@@ -971,10 +971,16 @@ func TestDeclareAuth_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
 		Public:  true,
 	})
-	// Also register the GET so the router can match it (otherwise 404).
-	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		t.Fatal("GET must not bypass auth when only POST is declared public")
-	}))
+	// Register GET with a policy so it is covered by policy enforcement;
+	// the verifier always fails so a GET without a token still returns 401.
+	auth.Declare(r, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/api/v1/auth/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			t.Fatal("GET must not bypass auth when only POST is declared public")
+		}),
+		Policy: auth.Authenticated(),
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -1000,10 +1006,17 @@ func TestDeclareAuth_TracingNewRoot(t *testing.T) {
 		}),
 		Public: true,
 	})
-	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		internalTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
-		w.WriteHeader(http.StatusOK)
-	}))
+	// /internal uses Delegated so it is covered by policy enforcement; no auth
+	// verifier is installed so Delegated is the right semantic.
+	auth.Declare(r, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/internal",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			internalTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+			w.WriteHeader(http.StatusOK)
+		}),
+		Delegated: true,
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -1038,10 +1051,17 @@ func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 		}),
 		Public: true,
 	})
-	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		internalID, _ = ctxkeys.RequestIDFrom(req.Context())
-		w.WriteHeader(http.StatusOK)
-	}))
+	// /internal uses Delegated so it is covered by policy enforcement; no auth
+	// verifier is installed so Delegated is the right semantic.
+	auth.Declare(r, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/internal",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			internalID, _ = ctxkeys.RequestIDFrom(req.Context())
+			w.WriteHeader(http.StatusOK)
+		}),
+		Delegated: true,
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -1070,9 +1090,13 @@ func TestDeclareAuth_ProtectedStillRequiresAuth(t *testing.T) {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
 		Public:  true,
 	})
-	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	// /api/v1/data is protected — declared with a policy to satisfy coverage enforcement.
+	auth.Declare(r, auth.RouteDecl{
+		Method:  http.MethodGet,
+		Path:    "/api/v1/data",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		Policy:  auth.Authenticated(),
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Protected endpoint without token → 401.
@@ -1104,9 +1128,13 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 		}),
 		Public: true,
 	})
-	r.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	// /fine-grained-public uses Delegated so it is covered by policy enforcement.
+	auth.Declare(r, auth.RouteDecl{
+		Method:    http.MethodGet,
+		Path:      "/fine-grained-public",
+		Handler:   http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		Delegated: true,
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	var publicTraceID, fineTraceID string
@@ -1127,10 +1155,16 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 		}),
 		Public: true,
 	})
-	r2.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		fineTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
-		w.WriteHeader(http.StatusOK)
-	}))
+	// /fine-grained-public uses Delegated so it is covered by policy enforcement.
+	auth.Declare(r2, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/fine-grained-public",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			fineTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+			w.WriteHeader(http.StatusOK)
+		}),
+		Delegated: true,
+	})
 	require.NoError(t, r2.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -1208,10 +1242,16 @@ func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 	r := New(WithTracer(tracer))
 
 	var traceID string
-	r.Handle("/test", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-		traceID, _ = ctxkeys.TraceIDFrom(req.Context())
-		w.WriteHeader(http.StatusOK)
-	}))
+	// /test uses Delegated so it is covered by policy enforcement; no auth verifier is installed.
+	auth.Declare(r, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/test",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			traceID, _ = ctxkeys.TraceIDFrom(req.Context())
+			w.WriteHeader(http.StatusOK)
+		}),
+		Delegated: true,
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -1263,10 +1303,14 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
 		Public:  true,
 	})
-	// Register the GET handler so it can be matched and receive auth check.
-	r.Handle("/api/v1/auth/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+	// Register the GET handler with a policy so it is covered by policy enforcement;
+	// auth middleware will require a valid token for GET.
+	auth.Declare(r, auth.RouteDecl{
+		Method:  http.MethodGet,
+		Path:    "/api/v1/auth/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+		Policy:  auth.Authenticated(),
+	})
 	require.NoError(t, r.FinalizeAuth())
 
 	// POST without token → public, 200.

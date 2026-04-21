@@ -233,6 +233,83 @@ func TestAuditEntryResponse_ExcludesInternalFields(t *testing.T) {
 	assert.NotContains(t, body, `"hash"`)
 }
 
+// TestHandler_RegisterRoutes_AuthzNegative validates that RegisterRoutes installs
+// the auditQueryPolicy so unauthenticated and cross-user requests are rejected at
+// the route layer, not inside HandleQuery. This mirrors the production guard path.
+func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
+	repo := mem.NewAuditRepository()
+	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	h := NewHandler(svc)
+
+	// Seed one entry for usr-1 and one for usr-2.
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+		ID: "rr-1", EventID: "evt-rr-1", EventType: "event.test.v1",
+		ActorID: "usr-1", Timestamp: base, Payload: []byte("{}"),
+	}))
+	require.NoError(t, repo.Append(context.Background(), &domain.AuditEntry{
+		ID: "rr-2", EventID: "evt-rr-2", EventType: "event.test.v1",
+		ActorID: "usr-2", Timestamp: base.Add(time.Hour), Payload: []byte("{}"),
+	}))
+
+	mux := http.NewServeMux()
+	h.RegisterRoutes(mux)
+
+	tests := []struct {
+		name       string
+		subject    string
+		roles      []string
+		actorID    string
+		wantStatus int
+	}{
+		{
+			name:       "no_auth",
+			subject:    "",
+			roles:      nil,
+			actorID:    "",
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "non_admin_cross_user",
+			subject:    "usr-1",
+			roles:      []string{"viewer"},
+			actorID:    "usr-2",
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "self_access",
+			subject:    "usr-1",
+			roles:      nil,
+			actorID:    "usr-1",
+			wantStatus: http.StatusOK,
+		},
+		{
+			name:       "admin_cross_user",
+			subject:    "admin-1",
+			roles:      []string{"admin"},
+			actorID:    "usr-2",
+			wantStatus: http.StatusOK,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			url := "/entries"
+			if tc.actorID != "" {
+				url += "?actorId=" + tc.actorID
+			}
+			w := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			if tc.subject != "" {
+				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
+			}
+			mux.ServeHTTP(w, req)
+			assert.Equal(t, tc.wantStatus, w.Code)
+		})
+	}
+}
+
 // Trust boundary tests (#27q)
 func TestHandleQuery_ActorBinding(t *testing.T) {
 	repo := mem.NewAuditRepository()
@@ -240,15 +317,10 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	require.NoError(t, err)
 	h := NewHandler(svc)
 
-	// securedMux registers HandleQuery with auditQueryPolicy via auth.Declare so
-	// that trust boundary tests go through the policy as in production.
+	// securedMux registers HandleQuery via RegisterRoutes, mirroring production
+	// wiring so trust boundary tests exercise the same auth.Declare guard.
 	securedMux := http.NewServeMux()
-	auth.Declare(securedMux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/api/v1/audit/entries",
-		Handler: http.HandlerFunc(h.HandleQuery),
-		Policy:  auditQueryPolicy,
-	})
+	h.RegisterRoutes(securedMux)
 
 	// Seed entries for two actors
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -311,7 +383,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
+			req := httptest.NewRequest(http.MethodGet, "/entries"+tc.query, nil)
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/audit-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/audit-core/internal/ports"
+	cell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -64,6 +65,19 @@ func auditQueryPolicy(r *http.Request) error {
 		return nil
 	}
 	return auth.AnyRole("admin")(r)
+}
+
+// RegisterRoutes registers auditquery routes with the audit-query policy on
+// any cell.RouteHandler (satisfied by both *http.ServeMux and cell.RouteMux)
+// so production wiring, contract tests, and cell-level integration tests
+// share the same auth.Declare declarations.
+func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
+	auth.Declare(mux, auth.RouteDecl{
+		Method:  "GET",
+		Path:    "/entries",
+		Handler: http.HandlerFunc(h.HandleQuery),
+		Policy:  auditQueryPolicy,
+	})
 }
 
 // HandleQuery handles GET /api/v1/audit/entries.

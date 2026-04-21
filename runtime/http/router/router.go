@@ -249,6 +249,19 @@ func WithInternalPathPrefixGuard(prefix string, guard func(http.Handler) http.Ha
 	}
 }
 
+// WithPolicyCoverageWhitelist sets route patterns exempt from policy coverage
+// verification. Entries use "METHOD /path" for exact match or "/path/*" for
+// prefix match. Routes on outerMux (healthz, readyz, metrics) are
+// automatically excluded.
+//
+// ref: kubernetes/apiserver — structural injection guarantees authorizer
+// presence; GoCell's startup-time verification achieves the same guarantee.
+func WithPolicyCoverageWhitelist(patterns []string) Option {
+	return func(r *Router) {
+		r.policyCoverageWhitelist = append(r.policyCoverageWhitelist, patterns...)
+	}
+}
+
 // Router wraps chi.Mux and implements kernel/cell.RouteMux.
 //
 // Internally it uses two chi.Mux instances:
@@ -303,6 +316,10 @@ type Router struct {
 	// POST + PasswordResetExempt meta. Served at request time via
 	// WithPasswordResetChangeEndpointHintFn.
 	derivedHint string
+
+	// policyCoverageWhitelist holds patterns exempt from policy coverage
+	// verification. Populated by WithPolicyCoverageWhitelist.
+	policyCoverageWhitelist []string
 }
 
 // New creates a Router with default middleware and optional configuration.
@@ -623,40 +640,63 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 //   - "router: FinalizeAuth called twice"
 //   - "router: duplicate auth declaration METHOD /path"
 //
-// It is safe to call FinalizeAuth with an empty declaredAuthMetas slice (no-op
-// beyond setting authFinalized).
+// It is safe to call FinalizeAuth with an empty declaredAuthMetas slice; the
+// policy coverage check still runs to catch routes registered without any
+// auth.Declare call.
 func (r *Router) FinalizeAuth() error {
 	if r.authFinalized {
 		return fmt.Errorf("router: FinalizeAuth called twice")
 	}
 	r.authFinalized = true
 
-	if len(r.declaredAuthMetas) == 0 {
-		return nil
+	if len(r.declaredAuthMetas) > 0 {
+		partitioned, err := partitionAuthMetas(r.declaredAuthMetas)
+		if err != nil {
+			return err
+		}
+
+		if err := r.mergePublicMatcher(partitioned.publicEntries); err != nil {
+			return err
+		}
+		if err := r.mergeExemptMatcher(partitioned.exemptEntries); err != nil {
+			return err
+		}
+		r.mergeDelegatedMatcher(partitioned.delegatedMatcher)
+		r.deriveHint()
+
+		// Warn when auth declarations exist but no verifier is installed: the
+		// Public/Policy/PasswordResetExempt semantics compile successfully but
+		// AuthMiddleware is absent so none of the declarations have any effect.
+		if r.authVerifier == nil {
+			slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/Policy/PasswordResetExempt declarations will have no effect",
+				slog.Int("declared", len(r.declaredAuthMetas)))
+		}
 	}
 
-	partitioned, err := partitionAuthMetas(r.declaredAuthMetas)
-	if err != nil {
-		return err
+	// Policy coverage verification: every business route registered on r.mux
+	// must have a corresponding auth.Declare call (Public, Delegated, or with
+	// Policy). Routes on outerMux (healthz, readyz, metrics) are excluded.
+	routes := r.enumerateBusinessRoutes()
+	if err := verifyPolicyCoverage(routes, r.declaredAuthMetas, r.policyCoverageWhitelist); err != nil {
+		return fmt.Errorf("router: policy coverage: %w", err)
 	}
 
-	if err := r.mergePublicMatcher(partitioned.publicEntries); err != nil {
-		return err
-	}
-	if err := r.mergeExemptMatcher(partitioned.exemptEntries); err != nil {
-		return err
-	}
-	r.mergeDelegatedMatcher(partitioned.delegatedMatcher)
-	r.deriveHint()
-
-	// Warn when auth declarations exist but no verifier is installed: the
-	// Public/Policy/PasswordResetExempt semantics compile successfully but
-	// AuthMiddleware is absent so none of the declarations have any effect.
-	if r.authVerifier == nil && len(r.declaredAuthMetas) > 0 {
-		slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/Policy/PasswordResetExempt declarations will have no effect",
-			slog.Int("declared", len(r.declaredAuthMetas)))
-	}
 	return nil
+}
+
+// enumerateBusinessRoutes walks the chi business mux and returns all registered
+// (method, path) pairs. Infrastructure routes on outerMux (healthz, readyz,
+// metrics) are excluded because they are not registered through Cell
+// RegisterRoutes.
+func (r *Router) enumerateBusinessRoutes() []routeKey {
+	var routes []routeKey
+	// chi.Walk never returns a non-nil error when the walker callback always
+	// returns nil; the error return is part of the interface but unused here.
+	_ = chi.Walk(r.mux, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		routes = append(routes, routeKey{Method: method, Path: route})
+		return nil
+	})
+	return routes
 }
 
 // authMetaPartition holds the categorised results of partitionAuthMetas.
