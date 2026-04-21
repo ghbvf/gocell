@@ -12,8 +12,8 @@ import (
 type ConfigRepository interface {
 	Create(ctx context.Context, entry *domain.ConfigEntry) error
 	GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error)
-	Update(ctx context.Context, entry *domain.ConfigEntry) error
-	Delete(ctx context.Context, key string) error
+	Update(ctx context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error)
+	Delete(ctx context.Context, key string) (*domain.ConfigEntry, error)
 	List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error)
 	PublishVersion(ctx context.Context, version *domain.ConfigVersion) error
 	GetVersion(ctx context.Context, configID string, version int) (*domain.ConfigVersion, error)

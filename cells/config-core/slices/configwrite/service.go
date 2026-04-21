@@ -104,34 +104,36 @@ type UpdateInput struct {
 }
 
 // Update modifies an existing config entry and publishes a change event.
+// All reads and writes happen inside runInTx to eliminate the TOCTOU stale-read
+// race: GetByKey reads the current sensitive flag under the same transaction
+// that performs the atomic UPDATE...RETURNING.
+//
+// ref: flagwrite.Update — same "all-inside-tx" pattern.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.ConfigEntry, error) {
 	if input.Key == "" {
 		return nil, errcode.New(errcode.ErrConfigInvalidInput, "key is required")
 	}
 
-	entry, err := s.repo.GetByKey(ctx, input.Key)
-	if err != nil {
-		return nil, fmt.Errorf("config-write: update: %w", err)
-	}
-
-	entry.Value = input.Value
-	entry.Version++
-	entry.UpdatedAt = time.Now()
-
+	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Update(txCtx, entry); err != nil {
+		// Read inside tx to obtain the current sensitive flag (not changed by
+		// UpdateInput). The ambient transaction ensures this read is consistent
+		// with the subsequent UPDATE.
+		current, err := s.repo.GetByKey(txCtx, input.Key)
+		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}
-		if err := s.publishChange(txCtx, "updated", entry); err != nil {
-			return err
+		updated, err = s.repo.Update(txCtx, input.Key, input.Value, current.Sensitive)
+		if err != nil {
+			return fmt.Errorf("config-write: update: %w", err)
 		}
-		return nil
+		return s.publishChange(txCtx, "updated", updated)
 	}); err != nil {
 		return nil, err
 	}
 
-	s.logger.Info("config entry updated", slog.String("key", entry.Key), slog.Int("version", entry.Version))
-	return entry, nil
+	s.logger.Info("config entry updated", slog.String("key", updated.Key), slog.Int("version", updated.Version))
+	return updated, nil
 }
 
 // Delete removes a config entry by key and publishes a change event.
@@ -140,16 +142,12 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 		return errcode.New(errcode.ErrConfigInvalidInput, "key is required")
 	}
 
-	entry, err := s.repo.GetByKey(ctx, key)
-	if err != nil {
-		return fmt.Errorf("config-write: delete: %w", err)
-	}
-
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Delete(txCtx, key); err != nil {
+		deleted, err := s.repo.Delete(txCtx, key)
+		if err != nil {
 			return fmt.Errorf("config-write: delete: %w", err)
 		}
-		if err := s.publishChange(txCtx, "deleted", entry); err != nil {
+		if err := s.publishChange(txCtx, "deleted", deleted); err != nil {
 			return err
 		}
 		return nil

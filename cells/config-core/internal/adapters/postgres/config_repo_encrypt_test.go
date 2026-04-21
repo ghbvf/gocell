@@ -271,25 +271,31 @@ func TestEncrypt_GetByKey_NonSensitive_NoDecryption(t *testing.T) {
 }
 
 // TestEncrypt_Update_SensitiveWritesCipherColumns verifies that Update for a
-// sensitive entry writes cipher columns.
+// sensitive entry writes cipher columns and returns the updated entry via RETURNING.
 func TestEncrypt_Update_SensitiveWritesCipherColumns(t *testing.T) {
-	db := &mockDB{execAffected: 1}
+	ctx := context.Background()
 	tr := &fakeValueTransformer{currentKeyID: "local-aes-v1"}
-	repo := newEncryptedRepoFromDBTX(db, tr)
 
-	entry := &domain.ConfigEntry{
-		Key:       "api_key",
-		Value:     "new-secret",
-		Sensitive: true,
-		Version:   2,
-	}
-
-	err := repo.Update(context.Background(), entry)
+	// Build what the DB RETURNING row looks like after encryption.
+	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, []byte("new-secret"), configcrypto.AADForConfig("config-core", "api_key"))
 	require.NoError(t, err)
 
-	sql := db.execCalls[0].sql
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			values: []any{"cfg-1", "api_key", "", true, 2, now, now, ct, keyID, edk, nonce},
+		},
+	}
+	repo := newEncryptedRepoFromDBTX(db, tr)
+
+	entry, err := repo.Update(context.Background(), "api_key", "new-secret", true)
+	require.NoError(t, err)
+	require.NotNil(t, entry)
+
+	sql := db.queryRowCalls[0].sql
 	assert.Contains(t, sql, "UPDATE config_entries")
 	assert.Contains(t, sql, "value_cipher")
+	assert.Equal(t, "new-secret", entry.Value, "Update must return decrypted plaintext")
 }
 
 // TestEncrypt_PublishVersion_SensitiveWritesCipherColumns verifies that

@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/ports"
@@ -56,27 +57,33 @@ func (r *ConfigRepository) GetByKey(_ context.Context, key string) (*domain.Conf
 	return &clone, nil
 }
 
-func (r *ConfigRepository) Update(_ context.Context, entry *domain.ConfigEntry) error {
+func (r *ConfigRepository) Update(_ context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.entries[entry.Key]; !exists {
-		return errcode.New(errcode.ErrConfigNotFound, "config not found: "+entry.Key)
+	existing, ok := r.entries[key]
+	if !ok {
+		return nil, errcode.New(errcode.ErrConfigNotFound, "config not found: "+key)
 	}
-	clone := *entry
-	r.entries[entry.Key] = &clone
-	return nil
+	existing.Value = value
+	existing.Sensitive = sensitive
+	existing.Version++
+	existing.UpdatedAt = time.Now()
+	clone := *existing
+	return &clone, nil
 }
 
-func (r *ConfigRepository) Delete(_ context.Context, key string) error {
+func (r *ConfigRepository) Delete(_ context.Context, key string) (*domain.ConfigEntry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	if _, exists := r.entries[key]; !exists {
-		return errcode.New(errcode.ErrConfigNotFound, "config not found: "+key)
+	existing, ok := r.entries[key]
+	if !ok {
+		return nil, errcode.New(errcode.ErrConfigNotFound, "config not found: "+key)
 	}
+	clone := *existing
 	delete(r.entries, key)
-	return nil
+	return &clone, nil
 }
 
 // List returns config entries sorted and paginated according to params.

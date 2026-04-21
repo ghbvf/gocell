@@ -123,27 +123,31 @@ func TestConfigRepository_GetByKey_NotFound(t *testing.T) {
 }
 
 func TestConfigRepository_Update(t *testing.T) {
-	db := &mockDB{execAffected: 1}
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			// 11 columns matching configEntryColumns for RETURNING
+			values: []any{"cfg-1", "app.name", "GoCell v2", false, 2, now, now, nil, nil, nil, nil},
+		},
+	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	entry := &domain.ConfigEntry{
-		Key:     "app.name",
-		Value:   "GoCell v2",
-		Version: 2,
-	}
-
-	err := repo.Update(context.Background(), entry)
+	entry, err := repo.Update(context.Background(), "app.name", "GoCell v2", false)
 	require.NoError(t, err)
+	require.NotNil(t, entry)
+	assert.Equal(t, "GoCell v2", entry.Value)
 
-	require.Len(t, db.execCalls, 1)
-	assert.Contains(t, db.execCalls[0].sql, "UPDATE config_entries")
+	require.Len(t, db.queryRowCalls, 1)
+	assert.Contains(t, db.queryRowCalls[0].sql, "UPDATE config_entries")
 }
 
 func TestConfigRepository_Update_NotFound(t *testing.T) {
-	db := &mockDB{execAffected: 0}
+	db := &mockDB{
+		queryRowResult: &mockRow{scanErr: pgx.ErrNoRows},
+	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	err := repo.Update(context.Background(), &domain.ConfigEntry{Key: "missing"})
+	_, err := repo.Update(context.Background(), "missing", "v", false)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -152,21 +156,31 @@ func TestConfigRepository_Update_NotFound(t *testing.T) {
 }
 
 func TestConfigRepository_Delete(t *testing.T) {
-	db := &mockDB{execAffected: 1}
+	now := time.Now()
+	db := &mockDB{
+		queryRowResult: &mockRow{
+			// 11 columns matching configEntryColumns for RETURNING
+			values: []any{"cfg-1", "app.name", "GoCell", false, 1, now, now, nil, nil, nil, nil},
+		},
+	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	err := repo.Delete(context.Background(), "app.name")
+	deleted, err := repo.Delete(context.Background(), "app.name")
 	require.NoError(t, err)
+	require.NotNil(t, deleted)
+	assert.Equal(t, "app.name", deleted.Key)
 
-	require.Len(t, db.execCalls, 1)
-	assert.Contains(t, db.execCalls[0].sql, "DELETE FROM config_entries")
+	require.Len(t, db.queryRowCalls, 1)
+	assert.Contains(t, db.queryRowCalls[0].sql, "DELETE FROM config_entries")
 }
 
 func TestConfigRepository_Delete_NotFound(t *testing.T) {
-	db := &mockDB{execAffected: 0}
+	db := &mockDB{
+		queryRowResult: &mockRow{scanErr: pgx.ErrNoRows},
+	}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	err := repo.Delete(context.Background(), "missing")
+	_, err := repo.Delete(context.Background(), "missing")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -417,7 +431,7 @@ func TestUpdate_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
 	repo := NewConfigRepository(session, nil, nil)
 
-	err := repo.Update(context.Background(), &domain.ConfigEntry{Key: "k"})
+	_, err := repo.Update(context.Background(), "k", "v", false)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -431,7 +445,7 @@ func TestDelete_WithoutTx_ReturnsNoTxError(t *testing.T) {
 	session := NewSession(nil)
 	repo := NewConfigRepository(session, nil, nil)
 
-	err := repo.Delete(context.Background(), "k")
+	_, err := repo.Delete(context.Background(), "k")
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -548,6 +562,7 @@ type dbCallRecord struct {
 type mockDB struct {
 	execCalls      []dbCallRecord
 	queryCalls     []dbCallRecord
+	queryRowCalls  []dbCallRecord
 	queryRows      *mockRowSet
 	queryRowResult *mockRow
 	execErr        error
@@ -574,7 +589,8 @@ func (m *mockDB) Query(_ context.Context, sql string, args ...any) (Rows, error)
 	return m.queryRows, nil
 }
 
-func (m *mockDB) QueryRow(_ context.Context, _ string, _ ...any) Row {
+func (m *mockDB) QueryRow(_ context.Context, sql string, args ...any) Row {
+	m.queryRowCalls = append(m.queryRowCalls, dbCallRecord{sql: sql, args: args})
 	if m.queryRowResult == nil {
 		return &mockRow{scanErr: assert.AnError}
 	}

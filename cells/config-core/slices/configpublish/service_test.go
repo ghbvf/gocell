@@ -323,9 +323,8 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 			if tt.flipToSensitiveAt > 0 {
 				live, err := repo.GetByKey(context.Background(), "app.x")
 				require.NoError(t, err)
-				live.Sensitive = !tt.seedSensitive
-				live.Value = "v-live"
-				require.NoError(t, repo.Update(context.Background(), live))
+				_, err = repo.Update(context.Background(), live.Key, "v-live", !tt.seedSensitive)
+				require.NoError(t, err)
 			}
 
 			rolled, err := svc.Rollback(context.Background(), "app.x", 1)
@@ -334,4 +333,72 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 				"rollback must inherit the snapshot's Sensitive flag, not the live entry's")
 		})
 	}
+}
+
+// --- S10 PublishFailureMode tests ---
+
+// TestService_Publish_FailClosed_PublisherError verifies that when configured
+// with PublishFailureMode=FailClosed (the default), a publisher error propagates
+// as a hard failure.
+func TestService_Publish_FailClosed_PublisherError(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	pub := failingPublisher{err: errors.New("broker down")}
+	svc := NewService(repo, pub, slog.Default(),
+		WithPublishFailureMode(PublishFailureModeFailClosed))
+
+	mustSeedEntry(repo, "app.timeout", "30s")
+	_, err := svc.Publish(context.Background(), "app.timeout")
+	require.Error(t, err, "FailClosed: publisher failure must propagate")
+	assert.Contains(t, err.Error(), "broker down")
+}
+
+// TestService_Publish_FailOpen_PublisherError verifies that when configured
+// with PublishFailureMode=FailOpen, a publisher error is swallowed and logged
+// rather than failing the entire Publish operation.
+func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	pub := failingPublisher{err: errors.New("broker down")}
+	svc := NewService(repo, pub, slog.Default(),
+		WithPublishFailureMode(PublishFailureModeFailOpen))
+
+	mustSeedEntry(repo, "app.timeout", "30s")
+	ver, err := svc.Publish(context.Background(), "app.timeout")
+	require.NoError(t, err, "FailOpen: publisher failure must be swallowed")
+	assert.Equal(t, 1, ver.Version)
+}
+
+// TestService_Rollback_FailClosed_PublisherError verifies fail-closed on the
+// Rollback path's direct-publisher fallback.
+func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	pub := failingPublisher{err: errors.New("broker down")}
+	svc := NewService(repo, pub, slog.Default(),
+		WithPublishFailureMode(PublishFailureModeFailClosed))
+
+	mustSeedEntry(repo, "app.x", "v1")
+	svcOK := NewService(repo, stubPublisher{}, slog.Default())
+	_, err := svcOK.Publish(context.Background(), "app.x")
+	require.NoError(t, err)
+
+	_, err = svc.Rollback(context.Background(), "app.x", 1)
+	require.Error(t, err, "FailClosed: publisher failure must propagate on rollback")
+	assert.Contains(t, err.Error(), "broker down")
+}
+
+// TestService_Rollback_FailOpen_PublisherError verifies fail-open on the
+// Rollback path's direct-publisher fallback.
+func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
+	repo := mem.NewConfigRepository()
+	pub := failingPublisher{err: errors.New("broker down")}
+	svc := NewService(repo, pub, slog.Default(),
+		WithPublishFailureMode(PublishFailureModeFailOpen))
+
+	mustSeedEntry(repo, "app.x", "v1")
+	svcOK := NewService(repo, stubPublisher{}, slog.Default())
+	_, err := svcOK.Publish(context.Background(), "app.x")
+	require.NoError(t, err)
+
+	rolled, err := svc.Rollback(context.Background(), "app.x", 1)
+	require.NoError(t, err, "FailOpen: publisher failure must be swallowed on rollback")
+	assert.Equal(t, "v1", rolled.Value)
 }

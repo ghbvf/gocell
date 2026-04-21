@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/config-core/slices/configpublish"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -496,4 +497,37 @@ func TestWithPostgresDefaults_NilPool_SetsConfigRepoAndOutboxWriter(t *testing.T
 	require.NoError(t, c.Init(t.Context(), cell.Dependencies{DurabilityMode: cell.DurabilityDurable}))
 	assert.NotNil(t, c.configRepo, "configRepo must be non-nil after Init")
 	assert.NotNil(t, c.flagRepo, "flagRepo must be non-nil after Init")
+}
+
+// S10: deriveModes translates DurabilityMode into independent RunMode and
+// PublishFailureMode at Init() time.
+func TestConfigCore_DeriveModes(t *testing.T) {
+	tests := []struct {
+		name        string
+		durability  cell.DurabilityMode
+		wantRunMode query.RunMode
+		wantPubMode configpublish.PublishFailureMode
+	}{
+		{
+			name:        "demo maps to demo+fail-open",
+			durability:  cell.DurabilityDemo,
+			wantRunMode: query.RunModeDemo,
+			wantPubMode: configpublish.PublishFailureModeFailOpen,
+		},
+		{
+			name:        "durable maps to prod+fail-closed",
+			durability:  cell.DurabilityDurable,
+			wantRunMode: query.RunModeProd,
+			wantPubMode: configpublish.PublishFailureModeFailClosed,
+		},
+	}
+
+	c := NewConfigCore(WithInMemoryDefaults(), WithPublisher(eventbus.New()))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			runMode, publishMode := c.deriveModes(tt.durability)
+			assert.Equal(t, tt.wantRunMode, runMode)
+			assert.Equal(t, tt.wantPubMode, publishMode)
+		})
+	}
 }

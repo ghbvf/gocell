@@ -1,5 +1,10 @@
 // Package configpublish implements the config-publish slice: Publish/Rollback
 // versioned config snapshots.
+//
+// All reads and writes happen inside runInTx to eliminate the TOCTOU stale-read
+// race that existed when GetByKey/GetVersion were called before the transaction.
+//
+// ref: flagwrite — same "all-inside-tx" pattern.
 package configpublish
 
 import (
@@ -38,13 +43,23 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = tx }
 }
 
+// WithPublishFailureMode sets direct-publisher failure behavior when
+// outboxWriter is nil. Zero value is fail-closed (safe production default).
+//
+// S10 MODE-SEMANTIC-SPLIT-01: separated from query.RunMode so read-path cursor
+// tolerance and write-path publisher failure semantics evolve independently.
+func WithPublishFailureMode(mode PublishFailureMode) Option {
+	return func(s *Service) { s.publishFailureMode = mode }
+}
+
 // Service implements config publish/rollback business logic.
 type Service struct {
-	repo         ports.ConfigRepository
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	logger       *slog.Logger
+	repo               ports.ConfigRepository
+	publisher          outbox.Publisher
+	outboxWriter       outbox.Writer
+	txRunner           persistence.TxRunner
+	publishFailureMode PublishFailureMode
+	logger             *slog.Logger
 }
 
 // NewService creates a config-publish Service.
@@ -61,37 +76,39 @@ func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.
 }
 
 // Publish creates a versioned snapshot of a config entry.
+// All reads happen inside runInTx so the snapshot is consistent with the write.
 func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersion, error) {
 	if key == "" {
 		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput, "key is required")
 	}
 
-	entry, err := s.repo.GetByKey(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("config-publish: publish: %w", err)
-	}
-
-	now := time.Now()
-	version := &domain.ConfigVersion{
-		ID:          "ver" + "-" + uuid.NewString(),
-		ConfigID:    entry.ID,
-		Version:     entry.Version,
-		Value:       entry.Value,
-		Sensitive:   entry.Sensitive,
-		PublishedAt: &now,
-	}
-
-	payload, err := json.Marshal(map[string]any{
-		"action":    "published",
-		"key":       key,
-		"config_id": entry.ID,
-		"version":   version.Version,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("config-publish: marshal event payload: %w", err)
-	}
-
+	var version *domain.ConfigVersion
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+		entry, err := s.repo.GetByKey(txCtx, key)
+		if err != nil {
+			return fmt.Errorf("config-publish: publish: %w", err)
+		}
+
+		now := time.Now()
+		version = &domain.ConfigVersion{
+			ID:          "ver" + "-" + uuid.NewString(),
+			ConfigID:    entry.ID,
+			Version:     entry.Version,
+			Value:       entry.Value,
+			Sensitive:   entry.Sensitive,
+			PublishedAt: &now,
+		}
+
+		payload, err := json.Marshal(map[string]any{
+			"action":    "published",
+			"key":       key,
+			"config_id": entry.ID,
+			"version":   version.Version,
+		})
+		if err != nil {
+			return fmt.Errorf("config-publish: marshal event payload: %w", err)
+		}
+
 		if err := s.repo.PublishVersion(txCtx, version); err != nil {
 			return fmt.Errorf("config-publish: publish version: %w", err)
 		}
@@ -106,6 +123,9 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 }
 
 // Rollback reverts a config entry to a specific version.
+// All reads (GetByKey + GetVersion) and the atomic Update happen inside runInTx
+// to eliminate the TOCTOU stale-read race where a concurrent write could change
+// the entry between the reads and the update.
 func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (*domain.ConfigEntry, error) {
 	if key == "" {
 		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput, "key is required")
@@ -115,39 +135,33 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 			"rollback target version must be >= 1")
 	}
 
-	entry, err := s.repo.GetByKey(ctx, key)
-	if err != nil {
-		return nil, fmt.Errorf("config-publish: rollback: %w", err)
-	}
-
-	ver, err := s.repo.GetVersion(ctx, entry.ID, targetVersion)
-	if err != nil {
-		return nil, fmt.Errorf("config-publish: rollback: version not found: %w", err)
-	}
-
-	entry.Value = ver.Value
-	// Restore the snapshot's sensitivity so a rolled-back entry inherits the
-	// redaction policy that was in force at the snapshot time. Otherwise a
-	// sensitivity flip between the target version and the live entry would
-	// either leak a secret (entry was sensitive, snapshot was plain) or
-	// over-redact a public value (snapshot was sensitive, entry is now plain).
-	entry.Sensitive = ver.Sensitive
-	entry.Version++
-	entry.UpdatedAt = time.Now()
-
-	payload, err := json.Marshal(map[string]any{
-		"action":         "rollback",
-		"key":            key,
-		"target_version": targetVersion,
-		"new_version":    entry.Version,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("config-publish: marshal event payload: %w", err)
-	}
-
+	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Update(txCtx, entry); err != nil {
+		entry, err := s.repo.GetByKey(txCtx, key)
+		if err != nil {
+			return fmt.Errorf("config-publish: rollback: %w", err)
+		}
+
+		ver, err := s.repo.GetVersion(txCtx, entry.ID, targetVersion)
+		if err != nil {
+			return fmt.Errorf("config-publish: rollback: version not found: %w", err)
+		}
+
+		// Atomic UPDATE...RETURNING restores the snapshot's value and sensitivity.
+		// The repo handles version=version+1 and updated_at=now() internally.
+		updated, err = s.repo.Update(txCtx, key, ver.Value, ver.Sensitive)
+		if err != nil {
 			return fmt.Errorf("config-publish: rollback update: %w", err)
+		}
+
+		payload, err := json.Marshal(map[string]any{
+			"action":         "rollback",
+			"key":            key,
+			"target_version": targetVersion,
+			"new_version":    updated.Version,
+		})
+		if err != nil {
+			return fmt.Errorf("config-publish: marshal event payload: %w", err)
 		}
 		return s.publishEvent(txCtx, TopicConfigRollback, payload)
 	}); err != nil {
@@ -156,7 +170,7 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 
 	s.logger.Info("config rolled back",
 		slog.String("key", key), slog.Int("target_version", targetVersion))
-	return entry, nil
+	return updated, nil
 }
 
 // runInTx executes fn in a transaction if txRunner is configured, otherwise
@@ -171,10 +185,11 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 
 // publishEvent writes to the outbox (L2 durable) or directly via publisher
 // (fallback when outboxWriter is nil, e.g. demo assemblies using DiscardPublisher).
-// No RunMode fail-open needed: demo mode injects DiscardPublisher which never
-// errors by contract, so any publisher failure is a real infrastructure problem
-// that must surface. Read slices use RunMode to handle stale cursor tokens —
-// a concern that does not exist in write operations.
+// PublishFailureMode controls whether direct-publisher failures are propagated
+// (fail-closed, the safe default for production) or tolerated after a warning
+// (fail-open, the demo-mode behavior when the publisher is degraded but the
+// write path should not block). DiscardPublisher never errors by contract, so
+// any publisher failure indicates a real infrastructure problem.
 func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte) error {
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
@@ -191,6 +206,14 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 	// accepts the message.
 	envelope := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), payload)
 	if err := s.publisher.Publish(ctx, topic, envelope); err != nil {
+		if s.publishFailureMode.IsFailOpen() {
+			s.logger.Warn("config-publish: publisher failed (fail-open mode)",
+				slog.String("topic", topic),
+				slog.String("publish_failure_mode", s.publishFailureMode.String()),
+				slog.String("error", err.Error()),
+			)
+			return nil
+		}
 		return fmt.Errorf("config-publish: publisher failed for topic %s: %w", topic, err)
 	}
 	return nil

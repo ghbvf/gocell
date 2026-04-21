@@ -100,17 +100,18 @@ func TestConfigRepository_Update(t *testing.T) {
 	}))
 
 	t.Run("success", func(t *testing.T) {
-		require.NoError(t, repo.Update(ctx, &domain.ConfigEntry{
-			ID: "cfg-1", Key: "app.name", Value: "new", Version: 2,
-			CreatedAt: now, UpdatedAt: time.Now(),
-		}))
+		updated, err := repo.Update(ctx, "app.name", "new", false)
+		require.NoError(t, err)
+		require.NotNil(t, updated)
+		assert.Equal(t, "new", updated.Value)
+		assert.Equal(t, 2, updated.Version)
 		got, err := repo.GetByKey(ctx, "app.name")
 		require.NoError(t, err)
 		assert.Equal(t, "new", got.Value)
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		err := repo.Update(ctx, &domain.ConfigEntry{Key: "missing"})
+		_, err := repo.Update(ctx, "missing", "v", false)
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
@@ -127,13 +128,17 @@ func TestConfigRepository_Delete(t *testing.T) {
 	}))
 
 	t.Run("success", func(t *testing.T) {
-		require.NoError(t, repo.Delete(ctx, "app.name"))
-		_, err := repo.GetByKey(ctx, "app.name")
+		deleted, err := repo.Delete(ctx, "app.name")
+		require.NoError(t, err)
+		require.NotNil(t, deleted)
+		assert.Equal(t, "app.name", deleted.Key)
+		assert.Equal(t, "v", deleted.Value)
+		_, err = repo.GetByKey(ctx, "app.name")
 		require.Error(t, err)
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		err := repo.Delete(ctx, "missing")
+		_, err := repo.Delete(ctx, "missing")
 		require.Error(t, err)
 	})
 }

@@ -273,8 +273,9 @@ func TestCreate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	assert.Len(t, writer.entries, 1, "outbox entry must be written inside the tx")
 }
 
-// TestUpdate_CallsTxRunnerRunInTxOnce asserts that Update wraps the repo+outbox
-// writes in a single RunInTx (the pre-fetch GetByKey is outside the tx).
+// TestUpdate_CallsTxRunnerRunInTxOnce asserts that Update wraps the GetByKey
+// read, repo.Update write, and outbox write inside a single RunInTx call
+// (L2 atomicity — all reads and writes are transactional).
 func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &recordingWriter{}
@@ -292,8 +293,9 @@ func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	assert.Equal(t, 1, tx.calls, "Update must call RunInTx exactly once")
 }
 
-// TestDelete_CallsTxRunnerRunInTxOnce asserts that Delete wraps the repo+outbox
-// writes in a single RunInTx (the pre-fetch GetByKey is outside the tx).
+// TestDelete_CallsTxRunnerRunInTxOnce asserts that Delete wraps repo.Delete
+// (which returns the deleted entry via RETURNING) and outbox write inside a
+// single RunInTx call (L2 atomicity — no pre-fetch outside the tx).
 func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &recordingWriter{}
