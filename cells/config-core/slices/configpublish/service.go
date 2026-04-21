@@ -207,6 +207,8 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 	envelope := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), payload)
 	if err := s.publisher.Publish(ctx, topic, envelope); err != nil {
 		if s.publishFailureMode.IsFailOpen() {
+			// topic + error are sufficient for demo-mode triage; the key is inside
+			// the serialized payload and would require unmarshaling to extract.
 			s.logger.Warn("config-publish: publisher failed (fail-open mode)",
 				slog.String("topic", topic),
 				slog.String("publish_failure_mode", s.publishFailureMode.String()),

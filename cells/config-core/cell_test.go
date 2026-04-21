@@ -520,6 +520,12 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 			wantRunMode: query.RunModeProd,
 			wantPubMode: configpublish.PublishFailureModeFailClosed,
 		},
+		{
+			name:        "unknown maps to prod+fail-closed (safe default)",
+			durability:  cell.DurabilityMode(99),
+			wantRunMode: query.RunModeProd,
+			wantPubMode: configpublish.PublishFailureModeFailClosed,
+		},
 	}
 
 	c := NewConfigCore(WithInMemoryDefaults(), WithPublisher(eventbus.New()))

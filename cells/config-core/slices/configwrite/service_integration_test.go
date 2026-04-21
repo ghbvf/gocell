@@ -111,6 +111,69 @@ func TestCreate_AtomicWithOutbox(t *testing.T) {
 		"Create must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigChanged)
 }
 
+// TestUpdate_AtomicWithOutbox verifies that the config_entries row is updated
+// and an outbox_entries row is co-committed in the same transaction (L2 atomicity).
+func TestUpdate_AtomicWithOutbox(t *testing.T) {
+	bundle, cleanup := setupWriteService(t)
+	defer cleanup()
+
+	// Seed an entry via Create (which itself commits atomically).
+	_, err := bundle.svc.Create(context.Background(), CreateInput{
+		Key:   "integration.atomic.update",
+		Value: "initial",
+	})
+	require.NoError(t, err)
+
+	// Baseline: 1 outbox row from Create above.
+	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
+
+	updated, err := bundle.svc.Update(context.Background(), UpdateInput{
+		Key:   "integration.atomic.update",
+		Value: "updated-value",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "integration.atomic.update", updated.Key)
+	assert.Equal(t, 2, updated.Version, "Update must bump version")
+
+	// Outbox-side: Update's L2 co-commit must have added exactly one outbox row.
+	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
+	assert.Equal(t, 1, after-before,
+		"Update must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigChanged)
+}
+
+// TestDelete_AtomicWithOutbox verifies that the config_entries row is deleted
+// and an outbox_entries row is co-committed in the same transaction (L2 atomicity).
+func TestDelete_AtomicWithOutbox(t *testing.T) {
+	bundle, cleanup := setupWriteService(t)
+	defer cleanup()
+
+	// Seed an entry via Create.
+	_, err := bundle.svc.Create(context.Background(), CreateInput{
+		Key:   "integration.atomic.delete",
+		Value: "to-be-deleted",
+	})
+	require.NoError(t, err)
+
+	// Baseline: 1 outbox row from Create above.
+	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
+
+	err = bundle.svc.Delete(context.Background(), "integration.atomic.delete")
+	require.NoError(t, err)
+
+	// Outbox-side: Delete's L2 co-commit must have added exactly one outbox row.
+	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
+	assert.Equal(t, 1, after-before,
+		"Delete must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigChanged)
+
+	// Domain-side: the config_entries row must be absent after Delete.
+	_, getErr := bundle.svc.repo.GetByKey(context.Background(), "integration.atomic.delete")
+	require.Error(t, getErr, "config_entries row must not exist after Delete")
+	var ec *errcode.Error
+	require.ErrorAs(t, getErr, &ec)
+	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code,
+		"deleted entry must return ErrConfigRepoNotFound")
+}
+
 // TestCreate_RollbackOnOutboxFailure verifies that when the outbox write
 // returns a permanent error, the config_entries row is absent (transaction
 // rolled back atomically).

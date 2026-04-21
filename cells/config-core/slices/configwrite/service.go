@@ -120,6 +120,14 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 		// UpdateInput). The ambient transaction ensures this read is consistent
 		// with the subsequent UPDATE.
 		current, err := s.repo.GetByKey(txCtx, input.Key)
+		// NOTE: Under READ COMMITTED (PostgreSQL default), a concurrent Rollback
+		// that changes sensitive between this read and the UPDATE below could make
+		// the sensitive flag stale. This is acceptable because:
+		// 1. No API changes sensitive in a normal Update flow (UpdateInput has no
+		//    Sensitive field); only Rollback restores sensitivity from snapshots.
+		// 2. Concurrent Rollback + Update on the same key is an extremely rare
+		//    admin race. If stricter guarantees are needed, upgrade to REPEATABLE
+		//    READ or add SELECT...FOR UPDATE to the read inside the tx.
 		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}

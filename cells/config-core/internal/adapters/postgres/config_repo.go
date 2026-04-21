@@ -210,6 +210,8 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		if encErr != nil {
 			return encErr
 		}
+		// NOTE: SQL param order (edk, nonce) differs from encryptValue return
+		// order (nonce, edk). Matches column order: value_edk=$10, value_nonce=$11.
 		const q = `INSERT INTO config_entries
 			(id, key, value, sensitive, version, created_at, updated_at,
 			 value_cipher, value_key_id, value_edk, value_nonce)
@@ -375,6 +377,8 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string,
 		if encErr != nil {
 			return nil, encErr
 		}
+		// NOTE: SQL param order (edk, nonce) differs from encryptValue return
+		// order (nonce, edk). Matches the column order: value_edk=$3, value_nonce=$4.
 		const q = `UPDATE config_entries
 			SET value = '', sensitive = true, version = version+1, updated_at = now(),
 			    value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4
