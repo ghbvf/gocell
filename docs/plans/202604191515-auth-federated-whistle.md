@@ -490,7 +490,7 @@ func (b *Bootstrapper) RegisterLifecycle(lc bootstrap.Lifecycle) {
 | PR-AUTH-F1-JWT-REGISTRY | F1 JWT 配置 Registry | S18 + S31 + S20 | 5h |
 | PR-AUTH-F7-PRINCIPAL | F7 Principal 统一契约 + Authenticator 接口 + handler authz 切换 | 审查 P1-A | 4h |
 | PR-AUTH-F3-SELECTOR | F3 Selector Builder + 移除 cmd/main.go 硬编码业务路径 | S35 彻底版 + S39 | 2h |
-| PR-AUTH-F2-REFRESH-PG | F2 Refresh token opaque + PG store + migration 007 | P1-17 + X10 一次到位 | 1.5d |
+| PR-AUTH-F2-REFRESH-PG | F2 Refresh token opaque + PG store + migration 007 | P1-17 + X10 一次到位 | 1.5d | **PG Store 已完成** PR#213 |
 | PR-AUTH-F4-ROUTEGROUP | F4 独立 listener + RouteGroup + merged-state e2e | R4 + S32 + PR#185 方案 C + 审查 P2-C | 1.5d |
 
 **Wave 0 顺序**（已锁定）：F5 → F6 → F1 → **F7** → F3 → F2 → F4
@@ -513,6 +513,33 @@ func (b *Bootstrapper) RegisterLifecycle(lc bootstrap.Lifecycle) {
 ### Wave 2 — 无（F2 Wave 0 已完工）
 
 ~~原计划 Wave 2 F2 PG 持久化~~ → 已并入 Wave 0 PR-AUTH-F2-REFRESH-PG 一次完工
+
+### F2 进度更新（2026-04-21）
+
+**已完成（PR#213）**：
+- `adapters/postgres/refresh_store.go` — PGRefreshStore 实现（Issue/Rotate/Revoke/GC）
+- `adapters/postgres/refresh_store_integration_test.go` — storetest 13 条契约测试 + migration 结构断言
+- `adapters/postgres/migrations/007_refresh_tokens.sql` — 移除 DEFAULT now()（Clock 注入）
+- `adapters/postgres/migrations/011_refresh_tokens_token_index.sql` — 非部分 token 索引（review P1 修复）
+- 开源对标 Hydra/Zitadel/Dex：CAS Rotate、分批 GC SKIP LOCKED、部分唯一索引
+
+**F2 后续工作（backlog X11-X15，已更新依赖顺序）**：
+
+```
+X11 HMAC-SPLIT (4h) ──→ X15 OPAQUE-INTEGRATION (6h) ──→ X12 IDLE-EXPIRE (3h)
+                                                    ──→ X14 GRACE-COUNTER (2h)
+                                                    ──→ X13 PARTITION (3h, 生产扩容时)
+```
+
+| # | ID | 工时 | 触发条件 | 说明 |
+|---|-----|------|---------|------|
+| X11 | REFRESH-HMAC-SPLIT-01 | 4h | PG store 已有 ✅ | **必须在 X15 之前**。HMAC-split token (selector\|verifier)，DB 存 selector 明文 + SHA-256(verifier)。明文 token 入库后改格式需数据迁移，ref: Hydra |
+| X15 | REFRESH-OPAQUE-INTEGRATION-01 | 6h | X11 完成后 | sessionrefresh/sessionlogin 切换 opaque token + 接线 access_module.go |
+| X12 | REFRESH-IDLE-EXPIRE-01 | 3h | X15 之后 | idle_expires_at 滑动窗口，ref: Zitadel |
+| X14 | REFRESH-GRACE-COUNTER-01 | 2h | X15 之后 | first_used_at + used_times 列，grace 窗口重用次数上限，ref: Hydra |
+| X13 | REFRESH-PARTITION-01 | 3h | 生产流量达阈值 | expires_at range 分区，DROP PARTITION 替代批量 DELETE |
+
+**关键依赖**：X11 必须在 X15 之前完成——一旦 X15 上线，明文 token 入库后改 HMAC-split 格式需要数据迁移。
 
 ---
 
@@ -706,6 +733,7 @@ D5  F4 merged-state e2e (0.5d)
   文件范围: runtime/auth/refresh/（新）+ adapters/postgres/refresh_store.go（新）+
     migrations/007_refresh_tokens.sql（新）+ sessionlogin/service.go + sessionrefresh/service.go + contract schema
   验证门禁: testcontainers 100 goroutine 并发 Rotate CAS；reuseInterval 窗口测试
+  状态（2026-04-21）: **PG Store 部分已完成** PR#213 合入。剩余: X11 HMAC-split → X15 service 集成（见上方 F2 后续工作）
   ────────────────────────────────────────
   #: 7
   PR: PR-AUTH-F4-ROUTEGROUP

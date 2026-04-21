@@ -129,15 +129,24 @@ type InvalidIndex struct {
 }
 
 // DetectInvalidIndexes queries pg_index for any indexes marked as invalid
-// (indisvalid = false). These can occur when CREATE INDEX CONCURRENTLY is
-// interrupted. The caller should log a warning and consider manual cleanup.
+// (indisvalid = false) within the current schema. These can occur when
+// CREATE INDEX CONCURRENTLY is interrupted. The caller should log a warning
+// and consider manual cleanup.
+//
+// The check is scoped to current_schema() so that in-progress CONCURRENTLY
+// builds in other schemas (e.g. parallel test schemas) do not block
+// migrations in unrelated schemas.
 //
 // Returns an empty slice when no invalid indexes are found.
 func DetectInvalidIndexes(ctx context.Context, pool *Pool) ([]InvalidIndex, error) {
-	const q = `SELECT indexrelid::regclass::text AS index_name,
-		indrelid::regclass::text AS table_name
-		FROM pg_index
-		WHERE NOT indisvalid`
+	const q = `SELECT c.relname AS index_name,
+		t.relname AS table_name
+		FROM pg_index i
+		JOIN pg_class c ON c.oid = i.indexrelid
+		JOIN pg_class t ON t.oid = i.indrelid
+		JOIN pg_namespace n ON n.oid = c.relnamespace
+		WHERE NOT i.indisvalid
+		  AND n.nspname = current_schema()`
 
 	rows, err := pool.inner.Query(ctx, q)
 	if err != nil {

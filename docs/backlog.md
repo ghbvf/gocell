@@ -119,6 +119,11 @@
 | X5 | **P3-TD-11 access-core domain 拆分** User/Session/Role | 4h | X1 | 历史 Batch 8 |
 | X9 | **LINT-MODERN-01** (Cx2, P3): 全仓库 modernization baseline 清理（rangeint / stringsseq / forvar / inline / testingcontext / any / nhooyr.io→coder/websocket）。独立 PR，不混入功能 | 6h | — | PR#163 post-review |
 | X10 | **AUTH-REFRESH-OPAQUE-01** (Cx3, 🟠 条件延后，X1 PG-DOMAIN-REPO 上线后触发): refresh token 由 JWT 改为 opaque string + server-side rotation store（RFC 6819 §5.2.2.2）；减小 JWT 承载、允许即时撤销 | 1-2d | `runtime/auth/` + `adapters/postgres/` 新 refresh_token_store | PR#166 R1-F2-7 |
+| X11 | **REFRESH-HMAC-SPLIT-01** (Cx3, 🟠 条件延后，**X15 之前必须完成**): HMAC-split token 格式 (selector\|verifier)，DB 存 selector 明文 + SHA-256(verifier)。需 migration ALTER + Store 接口变更。防 DB 泄漏后 token 被直接使用。**必须在 X15 上线前完成**——明文 token 入库后改格式需数据迁移 | 4h | `runtime/auth/refresh/` + `adapters/postgres/refresh_store.go` + migration | 开源对标 Hydra 双层防护 |
+| X12 | **REFRESH-IDLE-EXPIRE-01** (Cx2, 🟠 条件延后，X15 集成后): `idle_expires_at` 滑动窗口列 + Policy.MaxIdle。长时间未使用的 token 提前过期 | 3h | `runtime/auth/refresh/types.go` + `adapters/postgres/` + migration | 开源对标 Zitadel 双过期列 |
+| X13 | **REFRESH-PARTITION-01** (Cx2, 🟠 条件延后，生产流量达阈值后): `expires_at` range 分区，用 DROP PARTITION 替代批量 DELETE 进行 GC | 3h | migration + DBA ops runbook | 通用 PG 高吞吐模式 |
+| X14 | **REFRESH-GRACE-COUNTER-01** (Cx2, 🟠 条件延后，X15 集成后): `first_used_at` + `used_times` 列，grace 窗口内限制重用次数上限 | 2h | `adapters/postgres/refresh_store.go` + migration | 开源对标 Hydra COALESCE 模式 |
+| X15 | **REFRESH-OPAQUE-INTEGRATION-01** (Cx3, 🟠 条件延后，**X11 完成后**): sessionrefresh/sessionlogin 切换 opaque token + 接线 access_module.go。替换当前 JWT refresh token 为 opaque + refresh.Store。前置: X11 HMAC-split | 6h | `cells/access-core/slices/sessionrefresh/` + `cmd/core-bundle/access_module.go` | F2 plan 后续集成 |
 
 ---
 
