@@ -231,7 +231,7 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	}
 
 	compiler := jsonschema.NewCompiler()
-	url := "file:///" + filepath.Base(filename)
+	url := "file:///" + filepath.Clean(fullPath)
 	if err := compiler.AddResource(url, doc); err != nil {
 		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
 	}
@@ -351,7 +351,7 @@ func compileSchemaFileAbsolute(t testing.TB, dir, filename string) *jsonschema.S
 	}
 
 	compiler := jsonschema.NewCompiler()
-	url := "file:///" + filepath.Base(filename)
+	url := "file:///" + filepath.Clean(fullPath)
 	if err := compiler.AddResource(url, doc); err != nil {
 		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
 	}
