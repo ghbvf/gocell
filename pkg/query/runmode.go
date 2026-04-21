@@ -65,6 +65,15 @@ func RunModeForDemo(demo bool) RunMode {
 // PublishFailureMode controls whether direct publisher failures on write paths
 // are propagated (fail-closed) or tolerated (fail-open) when no outbox writer
 // is configured.
+//
+// Placed in pkg/query alongside RunMode because both types serve the same role:
+// translating a single DurabilityMode signal (prod vs demo) into concrete
+// fail-closed vs fail-open behaviors at Cell init time. Collocating them
+// keeps the demo-mode translation logic together and prevents pkg/query from
+// importing kernel/cell (preserving the kernel-agnostic layering of shared
+// utilities). This is a pragmatic choice within the current PR scope; a future
+// refactor may extract both types into a new pkg/runmode if additional
+// fail-open modes emerge.
 type PublishFailureMode uint8
 
 const (

@@ -222,6 +222,9 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
+// deriveModes is the single translation point from kernel/cell.DurabilityMode
+// to pkg/query run modes. Called only once at Init() time; propagated via
+// constructor parameters to all slices (do not call in handler/repository).
 func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunMode, query.PublishFailureMode) {
 	demo := durabilityMode == cell.DurabilityDemo
 	return query.RunModeForDemo(demo), query.PublishFailureModeForDemo(demo)

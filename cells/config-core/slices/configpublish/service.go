@@ -179,10 +179,11 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 
 // publishEvent writes to the outbox (L2 durable) or directly via publisher
 // (fallback when outboxWriter is nil, e.g. demo assemblies using DiscardPublisher).
-// No RunMode fail-open needed: demo mode injects DiscardPublisher which never
-// errors by contract, so any publisher failure is a real infrastructure problem
-// that must surface. Read slices use RunMode to handle stale cursor tokens —
-// a concern that does not exist in write operations.
+// PublishFailureMode controls whether direct-publisher failures are propagated
+// (fail-closed, the safe default for production) or tolerated after a warning
+// (fail-open, the demo-mode behavior when the publisher is degraded but the
+// write path should not block). DiscardPublisher never errors by contract, so
+// any publisher failure indicates a real infrastructure problem.
 func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte) error {
 	if s.outboxWriter != nil {
 		entry := outbox.Entry{
@@ -203,7 +204,7 @@ func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte
 			s.logger.Warn("config-publish: publisher failed (fail-open mode)",
 				slog.String("topic", topic),
 				slog.String("publish_failure_mode", s.publishFailureMode.String()),
-				slog.Any("error", err),
+				slog.String("error", err.Error()),
 			)
 			return nil
 		}
