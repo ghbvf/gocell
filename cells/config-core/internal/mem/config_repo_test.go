@@ -95,22 +95,52 @@ func TestConfigRepository_Update(t *testing.T) {
 
 	now := time.Now()
 	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
-		ID: "cfg-1", Key: "app.name", Value: "old", Version: 1,
+		ID: "cfg-1", Key: "app.name", Value: "old", Sensitive: false, Version: 1,
 		CreatedAt: now, UpdatedAt: now,
 	}))
 
-	t.Run("success", func(t *testing.T) {
-		require.NoError(t, repo.Update(ctx, &domain.ConfigEntry{
-			ID: "cfg-1", Key: "app.name", Value: "new", Version: 2,
-			CreatedAt: now, UpdatedAt: time.Now(),
-		}))
+	t.Run("success preserves sensitive flag", func(t *testing.T) {
+		updated, err := repo.Update(ctx, "app.name", "new")
+		require.NoError(t, err)
+		require.NotNil(t, updated)
+		assert.Equal(t, "new", updated.Value)
+		assert.Equal(t, 2, updated.Version)
+		assert.False(t, updated.Sensitive, "Update must preserve the existing sensitive flag")
 		got, err := repo.GetByKey(ctx, "app.name")
 		require.NoError(t, err)
 		assert.Equal(t, "new", got.Value)
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		err := repo.Update(ctx, &domain.ConfigEntry{Key: "missing"})
+		_, err := repo.Update(ctx, "missing", "v")
+		require.Error(t, err)
+		var ecErr *errcode.Error
+		require.ErrorAs(t, err, &ecErr)
+		assert.Equal(t, errcode.ErrConfigNotFound, ecErr.Code)
+	})
+}
+
+func TestConfigRepository_UpdateForRollback(t *testing.T) {
+	repo := NewConfigRepository()
+	ctx := context.Background()
+
+	now := time.Now()
+	require.NoError(t, repo.Create(ctx, &domain.ConfigEntry{
+		ID: "cfg-1", Key: "app.name", Value: "old", Sensitive: false, Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	}))
+
+	t.Run("changes sensitive flag", func(t *testing.T) {
+		updated, err := repo.UpdateForRollback(ctx, "app.name", "secret", true)
+		require.NoError(t, err)
+		require.NotNil(t, updated)
+		assert.Equal(t, "secret", updated.Value)
+		assert.True(t, updated.Sensitive, "UpdateForRollback must set the provided sensitive flag")
+		assert.Equal(t, 2, updated.Version)
+	})
+
+	t.Run("not found", func(t *testing.T) {
+		_, err := repo.UpdateForRollback(ctx, "missing", "v", false)
 		require.Error(t, err)
 		var ecErr *errcode.Error
 		require.ErrorAs(t, err, &ecErr)
@@ -127,13 +157,17 @@ func TestConfigRepository_Delete(t *testing.T) {
 	}))
 
 	t.Run("success", func(t *testing.T) {
-		require.NoError(t, repo.Delete(ctx, "app.name"))
-		_, err := repo.GetByKey(ctx, "app.name")
+		deleted, err := repo.Delete(ctx, "app.name")
+		require.NoError(t, err)
+		require.NotNil(t, deleted)
+		assert.Equal(t, "app.name", deleted.Key)
+		assert.Equal(t, "v", deleted.Value)
+		_, err = repo.GetByKey(ctx, "app.name")
 		require.Error(t, err)
 	})
 
 	t.Run("not found", func(t *testing.T) {
-		err := repo.Delete(ctx, "missing")
+		_, err := repo.Delete(ctx, "missing")
 		require.Error(t, err)
 	})
 }
@@ -605,4 +639,30 @@ func TestConfigRepository_ConcurrentCRUDAndList(t *testing.T) {
 	wg.Wait()
 	assert.Zero(t, writeErrors.Load(), "concurrent writes should not error (unique keys)")
 	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
+}
+
+// TestConcurrentUpdate_NoLostWrite verifies that concurrent Update calls on the
+// same key each increment the version exactly once — no lost writes under race.
+func TestConcurrentUpdate_NoLostWrite(t *testing.T) {
+	repo := NewConfigRepository()
+	now := time.Now()
+	_ = repo.Create(context.Background(), &domain.ConfigEntry{
+		ID: "cfg-1", Key: "k", Value: "v0", Version: 1,
+		CreatedAt: now, UpdatedAt: now,
+	})
+
+	const goroutines = 10
+	var wg sync.WaitGroup
+	wg.Add(goroutines)
+	for i := 0; i < goroutines; i++ {
+		go func(i int) {
+			defer wg.Done()
+			_, _ = repo.Update(context.Background(), "k", fmt.Sprintf("v%d", i))
+		}(i)
+	}
+	wg.Wait()
+
+	entry, err := repo.GetByKey(context.Background(), "k")
+	require.NoError(t, err)
+	assert.Equal(t, goroutines+1, entry.Version, "each Update must increment version exactly once")
 }

@@ -4,6 +4,7 @@ package configpublish
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -144,4 +145,102 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
 	assert.Equal(t, 1, after-before,
 		"Publish must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigChanged)
+}
+
+// TestRollback_AtomicWithOutbox verifies that config_entries (version bump) and
+// outbox_entries rows are both committed in the same transaction (L2 atomicity)
+// during Rollback. Uses a real PostgreSQL backend.
+func TestRollback_AtomicWithOutbox(t *testing.T) {
+	bundle, cleanup := setupPublishBundle(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	// Seed an entry and publish a version so Rollback has a target.
+	seedConfigEntry(t, bundle, "integration.rollback.key", "rollback-value")
+
+	// Publish v1 to create a config_versions row to roll back to.
+	ver, err := bundle.svc.Publish(ctx, "integration.rollback.key")
+	require.NoError(t, err)
+	assert.Equal(t, 1, ver.Version)
+
+	// Baseline: count outbox rows after Publish (exactly 1 from Publish above).
+	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback)
+	require.Equal(t, 0, before, "no rollback outbox rows should exist before Rollback call")
+
+	// Rollback to version 1.
+	rolled, err := bundle.svc.Rollback(ctx, "integration.rollback.key", 1)
+	require.NoError(t, err)
+	assert.Equal(t, 2, rolled.Version,
+		"Rollback must increment the config_entries version (UPDATE...RETURNING)")
+
+	// Outbox-side: Rollback's L2 co-commit must have added exactly one
+	// event.config.rollback row to outbox_entries in the same tx.
+	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback)
+	assert.Equal(t, 1, after-before,
+		"Rollback must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigRollback)
+}
+
+// TestRollback_AtomicWithOutbox_FailureRollsBackBoth verifies that when the outbox
+// write fails during Rollback, both the config_entries update and the outbox write
+// are rolled back (transaction atomicity).
+func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
+	ctx := context.Background()
+
+	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err)
+	defer func() { _ = container.Terminate(ctx) }()
+
+	connStr, err := container.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
+	require.NoError(t, err)
+	defer func() { _ = pool.Close(ctx) }()
+
+	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	session := cellpg.NewSession(pool.DB())
+	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
+	txMgr := adapterpg.NewTxManager(pool)
+
+	// First: seed and publish using a good writer.
+	goodWriter := adapterpg.NewOutboxWriter()
+	svcGood := NewService(repo, stubPublisher{}, slog.Default(),
+		WithOutboxWriter(goodWriter),
+		WithTxManager(txMgr),
+	)
+
+	b := publishServiceBundle{svc: svcGood, repo: repo, pool: pool.DB(), txMgr: txMgr}
+	seedConfigEntry(t, b, "rollback.failure.key", "initial-value")
+	_, err = svcGood.Publish(ctx, "rollback.failure.key")
+	require.NoError(t, err)
+
+	// Capture the config_entries version before the failing Rollback.
+	entryBefore, err := repo.GetByKey(ctx, "rollback.failure.key")
+	require.NoError(t, err)
+	versionBefore := entryBefore.Version
+
+	// Now inject a failing writer — simulates outbox broker down during Rollback.
+	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}
+	svcFail := NewService(repo, stubPublisher{}, slog.Default(),
+		WithOutboxWriter(failingWriter),
+		WithTxManager(txMgr),
+	)
+
+	_, err = svcFail.Rollback(ctx, "rollback.failure.key", 1)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outbox")
+
+	// config_entries version must NOT have changed (rolled back).
+	entryAfter, err := repo.GetByKey(ctx, "rollback.failure.key")
+	require.NoError(t, err)
+	assert.Equal(t, versionBefore, entryAfter.Version,
+		"config_entries version must not change when outbox write fails (atomic rollback)")
 }

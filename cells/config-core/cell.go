@@ -206,12 +206,12 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
-	runMode := query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
+	runMode, publishFailureMode := c.deriveModes(deps.DurabilityMode)
 	c.initWriteSlice()
 	if err := c.initReadSlice(runMode); err != nil {
 		return err
 	}
-	c.initPublishSlice()
+	c.initPublishSlice(publishFailureMode)
 	c.initSubscribeSlice()
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
@@ -220,6 +220,20 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 	return nil
+}
+
+// deriveModes is the single translation point from kernel/cell.DurabilityMode
+// to run modes used by slices. Called only once at Init() time; propagated via
+// constructor parameters (do not call in handler/repository).
+//
+// S10 MODE-SEMANTIC-SPLIT-01: read-path cursor tolerance (RunMode) and write-
+// path publisher failure semantics (PublishFailureMode) are separate types that
+// evolve independently.
+//
+// ref: Uber fx Provide/Decorate — each decision gets its own typed injection.
+func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunMode, configpublish.PublishFailureMode) {
+	demo := durabilityMode == cell.DurabilityDemo
+	return query.RunModeForDemo(demo), configpublish.PublishFailureModeForDemo(demo)
 }
 
 // validateOutboxDeps enforces the XOR constraint (outboxWriter + txRunner
@@ -294,7 +308,7 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 	return nil
 }
 
-func (c *ConfigCore) initPublishSlice() {
+func (c *ConfigCore) initPublishSlice(publishFailureMode configpublish.PublishFailureMode) {
 	var opts []configpublish.Option
 	if c.outboxWriter != nil {
 		opts = append(opts, configpublish.WithOutboxWriter(c.outboxWriter))
@@ -302,6 +316,7 @@ func (c *ConfigCore) initPublishSlice() {
 	if c.txRunner != nil {
 		opts = append(opts, configpublish.WithTxManager(c.txRunner))
 	}
+	opts = append(opts, configpublish.WithPublishFailureMode(publishFailureMode))
 	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, opts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("configpublish", "config-core", cell.L2))

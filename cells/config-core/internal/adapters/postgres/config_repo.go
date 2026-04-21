@@ -210,6 +210,8 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		if encErr != nil {
 			return encErr
 		}
+		// NOTE: SQL param order (edk, nonce) differs from encryptValue return
+		// order (nonce, edk). Matches column order: value_edk=$10, value_nonce=$11.
 		const q = `INSERT INTO config_entries
 			(id, key, value, sensitive, version, created_at, updated_at,
 			 value_cipher, value_key_id, value_edk, value_nonce)
@@ -235,69 +237,105 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 	return nil
 }
 
-// GetByKey retrieves a config entry by key with transparent decryption for
-// sensitive entries. Sets entry.Stale=true when keyID != current active key.
-func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error) {
-	const q = `SELECT id, key, value, sensitive, version, created_at, updated_at,
-		value_cipher, value_key_id, value_edk, value_nonce
-		FROM config_entries WHERE key = $1`
+// configEntryColumns is the canonical column list for config_entries used by
+// every SELECT/RETURNING projection in this file. Centralised so the column
+// order stays in sync between GetByKey, Update RETURNING, and Delete RETURNING.
+const configEntryColumns = "id, key, value, sensitive, version, created_at, updated_at, value_cipher, value_key_id, value_edk, value_nonce"
 
-	row := r.resolveDB(ctx).QueryRow(ctx, q, key)
+// listEntryColumns is the reduced column set for List operations. It excludes
+// cipher payload columns (value_cipher, value_edk, value_nonce) because List
+// does not decrypt sensitive values — it returns "***" sentinel instead.
+// See applySensitiveListSentinel for the redaction logic.
+const listEntryColumns = "id, key, value, sensitive, version, created_at, updated_at, value_key_id"
 
-	var (
-		e           domain.ConfigEntry
-		valueCipher []byte
-		valueKeyID  *string
-		valueEDK    []byte
-		valueNonce  []byte
-	)
-	if err := row.Scan(
-		&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt,
+// scanConfigRow scans one row (order matches configEntryColumns) into a
+// ConfigEntry plus the raw cipher tuple. The caller is responsible for
+// decrypting the cipher tuple via decryptScannedEntry.
+func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKeyID *string, valueEDK []byte, valueNonce []byte, err error) {
+	var entry domain.ConfigEntry
+	if scanErr := row.Scan(
+		&entry.ID, &entry.Key, &entry.Value, &entry.Sensitive, &entry.Version,
+		&entry.CreatedAt, &entry.UpdatedAt,
 		&valueCipher, &valueKeyID, &valueEDK, &valueNonce,
-	); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, &errcode.Error{
-				Code:            errcode.ErrConfigRepoNotFound,
-				Message:         "config not found",
-				InternalMessage: fmt.Sprintf("config repo: GetByKey miss key=%s", key),
-				Cause:           err,
-			}
-		}
-		return nil, &errcode.Error{
-			Code:            errcode.ErrConfigRepoQuery,
-			Message:         "config repo query failed",
-			InternalMessage: fmt.Sprintf("config repo: GetByKey scan error key=%s", key),
+	); scanErr != nil {
+		return nil, nil, nil, nil, nil, scanErr
+	}
+	return &entry, valueCipher, valueKeyID, valueEDK, valueNonce, nil
+}
+
+// scanConfigOrMapError calls scanConfigRow and translates the two known failure
+// modes into GoCell errcode.Error values:
+//
+//   - pgx.ErrNoRows  → ErrConfigRepoNotFound (domain not-found; maps to 404).
+//   - anything else  → ErrConfigRepoQuery (infra failure; maps to 500).
+//
+// op is the method name used only in InternalMessage for operator debugging;
+// key is the lookup key surfaced the same way.
+func scanConfigOrMapError(row Row, op, key string) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
+	e, ct, keyID, edk, nonce, err := scanConfigRow(row)
+	if err == nil {
+		return e, ct, keyID, edk, nonce, nil
+	}
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, nil, nil, nil, nil, &errcode.Error{
+			Code:            errcode.ErrConfigRepoNotFound,
+			Message:         "config not found",
+			InternalMessage: fmt.Sprintf("config repo: %s miss key=%s", op, key),
 			Cause:           err,
 		}
 	}
+	return nil, nil, nil, nil, nil, &errcode.Error{
+		Code:            errcode.ErrConfigRepoQuery,
+		Message:         "config repo query failed",
+		InternalMessage: fmt.Sprintf("config repo: %s scan error key=%s", op, key),
+		Cause:           err,
+	}
+}
 
-	// Fail-closed enforcement for sensitive entries.
-	if e.Sensitive {
-		if len(valueCipher) == 0 || valueKeyID == nil || *valueKeyID == "" {
-			// Legacy plaintext row: sensitive=true but value_cipher IS NULL.
-			// Block read until plaintext_migration completes to enforce
-			// fail-closed semantics — never return plaintext from unencrypted rows.
-			return nil, errcode.New(errcode.ErrConfigDecryptFailed,
-				"sensitive value is in legacy plaintext format; run plaintext_migration tool before reading")
-		}
-		plain, err := r.decryptValue(ctx, key, valueCipher, *valueKeyID, valueNonce, valueEDK)
-		if err != nil {
-			return nil, err
-		}
-		e.Value = plain
-		e.KeyID = *valueKeyID
+// decryptScannedEntry applies fail-closed sensitive-value decryption and stale-key
+// detection to an already-scanned ConfigEntry. For non-sensitive entries it is a
+// no-op. The cipher tuple fields (ct, keyID, edk, nonce) are the raw values
+// returned by scanConfigRow.
+func (r *ConfigRepository) decryptScannedEntry(ctx context.Context, e *domain.ConfigEntry, ct []byte, keyID *string, nonce, edk []byte) error {
+	if !e.Sensitive {
+		return nil
+	}
+	if len(ct) == 0 || keyID == nil || *keyID == "" {
+		// Legacy plaintext row: sensitive=true but value_cipher IS NULL.
+		return errcode.New(errcode.ErrConfigDecryptFailed,
+			"sensitive value is in legacy plaintext format; run plaintext_migration tool before reading")
+	}
+	plain, err := r.decryptValue(ctx, e.Key, ct, *keyID, nonce, edk)
+	if err != nil {
+		return err
+	}
+	e.Value = plain
+	e.KeyID = *keyID
 
-		// Staleness check: if the stored keyID differs from current, mark stale.
-		if r.transformer != nil {
-			currentID := r.currentKeyID(ctx)
-			if currentID != "" && currentID != *valueKeyID {
-				e.Stale = true
-				r.observeStaleCipher(ctx, key, *valueKeyID, currentID)
-			}
+	// Staleness check: if the stored keyID differs from current, mark stale.
+	if r.transformer != nil {
+		currentID := r.currentKeyID(ctx)
+		if currentID != "" && currentID != *keyID {
+			e.Stale = true
+			r.observeStaleCipher(ctx, e.Key, *keyID, currentID)
 		}
 	}
+	return nil
+}
 
-	return &e, nil
+// GetByKey retrieves a config entry by key with transparent decryption for
+// sensitive entries. Sets entry.Stale=true when keyID != current active key.
+func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error) {
+	const q = `SELECT ` + configEntryColumns + ` FROM config_entries WHERE key = $1`
+	row := r.resolveDB(ctx).QueryRow(ctx, q, key)
+	e, ct, keyID, edk, nonce, err := scanConfigOrMapError(row, "GetByKey", key)
+	if err != nil {
+		return nil, err
+	}
+	if err := r.decryptScannedEntry(ctx, e, ct, keyID, nonce, edk); err != nil {
+		return nil, err
+	}
+	return e, nil
 }
 
 // observeStaleCipher emits a slog.Warn and invokes the optional onStaleCipher
@@ -330,72 +368,107 @@ func (r *ConfigRepository) currentKeyID(ctx context.Context) string {
 	return ""
 }
 
-// Update updates an existing config entry.
-// For sensitive=true: re-encrypts value and writes cipher columns.
-func (r *ConfigRepository) Update(ctx context.Context, entry *domain.ConfigEntry) error {
-	if entry.UpdatedAt.IsZero() {
-		entry.UpdatedAt = time.Now()
-	}
-
+// Update atomically sets value and increments version. Preserves the existing
+// sensitive flag — reads it internally via SELECT...FOR UPDATE to eliminate
+// any TOCTOU race on the sensitive flag. Callers do not need to pre-read the
+// entry. Returns ErrConfigRepoNotFound if the key does not exist.
+func (r *ConfigRepository) Update(ctx context.Context, key string, value string) (*domain.ConfigEntry, error) {
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
-	var affected int64
-	if entry.Sensitive {
-		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, entry.Key, entry.Value)
-		if encErr != nil {
-			return encErr
+	// Lock the row and read the current sensitive flag atomically.
+	const selectQ = `SELECT sensitive FROM config_entries WHERE key = $1 FOR UPDATE`
+	var sensitive bool
+	selectRow := db.QueryRow(ctx, selectQ, key)
+	if scanErr := selectRow.Scan(&sensitive); scanErr != nil {
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			return nil, &errcode.Error{
+				Code:            errcode.ErrConfigRepoNotFound,
+				Message:         "config not found",
+				InternalMessage: fmt.Sprintf("config repo: Update miss key=%s", key),
+				Cause:           scanErr,
+			}
 		}
-		const q = `UPDATE config_entries
-			SET value = $1, sensitive = $2, version = $3, updated_at = $4,
-			    value_cipher = $5, value_key_id = $6, value_edk = $7, value_nonce = $8
-			WHERE key = $9`
-		affected, err = db.Exec(ctx, q,
-			"", entry.Sensitive, entry.Version, entry.UpdatedAt,
-			ct, keyID, edk, nonce, entry.Key,
-		)
-	} else {
-		const q = `UPDATE config_entries
-			SET value = $1, sensitive = $2, version = $3, updated_at = $4,
-			    value_cipher = NULL, value_key_id = NULL, value_edk = NULL, value_nonce = NULL
-			WHERE key = $5`
-		affected, err = db.Exec(ctx, q,
-			entry.Value, entry.Sensitive, entry.Version, entry.UpdatedAt, entry.Key,
-		)
+		return nil, &errcode.Error{
+			Code:            errcode.ErrConfigRepoQuery,
+			Message:         "config repo query failed",
+			InternalMessage: fmt.Sprintf("config repo: Update select-for-update error key=%s", key),
+			Cause:           scanErr,
+		}
 	}
-	if err != nil {
-		return errcode.Wrap(errcode.ErrConfigRepoQuery,
-			fmt.Sprintf("config repo: update failed for key %s", entry.Key), err)
-	}
-	if affected == 0 {
-		return errcode.Safe(errcode.ErrConfigRepoNotFound,
-			"config not found",
-			fmt.Sprintf("config repo: Update miss key=%s", entry.Key))
-	}
-	return nil
+
+	return r.doUpdate(ctx, db, key, value, sensitive)
 }
 
-// Delete removes a config entry by key.
-func (r *ConfigRepository) Delete(ctx context.Context, key string) error {
-	const q = `DELETE FROM config_entries WHERE key = $1`
+// UpdateForRollback atomically sets value AND sensitive, increments version.
+// Used exclusively by configpublish.Rollback to restore a snapshot's sensitivity
+// alongside its value. Returns ErrConfigRepoNotFound if the key does not exist.
+func (r *ConfigRepository) UpdateForRollback(ctx context.Context, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
+	db, err := r.resolveWriteDB(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return r.doUpdate(ctx, db, key, value, sensitive)
+}
+
+// doUpdate performs the actual UPDATE...RETURNING for both Update and
+// UpdateForRollback. sensitive is the resolved flag (read by caller or provided
+// directly). For sensitive=true: re-encrypts value and writes cipher columns.
+func (r *ConfigRepository) doUpdate(ctx context.Context, db DBTX, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
+	var row Row
+	if sensitive {
+		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, key, value)
+		if encErr != nil {
+			return nil, encErr
+		}
+		// NOTE: SQL param order (edk, nonce) differs from encryptValue return
+		// order (nonce, edk). Matches the column order: value_edk=$3, value_nonce=$4.
+		const q = `UPDATE config_entries
+			SET value = '', sensitive = true, version = version+1, updated_at = now(),
+			    value_cipher = $1, value_key_id = $2, value_edk = $3, value_nonce = $4
+			WHERE key = $5
+			RETURNING ` + configEntryColumns
+		row = db.QueryRow(ctx, q, ct, keyID, edk, nonce, key)
+	} else {
+		const q = `UPDATE config_entries
+			SET value = $1, sensitive = false, version = version+1, updated_at = now(),
+			    value_cipher = NULL, value_key_id = NULL, value_edk = NULL, value_nonce = NULL
+			WHERE key = $2
+			RETURNING ` + configEntryColumns
+		row = db.QueryRow(ctx, q, value, key)
+	}
+
+	e, ct, keyID, edk, nonce, scanErr := scanConfigOrMapError(row, "Update", key)
+	if scanErr != nil {
+		return nil, scanErr
+	}
+	if err := r.decryptScannedEntry(ctx, e, ct, keyID, nonce, edk); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// Delete atomically removes a config entry by key and returns the deleted row
+// via DELETE...RETURNING, enabling callers to publish a tombstone event without
+// a separate pre-read.
+func (r *ConfigRepository) Delete(ctx context.Context, key string) (*domain.ConfigEntry, error) {
+	const q = `DELETE FROM config_entries WHERE key = $1 RETURNING ` + configEntryColumns
 
 	db, err := r.resolveWriteDB(ctx)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	affected, err := db.Exec(ctx, q, key)
-	if err != nil {
-		return errcode.Wrap(errcode.ErrConfigRepoQuery,
-			fmt.Sprintf("config repo: delete failed for key %s", key), err)
+	row := db.QueryRow(ctx, q, key)
+	e, ct, keyID, edk, nonce, scanErr := scanConfigOrMapError(row, "Delete", key)
+	if scanErr != nil {
+		return nil, scanErr
 	}
-	if affected == 0 {
-		return errcode.Safe(errcode.ErrConfigRepoNotFound,
-			"config not found",
-			fmt.Sprintf("config repo: Delete miss key=%s", key))
+	if err := r.decryptScannedEntry(ctx, e, ct, keyID, nonce, edk); err != nil {
+		return nil, err
 	}
-	return nil
+	return e, nil
 }
 
 // sensitiveListSentinel is the placeholder value returned by List for sensitive entries.
@@ -450,7 +523,7 @@ func (r *ConfigRepository) applySensitiveListSentinel(ctx context.Context, e *do
 // exposure of sensitive values in list responses.
 func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
 	b := query.NewBuilder()
-	b.Append("SELECT id, key, value, sensitive, version, created_at, updated_at, value_key_id FROM config_entries WHERE 1=1")
+	b.Append("SELECT " + listEntryColumns + " FROM config_entries WHERE 1=1")
 
 	if err := query.AppendKeyset(b, params); err != nil {
 		return nil, errcode.Wrap(errcode.ErrConfigRepoQuery, "config repo: keyset build failed", err)

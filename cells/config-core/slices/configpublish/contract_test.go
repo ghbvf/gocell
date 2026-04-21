@@ -12,16 +12,17 @@ import (
 
 	"github.com/ghbvf/gocell/cells/config-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/config-core/internal/mem"
+	"github.com/ghbvf/gocell/cells/config-core/internal/testutil"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/require"
 )
 
-func newContractService() (*Service, *mem.ConfigRepository, *recordingWriter) {
+func newContractService() (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
 	repo := mem.NewConfigRepository()
-	writer := &recordingWriter{}
-	svc := NewService(repo, stubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+	writer := &testutil.RecordingWriter{}
+	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
+		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
 	return svc, repo, writer
 }
 
@@ -201,8 +202,8 @@ func TestEventConfigChangedV1Publish(t *testing.T) {
 	_, err := svc.Publish(context.Background(), "app.name")
 	require.NoError(t, err)
 
-	require.Len(t, writer.entries, 1, "Publish must emit one outbox entry")
-	entry := writer.entries[0]
+	require.Len(t, writer.Entries, 1, "Publish must emit one outbox entry")
+	entry := writer.Entries[0]
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
 	c.MustRejectPayload(t, []byte(`{"action":"published","key":"app.name"}`))
@@ -218,13 +219,13 @@ func TestEventConfigRollbackV1Publish(t *testing.T) {
 	// Publish first to create a version, then rollback
 	_, err := svc.Publish(context.Background(), "app.name")
 	require.NoError(t, err)
-	writer.entries = nil // reset
+	writer.Entries = nil // reset
 
 	_, err = svc.Rollback(context.Background(), "app.name", 1)
 	require.NoError(t, err)
 
-	require.Len(t, writer.entries, 1, "Rollback must emit one outbox entry")
-	entry := writer.entries[0]
+	require.Len(t, writer.Entries, 1, "Rollback must emit one outbox entry")
+	entry := writer.Entries[0]
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
 	c.MustRejectPayload(t, []byte(`{"action":"rollback","key":"app.name"}`))

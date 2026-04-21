@@ -101,11 +101,16 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 			return repo.Create(txCtx, entry)
 		}))
 
-		entry.Value = "updated"
-		entry.Version = 2
+		var updated *domain.ConfigEntry
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Update(txCtx, entry)
+			var err error
+			updated, err = repo.Update(txCtx, "integration.update.key", "updated")
+			return err
 		}))
+
+		require.NotNil(t, updated)
+		assert.Equal(t, "updated", updated.Value)
+		assert.Equal(t, 2, updated.Version)
 
 		got, err := repo.GetByKey(ctx, "integration.update.key")
 		require.NoError(t, err)
@@ -124,9 +129,14 @@ func TestConfigRepo_Integration_CRUD(t *testing.T) {
 			return repo.Create(txCtx, entry)
 		}))
 
+		var deleted *domain.ConfigEntry
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Delete(txCtx, "integration.delete.key")
+			var err error
+			deleted, err = repo.Delete(txCtx, "integration.delete.key")
+			return err
 		}))
+		require.NotNil(t, deleted)
+		assert.Equal(t, "to-be-deleted", deleted.Value)
 
 		_, err := repo.GetByKey(ctx, "integration.delete.key")
 		require.Error(t, err)
@@ -360,10 +370,9 @@ func TestConfigRepo_Integration_Encryption_RoundTrip(t *testing.T) {
 			return repo.Create(txCtx, entry)
 		}))
 
-		entry.Value = "rotated-token"
-		entry.Version = 2
 		require.NoError(t, txMgr.RunInTx(ctx, func(txCtx context.Context) error {
-			return repo.Update(txCtx, entry)
+			_, err := repo.UpdateForRollback(txCtx, entry.Key, "rotated-token", true)
+			return err
 		}))
 
 		got, err := repo.GetByKey(ctx, entry.Key)

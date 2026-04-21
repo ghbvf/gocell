@@ -104,34 +104,28 @@ type UpdateInput struct {
 }
 
 // Update modifies an existing config entry and publishes a change event.
+// The repo reads the sensitive flag internally via SELECT...FOR UPDATE, so no
+// pre-read is needed here. The entire update and outbox write are wrapped in
+// a single transaction for L2 atomicity.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.ConfigEntry, error) {
 	if input.Key == "" {
 		return nil, errcode.New(errcode.ErrConfigInvalidInput, "key is required")
 	}
 
-	entry, err := s.repo.GetByKey(ctx, input.Key)
-	if err != nil {
-		return nil, fmt.Errorf("config-write: update: %w", err)
-	}
-
-	entry.Value = input.Value
-	entry.Version++
-	entry.UpdatedAt = time.Now()
-
+	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Update(txCtx, entry); err != nil {
+		var err error
+		updated, err = s.repo.Update(txCtx, input.Key, input.Value)
+		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}
-		if err := s.publishChange(txCtx, "updated", entry); err != nil {
-			return err
-		}
-		return nil
+		return s.publishChange(txCtx, "updated", updated)
 	}); err != nil {
 		return nil, err
 	}
 
-	s.logger.Info("config entry updated", slog.String("key", entry.Key), slog.Int("version", entry.Version))
-	return entry, nil
+	s.logger.Info("config entry updated", slog.String("key", updated.Key), slog.Int("version", updated.Version))
+	return updated, nil
 }
 
 // Delete removes a config entry by key and publishes a change event.
@@ -140,16 +134,12 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 		return errcode.New(errcode.ErrConfigInvalidInput, "key is required")
 	}
 
-	entry, err := s.repo.GetByKey(ctx, key)
-	if err != nil {
-		return fmt.Errorf("config-write: delete: %w", err)
-	}
-
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Delete(txCtx, key); err != nil {
+		deleted, err := s.repo.Delete(txCtx, key)
+		if err != nil {
 			return fmt.Errorf("config-write: delete: %w", err)
 		}
-		if err := s.publishChange(txCtx, "deleted", entry); err != nil {
+		if err := s.publishChange(txCtx, "deleted", deleted); err != nil {
 			return err
 		}
 		return nil
