@@ -27,6 +27,7 @@
         "additionalProperties": false
       }
     },
+    "nextCursor": { "type": "string" },
     "hasMore": { "type": "boolean" }
   },
   "required": ["data", "hasMore"]

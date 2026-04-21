@@ -2,7 +2,9 @@ package governance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -525,8 +527,14 @@ func (v *Validator) validateFMT14() []ValidationResult {
 	return results
 }
 
-// validateFMT15 checks that HTTP list-style response schemas include "hasMore"
-// in their required fields. A response is a "list" when properties.data.type is "array".
+// codeFMT15 is the rule code for HTTP list response schema validation.
+const codeFMT15 = "FMT-15"
+
+// validateFMT15 checks that HTTP list-style response schemas:
+//   - include "hasMore" in required fields
+//   - declare "nextCursor" as a property (not required, because PageResult uses omitempty)
+//
+// A response is a "list" when properties.data.type is "array".
 // Skipped when root is empty, for non-HTTP contracts, or when the schema file cannot be read.
 func (v *Validator) validateFMT15() []ValidationResult {
 	if v.root == "" {
@@ -534,33 +542,67 @@ func (v *Validator) validateFMT15() []ValidationResult {
 	}
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if c.Kind != "http" || c.SchemaRefs.Response == "" {
-			continue
+		results = append(results, v.checkFMT15Contract(c)...)
+	}
+	return results
+}
+
+// checkFMT15Contract validates a single contract's list response schema for FMT-15.
+// Returns one result per violated constraint.
+func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationResult {
+	if c.Kind != "http" || c.SchemaRefs.Response == "" {
+		return nil
+	}
+	contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
+	schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
+	if !IsWithinRoot(v.root, schemaPath) {
+		return nil
+	}
+	data, err := v.readFile(schemaPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // REF-12 handles missing files
 		}
-		contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
-		schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
-		if !IsWithinRoot(v.root, schemaPath) {
-			continue
-		}
-		data, err := v.readFile(schemaPath)
-		if err != nil {
-			continue // REF-12 handles missing files
-		}
-		info, ok := parseResponseSchema(data)
-		if !ok {
-			continue
-		}
-		if !isListSchema(info) {
-			continue
-		}
-		if !hasMoreInRequired(info) {
-			results = append(results, v.newResult(
-				"FMT-15", SeverityError, IssueRequired,
-				contractFile(c.ID),
-				fieldSchemaRefsResponse,
-				fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
-			))
-		}
+		return []ValidationResult{v.newResult(
+			codeFMT15, SeverityError, IssueInvalid,
+			contractFile(c.ID), fieldSchemaRefsResponse,
+			fmt.Sprintf("cannot read response schema for contract %q: %v", c.ID, err),
+		)}
+	}
+	info, err := parseListSchemaInfo(data)
+	if err != nil {
+		return []ValidationResult{v.newResult(
+			codeFMT15, SeverityError, IssueInvalid,
+			contractFile(c.ID), fieldSchemaRefsResponse,
+			fmt.Sprintf("response schema for contract %q is not valid JSON: %v", c.ID, err),
+		)}
+	}
+	if hasCombinator(info) && looksLikeListSchema(info) {
+		return []ValidationResult{v.newResult(
+			codeFMT15, SeverityWarning, IssueInvalid,
+			contractFile(c.ID), fieldSchemaRefsResponse,
+			fmt.Sprintf("response schema for contract %q uses oneOf/anyOf/allOf: FMT-15 cannot verify list constraints; split into single-shape contracts", c.ID),
+		)}
+	}
+	if !isListSchema(info) {
+		return nil
+	}
+	var results []ValidationResult
+	if !hasMoreInRequired(info) {
+		results = append(results, v.newResult(
+			codeFMT15, SeverityError, IssueRequired,
+			contractFile(c.ID),
+			fieldSchemaRefsResponse,
+			fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
+		))
+	}
+	if !hasNextCursorProperty(info) {
+		results = append(results, v.newResult(
+			codeFMT15, SeverityError, IssueRequired,
+			contractFile(c.ID),
+			fieldSchemaRefsResponse,
+			fmt.Sprintf("list response schema for contract %q must declare \"nextCursor\" property (omit from required; PageResult omits it on last page)", c.ID),
+		))
 	}
 	return results
 }
@@ -571,22 +613,43 @@ type responseSchemaInfo struct {
 		Data struct {
 			Type string `json:"type"`
 		} `json:"data"`
+		// NextCursor is non-nil when the "nextCursor" property is declared in the schema.
+		NextCursor *json.RawMessage `json:"nextCursor"`
+		// HasMore is non-nil when the "hasMore" property is declared in the schema.
+		HasMore *json.RawMessage `json:"hasMore"`
 	} `json:"properties"`
 	Required []string `json:"required"`
+	// Combinator fields: non-nil when the schema uses oneOf/anyOf/allOf at the root level.
+	OneOf *json.RawMessage `json:"oneOf"`
+	AnyOf *json.RawMessage `json:"anyOf"`
+	AllOf *json.RawMessage `json:"allOf"`
 }
 
-// parseResponseSchema unmarshals the minimal fields needed for list-lint checks.
-func parseResponseSchema(data []byte) (responseSchemaInfo, bool) {
+// parseListSchemaInfo unmarshals the minimal fields needed for list-lint checks.
+// Returns an error if data is not valid JSON.
+func parseListSchemaInfo(data []byte) (responseSchemaInfo, error) {
 	var info responseSchemaInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return info, false
+		return info, err
 	}
-	return info, true
+	return info, nil
 }
 
 // isListSchema checks if a JSON schema has properties.data.type == "array".
 func isListSchema(info responseSchemaInfo) bool {
 	return info.Properties.Data.Type == "array"
+}
+
+// hasCombinator reports whether the schema uses oneOf/anyOf/allOf at the root level.
+func hasCombinator(info responseSchemaInfo) bool {
+	return info.OneOf != nil || info.AnyOf != nil || info.AllOf != nil
+}
+
+// looksLikeListSchema reports whether a schema appears list-related by checking
+// whether "hasMore" or "nextCursor" are declared in the top-level properties.
+// Used together with hasCombinator to avoid false positives on non-list schemas.
+func looksLikeListSchema(info responseSchemaInfo) bool {
+	return info.Properties.HasMore != nil || hasNextCursorProperty(info)
 }
 
 // hasMoreInRequired checks if "hasMore" is in the JSON schema required array.
@@ -597,4 +660,12 @@ func hasMoreInRequired(info responseSchemaInfo) bool {
 		}
 	}
 	return false
+}
+
+// hasNextCursorProperty checks if "nextCursor" is declared as a schema property.
+// The field must be declared (though not in required[]) because PageResult uses
+// omitempty: nextCursor is absent from last-page responses and must not be required.
+// A "nextCursor": null declaration is treated as absent (null is not a valid schema).
+func hasNextCursorProperty(info responseSchemaInfo) bool {
+	return info.Properties.NextCursor != nil && string(*info.Properties.NextCursor) != "null"
 }
