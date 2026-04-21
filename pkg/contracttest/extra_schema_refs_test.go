@@ -42,8 +42,8 @@ func TestContractYAML_ExtraSchemaRefs(t *testing.T) {
 }
 
 // TestLoad_ExtraSchemaRefs confirms the full Load path with a non-standard
-// schemaRefs key: the contract loads successfully (extra keys are ignored by
-// the schema compiler) and the known refs are compiled.
+// schemaRefs key: the contract loads successfully, known refs are compiled,
+// and extra refs are accessible via ValidateSchemaRef.
 func TestLoad_ExtraSchemaRefs(t *testing.T) {
 	dir := filepath.Join(testdataRoot(), "http", "test", "extrarefs", "v1")
 	c := Load(t, dir)
@@ -53,4 +53,21 @@ func TestLoad_ExtraSchemaRefs(t *testing.T) {
 	}
 	// Prove that the response schema was compiled by validating a minimal document.
 	c.ValidateResponse(t, []byte(`{"data":{}}`))
+
+	// Prove that ValidateSchemaRef dispatches to extra schemas.
+	// custom.schema.json requires {"code": <string>}.
+	c.ValidateSchemaRef(t, "customKey", []byte(`{"code":"ok"}`))
+
+	// Prove that ValidateSchemaRef rejects invalid data against the extra schema.
+	mockT := &mockTB{}
+	c.ValidateSchemaRef(mockT, "customKey", []byte(`{}`)) // missing required "code"
+	if !mockT.failed {
+		t.Error("expected ValidateSchemaRef to fail for missing required field, but it passed")
+	}
+
+	// Prove that ValidateSchemaRef is a no-op for unknown keys.
+	c.ValidateSchemaRef(t, "nonexistentKey", []byte(`{"anything":"goes"}`))
+
+	// Prove that ValidateSchemaRef dispatches well-known keys correctly.
+	c.ValidateSchemaRef(t, "response", []byte(`{"data":{}}`))
 }

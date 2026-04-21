@@ -44,6 +44,7 @@ type Contract struct {
 	responseSchema *jsonschema.Schema
 	payloadSchema  *jsonschema.Schema
 	headersSchema  *jsonschema.Schema
+	extraSchemas   map[string]*jsonschema.Schema // keyed by extra ref name
 }
 
 // HTTPTransport holds optional transport metadata for migrated HTTP contracts.
@@ -113,6 +114,11 @@ func Load(t testing.TB, contractDir string) *Contract {
 	c.payloadSchema = compileSchemaFile(t, contractDir, cy.SchemaRefs.Payload)
 	c.headersSchema = compileSchemaFile(t, contractDir, cy.SchemaRefs.Headers)
 
+	c.extraSchemas = make(map[string]*jsonschema.Schema)
+	for key, filename := range cy.SchemaRefs.Extra {
+		c.extraSchemas[key] = compileSchemaFile(t, contractDir, filename)
+	}
+
 	return c
 }
 
@@ -149,6 +155,32 @@ func (c *Contract) ValidatePayload(t testing.TB, jsonData []byte) {
 func (c *Contract) ValidateHeaders(t testing.TB, jsonData []byte) {
 	t.Helper()
 	validateJSON(t, c.headersSchema, jsonData, "headers")
+}
+
+// ValidateSchemaRef validates jsonData against the schema referenced by the
+// given key name. This covers both well-known refs (request, response, payload,
+// headers) and extra refs declared in schemaRefs. No-op if the key is not found.
+func (c *Contract) ValidateSchemaRef(t testing.TB, key string, jsonData []byte) {
+	t.Helper()
+	switch key {
+	case "request":
+		c.ValidateRequest(t, jsonData)
+		return
+	case "response":
+		c.ValidateResponse(t, jsonData)
+		return
+	case "payload":
+		c.ValidatePayload(t, jsonData)
+		return
+	case "headers":
+		c.ValidateHeaders(t, jsonData)
+		return
+	}
+	schema, ok := c.extraSchemas[key]
+	if !ok {
+		return // no-op: ref not declared
+	}
+	validateJSON(t, schema, jsonData, key)
 }
 
 // ValidateHTTPResponseRecorder validates an HTTP provider response against the
