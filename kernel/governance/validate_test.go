@@ -3381,6 +3381,7 @@ func TestFMT15(t *testing.T) {
 
 	tests := []struct {
 		name      string
+		emptyRoot bool // when true, Validator is created with root=""
 		setup     func(*metadata.ProjectMeta)
 		readFile  func(string) ([]byte, error)
 		wantCount int
@@ -3410,6 +3411,16 @@ func TestFMT15(t *testing.T) {
 			wantCount: 1,
 		},
 		{
+			name: "list schema missing both hasMore and nextCursor",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile: func(_ string) ([]byte, error) {
+				return []byte(`{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data"]}`), nil
+			},
+			wantCount: 2,
+		},
+		{
 			name: "non-list schema skipped",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
@@ -3422,6 +3433,16 @@ func TestFMT15(t *testing.T) {
 			setup:     func(_ *metadata.ProjectMeta) {},
 			readFile:  nil,
 			wantCount: 0,
+		},
+		{
+			name: "nextCursor declared as null is not a valid property",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile: func(_ string) ([]byte, error) {
+				return []byte(`{"properties":{"data":{"type":"array"},"nextCursor":null},"required":["data","hasMore"]}`), nil
+			},
+			wantCount: 1,
 		},
 		{
 			name: "file read error skipped gracefully",
@@ -3448,12 +3469,13 @@ func TestFMT15(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "empty root skipped",
+			name:      "empty root skipped",
+			emptyRoot: true, // root="" causes early return in validateFMT15
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
 			readFile:  func(_ string) ([]byte, error) { return []byte(missingHasMore), nil },
-			wantCount: 0, // root="" causes early return
+			wantCount: 0,
 		},
 	}
 	for _, tt := range tests {
@@ -3461,7 +3483,7 @@ func TestFMT15(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
 			root := "/fake/root"
-			if tt.name == "empty root skipped" {
+			if tt.emptyRoot {
 				root = ""
 			}
 			val := NewValidator(pm, root)

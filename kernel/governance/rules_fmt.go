@@ -557,7 +557,7 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 	if err != nil {
 		return nil // REF-12 handles missing files
 	}
-	info, ok := parseResponseSchema(data)
+	info, ok := parseListSchemaInfo(data)
 	if !ok || !isListSchema(info) {
 		return nil
 	}
@@ -587,16 +587,14 @@ type responseSchemaInfo struct {
 		Data struct {
 			Type string `json:"type"`
 		} `json:"data"`
-		// NextCursor is non-nil when "nextCursor" is declared in the schema properties.
-		// It must be declared (though not required) because PageResult uses omitempty:
-		// the field is absent on the last page and must not appear in required[].
+		// NextCursor is non-nil when the "nextCursor" property is declared in the schema.
 		NextCursor *json.RawMessage `json:"nextCursor"`
 	} `json:"properties"`
 	Required []string `json:"required"`
 }
 
-// parseResponseSchema unmarshals the minimal fields needed for list-lint checks.
-func parseResponseSchema(data []byte) (responseSchemaInfo, bool) {
+// parseListSchemaInfo unmarshals the minimal fields needed for list-lint checks.
+func parseListSchemaInfo(data []byte) (responseSchemaInfo, bool) {
 	var info responseSchemaInfo
 	if err := json.Unmarshal(data, &info); err != nil {
 		return info, false
@@ -605,6 +603,9 @@ func parseResponseSchema(data []byte) (responseSchemaInfo, bool) {
 }
 
 // isListSchema checks if a JSON schema has properties.data.type == "array".
+// Note: dual-mode schemas that use oneOf/anyOf instead of a top-level
+// "type":"array" on properties.data are not detected here and are silently
+// skipped by FMT-15. Such schemas require manual review at the contract level.
 func isListSchema(info responseSchemaInfo) bool {
 	return info.Properties.Data.Type == "array"
 }
@@ -619,7 +620,10 @@ func hasMoreInRequired(info responseSchemaInfo) bool {
 	return false
 }
 
-// hasNextCursorProperty checks if "nextCursor" is declared in the schema properties.
+// hasNextCursorProperty checks if "nextCursor" is declared as a schema property.
+// The field must be declared (though not in required[]) because PageResult uses
+// omitempty: nextCursor is absent from last-page responses and must not be required.
+// A "nextCursor": null declaration is treated as absent (null is not a valid schema).
 func hasNextCursorProperty(info responseSchemaInfo) bool {
-	return info.Properties.NextCursor != nil
+	return info.Properties.NextCursor != nil && string(*info.Properties.NextCursor) != "null"
 }
