@@ -110,6 +110,9 @@ func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Cl
 	if policy.MaxAge <= 0 {
 		panic("postgres.NewRefreshStore: policy.MaxAge must be positive")
 	}
+	if policy.ReuseInterval < 0 {
+		panic("postgres.NewRefreshStore: policy.ReuseInterval must not be negative")
+	}
 	if randReader == nil {
 		randReader = rand.Reader
 	}
@@ -226,16 +229,18 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presentedToken string) (*re
 	}()
 
 	tok, err := s.rotateInTx(ctx, tx, presentedToken, newTokenID, now)
-	if err != nil {
-		return nil, err
+
+	// Commit when: success (happy/grace) OR reuse cascade (revoke must persist).
+	// Rollback when: revoked/expired/not-found (read-only branches).
+	needCommit := err == nil || errors.Is(err, refresh.ErrTokenReused)
+	if needCommit {
+		if cErr := tx.Commit(ctx); cErr != nil {
+			return nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: rotate commit", cErr)
+		}
+		committed = true
 	}
 
-	if err := tx.Commit(ctx); err != nil {
-		return nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: rotate commit", err)
-	}
-	committed = true
-
-	return tok, nil
+	return tok, err
 }
 
 // rotateInTx orchestrates the five Rotate branches within an open transaction.
@@ -268,8 +273,11 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, presentedTok
 		if scanErr == nil {
 			return nil, refresh.ErrTokenRevoked
 		}
-		// Branch 5: genuinely not found in any index.
-		return nil, refresh.ErrTokenNotFound
+		if errors.Is(scanErr, pgx.ErrNoRows) {
+			// Branch 5: genuinely not found in any index.
+			return nil, refresh.ErrTokenNotFound
+		}
+		return nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: check obsolete revoked", scanErr)
 	}
 	return nil, err
 }

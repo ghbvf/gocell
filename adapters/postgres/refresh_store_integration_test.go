@@ -26,12 +26,14 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 
 	baseTime := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 
+	// Clean any residual data before the parallel contract suite.
+	// Each subtest uses unique session IDs, but GC counts ALL expired rows
+	// including those from other subtests — T13 is sensitive to this.
+	_, err = pool.DB().Exec(ctx, "TRUNCATE refresh_tokens")
+	require.NoError(t, err)
+
 	storetest.RunContractSuite(t, func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
 		t.Helper()
-		// No TRUNCATE: storetest assigns unique session IDs per test case
-		// ("sess-1".."sess-13b") and unique random tokens, so parallel subtests
-		// do not collide. The container is fresh per TestPGRefreshStore_ContractSuite
-		// invocation, so stale rows from a previous run are not a concern.
 
 		clock := storetest.NewFakeClock(baseTime)
 		store := NewRefreshStore(pool.DB(), policy, clock, nil)
