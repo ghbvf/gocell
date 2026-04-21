@@ -527,6 +527,9 @@ func (v *Validator) validateFMT14() []ValidationResult {
 	return results
 }
 
+// codeFMT15 is the rule code for HTTP list response schema validation.
+const codeFMT15 = "FMT-15"
+
 // validateFMT15 checks that HTTP list-style response schemas:
 //   - include "hasMore" in required fields
 //   - declare "nextCursor" as a property (not required, because PageResult uses omitempty)
@@ -561,7 +564,7 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 			return nil // REF-12 handles missing files
 		}
 		return []ValidationResult{v.newResult(
-			"FMT-15", SeverityError, IssueInvalid,
+			codeFMT15, SeverityError, IssueInvalid,
 			contractFile(c.ID), fieldSchemaRefsResponse,
 			fmt.Sprintf("cannot read response schema for contract %q: %v", c.ID, err),
 		)}
@@ -569,14 +572,14 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 	info, err := parseListSchemaInfo(data)
 	if err != nil {
 		return []ValidationResult{v.newResult(
-			"FMT-15", SeverityError, IssueInvalid,
+			codeFMT15, SeverityError, IssueInvalid,
 			contractFile(c.ID), fieldSchemaRefsResponse,
 			fmt.Sprintf("response schema for contract %q is not valid JSON: %v", c.ID, err),
 		)}
 	}
 	if hasCombinator(info) && looksLikeListSchema(info) {
 		return []ValidationResult{v.newResult(
-			"FMT-15", SeverityWarning, IssueInvalid,
+			codeFMT15, SeverityWarning, IssueInvalid,
 			contractFile(c.ID), fieldSchemaRefsResponse,
 			fmt.Sprintf("response schema for contract %q uses oneOf/anyOf/allOf: FMT-15 cannot verify list constraints; split into single-shape contracts", c.ID),
 		)}
@@ -587,7 +590,7 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 	var results []ValidationResult
 	if !hasMoreInRequired(info) {
 		results = append(results, v.newResult(
-			"FMT-15", SeverityError, IssueRequired,
+			codeFMT15, SeverityError, IssueRequired,
 			contractFile(c.ID),
 			fieldSchemaRefsResponse,
 			fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
@@ -595,7 +598,7 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 	}
 	if !hasNextCursorProperty(info) {
 		results = append(results, v.newResult(
-			"FMT-15", SeverityError, IssueRequired,
+			codeFMT15, SeverityError, IssueRequired,
 			contractFile(c.ID),
 			fieldSchemaRefsResponse,
 			fmt.Sprintf("list response schema for contract %q must declare \"nextCursor\" property (omit from required; PageResult omits it on last page)", c.ID),
