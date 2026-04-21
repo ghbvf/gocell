@@ -51,7 +51,6 @@ func TestLoad_ExtraSchemaRefs(t *testing.T) {
 	if c.ID != "http.test.extrarefs.v1" {
 		t.Errorf("ID = %q, want %q", c.ID, "http.test.extrarefs.v1")
 	}
-	if c.responseSchema == nil {
-		t.Error("responseSchema should be compiled from the 'response' schemaRef, got nil")
-	}
+	// Prove that the response schema was compiled by validating a minimal document.
+	c.ValidateResponse(t, []byte(`{"data":{}}`))
 }

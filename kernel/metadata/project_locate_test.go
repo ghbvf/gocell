@@ -67,6 +67,24 @@ func TestProjectMeta_HasFileNodes(t *testing.T) {
 	assert.True(t, pm.HasFileNodes())
 }
 
+func TestProjectMeta_Locate_NilReceiver(t *testing.T) {
+	var pm *ProjectMeta
+	pos := pm.Locate("any.yaml", "id")
+	assert.False(t, pos.Known())
+}
+
+func TestProjectMeta_FileNode_NilReceiver(t *testing.T) {
+	var pm *ProjectMeta
+	n, ok := pm.FileNode("any.yaml")
+	assert.Nil(t, n)
+	assert.False(t, ok)
+}
+
+func TestProjectMeta_HasFileNodes_NilReceiver(t *testing.T) {
+	var pm *ProjectMeta
+	assert.False(t, pm.HasFileNodes())
+}
+
 // parseTestNode decodes a YAML string into a *yaml.Node for testing.
 func parseTestNode(t *testing.T, src string) *yaml.Node {
 	t.Helper()

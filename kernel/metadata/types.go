@@ -241,7 +241,7 @@ func (pm *ProjectMeta) SetFileNode(file string, node *yaml.Node) {
 // FileNode returns the parsed YAML document node for the given file path.
 // Returns (nil, false) if the file was not parsed or file nodes are not available.
 func (pm *ProjectMeta) FileNode(file string) (*yaml.Node, bool) {
-	if pm.fileNodes == nil {
+	if pm == nil || pm.fileNodes == nil {
 		return nil, false
 	}
 	n, ok := pm.fileNodes[file]
@@ -250,5 +250,8 @@ func (pm *ProjectMeta) FileNode(file string) (*yaml.Node, bool) {
 
 // HasFileNodes reports whether any file nodes have been stored.
 func (pm *ProjectMeta) HasFileNodes() bool {
+	if pm == nil {
+		return false
+	}
 	return len(pm.fileNodes) > 0
 }

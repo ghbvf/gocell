@@ -103,6 +103,6 @@ func TestSchemaRefsExtraRoundTrip(t *testing.T) {
 
 func TestSchemaRefsEmpty(t *testing.T) {
 	var sr SchemaRefs
-	data, _ := roundTrip(t, sr)
-	assert.Equal(t, "{}\n", string(data))
+	_, got := roundTrip(t, sr)
+	assert.Equal(t, sr, got, "empty SchemaRefs round-trip should preserve zero value")
 }

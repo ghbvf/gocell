@@ -30,9 +30,13 @@ type HTTPResponse struct {
 // keys are captured in Extra to stay compatible with contract.schema.json's
 // additionalProperties: {"type":"string"}.
 type SchemaRefs struct {
-	Request  string            `yaml:"request,omitempty"  json:"request,omitempty"`
-	Response string            `yaml:"response,omitempty" json:"response,omitempty"`
-	Payload  string            `yaml:"payload,omitempty"  json:"payload,omitempty"`
-	Headers  string            `yaml:"headers,omitempty"  json:"headers,omitempty"`
-	Extra    map[string]string `yaml:",inline"            json:"-"`
+	Request  string `yaml:"request,omitempty"  json:"request,omitempty"`
+	Response string `yaml:"response,omitempty" json:"response,omitempty"`
+	Payload  string `yaml:"payload,omitempty"  json:"payload,omitempty"`
+	Headers  string `yaml:"headers,omitempty"  json:"headers,omitempty"`
+	// Extra captures additional string-valued schema ref keys beyond the four
+	// well-known ones, via yaml:",inline". It is excluded from JSON serialization
+	// (json:"-") because Go's encoding/json does not support inline maps; callers
+	// that need JSON output should implement custom MarshalJSON if needed.
+	Extra map[string]string `yaml:",inline"            json:"-"`
 }
