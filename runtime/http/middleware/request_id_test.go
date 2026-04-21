@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -97,29 +98,6 @@ func TestRequestID_RejectsUnsafeChars(t *testing.T) {
 			handler.ServeHTTP(rec, req)
 
 			assert.Len(t, gotID, 36, "unsafe ID %q should be replaced with UUID", unsafeID)
-		})
-	}
-}
-
-func TestIsSafeID(t *testing.T) {
-	tests := []struct {
-		input string
-		safe  bool
-	}{
-		{"abc-123", true},
-		{"550e8400-e29b-41d4-a716-446655440000", true},
-		{"req.trace_id:v1/sub", true},
-		{"UPPER-case-Mix", true},
-		{"", false},
-		{"has space", false},
-		{"has\nnewline", false},
-		{`has"quote`, false},
-		{"has\x00null", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.safe, isSafeID(tt.input))
 		})
 	}
 }
@@ -239,6 +217,44 @@ func TestRequestIDWithOptions_NilPublicEndpointFn_BackwardCompat(t *testing.T) {
 
 	assert.Equal(t, "legacy-id", gotID,
 		"zero options must preserve backward-compatible behavior")
+}
+
+func TestRequestIDWithOptions_NonPublic_RejectsInvalidHeaders(t *testing.T) {
+	isPublic := func(r *http.Request) bool { return false }
+
+	overlong := strings.Repeat("a", 200)
+
+	tests := []struct {
+		name   string
+		header string
+	}{
+		{"empty", ""},
+		{"overlong", overlong},
+		{"control chars", "evil\nfake-log"},
+		{"spaces", "has spaces"},
+		{"tab", "has\ttab"},
+		{"braces", "has{braces}"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotID string
+			handler := RequestIDWithOptions(
+				WithReqIDPublicEndpointFn(isPublic),
+			)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotID, _ = ctxkeys.RequestIDFrom(r.Context())
+			}))
+
+			req := httptest.NewRequest(http.MethodGet, "/internal", nil)
+			if tt.header != "" {
+				req.Header.Set("X-Request-Id", tt.header)
+			}
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+
+			assert.Len(t, gotID, 36, "invalid header %q must be replaced with UUID", tt.name)
+		})
+	}
 }
 
 func TestRequestIDWithOptions_PublicEndpoint_BridgesCorrelationID(t *testing.T) {

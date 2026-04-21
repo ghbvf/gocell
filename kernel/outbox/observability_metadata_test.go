@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/idutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -149,6 +150,18 @@ func TestContextWithObservabilityMetadata_RejectsUnsafeValues(t *testing.T) {
 	assert.False(t, ok, "unsafe value with newlines should be rejected")
 }
 
+func TestContextWithObservabilityMetadata_RejectsEmptyValues(t *testing.T) {
+	ctx := ContextWithObservabilityMetadata(context.Background(), map[string]string{
+		"request_id":     "",
+		"correlation_id": "corr-ok",
+	})
+	_, ok := ctxkeys.RequestIDFrom(ctx)
+	assert.False(t, ok, "empty metadata value must not be written to context")
+	corrID, ok := ctxkeys.CorrelationIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "corr-ok", corrID)
+}
+
 func TestContextWithObservabilityMetadata_RejectsOverlongValues(t *testing.T) {
 	longID := make([]byte, 300)
 	for i := range longID {
@@ -237,6 +250,17 @@ func TestCloneMetadata_MutatingSourceDoesNotAffectClone(t *testing.T) {
 	assert.Equal(t, "v", got["k"], "clone must be isolated from source mutations")
 	_, ok := got["added"]
 	assert.False(t, ok)
+}
+
+func TestEntryID_RoundTrip_MetadataContextExtraction(t *testing.T) {
+	entryID := NewEntryID()
+	ctx := ctxkeys.WithRequestID(context.Background(), entryID)
+	metadata := MergeObservabilityMetadata(ctx, nil)
+	restored := ContextWithObservabilityMetadata(context.Background(), metadata)
+	got, ok := ctxkeys.RequestIDFrom(restored)
+	require.True(t, ok)
+	assert.Equal(t, entryID, got)
+	assert.True(t, idutil.IsSafeID(got))
 }
 
 // ExampleIsReservedMetadataKey demonstrates checking custom metadata keys
