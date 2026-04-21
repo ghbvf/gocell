@@ -6,13 +6,15 @@
 > 施工期：~5 天（单人串行）/ ~3-4 天（双人并行）
 > 预计 PR 数：6（R1a ~ R1e + R2）
 >
-> **状态（2026-04-20 更新）**：
+> **状态（2026-04-21 更新）— 计划完成 ✅**：
 > - R1a ✅ PR#200 合入（kernel/lifecycle + worker）
 > - R1b ✅ PR#202 合入（kernel/crypto）
 > - R1c ✅ PR#204 合入（Vault envelope + adapters/vault）— 追加审查发现 A13/A14/A19/A20 并入 R2/R1e
 > - R1d ✅ PR#203 合入（CellModule + BuildApp）
-> - R1e ⏳ 待开（工时 ~1 天，含 A2/A7/checklist + **A17 aead 提取 + A19 Vault readiness**）
-> - R2  ⏳ 待开（工时 ~1.5 天，含原 S1-S4/M3/A3/O3 + **A13 LifetimeWatcher + A14 AppRole/K8s + A20 keyID 契约**）
+> - R1e ✅ PR#205 合入（pkg/aeadutil 提取 A17 + Vault readiness health A19）
+> - R2  ✅ PR#207(R2a) + PR#209(R2b) + PR#210(L0) 合入（安全加固 + 可观测 + token renewal A13 + keyID 契约 A20 + stale cipher metric M3 + demo key reject L0）
+>
+> **保留 backlog 🟠 条件延后**：S4b（static token real guard）+ A14（AppRole/K8s auth）— 多 pod 生产部署前触发
 
 ---
 
@@ -797,6 +799,66 @@ func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) 
 - [ ] 更新 `docs/backlog.md`（按"本 plan 消化"清单标 ✅）
 - [ ] 归档 `docs/reviews/archive/`
 - [ ] CHANGELOG.md 更新 v1.0-rc 条目
+
+---
+
+## 附录 B：加密方案演进分析（2026-04-20 对话补充）
+
+### 当前方案的完整性评估
+
+**做对的部分**：envelope 分层（本地 DEK + Vault wrap KEK）、AAD 按 `cell/key` 绑定防跨行复制、DEK `defer clear()` 内存清零、keyID 从 Encrypt 返回消灭 TOCTOU。核心安全模型是正确的。
+
+**原始缺口分析**（结合"无向后兼容"前提后的修正结论）：
+
+| 缺口 | 原始描述 | 无向后兼容修正 |
+|------|---------|------------|
+| ①轮转后补加密 | 需要持续运行的后台 re-encryption job | **大幅简化**：key rotation = 一次性 admin 命令，同步 decrypt+re-encrypt 所有 stale 行，旧 key 下线。M3 的 warn 作为迁移完成的验证手段，不是运行时容忍机制。无需后台 job |
+| ②每次 Vault 调用生成新 DEK，无缓存 | 高频场景会撑不住 | config 值低频，当前可接受。若未来 access-core session 走此路径再评估 DEK cache |
+| ③LocalAES 与 Vault 两套孤立 key 宇宙 | `local-aes-v1` / `vault-transit:v3` 格式不兼容，无跨 provider 迁移路径 | 保留为已知限制；环境切换（dev→prod）走一次同步迁移命令即可 |
+
+### 为什么一开始没有用 Google Tink
+
+根本原因是**存储模型不兼容**：
+
+- 当前 `KeyHandle.Encrypt` 返回 `(ciphertext, nonce, edk []byte, keyID string)` 四元组，映射到 DB 四个独立列（`value_cipher / value_nonce / value_edk / value_key_id`）
+- Tink 的 `AEAD.Encrypt` 返回单一 opaque blob，所有信息打包在一起
+
+两者是不同的存储哲学：**split-column**（透明、可单独索引 keyID、便于调试）vs **opaque blob**（简单、无需了解内部结构）。当前方案显式选择了 split-column，与 k8s KMS v2 的 EncryptResponse 设计一致，这是有意的架构决策，不是疏漏。
+
+### 现在换成 Tink 还来得及吗
+
+**结论：不建议，代价超过收益。**
+
+可行性分析：
+- R1b/R1c 已合入，`kernel/crypto.KeyHandle` 接口和存储 schema（migration 010）已稳定
+- 换 Tink 需要：① 将接口改为单 blob 输出 ② 新增 migration 011 合并四列为一列 ③ 重写 LocalAES + Vault provider ④ 更新 config_repo 的 scan/write 逻辑
+
+无向后兼容让 schema 迁移可行，但改动面覆盖已合入的 R1b/R1c 核心成果，重新引入不确定性。
+
+Tink 的主要价值（消除 `pkg/aeadutil` 手同步复制）已被 R1e A17 以更小的代价解决（提取为 `pkg/aeadutil` 公共包）。
+
+**何时值得重新评估 Tink**：若未来需要支持 AWS KMS / GCP KMS 等多 backend（S14a），Tink 的多 backend Keyset 抽象才真正发挥优势。届时可以以 S14a 为契机，整体切换存储模型。
+
+### 横向对比：业界同类方案（2026-04-20 研究）
+
+| 方案 | 存储格式 | Key ID 存储 | AAD 支持 | Envelope DEK | Key Rotation |
+|------|---------|------------|---------|-------------|-------------|
+| Rails 7 AR Encryption | 单 JSON blob | 可选 header | **无（空串）** | 可选 | 懒惰 try-all + 批量 re-save |
+| Django Fernet Fields | 单二进制 blob | **无（try-all）** | **无** | **无** | try-all + 批量 |
+| Tink-Go KMSEnvelope | 单二进制 blob（4B len + wrapped DEK + ct） | 5 字节前缀嵌入 | payload 层有，DEK wrap 层**无** | 是（核心设计） | KMS 原生，无数据迁移 |
+| Vault Transit（纯模式） | 单 text `vault:vN:...` | 版本前缀自描述 | 仅 convergent 模式 | 可选（datakey API） | `rewrap` API 无明文暴露 |
+| Spring JPA 社区 | text + 版本前缀约定 | 版本前缀 | **无** | 极少 | 手动版本循环 |
+| **GoCell kernel/crypto** | **4 列分开存** | **独立 key_id 列** | **一等公民参数** | 是 | 懒惰检测 + 手动迁移命令 |
+
+**GoCell 领先的点**：AAD 是接口一等公民（防跨行复制攻击）；`Encrypt` 返回 `keyID` 消灭 TOCTOU 竞争；`CurrentKeyIDProvider` 解耦 staleness 检测。
+
+**值得借鉴的点**：
+- **Vault Transit `rewrap` API**：KEK 轮转时服务端 decrypt+re-encrypt，明文不过应用层。GoCell 当前需要应用层 Decrypt+Encrypt，可在 `TransitKeyProvider` 上补一个 `Rewrap(ctx, edk) (newEDK, error)` 方法作为优化路径。
+- **Tink 的 5 字节 ciphertext 前缀**：将 keyID 嵌入 ciphertext blob 本身，可将 4 列压缩为 1 列（`value_encrypted`），消除 keyID/ciphertext 列之间的 schema 漂移风险。代价是放弃可单独索引 keyID 的灵活性。
+
+### 根本性架构问题备忘
+
+敏感配置是否应存在 PG 里？替代方案：Vault KV secrets engine 直接作为敏感值存储，config-core 退化为薄 proxy，PG 只存非敏感配置。代价是强依赖 Vault 存储路径。当前 encrypt-in-PG 的结构性复杂度来自"用通用存储承载密钥管理职责"，不会因代码质量提升而消失。若 Vault 已是强依赖，可在 v2.0 评估此方向。
 
 ---
 

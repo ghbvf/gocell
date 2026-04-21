@@ -8,6 +8,8 @@ tools:
   - search
   - todo
   - terminal
+  - edit/createFile
+  - edit/editFiles
   - web/fetch
   - web/githubRepo
 agents:

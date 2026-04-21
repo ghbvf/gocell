@@ -1,20 +1,21 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/202604180035-backlog-pre-cleanup.md`。
-> 更新日期: 2026-04-20（PR#203 同步）
-> 基线: develop@dde5cae（PR#165 合并后）
-> 最近合入概览: PR#175-200 分层重构 + auth F系列 + config-core PG pilot 全部完成；详见 git log
-> 未合入外部 PR: PR#129 Sentinel DSN redaction / PR#130 Bolt journey catalog
+> 更新日期: 2026-04-21（pg-pilot 计划全部完成：R1e PR#205 + R2a PR#207 + R2b PR#209 + L0 PR#210）
+> 基线: develop@b208c55（PR#210 合并后）
+> 最近合入概览: PR#175-210 分层重构 + auth F系列 + config-core PG pilot 全系（R1a-R1e + R2a/R2b）+ L0 安全修复全部完成；pg-pilot plan 完结；详见 git log
+> 未��入外部 PR: PR#129 Sentinel DSN redaction / PR#130 Bolt journey catalog
 > 标记说明:
 > 🟡 可延后 = 不卡正确性或安全；latent risk / DX / 测试覆盖 / 纯 tech debt / 供应链加固 / 架构打磨 — 可机会性纳入或 v1.0 后做
 > 🟠 条件延后 = 有明确触发条件（如首次 prod migration / PG 接线），触发前可延
 
 ---
 
-## P0 阻塞项（~2h）
+## P0 阻塞项
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
+| ~~L0~~ | ~~**SERVICE-SECRET-REJECT-DEMO-01**~~ ✅ PR#210 合入（`internalGuardFromEnv` 对 current/previous secret 调用 `rejectDemoKey` + 测试覆盖） | — | — | — |
 | L1 | **AUDIT-ROUTE-POLICY-01** (Cx2): `cells/audit-core/cell.go:241` 裸挂 `http.HandlerFunc(c.queryHandler.HandleQuery)`，`auditQueryPolicy` 未经 `auth.Secured()` 包装，非 admin 用户可横向读取他人审计记录。**修复**：`handler.go` 新增 `RegisterRoutes(mux cell.RouteMux)`，内部调用 `auth.Secured(h.HandleQuery, auditQueryPolicy)`；`cell.go` 改为 `c.queryHandler.RegisterRoutes(sub)`；补 401/403/200/admin 跨用户四条测试。 | 2h | `cells/audit-core/cell.go` + `cells/audit-core/slices/auditquery/handler.go` + `handler_test.go` | 2026-04-20 分层审查 |
 
 ---
@@ -26,9 +27,11 @@
 | P1-4 | **OUTPUT-JSON-SARIF-01** (Cx3, 🟡 可延后): `gocell validate` 缺机器可读输出通道（JSON/SARIF）。统一诊断模型（单一 `Issue` struct → 多 printer 映射）。对标 golangci-lint / staticcheck / ESLint / kubectl print flags | 6h | `cmd/gocell/` + `kernel/governance/` 序列化 | PR#152 round-2 review |
 | P1-5 | **METADATA-PERF-BENCH-01** (Cx3, 🟡 可延后): `BenchmarkParseFS_500Files` 性能基准 + goccy/go-yaml 单次解码迁移成本评估 | 4h | `kernel/metadata/parser_test.go` | PR#152 seat-4 |
 | P1-8 | **FEAT-1 DEVICE-LIST-API**: 新建 `device-list` slice + `GET /api/v1/devices` 分页 + contract + contract_test；同步触发 CONTRACT-LIST-LINT-01 规则 | 3h | `cells/device-cell/slices/device-list/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
+| ~~S2~~ | ~~**MASTER-KEY-REJECT-DEMO-01**~~ ✅ PR#207 合入 | — | — | — |
+| S-nonce | **SERVICE-TOKEN-NONCE-STORE-01** (Cx2, **P1 安全**, 🟠 条件延后，多 pod 生产部署前触发): `NewServiceTokenAuthenticator` 默认 NonceStore=nil（`authenticator.go:130`），生产 wiring `main.go:340` 未传 `WithNonceStore`，`SharedDeps.Validate()` 也不检查。5 分钟窗口内 ServiceToken 可无限重放。**修复**：real 模式强制注入 NonceStore（需 Redis 依赖）；未配置则启动失败；补 replay 集成测试。**前置**：需 Redis NonceStore 实现（adapters/redis/） | 3h | `runtime/auth/authenticator.go` + `cmd/core-bundle/main.go` + `cmd/core-bundle/shared_deps.go` | PR#209 合并后审查 |
+| S4b | **VAULT-TOKEN-STATIC-REAL-GUARD-01** (Cx1, **P1 安全**, 🟠 条件延后，多 pod 生产部署前触发): `adapters/vault/transit_provider.go` `adapterMode=real` 时仍允许静态 VAULT_TOKEN 运行，生产应要求 AppRole/K8s auth（自带续期 + 最小权限）。**修复**：新增 `authMode` option；real 模式 + static token → `errcode.ErrVaultAuthFailed`；与 A14（AppRole/K8s auth）+ **VAULT-RENEWAL-DEGRADATION-GAUGE**（静默降级不可观测）合并实施。来源：R1c(PR#204) 审查 §10 | 1h | `adapters/vault/transit_provider.go` | R1c(PR#204) 追加审查 |
 | L2 | **ROUTE-POLICY-REGISTRY-01** (Cx3, 前置 L1): 无法在编译/启动期发现"路由注册但无策略"，L1 类问题可再次出现。**修复**：`runtime/http/router/policy_registry.go` 新增 `PolicyRegistry`（`RecordSecured(method, path)` + `Verify(registeredRoutes, whitelist) error`）；`runtime/bootstrap/bootstrap.go` 启动期调用 `Verify`，发现裸路由直接 `return error`。白名单格式复用 L3 统一后的 `parseEndpointRule`。 | 5h | `runtime/http/router/policy_registry.go`（新）+ `runtime/bootstrap/bootstrap.go` | 2026-04-20 分层审查 |
 | L4 | **ID-VALIDATION-SINGLE-SOURCE-01** (Cx2): `runtime/http/middleware/request_id.go` 有 `maxRequestIDLen=128` + `isSafeID()` 校验；`kernel/outbox/observability_metadata.go` 恢复路径无长度/字符集校验，两条路径规则不一致。**修复**：新增 `pkg/idutil/id.go`（`MaxIDLen=128`, `IsSafeID(s string) bool`）；`runtime/http/middleware/request_id.go` + `kernel/outbox/observability_metadata.go` 均改为引用 `pkg/idutil`，单一事实源。 | 2h | `pkg/idutil/id.go`（新）+ `runtime/http/middleware/request_id.go` + `kernel/outbox/observability_metadata.go` | 2026-04-20 分层审查 |
-| L5 | **L2-CONSTRAINT-ERROR-SEMANTIC-01** (Cx1): `cells/config-core/slices/flagwrite/service.go:77` L2 依赖约束违反时调用 `panic(...)`，与 `audit-core/cell.go:144`（`return errcode.New(...)`）语义分裂。**修复**：将 `panic` 改为 `return nil, errcode.New(errcode.ErrCellMissingOutbox, "...")`；补构造期错误测试。 | 1h | `cells/config-core/slices/flagwrite/service.go` + `service_test.go` | 2026-04-20 分层审查 |
 | L6 | **CONTRACTTEST-MODEL-ALIGN-01** (Cx3): `pkg/contracttest` 自定义 schema 解析结构，与 `kernel/metadata` 元模型不一致，`schemaRefs.Extra` 等扩展键在 contracttest 路径静默丢失。`pkg/` 不可依赖 `kernel/`，需共享类型落在 `pkg/`。**修复**：新增 `pkg/contracts/schema_types.go`（共享 schema 结构体）；`pkg/contracttest/contracttest.go` 引用共享类型；`kernel/metadata/` 中对应本地定义替换为 `pkg/contracts` 引用；补解析一致性测试。 | 3h | `pkg/contracts/schema_types.go`（新）+ `pkg/contracttest/contracttest.go` + `kernel/metadata/` | 2026-04-20 分层审查 |
 | L7 | **EXAMPLES-STARTUP-SMOKE-01** (Cx2): `examples/sso-bff/main.go` 的 audit cursor key `"sso-bff-audit-cursor-key-32b!!"` 仅 30 字节，config cursor key 31 字节，`examples/todo-order/main.go` 同类 31 字节；`pkg/query.NewCursorCodec` 要求 ≥ 32 字节（注释声明 HMAC-SHA256 block size），**examples 实际 `os.Exit(1)` 启动失败**。CI 只 `go build`，字符串长度是运行时 error，lint 不查，bug 潜伏至今。**根因**：(a) examples 不在治理护栏（`gocell validate` 不管 main.go）；(b) 无 smoke test 跑 example binary；(c) 字符串 label `-32b` / `-32bytes` 与实际字节数错位，肉眼数不准。**修复**：(1) cursor key 改用可计算/常量保证长度，如 `[]byte(fmt.Sprintf("%-32s", "sso-bff-audit"))` 或 `bytes.Repeat`；(2) CI 增 `examples-smoke` job：`timeout 5s go run ./examples/sso-bff` 期望正常启动再 ctx cancel 退出；(3) 治理扩展：`cmd/gocell/check_examples.go` 扫描 `examples/*/main.go` 静态检查 `NewCursorCodec([]byte("..."))` 字面量长度。 | 2h | `examples/sso-bff/main.go` + `examples/todo-order/main.go` + `.github/workflows/ci.yml` + `cmd/gocell/` | 2026-04-20 PR#204 旁路发现 |
 
@@ -42,7 +45,7 @@
 |---|------|------|------|------|
 | K1 | **METADATA-PROJECTLOC-IFACE-01** (Cx3, 🟡 可延后): 提取 `ProjectLocator interface { Locate(file, path string) Position }` 隐藏 yaml.v3 AST；`ProjectMeta.FileNodes` 不再泄漏 | 3h | `kernel/metadata/` + `kernel/governance/` + `cmd/gocell/` | PR#152 seat-1 |
 | K2 | **OBS-RELAY-REGISTER-ATOMIC-01** (Cx3, 🟡 可延后): `outbox.NewProviderRelayCollector` 5 个 metric 原子注册，需 `Provider.Unregister` 支持或文档化契约 | 2h | `kernel/outbox/` + `kernel/observability/metrics/` | PR#157 review S3-05 |
-| ~~R1~~ | ~~**BOOTSTRAP-RUN-COGNIT-01**~~ ✅ PR#200/#202/#203（R1a ManagedResource+Worker→kernel + R1b KeyProvider→kernel/crypto + R1d CellModule+BuildApp 三步完成）: ~~`bootstrap.go::Run()` 认知复杂度 225（`//nolint:gocognit` 抑制），拆 `validateOptions()` / `buildRouter()` / `startServers()` 三段式~~ | ~~4h~~ | ~~`runtime/bootstrap/bootstrap.go`~~ | PR#163 agent 报告 |
+| ~~R1~~ | ~~**BOOTSTRAP-RUN-COGNIT-01**~~ ✅ PR#200/#202/#203/#204（R1a ManagedResource+Worker→kernel + R1b KeyProvider→kernel/crypto + R1c Vault envelope encryption+adapters/vault 迁移 + R1d CellModule+BuildApp 四步完成）: ~~`bootstrap.go::Run()` 认知复杂度 225（`//nolint:gocognit` 抑制），拆 `validateOptions()` / `buildRouter()` / `startServers()` 三段式~~ | ~~4h~~ | ~~`runtime/bootstrap/bootstrap.go`~~ | PR#163 agent 报告 |
 | R2 | **OBS-HTTP-COLLECTOR-AUTOWIRE-01** (Cx3, 🟡 可延后): `bootstrap.WithMetricsProvider` 自动为默认 HTTP 中间件构造 `NewProviderCollector`；设计 `WithHTTPCollectorCellID` option | 2h | `runtime/bootstrap/bootstrap.go` + `runtime/http/middleware/` | PR#157 review S4-01 |
 | R3 | **OB-02** (🟡 可延后): safe_observe broken logger 注入测试 | 1h | `runtime/http/middleware/safe_observe_test.go` | 历史 backlog 0-J |
 | R4 | **INTERNAL-LISTENER-01** (Cx4, 🟡 可延后): `/internal/v1/` 与公网共用 listener + Bearer JWT；独立 listener 或 service-token/mTLS 策略 | 4-8h | `runtime/bootstrap/bootstrap.go` + cell 路由注册拆分 | PR#143 review F1 |
@@ -57,13 +60,15 @@
 | A8 | **CI-DIGEST-01** (🟡 可延后): testcontainers 镜像 tag+digest 双固定 | 1h | `adapters/*/integration_test.go` | PR#139 review |
 | A9 | **CI-LINT-PIN-01** (🟡 可延后): golangci-lint patch 级固定 + dependabot | 1h | `.github/workflows/ci.yml` | PR#139 review |
 | A10 | **OBS-LGTM-INTEGRATION-01** (Cx3, 🟡 可延后): `//go:build integration` 夜间 OTel collector 真实 OTLP 协议兼容性测试 | 2h | `adapters/otel/integration_test.go` | PR#157 review S6-04 |
-| A13 | **VAULT-TOKEN-RENEW-01** (**P1**, Cx2): 生产长运行时 Vault token 过期导致 provider 失效；PR#204 恢复 `VAULT_TOKEN` 构造期 fail-fast 后，对 token 生命周期敏感度提升。方案：`NewTransitKeyProviderFromEnv` 启动时创建 `vaultapi.NewLifetimeWatcher`，后台 goroutine 持续续期 token，续期失败映射 transient → EventBus Requeue；暴露 `vault_token_renew_success_total` / `vault_token_renew_failure_total` 观测指标。排期：下两个 Sprint 前落地 | 2h | `adapters/vault/transit_provider.go` | R1c (PR #204) 追加审查 P1 |
-| A19 | **VAULT-READINESS-HEALTH-01** (P2, Cx3, 🟡 可延后): `NewTransitKeyProviderFromEnv` 启动自检把 403（auth 失败）/ 404（mount 或 key 不存在）/ 5xx（网络）统一折成 "key not found"，运行期无 readiness 探测，Vault 不可用只能靠业务调用失败被动暴露。方案：启动 self-check 按错误分类返回不同 errcode（`ErrVaultAuthFailed` / `ErrVaultKeyNotFound` / `ErrKeyProviderTransient`）；`TransitKeyProvider` 接入 `kernel/lifecycle.ManagedResource` 或 `runtime/http/health`，暴露 ready/not-ready；integration test 覆盖 token-revoked / mount-missing / key-missing 三种场景分别返回 non-ready | 4h | `adapters/vault/transit_provider.go` + `runtime/http/health/` | R1c (PR #204) 追加审查 P2 |
-| A20 | **VAULT-KEYID-CONTRACT-STRONG-01** (P2, Cx3, 🟡 可延后): PR#204 已在 Decrypt 入口加"最小校验"（`keyID` 与 `edk` 前缀 `vault:v{N}:...` 的版本号比对）；跟进**契约文档级强化**：`kernel/crypto/key_provider.go` godoc 声明 `keyID` 为"可验证元数据"（不是弱观测标签）；新增 `kernel/crypto/verifykeyid.go` 通用 helper（版本号解析 + 比对），LocalAES / Vault 两实现统一切到 helper；table-driven test 覆盖伪造 / 漂移 keyID 被拒场景，未来 KMS provider 漏校验必 fail | 3h | `kernel/crypto/key_provider.go` + `kernel/crypto/verifykeyid.go`（新）+ `adapters/vault/transit_provider.go` + `runtime/crypto/local_aes_provider.go` | R1c (PR #204) 追加审查 P1 最小修复已合，契约强化跟进 |
-| A14 | **VAULT-AUTH-PLUGGABLE-01** (P2, 🟡 可延后): 当前硬编码 VAULT_TOKEN，生产需 AppRole / Kubernetes auth / JWT auth。方案：构造函数加 `api.AuthMethod` 参数；env 读取模式保留 token 作 dev fallback | 3h | `adapters/vault/transit_provider.go` | R1c (PR #204)，plan U2 `/Users/shengming/.claude/plans/r1c-agents-explorer-3-tdd-sequential-torvalds.md` |
+| ~~A3~~ | ~~**SHARED-DEPS-KEYPROVIDER-EXIST-01**~~ ✅ PR#207 合入（`shared_deps.go:117-121`）| — | — | — |
+| ~~M3~~ | ~~**CONFIG-STALE-KEY-OBSERVE-01**~~ ✅ PR#207 slog.Warn + callback hook；PR#209 生产 Prometheus counter `gocell_config_stale_cipher_total` 注册 | — | — | — |
+| ~~A13~~ | ~~**VAULT-TOKEN-RENEW-01**~~ ✅ PR#207 LifetimeWatcher + tokenRenewalWorker；PR#209 Prometheus counters `gocell_vault_token_renew_{success,failure}_total` + registry 注册 | — | — | — |
+| ~~A19~~ | ~~**VAULT-READINESS-HEALTH-01**~~ ✅ PR#205 合入（Vault 启动自检错误分类 + ManagedResource.Checkers 接入 /readyz） | — | — | — |
+| ~~A20~~ | ~~**VAULT-KEYID-CONTRACT-STRONG-01**~~ ✅ PR#209：`kernel/crypto/verifykeyid.go` ParseKeyID/MatchKeyID helpers + Vault Decrypt 迁移 + godoc "verifiable metadata" 升级 | — | — | — |
+| A14 | **VAULT-AUTH-PLUGGABLE-01** (P2, 🟡 可延后): 当前硬编码 VAULT_TOKEN，生产需 AppRole / Kubernetes auth / JWT auth。方案：构造函数加 `api.AuthMethod` 参数；env 读取模式保留 token 作 dev fallback。**同批处理**：S4b（real-mode static-token guard）+ **VAULT-RENEWAL-DEGRADATION-GAUGE**（`initTokenRenewal` 降级到静态 token 时仅 slog.Warn 一次，运维通过 `/metrics` 无法区分自动续期 vs 静默过期；A14 做完后静态 token 被拒，此项自动消失）| 3h | `adapters/vault/transit_provider.go` | R1c (PR #204) + PR#209 review P2 |
 | A15 | **VAULT-NAMESPACE-MULTITENANT-01** (P2, 🟡 可延后): HCP Vault / Enterprise 多租户场景，当前无 namespace 支持，低优先级。方案：`client.SetNamespace(ns)` + 环境变量 `GOCELL_VAULT_NAMESPACE` | 1h | `adapters/vault/transit_provider.go` | R1c (PR #204)，plan U3 `/Users/shengming/.claude/plans/r1c-agents-explorer-3-tdd-sequential-torvalds.md` |
 | A16 | **VAULT-DATAKEY-ENDPOINT-01** (P2, 🟡 可延后, 🟠 条件延后：S14a 或 S3 对象加密需求触发): `datakey/plaintext` endpoint 支持，大 blob 场景才需要（当前小 config 值场景本地 DEK + encrypt(DEK) 已最优）。关联：S14a / 未来 S3 加密需求 | 2h | `adapters/vault/transit_provider.go` | R1c (PR #204)，plan U4 `/Users/shengming/.claude/plans/r1c-agents-explorer-3-tdd-sequential-torvalds.md` |
-| A17 | **VAULT-AEAD-UTIL-EXTRACT-01** (P2, Cx1, 🟡 可延后): `adapters/vault/aead.go` 与 `runtime/crypto/local_aes_provider.go` 的 AES-GCM helpers 存在双拷贝。方案：新建 `pkg/aeadutil/gcm.go` 含 `EncryptSplit` / `Decrypt` 两个纯函数，两端 import | 1h | `pkg/aeadutil/gcm.go`（新）+ `adapters/vault/aead.go` + `runtime/crypto/local_aes_provider.go` | R1c (PR #204)，reviewer FID-008 |
+| ~~A17~~ | ~~**VAULT-AEAD-UTIL-EXTRACT-01**~~ ✅ PR#205 合入（`pkg/aeadutil/gcm.go` EncryptSplit/Decrypt 纯函数，双拷贝消除） | — | — | — |
 | A18 | **VAULT-ROTATE-OPTIMISTIC-LOCK-01** (P2, Cx2, 🟡 可延后): `TransitKeyProvider.Rotate` 当前持写锁期间执行 2 次 Vault HTTP 调用，阻塞并发读。方案：无锁执行 rotate + readLatestVersion，完成后 Lock 仅更新 version cache；需补充并发测试 | 2h | `adapters/vault/transit_provider.go` | R1c (PR #204)，reviewer FID-011 |
 | A21 | **HEALTH-CHECKER-CTX-BUDGET-01** (P2, Cx3, 🟡 可延后): `runtime/http/health.Checker` 签名为 `func() error`，聚合层 (`Handler.ReadyzHandler`) 顺序执行所有 checker 且无统一超时/并行策略。`TransitKeyProvider.Checkers["vault_transit_ready"]` 内部自控 3s context，但其他 checker（PGResource、broker health）预算各自为政；未来 checker 退化或新增时，`/readyz` 尾延迟会叠加放大。**方案**：将 `Checker` 升级为 `func(ctx.Context) error`，`ReadyzHandler` 为整个聚合注入统一 deadline（如 2s）并考虑并发执行；失败时日志/响应输出每个 checker 的耗时与错误名称，用于运维定位。前置：需要 `kernel/lifecycle.ManagedResource.Checkers()` 签名同步升级。排期建议 R2 之后独立 PR 做。 | 3h | `runtime/http/health/health.go` + `kernel/lifecycle/managed_resource.go` + 所有 `Checkers()` 实现 | PR #205 review 2026-04-20 P2 finding |
 
@@ -88,6 +93,8 @@
 | S22 | **REFRESH-AUD-REAL-ROUTE-TEST-01** (P2, Cx2, 🟡 可延后): `runtime/auth/middleware_aud_test.go` 的 refresh-path audience 回归测试手造 fake handler 直接调 `VerifyIntent`，不经过真实 route registration / body binding / `Service.Refresh`，无法检测 public-route bypass 或 body decode 回归。**修法**：在 `cells/access-core/auth_integration_test.go` 补一条真实 HTTP 测试：POST `{"refreshToken": wrong-aud-token}` 到 `/api/v1/access/sessions/refresh`，断言返回 401；再补 missing-aud token 场景。**前置**：可独立于 S18 实施。来源: PR#171 外部审查 F2 | 2h | `cells/access-core/auth_integration_test.go` + `runtime/auth/middleware_aud_test.go` | PR#171 外部审查 |
 | S23 | **AUTH-WALKTHROUGH-COMPOSE-01** (P2, Cx3, 🟡 可延后): `examples/sso-bff/walkthrough_test.go` 手装精简 server（无 bootstrap lifecycle），与 `main.go` 的真实组装路径、README 步骤三份语义各自独立，可掩盖 public-endpoint wiring / config-core 接线 / audit event delivery 的回归。**修法**：提取 `NewSSOBFFApp(opts...)` 组装函数被 `main.go` 和 walkthrough test 共用；test server 走同一 bootstrap + Start/Stop 路径。来源: PR#172 review F3（OUT_OF_SCOPE） | 4h | `examples/sso-bff/bootstrap.go`（新）+ `main.go` + `walkthrough_test.go` | PR#172 review F3 |
 | S24 | **AUTH-MIDDLEWARE-AUD-REFRESH-E2E-01** (P3, Cx2, 🟡 可延后): `TestAuthMiddleware_WrongAudience_RefreshPath_Returns401` 直接调 `verifier.VerifyIntent()`，未经过 `AuthMiddleware` 真实中间件链（parse req → call verifier → write error）。本质是在测 verifier 行为而非 middleware 集成。生产 refresh 路径确实也是 `VerifyIntent` 直调，无实际安全风险；但若未来 middleware 有 early-return/short-circuit 改动，该测试无法检测 regression。**修法**：用 `httptest.NewServer` + 真实 `AuthMiddleware` + `makeTokenWithAud` 覆盖 refresh-path wrong-audience 场景，使测试打到完整链路。来源: PR#293 round-2 /fix 分析 | 1h | `runtime/auth/middleware_aud_test.go` | PR#293 round-2 |
+| L10 | **INTERNAL-ROUTE-POLICY-ALIGN-01** (Cx1, 🟡 可延后): `/internal/v1/*` 路由的 `auth.Declare` 声明 `AnyRole("admin")`，但 service principal 角色为 `auth.RoleInternalAdmin`（`"role:internal-admin"`）。当前不影响运行（Delegated 路由 bypass Policy），但若未来移除 Delegated 标记，会导致所有 internal 调用 403。**修复**：将 internal 路由 Policy 改为 `AnyRole(auth.RoleInternalAdmin)`；或移除冗余 Policy 声明并补注释说明 Delegated 语义。 | 0.5h | `cells/access-core/cell.go` + `cells/audit-core/slices/auditquery/handler.go` | #210-review 2026-04-21 审查 |
+| L11 | **GOVERNANCE-CI-MAINBRANCH-01** (Cx1, 🟡 可延后): governance strict gate CI workflow 仅挂 develop 分支，main/release 路径可绕过同等级治理门禁。**修复**：`.github/workflows/governance.yml` 扩展 `branches` 至 `[develop, main, 'release/**']`。 | 0.5h | `.github/workflows/governance.yml` | #210-review 2026-04-21 审查 |
 | L7 | **FMT15-NEXTCURSOR-ENFORCE-01** (Cx1, 🟡 可延后): 列表响应治理规则（FMT-14）只强制 `hasMore`，未强制 `nextCursor`，导致接口形态漂移（部分 slice 返回 `nextCursor` 为空字符串而非 omitempty）。**修复**：`kernel/governance/rules_fmt.go` 新增 FMT-15：响应含 `hasMore` 时必须同时含 `nextCursor`（可为空但字段必须存在）；补对应 validate 测试。 | 2h | `kernel/governance/rules_fmt.go` + 对应 validate 测试 | 2026-04-20 分层审查 |
 | L8 | **PAGINATION-HELPER-EXTRACT-01** (Cx2, 🟡 可延后): `ParsePageRequest` + `slog.Warn` + `WriteDomainError` 三行分页错误处理模式在 auditquery、configwrite、flagwrite 等多处 slice handler 重复，观测语义分散。**修复**：`pkg/httputil/pagination.go` 提取公共 helper；各 slice handler 统一引用，消除重复。 | 2h | `pkg/httputil/pagination.go`（新）+ 各 `cells/*/slices/*/handler.go` | 2026-04-20 分层审查 |
 | L9 | **EXAMPLES-CONTEXT-NOOP-01** (Cx1, 🟡 可延后): `examples/` 下自定义 `noopTxRunner` 吞掉上游 context，破坏取消传播语义；且与 `persistence.NoopTxRunner` 形成分叉。**修复**：删除 examples 层自定义实现，改用 `persistence.NoopTxRunner`（或等价基础实现），恢复 context 传播。 | 1h | `examples/*/` 相关文件 | 2026-04-20 分层审查 |
@@ -147,6 +154,8 @@
 | #159 | GenerateServiceToken `crypto/rand` 失败静默返回 "" | 不修 | Go 1.24+ `crypto/rand.Read` always-succeed-or-fatal，空串触发下游 401 是 fail-closed |
 | #159 | ServiceTokenMiddleware nil ring 每请求 500 | 不修 | 返回 error 违背 Go 标准 middleware 签名惯例（net/http / go-chi / Kratos 均不返回 error）；构造时 panic 不符合编码规范 |
 | #159 | 缺 service token duration metric | 不修 | HMAC-SHA256 <0.1ms，histogram 分桶无意义信息；等 Redis nonce store 引入网络 I/O 后再加 |
+| #210-review | internal service principal `role:internal-admin` 与路由策略 `AnyRole("admin")` 不一致 | 假阳性 | `/internal/v1/*` 路由通过 `WithInternalPathPrefixGuard` 设置 `authDelegatedMatcher`，AuthMiddleware 识别 `isDelegated=true` 后跳过整个 JWT + Policy 链。`AnyRole("admin")` 对 internal 路由从未执行，service token guard 是唯一鉴权层。**但 Policy 声明应修正为 `AnyRole(auth.RoleInternalAdmin)` 作为 defense-in-depth**，见 L10 |
+| #210-review | BuildApp option 冲突检测缺失 | 🟡 延后 | 当前 3 个 CellModule，option 直接 append；引入第 4 个 module 前补 key 冲突检测（至少 warning） |
 
 ---
 
@@ -181,11 +190,11 @@
 
 | 分类 | 工时 |
 |------|------|
-| P0 阻塞 | ~2h |
-| P1 | ~18h（P1-4 6h + P1-5 4h + P1-8 3h + L2 5h + L4 2h + L5 1h + L6 3h）|
-| P2 kernel/runtime | ~16h |
-| P2 adapter | ~9h |
+| P0 阻塞 | ~~L0~~ ✅；剩余 L1 ~2h |
+| P1 | ~17h（P1-4 6h + P1-5 4h + P1-8 3h + ~~S2 ✅~~ + S4b 1h🟠 + L2 5h + L4 2h + L6 3h）|
+| P2 kernel/runtime | ~17h（含新增 L10 0.5h + L11 0.5h）|
+| P2 adapter | ~5h（~~A3 ✅~~ + ~~M3 ✅~~ + ~~A13 ✅~~ + ~~A17 ✅~~ + ~~A19 ✅~~ + ~~A20 ✅~~）|
 | P2 slice/cell | ~30h |
 | P2 发布 + 文档 | ~25h + v1.0 tag |
-| **核心路径合计（不含 P3）** | **~100h（约 12-13 工作日）** |
+| **核心路径合计（不含 P3）** | **~96h（约 12 工作日）** |
 | P3 长期 | 3-5d + 若干独立项 |
