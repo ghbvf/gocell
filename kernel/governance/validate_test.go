@@ -3380,11 +3380,12 @@ func TestFMT15(t *testing.T) {
 	invalidJSON := `{not json`
 
 	tests := []struct {
-		name      string
-		emptyRoot bool // when true, Validator is created with root=""
-		setup     func(*metadata.ProjectMeta)
-		readFile  func(string) ([]byte, error)
-		wantCount int
+		name         string
+		emptyRoot    bool // when true, Validator is created with root=""
+		setup        func(*metadata.ProjectMeta)
+		readFile     func(string) ([]byte, error)
+		wantCount    int
+		wantSeverity Severity // if non-empty, each result must have this severity; defaults to SeverityError
 	}{
 		{
 			name: "list schema with hasMore in required and nextCursor in properties",
@@ -3445,7 +3446,7 @@ func TestFMT15(t *testing.T) {
 			wantCount: 1,
 		},
 		{
-			name: "file read error skipped gracefully",
+			name: "file read ErrNotExist skipped (REF-12 handles)",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
@@ -3453,11 +3454,52 @@ func TestFMT15(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "invalid JSON skipped",
+			name: "file read non-ENOENT IO error reports FMT-15",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return nil, os.ErrPermission },
+			wantCount: 1,
+		},
+		{
+			name: "invalid JSON reports FMT-15",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
 			readFile:  func(_ string) ([]byte, error) { return []byte(invalidJSON), nil },
+			wantCount: 1,
+		},
+		{
+			name: "list-like schema with oneOf combinator reports FMT-15 warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile: func(_ string) ([]byte, error) {
+				return []byte(`{"properties":{"data":{},"nextCursor":{"type":"string"},"hasMore":{"type":"boolean"}},"oneOf":[{"properties":{"data":{"type":"object"}}},{"properties":{"data":{"type":"array"}}}]}`), nil
+			},
+			wantCount:    1,
+			wantSeverity: SeverityWarning,
+		},
+		{
+			name: "list-like schema with anyOf combinator reports FMT-15 warning",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile: func(_ string) ([]byte, error) {
+				return []byte(`{"properties":{"data":{},"hasMore":{"type":"boolean"}},"anyOf":[{"properties":{"data":{"type":"array"}}}]}`), nil
+			},
+			wantCount:    1,
+			wantSeverity: SeverityWarning,
+		},
+		{
+			name: "non-list combinator schema silently skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile: func(_ string) ([]byte, error) {
+				// combinator but no hasMore/nextCursor at top level → not list-related
+				return []byte(`{"properties":{"data":{}},"oneOf":[{"properties":{"data":{"type":"string"}}},{"properties":{"data":{"type":"integer"}}}]}`), nil
+			},
 			wantCount: 0,
 		},
 		{
@@ -3492,8 +3534,12 @@ func TestFMT15(t *testing.T) {
 			}
 			got := findByCode(val.validateFMT15(), "FMT-15")
 			assert.Len(t, got, tt.wantCount)
+			wantSev := tt.wantSeverity
+			if wantSev == "" {
+				wantSev = SeverityError
+			}
 			for _, r := range got {
-				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, wantSev, r.Severity)
 			}
 		})
 	}

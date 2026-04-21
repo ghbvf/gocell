@@ -2,7 +2,9 @@ package governance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -543,7 +545,7 @@ func (v *Validator) validateFMT15() []ValidationResult {
 }
 
 // checkFMT15Contract validates a single contract's list response schema for FMT-15.
-// Returns one error per violated constraint.
+// Returns one result per violated constraint.
 func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationResult {
 	if c.Kind != "http" || c.SchemaRefs.Response == "" {
 		return nil
@@ -555,10 +557,31 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 	}
 	data, err := v.readFile(schemaPath)
 	if err != nil {
-		return nil // REF-12 handles missing files
+		if errors.Is(err, os.ErrNotExist) {
+			return nil // REF-12 handles missing files
+		}
+		return []ValidationResult{v.newResult(
+			"FMT-15", SeverityError, IssueInvalid,
+			contractFile(c.ID), fieldSchemaRefsResponse,
+			fmt.Sprintf("cannot read response schema for contract %q: %v", c.ID, err),
+		)}
 	}
-	info, ok := parseListSchemaInfo(data)
-	if !ok || !isListSchema(info) {
+	info, err := parseListSchemaInfo(data)
+	if err != nil {
+		return []ValidationResult{v.newResult(
+			"FMT-15", SeverityError, IssueInvalid,
+			contractFile(c.ID), fieldSchemaRefsResponse,
+			fmt.Sprintf("response schema for contract %q is not valid JSON: %v", c.ID, err),
+		)}
+	}
+	if hasCombinator(info) && looksLikeListSchema(info) {
+		return []ValidationResult{v.newResult(
+			"FMT-15", SeverityWarning, IssueInvalid,
+			contractFile(c.ID), fieldSchemaRefsResponse,
+			fmt.Sprintf("response schema for contract %q uses oneOf/anyOf/allOf: FMT-15 cannot verify list constraints; split into single-shape contracts", c.ID),
+		)}
+	}
+	if !isListSchema(info) {
 		return nil
 	}
 	var results []ValidationResult
@@ -589,25 +612,41 @@ type responseSchemaInfo struct {
 		} `json:"data"`
 		// NextCursor is non-nil when the "nextCursor" property is declared in the schema.
 		NextCursor *json.RawMessage `json:"nextCursor"`
+		// HasMore is non-nil when the "hasMore" property is declared in the schema.
+		HasMore *json.RawMessage `json:"hasMore"`
 	} `json:"properties"`
 	Required []string `json:"required"`
+	// Combinator fields: non-nil when the schema uses oneOf/anyOf/allOf at the root level.
+	OneOf *json.RawMessage `json:"oneOf"`
+	AnyOf *json.RawMessage `json:"anyOf"`
+	AllOf *json.RawMessage `json:"allOf"`
 }
 
 // parseListSchemaInfo unmarshals the minimal fields needed for list-lint checks.
-func parseListSchemaInfo(data []byte) (responseSchemaInfo, bool) {
+// Returns an error if data is not valid JSON.
+func parseListSchemaInfo(data []byte) (responseSchemaInfo, error) {
 	var info responseSchemaInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		return info, false
+		return info, err
 	}
-	return info, true
+	return info, nil
 }
 
 // isListSchema checks if a JSON schema has properties.data.type == "array".
-// Note: dual-mode schemas that use oneOf/anyOf instead of a top-level
-// "type":"array" on properties.data are not detected here and are silently
-// skipped by FMT-15. Such schemas require manual review at the contract level.
 func isListSchema(info responseSchemaInfo) bool {
 	return info.Properties.Data.Type == "array"
+}
+
+// hasCombinator reports whether the schema uses oneOf/anyOf/allOf at the root level.
+func hasCombinator(info responseSchemaInfo) bool {
+	return info.OneOf != nil || info.AnyOf != nil || info.AllOf != nil
+}
+
+// looksLikeListSchema reports whether a schema appears list-related by checking
+// whether "hasMore" or "nextCursor" are declared in the top-level properties.
+// Used together with hasCombinator to avoid false positives on non-list schemas.
+func looksLikeListSchema(info responseSchemaInfo) bool {
+	return info.Properties.HasMore != nil || hasNextCursorProperty(info)
 }
 
 // hasMoreInRequired checks if "hasMore" is in the JSON schema required array.
