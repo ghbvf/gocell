@@ -93,6 +93,10 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	// fail closed rather than panic on nil dereference.
 	p, ok := auth.FromContext(r.Context())
 	if !ok {
+		slog.Error("audit: handler reached without principal — policy chain may be misconfigured",
+			slog.String("path", r.URL.Path),
+			slog.String("method", r.Method),
+		)
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, string(errcode.ErrAuthUnauthorized), "authentication required")
 		return
 	}

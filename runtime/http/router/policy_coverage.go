@@ -42,6 +42,10 @@ var businessMethods = map[string]bool{
 // chi and stdlib ServeMux both route HEAD to the GET handler automatically, so
 // requiring a separate HEAD auth.Declare would be redundant boilerplate.
 //
+// OPTIONS routes must be explicitly declared via auth.Declare (typically with
+// Public: true for CORS preflight). Unlike HEAD, there is no auto-coverage
+// from GET declarations.
+//
 // ref: kubernetes/apiserver — structural injection guarantees every handler
 // has an authorizer; GoCell achieves the same guarantee at startup time
 // by enumerating chi routes and comparing against auth.Declare metadata.
@@ -70,30 +74,9 @@ func verifyPolicyCoverage(
 	// Walk registered routes and collect uncovered ones.
 	var uncovered []string
 	for _, r := range registeredRoutes {
-		method := strings.ToUpper(r.Method)
-		cleanedPath := path.Clean(r.Path)
-
-		// Skip non-business methods (e.g. CONNECT from chi sub-router internals).
-		if !businessMethods[method] {
-			continue
+		if entry, ok := classifyRoute(r, declared, getDeclared, exactWhitelist, prefixWhitelist); !ok {
+			uncovered = append(uncovered, entry)
 		}
-
-		// Already declared via auth.Declare.
-		if declared[method+"\x00"+cleanedPath] {
-			continue
-		}
-
-		// HEAD auto-covered by GET declaration (RFC 7231 §4.3.2).
-		if method == "HEAD" && getDeclared[cleanedPath] {
-			continue
-		}
-
-		// Whitelisted.
-		if matchWhitelist(method, cleanedPath, exactWhitelist, prefixWhitelist) {
-			continue
-		}
-
-		uncovered = append(uncovered, method+" "+cleanedPath)
 	}
 
 	if len(uncovered) == 0 {
@@ -105,6 +88,51 @@ func verifyPolicyCoverage(
 			"use auth.Declare to register routes, or add to WithPolicyCoverageWhitelist if exempt",
 		len(uncovered), strings.Join(uncovered, ", "),
 	)
+}
+
+// classifyRoute decides whether a single registered route is covered.
+// Returns (entry, false) when the route is uncovered, where entry is the
+// human-readable label to include in the error. Returns ("", true) when
+// the route is covered or skipped (non-business method).
+func classifyRoute(
+	r routeKey,
+	declared map[string]bool,
+	getDeclared map[string]bool,
+	exactWhitelist map[string]bool,
+	prefixWhitelist []string,
+) (entry string, covered bool) {
+	method := strings.ToUpper(r.Method)
+	cleanedPath := path.Clean(r.Path)
+
+	// Flag routes with empty or unrecognized methods — these cannot be
+	// covered by auth.Declare which requires an explicit HTTP method.
+	// chi.Walk should not produce empty methods, but defense-in-depth
+	// catches malformed route registrations.
+	if method == "" {
+		return "(empty method) " + cleanedPath, false
+	}
+
+	// Skip non-business methods (e.g. CONNECT from chi sub-router internals).
+	if !businessMethods[method] {
+		return "", true
+	}
+
+	// Already declared via auth.Declare.
+	if declared[method+"\x00"+cleanedPath] {
+		return "", true
+	}
+
+	// HEAD auto-covered by GET declaration (RFC 7231 §4.3.2).
+	if method == "HEAD" && getDeclared[cleanedPath] {
+		return "", true
+	}
+
+	// Whitelisted.
+	if matchWhitelist(method, cleanedPath, exactWhitelist, prefixWhitelist) {
+		return "", true
+	}
+
+	return method + " " + cleanedPath, false
 }
 
 // parseWhitelist splits whitelist entries into exact and prefix sets.

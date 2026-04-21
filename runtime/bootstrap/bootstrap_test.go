@@ -2227,14 +2227,24 @@ func newHTTPCell(id string) *httpCell {
 }
 
 func (c *httpCell) RegisterRoutes(mux cell.RouteMux) {
-	mux.Handle("GET /api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"data":"ok"}`))
-	}))
-	mux.Handle("POST /api/v1/access/sessions/login", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
-	}))
+	auth.Declare(mux, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/api/v1/data",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":"ok"}`))
+		}),
+		Policy: auth.Authenticated(),
+	})
+	auth.Declare(mux, auth.RouteDecl{
+		Method: http.MethodPost,
+		Path:   "/api/v1/access/sessions/login",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+		}),
+		Public: true,
+	})
 }
 
 // bootstrapTestVerifier is a minimal IntentTokenVerifier for bootstrap tests.
@@ -2322,10 +2332,15 @@ func newPublicHTTPCell(id string) *publicHTTPCell {
 }
 
 func (c *publicHTTPCell) RegisterRoutes(mux cell.RouteMux) {
-	mux.Handle("GET /api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"data":"ok"}`))
-	}))
+	auth.Declare(mux, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/api/v1/data",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":"ok"}`))
+		}),
+		Public: true,
+	})
 	auth.Declare(mux, auth.RouteDecl{
 		Method: http.MethodPost,
 		Path:   "/api/v1/access/sessions/login",
@@ -2517,10 +2532,15 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 
 	var gotTraceID string
 	tc := newTracingTestCell("trace-biz", func(mux cell.RouteMux) {
-		mux.Handle("GET /api/v1/trace-test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
-			w.WriteHeader(http.StatusOK)
-		}))
+		auth.Declare(mux, auth.RouteDecl{
+			Method: http.MethodGet,
+			Path:   "/api/v1/trace-test",
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
+				w.WriteHeader(http.StatusOK)
+			}),
+			Delegated: true,
+		})
 	})
 
 	asm := assembly.New(assembly.Config{ID: "trace-e2e", DurabilityMode: cell.DurabilityDemo})
@@ -2555,10 +2575,15 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 
 	var gotTraceID string
 	tc := newTracingTestCell("trace-upstream", func(mux cell.RouteMux) {
-		mux.Handle("GET /api/v1/propagate", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
-			w.WriteHeader(http.StatusOK)
-		}))
+		auth.Declare(mux, auth.RouteDecl{
+			Method: http.MethodGet,
+			Path:   "/api/v1/propagate",
+			Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
+				w.WriteHeader(http.StatusOK)
+			}),
+			Delegated: true,
+		})
 	})
 
 	asm := assembly.New(assembly.Config{ID: "trace-upstream", DurabilityMode: cell.DurabilityDemo})
@@ -2598,9 +2623,14 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	tracer := tracing.NewTracer("bootstrap-panic-e2e")
 
 	tc := newTracingTestCell("trace-panic", func(mux cell.RouteMux) {
-		mux.Handle("GET /api/v1/boom", http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
-			panic("boom for tracing test")
-		}))
+		auth.Declare(mux, auth.RouteDecl{
+			Method: http.MethodGet,
+			Path:   "/api/v1/boom",
+			Handler: http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+				panic("boom for tracing test")
+			}),
+			Delegated: true,
+		})
 	})
 
 	asm := assembly.New(assembly.Config{ID: "trace-panic", DurabilityMode: cell.DurabilityDemo})
@@ -2687,10 +2717,15 @@ func (c *authProviderCell) TokenVerifier() auth.IntentTokenVerifier {
 }
 
 func (c *authProviderCell) RegisterRoutes(mux cell.RouteMux) {
-	mux.Handle("GET /api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`{"data":"ok"}`))
-	}))
+	auth.Declare(mux, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/api/v1/data",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"data":"ok"}`))
+		}),
+		Policy: auth.Authenticated(),
+	})
 	// F3: login is declared as a public route so auth discovery tests can verify
 	// that no-token requests bypass JWT checks on this endpoint.
 	auth.Declare(mux, auth.RouteDecl{
@@ -3257,11 +3292,16 @@ func (c *traceCapturingCell) RegisterRoutes(mux cell.RouteMux) {
 		}),
 		Public: true,
 	})
-	mux.Handle("GET /api/v1/protected/ping", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		tid, _ := ctxkeys.TraceIDFrom(r.Context())
-		c.gotProtected <- tid
-		w.WriteHeader(http.StatusOK)
-	}))
+	auth.Declare(mux, auth.RouteDecl{
+		Method: http.MethodGet,
+		Path:   "/api/v1/protected/ping",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			tid, _ := ctxkeys.TraceIDFrom(r.Context())
+			c.gotProtected <- tid
+			w.WriteHeader(http.StatusOK)
+		}),
+		Policy: auth.Authenticated(),
+	})
 }
 
 // TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored verifies the

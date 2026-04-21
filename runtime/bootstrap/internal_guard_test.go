@@ -87,23 +87,32 @@ func TestWithInternalEndpointGuard_PrefixMustEndWithSlash(t *testing.T) {
 // routeRegisterCell registers an HTTP route at the given path so we can probe it.
 type routeRegisterCell struct {
 	*cell.BaseCell
-	path    string
-	handler http.HandlerFunc
+	method    string
+	path      string
+	handler   http.HandlerFunc
+	delegated bool
 }
 
-func newRouteRegisterCell(id, path string, h http.HandlerFunc) *routeRegisterCell {
+func newRouteRegisterCell(id, method, path string, h http.HandlerFunc, delegated bool) *routeRegisterCell {
 	return &routeRegisterCell{
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{
 			ID:   id,
 			Type: cell.CellTypeCore,
 		}),
-		path:    path,
-		handler: h,
+		method:    method,
+		path:      path,
+		handler:   h,
+		delegated: delegated,
 	}
 }
 
 func (c *routeRegisterCell) RegisterRoutes(mux cell.RouteMux) {
-	mux.Handle(c.path, c.handler)
+	auth.Declare(mux, auth.RouteDecl{
+		Method:    c.method,
+		Path:      c.path,
+		Handler:   c.handler,
+		Delegated: c.delegated,
+	})
 }
 
 func TestWithInternalEndpointGuard_Wiring(t *testing.T) {
@@ -121,16 +130,16 @@ func TestWithInternalEndpointGuard_Wiring(t *testing.T) {
 
 	asm := assembly.New(assembly.Config{ID: "guard-wiring-test", DurabilityMode: cell.DurabilityDemo})
 
-	internalCell := newRouteRegisterCell("internal-cell", "/internal/v1/roles",
+	internalCell := newRouteRegisterCell("internal-cell", http.MethodGet, "/internal/v1/roles",
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			internalHit.Add(1)
 			w.WriteHeader(http.StatusOK)
-		}))
-	apiCell := newRouteRegisterCell("api-cell", "/api/v1/users",
+		}), true)
+	apiCell := newRouteRegisterCell("api-cell", http.MethodGet, "/api/v1/users",
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			apiHit.Add(1)
 			w.WriteHeader(http.StatusOK)
-		}))
+		}), false)
 
 	require.NoError(t, asm.Register(internalCell))
 	require.NoError(t, asm.Register(apiCell))
@@ -221,14 +230,14 @@ func TestWithInternalEndpointGuard_BypassesJWT(t *testing.T) {
 
 	asm := assembly.New(assembly.Config{ID: "bypass-jwt-test", DurabilityMode: cell.DurabilityDemo})
 
-	internalCell := newRouteRegisterCell("internal-cell", "/internal/v1/roles",
+	internalCell := newRouteRegisterCell("internal-cell", http.MethodGet, "/internal/v1/roles",
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK) // only reached if guard allows
-		}))
-	apiCell := newRouteRegisterCell("api-cell", "/api/v1/users",
+		}), true)
+	apiCell := newRouteRegisterCell("api-cell", http.MethodGet, "/api/v1/users",
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-		}))
+		}), false)
 
 	require.NoError(t, asm.Register(internalCell))
 	require.NoError(t, asm.Register(apiCell))
