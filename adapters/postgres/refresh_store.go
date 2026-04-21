@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"io"
+	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -16,6 +17,10 @@ import (
 
 // Compile-time assertion: PGRefreshStore implements refresh.Store.
 var _ refresh.Store = (*PGRefreshStore)(nil)
+
+// errCASMiss is returned internally when a CAS UPDATE/SELECT matched no row.
+// It is unexported so callers compare with errors.Is rather than pgx.ErrNoRows.
+var errCASMiss = errors.New("refresh store: CAS miss")
 
 // gcBatchSize is the number of rows deleted per GC batch iteration.
 const gcBatchSize = 1000
@@ -79,6 +84,9 @@ WHERE id IN (
 // Consistency: L1 LocalTx — Rotate is atomic within a single transaction;
 // Issue and Revoke are single-statement writes.
 //
+// Token values are stored in plaintext. See backlog X11 (REFRESH-HMAC-SPLIT-01)
+// for the planned HMAC-split upgrade that stores only hash(verifier).
+//
 // ref: dexidp/dex storage/sql/sql.go (pgx-based refresh token CAS pattern)
 // ref: F2 contract C1-C7 from docs/plans/202604191515-auth-federated-whistle.md
 type PGRefreshStore struct {
@@ -93,6 +101,9 @@ type PGRefreshStore struct {
 // clock must not be nil. policy.MaxAge must be positive. If randReader is nil,
 // crypto/rand.Reader is used.
 func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Clock, randReader io.Reader) *PGRefreshStore {
+	if pool == nil {
+		panic("postgres.NewRefreshStore: pool must not be nil")
+	}
 	if clock == nil {
 		panic("postgres.NewRefreshStore: clock must not be nil")
 	}
@@ -234,7 +245,7 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, presentedTok
 	if err == nil {
 		return tok, nil
 	}
-	if !errors.Is(err, pgx.ErrNoRows) {
+	if !errors.Is(err, errCASMiss) {
 		return nil, err
 	}
 
@@ -250,7 +261,7 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, presentedTok
 	if err == nil {
 		return tok, nil
 	}
-	if errors.Is(err, pgx.ErrNoRows) {
+	if errors.Is(err, errCASMiss) {
 		// Branch 4b: check if it's an obsolete token on a revoked row.
 		var dummy int
 		scanErr := tx.QueryRow(ctx, checkObsoleteRevokedSQL, presentedToken).Scan(&dummy)
@@ -264,14 +275,14 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, presentedTok
 }
 
 // tryRotateActive attempts the CAS UPDATE for an active, valid token.
-// Returns (token, nil) on success, (nil, pgx.ErrNoRows) when the UPDATE matched
+// Returns (token, nil) on success, (nil, errCASMiss) when the UPDATE matched
 // no row (token absent, revoked, or expired), or (nil, infraErr) on DB error.
 func (s *PGRefreshStore) tryRotateActive(ctx context.Context, tx pgx.Tx, presentedToken, newTokenID string, now time.Time) (*refresh.Token, error) {
 	row := tx.QueryRow(ctx, rotateActiveSQL, newTokenID, now, presentedToken, now)
 	tok, err := scanTokenRow(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, pgx.ErrNoRows
+			return nil, errCASMiss
 		}
 		return nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: rotate active", err)
 	}
@@ -305,35 +316,27 @@ func (s *PGRefreshStore) checkActiveState(ctx context.Context, tx pgx.Tx, presen
 // of the current-generation record.
 //
 // Returns (token, nil) for grace retry, (nil, ErrTokenReused) for reuse attack,
-// or (nil, pgx.ErrNoRows) when no active record holds this as obsolete_token.
+// or (nil, errCASMiss) when no active record holds this as obsolete_token.
 func (s *PGRefreshStore) tryObsolete(ctx context.Context, tx pgx.Tx, presentedToken string, now time.Time) (*refresh.Token, error) {
 	row := tx.QueryRow(ctx, lookupByObsoleteSQL, presentedToken)
 
-	var (
-		id            int64
-		token         string
-		obsoleteToken *string
-		sessionID     string
-		subjectID     string
-		createdAt     time.Time
-		lastUsed      time.Time
-		expiresAt     time.Time
-		revokedAt     *time.Time
-	)
-	err := row.Scan(&id, &token, &obsoleteToken, &sessionID, &subjectID, &createdAt, &lastUsed, &expiresAt, &revokedAt)
+	tok, err := scanFullTokenRow(row)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return nil, pgx.ErrNoRows
+		return nil, errCASMiss
 	}
 	if err != nil {
 		return nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: lookup by obsolete", err)
 	}
 
 	// Branch 4: grace window elapsed → cascade revoke + ErrTokenReused.
-	elapsed := now.Sub(lastUsed)
+	elapsed := now.Sub(tok.LastUsed)
 	if elapsed > s.policy.ReuseInterval {
-		if _, execErr := tx.Exec(ctx, revokeSessionSQL, now, sessionID); execErr != nil {
+		if _, execErr := tx.Exec(ctx, revokeSessionSQL, now, tok.SessionID); execErr != nil {
 			return nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: cascade revoke on reuse", execErr)
 		}
+		slog.Error("refresh token reuse detected",
+			slog.String("session_id", tok.SessionID),
+		)
 		return nil, refresh.ErrTokenReused
 	}
 
@@ -343,14 +346,7 @@ func (s *PGRefreshStore) tryObsolete(ctx context.Context, tx pgx.Tx, presentedTo
 	// memstore.rotateObsolete behaviour.
 	//
 	// ref: memstore/store.go rotateObsolete — tok.ObsoleteToken = ""
-	tok := &refresh.Token{
-		ID:        token,
-		SessionID: sessionID,
-		SubjectID: subjectID,
-		CreatedAt: createdAt,
-		LastUsed:  lastUsed,
-		ExpiresAt: expiresAt,
-	}
+	tok.ObsoleteToken = ""
 	return tok, nil
 }
 
@@ -367,6 +363,38 @@ func scanTokenRow(row RowScanner) (*refresh.Token, error) {
 		expiresAt     time.Time
 	)
 	if err := row.Scan(&id, &token, &obsoleteToken, &sessionID, &subjectID, &createdAt, &lastUsed, &expiresAt); err != nil {
+		return nil, err
+	}
+	tok := &refresh.Token{
+		ID:        token,
+		SessionID: sessionID,
+		SubjectID: subjectID,
+		CreatedAt: createdAt,
+		LastUsed:  lastUsed,
+		ExpiresAt: expiresAt,
+	}
+	if obsoleteToken != nil {
+		tok.ObsoleteToken = *obsoleteToken
+	}
+	return tok, nil
+}
+
+// scanFullTokenRow reads all columns including revokedAt, as returned by
+// lookupByObsoleteSQL. revokedAt is scanned but not included in Token (which
+// has no revocation field); callers needing it should inspect the raw scan.
+func scanFullTokenRow(row RowScanner) (*refresh.Token, error) {
+	var (
+		id            int64
+		token         string
+		obsoleteToken *string
+		sessionID     string
+		subjectID     string
+		createdAt     time.Time
+		lastUsed      time.Time
+		expiresAt     time.Time
+		revokedAt     *time.Time
+	)
+	if err := row.Scan(&id, &token, &obsoleteToken, &sessionID, &subjectID, &createdAt, &lastUsed, &expiresAt, &revokedAt); err != nil {
 		return nil, err
 	}
 	tok := &refresh.Token{

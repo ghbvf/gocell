@@ -17,8 +17,9 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()
-	// Run migrations
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations")
+	// Run migrations using a dedicated tracking table so this test's schema
+	// version tracking does not collide with other integration test suites.
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_refresh_store")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
@@ -26,8 +27,10 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 
 	storetest.RunContractSuite(t, func(t *testing.T, policy refresh.Policy) (refresh.Store, *storetest.FakeClock) {
 		t.Helper()
-		_, err := pool.DB().Exec(ctx, "TRUNCATE refresh_tokens")
-		require.NoError(t, err)
+		// No TRUNCATE: storetest assigns unique session IDs per test case
+		// ("sess-1".."sess-13b") and unique random tokens, so parallel subtests
+		// do not collide. The container is fresh per TestPGRefreshStore_ContractSuite
+		// invocation, so stale rows from a previous run are not a concern.
 
 		clock := storetest.NewFakeClock(baseTime)
 		store := NewRefreshStore(pool.DB(), policy, clock, nil)
