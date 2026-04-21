@@ -111,8 +111,8 @@ func verifyPolicyCoverage(
 //
 // Exact entries have the format "METHOD /path" (e.g. "GET /debug/pprof").
 // Prefix entries have the format "/path/*" (e.g. "/debug/*").
-// All other formats are silently ignored (fail-open for whitelist parsing;
-// FinalizeAuth validates business route coverage separately).
+// Malformed entries are silently skipped — FinalizeAuth still enforces
+// coverage for any route not matched by a valid entry (fail-closed overall).
 func parseWhitelist(whitelist []string) (exact map[string]bool, prefixes []string) {
 	exact = make(map[string]bool, len(whitelist))
 	for _, entry := range whitelist {

@@ -102,6 +102,16 @@ func TestVerifyPolicyCoverage(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name: "malformed_whitelist_entry_silently_ignored",
+			routes: []routeKey{
+				{Method: "GET", Path: "/api/v1/secret"},
+			},
+			metas:       []kcell.AuthRouteMeta{},
+			whitelist:   []string{"INVALID_ENTRY", "just-a-word"},
+			wantErr:     true,
+			errContains: "GET /api/v1/secret",
+		},
+		{
 			name: "head_auto_covered_by_get",
 			routes: []routeKey{
 				{Method: "GET", Path: "/api/v1/resources"},

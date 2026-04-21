@@ -334,12 +334,13 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	}))
 
 	tests := []struct {
-		name       string
-		query      string
-		subject    string
-		roles      []string
-		wantStatus int
-		wantCount  int // -1 = don't check
+		name            string
+		query           string
+		subject         string
+		roles           []string
+		injectEmptyAuth bool // inject auth.TestContext("", nil) — authenticated but empty Subject
+		wantStatus      int
+		wantCount       int // -1 = don't check
 	}{
 		{
 			name:       "self actorId matches subject",
@@ -378,13 +379,23 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 			wantStatus: http.StatusUnauthorized,
 			wantCount:  -1,
 		},
+		{
+			name:            "empty subject in principal returns 401",
+			query:           "",
+			injectEmptyAuth: true,
+			wantStatus:      http.StatusUnauthorized,
+			wantCount:       -1,
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/entries"+tc.query, nil)
-			if tc.subject != "" {
+			switch {
+			case tc.injectEmptyAuth:
+				req = req.WithContext(auth.TestContext("", tc.roles))
+			case tc.subject != "":
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}
 			securedMux.ServeHTTP(w, req)

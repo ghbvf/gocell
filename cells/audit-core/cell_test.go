@@ -273,8 +273,8 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	req = req.WithContext(auth.TestContext("usr-1", nil))
 	r.ServeHTTP(rec, req)
 
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"GET /api/v1/audit/entries should not return 404 (got %d)", rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"GET /api/v1/audit/entries should return 200 (got %d)", rec.Code)
 }
 
 // TestInit_DurableMode_RejectsMissingCursorCodec locks the fail-fast

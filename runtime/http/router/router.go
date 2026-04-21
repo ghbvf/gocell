@@ -665,10 +665,11 @@ func (r *Router) FinalizeAuth() error {
 		r.deriveHint()
 
 		// Warn when auth declarations exist but no verifier is installed: the
-		// Public/Policy/PasswordResetExempt semantics compile successfully but
-		// AuthMiddleware is absent so none of the declarations have any effect.
+		// Public/PasswordResetExempt matchers need AuthMiddleware to run, but
+		// Policy guards are inlined into handlers via RequirePolicy at Declare
+		// time and remain effective regardless.
 		if r.authVerifier == nil {
-			slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/Policy/PasswordResetExempt declarations will have no effect",
+			slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/PasswordResetExempt matchers will have no effect (Policy guards run inline regardless)",
 				slog.Int("declared", len(r.declaredAuthMetas)))
 		}
 	}
