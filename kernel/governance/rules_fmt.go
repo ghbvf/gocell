@@ -525,8 +525,11 @@ func (v *Validator) validateFMT14() []ValidationResult {
 	return results
 }
 
-// validateFMT15 checks that HTTP list-style response schemas include "hasMore"
-// in their required fields. A response is a "list" when properties.data.type is "array".
+// validateFMT15 checks that HTTP list-style response schemas:
+//   - include "hasMore" in required fields
+//   - declare "nextCursor" as a property (not required, because PageResult uses omitempty)
+//
+// A response is a "list" when properties.data.type is "array".
 // Skipped when root is empty, for non-HTTP contracts, or when the schema file cannot be read.
 func (v *Validator) validateFMT15() []ValidationResult {
 	if v.root == "" {
@@ -534,33 +537,46 @@ func (v *Validator) validateFMT15() []ValidationResult {
 	}
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if c.Kind != "http" || c.SchemaRefs.Response == "" {
-			continue
-		}
-		contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
-		schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
-		if !IsWithinRoot(v.root, schemaPath) {
-			continue
-		}
-		data, err := v.readFile(schemaPath)
-		if err != nil {
-			continue // REF-12 handles missing files
-		}
-		info, ok := parseResponseSchema(data)
-		if !ok {
-			continue
-		}
-		if !isListSchema(info) {
-			continue
-		}
-		if !hasMoreInRequired(info) {
-			results = append(results, v.newResult(
-				"FMT-15", SeverityError, IssueRequired,
-				contractFile(c.ID),
-				fieldSchemaRefsResponse,
-				fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
-			))
-		}
+		results = append(results, v.checkFMT15Contract(c)...)
+	}
+	return results
+}
+
+// checkFMT15Contract validates a single contract's list response schema for FMT-15.
+// Returns one error per violated constraint.
+func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationResult {
+	if c.Kind != "http" || c.SchemaRefs.Response == "" {
+		return nil
+	}
+	contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
+	schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
+	if !IsWithinRoot(v.root, schemaPath) {
+		return nil
+	}
+	data, err := v.readFile(schemaPath)
+	if err != nil {
+		return nil // REF-12 handles missing files
+	}
+	info, ok := parseResponseSchema(data)
+	if !ok || !isListSchema(info) {
+		return nil
+	}
+	var results []ValidationResult
+	if !hasMoreInRequired(info) {
+		results = append(results, v.newResult(
+			"FMT-15", SeverityError, IssueRequired,
+			contractFile(c.ID),
+			fieldSchemaRefsResponse,
+			fmt.Sprintf("list response schema for contract %q must include \"hasMore\" in required fields", c.ID),
+		))
+	}
+	if !hasNextCursorProperty(info) {
+		results = append(results, v.newResult(
+			"FMT-15", SeverityError, IssueRequired,
+			contractFile(c.ID),
+			fieldSchemaRefsResponse,
+			fmt.Sprintf("list response schema for contract %q must declare \"nextCursor\" property (omit from required; PageResult omits it on last page)", c.ID),
+		))
 	}
 	return results
 }
@@ -571,6 +587,10 @@ type responseSchemaInfo struct {
 		Data struct {
 			Type string `json:"type"`
 		} `json:"data"`
+		// NextCursor is non-nil when "nextCursor" is declared in the schema properties.
+		// It must be declared (though not required) because PageResult uses omitempty:
+		// the field is absent on the last page and must not appear in required[].
+		NextCursor *json.RawMessage `json:"nextCursor"`
 	} `json:"properties"`
 	Required []string `json:"required"`
 }
@@ -597,4 +617,9 @@ func hasMoreInRequired(info responseSchemaInfo) bool {
 		}
 	}
 	return false
+}
+
+// hasNextCursorProperty checks if "nextCursor" is declared in the schema properties.
+func hasNextCursorProperty(info responseSchemaInfo) bool {
+	return info.Properties.NextCursor != nil
 }

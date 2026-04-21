@@ -3367,11 +3367,15 @@ func TestFMT14(t *testing.T) {
 	}
 }
 
-// --- FMT-15: list response schema must include hasMore ---
+// --- FMT-15: list response schema must include hasMore in required and declare nextCursor in properties ---
 
 func TestFMT15(t *testing.T) {
-	validListSchema := `{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data","hasMore"]}`
-	missingHasMore := `{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data"]}`
+	// valid: nextCursor declared in properties, hasMore in required
+	validListSchema := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data","hasMore"]}`
+	// missing hasMore from required (nextCursor still in properties)
+	missingHasMore := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data"]}`
+	// missing nextCursor from properties (hasMore still in required)
+	missingNextCursor := `{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data","hasMore"]}`
 	singleObject := `{"properties":{"data":{"type":"object"}},"required":["data"]}`
 	invalidJSON := `{not json`
 
@@ -3382,7 +3386,7 @@ func TestFMT15(t *testing.T) {
 		wantCount int
 	}{
 		{
-			name: "list schema with hasMore in required",
+			name: "list schema with hasMore in required and nextCursor in properties",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
@@ -3395,6 +3399,14 @@ func TestFMT15(t *testing.T) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
 			readFile:  func(_ string) ([]byte, error) { return []byte(missingHasMore), nil },
+			wantCount: 1,
+		},
+		{
+			name: "list schema missing nextCursor in properties",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return []byte(missingNextCursor), nil },
 			wantCount: 1,
 		},
 		{
