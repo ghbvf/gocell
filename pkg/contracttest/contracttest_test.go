@@ -272,7 +272,6 @@ func TestContractsRoot(t *testing.T) {
 type mockTB struct {
 	testing.TB
 	failed bool
-	logs   []string
 }
 
 func (m *mockTB) Helper() {}

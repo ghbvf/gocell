@@ -26,6 +26,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/contracts"
 	"github.com/santhosh-tekuri/jsonschema/v6"
 	"gopkg.in/yaml.v3"
 )
@@ -46,53 +47,26 @@ type Contract struct {
 }
 
 // HTTPTransport holds optional transport metadata for migrated HTTP contracts.
-type HTTPTransport struct {
-	Method        string
-	Path          string
-	SuccessStatus int
-	NoContent     bool
-	Responses     map[int]HTTPResponseEntry
-}
+// It is an alias of contracts.HTTPTransport to preserve the public API.
+type HTTPTransport = contracts.HTTPTransport
 
 // HTTPResponseEntry describes a declared error response for a specific HTTP status code.
-type HTTPResponseEntry struct {
-	Description string
-	SchemaRef   string
-}
+// It is an alias of contracts.HTTPResponse to preserve the public API.
+type HTTPResponseEntry = contracts.HTTPResponse
 
 // contractYAML is a local struct for parsing contract.yaml without
 // importing kernel/metadata (avoids coupling).
 type contractYAML struct {
-	ID               string         `yaml:"id"`
-	Kind             string         `yaml:"kind"`
-	OwnerCell        string         `yaml:"ownerCell"`
-	ConsistencyLevel string         `yaml:"consistencyLevel"`
-	Endpoints        endpointsYAML  `yaml:"endpoints"`
-	SchemaRefs       schemaRefsYAML `yaml:"schemaRefs"`
+	ID               string               `yaml:"id"`
+	Kind             string               `yaml:"kind"`
+	OwnerCell        string               `yaml:"ownerCell"`
+	ConsistencyLevel string               `yaml:"consistencyLevel"`
+	Endpoints        endpointsYAML        `yaml:"endpoints"`
+	SchemaRefs       contracts.SchemaRefs `yaml:"schemaRefs"`
 }
 
 type endpointsYAML struct {
-	HTTP *httpTransportYAML `yaml:"http,omitempty"`
-}
-
-type httpTransportYAML struct {
-	Method        string                        `yaml:"method"`
-	Path          string                        `yaml:"path"`
-	SuccessStatus int                           `yaml:"successStatus"`
-	NoContent     bool                          `yaml:"noContent"`
-	Responses     map[int]httpResponseEntryYAML `yaml:"responses,omitempty"`
-}
-
-type httpResponseEntryYAML struct {
-	Description string `yaml:"description"`
-	SchemaRef   string `yaml:"schemaRef"`
-}
-
-type schemaRefsYAML struct {
-	Request  string `yaml:"request,omitempty"`
-	Response string `yaml:"response,omitempty"`
-	Payload  string `yaml:"payload,omitempty"`
-	Headers  string `yaml:"headers,omitempty"`
+	HTTP *contracts.HTTPTransport `yaml:"http,omitempty"`
 }
 
 // ContractsRoot returns the absolute path to the contracts/ directory,
@@ -330,23 +304,8 @@ func formatValidationErrorDetail(ve *jsonschema.ValidationError, indent string) 
 	return sb.String()
 }
 
-func newHTTPTransport(meta *httpTransportYAML) *HTTPTransport {
-	if meta == nil {
-		return nil
-	}
-	t := &HTTPTransport{
-		Method:        meta.Method,
-		Path:          meta.Path,
-		SuccessStatus: meta.SuccessStatus,
-		NoContent:     meta.NoContent,
-	}
-	if len(meta.Responses) > 0 {
-		t.Responses = make(map[int]HTTPResponseEntry, len(meta.Responses))
-		for status, entry := range meta.Responses {
-			t.Responses[status] = HTTPResponseEntry(entry)
-		}
-	}
-	return t
+func newHTTPTransport(meta *contracts.HTTPTransport) *HTTPTransport {
+	return meta
 }
 
 // ValidateErrorResponse validates body against the JSON Schema declared for

@@ -2,7 +2,10 @@
 // and provides a file-system-based parser to load them into a unified ProjectMeta.
 package metadata
 
-import "gopkg.in/yaml.v3"
+import (
+	"github.com/ghbvf/gocell/pkg/contracts"
+	"gopkg.in/yaml.v3"
+)
 
 // CellMeta maps to cells/{id}/cell.yaml.
 //
@@ -133,35 +136,17 @@ type EndpointsMeta struct {
 	Readers  []string `yaml:"readers,omitempty"`
 }
 
-// HTTPResponseMeta describes an expected error response for a specific HTTP
-// status code. It references a JSON Schema file (relative to the contract
-// directory) that describes the error response body.
-type HTTPResponseMeta struct {
-	Description string `yaml:"description"`
-	SchemaRef   string `yaml:"schemaRef"`
-}
+// HTTPResponseMeta is a type alias for contracts.HTTPResponse.
+// It describes an expected error response for a specific HTTP status code.
+type HTTPResponseMeta = contracts.HTTPResponse
 
-// HTTPTransportMeta holds transport-level details for migrated HTTP contracts.
-// It is optional so legacy HTTP contracts can remain schema-only until migrated.
-type HTTPTransportMeta struct {
-	Method        string                   `yaml:"method"`
-	Path          string                   `yaml:"path"`
-	SuccessStatus int                      `yaml:"successStatus"`
-	NoContent     bool                     `yaml:"noContent"`
-	Responses     map[int]HTTPResponseMeta `yaml:"responses,omitempty"`
-}
+// HTTPTransportMeta is a type alias for contracts.HTTPTransport.
+// It holds transport-level details for migrated HTTP contracts.
+type HTTPTransportMeta = contracts.HTTPTransport
 
-// SchemaRefsMeta holds JSON Schema file references relative to the contract directory.
-// Known keys are request, response, payload, headers; additional string-valued keys
-// are captured in Extra to stay compatible with contract.schema.json's
-// additionalProperties: {"type":"string"}.
-type SchemaRefsMeta struct {
-	Request  string            `yaml:"request,omitempty"`
-	Response string            `yaml:"response,omitempty"`
-	Payload  string            `yaml:"payload,omitempty"`
-	Headers  string            `yaml:"headers,omitempty"`
-	Extra    map[string]string `yaml:",inline"`
-}
+// SchemaRefsMeta is a type alias for contracts.SchemaRefs.
+// It holds JSON Schema file references relative to the contract directory.
+type SchemaRefsMeta = contracts.SchemaRefs
 
 // JourneyMeta maps to journeys/J-*.yaml.
 type JourneyMeta struct {
@@ -219,9 +204,51 @@ type ProjectMeta struct {
 	Assemblies  map[string]*AssemblyMeta // keyed by assembly ID
 	StatusBoard []StatusBoardEntry
 	Actors      []ActorMeta
-	// FileNodes maps each parsed YAML file path (as walked during ParseFS) to its
+	// fileNodes maps each parsed YAML file path (as walked during ParseFS) to its
 	// root DocumentNode, enabling validator rules to report precise
 	// file:line:column locations. nil when the project was constructed
 	// manually (e.g. in tests); callers must tolerate that case.
-	FileNodes map[string]*yaml.Node
+	// Access via Locate, FileNode, SetFileNode, or HasFileNodes.
+	fileNodes map[string]*yaml.Node
+}
+
+// Locate returns the Position of the YAML value at the given dotted field path
+// inside file. Returns a zero Position when any precondition is missing (nil
+// receiver, no file nodes, file not found, path unresolvable).
+func (pm *ProjectMeta) Locate(file, path string) Position {
+	if pm == nil || file == "" || path == "" {
+		return Position{}
+	}
+	if pm.fileNodes == nil {
+		return Position{}
+	}
+	n, ok := pm.fileNodes[file]
+	if !ok || n == nil {
+		return Position{}
+	}
+	return Locate(n, path)
+}
+
+// SetFileNode stores a parsed YAML document node for the given file path.
+// It initializes the internal map on first use.
+func (pm *ProjectMeta) SetFileNode(file string, node *yaml.Node) {
+	if pm.fileNodes == nil {
+		pm.fileNodes = make(map[string]*yaml.Node)
+	}
+	pm.fileNodes[file] = node
+}
+
+// FileNode returns the parsed YAML document node for the given file path.
+// Returns (nil, false) if the file was not parsed or file nodes are not available.
+func (pm *ProjectMeta) FileNode(file string) (*yaml.Node, bool) {
+	if pm.fileNodes == nil {
+		return nil, false
+	}
+	n, ok := pm.fileNodes[file]
+	return n, ok
+}
+
+// HasFileNodes reports whether any file nodes have been stored.
+func (pm *ProjectMeta) HasFileNodes() bool {
+	return len(pm.fileNodes) > 0
 }
