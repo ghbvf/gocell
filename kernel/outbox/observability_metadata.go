@@ -10,6 +10,7 @@ import (
 	"maps"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/idutil"
 )
 
 // Observability metadata keys injected by MergeObservabilityMetadata and
@@ -38,32 +39,6 @@ var reservedMetadataKeys = map[string]struct{}{
 func IsReservedMetadataKey(key string) bool {
 	_, ok := reservedMetadataKeys[key]
 	return ok
-}
-
-// maxObservabilityIDLen is the maximum length for an observability ID restored
-// from broker metadata. Values exceeding this limit are silently dropped to
-// prevent resource exhaustion from malformed messages.
-const maxObservabilityIDLen = 256
-
-// isSafeObservabilityID checks that a metadata value contains only safe
-// characters for observability IDs: ASCII letters, digits, and ._:/-
-// This mirrors the HTTP-side isSafeID validation in the request_id middleware.
-func isSafeObservabilityID(s string) bool {
-	if len(s) == 0 || len(s) > maxObservabilityIDLen {
-		return false
-	}
-	for i := 0; i < len(s); i++ {
-		c := s[i]
-		switch {
-		case c >= 'a' && c <= 'z':
-		case c >= 'A' && c <= 'Z':
-		case c >= '0' && c <= '9':
-		case c == '.' || c == '_' || c == ':' || c == '/' || c == '-':
-		default:
-			return false
-		}
-	}
-	return true
 }
 
 // MergeObservabilityMetadata copies whitelisted observability values from ctx
@@ -134,7 +109,7 @@ func withContextMetadata(
 	getter contextValueGetter,
 	setter contextValueSetter,
 ) context.Context {
-	if !isSafeObservabilityID(value) {
+	if len(value) > idutil.MaxMetadataIDLen || !idutil.IsSafeID(value) {
 		return ctx
 	}
 	if existing, ok := getter(ctx); ok && existing != "" {

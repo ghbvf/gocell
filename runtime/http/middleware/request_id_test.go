@@ -101,29 +101,6 @@ func TestRequestID_RejectsUnsafeChars(t *testing.T) {
 	}
 }
 
-func TestIsSafeID(t *testing.T) {
-	tests := []struct {
-		input string
-		safe  bool
-	}{
-		{"abc-123", true},
-		{"550e8400-e29b-41d4-a716-446655440000", true},
-		{"req.trace_id:v1/sub", true},
-		{"UPPER-case-Mix", true},
-		{"", false},
-		{"has space", false},
-		{"has\nnewline", false},
-		{`has"quote`, false},
-		{"has\x00null", false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			assert.Equal(t, tt.safe, isSafeID(tt.input))
-		})
-	}
-}
-
 func TestRequestID_BridgesCorrelationID(t *testing.T) {
 	handler := RequestID(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		corrID, ok := ctxkeys.CorrelationIDFrom(r.Context())

@@ -3,6 +3,9 @@ package outbox
 import (
 	"strings"
 	"testing"
+
+	"github.com/ghbvf/gocell/pkg/idutil"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestNewEntryID_HasPrefix(t *testing.T) {
@@ -20,5 +23,13 @@ func TestNewEntryID_Unique(t *testing.T) {
 			t.Fatalf("duplicate entry ID %q at iteration %d", id, i)
 		}
 		seen[id] = struct{}{}
+	}
+}
+
+func TestNewEntryID_PassesSafeIDConstraints(t *testing.T) {
+	for range 100 {
+		id := NewEntryID()
+		assert.True(t, idutil.IsSafeID(id), "entry ID %q must pass IsSafeID", id)
+		assert.LessOrEqual(t, len(id), idutil.MaxMetadataIDLen)
 	}
 }
