@@ -133,12 +133,13 @@ type InvalidIndex struct {
 // CREATE INDEX CONCURRENTLY is interrupted. The caller should log a warning
 // and consider manual cleanup.
 //
-// The check is scoped to current_schema() so that indexes in other schemas
-// (e.g. parallel test schemas) do not block migrations in unrelated schemas.
+// The check is scoped to current_schema() so that in-progress CONCURRENTLY
+// builds in other schemas (e.g. parallel test schemas) do not block
+// migrations in unrelated schemas.
 //
 // Returns an empty slice when no invalid indexes are found.
 func DetectInvalidIndexes(ctx context.Context, pool *Pool) ([]InvalidIndex, error) {
-	const q = `SELECT n.nspname || '.' || c.relname AS index_name,
+	const q = `SELECT c.relname AS index_name,
 		t.relname AS table_name
 		FROM pg_index i
 		JOIN pg_class c ON c.oid = i.indexrelid
