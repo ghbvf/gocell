@@ -68,7 +68,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
 
-	pageReq, ok := httputil.ParsePageRequestOrWrite(w, r)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
 		return
 	}

@@ -79,7 +79,7 @@ func TestService_List(t *testing.T) {
 	seedFlag(t, repo, "f1", domain.FlagBoolean, true, 0)
 	seedFlag(t, repo, "f2", domain.FlagPercentage, true, 50)
 
-	result, err := svc.List(context.Background(), query.PageRequest{Limit: 50})
+	result, err := svc.List(context.Background(), query.PageParams{Limit: 50})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -91,7 +91,7 @@ func TestService_List_FirstPage(t *testing.T) {
 		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, true, 0)
 	}
 
-	result, err := svc.List(context.Background(), query.PageRequest{Limit: 3})
+	result, err := svc.List(context.Background(), query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
@@ -104,11 +104,11 @@ func TestService_List_WithCursor(t *testing.T) {
 		seedFlag(t, repo, "flag-"+string(rune('a'+i)), domain.FlagBoolean, true, 0)
 	}
 
-	page1, err := svc.List(context.Background(), query.PageRequest{Limit: 3})
+	page1, err := svc.List(context.Background(), query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
-	page2, err := svc.List(context.Background(), query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	page2, err := svc.List(context.Background(), query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 2)
 	assert.NotEqual(t, page1.Items[0].ID, page2.Items[0].ID)
@@ -117,7 +117,7 @@ func TestService_List_WithCursor(t *testing.T) {
 func TestService_List_InvalidCursor(t *testing.T) {
 	svc, _ := newTestService()
 
-	_, err := svc.List(context.Background(), query.PageRequest{Cursor: "garbage"})
+	_, err := svc.List(context.Background(), query.PageParams{Cursor: "garbage"})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -142,7 +142,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	token, err := codec.Encode(cur)
 	require.NoError(t, err)
 
-	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	_, err = svc.List(context.Background(), query.PageParams{Cursor: token})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -164,7 +164,7 @@ func TestService_List_ContextMismatch(t *testing.T) {
 	token, err := codec.Encode(cur)
 	require.NoError(t, err)
 
-	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	_, err = svc.List(context.Background(), query.PageParams{Cursor: token})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -177,7 +177,7 @@ func TestService_List_LastPage(t *testing.T) {
 	seedFlag(t, repo, "flag-a", domain.FlagBoolean, true, 0)
 	seedFlag(t, repo, "flag-b", domain.FlagBoolean, true, 0)
 
-	result, err := svc.List(context.Background(), query.PageRequest{Limit: 10})
+	result, err := svc.List(context.Background(), query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -187,7 +187,7 @@ func TestService_List_LastPage(t *testing.T) {
 func TestService_List_Empty(t *testing.T) {
 	svc, _ := newTestService()
 
-	result, err := svc.List(context.Background(), query.PageRequest{})
+	result, err := svc.List(context.Background(), query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)

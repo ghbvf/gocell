@@ -41,7 +41,7 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 	NewHandler(svc).RegisterRoutes(inner)
 
 	outer := http.NewServeMux()
-	prefix := "/api/v1/devices"
+	prefix := "/api/v1/devices/"
 	stripped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		r2 := r.Clone(r.Context())
 		r2.URL.Path = "/" + strings.TrimPrefix(r.URL.Path, prefix)
@@ -50,7 +50,6 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 		}
 		inner.ServeHTTP(w, r2)
 	})
-	outer.Handle("/api/v1/devices", stripped)
 	outer.Handle("/api/v1/devices/", stripped)
 	return outer
 }

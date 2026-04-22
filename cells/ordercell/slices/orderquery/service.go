@@ -51,13 +51,13 @@ func (s *Service) GetByID(ctx context.Context, id string) (*domain.Order, error)
 }
 
 // List returns a paginated page of orders.
-func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.Order], error) {
+func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.Order], error) {
 	qctx := query.QueryContext("endpoint", "order-query")
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Order]{
-		Codec:    s.codec,
-		Request:  pageReq,
-		Sort:     orderSort,
-		QueryCtx: qctx,
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       orderSort,
+		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.Order, error) {
 			return s.repo.List(ctx, params)
 		},

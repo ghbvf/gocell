@@ -34,9 +34,6 @@ func (p *PageParams) Normalize() {
 	}
 }
 
-// PageRequest is a compatibility alias for older call sites.
-type PageRequest = PageParams
-
 // SortColumn defines a column used in keyset ordering.
 type SortColumn struct {
 	Name      string  // SQL column name — must be a trusted identifier, never user input

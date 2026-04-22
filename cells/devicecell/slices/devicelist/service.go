@@ -40,10 +40,10 @@ func NewService(deviceRepo domain.DeviceRepository, codec *query.CursorCodec, lo
 func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.Device], error) {
 	qctx := query.QueryContext("endpoint", "device-list")
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Device]{
-		Codec:    s.codec,
-		Request:  pageReq,
-		Sort:     defaultSort,
-		QueryCtx: qctx,
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       defaultSort,
+		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.Device, error) {
 			devices, err := s.deviceRepo.List(ctx, params)
 			if err != nil {

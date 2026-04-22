@@ -10,7 +10,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// ParsePageRequest extracts pagination parameters from URL query params.
+// ParsePageParams extracts pagination parameters from URL query params.
 // Query params: ?limit=N&cursor=TOKEN
 //
 // Returns ErrPageSizeExceeded if limit > MaxPageSize.
@@ -20,7 +20,7 @@ import (
 // can be forced to do before the codec's own length guard fires.
 // ref: kubernetes apiserver 4 KiB continue-token guidance.
 // Zero or negative limits are normalized to DefaultPageSize.
-func ParsePageRequest(r *http.Request) (query.PageParams, error) {
+func ParsePageParams(r *http.Request) (query.PageParams, error) {
 	var pr query.PageParams
 
 	if s := r.URL.Query().Get("limit"); s != "" {

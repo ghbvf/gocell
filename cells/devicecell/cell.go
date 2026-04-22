@@ -181,7 +181,7 @@ func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 				Handler: http.HandlerFunc(c.registerHandler.HandleRegister),
 				Public:  true,
 			})
-			// Device list: paginated listing of all devices.
+			// Device list: paginated listing of all devices at /api/v1/devices/.
 			auth.Declare(devices, auth.RouteDecl{
 				Method:  "GET",
 				Path:    "/",

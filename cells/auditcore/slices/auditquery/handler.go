@@ -137,7 +137,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		filters.To = t
 	}
 
-	pageReq, ok := httputil.ParsePageRequestOrWrite(w, r)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
 		return
 	}

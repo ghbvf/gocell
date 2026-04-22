@@ -54,7 +54,7 @@ func NewHandler(svc *Service) *Handler {
 
 // HandleList handles GET / — returns paginated feature flags.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	pageReq, ok := httputil.ParsePageRequestOrWrite(w, r)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
 		return
 	}

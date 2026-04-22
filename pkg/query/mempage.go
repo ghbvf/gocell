@@ -46,35 +46,47 @@ func Sort[T any](items []T, cols []SortColumn, compareField CompareFunc[T]) {
 // if Sort is empty when CursorValues is present, or if cursor value types are
 // incompatible.
 func ApplyCursor[T any](items []T, params ListParams, fieldValue FieldFunc[T]) ([]T, error) {
-	if params.CursorValues != nil {
-		if len(params.Sort) == 0 {
-			return nil, cursorInvalid("cursor values present but no sort columns defined")
-		}
-		if len(params.CursorValues) != len(params.Sort) {
-			return nil, cursorInvalid(fmt.Sprintf("cursor values count %d does not match sort columns count %d",
-				len(params.CursorValues), len(params.Sort)))
-		}
+	if err := validateCursorParams(params); err != nil {
+		return nil, err
 	}
 
-	start := 0
-	if params.CursorValues != nil {
-		for i, item := range items {
-			after, err := afterCursor(item, params.Sort, params.CursorValues, fieldValue)
-			if err != nil {
-				return nil, err
-			}
-			if after {
-				start = i
-				break
-			}
-			if i == len(items)-1 {
-				start = len(items) // cursor past all rows
-			}
-		}
+	start, err := findCursorStart(items, params, fieldValue)
+	if err != nil {
+		return nil, err
 	}
 
 	end := min(start+params.FetchLimit(), len(items))
 	return items[start:end], nil
+}
+
+func validateCursorParams(params ListParams) error {
+	if params.CursorValues == nil {
+		return nil
+	}
+	if len(params.Sort) == 0 {
+		return cursorInvalid("cursor values present but no sort columns defined")
+	}
+	if len(params.CursorValues) != len(params.Sort) {
+		return cursorInvalid(fmt.Sprintf("cursor values count %d does not match sort columns count %d",
+			len(params.CursorValues), len(params.Sort)))
+	}
+	return nil
+}
+
+func findCursorStart[T any](items []T, params ListParams, fieldValue FieldFunc[T]) (int, error) {
+	if params.CursorValues == nil {
+		return 0, nil
+	}
+	for i, item := range items {
+		after, err := afterCursor(item, params.Sort, params.CursorValues, fieldValue)
+		if err != nil {
+			return 0, err
+		}
+		if after {
+			return i, nil
+		}
+	}
+	return len(items), nil
 }
 
 // afterCursor returns true if item is strictly after the cursor position
@@ -123,36 +135,67 @@ func afterCursor[T any](item T, cols []SortColumn, cursorValues []any, fieldValu
 func CompareAny(a, b any) (int, error) {
 	a, b = normalizeNumeric(a), normalizeNumeric(b)
 
-	switch av := a.(type) {
-	case string:
-		if bv, ok := b.(string); ok {
-			return cmp.Compare(av, bv), nil
-		}
-		if bt, ok := b.(time.Time); ok {
-			at, err := parseTimeString(av)
-			if err != nil {
-				return 0, err
-			}
-			return at.Compare(bt), nil
-		}
-	case float64:
-		if bv, ok := b.(float64); ok {
-			return cmp.Compare(av, bv), nil
-		}
-	case time.Time:
-		if bt, ok := b.(time.Time); ok {
-			return av.Compare(bt), nil
-		}
-		if bs, ok := b.(string); ok {
-			bt, err := parseTimeString(bs)
-			if err != nil {
-				return 0, err
-			}
-			return av.Compare(bt), nil
-		}
+	if result, ok, err := compareStringValues(a, b); ok {
+		return result, err
+	}
+	if result, ok := compareFloatValues(a, b); ok {
+		return result, nil
+	}
+	if result, ok, err := compareTimeValues(a, b); ok {
+		return result, err
 	}
 
 	return 0, cursorInvalid("unsupported cursor value types")
+}
+
+func compareStringValues(a, b any) (int, bool, error) {
+	av, ok := a.(string)
+	if !ok {
+		return 0, false, nil
+	}
+	switch bv := b.(type) {
+	case string:
+		return cmp.Compare(av, bv), true, nil
+	case time.Time:
+		at, err := parseTimeString(av)
+		if err != nil {
+			return 0, true, err
+		}
+		return at.Compare(bv), true, nil
+	default:
+		return 0, false, nil
+	}
+}
+
+func compareFloatValues(a, b any) (int, bool) {
+	av, ok := a.(float64)
+	if !ok {
+		return 0, false
+	}
+	bv, ok := b.(float64)
+	if !ok {
+		return 0, false
+	}
+	return cmp.Compare(av, bv), true
+}
+
+func compareTimeValues(a, b any) (int, bool, error) {
+	av, ok := a.(time.Time)
+	if !ok {
+		return 0, false, nil
+	}
+	switch bv := b.(type) {
+	case time.Time:
+		return av.Compare(bv), true, nil
+	case string:
+		bt, err := parseTimeString(bv)
+		if err != nil {
+			return 0, true, err
+		}
+		return av.Compare(bt), true, nil
+	default:
+		return 0, false, nil
+	}
 }
 
 // normalizeNumeric converts int to float64 for uniform numeric comparison.

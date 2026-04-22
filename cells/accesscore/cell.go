@@ -223,6 +223,7 @@ type AccessCore struct {
 	validateSvc         *sessionvalidate.Service
 	authzSvc            *authorizationdecide.Service
 	rbacHandler         *rbaccheck.Handler
+	rbacRunMode         query.RunMode
 	rbacAssignHandler   *rbacassign.Handler
 	configReceiveSvc    *configreceive.Service
 	rbacSessionConsumer *sessionlogout.Consumer
@@ -399,6 +400,7 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		c.cursorCodec = codec
 		c.logger.Warn("accesscore: using default cursor codec (demo mode)")
 	}
+	c.rbacRunMode = query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
 	return nil
 }
 
@@ -479,8 +481,10 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("authorizationdecide", "accesscore", cell.L0))
 
 	// rbac-check
-	rbacSvc := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger,
-		query.RunModeForDemo(c.outboxWriter == nil && c.txRunner == nil))
+	rbacSvc, err := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger, c.rbacRunMode)
+	if err != nil {
+		return err
+	}
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbaccheck", "accesscore", cell.L0))
 

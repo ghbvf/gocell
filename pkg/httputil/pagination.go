@@ -7,11 +7,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// ParsePageRequestOrWrite parses pagination query params from r.
+// ParsePageParamsOrWrite parses pagination query params from r.
 // On error it logs a warning, writes the domain error response, and returns ok=false.
 // The caller must return immediately when ok is false.
-func ParsePageRequestOrWrite(w http.ResponseWriter, r *http.Request) (query.PageParams, bool) {
-	params, err := ParsePageRequest(r)
+func ParsePageParamsOrWrite(w http.ResponseWriter, r *http.Request) (query.PageParams, bool) {
+	params, err := ParsePageParams(r)
 	if err != nil {
 		slog.Warn("pagination: request validation failed",
 			slog.String("error", err.Error()),

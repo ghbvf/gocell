@@ -27,8 +27,12 @@ type Service struct {
 }
 
 // NewService creates an rbac-check Service.
-func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
-	return &Service{roleRepo: roleRepo, codec: codec, logger: logger, runMode: runMode}
+// codec must be non-nil; cursor pagination cannot be served without it.
+func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+	if codec == nil {
+		return nil, errcode.New(errcode.ErrCellMissingCodec, "rbac-check: cursor codec is required")
+	}
+	return &Service{roleRepo: roleRepo, codec: codec, logger: logger, runMode: runMode}, nil
 }
 
 // HasRole checks if a user has the specified role.
@@ -58,10 +62,10 @@ func (s *Service) ListRoles(ctx context.Context, userID string, pageReq query.Pa
 
 	qctx := query.QueryContext("endpoint", "rbac-list-roles", "userId", userID)
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Role]{
-		Codec:    s.codec,
-		Request:  pageReq,
-		Sort:     roleSort,
-		QueryCtx: qctx,
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       roleSort,
+		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.Role, error) {
 			roles, err := s.roleRepo.ListByUserID(ctx, userID, params)
 			if err != nil {

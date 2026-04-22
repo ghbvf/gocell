@@ -106,7 +106,7 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
-	pageReq, ok := httputil.ParsePageRequestOrWrite(w, r)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
 		return
 	}

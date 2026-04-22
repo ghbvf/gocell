@@ -56,13 +56,13 @@ func (s *Service) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry
 }
 
 // List returns a paginated page of config entries.
-func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.ConfigEntry], error) {
+func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.ConfigEntry], error) {
 	qctx := query.QueryContext("endpoint", "config-read")
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.ConfigEntry]{
-		Codec:    s.codec,
-		Request:  pageReq,
-		Sort:     configSort,
-		QueryCtx: qctx,
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       configSort,
+		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.ConfigEntry, error) {
 			entries, err := s.repo.List(ctx, params)
 			if err != nil {

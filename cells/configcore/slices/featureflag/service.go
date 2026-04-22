@@ -63,13 +63,13 @@ func (s *Service) GetByKey(ctx context.Context, key string) (*domain.FeatureFlag
 }
 
 // List returns a paginated page of feature flags.
-func (s *Service) List(ctx context.Context, pageReq query.PageRequest) (query.PageResult[*domain.FeatureFlag], error) {
+func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.PageResult[*domain.FeatureFlag], error) {
 	qctx := query.QueryContext("endpoint", "feature-flag")
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.FeatureFlag]{
-		Codec:    s.codec,
-		Request:  pageReq,
-		Sort:     flagSort,
-		QueryCtx: qctx,
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       flagSort,
+		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.FeatureFlag, error) {
 			flags, err := s.repo.List(ctx, params)
 			if err != nil {

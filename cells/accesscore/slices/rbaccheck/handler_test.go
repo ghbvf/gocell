@@ -53,7 +53,8 @@ func TestRoleResponse_EmptyPermissions(t *testing.T) {
 	assert.Empty(t, resp.Permissions)
 }
 
-func setup() http.Handler {
+func setup(t *testing.T, runMode query.RunMode) http.Handler {
+	t.Helper()
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{
 		ID: "r1", Name: "admin",
@@ -68,7 +69,10 @@ func setup() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	svc := NewService(roleRepo, codec, slog.Default(), query.RunModeDemo)
+	svc, err := NewService(roleRepo, codec, slog.Default(), runMode)
+	if err != nil {
+		panic(err)
+	}
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux
@@ -185,7 +189,7 @@ func TestHandler(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			r := setup()
+			r := setup(t, query.RunModeDemo)
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
 			if tc.subject != "" {
@@ -198,4 +202,15 @@ func TestHandler(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandler_ListRoles_ProdMode_InvalidCursor_Returns400(t *testing.T) {
+	r := setup(t, query.RunModeProd)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/user-1?cursor=not-a-valid-cursor", nil)
+	req = req.WithContext(auth.TestContext("user-1", nil))
+
+	r.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
 }

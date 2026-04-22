@@ -80,12 +80,12 @@ func TestExecutePagedQuery_FirstPage(t *testing.T) {
 	}
 
 	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec:    codec,
-		Request:  PageRequest{Limit: 3},
-		Sort:     pagedTestSort,
-		QueryCtx: QueryContext("endpoint", "test"),
-		Fetch:    makeFetcher(items),
-		Extract:  testExtract,
+		Codec:      codec,
+		PageParams: PageParams{Limit: 3},
+		Sort:       pagedTestSort,
+		QueryCtx:   QueryContext("endpoint", "test"),
+		Fetch:      makeFetcher(items),
+		Extract:    testExtract,
 	})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
@@ -105,13 +105,13 @@ func TestExecutePagedQuery_SecondPage(t *testing.T) {
 	qctx := QueryContext("endpoint", "test")
 
 	page1, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 3}, Sort: pagedTestSort, QueryCtx: qctx,
+		Codec: codec, PageParams: PageParams{Limit: 3}, Sort: pagedTestSort, QueryCtx: qctx,
 		Fetch: makeFetcher(items), Extract: testExtract,
 	})
 	require.NoError(t, err)
 
 	page2, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 3, Cursor: page1.NextCursor}, Sort: pagedTestSort, QueryCtx: qctx,
+		Codec: codec, PageParams: PageParams{Limit: 3, Cursor: page1.NextCursor}, Sort: pagedTestSort, QueryCtx: qctx,
 		Fetch: makeFetcher(items), Extract: testExtract,
 	})
 	require.NoError(t, err)
@@ -128,7 +128,7 @@ func TestExecutePagedQuery_LastPage_FewerThanLimit(t *testing.T) {
 	}
 
 	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 10}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Limit: 10}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(items), Extract: testExtract,
 	})
 	require.NoError(t, err)
@@ -141,7 +141,7 @@ func TestExecutePagedQuery_Empty(t *testing.T) {
 	codec := newTestCodec(t)
 
 	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 10}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Limit: 10}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 	})
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestExecutePagedQuery_GarbageCursor(t *testing.T) {
 	codec := newTestCodec(t)
 
 	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Cursor: "garbage"}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Cursor: "garbage"}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 	})
 	require.Error(t, err)
@@ -174,7 +174,7 @@ func TestExecutePagedQuery_ScopeMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Cursor: token}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Cursor: token}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 	})
 	require.Error(t, err)
@@ -195,7 +195,7 @@ func TestExecutePagedQuery_ContextMismatch(t *testing.T) {
 	require.NoError(t, err)
 
 	_, err = ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Cursor: token}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Cursor: token}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 	})
 	require.Error(t, err)
@@ -211,7 +211,7 @@ func TestExecutePagedQuery_OnCursorErr_Decode(t *testing.T) {
 	var capturedErr error
 
 	_, _ = ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Cursor: "garbage"}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Cursor: "garbage"}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 		OnCursorErr: func(_ context.Context, phase string, err error) {
 			capturedPhase = phase
@@ -236,7 +236,7 @@ func TestExecutePagedQuery_OnCursorErr_Scope(t *testing.T) {
 
 	var capturedPhase string
 	_, _ = ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Cursor: token}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Cursor: token}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 		OnCursorErr: func(_ context.Context, phase string, _ error) {
 			capturedPhase = phase
@@ -250,7 +250,7 @@ func TestExecutePagedQuery_OnCursorErr_NilDoesNotPanic(t *testing.T) {
 	codec := newTestCodec(t)
 
 	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Cursor: "garbage"}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Cursor: "garbage"}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 		OnCursorErr: nil,
 	})
@@ -264,7 +264,7 @@ func TestExecutePagedQuery_FetchErrorPropagated(t *testing.T) {
 	codec := newTestCodec(t)
 
 	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 10}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Limit: 10}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"),
 		Fetch: func(context.Context, ListParams) ([]testItem, error) {
 			return nil, fmt.Errorf("db connection refused")
@@ -283,7 +283,7 @@ func TestExecutePagedQuery_NormalizesLimit(t *testing.T) {
 	}
 
 	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 0}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Limit: 0}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(items), Extract: testExtract,
 	})
 	require.NoError(t, err)
@@ -298,7 +298,7 @@ func TestExecutePagedQuery_RunModeDemo_StaleCursor_ReturnsFirstPage(t *testing.T
 	}
 
 	result, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 10, Cursor: "garbage"}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Limit: 10, Cursor: "garbage"}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(items), Extract: testExtract,
 		RunMode: RunModeDemo,
 	})
@@ -316,7 +316,7 @@ func TestExecutePagedQuery_RunModeProd_StaleCursor_ReturnsError(t *testing.T) {
 	codec := newTestCodec(t)
 
 	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Cursor: "garbage"}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Cursor: "garbage"}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 		// RunMode unset — zero value must be RunModeProd (fail-closed).
 	})
@@ -342,7 +342,7 @@ func TestExecutePagedQuery_RunModeDemo_ScopeMismatch_StillRejects(t *testing.T) 
 	require.NoError(t, err)
 
 	_, err = ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 10, Cursor: token}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Limit: 10, Cursor: token}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"), Fetch: makeFetcher(nil), Extract: testExtract,
 		RunMode: RunModeDemo,
 	})
@@ -356,7 +356,7 @@ func TestExecutePagedQuery_RunModeDemo_FetchError_Propagated(t *testing.T) {
 	codec := newTestCodec(t)
 
 	_, err := ExecutePagedQuery(context.Background(), PagedQueryConfig[testItem]{
-		Codec: codec, Request: PageRequest{Limit: 10, Cursor: "garbage"}, Sort: pagedTestSort,
+		Codec: codec, PageParams: PageParams{Limit: 10, Cursor: "garbage"}, Sort: pagedTestSort,
 		QueryCtx: QueryContext("endpoint", "test"),
 		Fetch: func(context.Context, ListParams) ([]testItem, error) {
 			return nil, fmt.Errorf("db connection refused")

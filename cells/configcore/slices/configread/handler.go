@@ -33,7 +33,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 // HandleList handles GET /?limit=N&cursor=TOKEN — returns paginated config entries.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	pageReq, ok := httputil.ParsePageRequestOrWrite(w, r)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
 		return
 	}

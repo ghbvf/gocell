@@ -10,7 +10,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-func TestParsePageRequestOrWrite(t *testing.T) {
+func TestParsePageParamsOrWrite(t *testing.T) {
 	tests := []struct {
 		name       string
 		query      string
@@ -49,7 +49,7 @@ func TestParsePageRequestOrWrite(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := httptest.NewRequest(http.MethodGet, "/?"+tc.query, nil)
 
-			pr, ok := httputil.ParsePageRequestOrWrite(w, r)
+			pr, ok := httputil.ParsePageParamsOrWrite(w, r)
 
 			if ok != tc.wantOK {
 				t.Errorf("ok=%v, want %v", ok, tc.wantOK)

@@ -52,7 +52,7 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 // HandleList handles GET /api/v1/orders?limit=N&cursor=TOKEN.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	pageReq, ok := httputil.ParsePageRequestOrWrite(w, r)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
 		return
 	}

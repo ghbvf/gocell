@@ -44,7 +44,7 @@ func NewService(repo ports.AuditRepository, codec *query.CursorCodec, logger *sl
 }
 
 // Query returns a paginated page of audit entries matching the given filters.
-func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq query.PageRequest) (query.PageResult[*domain.AuditEntry], error) {
+func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq query.PageParams) (query.PageResult[*domain.AuditEntry], error) {
 	qctx := query.QueryContext("endpoint", "audit-query",
 		"eventType", filters.EventType,
 		"actorId", filters.ActorID,
@@ -52,10 +52,10 @@ func (s *Service) Query(ctx context.Context, filters ports.AuditFilters, pageReq
 		"to", filters.To.Format(time.RFC3339Nano),
 	)
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.AuditEntry]{
-		Codec:    s.codec,
-		Request:  pageReq,
-		Sort:     auditSort,
-		QueryCtx: qctx,
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       auditSort,
+		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.AuditEntry, error) {
 			entries, err := s.repo.Query(ctx, filters, params)
 			if err != nil {

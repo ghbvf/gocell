@@ -7,6 +7,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,9 +23,25 @@ func newTestCodec(t *testing.T) *query.CursorCodec {
 }
 
 func newTestService(t *testing.T) (*Service, *mem.RoleRepository) {
+	return newTestServiceWithMode(t, query.RunModeDemo)
+}
+
+func newTestServiceWithMode(t *testing.T, runMode query.RunMode) (*Service, *mem.RoleRepository) {
 	t.Helper()
 	repo := mem.NewRoleRepository()
-	return NewService(repo, newTestCodec(t), slog.Default(), query.RunModeDemo), repo
+	svc, err := NewService(repo, newTestCodec(t), slog.Default(), runMode)
+	require.NoError(t, err)
+	return svc, repo
+}
+
+func TestNewService_RequiresCodec(t *testing.T) {
+	repo := mem.NewRoleRepository()
+	svc, err := NewService(repo, nil, slog.Default(), query.RunModeProd)
+	require.Error(t, err)
+	require.Nil(t, svc)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 }
 
 func TestService_HasRole(t *testing.T) {
@@ -91,4 +108,20 @@ func TestService_ListRolesEmptyInput(t *testing.T) {
 	svc, _ := newTestService(t)
 	_, err := svc.ListRoles(context.Background(), "", query.PageParams{})
 	assert.Error(t, err)
+}
+
+func TestService_ListRoles_ProdMode_BadCursor_ReturnsError(t *testing.T) {
+	svc, repo := newTestServiceWithMode(t, query.RunModeProd)
+	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	_, _ = repo.AssignToUser(context.Background(), "usr-1", "admin")
+
+	_, err := svc.ListRoles(context.Background(), "usr-1", query.PageParams{
+		Limit:  50,
+		Cursor: "not-a-valid-cursor",
+	})
+	require.Error(t, err)
+
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCursorInvalid, ecErr.Code)
 }

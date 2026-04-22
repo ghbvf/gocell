@@ -28,7 +28,7 @@ func toDeviceResponse(d *domain.Device) DeviceResponse {
 	}
 }
 
-// Handler provides the GET /api/v1/devices endpoint.
+// Handler provides the GET /api/v1/devices/ endpoint.
 type Handler struct {
 	svc *Service
 }
@@ -48,9 +48,9 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	})
 }
 
-// HandleList handles GET /api/v1/devices.
+// HandleList handles GET /api/v1/devices/.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	pageReq, ok := httputil.ParsePageRequestOrWrite(w, r)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
 		return
 	}

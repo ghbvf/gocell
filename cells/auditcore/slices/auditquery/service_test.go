@@ -104,7 +104,7 @@ func TestService_Query(t *testing.T) {
 			svc, repo := newTestService()
 			tt.seed(repo)
 
-			result, err := svc.Query(context.Background(), tt.filters, query.PageRequest{})
+			result, err := svc.Query(context.Background(), tt.filters, query.PageParams{})
 			require.NoError(t, err)
 			assert.Len(t, result.Items, tt.wantLen)
 		})
@@ -119,7 +119,7 @@ func TestService_Query_FirstPage(t *testing.T) {
 			base.Add(time.Duration(i)*time.Hour))
 	}
 
-	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{Limit: 3})
+	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
@@ -137,12 +137,12 @@ func TestService_Query_WithCursor(t *testing.T) {
 	}
 
 	// Get first page
-	page1, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{Limit: 3})
+	page1, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
 	// Get second page using cursor
-	page2, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	page2, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 3)
 	// Second page should continue where first left off
@@ -152,7 +152,7 @@ func TestService_Query_WithCursor(t *testing.T) {
 func TestService_Query_InvalidCursor(t *testing.T) {
 	svc, _ := newTestService()
 
-	_, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{Cursor: "garbage-token"})
+	_, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Cursor: "garbage-token"})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -165,7 +165,7 @@ func TestService_Query_LastPage(t *testing.T) {
 	seedEntry(repo, "ae-00", "event.test.v1", "usr-1", base)
 	seedEntry(repo, "ae-01", "event.test.v1", "usr-1", base.Add(time.Hour))
 
-	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{Limit: 10})
+	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -175,7 +175,7 @@ func TestService_Query_LastPage(t *testing.T) {
 func TestService_Query_Empty(t *testing.T) {
 	svc, _ := newTestService()
 
-	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{})
+	result, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)
@@ -194,14 +194,14 @@ func TestService_Query_CursorContextMismatch(t *testing.T) {
 
 	// Get first page with eventType=login filter.
 	loginFilters := ports.AuditFilters{EventType: "event.login.v1"}
-	page1, err := svc.Query(context.Background(), loginFilters, query.PageRequest{Limit: 3})
+	page1, err := svc.Query(context.Background(), loginFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	// Replay the cursor with a different eventType filter — must fail.
 	logoutFilters := ports.AuditFilters{EventType: "event.logout.v1"}
-	_, err = svc.Query(context.Background(), logoutFilters, query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(context.Background(), logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -248,7 +248,7 @@ func TestService_Query_InvalidCursor_LogsDecode(t *testing.T) {
 
 	badCursor := "garbage-token-should-not-appear-in-log"
 	ctx := ctxkeys.WithRequestID(context.Background(), "req-test-001")
-	_, err := svc.Query(ctx, ports.AuditFilters{}, query.PageRequest{Cursor: badCursor})
+	_, err := svc.Query(ctx, ports.AuditFilters{}, query.PageParams{Cursor: badCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -277,7 +277,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 
 	// Issue a valid first page to mint a scoped cursor.
 	loginFilters := ports.AuditFilters{EventType: "event.login.v1"}
-	page1, err := svc.Query(context.Background(), loginFilters, query.PageRequest{Limit: 3})
+	page1, err := svc.Query(context.Background(), loginFilters, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.NotEmpty(t, page1.NextCursor)
 
@@ -288,7 +288,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 	// to confirm correlation propagation.
 	logoutFilters := ports.AuditFilters{EventType: "event.logout.v1"}
 	ctxWithReqID := ctxkeys.WithRequestID(context.Background(), "req-test-002")
-	_, err = svc.Query(ctxWithReqID, logoutFilters, query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.Query(ctxWithReqID, logoutFilters, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -310,7 +310,7 @@ func TestService_Query_InvalidCursor_LogsScope(t *testing.T) {
 func TestService_Query_InvalidCursor_NoRequestID(t *testing.T) {
 	svc, _, buf := newTestServiceWithLogBuf()
 
-	_, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageRequest{Cursor: "garbage"})
+	_, err := svc.Query(context.Background(), ports.AuditFilters{}, query.PageParams{Cursor: "garbage"})
 	require.Error(t, err)
 
 	logs := parseLogLines(t, buf)
@@ -332,13 +332,13 @@ func TestService_Query_SubsecondFilterContext(t *testing.T) {
 
 	// Query A: from = base+100ns
 	filtersA := ports.AuditFilters{From: base.Add(100 * time.Nanosecond)}
-	pageA, err := svc.Query(context.Background(), filtersA, query.PageRequest{Limit: 3})
+	pageA, err := svc.Query(context.Background(), filtersA, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, pageA.HasMore)
 
 	// Query B: from = base+200ns (same second, different nanosecond)
 	filtersB := ports.AuditFilters{From: base.Add(200 * time.Nanosecond)}
-	_, err = svc.Query(context.Background(), filtersB, query.PageRequest{
+	_, err = svc.Query(context.Background(), filtersB, query.PageParams{
 		Limit:  3,
 		Cursor: pageA.NextCursor,
 	})
