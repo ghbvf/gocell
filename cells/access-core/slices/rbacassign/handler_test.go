@@ -157,6 +157,27 @@ func TestHandler_Revoke(t *testing.T) {
 			wantStatus: http.StatusForbidden,
 		},
 		{
+			name:       "invalid body returns 400",
+			body:       `{bad json`,
+			subject:    "usr-1",
+			roles:      []string{auth.RoleInternalAdmin},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "empty userId returns 400",
+			body:       `{"userId":"","roleId":"admin"}`,
+			subject:    "usr-1",
+			roles:      []string{auth.RoleInternalAdmin},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
+			name:       "empty roleId returns 400",
+			body:       `{"userId":"usr-1","roleId":""}`,
+			subject:    "usr-1",
+			roles:      []string{auth.RoleInternalAdmin},
+			wantStatus: http.StatusBadRequest,
+		},
+		{
 			name:       "non-admin returns 403",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
 			subject:    "usr-2",

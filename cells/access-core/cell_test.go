@@ -426,6 +426,47 @@ func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
 }
 
+func TestAccessCore_RouteRoleRevoke(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	// Revoking a role that the user does not hold is an idempotent no-op → 200.
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
+		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{auth.RoleInternalAdmin}))
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
+		"response should be JSON (handler reached, not router 404)")
+}
+
+func TestAccessCore_RouteRoleRevoke_NoAuth_Returns401(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
+		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
+}
+
+func TestAccessCore_RouteRoleRevoke_NonAdmin_Returns403(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
+		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+	r.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
+}
+
 func TestAccessCore_RouteRolesList(t *testing.T) {
 	r := initCellWithRouter(t)
 

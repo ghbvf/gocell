@@ -50,17 +50,18 @@ type RevokeRequest struct {
 // Policy is declared at registration time via auth.Declare so that handler
 // bodies contain only business logic (no inline guard calls).
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
+	internalAdminPolicy := auth.AnyRole(auth.RoleInternalAdmin)
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "POST",
 		Path:    "/assign",
 		Handler: http.HandlerFunc(h.handleAssign),
-		Policy:  auth.AnyRole(auth.RoleInternalAdmin),
+		Policy:  internalAdminPolicy,
 	})
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "POST",
 		Path:    "/revoke",
 		Handler: http.HandlerFunc(h.handleRevoke),
-		Policy:  auth.AnyRole(auth.RoleInternalAdmin),
+		Policy:  internalAdminPolicy,
 	})
 }
 

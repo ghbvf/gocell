@@ -78,7 +78,7 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	c.ValidateHTTPResponseRecorder(t, rec)
-	require.Equal(t, 200, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code)
 
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
