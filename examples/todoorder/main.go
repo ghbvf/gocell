@@ -34,7 +34,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Cursor codec for pagination (demo mode).
-	cursorCodec, err := query.NewCursorCodec([]byte("todoorder-cursor-key-32bytes!!"))
+	cursorCodec, err := query.NewCursorCodec([]byte("todoorder-cursor-key-32bytes!!!!"))
 	if err != nil {
 		logger.Error("failed to create cursor codec", slog.Any("error", err))
 		os.Exit(1)

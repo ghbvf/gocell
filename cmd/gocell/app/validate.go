@@ -22,7 +22,7 @@ func runValidate(args []string) error {
 	failFast := fs.Bool("fail-fast", false,
 		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
 	strict := fs.Bool("strict", false,
-		"enforce kebab-case slice directory and allowedFiles-mismatch rules (FMT-16, FMT-17); strict-only, silent without this flag")
+		"enforce no-dash naming and allowedFiles-mismatch rules (FMT-16 slice/cell/assembly dirs, FMT-17 allowedFiles, FMT-C1 cell id, FMT-A1 assembly id); strict-only, silent without this flag")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
