@@ -193,7 +193,7 @@ func (ts *TargetSelector) matchFromJourneyPath(f string, cellSet map[string]stru
 		return false
 	}
 
-	// Extract filename: journeys/J-sso-login.yaml -> J-sso-login.yaml
+	// Extract filename: journeys/J-ssologin.yaml -> J-ssologin.yaml
 	base := path.Base(f)
 
 	// Only J-*.yaml files are journey definitions.

@@ -191,19 +191,19 @@ func TestRunJourney_Integration(t *testing.T) {
 	require.NoError(t, os.MkdirAll(journeyDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(journeyDir, "sso_test.go"), []byte(`package journeys
 import "testing"
-func TestJSsoLoginOidcRedirect(t *testing.T) {}
-func TestJSsoLoginSessionPersist(t *testing.T) {}
+func TestJSsologinOidcRedirect(t *testing.T) {}
+func TestJSsologinSessionPersist(t *testing.T) {}
 `), 0o644))
 
 	proj := &metadata.ProjectMeta{
 		Cells:  map[string]*metadata.CellMeta{},
 		Slices: map[string]*metadata.SliceMeta{},
 		Journeys: map[string]*metadata.JourneyMeta{
-			"J-sso-login": {
-				ID: "J-sso-login",
+			"J-ssologin": {
+				ID: "J-ssologin",
 				PassCriteria: []metadata.PassCriterion{
-					{Text: "OIDC redirect", Mode: "auto", CheckRef: "journey.J-sso-login.oidc-redirect"},
-					{Text: "session persist", Mode: "auto", CheckRef: "journey.J-sso-login.session-persist"},
+					{Text: "OIDC redirect", Mode: "auto", CheckRef: "journey.J-ssologin.oidc-redirect"},
+					{Text: "session persist", Mode: "auto", CheckRef: "journey.J-ssologin.session-persist"},
 					{Text: "manual check", Mode: "manual"},
 				},
 			},
@@ -211,7 +211,7 @@ func TestJSsoLoginSessionPersist(t *testing.T) {}
 	}
 
 	r := NewRunner(proj, dir)
-	res, err := r.RunJourney(context.Background(), "J-sso-login")
+	res, err := r.RunJourney(context.Background(), "J-ssologin")
 	require.NoError(t, err)
 	assert.True(t, res.Passed)
 	assert.Len(t, res.Results, 2)

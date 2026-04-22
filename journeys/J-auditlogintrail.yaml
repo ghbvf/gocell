@@ -1,4 +1,4 @@
-id: J-audit-login-trail
+id: J-auditlogintrail
 goal: 登录事件跨 cell 传播并写入审计 hash chain，完整性可验证
 owner:
   team: platform
@@ -12,10 +12,10 @@ contracts:
 passCriteria:
   - text: session.created 事件被 auditcore 消费
     mode: auto
-    checkRef: journey.J-audit-login-trail.event-consume
+    checkRef: journey.J-auditlogintrail.event-consume
   - text: 审计记录写入 hash chain
     mode: auto
-    checkRef: journey.J-audit-login-trail.hash-chain
+    checkRef: journey.J-auditlogintrail.hash-chain
   - text: hash chain 完整性验证通过
     mode: auto
-    checkRef: journey.J-audit-login-trail.integrity-verify
+    checkRef: journey.J-auditlogintrail.integrity-verify

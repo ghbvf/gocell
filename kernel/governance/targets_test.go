@@ -64,8 +64,8 @@ func targetsProject() *metadata.ProjectMeta {
 			},
 		},
 		Journeys: map[string]*metadata.JourneyMeta{
-			"J-sso-login": {
-				ID:        "J-sso-login",
+			"J-ssologin": {
+				ID:        "J-ssologin",
 				Goal:      "SSO login flow",
 				Cells:     []string{"accesscore", "auditcore"},
 				Contracts: []string{"http.auth.login.v1", "event.session.created.v1"},
@@ -98,7 +98,7 @@ func TestSelectFromFiles_SliceDirectory(t *testing.T) {
 	assert.Equal(t, []string{"accesscore/session-login"}, result.Slices)
 	assert.Equal(t, []string{"accesscore"}, result.Cells)
 	assert.Equal(t, []string{"event.session.created.v1", "http.auth.login.v1"}, result.Contracts)
-	assert.Equal(t, []string{"J-sso-login"}, result.Journeys)
+	assert.Equal(t, []string{"J-ssologin"}, result.Journeys)
 }
 
 func TestSelectFromFiles_CellDirectoryNonSlices(t *testing.T) {
@@ -111,7 +111,7 @@ func TestSelectFromFiles_CellDirectoryNonSlices(t *testing.T) {
 	assert.Equal(t, []string{"accesscore/session-login", "accesscore/session-refresh"}, result.Slices)
 	assert.Equal(t, []string{"accesscore"}, result.Cells)
 	assert.Equal(t, []string{"event.session.created.v1", "http.auth.login.v1"}, result.Contracts)
-	assert.Equal(t, []string{"J-sso-login"}, result.Journeys)
+	assert.Equal(t, []string{"J-ssologin"}, result.Journeys)
 }
 
 func TestSelectFromFiles_ContractDirectory(t *testing.T) {
@@ -124,7 +124,7 @@ func TestSelectFromFiles_ContractDirectory(t *testing.T) {
 	assert.Equal(t, []string{"accesscore/session-login", "auditcore/audit-write"}, result.Slices)
 	assert.Equal(t, []string{"accesscore", "auditcore"}, result.Cells)
 	// Both journeys are affected since both cells are involved.
-	assert.Equal(t, []string{"J-audit-trail", "J-sso-login"}, result.Journeys)
+	assert.Equal(t, []string{"J-audit-trail", "J-ssologin"}, result.Journeys)
 }
 
 func TestSelectFromFiles_MultipleFilesMergedAndDeduped(t *testing.T) {
@@ -137,7 +137,7 @@ func TestSelectFromFiles_MultipleFilesMergedAndDeduped(t *testing.T) {
 
 	assert.Equal(t, []string{"accesscore/session-login", "auditcore/audit-write"}, result.Slices)
 	assert.Equal(t, []string{"accesscore", "auditcore"}, result.Cells)
-	assert.Equal(t, []string{"J-audit-trail", "J-sso-login"}, result.Journeys)
+	assert.Equal(t, []string{"J-audit-trail", "J-ssologin"}, result.Journeys)
 	assert.Equal(t, []string{"event.session.created.v1", "http.auth.login.v1"}, result.Contracts)
 }
 
@@ -207,7 +207,7 @@ func TestSelectFromSlice_Basic(t *testing.T) {
 	assert.Equal(t, []string{"auditcore/audit-write"}, result.Slices)
 	assert.Equal(t, []string{"auditcore"}, result.Cells)
 	assert.Equal(t, []string{"event.session.created.v1"}, result.Contracts)
-	assert.Equal(t, []string{"J-audit-trail", "J-sso-login"}, result.Journeys)
+	assert.Equal(t, []string{"J-audit-trail", "J-ssologin"}, result.Journeys)
 }
 
 func TestSelectFromSlice_NonexistentSlice(t *testing.T) {
@@ -263,29 +263,29 @@ func TestSelectFromFiles_CellDirectoryDeepNonSlice(t *testing.T) {
 
 func TestSelectFromSlice_ExpandsJourneysCorrectly(t *testing.T) {
 	ts := NewTargetSelector(targetsProject())
-	// accesscore is in J-sso-login but NOT in J-audit-trail.
+	// accesscore is in J-ssologin but NOT in J-audit-trail.
 	result := ts.SelectFromSlice("accesscore/session-refresh")
 
 	assert.Equal(t, []string{"accesscore/session-refresh"}, result.Slices)
 	assert.Equal(t, []string{"accesscore"}, result.Cells)
 	assert.Equal(t, []string{"http.auth.login.v1"}, result.Contracts)
-	assert.Equal(t, []string{"J-sso-login"}, result.Journeys)
+	assert.Equal(t, []string{"J-ssologin"}, result.Journeys)
 }
 
 func TestSelectFromFiles_JourneyFile(t *testing.T) {
 	ts := NewTargetSelector(targetsProject())
 	result := ts.SelectFromFiles([]string{
-		"journeys/J-sso-login.yaml",
+		"journeys/J-ssologin.yaml",
 	})
 
-	// J-sso-login references accesscore and auditcore, so all their slices are affected.
+	// J-ssologin references accesscore and auditcore, so all their slices are affected.
 	assert.Equal(t, []string{
 		"accesscore/session-login", "accesscore/session-refresh", "auditcore/audit-write",
 	}, result.Slices)
 	assert.Equal(t, []string{"accesscore", "auditcore"}, result.Cells)
 	// Contracts come from slice contractUsages + journey.Contracts (merged).
 	assert.Equal(t, []string{"event.session.created.v1", "http.auth.login.v1"}, result.Contracts)
-	assert.Equal(t, []string{"J-audit-trail", "J-sso-login"}, result.Journeys)
+	assert.Equal(t, []string{"J-audit-trail", "J-ssologin"}, result.Journeys)
 }
 
 func TestSelectFromFiles_AssemblyFile(t *testing.T) {

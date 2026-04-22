@@ -99,14 +99,14 @@ func TestParseRealProject(t *testing.T) {
 	assert.GreaterOrEqual(t, len(pm.Journeys), 8, "expected at least 8 journeys")
 	assert.LessOrEqual(t, len(pm.Journeys), 12, "unexpected extra journeys parsed — update this bound if new journeys were added intentionally")
 	expectedJourneys := []string{
-		"J-sso-login",
-		"J-session-refresh",
-		"J-session-logout",
-		"J-user-onboarding",
-		"J-account-lockout",
-		"J-audit-login-trail",
-		"J-config-hot-reload",
-		"J-config-rollback",
+		"J-ssologin",
+		"J-sessionrefresh",
+		"J-sessionlogout",
+		"J-useronboarding",
+		"J-accountlockout",
+		"J-auditlogintrail",
+		"J-confighotreload",
+		"J-configrollback",
 	}
 	for _, id := range expectedJourneys {
 		assert.Contains(t, pm.Journeys, id, "missing journey %s", id)

@@ -1,4 +1,4 @@
-id: J-order-create
+id: J-ordercreate
 goal: "Create an order over HTTP and emit order-created through the configured runtime path"
 owner:
   team: examples

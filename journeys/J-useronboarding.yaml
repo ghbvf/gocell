@@ -1,4 +1,4 @@
-id: J-user-onboarding
+id: J-useronboarding
 goal: 新用户完成创建并具备登录能力
 owner:
   team: platform
@@ -10,13 +10,13 @@ contracts:
 passCriteria:
   - text: 用户记录创建成功
     mode: auto
-    checkRef: journey.J-user-onboarding.user-create
+    checkRef: journey.J-useronboarding.user-create
   - text: 默认角色分配完成
     mode: auto
-    checkRef: journey.J-user-onboarding.role-assign
+    checkRef: journey.J-useronboarding.role-assign
   - text: user.created 事件发布成功
     mode: auto
-    checkRef: journey.J-user-onboarding.event-publish
+    checkRef: journey.J-useronboarding.event-publish
   - text: 新用户可成功登录
     mode: auto
-    checkRef: journey.J-user-onboarding.login-verify
+    checkRef: journey.J-useronboarding.login-verify

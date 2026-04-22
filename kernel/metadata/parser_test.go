@@ -88,7 +88,7 @@ deliverySemantics: at-least-once
 `)},
 
 		// --- journeys ---
-		"journeys/J-sso-login.yaml": &fstest.MapFile{Data: []byte(`id: J-sso-login
+		"journeys/J-ssologin.yaml": &fstest.MapFile{Data: []byte(`id: J-ssologin
 goal: User completes SSO login
 owner:
   team: platform
@@ -102,7 +102,7 @@ contracts:
 passCriteria:
   - text: OIDC redirect completed
     mode: auto
-    checkRef: journey.J-sso-login.oidc-redirect
+    checkRef: journey.J-ssologin.oidc-redirect
   - text: Security review
     mode: manual
 `)},
@@ -119,12 +119,12 @@ build:
 `)},
 
 		// --- status-board ---
-		"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`- journeyId: J-sso-login
+		"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`- journeyId: J-ssologin
   state: doing
   risk: low
   blocker: ""
   updatedAt: 2026-04-04
-- journeyId: J-session-refresh
+- journeyId: J-sessionrefresh
   state: todo
   risk: low
   blocker: ""
@@ -187,8 +187,8 @@ func TestParseFS_FullProject(t *testing.T) {
 
 	// Journeys
 	assert.Len(t, pm.Journeys, 1)
-	assert.Contains(t, pm.Journeys, "J-sso-login")
-	j := pm.Journeys["J-sso-login"]
+	assert.Contains(t, pm.Journeys, "J-ssologin")
+	j := pm.Journeys["J-ssologin"]
 	assert.Equal(t, "User completes SSO login", j.Goal)
 	assert.Equal(t, []string{"accesscore", "auditcore"}, j.Cells)
 	assert.Len(t, j.PassCriteria, 2)
@@ -205,7 +205,7 @@ func TestParseFS_FullProject(t *testing.T) {
 
 	// Status Board
 	assert.Len(t, pm.StatusBoard, 2)
-	assert.Equal(t, "J-sso-login", pm.StatusBoard[0].JourneyID)
+	assert.Equal(t, "J-ssologin", pm.StatusBoard[0].JourneyID)
 	assert.Equal(t, "doing", pm.StatusBoard[0].State)
 
 	// Actors
@@ -388,7 +388,7 @@ verify:
 func TestParseFS_JourneyPatternFiltering(t *testing.T) {
 	fs := fstest.MapFS{
 		// Valid journey
-		"journeys/J-sso-login.yaml": &fstest.MapFile{Data: []byte(`id: J-sso-login
+		"journeys/J-ssologin.yaml": &fstest.MapFile{Data: []byte(`id: J-ssologin
 goal: SSO login
 owner:
   team: platform
@@ -398,7 +398,7 @@ contracts: []
 passCriteria: []
 `)},
 		// status-board should not be parsed as journey
-		"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`- journeyId: J-sso-login
+		"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`- journeyId: J-ssologin
   state: doing
   risk: low
   blocker: ""
@@ -413,7 +413,7 @@ passCriteria: []
 	require.NoError(t, err)
 
 	assert.Len(t, pm.Journeys, 1)
-	assert.Contains(t, pm.Journeys, "J-sso-login")
+	assert.Contains(t, pm.Journeys, "J-ssologin")
 	assert.Len(t, pm.StatusBoard, 1)
 }
 
@@ -639,7 +639,7 @@ func TestParseFS_DuplicateJourneyID(t *testing.T) {
 	// However, matchJourneyYAML only matches "journeys/J-*.yaml" (exactly 2 segments).
 	// Instead we use two journey files with different names but the same id field.
 	fs := fstest.MapFS{
-		"journeys/J-sso-login.yaml": &fstest.MapFile{Data: []byte(`id: J-sso-login
+		"journeys/J-ssologin.yaml": &fstest.MapFile{Data: []byte(`id: J-ssologin
 goal: SSO login
 owner:
   team: platform
@@ -648,7 +648,7 @@ cells: []
 contracts: []
 passCriteria: []
 `)},
-		"journeys/J-sso-login-copy.yaml": &fstest.MapFile{Data: []byte(`id: J-sso-login
+		"journeys/J-ssologin-copy.yaml": &fstest.MapFile{Data: []byte(`id: J-ssologin
 goal: SSO login copy
 owner:
   team: platform
@@ -663,7 +663,7 @@ passCriteria: []
 	_, err := p.ParseFS(fs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate")
-	assert.Contains(t, err.Error(), "J-sso-login")
+	assert.Contains(t, err.Error(), "J-ssologin")
 }
 
 func TestParseFS_DuplicateAssemblyID(t *testing.T) {

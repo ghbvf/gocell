@@ -428,16 +428,16 @@ func TestCreateJourney(t *testing.T) {
 	s := New(root)
 
 	opts := JourneyOpts{
-		ID:        "sso-login",
+		ID:        "ssologin",
 		Goal:      "User completes SSO login and obtains a valid session",
 		OwnerTeam: "platform",
 		Cells:     []string{"accesscore", "auditcore"},
 	}
 	require.NoError(t, s.CreateJourney(opts))
 
-	outPath := filepath.Join(root, "journeys", "J-sso-login.yaml")
+	outPath := filepath.Join(root, "journeys", "J-ssologin.yaml")
 	content := readGenerated(t, outPath)
-	assert.Contains(t, content, "id: J-sso-login")
+	assert.Contains(t, content, "id: J-ssologin")
 	assert.Contains(t, content, `goal: "User completes SSO login and obtains a valid session"`)
 	assert.Contains(t, content, "team: platform")
 	assert.Contains(t, content, "role: journey-owner")

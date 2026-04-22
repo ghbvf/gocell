@@ -1,4 +1,4 @@
-id: J-session-logout
+id: J-sessionlogout
 goal: 用户主动登出并吊销 session，审计事件正确记录
 owner:
   team: platform
@@ -11,10 +11,10 @@ contracts:
 passCriteria:
   - text: Session 标记为已吊销
     mode: auto
-    checkRef: journey.J-session-logout.session-revoke
+    checkRef: journey.J-sessionlogout.session-revoke
   - text: session.revoked 事件发布成功
     mode: auto
-    checkRef: journey.J-session-logout.event-publish
+    checkRef: journey.J-sessionlogout.event-publish
   - text: 审计记录写入确认
     mode: auto
-    checkRef: journey.J-session-logout.audit-record
+    checkRef: journey.J-sessionlogout.audit-record

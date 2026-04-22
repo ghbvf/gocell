@@ -11,16 +11,16 @@ import (
 )
 
 // buildTestProject returns a ProjectMeta with 3 journeys:
-//   - J-user-onboarding: single cell (accesscore)
-//   - J-sso-login: cross-cell (accesscore, auditcore, configcore)
-//   - J-audit-login-trail: cross-cell (accesscore, auditcore)
+//   - J-useronboarding: single cell (accesscore)
+//   - J-ssologin: cross-cell (accesscore, auditcore, configcore)
+//   - J-auditlogintrail: cross-cell (accesscore, auditcore)
 //
-// and 2 status-board entries (J-sso-login, J-audit-login-trail).
+// and 2 status-board entries (J-ssologin, J-auditlogintrail).
 func buildTestProject() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Journeys: map[string]*metadata.JourneyMeta{
-			"J-user-onboarding": {
-				ID:        "J-user-onboarding",
+			"J-useronboarding": {
+				ID:        "J-useronboarding",
 				Goal:      "new user onboarding",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
 				Cells:     []string{"accesscore"},
@@ -29,8 +29,8 @@ func buildTestProject() *metadata.ProjectMeta {
 					{Text: "user record created", Mode: "auto"},
 				},
 			},
-			"J-sso-login": {
-				ID:        "J-sso-login",
+			"J-ssologin": {
+				ID:        "J-ssologin",
 				Goal:      "SSO login with session",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
 				Cells:     []string{"accesscore", "auditcore", "configcore"},
@@ -40,8 +40,8 @@ func buildTestProject() *metadata.ProjectMeta {
 					{Text: "session persisted", Mode: "auto"},
 				},
 			},
-			"J-audit-login-trail": {
-				ID:        "J-audit-login-trail",
+			"J-auditlogintrail": {
+				ID:        "J-auditlogintrail",
 				Goal:      "login events propagate to audit hash chain",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
 				Cells:     []string{"accesscore", "auditcore"},
@@ -53,8 +53,8 @@ func buildTestProject() *metadata.ProjectMeta {
 			},
 		},
 		StatusBoard: []metadata.StatusBoardEntry{
-			{JourneyID: "J-sso-login", State: "doing", Risk: "low", UpdatedAt: "2026-04-04"},
-			{JourneyID: "J-audit-login-trail", State: "todo", Risk: "low", UpdatedAt: "2026-04-05"},
+			{JourneyID: "J-ssologin", State: "doing", Risk: "low", UpdatedAt: "2026-04-04"},
+			{JourneyID: "J-auditlogintrail", State: "todo", Risk: "low", UpdatedAt: "2026-04-05"},
 		},
 	}
 }
@@ -117,7 +117,7 @@ func TestGet(t *testing.T) {
 		wantNil bool
 		wantID string
 	}{
-		{name: "existing journey", id: "J-sso-login", wantNil: false, wantID: "J-sso-login"},
+		{name: "existing journey", id: "J-ssologin", wantNil: false, wantID: "J-ssologin"},
 		{name: "non-existing journey", id: "J-does-not-exist", wantNil: true},
 		{name: "empty id", id: "", wantNil: true},
 	}
@@ -144,7 +144,7 @@ func TestList(t *testing.T) {
 		{
 			name:    "sorted by ID",
 			project: buildTestProject(),
-			wantIDs: []string{"J-audit-login-trail", "J-sso-login", "J-user-onboarding"},
+			wantIDs: []string{"J-auditlogintrail", "J-ssologin", "J-useronboarding"},
 		},
 		{
 			name:    "empty catalog",
@@ -177,17 +177,17 @@ func TestCellJourneys(t *testing.T) {
 		{
 			name:    "accesscore referenced by all three journeys",
 			cellID:  "accesscore",
-			wantIDs: []string{"J-audit-login-trail", "J-sso-login", "J-user-onboarding"},
+			wantIDs: []string{"J-auditlogintrail", "J-ssologin", "J-useronboarding"},
 		},
 		{
 			name:    "auditcore referenced by two journeys",
 			cellID:  "auditcore",
-			wantIDs: []string{"J-audit-login-trail", "J-sso-login"},
+			wantIDs: []string{"J-auditlogintrail", "J-ssologin"},
 		},
 		{
 			name:    "configcore referenced by one journey",
 			cellID:  "configcore",
-			wantIDs: []string{"J-sso-login"},
+			wantIDs: []string{"J-ssologin"},
 		},
 		{
 			name:    "unknown cell returns empty",
@@ -223,17 +223,17 @@ func TestContractJourneys(t *testing.T) {
 		{
 			name:       "event.session.created.v1 referenced by two journeys",
 			contractID: "event.session.created.v1",
-			wantIDs:    []string{"J-audit-login-trail", "J-sso-login"},
+			wantIDs:    []string{"J-auditlogintrail", "J-ssologin"},
 		},
 		{
 			name:       "http.auth.login.v1 referenced by one journey",
 			contractID: "http.auth.login.v1",
-			wantIDs:    []string{"J-sso-login"},
+			wantIDs:    []string{"J-ssologin"},
 		},
 		{
 			name:       "event.user.created.v1 referenced by one journey",
 			contractID: "event.user.created.v1",
-			wantIDs:    []string{"J-user-onboarding"},
+			wantIDs:    []string{"J-useronboarding"},
 		},
 		{
 			name:       "unknown contract returns empty",
@@ -269,19 +269,19 @@ func TestStatus(t *testing.T) {
 	}{
 		{
 			name:      "existing status entry",
-			journeyID: "J-sso-login",
+			journeyID: "J-ssologin",
 			wantNil:   false,
 			wantState: "doing",
 		},
 		{
 			name:      "another existing status entry",
-			journeyID: "J-audit-login-trail",
+			journeyID: "J-auditlogintrail",
 			wantNil:   false,
 			wantState: "todo",
 		},
 		{
 			name:      "journey without status entry",
-			journeyID: "J-user-onboarding",
+			journeyID: "J-useronboarding",
 			wantNil:   true,
 		},
 		{
@@ -313,7 +313,7 @@ func TestCrossCellJourneys(t *testing.T) {
 		{
 			name:    "returns only cross-cell journeys sorted by ID",
 			project: buildTestProject(),
-			wantIDs: []string{"J-audit-login-trail", "J-sso-login"},
+			wantIDs: []string{"J-auditlogintrail", "J-ssologin"},
 		},
 		{
 			name:    "empty catalog",

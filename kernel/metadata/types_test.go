@@ -226,7 +226,7 @@ func TestContractMetaNilReplayable(t *testing.T) {
 
 func TestJourneyMetaRoundTrip(t *testing.T) {
 	orig := JourneyMeta{
-		ID:    "J-sso-login",
+		ID:    "J-ssologin",
 		Goal:  "User completes SSO login",
 		Owner: OwnerMeta{Team: "platform", Role: "journey-owner"},
 		Cells: []string{"accesscore", "auditcore"},
@@ -235,7 +235,7 @@ func TestJourneyMetaRoundTrip(t *testing.T) {
 			"event.session.created.v1",
 		},
 		PassCriteria: []PassCriterion{
-			{Text: "OIDC redirect completed", Mode: "auto", CheckRef: "journey.J-sso-login.oidc-redirect"},
+			{Text: "OIDC redirect completed", Mode: "auto", CheckRef: "journey.J-ssologin.oidc-redirect"},
 			{Text: "Security review", Mode: "manual"},
 		},
 	}
@@ -269,7 +269,7 @@ func TestAssemblyMetaRoundTrip(t *testing.T) {
 
 func TestStatusBoardEntryRoundTrip(t *testing.T) {
 	orig := StatusBoardEntry{
-		JourneyID: "J-sso-login",
+		JourneyID: "J-ssologin",
 		State:     "doing",
 		Risk:      "low",
 		Blocker:   "",
@@ -382,8 +382,8 @@ func TestEndpointsMetaOmitEmpty(t *testing.T) {
 
 func TestStatusBoardSliceRoundTrip(t *testing.T) {
 	orig := []StatusBoardEntry{
-		{JourneyID: "J-sso-login", State: "doing", Risk: "low", Blocker: "", UpdatedAt: "2026-04-04"},
-		{JourneyID: "J-session-refresh", State: "todo", Risk: "low", Blocker: "", UpdatedAt: "2026-04-05"},
+		{JourneyID: "J-ssologin", State: "doing", Risk: "low", Blocker: "", UpdatedAt: "2026-04-04"},
+		{JourneyID: "J-sessionrefresh", State: "todo", Risk: "low", Blocker: "", UpdatedAt: "2026-04-05"},
 	}
 	data, err := yaml.Marshal(orig)
 	require.NoError(t, err)

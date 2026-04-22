@@ -1,39 +1,39 @@
-- journeyId: J-sso-login
+- journeyId: J-ssologin
   state: doing
   risk: low
   blocker: ""
   updatedAt: 2026-04-04
-- journeyId: J-session-refresh
+- journeyId: J-sessionrefresh
   state: todo
   risk: low
   blocker: ""
   updatedAt: 2026-04-05
-- journeyId: J-session-logout
+- journeyId: J-sessionlogout
   state: todo
   risk: low
   blocker: ""
   updatedAt: 2026-04-05
-- journeyId: J-user-onboarding
+- journeyId: J-useronboarding
   state: todo
   risk: low
   blocker: ""
   updatedAt: 2026-04-05
-- journeyId: J-account-lockout
+- journeyId: J-accountlockout
   state: todo
   risk: low
   blocker: ""
   updatedAt: 2026-04-05
-- journeyId: J-audit-login-trail
+- journeyId: J-auditlogintrail
   state: todo
   risk: low
   blocker: ""
   updatedAt: 2026-04-05
-- journeyId: J-config-hot-reload
+- journeyId: J-confighotreload
   state: todo
   risk: low
   blocker: ""
   updatedAt: 2026-04-05
-- journeyId: J-config-rollback
+- journeyId: J-configrollback
   state: todo
   risk: low
   blocker: ""

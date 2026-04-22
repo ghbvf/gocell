@@ -7,7 +7,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// J-account-lockout
+// J-accountlockout
 // ---------------------------------------------------------------------------
 
 func TestJourney_JAccountLockoutAdminUnlock(t *testing.T) {
@@ -27,7 +27,7 @@ func TestJourney_JAccountLockoutLoginReject(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// J-audit-login-trail
+// J-auditlogintrail
 // ---------------------------------------------------------------------------
 
 func TestJourney_JAuditLoginTrailEventConsume(t *testing.T) {
@@ -43,7 +43,7 @@ func TestJourney_JAuditLoginTrailIntegrityVerify(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// J-config-hot-reload
+// J-confighotreload
 // ---------------------------------------------------------------------------
 
 func TestJourney_JConfigHotReloadAccessApply(t *testing.T) {
@@ -59,7 +59,7 @@ func TestJourney_JConfigHotReloadHealthVerify(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// J-config-rollback
+// J-configrollback
 // ---------------------------------------------------------------------------
 
 func TestJourney_JConfigRollbackAuditRecord(t *testing.T) {
@@ -79,7 +79,7 @@ func TestJourney_JConfigRollbackVersionRevert(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// J-session-logout
+// J-sessionlogout
 // ---------------------------------------------------------------------------
 
 func TestJourney_JSessionLogoutAuditRecord(t *testing.T) {
@@ -95,7 +95,7 @@ func TestJourney_JSessionLogoutSessionRevoke(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// J-session-refresh
+// J-sessionrefresh
 // ---------------------------------------------------------------------------
 
 func TestJourney_JSessionRefreshOldTokenRevoke(t *testing.T) {
@@ -111,7 +111,7 @@ func TestJourney_JSessionRefreshTokenVerify(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// J-sso-login
+// J-ssologin
 // ---------------------------------------------------------------------------
 
 func TestJourney_JSsoLoginOidcRedirect(t *testing.T) {
@@ -123,7 +123,7 @@ func TestJourney_JSsoLoginSessionDb(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// J-user-onboarding
+// J-useronboarding
 // ---------------------------------------------------------------------------
 
 func TestJourney_JUserOnboardingEventPublish(t *testing.T) {

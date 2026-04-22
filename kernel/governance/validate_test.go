@@ -131,8 +131,8 @@ func validProject() *metadata.ProjectMeta {
 			},
 		},
 		Journeys: map[string]*metadata.JourneyMeta{
-			"J-sso-login": {
-				ID:    "J-sso-login",
+			"J-ssologin": {
+				ID:    "J-ssologin",
 				Goal:  "User completes SSO login",
 				Owner: metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
 				Cells: []string{"accesscore", "auditcore"},
@@ -141,7 +141,7 @@ func validProject() *metadata.ProjectMeta {
 					"event.session.created.v1",
 				},
 				PassCriteria: []metadata.PassCriterion{
-					{Text: "login returns token", Mode: "auto", CheckRef: "journey.J-sso-login.login-returns-token"},
+					{Text: "login returns token", Mode: "auto", CheckRef: "journey.J-ssologin.login-returns-token"},
 					{Text: "manual review", Mode: "manual"},
 				},
 			},
@@ -158,7 +158,7 @@ func validProject() *metadata.ProjectMeta {
 			},
 		},
 		StatusBoard: []metadata.StatusBoardEntry{
-			{JourneyID: "J-sso-login", State: "doing", Risk: "low", UpdatedAt: "2026-04-04"},
+			{JourneyID: "J-ssologin", State: "doing", Risk: "low", UpdatedAt: "2026-04-04"},
 		},
 		Actors: []metadata.ActorMeta{
 			{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L1"},
@@ -404,7 +404,7 @@ func TestREF06(t *testing.T) {
 		{
 			name: "journey references missing cell",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Journeys["J-sso-login"].Cells = append(pm.Journeys["J-sso-login"].Cells, "nonexistent")
+				pm.Journeys["J-ssologin"].Cells = append(pm.Journeys["J-ssologin"].Cells, "nonexistent")
 			},
 			wantCount: 1,
 		},
@@ -434,7 +434,7 @@ func TestREF07(t *testing.T) {
 		{
 			name: "journey references missing contract",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Journeys["J-sso-login"].Contracts = append(pm.Journeys["J-sso-login"].Contracts, "nonexistent.v1")
+				pm.Journeys["J-ssologin"].Contracts = append(pm.Journeys["J-ssologin"].Contracts, "nonexistent.v1")
 			},
 			wantCount: 1,
 		},
@@ -1277,8 +1277,8 @@ func TestVERIFY05(t *testing.T) {
 		{
 			name: "journey checkRef valid format",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{
-					{Text: "login ok", Mode: "auto", CheckRef: "journey.J-sso-login.login-ok"},
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "login ok", Mode: "auto", CheckRef: "journey.J-ssologin.login-ok"},
 				}
 			},
 			wantCount: 0,
@@ -1286,8 +1286,8 @@ func TestVERIFY05(t *testing.T) {
 		{
 			name: "journey checkRef invalid prefix",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{
-					{Text: "login ok", Mode: "auto", CheckRef: "unknown.J-sso-login.login-ok"},
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "login ok", Mode: "auto", CheckRef: "unknown.J-ssologin.login-ok"},
 				}
 			},
 			wantCount: 1,
@@ -1295,7 +1295,7 @@ func TestVERIFY05(t *testing.T) {
 		{
 			name: "journey checkRef too few segments",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
 					{Text: "login ok", Mode: "auto", CheckRef: "journey.login"},
 				}
 			},
@@ -1311,7 +1311,7 @@ func TestVERIFY05(t *testing.T) {
 		{
 			name: "empty checkRef is skipped",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Journeys["J-sso-login"].PassCriteria = []metadata.PassCriterion{
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
 					{Text: "manual step", Mode: "manual", CheckRef: ""},
 				}
 			},
@@ -1733,7 +1733,7 @@ func TestFilePathHelpers(t *testing.T) {
 	assert.Equal(t, "cells/accesscore/cell.yaml", cellFile("accesscore"))
 	assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", sliceFile("accesscore/session-login"))
 	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml", contractFile("http.auth.login.v1"))
-	assert.Equal(t, "journeys/J-sso-login.yaml", journeyFile("J-sso-login"))
+	assert.Equal(t, "journeys/J-ssologin.yaml", journeyFile("J-ssologin"))
 	assert.Equal(t, "assemblies/corebundle/assembly.yaml", assemblyFile("corebundle"))
 }
 
