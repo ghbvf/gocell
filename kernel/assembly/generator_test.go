@@ -19,7 +19,7 @@ import (
 // suitable for testing boundary computation.
 //
 // Layout:
-//   - assembly "sso-bff" contains cells: accesscore, auditcore
+//   - assembly "ssobff" contains cells: accesscore, auditcore
 //   - cell "configcore" is outside the assembly
 //   - contract "http/auth/login" (http): server=accesscore, clients=[configcore]
 //     → exported (provider inside, consumer outside)
@@ -98,13 +98,13 @@ func buildTestProject() *metadata.ProjectMeta {
 		},
 		Journeys: make(map[string]*metadata.JourneyMeta),
 		Assemblies: map[string]*metadata.AssemblyMeta{
-			"sso-bff": {
-				ID:    "sso-bff",
+			"ssobff": {
+				ID:    "ssobff",
 				Cells: []string{"accesscore", "auditcore"},
 				Build: metadata.BuildMeta{
-					Entrypoint:     "cmd/sso-bff/main.go",
-					Binary:         "sso-bff",
-					DeployTemplate: "k8s/sso-bff.yaml",
+					Entrypoint:     "cmd/ssobff/main.go",
+					Binary:         "ssobff",
+					DeployTemplate: "k8s/ssobff.yaml",
 				},
 			},
 		},
@@ -121,18 +121,18 @@ func TestGenerateEntrypoint_ContainsAssemblyID(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateEntrypoint("sso-bff")
+	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, `assembly.Config{ID: "sso-bff", DurabilityMode: cell.DurabilityDemo}`)
+	assert.Contains(t, content, `assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDemo}`)
 }
 
 func TestGenerateEntrypoint_ContainsCellComments(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateEntrypoint("sso-bff")
+	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -144,7 +144,7 @@ func TestGenerateEntrypoint_ContainsModulePath(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateEntrypoint("sso-bff")
+	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -155,7 +155,7 @@ func TestGenerateEntrypoint_ContainsDoNotEdit(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateEntrypoint("sso-bff")
+	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -182,7 +182,7 @@ func TestGenerateBoundary_ExportedContracts(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -198,7 +198,7 @@ func TestGenerateBoundary_NotExportedWhenAllConsumersInside(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -237,7 +237,7 @@ func TestGenerateBoundary_ImportedContracts(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -266,7 +266,7 @@ func TestGenerateBoundary_SmokeTargets(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -285,7 +285,7 @@ func TestGenerateBoundary_FingerprintNonEmpty(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -306,11 +306,11 @@ func TestGenerateBoundary_ContainsAssemblyID(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, "assemblyId: sso-bff")
+	assert.Contains(t, content, "assemblyId: ssobff")
 }
 
 func TestGenerateBoundary_NotFoundAssembly(t *testing.T) {
@@ -379,8 +379,8 @@ func TestSourceFingerprint_Deterministic(t *testing.T) {
 	exported, imported, err := gen.computeBoundaryContracts(cellSet)
 	require.NoError(t, err)
 
-	fp1 := gen.sourceFingerprint("sso-bff", exported, imported)
-	fp2 := gen.sourceFingerprint("sso-bff", exported, imported)
+	fp1 := gen.sourceFingerprint("ssobff", exported, imported)
+	fp2 := gen.sourceFingerprint("ssobff", exported, imported)
 
 	assert.Equal(t, fp1, fp2, "fingerprint should be deterministic")
 	assert.Len(t, fp1, 64)
@@ -426,7 +426,7 @@ func TestGenerateBoundary_CommandAndProjectionKinds(t *testing.T) {
 	// Rebuild generator to pick up new contracts
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -452,7 +452,7 @@ func TestGenerateBoundary_UnknownKindReturnsError(t *testing.T) {
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	_, err := gen.GenerateBoundary("sso-bff")
+	_, err := gen.GenerateBoundary("ssobff")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown.kind.v1")
 

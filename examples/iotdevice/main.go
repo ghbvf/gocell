@@ -1,10 +1,10 @@
-// Package main is the entry point for the iot-device example application.
+// Package main is the entry point for the iotdevice example application.
 // It demonstrates the L4 DeviceLatent consistency model: commands are enqueued
 // by the server and polled by IoT devices on their own schedule.
 //
 // Usage:
 //
-//	go run ./examples/iot-device
+//	go run ./examples/iotdevice
 package main
 
 import (
@@ -32,7 +32,7 @@ func main() {
 	eb := eventbus.New()
 
 	// Cursor codec for pagination (demo mode).
-	cursorCodec, err := query.NewCursorCodec([]byte("iot-device-cursor-key-32-bytes!!"))
+	cursorCodec, err := query.NewCursorCodec([]byte("iotdevice-cursor-key-32-bytes!!!"))
 	if err != nil {
 		logger.Error("failed to create cursor codec", slog.Any("error", err))
 		os.Exit(1)
@@ -46,7 +46,7 @@ func main() {
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: "iot-device", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "iotdevice", DurabilityMode: cell.DurabilityDemo})
 	if err := asm.Register(dc); err != nil {
 		logger.Error("failed to register devicecell", slog.Any("error", err))
 		os.Exit(1)
@@ -62,9 +62,9 @@ func main() {
 		bootstrap.WithHTTPAddr(":8083"),
 	)
 
-	logger.Info("iot-device: starting on :8083")
+	logger.Info("iotdevice: starting on :8083")
 	if err := app.Run(ctx); err != nil {
-		logger.Error("iot-device: application exited with error", slog.Any("error", err))
+		logger.Error("iotdevice: application exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
 }

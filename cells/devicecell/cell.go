@@ -1,4 +1,4 @@
-// Package devicecell implements the devicecell Cell for the iot-device example.
+// Package devicecell implements the devicecell Cell for the iotdevice example.
 // It demonstrates the L4 DeviceLatent consistency model: commands are enqueued
 // by the server and polled by devices on their own schedule.
 package devicecell

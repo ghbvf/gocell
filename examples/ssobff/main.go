@@ -1,11 +1,11 @@
-// Package main is the entry point for the sso-bff example application.
+// Package main is the entry point for the ssobff example application.
 // It demonstrates combining the three built-in GoCell Cells (accesscore,
 // auditcore, configcore) into a single SSO BFF assembly using in-memory
 // dependencies for development.
 //
 // Usage:
 //
-//	go run ./examples/sso-bff
+//	go run ./examples/ssobff
 package main
 
 import (
@@ -58,7 +58,7 @@ func main() {
 		logger.Error("failed to create key set", slog.Any("error", err))
 		os.Exit(1)
 	}
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "sso-bff-dev", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-dev", 15*time.Minute,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	if err != nil {
 		logger.Error("failed to create JWT issuer", slog.Any("error", err))
@@ -66,7 +66,7 @@ func main() {
 	}
 	jwtVerifier, err := auth.NewJWTVerifier(keySet,
 		auth.WithExpectedAudiences("gocell"),
-		auth.WithExpectedIssuer("sso-bff-dev"))
+		auth.WithExpectedIssuer("ssobff-dev"))
 	if err != nil {
 		logger.Error("failed to create JWT verifier", slog.Any("error", err))
 		os.Exit(1)
@@ -96,8 +96,8 @@ func main() {
 
 	// --- auditcore (L3): tamper-evident audit log ---
 	// 32 bytes: matches SHA-256 block size used by the audit HMAC chain.
-	auditHMACKey := []byte("sso-bff-dev-hmac-key-32-bytes!!!")
-	auditCursorCodec, err := query.NewCursorCodec([]byte("sso-bff-audit-cursor-key-32b!!"))
+	auditHMACKey := []byte("ssobff-dev-hmac-key-32-bytes!!!!")
+	auditCursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
 	if err != nil {
 		logger.Error("failed to create audit cursor codec", slog.Any("error", err))
 		os.Exit(1)
@@ -113,7 +113,7 @@ func main() {
 	)
 
 	// --- configcore (L2): configuration + feature flags ---
-	configCursorCodec, err := query.NewCursorCodec([]byte("sso-bff-config-cursor-key-32b!!"))
+	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
 	if err != nil {
 		logger.Error("failed to create config cursor codec", slog.Any("error", err))
 		os.Exit(1)
@@ -128,7 +128,7 @@ func main() {
 	)
 
 	// Build assembly and register all three Cells.
-	asm := assembly.New(assembly.Config{ID: "sso-bff", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDemo})
 	for _, err := range []error{
 		asm.Register(ac),
 		asm.Register(auc),
@@ -163,17 +163,17 @@ func main() {
 
 	credPath, err := accesscore.ResolveBootstrapCredentialPath(stateDir)
 	if err != nil {
-		logger.Warn("sso-bff: invalid GOCELL_STATE_DIR for credential path resolution",
+		logger.Warn("ssobff: invalid GOCELL_STATE_DIR for credential path resolution",
 			slog.String("error", err.Error()))
 		credPath = stateDir + "/initial_admin_password"
 	}
-	logger.Info("sso-bff: starting on :8081; if first run, initial admin credentials are written to the path below",
+	logger.Info("ssobff: starting on :8081; if first run, initial admin credentials are written to the path below",
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
 		slog.String("cred_path", credPath),
 	)
 	if err := app.Run(ctx); err != nil {
-		logger.Error("sso-bff: application exited with error", slog.Any("error", err))
+		logger.Error("ssobff: application exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
 }

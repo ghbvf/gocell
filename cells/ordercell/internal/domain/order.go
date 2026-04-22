@@ -8,7 +8,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// Order represents a todo-order aggregate.
+// Order represents a todoorder aggregate.
 type Order struct {
 	ID        string
 	Item      string

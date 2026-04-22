@@ -1,4 +1,4 @@
-// Package ordercell implements the ordercell Cell for the todo-order example.
+// Package ordercell implements the ordercell Cell for the todoorder example.
 // It demonstrates the "golden path" of building a business Cell with HTTP
 // endpoints and event publishing using the GoCell framework.
 package ordercell

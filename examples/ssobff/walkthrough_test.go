@@ -1,6 +1,6 @@
 //go:build integration
 
-// Package main — walkthrough integration test for sso-bff.
+// Package main — walkthrough integration test for ssobff.
 //
 // Verifies the complete API flow described in README.md:
 //  1. Bootstrap admin credentials are written to a temp credential file
@@ -142,7 +142,7 @@ func credentialFromFile(path string) (username, password string, err error) {
 }
 
 // buildWalkthroughServer constructs an in-memory test server that mirrors
-// sso-bff main.go but uses httptest.NewServer for port-free testing.
+// ssobff main.go but uses httptest.NewServer for port-free testing.
 //
 // It uses WithInitialAdminBootstrap so bootstrap credentials are written to
 // <stateDir>/initial_admin_password. Callers read credentials from the file.
@@ -163,13 +163,13 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	require.NoError(t, err)
 
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "sso-bff-test", 15*time.Minute,
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-test", 15*time.Minute,
 		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
 	require.NoError(t, err)
 
 	jwtVerifier, err := auth.NewJWTVerifier(keySet,
 		auth.WithExpectedAudiences("gocell"),
-		auth.WithExpectedIssuer("sso-bff-test"))
+		auth.WithExpectedIssuer("ssobff-test"))
 	require.NoError(t, err)
 
 	// The bootstrap sink captures the cleaner worker. In tests the cleaner
@@ -264,7 +264,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	return srv, cleanup
 }
 
-// TestWalkthrough exercises the complete sso-bff API walkthrough.
+// TestWalkthrough exercises the complete ssobff API walkthrough.
 func TestWalkthrough(t *testing.T) {
 	// Use a temp dir as GOCELL_STATE_DIR so the credential file is isolated
 	// to this test run. The slog capturing handler wraps a discard handler

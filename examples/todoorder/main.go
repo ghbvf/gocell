@@ -1,4 +1,4 @@
-// Package main is the entry point for the todo-order example application.
+// Package main is the entry point for the todoorder example application.
 // It demonstrates the GoCell "golden path": creating a business Cell with
 // HTTP endpoints and outbox-based event publishing.
 //
@@ -8,7 +8,7 @@
 //
 // Usage:
 //
-//	go run ./examples/todo-order
+//	go run ./examples/todoorder
 package main
 
 import (
@@ -34,7 +34,7 @@ func main() {
 	slog.SetDefault(logger)
 
 	// Cursor codec for pagination (demo mode).
-	cursorCodec, err := query.NewCursorCodec([]byte("todo-order-cursor-key-32bytes!!"))
+	cursorCodec, err := query.NewCursorCodec([]byte("todoorder-cursor-key-32bytes!!"))
 	if err != nil {
 		logger.Error("failed to create cursor codec", slog.Any("error", err))
 		os.Exit(1)
@@ -53,7 +53,7 @@ func main() {
 	)
 
 	// Build assembly and register the cell.
-	asm := assembly.New(assembly.Config{ID: "todo-order", DurabilityMode: cell.DurabilityDemo})
+	asm := assembly.New(assembly.Config{ID: "todoorder", DurabilityMode: cell.DurabilityDemo})
 	if err := asm.Register(oc); err != nil {
 		logger.Error("failed to register ordercell", slog.Any("error", err))
 		os.Exit(1)
@@ -68,9 +68,9 @@ func main() {
 		bootstrap.WithHTTPAddr(":8082"),
 	)
 
-	logger.Info("todo-order: starting on :8082")
+	logger.Info("todoorder: starting on :8082")
 	if err := app.Run(ctx); err != nil {
-		logger.Error("todo-order: application exited with error", slog.Any("error", err))
+		logger.Error("todoorder: application exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
 }

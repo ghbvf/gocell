@@ -246,7 +246,7 @@ func TestLayerOf(t *testing.T) {
 		{"github.com/ghbvf/gocell/cells/accesscore/internal/domain", "cells"},
 		{"github.com/ghbvf/gocell/pkg/errcode", "pkg"},
 		{"github.com/ghbvf/gocell/cmd/gocell", "cmd"},
-		{"github.com/ghbvf/gocell/examples/sso-bff", "examples"},
+		{"github.com/ghbvf/gocell/examples/ssobff", "examples"},
 		{"github.com/ghbvf/gocell/tools/archtest", "tools"},
 		// Module root package returns "" (no layer segment after prefix).
 		{"github.com/ghbvf/gocell", ""},
@@ -440,7 +440,7 @@ func TestCheckLayering(t *testing.T) {
 			name: "LAYER-04 violation: adapters imports examples",
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/adapters/redis", Imports: []string{
-					"github.com/ghbvf/gocell/examples/sso-bff", // forbidden
+					"github.com/ghbvf/gocell/examples/ssobff", // forbidden
 				}},
 			},
 			wantRules: []string{"LAYER-04"},
@@ -503,7 +503,7 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "clean: examples imports all layers (unrestricted)",
 			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/examples/sso-bff", Imports: []string{
+				{ImportPath: "github.com/ghbvf/gocell/examples/ssobff", Imports: []string{
 					"github.com/ghbvf/gocell/kernel/cell",
 					"github.com/ghbvf/gocell/runtime/auth",
 					"github.com/ghbvf/gocell/adapters/postgres",
