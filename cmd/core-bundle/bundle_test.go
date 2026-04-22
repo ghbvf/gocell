@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	accesscore "github.com/ghbvf/gocell/cells/access-core"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -20,9 +20,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fastAdminBootstrapOpts returns access-core InitialAdmin options that
+// fastAdminBootstrapOpts returns accesscore InitialAdmin options that
 // replace the production bcrypt cost=12 hasher with bcrypt.MinCost=4 so
-// the synchronous bcrypt call in access-core.Init does not block phase3
+// the synchronous bcrypt call in accesscore.Init does not block phase3
 // for 5-7s on slow CI runners. The rest of the InitialAdmin path
 // (Sweep → EnsureAdmin → WriteCredentialFile → Cleaner worker registration)
 // still runs, preserving bundle_test coverage of the full wiring.
@@ -361,7 +361,7 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 }
 
 // TestBuildBootstrap_AssemblyHasAllCells verifies that BuildApp registers
-// config-core, access-core, and audit-core. We check via health + /readyz
+// configcore, accesscore, and auditcore. We check via health + /readyz
 // which would fail if any cell fails to init.
 func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	shared := buildTestSharedDeps(t)
@@ -391,7 +391,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"all three cells (config-core, access-core, audit-core) must be healthy")
+		"all three cells (configcore, accesscore, auditcore) must be healthy")
 
 	cancel()
 	select {

@@ -19,7 +19,7 @@ func TestParseSliceKey(t *testing.T) {
 		wantS   string
 		wantErr bool
 	}{
-		{"access-core/session-login", "access-core", "session-login", false},
+		{"accesscore/session-login", "accesscore", "session-login", false},
 		{"a/b", "a", "b", false},
 		{"noslash", "", "", true},
 		{"/leading", "", "", true},

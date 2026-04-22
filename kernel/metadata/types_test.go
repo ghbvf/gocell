@@ -23,12 +23,12 @@ func roundTrip[T any](t *testing.T, v T) ([]byte, T) {
 
 func TestCellMetaRoundTrip(t *testing.T) {
 	orig := CellMeta{
-		ID:               "access-core",
+		ID:               "accesscore",
 		Type:             "core",
 		ConsistencyLevel: "L2",
 		Owner:            OwnerMeta{Team: "platform", Role: "cell-owner"},
 		Schema:           SchemaMeta{Primary: "cell_access_core"},
-		Verify:           CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+		Verify:           CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 		L0Dependencies:   []L0DepMeta{{Cell: "shared-crypto", Reason: "hashing"}},
 	}
 	_, got := roundTrip(t, orig)
@@ -37,12 +37,12 @@ func TestCellMetaRoundTrip(t *testing.T) {
 
 func TestCellMetaEmptyL0Dependencies(t *testing.T) {
 	orig := CellMeta{
-		ID:               "config-core",
+		ID:               "configcore",
 		Type:             "core",
 		ConsistencyLevel: "L2",
 		Owner:            OwnerMeta{Team: "platform", Role: "cell-owner"},
 		Schema:           SchemaMeta{Primary: "cell_config_core"},
-		Verify:           CellVerifyMeta{Smoke: []string{"smoke.config-core.startup"}},
+		Verify:           CellVerifyMeta{Smoke: []string{"smoke.configcore.startup"}},
 		L0Dependencies:   []L0DepMeta{},
 	}
 	_, got := roundTrip(t, orig)
@@ -52,7 +52,7 @@ func TestCellMetaEmptyL0Dependencies(t *testing.T) {
 func TestSliceMetaRoundTrip(t *testing.T) {
 	orig := SliceMeta{
 		ID:            "session-login",
-		BelongsToCell: "access-core",
+		BelongsToCell: "accesscore",
 		ContractUsages: []ContractUsage{
 			{Contract: "http.auth.login.v1", Role: "serve"},
 			{Contract: "event.session.created.v1", Role: "publish"},
@@ -78,11 +78,11 @@ func TestContractMetaHTTPRoundTrip(t *testing.T) {
 	orig := ContractMeta{
 		ID:               "http.auth.login.v1",
 		Kind:             "http",
-		OwnerCell:        "access-core",
+		OwnerCell:        "accesscore",
 		ConsistencyLevel: "L1",
 		Lifecycle:        "active",
 		Endpoints: EndpointsMeta{
-			Server:  "access-core",
+			Server:  "accesscore",
 			Clients: []string{"edge-bff"},
 		},
 		SchemaRefs: SchemaRefsMeta{
@@ -103,11 +103,11 @@ func TestContractMetaHTTPTransportRoundTrip(t *testing.T) {
 	orig := ContractMeta{
 		ID:               "http.auth.user.delete.v1",
 		Kind:             "http",
-		OwnerCell:        "access-core",
+		OwnerCell:        "accesscore",
 		ConsistencyLevel: "L1",
 		Lifecycle:        "active",
 		Endpoints: EndpointsMeta{
-			Server:  "access-core",
+			Server:  "accesscore",
 			Clients: []string{"edge-bff"},
 			HTTP: &HTTPTransportMeta{
 				Method:        "DELETE",
@@ -134,12 +134,12 @@ func TestContractMetaEventRoundTrip(t *testing.T) {
 	orig := ContractMeta{
 		ID:               "event.session.created.v1",
 		Kind:             "event",
-		OwnerCell:        "access-core",
+		OwnerCell:        "accesscore",
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
 		Endpoints: EndpointsMeta{
-			Publisher:   "access-core",
-			Subscribers: []string{"audit-core"},
+			Publisher:   "accesscore",
+			Subscribers: []string{"auditcore"},
 		},
 		Replayable:        &replayable,
 		IdempotencyKey:    "event_id",
@@ -229,7 +229,7 @@ func TestJourneyMetaRoundTrip(t *testing.T) {
 		ID:    "J-sso-login",
 		Goal:  "User completes SSO login",
 		Owner: OwnerMeta{Team: "platform", Role: "journey-owner"},
-		Cells: []string{"access-core", "audit-core"},
+		Cells: []string{"accesscore", "auditcore"},
 		Contracts: []string{
 			"http.auth.login.v1",
 			"event.session.created.v1",
@@ -256,7 +256,7 @@ func TestPassCriterionOmitEmptyCheckRef(t *testing.T) {
 func TestAssemblyMetaRoundTrip(t *testing.T) {
 	orig := AssemblyMeta{
 		ID:    "core-bundle",
-		Cells: []string{"access-core", "audit-core", "config-core"},
+		Cells: []string{"accesscore", "auditcore", "configcore"},
 		Build: BuildMeta{
 			Entrypoint:     "cmd/core-bundle/main.go",
 			Binary:         "core-bundle",

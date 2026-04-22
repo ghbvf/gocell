@@ -123,7 +123,7 @@ func New(opts ...Option) *InMemoryEventBus {
 // sent raw business bytes; with envelope enforcement added in P1-14 A1/A2 such
 // bytes were silently dead-lettered + nil returned, causing complete event
 // loss (symptom: sso-bff walkthrough audit-entries assertion fails because
-// audit-core never received session.created / user.created events). Returning
+// auditcore never received session.created / user.created events). Returning
 // an explicit error makes producer-side contract violations loud instead of
 // silent; the dead-letter slice is retained as a diagnostic trail.
 //

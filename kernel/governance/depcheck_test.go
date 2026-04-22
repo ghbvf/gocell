@@ -21,12 +21,12 @@ func TestDEP01(t *testing.T) {
 			name: "belongsToCell matches key cellID — no error",
 			project: &metadata.ProjectMeta{
 				Cells: map[string]*metadata.CellMeta{
-					"access-core": {ID: "access-core", ConsistencyLevel: "L1"},
+					"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
 				},
 				Slices: map[string]*metadata.SliceMeta{
-					"access-core/session-login": {
+					"accesscore/session-login": {
 						ID:            "session-login",
-						BelongsToCell: "access-core",
+						BelongsToCell: "accesscore",
 					},
 				},
 				Contracts:  map[string]*metadata.ContractMeta{},
@@ -38,13 +38,13 @@ func TestDEP01(t *testing.T) {
 			name: "belongsToCell mismatches key cellID — error",
 			project: &metadata.ProjectMeta{
 				Cells: map[string]*metadata.CellMeta{
-					"access-core": {ID: "access-core", ConsistencyLevel: "L1"},
-					"audit-core":  {ID: "audit-core", ConsistencyLevel: "L1"},
+					"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
+					"auditcore":  {ID: "auditcore", ConsistencyLevel: "L1"},
 				},
 				Slices: map[string]*metadata.SliceMeta{
-					"access-core/session-login": {
+					"accesscore/session-login": {
 						ID:            "session-login",
-						BelongsToCell: "audit-core", // mismatch!
+						BelongsToCell: "auditcore", // mismatch!
 					},
 				},
 				Contracts:  map[string]*metadata.ContractMeta{},

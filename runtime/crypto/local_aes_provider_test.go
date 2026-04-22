@@ -62,7 +62,7 @@ func TestLocalAESKeyProvider_ByID_OldKeyStillDecrypts(t *testing.T) {
 	currentID := current.ID()
 
 	plaintext := []byte("secret value")
-	aad := []byte("cell:config-core/key:db_password")
+	aad := []byte("cell:configcore/key:db_password")
 
 	cipher, nonce, edk, _, err := current.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -89,7 +89,7 @@ func TestLocalAESKeyProvider_ByID_PreviousKeyDecrypts(t *testing.T) {
 	require.NoError(t, err)
 
 	plaintext := []byte("old secret")
-	aad := []byte("cell:config-core/key:legacy_key")
+	aad := []byte("cell:configcore/key:legacy_key")
 	cipher, nonce, edk, _, err := prevHandle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
 
@@ -136,10 +136,10 @@ func TestLocalAESKeyProvider_EnvelopeRoundTrip(t *testing.T) {
 		plaintext string
 		aad       string
 	}{
-		{"empty plaintext", "", "cell:config-core/key:empty"},
-		{"short value", "v", "cell:config-core/key:short"},
-		{"long value", string(make([]byte, 4096)), "cell:config-core/key:long"},
-		{"binary-like value", "\x00\x01\x02\xff\xfe", "cell:config-core/key:binary"},
+		{"empty plaintext", "", "cell:configcore/key:empty"},
+		{"short value", "v", "cell:configcore/key:short"},
+		{"long value", string(make([]byte, 4096)), "cell:configcore/key:long"},
+		{"binary-like value", "\x00\x01\x02\xff\xfe", "cell:configcore/key:binary"},
 	}
 
 	for _, tc := range tests {
@@ -203,8 +203,8 @@ func TestLocalAESKeyProvider_DecryptAADMismatch_FailClosed(t *testing.T) {
 	require.NoError(t, err)
 
 	plaintext := []byte("sensitive value")
-	aad := []byte("cell:config-core/key:my_key")
-	wrongAAD := []byte("cell:config-core/key:other_key")
+	aad := []byte("cell:configcore/key:my_key")
+	wrongAAD := []byte("cell:configcore/key:other_key")
 
 	cipher, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -372,7 +372,7 @@ func TestLocalAESHandle_Encrypt_ReturnsKeyIDEqualsHandleID(t *testing.T) {
 	require.NoError(t, err)
 
 	plaintext := []byte("sensitive config value")
-	aad := []byte("cell:config-core/key:api_key")
+	aad := []byte("cell:configcore/key:api_key")
 
 	// Five-return-value Encrypt (Phase 0-b kernel interface).
 	// Compile error here is expected until Phase 2-c updates localAESHandle.Encrypt.
@@ -419,7 +419,7 @@ func TestLocalAESHandle_Encrypt_ByIDReturnedKeyIDMatches(t *testing.T) {
 	require.NoError(t, err)
 
 	plaintext := []byte("old secret value")
-	aad := []byte("cell:config-core/key:legacy_db_password")
+	aad := []byte("cell:configcore/key:legacy_db_password")
 
 	// Five-return-value Encrypt (Phase 0-b kernel interface).
 	ct, nonce, edk, keyID, err := prevHandle.Encrypt(ctx, plaintext, aad)
@@ -475,7 +475,7 @@ func TestLocalAESHandle_Encrypt_DoesNotReuseBuffers(t *testing.T) {
 	require.NoError(t, err)
 
 	plaintext := []byte("same plaintext for both calls")
-	aad := []byte("cell:config-core/key:test_key")
+	aad := []byte("cell:configcore/key:test_key")
 
 	// Five-return-value Encrypt (Phase 0-b kernel interface).
 	ct1, nonce1, edk1, keyID1, err := handle.Encrypt(ctx, plaintext, aad)

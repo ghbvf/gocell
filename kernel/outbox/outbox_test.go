@@ -998,7 +998,7 @@ func TestSubscriberWithMiddleware_PassesFullSubscription(t *testing.T) {
 		Middleware: []SubscriptionMiddleware{mw},
 	}
 
-	wantSub := Subscription{Topic: "orders.created.v1", ConsumerGroup: "cg-audit-core", CellID: "audit-core"}
+	wantSub := Subscription{Topic: "orders.created.v1", ConsumerGroup: "cg-auditcore", CellID: "auditcore"}
 	err := swm.Subscribe(context.Background(), wantSub, func(_ context.Context, _ Entry) HandleResult {
 		return HandleResult{Disposition: DispositionAck}
 	})

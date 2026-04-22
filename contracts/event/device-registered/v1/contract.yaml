@@ -1,10 +1,10 @@
 id: event.device-registered.v1
 kind: event
-ownerCell: device-cell
+ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
 endpoints:
-  publisher: device-cell
+  publisher: devicecell
   subscribers: []
 schemaRefs:
   headers: headers.schema.json

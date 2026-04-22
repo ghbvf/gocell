@@ -4,13 +4,13 @@ owner:
   team: platform
   role: journey-owner
 cells:
-  - access-core
-  - audit-core
+  - accesscore
+  - auditcore
 contracts:
   - event.session.created.v1
   - event.audit.integrity-verified.v1
 passCriteria:
-  - text: session.created 事件被 audit-core 消费
+  - text: session.created 事件被 auditcore 消费
     mode: auto
     checkRef: journey.J-audit-login-trail.event-consume
   - text: 审计记录写入 hash chain

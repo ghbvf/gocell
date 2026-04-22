@@ -1,0 +1,13 @@
+id: configreceive
+belongsToCell: accesscore
+contractUsages:
+  - contract: event.config.changed.v1
+    role: subscribe
+verify:
+  unit:
+    - unit.configreceive.service
+  contract:
+    - contract.event.config.changed.v1.subscribe
+
+allowedFiles:
+  - cells/accesscore/slices/configreceive/**

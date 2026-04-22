@@ -52,13 +52,13 @@ func TestSubscription_Validate(t *testing.T) {
 }
 
 func TestSubscription_IdempotencyNamespace(t *testing.T) {
-	sub := Subscription{Topic: "t", ConsumerGroup: "cg-audit-core"}
-	assert.Equal(t, "cg-audit-core", sub.IdempotencyNamespace())
+	sub := Subscription{Topic: "t", ConsumerGroup: "cg-auditcore"}
+	assert.Equal(t, "cg-auditcore", sub.IdempotencyNamespace())
 }
 
 func TestSubscription_ObservabilityID_UsesCellID(t *testing.T) {
-	sub := Subscription{Topic: "t", ConsumerGroup: "cg-audit", CellID: "audit-core"}
-	assert.Equal(t, "audit-core", sub.ObservabilityID())
+	sub := Subscription{Topic: "t", ConsumerGroup: "cg-audit", CellID: "auditcore"}
+	assert.Equal(t, "auditcore", sub.ObservabilityID())
 }
 
 func TestSubscription_ObservabilityID_FallsBackToConsumerGroup(t *testing.T) {

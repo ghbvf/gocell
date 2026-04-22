@@ -1,10 +1,10 @@
 id: http.order.get.v1
 kind: http
-ownerCell: order-cell
+ownerCell: ordercell
 consistencyLevel: L2
 lifecycle: active
 endpoints:
-  server: order-cell
+  server: ordercell
   clients:
     - edge-bff
   http:

@@ -1,0 +1,14 @@
+id: configsubscribe
+belongsToCell: configcore
+contractUsages:
+  - contract: event.config.changed.v1
+    role: subscribe
+verify:
+  unit:
+    - unit.configsubscribe.service
+  contract:
+    - contract.event.config.changed.v1.subscribe
+  waivers: []
+
+allowedFiles:
+  - cells/configcore/slices/configsubscribe/**

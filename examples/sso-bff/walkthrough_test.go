@@ -36,9 +36,9 @@ import (
 	"testing"
 	"time"
 
-	accesscore "github.com/ghbvf/gocell/cells/access-core"
-	auditcore "github.com/ghbvf/gocell/cells/audit-core"
-	configcore "github.com/ghbvf/gocell/cells/config-core"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	auditcore "github.com/ghbvf/gocell/cells/auditcore"
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -178,7 +178,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	bootstrapSink := func(_ worker.Worker) {} // intentional no-op in test
 
 	// Demo mode: no outboxWriter/txRunner — cells publish directly via the
-	// eventbus publisher. This ensures access-core events reach audit-core's
+	// eventbus publisher. This ensures accesscore events reach auditcore's
 	// subscriber without transactional outbox machinery.
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
@@ -207,7 +207,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	configCursorCodec, err := query.NewCursorCodec([]byte("walkthrough-config-cursor-key-32b"))
 	require.NoError(t, err)
 
-	// config-core: demo mode — publisher only, no outboxWriter/txRunner.
+	// configcore: demo mode — publisher only, no outboxWriter/txRunner.
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
 		configcore.WithPublisher(eb),
@@ -225,7 +225,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	require.NoError(t, cc.Init(ctx, deps))
 
 	// F3: public routes (login, refresh) and PasswordResetExempt routes
-	// (change-password, logout) are declared via auth.Declare inside access-core's
+	// (change-password, logout) are declared via auth.Declare inside accesscore's
 	// RegisterRoutes. FinalizeAuth compiles them into the router's auth predicates.
 	r := router.New(
 		router.WithAuthMiddleware(ac.TokenVerifier()),
@@ -237,7 +237,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		panic(err)
 	}
 
-	// Wire audit-core event subscriptions so access-core events reach the
+	// Wire auditcore event subscriptions so accesscore events reach the
 	// audit handler asynchronously (mirrors bootstrap wiring in main.go).
 	evtRouter := eventrouter.New(eb)
 	require.NoError(t, auc.RegisterSubscriptions(evtRouter))
@@ -569,7 +569,7 @@ func TestWalkthrough(t *testing.T) {
 		}
 	})
 
-	// Steps 8-11: config-core CRUD + feature flags.
+	// Steps 8-11: configcore CRUD + feature flags.
 	// Write ops require admin role; read ops are open (no auth required).
 
 	t.Run("admin can update a config entry (PUT /api/v1/config/site.title)", func(t *testing.T) {

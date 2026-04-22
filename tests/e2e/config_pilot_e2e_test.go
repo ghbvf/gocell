@@ -1,6 +1,6 @@
 //go:build e2e
 
-// Package e2e contains end-to-end tests that exercise the full config-core
+// Package e2e contains end-to-end tests that exercise the full configcore
 // PG pilot including value encryption. These tests require a live 3-container
 // environment (PostgreSQL + Vault + core-bundle HTTP server) started via:
 //

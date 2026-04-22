@@ -4,7 +4,7 @@ owner:
   team: examples
   role: order-owner
 cells:
-  - order-cell
+  - ordercell
 contracts:
   - http.order.create.v1
   - event.order-created.v1

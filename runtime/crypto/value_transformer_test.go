@@ -11,11 +11,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// testAAD constructs a test AAD in the config-core format.
-// AADForConfig was moved to cells/config-core/internal/crypto;
+// testAAD constructs a test AAD in the configcore format.
+// AADForConfig was moved to cells/configcore/internal/crypto;
 // runtime/crypto tests use this local helper to avoid a cells/ import.
 func testAAD(configKey string) []byte {
-	return []byte("cell:config-core/key:" + configKey)
+	return []byte("cell:configcore/key:" + configKey)
 }
 
 // ---------------------------------------------------------------------------
@@ -179,12 +179,12 @@ func TestNoopTransformer_Passthrough(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // TestTestAAD_Format verifies the local testAAD helper used by this test file
-// produces the expected config-core AAD format.
+// produces the expected configcore AAD format.
 // The canonical AADForConfig implementation lives in
-// cells/config-core/internal/crypto.
+// cells/configcore/internal/crypto.
 func TestTestAAD_Format(t *testing.T) {
 	aad := testAAD("api_key")
-	assert.Equal(t, []byte("cell:config-core/key:api_key"), aad)
+	assert.Equal(t, []byte("cell:configcore/key:api_key"), aad)
 }
 
 // ---------------------------------------------------------------------------

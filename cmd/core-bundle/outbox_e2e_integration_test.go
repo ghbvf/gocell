@@ -37,9 +37,9 @@ import (
 	"time"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
-	accesscore "github.com/ghbvf/gocell/cells/access-core"
-	auditcore "github.com/ghbvf/gocell/cells/audit-core"
-	configcore "github.com/ghbvf/gocell/cells/config-core"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	auditcore "github.com/ghbvf/gocell/cells/auditcore"
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -57,7 +57,7 @@ import (
 )
 
 // configChangedBusinessPayload is the business event shape that
-// cells/config-core/slices/configsubscribe/service.go expects. If the relay's
+// cells/configcore/slices/configsubscribe/service.go expects. If the relay's
 // wire envelope reaches subscribers unwrapped (F1 bug), these fields will all
 // be empty and the regression guard fires.
 type configChangedBusinessPayload struct {
@@ -72,7 +72,7 @@ type configChangedBusinessPayload struct {
 // same bus must see business payloads, and the bundle must start/stop via
 // bootstrap.WithWorkers lifecycle.
 //
-// Chain under test: HTTP publish → config-core WriteService (L2) → outbox_entries
+// Chain under test: HTTP publish → configcore WriteService (L2) → outbox_entries
 //
 //	→ OutboxRelay.publishAll (envelope) → eventbus (unwrap via F1)
 //	→ subscriber handler receives business payload.
@@ -183,10 +183,10 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	// lazyE2EAdminWorker resolves the cleaner at Start() time, after
 	// asm.StartWithConfig has fired the sink (bootstrap Step 3-4 inside Run).
-	// Constructed before access-core so the sink closure can capture it.
+	// Constructed before accesscore so the sink closure can capture it.
 	lazyE2EAdminWorker := worker.Lazy()
 
-	// Wire access-core with WithInitialAdminBootstrap (replaces WithSeedAdmin).
+	// Wire accesscore with WithInitialAdminBootstrap (replaces WithSeedAdmin).
 	// The sink calls lazyE2EAdminWorker.Set so the lazy wrapper resolves before
 	// the WorkerGroup starts (Step 8). No-op when admin already existed.
 	accessCell := accesscore.NewAccessCore(
@@ -219,8 +219,8 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
-		// (change-password, logout) are declared via auth.Declare inside access-core's
-		// RegisterRoutes. WithAuthDiscovery discovers the verifier from access-core.
+		// (change-password, logout) are declared via auth.Declare inside accesscore's
+		// RegisterRoutes. WithAuthDiscovery discovers the verifier from accesscore.
 		bootstrap.WithAuthDiscovery(),
 		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
 		// not from a manual adapterpg.NewOutboxRelay call. If the production

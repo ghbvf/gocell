@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 
-	configcore "github.com/ghbvf/gocell/cells/config-core"
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -12,10 +12,10 @@ import (
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
-// ConfigCoreModule wires config-core: KeyProvider → ValueTransformer →
+// ConfigCoreModule wires configcore: KeyProvider → ValueTransformer →
 // PGResource/cellOpts (storage-backend specific) → configcore.ConfigCore.
 //
-// ref: uber-go/fx fx.Module("config-core", ...) — self-contained module.
+// ref: uber-go/fx fx.Module("configcore", ...) — self-contained module.
 // backlog: S29 CORE-BUNDLE-APP-BUILDER-01
 type ConfigCoreModule struct {
 	// KeyProviderOverride bypasses env-based KeyProvider construction when
@@ -27,7 +27,7 @@ type ConfigCoreModule struct {
 }
 
 // ID returns the stable identifier used in error messages.
-func (ConfigCoreModule) ID() string { return "config-core" }
+func (ConfigCoreModule) ID() string { return "configcore" }
 
 // configStaleCipherOpts is the Prometheus counter descriptor for M3 stale-key
 // observability. The counter is registered against the isolated per-run
@@ -40,7 +40,7 @@ var configStaleCipherOpts = prom.CounterOpts{
 	Help:      "Number of config values read that are encrypted with a non-current key version.",
 }
 
-// Provide resolves all config-core-specific dependencies and returns the
+// Provide resolves all configcore-specific dependencies and returns the
 // constructed cell and any bootstrap.Options (e.g. WithManagedResource).
 func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
 	kp := m.KeyProviderOverride
@@ -48,7 +48,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		var err error
 		kp, err = buildKeyProvider(shared.Topology.StorageBackend, shared.Topology.AdapterMode, shared.KeyProviderName)
 		if err != nil {
-			return nil, nil, fmt.Errorf("config-core key provider: %w", err)
+			return nil, nil, fmt.Errorf("configcore key provider: %w", err)
 		}
 	}
 	vt := keyProviderToTransformer(kp)
@@ -65,7 +65,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	// can reuse it instead of creating an orphaned counter.
 	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("config-core: register stale_cipher counter: %w", err)
+		return nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
 	}
 
 	baseOpts := []configcore.Option{
@@ -80,7 +80,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 
 	// A13: register vault token renewal counters when the KeyProvider exposes them.
 	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
-		return nil, nil, fmt.Errorf("config-core: register renewal metrics: %w", err)
+		return nil, nil, fmt.Errorf("configcore: register renewal metrics: %w", err)
 	}
 
 	var opts []bootstrap.Option

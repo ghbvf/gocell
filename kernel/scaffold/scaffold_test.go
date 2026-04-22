@@ -73,14 +73,14 @@ func TestCreateCell_Defaults(t *testing.T) {
 	s := New(root)
 
 	opts := CellOpts{
-		ID:        "audit-core",
+		ID:        "auditcore",
 		OwnerTeam: "platform",
 		// Type and ConsistencyLevel left empty — should use defaults.
 	}
 
 	require.NoError(t, s.CreateCell(opts))
 
-	content := readGenerated(t, filepath.Join(root, "cells", "audit-core", "cell.yaml"))
+	content := readGenerated(t, filepath.Join(root, "cells", "auditcore", "cell.yaml"))
 	assert.Contains(t, content, "type: core")
 	assert.Contains(t, content, "consistencyLevel: L2")
 }
@@ -133,19 +133,19 @@ func TestCreateSlice(t *testing.T) {
 	s := New(root)
 
 	// Must create cell first.
-	require.NoError(t, s.CreateCell(CellOpts{ID: "access-core", OwnerTeam: "platform"}))
+	require.NoError(t, s.CreateCell(CellOpts{ID: "accesscore", OwnerTeam: "platform"}))
 
-	opts := SliceOpts{ID: "sessionlogin", CellID: "access-core"}
+	opts := SliceOpts{ID: "sessionlogin", CellID: "accesscore"}
 	require.NoError(t, s.CreateSlice(opts))
 
-	sliceDir := filepath.Join(root, "cells", "access-core", "slices", "sessionlogin")
+	sliceDir := filepath.Join(root, "cells", "accesscore", "slices", "sessionlogin")
 	info, err := os.Stat(sliceDir)
 	require.NoError(t, err)
 	assert.True(t, info.IsDir())
 
 	content := readGenerated(t, filepath.Join(sliceDir, "slice.yaml"))
 	assert.Contains(t, content, "id: sessionlogin")
-	assert.Contains(t, content, "belongsToCell: access-core")
+	assert.Contains(t, content, "belongsToCell: accesscore")
 	assert.Contains(t, content, "contractUsages: []")
 	assert.Contains(t, content, "unit.sessionlogin.service")
 	assert.Contains(t, content, "contract: []")
@@ -198,7 +198,7 @@ func TestCreateContractHTTP(t *testing.T) {
 	opts := ContractOpts{
 		ID:        "http.auth.login.v1",
 		Kind:      "http",
-		OwnerCell: "access-core",
+		OwnerCell: "accesscore",
 	}
 	require.NoError(t, s.CreateContract(opts))
 
@@ -211,10 +211,10 @@ func TestCreateContractHTTP(t *testing.T) {
 	content := readGenerated(t, filepath.Join(dir, "contract.yaml"))
 	assert.Contains(t, content, "id: http.auth.login.v1")
 	assert.Contains(t, content, "kind: http")
-	assert.Contains(t, content, "ownerCell: access-core")
+	assert.Contains(t, content, "ownerCell: accesscore")
 	assert.Contains(t, content, "consistencyLevel: L1")
 	assert.Contains(t, content, "lifecycle: draft")
-	assert.Contains(t, content, "server: access-core")
+	assert.Contains(t, content, "server: accesscore")
 	assert.Contains(t, content, "clients: []")
 	assert.Contains(t, content, "request: request.schema.json")
 	assert.Contains(t, content, "response: response.schema.json")
@@ -231,7 +231,7 @@ func TestCreateContractEvent(t *testing.T) {
 	opts := ContractOpts{
 		ID:        "event.session.revoked.v1",
 		Kind:      "event",
-		OwnerCell: "access-core",
+		OwnerCell: "accesscore",
 	}
 	require.NoError(t, s.CreateContract(opts))
 
@@ -243,12 +243,12 @@ func TestCreateContractEvent(t *testing.T) {
 	content := readGenerated(t, filepath.Join(dir, "contract.yaml"))
 	assert.Contains(t, content, "id: event.session.revoked.v1")
 	assert.Contains(t, content, "kind: event")
-	assert.Contains(t, content, "ownerCell: access-core")
+	assert.Contains(t, content, "ownerCell: accesscore")
 	assert.Contains(t, content, "consistencyLevel: L2")
 	assert.Contains(t, content, "replayable: true")
 	assert.Contains(t, content, "idempotencyKey: event_id")
 	assert.Contains(t, content, "deliverySemantics: at-least-once")
-	assert.Contains(t, content, "publisher: access-core")
+	assert.Contains(t, content, "publisher: accesscore")
 	assert.Contains(t, content, "subscribers: []")
 }
 
@@ -286,14 +286,14 @@ func TestCreateContractProjection(t *testing.T) {
 	opts := ContractOpts{
 		ID:        "projection.audit.summary.v1",
 		Kind:      "projection",
-		OwnerCell: "audit-core",
+		OwnerCell: "auditcore",
 	}
 	require.NoError(t, s.CreateContract(opts))
 
 	dir := filepath.Join(root, "contracts", "projection", "audit", "summary", "v1")
 	content := readGenerated(t, filepath.Join(dir, "contract.yaml"))
 	assert.Contains(t, content, "kind: projection")
-	assert.Contains(t, content, "provider: audit-core")
+	assert.Contains(t, content, "provider: auditcore")
 	assert.Contains(t, content, "readers: []")
 	assert.Contains(t, content, "consistencyLevel: L3")
 }
@@ -350,7 +350,7 @@ func TestCreateContract_Conflict(t *testing.T) {
 	root := t.TempDir()
 	s := New(root)
 
-	opts := ContractOpts{ID: "http.auth.user.create.v1", Kind: "http", OwnerCell: "access-core"}
+	opts := ContractOpts{ID: "http.auth.user.create.v1", Kind: "http", OwnerCell: "accesscore"}
 	require.NoError(t, s.CreateContract(opts))
 
 	err := s.CreateContract(opts)
@@ -431,7 +431,7 @@ func TestCreateJourney(t *testing.T) {
 		ID:        "sso-login",
 		Goal:      "User completes SSO login and obtains a valid session",
 		OwnerTeam: "platform",
-		Cells:     []string{"access-core", "audit-core"},
+		Cells:     []string{"accesscore", "auditcore"},
 	}
 	require.NoError(t, s.CreateJourney(opts))
 
@@ -441,8 +441,8 @@ func TestCreateJourney(t *testing.T) {
 	assert.Contains(t, content, `goal: "User completes SSO login and obtains a valid session"`)
 	assert.Contains(t, content, "team: platform")
 	assert.Contains(t, content, "role: journey-owner")
-	assert.Contains(t, content, "- access-core")
-	assert.Contains(t, content, "- audit-core")
+	assert.Contains(t, content, "- accesscore")
+	assert.Contains(t, content, "- auditcore")
 	assert.Contains(t, content, "contracts: []")
 	assert.Contains(t, content, "passCriteria: []")
 }
@@ -455,7 +455,7 @@ func TestCreateJourney_WithJPrefix(t *testing.T) {
 		ID:        "J-config-reload",
 		Goal:      "Config hot reload works",
 		OwnerTeam: "platform",
-		Cells:     []string{"config-core"},
+		Cells:     []string{"configcore"},
 	}
 	require.NoError(t, s.CreateJourney(opts))
 

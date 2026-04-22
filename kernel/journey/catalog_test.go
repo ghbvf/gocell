@@ -11,9 +11,9 @@ import (
 )
 
 // buildTestProject returns a ProjectMeta with 3 journeys:
-//   - J-user-onboarding: single cell (access-core)
-//   - J-sso-login: cross-cell (access-core, audit-core, config-core)
-//   - J-audit-login-trail: cross-cell (access-core, audit-core)
+//   - J-user-onboarding: single cell (accesscore)
+//   - J-sso-login: cross-cell (accesscore, auditcore, configcore)
+//   - J-audit-login-trail: cross-cell (accesscore, auditcore)
 //
 // and 2 status-board entries (J-sso-login, J-audit-login-trail).
 func buildTestProject() *metadata.ProjectMeta {
@@ -23,7 +23,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				ID:        "J-user-onboarding",
 				Goal:      "new user onboarding",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells:     []string{"access-core"},
+				Cells:     []string{"accesscore"},
 				Contracts: []string{"event.user.created.v1"},
 				PassCriteria: []metadata.PassCriterion{
 					{Text: "user record created", Mode: "auto"},
@@ -33,7 +33,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				ID:        "J-sso-login",
 				Goal:      "SSO login with session",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells:     []string{"access-core", "audit-core", "config-core"},
+				Cells:     []string{"accesscore", "auditcore", "configcore"},
 				Contracts: []string{"http.auth.login.v1", "event.session.created.v1"},
 				PassCriteria: []metadata.PassCriterion{
 					{Text: "OIDC redirect done", Mode: "auto"},
@@ -44,10 +44,10 @@ func buildTestProject() *metadata.ProjectMeta {
 				ID:        "J-audit-login-trail",
 				Goal:      "login events propagate to audit hash chain",
 				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells:     []string{"access-core", "audit-core"},
+				Cells:     []string{"accesscore", "auditcore"},
 				Contracts: []string{"event.session.created.v1", "event.audit.integrity-verified.v1"},
 				PassCriteria: []metadata.PassCriterion{
-					{Text: "event consumed by audit-core", Mode: "auto"},
+					{Text: "event consumed by auditcore", Mode: "auto"},
 					{Text: "hash chain integrity verified", Mode: "auto"},
 				},
 			},
@@ -175,18 +175,18 @@ func TestCellJourneys(t *testing.T) {
 		wantIDs []string
 	}{
 		{
-			name:    "access-core referenced by all three journeys",
-			cellID:  "access-core",
+			name:    "accesscore referenced by all three journeys",
+			cellID:  "accesscore",
 			wantIDs: []string{"J-audit-login-trail", "J-sso-login", "J-user-onboarding"},
 		},
 		{
-			name:    "audit-core referenced by two journeys",
-			cellID:  "audit-core",
+			name:    "auditcore referenced by two journeys",
+			cellID:  "auditcore",
 			wantIDs: []string{"J-audit-login-trail", "J-sso-login"},
 		},
 		{
-			name:    "config-core referenced by one journey",
-			cellID:  "config-core",
+			name:    "configcore referenced by one journey",
+			cellID:  "configcore",
 			wantIDs: []string{"J-sso-login"},
 		},
 		{
@@ -398,9 +398,9 @@ func TestEmptyProjectMeta_NoPanic(t *testing.T) {
 
 func TestValidate(t *testing.T) {
 	allCells := map[string]struct{}{
-		"access-core": {},
-		"audit-core":  {},
-		"config-core": {},
+		"accesscore": {},
+		"auditcore":  {},
+		"configcore": {},
 	}
 	allContracts := map[string]struct{}{
 		"event.user.created.v1":            {},
@@ -429,14 +429,14 @@ func TestValidate(t *testing.T) {
 			name:    "missing cell reference",
 			project: buildTestProject(),
 			cellIDs: map[string]struct{}{
-				"access-core": {},
-				"audit-core":  {},
-				// config-core missing
+				"accesscore": {},
+				"auditcore":  {},
+				// configcore missing
 			},
 			contractIDs: allContracts,
 			wantErr:     true,
 			wantCode:    ecErr.ErrReferenceBroken,
-			wantContain: []string{"config-core", "unknown cell"},
+			wantContain: []string{"configcore", "unknown cell"},
 		},
 		{
 			name:    "missing contract reference",

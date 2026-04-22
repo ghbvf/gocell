@@ -37,7 +37,7 @@ import (
 )
 
 // authProvider is discovered post-Init from cells that provide a
-// session-aware IntentTokenVerifier (e.g. access-core's TokenVerifier()).
+// session-aware IntentTokenVerifier (e.g. accesscore's TokenVerifier()).
 // Intent-awareness is required so AuthMiddleware can enforce
 // token_use=access at the type level.
 type authProvider interface {

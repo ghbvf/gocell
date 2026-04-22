@@ -7,7 +7,7 @@ import (
 )
 
 // TestAssembly_CoreBundleBoot boots the core-bundle assembly with all
-// three core cells (access-core, audit-core, config-core) and asserts
+// three core cells (accesscore, auditcore, configcore) and asserts
 // that Health() reports healthy for every cell.
 func TestAssembly_CoreBundleBoot(t *testing.T) {
 	t.Skip("stub: requires full assembly (docker compose up)")

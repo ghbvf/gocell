@@ -15,7 +15,7 @@ import (
 func fullProjectFS() fstest.MapFS {
 	return fstest.MapFS{
 		// --- cells ---
-		"cells/access-core/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core
+		"cells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -25,10 +25,10 @@ schema:
   primary: cell_access_core
 verify:
   smoke:
-    - smoke.access-core.startup
+    - smoke.accesscore.startup
 l0Dependencies: []
 `)},
-		"cells/audit-core/cell.yaml": &fstest.MapFile{Data: []byte(`id: audit-core
+		"cells/auditcore/cell.yaml": &fstest.MapFile{Data: []byte(`id: auditcore
 type: core
 consistencyLevel: L2
 owner:
@@ -38,13 +38,13 @@ schema:
   primary: cell_audit_core
 verify:
   smoke:
-    - smoke.audit-core.startup
+    - smoke.auditcore.startup
 l0Dependencies: []
 `)},
 
 		// --- slices ---
-		"cells/access-core/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
-belongsToCell: access-core
+		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+belongsToCell: accesscore
 contractUsages:
   - contract: http.auth.login.v1
     role: serve
@@ -62,11 +62,11 @@ verify:
 		// --- contracts ---
 		"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.auth.login.v1
 kind: http
-ownerCell: access-core
+ownerCell: accesscore
 consistencyLevel: L1
 lifecycle: active
 endpoints:
-  server: access-core
+  server: accesscore
   clients:
     - edge-bff
 schemaRefs:
@@ -75,13 +75,13 @@ schemaRefs:
 `)},
 		"contracts/event/session/created/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: event.session.created.v1
 kind: event
-ownerCell: access-core
+ownerCell: accesscore
 consistencyLevel: L2
 lifecycle: active
 endpoints:
-  publisher: access-core
+  publisher: accesscore
   subscribers:
-    - audit-core
+    - auditcore
 replayable: true
 idempotencyKey: event_id
 deliverySemantics: at-least-once
@@ -94,8 +94,8 @@ owner:
   team: platform
   role: journey-owner
 cells:
-  - access-core
-  - audit-core
+  - accesscore
+  - auditcore
 contracts:
   - http.auth.login.v1
   - event.session.created.v1
@@ -110,8 +110,8 @@ passCriteria:
 		// --- assemblies ---
 		"assemblies/core-bundle/assembly.yaml": &fstest.MapFile{Data: []byte(`id: core-bundle
 cells:
-  - access-core
-  - audit-core
+  - accesscore
+  - auditcore
 build:
   entrypoint: cmd/core-bundle/main.go
   binary: core-bundle
@@ -146,20 +146,20 @@ func TestParseFS_FullProject(t *testing.T) {
 
 	// Cells
 	assert.Len(t, pm.Cells, 2)
-	assert.Contains(t, pm.Cells, "access-core")
-	assert.Contains(t, pm.Cells, "audit-core")
-	assert.Equal(t, "core", pm.Cells["access-core"].Type)
-	assert.Equal(t, "L2", pm.Cells["access-core"].ConsistencyLevel)
-	assert.Equal(t, "platform", pm.Cells["access-core"].Owner.Team)
-	assert.Equal(t, "cell_access_core", pm.Cells["access-core"].Schema.Primary)
-	assert.Equal(t, []string{"smoke.access-core.startup"}, pm.Cells["access-core"].Verify.Smoke)
+	assert.Contains(t, pm.Cells, "accesscore")
+	assert.Contains(t, pm.Cells, "auditcore")
+	assert.Equal(t, "core", pm.Cells["accesscore"].Type)
+	assert.Equal(t, "L2", pm.Cells["accesscore"].ConsistencyLevel)
+	assert.Equal(t, "platform", pm.Cells["accesscore"].Owner.Team)
+	assert.Equal(t, "cell_access_core", pm.Cells["accesscore"].Schema.Primary)
+	assert.Equal(t, []string{"smoke.accesscore.startup"}, pm.Cells["accesscore"].Verify.Smoke)
 
 	// Slices
 	assert.Len(t, pm.Slices, 1)
-	assert.Contains(t, pm.Slices, "access-core/session-login")
-	sl := pm.Slices["access-core/session-login"]
+	assert.Contains(t, pm.Slices, "accesscore/session-login")
+	sl := pm.Slices["accesscore/session-login"]
 	assert.Equal(t, "session-login", sl.ID)
-	assert.Equal(t, "access-core", sl.BelongsToCell)
+	assert.Equal(t, "accesscore", sl.BelongsToCell)
 	assert.Len(t, sl.ContractUsages, 2)
 	assert.Equal(t, "http.auth.login.v1", sl.ContractUsages[0].Contract)
 	assert.Equal(t, "serve", sl.ContractUsages[0].Role)
@@ -171,15 +171,15 @@ func TestParseFS_FullProject(t *testing.T) {
 
 	httpC := pm.Contracts["http.auth.login.v1"]
 	assert.Equal(t, "http", httpC.Kind)
-	assert.Equal(t, "access-core", httpC.Endpoints.Server)
+	assert.Equal(t, "accesscore", httpC.Endpoints.Server)
 	assert.Equal(t, []string{"edge-bff"}, httpC.Endpoints.Clients)
 	assert.Equal(t, "request.schema.json", httpC.SchemaRefs.Request)
 	assert.Nil(t, httpC.Replayable)
 
 	eventC := pm.Contracts["event.session.created.v1"]
 	assert.Equal(t, "event", eventC.Kind)
-	assert.Equal(t, "access-core", eventC.Endpoints.Publisher)
-	assert.Equal(t, []string{"audit-core"}, eventC.Endpoints.Subscribers)
+	assert.Equal(t, "accesscore", eventC.Endpoints.Publisher)
+	assert.Equal(t, []string{"auditcore"}, eventC.Endpoints.Subscribers)
 	require.NotNil(t, eventC.Replayable)
 	assert.True(t, *eventC.Replayable)
 	assert.Equal(t, "event_id", eventC.IdempotencyKey)
@@ -190,7 +190,7 @@ func TestParseFS_FullProject(t *testing.T) {
 	assert.Contains(t, pm.Journeys, "J-sso-login")
 	j := pm.Journeys["J-sso-login"]
 	assert.Equal(t, "User completes SSO login", j.Goal)
-	assert.Equal(t, []string{"access-core", "audit-core"}, j.Cells)
+	assert.Equal(t, []string{"accesscore", "auditcore"}, j.Cells)
 	assert.Len(t, j.PassCriteria, 2)
 	assert.Equal(t, "auto", j.PassCriteria[0].Mode)
 	assert.Equal(t, "manual", j.PassCriteria[1].Mode)
@@ -200,7 +200,7 @@ func TestParseFS_FullProject(t *testing.T) {
 	assert.Len(t, pm.Assemblies, 1)
 	assert.Contains(t, pm.Assemblies, "core-bundle")
 	a := pm.Assemblies["core-bundle"]
-	assert.Equal(t, []string{"access-core", "audit-core"}, a.Cells)
+	assert.Equal(t, []string{"accesscore", "auditcore"}, a.Cells)
 	assert.Equal(t, "k8s", a.Build.DeployTemplate)
 
 	// Status Board
@@ -329,13 +329,13 @@ func TestParseFS_DeepContractPath(t *testing.T) {
 	fs := fstest.MapFS{
 		"contracts/event/session/created/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: event.session.created.v1
 kind: event
-ownerCell: access-core
+ownerCell: accesscore
 consistencyLevel: L2
 lifecycle: active
 endpoints:
-  publisher: access-core
+  publisher: accesscore
   subscribers:
-    - audit-core
+    - auditcore
 replayable: true
 idempotencyKey: event_id
 deliverySemantics: at-least-once
@@ -350,12 +350,12 @@ deliverySemantics: at-least-once
 	assert.Contains(t, pm.Contracts, "event.session.created.v1")
 	c := pm.Contracts["event.session.created.v1"]
 	assert.Equal(t, "event", c.Kind)
-	assert.Equal(t, "access-core", c.Endpoints.Publisher)
+	assert.Equal(t, "accesscore", c.Endpoints.Publisher)
 }
 
 func TestParseFS_NonMetadataFilesIgnored(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/access-core/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core
+		"cells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -365,11 +365,11 @@ schema:
   primary: cell_access_core
 verify:
   smoke:
-    - smoke.access-core.startup
+    - smoke.accesscore.startup
 `)},
 		// These should be ignored:
 		"README.md":                                &fstest.MapFile{Data: []byte(`# readme`)},
-		"cells/access-core/main.go":                &fstest.MapFile{Data: []byte(`package main`)},
+		"cells/accesscore/main.go":                 &fstest.MapFile{Data: []byte(`package main`)},
 		"journeys/status-board.yaml.bak":           &fstest.MapFile{Data: []byte(`backup`)},
 		"contracts/http/auth/login/v1/schema.json": &fstest.MapFile{Data: []byte(`{}`)},
 	}
@@ -419,15 +419,15 @@ passCriteria: []
 
 func TestParseFS_MultipleSlicesSameCell(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/access-core/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
-belongsToCell: access-core
+		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+belongsToCell: accesscore
 contractUsages: []
 verify:
   unit: []
   contract: []
 `)},
-		"cells/access-core/slices/rbac-check/slice.yaml": &fstest.MapFile{Data: []byte(`id: rbac-check
-belongsToCell: access-core
+		"cells/accesscore/slices/rbac-check/slice.yaml": &fstest.MapFile{Data: []byte(`id: rbac-check
+belongsToCell: accesscore
 contractUsages: []
 verify:
   unit: []
@@ -440,14 +440,14 @@ verify:
 	require.NoError(t, err)
 
 	assert.Len(t, pm.Slices, 2)
-	assert.Contains(t, pm.Slices, "access-core/session-login")
-	assert.Contains(t, pm.Slices, "access-core/rbac-check")
+	assert.Contains(t, pm.Slices, "accesscore/session-login")
+	assert.Contains(t, pm.Slices, "accesscore/rbac-check")
 }
 
 func TestParseFS_SliceWithWaivers(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/access-core/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
-belongsToCell: access-core
+		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+belongsToCell: accesscore
 contractUsages:
   - contract: http.auth.login.v1
     role: serve
@@ -470,7 +470,7 @@ verify:
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	sl := pm.Slices["access-core/session-login"]
+	sl := pm.Slices["accesscore/session-login"]
 	require.NotNil(t, sl)
 	require.Len(t, sl.Verify.Waivers, 1)
 	assert.Equal(t, "http.config.get.v1", sl.Verify.Waivers[0].Contract)
@@ -490,7 +490,7 @@ func TestParseFS_SliceBelongsToCellDerive(t *testing.T) {
 	}{
 		{
 			name: "omitted belongsToCell is derived from path",
-			path: "cells/access-core/slices/session-login/slice.yaml",
+			path: "cells/accesscore/slices/session-login/slice.yaml",
 			yaml: `id: session-login
 contractUsages: []
 verify:
@@ -498,20 +498,20 @@ verify:
   contract: []
 `,
 			sliceID:  "session-login",
-			wantCell: "access-core",
+			wantCell: "accesscore",
 		},
 		{
 			name: "explicit belongsToCell matching path is preserved",
-			path: "cells/audit-core/slices/write-log/slice.yaml",
+			path: "cells/auditcore/slices/write-log/slice.yaml",
 			yaml: `id: write-log
-belongsToCell: audit-core
+belongsToCell: auditcore
 contractUsages: []
 verify:
   unit: []
   contract: []
 `,
 			sliceID:  "write-log",
-			wantCell: "audit-core",
+			wantCell: "auditcore",
 		},
 		{
 			name: "derived from path with simple cell name",
@@ -550,7 +550,7 @@ verify:
 // that contradicts the directory path is rejected with an error.
 func TestParseFS_SliceBelongsToCellMismatch(t *testing.T) {
 	fsys := fstest.MapFS{
-		"cells/access-core/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
+		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: session-login
 belongsToCell: wrong-cell
 contractUsages: []
 verify:
@@ -566,12 +566,12 @@ verify:
 	assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
 	assert.Contains(t, err.Error(), "does not match directory")
 	assert.Contains(t, err.Error(), "wrong-cell")
-	assert.Contains(t, err.Error(), "access-core")
+	assert.Contains(t, err.Error(), "accesscore")
 }
 
 func TestParseFS_DuplicateCellID(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/access-core/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core
+		"cells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -581,9 +581,9 @@ schema:
   primary: cell_access_core
 verify:
   smoke:
-    - smoke.access-core.startup
+    - smoke.accesscore.startup
 `)},
-		"cells/access-core-v2/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core
+		"cells/accesscore-v2/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -593,7 +593,7 @@ schema:
   primary: cell_access_core
 verify:
   smoke:
-    - smoke.access-core.startup
+    - smoke.accesscore.startup
 `)},
 	}
 
@@ -601,27 +601,27 @@ verify:
 	_, err := p.ParseFS(fs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate")
-	assert.Contains(t, err.Error(), "access-core")
+	assert.Contains(t, err.Error(), "accesscore")
 }
 
 func TestParseFS_DuplicateContractID(t *testing.T) {
 	fs := fstest.MapFS{
 		"contracts/http/auth/login/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.auth.login.v1
 kind: http
-ownerCell: access-core
+ownerCell: accesscore
 consistencyLevel: L1
 lifecycle: active
 endpoints:
-  server: access-core
+  server: accesscore
   clients: []
 `)},
 		"contracts/http/auth/login/v2/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.auth.login.v1
 kind: http
-ownerCell: access-core
+ownerCell: accesscore
 consistencyLevel: L1
 lifecycle: active
 endpoints:
-  server: access-core
+  server: accesscore
   clients: []
 `)},
 	}
@@ -670,7 +670,7 @@ func TestParseFS_DuplicateAssemblyID(t *testing.T) {
 	fs := fstest.MapFS{
 		"assemblies/core-bundle/assembly.yaml": &fstest.MapFile{Data: []byte(`id: core-bundle
 cells:
-  - access-core
+  - accesscore
 build:
   entrypoint: cmd/core-bundle/main.go
   binary: core-bundle
@@ -678,7 +678,7 @@ build:
 `)},
 		"assemblies/core-bundle-v2/assembly.yaml": &fstest.MapFile{Data: []byte(`id: core-bundle
 cells:
-  - access-core
+  - accesscore
 build:
   entrypoint: cmd/core-bundle/main.go
   binary: core-bundle
@@ -704,15 +704,15 @@ func TestParseFS_DuplicateSliceID(t *testing.T) {
 	// This requires two different slice directories under the same cell, both declaring
 	// the same id in YAML.
 	fs := fstest.MapFS{
-		"cells/access-core/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
-belongsToCell: access-core
+		"cells/accesscore/slices/session-login/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
+belongsToCell: accesscore
 contractUsages: []
 verify:
   unit: []
   contract: []
 `)},
-		"cells/access-core/slices/session-logout/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
-belongsToCell: access-core
+		"cells/accesscore/slices/session-logout/slice.yaml": &fstest.MapFile{Data: []byte(`id: dup-slice
+belongsToCell: accesscore
 contractUsages: []
 verify:
   unit: []
@@ -729,7 +729,7 @@ verify:
 
 func TestParseFS_CellWithL0Dependencies(t *testing.T) {
 	fs := fstest.MapFS{
-		"cells/access-core/cell.yaml": &fstest.MapFile{Data: []byte(`id: access-core
+		"cells/accesscore/cell.yaml": &fstest.MapFile{Data: []byte(`id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -739,7 +739,7 @@ schema:
   primary: cell_access_core
 verify:
   smoke:
-    - smoke.access-core.startup
+    - smoke.accesscore.startup
 l0Dependencies:
   - cell: shared-crypto
     reason: deterministic hashing
@@ -750,7 +750,7 @@ l0Dependencies:
 	pm, err := p.ParseFS(fs)
 	require.NoError(t, err)
 
-	cell := pm.Cells["access-core"]
+	cell := pm.Cells["accesscore"]
 	require.NotNil(t, cell)
 	require.Len(t, cell.L0Dependencies, 1)
 	assert.Equal(t, "shared-crypto", cell.L0Dependencies[0].Cell)
@@ -1003,7 +1003,7 @@ func TestParseFS_HTTPTransportMetadata(t *testing.T) {
 kind: http
 lifecycle: active
 endpoints:
-  server: access-core
+  server: accesscore
   clients:
     - edge-bff
   http:

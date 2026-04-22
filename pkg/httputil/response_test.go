@@ -328,8 +328,8 @@ func TestWriteDomainError_4xx_ShowsMessage(t *testing.T) {
 		},
 		{
 			name:    "404 shows original message",
-			err:     errcode.New(errcode.ErrCellNotFound, "cell access-core not found"),
-			wantMsg: "cell access-core not found",
+			err:     errcode.New(errcode.ErrCellNotFound, "cell accesscore not found"),
+			wantMsg: "cell accesscore not found",
 		},
 		{
 			name:    "Safe error 400 — shows public Message not InternalMessage",

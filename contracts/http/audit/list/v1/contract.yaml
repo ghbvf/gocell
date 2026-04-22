@@ -1,10 +1,10 @@
 id: http.audit.list.v1
 kind: http
-ownerCell: audit-core
+ownerCell: auditcore
 consistencyLevel: L2
 lifecycle: active
 endpoints:
-  server: audit-core
+  server: auditcore
   clients:
     - edge-bff
   http:

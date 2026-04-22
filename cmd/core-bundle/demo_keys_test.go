@@ -91,10 +91,10 @@ func TestCellDemoKeys_AreAllInWellKnownDemoKeys(t *testing.T) {
 	// When a new cell is added with its own demo key, append here AND in
 	// demo_keys.go wellKnownDemoKeys (append-only rule applies).
 	cellDemoKeys := []string{
-		"gocell-demo-AUDIT--CORE-key-32!!", // cells/audit-core/cell.go
-		"gocell-demo-CONFIG-CORE-key-32!!", // cells/config-core/cell.go
-		"gocell-demo-ORDER-CELL-key-32b!!", // cells/order-cell/cell.go
-		"gocell-demo-DEVICE-CELL-key-32!!", // cells/device-cell/cell.go
+		"gocell-demo-AUDIT--CORE-key-32!!", // cells/auditcore/cell.go
+		"gocell-demo-CONFIG-CORE-key-32!!", // cells/configcore/cell.go
+		"gocell-demo-ORDER-CELL-key-32b!!", // cells/ordercell/cell.go
+		"gocell-demo-DEVICE-CELL-key-32!!", // cells/devicecell/cell.go
 	}
 	wellKnownSet := make(map[string]bool, len(wellKnownDemoKeys))
 	for _, k := range wellKnownDemoKeys {

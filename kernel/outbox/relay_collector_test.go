@@ -115,7 +115,7 @@ func (h spyHistogram) Observe(v float64) {
 
 func TestProviderRelayCollector_PollCycleEmitsPerOutcome(t *testing.T) {
 	p := newSpyProvider()
-	c, err := outbox.NewProviderRelayCollector(p, "access-core")
+	c, err := outbox.NewProviderRelayCollector(p, "accesscore")
 	if err != nil {
 		t.Fatalf("NewProviderRelayCollector: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestProviderRelayCollector_PollCycleEmitsPerOutcome(t *testing.T) {
 
 func TestProviderRelayCollector_ZeroBatchSizeStillObserved(t *testing.T) {
 	p := newSpyProvider()
-	c, err := outbox.NewProviderRelayCollector(p, "access-core")
+	c, err := outbox.NewProviderRelayCollector(p, "accesscore")
 	if err != nil {
 		t.Fatalf("NewProviderRelayCollector: %v", err)
 	}

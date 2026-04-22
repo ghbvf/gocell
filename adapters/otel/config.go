@@ -4,7 +4,7 @@ import "fmt"
 
 // TracerConfig holds settings for the OTel tracer adapter.
 type TracerConfig struct {
-	// ServiceName identifies this service in traces (e.g. "access-core").
+	// ServiceName identifies this service in traces (e.g. "accesscore").
 	ServiceName string
 
 	// ExporterEndpoint is the OTLP gRPC collector address (e.g. "localhost:4317").

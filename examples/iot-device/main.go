@@ -14,7 +14,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	devicecell "github.com/ghbvf/gocell/cells/device-cell"
+	devicecell "github.com/ghbvf/gocell/cells/devicecell"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -48,7 +48,7 @@ func main() {
 	// Build assembly and register the cell.
 	asm := assembly.New(assembly.Config{ID: "iot-device", DurabilityMode: cell.DurabilityDemo})
 	if err := asm.Register(dc); err != nil {
-		logger.Error("failed to register device-cell", slog.Any("error", err))
+		logger.Error("failed to register devicecell", slog.Any("error", err))
 		os.Exit(1)
 	}
 

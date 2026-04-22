@@ -26,7 +26,7 @@ func TestContextHandler_JSON_WithAllContextValues(t *testing.T) {
 	ctx = ctxkeys.WithSpanID(ctx, "span-xyz")
 	ctx = ctxkeys.WithRequestID(ctx, "req-123")
 	ctx = ctxkeys.WithCorrelationID(ctx, "corr-123")
-	ctx = ctxkeys.WithCellID(ctx, "access-core")
+	ctx = ctxkeys.WithCellID(ctx, "accesscore")
 
 	logger.InfoContext(ctx, "test message", slog.String("extra", "value"))
 
@@ -39,7 +39,7 @@ func TestContextHandler_JSON_WithAllContextValues(t *testing.T) {
 	assert.Equal(t, "span-xyz", entry["span_id"])
 	assert.Equal(t, "req-123", entry["request_id"])
 	assert.Equal(t, "corr-123", entry["correlation_id"])
-	assert.Equal(t, "access-core", entry["cell_id"])
+	assert.Equal(t, "accesscore", entry["cell_id"])
 	assert.Equal(t, "value", entry["extra"])
 }
 

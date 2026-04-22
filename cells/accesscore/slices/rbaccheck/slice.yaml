@@ -1,0 +1,17 @@
+id: rbaccheck
+belongsToCell: accesscore
+contractUsages:
+  - contract: http.auth.role.list.v1
+    role: serve
+  - contract: http.auth.role.check.v1
+    role: serve
+verify:
+  unit:
+    - unit.rbaccheck.service
+  contract:
+    - contract.http.auth.role.list.v1.serve
+    - contract.http.auth.role.check.v1.serve
+  waivers: []
+
+allowedFiles:
+  - cells/accesscore/slices/rbaccheck/**

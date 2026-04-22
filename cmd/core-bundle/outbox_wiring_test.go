@@ -186,8 +186,8 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	// Two counters — one per consumer group.
 	var accessCalls, auditCalls atomic.Int64
 
-	// Subscribe with ConsumerGroup "access-core" (simulates cells/access-core).
-	accessSub := outbox.Subscription{Topic: topic, ConsumerGroup: "access-core"}
+	// Subscribe with ConsumerGroup "accesscore" (simulates cells/accesscore).
+	accessSub := outbox.Subscription{Topic: topic, ConsumerGroup: "accesscore"}
 	go func() {
 		_ = eb.Subscribe(ctx, accessSub, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			accessCalls.Add(1)
@@ -195,8 +195,8 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 		})
 	}()
 
-	// Subscribe with ConsumerGroup "audit-core" (simulates cells/audit-core).
-	auditSub := outbox.Subscription{Topic: topic, ConsumerGroup: "audit-core"}
+	// Subscribe with ConsumerGroup "auditcore" (simulates cells/auditcore).
+	auditSub := outbox.Subscription{Topic: topic, ConsumerGroup: "auditcore"}
 	go func() {
 		_ = eb.Subscribe(ctx, auditSub, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			auditCalls.Add(1)
@@ -209,12 +209,12 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 	select {
 	case <-eb.Ready(accessSub):
 	case <-ctx.Done():
-		t.Fatal("timed out waiting for access-core subscription to be ready")
+		t.Fatal("timed out waiting for accesscore subscription to be ready")
 	}
 	select {
 	case <-eb.Ready(auditSub):
 	case <-ctx.Done():
-		t.Fatal("timed out waiting for audit-core subscription to be ready")
+		t.Fatal("timed out waiting for auditcore subscription to be ready")
 	}
 
 	// Publish exactly 1 event wrapped in a v1 envelope so the bus envelope
@@ -242,6 +242,6 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 		"P0 regression: both consumer groups must receive the event; "+
 			"access=%d audit=%d", accessCalls.Load(), auditCalls.Load())
 
-	assert.Equal(t, int64(1), accessCalls.Load(), "access-core handler must be called exactly once")
-	assert.Equal(t, int64(1), auditCalls.Load(), "audit-core handler must be called exactly once")
+	assert.Equal(t, int64(1), accessCalls.Load(), "accesscore handler must be called exactly once")
+	assert.Equal(t, int64(1), auditCalls.Load(), "auditcore handler must be called exactly once")
 }

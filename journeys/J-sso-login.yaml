@@ -4,9 +4,9 @@ owner:
   team: platform
   role: journey-owner
 cells:
-  - access-core
-  - audit-core
-  - config-core
+  - accesscore
+  - auditcore
+  - configcore
 contracts:
   - http.auth.login.v1
   - event.session.created.v1

@@ -370,7 +370,7 @@ func generateTestPEM(t *testing.T) (privPEM, pubPEM []byte) {
 }
 
 // TestBootstrap_DemoModeUsesInMemory verifies that when GOCELL_CELL_ADAPTER_MODE
-// is unset (or empty), run() selects the in-memory storage path for config-core
+// is unset (or empty), run() selects the in-memory storage path for configcore
 // and does not attempt to connect to PostgreSQL (no GOCELL_PG_DSN required).
 // Guards against regression where the default could be accidentally flipped to
 // "postgres" and break dev/test setups.
@@ -390,7 +390,7 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 
 	err := run(ctx)
 	// Only context.Canceled and listen/sandbox errors are acceptable.
-	// A postgres connection failure would be: "config-core PG pool: ..."
+	// A postgres connection failure would be: "configcore PG pool: ..."
 	if err != nil {
 		acceptable := errors.Is(err, context.Canceled) ||
 			errors.Is(err, syscall.EPERM) ||

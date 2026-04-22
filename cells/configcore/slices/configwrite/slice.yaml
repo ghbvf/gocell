@@ -1,0 +1,17 @@
+id: configwrite
+belongsToCell: configcore
+contractUsages:
+  - contract: http.config.write.v1
+    role: serve
+  - contract: event.config.changed.v1
+    role: publish
+verify:
+  unit:
+    - unit.configwrite.service
+  contract:
+    - contract.http.config.write.v1.serve
+    - contract.event.config.changed.v1.publish
+  waivers: []
+
+allowedFiles:
+  - cells/configcore/slices/configwrite/**

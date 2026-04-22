@@ -1,10 +1,10 @@
 id: http.device.command.list.v1
 kind: http
-ownerCell: device-cell
+ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
 endpoints:
-  server: device-cell
+  server: devicecell
   clients:
     - edge-bff
   http:

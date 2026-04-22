@@ -4,9 +4,9 @@ owner:
   team: platform
   role: journey-owner
 cells:
-  - config-core
-  - access-core
-  - audit-core
+  - configcore
+  - accesscore
+  - auditcore
 contracts:
   - event.config.rollback.v1
 passCriteria:

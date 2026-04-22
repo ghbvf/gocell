@@ -1,14 +1,14 @@
 id: event.config.changed.v1
 kind: event
-ownerCell: config-core
+ownerCell: configcore
 consistencyLevel: L2
 lifecycle: active
 endpoints:
-  publisher: config-core
+  publisher: configcore
   subscribers:
-    - access-core
-    - audit-core
-    - config-core
+    - accesscore
+    - auditcore
+    - configcore
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json

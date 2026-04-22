@@ -902,18 +902,18 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 		wg        sync.WaitGroup
 	)
 
-	// Two subscribers in the SAME group "audit-core".
+	// Two subscribers in the SAME group "auditcore".
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "audit-core"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub1Count.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "audit-core"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			sub2Count.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
@@ -922,9 +922,9 @@ func TestConsumerGroup_SameGroup_CompetingConsumption(t *testing.T) {
 	require.Eventually(t, func() bool {
 		bus.mu.RLock()
 		defer bus.mu.RUnlock()
-		gs := bus.groupSubs["session.created"]["audit-core"]
+		gs := bus.groupSubs["session.created"]["auditcore"]
 		return gs != nil && len(gs.subs) == 2
-	}, time.Second, 10*time.Millisecond, "both audit-core subscribers must register")
+	}, time.Second, 10*time.Millisecond, "both auditcore subscribers must register")
 
 	// Publish 10 messages.
 	n := 10
@@ -968,14 +968,14 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "audit-core"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "auditcore"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			auditCount.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
 	}()
 	go func() {
 		defer wg.Done()
-		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "config-core"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		_ = bus.Subscribe(ctx, outbox.Subscription{Topic: "session.created", ConsumerGroup: "configcore"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			configCount.Add(1)
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		})
@@ -984,8 +984,8 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 	require.Eventually(t, func() bool {
 		bus.mu.RLock()
 		defer bus.mu.RUnlock()
-		gsAudit := bus.groupSubs["session.created"]["audit-core"]
-		gsConfig := bus.groupSubs["session.created"]["config-core"]
+		gsAudit := bus.groupSubs["session.created"]["auditcore"]
+		gsConfig := bus.groupSubs["session.created"]["configcore"]
 		return gsAudit != nil && len(gsAudit.subs) == 1 &&
 			gsConfig != nil && len(gsConfig.subs) == 1
 	}, time.Second, 10*time.Millisecond, "both group subscribers must register")
@@ -1003,8 +1003,8 @@ func TestConsumerGroup_DifferentGroups_Fanout(t *testing.T) {
 	cancel()
 	wg.Wait()
 
-	assert.Equal(t, int32(n), auditCount.Load(), "audit-core should get all messages")
-	assert.Equal(t, int32(n), configCount.Load(), "config-core should get all messages")
+	assert.Equal(t, int32(n), auditCount.Load(), "auditcore should get all messages")
+	assert.Equal(t, int32(n), configCount.Load(), "configcore should get all messages")
 }
 
 // TestConsumerGroup_EmptyGroup_BackwardCompatible verifies that subscribers

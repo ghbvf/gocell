@@ -10,8 +10,8 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
-	accesscore "github.com/ghbvf/gocell/cells/access-core"
-	configcore "github.com/ghbvf/gocell/cells/config-core"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
@@ -66,8 +66,8 @@ func defaultRuntimeOptions(
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
 		// Public routes and password-reset-exempt routes are declared by the
-		// owning Cells via auth.Declare (see cells/access-core/cell.go and
-		// cells/access-core/slices/identitymanage/handler.go). Bootstrap only
+		// owning Cells via auth.Declare (see cells/accesscore/cell.go and
+		// cells/accesscore/slices/identitymanage/handler.go). Bootstrap only
 		// needs the opt-in signal that an auth provider cell will be wired.
 		bootstrap.WithAuthDiscovery(),
 		bootstrap.WithAdapterInfo(adapterInfo),
@@ -101,7 +101,7 @@ func buildKeyProvider(storageBackend, adapterMode, providerName string) (kcrypto
 	if providerName == "" {
 		if storageBackend == "postgres" {
 			return nil, errcode.New(errcode.ErrConfigKeyMissing,
-				"config-core: GOCELL_KEY_PROVIDER must be set when StorageBackend=postgres "+
+				"configcore: GOCELL_KEY_PROVIDER must be set when StorageBackend=postgres "+
 					"(known values: \"local-aes\" for dev/CI, \"vault-transit\" for production). "+
 					"Silent NoopTransformer fallback is disabled because it would persist "+
 					"sensitive values unencrypted.")
@@ -122,14 +122,14 @@ func buildKeyProvider(storageBackend, adapterMode, providerName string) (kcrypto
 		if err != nil {
 			return nil, fmt.Errorf("local-aes key provider: %w", err)
 		}
-		slog.Info("config-core: key provider initialized", slog.String("provider", "local-aes"))
+		slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
 		return kp, nil
 	case "vault-transit":
 		kp, err := adaptervault.NewTransitKeyProviderFromEnv()
 		if err != nil {
 			return nil, fmt.Errorf("vault-transit key provider: %w", err)
 		}
-		slog.Info("config-core: key provider initialized", slog.String("provider", "vault-transit"))
+		slog.Info("configcore: key provider initialized", slog.String("provider", "vault-transit"))
 		return kp, nil
 	default:
 		return nil, errcode.New(errcode.ErrValidationFailed,
@@ -146,7 +146,7 @@ func keyProviderToTransformer(kp kcrypto.KeyProvider) kcrypto.ValueTransformer {
 	return crypto.NewValueTransformer(kp)
 }
 
-// buildConfigCoreOpts selects storage-adapter options for config-core based on
+// buildConfigCoreOpts selects storage-adapter options for configcore based on
 // the already-resolved Topology. Returns a ManagedResource (non-nil iff
 // postgres mode) and cell options to pass to configcore.NewConfigCore.
 //
@@ -168,18 +168,18 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 	case "postgres":
 		pool, err := adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
 		if err != nil {
-			return nil, nil, fmt.Errorf("config-core PG pool: %w", err)
+			return nil, nil, fmt.Errorf("configcore PG pool: %w", err)
 		}
 		// A12: fail-fast on schema version mismatch.
 		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, adapterpg.MigrationsFS()); schemaErr != nil {
 			_ = pool.Close(ctx)
-			return nil, nil, fmt.Errorf("config-core PG schema guard: %w", schemaErr)
+			return nil, nil, fmt.Errorf("configcore PG schema guard: %w", schemaErr)
 		}
 		// A4: warn on INVALID indexes (non-fatal).
 		if invalid, detectErr := adapterpg.DetectInvalidIndexes(ctx, pool); detectErr != nil {
-			slog.Warn("config-core: could not detect invalid indexes", slog.Any("error", detectErr))
+			slog.Warn("configcore: could not detect invalid indexes", slog.Any("error", detectErr))
 		} else if len(invalid) > 0 {
-			slog.Warn("config-core: invalid indexes detected; manual cleanup required",
+			slog.Warn("configcore: invalid indexes detected; manual cleanup required",
 				slog.Any("indexes", invalid))
 		}
 
@@ -187,10 +187,10 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 		txMgr := adapterpg.NewTxManager(pool)
 
 		relayCfg := outboxruntime.DefaultRelayConfig()
-		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "config-core")
+		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "configcore")
 		if rmErr != nil {
 			_ = pool.Close(ctx)
-			return nil, nil, fmt.Errorf("config-core outbox relay metrics: %w", rmErr)
+			return nil, nil, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
 		pgStore := adapterpg.NewOutboxStore(pool.DB())
@@ -199,9 +199,9 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 		pgRes, resErr := adapterpg.NewPGResource(pool, relayWorker)
 		if resErr != nil {
 			_ = pool.Close(ctx)
-			return nil, nil, fmt.Errorf("config-core PG resource: %w", resErr)
+			return nil, nil, fmt.Errorf("configcore PG resource: %w", resErr)
 		}
-		slog.Info("config-core: using PostgreSQL storage", slog.String("cell_adapter_mode", topo.StorageBackend))
+		slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", topo.StorageBackend))
 		opts := []configcore.Option{
 			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
 			configcore.WithTxManager(txMgr),
@@ -210,7 +210,7 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 		return pgRes, opts, nil
 
 	case "memory":
-		slog.Info("config-core: using in-memory storage", slog.String("cell_adapter_mode", topo.StorageBackend))
+		slog.Info("configcore: using in-memory storage", slog.String("cell_adapter_mode", topo.StorageBackend))
 		return nil, []configcore.Option{configcore.WithInMemoryDefaults()}, nil
 
 	default:
@@ -222,7 +222,7 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbo
 }
 
 // adminBootstrapWorkerOpts wires WithInitialAdminBootstrap + WithBootstrapWorkerSink
-// onto the given base access-core options and returns the extended options together
+// onto the given base accesscore options and returns the extended options together
 // with a bootstrap.Option that lazily adds the cleanup worker to the bootstrap
 // WorkerGroup.
 //

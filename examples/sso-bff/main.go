@@ -1,6 +1,6 @@
 // Package main is the entry point for the sso-bff example application.
-// It demonstrates combining the three built-in GoCell Cells (access-core,
-// audit-core, config-core) into a single SSO BFF assembly using in-memory
+// It demonstrates combining the three built-in GoCell Cells (accesscore,
+// auditcore, configcore) into a single SSO BFF assembly using in-memory
 // dependencies for development.
 //
 // Usage:
@@ -16,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
-	accesscore "github.com/ghbvf/gocell/cells/access-core"
-	auditcore "github.com/ghbvf/gocell/cells/audit-core"
-	configcore "github.com/ghbvf/gocell/cells/config-core"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	auditcore "github.com/ghbvf/gocell/cells/auditcore"
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -81,7 +81,7 @@ func main() {
 	adminLazy := worker.Lazy()
 	bootstrapSink := func(w worker.Worker) { _ = adminLazy.Set(w) }
 
-	// --- access-core (L2): identity, session, RBAC ---
+	// --- accesscore (L2): identity, session, RBAC ---
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithInitialAdminBootstrap(),
@@ -94,7 +94,7 @@ func main() {
 		accesscore.WithLogger(logger),
 	)
 
-	// --- audit-core (L3): tamper-evident audit log ---
+	// --- auditcore (L3): tamper-evident audit log ---
 	// 32 bytes: matches SHA-256 block size used by the audit HMAC chain.
 	auditHMACKey := []byte("sso-bff-dev-hmac-key-32-bytes!!!")
 	auditCursorCodec, err := query.NewCursorCodec([]byte("sso-bff-audit-cursor-key-32b!!"))
@@ -112,7 +112,7 @@ func main() {
 		auditcore.WithLogger(logger),
 	)
 
-	// --- config-core (L2): configuration + feature flags ---
+	// --- configcore (L2): configuration + feature flags ---
 	configCursorCodec, err := query.NewCursorCodec([]byte("sso-bff-config-cursor-key-32b!!"))
 	if err != nil {
 		logger.Error("failed to create config cursor codec", slog.Any("error", err))
@@ -150,7 +150,7 @@ func main() {
 		stateDir = "/run/gocell"
 	}
 	// Public routes and password-reset-exempt routes are declared by the
-	// access-core Cell itself via auth.Declare. Bootstrap only needs the
+	// accesscore Cell itself via auth.Declare. Bootstrap only needs the
 	// opt-in signal that the assembly expects an auth provider cell.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),

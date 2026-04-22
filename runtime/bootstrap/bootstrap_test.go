@@ -730,7 +730,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-contrib", DurabilityMode: cell.DurabilityDemo})
-	hcc := newHealthContribCell("access-core", map[string]func() error{
+	hcc := newHealthContribCell("accesscore", map[string]func() error{
 		"session-store": func() error { return nil },
 	})
 	require.NoError(t, asm.Register(hcc))
@@ -2747,7 +2747,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	verifier := &bootstrapTestVerifier{
 		err: fmt.Errorf("no token provided"),
 	}
-	hc := newAuthProviderCell("access-core", verifier)
+	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
@@ -2794,7 +2794,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	verifier := &bootstrapTestVerifier{
 		err: fmt.Errorf("should not verify for public route"),
 	}
-	hc := newAuthProviderCell("access-core", verifier)
+	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
@@ -2853,7 +2853,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 	cellVerifier := &bootstrapTestVerifier{
 		err: fmt.Errorf("cell-verifier: should not be called"),
 	}
-	hc := newAuthProviderCell("access-core", cellVerifier)
+	hc := newAuthProviderCell("accesscore", cellVerifier)
 	require.NoError(t, asm.Register(hc))
 
 	explicitVerifier := &bootstrapTestVerifier{
@@ -2937,7 +2937,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 	}
 
 	asm := assembly.New(assembly.Config{ID: "test-multi-auth", DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, asm.Register(newAuthProviderCell("access-core", verifier1)))
+	require.NoError(t, asm.Register(newAuthProviderCell("accesscore", verifier1)))
 	require.NoError(t, asm.Register(newAuthProviderCell("identity-core", verifier2)))
 
 	b := New(
@@ -2953,7 +2953,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 	err = b.Run(ctx)
 	require.Error(t, err, "bootstrap should reject multiple auth provider cells")
 	assert.Contains(t, err.Error(), "multiple auth provider cells")
-	assert.Contains(t, err.Error(), "access-core")
+	assert.Contains(t, err.Error(), "accesscore")
 	assert.Contains(t, err.Error(), "identity-core")
 }
 
@@ -2970,7 +2970,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	verifier := &bootstrapTestVerifier{
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
-	hc := newAuthProviderCell("access-core", verifier)
+	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
 	b := New(
@@ -3624,7 +3624,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 		err: fmt.Errorf("should not be called for GET/HEAD public route"),
 	}
 	// F3: cell declares GET /api/v1/public/ping as public; HEAD alias is automatic.
-	hc := newPublicPingAuthCell("access-core", verifier)
+	hc := newPublicPingAuthCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
 	b := New(

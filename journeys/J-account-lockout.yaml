@@ -4,7 +4,7 @@ owner:
   team: platform
   role: journey-owner
 cells:
-  - access-core
+  - accesscore
 contracts:
   - event.user.locked.v1
 passCriteria:

@@ -1,12 +1,12 @@
 id: http.config.get.v1
 kind: http
-ownerCell: config-core
+ownerCell: configcore
 consistencyLevel: L1
 lifecycle: active
 endpoints:
-  server: config-core
+  server: configcore
   clients:
-    - access-core
+    - accesscore
   http:
     method: GET
     path: /api/v1/config/{key}

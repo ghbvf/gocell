@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	accesscore "github.com/ghbvf/gocell/cells/access-core"
-	auditcore "github.com/ghbvf/gocell/cells/audit-core"
-	configcore "github.com/ghbvf/gocell/cells/config-core"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	auditcore "github.com/ghbvf/gocell/cells/auditcore"
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -38,7 +38,7 @@ var _ persistence.TxRunner = noopTxRunner{}
 var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
 
 // TestAuthWiring_RealAssembly_ProtectedRoutes401 boots a real assembly
-// (access-core + config-core + audit-core) with auth middleware and asserts
+// (accesscore + configcore + auditcore) with auth middleware and asserts
 // that sensitive business routes return 401 without a token, while public
 // routes (login, refresh) remain accessible.
 //
@@ -97,7 +97,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, asm.Register(auc))
 
 	// F3: public routes (login, refresh) are declared via auth.Declare(Public:true)
-	// inside access-core's RegisterRoutes. WithAuthDiscovery discovers the verifier.
+	// inside accesscore's RegisterRoutes. WithAuthDiscovery discovers the verifier.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(ln),
@@ -282,7 +282,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// /internal/v1/* endpoints are auto-delegated by WithInternalEndpointGuard:
 	// JWT AuthMiddleware skips those paths entirely and the guard becomes the sole
 	// authentication layer. F3: public routes (login, refresh) are declared by
-	// access-core via auth.Declare(Public:true); WithAuthDiscovery discovers the verifier.
+	// accesscore via auth.Declare(Public:true); WithAuthDiscovery discovers the verifier.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(ln),

@@ -36,7 +36,7 @@ type SharedDeps struct {
 	// CursorCodecs holds the audit and config cursor codecs.
 	CursorCodecs cursorCodecs
 
-	// HMACKey is the HMAC secret for audit-core chain authentication.
+	// HMACKey is the HMAC secret for auditcore chain authentication.
 	HMACKey []byte
 
 	// EventBus is the in-process event bus used for both publish and subscribe.
@@ -117,7 +117,7 @@ func (d *SharedDeps) validateCore() []error {
 	if d.Topology.StorageBackend == "postgres" && d.KeyProviderName == "" {
 		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
 			"SharedDeps: GOCELL_KEY_PROVIDER must be set when StorageBackend=postgres "+
-				"(defense-in-depth; config-core module also validates this)"))
+				"(defense-in-depth; configcore module also validates this)"))
 	}
 	return errs
 }

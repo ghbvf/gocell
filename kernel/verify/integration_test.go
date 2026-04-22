@@ -74,7 +74,7 @@ func TestVerifySlice_Integration(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
 
-	sliceDir := filepath.Join(dir, "cells", "access-core", "slices", "session-create")
+	sliceDir := filepath.Join(dir, "cells", "accesscore", "slices", "session-create")
 	require.NoError(t, os.MkdirAll(sliceDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(sliceDir, "service_test.go"), []byte(`package sessioncreate
 import "testing"
@@ -82,13 +82,13 @@ func TestUnit(t *testing.T) {}
 `), 0o644))
 
 	proj := &metadata.ProjectMeta{
-		Cells:    map[string]*metadata.CellMeta{"access-core": {ID: "access-core"}},
-		Slices:   map[string]*metadata.SliceMeta{"access-core/session-create": {ID: "session-create", BelongsToCell: "access-core"}},
+		Cells:    map[string]*metadata.CellMeta{"accesscore": {ID: "accesscore"}},
+		Slices:   map[string]*metadata.SliceMeta{"accesscore/session-create": {ID: "session-create", BelongsToCell: "accesscore"}},
 		Journeys: map[string]*metadata.JourneyMeta{},
 	}
 
 	r := NewRunner(proj, dir)
-	res, err := r.VerifySlice(context.Background(), "access-core/session-create")
+	res, err := r.VerifySlice(context.Background(), "accesscore/session-create")
 	require.NoError(t, err)
 	assert.True(t, res.Passed)
 	assert.Contains(t, res.Results[0].Output, "PASS")
@@ -139,7 +139,7 @@ func TestVerifyCell_Integration(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
 
-	cellDir := filepath.Join(dir, "cells", "audit-core")
+	cellDir := filepath.Join(dir, "cells", "auditcore")
 	require.NoError(t, os.MkdirAll(cellDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "smoke_test.go"), []byte(`package auditcore
 import "testing"
@@ -148,9 +148,9 @@ func TestWrite(t *testing.T) {}
 
 	proj := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"audit-core": {
-				ID:    "audit-core",
-				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.audit-core.write"}},
+			"auditcore": {
+				ID:     "auditcore",
+				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore.write"}},
 			},
 		},
 		Slices:   map[string]*metadata.SliceMeta{},
@@ -158,7 +158,7 @@ func TestWrite(t *testing.T) {}
 	}
 
 	r := NewRunner(proj, dir)
-	res, err := r.VerifyCell(context.Background(), "audit-core")
+	res, err := r.VerifyCell(context.Background(), "auditcore")
 	require.NoError(t, err)
 	assert.True(t, res.Passed)
 	require.Len(t, res.Results, 1)
@@ -217,4 +217,3 @@ func TestJSsoLoginSessionPersist(t *testing.T) {}
 	assert.Len(t, res.Results, 2)
 	assert.Equal(t, []string{"manual check"}, res.ManualPending)
 }
-

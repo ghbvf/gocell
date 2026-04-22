@@ -23,7 +23,7 @@ jobs:
 
       - name: Scaffold rejects kebab slice names
         run: |
-          result=$(go run ./cmd/gocell scaffold slice --id=test-slice --cell=access-core 2>&1 || true)
+          result=$(go run ./cmd/gocell scaffold slice --id=test-slice --cell=accesscore 2>&1 || true)
           echo "scaffold output: $result"
           if echo "$result" | grep -q "must not contain"; then
             echo "PASS: scaffold correctly rejects kebab slice name"

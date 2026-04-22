@@ -3,15 +3,15 @@ package main
 import (
 	"context"
 
-	accesscore "github.com/ghbvf/gocell/cells/access-core"
+	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
-// AccessCoreModule wires access-core: JWT issuer/verifier + EventBus +
+// AccessCoreModule wires accesscore: JWT issuer/verifier + EventBus +
 // initial-admin bootstrap worker.
 //
-// ref: uber-go/fx fx.Module("access-core", ...) — self-contained module.
+// ref: uber-go/fx fx.Module("accesscore", ...) — self-contained module.
 // backlog: S29 CORE-BUNDLE-APP-BUILDER-01
 type AccessCoreModule struct {
 	// InitialAdminOpts are additional options for the initial-admin bootstrap
@@ -21,9 +21,9 @@ type AccessCoreModule struct {
 }
 
 // ID returns the stable identifier used in error messages.
-func (AccessCoreModule) ID() string { return "access-core" }
+func (AccessCoreModule) ID() string { return "accesscore" }
 
-// Provide resolves all access-core-specific dependencies and returns the
+// Provide resolves all accesscore-specific dependencies and returns the
 // constructed cell and the lazy admin bootstrap worker option.
 func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
 	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{

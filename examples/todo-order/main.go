@@ -18,7 +18,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	ordercell "github.com/ghbvf/gocell/cells/order-cell"
+	ordercell "github.com/ghbvf/gocell/cells/ordercell"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -55,7 +55,7 @@ func main() {
 	// Build assembly and register the cell.
 	asm := assembly.New(assembly.Config{ID: "todo-order", DurabilityMode: cell.DurabilityDemo})
 	if err := asm.Register(oc); err != nil {
-		logger.Error("failed to register order-cell", slog.Any("error", err))
+		logger.Error("failed to register ordercell", slog.Any("error", err))
 		os.Exit(1)
 	}
 

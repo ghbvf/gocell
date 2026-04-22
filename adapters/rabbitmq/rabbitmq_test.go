@@ -1343,9 +1343,9 @@ func TestSubscriber_Subscribe_ProcessesDelivery(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
-		PrefetchCount:   5,
-		DLXExchange:     "test.dlx",
+		QueueName:     "test-queue",
+		PrefetchCount: 5,
+		DLXExchange:   "test.dlx",
 	})
 
 	entry := outbox.Entry{
@@ -1406,8 +1406,8 @@ func TestSubscriber_Subscribe_UnmarshalFailure_Nack(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "test.dlx",
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
 	})
 
 	handler := func(_ context.Context, e outbox.Entry) outbox.HandleResult {
@@ -1499,8 +1499,8 @@ func TestSubscriber_Subscribe_HandlerError_NackWithRequeue(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "test.dlx",
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
 	})
 
 	entry := outbox.Entry{ID: "evt-002", EventType: "test.failed"}
@@ -1544,7 +1544,7 @@ func TestSubscriber_Subscribe_DefaultQueueName(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// QueueName deliberately left empty.
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1592,8 +1592,8 @@ func TestSubscriber_DeliveryChannelClosed_TriggersReconnect(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "test.dlx",
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1679,8 +1679,8 @@ func TestSubscriber_ReconnectLoop_CtxCancelledDuringWait(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(c, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "test.dlx",
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1737,9 +1737,9 @@ func TestSubscriber_ResolveQueueName(t *testing.T) {
 		},
 		{
 			name:         "runtime group with no config group",
-			runtimeGroup: "audit-core",
+			runtimeGroup: "auditcore",
 			topic:        "events.v1",
-			expected:     "audit-core.events.v1",
+			expected:     "auditcore.events.v1",
 		},
 	}
 
@@ -1812,8 +1812,8 @@ func TestSubscriber_SubscribeOnce_AcquireChannelFails(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "test.dlx",
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
 	})
 
 	// subscribeOnce should return an error (channel acquisition failure).
@@ -1854,8 +1854,8 @@ func TestSubscriber_Subscribe_ClosedDuringReconnect(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(c, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "test.dlx",
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
 	})
 
 	// Run Subscribe in a goroutine so the main goroutine can orchestrate the
@@ -1908,8 +1908,8 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// QueueName deliberately left empty; ConsumerGroup is set.
-		ConsumerGroup:   "audit-core",
-		DLXExchange:     "test.dlx",
+		ConsumerGroup: "auditcore",
+		DLXExchange:   "test.dlx",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1920,9 +1920,9 @@ func TestSubscriber_Subscribe_ConsumerGroupQueueName(t *testing.T) {
 
 	ch.mu.Lock()
 	// Queue name should be "{ConsumerGroup}.{topic}".
-	assert.Contains(t, ch.queuesDeclared, "audit-core.session.created")
+	assert.Contains(t, ch.queuesDeclared, "auditcore.session.created")
 	// Binding should reference the derived queue name.
-	assert.Contains(t, ch.queueBindings, "audit-core.session.created->session.created")
+	assert.Contains(t, ch.queueBindings, "auditcore.session.created->session.created")
 	ch.mu.Unlock()
 }
 
@@ -1935,9 +1935,9 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "my-explicit-queue",
-		ConsumerGroup:   "audit-core", // Should be ignored when QueueName is set.
-		DLXExchange:     "test.dlx",
+		QueueName:     "my-explicit-queue",
+		ConsumerGroup: "auditcore", // Should be ignored when QueueName is set.
+		DLXExchange:   "test.dlx",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1949,7 +1949,7 @@ func TestSubscriber_Subscribe_ExplicitQueueName_OverridesConsumerGroup(t *testin
 	ch.mu.Lock()
 	// Explicit QueueName takes precedence over ConsumerGroup derivation.
 	assert.Contains(t, ch.queuesDeclared, "my-explicit-queue")
-	assert.NotContains(t, ch.queuesDeclared, "audit-core.session.created")
+	assert.NotContains(t, ch.queuesDeclared, "auditcore.session.created")
 	ch.mu.Unlock()
 }
 
@@ -1963,7 +1963,7 @@ func TestSubscriber_Subscribe_NoConsumerGroup_FallsBackToTopic(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{
 		// Both QueueName and ConsumerGroup empty — backward compat.
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1988,8 +1988,8 @@ func TestSubscriber_Subscribe_DLXExchange_SetsQueueArgs(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "my-dlx",
+		QueueName:   "test-queue",
+		DLXExchange: "my-dlx",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2016,9 +2016,9 @@ func TestSubscriber_Subscribe_DLXExchangeWithRoutingKey(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "my-dlx",
-		DLXRoutingKey:   "dead-letter-key",
+		QueueName:     "test-queue",
+		DLXExchange:   "my-dlx",
+		DLXRoutingKey: "dead-letter-key",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2039,7 +2039,7 @@ func TestSubscriber_Subscribe_NoDLX_ReturnsError(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
+		QueueName: "test-queue",
 		// DLXExchange deliberately left empty.
 	})
 
@@ -2089,8 +2089,8 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "test-queue",
-		DLXExchange:     "test.dlx",
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
 	})
 
 	entry := outbox.Entry{ID: "evt-ctx-cancel", EventType: "test.cancel"}
@@ -2895,7 +2895,7 @@ func TestProcessDelivery_Ack_CommitsReceipt(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	receipt := &mockReceipt{}
@@ -2931,7 +2931,7 @@ func TestProcessDelivery_Reject_ReleasesReceipt(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	receipt := &mockReceipt{}
@@ -2972,7 +2972,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	entry := outbox.Entry{ID: "evt-nil-receipt", EventType: "test.nil"}
@@ -3005,7 +3005,7 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	entry := outbox.Entry{
@@ -3065,7 +3065,7 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	entry := outbox.Entry{
@@ -3106,7 +3106,7 @@ func TestProcessDelivery_Receipt_UsesDetachedCtx(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	receipt := &mockReceipt{}
@@ -3144,7 +3144,7 @@ func TestProcessDelivery_Requeue_ReleasesReceipt(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	receipt := &mockReceipt{}
@@ -3225,7 +3225,7 @@ func TestProcessDelivery_BrokerAckFails_CommitAlreadyDone(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	receipt := &mockReceipt{} // commitErr = nil → Commit succeeds
@@ -3385,7 +3385,7 @@ func TestProcessDelivery_HandlerError_Logged(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	entry := outbox.Entry{ID: "evt-ack-with-err", EventType: "test.ackwitherr"}
@@ -3422,7 +3422,7 @@ func TestProcessDelivery_Requeue_BrokerNackFails_ReleasesReceipt(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	receipt := &mockReceipt{}
@@ -3532,7 +3532,7 @@ func TestProcessDelivery_UnknownDisposition_NackWithRequeue(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		DLXExchange:     "test.dlx",
+		DLXExchange: "test.dlx",
 	})
 
 	receipt := &mockReceipt{}

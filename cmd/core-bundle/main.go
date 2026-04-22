@@ -1,5 +1,5 @@
 // Package main is the entry point for the core-bundle assembly.
-// It bootstraps config-core, access-core, and audit-core with in-memory
+// It bootstraps configcore, accesscore, and auditcore with in-memory
 // repositories by default, suitable for development and integration testing.
 //
 // DurabilityDurable is set to reject noop placeholders (NoopWriter,
@@ -154,7 +154,7 @@ func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string
 	return codec, nil
 }
 
-// cursorCodecs holds the parsed cursor codecs for audit-core and config-core.
+// cursorCodecs holds the parsed cursor codecs for auditcore and configcore.
 type cursorCodecs struct {
 	audit  *query.CursorCodec
 	config *query.CursorCodec

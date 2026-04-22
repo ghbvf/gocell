@@ -27,11 +27,11 @@ func TestCreateSlice_KebabNameRejected(t *testing.T) {
 			s := New(root)
 
 			// Create a cell first so the missing-cell check doesn't interfere.
-			if err := s.CreateCell(CellOpts{ID: "access-core", OwnerTeam: "platform"}); err != nil {
+			if err := s.CreateCell(CellOpts{ID: "accesscore", OwnerTeam: "platform"}); err != nil {
 				t.Fatalf("CreateCell: %v", err)
 			}
 
-			err := s.CreateSlice(SliceOpts{ID: tt.sliceID, CellID: "access-core"})
+			err := s.CreateSlice(SliceOpts{ID: tt.sliceID, CellID: "accesscore"})
 			if err == nil {
 				t.Fatalf("CreateSlice(%q) should have returned an error", tt.sliceID)
 			}
@@ -59,11 +59,11 @@ func TestCreateSlice_NoDashNameAccepted(t *testing.T) {
 			root := t.TempDir()
 			s := New(root)
 
-			if err := s.CreateCell(CellOpts{ID: "access-core", OwnerTeam: "platform"}); err != nil {
+			if err := s.CreateCell(CellOpts{ID: "accesscore", OwnerTeam: "platform"}); err != nil {
 				t.Fatalf("CreateCell: %v", err)
 			}
 
-			err := s.CreateSlice(SliceOpts{ID: tt.sliceID, CellID: "access-core"})
+			err := s.CreateSlice(SliceOpts{ID: tt.sliceID, CellID: "accesscore"})
 			if err != nil {
 				t.Errorf("CreateSlice(%q) should succeed, got: %v", tt.sliceID, err)
 			}

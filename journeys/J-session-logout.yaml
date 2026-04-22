@@ -4,8 +4,8 @@ owner:
   team: platform
   role: journey-owner
 cells:
-  - access-core
-  - audit-core
+  - accesscore
+  - auditcore
 contracts:
   - event.session.revoked.v1
 passCriteria:

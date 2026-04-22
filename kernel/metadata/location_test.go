@@ -27,7 +27,7 @@ func TestPosition_ZeroValue(t *testing.T) {
 // and then walks a MappingNode by field name.
 func TestFind_RootMapping(t *testing.T) {
 	src := `
-id: access-core
+id: accesscore
 type: core
 `
 	root := mustParseNode(t, src)
@@ -36,8 +36,8 @@ type: core
 	if err != nil {
 		t.Fatalf("Find(id) err = %v", err)
 	}
-	if n.Value != "access-core" {
-		t.Errorf("Find(id).Value = %q, want access-core", n.Value)
+	if n.Value != "accesscore" {
+		t.Errorf("Find(id).Value = %q, want accesscore", n.Value)
 	}
 	if n.Line != 2 {
 		t.Errorf("Find(id).Line = %d, want 2", n.Line)
@@ -47,7 +47,7 @@ type: core
 // TestFind_NestedField verifies dot-separated mapping traversal.
 func TestFind_NestedField(t *testing.T) {
 	src := `
-id: access-core
+id: accesscore
 owner:
   team: platform
   role: backend
@@ -70,9 +70,9 @@ owner:
 func TestFind_ArrayIndex(t *testing.T) {
 	src := `
 cells:
-  - access-core
-  - audit-core
-  - config-core
+  - accesscore
+  - auditcore
+  - configcore
 `
 	root := mustParseNode(t, src)
 
@@ -80,8 +80,8 @@ cells:
 	if err != nil {
 		t.Fatalf("Find(cells[1]) err = %v", err)
 	}
-	if n.Value != "audit-core" {
-		t.Errorf("Find(cells[1]).Value = %q, want audit-core", n.Value)
+	if n.Value != "auditcore" {
+		t.Errorf("Find(cells[1]).Value = %q, want auditcore", n.Value)
 	}
 	if n.Line != 4 {
 		t.Errorf("Find(cells[1]).Line = %d, want 4", n.Line)
@@ -124,7 +124,7 @@ slices:
 
 // TestFind_FieldNotFound returns a clear error.
 func TestFind_FieldNotFound(t *testing.T) {
-	src := `id: access-core`
+	src := `id: accesscore`
 	root := mustParseNode(t, src)
 
 	if _, err := Find(root, "nope"); err == nil {
@@ -216,7 +216,7 @@ matrix:
 // TestLocate is the convenience wrapper returning (Line, Column) via Position.
 func TestLocate(t *testing.T) {
 	src := `
-id: access-core
+id: accesscore
 owner:
   team: platform
 `

@@ -1,10 +1,10 @@
 id: event.order-created.v1
 kind: event
-ownerCell: order-cell
+ownerCell: ordercell
 consistencyLevel: L2
 lifecycle: active
 endpoints:
-  publisher: order-cell
+  publisher: ordercell
   subscribers: []
 schemaRefs:
   headers: headers.schema.json

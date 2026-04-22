@@ -20,25 +20,25 @@ func validProject() *metadata.ProjectMeta {
 	replayable := true
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				DurabilityMode:   "durable",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
-				Dir:              "access-core",
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
+				Dir:              "accesscore",
 			},
-			"audit-core": {
-				ID:               "audit-core",
+			"auditcore": {
+				ID:               "auditcore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				DurabilityMode:   "durable",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_audit_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.audit-core.startup"}},
-				Dir:              "audit-core",
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore.startup"}},
+				Dir:              "auditcore",
 			},
 			"shared-crypto": {
 				ID:               "shared-crypto",
@@ -50,9 +50,9 @@ func validProject() *metadata.ProjectMeta {
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/session-login": {
+			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "access-core",
+				BelongsToCell: "accesscore",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 					{Contract: "event.session.created.v1", Role: "publish"},
@@ -67,15 +67,15 @@ func validProject() *metadata.ProjectMeta {
 					},
 				},
 				AllowedFiles: []string{
-					"cells/access-core/slices/session-login/**",
-					"cells/access-core/slices/sessionlogin/**",
+					"cells/accesscore/slices/session-login/**",
+					"cells/accesscore/slices/sessionlogin/**",
 				},
 				Dir:     "session-login",
-				CellDir: "access-core",
+				CellDir: "accesscore",
 			},
-			"audit-core/audit-write": {
+			"auditcore/audit-write": {
 				ID:            "audit-write",
-				BelongsToCell: "audit-core",
+				BelongsToCell: "auditcore",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "event.session.created.v1", Role: "subscribe"},
 				},
@@ -84,34 +84,34 @@ func validProject() *metadata.ProjectMeta {
 					Contract: []string{"contract.event.session.created.v1.subscribe"},
 				},
 				AllowedFiles: []string{
-					"cells/audit-core/slices/audit-write/**",
-					"cells/audit-core/slices/auditwrite/**",
+					"cells/auditcore/slices/audit-write/**",
+					"cells/auditcore/slices/auditwrite/**",
 				},
 				Dir:     "audit-write",
-				CellDir: "audit-core",
+				CellDir: "auditcore",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
 			"http.auth.login.v1": {
 				ID:               "http.auth.login.v1",
 				Kind:             "http",
-				OwnerCell:        "access-core",
+				OwnerCell:        "accesscore",
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "access-core",
-					Clients: []string{"audit-core"},
+					Server:  "accesscore",
+					Clients: []string{"auditcore"},
 				},
 			},
 			"event.session.created.v1": {
 				ID:               "event.session.created.v1",
 				Kind:             "event",
-				OwnerCell:        "access-core",
+				OwnerCell:        "accesscore",
 				ConsistencyLevel: "L2",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "access-core",
-					Subscribers: []string{"audit-core"},
+					Publisher:   "accesscore",
+					Subscribers: []string{"auditcore"},
 				},
 				Replayable:        &replayable,
 				IdempotencyKey:    "session-id",
@@ -120,12 +120,12 @@ func validProject() *metadata.ProjectMeta {
 			"projection.session.active.v1": {
 				ID:               "projection.session.active.v1",
 				Kind:             "projection",
-				OwnerCell:        "access-core",
+				OwnerCell:        "accesscore",
 				ConsistencyLevel: "L1",
 				Lifecycle:        "active",
 				Endpoints: metadata.EndpointsMeta{
-					Provider: "access-core",
-					Readers:  []string{"audit-core"},
+					Provider: "accesscore",
+					Readers:  []string{"auditcore"},
 				},
 				Replayable: &replayable,
 			},
@@ -135,7 +135,7 @@ func validProject() *metadata.ProjectMeta {
 				ID:    "J-sso-login",
 				Goal:  "User completes SSO login",
 				Owner: metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells: []string{"access-core", "audit-core"},
+				Cells: []string{"accesscore", "auditcore"},
 				Contracts: []string{
 					"http.auth.login.v1",
 					"event.session.created.v1",
@@ -149,7 +149,7 @@ func validProject() *metadata.ProjectMeta {
 		Assemblies: map[string]*metadata.AssemblyMeta{
 			"core-bundle": {
 				ID:    "core-bundle",
-				Cells: []string{"access-core", "audit-core", "shared-crypto"},
+				Cells: []string{"accesscore", "auditcore", "shared-crypto"},
 				Build: metadata.BuildMeta{
 					Entrypoint:     "cmd/core-bundle/main.go",
 					Binary:         "core-bundle",
@@ -259,9 +259,9 @@ func TestREF02(t *testing.T) {
 		{
 			name: "missing contract",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/bad-slice"] = &metadata.SliceMeta{
+				pm.Slices["accesscore/bad-slice"] = &metadata.SliceMeta{
 					ID:            "bad-slice",
-					BelongsToCell: "access-core",
+					BelongsToCell: "accesscore",
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "http.nonexistent.v1", Role: "serve"},
 					},
@@ -369,11 +369,11 @@ func TestREF05(t *testing.T) {
 		{
 			name: "id mismatch directory",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/actual-name"] = &metadata.SliceMeta{
+				pm.Slices["accesscore/actual-name"] = &metadata.SliceMeta{
 					ID:            "actual-name",
-					BelongsToCell: "access-core",
+					BelongsToCell: "accesscore",
 					Dir:           "wrong-dir",
-					CellDir:       "access-core",
+					CellDir:       "accesscore",
 				}
 			},
 			wantCount: 1,
@@ -494,7 +494,7 @@ func TestREF09(t *testing.T) {
 		{
 			name: "valid l0 dependency",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].L0Dependencies = []metadata.L0DepMeta{
+				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
 					{Cell: "shared-crypto", Reason: "hashing"},
 				}
 			},
@@ -503,7 +503,7 @@ func TestREF09(t *testing.T) {
 		{
 			name: "missing l0 dependency target",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].L0Dependencies = []metadata.L0DepMeta{
+				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
 					{Cell: "nonexistent", Reason: "missing"},
 				}
 			},
@@ -537,9 +537,9 @@ func TestTOPO01(t *testing.T) {
 		{
 			name: "wrong role for http contract",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/bad-role"] = &metadata.SliceMeta{
+				pm.Slices["accesscore/bad-role"] = &metadata.SliceMeta{
 					ID:            "bad-role",
-					BelongsToCell: "access-core",
+					BelongsToCell: "accesscore",
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "http.auth.login.v1", Role: "publish"}, // publish is event role
 					},
@@ -573,11 +573,11 @@ func TestTOPO02(t *testing.T) {
 		{
 			name: "provider mismatch",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["audit-core/wrong-provider"] = &metadata.SliceMeta{
+				pm.Slices["auditcore/wrong-provider"] = &metadata.SliceMeta{
 					ID:            "wrong-provider",
-					BelongsToCell: "audit-core",
+					BelongsToCell: "auditcore",
 					ContractUsages: []metadata.ContractUsage{
-						{Contract: "http.auth.login.v1", Role: "serve"}, // server is access-core
+						{Contract: "http.auth.login.v1", Role: "serve"}, // server is accesscore
 					},
 					Verify: metadata.SliceVerifyMeta{
 						Contract: []string{"contract.http.auth.login.v1.serve"},
@@ -612,12 +612,12 @@ func TestTOPO03(t *testing.T) {
 		{
 			name: "consumer not in consumers list",
 			setup: func(pm *metadata.ProjectMeta) {
-				// access-core is not in the subscribers list for event.session.created.v1
-				pm.Slices["access-core/wrong-consumer"] = &metadata.SliceMeta{
+				// accesscore is not in the subscribers list for event.session.created.v1
+				pm.Slices["accesscore/wrong-consumer"] = &metadata.SliceMeta{
 					ID:            "wrong-consumer",
-					BelongsToCell: "access-core",
+					BelongsToCell: "accesscore",
 					ContractUsages: []metadata.ContractUsage{
-						{Contract: "event.session.created.v1", Role: "subscribe"}, // access-core is publisher, not subscriber
+						{Contract: "event.session.created.v1", Role: "subscribe"}, // accesscore is publisher, not subscriber
 					},
 				}
 			},
@@ -627,7 +627,7 @@ func TestTOPO03(t *testing.T) {
 			name: "wildcard consumer allows any cell",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{"*"}
-				// audit-core/audit-write subscribes to this contract; "*" should match
+				// auditcore/audit-write subscribes to this contract; "*" should match
 			},
 			wantCount: 0,
 		},
@@ -658,7 +658,7 @@ func TestTOPO04(t *testing.T) {
 			name: "contract level exceeds cell level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].ConsistencyLevel = "L4"
-				// ownerCell access-core is L2
+				// ownerCell accesscore is L2
 			},
 			wantCount: 1,
 		},
@@ -677,7 +677,7 @@ func TestTOPO04(t *testing.T) {
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
 						Server:  "ext-gateway",
-						Clients: []string{"access-core"},
+						Clients: []string{"accesscore"},
 					},
 				}
 			},
@@ -698,7 +698,7 @@ func TestTOPO04(t *testing.T) {
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
 						Server:  "ext-gateway",
-						Clients: []string{"access-core"},
+						Clients: []string{"accesscore"},
 					},
 				}
 			},
@@ -719,7 +719,7 @@ func TestTOPO04(t *testing.T) {
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
 						Server:  "ext-gateway",
-						Clients: []string{"access-core"},
+						Clients: []string{"accesscore"},
 					},
 				}
 			},
@@ -748,7 +748,7 @@ func TestTOPO04_EmptyMaxConsistencyLevel(t *testing.T) {
 		OwnerCell:        "ext-gateway",
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
-		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"access-core"}},
+		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"accesscore"}},
 	}
 
 	val := NewValidator(pm, "")
@@ -767,7 +767,7 @@ func TestTOPO04_MalformedMessage(t *testing.T) {
 		OwnerCell:        "ext-gateway",
 		ConsistencyLevel: "L2",
 		Lifecycle:        "active",
-		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"access-core"}},
+		Endpoints:        metadata.EndpointsMeta{Server: "ext-gateway", Clients: []string{"accesscore"}},
 	}
 
 	val := NewValidator(pm, "")
@@ -794,12 +794,12 @@ func TestTOPO05(t *testing.T) {
 				pm.Contracts["http.crypto.v1"] = &metadata.ContractMeta{
 					ID:               "http.crypto.v1",
 					Kind:             "http",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L0",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
 						Server:  "shared-crypto", // L0 cell
-						Clients: []string{"access-core"},
+						Clients: []string{"accesscore"},
 					},
 				}
 			},
@@ -811,11 +811,11 @@ func TestTOPO05(t *testing.T) {
 				pm.Contracts["http.crypto.v1"] = &metadata.ContractMeta{
 					ID:               "http.crypto.v1",
 					Kind:             "http",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L0",
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
-						Server:  "access-core",
+						Server:  "accesscore",
 						Clients: []string{"shared-crypto"}, // L0 cell
 					},
 				}
@@ -850,7 +850,7 @@ func TestTOPO06(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Assemblies["edge-bundle"] = &metadata.AssemblyMeta{
 					ID:    "edge-bundle",
-					Cells: []string{"access-core"}, // also in core-bundle
+					Cells: []string{"accesscore"}, // also in core-bundle
 					Build: metadata.BuildMeta{
 						Entrypoint:     "cmd/edge-bundle/main.go",
 						Binary:         "edge-bundle",
@@ -888,7 +888,7 @@ func TestVERIFY01(t *testing.T) {
 		{
 			name: "missing verify entry for provider",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+				pm.Slices["accesscore/session-login"].Verify.Contract = []string{
 					// removed "contract.http.auth.login.v1.serve"
 					"contract.event.session.created.v1.publish",
 					"contract.projection.session.active.v1.provide",
@@ -899,12 +899,12 @@ func TestVERIFY01(t *testing.T) {
 		{
 			name: "waiver covers missing verify entry",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+				pm.Slices["accesscore/session-login"].Verify.Contract = []string{
 					// removed "contract.http.auth.login.v1.serve"
 					"contract.event.session.created.v1.publish",
 					"contract.projection.session.active.v1.provide",
 				}
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{
 						Contract:  "http.auth.login.v1",
 						Owner:     "platform",
@@ -918,11 +918,11 @@ func TestVERIFY01(t *testing.T) {
 		{
 			name: "expired waiver does not cover",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+				pm.Slices["accesscore/session-login"].Verify.Contract = []string{
 					"contract.event.session.created.v1.publish",
 					"contract.projection.session.active.v1.provide",
 				}
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{
 						Contract:  "http.auth.login.v1",
 						Owner:     "platform",
@@ -936,11 +936,11 @@ func TestVERIFY01(t *testing.T) {
 		{
 			name: "waiver with empty expiresAt does not cover",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+				pm.Slices["accesscore/session-login"].Verify.Contract = []string{
 					"contract.event.session.created.v1.publish",
 					"contract.projection.session.active.v1.provide",
 				}
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{
 						Contract:  "http.auth.login.v1",
 						Owner:     "platform",
@@ -954,11 +954,11 @@ func TestVERIFY01(t *testing.T) {
 		{
 			name: "waiver with unparseable expiresAt does not cover",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+				pm.Slices["accesscore/session-login"].Verify.Contract = []string{
 					"contract.event.session.created.v1.publish",
 					"contract.projection.session.active.v1.provide",
 				}
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{
 						Contract:  "http.auth.login.v1",
 						Owner:     "platform",
@@ -972,7 +972,7 @@ func TestVERIFY01(t *testing.T) {
 		{
 			name: "consumer role without verify entry triggers error",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["audit-core/audit-write"].Verify.Contract = nil
+				pm.Slices["auditcore/audit-write"].Verify.Contract = nil
 			},
 			wantCount: 1,
 		},
@@ -1002,7 +1002,7 @@ func TestVERIFY02(t *testing.T) {
 		{
 			name: "valid future waiver with all fields",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "http.auth.login.v1", Owner: "platform", Reason: "testing", ExpiresAt: "2099-12-31"},
 				}
 			},
@@ -1011,7 +1011,7 @@ func TestVERIFY02(t *testing.T) {
 		{
 			name: "expired waiver",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "http.auth.login.v1", Owner: "platform", Reason: "old", ExpiresAt: "2020-01-01"},
 				}
 			},
@@ -1020,7 +1020,7 @@ func TestVERIFY02(t *testing.T) {
 		{
 			name: "invalid date format",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "http.auth.login.v1", Owner: "platform", Reason: "test", ExpiresAt: "not-a-date"},
 				}
 			},
@@ -1029,7 +1029,7 @@ func TestVERIFY02(t *testing.T) {
 		{
 			name: "missing contract field",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "", Owner: "platform", Reason: "test", ExpiresAt: "2099-12-31"},
 				}
 			},
@@ -1038,7 +1038,7 @@ func TestVERIFY02(t *testing.T) {
 		{
 			name: "missing owner field",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "http.auth.login.v1", Owner: "", Reason: "test", ExpiresAt: "2099-12-31"},
 				}
 			},
@@ -1047,7 +1047,7 @@ func TestVERIFY02(t *testing.T) {
 		{
 			name: "missing reason field",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "http.auth.login.v1", Owner: "platform", Reason: "", ExpiresAt: "2099-12-31"},
 				}
 			},
@@ -1056,7 +1056,7 @@ func TestVERIFY02(t *testing.T) {
 		{
 			name: "missing expiresAt field",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "http.auth.login.v1", Owner: "platform", Reason: "test", ExpiresAt: ""},
 				}
 			},
@@ -1065,7 +1065,7 @@ func TestVERIFY02(t *testing.T) {
 		{
 			name: "all fields missing",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{},
 				}
 			},
@@ -1087,7 +1087,7 @@ func TestVERIFY02_TimeOverride(t *testing.T) {
 	t.Parallel()
 
 	pm := validProject()
-	pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+	pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 		{Contract: "http.auth.login.v1", Owner: "platform", Reason: "test", ExpiresAt: "2026-04-04"}, // yesterday
 	}
 
@@ -1114,7 +1114,7 @@ func TestVERIFY03(t *testing.T) {
 		{
 			name: "l0 dependency targets L0 cell",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].L0Dependencies = []metadata.L0DepMeta{
+				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
 					{Cell: "shared-crypto", Reason: "hashing"},
 				}
 			},
@@ -1123,8 +1123,8 @@ func TestVERIFY03(t *testing.T) {
 		{
 			name: "l0 dependency targets non-L0 cell",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].L0Dependencies = []metadata.L0DepMeta{
-					{Cell: "audit-core", Reason: "wrong"}, // audit-core is L2
+				pm.Cells["accesscore"].L0Dependencies = []metadata.L0DepMeta{
+					{Cell: "auditcore", Reason: "wrong"}, // auditcore is L2
 				}
 			},
 			wantCount: 1,
@@ -1156,7 +1156,7 @@ func TestVERIFY04(t *testing.T) {
 			name: "active contract without provider-role slice fails",
 			setup: func(pm *metadata.ProjectMeta) {
 				// Remove the provide usage from the only slice that provides this contract.
-				s := pm.Slices["access-core/session-login"]
+				s := pm.Slices["accesscore/session-login"]
 				s.ContractUsages = []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 					{Contract: "event.session.created.v1", Role: "publish"},
@@ -1173,7 +1173,7 @@ func TestVERIFY04(t *testing.T) {
 			name: "draft contract without provider-role slice is OK",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["projection.session.active.v1"].Lifecycle = "draft"
-				s := pm.Slices["access-core/session-login"]
+				s := pm.Slices["accesscore/session-login"]
 				s.ContractUsages = []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 					{Contract: "event.session.created.v1", Role: "publish"},
@@ -1199,7 +1199,7 @@ func TestVERIFY04(t *testing.T) {
 					Lifecycle:        "active",
 					Endpoints: metadata.EndpointsMeta{
 						Server:  "ext-gateway", // actor, not a cell
-						Clients: []string{"access-core"},
+						Clients: []string{"accesscore"},
 					},
 				}
 			},
@@ -1231,42 +1231,42 @@ func TestVERIFY05(t *testing.T) {
 		{
 			name: "smoke ref missing third segment",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Verify.Smoke = []string{"smoke.access-core"}
+				pm.Cells["accesscore"].Verify.Smoke = []string{"smoke.accesscore"}
 			},
 			wantCount: 1,
 		},
 		{
 			name: "unknown prefix",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Verify.Smoke = []string{"integration.access-core.startup"}
+				pm.Cells["accesscore"].Verify.Smoke = []string{"integration.accesscore.startup"}
 			},
 			wantCount: 1,
 		},
 		{
 			name: "smoke ref references non-existent cell",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Verify.Smoke = []string{"smoke.nonexistent-cell.startup"}
+				pm.Cells["accesscore"].Verify.Smoke = []string{"smoke.nonexistent-cell.startup"}
 			},
 			wantCount: 1,
 		},
 		{
 			name: "unit ref valid format",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Unit = []string{"unit.session-login.service"}
+				pm.Slices["accesscore/session-login"].Verify.Unit = []string{"unit.session-login.service"}
 			},
 			wantCount: 0,
 		},
 		{
 			name: "unit ref too few segments",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Unit = []string{"unit.service"}
+				pm.Slices["accesscore/session-login"].Verify.Unit = []string{"unit.service"}
 			},
 			wantCount: 1,
 		},
 		{
 			name: "contract ref valid format",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Contract = []string{
+				pm.Slices["accesscore/session-login"].Verify.Contract = []string{
 					"contract.http.auth.login.v1.serve",
 					"contract.event.session.created.v1.publish",
 					"contract.projection.session.active.v1.provide",
@@ -1304,7 +1304,7 @@ func TestVERIFY05(t *testing.T) {
 		{
 			name: "empty scope segment rejected",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Unit = []string{"unit..service"}
+				pm.Slices["accesscore/session-login"].Verify.Unit = []string{"unit..service"}
 			},
 			wantCount: 1,
 		},
@@ -1320,15 +1320,15 @@ func TestVERIFY05(t *testing.T) {
 		{
 			name: "leading dot ref rejected as empty prefix",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Verify.Smoke = []string{".foo.bar"}
+				pm.Cells["accesscore"].Verify.Smoke = []string{".foo.bar"}
 			},
 			wantCount: 1,
 		},
 		{
 			name: "multiple invalid refs accumulate",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Verify.Smoke = []string{"bad.ref"}
-				pm.Slices["access-core/session-login"].Verify.Unit = []string{"also-bad"}
+				pm.Cells["accesscore"].Verify.Smoke = []string{"bad.ref"}
+				pm.Slices["accesscore/session-login"].Verify.Unit = []string{"also-bad"}
 			},
 			wantCount: 2,
 		},
@@ -1397,7 +1397,7 @@ func TestFMT02(t *testing.T) {
 		{
 			name: "invalid cell type",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Type = "invalid"
+				pm.Cells["accesscore"].Type = "invalid"
 			},
 			wantCount: 1,
 		},
@@ -1427,7 +1427,7 @@ func TestFMT03(t *testing.T) {
 		{
 			name: "invalid cell consistency level",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].ConsistencyLevel = "L9"
+				pm.Cells["accesscore"].ConsistencyLevel = "L9"
 			},
 			wantCount: 1,
 		},
@@ -1538,9 +1538,9 @@ func TestFMT05(t *testing.T) {
 		{
 			name: "invalid role string",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/bad-role"] = &metadata.SliceMeta{
+				pm.Slices["accesscore/bad-role"] = &metadata.SliceMeta{
 					ID:            "bad-role",
-					BelongsToCell: "access-core",
+					BelongsToCell: "accesscore",
 					ContractUsages: []metadata.ContractUsage{
 						{Contract: "http.auth.login.v1", Role: "consume"}, // not a valid role
 					},
@@ -1579,10 +1579,10 @@ func TestFMT09(t *testing.T) {
 				pm.Contracts["grpc.test.v1"] = &metadata.ContractMeta{
 					ID:               "grpc.test.v1",
 					Kind:             "grpc",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "access-core"},
+					Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
 				}
 			},
 			wantCount: 1,
@@ -1593,7 +1593,7 @@ func TestFMT09(t *testing.T) {
 				pm.Contracts["empty.kind.v1"] = &metadata.ContractMeta{
 					ID:               "empty.kind.v1",
 					Kind:             "",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints:        metadata.EndpointsMeta{},
@@ -1607,10 +1607,10 @@ func TestFMT09(t *testing.T) {
 				pm.Contracts["command.test.v1"] = &metadata.ContractMeta{
 					ID:               "command.test.v1",
 					Kind:             "command",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Handler: "access-core"},
+					Endpoints:        metadata.EndpointsMeta{Handler: "accesscore"},
 				}
 			},
 			wantCount: 0,
@@ -1621,10 +1621,10 @@ func TestFMT09(t *testing.T) {
 				pm.Contracts["projection.test.v1"] = &metadata.ContractMeta{
 					ID:               "projection.test.v1",
 					Kind:             "projection",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Provider: "access-core"},
+					Endpoints:        metadata.EndpointsMeta{Provider: "accesscore"},
 				}
 			},
 			wantCount: 0,
@@ -1730,8 +1730,8 @@ func TestContractProviderAndConsumers(t *testing.T) {
 }
 
 func TestFilePathHelpers(t *testing.T) {
-	assert.Equal(t, "cells/access-core/cell.yaml", cellFile("access-core"))
-	assert.Equal(t, "cells/access-core/slices/session-login/slice.yaml", sliceFile("access-core/session-login"))
+	assert.Equal(t, "cells/accesscore/cell.yaml", cellFile("accesscore"))
+	assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", sliceFile("accesscore/session-login"))
 	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml", contractFile("http.auth.login.v1"))
 	assert.Equal(t, "journeys/J-sso-login.yaml", journeyFile("J-sso-login"))
 	assert.Equal(t, "assemblies/core-bundle/assembly.yaml", assemblyFile("core-bundle"))
@@ -1805,7 +1805,7 @@ func TestFMT06(t *testing.T) {
 		{
 			name: "non-L0 cell without schema.primary",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Schema.Primary = ""
+				pm.Cells["accesscore"].Schema.Primary = ""
 			},
 			wantCount: 1,
 		},
@@ -1858,7 +1858,7 @@ func TestFMT07(t *testing.T) {
 				pm.Contracts["cmd.test.v1"] = &metadata.ContractMeta{
 					ID:               "cmd.test.v1",
 					Kind:             "command",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints:        metadata.EndpointsMeta{Handler: ""},
@@ -1872,7 +1872,7 @@ func TestFMT07(t *testing.T) {
 				pm.Contracts["projection.test.v1"] = &metadata.ContractMeta{
 					ID:               "projection.test.v1",
 					Kind:             "projection",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints:        metadata.EndpointsMeta{Provider: ""},
@@ -1924,10 +1924,10 @@ func TestFMT08(t *testing.T) {
 				pm.Contracts["command.test.v1"] = &metadata.ContractMeta{
 					ID:               "command.test.v1",
 					Kind:             "command",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Handler: "access-core"},
+					Endpoints:        metadata.EndpointsMeta{Handler: "accesscore"},
 				}
 			},
 			wantCount: 0,
@@ -1938,10 +1938,10 @@ func TestFMT08(t *testing.T) {
 				pm.Contracts["nodot"] = &metadata.ContractMeta{
 					ID:               "nodot",
 					Kind:             "http",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "access-core"},
+					Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
 				}
 			},
 			wantCount:     1,
@@ -2224,7 +2224,7 @@ func TestREF13(t *testing.T) {
 				pm.Contracts["http.ext.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.v1",
 					Kind:             "http",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints:        metadata.EndpointsMeta{Server: "edge-bff"},
@@ -2238,7 +2238,7 @@ func TestREF13(t *testing.T) {
 				pm.Contracts["http.unknown.v1"] = &metadata.ContractMeta{
 					ID:               "http.unknown.v1",
 					Kind:             "http",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints:        metadata.EndpointsMeta{Server: "nonexistent-service"},
@@ -2252,7 +2252,7 @@ func TestREF13(t *testing.T) {
 				pm.Contracts["http.noprov.v1"] = &metadata.ContractMeta{
 					ID:               "http.noprov.v1",
 					Kind:             "http",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
 					Endpoints:        metadata.EndpointsMeta{Server: ""},
@@ -2351,7 +2351,7 @@ func TestREF15(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Assemblies["wrong-key"] = &metadata.AssemblyMeta{
 					ID:    "actual-id",
-					Cells: []string{"access-core"},
+					Cells: []string{"accesscore"},
 					Build: metadata.BuildMeta{Entrypoint: "cmd/main.go"},
 				}
 			},
@@ -2389,7 +2389,7 @@ func TestADV03(t *testing.T) {
 		{
 			name: "waiver matches contractUsage",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "http.auth.login.v1", Owner: "platform", Reason: "test", ExpiresAt: "2099-12-31"},
 				}
 			},
@@ -2398,7 +2398,7 @@ func TestADV03(t *testing.T) {
 		{
 			name: "waiver has no matching contractUsage",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "http.nonexistent.v1", Owner: "platform", Reason: "orphan", ExpiresAt: "2099-12-31"},
 				}
 			},
@@ -2407,7 +2407,7 @@ func TestADV03(t *testing.T) {
 		{
 			name: "waiver with empty contract skipped",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Waivers = []metadata.WaiverMeta{
+				pm.Slices["accesscore/session-login"].Verify.Waivers = []metadata.WaiverMeta{
 					{Contract: "", Owner: "platform", Reason: "empty", ExpiresAt: "2099-12-31"},
 				}
 			},
@@ -2502,7 +2502,7 @@ func TestActorExists(t *testing.T) {
 	pm := validProject()
 	val := NewValidator(pm, "")
 
-	assert.True(t, val.actorExists("access-core"), "cell should be a known actor")
+	assert.True(t, val.actorExists("accesscore"), "cell should be a known actor")
 	assert.True(t, val.actorExists("edge-bff"), "external actor should be known")
 	assert.False(t, val.actorExists("nonexistent"), "unknown ID should not exist")
 }
@@ -2638,10 +2638,10 @@ func TestFMT10(t *testing.T) {
 				pm.Contracts["http/auth/login/v1"] = &metadata.ContractMeta{
 					ID:               "http/auth/login/v1",
 					Kind:             "http",
-					OwnerCell:        "access-core",
+					OwnerCell:        "accesscore",
 					ConsistencyLevel: "L1",
 					Lifecycle:        "active",
-					Endpoints:        metadata.EndpointsMeta{Server: "access-core"},
+					Endpoints:        metadata.EndpointsMeta{Server: "accesscore"},
 				}
 			},
 			wantCount: 1,
@@ -2675,7 +2675,7 @@ func TestFMT11(t *testing.T) {
 		{
 			name: "cell missing owner.team",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Owner.Team = ""
+				pm.Cells["accesscore"].Owner.Team = ""
 			},
 			wantCount: 1,
 			wantField: "owner.team",
@@ -2683,7 +2683,7 @@ func TestFMT11(t *testing.T) {
 		{
 			name: "cell missing owner.role",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Owner.Role = ""
+				pm.Cells["accesscore"].Owner.Role = ""
 			},
 			wantCount: 1,
 			wantField: "owner.role",
@@ -2691,7 +2691,7 @@ func TestFMT11(t *testing.T) {
 		{
 			name: "cell missing verify.smoke",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Verify.Smoke = nil
+				pm.Cells["accesscore"].Verify.Smoke = nil
 			},
 			wantCount: 1,
 			wantField: "verify.smoke",
@@ -2699,7 +2699,7 @@ func TestFMT11(t *testing.T) {
 		{
 			name: "cell with empty verify.smoke slice",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Verify.Smoke = []string{}
+				pm.Cells["accesscore"].Verify.Smoke = []string{}
 			},
 			wantCount: 1,
 			wantField: "verify.smoke",
@@ -2707,17 +2707,17 @@ func TestFMT11(t *testing.T) {
 		{
 			name: "cell missing all three fields",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Owner.Team = ""
-				pm.Cells["access-core"].Owner.Role = ""
-				pm.Cells["access-core"].Verify.Smoke = nil
+				pm.Cells["accesscore"].Owner.Team = ""
+				pm.Cells["accesscore"].Owner.Role = ""
+				pm.Cells["accesscore"].Verify.Smoke = nil
 			},
 			wantCount: 3,
 		},
 		{
 			name: "multiple cells with missing fields",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].Owner.Team = ""
-				pm.Cells["audit-core"].Owner.Role = ""
+				pm.Cells["accesscore"].Owner.Team = ""
+				pm.Cells["auditcore"].Owner.Role = ""
 			},
 			wantCount: 2,
 		},
@@ -2756,22 +2756,22 @@ func TestFMT12(t *testing.T) {
 		{
 			name: "slice missing verify.unit (nil)",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Unit = nil
+				pm.Slices["accesscore/session-login"].Verify.Unit = nil
 			},
 			wantCount: 1,
 		},
 		{
 			name: "slice with empty verify.unit slice",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Unit = []string{}
+				pm.Slices["accesscore/session-login"].Verify.Unit = []string{}
 			},
 			wantCount: 1,
 		},
 		{
 			name: "multiple slices missing verify.unit",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["access-core/session-login"].Verify.Unit = nil
-				pm.Slices["audit-core/audit-write"].Verify.Unit = nil
+				pm.Slices["accesscore/session-login"].Verify.Unit = nil
+				pm.Slices["auditcore/audit-write"].Verify.Unit = nil
 			},
 			wantCount: 2,
 		},
@@ -3019,8 +3019,8 @@ func TestTOPO07(t *testing.T) {
 		{
 			name: "cell consumer is not checked by TOPO-07",
 			setup: func(pm *metadata.ProjectMeta) {
-				// audit-core is a cell consumer (L2), contract is L1: TOPO-07 should skip cells
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"audit-core"}
+				// auditcore is a cell consumer (L2), contract is L1: TOPO-07 should skip cells
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"auditcore"}
 			},
 			wantCount: 0,
 		},
@@ -3117,9 +3117,9 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 			}
 			c := &metadata.ContractMeta{
 				ID: tt.kind + ".test.v1", Kind: tt.kind,
-				OwnerCell: "access-core", ConsistencyLevel: "L2",
+				OwnerCell: "accesscore", ConsistencyLevel: "L2",
 				Lifecycle: "active",
-				Endpoints: metadata.EndpointsMeta{Server: "access-core", Publisher: "access-core", Handler: "access-core", Provider: "access-core"},
+				Endpoints: metadata.EndpointsMeta{Server: "accesscore", Publisher: "accesscore", Handler: "accesscore", Provider: "accesscore"},
 			}
 			tt.setup(c)
 			pm.Contracts[c.ID] = c
@@ -3274,7 +3274,7 @@ func TestREF16(t *testing.T) {
 		pm := validProject()
 		pm.Assemblies["../../etc"] = &metadata.AssemblyMeta{
 			ID:    "../../etc",
-			Cells: []string{"access-core"},
+			Cells: []string{"accesscore"},
 			Build: metadata.BuildMeta{
 				Entrypoint: "cmd/evil/main.go",
 				Binary:     "evil",
@@ -3303,7 +3303,7 @@ func TestREF16(t *testing.T) {
 		pm := validProject()
 		pm.Assemblies["edge-bundle"] = &metadata.AssemblyMeta{
 			ID:    "edge-bundle",
-			Cells: []string{"access-core"},
+			Cells: []string{"accesscore"},
 			Build: metadata.BuildMeta{
 				Entrypoint:     "cmd/edge-bundle/main.go",
 				Binary:         "edge-bundle",
@@ -3346,7 +3346,7 @@ func TestFMT14(t *testing.T) {
 		{
 			name: "only one slice missing",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Slices["audit-core/audit-write"].AllowedFiles = nil
+				pm.Slices["auditcore/audit-write"].AllowedFiles = nil
 			},
 			wantCount: 1,
 		},
@@ -3573,16 +3573,16 @@ func TestOUTGUARD01(t *testing.T) {
 		{
 			name: "L2 cell without durabilityMode — error",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].DurabilityMode = ""
-				pm.Cells["audit-core"].DurabilityMode = ""
+				pm.Cells["accesscore"].DurabilityMode = ""
+				pm.Cells["auditcore"].DurabilityMode = ""
 			},
 			wantCount: 2, // both L2 cells missing durabilityMode
 		},
 		{
 			name: "L2 cell with durabilityMode — no warning",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].DurabilityMode = "durable"
-				pm.Cells["audit-core"].DurabilityMode = "durable"
+				pm.Cells["accesscore"].DurabilityMode = "durable"
+				pm.Cells["auditcore"].DurabilityMode = "durable"
 			},
 			wantCount: 0,
 		},
@@ -3590,8 +3590,8 @@ func TestOUTGUARD01(t *testing.T) {
 			name: "L0 cell without durabilityMode — no warning",
 			setup: func(pm *metadata.ProjectMeta) {
 				// shared-crypto is L0 — no durability declaration required.
-				pm.Cells["access-core"].DurabilityMode = "durable"
-				pm.Cells["audit-core"].DurabilityMode = "durable"
+				pm.Cells["accesscore"].DurabilityMode = "durable"
+				pm.Cells["auditcore"].DurabilityMode = "durable"
 				pm.Cells["shared-crypto"].DurabilityMode = ""
 			},
 			wantCount: 0,
@@ -3599,8 +3599,8 @@ func TestOUTGUARD01(t *testing.T) {
 		{
 			name: "mixed — only L2+ without durabilityMode warned",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].DurabilityMode = "durable"
-				pm.Cells["audit-core"].DurabilityMode = ""    // L2, should warn
+				pm.Cells["accesscore"].DurabilityMode = "durable"
+				pm.Cells["auditcore"].DurabilityMode = ""     // L2, should warn
 				pm.Cells["shared-crypto"].DurabilityMode = "" // L0, should not warn
 			},
 			wantCount: 1,
@@ -3608,8 +3608,8 @@ func TestOUTGUARD01(t *testing.T) {
 		{
 			name: "L1 cell without durabilityMode — no warning",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Cells["access-core"].DurabilityMode = "durable"
-				pm.Cells["audit-core"].DurabilityMode = "durable"
+				pm.Cells["accesscore"].DurabilityMode = "durable"
+				pm.Cells["auditcore"].DurabilityMode = "durable"
 				pm.Cells["l1-cell"] = &metadata.CellMeta{
 					ID:               "l1-cell",
 					Type:             "core",
@@ -3640,8 +3640,8 @@ func TestOUTGUARD01(t *testing.T) {
 func TestOUTGUARD01_L3_L4_Warning(t *testing.T) {
 	pm := validProject()
 	// Suppress existing L2 warnings.
-	pm.Cells["access-core"].DurabilityMode = "durable"
-	pm.Cells["audit-core"].DurabilityMode = "durable"
+	pm.Cells["accesscore"].DurabilityMode = "durable"
+	pm.Cells["auditcore"].DurabilityMode = "durable"
 	// Add L3 and L4 cells without durabilityMode.
 	pm.Cells["l3-cell"] = &metadata.CellMeta{
 		ID:               "l3-cell",
@@ -3668,7 +3668,7 @@ func TestValidate_OUTGUARD01_Registration(t *testing.T) {
 	// and assert OUTGUARD-01 is registered and fires. Prevents silent
 	// deregistration if someone removes the rule from Validate().
 	pm := validProject()
-	pm.Cells["access-core"].DurabilityMode = "" // L2, missing → error
+	pm.Cells["accesscore"].DurabilityMode = "" // L2, missing → error
 
 	val := NewValidator(pm, ".")
 	all := val.Validate()
@@ -3678,8 +3678,8 @@ func TestValidate_OUTGUARD01_Registration(t *testing.T) {
 
 func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 	pm := validProject()
-	pm.Cells["access-core"].DurabilityMode = "banana" // invalid value
-	pm.Cells["audit-core"].DurabilityMode = "durable"
+	pm.Cells["accesscore"].DurabilityMode = "banana" // invalid value
+	pm.Cells["auditcore"].DurabilityMode = "durable"
 
 	val := NewValidator(pm, ".")
 	got := findByCode(val.validateOUTGUARD01(), "OUTGUARD-01")

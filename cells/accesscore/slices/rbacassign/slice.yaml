@@ -1,0 +1,22 @@
+id: rbacassign
+belongsToCell: accesscore
+contractUsages:
+  - contract: http.auth.role.assign.v1
+    role: serve
+  - contract: http.auth.role.revoke.v1
+    role: serve
+  - contract: event.role.assigned.v1
+    role: publish
+  - contract: event.role.revoked.v1
+    role: publish
+verify:
+  unit:
+    - unit.rbacassign.service
+  contract:
+    - contract.http.auth.role.assign.v1.serve
+    - contract.http.auth.role.revoke.v1.serve
+    - contract.event.role.assigned.v1.publish
+    - contract.event.role.revoked.v1.publish
+
+allowedFiles:
+  - cells/accesscore/slices/rbacassign/**

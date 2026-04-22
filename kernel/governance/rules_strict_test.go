@@ -12,19 +12,19 @@ import (
 func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/session-login": {
+			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "access-core",
+				BelongsToCell: "accesscore",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -33,10 +33,10 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 					Contract: []string{"contract.http.auth.login.v1.serve"},
 				},
 				AllowedFiles: []string{
-					"cells/access-core/slices/session-login/**",
+					"cells/accesscore/slices/session-login/**",
 				},
 				Dir:     "session-login",
-				CellDir: "access-core",
+				CellDir: "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -75,19 +75,19 @@ func TestStrictValidator_KebabDirDisallowed(t *testing.T) {
 func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/sessionlogin": {
+			"accesscore/sessionlogin": {
 				ID:            "sessionlogin",
-				BelongsToCell: "access-core",
+				BelongsToCell: "accesscore",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -97,11 +97,11 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 				},
 				// First entry points to wrong (kebab) path.
 				AllowedFiles: []string{
-					"cells/access-core/slices/session-login/**",
-					"cells/access-core/slices/sessionlogin/**",
+					"cells/accesscore/slices/session-login/**",
+					"cells/accesscore/slices/sessionlogin/**",
 				},
 				Dir:     "sessionlogin",
-				CellDir: "access-core",
+				CellDir: "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -140,20 +140,20 @@ func TestValidateStrictFailFast_ShortCircuitsOnBaseError(t *testing.T) {
 	// FMT-16 in strict mode.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				// schema.primary intentionally empty → triggers FMT-01 error.
 				Schema: metadata.SchemaMeta{Primary: ""},
-				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Verify: metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/session-login": {
+			"accesscore/session-login": {
 				ID:            "session-login",
-				BelongsToCell: "access-core",
+				BelongsToCell: "accesscore",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -161,9 +161,9 @@ func TestValidateStrictFailFast_ShortCircuitsOnBaseError(t *testing.T) {
 					Unit:     []string{"unit.session-login.service"},
 					Contract: []string{"contract.http.auth.login.v1.serve"},
 				},
-				AllowedFiles: []string{"cells/access-core/slices/session-login/**"},
+				AllowedFiles: []string{"cells/accesscore/slices/session-login/**"},
 				Dir:          "session-login",
-				CellDir:      "access-core",
+				CellDir:      "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -195,27 +195,27 @@ func TestValidateStrictFailFast_RunsFMT16FMT17WhenNoBaseError(t *testing.T) {
 	// slice key uses a kebab-case directory that strict mode (FMT-16) must flag.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/session-login": {
+			"accesscore/session-login": {
 				ID:             "session-login",
-				BelongsToCell:  "access-core",
+				BelongsToCell:  "accesscore",
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.session-login.service"},
 					Contract: []string{},
 				},
-				AllowedFiles: []string{"cells/access-core/slices/session-login/**"},
+				AllowedFiles: []string{"cells/accesscore/slices/session-login/**"},
 				Dir:          "session-login",
-				CellDir:      "access-core",
+				CellDir:      "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -275,19 +275,19 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 	// standard rules actually fire some results.
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/sessionlogin": {
+			"accesscore/sessionlogin": {
 				ID:            "sessionlogin",
-				BelongsToCell: "access-core",
+				BelongsToCell: "accesscore",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -296,10 +296,10 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 					Contract: []string{"contract.http.auth.login.v1.serve"},
 				},
 				AllowedFiles: []string{
-					"cells/access-core/slices/sessionlogin/**",
+					"cells/accesscore/slices/sessionlogin/**",
 				},
 				Dir:     "sessionlogin",
-				CellDir: "access-core",
+				CellDir: "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -346,19 +346,19 @@ func TestValidateStrict_NonStrictEquivalentToValidate(t *testing.T) {
 func TestStrictValidator_NodashSliceClean(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/sessionlogin": {
+			"accesscore/sessionlogin": {
 				ID:            "sessionlogin",
-				BelongsToCell: "access-core",
+				BelongsToCell: "accesscore",
 				ContractUsages: []metadata.ContractUsage{
 					{Contract: "http.auth.login.v1", Role: "serve"},
 				},
@@ -367,10 +367,10 @@ func TestStrictValidator_NodashSliceClean(t *testing.T) {
 					Contract: []string{"contract.http.auth.login.v1.serve"},
 				},
 				AllowedFiles: []string{
-					"cells/access-core/slices/sessionlogin/**",
+					"cells/accesscore/slices/sessionlogin/**",
 				},
 				Dir:     "sessionlogin",
-				CellDir: "access-core",
+				CellDir: "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -394,30 +394,30 @@ func TestStrictValidator_NodashSliceClean(t *testing.T) {
 func TestStrictValidator_FMT16_PathIDSplit_KebabDirNoDashID(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
-				Dir:              "access-core",
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
+				Dir:              "accesscore",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			// Map key is "access-core/sessionlogin" (yaml id), but the
+			// Map key is "accesscore/sessionlogin" (yaml id), but the
 			// walked directory is the kebab-case "session-login".
-			"access-core/sessionlogin": {
+			"accesscore/sessionlogin": {
 				ID:             "sessionlogin",
-				BelongsToCell:  "access-core",
+				BelongsToCell:  "accesscore",
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.sessionlogin.service"},
 					Contract: []string{},
 				},
-				AllowedFiles: []string{"cells/access-core/slices/session-login/**"},
+				AllowedFiles: []string{"cells/accesscore/slices/session-login/**"},
 				Dir:          "session-login",
-				CellDir:      "access-core",
+				CellDir:      "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -446,28 +446,28 @@ func TestStrictValidator_FMT16_PathIDSplit_KebabDirNoDashID(t *testing.T) {
 func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
-				Dir:              "access-core",
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
+				Dir:              "accesscore",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/sessionlogin": {
+			"accesscore/sessionlogin": {
 				ID:             "sessionlogin",
-				BelongsToCell:  "access-core",
+				BelongsToCell:  "accesscore",
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.sessionlogin.service"},
 					Contract: []string{},
 				},
-				AllowedFiles: []string{"cells/access-core/slices/sessionlogin/**"},
+				AllowedFiles: []string{"cells/accesscore/slices/sessionlogin/**"},
 				Dir:          "session-login", // disk says kebab, yaml says no-dash
-				CellDir:      "access-core",
+				CellDir:      "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},
@@ -491,17 +491,19 @@ func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 
 // TestStrictValidator_FMTC1_KebabCellID verifies that FMT-C1 flags cell.yaml
 // ids containing '-' (kebab-case) in strict mode and is silent otherwise.
+// Uses synthetic ids (foo-bar) so later repo-wide sed renames do not erase
+// the kebab fixture.
 func TestStrictValidator_FMTC1_KebabCellID(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"foo-bar": {
+				ID:               "foo-bar",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_foobar"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.startup"}},
-				Dir:              "accesscore", // dir already no-dash, but id still dash
+				Dir:              "foobar", // dir already no-dash, but id still dash
 			},
 		},
 		Slices:     map[string]*metadata.SliceMeta{},
@@ -532,7 +534,8 @@ func TestStrictValidator_FMTC1_KebabCellID(t *testing.T) {
 }
 
 // TestStrictValidator_FMTA1_KebabAssemblyID verifies FMT-A1 flags
-// assembly.yaml ids containing '-' in strict mode.
+// assembly.yaml ids containing '-' in strict mode. Uses synthetic ids
+// (baz-qux) so later repo-wide sed renames do not erase the kebab fixture.
 func TestStrictValidator_FMTA1_KebabAssemblyID(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells:     map[string]*metadata.CellMeta{},
@@ -540,11 +543,11 @@ func TestStrictValidator_FMTA1_KebabAssemblyID(t *testing.T) {
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
-			"core-bundle": {
-				ID:    "core-bundle",
+			"baz-qux": {
+				ID:    "baz-qux",
 				Cells: []string{},
-				Build: metadata.BuildMeta{Entrypoint: "cmd/corebundle/main.go", Binary: "corebundle"},
-				Dir:   "corebundle",
+				Build: metadata.BuildMeta{Entrypoint: "cmd/bazqux/main.go", Binary: "bazqux"},
+				Dir:   "bazqux",
 			},
 		},
 	}
@@ -569,18 +572,19 @@ func TestStrictValidator_FMTA1_KebabAssemblyID(t *testing.T) {
 }
 
 // TestStrictValidator_FMT16_KebabCellDir verifies FMT-16 flags kebab cell
-// directories (not just slices).
+// directories (not just slices). Uses synthetic ids so later repo-wide sed
+// renames cannot accidentally clean up the kebab fixture.
 func TestStrictValidator_FMT16_KebabCellDir(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"accesscore": {
-				ID:               "accesscore",
+			"foobar": {
+				ID:               "foobar",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
-				Schema:           metadata.SchemaMeta{Primary: "cell_accesscore"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_foobar"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.startup"}},
-				Dir:              "access-core", // id clean but dir kebab
+				Dir:              "foo-bar", // id clean but dir kebab
 			},
 		},
 		Slices:     map[string]*metadata.SliceMeta{},
@@ -604,7 +608,8 @@ func TestStrictValidator_FMT16_KebabCellDir(t *testing.T) {
 }
 
 // TestStrictValidator_FMT16_KebabAssemblyDir verifies FMT-16 covers kebab
-// assembly directories.
+// assembly directories. Uses synthetic ids to insulate the fixture from
+// repo-wide sed renames.
 func TestStrictValidator_FMT16_KebabAssemblyDir(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells:     map[string]*metadata.CellMeta{},
@@ -612,11 +617,11 @@ func TestStrictValidator_FMT16_KebabAssemblyDir(t *testing.T) {
 		Contracts: map[string]*metadata.ContractMeta{},
 		Journeys:  map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{
-			"corebundle": {
-				ID:    "corebundle",
+			"bazqux": {
+				ID:    "bazqux",
 				Cells: []string{},
-				Build: metadata.BuildMeta{Entrypoint: "cmd/corebundle/main.go", Binary: "corebundle"},
-				Dir:   "core-bundle", // id clean but dir kebab
+				Build: metadata.BuildMeta{Entrypoint: "cmd/bazqux/main.go", Binary: "bazqux"},
+				Dir:   "baz-qux", // id clean but dir kebab
 			},
 		},
 	}
@@ -681,20 +686,20 @@ func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
 func TestStrictValidator_FMT17_AllowedFilesAgainstRealDir(t *testing.T) {
 	project := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.startup"}},
-				Dir:              "access-core",
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
+				Dir:              "accesscore",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/sessionlogin": {
+			"accesscore/sessionlogin": {
 				ID:             "sessionlogin",
-				BelongsToCell:  "access-core",
+				BelongsToCell:  "accesscore",
 				ContractUsages: []metadata.ContractUsage{},
 				Verify: metadata.SliceVerifyMeta{
 					Unit:     []string{"unit.sessionlogin.service"},
@@ -702,9 +707,9 @@ func TestStrictValidator_FMT17_AllowedFilesAgainstRealDir(t *testing.T) {
 				},
 				// allowedFiles points to the (no-dash) id path, lying about
 				// the real directory on disk.
-				AllowedFiles: []string{"cells/access-core/slices/sessionlogin/**"},
+				AllowedFiles: []string{"cells/accesscore/slices/sessionlogin/**"},
 				Dir:          "session-login",
-				CellDir:      "access-core",
+				CellDir:      "accesscore",
 			},
 		},
 		Contracts:  map[string]*metadata.ContractMeta{},

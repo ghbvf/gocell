@@ -1,0 +1,12 @@
+id: devicecell
+type: edge
+consistencyLevel: L4
+durabilityMode: durable
+owner:
+  team: examples
+  role: device-owner
+schema:
+  primary: devices
+verify:
+  smoke:
+    - smoke.devicecell.startup

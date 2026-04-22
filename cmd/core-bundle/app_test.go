@@ -62,10 +62,10 @@ func TestBuildApp_ValidationFail(t *testing.T) {
 func TestBuildApp_ModuleProvideError(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	shared := buildTestSharedDeps(t)
-	mod := errCellModule{name: "config-core", err: errors.New("db pool unavailable")}
+	mod := errCellModule{name: "configcore", err: errors.New("db pool unavailable")}
 	_, _, err := BuildApp(context.Background(), shared, mod)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "config-core")
+	assert.Contains(t, err.Error(), "configcore")
 }
 
 // TestBuildApp_NilModuleInList verifies that a nil entry in the module list

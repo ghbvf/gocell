@@ -1,0 +1,12 @@
+id: ordercell
+type: core
+consistencyLevel: L2
+durabilityMode: durable
+owner:
+  team: examples
+  role: order-owner
+schema:
+  primary: orders
+verify:
+  smoke:
+    - smoke.ordercell.startup
