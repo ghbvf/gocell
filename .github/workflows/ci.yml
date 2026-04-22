@@ -27,7 +27,11 @@ jobs:
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           version: v2.11
-          only-new-issues: true
+          # only-new-issues uses the GitHub pull-request diff API which
+          # refuses diffs larger than 300 files; fall back to
+          # --new-from-merge-base so mass-rename PRs (repo-wide renames,
+          # metadata id sweeps) still get "new issue" filtering.
+          args: --new-from-merge-base=origin/develop
 
       - name: Test
         run: go test -race -coverprofile=coverage.out -coverpkg=./... ./... -count=1 -timeout 5m
