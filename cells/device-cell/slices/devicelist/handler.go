@@ -44,7 +44,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 		Method:  "GET",
 		Path:    "/",
 		Handler: http.HandlerFunc(h.HandleList),
-		Policy:  auth.Authenticated(),
+		Policy:  auth.AnyRole("admin"),
 	})
 }
 

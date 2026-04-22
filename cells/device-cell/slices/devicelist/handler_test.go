@@ -32,7 +32,7 @@ func TestHandleList_OK(t *testing.T) {
 	h := newHandlerForTest(t)
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/", nil)
-	r = r.WithContext(auth.TestContext("user-1", nil))
+	r = r.WithContext(auth.TestContext("user-1", []string{"admin"}))
 
 	h.HandleList(w, r)
 

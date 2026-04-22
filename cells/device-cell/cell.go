@@ -190,7 +190,7 @@ func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 				Method:  "GET",
 				Path:    "/",
 				Handler: http.HandlerFunc(c.listHandler.HandleList),
-				Policy:  auth.Authenticated(),
+				Policy:  auth.AnyRole("admin"),
 			})
 			// Device status is queried by authenticated operators/devices.
 			auth.Declare(devices, auth.RouteDecl{

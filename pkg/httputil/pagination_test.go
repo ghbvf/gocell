@@ -1,6 +1,7 @@
 package httputil_test
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -61,6 +62,14 @@ func TestParsePageRequestOrWrite(t *testing.T) {
 			}
 			if tc.wantOK && w.Code != 0 && w.Code != http.StatusOK {
 				t.Errorf("unexpected write on ok=true: HTTP status=%d", w.Code)
+			}
+			if !tc.wantOK {
+				var body map[string]any
+				if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+					t.Errorf("response body is not JSON: %v", err)
+				} else if _, ok := body["error"]; !ok {
+					t.Errorf("response body missing 'error' field: %s", w.Body.String())
+				}
 			}
 		})
 	}

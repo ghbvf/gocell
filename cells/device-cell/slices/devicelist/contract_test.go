@@ -64,7 +64,7 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, nil)
-	req = req.WithContext(auth.TestContext("user-1", nil))
+	req = req.WithContext(auth.TestContext("user-1", []string{"admin"}))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 
@@ -74,4 +74,13 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"data":{"id":"dev-1"},"hasMore":false}`))
 	// MustRejectResponse: hasMore must be bool, not string
 	c.MustRejectResponse(t, []byte(`{"data":[],"hasMore":"yes"}`))
+
+	// 400: invalid limit parameter
+	rec400 := httptest.NewRecorder()
+	req400 := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?limit=notanumber", nil)
+	req400 = req400.WithContext(auth.TestContext("user-1", []string{"admin"}))
+	h.ServeHTTP(rec400, req400)
+	if rec400.Code != http.StatusBadRequest {
+		t.Errorf("invalid limit: expected 400, got %d", rec400.Code)
+	}
 }

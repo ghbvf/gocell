@@ -102,3 +102,80 @@ func TestService_ListPagination(t *testing.T) {
 		t.Errorf("expected 1 item on last page, got %d", len(page2.Items))
 	}
 }
+
+func TestService_ListSingleDevice(t *testing.T) {
+	repo := mem.NewDeviceRepository()
+	seedDevice(t, repo, "dev-1", "solo", "online")
+
+	svc, err := NewService(repo, newTestCodec(t), slog.Default(), query.RunModeDemo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.List(context.Background(), query.PageRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.HasMore {
+		t.Error("expected HasMore=false for single device")
+	}
+	if result.NextCursor != "" {
+		t.Errorf("expected empty NextCursor when HasMore=false, got %q", result.NextCursor)
+	}
+	if len(result.Items) != 1 {
+		t.Errorf("expected 1 item, got %d", len(result.Items))
+	}
+}
+
+func TestService_ListLimitOne(t *testing.T) {
+	repo := mem.NewDeviceRepository()
+	seedDevice(t, repo, "dev-1", "alpha", "online")
+	seedDevice(t, repo, "dev-2", "beta", "offline")
+
+	svc, err := NewService(repo, newTestCodec(t), slog.Default(), query.RunModeDemo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.List(context.Background(), query.PageRequest{Limit: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !result.HasMore {
+		t.Error("expected HasMore=true with limit=1 and 2 devices")
+	}
+	if len(result.Items) != 1 {
+		t.Errorf("expected 1 item, got %d", len(result.Items))
+	}
+	// First item should be "alpha" (name ASC sort)
+	if result.Items[0].Name != "alpha" {
+		t.Errorf("expected first item to be 'alpha' (name ASC), got %q", result.Items[0].Name)
+	}
+}
+
+func TestService_ListSecondarySort(t *testing.T) {
+	// Two devices with same name — secondary sort by id ASC must be stable.
+	repo := mem.NewDeviceRepository()
+	seedDevice(t, repo, "dev-z", "sensor", "offline")
+	seedDevice(t, repo, "dev-a", "sensor", "online")
+
+	svc, err := NewService(repo, newTestCodec(t), slog.Default(), query.RunModeDemo)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := svc.List(context.Background(), query.PageRequest{Limit: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result.Items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(result.Items))
+	}
+	// id ASC: "dev-a" before "dev-z"
+	if result.Items[0].ID != "dev-a" {
+		t.Errorf("expected first item id='dev-a' (id ASC), got %q", result.Items[0].ID)
+	}
+	if result.Items[1].ID != "dev-z" {
+		t.Errorf("expected second item id='dev-z', got %q", result.Items[1].ID)
+	}
+}
