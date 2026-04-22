@@ -3,7 +3,6 @@ package rbacassign
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -51,17 +50,20 @@ type RevokeRequest struct {
 // Policy is declared at registration time via auth.Declare so that handler
 // bodies contain only business logic (no inline guard calls).
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
+	internalAdminPolicy := auth.AnyRole(auth.RoleInternalAdmin)
 	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/assign",
-		Handler: http.HandlerFunc(h.handleAssign),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
+		Method:    "POST",
+		Path:      "/assign",
+		Handler:   http.HandlerFunc(h.handleAssign),
+		Policy:    internalAdminPolicy,
+		Delegated: true, // JWT auth delegated to WithInternalPathPrefixGuard; Policy still enforces role.
 	})
 	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/revoke",
-		Handler: http.HandlerFunc(h.handleRevoke),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
+		Method:    "POST",
+		Path:      "/revoke",
+		Handler:   http.HandlerFunc(h.handleRevoke),
+		Policy:    internalAdminPolicy,
+		Delegated: true, // JWT auth delegated to WithInternalPathPrefixGuard; Policy still enforces role.
 	})
 }
 

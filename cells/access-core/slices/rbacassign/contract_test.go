@@ -50,7 +50,7 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 	// Execute real handler.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-2","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-seed", []string{"admin"}))
+	req = req.WithContext(auth.TestContext("usr-seed", []string{auth.RoleInternalAdmin}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -69,16 +69,17 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	// Validate request schema.
 	c.ValidateRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin"}`))
 	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed"}`))
+	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin","extra":"bad"}`))
 
 	// Execute real handler.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-seed","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-seed", []string{"admin"}))
+	req = req.WithContext(auth.TestContext("usr-seed", []string{auth.RoleInternalAdmin}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
 	c.ValidateHTTPResponseRecorder(t, rec)
-	require.Equal(t, 200, rec.Code)
+	require.Equal(t, http.StatusOK, rec.Code)
 
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
