@@ -2860,7 +2860,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core -->
 <g id="node86" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core</title>
-<g id="a_node86"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core\l543 / 23.7KB\l" target="_graphviz">
+<g id="a_node86"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core\l543 / 23.7KB\l" target="_graphviz">
 <polygon fill="none" stroke="#079163" stroke-width="2" stroke-opacity="0.698039" points="2394,-5007.17 2178,-5007.17 2178,-4971.17 2394,-4971.17 2394,-5007.17"/>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-4990.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core</text>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-4979.67" font-family="Times,serif" font-size="10.00">543 / 23.7KB</text>
@@ -2870,7 +2870,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/internal/dto -->
 <g id="node88" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/internal/dto</title>
-<g id="a_node88"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/internal/dto" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/dto\l49 / 2.1KB\l" target="_graphviz">
+<g id="a_node88"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/internal/dto" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/dto\l49 / 2.1KB\l" target="_graphviz">
 <polygon fill="none" stroke="#869107" stroke-width="2" stroke-opacity="0.698039" points="3294,-6243.17 3042,-6243.17 3042,-6207.17 3294,-6207.17 3294,-6243.17"/>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-6226.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/internal/dto</text>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-6215.67" font-family="Times,serif" font-size="10.00">49 / 2.1KB</text>
@@ -2886,7 +2886,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/internal/initialadmin -->
 <g id="node89" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/internal/initialadmin</title>
-<g id="a_node89"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/internal/initialadmin" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/initialadmin\l1046 / 39.9KB\l" target="_graphviz">
+<g id="a_node89"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/internal/initialadmin" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/initialadmin\l1046 / 39.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#079163" stroke-width="2" stroke-opacity="0.698039" points="2844,-5461.17 2556,-5461.17 2556,-5425.17 2844,-5425.17 2844,-5461.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-5444.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/internal/initialadmin</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-5433.67" font-family="Times,serif" font-size="10.00">1046 / 39.9KB</text>
@@ -2902,7 +2902,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/internal/mem -->
 <g id="node90" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/internal/mem</title>
-<g id="a_node90"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/mem\l357 / 11.0KB\l" target="_graphviz">
+<g id="a_node90"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/mem\l357 / 11.0KB\l" target="_graphviz">
 <polygon fill="none" stroke="#5a9107" stroke-width="2" stroke-opacity="0.698039" points="2826,-5107.17 2574,-5107.17 2574,-5071.17 2826,-5071.17 2826,-5107.17"/>
 <text xml:space="preserve" text-anchor="start" x="2582" y="-5090.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/internal/mem</text>
 <text xml:space="preserve" text-anchor="start" x="2582" y="-5079.67" font-family="Times,serif" font-size="10.00">357 / 11.0KB</text>
@@ -2918,7 +2918,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/internal/ports -->
 <g id="node91" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/internal/ports</title>
-<g id="a_node91"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/internal/ports" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/ports\l82 / 4.2KB\l" target="_graphviz">
+<g id="a_node91"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/internal/ports" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/ports\l82 / 4.2KB\l" target="_graphviz">
 <polygon fill="none" stroke="#460791" stroke-width="2" stroke-opacity="0.698039" points="3294,-5023.17 3042,-5023.17 3042,-4987.17 3294,-4987.17 3294,-5023.17"/>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-5006.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/internal/ports</text>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-4995.67" font-family="Times,serif" font-size="10.00">82 / 4.2KB</text>
@@ -2934,7 +2934,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/authorizationdecide -->
 <g id="node92" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/authorizationdecide</title>
-<g id="a_node92"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/authorizationdecide" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/authorizationdecide\l41 / 1.4KB\l" target="_graphviz">
+<g id="a_node92"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/authorizationdecide\l41 / 1.4KB\l" target="_graphviz">
 <polygon fill="none" stroke="#91075e" stroke-width="2" stroke-opacity="0.698039" points="2862,-4799.17 2538,-4799.17 2538,-4763.17 2862,-4763.17 2862,-4799.17"/>
 <text xml:space="preserve" text-anchor="start" x="2546" y="-4782.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/authorizationdecide</text>
 <text xml:space="preserve" text-anchor="start" x="2546" y="-4771.67" font-family="Times,serif" font-size="10.00">41 / 1.4KB</text>
@@ -2950,7 +2950,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/configreceive -->
 <g id="node93" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/configreceive</title>
-<g id="a_node93"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/configreceive" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/configreceive\l68 / 2.6KB\l" target="_graphviz">
+<g id="a_node93"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/configreceive" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/configreceive\l68 / 2.6KB\l" target="_graphviz">
 <polygon fill="none" stroke="#2f9107" stroke-width="2" stroke-opacity="0.698039" points="3312,-6877.17 3024,-6877.17 3024,-6841.17 3312,-6841.17 3312,-6877.17"/>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-6860.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/configreceive</text>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-6849.67" font-family="Times,serif" font-size="10.00">68 / 2.6KB</text>
@@ -2966,7 +2966,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/identitymanage -->
 <g id="node94" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/identitymanage</title>
-<g id="a_node94"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/identitymanage" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/identitymanage\l602 / 22.1KB\l" target="_graphviz">
+<g id="a_node94"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/identitymanage\l602 / 22.1KB\l" target="_graphviz">
 <polygon fill="none" stroke="#07912d" stroke-width="2" stroke-opacity="0.698039" points="2844,-5221.17 2556,-5221.17 2556,-5185.17 2844,-5185.17 2844,-5221.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-5204.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/identitymanage</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-5193.67" font-family="Times,serif" font-size="10.00">602 / 22.1KB</text>
@@ -2982,7 +2982,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/rbacassign -->
 <g id="node95" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/rbacassign</title>
-<g id="a_node95"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/rbacassign" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/rbacassign\l295 / 10.2KB\l" target="_graphviz">
+<g id="a_node95"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/rbacassign" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/rbacassign\l295 / 10.2KB\l" target="_graphviz">
 <polygon fill="none" stroke="#917907" stroke-width="2" stroke-opacity="0.698039" points="2844,-4907.17 2556,-4907.17 2556,-4871.17 2844,-4871.17 2844,-4907.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4890.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/rbacassign</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4879.67" font-family="Times,serif" font-size="10.00">295 / 10.2KB</text>
@@ -2998,7 +2998,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/rbaccheck -->
 <g id="node96" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/rbaccheck</title>
-<g id="a_node96"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/rbaccheck" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/rbaccheck\l126 / 4.2KB\l" target="_graphviz">
+<g id="a_node96"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/rbaccheck" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/rbaccheck\l126 / 4.2KB\l" target="_graphviz">
 <polygon fill="none" stroke="#079118" stroke-width="2" stroke-opacity="0.698039" points="2844,-4543.17 2556,-4543.17 2556,-4507.17 2844,-4507.17 2844,-4543.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4526.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/rbaccheck</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4515.67" font-family="Times,serif" font-size="10.00">126 / 4.2KB</text>
@@ -3014,7 +3014,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogin -->
 <g id="node97" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogin</title>
-<g id="a_node97"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogin\l310 / 11.9KB\l" target="_graphviz">
+<g id="a_node97"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogin\l310 / 11.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#260791" stroke-width="2" stroke-opacity="0.698039" points="2844,-5161.17 2556,-5161.17 2556,-5125.17 2844,-5125.17 2844,-5161.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-5144.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogin</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-5133.67" font-family="Times,serif" font-size="10.00">310 / 11.9KB</text>
@@ -3030,7 +3030,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogout -->
 <g id="node98" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogout</title>
-<g id="a_node98"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/sessionlogout" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogout\l236 / 8.9KB\l" target="_graphviz">
+<g id="a_node98"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogout" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogout\l236 / 8.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#07918d" stroke-width="2" stroke-opacity="0.698039" points="2844,-5053.17 2556,-5053.17 2556,-5017.17 2844,-5017.17 2844,-5053.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-5036.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionlogout</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-5025.67" font-family="Times,serif" font-size="10.00">236 / 8.9KB</text>
@@ -3046,7 +3046,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionrefresh -->
 <g id="node99" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionrefresh</title>
-<g id="a_node99"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/sessionrefresh" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionrefresh\l283 / 11.7KB\l" target="_graphviz">
+<g id="a_node99"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/sessionrefresh" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionrefresh\l283 / 11.7KB\l" target="_graphviz">
 <polygon fill="none" stroke="#8a0791" stroke-width="2" stroke-opacity="0.698039" points="2844,-4961.17 2556,-4961.17 2556,-4925.17 2844,-4925.17 2844,-4961.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4944.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionrefresh</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4933.67" font-family="Times,serif" font-size="10.00">283 / 11.7KB</text>
@@ -3062,7 +3062,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionvalidate -->
 <g id="node100" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionvalidate</title>
-<g id="a_node100"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/slices/sessionvalidate" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionvalidate\l118 / 5.4KB\l" target="_graphviz">
+<g id="a_node100"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionvalidate\l118 / 5.4KB\l" target="_graphviz">
 <polygon fill="none" stroke="#910762" stroke-width="2" stroke-opacity="0.698039" points="2844,-4853.17 2556,-4853.17 2556,-4817.17 2844,-4817.17 2844,-4853.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4836.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/slices/sessionvalidate</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4825.67" font-family="Times,serif" font-size="10.00">118 / 5.4KB</text>
@@ -3134,7 +3134,7 @@
 <!-- github.com/ghbvf/gocell/cells/access&#45;core/internal/domain -->
 <g id="node87" class="node">
 <title>github.com/ghbvf/gocell/cells/access&#45;core/internal/domain</title>
-<g id="a_node87"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/access-core/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/domain\l166 / 5.3KB\l" target="_graphviz">
+<g id="a_node87"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/accesscore/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/access&#45;core/internal/domain\l166 / 5.3KB\l" target="_graphviz">
 <polygon fill="none" stroke="#409107" stroke-width="2" stroke-opacity="0.698039" points="3798,-5023.17 3510,-5023.17 3510,-4987.17 3798,-4987.17 3798,-5023.17"/>
 <text xml:space="preserve" text-anchor="start" x="3518" y="-5006.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/access&#45;core/internal/domain</text>
 <text xml:space="preserve" text-anchor="start" x="3518" y="-4995.67" font-family="Times,serif" font-size="10.00">166 / 5.3KB</text>
@@ -3578,7 +3578,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core -->
 <g id="node101" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core</title>
-<g id="a_node101"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core\l223 / 8.8KB\l" target="_graphviz">
+<g id="a_node101"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core\l223 / 8.8KB\l" target="_graphviz">
 <polygon fill="none" stroke="#07911e" stroke-width="2" stroke-opacity="0.698039" points="2394,-3713.17 2178,-3713.17 2178,-3677.17 2394,-3677.17 2394,-3713.17"/>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-3696.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core</text>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-3685.67" font-family="Times,serif" font-size="10.00">223 / 8.8KB</text>
@@ -3588,7 +3588,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/internal/mem -->
 <g id="node105" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/internal/mem</title>
-<g id="a_node105"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/mem\l143 / 3.9KB\l" target="_graphviz">
+<g id="a_node105"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/mem\l143 / 3.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#07913b" stroke-width="2" stroke-opacity="0.698039" points="2826,-2309.17 2574,-2309.17 2574,-2273.17 2826,-2273.17 2826,-2309.17"/>
 <text xml:space="preserve" text-anchor="start" x="2582" y="-2292.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/internal/mem</text>
 <text xml:space="preserve" text-anchor="start" x="2582" y="-2281.67" font-family="Times,serif" font-size="10.00">143 / 3.9KB</text>
@@ -3604,7 +3604,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/internal/ports -->
 <g id="node106" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/internal/ports</title>
-<g id="a_node106"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/internal/ports" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/ports\l30 / 0.9KB\l" target="_graphviz">
+<g id="a_node106"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/internal/ports" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/ports\l30 / 0.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#079130" stroke-width="2" stroke-opacity="0.698039" points="3294,-2517.17 3042,-2517.17 3042,-2481.17 3294,-2481.17 3294,-2517.17"/>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-2500.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/internal/ports</text>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-2489.67" font-family="Times,serif" font-size="10.00">30 / 0.9KB</text>
@@ -3620,7 +3620,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditappend -->
 <g id="node107" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditappend</title>
-<g id="a_node107"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/slices/auditappend" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditappend\l170 / 5.9KB\l" target="_graphviz">
+<g id="a_node107"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/slices/auditappend" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditappend\l170 / 5.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#071591" stroke-width="2" stroke-opacity="0.698039" points="2844,-3713.17 2556,-3713.17 2556,-3677.17 2844,-3677.17 2844,-3713.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-3696.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditappend</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-3685.67" font-family="Times,serif" font-size="10.00">170 / 5.9KB</text>
@@ -3636,7 +3636,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditarchive -->
 <g id="node108" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditarchive</title>
-<g id="a_node108"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/slices/auditarchive" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditarchive\l17 / 552B\l" target="_graphviz">
+<g id="a_node108"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/slices/auditarchive" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditarchive\l17 / 552B\l" target="_graphviz">
 <polygon fill="none" stroke="#916a07" stroke-width="2" stroke-opacity="0.698039" points="4248,-2555.17 3960,-2555.17 3960,-2519.17 4248,-2519.17 4248,-2555.17"/>
 <text xml:space="preserve" text-anchor="start" x="3968" y="-2538.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditarchive</text>
 <text xml:space="preserve" text-anchor="start" x="3968" y="-2527.67" font-family="Times,serif" font-size="10.00">17 / 552B</text>
@@ -3652,7 +3652,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditquery -->
 <g id="node109" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditquery</title>
-<g id="a_node109"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/slices/auditquery" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditquery\l191 / 6.9KB\l" target="_graphviz">
+<g id="a_node109"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/slices/auditquery" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditquery\l191 / 6.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#076c91" stroke-width="2" stroke-opacity="0.698039" points="2844,-2677.17 2556,-2677.17 2556,-2641.17 2844,-2641.17 2844,-2677.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2660.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditquery</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2649.67" font-family="Times,serif" font-size="10.00">191 / 6.9KB</text>
@@ -3668,7 +3668,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditverify -->
 <g id="node110" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditverify</title>
-<g id="a_node110"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/slices/auditverify" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditverify\l123 / 4.3KB\l" target="_graphviz">
+<g id="a_node110"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/slices/auditverify" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditverify\l123 / 4.3KB\l" target="_graphviz">
 <polygon fill="none" stroke="#912607" stroke-width="2" stroke-opacity="0.698039" points="2844,-4071.17 2556,-4071.17 2556,-4035.17 2844,-4035.17 2844,-4071.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4054.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/slices/auditverify</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-4043.67" font-family="Times,serif" font-size="10.00">123 / 4.3KB</text>
@@ -3724,7 +3724,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/postgres -->
 <g id="node102" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/postgres</title>
-<g id="a_node102"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/internal/adapters/postgres" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/postgres\l129 / 4.5KB\l" target="_graphviz">
+<g id="a_node102"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/internal/adapters/postgres" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/postgres\l129 / 4.5KB\l" target="_graphviz">
 <polygon fill="none" stroke="#917f07" stroke-width="2" stroke-opacity="0.698039" points="2862,-2255.17 2538,-2255.17 2538,-2219.17 2862,-2219.17 2862,-2255.17"/>
 <text xml:space="preserve" text-anchor="start" x="2546" y="-2238.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/postgres</text>
 <text xml:space="preserve" text-anchor="start" x="2546" y="-2227.67" font-family="Times,serif" font-size="10.00">129 / 4.5KB</text>
@@ -3734,7 +3734,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/internal/domain -->
 <g id="node104" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/internal/domain</title>
-<g id="a_node104"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/domain\l92 / 2.7KB\l" target="_graphviz">
+<g id="a_node104"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/domain\l92 / 2.7KB\l" target="_graphviz">
 <polygon fill="none" stroke="#1b9107" stroke-width="2" stroke-opacity="0.698039" points="3798,-3683.17 3510,-3683.17 3510,-3647.17 3798,-3647.17 3798,-3683.17"/>
 <text xml:space="preserve" text-anchor="start" x="3518" y="-3666.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/internal/domain</text>
 <text xml:space="preserve" text-anchor="start" x="3518" y="-3655.67" font-family="Times,serif" font-size="10.00">92 / 2.7KB</text>
@@ -3768,7 +3768,7 @@
 <!-- github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/s3archive -->
 <g id="node103" class="node">
 <title>github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/s3archive</title>
-<g id="a_node103"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/audit-core/internal/adapters/s3archive" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/s3archive\l54 / 2.0KB\l" target="_graphviz">
+<g id="a_node103"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/auditcore/internal/adapters/s3archive" xlink:title="github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/s3archive\l54 / 2.0KB\l" target="_graphviz">
 <polygon fill="none" stroke="#5d0791" stroke-width="2" stroke-opacity="0.698039" points="2862,-2547.17 2538,-2547.17 2538,-2511.17 2862,-2511.17 2862,-2547.17"/>
 <text xml:space="preserve" text-anchor="start" x="2546" y="-2530.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/audit&#45;core/internal/adapters/s3archive</text>
 <text xml:space="preserve" text-anchor="start" x="2546" y="-2519.67" font-family="Times,serif" font-size="10.00">54 / 2.0KB</text>
@@ -3934,7 +3934,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core -->
 <g id="node111" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core</title>
-<g id="a_node111"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core\l368 / 14.7KB\l" target="_graphviz">
+<g id="a_node111"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core\l368 / 14.7KB\l" target="_graphviz">
 <polygon fill="none" stroke="#580791" stroke-width="2" stroke-opacity="0.698039" points="2394,-3820.17 2178,-3820.17 2178,-3784.17 2394,-3784.17 2394,-3820.17"/>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-3803.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core</text>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-3792.67" font-family="Times,serif" font-size="10.00">368 / 14.7KB</text>
@@ -3944,7 +3944,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/internal/adapters/postgres -->
 <g id="node112" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/internal/adapters/postgres</title>
-<g id="a_node112"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/internal/adapters/postgres" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/adapters/postgres\l913 / 35.3KB\l" target="_graphviz">
+<g id="a_node112"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/adapters/postgres\l913 / 35.3KB\l" target="_graphviz">
 <polygon fill="none" stroke="#918907" stroke-width="2" stroke-opacity="0.698039" points="2862,-3271.17 2538,-3271.17 2538,-3235.17 2862,-3235.17 2862,-3271.17"/>
 <text xml:space="preserve" text-anchor="start" x="2546" y="-3254.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/internal/adapters/postgres</text>
 <text xml:space="preserve" text-anchor="start" x="2546" y="-3243.67" font-family="Times,serif" font-size="10.00">913 / 35.3KB</text>
@@ -3960,7 +3960,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/internal/mem -->
 <g id="node116" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/internal/mem</title>
-<g id="a_node116"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/mem\l273 / 8.3KB\l" target="_graphviz">
+<g id="a_node116"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/mem\l273 / 8.3KB\l" target="_graphviz">
 <polygon fill="none" stroke="#073591" stroke-width="2" stroke-opacity="0.698039" points="2826,-2147.17 2574,-2147.17 2574,-2111.17 2826,-2111.17 2826,-2147.17"/>
 <text xml:space="preserve" text-anchor="start" x="2582" y="-2130.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/internal/mem</text>
 <text xml:space="preserve" text-anchor="start" x="2582" y="-2119.67" font-family="Times,serif" font-size="10.00">273 / 8.3KB</text>
@@ -3976,7 +3976,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/internal/ports -->
 <g id="node117" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/internal/ports</title>
-<g id="a_node117"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/internal/ports" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/ports\l40 / 2.1KB\l" target="_graphviz">
+<g id="a_node117"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/internal/ports" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/ports\l40 / 2.1KB\l" target="_graphviz">
 <polygon fill="none" stroke="#915607" stroke-width="2" stroke-opacity="0.698039" points="3294,-2463.17 3042,-2463.17 3042,-2427.17 3294,-2427.17 3294,-2463.17"/>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-2446.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/internal/ports</text>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-2435.67" font-family="Times,serif" font-size="10.00">40 / 2.1KB</text>
@@ -3992,7 +3992,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/slices/configpublish -->
 <g id="node118" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/slices/configpublish</title>
-<g id="a_node118"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/slices/configpublish" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/configpublish\l267 / 9.7KB\l" target="_graphviz">
+<g id="a_node118"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/slices/configpublish" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/configpublish\l267 / 9.7KB\l" target="_graphviz">
 <polygon fill="none" stroke="#072491" stroke-width="2" stroke-opacity="0.698039" points="2844,-3545.17 2556,-3545.17 2556,-3509.17 2844,-3509.17 2844,-3545.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-3528.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/slices/configpublish</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-3517.67" font-family="Times,serif" font-size="10.00">267 / 9.7KB</text>
@@ -4008,7 +4008,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/slices/configread -->
 <g id="node119" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/slices/configread</title>
-<g id="a_node119"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/slices/configread" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/configread\l116 / 3.9KB\l" target="_graphviz">
+<g id="a_node119"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/slices/configread" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/configread\l116 / 3.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#072e91" stroke-width="2" stroke-opacity="0.698039" points="2844,-2201.17 2556,-2201.17 2556,-2165.17 2844,-2165.17 2844,-2201.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2184.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/slices/configread</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2173.67" font-family="Times,serif" font-size="10.00">116 / 3.9KB</text>
@@ -4024,7 +4024,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/slices/configsubscribe -->
 <g id="node120" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/slices/configsubscribe</title>
-<g id="a_node120"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/slices/configsubscribe" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/configsubscribe\l102 / 3.5KB\l" target="_graphviz">
+<g id="a_node120"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/slices/configsubscribe" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/configsubscribe\l102 / 3.5KB\l" target="_graphviz">
 <polygon fill="none" stroke="#910786" stroke-width="2" stroke-opacity="0.698039" points="3312,-5381.17 3024,-5381.17 3024,-5345.17 3312,-5345.17 3312,-5381.17"/>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-5364.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/slices/configsubscribe</text>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-5353.67" font-family="Times,serif" font-size="10.00">102 / 3.5KB</text>
@@ -4040,7 +4040,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/slices/configwrite -->
 <g id="node121" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/slices/configwrite</title>
-<g id="a_node121"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/slices/configwrite" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/configwrite\l269 / 8.8KB\l" target="_graphviz">
+<g id="a_node121"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/slices/configwrite" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/configwrite\l269 / 8.8KB\l" target="_graphviz">
 <polygon fill="none" stroke="#911207" stroke-width="2" stroke-opacity="0.698039" points="2844,-3491.17 2556,-3491.17 2556,-3455.17 2844,-3455.17 2844,-3491.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-3474.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/slices/configwrite</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-3463.67" font-family="Times,serif" font-size="10.00">269 / 8.8KB</text>
@@ -4056,7 +4056,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/slices/featureflag -->
 <g id="node122" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/slices/featureflag</title>
-<g id="a_node122"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/slices/featureflag" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/featureflag\l186 / 6.2KB\l" target="_graphviz">
+<g id="a_node122"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/slices/featureflag" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/featureflag\l186 / 6.2KB\l" target="_graphviz">
 <polygon fill="none" stroke="#917007" stroke-width="2" stroke-opacity="0.698039" points="2844,-2093.17 2556,-2093.17 2556,-2057.17 2844,-2057.17 2844,-2093.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2076.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/slices/featureflag</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2065.67" font-family="Times,serif" font-size="10.00">186 / 6.2KB</text>
@@ -4072,7 +4072,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/slices/flagwrite -->
 <g id="node123" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/slices/flagwrite</title>
-<g id="a_node123"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/slices/flagwrite" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/flagwrite\l437 / 16.6KB\l" target="_graphviz">
+<g id="a_node123"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/slices/flagwrite" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/slices/flagwrite\l437 / 16.6KB\l" target="_graphviz">
 <polygon fill="none" stroke="#911107" stroke-width="2" stroke-opacity="0.698039" points="2844,-3187.17 2556,-3187.17 2556,-3151.17 2844,-3151.17 2844,-3187.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-3170.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/slices/flagwrite</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-3159.67" font-family="Times,serif" font-size="10.00">437 / 16.6KB</text>
@@ -4162,7 +4162,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/internal/crypto -->
 <g id="node113" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/internal/crypto</title>
-<g id="a_node113"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/internal/crypto" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/crypto\l17 / 0.8KB\l" target="_graphviz">
+<g id="a_node113"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/internal/crypto" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/crypto\l17 / 0.8KB\l" target="_graphviz">
 <polygon fill="none" stroke="#910768" stroke-width="2" stroke-opacity="0.698039" points="3312,-3271.17 3024,-3271.17 3024,-3235.17 3312,-3235.17 3312,-3271.17"/>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-3254.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/internal/crypto</text>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-3243.67" font-family="Times,serif" font-size="10.00">17 / 0.8KB</text>
@@ -4178,7 +4178,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/internal/domain -->
 <g id="node114" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/internal/domain</title>
-<g id="a_node114"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/domain\l84 / 2.8KB\l" target="_graphviz">
+<g id="a_node114"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/domain\l84 / 2.8KB\l" target="_graphviz">
 <polygon fill="none" stroke="#6a0791" stroke-width="2" stroke-opacity="0.698039" points="3798,-3061.17 3510,-3061.17 3510,-3025.17 3798,-3025.17 3798,-3061.17"/>
 <text xml:space="preserve" text-anchor="start" x="3518" y="-3044.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/internal/domain</text>
 <text xml:space="preserve" text-anchor="start" x="3518" y="-3033.67" font-family="Times,serif" font-size="10.00">84 / 2.8KB</text>
@@ -4236,7 +4236,7 @@
 <!-- github.com/ghbvf/gocell/cells/config&#45;core/internal/dto -->
 <g id="node115" class="node">
 <title>github.com/ghbvf/gocell/cells/config&#45;core/internal/dto</title>
-<g id="a_node115"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/config-core/internal/dto" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/dto\l40 / 1.6KB\l" target="_graphviz">
+<g id="a_node115"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/configcore/internal/dto" xlink:title="github.com/ghbvf/gocell/cells/config&#45;core/internal/dto\l40 / 1.6KB\l" target="_graphviz">
 <polygon fill="none" stroke="#918b07" stroke-width="2" stroke-opacity="0.698039" points="3294,-3103.17 3042,-3103.17 3042,-3067.17 3294,-3067.17 3294,-3103.17"/>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-3086.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/config&#45;core/internal/dto</text>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-3075.67" font-family="Times,serif" font-size="10.00">40 / 1.6KB</text>
@@ -4568,7 +4568,7 @@
 <!-- github.com/ghbvf/gocell/cells/device&#45;cell -->
 <g id="node125" class="node">
 <title>github.com/ghbvf/gocell/cells/device&#45;cell</title>
-<g id="a_node125"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/device-cell" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell\l180 / 7.2KB\l" target="_graphviz">
+<g id="a_node125"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/devicecell" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell\l180 / 7.2KB\l" target="_graphviz">
 <polygon fill="none" stroke="#910755" stroke-width="2" stroke-opacity="0.698039" points="2394,-1191.17 2178,-1191.17 2178,-1155.17 2394,-1155.17 2394,-1191.17"/>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-1174.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/device&#45;cell</text>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-1163.67" font-family="Times,serif" font-size="10.00">180 / 7.2KB</text>
@@ -4578,7 +4578,7 @@
 <!-- github.com/ghbvf/gocell/cells/device&#45;cell/internal/domain -->
 <g id="node126" class="node">
 <title>github.com/ghbvf/gocell/cells/device&#45;cell/internal/domain</title>
-<g id="a_node126"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/device-cell/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/internal/domain\l37 / 1.2KB\l" target="_graphviz">
+<g id="a_node126"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/devicecell/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/internal/domain\l37 / 1.2KB\l" target="_graphviz">
 <polygon fill="none" stroke="#079155" stroke-width="2" stroke-opacity="0.698039" points="3312,-451.17 3024,-451.17 3024,-415.17 3312,-415.17 3312,-451.17"/>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-434.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/device&#45;cell/internal/domain</text>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-423.67" font-family="Times,serif" font-size="10.00">37 / 1.2KB</text>
@@ -4594,7 +4594,7 @@
 <!-- github.com/ghbvf/gocell/cells/device&#45;cell/internal/mem -->
 <g id="node127" class="node">
 <title>github.com/ghbvf/gocell/cells/device&#45;cell/internal/mem</title>
-<g id="a_node127"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/device-cell/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/internal/mem\l147 / 4.4KB\l" target="_graphviz">
+<g id="a_node127"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/devicecell/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/internal/mem\l147 / 4.4KB\l" target="_graphviz">
 <polygon fill="none" stroke="#914d07" stroke-width="2" stroke-opacity="0.698039" points="2826,-715.17 2574,-715.17 2574,-679.17 2826,-679.17 2826,-715.17"/>
 <text xml:space="preserve" text-anchor="start" x="2582" y="-698.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/device&#45;cell/internal/mem</text>
 <text xml:space="preserve" text-anchor="start" x="2582" y="-687.67" font-family="Times,serif" font-size="10.00">147 / 4.4KB</text>
@@ -4610,7 +4610,7 @@
 <!-- github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;command -->
 <g id="node128" class="node">
 <title>github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;command</title>
-<g id="a_node128"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/device-cell/slices/device-command" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;command\l238 / 9.0KB\l" target="_graphviz">
+<g id="a_node128"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/devicecell/slices/device-command" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;command\l238 / 9.0KB\l" target="_graphviz">
 <polygon fill="none" stroke="#077f91" stroke-width="2" stroke-opacity="0.698039" points="2844,-1419.17 2556,-1419.17 2556,-1383.17 2844,-1383.17 2844,-1419.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-1402.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;command</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-1391.67" font-family="Times,serif" font-size="10.00">238 / 9.0KB</text>
@@ -4626,7 +4626,7 @@
 <!-- github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;register -->
 <g id="node129" class="node">
 <title>github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;register</title>
-<g id="a_node129"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/device-cell/slices/device-register" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;register\l128 / 4.2KB\l" target="_graphviz">
+<g id="a_node129"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/devicecell/slices/device-register" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;register\l128 / 4.2KB\l" target="_graphviz">
 <polygon fill="none" stroke="#500791" stroke-width="2" stroke-opacity="0.698039" points="2844,-2363.17 2556,-2363.17 2556,-2327.17 2844,-2327.17 2844,-2363.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2346.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;register</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2335.67" font-family="Times,serif" font-size="10.00">128 / 4.2KB</text>
@@ -4642,7 +4642,7 @@
 <!-- github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;status -->
 <g id="node130" class="node">
 <title>github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;status</title>
-<g id="a_node130"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/device-cell/slices/device-status" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;status\l66 / 1.9KB\l" target="_graphviz">
+<g id="a_node130"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/devicecell/slices/device-status" xlink:title="github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;status\l66 / 1.9KB\l" target="_graphviz">
 <polygon fill="none" stroke="#07917d" stroke-width="2" stroke-opacity="0.698039" points="2844,-917.17 2556,-917.17 2556,-881.17 2844,-881.17 2844,-917.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-900.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/device&#45;cell/slices/device&#45;status</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-889.67" font-family="Times,serif" font-size="10.00">66 / 1.9KB</text>
@@ -4802,7 +4802,7 @@
 <!-- github.com/ghbvf/gocell/cells/order&#45;cell -->
 <g id="node131" class="node">
 <title>github.com/ghbvf/gocell/cells/order&#45;cell</title>
-<g id="a_node131"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/order-cell" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell\l141 / 5.6KB\l" target="_graphviz">
+<g id="a_node131"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/ordercell" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell\l141 / 5.6KB\l" target="_graphviz">
 <polygon fill="none" stroke="#916607" stroke-width="2" stroke-opacity="0.698039" points="2394,-1511.17 2178,-1511.17 2178,-1475.17 2394,-1475.17 2394,-1511.17"/>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-1494.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/order&#45;cell</text>
 <text xml:space="preserve" text-anchor="start" x="2186" y="-1483.67" font-family="Times,serif" font-size="10.00">141 / 5.6KB</text>
@@ -4812,7 +4812,7 @@
 <!-- github.com/ghbvf/gocell/cells/order&#45;cell/internal/domain -->
 <g id="node132" class="node">
 <title>github.com/ghbvf/gocell/cells/order&#45;cell/internal/domain</title>
-<g id="a_node132"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/order-cell/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell/internal/domain\l20 / 584B\l" target="_graphviz">
+<g id="a_node132"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/ordercell/internal/domain" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell/internal/domain\l20 / 584B\l" target="_graphviz">
 <polygon fill="none" stroke="#079130" stroke-width="2" stroke-opacity="0.698039" points="3780,-589.17 3528,-589.17 3528,-553.17 3780,-553.17 3780,-589.17"/>
 <text xml:space="preserve" text-anchor="start" x="3536" y="-572.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/order&#45;cell/internal/domain</text>
 <text xml:space="preserve" text-anchor="start" x="3536" y="-561.67" font-family="Times,serif" font-size="10.00">20 / 584B</text>
@@ -4828,7 +4828,7 @@
 <!-- github.com/ghbvf/gocell/cells/order&#45;cell/internal/mem -->
 <g id="node133" class="node">
 <title>github.com/ghbvf/gocell/cells/order&#45;cell/internal/mem</title>
-<g id="a_node133"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/order-cell/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell/internal/mem\l96 / 2.7KB\l" target="_graphviz">
+<g id="a_node133"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/ordercell/internal/mem" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell/internal/mem\l96 / 2.7KB\l" target="_graphviz">
 <polygon fill="none" stroke="#1d0791" stroke-width="2" stroke-opacity="0.698039" points="3294,-543.17 3042,-543.17 3042,-507.17 3294,-507.17 3294,-543.17"/>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-526.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/order&#45;cell/internal/mem</text>
 <text xml:space="preserve" text-anchor="start" x="3050" y="-515.67" font-family="Times,serif" font-size="10.00">96 / 2.7KB</text>
@@ -4844,7 +4844,7 @@
 <!-- github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;create -->
 <g id="node134" class="node">
 <title>github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;create</title>
-<g id="a_node134"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/order-cell/slices/order-create" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;create\l174 / 5.6KB\l" target="_graphviz">
+<g id="a_node134"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/ordercell/slices/order-create" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;create\l174 / 5.6KB\l" target="_graphviz">
 <polygon fill="none" stroke="#0b9107" stroke-width="2" stroke-opacity="0.698039" points="2844,-2417.17 2556,-2417.17 2556,-2381.17 2844,-2381.17 2844,-2417.17"/>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2400.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;create</text>
 <text xml:space="preserve" text-anchor="start" x="2564" y="-2389.67" font-family="Times,serif" font-size="10.00">174 / 5.6KB</text>
@@ -4860,7 +4860,7 @@
 <!-- github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;query -->
 <g id="node135" class="node">
 <title>github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;query</title>
-<g id="a_node135"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/order-cell/slices/order-query" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;query\l124 / 4.0KB\l" target="_graphviz">
+<g id="a_node135"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cells/ordercell/slices/order-query" xlink:title="github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;query\l124 / 4.0KB\l" target="_graphviz">
 <polygon fill="none" stroke="#910724" stroke-width="2" stroke-opacity="0.698039" points="3312,-673.17 3024,-673.17 3024,-637.17 3312,-637.17 3312,-673.17"/>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-656.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cells/order&#45;cell/slices/order&#45;query</text>
 <text xml:space="preserve" text-anchor="start" x="3032" y="-645.67" font-family="Times,serif" font-size="10.00">124 / 4.0KB</text>
@@ -4990,7 +4990,7 @@
 <!-- github.com/ghbvf/gocell/cmd/core&#45;bundle -->
 <g id="node136" class="node">
 <title>github.com/ghbvf/gocell/cmd/core&#45;bundle</title>
-<g id="a_node136"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cmd/core-bundle" xlink:title="github.com/ghbvf/gocell/cmd/core&#45;bundle\l1047 / 42.5KB\l" target="_graphviz">
+<g id="a_node136"><a xlink:href="https://pkg.go.dev/github.com/ghbvf/gocell/cmd/corebundle" xlink:title="github.com/ghbvf/gocell/cmd/core&#45;bundle\l1047 / 42.5KB\l" target="_graphviz">
 <polygon fill="none" stroke="#911d07" stroke-width="2" stroke-opacity="0.698039" points="1512,-6201.17 1296,-6201.17 1296,-6165.17 1512,-6165.17 1512,-6201.17"/>
 <text xml:space="preserve" text-anchor="start" x="1304" y="-6184.92" font-family="Times,serif" font-size="10.00">github.com/ghbvf/gocell/cmd/core&#45;bundle</text>
 <text xml:space="preserve" text-anchor="start" x="1304" y="-6173.67" font-family="Times,serif" font-size="10.00">1047 / 42.5KB</text>
