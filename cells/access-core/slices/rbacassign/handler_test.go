@@ -45,7 +45,7 @@ func TestHandler_Assign(t *testing.T) {
 			name:       "admin assigns role returns 201",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
 			subject:    "usr-1",
-			roles:      []string{"admin"},
+			roles:      []string{auth.RoleInternalAdmin},
 			wantStatus: http.StatusCreated,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -78,21 +78,21 @@ func TestHandler_Assign(t *testing.T) {
 			name:       "invalid body returns 400",
 			body:       `{bad json`,
 			subject:    "usr-1",
-			roles:      []string{"admin"},
+			roles:      []string{auth.RoleInternalAdmin},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "empty userId returns 400",
 			body:       `{"userId":"","roleId":"admin"}`,
 			subject:    "usr-1",
-			roles:      []string{"admin"},
+			roles:      []string{auth.RoleInternalAdmin},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "role not found returns 404",
 			body:       `{"userId":"usr-2","roleId":"nonexistent"}`,
 			subject:    "usr-1",
-			roles:      []string{"admin"},
+			roles:      []string{auth.RoleInternalAdmin},
 			wantStatus: http.StatusNotFound,
 		},
 	}
@@ -133,7 +133,7 @@ func TestHandler_Revoke(t *testing.T) {
 			},
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
 			subject:    "usr-1",
-			roles:      []string{"admin"},
+			roles:      []string{auth.RoleInternalAdmin},
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -153,7 +153,7 @@ func TestHandler_Revoke(t *testing.T) {
 			name:       "revoke last admin returns 403",
 			body:       `{"userId":"usr-1","roleId":"admin"}`,
 			subject:    "usr-1",
-			roles:      []string{"admin"},
+			roles:      []string{auth.RoleInternalAdmin},
 			wantStatus: http.StatusForbidden,
 		},
 		{

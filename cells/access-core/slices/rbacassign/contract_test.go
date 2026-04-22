@@ -50,7 +50,7 @@ func TestHttpAuthRoleAssignV1Serve(t *testing.T) {
 	// Execute real handler.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-2","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-seed", []string{"admin"}))
+	req = req.WithContext(auth.TestContext("usr-seed", []string{auth.RoleInternalAdmin}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
@@ -73,7 +73,7 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	// Execute real handler.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-seed","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-seed", []string{"admin"}))
+	req = req.WithContext(auth.TestContext("usr-seed", []string{auth.RoleInternalAdmin}))
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 

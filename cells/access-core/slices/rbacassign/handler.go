@@ -3,7 +3,6 @@ package rbacassign
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -55,13 +54,13 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 		Method:  "POST",
 		Path:    "/assign",
 		Handler: http.HandlerFunc(h.handleAssign),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
+		Policy:  auth.AnyRole(auth.RoleInternalAdmin),
 	})
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "POST",
 		Path:    "/revoke",
 		Handler: http.HandlerFunc(h.handleRevoke),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
+		Policy:  auth.AnyRole(auth.RoleInternalAdmin),
 	})
 }
 
