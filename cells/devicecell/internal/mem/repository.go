@@ -58,6 +58,51 @@ func (r *DeviceRepository) GetByID(_ context.Context, id string) (*domain.Device
 	return &out, nil
 }
 
+// List returns paginated devices sorted and cursor-filtered per params.
+func (r *DeviceRepository) List(_ context.Context, params query.ListParams) ([]*domain.Device, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	all := make([]*domain.Device, 0, len(r.devices))
+	for _, d := range r.devices {
+		cp := *d
+		all = append(all, &cp)
+	}
+
+	query.Sort(all, params.Sort, compareDeviceField)
+	result, err := query.ApplyCursor(all, params, deviceFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("device-repo: list: %w", err)
+	}
+	return result, nil
+}
+
+func compareDeviceField(a, b *domain.Device, field string) int {
+	switch field {
+	case "name":
+		return cmp.Compare(a.Name, b.Name)
+	case "id":
+		return cmp.Compare(a.ID, b.ID)
+	case "status":
+		return cmp.Compare(a.Status, b.Status)
+	default:
+		return 0
+	}
+}
+
+func deviceFieldValue(d *domain.Device, field string) any {
+	switch field {
+	case "name":
+		return d.Name
+	case "id":
+		return d.ID
+	case "status":
+		return d.Status
+	default:
+		return ""
+	}
+}
+
 // CommandRepository is a thread-safe in-memory command store.
 type CommandRepository struct {
 	mu       sync.RWMutex

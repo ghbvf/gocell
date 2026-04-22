@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -136,6 +137,9 @@ func (r *countingRoleRepo) RemoveFromUser(ctx context.Context, userID, roleID st
 }
 func (r *countingRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (bool, error) {
 	return r.inner.RemoveFromUserIfNotLast(ctx, userID, roleID)
+}
+func (r *countingRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
+	return r.inner.GetByUserID(ctx, userID)
 }
 
 var _ ports.RoleRepository = (*countingRoleRepo)(nil)

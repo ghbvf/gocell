@@ -20,8 +20,8 @@ import (
 // can be forced to do before the codec's own length guard fires.
 // ref: kubernetes apiserver 4 KiB continue-token guidance.
 // Zero or negative limits are normalized to DefaultPageSize.
-func ParsePageRequest(r *http.Request) (query.PageRequest, error) {
-	var pr query.PageRequest
+func ParsePageRequest(r *http.Request) (query.PageParams, error) {
+	var pr query.PageParams
 
 	if s := r.URL.Query().Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)

@@ -29,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -82,6 +83,11 @@ func WithJWTVerifier(verifier *auth.JWTVerifier) Option {
 // WithOutboxWriter sets the outbox.Writer for transactional event publishing.
 func WithOutboxWriter(w outbox.Writer) Option {
 	return func(c *AccessCore) { c.outboxWriter = w }
+}
+
+// WithCursorCodec sets the cursor codec for pagination. Required in durable mode.
+func WithCursorCodec(codec *query.CursorCodec) Option {
+	return func(c *AccessCore) { c.cursorCodec = codec }
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
@@ -201,6 +207,7 @@ type AccessCore struct {
 	logger       *slog.Logger
 	jwtIssuer    *auth.JWTIssuer
 	jwtVerifier  *auth.JWTVerifier
+	cursorCodec  *query.CursorCodec
 
 	// Bootstrap configuration (set via WithInitialAdminBootstrap).
 	initialAdminCfg     *initialAdminConfig
@@ -380,6 +387,18 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		return errcode.New(errcode.ErrAuthKeyInvalid,
 			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
 	}
+	if c.cursorCodec == nil {
+		if deps.DurabilityMode == cell.DurabilityDurable {
+			return errcode.New(errcode.ErrCellMissingCodec,
+				"accesscore durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
+		}
+		codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
+		if err != nil {
+			return err
+		}
+		c.cursorCodec = codec
+		c.logger.Warn("accesscore: using default cursor codec (demo mode)")
+	}
 	return nil
 }
 
@@ -460,7 +479,8 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("authorizationdecide", "accesscore", cell.L0))
 
 	// rbac-check
-	rbacSvc := rbaccheck.NewService(c.roleRepo, c.logger)
+	rbacSvc := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger,
+		query.RunModeForDemo(c.outboxWriter == nil && c.txRunner == nil))
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbaccheck", "accesscore", cell.L0))
 

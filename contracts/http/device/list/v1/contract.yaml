@@ -1,0 +1,16 @@
+id: http.device.list.v1
+kind: http
+ownerCell: devicecell
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: devicecell
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/devices
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json

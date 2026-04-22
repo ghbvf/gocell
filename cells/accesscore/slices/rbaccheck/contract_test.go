@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -27,7 +28,11 @@ func newContractRBACHandler() http.Handler {
 		},
 	})
 	_, _ = roleRepo.AssignToUser(context.Background(), "user-1", "r1")
-	svc := NewService(roleRepo, slog.Default())
+	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
+	if err != nil {
+		panic(err)
+	}
+	svc := NewService(roleRepo, codec, slog.Default(), query.RunModeDemo)
 
 	inner := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(inner)
@@ -48,6 +53,9 @@ func TestHttpAuthRoleListV1Serve(t *testing.T) {
 	req = req.WithContext(auth.TestContext("user-1", nil))
 	h.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	c.MustRejectResponse(t, []byte(`{"data":[]}`))
+	c.MustRejectResponse(t, []byte(`{"data":{"wrong":"shape"},"hasMore":false}`))
 }
 
 func TestHttpAuthRoleCheckV1Serve(t *testing.T) {

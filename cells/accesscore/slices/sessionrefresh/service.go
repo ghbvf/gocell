@@ -151,7 +151,7 @@ func (s *Service) lookupSession(ctx context.Context, refreshToken string) (*doma
 	s.logger.Error("session-refresh: refresh token reuse detected, session revoked",
 		slog.String("session_id", reuseSession.ID),
 		slog.String("user_id", reuseSession.UserID))
-	return nil, errcode.New(errcode.ErrAuthRefreshTokenReuse, "refresh token reuse detected, session revoked")
+	return nil, errcode.New(errcode.ErrRefreshTokenReused, "refresh token reuse detected, session revoked")
 }
 
 // rotateAndIssue mints new access + refresh tokens, persists the rotated

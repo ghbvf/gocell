@@ -214,6 +214,30 @@ func TestRun_MissingJWTAudience_FailsFast(t *testing.T) {
 		"run() must fail fast when GOCELL_JWT_AUDIENCE is unset")
 }
 
+func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
+	privPEM, pubPEM := generateTestPEM(t)
+	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+	t.Setenv(auth.EnvJWTPrevPublicKey, "")
+	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
+	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
+	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
+	t.Setenv("GOCELL_ACCESS_CURSOR_KEY", "")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := run(ctx)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_ACCESS_CURSOR_KEY")
+}
+
 // TestRun_RealMode_MissingVerboseToken_FailsFast ensures the H1-6
 // READYZ-VERBOSE-TOKEN fail-fast integration point — empty
 // GOCELL_READYZ_VERBOSE_TOKEN in real mode must error out before the
@@ -233,6 +257,7 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_ACCESS_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	// The trip-wire: verbose token is empty.
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "")
@@ -262,6 +287,7 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_ACCESS_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	// The trip-wire: metrics token is empty.
@@ -291,6 +317,7 @@ func TestRun_RealMode_MissingServiceSecret_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
 	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_ACCESS_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
 	// The trip-wire: service secret is empty.
@@ -421,7 +448,7 @@ func TestBootstrap_UnknownCellAdapterMode_FailsFast(t *testing.T) {
 }
 
 // TestRun_RealMode_DemoKey_FailsFast locks the rejectDemoKey wiring: for
-// each env channel (HMAC key + two cursor keys), injecting a well-known
+// each env channel (HMAC key + three cursor keys), injecting a well-known
 // demo value must abort run() before the HTTP server starts. Guards
 // against reordering that would let demo secrets leak into real mode.
 // ref: K8s kube-apiserver — refuses to start with insecure signing material.
@@ -429,6 +456,7 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 	freshHMAC := "prod-hmac-key-replace-32bytes!!!"
 	freshAudit := "audit-cursor-key-32-bytes-padded!"
 	freshConfig := "config-cursor-key-32b-padded-xx!"
+	freshAccess := "access-cursor-key-32b-padded-x!!"
 
 	type envPatch struct {
 		name, value string
@@ -452,6 +480,16 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			name:  "config cursor demo literal rejected",
 			patch: envPatch{"GOCELL_CONFIG_CURSOR_KEY", "corebundle-cfg-cursor-key--32bb!"},
 			want:  "GOCELL_CONFIG_CURSOR_KEY",
+		},
+		{
+			name:  "access cursor demo literal rejected",
+			patch: envPatch{"GOCELL_ACCESS_CURSOR_KEY", "corebundle-access-cursor-key32!!"},
+			want:  "GOCELL_ACCESS_CURSOR_KEY",
+		},
+		{
+			name:  "access cursor cell demo literal rejected",
+			patch: envPatch{"GOCELL_ACCESS_CURSOR_KEY", "gocell-demo-ACCESS-CORE-key-32!!"},
+			want:  "GOCELL_ACCESS_CURSOR_KEY",
 		},
 		{
 			name:  "service secret demo literal rejected",
@@ -478,6 +516,7 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
 			t.Setenv("GOCELL_AUDIT_CURSOR_KEY", freshAudit)
 			t.Setenv("GOCELL_CONFIG_CURSOR_KEY", freshConfig)
+			t.Setenv("GOCELL_ACCESS_CURSOR_KEY", freshAccess)
 			t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 			t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 			t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")

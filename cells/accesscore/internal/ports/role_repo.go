@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 // RoleRepository persists and retrieves Role entities and user-role assignments.
@@ -27,4 +28,7 @@ type RoleRepository interface {
 	// Callers gate outbox emission on changed.
 	RemoveFromUserIfNotLast(ctx context.Context, userID, roleID string) (changed bool, err error)
 	CountByRole(ctx context.Context, roleID string) (int, error)
+	// ListByUserID returns a paginated list of roles assigned to userID,
+	// sorted and filtered per params.
+	ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error)
 }
