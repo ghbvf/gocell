@@ -1,0 +1,74 @@
+version: v1
+name: normalized-review-finding-schema
+
+# Unified schema for historical review extraction and multi-stage analysis.
+# Keep IDs stable once assigned to support trend analysis.
+
+finding:
+  findingId: "F-YYYYMMDD-0001"
+  source:
+    type: "review|backlog|tech-debt|spec|debug-log"
+    path: "docs/reviews/202604211900-301-backlog-six-role-recheck-report.md"
+    lineRef: "L1"
+    excerpt: "optional short evidence quote"
+  seat:
+    name: "architecture|security|testing|operations|maintainability|product"
+    independent: true
+  classification:
+    domain: "auth|session|config|audit|device|order|cross-cutting|unknown"
+    layer: "kernel|runtime|cells|adapters|contracts|pkg|cmd|examples|cross-layer"
+    severity: "P0|P1|P2"
+    complexity: "Cx1|Cx2|Cx3|Cx4"
+    lifecycle: "new|known|recurring|resolved|deferred"
+  analysis:
+    title: "short issue title"
+    symptom: "what is observed"
+    impact: "what can break and who is affected"
+    rootCauseCluster: "RC-A"
+    callChain: "entry -> handler -> service -> adapter"
+    dataFlow: "input -> transform -> persist/publish/return"
+  handling:
+    decision: "now|this-iteration|backlog|wont-fix"
+    rationale: "why this decision is chosen"
+    owner: "optional owner/team"
+    targetMilestone: "optional milestone"
+    verificationPlan:
+      - "go build ./..."
+      - "go test ./..."
+  benchmark:
+    requiredForBestPractice: true
+    status: "complete|pending|insufficient|conflict"
+    references:
+      - project: "Kubernetes"
+        source: "docs url or source file"
+        pattern: "observed pattern"
+        applicability: "adopt|adapt|reject"
+        reason: "why"
+      - project: "Uber fx"
+        source: "docs url or source file"
+        pattern: "observed pattern"
+        applicability: "adopt|adapt|reject"
+        reason: "why"
+      - project: "Kratos"
+        source: "docs url or source file"
+        pattern: "observed pattern"
+        applicability: "adopt|adapt|reject"
+        reason: "why"
+
+aggregates:
+  rootCauseCluster:
+    clusterId: "RC-A"
+    summary: "shared root cause"
+    findingIds:
+      - "F-20260422-0001"
+      - "F-20260422-0002"
+    frequency: 0
+    affectedDomains: []
+    affectedLayers: []
+
+reportGate:
+  sixSeatCoverageRequired: true
+  sixSeatCoverageMin: 100
+  evidenceTraceabilityRequired: true
+  bestPracticeMinProjects: 3
+  missingBenchmarkPolicy: "must label as insufficient and avoid best-practice claim"
