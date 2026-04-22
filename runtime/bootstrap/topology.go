@@ -32,7 +32,7 @@ type Topology struct {
 // TopologyFromEnv reads GOCELL_CELL_ADAPTER_MODE and GOCELL_ADAPTER_MODE,
 // validates their combination, and returns a Topology.
 //
-// Coupling rule (mirrors validateModeCoupling in cmd/core-bundle/main.go):
+// Coupling rule (mirrors validateModeCoupling in cmd/corebundle/main.go):
 // postgres storage requires GOCELL_ADAPTER_MODE=real so production key loading,
 // token-guarded /metrics, and token-guarded /readyz?verbose are all enforced.
 //

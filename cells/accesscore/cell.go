@@ -93,7 +93,7 @@ func WithTxManager(tx persistence.TxRunner) Option {
 // same resolution logic as the internal Bootstrapper: stateDir overrides
 // GOCELL_STATE_DIR, which overrides the default /run/gocell path.
 //
-// This is the canonical path helper for cmd/core-bundle startup logging so
+// This is the canonical path helper for cmd/corebundle startup logging so
 // that the logged path always matches the file the bootstrapper writes (P2-6).
 func ResolveBootstrapCredentialPath(stateDir string) (string, error) {
 	return initialadmin.ResolveCredentialPath(stateDir)

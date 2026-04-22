@@ -24,7 +24,7 @@ validate:
 	go run ./cmd/gocell validate
 
 generate:
-	go run ./cmd/gocell generate assembly --id=core-bundle
+	go run ./cmd/gocell generate assembly --id=corebundle
 
 cover:
 	go test ./... -coverprofile=coverage.out
@@ -33,7 +33,7 @@ cover:
 clean:
 	rm -rf bin/
 	rm -f coverage.out
-	rm -f gocell core-bundle iot-device sso-bff todo-order
+	rm -f gocell corebundle iot-device sso-bff todo-order
 
 # ---------------------------------------------------------------------------
 # Docker Compose lifecycle

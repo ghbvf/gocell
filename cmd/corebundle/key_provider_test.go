@@ -100,7 +100,7 @@ func TestBuildKeyProvider_LocalAES_MissingKey_Fails(t *testing.T) {
 // endpoint, rather than silently degrading to NoopTransformer.
 //
 // Success-case wiring is covered by adapters/vault integration tests (real
-// Vault container); this unit test only locks the cmd/core-bundle wiring
+// Vault container); this unit test only locks the cmd/corebundle wiring
 // so buildKeyProvider’s vault-transit branch does not regress silently.
 func TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast(t *testing.T) {
 	// Deliberately unreachable address — readLatestVersion must surface the

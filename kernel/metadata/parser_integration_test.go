@@ -115,7 +115,7 @@ func TestParseRealProject(t *testing.T) {
 	// --- Assemblies: at least the 1 original assembly (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Assemblies), 1, "expected at least 1 assembly")
 	assert.LessOrEqual(t, len(pm.Assemblies), 3, "unexpected extra assemblies parsed — update this bound if new assemblies were added intentionally")
-	assert.Contains(t, pm.Assemblies, "core-bundle")
+	assert.Contains(t, pm.Assemblies, "corebundle")
 
 	// --- Status Board: at least the 8 original entries (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.StatusBoard), 8, "expected at least 8 status-board entries")

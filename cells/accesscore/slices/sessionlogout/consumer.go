@@ -23,8 +23,8 @@ import (
 // Wiring: these guarantees are provided by outbox.ConsumerBase, which
 // bootstrap injects via WithConsumerMiddleware — the handler below only
 // needs to produce a LegacyHandler return value; ConsumerBase wraps it to
-// enforce claim/backoff/DLX semantics. See cmd/core-bundle/main.go for the
-// concrete wiring (in-mem Claimer in core-bundle; redis IdempotencyClaimer
+// enforce claim/backoff/DLX semantics. See cmd/corebundle/main.go for the
+// concrete wiring (in-mem Claimer in corebundle; redis IdempotencyClaimer
 // in multi-pod deployments).
 //
 // Ack timing: after sessionRepo.RevokeByUserID returns nil

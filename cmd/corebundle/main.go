@@ -1,4 +1,4 @@
-// Package main is the entry point for the core-bundle assembly.
+// Package main is the entry point for the corebundle assembly.
 // It bootstraps configcore, accesscore, and auditcore with in-memory
 // repositories by default, suitable for development and integration testing.
 //
@@ -165,13 +165,13 @@ type cursorCodecs struct {
 func loadAllCursorCodecs(adapterMode string) (cursorCodecs, error) {
 	audit, err := loadCursorCodec(adapterMode,
 		"GOCELL_AUDIT_CURSOR_KEY", "GOCELL_AUDIT_CURSOR_PREVIOUS_KEY",
-		"core-bundle-audit-cursor-key-32!", "audit")
+		"corebundle-audit-cursor-key-32b!", "audit")
 	if err != nil {
 		return cursorCodecs{}, err
 	}
 	cfg, err := loadCursorCodec(adapterMode,
 		"GOCELL_CONFIG_CURSOR_KEY", "GOCELL_CONFIG_CURSOR_PREVIOUS_KEY",
-		"core-bundle-cfg-cursor-key--32b!", "config")
+		"corebundle-cfg-cursor-key--32bb!", "config")
 	if err != nil {
 		return cursorCodecs{}, err
 	}
@@ -252,7 +252,7 @@ func buildJWTDeps(adapterMode string) (jwtDeps, error) {
 		return jwtDeps{}, fmt.Errorf("create JWT verifier: %w", err)
 	}
 
-	slog.Info("core-bundle: JWT deps built",
+	slog.Info("corebundle: JWT deps built",
 		slog.String("issuer", reg.Issuer()),
 		slog.Any("audiences", reg.Audiences()),
 		slog.String("adapter_mode", adapterMode))
@@ -368,7 +368,7 @@ func main() {
 //  5. buildConsumerBase — start the event-consumer goroutine pool.
 //
 // Adding a new Cell is O(1):
-//  1. Create cmd/core-bundle/<new>_module.go implementing CellModule.
+//  1. Create cmd/corebundle/<new>_module.go implementing CellModule.
 //  2. Append <New>CellModule{} to the BuildApp call list below.
 //
 // ref: uber-go/fx app.go Run — thin wrapper around Start/Stop lifecycle.
@@ -401,7 +401,7 @@ func run(ctx context.Context) error {
 	metricsHandler := shared.metricsHandler
 
 	adapterInfo := shared.Topology.AdapterInfo()
-	slog.Info("core-bundle: startup configuration",
+	slog.Info("corebundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
 		slog.String("event_bus", adapterInfo["event_bus"]),

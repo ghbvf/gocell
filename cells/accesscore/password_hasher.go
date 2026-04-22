@@ -3,7 +3,7 @@ package accesscore
 import "github.com/ghbvf/gocell/cells/accesscore/internal/initialadmin"
 
 // PasswordHasher re-exports initialadmin.PasswordHasher so external
-// composition roots (e.g. cmd/core-bundle) can inject a test hasher
+// composition roots (e.g. cmd/corebundle) can inject a test hasher
 // without importing an internal package.
 //
 // ref: uber-go/fx — expensive production dependencies exposed as options

@@ -147,12 +147,12 @@ func validProject() *metadata.ProjectMeta {
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{
-			"core-bundle": {
-				ID:    "core-bundle",
+			"corebundle": {
+				ID:    "corebundle",
 				Cells: []string{"accesscore", "auditcore", "shared-crypto"},
 				Build: metadata.BuildMeta{
-					Entrypoint:     "cmd/core-bundle/main.go",
-					Binary:         "core-bundle",
+					Entrypoint:     "cmd/corebundle/main.go",
+					Binary:         "corebundle",
 					DeployTemplate: "k8s",
 				},
 			},
@@ -464,7 +464,7 @@ func TestREF08(t *testing.T) {
 		{
 			name: "assembly references missing cell",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Assemblies["core-bundle"].Cells = append(pm.Assemblies["core-bundle"].Cells, "nonexistent")
+				pm.Assemblies["corebundle"].Cells = append(pm.Assemblies["corebundle"].Cells, "nonexistent")
 			},
 			wantCount: 1,
 		},
@@ -850,7 +850,7 @@ func TestTOPO06(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Assemblies["edge-bundle"] = &metadata.AssemblyMeta{
 					ID:    "edge-bundle",
-					Cells: []string{"accesscore"}, // also in core-bundle
+					Cells: []string{"accesscore"}, // also in corebundle
 					Build: metadata.BuildMeta{
 						Entrypoint:     "cmd/edge-bundle/main.go",
 						Binary:         "edge-bundle",
@@ -1734,7 +1734,7 @@ func TestFilePathHelpers(t *testing.T) {
 	assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", sliceFile("accesscore/session-login"))
 	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml", contractFile("http.auth.login.v1"))
 	assert.Equal(t, "journeys/J-sso-login.yaml", journeyFile("J-sso-login"))
-	assert.Equal(t, "assemblies/core-bundle/assembly.yaml", assemblyFile("core-bundle"))
+	assert.Equal(t, "assemblies/corebundle/assembly.yaml", assemblyFile("corebundle"))
 }
 
 func TestSliceFileFallback(t *testing.T) {
@@ -1979,7 +1979,7 @@ func TestREF10(t *testing.T) {
 		{
 			name: "assembly missing entrypoint",
 			setup: func(pm *metadata.ProjectMeta) {
-				pm.Assemblies["core-bundle"].Build.Entrypoint = ""
+				pm.Assemblies["corebundle"].Build.Entrypoint = ""
 			},
 			wantCount: 1,
 		},
@@ -2014,7 +2014,7 @@ func TestREF11(t *testing.T) {
 		// Create the entrypoint file under the project root.
 		srcDir := filepath.Join(tmpDir, "src")
 		require.NoError(t, os.MkdirAll(srcDir, 0o755))
-		entryDir := filepath.Join(tmpDir, "src", "cmd", "core-bundle")
+		entryDir := filepath.Join(tmpDir, "src", "cmd", "corebundle")
 		require.NoError(t, os.MkdirAll(entryDir, 0o755))
 		require.NoError(t, os.WriteFile(filepath.Join(entryDir, "main.go"), []byte("package main"), 0o644))
 
@@ -2533,7 +2533,7 @@ func TestIsWithinRoot(t *testing.T) {
 	}{
 		"relative root dot",
 		".",
-		filepath.Join(cwd, "assemblies", "core-bundle", "generated", "boundary.yaml"),
+		filepath.Join(cwd, "assemblies", "corebundle", "generated", "boundary.yaml"),
 		true,
 	})
 	for _, tt := range tests {
@@ -2568,7 +2568,7 @@ func TestREF11_PathTraversal(t *testing.T) {
 	require.NoError(t, os.MkdirAll(srcDir, 0o755))
 
 	pm := validProject()
-	pm.Assemblies["core-bundle"].Build.Entrypoint = "../../../etc/passwd"
+	pm.Assemblies["corebundle"].Build.Entrypoint = "../../../etc/passwd"
 	val := NewValidator(pm, srcDir)
 	got := findByCode(val.validateREF11(), "REF-11")
 	require.Len(t, got, 1)
@@ -3241,9 +3241,9 @@ func TestREF16(t *testing.T) {
 		srcDir := filepath.Join(tmpDir, "src")
 		require.NoError(t, os.MkdirAll(srcDir, 0o755))
 		// Create boundary.yaml under assemblies/ (where gocell generate writes it).
-		boundaryDir := filepath.Join(srcDir, "assemblies", "core-bundle", "generated")
+		boundaryDir := filepath.Join(srcDir, "assemblies", "corebundle", "generated")
 		require.NoError(t, os.MkdirAll(boundaryDir, 0o755))
-		require.NoError(t, os.WriteFile(filepath.Join(boundaryDir, "boundary.yaml"), []byte("assembly: core-bundle"), 0o644))
+		require.NoError(t, os.WriteFile(filepath.Join(boundaryDir, "boundary.yaml"), []byte("assembly: corebundle"), 0o644))
 
 		pm := validProject()
 		val := NewValidator(pm, srcDir)
@@ -3263,7 +3263,7 @@ func TestREF16(t *testing.T) {
 		assert.Equal(t, SeverityWarning, got[0].Severity)
 		assert.Equal(t, IssueRefNotFound, got[0].IssueType)
 		assert.Contains(t, got[0].Message, "boundary.yaml")
-		assert.Contains(t, got[0].Message, "assemblies/core-bundle/generated/boundary.yaml")
+		assert.Contains(t, got[0].Message, "assemblies/corebundle/generated/boundary.yaml")
 	})
 
 	t.Run("path traversal in assembly ID", func(t *testing.T) {

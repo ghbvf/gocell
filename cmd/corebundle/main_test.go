@@ -445,12 +445,12 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 		},
 		{
 			name:  "audit cursor demo literal rejected",
-			patch: envPatch{"GOCELL_AUDIT_CURSOR_KEY", "core-bundle-audit-cursor-key-32!"},
+			patch: envPatch{"GOCELL_AUDIT_CURSOR_KEY", "corebundle-audit-cursor-key-32b!"},
 			want:  "GOCELL_AUDIT_CURSOR_KEY",
 		},
 		{
 			name:  "config cursor demo literal rejected",
-			patch: envPatch{"GOCELL_CONFIG_CURSOR_KEY", "core-bundle-cfg-cursor-key--32b!"},
+			patch: envPatch{"GOCELL_CONFIG_CURSOR_KEY", "corebundle-cfg-cursor-key--32bb!"},
 			want:  "GOCELL_CONFIG_CURSOR_KEY",
 		},
 		{

@@ -204,7 +204,7 @@ func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {
 		if err := json.Unmarshal(line, &record); err != nil {
 			continue
 		}
-		if record["msg"] != "core-bundle: JWT deps built" {
+		if record["msg"] != "corebundle: JWT deps built" {
 			continue
 		}
 		found = true
@@ -213,7 +213,7 @@ func TestBuildJWTDeps_LogsEffectiveConfig(t *testing.T) {
 		// audiences is now a []string (slog.Any) rather than a plain string
 		assert.NotNil(t, record["audiences"], "log must contain audiences field")
 	}
-	assert.True(t, found, "structured log 'core-bundle: JWT deps built' must be emitted by buildJWTDeps")
+	assert.True(t, found, "structured log 'corebundle: JWT deps built' must be emitted by buildJWTDeps")
 }
 
 // splitLines splits a byte slice into non-empty newline-delimited chunks.

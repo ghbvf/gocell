@@ -20,7 +20,7 @@ func TestLoadCursorCodec_DevDefault_Succeeds(t *testing.T) {
 
 	codec, err := loadCursorCodec("", "GOCELL_TEST_CURSOR_KEY",
 		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		"core-bundle-audit-cursor-key-32!", "audit")
+		"corebundle-audit-cursor-key-32b!", "audit")
 	require.NoError(t, err)
 	require.NotNil(t, codec)
 
@@ -37,7 +37,7 @@ func TestLoadCursorCodec_RealModeMissingEnv_FailFast(t *testing.T) {
 
 	codec, err := loadCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
 		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		"core-bundle-audit-cursor-key-32!", "audit")
+		"corebundle-audit-cursor-key-32b!", "audit")
 	require.Error(t, err)
 	assert.Nil(t, codec)
 	assert.Contains(t, err.Error(), "GOCELL_TEST_CURSOR_KEY",
@@ -51,12 +51,12 @@ func TestLoadCursorCodec_RealModeMissingEnv_FailFast(t *testing.T) {
 // env is set, a well-known demo value is rejected in real mode. Reachable if
 // an operator copies the dev default into prod config.
 func TestLoadCursorCodec_DemoKeyInRealMode_Rejected(t *testing.T) {
-	t.Setenv("GOCELL_TEST_CURSOR_KEY", "core-bundle-audit-cursor-key-32!")
+	t.Setenv("GOCELL_TEST_CURSOR_KEY", "corebundle-audit-cursor-key-32b!")
 	t.Setenv("GOCELL_TEST_CURSOR_PREVIOUS_KEY", "")
 
 	_, err := loadCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
 		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		"core-bundle-audit-cursor-key-32!", "audit")
+		"corebundle-audit-cursor-key-32b!", "audit")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "well-known demo key",
 		"error must come from rejectDemoKey")
@@ -157,7 +157,7 @@ func TestLoadCursorCodec_PreviousKeyUnset_OK(t *testing.T) {
 func TestLoadCursorCodec_PreviousKeyDemoInRealMode_Rejected(t *testing.T) {
 	keyNew := bytes.Repeat([]byte("N"), 32)
 	t.Setenv("GOCELL_TEST_CURSOR_KEY", string(keyNew))
-	t.Setenv("GOCELL_TEST_CURSOR_PREVIOUS_KEY", "core-bundle-audit-cursor-key-32!")
+	t.Setenv("GOCELL_TEST_CURSOR_PREVIOUS_KEY", "corebundle-audit-cursor-key-32b!")
 
 	_, err := loadCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
 		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",

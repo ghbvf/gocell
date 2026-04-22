@@ -162,8 +162,8 @@ func TestValidateModeCoupling_Matrix(t *testing.T) {
 }
 
 // TestOutboxE2E_CrossCellFanout is the P0 regression guard for the cross-cell
-// fanout bug: before Commit 1, all cells in core-bundle shared a single
-// ConsumerGroup ("core-bundle"), causing the idempotency key to be the same for
+// fanout bug: before Commit 1, all cells in corebundle shared a single
+// ConsumerGroup ("corebundle"), causing the idempotency key to be the same for
 // every cell. The second cell to process an event saw ClaimDone and silently
 // Acked without calling its handler.
 //
@@ -233,7 +233,7 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 
 	// Assert both handlers are called exactly once.
 	// Before the Subscription-first-class refactor (Commit 1), the shared
-	// "core-bundle" ConsumerGroup caused the second cell to see ClaimDone and
+	// "corebundle" ConsumerGroup caused the second cell to see ClaimDone and
 	// silently Ack without calling its handler — one of the two counts would
 	// stay at 0.
 	require.Eventually(t, func() bool {

@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// TestAssembly_CoreBundleBoot boots the core-bundle assembly with all
+// TestAssembly_CoreBundleBoot boots the corebundle assembly with all
 // three core cells (accesscore, auditcore, configcore) and asserts
 // that Health() reports healthy for every cell.
 func TestAssembly_CoreBundleBoot(t *testing.T) {

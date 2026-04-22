@@ -108,13 +108,13 @@ passCriteria:
 `)},
 
 		// --- assemblies ---
-		"assemblies/core-bundle/assembly.yaml": &fstest.MapFile{Data: []byte(`id: core-bundle
+		"assemblies/corebundle/assembly.yaml": &fstest.MapFile{Data: []byte(`id: corebundle
 cells:
   - accesscore
   - auditcore
 build:
-  entrypoint: cmd/core-bundle/main.go
-  binary: core-bundle
+  entrypoint: cmd/corebundle/main.go
+  binary: corebundle
   deployTemplate: k8s
 `)},
 
@@ -198,8 +198,8 @@ func TestParseFS_FullProject(t *testing.T) {
 
 	// Assemblies
 	assert.Len(t, pm.Assemblies, 1)
-	assert.Contains(t, pm.Assemblies, "core-bundle")
-	a := pm.Assemblies["core-bundle"]
+	assert.Contains(t, pm.Assemblies, "corebundle")
+	a := pm.Assemblies["corebundle"]
 	assert.Equal(t, []string{"accesscore", "auditcore"}, a.Cells)
 	assert.Equal(t, "k8s", a.Build.DeployTemplate)
 
@@ -668,20 +668,20 @@ passCriteria: []
 
 func TestParseFS_DuplicateAssemblyID(t *testing.T) {
 	fs := fstest.MapFS{
-		"assemblies/core-bundle/assembly.yaml": &fstest.MapFile{Data: []byte(`id: core-bundle
+		"assemblies/corebundle/assembly.yaml": &fstest.MapFile{Data: []byte(`id: corebundle
 cells:
   - accesscore
 build:
-  entrypoint: cmd/core-bundle/main.go
-  binary: core-bundle
+  entrypoint: cmd/corebundle/main.go
+  binary: corebundle
   deployTemplate: k8s
 `)},
-		"assemblies/core-bundle-v2/assembly.yaml": &fstest.MapFile{Data: []byte(`id: core-bundle
+		"assemblies/corebundle-v2/assembly.yaml": &fstest.MapFile{Data: []byte(`id: corebundle
 cells:
   - accesscore
 build:
-  entrypoint: cmd/core-bundle/main.go
-  binary: core-bundle
+  entrypoint: cmd/corebundle/main.go
+  binary: corebundle
   deployTemplate: k8s
 `)},
 	}
@@ -690,7 +690,7 @@ build:
 	_, err := p.ParseFS(fs)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicate")
-	assert.Contains(t, err.Error(), "core-bundle")
+	assert.Contains(t, err.Error(), "corebundle")
 }
 
 func TestParseFS_DuplicateSliceID(t *testing.T) {

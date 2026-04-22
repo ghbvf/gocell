@@ -24,14 +24,14 @@ var wellKnownDemoKeys = []string{
 	"gocell-demo-CONFIG-CORE-key-32!!",
 	"gocell-demo-ORDER-CELL-key-32b!!",
 	"gocell-demo-DEVICE-CELL-key-32!!",
-	"core-bundle-audit-cursor-key-32!",
-	"core-bundle-cfg-cursor-key--32b!",
+	"corebundle-audit-cursor-key-32b!",
+	"corebundle-cfg-cursor-key--32bb!",
 
 	// Service token HMAC (shipped as test fixture; never use in production)
 	"service-secret-32-bytes-xxxxxx!!",
 
 	// AES master key (hex-encoded, 64 chars) shipped as test fixture in
-	// cmd/core-bundle and CI; real mode must refuse this value.
+	// cmd/corebundle and CI; real mode must refuse this value.
 	"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
 }
 

@@ -2,7 +2,7 @@
 
 // Package e2e contains end-to-end tests that exercise the full configcore
 // PG pilot including value encryption. These tests require a live 3-container
-// environment (PostgreSQL + Vault + core-bundle HTTP server) started via:
+// environment (PostgreSQL + Vault + corebundle HTTP server) started via:
 //
 //	docker compose -f tests/e2e/docker-compose.e2e.yaml up -d
 //
@@ -25,7 +25,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// e2eBaseURL returns the base URL of the running core-bundle, defaulting to
+// e2eBaseURL returns the base URL of the running corebundle, defaulting to
 // localhost:8080. Override via E2E_BASE_URL environment variable.
 func e2eBaseURL() string {
 	if u := os.Getenv("E2E_BASE_URL"); u != "" {
@@ -89,7 +89,7 @@ func doJSON(t *testing.T, method, path string, body any, token string) *http.Res
 //
 // Container requirements:
 //   - PostgreSQL (GOCELL_DATABASE_URL set in compose env)
-//   - core-bundle with GOCELL_KEY_PROVIDER=local-aes + GOCELL_MASTER_KEY set
+//   - corebundle with GOCELL_KEY_PROVIDER=local-aes + GOCELL_MASTER_KEY set
 //   - GOCELL_CELL_ADAPTER_MODE=postgres
 func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
 	t.Skip("e2e: requires docker compose environment — run: docker compose -f tests/e2e/docker-compose.e2e.yaml up -d")

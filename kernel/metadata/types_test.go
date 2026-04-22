@@ -255,11 +255,11 @@ func TestPassCriterionOmitEmptyCheckRef(t *testing.T) {
 
 func TestAssemblyMetaRoundTrip(t *testing.T) {
 	orig := AssemblyMeta{
-		ID:    "core-bundle",
+		ID:    "corebundle",
 		Cells: []string{"accesscore", "auditcore", "configcore"},
 		Build: BuildMeta{
-			Entrypoint:     "cmd/core-bundle/main.go",
-			Binary:         "core-bundle",
+			Entrypoint:     "cmd/corebundle/main.go",
+			Binary:         "corebundle",
 			DeployTemplate: "k8s",
 		},
 	}

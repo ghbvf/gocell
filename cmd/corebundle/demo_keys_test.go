@@ -51,8 +51,8 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	// in dev mode); rejectDemoKey is called directly in internalGuardFromEnv.
 	devDefaults := []string{
 		"dev-hmac-key-replace-in-prod!!!!", // loadSecret("GOCELL_HMAC_KEY", ...)
-		"core-bundle-audit-cursor-key-32!", // loadCursorCodec("GOCELL_AUDIT_CURSOR_KEY", ...)
-		"core-bundle-cfg-cursor-key--32b!", // loadCursorCodec("GOCELL_CONFIG_CURSOR_KEY", ...)
+		"corebundle-audit-cursor-key-32b!", // loadCursorCodec("GOCELL_AUDIT_CURSOR_KEY", ...)
+		"corebundle-cfg-cursor-key--32bb!", // loadCursorCodec("GOCELL_CONFIG_CURSOR_KEY", ...)
 	}
 	for _, dd := range devDefaults {
 		dd := dd

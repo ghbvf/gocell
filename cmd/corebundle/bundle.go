@@ -27,11 +27,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
-// buildAssembly constructs the core-bundle Assembly and registers the three
+// buildAssembly constructs the corebundle Assembly and registers the three
 // cells with durable mode. Extracted to keep run() cognitive complexity ≤ 15.
 func buildAssembly(ps promStack, cells ...cell.Cell) (*assembly.CoreAssembly, error) {
 	asm := assembly.New(assembly.Config{
-		ID:              "core-bundle",
+		ID:              "corebundle",
 		DurabilityMode:  cell.DurabilityDurable,
 		HookObserver:    ps.hookObserver,
 		MetricsProvider: ps.metricProvider,
@@ -258,11 +258,11 @@ func logInitialAdminCredPath() {
 	if err != nil {
 		// GOCELL_STATE_DIR is not absolute — the bootstrapper will fail-fast too,
 		// so log the error here and let the user fix the config.
-		slog.Warn("core-bundle: invalid GOCELL_STATE_DIR; initial admin credential path unresolvable",
+		slog.Warn("corebundle: invalid GOCELL_STATE_DIR; initial admin credential path unresolvable",
 			slog.String("error", err.Error()))
 		return
 	}
-	slog.Info("core-bundle: starting; if first run, initial admin credentials are written to "+credPath,
+	slog.Info("corebundle: starting; if first run, initial admin credentials are written to "+credPath,
 		slog.String("cred_path", credPath))
 }
 

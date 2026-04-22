@@ -77,12 +77,12 @@ func targetsProject() *metadata.ProjectMeta {
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{
-			"core-bundle": {
-				ID:    "core-bundle",
+			"corebundle": {
+				ID:    "corebundle",
 				Cells: []string{"accesscore", "auditcore"},
 				Build: metadata.BuildMeta{
-					Entrypoint: "cmd/core-bundle/main.go",
-					Binary:     "core-bundle",
+					Entrypoint: "cmd/corebundle/main.go",
+					Binary:     "corebundle",
 				},
 			},
 		},
@@ -291,10 +291,10 @@ func TestSelectFromFiles_JourneyFile(t *testing.T) {
 func TestSelectFromFiles_AssemblyFile(t *testing.T) {
 	ts := NewTargetSelector(targetsProject())
 	result := ts.SelectFromFiles([]string{
-		"assemblies/core-bundle/assembly.yaml",
+		"assemblies/corebundle/assembly.yaml",
 	})
 
-	// core-bundle contains accesscore and auditcore, so all their slices are affected.
+	// corebundle contains accesscore and auditcore, so all their slices are affected.
 	assert.Equal(t, []string{
 		"accesscore/session-login", "accesscore/session-refresh", "auditcore/audit-write",
 	}, result.Slices)

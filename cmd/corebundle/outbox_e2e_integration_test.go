@@ -3,7 +3,7 @@
 // Package main — e2e regression test for A11 (OUTBOX-RELAY-WIRE-PG-01) + F1
 // (PG→in-memory-eventbus envelope unwrap).
 //
-// Before A11, cmd/core-bundle in GOCELL_CELL_ADAPTER_MODE=postgres created the
+// Before A11, cmd/corebundle in GOCELL_CELL_ADAPTER_MODE=postgres created the
 // outbox writer but never started the relay worker. Config publish events
 // written to outbox_entries stalled indefinitely — PG mode was broken.
 //
@@ -16,7 +16,7 @@
 //
 // Current form exercises the REAL production path:
 //   - Publisher passed to buildConfigCoreOpts is the in-memory eventbus `eb`
-//     (matching cmd/core-bundle/main.go:492).
+//     (matching cmd/corebundle/main.go:492).
 //   - Subscription is registered on the same `eb` and asserts the received
 //     Entry.Payload parses as a business event (action/key/value), which
 //     requires the F1 envelope-unwrap fix to work.
@@ -68,7 +68,7 @@ type configChangedBusinessPayload struct {
 
 // TestOutboxE2E_PGMode_WriteToSubscribe is the combined A11 + F1 regression
 // guard. It exercises the SHIPPED production path: in-memory eventbus is the
-// relay publisher (no RabbitMQ in core-bundle today), a subscriber on the
+// relay publisher (no RabbitMQ in corebundle today), a subscriber on the
 // same bus must see business payloads, and the bundle must start/stop via
 // bootstrap.WithWorkers lifecycle.
 //
@@ -82,7 +82,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	// --- Step 1: Start PG testcontainer (RMQ is NOT used by core-bundle today) ---
+	// --- Step 1: Start PG testcontainer (RMQ is NOT used by corebundle today) ---
 	pgContainer, err := tcpostgres.Run(ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
 		tcpostgres.WithUsername("test"),

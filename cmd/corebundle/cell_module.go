@@ -12,10 +12,10 @@ import (
 // self-managing all Cell-specific dependency wiring (KeyProvider, PGResource,
 // cellOpts, etc.).
 //
-// CellModule is defined here (cmd/core-bundle) rather than in runtime/bootstrap
+// CellModule is defined here (cmd/corebundle) rather than in runtime/bootstrap
 // because Provide must accept the concrete *SharedDeps type for type safety.
 // Moving it here avoids a circular dependency (runtime/bootstrap cannot import
-// cmd/core-bundle).
+// cmd/corebundle).
 //
 // ref: uber-go/fx fx.Module(name, opts...) — each module is self-contained
 // and registers its own providers.

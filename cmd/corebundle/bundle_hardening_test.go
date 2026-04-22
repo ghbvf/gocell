@@ -94,7 +94,7 @@ func findOffendingLines(t *testing.T, filePath string, patterns ...*regexp.Regex
 }
 
 // findRepoRoot walks upward from the working directory until it finds a
-// go.mod file. The test was written as `go test ./cmd/core-bundle/...` so the
+// go.mod file. The test was written as `go test ./cmd/corebundle/...` so the
 // working directory is the package dir; repo root is three levels up, but we
 // do the walk defensively in case the harness changes.
 func findRepoRoot(t *testing.T) string {
