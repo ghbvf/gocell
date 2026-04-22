@@ -22,6 +22,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// demoCursorKey is the public demo-mode cursor codec key.
+// In durable mode a secret key must be supplied via WithCursorCodec.
+const demoCursorKey = "gocell-demo-DEVICE-CELL-key-32!!"
+
 // Compile-time interface checks.
 var (
 	_ cell.Cell          = (*DeviceCell)(nil)
@@ -135,7 +139,7 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 				"device-cell durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
 		}
 		// Each cell uses a distinct demo key to prevent cross-cell cursor reuse in demo mode.
-		codec, err := query.NewCursorCodec([]byte("gocell-demo-DEVICE-CELL-key-32!!"))
+		codec, err := query.NewCursorCodec([]byte(demoCursorKey))
 		if err != nil {
 			return err
 		}

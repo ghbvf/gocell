@@ -23,11 +23,12 @@ type Service struct {
 	roleRepo ports.RoleRepository
 	codec    *query.CursorCodec
 	logger   *slog.Logger
+	runMode  query.RunMode
 }
 
 // NewService creates an rbac-check Service.
-func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger *slog.Logger) *Service {
-	return &Service{roleRepo: roleRepo, codec: codec, logger: logger}
+func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) *Service {
+	return &Service{roleRepo: roleRepo, codec: codec, logger: logger, runMode: runMode}
 }
 
 // HasRole checks if a user has the specified role.
@@ -72,6 +73,6 @@ func (s *Service) ListRoles(ctx context.Context, userID string, pageReq query.Pa
 			return []any{r.Name, r.ID}
 		},
 		OnCursorErr: query.LogCursorError(s.logger, "rbac-check"),
-		RunMode:     query.RunModeProd,
+		RunMode:     s.runMode,
 	})
 }

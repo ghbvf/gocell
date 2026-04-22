@@ -68,7 +68,7 @@ func setup() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	svc := NewService(roleRepo, codec, slog.Default())
+	svc := NewService(roleRepo, codec, slog.Default(), query.RunModeDemo)
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux

@@ -33,7 +33,7 @@ func newContractRBACHandler() http.Handler {
 	if err != nil {
 		panic(err)
 	}
-	svc := NewService(roleRepo, codec, slog.Default())
+	svc := NewService(roleRepo, codec, slog.Default(), query.RunModeDemo)
 
 	inner := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(inner)

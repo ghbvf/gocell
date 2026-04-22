@@ -1,4 +1,5 @@
 // Package devicelist implements the device-list slice: paginated device listing.
+// Consistency: L0 LocalOnly — read-only query, no state mutation or outbox publishing.
 package devicelist
 
 import (

@@ -139,7 +139,7 @@ func (r *countingRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, 
 	return r.inner.RemoveFromUserIfNotLast(ctx, userID, roleID)
 }
 func (r *countingRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
-	return r.inner.GetByUserID(ctx, userID)
+	return r.inner.ListByUserID(ctx, userID, params)
 }
 
 var _ ports.RoleRepository = (*countingRoleRepo)(nil)

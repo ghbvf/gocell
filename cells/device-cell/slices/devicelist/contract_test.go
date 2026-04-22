@@ -5,11 +5,13 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -26,7 +28,7 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 		ID: "dev-2", Name: "sensor-beta", Status: "offline", LastSeen: now,
 	})
 
-	codec, err := query.NewCursorCodec([]byte("gocell-demo-DEVICE-CELL-key-32!!"))
+	codec, err := query.NewCursorCodec([]byte("gocell-demo-DEVICE-CELL-key-32!!")) // must match cell.go demoCursorKey
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -34,11 +36,25 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := NewHandler(svc)
 
-	mux := http.NewServeMux()
-	mux.Handle("GET /api/v1/devices", auth.RequirePolicy(auth.Authenticated())(http.HandlerFunc(h.HandleList)))
-	return mux
+	inner := celltest.NewTestMux()
+	NewHandler(svc).RegisterRoutes(inner)
+
+	outer := http.NewServeMux()
+	// The contract path is /api/v1/devices (no trailing slash). Strip the prefix
+	// and normalise to "/" so the inner handler registered at "GET /" matches.
+	prefix := "/api/v1/devices"
+	stripped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		r2 := r.Clone(r.Context())
+		r2.URL.Path = "/" + strings.TrimPrefix(r.URL.Path, prefix)
+		if r2.URL.Path == "/" || r2.URL.Path == "" {
+			r2.URL.Path = "/"
+		}
+		inner.ServeHTTP(w, r2)
+	})
+	outer.Handle("/api/v1/devices", stripped)
+	outer.Handle("/api/v1/devices/", stripped)
+	return outer
 }
 
 func TestHttpDeviceListV1Serve(t *testing.T) {
@@ -56,4 +72,6 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"data":{"wrong":"shape"}}`))
 	// MustRejectResponse: data is not an array
 	c.MustRejectResponse(t, []byte(`{"data":{"id":"dev-1"},"hasMore":false}`))
+	// MustRejectResponse: hasMore must be bool, not string
+	c.MustRejectResponse(t, []byte(`{"data":[],"hasMore":"yes"}`))
 }

@@ -24,7 +24,7 @@ func newTestCodec(t *testing.T) *query.CursorCodec {
 func newTestService(t *testing.T) (*Service, *mem.RoleRepository) {
 	t.Helper()
 	repo := mem.NewRoleRepository()
-	return NewService(repo, newTestCodec(t), slog.Default()), repo
+	return NewService(repo, newTestCodec(t), slog.Default(), query.RunModeDemo), repo
 }
 
 func TestService_HasRole(t *testing.T) {

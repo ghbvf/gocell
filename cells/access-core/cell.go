@@ -406,7 +406,7 @@ func (c *AccessCore) validateDemoMode() error {
 
 // initSlices constructs all 9 slice services and handlers.
 // Extracted from Init to reduce cognitive complexity.
-func (c *AccessCore) initSlices() error {
+func (c *AccessCore) initSlices(deps cell.Dependencies) error {
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.
 	var loginOpts []sessionlogin.Option
@@ -468,6 +468,10 @@ func (c *AccessCore) initSlices() error {
 
 	// Initialize cursor codec for pagination (rbac-check).
 	if c.cursorCodec == nil {
+		if deps.DurabilityMode == cell.DurabilityDurable {
+			return errcode.New(errcode.ErrCellMissingCodec,
+				"access-core durable mode requires a cursor codec; use WithCursorCodec(query.NewCursorCodec(secret)) — the built-in demo key is public in the source tree")
+		}
 		codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
 		if err != nil {
 			return err
@@ -477,7 +481,8 @@ func (c *AccessCore) initSlices() error {
 	}
 
 	// rbac-check
-	rbacSvc := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger)
+	rbacSvc := rbaccheck.NewService(c.roleRepo, c.cursorCodec, c.logger,
+		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
 	c.rbacHandler = rbaccheck.NewHandler(rbacSvc)
 	c.AddSlice(cell.NewBaseSlice("rbaccheck", "access-core", cell.L0))
 
@@ -526,7 +531,7 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.runInitialAdminBootstrap(ctx); err != nil {
 		return err
 	}
-	if err := c.initSlices(); err != nil {
+	if err := c.initSlices(deps); err != nil {
 		return err
 	}
 	return nil
