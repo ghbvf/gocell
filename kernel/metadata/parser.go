@@ -271,6 +271,11 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("assembly id is empty in %s", path))
 	}
+	// Record filesystem truth so strict rules (FMT-16) can compare the directory
+	// segment against m.ID. matchAssemblyYAML guarantees len(parts)==3 and
+	// parts[0]=="assemblies", so parts[1] is always the assembly directory.
+	parts := splitPath(path)
+	m.Dir = parts[1]
 	if _, exists := pm.Assemblies[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate assembly ID %q: %s and previous", m.ID, path))

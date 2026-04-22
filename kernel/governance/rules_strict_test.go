@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -485,6 +486,191 @@ func TestREF05_PathIDSplit_FiresWhenDirAndIDDisagree(t *testing.T) {
 	}
 	if !gotREF05 {
 		t.Error("REF-05 must fire when slice.id disagrees with directory name (was silent before Dir field)")
+	}
+}
+
+// TestStrictValidator_FMTC1_KebabCellID verifies that FMT-C1 flags cell.yaml
+// ids containing '-' (kebab-case) in strict mode and is silent otherwise.
+func TestStrictValidator_FMTC1_KebabCellID(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"access-core": {
+				ID:               "access-core",
+				Type:             "core",
+				ConsistencyLevel: "L2",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.startup"}},
+				Dir:              "accesscore", // dir already no-dash, but id still dash
+			},
+		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+
+	// Non-strict: silent.
+	for _, r := range v.ValidateStrict(false) {
+		if r.Code == "FMT-C1" {
+			t.Errorf("non-strict mode must not emit FMT-C1: %s", r.Message)
+		}
+	}
+
+	// Strict: must fire FMT-C1.
+	var got bool
+	for _, r := range v.ValidateStrict(true) {
+		if r.Code == "FMT-C1" && r.Severity == SeverityError {
+			got = true
+		}
+	}
+	if !got {
+		t.Error("strict mode should produce FMT-C1 error for kebab-case cell id")
+	}
+}
+
+// TestStrictValidator_FMTA1_KebabAssemblyID verifies FMT-A1 flags
+// assembly.yaml ids containing '-' in strict mode.
+func TestStrictValidator_FMTA1_KebabAssemblyID(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"core-bundle": {
+				ID:    "core-bundle",
+				Cells: []string{},
+				Build: metadata.BuildMeta{Entrypoint: "cmd/corebundle/main.go", Binary: "corebundle"},
+				Dir:   "corebundle",
+			},
+		},
+	}
+
+	v := NewValidator(project, "")
+
+	for _, r := range v.ValidateStrict(false) {
+		if r.Code == "FMT-A1" {
+			t.Errorf("non-strict mode must not emit FMT-A1: %s", r.Message)
+		}
+	}
+
+	var got bool
+	for _, r := range v.ValidateStrict(true) {
+		if r.Code == "FMT-A1" && r.Severity == SeverityError {
+			got = true
+		}
+	}
+	if !got {
+		t.Error("strict mode should produce FMT-A1 error for kebab-case assembly id")
+	}
+}
+
+// TestStrictValidator_FMT16_KebabCellDir verifies FMT-16 flags kebab cell
+// directories (not just slices).
+func TestStrictValidator_FMT16_KebabCellDir(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"accesscore": {
+				ID:               "accesscore",
+				Type:             "core",
+				ConsistencyLevel: "L2",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_accesscore"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.startup"}},
+				Dir:              "access-core", // id clean but dir kebab
+			},
+		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(project, "")
+
+	var got bool
+	for _, r := range v.ValidateStrict(true) {
+		if r.Code == "FMT-16" && r.Severity == SeverityError &&
+			strings.Contains(r.Message, "cell") {
+			got = true
+		}
+	}
+	if !got {
+		t.Error("FMT-16 should flag kebab-case cell directory")
+	}
+}
+
+// TestStrictValidator_FMT16_KebabAssemblyDir verifies FMT-16 covers kebab
+// assembly directories.
+func TestStrictValidator_FMT16_KebabAssemblyDir(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells:     map[string]*metadata.CellMeta{},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"corebundle": {
+				ID:    "corebundle",
+				Cells: []string{},
+				Build: metadata.BuildMeta{Entrypoint: "cmd/corebundle/main.go", Binary: "corebundle"},
+				Dir:   "core-bundle", // id clean but dir kebab
+			},
+		},
+	}
+
+	v := NewValidator(project, "")
+
+	var got bool
+	for _, r := range v.ValidateStrict(true) {
+		if r.Code == "FMT-16" && r.Severity == SeverityError &&
+			strings.Contains(r.Message, "assembly") {
+			got = true
+		}
+	}
+	if !got {
+		t.Error("FMT-16 should flag kebab-case assembly directory")
+	}
+}
+
+// TestStrictValidator_FMTC1_FMTA1_NoDashClean verifies clean no-dash cell
+// and assembly pass both FMT-C1 and FMT-A1.
+func TestStrictValidator_FMTC1_FMTA1_NoDashClean(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"accesscore": {
+				ID:               "accesscore",
+				Type:             "core",
+				ConsistencyLevel: "L2",
+				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
+				Schema:           metadata.SchemaMeta{Primary: "cell_accesscore"},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.startup"}},
+				Dir:              "accesscore",
+			},
+		},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Journeys:  map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"corebundle": {
+				ID:    "corebundle",
+				Cells: []string{"accesscore"},
+				Build: metadata.BuildMeta{Entrypoint: "cmd/corebundle/main.go", Binary: "corebundle"},
+				Dir:   "corebundle",
+			},
+		},
+	}
+
+	v := NewValidator(project, "")
+	for _, r := range v.ValidateStrict(true) {
+		if r.Code == "FMT-C1" || r.Code == "FMT-A1" {
+			t.Errorf("clean no-dash project should not produce %s: %s", r.Code, r.Message)
+		}
+		if r.Code == "FMT-16" && (strings.Contains(r.Message, "cell") || strings.Contains(r.Message, "assembly")) {
+			t.Errorf("clean no-dash project should not produce FMT-16 for cell/assembly: %s", r.Message)
+		}
 	}
 }
 
