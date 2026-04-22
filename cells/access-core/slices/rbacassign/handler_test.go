@@ -42,7 +42,7 @@ func TestHandler_Assign(t *testing.T) {
 		checkBody  func(t *testing.T, body []byte)
 	}{
 		{
-			name:       "admin assigns role returns 201",
+			name:       "internal-admin caller assigns role returns 201",
 			body:       `{"userId":"usr-2","roleId":"admin"}`,
 			subject:    "usr-1",
 			roles:      []string{auth.RoleInternalAdmin},
@@ -126,7 +126,7 @@ func TestHandler_Revoke(t *testing.T) {
 		checkBody  func(t *testing.T, body []byte)
 	}{
 		{
-			name: "admin revokes role returns 200 (multiple holders)",
+			name: "internal-admin caller revokes role returns 200 (multiple holders)",
 			setup: func(r *mem.RoleRepository) {
 				// Ensure 2 admins so last-admin guard doesn't block.
 				_, _ = r.AssignToUser(context.Background(), "usr-2", "admin")

@@ -69,6 +69,7 @@ func TestHttpAuthRoleRevokeV1Serve(t *testing.T) {
 	// Validate request schema.
 	c.ValidateRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin"}`))
 	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed"}`))
+	c.MustRejectRequest(t, []byte(`{"userId":"usr-seed","roleId":"admin","extra":"bad"}`))
 
 	// Execute real handler.
 	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(`{"userId":"usr-seed","roleId":"admin"}`))

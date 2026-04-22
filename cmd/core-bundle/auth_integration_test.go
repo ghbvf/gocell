@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -317,33 +318,59 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 			"/internal/v1/* without service token must return 401 from guard")
 	})
 
-	// Request /internal/v1/* with valid service token → guard passes.
-	// The downstream handler may return any status (400/401/404 from business
-	// logic are all acceptable). We verify the guard did NOT reject by checking
-	// that the response body does not contain "missing service token" — the
-	// sentinel message emitted by ServiceTokenMiddleware on guard rejection.
-	t.Run("internal_with_valid_service_token_passes_guard", func(t *testing.T) {
+	// Request /internal/v1/access/roles/assign with valid service token + valid body.
+	// Chain: JWT-delegated → ServiceTokenMiddleware (sets RoleInternalAdmin principal)
+	// → RequirePolicy(AnyRole(RoleInternalAdmin)) → handler.
+	// The role "nonexistent" is not seeded, so the handler returns 404 with
+	// ERR_AUTH_ROLE_NOT_FOUND — proving guard passed AND policy passed AND handler ran.
+	t.Run("internal_assign_service_token_policy_passes_to_handler", func(t *testing.T) {
+		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
 		token := auth.GenerateServiceToken(ring,
 			http.MethodPost, "/internal/v1/access/roles/assign", "", time.Now())
-		require.NotEmpty(t, token, "service token generation must succeed")
+		require.NotEmpty(t, token)
 
 		req, err := http.NewRequest(http.MethodPost,
-			fmt.Sprintf("http://%s/internal/v1/access/roles/assign", addr), nil)
+			fmt.Sprintf("http://%s/internal/v1/access/roles/assign", addr), body)
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "ServiceToken "+token)
+		req.Header.Set("Content-Type", "application/json")
 
 		resp, err := testHTTPClient.Do(req)
 		require.NoError(t, err)
-		bodyBytes, readErr := io.ReadAll(resp.Body)
+		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
-		require.NoError(t, readErr)
 
-		// "missing service token" in the body means the guard rejected — test fails.
-		// Any other response (including 401 from business-logic RBAC check) means
-		// the guard passed and the handler ran.
-		assert.NotContains(t, string(bodyBytes), "missing service token",
-			"/internal/v1/* with valid service token must pass the guard; "+
-				"body=%s", string(bodyBytes))
+		// 404 = guard passed (not 401) + policy passed (not 403) + handler ran (role not found).
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+			"expected guard+policy to pass and handler to return 404 (role not found); body=%s", bodyBytes)
+		assert.Contains(t, string(bodyBytes), "ERR_AUTH_ROLE_NOT_FOUND",
+			"response must contain role-not-found error code; body=%s", bodyBytes)
+	})
+
+	// Same chain for revoke: service token → guard passes → policy passes → handler returns 200
+	// (revoke of unassigned role is idempotent no-op).
+	t.Run("internal_revoke_service_token_policy_passes_to_handler", func(t *testing.T) {
+		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
+		token := auth.GenerateServiceToken(ring,
+			http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
+		require.NotEmpty(t, token)
+
+		req, err := http.NewRequest(http.MethodPost,
+			fmt.Sprintf("http://%s/internal/v1/access/roles/revoke", addr), body)
+		require.NoError(t, err)
+		req.Header.Set("Authorization", "ServiceToken "+token)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := testHTTPClient.Do(req)
+		require.NoError(t, err)
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+
+		// 200 = guard passed + policy passed + handler ran (idempotent no-op for unassigned role).
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"expected guard+policy to pass and handler to return 200 (idempotent revoke); body=%s", bodyBytes)
+		assert.Contains(t, string(bodyBytes), `"revoked"`,
+			"response must contain revoke result; body=%s", bodyBytes)
 	})
 
 	// /api/v1/* without token → 401 from JWT auth (guard not involved).
