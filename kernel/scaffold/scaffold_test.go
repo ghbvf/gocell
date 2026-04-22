@@ -459,13 +459,20 @@ func TestCreateJourney_WithJPrefix(t *testing.T) {
 	}
 	require.NoError(t, s.CreateJourney(opts))
 
-	// Should NOT double-prefix: file is J-config-reload.yaml, not J-J-config-reload.yaml.
-	outPath := filepath.Join(root, "journeys", "J-config-reload.yaml")
+	// Should NOT double-prefix the J- namespace, AND should strip secondary
+	// dashes in the name portion: J-config-reload normalizes to J-configreload
+	// so generated ids satisfy the no-dash naming convention.
+	outPath := filepath.Join(root, "journeys", "J-configreload.yaml")
 	_, err := os.Stat(outPath)
 	require.NoError(t, err, "expected file at %s", outPath)
 
 	content := readGenerated(t, outPath)
-	assert.Contains(t, content, "id: J-config-reload")
+	assert.Contains(t, content, "id: J-configreload")
+
+	// Old dashed filename must NOT be created.
+	oldPath := filepath.Join(root, "journeys", "J-config-reload.yaml")
+	_, err = os.Stat(oldPath)
+	require.Error(t, err, "dashed filename %s should not exist after normalization", oldPath)
 }
 
 func TestCreateJourney_Conflict(t *testing.T) {
@@ -667,7 +674,7 @@ func TestIntegration_CellSliceContractJourney(t *testing.T) {
 		"cells/order-core/slices/ordercancel/slice.yaml",
 		"contracts/http/order/create/v1/contract.yaml",
 		"contracts/event/order/created/v1/contract.yaml",
-		"journeys/J-order-checkout.yaml",
+		"journeys/J-ordercheckout.yaml",
 	}
 	for _, p := range paths {
 		full := filepath.Join(root, p)
@@ -685,7 +692,7 @@ func TestIntegration_CellSliceContractJourney(t *testing.T) {
 	contractContent := readGenerated(t, filepath.Join(root, "contracts/event/order/created/v1/contract.yaml"))
 	assert.True(t, strings.Contains(contractContent, "publisher: order-core"))
 
-	journeyContent := readGenerated(t, filepath.Join(root, "journeys/J-order-checkout.yaml"))
+	journeyContent := readGenerated(t, filepath.Join(root, "journeys/J-ordercheckout.yaml"))
 	assert.True(t, strings.Contains(journeyContent, "- order-core"))
 	assert.True(t, strings.Contains(journeyContent, "- billing-core"))
 }
