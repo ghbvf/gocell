@@ -4,6 +4,8 @@ services:
     environment:
       POSTGRES_DB: sso_bff
       POSTGRES_USER: gocell
+      # Demo credential for local `docker compose up`; DO NOT USE IN PRODUCTION.
+      # nosemgrep: generic.secrets.security.detected-generic-secret
       POSTGRES_PASSWORD: gocell
     ports:
       - "5432:5432"
