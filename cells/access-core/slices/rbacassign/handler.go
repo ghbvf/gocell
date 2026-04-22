@@ -52,16 +52,18 @@ type RevokeRequest struct {
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	internalAdminPolicy := auth.AnyRole(auth.RoleInternalAdmin)
 	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/assign",
-		Handler: http.HandlerFunc(h.handleAssign),
-		Policy:  internalAdminPolicy,
+		Method:    "POST",
+		Path:      "/assign",
+		Handler:   http.HandlerFunc(h.handleAssign),
+		Policy:    internalAdminPolicy,
+		Delegated: true, // JWT auth delegated to WithInternalPathPrefixGuard; Policy still enforces role.
 	})
 	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/revoke",
-		Handler: http.HandlerFunc(h.handleRevoke),
-		Policy:  internalAdminPolicy,
+		Method:    "POST",
+		Path:      "/revoke",
+		Handler:   http.HandlerFunc(h.handleRevoke),
+		Policy:    internalAdminPolicy,
+		Delegated: true, // JWT auth delegated to WithInternalPathPrefixGuard; Policy still enforces role.
 	})
 }
 
