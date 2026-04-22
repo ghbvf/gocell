@@ -38,12 +38,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 ### Added
 
 - **kernel/cell**: `CheckNotNoop` now rejects zero-value `DurabilityMode` with `ErrValidationFailed`.
-- **cells**: access-core, audit-core, config-core now call `CheckNotNoop` in `Init()`, aligning with order-cell and device-cell.
+- **cells**: accesscore, auditcore, configcore now call `CheckNotNoop` in `Init()`, aligning with ordercell and devicecell.
 - **kernel/persistence**: `NoopTxRunner.RunInTx` panics with descriptive message on nil fn (ref: `net/http.HandleFunc`).
 
 ### Fixed
 
-- **cells/order-cell**: outbox log distinguishes noop path (`Debug`) from real write (`Info`).
+- **cells/ordercell**: outbox log distinguishes noop path (`Debug`) from real write (`Info`).
 - **pkg/securecookie**: `TestSecureCookie_TamperedValue` flaky (1/64 probability) fixed via bit-flip instead of literal "X" replacement.
 
 ## [Unreleased] - Decode 严格化 + 回归锁定
@@ -98,11 +98,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### feat
 
-- **examples/todo-order**: 自定义 order-cell golden-path 示例（L2-L3，outbox pattern + RabbitMQ + in-memory repo），附 docker-compose.yml + README (`8d03190`)
-- **examples/sso-bff**: 3 个内置 Cell（access-core + audit-core + config-core）组合示例（L1-L2），附 docker-compose.yml + README (`764c179`)
-- **examples/iot-device**: L4 DeviceLatent 一致性示例（命令回执 + WebSocket 推送），附 docker-compose.yml + README (`3a3f8ca`)
-- **cells/access-core**: RS256 完整迁移——引入 WithJWTIssuer/WithJWTVerifier Option；三个 slice（sessionlogin / sessionvalidate / sessionrefresh）迁移到 JWTIssuer/JWTVerifier 接口 (`01d49f1`)
-- **cells/access-core + audit-core + config-core**: outboxWriter fail-fast——L2+ Cell 的 Init 阶段检查 outboxWriter 是否注入，缺失时返回 ERR_CELL_MISSING_OUTBOX (`2ff2acc`)
+- **examples/todoorder**: 自定义 ordercell golden-path 示例（L2-L3，outbox pattern + RabbitMQ + in-memory repo），附 docker-compose.yml + README (`8d03190`)
+- **examples/ssobff**: 3 个内置 Cell（accesscore + auditcore + configcore）组合示例（L1-L2），附 docker-compose.yml + README (`764c179`)
+- **examples/iotdevice**: L4 DeviceLatent 一致性示例（命令回执 + WebSocket 推送），附 docker-compose.yml + README (`3a3f8ca`)
+- **cells/accesscore**: RS256 完整迁移——引入 WithJWTIssuer/WithJWTVerifier Option；三个 slice（sessionlogin / sessionvalidate / sessionrefresh）迁移到 JWTIssuer/JWTVerifier 接口 (`01d49f1`)
+- **cells/accesscore + auditcore + configcore**: outboxWriter fail-fast——L2+ Cell 的 Init 阶段检查 outboxWriter 是否注入，缺失时返回 ERR_CELL_MISSING_OUTBOX (`2ff2acc`)
 - **runtime/auth**: 新增 MustGenerateTestKeyPair + LoadRSAKeyPairFromPEM RSA helper（测试辅助工具） (`d52336c`)
 - **ci**: GitHub Actions CI 工作流——build / test / vet / gocell validate / integration / kernel coverage gate (`3d79543`)
 - **Wave 0**: S3 GOCELL_S3_* env prefix 对齐（fallback to S3_* + slog.Warn deprecation）；root docker-compose.yml 补全 start_period: 15s；testcontainers-go v0.41.0 加入 go.mod (`2a0f7cb`)
@@ -121,7 +121,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### fix
 
-- **S6 P0 fixes**: errcode 常量替换 string literal；access-core 移除 ephemeral RSA key 生成路径 (`eace83a`)
+- **S6 P0 fixes**: errcode 常量替换 string literal；accesscore 移除 ephemeral RSA key 生成路径 (`eace83a`)
 - **metadata**: 新 contract / slice 的 YAML 格式对齐 (`f59d0dc`)
 - **tests**: httptest sandbox TCP 监听跳过 guard（非沙箱环境自动跳过） (`26d34ac`)
 - **evidence**: S7 evidence 格式修正——journey/result.txt + validate PASS 行 (`e15462d`)
@@ -147,8 +147,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **adapters/oidc + s3 + websocket**: OIDC Provider Client + S3/MinIO Client + WebSocket Hub (`43b5bca`)
 - **adapters/postgres (Cell repos)**: AuditRepository PG 实现、ConfigRepository PG 实现、outbox chain (`43b5bca`)
 - **runtime/security**: RS256 JWTIssuer + JWTVerifier、trustedProxies RealIP、ServiceToken timestamp 防重放、认证中间件 (`1551c12`)
-- **cells/access-core**: RS256 JWTIssuer/Verifier Option 注入、refresh token rotation + reuse detection、WithJWTIssuer/WithJWTVerifier (`44b1253`)
-- **cells/audit-core + config-core**: outbox.Writer 重构（7 处 publisher.Publish 替换）、ArchiveStore Cell 内部封装 (`44b1253`)
+- **cells/accesscore**: RS256 JWTIssuer/Verifier Option 注入、refresh token rotation + reuse detection、WithJWTIssuer/WithJWTVerifier (`44b1253`)
+- **cells/auditcore + configcore**: outbox.Writer 重构（7 处 publisher.Publish 替换）、ArchiveStore Cell 内部封装 (`44b1253`)
 - **pkg/uid**: crypto/rand UUID 生成器，替换 7 处 UnixNano ID (`3fe050a`)
 - **runtime/bootstrap**: 接口化重构——WithPublisher + WithSubscriber 替代具体类型注入；WithEventBus 已删除 (`e1bf267`, PR#83)
 - **devops**: Docker Compose（PostgreSQL + Redis + RabbitMQ + MinIO）+ .env.example + Makefile + healthcheck (`9aabc62`)
@@ -161,8 +161,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **cells**: 7 处 publisher.Publish 替换为 outbox.Writer.Write（L2 一致性绑定）(`44b1253`)
 - **runtime/auth**: RS256 集成、outbox transaction 绑定、env prefix 统一（GOCELL_*）、relay tx (`b8d7662`)
 - **runtime/config**: config watcher 集成到 bootstrap 生命周期 (`b8d7662`)
-- **cells/audit-core**: 审计查询 time.Parse 错误返回 400（替换静默忽略）(`44b1253`)
-- **cells/access-core**: PATCH user 扩展可更新字段（不再仅 email）(`44b1253`)
+- **cells/auditcore**: 审计查询 time.Parse 错误返回 400（替换静默忽略）(`44b1253`)
+- **cells/accesscore**: PATCH user 扩展可更新字段（不再仅 email）(`44b1253`)
 - **go vet**: copylocks warning 修复；tasks/PRs 标记完成 (`67b060b`)
 - **evidence**: validate result.txt pattern 匹配修复 (`3c6e4de`)
 
@@ -191,12 +191,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - **runtime/worker**: 后台 worker 生命周期 + periodic job 框架 (`0c2e257`)
 - **runtime/auth**: JWT 验证 + RBAC 抽象中间件 + ServiceToken HMAC 服务间认证 (`0c2e257`)
 - **runtime/eventbus**: in-memory Pub/Sub（at-most-once + 3x 重试 + dead letter channel） (`0c2e257`)
-- **cells/access-core**: 5 slices -- identity-manage / session-login / session-refresh / session-logout / authorization-decide (`0c2e257`)
-- **cells/audit-core**: 3 slices -- audit-write / audit-verify / audit-archive + HMAC-SHA256 hash chain (`0c2e257`)
-- **cells/config-core**: 4 slices -- config-manage / config-publish / config-subscribe / feature-flag (`0c2e257`)
+- **cells/accesscore**: 5 slices -- identity-manage / session-login / session-refresh / session-logout / authorization-decide (`0c2e257`)
+- **cells/auditcore**: 3 slices -- audit-write / audit-verify / audit-archive + HMAC-SHA256 hash chain (`0c2e257`)
+- **cells/configcore**: 4 slices -- config-manage / config-publish / config-subscribe / feature-flag (`0c2e257`)
 - **kernel/outbox**: Subscriber 接口（与 Publisher 对称） (`0c2e257`)
 - **kernel/cell**: HTTPRegistrar / EventRegistrar / RouteMux 可选接口 (`0c2e257`)
-- **cmd/core-bundle**: 3 Cell 编排启动入口（config-core -> access-core -> audit-core） (`0c2e257`)
+- **cmd/corebundle**: 3 Cell 编排启动入口（configcore -> accesscore -> auditcore） (`0c2e257`)
 - **docs/guides**: Cell 开发指南 (`0c2e257`)
 - 全量代码审查报告与审查基线计划 (`2014298`)
 

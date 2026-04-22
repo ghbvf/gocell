@@ -70,7 +70,7 @@ func NewRegistry(cfg Config) (Registry, error) { /* ... */ }
 **修改路径**：
 - 新建 `runtime/auth/config/` 包
 - `runtime/auth/jwt.go` 的 `JWTIssuer` / `Verifier` 重构为"消费 Registry"，删除字段级 issuer/audience
-- `cmd/core-bundle/main.go::buildJWTDeps` 重构为构造 Registry 一次，Issuer + Verifier + Middleware 共享
+- `cmd/corebundle/main.go::buildJWTDeps` 重构为构造 Registry 一次，Issuer + Verifier + Middleware 共享
 - slice（sessionlogin / sessionrefresh）删除 `issuer.DefaultAudience()` 调用，统一从 Registry 读
 
 **吸收 backlog**：S18 (3h) + S31 (1h) + S20 (0.5h)；工时 4.5h → 基石 5h（含测试）
@@ -123,11 +123,11 @@ type Policy struct {
 - 新建 `runtime/auth/refresh/` 包（store.go / policy.go / fake/）
 - 新建 `adapters/postgres/refresh_store.go` + `migrations/007_refresh_tokens.sql`
 - `runtime/auth/jwt.go::Issue` 的 refresh token 分支剥离：不再走 JWT，改走 `refresh.Store.Issue`
-- `cells/access-core/slices/sessionrefresh/service.go` 重写为：
+- `cells/accesscore/slices/sessionrefresh/service.go` 重写为：
   - 入参 token 不再 JWT 解析，直接调 `Store.Rotate`
   - reuse detection 由 Store 内 CAS 保证（删除当前基于 `GetByPreviousRefreshToken` 的应用层逻辑）
-- `cells/access-core/slices/sessionlogin/service.go`：issue refresh token 改调 `refresh.Store.Issue`
-- `cmd/core-bundle/main.go`：wiring PG pool → refresh.Store → sessionlogin/refresh service
+- `cells/accesscore/slices/sessionlogin/service.go`：issue refresh token 改调 `refresh.Store.Issue`
+- `cmd/corebundle/main.go`：wiring PG pool → refresh.Store → sessionlogin/refresh service
 - 对外 token 格式变化 → contract schema 更新（仍为 string，长度从 JWT ~300B → opaque 43B）
 
 **吸收 backlog**：P1-17 (3h) + X10 (1-2d) 彻底合并完工；工时 1.5d 一次到位（不拖 Wave 2）
@@ -239,7 +239,7 @@ func (s *Selector) Skip(fn MatchFunc) *Selector { /* 链式追加 */ }
 func (s *Selector) Path(pattern string) *Selector { /* Path-based skip helper */ }
 func (s *Selector) Build() func(http.Handler) http.Handler { /* ... */ }
 
-// cells/access-core/cell.go 注册时：
+// cells/accesscore/cell.go 注册时：
 // runtime/auth 零硬编码路径；cell 声明自身豁免规则
 authSelector := auth.NewSelector(middleware).
     Path("/api/v1/access/users/change-password").
@@ -250,8 +250,8 @@ authSelector := auth.NewSelector(middleware).
 **修改路径**：
 - 新建 `runtime/auth/selector.go`
 - `runtime/auth/middleware.go` 删除 `WithPasswordResetExemptMatcher` / `WithPasswordResetChangeEndpointHint` option，exempt 逻辑全部上提到 Selector 层
-- `cmd/core-bundle/main.go:815-825` 硬编码路径全部删除，移到 `cells/access-core/cell.go::RegisterRoutes` 内
-- `cells/access-core/cell.go` 新增 `AuthExemptMatcher()` 方法暴露给 bootstrap
+- `cmd/corebundle/main.go:815-825` 硬编码路径全部删除，移到 `cells/accesscore/cell.go::RegisterRoutes` 内
+- `cells/accesscore/cell.go` 新增 `AuthExemptMatcher()` 方法暴露给 bootstrap
 
 **吸收 backlog**：S35 彻底版（PR#187 半做 → 这里完工）+ 搭车 S39 (15min)；工时 2h
 
@@ -312,7 +312,7 @@ bootstrap.New(
 - `runtime/bootstrap/bootstrap.go` 核心重构（+listener pool +route group registry）
 - 删除 `WithInternalEndpointGuard`（PR#185 中间态），改用 RouteGroup declarative
 - 所有 Cell 的 `RegisterRoutes` 签名调整：接收 `RouteGroupRegistry` 而非 flat router
-- `cmd/core-bundle/main.go` 改为显式声明 3 个 RouteGroup
+- `cmd/corebundle/main.go` 改为显式声明 3 个 RouteGroup
 
 **Blast radius**：500+ 行改动，touches runtime 核心 + 全部 Cell 路由注册 API
 
@@ -354,8 +354,8 @@ type Error struct {
 **修改路径**：
 - 扩展 `pkg/errcode/` 现有文件（不新建包）
 - 所有现有 `errcode.New(code, message)` 保持兼容；新增 `errcode.NewInfra(code, ...)` 显式 category
-- `cells/access-core/slices/sessionvalidate/service.go::logSessionLookupError` 改用 `IsDomainNotFound` 白名单
-- `cells/access-core/slices/sessionrefresh/service.go::lookupSession` 改用 `IsInfraError` 分支
+- `cells/accesscore/slices/sessionvalidate/service.go::logSessionLookupError` 改用 `IsDomainNotFound` 白名单
+- `cells/accesscore/slices/sessionrefresh/service.go::lookupSession` 改用 `IsInfraError` 分支
 - `runtime/auth/middleware.go` 日志降级改用 `IsExpected4xx`
 
 **吸收 backlog**：P1-18 (2h) + S40 (1h) + S43 (1h)；工时 3h（含基石 API 2h + 应用 1h）
@@ -406,7 +406,7 @@ type Authenticator interface {
 
 **Service Token → Principal 映射策略**：
 - ServiceTokenMiddleware 成功后注入 `Principal{Kind: Service, Subject: "gocell-internal", Roles: ["role:internal-admin"], AuthMethod: "service_token"}`
-- `role:internal-admin` 为保留 role，`cells/access-core/.../authz.go` 的 `RequireAnyRole` 匹配时允许穿过
+- `role:internal-admin` 为保留 role，`cells/accesscore/.../authz.go` 的 `RequireAnyRole` 匹配时允许穿过
 - 后续可扩展：不同 service token 映射不同 roles（多租户 machine principal）
 
 **修改路径**：
@@ -451,7 +451,7 @@ func Lazy(get func() Worker) Worker { ... }  // atomic.Pointer 封装
 
 **应用到 credential sweep**：
 ```go
-// cells/access-core/internal/initialadmin/sweep.go（新）
+// cells/accesscore/internal/initialadmin/sweep.go（新）
 func (b *Bootstrapper) RegisterLifecycle(lc bootstrap.Lifecycle) {
     lc.Append(bootstrap.Hook{
         Name: "initialadmin-sweep",
@@ -470,7 +470,7 @@ func (b *Bootstrapper) RegisterLifecycle(lc bootstrap.Lifecycle) {
 **修改路径**：
 - 新建 `runtime/bootstrap/lifecycle.go`
 - 新建 `runtime/worker/lazy.go`（搭车域 9 S36，框架级 Lazy）
-- `cells/access-core/internal/initialadmin/` 重构：删 `lazyBootstrapWorker` 间接层，sweep 直接挂 OnStart
+- `cells/accesscore/internal/initialadmin/` 重构：删 `lazyBootstrapWorker` 间接层，sweep 直接挂 OnStart
 - `runtime/bootstrap/bootstrap.go::Run` 插入 Lifecycle OnStart/OnStop 阶段
 
 **吸收 backlog**：P1-16 (2h) + 域 9 S36 (2h)；工时 4h（含框架 2h + 应用 2h）
@@ -591,7 +591,7 @@ D5  F4 merged-state e2e (0.5d)
 - Track A 改 `runtime/auth/*` + handler authz 切换
 - Track B 改 `runtime/bootstrap/*` + `adapters/postgres/*` + `runtime/auth/refresh/*`
 - 两 Track 仅在 D2/D3 交界时共享 `runtime/auth/refresh/store.go` 接口（Track B 先出接口，Track A 不触碰）
-- 文件冲突极小，合并点仅在 `cmd/core-bundle/main.go`（wiring 层）
+- 文件冲突极小，合并点仅在 `cmd/corebundle/main.go`（wiring 层）
 
 ---
 
@@ -607,28 +607,28 @@ D5  F4 merged-state e2e (0.5d)
 - `runtime/bootstrap/lifecycle.go`（F6）
 - `runtime/worker/lazy.go`（F6）
 - `pkg/errcode/classify.go`（F5）
-- `cells/access-core/internal/initialadmin/sweep.go`（F6 应用）
+- `cells/accesscore/internal/initialadmin/sweep.go`（F6 应用）
 
 ### 重构
-- `cmd/core-bundle/main.go::buildJWTDeps` / `buildAuthMiddleware`（F1/F3/F4/F7 接线）
+- `cmd/corebundle/main.go::buildJWTDeps` / `buildAuthMiddleware`（F1/F3/F4/F7 接线）
 - `runtime/auth/jwt.go::JWTIssuer` / `Verifier`（F1 消费 Registry；F7 注入 user Principal）
 - `runtime/auth/middleware.go`（F3 删 exempt matcher option；F5 日志降级；F7 authn 成功注入 Principal）
 - `runtime/auth/servicetoken.go`（F7 注入 service Principal：`role:internal-admin`）
 - `runtime/auth.Policy/Guard`（PR#187）（F7 改为消费 Principal 而非直读 claims）
 - `runtime/bootstrap/bootstrap.go::Run`（F4 RouteGroup；F6 Lifecycle）
-- `cells/access-core/slices/sessionlogin/service.go`（F2 issue 走 Store；Wave 1 补 userId）
-- `cells/access-core/slices/sessionrefresh/service.go`（F2 rotate 走 Store；F5 infra 分支）
-- `cells/access-core/slices/sessionvalidate/service.go`（F5 errcode 白名单）
-- `cells/access-core/**/handler.go`（F7 改用 `auth.FromContext`，删 claims 直读）
-- `cells/access-core/cell.go`（F3 AuthExemptMatcher；F4 RouteGroup 注册）
-- `cells/access-core/internal/initialadmin/bootstrap.go`（F6 Lifecycle hook）
-- `cells/access-core/**/changepassword_e2e_test.go`（F4 验证：删测试 ctx 注入捷径，走 BuildApp）
+- `cells/accesscore/slices/sessionlogin/service.go`（F2 issue 走 Store；Wave 1 补 userId）
+- `cells/accesscore/slices/sessionrefresh/service.go`（F2 rotate 走 Store；F5 infra 分支）
+- `cells/accesscore/slices/sessionvalidate/service.go`（F5 errcode 白名单）
+- `cells/accesscore/**/handler.go`（F7 改用 `auth.FromContext`，删 claims 直读）
+- `cells/accesscore/cell.go`（F3 AuthExemptMatcher；F4 RouteGroup 注册）
+- `cells/accesscore/internal/initialadmin/bootstrap.go`（F6 Lifecycle hook）
+- `cells/accesscore/**/changepassword_e2e_test.go`（F4 验证：删测试 ctx 注入捷径，走 BuildApp）
 - `pkg/errcode/*.go`（F5 Category + classifier）
 
 ### 复用（已有，无需新建）
 - `runtime/auth.Policy` / `Guard`（PR#187）：F3 Selector 在其上延伸
 - `runtime/auth.WithInternalEndpointGuard`（PR#185）：F4 落地后删除
-- `cells/access-core/internal/initialadmin.Cleaner`（cleaner.go）：F6 OnStop 复用
+- `cells/accesscore/internal/initialadmin.Cleaner`（cleaner.go）：F6 OnStop 复用
 - `runtime/worker.Worker` 接口：F6 Lazy 包装
 
 ---
@@ -637,7 +637,7 @@ D5  F4 merged-state e2e (0.5d)
 
 ### F1 JWT Registry
 - **单测**：`runtime/auth/config/registry_test.go`——env var overlay、real 模式非空断言、多 audience allowlist
-- **集测**：`cells/access-core/auth_integration_test.go`——issuer 单一来源，drift 检测（编译期 + 运行期双保险）
+- **集测**：`cells/accesscore/auth_integration_test.go`——issuer 单一来源，drift 检测（编译期 + 运行期双保险）
 
 ### F2 Refresh Opaque
 - **单测**：`runtime/auth/refresh/memstore/store_test.go`——并发 100 goroutine Rotate，CAS 无重复 token 产出；reuseInterval 内复用；超窗触发 reuse detection 级联撤销
@@ -645,12 +645,12 @@ D5  F4 merged-state e2e (0.5d)
 
 ### F3 Selector
 - **单测**：`runtime/auth/selector_test.go`——MatchFunc 链式组合、path pattern、default deny
-- **集测**：grep 确认 `cmd/core-bundle/main.go` 无 `/api/v1/` 业务路径字面量
+- **集测**：grep 确认 `cmd/corebundle/main.go` 无 `/api/v1/` 业务路径字面量
 
 ### F4 RouteGroup
 - **集测**：三 listener 并行启动，`/internal/v1/` 仅 internal port 可达；未匹配 group 返回 404；mTLS 配置生效
 - **冒烟**：real 模式启动无 service-token/mTLS 应 fail-fast（吸收 S32）
-- **merged-state e2e（强制）**：新增 `cells/access-core/.../changepassword_e2e_test.go` 走 `cmd/core-bundle.BuildApp(opts...)` 真实装配链路（联动域 8 S29），POST `/internal/v1/access/roles/assign` 用真实 service token header，断言 downstream authz 通过；**删除**当前 e2e 内所有测试 context 直接注入捷径（吸收审查 P2-C）
+- **merged-state e2e（强制）**：新增 `cells/accesscore/.../changepassword_e2e_test.go` 走 `cmd/corebundle.BuildApp(opts...)` 真实装配链路（联动域 8 S29），POST `/internal/v1/access/roles/assign` 用真实 service token header，断言 downstream authz 通过；**删除**当前 e2e 内所有测试 context 直接注入捷径（吸收审查 P2-C）
 
 ### F7 Principal 契约
 - **单测**：`runtime/auth/principal_test.go`——WithPrincipal/FromContext round-trip、MustFromContext 未注入 panic、HasRole 匹配
@@ -707,7 +707,7 @@ D5  F4 merged-state e2e (0.5d)
   PR: PR-AUTH-F1-JWT-REGISTRY
   工时: 5h
   前置依赖: 无
-  文件范围: runtime/auth/config/（新）+ runtime/auth/jwt.go + cmd/core-bundle/main.go::buildJWTDeps
+  文件范围: runtime/auth/config/（新）+ runtime/auth/jwt.go + cmd/corebundle/main.go::buildJWTDeps
   验证门禁: env var overlay 单测；real 模式 issuer/audience 非空断言
   ────────────────────────────────────────
   #: 4
@@ -723,7 +723,7 @@ D5  F4 merged-state e2e (0.5d)
   工时: 2h
   前置依赖: F7 + PR#187 合入
   文件范围: runtime/auth/selector.go（新）+ runtime/auth/middleware.go 删 exempt option +
-    cmd/core-bundle/main.go:815-825 删硬编码 + cells/access-core/cell.go
+    cmd/corebundle/main.go:815-825 删硬编码 + cells/accesscore/cell.go
   验证门禁: grep 确认 cmd/main.go 无 /api/v1/ 字面量
   ────────────────────────────────────────
   #: 6

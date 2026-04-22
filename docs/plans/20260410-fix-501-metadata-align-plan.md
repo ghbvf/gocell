@@ -10,8 +10,8 @@
 
 ### 已完成
 
-- [x] 修复 `device-cell/smoke` → `smoke.device-cell.startup`
-- [x] 修复 `order-cell/smoke` → `smoke.order-cell.startup`
+- [x] 修复 `devicecell/smoke` → `smoke.devicecell.startup`
+- [x] 修复 `ordercell/smoke` → `smoke.ordercell.startup`
 - [x] 推送到 `fix/501-metadata-align` 分支
 
 ### Step 1: 删除 verify legacy fallback
@@ -26,12 +26,12 @@
 
 | Cell | 测试文件 |
 |------|---------|
-| access-core | `cells/access-core/cell_test.go` |
-| audit-core | `cells/audit-core/cell_test.go` |
-| config-core | `cells/config-core/cell_test.go` |
+| accesscore | `cells/accesscore/cell_test.go` |
+| auditcore | `cells/auditcore/cell_test.go` |
+| configcore | `cells/configcore/cell_test.go` |
 | demo | `cells/demo/cell_test.go`（新建） |
-| device-cell | `cells/device-cell/cell_test.go` |
-| order-cell | `cells/order-cell/cell_test.go` |
+| devicecell | `cells/devicecell/cell_test.go` |
+| ordercell | `cells/ordercell/cell_test.go` |
 
 ### Step 3: 补 Slice unit stub 测试（21 slice）
 
@@ -54,8 +54,8 @@ ref 格式: `journey.{id}.{suffix}` → `-run {CamelCase(suffix)}`。
 ```bash
 go build ./...
 go test ./kernel/verify/... -count=1
-go test ./cells/access-core/... -run Startup -v
-go test ./cells/access-core/slices/sessionlogin/... -run HttpAuthLoginV1Serve -v
+go test ./cells/accesscore/... -run Startup -v
+go test ./cells/accesscore/slices/sessionlogin/... -run HttpAuthLoginV1Serve -v
 go test -tags=integration ./tests/integration/... -run OidcRedirect -v
 ```
 

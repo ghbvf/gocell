@@ -45,8 +45,8 @@
 ### 文件
 - `runtime/auth/principal.go`
 - `runtime/auth/authz.go`
-- `cells/access-core/slices/rbacassign/handler.go`
-- `cells/audit-core/slices/auditquery/handler.go`（若有 internal policy）
+- `cells/accesscore/slices/rbacassign/handler.go`
+- `cells/auditcore/slices/auditquery/handler.go`（若有 internal policy）
 
 ### 验证门禁
 - BuildApp 集测: `/internal/v1/access/roles/assign|revoke` 使用合法 ServiceToken 返回业务成功
@@ -62,8 +62,8 @@
 
 ### 文件
 - `runtime/auth/authenticator.go`
-- `cmd/core-bundle/main.go`
-- `cmd/core-bundle/shared_deps.go`
+- `cmd/corebundle/main.go`
+- `cmd/corebundle/shared_deps.go`
 
 ### 验证门禁
 - real 模式无 nonce store: 启动失败
@@ -79,11 +79,11 @@
 - 完成 PG store 实现接线与最小并发 CAS 保证
 
 ### 文件
-- `cells/access-core/slices/sessionlogin/service.go`
-- `cells/access-core/slices/sessionrefresh/service.go`
+- `cells/accesscore/slices/sessionlogin/service.go`
+- `cells/accesscore/slices/sessionrefresh/service.go`
 - `runtime/auth/refresh/*`
 - `adapters/postgres/*refresh*`（新增 PG store 实现）
-- `cmd/core-bundle/*` wiring
+- `cmd/corebundle/*` wiring
 
 ### 验证门禁
 - 并发 100 goroutine Rotate（PG testcontainers）
@@ -101,7 +101,7 @@
 
 ### 文件
 - `runtime/bootstrap/*`
-- `cmd/core-bundle/bundle.go`
+- `cmd/corebundle/bundle.go`
 - `runtime/http/router/*`（最小 route-group 注册）
 
 ### 验证门禁
@@ -118,8 +118,8 @@
 - 保留兼容入口一个迭代后删除
 
 ### 文件
-- `cells/access-core/cell.go`
-- `cells/access-core/internal/initialadmin/*`
+- `cells/accesscore/cell.go`
+- `cells/accesscore/internal/initialadmin/*`
 
 ### 验证门禁
 - 启动 sweep + 停机 sweep 都可观测
@@ -149,7 +149,7 @@
 
 ### 验证门禁
 - `go test ./runtime/auth/...`
-- `go test ./cells/access-core/... -tags integration`
+- `go test ./cells/accesscore/... -tags integration`
 
 ---
 
@@ -238,7 +238,7 @@
 
 - `go build ./...`
 - `go test ./...`
-- 涉及并发: `go test -race ./runtime/auth/... ./cells/access-core/...`
+- 涉及并发: `go test -race ./runtime/auth/... ./cells/accesscore/...`
 - 变更契约后: `go run ./cmd/gocell validate`
 - 提交前: `golangci-lint run ./修改的包/...`
 

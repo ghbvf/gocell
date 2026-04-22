@@ -66,7 +66,7 @@ GoCell 通过两道防线确保 INVALID 索引不会被静默跳过：
 - 这遵循 pressly/goose migration workflow、Atlas lint gate 和 golang-migrate 的设计原则：
   在版本推进边界处验证前置条件，而不是在应用中途或启动期自愈。
 
-**第二道防线（启动期 detect-and-warn）**：`cmd/core-bundle/main.go` 的 postgres 分支
+**第二道防线（启动期 detect-and-warn）**：`cmd/corebundle/main.go` 的 postgres 分支
 在 pool 创建后调用 `DetectInvalidIndexes`，以 `slog.Warn` 告警，**不中断启动**。
 该防线覆盖 migration 被旁路工具绕过、并发 DDL 在 migration 之外留下残留等场景。
 

@@ -6,7 +6,7 @@ GoCell 是以 Cell 为核心构建单元的 Go 工程底座。提供：
 
 1. **Cell/Slice 运行时** — 接口定义 + 基础实现，用于构建可组合的 Cell 服务
 2. **治理工具链** — 元数据校验、Assembly 代码生成、契约注册、影响面分析
-3. **内置 Cell** — access-core（认证）、audit-core（审计追踪）、config-core（热更新 + 功能开关）
+3. **内置 Cell** — accesscore（认证）、auditcore（审计追踪）、configcore（热更新 + 功能开关）
 4. **适配器** — PostgreSQL、Redis、OIDC、S3、VictoriaMetrics、RabbitMQ、WebSocket
 
 命名与字段大小写收敛请参见 [统一命名基线](./naming-baseline.md)。
@@ -25,7 +25,7 @@ GoCell 是以 Cell 为核心构建单元的 Go 工程底座。提供：
 - 包含一个或多个 Slice
 
 三种类型：
-- **core** — 强一致性状态机（如 access-core、audit-core、config-core）
+- **core** — 强一致性状态机（如 accesscore、auditcore、configcore）
 - **edge** — 边缘节点 Cell
 - **support** — 辅助 Cell
 
@@ -217,9 +217,9 @@ Coordination 包括：outbox、consumed markers、replay checkpoints、job lease
 │   ├── idempotency/                # 消费者幂等接口
 │   └── contract/                   # 契约类型定义
 ├── cells/                          # 内置 Cell
-│   ├── access-core/                # SSO/OIDC 认证
-│   ├── audit-core/                 # 防篡改审计追踪
-│   └── config-core/                # 配置热更新 + 功能开关
+│   ├── accesscore/                # SSO/OIDC 认证
+│   ├── auditcore/                 # 防篡改审计追踪
+│   └── configcore/                # 配置热更新 + 功能开关
 ├── contracts/                      # 跨 Cell 边界契约
 │   ├── http/{domain}/{version}/    # HTTP 契约
 │   ├── event/{domain}/{version}/   # Event 契约

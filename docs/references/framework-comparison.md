@@ -68,7 +68,7 @@ goal:      chi-based，但参考 Kratos 的 middleware.Handler 签名设计
 ```
 primary:   micro/go-micro      → config/（Source 多后端、Watch 热更新）
 secondary: go-kratos/kratos    → config/（file/env/flag 多源、Watcher）
-goal:      config-core Cell 通过 outbox 事件推送变更，不是轮询
+goal:      configcore Cell 通过 outbox 事件推送变更，不是轮询
 ```
 
 ### kernel/outbox/ + kernel/idempotency/ — 事件驱动

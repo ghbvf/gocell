@@ -19,8 +19,8 @@
 
 以下 ID 统一使用 `kebab-case`：
 
-- Cell ID：`access-core`
-- Assembly ID：`core-bundle`
+- Cell ID：`accesscore`
+- Assembly ID：`corebundle`
 - Actor ID：`platform-team`
 
 Slice ID 统一使用无连字符的 `nodash` 小写格式（与 slice 目录名一致）：
@@ -33,8 +33,8 @@ Slice ID 由 `gocell validate --strict` 的 FMT-16 拦截 kebab-case；`gocell s
 
 Journey ID 统一使用 `J-{kebab-case}`：
 
-- `J-session-refresh`
-- `J-config-rollback`
+- `J-sessionrefresh`
+- `J-configrollback`
 
 Contract ID 统一使用小写点分格式：
 

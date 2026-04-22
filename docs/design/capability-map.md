@@ -77,9 +77,9 @@ external_refs:
 
 | 编号 | Cell | Slices | 核心 Journeys |
 |------|------|--------|--------------|
-| C01 | access-core | identity-manage / session-login / session-refresh / session-logout / authorization-decide | J-sso-login / J-session-refresh / J-session-logout / J-user-onboarding / J-account-lockout |
-| C02 | audit-core | audit-write / audit-verify / audit-archive | J-audit-login-trail |
-| C03 | config-core | config-manage / config-publish / config-subscribe / feature-flag | J-config-hot-reload / J-config-rollback |
+| C01 | accesscore | identity-manage / session-login / session-refresh / session-logout / authorization-decide | J-ssologin / J-sessionrefresh / J-sessionlogout / J-useronboarding / J-accountlockout |
+| C02 | auditcore | audit-write / audit-verify / audit-archive | J-auditlogintrail |
+| C03 | configcore | config-manage / config-publish / config-subscribe / feature-flag | J-confighotreload / J-configrollback |
 
 #### First-class Adapters — 一等适配器
 
@@ -87,7 +87,7 @@ external_refs:
 |------|---------|------|
 | A01 | PostgreSQL | 连接 + TxManager + Migrator + 健康检查 |
 | A02 | Redis | 连接 + TLS + 健康检查 + 分布式锁 |
-| A03 | OIDC provider | SSO/OIDC 认证适配（access-core 使用） |
+| A03 | OIDC provider | SSO/OIDC 认证适配（accesscore 使用） |
 | A04 | S3 / MinIO | 对象存储 |
 | A05 | VictoriaMetrics | 指标推送 |
 
@@ -130,9 +130,9 @@ external_refs:
 
 | 编号 | 示例 | 说明 |
 |------|------|------|
-| E01 | examples/sso-bff | SSO + BFF 登录完整旅程 |
-| E02 | examples/todo-order | 经典 CRUD + 事件驱动 |
-| E03 | examples/iot-device | IoT 设备管理（验证 L4 DeviceLatent） |
+| E01 | examples/ssobff | SSO + BFF 登录完整旅程 |
+| E02 | examples/todoorder | 经典 CRUD + 事件驱动 |
+| E03 | examples/iotdevice | IoT 设备管理（验证 L4 DeviceLatent） |
 
 #### Templates 补充
 
@@ -185,59 +185,59 @@ external_refs:
 
 ## 2. 内置 Cell 完整清单
 
-### C01: access-core
+### C01: accesscore
 
 ```
 能力：SSO/OIDC 登录 + 密码登录 + JWT 签发/验证 + Session 管理 + 登录锁定 + 角色权限
 一致性：L1/L2
 Slices: identity-manage / session-login / session-refresh / session-logout / authorization-decide
-Journeys: J-sso-login / J-session-refresh / J-session-logout / J-user-onboarding / J-account-lockout
+Journeys: J-ssologin / J-sessionrefresh / J-sessionlogout / J-useronboarding / J-accountlockout
 Produces: event.session.created.v1 / event.session.revoked.v1 / event.user.created.v1 / event.user.locked.v1
 ```
 
-### C02: audit-core
+### C02: auditcore
 
 ```
 能力：事件消费 → 审计写入 + HMAC-SHA256 hash chain + 验证 + 归档
 一致性：L2
 Slices: audit-write / audit-verify / audit-archive
-Journeys: J-audit-login-trail
+Journeys: J-auditlogintrail
 Consumes: event.session.* / event.user.* / event.config.*
 Produces: event.audit.integrity-verified.v1
 ```
 
-### C03: config-core
+### C03: configcore
 
 ```
 能力：配置 CRUD + 版本管理 + 热更新推送 + Feature flags + 灰度 + 回滚
 一致性：L2
 Slices: config-manage / config-publish / config-subscribe / feature-flag
-Journeys: J-config-hot-reload / J-config-rollback
+Journeys: J-confighotreload / J-configrollback
 Produces: event.config.changed.v1 / event.config.rollback.v1 / http.config.get.v1
 ```
 
 **三个 Cell 之间的交互：**
 
 ```
-access-core ──event.session.*──→ audit-core
-access-core ──event.user.*────→ audit-core
-config-core ──event.config.*──→ audit-core
-config-core ──event.config.*──→ access-core（配置热更新）
-config-core ──event.config.*──→ 任何订阅 cell
+accesscore ──event.session.*──→ auditcore
+accesscore ──event.user.*────→ auditcore
+configcore ──event.config.*──→ auditcore
+configcore ──event.config.*──→ accesscore（配置热更新）
+configcore ──event.config.*──→ 任何订阅 cell
 ```
 
 **内置 Journey 完整清单（8 条）：**
 
 | Journey | 跨 Cell | 验证要点 |
 |---------|---------|---------|
-| J-sso-login | access-core | OIDC 完整流程 |
-| J-session-refresh | access-core | token 刷新 |
-| J-session-logout | access-core | session 吊销 + 事件 |
-| J-user-onboarding | access-core | 用户创建到可登录 |
-| J-account-lockout | access-core | 锁定 + 解锁 |
-| J-audit-login-trail | access + audit | 跨 cell L2 事件消费 |
-| J-config-hot-reload | config + all | 配置传播 + 健康验证 |
-| J-config-rollback | config + all | 版本回滚 + 审计 |
+| J-ssologin | accesscore | OIDC 完整流程 |
+| J-sessionrefresh | accesscore | token 刷新 |
+| J-sessionlogout | accesscore | session 吊销 + 事件 |
+| J-useronboarding | accesscore | 用户创建到可登录 |
+| J-accountlockout | accesscore | 锁定 + 解锁 |
+| J-auditlogintrail | access + audit | 跨 cell L2 事件消费 |
+| J-confighotreload | config + all | 配置传播 + 健康验证 |
+| J-configrollback | config + all | 版本回滚 + 审计 |
 
 ---
 

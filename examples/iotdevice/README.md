@@ -4,7 +4,7 @@ An IoT device management application demonstrating the GoCell **L4 DeviceLatent*
 
 ## Architecture
 
-- **device-cell** (L4 DeviceLatent): manages device lifecycle and command dispatch
+- **devicecell** (L4 DeviceLatent): manages device lifecycle and command dispatch
   - **device-register** slice: POST registers a device and publishes `event.device-registered.v1`
   - **device-command** slice: enqueue commands, device polls pending commands, device acks execution
   - **device-status** slice: GET queries current device status
@@ -28,7 +28,7 @@ connectivity, high latency, or constrained bandwidth.
 No external dependencies required. Uses in-memory repositories and event bus.
 
 ```bash
-go run ./examples/iot-device
+go run ./examples/iotdevice
 ```
 
 The server starts on `:8083`.
@@ -38,10 +38,10 @@ The server starts on `:8083`.
 Start infrastructure services, then run the application:
 
 ```bash
-cd examples/iot-device
+cd examples/iotdevice
 docker compose up -d
 cd ../..
-go run ./examples/iot-device
+go run ./examples/iotdevice
 ```
 
 ## API

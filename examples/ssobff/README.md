@@ -3,16 +3,16 @@
 A single-process SSO BFF (Backend For Frontend) demonstrating how to compose the three
 built-in GoCell Cells into one assembly:
 
-- **access-core** (L2 OutboxFact): identity management, session lifecycle (login/refresh/logout), RBAC
-- **audit-core** (L3 WorkflowEventual): tamper-evident audit log with hash chain
-- **config-core** (L2 OutboxFact): configuration CRUD, publish/rollback, feature flags
+- **accesscore** (L2 OutboxFact): identity management, session lifecycle (login/refresh/logout), RBAC
+- **auditcore** (L3 WorkflowEventual): tamper-evident audit log with hash chain
+- **configcore** (L2 OutboxFact): configuration CRUD, publish/rollback, feature flags
 
 All dependencies are in-memory (no external services required).
 
 ## Quick Start
 
 ```bash
-go run ./examples/sso-bff
+go run ./examples/ssobff
 ```
 
 The server starts on `:8081`.
@@ -43,7 +43,7 @@ macOS-accessible path:
 
 ```bash
 export GOCELL_STATE_DIR=$TMPDIR/gocell
-go run ./examples/sso-bff
+go run ./examples/ssobff
 ```
 
 See [docs/operations/first-run-setup.md](../../docs/operations/first-run-setup.md) for full
@@ -98,7 +98,7 @@ After this the `ADMIN_TOKEN` works for all business endpoints.
 Every endpoint below except `POST /api/v1/access/sessions/login` and
 `POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
 header. Public routes are declared per-Cell via `auth.Declare(mux, auth.RouteDecl{Public: true})`
-inside `cells/access-core/cell.go`; the composition root (`examples/sso-bff/main.go`)
+inside `cells/accesscore/cell.go`; the composition root (`examples/ssobff/main.go`)
 opts into verifier discovery via `bootstrap.WithAuthDiscovery()` without
 hardcoding any endpoint list.
 `walkthrough_test.go` exercises the same sequence and is the authoritative
@@ -260,8 +260,8 @@ tracked in the backlog. The current PR provides the middleware primitives.
 Infrastructure services are provided for future adapter-based mode:
 
 ```bash
-cd examples/sso-bff
+cd examples/ssobff
 docker compose up -d
 cd ../..
-go run ./examples/sso-bff
+go run ./examples/ssobff
 ```

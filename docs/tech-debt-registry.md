@@ -28,7 +28,7 @@
 
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
-| P2-SEC-03 | [TECH] | RESOLVED | cmd/core-bundle 密钥硬编码（有 "replace-in-prod" 注释） | Phase 2 无生产部署，风险可控 | Phase 3 ✓ |
+| P2-SEC-03 | [TECH] | RESOLVED | cmd/corebundle 密钥硬编码（有 "replace-in-prod" 注释） | Phase 2 无生产部署，风险可控 | Phase 3 ✓ |
 | P2-SEC-04 | [TECH] | RESOLVED | JWT 使用 HS256 对称签名，缺少 aud claim | RS256 完整迁移在 Phase 4 完成（JWTIssuer/JWTVerifier RS256-only） | Phase 4 ✓ |
 | P2-SEC-06 | [TECH] | RESOLVED | RealIP 无条件信任 XFF，可绕过限流 | trustedProxies 配置已实现 | Phase 3 ✓ |
 | P2-SEC-07 | [TECH] | RESOLVED | ServiceToken HMAC 无 timestamp，可重放 | timestamp 5min 窗口已实现 | Phase 3 ✓ |
@@ -51,11 +51,11 @@
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
 | P2-T-01 | [TECH] | RESOLVED | 10/16 slices handler 层覆盖率 < 80%（Cell 级聚合达标 85-87%） | handler 层测试已补充 | Phase 3 ✓ |
-| P2-T-02 | [TECH] | OPEN | 无 J-audit-login-trail 端到端集成测试 | stub 已就位，需 Docker + testcontainers 激活 | Phase 5 |
+| P2-T-02 | [TECH] | OPEN | 无 J-auditlogintrail 端到端集成测试 | stub 已就位，需 Docker + testcontainers 激活 | Phase 5 |
 | P2-T-03 | [TECH] | RESOLVED | bootstrap.go 覆盖率 51.4%（sandbox 限制 net.Listen） | 覆盖率已提升 | Phase 3 ✓ |
 | P2-T-05 | [TECH] | RESOLVED | in-memory repo 掩盖集成问题 | adapter PG Repository 已实现（audit + config） | Phase 3 ✓ |
 | P2-T-06 | [TECH] | RESOLVED | go vet copylocks warning (time.Time in User struct) | copylocks 警告已修复 | Phase 3 ✓ |
-| P2-T-07 | [TECH] | RESOLVED | cmd/core-bundle 无冒烟测试 | 冒烟测试已补充 | Phase 3 ✓ |
+| P2-T-07 | [TECH] | RESOLVED | cmd/corebundle 无冒烟测试 | 冒烟测试已补充 | Phase 3 ✓ |
 | P2-router | [TECH] | RESOLVED | runtime/http/router 覆盖率 78.8%（接近 80% 阈值） | 覆盖率已提升 | Phase 3 ✓ |
 
 ### 运维/部署
@@ -139,7 +139,7 @@
 
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
-| P4-TD-04 | [TECH] | OPEN | order-cell 声明 L2 但使用 publisher.Publish 而非事务性 outbox write；Init 不强制 outboxWriter 注入 | todo-order 示例 L2 一致性为"声明型"而非"事务型"；semantic gap | v1.1 |
+| P4-TD-04 | [TECH] | OPEN | ordercell 声明 L2 但使用 publisher.Publish 而非事务性 outbox write；Init 不强制 outboxWriter 注入 | todo-order 示例 L2 一致性为"声明型"而非"事务型"；semantic gap | v1.1 |
 
 ### 测试/回归
 

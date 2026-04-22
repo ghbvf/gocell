@@ -22,7 +22,7 @@
 
 | Aspect             | Value                                                  |
 |--------------------|--------------------------------------------------------|
-| Cell(s) affected   | {cell-id, e.g. access-core, audit-core, config-core}  |
+| Cell(s) affected   | {cell-id, e.g. accesscore, auditcore, configcore}  |
 | Slice(s) affected  | {slice-id, e.g. session-manager, audit-writer}         |
 | Contract(s) affected | {contract path, e.g. event/access/v1}               |
 | Consistency Level  | {L0-L4 — state current and proposed if changing}       |
