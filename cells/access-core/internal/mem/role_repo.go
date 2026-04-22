@@ -1,6 +1,7 @@
 package mem
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"sync"
@@ -8,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 )
 
 var _ ports.RoleRepository = (*RoleRepository)(nil)
@@ -142,6 +144,56 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 
 	delete(r.userRoles[userID], roleID)
 	return true, nil
+}
+
+// ListByUserID returns paginated roles for userID sorted per params.
+func (r *RoleRepository) ListByUserID(_ context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+
+	roleIDs, ok := r.userRoles[userID]
+	if !ok {
+		return []*domain.Role{}, nil
+	}
+
+	roles := make([]*domain.Role, 0, len(roleIDs))
+	for rid := range roleIDs {
+		if role, ok := r.roles[rid]; ok {
+			clone := *role
+			clone.Permissions = make([]domain.Permission, len(role.Permissions))
+			copy(clone.Permissions, role.Permissions)
+			roles = append(roles, &clone)
+		}
+	}
+
+	query.Sort(roles, params.Sort, compareRoleField)
+	result, err := query.ApplyCursor(roles, params, roleFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("role-repo: list-by-user: %w", err)
+	}
+	return result, nil
+}
+
+func compareRoleField(a, b *domain.Role, field string) int {
+	switch field {
+	case "name":
+		return cmp.Compare(a.Name, b.Name)
+	case "id":
+		return cmp.Compare(a.ID, b.ID)
+	default:
+		return 0
+	}
+}
+
+func roleFieldValue(r *domain.Role, field string) any {
+	switch field {
+	case "name":
+		return r.Name
+	case "id":
+		return r.ID
+	default:
+		return ""
+	}
 }
 
 // CountByRole returns the number of users assigned to the given role.

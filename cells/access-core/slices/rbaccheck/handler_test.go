@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -63,7 +64,11 @@ func setup() http.Handler {
 	})
 	_, _ = roleRepo.AssignToUser(context.Background(), "user-1", "r1")
 
-	svc := NewService(roleRepo, slog.Default())
+	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
+	if err != nil {
+		panic(err)
+	}
+	svc := NewService(roleRepo, codec, slog.Default())
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux

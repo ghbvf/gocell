@@ -36,7 +36,7 @@ func TestDeviceCell_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, deps))
-	assert.Len(t, c.OwnedSlices(), 3, "should have 3 slices")
+	assert.Len(t, c.OwnedSlices(), 4, "should have 4 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -78,7 +78,7 @@ func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
 		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
-	assert.Len(t, c.OwnedSlices(), 3)
+	assert.Len(t, c.OwnedSlices(), 4)
 }
 
 func TestDeviceCell_InitNoPublisher(t *testing.T) {

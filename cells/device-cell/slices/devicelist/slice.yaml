@@ -1,0 +1,12 @@
+id: devicelist
+belongsToCell: device-cell
+contractUsages:
+  - contract: http.device.list.v1
+    role: serve
+verify:
+  unit:
+    - unit.devicelist.service
+  contract:
+    - contract.http.device.list.v1.serve
+allowedFiles:
+  - cells/device-cell/slices/devicelist/**

@@ -6,6 +6,7 @@ import (
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -66,17 +67,19 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 
 func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 	userID := r.PathValue("userID")
-	roles, err := h.svc.ListRoles(r.Context(), userID)
+
+	pageReq, ok := httputil.ParsePageRequestOrWrite(w, r)
+	if !ok {
+		return
+	}
+
+	result, err := h.svc.ListRoles(r.Context(), userID, pageReq)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
-	resp := make([]RoleResponse, len(roles))
-	for i, role := range roles {
-		resp[i] = toRoleResponse(role)
-	}
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": resp, "hasMore": false})
+	httputil.WriteJSON(w, http.StatusOK, query.MapPageResult(result, toRoleResponse))
 }
 
 func (h *Handler) handleHasRole(w http.ResponseWriter, r *http.Request) {

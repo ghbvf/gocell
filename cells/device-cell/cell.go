@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/device-cell/internal/domain"
 	"github.com/ghbvf/gocell/cells/device-cell/internal/mem"
 	devicecommand "github.com/ghbvf/gocell/cells/device-cell/slices/devicecommand"
+	devicelist "github.com/ghbvf/gocell/cells/device-cell/slices/devicelist"
 	deviceregister "github.com/ghbvf/gocell/cells/device-cell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/cells/device-cell/slices/devicestatus"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -67,6 +68,7 @@ type DeviceCell struct {
 	registerHandler *deviceregister.Handler
 	commandHandler  *devicecommand.Handler
 	statusHandler   *devicestatus.Handler
+	listHandler     *devicelist.Handler
 }
 
 // NewDeviceCell creates a new DeviceCell with the given options.
@@ -155,6 +157,15 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.statusHandler = devicestatus.NewHandler(statusSvc)
 	c.AddSlice(cell.NewBaseSlice("devicestatus", "device-cell", cell.L0))
 
+	// device-list slice
+	listSvc, err := devicelist.NewService(c.deviceRepo, c.cursorCodec, c.logger,
+		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
+	if err != nil {
+		return fmt.Errorf("device-list: %w", err)
+	}
+	c.listHandler = devicelist.NewHandler(listSvc)
+	c.AddSlice(cell.NewBaseSlice("devicelist", "device-cell", cell.L0))
+
 	return nil
 }
 
@@ -169,6 +180,13 @@ func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 				Path:    "/",
 				Handler: http.HandlerFunc(c.registerHandler.HandleRegister),
 				Public:  true,
+			})
+			// Device list: paginated listing of all devices.
+			auth.Declare(devices, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/",
+				Handler: http.HandlerFunc(c.listHandler.HandleList),
+				Policy:  auth.Authenticated(),
 			})
 			// Device status is queried by authenticated operators/devices.
 			auth.Declare(devices, auth.RouteDecl{

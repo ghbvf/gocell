@@ -7,13 +7,24 @@ import (
 
 	"github.com/ghbvf/gocell/cells/access-core/internal/domain"
 	"github.com/ghbvf/gocell/cells/access-core/internal/mem"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func newTestService() (*Service, *mem.RoleRepository) {
+func newTestCodec(t *testing.T) *query.CursorCodec {
+	t.Helper()
+	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return codec
+}
+
+func newTestService(t *testing.T) (*Service, *mem.RoleRepository) {
+	t.Helper()
 	repo := mem.NewRoleRepository()
-	return NewService(repo, slog.Default()), repo
+	return NewService(repo, newTestCodec(t), slog.Default()), repo
 }
 
 func TestService_HasRole(t *testing.T) {
@@ -50,7 +61,7 @@ func TestService_HasRole(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestService()
+			svc, repo := newTestService(t)
 			tt.setup(repo)
 
 			has, err := svc.HasRole(context.Background(), tt.userID, tt.roleName)
@@ -65,19 +76,19 @@ func TestService_HasRole(t *testing.T) {
 }
 
 func TestService_ListRoles(t *testing.T) {
-	svc, repo := newTestService()
+	svc, repo := newTestService(t)
 	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
 	repo.SeedRole(&domain.Role{ID: "viewer", Name: "viewer"})
 	_, _ = repo.AssignToUser(context.Background(), "usr-1", "admin")
 	_, _ = repo.AssignToUser(context.Background(), "usr-1", "viewer")
 
-	roles, err := svc.ListRoles(context.Background(), "usr-1")
+	result, err := svc.ListRoles(context.Background(), "usr-1", query.PageRequest{Limit: 50})
 	require.NoError(t, err)
-	assert.Len(t, roles, 2)
+	assert.Len(t, result.Items, 2)
 }
 
 func TestService_ListRolesEmptyInput(t *testing.T) {
-	svc, _ := newTestService()
-	_, err := svc.ListRoles(context.Background(), "")
+	svc, _ := newTestService(t)
+	_, err := svc.ListRoles(context.Background(), "", query.PageRequest{})
 	assert.Error(t, err)
 }
