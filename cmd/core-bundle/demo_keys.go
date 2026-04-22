@@ -24,8 +24,10 @@ var wellKnownDemoKeys = []string{
 	"gocell-demo-CONFIG-CORE-key-32!!",
 	"gocell-demo-ORDER-CELL-key-32b!!",
 	"gocell-demo-DEVICE-CELL-key-32!!",
+	"gocell-demo-ACCESS-CORE-key-32!!",
 	"core-bundle-audit-cursor-key-32!",
 	"core-bundle-cfg-cursor-key--32b!",
+	"core-bundle-access-cursor-key32!",
 
 	// Service token HMAC (shipped as test fixture; never use in production)
 	"service-secret-32-bytes-xxxxxx!!",

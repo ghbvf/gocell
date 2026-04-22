@@ -31,6 +31,7 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		accesscore.WithPublisher(shared.EventBus),
 		accesscore.WithJWTIssuer(shared.JWTDeps.issuer),
 		accesscore.WithJWTVerifier(shared.JWTDeps.verifier),
+		accesscore.WithCursorCodec(shared.CursorCodecs.accessCore),
 	}, m.InitialAdminOpts...)
 	c := accesscore.NewAccessCore(accessOpts...)
 

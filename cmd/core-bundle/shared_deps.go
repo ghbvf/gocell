@@ -108,6 +108,9 @@ func (d *SharedDeps) validateCore() []error {
 	if d.CursorCodecs.config == nil {
 		missing("CursorCodecs.config")
 	}
+	if d.CursorCodecs.accessCore == nil {
+		missing("CursorCodecs.accessCore")
+	}
 	if len(d.HMACKey) == 0 {
 		missing("HMACKey")
 	}
