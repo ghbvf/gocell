@@ -74,7 +74,7 @@ func LoadPGConfig(cellEnvPrefix string) (adapterpg.Config, error) {
 //	GOCELL_<CELLID>_CURSOR_PREVIOUS_KEY
 //
 // Either or both may be empty; callers are responsible for validation via
-// loadCursorCodec.
+// buildCursorCodec.
 func LoadCursorKeys(cellEnvPrefix string) (primary, previous string) {
 	prefix := "GOCELL_" + cellEnvPrefix + "_CURSOR_"
 	return os.Getenv(prefix + "KEY"), os.Getenv(prefix + "PREVIOUS_KEY")

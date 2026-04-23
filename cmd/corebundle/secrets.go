@@ -105,18 +105,3 @@ func buildCursorCodec(adapterMode, envLabelForErr, prevEnvLabelForErr, primary, 
 	}
 	return codec, nil
 }
-
-// loadCursorCodec loads a cursor HMAC secret from envName (with a dev-only
-// fallback to devDefault) and constructs a CursorCodec. In "real" adapter
-// mode the secret must be set and must not match a well-known demo value.
-//
-// Deprecated: prefer LoadCursorKeys + buildCursorCodec which separates env
-// reading from codec construction. This wrapper is retained for call sites
-// that have not yet migrated.
-func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string) (*query.CursorCodec, error) {
-	primary, previous := os.Getenv(envName), ""
-	if prevEnvName != "" {
-		previous = os.Getenv(prevEnvName)
-	}
-	return buildCursorCodec(adapterMode, envName, prevEnvName, primary, previous, devDefault, label)
-}

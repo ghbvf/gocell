@@ -183,6 +183,3 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 	return deps, nil
 }
-
-// loadSharedDepsForRun is an alias kept for the run() call site; delegates to
-// LoadSharedDepsFromEnv. Defined here to avoid a bare variable name collision.

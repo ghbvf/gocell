@@ -41,18 +41,19 @@ func TestRejectDemoKey_RealMode_EmptyKeyPasses(t *testing.T) {
 }
 
 // TestDevDefaults_AreAllInWellKnownDemoKeys guards against the pattern where
-// a new dev-only default is added to loadSecret/loadCursorCodec call sites
+// a new dev-only default is added to loadSecret/buildCursorCodec call sites
 // without being appended to wellKnownDemoKeys. Without this test, a stale
 // dev default could silently pass rejectDemoKey in real mode.
 func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
-	// The dev defaults currently wired in run(). Keep this list in sync with
-	// main.go's loadSecret/loadCursorCodec call sites when they change.
+	// The dev defaults currently wired in cell modules. Keep this list in sync
+	// with loadSecret / buildCursorCodec call sites (audit_module.go,
+	// config_module.go, access_module.go) when they change.
 	// Note: GOCELL_SERVICE_SECRET has no dev-default (empty disables the guard
 	// in dev mode); rejectDemoKey is called directly in internalGuardFromEnv.
 	devDefaults := []string{
 		"dev-hmac-key-replace-in-prod!!!!", // loadSecret("GOCELL_AUDITCORE_HMAC_KEY", ...)
-		"corebundle-audit-cursor-key-32b!", // loadCursorCodec("GOCELL_AUDITCORE_CURSOR_KEY", ...)
-		"corebundle-cfg-cursor-key--32bb!", // loadCursorCodec("GOCELL_CONFIGCORE_CURSOR_KEY", ...)
+		"corebundle-audit-cursor-key-32b!", // buildCursorCodec(... LoadCursorKeys("AUDITCORE") ...)
+		"corebundle-cfg-cursor-key--32bb!", // buildCursorCodec(... LoadCursorKeys("CONFIGCORE") ...)
 	}
 	for _, dd := range devDefaults {
 		dd := dd

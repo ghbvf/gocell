@@ -139,7 +139,7 @@ func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
 	checkers := pgRes.Checkers()
 	pgChecker, ok := checkers["postgres"]
 	require.True(t, ok, "ManagedResource must expose a \"postgres\" checker (adapterpg.PGResource default name)")
-	require.NoError(t, pgChecker(), "postgres checker must pass for the live container DSN")
+	require.NoError(t, pgChecker(ctx), "postgres checker must pass for the live container DSN")
 
 	// Close the resource to avoid leaking the connection pool.
 	// Ignore the error — the test has already passed at this point and pool

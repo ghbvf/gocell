@@ -67,8 +67,8 @@ type trackingManagedResource struct {
 	closeCalled bool
 }
 
-func (r *trackingManagedResource) Checkers() map[string]func() error {
-	return map[string]func() error{r.name: func() error { return nil }}
+func (r *trackingManagedResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{r.name: func(context.Context) error { return nil }}
 }
 
 func (r *trackingManagedResource) Worker() kworker.Worker { return nil }

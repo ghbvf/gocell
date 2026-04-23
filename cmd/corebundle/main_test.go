@@ -72,9 +72,9 @@ func TestLoadKeySet_RealMode_Success(t *testing.T) {
 
 func TestLoadKeySet_UnknownMode_StillGeneratesEphemeral(t *testing.T) {
 	// loadKeySet treats any non-"real" mode as dev (ephemeral key pair).
-	// In practice, validateAdapterMode rejects unknown values before
-	// loadKeySet is called, so this path is only reachable if a new
-	// valid mode is added without updating loadKeySet.
+	// In practice, bootstrap.TopologyFromEnv rejects unknown GOCELL_ADAPTER_MODE
+	// values before loadKeySet is called, so this path is only reachable if a
+	// new valid mode is added without updating loadKeySet.
 	ks, err := loadKeySet("reall") // deliberate typo
 	require.NoError(t, err)
 	assert.NotNil(t, ks)
@@ -107,33 +107,6 @@ func TestLoadSecret_RealMode_WithEnv(t *testing.T) {
 	got, err := loadSecret("TEST_KEY_REAL_OK", "fallback", "real")
 	require.NoError(t, err)
 	assert.Equal(t, []byte("prod-secret"), got)
-}
-
-func TestValidateAdapterMode_Real_Accepted(t *testing.T) {
-	require.NoError(t, validateAdapterMode("real"))
-}
-
-func TestValidateAdapterMode_InMemory_OK(t *testing.T) {
-	require.NoError(t, validateAdapterMode(""))
-}
-
-func TestValidateAdapterMode_Unknown_ReturnsError(t *testing.T) {
-	err := validateAdapterMode("staging")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown GOCELL_ADAPTER_MODE")
-	assert.Contains(t, err.Error(), "staging")
-}
-
-// TestValidateAdapterMode_DevLiteralRejected locks down the documented
-// semantics: dev is spelled as the *empty* value, not the string "dev".
-// Operators who copy the .env.example template literally must not find a
-// surprising mode to accept. Guards against regression if someone adds a
-// "dev" alias without updating the .env.example comment in the same change.
-func TestValidateAdapterMode_DevLiteralRejected(t *testing.T) {
-	err := validateAdapterMode("dev")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unknown GOCELL_ADAPTER_MODE")
-	assert.Contains(t, err.Error(), "dev")
 }
 
 func TestRun_DevMode_StartsAndCancels(t *testing.T) {

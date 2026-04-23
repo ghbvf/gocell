@@ -152,32 +152,6 @@ func TestTopologyAdapterInfo_TableDriven(t *testing.T) {
 	}
 }
 
-// TestValidateModeCoupling_Matrix ensures the control/data-plane guard
-// accepts compatible pairs and rejects postgres-without-real configurations
-// that would run production persistence with dev-grade keys.
-func TestValidateModeCoupling_Matrix(t *testing.T) {
-	tests := []struct {
-		name, cellAdapterMode, adapterMode string
-		wantErr                            bool
-	}{
-		{"memory-dev", "memory", "", false},
-		{"memory-real", "memory", "real", false},
-		{"postgres-real", "postgres", "real", false},
-		{"postgres-dev-rejected", "postgres", "", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateModeCoupling(tt.cellAdapterMode, tt.adapterMode)
-			if tt.wantErr {
-				require.Error(t, err, "postgres without real adapterMode must fail-fast")
-				assert.Contains(t, err.Error(), "postgres")
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
 // TestOutboxE2E_CrossCellFanout is the P0 regression guard for the cross-cell
 // fanout bug: before Commit 1, all cells in corebundle shared a single
 // ConsumerGroup ("corebundle"), causing the idempotency key to be the same for
