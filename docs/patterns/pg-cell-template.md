@@ -1,726 +1,355 @@
-# PG Cell Template
+<!-- ref: docs/plans/202604232330-025-architecture-pr-implementation-plan.md §PR-A3 T6 -->
 
-Patterns for adding PostgreSQL storage to a GoCell cell. Covers the three
-primitives introduced in PR-CC-TOPOLOGY-BUILDER and the rules for combining
-them correctly.
+# PG Cell 接入模板（per-cell adapter 模型）
 
----
-
-## Chapter 1 — Topology: Single Source of Truth
-
-`bootstrap.Topology` is the authority for the adapter-mode / storage-backend
-pairing in a GoCell assembly. It must be the **only** place where that pairing
-is resolved; all other code reads from `Topology`.
-
-### What it is
-
-```go
-type Topology struct {
-    AdapterMode    string // "" (dev) | "real" (production)
-    StorageBackend string // "memory" | "postgres"
-}
-```
-
-`TopologyFromEnv()` reads `GOCELL_ADAPTER_MODE` and `GOCELL_CELL_ADAPTER_MODE`,
-validates the combination, and returns the resolved `Topology`. The only valid
-combinations are:
-
-| GOCELL_CELL_ADAPTER_MODE | GOCELL_ADAPTER_MODE | Valid? |
-|--------------------------|---------------------|--------|
-| (unset) / memory         | (any)               | yes    |
-| postgres                 | real                | yes    |
-| postgres                 | (unset)             | **no** — fail-fast |
-
-The coupling rule prevents "real persistence + dev-grade keys": if the data
-plane uses PostgreSQL, the control plane must also use production-grade key
-loading, token-guarded `/metrics`, and token-guarded `/readyz?verbose`.
-
-### Where to use it
-
-- Read `Topology` exactly once at composition root (`AppDepsFromEnv`).
-- Pass the resolved `Topology` struct through `AppDeps` to all consumers.
-- Never re-read `GOCELL_ADAPTER_MODE` or `GOCELL_CELL_ADAPTER_MODE` in
-  lower-level code — read from the `Topology` you received.
-
-### AdapterInfo for observability
-
-```go
-info := topo.AdapterInfo()
-// {"mode": "real-keys-postgres-storage", "storage": "postgres",
-//  "event_bus": "in-memory", "outbox_storage": "postgres"}
-```
-
-Pass `info` to `bootstrap.WithAdapterInfo(info)` so operators can confirm
-active backends via `/readyz?verbose` without reading logs.
-
-### Anti-patterns to avoid
-
-- Checking `os.Getenv("GOCELL_CELL_ADAPTER_MODE")` outside `TopologyFromEnv`.
-- Coupling mode checks inside cell constructors or adapter packages.
-- Deriving mode coupling in multiple places — leads to the assembly drift
-  finding this pattern was created to fix.
+> 文档版本: 2026-04-24（T6 per-cell adapter 切分后重写）
+> 读者: 要给某个 cell 接 PostgreSQL 的开发者
+> 前置阅读: docs/architecture/ 里的分层规则 + docs/ops/env-vars.md 的 env 命名表
 
 ---
 
-## Chapter 2 — ManagedResource: Three-Piece Lifecycle
+## Chapter 1 — 模型总览
 
-`lifecycle.ManagedResource` is the single interface through which an external
-resource (PG pool + relay, Redis, etc.) participates in the bootstrap lifecycle.
+T6（PR-A3）确立的 per-cell adapter 模型把依赖分成两条独立的路径：
 
-### The interface
+```
+operator env
+     │
+     ├─── LoadSharedDepsFromEnv(ctx)          ← cross-cutting 只读一次
+     │         JWT / Prometheus / EventBus
+     │         InternalGuard / MetricsToken / VerboseToken
+     │         └─→ *SharedDeps
+     │
+     └─── CellModule.Provide(ctx, shared)     ← per-cell 各自读自己的 env
+               GOCELL_<CELLID>_DATABASE_URL
+               GOCELL_<CELLID>_CURSOR_KEY
+               GOCELL_<CELLID>_KEY_PROVIDER
+               └─→ (cell.Cell, []bootstrap.Option, []ManagedResource, error)
 
-```go
-type ManagedResource interface {
-    // Checkers returns named health probe functions registered under /readyz.
-    Checkers() map[string]func() error
-
-    // Worker returns the background worker (relay, cache warmer, etc.).
-    // May be nil when no background work is needed.
-    Worker() worker.Worker
-
-    // Close shuts down the resource. Called during LIFO teardown after the
-    // assembly, HTTP server, and workers have stopped.
-    Close(ctx context.Context) error
-}
+     ↓
+BuildApp(ctx, shared, ModuleA{}, ModuleB{}, ...)
+     ↓
+buildAssembly(ps, durabilityMode, cells...)
+     ↓
+bootstrap.New(defaultOpts..., cellOpts...).Run(ctx)
 ```
 
-### PGResource: the concrete implementation
+两条原则：
 
-```go
-pgRes := adapterpg.NewPGResource(pool, relayWorker)
-// pgRes.Checkers()["postgres"] → pings the pool with a 5-second standalone ctx
-// pgRes.Worker()               → the outbox relay worker (may be nil)
-// pgRes.Close()                → pool.Close()
-```
-
-Key design decisions:
-
-1. **5-second standalone context in Checkers()** — Each probe call creates
-   `context.WithTimeout(context.Background(), 5s)`, never the caller's context.
-   A SIGTERM cancelling the outer context must not cause the probe to report
-   PG as down; Kubernetes cannot distinguish "PG unreachable" from "process
-   shutting down" if the outer context is passed directly.
-
-2. **nil relay is valid** — `NewPGResource(pool, nil)` is correct for modes
-   where no outbox relay is needed. `Worker()` returns nil; bootstrap ignores
-   nil workers.
-
-3. **LIFO teardown order** — ManagedResource teardowns are appended to the
-   `teardowns` slice before assembly/HTTP teardowns. Because teardowns are
-   executed in LIFO (reverse) order, the managed resource is closed **last**:
-   assembly stops → HTTP stops → workers stop → PG pool closes.
-   This matches the uber-go/fx lifecycle order and prevents the pool from
-   being closed while cells are still processing requests.
-
-### Registering with bootstrap
-
-```go
-// Pass via AppDeps.PGResource:
-if d.deps.PGResource != nil {
-    opts = append(opts, bootstrap.WithManagedResource(d.deps.PGResource))
-}
-
-// bootstrap.expandManagedResources() handles the rest:
-// → adds Checkers() entries to health probes
-// → adds Worker() to the worker group (if non-nil)
-// → registers Close() in the LIFO teardown slice
-```
-
-### Anti-patterns to avoid
-
-- Passing the pool context to the health checker (SIGTERM sensitivity).
-- Registering pool health checkers manually alongside `WithManagedResource`
-  (double registration, duplicate checker names).
-- Calling `pool.Close()` directly in tests — use `res.Close()` so the
-  abstraction holds even when the pool is swapped for a fake.
+1. **cross-cutting 只在 SharedDeps**: JWT 秘钥、Prometheus 注册表、EventBus、
+   control-plane token 由 `LoadSharedDepsFromEnv` 统一构建，不在 CellModule 里重读。
+2. **per-cell adapter 配置由 CellModule.Provide 自己读**: PG URL、cursor key、
+   master key 等带 `GOCELL_<CELLID>_` 前缀的 env 由对应 Module 自行解析，
+   互不干扰。
 
 ---
 
-## Chapter 3 — AppDeps + BuildBootstrap: Test/Production Sharing
+## Chapter 2 — Env 命名约定
 
-Assembly drift occurs when tests assemble cells differently from production.
-The `AppDeps` + `BuildBootstrap` pattern eliminates this by sharing a single
-assembly entry point.
+命名模式：`GOCELL_<CELLID>_<RESOURCE>_<KNOB>`
 
-### The pattern
+| 变量 | 用途 | 必填条件 |
+|---|---|---|
+| `GOCELL_<CELLID>_DATABASE_URL` | PostgreSQL DSN | postgres mode |
+| `GOCELL_<CELLID>_DATABASE_MAX_CONNS` | 最大连接数（正整数） | 否，默认 10 |
+| `GOCELL_<CELLID>_DATABASE_IDLE_TIMEOUT` | 空闲超时（Go duration，如 `5m`） | 否 |
+| `GOCELL_<CELLID>_DATABASE_MAX_LIFETIME` | 最大生存时间（Go duration） | 否 |
+| `GOCELL_<CELLID>_CURSOR_KEY` | 游标 HMAC 主密钥 | real mode |
+| `GOCELL_<CELLID>_CURSOR_PREVIOUS_KEY` | 游标 HMAC 前置密钥（轮换用） | 否 |
+| `GOCELL_<CELLID>_KEY_PROVIDER` | 加密 KeyProvider（`local-aes` / `vault-transit`） | postgres mode |
+| `GOCELL_<CELLID>_MASTER_KEY` | local-aes 模式 32 字节 hex AES 主密钥 | 当 KEY_PROVIDER=local-aes |
+| `GOCELL_<CELLID>_MASTER_KEY_PREVIOUS` | 前置主密钥（轮换用） | 否 |
 
-```go
-// Production path:
-deps, err := AppDepsFromEnv(ctx)   // reads env, builds all deps
-app, err := BuildBootstrap(deps)   // assembles cells + bootstrap
-app.Run(ctx)
+完整清单（含跨 cell 公共变量）见 `docs/ops/env-vars.md`。
 
-// Test path:
-deps := &AppDeps{
-    Topology:   bootstrap.Topology{StorageBackend: "memory"},
-    JWTDeps:    jwtDeps{issuer: testIssuer, verifier: testVerifier},
-    PromStack:  ps,
-    CursorCodecs: codecs,
-    HMACKey:    []byte("test-hmac-key-32-bytes-long!!!!!"),
-    EventBus:   eventbus.New(),
-}
-app, err := BuildBootstrap(deps, bootstrap.WithListener(ln))
-```
+**fail-fast 契约**:
 
-Both paths call the same `BuildBootstrap`, so any assembly change in
-production automatically appears in tests.
-
-### AppDeps design decisions
-
-- **`PGResource lifecycle.ManagedResource`** (interface, not `*adapterpg.PGResource`)
-  — allows tests to inject a `fakeManagedResource` without a real PG pool.
-  Tests set `PGResource = &fakeManagedResource{name: "postgres"}`.
-
-- **`configCellOpts []configcore.Option` (private)** — populated by
-  `AppDepsFromEnv` with production adapter options. Test struct literals
-  leave it nil, so `buildConfigCell` falls back to `WithInMemoryDefaults()`.
-  This lets the struct literal syntax remain clean without exposing internals.
-
-- **`MetricsToken` and `VerboseToken` are required in real adapter mode** —
-  tests using `AdapterMode: "real"` (e.g. postgres wiring tests) must supply
-  both tokens; omitting them triggers a fail-fast in `BuildBootstrap`.
-
-### Test topology helpers
-
-```go
-// buildTestDeps returns AppDeps for memory topology without a real PG pool.
-func buildTestDeps(t *testing.T) *AppDeps {
-    t.Setenv("GOCELL_STATE_DIR", t.TempDir())
-    t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
-    t.Setenv("GOCELL_JWT_AUDIENCE", "test-audience")
-    eb := eventbus.New()
-    privKey, pubKey := auth.MustGenerateTestKeyPair()
-    keySet, _ := auth.NewKeySet(privKey, pubKey)
-    issuer, _ := auth.NewJWTIssuer(keySet, "test-issuer", 15*time.Minute,
-        auth.WithDefaultAudience("test-audience"))
-    verifier, _ := auth.NewJWTVerifier(keySet,
-        auth.WithExpectedAudiences("test-audience"))
-    ps, _ := buildPromStack()
-    codecs, _ := loadAllCursorCodecs("")
-    return &AppDeps{
-        Topology:     bootstrap.Topology{StorageBackend: "memory"},
-        JWTDeps:      jwtDeps{issuer: issuer, verifier: verifier},
-        PromStack:    ps,
-        CursorCodecs: codecs,
-        HMACKey:      []byte("test-hmac-key-32-bytes-long!!!!!"),
-        EventBus:     eb,
-    }
-}
-```
-
-For postgres topology wiring tests, add `MetricsToken` and `VerboseToken`:
-
-```go
-deps := &AppDeps{
-    Topology:     bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-    PGResource:   fakePG, // inject fake; no real PG needed for wiring test
-    MetricsToken: "test-metrics-token",
-    VerboseToken: "test-verbose-token",
-    // ... other fields
-}
-```
-
-### What BuildBootstrap does
-
-1. Builds configcore cell (in-memory defaults when `configCellOpts` is nil,
-   otherwise uses the production adapter options).
-2. Builds accesscore with `adminBootstrapWorkerOpts` (lazy admin cleaner).
-3. Builds auditcore.
-4. Registers all three cells in `CoreAssembly`.
-5. Assembles all `bootstrap.Option` slices including `WithManagedResource`
-   (if `PGResource` is non-nil), internal guard (if `InternalGuard` is
-   non-nil), and verbose/metrics token guards.
-6. Returns `bootstrap.New(opts...)`.
-
-Tests and production get identical wiring. No separate "test assembly path"
-exists anywhere in the codebase.
-
-### Anti-patterns to avoid
-
-- Manually calling `adapterpg.NewPool` in integration tests to build cells —
-  use `AppDeps.PGResource` injection instead.
-- Duplicating cell option construction across `main_test.go`, e2e tests, and
-  production `run()` — a single `BuildBootstrap` call serves all.
-- Forgetting `MetricsToken`/`VerboseToken` when testing with `AdapterMode:
-  "real"` — `BuildBootstrap` will fail-fast with a clear error message.
+- `LoadPGConfig` 在收到非法整数（如 `MAX_CONNS=abc`）或非法 duration（如
+  `IDLE_TIMEOUT=bad`）时立即返回包含变量名的错误；进程在 `run()` 返回前就停止，
+  不会进入服务循环。
+- `LoadCursorKeys` 只读取字符串，不做校验；后续 `buildCursorCodec` 在
+  real mode 下遇到空值才 fail-fast。
+- postgres mode 下 `KEY_PROVIDER` 为空 → 启动失败，不静默降级为 NoopTransformer。
 
 ---
 
-## Chapter 4 — Durable Write Slice + RunInTx + Outbox Event Pattern
+## Chapter 3 — 新 Cell 接入 PG 的最小步骤
 
-This chapter documents the **flag-write slice** as the canonical template for
-adding a durable CUD write slice to any GoCell cell. The pattern ensures L2
-OutboxFact consistency: the domain write and the outbox event are always
-committed or rolled back together.
+以新建 `foocore` cell 为例，走完整流程。
 
-### Why RunInTx + Outbox must be atomic
+### Step 1. 新建 cell.yaml
 
-Unleash's original design (pre-2020) wrote the flag record and then published
-the change event as two separate database calls. When the event write failed,
-the flag was already mutated with no event — consumers diverged silently.
+```yaml
+# cells/foocore/cell.yaml
+id: foocore
+type: core
+consistencyLevel: L2
+owner:
+  team: platform
+  role: maintainer
+schema:
+  primary: foo_entries
+verify:
+  smoke: go test ./cells/foocore/... -run TestSmoke -count=1
+```
 
-The GoCell pattern wraps **both** operations inside a single `RunInTx` call.
-If the outbox write fails the entire transaction rolls back, including the
-domain write. The outbox relay then delivers the event at-least-once after
-commit, driven by the `outbox_entries` table.
-
-ref: Unleash/unleash src/lib/db/feature-environment-store.ts  
-ref: Watermill router pattern — event publishing decoupled from HTTP handler  
-
-### Service implementation (from `cells/configcore/slices/flagwrite/service.go`)
+### Step 2. 新建 `cmd/corebundle/foo_module.go`
 
 ```go
-// L2 OutboxFact: repo writes + outbox writes are wrapped in a single RunInTx
-// per operation. Failure in either rolls back both.
-type Service struct {
-    repo         ports.FlagRepository
-    outboxWriter outbox.Writer
-    txRunner     persistence.TxRunner
-    logger       *slog.Logger
+// cmd/corebundle/foo_module.go
+package main
+
+import (
+	"context"
+	"fmt"
+
+	foocore "github.com/ghbvf/gocell/cells/foocore"
+	"github.com/ghbvf/gocell/kernel/cell"
+	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
+)
+
+// FooCoreModule wires foocore per-cell adapter dependencies.
+type FooCoreModule struct {
+	// KeyProviderOverride bypasses env-based construction in tests.
+	KeyProviderOverride kcrypto.KeyProvider
 }
 
-func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
-    if key == "" {
-        return nil, errcode.New(errcode.ErrFlagInvalidInput, "key is required")
-    }
+func (FooCoreModule) ID() string { return "foocore" }
 
-    var updated *domain.FeatureFlag
+func (m FooCoreModule) Provide(ctx context.Context, shared *SharedDeps) (
+	cell.Cell,
+	[]bootstrap.Option,
+	[]kernellifecycle.ManagedResource,
+	error,
+) {
+	// 1. Cursor codec.
+	pri, prev := LoadCursorKeys("FOOCORE")
+	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
+		"GOCELL_FOOCORE_CURSOR_KEY", "GOCELL_FOOCORE_CURSOR_PREVIOUS_KEY",
+		pri, prev,
+		"foocore-cursor-key-32-byte-def!", "foo")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("foocore cursor codec: %w", err)
+	}
 
-    if err := s.runInTx(ctx, func(txCtx context.Context) error {
-        var err error
-        updated, err = s.repo.Toggle(txCtx, key, enabled)  // atomic UPDATE ... RETURNING
-        if err != nil {
-            return fmt.Errorf("flag-write: toggle: %w", err)
-        }
-        return s.emitFlagChanged(txCtx, "toggled", updated) // outbox write inside same tx
-    }); err != nil {
-        return nil, err
-    }
+	// 2. PG pool config (read per-cell env; validation deferred to NewPool).
+	pgCfg, err := LoadPGConfig("FOOCORE")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("foocore pg config: %w", err)
+	}
 
-    s.logger.Info("feature flag toggled",
-        slog.String("key", key),
-        slog.Bool("enabled", enabled))
-    return updated, nil
+	// 3. Storage-backend branching via Topology.
+	pgRes, cellOpts, err := buildFooCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	c := foocore.NewFooCore(append([]foocore.Option{
+		foocore.WithPublisher(shared.EventBus),
+		foocore.WithCursorCodec(cursorCodec),
+	}, cellOpts...)...)
+
+	var opts []bootstrap.Option
+	var provisional []kernellifecycle.ManagedResource
+	if pgRes != nil {
+		opts = append(opts, bootstrap.WithManagedResource(pgRes))
+		provisional = append(provisional, pgRes)
+	}
+	return c, opts, provisional, nil
 }
 
-// FlagChangedPayload is the typed event struct (camelCase JSON per convention).
-type FlagChangedPayload struct {
-    EventID    string    `json:"eventId"`
-    Action     string    `json:"action"`
-    Key        string    `json:"key"`
-    Enabled    bool      `json:"enabled"`
-    Version    int       `json:"version"`
-    OccurredAt time.Time `json:"occurredAt"`
-}
+var _ CellModule = FooCoreModule{}
 ```
 
-### Key design decisions
-
-| Decision | Choice | Reason |
-|----------|--------|--------|
-| Toggle SQL | `UPDATE ... SET enabled=$1, version=version+1 ... RETURNING *` | Prevents concurrent partial-write data loss (Unleash lesson) |
-| Payload struct | Typed `FlagChangedPayload` | Schema enforced at compile time; JSON Schema contract validated in tests |
-| runInTx nil-check | `if s.txRunner != nil { ... } else fn(ctx)` | Demo mode (no tx) stays functional; Init() validates presence for L2 slices |
-| Event action field | `"created" \| "updated" \| "toggled" \| "deleted"` | Distinct `toggled` action separates bulk-update from enable/disable flows |
-| outboxWriter nil-check | No event emitted if nil | Integration test wiring; Init() must fail-fast before serving in durable mode |
-
-### Checklist for adding a new durable write slice
-
-1. Create `cells/<cell>/slices/<slice-name>/service.go` — implement
-   `Create/Update/Delete` each calling `s.runInTx(ctx, func(txCtx) { repo.X + outboxWriter.Write })`.
-2. Create typed `*ChangedPayload` struct with `eventId`, `action`, `occurredAt`.
-3. Create `handler.go` — decode request, call service, respond with DTO.
-4. Create `slice.yaml` in `cells/<cell>/slices/<slice-name>/` — declare `contractUsages`
-   for each HTTP contract (`role: serve`) and the event contract (`role: publish`).
-5. Create contracts under `contracts/http/...` and `contracts/event/...` with JSON Schema.
-6. Add `initXxxWriteSlice()` in `cell.go` — mirror `initFlagWriteSlice()`.
-7. Register HTTP routes in `RegisterRoutes` under the resource prefix.
-8. Write `service_test.go` (atomicity), `contract_test.go` (schema), `ctx_cancel_test.go` (rollback).
-9. Run `go run ./cmd/gocell validate` — must be 0 errors.
-
-### Disposition flow
-
-```
-Service.Create(ctx)
-  └─ runInTx(ctx, fn)
-       ├─ repo.Create(txCtx, flag)     ──→ INSERT INTO feature_flags
-       └─ outboxWriter.Write(txCtx, e) ──→ INSERT INTO outbox_entries
-             ↓ tx commits
-       relay polls outbox_entries
-             ↓ publishes to broker
-       consumer receives flag.changed.v1
-             ↓ DispositionAck
-       Receipt.Commit (idempotency key marked done)
-```
-
----
-
-## Chapter 5 — Repository-boundary Encryption
-
-Sensitive config values are encrypted before they reach the database and
-decrypted on the way out, entirely within the repository layer. The handler
-and service layers are unaware of encryption details.
-
-### Core abstractions
+### Step 3. 注册到 `cmd/corebundle/main.go`
 
 ```go
-// runtime/crypto — three interfaces, one selection concern.
-
-type KeyHandle interface {
-    ID() string
-    Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, err error)
-    Decrypt(ctx context.Context, ciphertext, nonce, edk, aad []byte) (plaintext []byte, err error)
-}
-
-type KeyProvider interface {
-    Current(ctx context.Context) (KeyHandle, error)      // current key for encryption
-    ByID(ctx context.Context, keyID string) (KeyHandle, error) // historical key for decryption
-    Rotate(ctx context.Context) (newKeyID string, err error)
-}
-
-type ValueTransformer interface {
-    Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext []byte, keyID string, nonce, edk []byte, err error)
-    Decrypt(ctx context.Context, ciphertext []byte, keyID string, nonce, edk, aad []byte) (plaintext []byte, err error)
-}
-```
-
-`ValueTransformer` is the boundary interface: it wraps `KeyProvider` to handle
-key resolution and forwards AAD to `KeyHandle`. The repository only calls
-`Encrypt` and `Decrypt` — it does not manage keys.
-
-`NoopTransformer` is the production-safe fallback for `sensitive=false` entries
-and for development without a key provider. It is an identity transformer, not
-a zero value — explicit, auditable, and searchable in code.
-
-### Envelope encryption design
-
-Each sensitive row uses a per-row Data Encryption Key (DEK):
-
-```
-plaintext ──→ AES-GCM-256 (DEK, nonce) ──→ value_cipher  + value_nonce
-DEK       ──→ AES-GCM-256 (KEK, edk_nonce) ──→ value_edk
-KeyHandle.ID() ──→ value_key_id
-```
-
-- `value_cipher`: raw ciphertext (no nonce prefix — nonce stored separately)
-- `value_nonce`: 12-byte random nonce for AES-GCM  
-- `value_edk`: encrypted DEK (self-contained blob with its own nonce prefix)
-- `value_key_id`: key version identifier used to resolve the correct KEK on
-  read (enables key rotation without re-encrypting all rows)
-
-VaultTransit uses a different scheme: Vault manages DEK + KEK internally.
-`nonce` and `edk` are nil; `value_cipher` contains the opaque Vault ciphertext
-(`vault:vN:base64...`); `value_key_id` stores the Vault key version extracted
-from the ciphertext prefix.
-
-### Additional Authenticated Data (AAD)
-
-```go
-func AADForConfig(cellID, configKey string) []byte {
-    return []byte(fmt.Sprintf("cell:%s/key:%s", cellID, configKey))
-}
-```
-
-AAD is computed from the row's identity and bound into the ciphertext. It is
-**not** stored in the database — it is recomputed on decrypt from the row's key.
-This prevents a ciphertext for `cell:A/key:x` from being transplanted into
-`cell:B/key:y` (cross-row replay attack).
-
-### Repository boundary — write path
-
-```go
-// config_repo.go — Create (sensitive branch)
-ct, keyID, nonce, edk, err := r.encryptValue(ctx, entry.Key, entry.Value)
-db.Exec(ctx, `INSERT INTO config_entries
-    (id, key, value, sensitive, version, created_at, updated_at,
-     value_cipher, value_key_id, value_edk, value_nonce)
-    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
-    entry.ID, entry.Key, "",  // value stored as "" when encrypted
-    entry.Sensitive, entry.Version, entry.CreatedAt, entry.UpdatedAt,
-    ct, keyID, edk, nonce,
+// cmd/corebundle/main.go  (only the BuildApp call site)
+cells, cellOpts, err := BuildApp(ctx, shared,
+    ConfigCoreModule{},
+    AccessCoreModule{},
+    AuditCoreModule{},
+    FooCoreModule{},   // ← add here
 )
 ```
 
-Plaintext value is set to `""` (empty string) for encrypted rows. On decrypt
-failure the entry is **not** returned with an empty value — the error propagates
-as `ErrConfigDecryptFailed` (fail-closed).
-
-### Repository boundary — read path
+### Step 4. 在 `bundle.go`（或独立文件）写 `buildFooCoreOpts`
 
 ```go
-// Transparent decryption (config_repo.go — GetByKey)
-if e.Sensitive && len(valueCipher) > 0 && valueKeyID != nil && *valueKeyID != "" {
-    plain, err := r.decryptValue(ctx, key, valueCipher, *valueKeyID, valueNonce, valueEDK)
-    if err != nil {
-        return nil, err // ErrConfigDecryptFailed — never return empty plaintext
-    }
-    e.Value = plain
+// cmd/corebundle/bundle.go  (or foo_bundle.go)
+func buildFooCoreOpts(
+	ctx context.Context,
+	topo bootstrap.Topology,
+	pgCfg adapterpg.Config,
+	pub outbox.Publisher,
+) (kernellifecycle.ManagedResource, []foocore.Option, error) {
+	switch topo.StorageBackend {
+	case "postgres":
+		if pgCfg.DSN == "" {
+			return nil, nil, fmt.Errorf("foocore postgres mode requires GOCELL_FOOCORE_DATABASE_URL")
+		}
+		pool, err := adapterpg.NewPool(ctx, pgCfg)
+		if err != nil {
+			return nil, nil, fmt.Errorf("foocore PG pool: %w", err)
+		}
+		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, foocore.MigrationsFS()); schemaErr != nil {
+			_ = pool.Close(ctx)
+			return nil, nil, fmt.Errorf("foocore PG schema guard: %w", schemaErr)
+		}
+		outboxWriter := adapterpg.NewOutboxWriter()
+		txMgr := adapterpg.NewTxManager(pool)
+		relayWorker := outboxruntime.NewRelay(adapterpg.NewOutboxStore(pool.DB()), pub,
+			outboxruntime.DefaultRelayConfig())
+		pgRes, resErr := adapterpg.NewPGResource(pool, relayWorker)
+		if resErr != nil {
+			_ = pool.Close(ctx)
+			return nil, nil, fmt.Errorf("foocore PG resource: %w", resErr)
+		}
+		opts := []foocore.Option{
+			foocore.WithPostgresDefaults(pool.DB(), outboxWriter),
+			foocore.WithTxManager(txMgr),
+		}
+		return pgRes, opts, nil
+
+	case "memory":
+		return nil, []foocore.Option{foocore.WithInMemoryDefaults()}, nil
+
+	default:
+		return nil, nil, errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("buildFooCoreOpts: unexpected StorageBackend %q", topo.StorageBackend))
+	}
 }
 ```
 
-### Provider selection at startup
+### Step 5. 更新 `docs/ops/env-vars.md`
+
+在 "Per-Cell Session and Cursor Keys" 和 "configcore cell database" 章节后追加
+`foocore` 小节，列出 `GOCELL_FOOCORE_DATABASE_URL` 等变量。
+
+### Step 6. 更新 `.env.example`
+
+添加 `foocore` 相关的带注释示例行：
 
 ```
-GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes      → LocalAESKeyProvider (dev/CI)
-GOCELL_CONFIGCORE_KEY_PROVIDER=vault-transit  → adapters/vault.TransitKeyProvider (production, envelope mode)
-(unset)                                        → NoopTransformer (dev mode, plaintext)
+# foocore cell (postgres mode only)
+# GOCELL_FOOCORE_DATABASE_URL=postgres://foocore:pass@localhost:5432/foocore?sslmode=disable
+# GOCELL_FOOCORE_CURSOR_KEY=<32-byte-random-hex>
 ```
-
-When `GOCELL_CONFIGCORE_KEY_PROVIDER` is unset and storage backend is `postgres`,
-`buildKeyProvider` fails fast so that operators must explicitly configure encryption.
-
-Fail-fast applies for invalid values:
-```
-GOCELL_CONFIGCORE_KEY_PROVIDER=unknown → ErrValidationFailed at startup
-GOCELL_CONFIGCORE_MASTER_KEY not set with local-aes → ErrValidationFailed at startup
-```
-
-### Wiring in cell.go (deferred construction)
-
-`WithKeyProvider` and `WithPostgresDefaults` may be applied in any order.
-Repo construction is deferred to `Init()` so both options are visible:
-
-```go
-// cell.go — Init()
-if c.pgPool != nil && c.configRepo == nil {
-    session := cellpg.NewSession(c.pgPool)
-    c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer)
-    c.flagRepo = cellpg.NewFlagRepository(session)
-}
-```
-
-`c.valueTransformer` is set by `WithKeyProvider` or `WithValueTransformer`.
-If neither is called, the repo receives `nil` — the repo treats nil as
-"no encryption for non-sensitive entries" but fails-fast on sensitive writes
-with `ErrConfigKeyMissing`.
 
 ---
 
-## Chapter 6 — Key Rotation and Staleness-Driven Lazy Re-encrypt
+## Chapter 4 — 资源生命周期（provisional rollback）
 
-### Rotation model
+`CellModule.Provide` 打开的外部资源（pool、vault client）**必须**同时出现在两处：
 
-Keys are versioned. `KeyProvider.Rotate(ctx)` advances the "current" key ID.
-Existing ciphertext rows are **not** re-encrypted eagerly — they remain readable
-via `ByID(ctx, storedKeyID)` until explicitly migrated.
-
-```
-Before rotation:   current = "local-aes-v1"
-After rotation:    current = "local-aes-v2", "local-aes-v1" still accessible
-```
-
-This decouples rotation from downtime: you rotate, deploy, then run the
-migration tool at a convenient time.
-
-### Staleness signal
-
-On each read, the repository compares the stored `value_key_id` against the
-current key ID:
-
-```go
-// crypto.CurrentKeyIDProvider is the optional extension interface for
-// transformers that can report the current key ID (see runtime/crypto/
-// value_transformer.go). Discovered via type assertion.
-func (r *ConfigRepository) currentKeyID(ctx context.Context) (string, bool) {
-    if hc, ok := r.transformer.(crypto.CurrentKeyIDProvider); ok {
-        id, err := hc.CurrentKeyID(ctx)
-        if err != nil || id == "" {
-            return "", false
-        }
-        return id, true
-    }
-    return "", false
-}
-```
-
-`ConfigEntry.Stale = true` when `storedKeyID != currentKeyID`. The service
-and handler layers may expose `stale` in responses so operators know which
-entries need re-encryption.
-
-The `crypto.CurrentKeyIDProvider` interface is optional — `ValueTransformer`
-does not require it. Only `keyProviderTransformer` implements it.
-`NoopTransformer` and custom test transformers that do not implement it
-will simply never mark entries stale.
-
-### Re-encryption patterns
-
-**Lazy (per-request)**: On a write (`Update`, `PublishVersion`) for a stale
-entry, the repository naturally re-encrypts under the new key because it
-always calls `transformer.Encrypt(ctx, ...)` with the current key. No explicit
-lazy path is needed — re-encryption happens on the next mutation.
-
-**Eager (bulk migration)**: For long-lived read-only entries that are never
-updated, use `plaintextMigrator.MigrateConfigEntries(ctx)`:
-
-```go
-migrator, err := newPlaintextMigrator(db, transformer, PlaintextMigrationConfig{
-    BatchSize:      100,            // rows per DB round-trip
-    RateLimitDelay: 50 * time.Millisecond, // pause between batches
-})
-result, err := migrator.MigrateConfigEntries(ctx)
-// result.Processed = rows encrypted this run
-// result.Skipped   = rows already encrypted (idempotent)
-```
-
-The migrator scans `WHERE sensitive = true AND value_cipher IS NULL`, so it is
-safe to run multiple times (idempotent by SQL predicate). It does not update
-already-encrypted rows regardless of their key ID. Key-rotation migration
-(re-encrypting under a new KEK) is a separate future concern (backlog S14b).
-
-### LocalAES key loading
+1. 作为 `bootstrap.WithManagedResource(res)` 追加进 `opts` 返回值——让
+   `bootstrap.Run` 在 happy path 管理生命周期（健康检查 + 后台 worker + LIFO Close）。
+2. 作为 `provisional` slice 元素返回——让 `BuildApp` 在**后续模块 Provide 失败**时
+   逆序 Close 已开启的连接，防止启动失败时泄漏。
 
 ```
-GOCELL_CONFIGCORE_MASTER_KEY          64-char hex or base64 (required)
-GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS 64-char hex or base64 (optional; enables reading
-                                       pre-rotation ciphertext after KEK rotation)
+BuildApp 内部逻辑（简化）:
+
+module A Provide → pgResA → provisional = [pgResA]
+module B Provide → pgResB → provisional = [pgResA, pgResB]
+module C Provide → error
+  ↓ rollback:
+  pgResB.Close(ctx)   // LIFO: B 先关
+  pgResA.Close(ctx)   // 再关 A
 ```
 
-LocalAES does not call an external KMS — keys are loaded from environment
-variables at startup. This is intentional for dev/CI: no network dependency,
-deterministic, fast. Production should use VaultTransit.
-
-### VaultTransit key management
-
-VaultTransit delegates KEK management to Vault and uses envelope encryption:
-the client generates a 32-byte DEK per row, performs AES-GCM locally (binding
-AAD in `cipher.AEAD.Seal`), and asks Vault to wrap only the DEK.
-
-```
-VAULT_ADDR                   e.g. https://vault.example.com (standard Vault SDK env)
-VAULT_TOKEN                  service token with transit/{name}/encrypt+decrypt+rotate
-GOCELL_VAULT_TRANSIT_MOUNT   transit engine mount path (default: "transit")
-GOCELL_VAULT_TRANSIT_KEY     Vault key name (default: "gocell-config")
-```
-
-Under envelope encryption all four cipher columns are populated:
-- `value_cipher` — AES-GCM ciphertext of the business plaintext (DEK-wrapped).
-- `value_nonce`  — 12-byte random IV for the local AES-GCM operation.
-- `value_edk`    — Vault-returned `vault:vN:...` string that wraps the DEK.
-- `value_key_id` — `vault-transit:vN` parsed from the Vault ciphertext prefix
-  at encrypt-time (对标 k8s KMS v2 EncryptResponse.KeyID).
-
-`ByID` validates the `vault-transit:{version}` prefix; Vault routes decryption
-to the correct historical key version via the `vault:vN:` ciphertext prefix.
-Production hardening (LifetimeWatcher token renewal, AppRole/K8s auth,
-namespace multi-tenant) is tracked in backlog VAULT-* items and S14a.
+这是 T6 review 后（PR-A3）新增的契约。不把资源放入 `provisional` 会导致启动失败
+时 PG pool 泄漏，进程退出前连接不会被释放。
 
 ---
 
-## Chapter 7 — Three-Layer Testing Strategy
+## Chapter 5 — 测试
 
-Testing encrypted config values requires three layers: unit tests that
-avoid DB and KMS calls, testcontainers integration tests with a real PG schema,
-and e2e tests that validate the full assembly.
+### 5a. 单 helper 测试（不启 pool）
 
-### Layer 1 — Unit tests (no DB, no KMS)
-
-Test the transformer independently using table-driven cases:
+用 `t.Setenv` + `LoadPGConfig` 表驱动，验证 fail-fast 行为：
 
 ```go
-// runtime/crypto/local_aes_provider_test.go — pattern
-func TestLocalAESHandle_Encrypt_Decrypt_RoundTrip(t *testing.T) {
-    cases := []struct {
-        name      string
-        plaintext string
-    }{
-        {"empty", ""},
-        {"short", "v"},
-        {"unicode", "日本語テスト"},
-        {"binary", string([]byte{0x00, 0xFF, 0xFE})},
-    }
-    for _, tc := range cases {
-        t.Run(tc.name, func(t *testing.T) {
-            kp := mustBuildLocalAESProvider(t)
-            h, _ := kp.Current(ctx)
-            ct, nonce, edk, _ := h.Encrypt(ctx, []byte(tc.plaintext), nil)
-            pt, _ := h.Decrypt(ctx, ct, nonce, edk, nil)
-            assert.Equal(t, normBytes(tc.plaintext), normBytes(string(pt)))
-        })
-    }
+// cmd/corebundle/per_cell_adapter_test.go  (已有示例，新 cell 照此模式)
+func TestLoadPGConfig_InvalidMaxConns_FailsFast(t *testing.T) {
+	t.Setenv("GOCELL_FOOCORE_DATABASE_URL", "postgres://x/db")
+	t.Setenv("GOCELL_FOOCORE_DATABASE_MAX_CONNS", "not-a-number")
+	t.Setenv("GOCELL_FOOCORE_DATABASE_IDLE_TIMEOUT", "")
+	t.Setenv("GOCELL_FOOCORE_DATABASE_MAX_LIFETIME", "")
+
+	_, err := LoadPGConfig("FOOCORE")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MAX_CONNS")
 }
 ```
 
-Test the repository boundary using the `fakeDB` pattern (implemented in
-`config_repo_test.go`):
+### 5b. 集成测试（真 PG 连接）
 
-```go
-// Inject a pre-built transformer alongside a fakeDB — no pgxpool.Pool needed.
-m := newEncryptedRepoFromDBTX(fakeDB, transformer)
-err := m.Create(ctx, &domain.ConfigEntry{Key: "k", Value: "v", Sensitive: true})
-```
-
-AAD mismatch and wrong-key tests must be present and marked fail-closed:
-```go
-_, err = h.Decrypt(ctx, ct, nonce, edk, []byte("wrong-aad"))
-require.Error(t, err, "AAD mismatch must fail-closed")
-```
-
-### Layer 2 — testcontainers (real PG schema)
-
-Integration tests in `cells/configcore/internal/adapters/postgres/*_test.go`
-use `testcontainers-go` to spin up a real PostgreSQL instance and run
-migrations 001–010 before the test suite. These tests exercise the full
-repository path including cipher columns.
+Build tag `integration`，走 `BuildApp` 路径（不要直接调 `buildFooCoreOpts`）：
 
 ```go
 //go:build integration
 
-func TestConfigRepository_Encrypt_Decrypt_IntegrationRoundTrip(t *testing.T) {
-    pool := startTestPG(t) // testcontainers helper
-    kp, _ := crypto.NewLocalAESKeyProviderFromKeys(validKey, "")
-    tr := crypto.NewValueTransformer(kp)
-    session := cellpg.NewSession(pool)
-    repo := cellpg.NewConfigRepository(session, tr)
+// cmd/corebundle/main_integration_test.go  (新 cell 加独立 Test* 函数)
+func TestBuildFooCoreOpts_Postgres_SchemaMatched(t *testing.T) {
+	dsn, cleanup := setupPostgresForMain(t)  // testcontainers helper
+	defer cleanup()
 
-    entry := &domain.ConfigEntry{Key: "sec.key", Value: "secret", Sensitive: true}
-    // ... Create, GetByKey, assert decrypted value matches
+	ctx := context.Background()
+
+	// 预先跑 migration
+	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
+	require.NoError(t, err)
+	migrator, err := adapterpg.NewMigrator(pool, foocore.MigrationsFS(), "schema_migrations")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+	_ = pool.Close(ctx)
+
+	t.Setenv("GOCELL_JWT_ISSUER", "test-issuer")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "test-audience")
+	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
+	t.Setenv("GOCELL_FOOCORE_DATABASE_URL", dsn)
+
+	shared, err := LoadSharedDepsFromEnv(ctx)
+	require.NoError(t, err)
+
+	cells, opts, err := BuildApp(ctx, shared, FooCoreModule{})
+	require.NoError(t, err)
+	require.Len(t, cells, 1)
+	assert.NotEmpty(t, opts)
 }
 ```
 
-Run with: `go test -tags=integration -timeout=120s ./cells/configcore/...`
+运行：`go test -tags=integration -timeout=120s ./cmd/corebundle/...`
 
-### Layer 3 — e2e compose (full assembly)
+---
 
-E2E tests in `tests/e2e/config_pilot_e2e_test.go` validate the full HTTP API
-with a running corebundle, PostgreSQL, and optionally Vault:
+## Chapter 6 — 陷阱
 
-```go
-//go:build e2e
+| 陷阱 | 后果 | 正确做法 |
+|---|---|---|
+| `cell.yaml` 的 `id` 含 dash（如 `foo-core`） | `gocell validate --strict` 挂起，FMT-C1 违规 | 用 no-dash 格式：`foocore` |
+| `Provide` 不返回 `provisional` | 后续模块失败时 PG pool 泄漏 | 参见 Chapter 4，`provisional` 必须含所有已打开资源 |
+| `LoadPGConfig` 收到坏值 | 运维 typo 导致进程静默启动但连接异常 | fail-fast 已内置；不需要额外检查 |
+| memory 模式下 `pgCfg.DSN` 为空 | 无问题——`buildFooCoreOpts` 走 memory 分支，不会调 `NewPool` | 确保 `StorageBackend` 判断在 `NewPool` 调用之前 |
+| postgres 模式未配置 `KEY_PROVIDER` | 启动失败（不是警告） | 必须设 `GOCELL_<CELLID>_KEY_PROVIDER=local-aes`（dev/CI）或 `vault-transit`（生产） |
+| 在 `SharedDeps` 外自行读取 `GOCELL_ADAPTER_MODE` | 产生 topology 不一致 | 只读 `shared.Topology`；禁止在 CellModule 内调用 `os.Getenv("GOCELL_ADAPTER_MODE")` |
 
-func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
-    waitForReady(t, 30*time.Second)
-    token := e2eAdminToken()
-    // POST sensitive entry, GET back — assert value is redacted.
-}
-```
+---
 
-Required environment:
-```
-GOCELL_CELL_ADAPTER_MODE=postgres
-GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes
-GOCELL_CONFIGCORE_MASTER_KEY=<64-char hex>
-GOCELL_CONFIGCORE_DATABASE_URL=postgres://...
-E2E_ADMIN_TOKEN=<jwt>
-```
+## Chapter 7 — 迁移记录
 
-Run with: `go test -tags=e2e -timeout=120s ./tests/e2e/...`
+本文档在 T6（2026-04-24，PR-A3）被彻底重写。旧版所教的 API 已全部删除：
 
-### Coverage thresholds
+| 已删除的符号 | 替代 |
+|---|---|
+| `AppDepsFromEnv` | `LoadSharedDepsFromEnv` + 各 `CellModule.Provide` |
+| `BuildBootstrap` | `BuildApp` + `buildAssembly` + `bootstrap.New(opts...).Run` |
+| `AppDeps` struct | `SharedDeps`（cross-cutting）+ per-cell Module 私有字段 |
+| `AppDeps.PGResource` | `CellModule.Provide` 返回的 `[]ManagedResource` |
+| `configCellOpts` 字段 | `ConfigCoreModule.Provide` 返回的 `[]bootstrap.Option` |
 
-| Layer | Package | Minimum |
-|-------|---------|---------|
-| Unit | `runtime/crypto/` | ≥ 90% |
-| Unit | `cells/configcore/internal/adapters/postgres/` | ≥ 80% |
-| Integration | cipher columns round-trip | required (no skip) |
-| E2E | all `t.Skip` stubs | acceptable — activated by compose environment |
-
-### Anti-patterns to avoid
-
-- Using `NoopTransformer` in integration tests that claim to test encryption.
-- Asserting that `entry.Value == ""` as proof of encryption — the plaintext
-  field is cleared on write but the integration test must verify the value can
-  be decrypted back, not just that it was zeroed.
-- Testing key rotation without asserting that the old ciphertext is still
-  decryptable after rotation (historical key access is a correctness invariant).
-- Skipping AAD mismatch tests — they must fail-closed; a passing test here
-  is a security regression.
+不要参考任何 git history 中旧版本的这些符号。按旧版模板接 PG cell 会导致
+编译错误（这些符号已从代码库删除）。

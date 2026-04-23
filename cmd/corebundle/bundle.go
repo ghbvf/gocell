@@ -124,6 +124,11 @@ func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prev
 		if err := rejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY", []byte(strings.ToLower(masterKey))); err != nil {
 			return nil, err
 		}
+		if prevMasterKey != "" {
+			if err := rejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", []byte(strings.ToLower(prevMasterKey))); err != nil {
+				return nil, err
+			}
+		}
 		kp, err := crypto.NewLocalAESKeyProviderFromKeys(masterKey, prevMasterKey)
 		if err != nil {
 			return nil, fmt.Errorf("local-aes key provider: %w", err)

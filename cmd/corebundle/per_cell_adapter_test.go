@@ -19,7 +19,8 @@ func TestLoadPGConfig_AllEmpty_ReturnsZeroDSN(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT", "")
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME", "")
 
-	cfg := LoadPGConfig("CONFIGCORE")
+	cfg, err := LoadPGConfig("CONFIGCORE")
+	require.NoError(t, err)
 	assert.Equal(t, "", cfg.DSN, "empty env must produce empty DSN")
 	// MaxConns/IdleTimeout/MaxLifetime are zero here; applyDefaults fills them at NewPool time.
 	assert.EqualValues(t, 0, cfg.MaxConns)
@@ -33,7 +34,8 @@ func TestLoadPGConfig_OnlyDSN_CorrectlyRead(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT", "")
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME", "")
 
-	cfg := LoadPGConfig("CONFIGCORE")
+	cfg, err := LoadPGConfig("CONFIGCORE")
+	require.NoError(t, err)
 	assert.Equal(t, "postgres://cfg:pass@localhost/db", cfg.DSN)
 }
 
@@ -43,36 +45,62 @@ func TestLoadPGConfig_AllFields_ParsedCorrectly(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT", "2m")
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME", "30m")
 
-	cfg := LoadPGConfig("CONFIGCORE")
+	cfg, err := LoadPGConfig("CONFIGCORE")
+	require.NoError(t, err)
 	assert.Equal(t, "postgres://cfg:x@host/db", cfg.DSN)
 	assert.EqualValues(t, 20, cfg.MaxConns)
 	assert.Equal(t, 2*time.Minute, cfg.IdleTimeout)
 	assert.Equal(t, 30*time.Minute, cfg.MaxLifetime)
 }
 
-// TestLoadPGConfig_InvalidDuration_SilentlyIgnored verifies that invalid
-// int/duration env values are silently ignored (field left at zero;
-// NewPool fills default via applyDefaults).
-func TestLoadPGConfig_InvalidDuration_SilentlyIgnored(t *testing.T) {
+// TestLoadPGConfig_InvalidDuration_FailsFast verifies that an invalid duration
+// value causes LoadPGConfig to return an error containing the env var name.
+func TestLoadPGConfig_InvalidDuration_FailsFast(t *testing.T) {
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_URL", "postgres://x/db")
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_CONNS", "")
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT", "bad-duration")
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME", "")
+
+	_, err := LoadPGConfig("CONFIGCORE")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "IDLE_TIMEOUT")
+}
+
+// TestLoadPGConfig_InvalidMaxConns_FailsFast verifies that a non-numeric
+// MAX_CONNS value causes LoadPGConfig to return an error containing the env var name.
+func TestLoadPGConfig_InvalidMaxConns_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_URL", "postgres://x/db")
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_CONNS", "not-a-number")
-	t.Setenv("GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT", "bad-duration")
-	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME", "bad-duration")
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT", "")
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME", "")
 
-	cfg := LoadPGConfig("CONFIGCORE")
-	assert.Equal(t, "postgres://x/db", cfg.DSN)
-	// Invalid int/duration: silently ignored (field left at zero; NewPool fills default via applyDefaults).
-	assert.EqualValues(t, 0, cfg.MaxConns)
-	assert.Equal(t, time.Duration(0), cfg.IdleTimeout)
-	assert.Equal(t, time.Duration(0), cfg.MaxLifetime)
+	_, err := LoadPGConfig("CONFIGCORE")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MAX_CONNS")
+}
+
+// TestLoadPGConfig_ZeroMaxConns_FailsFast verifies that MAX_CONNS=0 is rejected
+// (pgx treats 0 as unlimited, which is unintended and hides misconfiguration).
+func TestLoadPGConfig_ZeroMaxConns_FailsFast(t *testing.T) {
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_URL", "postgres://x/db")
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_CONNS", "0")
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT", "")
+	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_LIFETIME", "")
+
+	_, err := LoadPGConfig("CONFIGCORE")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MAX_CONNS")
+	assert.Contains(t, err.Error(), "must be > 0")
 }
 
 func TestLoadPGConfig_CrossCellIsolation(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_URL", "postgres://cfg/db")
 	t.Setenv("GOCELL_ACCESSCORE_DATABASE_URL", "")
 
-	cfgCore := LoadPGConfig("CONFIGCORE")
-	accessCore := LoadPGConfig("ACCESSCORE")
+	cfgCore, err := LoadPGConfig("CONFIGCORE")
+	require.NoError(t, err)
+	accessCore, err := LoadPGConfig("ACCESSCORE")
+	require.NoError(t, err)
 
 	assert.Equal(t, "postgres://cfg/db", cfgCore.DSN)
 	assert.Equal(t, "", accessCore.DSN, "ACCESSCORE prefix must not pick up CONFIGCORE env")

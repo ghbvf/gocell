@@ -136,6 +136,35 @@ func TestBuildKeyProvider_LocalAES_DemoKey_MixedCase_RealMode_Rejected(t *testin
 	assert.Contains(t, err.Error(), "well-known demo key")
 }
 
+// TestBuildKeyProvider_PrevMasterKeyDemo_FailsFast verifies that a well-known
+// demo key used as prevMasterKey is rejected in real adapter mode. Previously
+// only the primary masterKey was checked, leaving the rotation key as an
+// active decryption path without demo-key validation (F2 fix).
+func TestBuildKeyProvider_PrevMasterKeyDemo_FailsFast(t *testing.T) {
+	kp, err := buildKeyProvider("postgres", "real", "local-aes", validMasterKeyHex, demoMasterKeyHex)
+	require.Error(t, err, "real mode must reject demo prevMasterKey")
+	assert.Nil(t, kp)
+	assert.Contains(t, err.Error(), "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS",
+		"error must name the env var so operators can identify which key to rotate")
+	assert.Contains(t, err.Error(), "well-known demo key")
+}
+
+// TestBuildKeyProvider_PrevMasterKeyDemo_DevMode_Allowed verifies that a demo
+// prevMasterKey is accepted in non-real adapter modes (dev/CI).
+func TestBuildKeyProvider_PrevMasterKeyDemo_DevMode_Allowed(t *testing.T) {
+	kp, err := buildKeyProvider("postgres", "dev", "local-aes", validMasterKeyHex, demoMasterKeyHex)
+	require.NoError(t, err)
+	require.NotNil(t, kp)
+}
+
+// TestBuildKeyProvider_PrevMasterKeyEmpty_RealMode_OK verifies that an empty
+// prevMasterKey is accepted in real mode (key rotation not configured).
+func TestBuildKeyProvider_PrevMasterKeyEmpty_RealMode_OK(t *testing.T) {
+	kp, err := buildKeyProvider("postgres", "real", "local-aes", validMasterKeyHex, "")
+	require.NoError(t, err)
+	require.NotNil(t, kp)
+}
+
 // TestKeyProviderToTransformer_NilReturnsNoop verifies that a nil provider
 // falls through to NoopTransformer (used for memory-mode tests that do not
 // encrypt).

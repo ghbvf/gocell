@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -27,7 +28,18 @@ type CellModule interface {
 	// ID returns a stable identifier used in error messages.
 	ID() string
 	// Provide resolves Cell-specific dependencies from the shared context and
-	// returns the constructed cell.Cell plus any bootstrap.Options it requires
-	// (e.g. WithManagedResource for a PGResource).
-	Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error)
+	// returns the constructed cell.Cell, any bootstrap.Options it requires
+	// (e.g. WithManagedResource for a PGResource), and the provisional
+	// resources that must be closed if a subsequent module's Provide fails
+	// before bootstrap.Run activates the lifecycle. The caller (BuildApp)
+	// owns rollback: on any failure it calls Close(ctx) in reverse order on
+	// the accumulated provisional resources. Modules MUST include in the
+	// returned resources every external connection opened during Provide
+	// (PG pool, vault client, etc.) so BuildApp can release them when the
+	// assembly cannot complete.
+	//
+	// Note: the same resources must still be included in the returned
+	// bootstrap.Options via bootstrap.WithManagedResource so that
+	// bootstrap.Run manages their lifecycle on the happy path.
+	Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error)
 }

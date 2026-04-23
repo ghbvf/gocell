@@ -8,6 +8,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"strconv"
 	"time"
@@ -23,14 +24,14 @@ import (
 //	GOCELL_<CELLID>_DATABASE_IDLE_TIMEOUT
 //	GOCELL_<CELLID>_DATABASE_MAX_LIFETIME
 //
-// Invalid int/duration values are silently ignored (field left at zero).
-// Zero-valued numeric fields are filled by adapterpg.Config.applyDefaults when
-// adapterpg.NewPool is called. DSN may be empty; callers must validate it
-// before calling NewPool in postgres mode.
+// Invalid int/duration values and non-positive MAX_CONNS return an error; the
+// message includes the env var name and the actual value so operators can
+// diagnose misconfiguration at startup. DSN may be empty; callers must
+// validate it before calling NewPool in postgres mode.
 //
 // ref: Kratos config/env prefix-strip convention.
 // ref: uber-go/fx fx.Module + fx.Private — module-private configuration.
-func LoadPGConfig(cellEnvPrefix string) adapterpg.Config {
+func LoadPGConfig(cellEnvPrefix string) (adapterpg.Config, error) {
 	prefix := "GOCELL_" + cellEnvPrefix + "_DATABASE_"
 
 	cfg := adapterpg.Config{
@@ -38,23 +39,31 @@ func LoadPGConfig(cellEnvPrefix string) adapterpg.Config {
 	}
 
 	if v := os.Getenv(prefix + "MAX_CONNS"); v != "" {
-		// n > 0: guards against passing zero to pgx which treats MaxConns=0 as unlimited.
-		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
-			cfg.MaxConns = int32(n)
+		n, err := strconv.ParseInt(v, 10, 32)
+		if err != nil {
+			return adapterpg.Config{}, fmt.Errorf("LoadPGConfig(%s): invalid %sMAX_CONNS %q: %w", cellEnvPrefix, prefix, v, err)
 		}
+		if n <= 0 {
+			return adapterpg.Config{}, fmt.Errorf("LoadPGConfig(%s): %sMAX_CONNS must be > 0, got %d (pgx treats 0 as unlimited)", cellEnvPrefix, prefix, n)
+		}
+		cfg.MaxConns = int32(n)
 	}
 	if v := os.Getenv(prefix + "IDLE_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.IdleTimeout = d
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return adapterpg.Config{}, fmt.Errorf("LoadPGConfig(%s): invalid %sIDLE_TIMEOUT %q: %w", cellEnvPrefix, prefix, v, err)
 		}
+		cfg.IdleTimeout = d
 	}
 	if v := os.Getenv(prefix + "MAX_LIFETIME"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.MaxLifetime = d
+		d, err := time.ParseDuration(v)
+		if err != nil {
+			return adapterpg.Config{}, fmt.Errorf("LoadPGConfig(%s): invalid %sMAX_LIFETIME %q: %w", cellEnvPrefix, prefix, v, err)
 		}
+		cfg.MaxLifetime = d
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 // LoadCursorKeys reads the cursor HMAC primary and previous keys for a cell.

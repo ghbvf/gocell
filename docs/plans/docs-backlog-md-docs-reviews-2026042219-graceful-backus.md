@@ -27,7 +27,7 @@
 
 ---
 
-## PR#211–#222 核销对照（含 backlog 状态同步提示）
+## PR#211–#227 核销对照（含 backlog 状态同步提示）
 
 | PR | Commit | 关闭 backlog | 状态 | 残留 |
 |---|---|---|---|---|
@@ -42,8 +42,14 @@
 | #220 | a74c487 | **P2-12** NAMING + 新增 FMT-16/C1/A1 治理规则 | verification 已标 ✅ | **PR#220 遗留报告 6 项**，见下 |
 | #221 | f7f5a6e | **P1-8** FEAT-1 DEVICE-LIST-API 主体 | backlog.md 已登记 | rbaccheck 伪分页残余 |
 | #222 | f32d54d | **A1 P0-2** PKG-CTXKEYS-LAYER | verification 已标 ✅ | — |
+| #223 | f9d10b0 | examples cells 目录迁移 | — | — |
+| #224 | 8db2f84 | outbox emitter 重构 + demo tx defaults | — | — |
+| #227 | (合并中) | **PR-A3**: V-A8 CMD-THICK-ENTRY-REDUCE + T6 GOCELL-PER-CELL-ADAPTER + 六席位 review 追加修复（F1-F5，含吸收 PR-A28 pg-cell-template 重写） | 本轮需同步登记 ✅ | PR-A28 残余仅 `config-core-encryption-appendix` 可选；Vault env 命名 namespace 交 PR-A8/A18 |
 
-**Action：** backlog.md 需把 L10 从开放状态改为已关闭（核销 PR#218）。
+**Action：**
+- backlog.md 需把 L10 从开放状态改为已关闭（核销 PR#218）
+- backlog.md 的 P1 `A8 verif. CMD-THICK-ENTRY-REDUCE-01` 可核销（PR #227 完成）
+- 新增"PR-A3 review 追加修复"记录（F1 BuildApp cleanup / F2 prev master key demo-guard / F3 pg-cell-template rewrite / F4 LoadPGConfig fail-fast / F5 BuildApp env integration test）— 均已在 PR #227 fixed，不另登记 backlog。详见 `docs/plans/202604232330-025-architecture-pr-implementation-plan.md` §PR-A3。
 
 ---
 

@@ -6,6 +6,7 @@ import (
 
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -21,11 +22,11 @@ func (AuditCoreModule) ID() string { return "auditcore" }
 
 // Provide resolves all auditcore-specific dependencies and returns the
 // constructed cell. Audit-core is in-memory only, so no bootstrap.Options
-// are needed.
+// or provisional resources are needed.
 //
 // Reads GOCELL_AUDITCORE_HMAC_KEY, GOCELL_AUDITCORE_CURSOR_KEY, and
 // GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY from the environment.
-func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
+func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// Cursor codec for auditcore: read env via LoadCursorKeys then build.
 	auditPrimary, auditPrevious := LoadCursorKeys("AUDITCORE")
 	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
@@ -33,16 +34,16 @@ func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell
 		auditPrimary, auditPrevious,
 		"corebundle-audit-cursor-key-32b!", "audit")
 	if err != nil {
-		return nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
+		return nil, nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
 	}
 
 	// HMAC key for audit hash chain.
 	hmacKeyStr, err := loadSecret("GOCELL_AUDITCORE_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!", shared.Topology.AdapterMode)
 	if err != nil {
-		return nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
+		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
 	}
 	if err := rejectDemoKey(shared.Topology.AdapterMode, "GOCELL_AUDITCORE_HMAC_KEY", hmacKeyStr); err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 
 	c := auditcore.NewAuditCore(
@@ -51,7 +52,7 @@ func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell
 		auditcore.WithHMACKey(hmacKeyStr),
 		auditcore.WithCursorCodec(cursorCodec),
 	)
-	return c, nil, nil
+	return c, nil, nil, nil
 }
 
 var _ CellModule = AuditCoreModule{}
