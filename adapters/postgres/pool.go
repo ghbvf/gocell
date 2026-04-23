@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"os"
-	"strconv"
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
@@ -26,53 +24,24 @@ const (
 )
 
 // Config holds PostgreSQL connection pool settings.
-// Fields are populated from an explicit struct literal or from environment
-// variables via ConfigFromEnv.
+// All fields must be set explicitly by the caller; there is no global env-reading
+// constructor.
 type Config struct {
 	// DSN is the PostgreSQL connection string (e.g.
 	// "postgres://user:pass@localhost:5432/dbname?sslmode=disable").
-	// When empty, ConfigFromEnv reads GOCELL_PG_DSN.
 	DSN string
 
 	// MaxConns is the maximum number of connections in the pool.
-	// Default: 10. Env: GOCELL_PG_MAX_CONNS.
+	// Default (applied by applyDefaults): 10.
 	MaxConns int32
 
 	// IdleTimeout is how long an idle connection may remain in the pool.
-	// Default: 5m. Env: GOCELL_PG_IDLE_TIMEOUT (duration string).
+	// Default (applied by applyDefaults): 5m.
 	IdleTimeout time.Duration
 
 	// MaxLifetime is the maximum lifetime of a connection.
-	// Default: 1h. Env: GOCELL_PG_MAX_LIFETIME (duration string).
+	// Default (applied by applyDefaults): 1h.
 	MaxLifetime time.Duration
-}
-
-// ConfigFromEnv builds a Config from environment variables.
-// Missing or unparseable values fall back to defaults.
-func ConfigFromEnv() Config {
-	cfg := Config{
-		DSN:         os.Getenv("GOCELL_PG_DSN"),
-		MaxConns:    defaultMaxConns,
-		IdleTimeout: defaultIdleTimeout,
-		MaxLifetime: defaultMaxLifetime,
-	}
-
-	if v := os.Getenv("GOCELL_PG_MAX_CONNS"); v != "" {
-		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
-			cfg.MaxConns = int32(n)
-		}
-	}
-	if v := os.Getenv("GOCELL_PG_IDLE_TIMEOUT"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.IdleTimeout = d
-		}
-	}
-	if v := os.Getenv("GOCELL_PG_MAX_LIFETIME"); v != "" {
-		if d, err := time.ParseDuration(v); err == nil {
-			cfg.MaxLifetime = d
-		}
-	}
-	return cfg
 }
 
 // applyDefaults fills zero-valued fields with default values.

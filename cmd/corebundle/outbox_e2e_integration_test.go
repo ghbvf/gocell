@@ -111,10 +111,10 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	eb := eventbus.New()
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
-	t.Setenv("GOCELL_PG_DSN", pgConnStr)
 
 	pgRes, cellAdapterOpts, err := buildConfigCoreOpts(ctx,
 		bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		adapterpg.Config{DSN: pgConnStr},
 		eb, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	require.NotNil(t, pgRes,

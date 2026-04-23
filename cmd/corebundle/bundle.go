@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
@@ -90,25 +89,26 @@ func defaultRuntimeOptions(
 	return opts
 }
 
-// buildKeyProvider constructs the KeyProvider from the given providerName
-// (pre-read from GOCELL_KEY_PROVIDER by the caller). Supported values:
-// "local-aes", "vault-transit".
+// buildKeyProvider constructs the KeyProvider from the supplied providerName,
+// masterKey, and prevMasterKey (all pre-read from per-cell env by the caller).
+//
+// Supported providerName values: "local-aes", "vault-transit".
 // In memory mode (empty providerName) nil is returned (no encryption;
 // NoopTransformer via keyProviderToTransformer).
 // In postgres mode (empty providerName) the function fails-fast: sensitive-value
 // encryption is a production security invariant; silently wiring NoopTransformer
 // would defeat the stated threat model (see docs/architecture/202604191800-adr-config-value-encryption.md).
-// Operators must explicitly opt in via GOCELL_KEY_PROVIDER=local-aes (dev/CI only) or
-// vault-transit (production).
+// Operators must explicitly opt in via GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes
+// (dev/CI only) or vault-transit (production).
 //
 // ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
 // EncryptionConfig in an active storage path is a startup error, not a warning.
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.
-func buildKeyProvider(storageBackend, adapterMode, providerName string) (kcrypto.KeyProvider, error) {
+func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prevMasterKey string) (kcrypto.KeyProvider, error) {
 	if providerName == "" {
 		if storageBackend == "postgres" {
 			return nil, errcode.New(errcode.ErrConfigKeyMissing,
-				"configcore: GOCELL_KEY_PROVIDER must be set when StorageBackend=postgres "+
+				"configcore: GOCELL_CONFIGCORE_KEY_PROVIDER must be set when StorageBackend=postgres "+
 					"(known values: \"local-aes\" for dev/CI, \"vault-transit\" for production). "+
 					"Silent NoopTransformer fallback is disabled because it would persist "+
 					"sensitive values unencrypted.")
@@ -117,15 +117,19 @@ func buildKeyProvider(storageBackend, adapterMode, providerName string) (kcrypto
 	}
 	switch providerName {
 	case "local-aes":
-		masterKeyRaw := os.Getenv("GOCELL_MASTER_KEY")
 		// Normalize hex to lowercase before demo-key check: hex.DecodeString is
 		// case-insensitive, so "0123ABCD..." and "0123abcd..." produce identical
 		// key material. Comparing at string level without normalization would let
 		// an uppercase variant of a known demo key slip through.
-		if err := rejectDemoKey(adapterMode, "GOCELL_MASTER_KEY", []byte(strings.ToLower(masterKeyRaw))); err != nil {
+		if err := rejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY", []byte(strings.ToLower(masterKey))); err != nil {
 			return nil, err
 		}
-		kp, err := crypto.NewLocalAESKeyProviderFromEnv()
+		if prevMasterKey != "" {
+			if err := rejectDemoKey(adapterMode, "GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS", []byte(strings.ToLower(prevMasterKey))); err != nil {
+				return nil, err
+			}
+		}
+		kp, err := crypto.NewLocalAESKeyProviderFromKeys(masterKey, prevMasterKey)
 		if err != nil {
 			return nil, fmt.Errorf("local-aes key provider: %w", err)
 		}
@@ -140,7 +144,7 @@ func buildKeyProvider(storageBackend, adapterMode, providerName string) (kcrypto
 		return kp, nil
 	default:
 		return nil, errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("unknown GOCELL_KEY_PROVIDER %q; known values: \"local-aes\", \"vault-transit\"", providerName))
+			fmt.Sprintf("unknown GOCELL_CONFIGCORE_KEY_PROVIDER %q; known values: \"local-aes\", \"vault-transit\"", providerName))
 	}
 }
 
@@ -157,23 +161,29 @@ func keyProviderToTransformer(kp kcrypto.KeyProvider) kcrypto.ValueTransformer {
 // the already-resolved Topology. Returns a ManagedResource (non-nil iff
 // postgres mode) and cell options to pass to configcore.NewConfigCore.
 //
+// pgCfg must be built by the caller (via LoadPGConfig) and passed explicitly;
+// buildConfigCoreOpts no longer reads environment variables directly.
+// In postgres mode, pgCfg.DSN must be non-empty; an empty DSN causes a
+// fail-fast error with a message naming GOCELL_CONFIGCORE_DATABASE_URL.
+//
 // Signature reduced from 5 return values (mode, opts, pool, relay, err) to
 // 3 (ManagedResource, opts, err). pool + relay lifecycle are now owned by
 // *adapterpg.PGResource which satisfies lifecycle.ManagedResource (kernel/lifecycle).
 //
-// Topology is consumed as a parameter rather than re-read from the environment:
 // ref: go-zero core/conf/config.go — validate once, pass through; never
 // re-read config downstream of the validation boundary.
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/server.go CompletedOptions
 // — sealed type threaded through Run ensures downstream receives a validated
 // object, not raw env.
-//
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
 // ref: uber-go/fx lifecycle — external resources hook via ManagedResource.
-func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pub outbox.Publisher, metricsProvider metrics.Provider, vt kcrypto.ValueTransformer) (kernellifecycle.ManagedResource, []configcore.Option, error) {
+func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg adapterpg.Config, pub outbox.Publisher, metricsProvider metrics.Provider, vt kcrypto.ValueTransformer) (kernellifecycle.ManagedResource, []configcore.Option, error) {
 	switch topo.StorageBackend {
 	case "postgres":
-		pool, err := adapterpg.NewPool(ctx, adapterpg.ConfigFromEnv())
+		if pgCfg.DSN == "" {
+			return nil, nil, fmt.Errorf("configcore postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
+		}
+		pool, err := adapterpg.NewPool(ctx, pgCfg)
 		if err != nil {
 			return nil, nil, fmt.Errorf("configcore PG pool: %w", err)
 		}

@@ -1,0 +1,80 @@
+// metrics.go: Prometheus 指标栈构建与 /metrics handler 守卫。
+package main
+
+import (
+	"crypto/subtle"
+	"fmt"
+	"log/slog"
+	"net/http"
+
+	adapterprom "github.com/ghbvf/gocell/adapters/prometheus"
+	prom "github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+)
+
+// metricsTokenHeader names the request header used to authenticate
+// /metrics scrapers when a token is configured. Mirrors the X-Readyz-Token
+// convention for /readyz?verbose — keeping the same shape for all
+// control-plane endpoints lets operators standardise scraper config.
+const metricsTokenHeader = "X-Metrics-Token"
+
+// withMetricsTokenGuard wraps h so requests without a matching
+// X-Metrics-Token header are rejected with 401 Unauthorized. Uses
+// crypto/subtle.ConstantTimeCompare to avoid timing side channels on
+// token comparison.
+func withMetricsTokenGuard(token string, h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if subtle.ConstantTimeCompare([]byte(r.Header.Get(metricsTokenHeader)), []byte(token)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
+// promStack groups the Prometheus hook observer and metric provider.
+type promStack struct {
+	registry       *prom.Registry
+	hookObserver   *adapterprom.HookObserver
+	metricProvider *adapterprom.MetricProvider
+}
+
+// buildPromStack creates an isolated Prometheus registry, a hook observer,
+// and a metric provider on top of it.
+func buildPromStack() (promStack, error) {
+	registry := prom.NewRegistry()
+	hookObserver, err := adapterprom.NewHookObserver(adapterprom.HookObserverConfig{
+		Registry: registry,
+	})
+	if err != nil {
+		return promStack{}, fmt.Errorf("register cell hook observer: %w", err)
+	}
+	metricProvider, err := adapterprom.NewMetricProvider(adapterprom.MetricProviderConfig{
+		Registry:  registry,
+		Namespace: "gocell",
+	})
+	if err != nil {
+		return promStack{}, fmt.Errorf("build metrics provider: %w", err)
+	}
+	return promStack{
+		registry:       registry,
+		hookObserver:   hookObserver,
+		metricProvider: metricProvider,
+	}, nil
+}
+
+// buildMetricsHandler constructs the /metrics HTTP handler. When metricsToken
+// is set the handler is wrapped with a constant-time token guard; otherwise a
+// warning is emitted and the handler is unauthenticated. The production-mode
+// "token required" fail-fast is enforced centrally by SharedDeps.Validate so
+// this helper only concerns itself with handler construction.
+//
+// ref: Kubernetes metrics/rbac — control-plane endpoints must be guarded.
+func buildMetricsHandler(metricsToken string, registry *prom.Registry) (http.Handler, error) {
+	h := http.Handler(promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))
+	if metricsToken != "" {
+		return withMetricsTokenGuard(metricsToken, h), nil
+	}
+	slog.Warn("GOCELL_METRICS_TOKEN not set; /metrics exposes cell lifecycle signals without authentication (dev mode only)")
+	return h, nil
+}

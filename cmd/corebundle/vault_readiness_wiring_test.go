@@ -75,7 +75,7 @@ var (
 
 // buildBootstrapWithFakeKeyProvider is the test harness for A19. It mirrors
 // buildBootstrapFromShared but injects ConfigCoreModule{KeyProviderOverride}
-// so the readiness wiring can be exercised without GOCELL_KEY_PROVIDER / Vault.
+// so the readiness wiring can be exercised without GOCELL_CONFIGCORE_KEY_PROVIDER / Vault.
 func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
 	t.Helper()
 	ctx := context.Background()

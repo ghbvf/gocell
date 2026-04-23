@@ -89,15 +89,26 @@
 
 ---
 
-### PR-A3 入口收口 + per-cell adapter（预计 4h）
+### PR-A3 入口收口 + per-cell adapter（实际 ~10h，PR #227，2026-04-24 合并）
 
 **主线**：
-- **V-A8 CMD-THICK-ENTRY-REDUCE-01**（P1-13 PARTIALLY）`cmd/corebundle/main.go` 继续缩减（2h）
+- **V-A8 CMD-THICK-ENTRY-REDUCE-01**（P1-13 PARTIALLY）`cmd/corebundle/main.go` 继续缩减（2h → 实际 main.go 423→95 行，5 个 helper 文件）
 - **T6 GOCELL-PER-CELL-ADAPTER-01** 全局 env 拆单 cell adapter 配置（2h，PR-X-PG-REPO-ACCESS 强制前置）
 
 **搭车理由**：同在 `cmd/corebundle/` 下，wiring 逻辑耦合。T6 完成后 main.go 体量自然进一步下降。
 
-**文件面**：`cmd/corebundle/`
+**六席位 review 追加修复（~4h）**：
+- **F1 BUILDAPP-CLEANUP-ON-FAILURE-01**（P1 correctness）`CellModule.Provide` 扩签名返回 `[]ManagedResource` 作为 provisional；`BuildApp` 任一模块失败时逆序 `Close(ctx)` 已产出资源，防启动失败泄漏 PG pool / vault client
+- **F2 PREV-MASTER-KEY-DEMO-GUARD-01**（P1 security）`buildKeyProvider` 对 `GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS` 补相同的 `rejectDemoKey` 检查（历史 key 仍是活跃 decrypt 路径）
+- **F3 DOC-PG-CELL-TEMPLATE-REWRITE-01**（P1 DX）原 PR-A28 工作，彻底重写 `docs/patterns/pg-cell-template.md` 为新模型（355 行），删除所有 `AppDepsFromEnv` / `BuildBootstrap` / `AppDeps.PGResource` / `configCellOpts` 旧 API 引用
+- **F4 LOADPGCONFIG-FAIL-FAST-01**（P2 ops）`LoadPGConfig` 返回 `(Config, error)`，坏 `MAX_CONNS` / `IDLE_TIMEOUT` / `MAX_LIFETIME` 值带 env 名 + 实际值 fail-fast
+- **F5 BUILDAPP-ENV-INTEGRATION-TEST-01**（P2 testing）新建 `cmd/corebundle/buildapp_env_integration_test.go` 走完整 `t.Setenv → LoadSharedDepsFromEnv → BuildApp → ConfigCoreModule.Provide` 路径（含 testcontainers PG）
+
+**文件面**：`cmd/corebundle/` + `adapters/postgres/pool.go` + `runtime/crypto/local_aes_provider.go` + `.env.example` + `docs/ops/env-vars.md` + `docs/patterns/pg-cell-template.md` + `docs/guides/integration-testing.md`
+
+**遗留开放项（不阻塞本 PR）**：
+- S4b VAULT-TOKEN-STATIC-REAL-GUARD-01 (real 模式接受静态 `VAULT_TOKEN` 路径) — 已在 backlog P1 安全章节，交 PR-A8 Vault auth 批量处理
+- Vault 相关 env 命名未按 per-cell 约定 namespace（本 PR T6 未动）—— 交 PR-A8 / PR-A18 Vault 专项
 
 **风险**：低；wiring 重排。
 
@@ -276,19 +287,16 @@
 
 ---
 
-### PR-A28 CONFIG-DOCS-REWRITE（🟡 发布前应做，~2-4h）
+### PR-A28 CONFIG-DOCS-REWRITE（🟢 主体已吸收进 PR-A3，~1-2h 残余）
 
-**主线**：
-- **DOC-PG-CELL-TEMPLATE-REWRITE-01** `docs/patterns/pg-cell-template.md` 重写：
-  - 删除旧 `AppDepsFromEnv` + `GOCELL_DATABASE_URL` 入口，改讲 `cmd/corebundle/BuildApp(opts...)` + per-cell adapter options
-  - 把加密/stale cipher/AAD/migration 010 forward-only 从通用模板剥离到 `docs/patterns/config-core-encryption-appendix.md`（新）
-  - 顶端加 deprecation 顶栏（若无法 1d 完成全量重写）
+**状态**：主体 `DOC-PG-CELL-TEMPLATE-REWRITE-01` 已在 PR-A3（PR #227，2026-04-24）彻底重写完成（`docs/patterns/pg-cell-template.md` 全量 rewrite 为 SharedDeps + CellModule + BuildApp + LoadPGConfig 新模型，355 行）。触发原因：PR-A3 T6 六席位 review 的 P1-3 findings（模板仍教已删除的 `AppDepsFromEnv` / `BuildBootstrap` 模型）。
 
-**降级方案**：若发布前工期紧，最低做法——顶部加"过时"警告 + 指向 `docs/guides/integration-testing.md` 入口（1h）
+**残余（可选，本 PR 未做）**：
+- **DOC-CONFIG-ENCRYPTION-APPENDIX-01** 把加密/stale cipher/AAD/migration 010 forward-only 从通用模板剥离到 `docs/patterns/config-core-encryption-appendix.md`（新）。当前 `pg-cell-template.md` 已精简为通用 PG cell 接入指南，不再混入 configcore 加密专项内容，但也没有专门附录可指。**低优先级**，观察到实际读者困惑再动。
 
 **搭车**：无
 
-**文件面**：`docs/patterns/pg-cell-template.md` + `docs/patterns/config-core-encryption-appendix.md`（新，可选）
+**文件面**：`docs/patterns/config-core-encryption-appendix.md`（新，可选）
 
 **风险**：低（纯文档）
 

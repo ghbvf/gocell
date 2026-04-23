@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"os"
 	"sync"
 
 	"github.com/ghbvf/gocell/pkg/aeadutil"
@@ -102,14 +101,13 @@ func (h *localAESHandle) Decrypt(_ context.Context, ciphertext, nonce, edk, aad 
 // LocalAESKeyProvider
 // ---------------------------------------------------------------------------
 
-// LocalAESKeyProvider implements KeyProvider using local AES-GCM-256 keys
-// loaded from environment variables. Suitable for dev/CI; not recommended for
-// production (use `adapters/vault.TransitKeyProvider` instead).
+// LocalAESKeyProvider implements KeyProvider using local AES-GCM-256 keys.
+// Suitable for dev/CI; not recommended for production
+// (use `adapters/vault.TransitKeyProvider` instead).
 //
-// Master KEK loading:
-//   - GOCELL_MASTER_KEY:          required in postgres mode (32B hex or base64).
-//   - GOCELL_MASTER_KEY_PREVIOUS: optional; enables decryption of values
-//     encrypted with the prior key version (supports rotation).
+// Keys are supplied by the caller as hex/base64-encoded 32-byte strings.
+// Use cmd/corebundle.LoadConfigCoreKeyProvider to read per-cell env variables
+// and pass the result to NewLocalAESKeyProviderFromKeys.
 //
 // ref: hashicorp/vault sdk/helper/keysutil/policy.go@main:L127 — keyring with
 // current + historical versions.
@@ -119,32 +117,22 @@ type LocalAESKeyProvider struct {
 	current string // ID of the active key
 }
 
-// NewLocalAESKeyProviderFromEnv constructs a LocalAESKeyProvider from the
-// standard environment variables GOCELL_MASTER_KEY and optionally
-// GOCELL_MASTER_KEY_PREVIOUS. Returns ErrConfigKeyMissing if the primary key
-// is absent.
-func NewLocalAESKeyProviderFromEnv() (*LocalAESKeyProvider, error) {
-	return NewLocalAESKeyProviderFromKeys(
-		os.Getenv("GOCELL_MASTER_KEY"),
-		os.Getenv("GOCELL_MASTER_KEY_PREVIOUS"),
-	)
-}
-
 // NewLocalAESKeyProviderFromKeys constructs a LocalAESKeyProvider from the
 // supplied hex/base64 encoded 32-byte keys. prevKey may be empty (no previous
 // key in keyring). Both keys must decode to exactly 32 bytes.
 //
-// This constructor is the canonical entry point for tests; production code
-// calls NewLocalAESKeyProviderFromEnv.
+// currentKey is the active master KEK (required; must be non-empty).
+// prevKey enables decryption of values encrypted with a prior key version
+// (supports rotation); may be empty for single-key mode.
 func NewLocalAESKeyProviderFromKeys(currentKey, prevKey string) (*LocalAESKeyProvider, error) {
 	if currentKey == "" {
 		return nil, errcode.New(errcode.ErrConfigKeyMissing,
-			"local-aes: GOCELL_MASTER_KEY is required for encryption (set a 32-byte hex/base64 key)")
+			"local-aes: master key is required for encryption (set a 32-byte hex/base64 key)")
 	}
 
 	curBytes, err := decodeKey(currentKey)
 	if err != nil {
-		return nil, fmt.Errorf("local-aes: parse GOCELL_MASTER_KEY: %w", err)
+		return nil, fmt.Errorf("local-aes: parse master key: %w", err)
 	}
 
 	p := &LocalAESKeyProvider{
@@ -156,7 +144,7 @@ func NewLocalAESKeyProviderFromKeys(currentKey, prevKey string) (*LocalAESKeyPro
 	if prevKey != "" {
 		prevBytes, err := decodeKey(prevKey)
 		if err != nil {
-			return nil, fmt.Errorf("local-aes: parse GOCELL_MASTER_KEY_PREVIOUS: %w", err)
+			return nil, fmt.Errorf("local-aes: parse previous master key: %w", err)
 		}
 		p.keyring[LocalAESPreviousKeyID] = &localAESHandle{id: LocalAESPreviousKeyID, kek: prevBytes}
 	}

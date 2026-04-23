@@ -56,7 +56,8 @@ func (f *fakeManagedResource) Close(_ context.Context) error {
 var _ kernellifecycle.ManagedResource = (*fakeManagedResource)(nil)
 
 // buildTestSharedDeps returns a minimal SharedDeps for memory topology tests.
-// It skips cursor codecs (optional in tests) and internalGuard (dev mode).
+// Cell-specific keys (cursor codecs, HMAC key) are now module-private and are
+// read from the environment by each CellModule.Provide at wiring time.
 func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	t.Helper()
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
@@ -76,16 +77,11 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	ps, err := buildPromStack()
 	require.NoError(t, err)
 
-	codecs, err := loadAllCursorCodecs("")
-	require.NoError(t, err)
-
 	return &SharedDeps{
-		Topology:     bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
-		JWTDeps:      jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:    ps,
-		CursorCodecs: codecs,
-		HMACKey:      []byte("test-hmac-key-32-bytes-long!!!!!"),
-		EventBus:     eb,
+		Topology:  bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
+		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack: ps,
+		EventBus:  eb,
 	}
 }
 
@@ -93,9 +89,10 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 // given topology. Test cases can mutate individual fields to assert that a
 // single missing field surfaces the expected error.
 //
-// Note: PGResource is no longer part of SharedDeps; it is built inside
-// ConfigCoreModule.Provide. The "prod baseline" topology is tested here
-// without PGResource — the prod storage gate is now in ConfigCoreModule.
+// Note: PGResource, cursor codecs, HMAC key, and KeyProvider are no longer
+// part of SharedDeps; they are built inside the respective CellModule.Provide.
+// The "prod baseline" topology is tested here without those fields — the cell
+// module gates are now in each module's Provide.
 func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	t.Helper()
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
@@ -110,16 +107,12 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 
 	ps, err := buildPromStack()
 	require.NoError(t, err)
-	codecs, err := loadAllCursorCodecs("")
-	require.NoError(t, err)
 
 	deps := &SharedDeps{
-		Topology:     topo,
-		JWTDeps:      jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:    ps,
-		CursorCodecs: codecs,
-		HMACKey:      []byte("test-hmac-key-32-bytes-long!!!!!"),
-		EventBus:     eventbus.New(),
+		Topology:  topo,
+		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack: ps,
+		EventBus:  eventbus.New(),
 	}
 	if topo.RequireProductionControlPlane() {
 		deps.MetricsToken = "test-metrics"
@@ -127,8 +120,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		deps.InternalGuard = func(h http.Handler) http.Handler { return h }
 	}
 	if topo.StorageBackend == "postgres" {
-		deps.KeyProviderName = "local-aes"
-		t.Setenv("GOCELL_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
+		t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
 	}
 	return deps
 }
@@ -224,9 +216,6 @@ func TestSharedDeps_Validate(t *testing.T) {
 		{name: "missing prom registry", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.registry = nil }, wantErr: true, wantSubstr: "PromStack.registry"},
 		{name: "missing prom hook observer", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.hookObserver = nil }, wantErr: true, wantSubstr: "PromStack.hookObserver"},
 		{name: "missing prom metric provider", topo: devTopo, mutate: func(d *SharedDeps) { d.PromStack.metricProvider = nil }, wantErr: true, wantSubstr: "PromStack.metricProvider"},
-		{name: "missing cursor codec audit", topo: devTopo, mutate: func(d *SharedDeps) { d.CursorCodecs.audit = nil }, wantErr: true, wantSubstr: "CursorCodecs.audit"},
-		{name: "missing cursor codec config", topo: devTopo, mutate: func(d *SharedDeps) { d.CursorCodecs.config = nil }, wantErr: true, wantSubstr: "CursorCodecs.config"},
-		{name: "missing HMAC key", topo: devTopo, mutate: func(d *SharedDeps) { d.HMACKey = nil }, wantErr: true, wantSubstr: "HMACKey"},
 		{name: "missing event bus", topo: devTopo, mutate: func(d *SharedDeps) { d.EventBus = nil }, wantErr: true, wantSubstr: "EventBus"},
 
 		{name: "prod missing verbose token", topo: prodTopo, mutate: func(d *SharedDeps) { d.VerboseToken = "" }, wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN"},

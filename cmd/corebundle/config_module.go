@@ -22,7 +22,7 @@ type ConfigCoreModule struct {
 	// non-nil. Production code leaves this unset; tests use it to inject a
 	// fake KeyProvider (e.g. one that also implements
 	// kernel/lifecycle.ManagedResource) and assert wiring behaviour without
-	// touching GOCELL_KEY_PROVIDER / GOCELL_MASTER_KEY / Vault.
+	// touching GOCELL_CONFIGCORE_KEY_PROVIDER / GOCELL_CONFIGCORE_MASTER_KEY / Vault.
 	KeyProviderOverride kcrypto.KeyProvider
 }
 
@@ -41,21 +41,40 @@ var configStaleCipherOpts = prom.CounterOpts{
 }
 
 // Provide resolves all configcore-specific dependencies and returns the
-// constructed cell and any bootstrap.Options (e.g. WithManagedResource).
-func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
+// constructed cell, any bootstrap.Options (e.g. WithManagedResource), and the
+// provisional resources that BuildApp must close if a subsequent module's
+// Provide fails. It reads configcore-specific environment variables directly
+// via the LoadPGConfig / LoadCursorKeys / LoadConfigCoreKeyProvider helpers.
+func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	// 1. Cursor codec: read configcore-namespaced env via LoadCursorKeys then build.
+	cfgPrimary, cfgPrevious := LoadCursorKeys("CONFIGCORE")
+	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
+		"GOCELL_CONFIGCORE_CURSOR_KEY", "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
+		cfgPrimary, cfgPrevious,
+		"corebundle-cfg-cursor-key--32bb!", "config")
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
+	}
+
+	// 2. KeyProvider: read configcore-namespaced env (or use test override).
 	kp := m.KeyProviderOverride
 	if kp == nil {
-		var err error
-		kp, err = buildKeyProvider(shared.Topology.StorageBackend, shared.Topology.AdapterMode, shared.KeyProviderName)
+		providerName, masterKey, prevMasterKey := LoadConfigCoreKeyProvider()
+		kp, err = buildKeyProvider(shared.Topology.StorageBackend, shared.Topology.AdapterMode, providerName, masterKey, prevMasterKey)
 		if err != nil {
-			return nil, nil, fmt.Errorf("configcore key provider: %w", err)
+			return nil, nil, nil, fmt.Errorf("configcore key provider: %w", err)
 		}
 	}
 	vt := keyProviderToTransformer(kp)
 
-	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, shared.Topology, shared.EventBus, shared.PromStack.metricProvider, vt)
+	// 3. PG pool: read configcore-namespaced env.
+	pgCfg, err := LoadPGConfig("CONFIGCORE")
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, fmt.Errorf("configcore pg config: %w", err)
+	}
+	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus, shared.PromStack.metricProvider, vt)
+	if err != nil {
+		return nil, nil, nil, err
 	}
 
 	// Register the stale-cipher counter against the isolated per-run registry.
@@ -65,12 +84,12 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	// can reuse it instead of creating an orphaned counter.
 	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
 	if err != nil {
-		return nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
+		return nil, nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
 	}
 
 	baseOpts := []configcore.Option{
 		configcore.WithPublisher(shared.EventBus),
-		configcore.WithCursorCodec(shared.CursorCodecs.config),
+		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithOnStaleCipherMetric(staleCipherCounter),
 	}
 	if vt != nil {
@@ -80,12 +99,14 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 
 	// A13: register vault token renewal counters when the KeyProvider exposes them.
 	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
-		return nil, nil, fmt.Errorf("configcore: register renewal metrics: %w", err)
+		return nil, nil, nil, fmt.Errorf("configcore: register renewal metrics: %w", err)
 	}
 
 	var opts []bootstrap.Option
+	var provisional []kernellifecycle.ManagedResource
 	if pgRes != nil {
 		opts = append(opts, bootstrap.WithManagedResource(pgRes))
+		provisional = append(provisional, pgRes)
 	}
 	// A19: when the KeyProvider opts into lifecycle.ManagedResource (today:
 	// vault-transit via TransitKeyProvider.Checkers()["vault_transit_ready"]),
@@ -95,8 +116,9 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	// implementing ManagedResource themselves.
 	if kpRes, ok := kp.(kernellifecycle.ManagedResource); ok {
 		opts = append(opts, bootstrap.WithManagedResource(kpRes))
+		provisional = append(provisional, kpRes)
 	}
-	return c, opts, nil
+	return c, opts, provisional, nil
 }
 
 var _ CellModule = ConfigCoreModule{}

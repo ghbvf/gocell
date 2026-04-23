@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -18,9 +20,9 @@ type okCellModule struct{ name string }
 
 func (m okCellModule) ID() string { return m.name }
 
-func (m okCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
+func (m okCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	c := cell.NewBaseCell(cell.CellMetadata{ID: m.name})
-	return c, nil, nil
+	return c, nil, nil, nil
 }
 
 var _ CellModule = okCellModule{}
@@ -33,11 +35,50 @@ type errCellModule struct {
 
 func (m errCellModule) ID() string { return m.name }
 
-func (m errCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
-	return nil, nil, m.err
+func (m errCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	return nil, nil, nil, m.err
 }
 
 var _ CellModule = errCellModule{}
+
+// resourceCellModule is a CellModule that returns a tracked ManagedResource.
+// Used to verify BuildApp rollback behaviour.
+type resourceCellModule struct {
+	name string
+	res  kernellifecycle.ManagedResource
+}
+
+func (m resourceCellModule) ID() string { return m.name }
+
+func (m resourceCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	c := cell.NewBaseCell(cell.CellMetadata{ID: m.name})
+	var res []kernellifecycle.ManagedResource
+	if m.res != nil {
+		res = append(res, m.res)
+	}
+	return c, nil, res, nil
+}
+
+var _ CellModule = resourceCellModule{}
+
+// trackingManagedResource records whether Close was called.
+type trackingManagedResource struct {
+	name        string
+	closeCalled bool
+}
+
+func (r *trackingManagedResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{r.name: func(context.Context) error { return nil }}
+}
+
+func (r *trackingManagedResource) Worker() kworker.Worker { return nil }
+
+func (r *trackingManagedResource) Close(_ context.Context) error {
+	r.closeCalled = true
+	return nil
+}
+
+var _ kernellifecycle.ManagedResource = (*trackingManagedResource)(nil)
 
 // --- tests ---
 
@@ -89,14 +130,14 @@ func TestBuildApp_EmptyModuleList(t *testing.T) {
 	assert.Empty(t, opts)
 }
 
-// nilCellModule is a CellModule whose Provide always returns (nil, nil, nil).
+// nilCellModule is a CellModule whose Provide always returns (nil, nil, nil, nil).
 // It is used to test that BuildApp rejects nil Cell returns as a fail-fast error.
 type nilCellModule struct{}
 
 func (m nilCellModule) ID() string { return "nil-cell-module" }
 
-func (m nilCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
-	return nil, nil, nil
+func (m nilCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	return nil, nil, nil, nil
 }
 
 var _ CellModule = nilCellModule{}
@@ -128,4 +169,21 @@ func TestBuildApp_TwoModules_AggregateCells(t *testing.T) {
 	require.Len(t, cells, 2)
 	assert.Equal(t, "cell-a", cells[0].ID())
 	assert.Equal(t, "cell-b", cells[1].ID())
+}
+
+// TestBuildApp_PartialFailure_CleansUpManagedResource verifies that when a
+// subsequent module's Provide fails, resources registered by earlier modules
+// are closed in reverse order to prevent resource leaks.
+func TestBuildApp_PartialFailure_CleansUpManagedResource(t *testing.T) {
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	shared := buildTestSharedDeps(t)
+
+	res := &trackingManagedResource{name: "fake-pg"}
+	modA := resourceCellModule{name: "cell-a", res: res}
+	modB := errCellModule{name: "cell-b", err: errors.New("db pool unavailable")}
+
+	_, _, err := BuildApp(context.Background(), shared, modA, modB)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cell-b")
+	assert.True(t, res.closeCalled, "resource from module A must be closed when module B's Provide fails")
 }

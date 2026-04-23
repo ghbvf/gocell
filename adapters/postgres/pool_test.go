@@ -11,54 +11,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestConfigFromEnv_Defaults(t *testing.T) {
-	// Clear any env vars that might be set.
-	for _, key := range []string{"GOCELL_PG_DSN", "GOCELL_PG_MAX_CONNS", "GOCELL_PG_IDLE_TIMEOUT", "GOCELL_PG_MAX_LIFETIME"} {
-		t.Setenv(key, "")
-	}
-
-	cfg := ConfigFromEnv()
-
+// TestConfig_ZeroValue verifies that a zero Config has empty DSN and zero
+// numeric fields. applyDefaults fills them; callers supply explicit values.
+func TestConfig_ZeroValue(t *testing.T) {
+	cfg := Config{}
 	assert.Equal(t, "", cfg.DSN)
-	assert.Equal(t, int32(defaultMaxConns), cfg.MaxConns)
-	assert.Equal(t, defaultIdleTimeout, cfg.IdleTimeout)
-	assert.Equal(t, defaultMaxLifetime, cfg.MaxLifetime)
+	assert.EqualValues(t, 0, cfg.MaxConns)
+	assert.Equal(t, time.Duration(0), cfg.IdleTimeout)
+	assert.Equal(t, time.Duration(0), cfg.MaxLifetime)
 }
 
-func TestConfigFromEnv_CustomValues(t *testing.T) {
-	t.Setenv("GOCELL_PG_DSN", "postgres://test:test@localhost:5432/testdb")
-	t.Setenv("GOCELL_PG_MAX_CONNS", "25")
-	t.Setenv("GOCELL_PG_IDLE_TIMEOUT", "10m")
-	t.Setenv("GOCELL_PG_MAX_LIFETIME", "2h")
-
-	cfg := ConfigFromEnv()
-
+// TestConfig_ExplicitValues verifies that a Config struct literal passes
+// values through unchanged before applyDefaults is called.
+func TestConfig_ExplicitValues(t *testing.T) {
+	cfg := Config{
+		DSN:         "postgres://test:test@localhost:5432/testdb",
+		MaxConns:    25,
+		IdleTimeout: 10 * time.Minute,
+		MaxLifetime: 2 * time.Hour,
+	}
 	assert.Equal(t, "postgres://test:test@localhost:5432/testdb", cfg.DSN)
-	assert.Equal(t, int32(25), cfg.MaxConns)
+	assert.EqualValues(t, 25, cfg.MaxConns)
 	assert.Equal(t, 10*time.Minute, cfg.IdleTimeout)
 	assert.Equal(t, 2*time.Hour, cfg.MaxLifetime)
-}
-
-func TestConfigFromEnv_InvalidValues(t *testing.T) {
-	t.Setenv("GOCELL_PG_DSN", "postgres://localhost/db")
-	t.Setenv("GOCELL_PG_MAX_CONNS", "not-a-number")
-	t.Setenv("GOCELL_PG_IDLE_TIMEOUT", "bad-duration")
-	t.Setenv("GOCELL_PG_MAX_LIFETIME", "bad-duration")
-
-	cfg := ConfigFromEnv()
-
-	// Invalid values should fall back to defaults.
-	assert.Equal(t, int32(defaultMaxConns), cfg.MaxConns)
-	assert.Equal(t, defaultIdleTimeout, cfg.IdleTimeout)
-	assert.Equal(t, defaultMaxLifetime, cfg.MaxLifetime)
-}
-
-func TestConfigFromEnv_NegativeMaxConns(t *testing.T) {
-	t.Setenv("GOCELL_PG_DSN", "postgres://localhost/db")
-	t.Setenv("GOCELL_PG_MAX_CONNS", "-5")
-
-	cfg := ConfigFromEnv()
-	assert.Equal(t, int32(defaultMaxConns), cfg.MaxConns)
 }
 
 func TestConfig_ApplyDefaults(t *testing.T) {

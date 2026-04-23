@@ -67,11 +67,10 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
 	_ = pool.Close(ctx)
 
-	// Set env so buildConfigCoreOpts picks the postgres path.
+	// Pass the DSN directly; buildConfigCoreOpts no longer reads env vars.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
-	t.Setenv("GOCELL_PG_DSN", dsn)
 
-	res, opts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, discardPublisher{}, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
+	res, opts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, adapterpg.Config{DSN: dsn}, discardPublisher{}, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
 	require.NotNil(t, res, "ManagedResource must be non-nil on success")
@@ -107,11 +106,10 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	require.NoError(t, execErr, "deleting version records must succeed")
 	_ = pool.Close(ctx)
 
-	// Set env so buildConfigCoreOpts picks the postgres path.
+	// Pass the DSN directly; buildConfigCoreOpts no longer reads env vars.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
-	t.Setenv("GOCELL_PG_DSN", dsn)
 
-	res, opts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, discardPublisher{}, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
+	res, opts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, adapterpg.Config{DSN: dsn}, discardPublisher{}, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.Error(t, err, "buildConfigCoreOpts must return error when schema is lagged")
 	assert.Contains(t, err.Error(), "schema guard",

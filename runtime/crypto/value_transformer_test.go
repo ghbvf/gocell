@@ -83,7 +83,7 @@ func TestValueTransformer_EncryptDecrypt_RoundTrip(t *testing.T) {
 //
 // Note: LocalAES.Rotate() is intentionally disabled (returns ErrNotImplemented).
 // "Historical key" support is achieved by constructing a provider with both a
-// current key and a previous key (GOCELL_MASTER_KEY + GOCELL_MASTER_KEY_PREVIOUS).
+// current key and a previous key (caller-supplied via NewLocalAESKeyProviderFromKeys).
 // The provider with both keys can decrypt values encrypted with either.
 func TestValueTransformer_DecryptByHistoricalKeyID(t *testing.T) {
 	ctx := context.Background()

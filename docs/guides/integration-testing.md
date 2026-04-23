@@ -57,7 +57,7 @@ go test -tags integration ./tests/integration/... -run TestAssembly -count=1 -v
 
 1. Add `//go:build integration` as the first line (before `package`).
 2. Use `t.Skip("stub: requires ...")` for placeholder tests until the infrastructure helper is ready.
-3. Read connection parameters from environment variables (e.g., `GOCELL_PG_DSN`, `GOCELL_REDIS_ADDR`).
+3. Read connection parameters from environment variables (e.g., `GOCELL_CONFIGCORE_DATABASE_URL`, `GOCELL_REDIS_ADDR`). Most integration tests start their own testcontainer and pass the DSN directly; see `cmd/corebundle/main_integration_test.go` for the pattern.
 4. Each test must be self-contained: create its own schema/queue/bucket, run assertions, then clean up.
 5. Use `t.Parallel()` only when tests do not share mutable state (e.g., separate database schemas).
 
@@ -65,7 +65,7 @@ go test -tags integration ./tests/integration/... -run TestAssembly -count=1 -v
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `GOCELL_PG_DSN` | `postgres://gocell:gocell@localhost:5432/gocell_test?sslmode=disable` | PostgreSQL connection string |
+| `GOCELL_CONFIGCORE_DATABASE_URL` | (testcontainer; see test setup) | PostgreSQL DSN for configcore integration tests. Most tests start their own container and pass DSN directly. |
 | `GOCELL_REDIS_ADDR` | `localhost:6379` | Redis address |
 | `GOCELL_AMQP_URL` | `amqp://guest:guest@localhost:5672/` | RabbitMQ connection URL |
 | `GOCELL_S3_ENDPOINT` | `http://localhost:9000` | MinIO / S3 endpoint |
