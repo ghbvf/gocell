@@ -93,64 +93,94 @@ func (dc *DependencyChecker) checkDEP01() []ValidationResult {
 // yielding a directed edge consumer → provider.
 // Cycle detection uses iterative DFS with three-color marking.
 func (dc *DependencyChecker) checkDEP02() []ValidationResult {
-	var results []ValidationResult
-	// Build adjacency list: consumerCell → set of providerCells.
+	graph, buildErrs := dc.buildDependencyGraph()
+	if len(buildErrs) > 0 {
+		// Graph is incomplete — cycle detection would produce unreliable results.
+		return buildErrs
+	}
+	cycle := detectCycle(graph)
+	if len(cycle) > 0 {
+		// DEP-02 spans the whole cell graph — no single file owns the cycle,
+		// so we emit a scoped result ("project") rather than a fake file
+		// path, which would mislead users into trying to click-jump to it.
+		return []ValidationResult{dc.newScopedResult(
+			"DEP-02", SeverityError, IssueForbidden,
+			"project",
+			"cells",
+			fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
+		)}
+	}
+	return nil
+}
+
+// buildDependencyGraph constructs the adjacency list consumerCell → set of
+// providerCells from the slice contractUsages. All cells (even isolated ones)
+// are added so cycle detection covers the full graph.
+// Returns (graph, resolutionErrors); if resolutionErrors is non-empty the
+// graph is incomplete and must not be used for cycle detection.
+func (dc *DependencyChecker) buildDependencyGraph() (map[string]map[string]bool, []ValidationResult) {
 	graph := make(map[string]map[string]bool)
+	var errs []ValidationResult
 
 	for _, s := range dc.project.Slices {
-		providerCell := s.BelongsToCell
-		for _, cu := range s.ContractUsages {
-			if !isProviderRole(cu.Role) {
-				continue
-			}
-			consumers, consErr := dc.contracts.Consumers(cu.Contract)
-			if consErr != nil {
-				results = append(results, dc.newResult(
-					"DEP-02", SeverityError, IssueInvalid,
-					sliceFile(providerCell+"/"+s.ID),
-					"contractUsages",
-					fmt.Sprintf(
-						"cannot resolve consumers for contract %q: %v — dependency graph may be incomplete",
-						cu.Contract, consErr,
-					),
-				))
-				continue
-			}
-			for _, consumerCell := range consumers {
-				if consumerCell == providerCell {
-					continue // self-edge is not a cross-cell dependency
-				}
-				if graph[consumerCell] == nil {
-					graph[consumerCell] = make(map[string]bool)
-				}
-				graph[consumerCell][providerCell] = true
-			}
-		}
+		errs = append(errs, dc.addSliceEdges(graph, s)...)
 	}
-
-	// Also ensure all cells with no edges appear in the graph for completeness.
+	// Ensure isolated cells appear in the graph.
 	for cellID := range dc.project.Cells {
 		if graph[cellID] == nil {
 			graph[cellID] = make(map[string]bool)
 		}
 	}
+	return graph, errs
+}
 
-	// If any consumer resolution failed, the graph is incomplete and cycle
-	// detection would produce unreliable results. Return errors immediately.
-	if len(results) > 0 {
-		return results
+// addSliceEdges adds consumer → provider directed edges to graph for every
+// provider-role contractUsage in s. Returns resolution errors if any contract's
+// consumers cannot be resolved.
+func (dc *DependencyChecker) addSliceEdges(graph map[string]map[string]bool, s *metadata.SliceMeta) []ValidationResult {
+	providerCell := s.BelongsToCell
+	var errs []ValidationResult
+	for _, cu := range s.ContractUsages {
+		if !isProviderRole(cu.Role) {
+			continue
+		}
+		consumers, consErr := dc.contracts.Consumers(cu.Contract)
+		if consErr != nil {
+			errs = append(errs, dc.newResult(
+				"DEP-02", SeverityError, IssueInvalid,
+				sliceFile(providerCell+"/"+s.ID),
+				"contractUsages",
+				fmt.Sprintf(
+					"cannot resolve consumers for contract %q: %v — dependency graph may be incomplete",
+					cu.Contract, consErr,
+				),
+			))
+			continue
+		}
+		for _, consumerCell := range consumers {
+			if consumerCell == providerCell {
+				continue // self-edge is not a cross-cell dependency
+			}
+			if graph[consumerCell] == nil {
+				graph[consumerCell] = make(map[string]bool)
+			}
+			graph[consumerCell][providerCell] = true
+		}
 	}
+	return errs
+}
 
-	// Three-color DFS cycle detection.
+// detectCycle runs three-color DFS on the directed graph and returns the
+// first cycle found as a human-readable path (e.g. ["A", "B", "C", "A"]),
+// or nil if the graph is acyclic.
+func detectCycle(graph map[string]map[string]bool) []string {
 	const (
 		white = 0 // unvisited
-		gray  = 1 // in current path
+		gray  = 1 // in current DFS path
 		black = 2 // fully explored
 	)
-
-	color := make(map[string]int)
-	parent := make(map[string]string) // to reconstruct cycle path
-
+	color := make(map[string]int, len(graph))
+	parent := make(map[string]string, len(graph))
 	var cycle []string
 
 	var dfs func(node string) bool
@@ -159,7 +189,6 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 		for neighbor := range graph[node] {
 			switch color[neighbor] {
 			case gray:
-				// Found a cycle; reconstruct it.
 				cycle = reconstructCycle(parent, node, neighbor)
 				return true
 			case white:
@@ -174,25 +203,11 @@ func (dc *DependencyChecker) checkDEP02() []ValidationResult {
 	}
 
 	for node := range graph {
-		if color[node] == white {
-			if dfs(node) {
-				break
-			}
+		if color[node] == white && dfs(node) {
+			break
 		}
 	}
-
-	if len(cycle) > 0 {
-		// DEP-02 spans the whole cell graph — no single file owns the cycle,
-		// so we emit a scoped result ("project") rather than a fake file
-		// path, which would mislead users into trying to click-jump to it.
-		results = append(results, dc.newScopedResult(
-			"DEP-02", SeverityError, IssueForbidden,
-			"project",
-			"cells",
-			fmt.Sprintf("circular dependency detected: %s", strings.Join(cycle, " → ")),
-		))
-	}
-	return results
+	return cycle
 }
 
 // reconstructCycle traces parent pointers to build the cycle path from
