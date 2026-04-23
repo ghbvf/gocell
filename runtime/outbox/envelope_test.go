@@ -3,6 +3,7 @@ package outbox_test
 import (
 	"encoding/json"
 	"errors"
+	"reflect"
 	"testing"
 	"time"
 
@@ -230,6 +231,61 @@ func TestMarshalEnvelope_WireFormat(t *testing.T) {
 	}
 }
 
+func TestMarshalEnvelope_DelegatesToKernelEnvelope(t *testing.T) {
+	entry := outbox.ClaimedEntry{
+		Entry: kout.Entry{
+			ID:            "kernel-delegate-id",
+			AggregateID:   "agg-kernel-delegate",
+			AggregateType: "Widget",
+			EventType:     "widget.delegated.v1",
+			Topic:         "widgets.v1",
+			Payload:       []byte(`{"widgetId":"w-1"}`),
+			Metadata:      map[string]string{"trace_id": "trace-1"},
+			CreatedAt:     time.Date(2026, 4, 23, 12, 0, 0, 0, time.UTC),
+		},
+		Attempts: 4,
+	}
+
+	got, err := outbox.MarshalEnvelope(entry)
+	if err != nil {
+		t.Fatalf("runtime MarshalEnvelope: %v", err)
+	}
+	want, err := kout.MarshalEnvelope(entry.Entry)
+	if err != nil {
+		t.Fatalf("kernel MarshalEnvelope: %v", err)
+	}
+
+	assertJSONEqual(t, got, want)
+}
+
+func TestUnmarshalEnvelope_DelegatesKernelTopicFallback(t *testing.T) {
+	raw := []byte(`{"schemaVersion":"v1","id":"fallback-id","eventType":"fallback.event.v1","payload":{"ok":true},"createdAt":"2026-04-23T00:00:00Z"}`)
+
+	got, err := outbox.UnmarshalEnvelope("fallback.topic.v1", raw)
+	if err != nil {
+		t.Fatalf("UnmarshalEnvelope: %v", err)
+	}
+
+	if got.Topic != "fallback.topic.v1" {
+		t.Errorf("Topic: got %q, want fallback topic", got.Topic)
+	}
+}
+
+func TestUnmarshalEnvelope_UsesKernelVersionSentinel(t *testing.T) {
+	if !errors.Is(outbox.ErrUnknownEnvelopeVersion, kout.ErrUnknownEnvelopeVersion) {
+		t.Fatal("runtime ErrUnknownEnvelopeVersion must delegate to kernel sentinel")
+	}
+
+	raw := []byte(`{"schemaVersion":"v99","id":"x","eventType":"foo.v1","payload":{"data":"y"},"createdAt":"2026-04-23T00:00:00Z"}`)
+	_, err := outbox.UnmarshalEnvelope("foo.v1", raw)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, kout.ErrUnknownEnvelopeVersion) {
+		t.Errorf("expected kernel ErrUnknownEnvelopeVersion, got: %v", err)
+	}
+}
+
 // TestMarshalDirectEnvelope_ProducesV1 verifies that direct-publish envelopes
 // carry SchemaVersion=v1 and the supplied fields, and round-trip through
 // UnmarshalEnvelope so the bus delivers the business payload unchanged.
@@ -318,5 +374,21 @@ func TestUnmarshalEnvelope_MetadataTransparent(t *testing.T) {
 	}
 	if len(got.Metadata) != len(meta) {
 		t.Errorf("Metadata len: got %d, want %d", len(got.Metadata), len(meta))
+	}
+}
+
+func assertJSONEqual(t *testing.T, got, want []byte) {
+	t.Helper()
+
+	var gotJSON any
+	if err := json.Unmarshal(got, &gotJSON); err != nil {
+		t.Fatalf("unmarshal got JSON: %v", err)
+	}
+	var wantJSON any
+	if err := json.Unmarshal(want, &wantJSON); err != nil {
+		t.Fatalf("unmarshal want JSON: %v", err)
+	}
+	if !reflect.DeepEqual(gotJSON, wantJSON) {
+		t.Fatalf("JSON mismatch:\n got: %s\nwant: %s", got, want)
 	}
 }

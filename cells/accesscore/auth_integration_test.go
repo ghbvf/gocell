@@ -27,6 +27,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogout"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionrefresh"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -172,7 +173,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 //
 //  1. Seed admin role + two users (bob with session, admin with a second admin role holder).
 //  2. Revoke bob's "member" role via rbacassign.Service in durable mode
-//     (stubOutboxWriter + stubTxRunner injected via WithOutboxWriter / WithTxManager).
+//     (stubOutboxWriter wrapped as an emitter, plus stubTxRunner).
 //  3. Deliver the outbox entry synchronously to the sessionlogout consumer.
 //  4. Assert that bob's session is now revoked.
 //
@@ -207,7 +208,7 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	stubWriter := &rbacStubOutboxWriter{}
 	stubTx := &rbacStubTxRunner{}
 	assignSvc := rbacassign.NewService(roleRepo, sessionRepo, slog.Default(),
-		rbacassign.WithOutboxWriter(stubWriter),
+		rbacassign.WithEmitter(testoutbox.MustEmitter(t, stubWriter)),
 		rbacassign.WithTxManager(stubTx),
 	)
 

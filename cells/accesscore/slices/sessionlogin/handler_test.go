@@ -17,7 +17,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
 // testIssuer is declared in service_test.go
@@ -31,7 +30,7 @@ func setup() *Handler {
 	}
 	_ = userRepo.Create(context.Background(), user)
 
-	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), eventbus.New(), testIssuer, slog.Default())
+	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), testIssuer, slog.Default())
 	return NewHandler(svc)
 }
 

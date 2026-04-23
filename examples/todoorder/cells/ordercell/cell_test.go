@@ -80,7 +80,7 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 		wantErr    bool
 	}{
 		{
-			name:    "no options fails — outboxWriter+txRunner required",
+			name:    "no options fails without explicit outbox pair",
 			opts:    nil,
 			wantErr: true,
 		},
@@ -110,24 +110,22 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 			if tt.wantErr {
 				require.Error(t, err)
 				assert.Contains(t, err.Error(), "outboxWriter and txRunner")
-			} else {
-				require.NoError(t, err)
-				assert.Len(t, c.OwnedSlices(), tt.wantSlices)
+				return
 			}
+			require.NoError(t, err)
+			assert.Len(t, c.OwnedSlices(), tt.wantSlices)
 		})
 	}
 }
 
-func TestOrderCell_DefaultInit_RequiresOutboxWriterAndTxRunner(t *testing.T) {
+func TestOrderCell_DefaultInit_DemoModeRequiresExplicitOutboxPair(t *testing.T) {
 	c := NewOrderCell()
 	err := c.Init(context.Background(), newTestDeps())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
-	assert.Contains(t, err.Error(), "NoopWriter")
-	assert.Contains(t, err.Error(), "NoopTxRunner")
 }
 
-func TestOrderCell_InitRejectsHalfConfiguredPath(t *testing.T) {
+func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []Option
@@ -147,9 +145,7 @@ func TestOrderCell_InitRejectsHalfConfiguredPath(t *testing.T) {
 			c := NewOrderCell(tt.opts...)
 			err := c.Init(context.Background(), newTestDeps())
 			require.Error(t, err)
-			var ecErr *errcode.Error
-			require.ErrorAs(t, err, &ecErr)
-			assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+			assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 		})
 	}
 }

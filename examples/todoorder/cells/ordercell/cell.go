@@ -61,6 +61,7 @@ type OrderCell struct {
 	repo         domain.OrderRepository
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
+	emitter      outbox.Emitter
 	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 
@@ -88,21 +89,12 @@ func NewOrderCell(opts ...Option) *OrderCell {
 }
 
 // Init sets up repositories, slice services, and handlers.
-// outboxWriter and txRunner are required. For demo mode, inject
-// outbox.NoopWriter{} + persistence.NoopTxRunner{} for a unified code path.
 func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
 
-	// outboxWriter + txRunner are mandatory (demo uses NoopWriter + NoopTxRunner).
-	if c.outboxWriter == nil || c.txRunner == nil {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"ordercell requires outboxWriter and txRunner; use outbox.NoopWriter{} + persistence.NoopTxRunner{} for demo mode")
-	}
-
-	// Durable mode: reject noop implementations (#27c-2 BOOTSTRAP-STRICT-MODE).
-	if err := cell.CheckNotNoop(deps.DurabilityMode, "ordercell", c.outboxWriter, c.txRunner); err != nil {
+	if err := c.resolveOutboxDeps(deps.DurabilityMode); err != nil {
 		return err
 	}
 
@@ -114,7 +106,7 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	// order-create slice — unified outbox path, no publisher fork.
 	createSvc := ordercreate.NewService(c.repo, c.logger,
-		ordercreate.WithOutboxWriter(c.outboxWriter),
+		ordercreate.WithEmitter(c.emitter),
 		ordercreate.WithTxManager(c.txRunner),
 	)
 	c.createHandler = ordercreate.NewHandler(createSvc)
@@ -148,6 +140,35 @@ func (c *OrderCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	c.queryHandler = orderquery.NewHandler(querySvc)
 	c.AddSlice(cell.NewBaseSlice("orderquery", "ordercell", cell.L0))
 
+	return nil
+}
+
+func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
+	if err := cell.CheckNotNoop(mode, "ordercell", c.outboxWriter, c.txRunner); err != nil {
+		return err
+	}
+	if mode == cell.DurabilityDurable {
+		if c.outboxWriter == nil || c.txRunner == nil {
+			return errcode.New(errcode.ErrCellMissingOutbox,
+				"ordercell durable mode requires real outboxWriter and txRunner")
+		}
+		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
+		if err != nil {
+			return err
+		}
+		c.emitter = emitter
+		return nil
+	}
+	if c.outboxWriter == nil || c.txRunner == nil {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"ordercell demo mode requires outboxWriter and txRunner together; inject both explicitly")
+	}
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
+	if err != nil {
+		return err
+	}
+	c.emitter = emitter
 	return nil
 }
 

@@ -19,7 +19,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -33,41 +32,35 @@ const (
 // Option configures a config-publish Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) { s.outboxWriter = w }
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
-}
-
-// WithPublishFailureMode sets direct-publisher failure behavior when
-// outboxWriter is nil. Zero value is fail-closed (safe production default).
-//
-// S10 MODE-SEMANTIC-SPLIT-01: separated from query.RunMode so read-path cursor
-// tolerance and write-path publisher failure semantics evolve independently.
-func WithPublishFailureMode(mode PublishFailureMode) Option {
-	return func(s *Service) { s.publishFailureMode = mode }
+	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // Service implements config publish/rollback business logic.
 type Service struct {
-	repo               ports.ConfigRepository
-	publisher          outbox.Publisher
-	outboxWriter       outbox.Writer
-	txRunner           persistence.TxRunner
-	publishFailureMode PublishFailureMode
-	logger             *slog.Logger
+	repo     ports.ConfigRepository
+	txRunner persistence.TxRunner
+	emitter  outbox.Emitter
+	logger   *slog.Logger
 }
 
 // NewService creates a config-publish Service.
-func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+func NewService(repo ports.ConfigRepository, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
-		repo:      repo,
-		publisher: pub,
-		logger:    logger,
+		repo:     repo,
+		txRunner: persistence.NoopTxRunner{},
+		emitter:  outbox.NewNoopEmitter(),
+		logger:   logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -174,50 +167,19 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	return updated, nil
 }
 
-// runInTx executes fn in a transaction if txRunner is configured, otherwise
-// calls fn(ctx) directly. Nil txRunner is intentional for query-only slices;
-// Cell Init() validates txRunner presence for CUD slices before Start().
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if s.txRunner != nil {
-		return s.txRunner.RunInTx(ctx, fn)
-	}
-	return fn(ctx)
+	return s.txRunner.RunInTx(ctx, fn)
 }
 
-// publishEvent writes to the outbox (L2 durable) or directly via publisher
-// (fallback when outboxWriter is nil, e.g. demo assemblies using DiscardPublisher).
-// PublishFailureMode controls whether direct-publisher failures are propagated
-// (fail-closed, the safe default for production) or tolerated after a warning
-// (fail-open, the demo-mode behavior when the publisher is degraded but the
-// write path should not block). DiscardPublisher never errors by contract, so
-// any publisher failure indicates a real infrastructure problem.
+// publishEvent emits the config event through the injected emitter.
 func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte) error {
-	if s.outboxWriter != nil {
-		entry := outbox.Entry{
-			ID:        outbox.NewEntryID(),
-			EventType: topic,
-			Payload:   payload,
-		}
-		if err := s.outboxWriter.Write(ctx, entry); err != nil {
-			return fmt.Errorf("config-publish: write outbox entry: %w", err)
-		}
-		return nil
+	entry := outbox.Entry{
+		ID:        outbox.NewEntryID(),
+		EventType: topic,
+		Payload:   payload,
 	}
-	// Wrap in v1 wire envelope so the eventbus fail-closed schema check (P1-14)
-	// accepts the message.
-	envelope := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), payload)
-	if err := s.publisher.Publish(ctx, topic, envelope); err != nil {
-		if s.publishFailureMode.IsFailOpen() {
-			// topic + error are sufficient for demo-mode triage; the key is inside
-			// the serialized payload and would require unmarshaling to extract.
-			s.logger.Warn("config-publish: publisher failed (fail-open mode)",
-				slog.String("topic", topic),
-				slog.String("publish_failure_mode", s.publishFailureMode.String()),
-				slog.String("error", err.Error()),
-			)
-			return nil
-		}
-		return fmt.Errorf("config-publish: publisher failed for topic %s: %w", topic, err)
+	if err := s.emitter.Emit(ctx, entry); err != nil {
+		return fmt.Errorf("config-publish: emit event for topic %s: %w", topic, err)
 	}
 	return nil
 }

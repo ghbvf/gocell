@@ -11,8 +11,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -63,8 +63,7 @@ func newTestService() (*Service, *mem.UserRepository) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	eb := eventbus.New()
-	return NewService(userRepo, sessionRepo, roleRepo, eb, testIssuer, slog.Default()), userRepo
+	return NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default()), userRepo
 }
 
 // seedUser creates a user with a bcrypt-hashed password.
@@ -234,8 +233,7 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	eb := eventbus.New()
-	svc := NewService(userRepo, sessionRepo, roleRepo, eb, testIssuer, slog.Default())
+	svc := NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default())
 	seedUser(userRepo, "issue-persist", "pass123")
 
 	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
@@ -261,7 +259,9 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	seedUser(userRepo, "pub-err", "pass123")
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
-	svc := NewService(userRepo, sessionRepo, roleRepo, fp, testIssuer, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	require.NoError(t, err)
+	svc := NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default(), WithEmitter(emitter))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")

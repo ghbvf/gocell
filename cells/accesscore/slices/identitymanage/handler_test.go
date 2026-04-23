@@ -20,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
 // handlerStubIssuer is a minimal TokenIssuer stub used by handler tests that
@@ -28,7 +27,7 @@ import (
 var handlerStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setup() http.Handler {
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
 		WithTokenIssuer(handlerStubIssuer))
 	if err != nil {
 		panic("setup: " + err.Error())
@@ -45,7 +44,7 @@ func setupWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	if effectiveIssuer == nil {
 		effectiveIssuer = handlerStubIssuer
 	}
-	svc, err := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(), slog.Default(),
 		WithTokenIssuer(effectiveIssuer))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 	"time"
@@ -69,7 +70,7 @@ func newDurableTestService(t *testing.T) (*Service, *mem.FlagRepository, *record
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer),
+		WithEmitter(testoutbox.MustEmitter(t, writer)),
 		WithTxManager(&noopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)
@@ -95,21 +96,20 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) *domain.Featur
 
 // --- Test: XOR violation guard ---
 
-// TestNewService_XORViolation verifies that NewService rejects half-wired
-// configs: providing only outboxWriter or only txRunner breaks L2 atomicity.
-func TestNewService_XORViolation(t *testing.T) {
+// TestNewService_AllowsHalfWiredDemoPath verifies that service construction no
+// longer uses nil-mode coupling; Cell wiring owns durable-mode validation.
+func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 	cases := []struct {
 		name string
 		opts []Option
 	}{
-		{"only_outbox_writer", []Option{WithOutboxWriter(&recordingWriter{})}},
+		{"only_emitter", []Option{WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{}))}},
 		{"only_tx_runner", []Option{WithTxManager(&noopTxRunner{})}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := NewService(mem.NewFlagRepository(), slog.Default(), tc.opts...)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "must both be set")
+			require.NoError(t, err)
 		})
 	}
 }
@@ -123,7 +123,7 @@ func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
 	writer := &recordingWriter{}
 	tx := &noopTxRunner{}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(tx))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 	require.NoError(t, err)
 
 	flag, err := svc.Create(context.Background(), CreateInput{
@@ -152,7 +152,7 @@ func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
 	writer := &recordingWriter{}
 	tx := &failingTxRunner{failErr: errors.New("tx commit failed")}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(tx))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
@@ -230,7 +230,7 @@ func TestFlagWrite_OutboxWriteError_PropagatesFromCreate(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})

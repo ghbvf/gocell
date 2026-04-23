@@ -15,48 +15,49 @@ import (
 
 // Service handles RBAC role assignment and revocation.
 //
-// Durable mode (outboxWriter + txRunner both non-nil): writes role row and
-// event.role.{assigned,revoked}.v1 outbox entry atomically in one DB transaction.
-// Session revocation is handled asynchronously by sessionlogout.Consumer which
-// subscribes to both topics. This provides L2 OutboxFact atomicity — the partial-commit
-// window from the legacy dual-write is eliminated.
+// When the Cell injects an emitter for asynchronous role-change delivery, the
+// role mutation and event.role.{assigned,revoked}.v1 emission run in one
+// transaction and session revocation moves to the sessionlogout consumer.
 //
-// Demo mode (both nil): preserves today's synchronous dual-write behaviour —
-// roleRepo.{AssignToUser,RemoveFromUserIfNotLast} then sessionRepo.RevokeByUserID
-// in-process. Suitable for in-memory repos where "transaction" semantics are
-// implicit within a single goroutine.
+// With the default noop emitter, the service preserves the in-process
+// role-change + session-revoke flow used by demo and in-memory wiring.
 //
-// Idempotent no-op handling (both modes): the role repository reports whether
-// the call actually changed state. On no-op (repeat assign or revoke-non-member),
-// no outbox entry is written and no session revoke is triggered — the operation
-// is externally invisible, preventing false role-change facts.
+// The role repository reports whether the call actually changed state. On a
+// no-op (repeat assign or revoke-non-member), no event is emitted and no
+// session revoke is triggered, preventing false role-change facts.
 //
 // ref: Watermill SQL outbox + sessionlogin/service.go persistSession pattern.
 type Service struct {
-	roleRepo     ports.RoleRepository
-	sessionRepo  ports.SessionRepository
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	logger       *slog.Logger
+	roleRepo              ports.RoleRepository
+	sessionRepo           ports.SessionRepository
+	txRunner              persistence.TxRunner
+	emitter               outbox.Emitter
+	syncSessionRevocation bool
+	logger                *slog.Logger
 }
 
 // Option configures a rbac-assign Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing (L2 durable mode).
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) { s.outboxWriter = w }
+// WithEmitter sets the event emitter and disables in-process session revoke.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+			s.syncSessionRevocation = false
+		}
+	}
 }
 
-// WithTxManager sets the TxRunner for L2 atomicity (must be paired with WithOutboxWriter).
+// WithTxManager sets the TxRunner for L2 atomicity (must be paired with WithEmitter).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
+	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // NewService creates a new rbac-assign service.
-// In durable mode (both WithOutboxWriter and WithTxManager provided), session
-// revocation is delegated to the sessionlogout consumer via the outbox.
-// In demo mode (no opts), the legacy dual-write is used.
+// When WithEmitter is provided, session revocation is delegated to the
+// sessionlogout consumer. With default options, the legacy in-process revoke
+// path is used.
 func NewService(
 	roleRepo ports.RoleRepository,
 	sessionRepo ports.SessionRepository,
@@ -64,9 +65,12 @@ func NewService(
 	opts ...Option,
 ) *Service {
 	s := &Service{
-		roleRepo:    roleRepo,
-		sessionRepo: sessionRepo,
-		logger:      logger,
+		roleRepo:              roleRepo,
+		sessionRepo:           sessionRepo,
+		txRunner:              persistence.NoopTxRunner{},
+		emitter:               outbox.NewNoopEmitter(),
+		syncSessionRevocation: true,
+		logger:                logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -74,24 +78,13 @@ func NewService(
 	return s
 }
 
-// isDurableMode returns true when both outboxWriter and txRunner are configured.
-func (s *Service) isDurableMode() bool {
-	return s.outboxWriter != nil && s.txRunner != nil
-}
-
-// runInTx wraps fn in a transaction if txRunner is configured, otherwise calls fn directly.
+// runInTx wraps fn in a transaction runner.
 func (s *Service) runInTx(ctx context.Context, fn func(context.Context) error) error {
-	if s.txRunner != nil {
-		return s.txRunner.RunInTx(ctx, fn)
-	}
-	return fn(ctx)
+	return s.txRunner.RunInTx(ctx, fn)
 }
 
 // writeOutboxEntry writes a role-change outbox entry. Called inside a transaction.
 func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dto.RoleChangedEvent) error {
-	if s.outboxWriter == nil {
-		return nil
-	}
 	payload, err := json.Marshal(evt)
 	if err != nil {
 		return fmt.Errorf("rbac-assign: marshal role-changed event: %w", err)
@@ -101,42 +94,35 @@ func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dt
 		EventType: eventType,
 		Payload:   payload,
 	}
-	if err := s.outboxWriter.Write(ctx, entry); err != nil {
-		return fmt.Errorf("rbac-assign: write outbox entry: %w", err)
+	if err := s.emitter.Emit(ctx, entry); err != nil {
+		return fmt.Errorf("rbac-assign: emit role-changed event: %w", err)
 	}
 	return nil
 }
 
-// persistChange wraps a role mutation + outbox write in a single transaction (durable mode)
-// or delegates to the legacy dual-write (demo mode). writeFn returns whether the repository
-// actually mutated state; the outbox entry (durable) or session revoke (demo) is skipped
-// on a no-op so repeat calls do not publish false role-change facts.
+// persistChange wraps a role mutation in the configured transaction runner.
+// When an async emitter is configured it also emits the role-change event; with
+// the default noop emitter it keeps the in-process session revoke path. writeFn
+// returns whether the repository actually mutated state, so no-op calls never
+// emit false role-change facts.
 func (s *Service) persistChange(
 	ctx context.Context,
 	writeFn func(ctx context.Context) (changed bool, err error),
 	evt dto.RoleChangedEvent,
 	topic string,
 ) (changed bool, err error) {
-	if s.isDurableMode() {
-		// Durable: atomically persist role change + outbox entry.
-		// Session revocation is handled asynchronously by the consumer.
-		err = s.runInTx(ctx, func(txCtx context.Context) error {
-			var innerErr error
-			changed, innerErr = writeFn(txCtx)
-			if innerErr != nil {
-				return innerErr
-			}
-			if !changed {
-				return nil
-			}
-			return s.writeOutboxEntry(txCtx, topic, evt)
-		})
-		return changed, err
-	}
-
-	// Demo mode: synchronous dual-write (legacy behaviour), gated on changed.
-	changed, err = writeFn(ctx)
-	if err != nil {
+	err = s.runInTx(ctx, func(txCtx context.Context) error {
+		var innerErr error
+		changed, innerErr = writeFn(txCtx)
+		if innerErr != nil {
+			return innerErr
+		}
+		if !changed || s.syncSessionRevocation {
+			return nil
+		}
+		return s.writeOutboxEntry(txCtx, topic, evt)
+	})
+	if err != nil || !s.syncSessionRevocation {
 		return changed, err
 	}
 	if !changed {
@@ -175,7 +161,7 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 	}
 
 	mode := "demo"
-	if s.isDurableMode() {
+	if !s.syncSessionRevocation {
 		mode = "durable"
 	}
 	s.logger.Info("role assigned",
@@ -210,7 +196,7 @@ func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
 	}
 
 	mode := "demo"
-	if s.isDurableMode() {
+	if !s.syncSessionRevocation {
 		mode = "durable"
 	}
 	s.logger.Info("role revoked",

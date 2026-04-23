@@ -36,7 +36,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -91,13 +90,12 @@ func newE2EFixture() *e2eFixture {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	eb := eventbus.New()
 
 	loginSvc := sessionlogin.NewService(
-		userRepo, sessionRepo, roleRepo, eb, e2eIssuer, slog.Default(),
+		userRepo, sessionRepo, roleRepo, e2eIssuer, slog.Default(),
 	)
 
-	idmSvc, err := NewService(userRepo, sessionRepo, eb, slog.Default(),
+	idmSvc, err := NewService(userRepo, sessionRepo, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 	)
 	if err != nil {

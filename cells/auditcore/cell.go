@@ -87,6 +87,7 @@ type AuditCore struct {
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
+	emitter      outbox.Emitter
 	cursorCodec  *query.CursorCodec
 	logger       *slog.Logger
 	hmacKey      []byte
@@ -158,32 +159,61 @@ func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
 	return nil
 }
 
-// validateOutboxDeps enforces the XOR constraint on outboxWriter/txRunner and
-// the demo-mode publisher requirement.
+// validateOutboxDeps rejects noop implementations in durable mode and requires
+// demo mode to use an explicit event sink instead of synthesized defaults.
 func (c *AuditCore) validateOutboxDeps(mode cell.DurabilityMode) error {
-	// Fail-fast: outboxWriter and txRunner must be both present or both absent (XOR constraint).
-	// Both present = durable mode (L2 atomicity). Both absent = demo/in-memory mode.
-	if (c.outboxWriter == nil) != (c.txRunner == nil) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"auditcore durable mode requires both outboxWriter and txRunner")
-	}
-	// Durable mode: reject noop implementations.
 	if err := cell.CheckNotNoop(mode, "auditcore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
 		return err
 	}
-	// Demo mode: both nil → require publisher for degraded event delivery.
-	if c.outboxWriter == nil && c.txRunner == nil {
-		if c.publisher == nil {
+	if mode == cell.DurabilityDurable {
+		if c.outboxWriter == nil || c.txRunner == nil {
 			return errcode.New(errcode.ErrCellMissingOutbox,
-				"auditcore requires publisher or outbox writer; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
+				"auditcore durable mode requires real outboxWriter and txRunner")
 		}
-		if c.ConsistencyLevel() >= cell.L2 {
-			c.logger.Warn("auditcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-				slog.String("cell", c.ID()),
-				slog.Int("consistency_level", int(c.ConsistencyLevel())))
+		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
+		if err != nil {
+			return err
 		}
+		c.emitter = emitter
+		return nil
+	}
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"auditcore demo mode requires outboxWriter and txRunner together; inject both explicitly")
+	}
+	if c.publisher == nil && c.outboxWriter == nil {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"auditcore demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
+	}
+
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	emitter, err := c.resolveDemoEmitter()
+	if err != nil {
+		return err
+	}
+	c.emitter = emitter
+	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
+		c.logger.Warn("auditcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+			slog.String("cell", c.ID()),
+			slog.Int("consistency_level", int(c.ConsistencyLevel())))
 	}
 	return nil
+}
+
+func (c *AuditCore) resolveDemoEmitter() (outbox.Emitter, error) {
+	if c.publisher != nil && (c.outboxWriter == nil || isNoopDep(c.outboxWriter)) {
+		return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, c.logger)
+	}
+	if c.outboxWriter != nil {
+		return outbox.NewWriterEmitter(c.outboxWriter)
+	}
+	return nil, errcode.New(errcode.ErrCellMissingOutbox,
+		"auditcore demo mode requires an explicit event sink")
+}
+
+func isNoopDep(dep any) bool {
+	n, ok := dep.(interface{ Noop() bool })
+	return ok && n.Noop()
 }
 
 // initSlices constructs and registers the audit-append, audit-verify, and
@@ -191,26 +221,14 @@ func (c *AuditCore) validateOutboxDeps(mode cell.DurabilityMode) error {
 // because it requires the cursor codec to be resolved first.
 func (c *AuditCore) initSlices() {
 	// audit-append
-	var appendOpts []auditappend.Option
-	if c.outboxWriter != nil {
-		appendOpts = append(appendOpts, auditappend.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		appendOpts = append(appendOpts, auditappend.WithTxManager(c.txRunner))
-	}
-	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, appendOpts...)
+	appendOpts := []auditappend.Option{auditappend.WithEmitter(c.emitter), auditappend.WithTxManager(c.txRunner)}
+	c.appendSvc = auditappend.NewService(c.auditRepo, c.hmacKey, c.logger, appendOpts...)
 	// L3: 订阅 accesscore/configcore 跨 cell 事件，slice 级别可高于 cell 级别。
 	c.AddSlice(cell.NewBaseSlice("auditappend", "auditcore", cell.L3))
 
 	// audit-verify
-	var verifyOpts []auditverify.Option
-	if c.outboxWriter != nil {
-		verifyOpts = append(verifyOpts, auditverify.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		verifyOpts = append(verifyOpts, auditverify.WithTxManager(c.txRunner))
-	}
-	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.publisher, c.logger, verifyOpts...)
+	verifyOpts := []auditverify.Option{auditverify.WithEmitter(c.emitter), auditverify.WithTxManager(c.txRunner)}
+	c.verifySvc = auditverify.NewService(c.auditRepo, c.hmacKey, c.logger, verifyOpts...)
 	// L2: publishes event.audit.integrity-verified.v1 via transactional outbox.
 	c.AddSlice(cell.NewBaseSlice("auditverify", "auditcore", cell.L2))
 

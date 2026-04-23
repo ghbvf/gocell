@@ -61,17 +61,16 @@ func TestRegisterSubscriptions(t *testing.T) {
 	assert.Equal(t, "accesscore-rbac-session-sync", r.ConsumerGroups[2])
 }
 
-func TestInit_MissingOutboxWriter(t *testing.T) {
-	// L2 cell without outboxWriter (but with txRunner) should fail via XOR check.
+func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
 	c := NewAccessCore(
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithTxManager(noopTxRunner{}),
 	)
-	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable}
 	err := c.Init(context.Background(), deps)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "txRunner")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outboxWriter")
 }
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {

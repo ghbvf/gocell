@@ -3,6 +3,7 @@ package configwrite
 import (
 	"context"
 	"encoding/json"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,7 +16,6 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -49,7 +49,7 @@ func withAdmin(req *http.Request) *http.Request {
 
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
-	svc := NewService(repo, eventbus.New(), slog.Default())
+	svc := NewService(repo, slog.Default())
 	h := NewHandler(svc)
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
@@ -241,7 +241,7 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 func TestService_Create_SensitiveEventPayloadRedacted(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, eventbus.New(), slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	_, err := svc.Create(context.Background(), CreateInput{
 		Key: "db.password", Value: "s3cret!", Sensitive: true,
@@ -257,10 +257,10 @@ func TestService_Create_SensitiveEventPayloadRedacted(t *testing.T) {
 
 // --- outbox/tx service tests ---
 
-func TestService_WithOutboxWriter(t *testing.T) {
+func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, eventbus.New(), slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
@@ -272,7 +272,7 @@ func TestService_WithOutboxWriter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	tx := &stubTxRunner{}
-	svc := NewService(repo, eventbus.New(), slog.Default(), WithTxManager(tx))
+	svc := NewService(repo, slog.Default(), WithTxManager(tx))
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
@@ -284,8 +284,8 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := NewService(repo, eventbus.New(), slog.Default(),
-		WithOutboxWriter(ow), WithTxManager(tx))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 
 	// Create
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k1", Value: "v1"})

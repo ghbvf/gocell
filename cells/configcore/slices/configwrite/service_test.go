@@ -3,28 +3,29 @@ package configwrite
 import (
 	"context"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
-	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
-	eb := eventbus.New()
 	logger := slog.Default()
-	return NewService(repo, eb, logger), repo
+	return NewService(repo, logger), repo
 }
 
-func newDurableTestService() (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+	t.Helper()
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	return svc, repo, writer
 }
 
@@ -172,8 +173,8 @@ func TestService_Delete(t *testing.T) {
 func TestService_Create_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
 	require.Error(t, err, "Create must propagate outbox.Write error to preserve L2 atomicity")
@@ -183,14 +184,14 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 func TestService_Update_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	goodWriter := &testutil.RecordingWriter{}
-	svcGood := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(goodWriter), WithTxManager(&testutil.NoopTxRunner{}))
+	svcGood := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 	_, err := svcGood.Create(context.Background(), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
 
 	failWriter := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(failWriter), WithTxManager(&testutil.NoopTxRunner{}))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 
 	_, err = svc.Update(context.Background(), UpdateInput{Key: "k", Value: "v2"})
 	require.Error(t, err, "Update must propagate outbox.Write error to preserve L2 atomicity")
@@ -200,14 +201,14 @@ func TestService_Update_OutboxWriteError(t *testing.T) {
 func TestService_Delete_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	goodWriter := &testutil.RecordingWriter{}
-	svcGood := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(goodWriter), WithTxManager(&testutil.NoopTxRunner{}))
+	svcGood := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 	_, err := svcGood.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
 
 	failWriter := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(failWriter), WithTxManager(&testutil.NoopTxRunner{}))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 
 	err = svc.Delete(context.Background(), "k")
 	require.Error(t, err, "Delete must propagate outbox.Write error to preserve L2 atomicity")
@@ -215,7 +216,7 @@ func TestService_Delete_OutboxWriteError(t *testing.T) {
 }
 
 func TestService_Create_DurableMode_CapturesOutboxEntry(t *testing.T) {
-	svc, _, writer := newDurableTestService()
+	svc, _, writer := newDurableTestService(t)
 
 	entry, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
@@ -230,8 +231,8 @@ func TestCreate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(tx))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
@@ -245,11 +246,11 @@ func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(tx))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 
 	// Seed via direct repo insert (bypasses service tx counter).
-	_, _ = NewService(repo, testutil.StubPublisher{}, slog.Default()).Create(
+	_, _ = NewService(repo, slog.Default()).Create(
 		context.Background(), CreateInput{Key: "k", Value: "v1"})
 
 	tx.Calls = 0 // reset counter after seed
@@ -265,11 +266,11 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(tx))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 
 	// Seed via direct repo insert (bypasses service tx counter).
-	_, _ = NewService(repo, testutil.StubPublisher{}, slog.Default()).Create(
+	_, _ = NewService(repo, slog.Default()).Create(
 		context.Background(), CreateInput{Key: "k", Value: "v1"})
 
 	tx.Calls = 0 // reset counter after seed
@@ -285,7 +286,9 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	fp := testutil.FailingPublisher{Err: errors.New("broker unavailable")}
-	svc := NewService(repo, fp, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	require.NoError(t, err)
+	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 
 	entry, err := svc.Create(context.Background(), CreateInput{Key: "pub-err", Value: "v"})
 	require.NoError(t, err, "publish failure in demo mode must not fail Create")

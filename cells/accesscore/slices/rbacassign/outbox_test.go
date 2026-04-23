@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
@@ -50,8 +51,9 @@ func (r *trackingSessionRepo) RevokeByUserID(ctx context.Context, userID string)
 	return r.SessionRepository.RevokeByUserID(ctx, userID)
 }
 
-// newDurableTestService creates a Service with outboxWriter + txRunner injected (durable mode).
-func newDurableTestService(ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *mem.RoleRepository, *trackingSessionRepo) {
+// newDurableTestService creates a Service with emitter + txRunner injected (durable mode).
+func newDurableTestService(t testing.TB, ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *mem.RoleRepository, *trackingSessionRepo) {
+	t.Helper()
 	roleRepo := mem.NewRoleRepository()
 	roleRepo.SeedRole(&domain.Role{
 		ID:   "admin",
@@ -62,7 +64,7 @@ func newDurableTestService(ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *m
 	})
 	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
 	svc := NewService(roleRepo, sessionRepo, slog.Default(),
-		WithOutboxWriter(ow),
+		WithEmitter(testoutbox.MustEmitter(t, ow)),
 		WithTxManager(tx),
 	)
 	return svc, roleRepo, sessionRepo
@@ -75,7 +77,7 @@ func newDurableTestService(ow *stubOutboxWriter, tx *stubTxRunner) (*Service, *m
 func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, _, sessionRepo := newDurableTestService(ow, tx)
+	svc, _, sessionRepo := newDurableTestService(t, ow, tx)
 
 	err := svc.Assign(context.Background(), "alice", "admin")
 	require.NoError(t, err)
@@ -103,7 +105,7 @@ func TestService_Assign_Durable_WritesOutboxAtomically(t *testing.T) {
 func TestService_Revoke_Durable_WritesOutboxAtomically(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(ow, tx)
+	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
 
 	// Need two admins so last-admin guard passes.
 	_, _ = roleRepo.AssignToUser(context.Background(), "alice", "admin")
@@ -136,13 +138,13 @@ func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 	outboxErr := errors.New("outbox write failed")
 	ow := &stubOutboxWriter{err: outboxErr}
 	tx := &stubTxRunner{}
-	svc, _, _ := newDurableTestService(ow, tx)
+	svc, _, _ := newDurableTestService(t, ow, tx)
 
 	err := svc.Assign(context.Background(), "alice", "admin")
 	require.Error(t, err, "Assign must return error when outbox write fails")
 	assert.ErrorIs(t, err, outboxErr, "original outbox error must be in the chain")
 
-	// outboxWriter.entries is empty because Write returned error before appending.
+	// outbox entries are empty because Write returned error before appending.
 	assert.Empty(t, ow.entries)
 }
 
@@ -151,7 +153,7 @@ func TestService_Durable_OutboxWriteFailure_PropagatesError(t *testing.T) {
 func TestService_Durable_DoesNotCallSessionRepoDirectly(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(ow, tx)
+	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
 
 	// Assign.
 	require.NoError(t, svc.Assign(context.Background(), "u1", "admin"))
@@ -171,7 +173,7 @@ func TestService_Durable_DoesNotCallSessionRepoDirectly(t *testing.T) {
 func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, _, sessionRepo := newDurableTestService(ow, tx)
+	svc, _, sessionRepo := newDurableTestService(t, ow, tx)
 
 	require.NoError(t, svc.Assign(context.Background(), "alice", "admin"))
 	require.Len(t, ow.entries, 1, "first assign must publish exactly one event")
@@ -190,7 +192,7 @@ func TestService_Assign_Durable_RepeatIsNoop(t *testing.T) {
 func TestService_Revoke_Durable_NonMemberIsNoop(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc, roleRepo, sessionRepo := newDurableTestService(ow, tx)
+	svc, roleRepo, sessionRepo := newDurableTestService(t, ow, tx)
 
 	// Seed two other holders so the last-admin guard does not short-circuit.
 	_, _ = roleRepo.AssignToUser(context.Background(), "bob", "admin")

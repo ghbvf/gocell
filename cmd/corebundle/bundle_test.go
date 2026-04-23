@@ -10,6 +10,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -132,6 +133,36 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	return deps
 }
 
+func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
+	tests := []struct {
+		name string
+		topo bootstrap.Topology
+		want cell.DurabilityMode
+	}{
+		{
+			name: "memory real remains demo",
+			topo: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "real"},
+			want: cell.DurabilityDemo,
+		},
+		{
+			name: "postgres real is durable",
+			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+			want: cell.DurabilityDurable,
+		},
+		{
+			name: "memory dev remains demo",
+			topo: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
+			want: cell.DurabilityDemo,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			assert.Equal(t, tt.want, durabilityModeForTopology(tt.topo))
+		})
+	}
+}
+
 // buildBootstrapFromShared is the test-path assembly helper, equivalent to the
 // production run() flow but accepts extra bootstrap.Options (e.g. WithListener).
 // Uses memory topology (modules' Provide path) and AccessCoreModule with a
@@ -149,7 +180,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstr
 		return nil, err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, cells...)
+	asm, err := buildAssembly(shared.PromStack, durabilityModeForTopology(shared.Topology), cells...)
 	if err != nil {
 		return nil, err
 	}

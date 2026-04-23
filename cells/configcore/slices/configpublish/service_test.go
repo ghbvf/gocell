@@ -3,6 +3,7 @@ package configpublish
 import (
 	"context"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 	"time"
@@ -10,24 +11,31 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
-	eb := eventbus.New()
 	logger := slog.Default()
-	return NewService(repo, eb, logger), repo
+	return NewService(repo, logger), repo
 }
 
-func newDurableTestService() (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+func newDirectTestEmitter(t *testing.T, pub outbox.Publisher, mode outbox.DirectPublishFailureMode) outbox.Emitter {
+	t.Helper()
+	emitter, err := outbox.NewDirectEmitter(pub, mode, slog.Default())
+	require.NoError(t, err)
+	return emitter
+}
+
+func newDurableTestService(t testing.TB) (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+	t.Helper()
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	return svc, repo, writer
 }
 
@@ -128,7 +136,8 @@ func TestService_Rollback(t *testing.T) {
 func TestService_Publish_PublisherError_Propagates(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	pub := testutil.FailingPublisher{Err: errors.New("broker unavailable")}
-	svc := NewService(repo, pub, slog.Default()) // no outboxWriter → publisher path; error propagates
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed)))
 
 	mustSeedEntry(repo, "k", "v1")
 	_, err := svc.Publish(context.Background(), "k")
@@ -141,8 +150,8 @@ func TestService_Publish_PublisherError_Propagates(t *testing.T) {
 func TestService_Publish_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	mustSeedEntry(repo, "app.name", "value")
 
 	_, err := svc.Publish(context.Background(), "app.name")
@@ -153,13 +162,13 @@ func TestService_Publish_OutboxWriteError(t *testing.T) {
 func TestService_Rollback_OutboxWriteError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	mustSeedEntry(repo, "app.name", "v1")
 	// Publish first (use a working writer), then swap to failing writer for rollback.
 	goodWriter := &testutil.RecordingWriter{}
-	svcGood := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(goodWriter), WithTxManager(&testutil.NoopTxRunner{}))
+	svcGood := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 	_, err := svcGood.Publish(context.Background(), "app.name")
 	require.NoError(t, err)
 
@@ -169,7 +178,7 @@ func TestService_Rollback_OutboxWriteError(t *testing.T) {
 }
 
 func TestService_Publish_DurableMode_CapturesOutboxEntry(t *testing.T) {
-	svc, repo, writer := newDurableTestService()
+	svc, repo, writer := newDurableTestService(t)
 	mustSeedEntry(repo, "app.name", "value")
 
 	ver, err := svc.Publish(context.Background(), "app.name")
@@ -186,8 +195,8 @@ func TestPublishVersion_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(tx))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 
 	mustSeedEntry(repo, "app.name", "value")
 	_, err := svc.Publish(context.Background(), "app.name")
@@ -200,7 +209,7 @@ func TestPublishVersion_CallsTxRunnerRunInTxOnce(t *testing.T) {
 // Sensitive flag so downstream consumers (handler, postgres replay) can redact uniformly.
 func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
 	repo := mem.NewConfigRepository()
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default())
+	svc := NewService(repo, slog.Default())
 	now := time.Now()
 	require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
 		ID: "cfg-secret", Key: "db.password", Value: "s3cret!", Sensitive: true,
@@ -241,7 +250,7 @@ func TestService_Rollback_VersionNotFound(t *testing.T) {
 
 func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {
 	repo := mem.NewConfigRepository()
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default())
+	svc := NewService(repo, slog.Default())
 	mustSeedEntry(repo, "app.name", "gocell")
 
 	ver, err := svc.Publish(context.Background(), "app.name")
@@ -268,7 +277,7 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			repo := mem.NewConfigRepository()
-			svc := NewService(repo, testutil.StubPublisher{}, slog.Default())
+			svc := NewService(repo, slog.Default())
 			now := time.Now()
 			require.NoError(t, repo.Create(context.Background(), &domain.ConfigEntry{
 				ID: "cfg-x", Key: "app.x", Value: "v1", Sensitive: tt.seedSensitive,
@@ -302,8 +311,8 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 func TestService_Publish_FailClosed_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc := NewService(repo, pub, slog.Default(),
-		WithPublishFailureMode(PublishFailureModeFailClosed))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed)))
 
 	mustSeedEntry(repo, "app.timeout", "30s")
 	_, err := svc.Publish(context.Background(), "app.timeout")
@@ -317,8 +326,8 @@ func TestService_Publish_FailClosed_PublisherError(t *testing.T) {
 func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc := NewService(repo, pub, slog.Default(),
-		WithPublishFailureMode(PublishFailureModeFailOpen))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen)))
 
 	mustSeedEntry(repo, "app.timeout", "30s")
 	ver, err := svc.Publish(context.Background(), "app.timeout")
@@ -331,11 +340,11 @@ func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
 func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc := NewService(repo, pub, slog.Default(),
-		WithPublishFailureMode(PublishFailureModeFailClosed))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed)))
 
 	mustSeedEntry(repo, "app.x", "v1")
-	svcOK := NewService(repo, testutil.StubPublisher{}, slog.Default())
+	svcOK := NewService(repo, slog.Default())
 	_, err := svcOK.Publish(context.Background(), "app.x")
 	require.NoError(t, err)
 
@@ -349,11 +358,11 @@ func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	pub := testutil.FailingPublisher{Err: errors.New("broker down")}
-	svc := NewService(repo, pub, slog.Default(),
-		WithPublishFailureMode(PublishFailureModeFailOpen))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen)))
 
 	mustSeedEntry(repo, "app.x", "v1")
-	svcOK := NewService(repo, testutil.StubPublisher{}, slog.Default())
+	svcOK := NewService(repo, slog.Default())
 	_, err := svcOK.Publish(context.Background(), "app.x")
 	require.NoError(t, err)
 

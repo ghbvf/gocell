@@ -5,6 +5,7 @@ package configwrite
 import (
 	"context"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
@@ -59,8 +60,8 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 
-	svc := NewService(repo, stubPublisher{}, slog.Default(),
-		WithOutboxWriter(outboxWriter),
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(txMgr),
 	)
 
@@ -207,8 +208,8 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}
 
 	txMgr := adapterpg.NewTxManager(pool)
-	svc := NewService(repo, stubPublisher{}, slog.Default(),
-		WithOutboxWriter(failingWriter),
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),
 	)
 

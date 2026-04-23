@@ -2,6 +2,7 @@ package sessionlogin
 
 import (
 	"context"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
@@ -10,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -43,11 +43,11 @@ func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 	_ = repo.Create(context.Background(), user)
 }
 
-func TestService_WithOutboxWriter(t *testing.T) {
+func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	ow := &stubOutboxWriter{}
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
-		eventbus.New(), testIssuer, slog.Default(), WithOutboxWriter(ow))
+		testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))
@@ -63,7 +63,7 @@ func TestService_WithTxManager(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	tx := &stubTxRunner{}
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
-		eventbus.New(), testIssuer, slog.Default(), WithTxManager(tx))
+		testIssuer, slog.Default(), WithTxManager(tx))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "bob", string(hash))

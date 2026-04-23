@@ -210,8 +210,8 @@ GoCell assemblies must declare a `DurabilityMode` explicitly (zero value is reje
 
 | Mode | Value | Noop Allowed | Use Case |
 |------|-------|-------------|----------|
-| `DurabilityDemo` | 1 | Yes — `NoopWriter`, `NoopTxRunner`, `DiscardPublisher` accepted | Development, unit tests, examples |
-| `DurabilityDurable` | 2 | No — `CheckNotNoop` rejects at `Init()` | Production (`cmd/corebundle`) |
+| `DurabilityDemo` | 1 | Yes — `NoopWriter`, `NoopTxRunner`, `DiscardPublisher` accepted; missing Tx/outbox dependencies are completed with explicit no-op defaults | Development, unit tests, examples |
+| `DurabilityDurable` | 2 | No — `CheckNotNoop` rejects at `Init()` and L2 Cells require a real outbox writer + Tx runner | Production storage topologies |
 
 ```go
 // Production
@@ -220,6 +220,13 @@ asm := assembly.New(assembly.Config{ID: "prod", DurabilityMode: cell.DurabilityD
 // Development / tests
 asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: cell.DurabilityDemo})
 ```
+
+`cmd/corebundle` maps PostgreSQL storage topology to `DurabilityDurable`;
+development and memory storage topologies use `DurabilityDemo` so examples can
+run without a database or broker. Demo mode is explicit: Cells inject
+`NoopTxRunner` / `NoopEmitter` when dependencies are absent, or a direct
+`outbox.Emitter` when a publisher is supplied without a durable writer. Durable
+mode never silently falls back to those no-op dependencies.
 
 ## Architecture
 
@@ -268,17 +275,32 @@ examples/  ← all layers
 
 ### Outbox Wiring
 
-The transactional outbox is split across three layers — write at the cell, store + relay loop in `runtime/outbox`, persistence in `adapters/postgres`:
+The transactional outbox is split across three layers — Cell services depend on
+`persistence.TxRunner` + `outbox.Emitter`, store + relay loop lives in
+`runtime/outbox`, and persistence lives in `adapters/postgres`:
 
 ```go
-// 1. Write inside the cell's business transaction (any package)
-postgres.NewOutboxWriter().Write(txCtx, entry)
+// 1. Adapt the durable writer at the Cell boundary.
+emitter, err := outbox.NewWriterEmitter(postgres.NewOutboxWriter())
+if err != nil {
+    return err
+}
 
-// 2. Compose the relay at bootstrap (cmd/corebundle, examples, etc.)
+// 2. Service code writes business state + emits inside the same transaction.
+err = txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+    // ... write business state ...
+    return emitter.Emit(txCtx, entry)
+})
+
+// 3. Compose the relay at bootstrap (cmd/corebundle, examples, etc.)
 store := postgres.NewOutboxStore(pool.DB())
 relay := outbox.NewRelay(store, publisher, outbox.DefaultRelayConfig())
 // relay implements worker.Worker — register with bootstrap to manage lifecycle.
 ```
+
+Direct-publish demo paths use `outbox.NewDirectEmitter`; durable writer and
+direct publisher paths both marshal the same `kernel/outbox` v1 wire envelope.
+`runtime/outbox` owns relay/store runtime state only.
 
 `runtime/outbox` defines the SQL-dialect-neutral `Store` interface (`ClaimPending` / `MarkPublished` / `MarkRetry` / `MarkDead` / `ReclaimStale` / `CleanupPublished` / `CleanupDead` / `OldestEligibleAt`) and the `Relay` worker that owns the poll / reclaim / cleanup goroutines. Cleanup is data-driven: it sleeps until the next published / dead row crosses its retention window, so an idle table costs zero DB cycles.
 

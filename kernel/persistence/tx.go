@@ -32,3 +32,14 @@ var _ TxRunner = NoopTxRunner{}
 
 // Noop implements cell.Nooper. CheckNotNoop rejects NoopTxRunner in durable mode.
 func (NoopTxRunner) Noop() bool { return true }
+
+// RunnerOrNoop returns r when it is non-nil, otherwise an explicit NoopTxRunner.
+//
+// This keeps call paths unconditional while still making demo-mode transaction
+// behavior visible to durability checks.
+func RunnerOrNoop(r TxRunner) TxRunner {
+	if r == nil {
+		return NoopTxRunner{}
+	}
+	return r
+}

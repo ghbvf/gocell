@@ -3,6 +3,7 @@ package flagwrite
 import (
 	"context"
 	"encoding/json"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -40,7 +41,7 @@ func newContractService(t *testing.T) *Service {
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,7 +186,7 @@ func TestEventFlagChangedV1Publish(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
 	require.NoError(t, err)
 
 	_, err = svc.Create(testAdminCtx(), CreateInput{Key: "event-flag", Enabled: true, Description: "ev"})

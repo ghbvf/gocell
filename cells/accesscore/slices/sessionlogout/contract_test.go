@@ -3,6 +3,7 @@ package sessionlogout
 import (
 	"context"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -16,7 +17,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,8 +59,8 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 
 	sessionRepo := mem.NewSessionRepository()
 	sessID := seedContractSession(sessionRepo)
-	svc := NewService(sessionRepo, eventbus.New(), slog.Default(),
-		WithOutboxWriter(&recordingWriter{}), WithTxManager(noopTxRunner{}))
+	svc := NewService(sessionRepo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(noopTxRunner{}))
 
 	mux := http.NewServeMux()
 	mux.Handle("DELETE /api/v1/access/sessions/{id}", http.HandlerFunc(NewHandler(svc).HandleLogout))
@@ -85,8 +85,8 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 
 	sessionRepo := mem.NewSessionRepository()
 	writer := &recordingWriter{}
-	svc := NewService(sessionRepo, eventbus.New(), slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(noopTxRunner{}))
+	svc := NewService(sessionRepo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(noopTxRunner{}))
 
 	sessID := seedContractSession(sessionRepo)
 
@@ -163,8 +163,8 @@ func TestService_Logout_OutboxWriteError(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 	seedContractSession(sessionRepo)
 	failWriter := &recordingWriter{err: errors.New("outbox unavailable")}
-	svc := NewService(sessionRepo, eventbus.New(), slog.Default(),
-		WithOutboxWriter(failWriter), WithTxManager(noopTxRunner{}))
+	svc := NewService(sessionRepo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(noopTxRunner{}))
 
 	err := svc.Logout(context.Background(), "sess-1", "usr-1")
 	require.Error(t, err, "Logout must propagate outbox.Write error to preserve L2 atomicity")

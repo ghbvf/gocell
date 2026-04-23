@@ -12,10 +12,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/contracttest"
 )
 
-func newContractHandler() (http.Handler, *recordingWriter) {
+func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
+	t.Helper()
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
-	svc := NewService(repo, slog.Default(), WithOutboxWriter(writer), WithTxManager(&stubTxRunner{}))
+	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(&stubTxRunner{}))
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/orders/", http.HandlerFunc(NewHandler(svc).HandleCreate))
 	return mux, writer
@@ -24,7 +25,7 @@ func newContractHandler() (http.Handler, *recordingWriter) {
 func TestHttpOrderCreateV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot("todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.create.v1")
-	h, _ := newContractHandler()
+	h, _ := newContractHandler(t)
 
 	c.ValidateRequest(t, []byte(`{"item":"widget"}`))
 	c.MustRejectRequest(t, []byte(`{"item":"x","extra":"bad"}`))
@@ -40,7 +41,7 @@ func TestEventOrderCreatedV1Publish(t *testing.T) {
 	root := contracttest.ExampleContractsRoot("todoorder")
 	httpContract := contracttest.LoadByID(t, root, "http.order.create.v1")
 	c := contracttest.LoadByID(t, root, "event.order-created.v1")
-	h, writer := newContractHandler()
+	h, writer := newContractHandler(t)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(httpContract.HTTP.Method, httpContract.HTTP.Path, strings.NewReader(`{"item":"widget"}`))

@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -39,8 +38,7 @@ func TestDeviceRegisterResponse_Fields(t *testing.T) {
 
 func setupRegisterHandler() *Handler {
 	repo := mem.NewDeviceRepository()
-	pub := eventbus.New()
-	svc := NewService(repo, pub, slog.Default())
+	svc := NewService(repo, slog.Default())
 	return NewHandler(svc)
 }
 

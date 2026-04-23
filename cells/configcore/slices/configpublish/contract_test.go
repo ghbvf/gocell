@@ -3,6 +3,7 @@ package configpublish
 import (
 	"context"
 	"encoding/json"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,11 +19,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newContractService() (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+func newContractService(t testing.TB) (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+	t.Helper()
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
+	svc := NewService(repo, slog.Default(),
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	return svc, repo, writer
 }
 
@@ -51,7 +53,7 @@ func newContractMux(svc *Service) *http.ServeMux {
 func TestHttpConfigPublishV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
-	svc, repo, _ := newContractService()
+	svc, repo, _ := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
 
 	mux := newContractMux(svc)
@@ -72,7 +74,7 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
-	svc, repo, _ := newContractService()
+	svc, repo, _ := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
 
 	// Publish first to create version 1 so rollback target exists.
@@ -114,7 +116,7 @@ type errEnvelope struct {
 func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
-	svc, _, _ := newContractService()
+	svc, _, _ := newContractService(t)
 	mux := newContractMux(svc)
 
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
@@ -157,7 +159,7 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
-	svc, _, _ := newContractService()
+	svc, _, _ := newContractService(t)
 	mux := newContractMux(svc)
 
 	path := strings.Replace(c.HTTP.Path, "{key}", "app.name", 1)
@@ -196,7 +198,7 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 func TestEventConfigChangedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
-	svc, repo, writer := newContractService()
+	svc, repo, writer := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
 
 	_, err := svc.Publish(context.Background(), "app.name")
@@ -213,7 +215,7 @@ func TestEventConfigChangedV1Publish(t *testing.T) {
 func TestEventConfigRollbackV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.rollback.v1")
-	svc, repo, writer := newContractService()
+	svc, repo, writer := newContractService(t)
 	seedContractEntry(repo, "app.name", "v1")
 
 	// Publish first to create a version, then rollback

@@ -127,10 +127,9 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	require.NoError(t, c.Init(ctx, deps))
 }
 
-// --- L2 Hard Gate: XOR constraint + publisher check ---
+// --- L2 Hard Gate: durable-mode dependency checks ---
 
-func TestInit_TxRunnerXOR_OutboxWithoutTx(t *testing.T) {
-	// outboxWriter present but txRunner missing → XOR mismatch → error
+func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
@@ -141,14 +140,10 @@ func TestInit_TxRunnerXOR_OutboxWithoutTx(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, err.Error(), "both outboxWriter and txRunner")
+	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
 
-func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
-	// txRunner present but outboxWriter missing → XOR mismatch → error
+func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
@@ -159,25 +154,18 @@ func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, err.Error(), "both outboxWriter and txRunner")
+	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
 
-func TestInit_DemoMode_RequiresPublisher(t *testing.T) {
+func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
-		// No outboxWriter, no txRunner, no publisher.
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, err.Error(), "publisher")
+	assert.Contains(t, err.Error(), "explicit event sink")
 }
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
@@ -210,6 +198,18 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err, "demo mode with publisher should succeed")
+}
+
+func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithHMACKey(testHMACKey),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, err)
 }
 
 func TestAuditCore_RegisterRoutes(t *testing.T) {

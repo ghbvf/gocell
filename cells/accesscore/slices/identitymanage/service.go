@@ -17,7 +17,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -39,14 +38,18 @@ const (
 // Option configures an identity-manage Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) { s.outboxWriter = w }
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
+	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // WithTokenIssuer injects the token issuer used by ChangePassword to issue a
@@ -58,21 +61,26 @@ func WithTokenIssuer(ti TokenIssuer) Option {
 
 // Service implements identity management business logic.
 type Service struct {
-	repo         ports.UserRepository
-	sessionRepo  ports.SessionRepository
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	logger       *slog.Logger
-	tokenIssuer  TokenIssuer
+	repo        ports.UserRepository
+	sessionRepo ports.SessionRepository
+	txRunner    persistence.TxRunner
+	emitter     outbox.Emitter
+	logger      *slog.Logger
+	tokenIssuer TokenIssuer
 }
 
 // NewService creates an identity-manage Service. tokenIssuer is required;
 // callers must supply it via WithTokenIssuer. Omitting it or passing nil
 // returns errcode.ErrCellMissingTokenIssuer so mis-wired assemblies fail at
 // startup rather than at the first ChangePassword call.
-func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) (*Service, error) {
-	s := &Service{repo: repo, sessionRepo: sessionRepo, publisher: pub, logger: logger}
+func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+	s := &Service{
+		repo:        repo,
+		sessionRepo: sessionRepo,
+		txRunner:    persistence.NoopTxRunner{},
+		emitter:     outbox.NewNoopEmitter(),
+		logger:      logger,
+	}
 	for _, o := range opts {
 		o(s)
 	}
@@ -346,34 +354,17 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 	if err != nil {
 		return fmt.Errorf("identity-manage: marshal event payload: %w", err)
 	}
-	if s.outboxWriter != nil {
-		entry := outbox.Entry{
-			ID:        outbox.NewEntryID(),
-			EventType: topic,
-			Payload:   data,
-		}
-		if err := s.outboxWriter.Write(ctx, entry); err != nil {
-			return fmt.Errorf("identity-manage: write outbox entry: %w", err)
-		}
-		return nil
+	entry := outbox.Entry{
+		ID:        outbox.NewEntryID(),
+		EventType: topic,
+		Payload:   data,
 	}
-	// Demo mode: publisher failure is logged but not propagated since
-	// demo mode does not guarantee L2 atomicity. Wrap in v1 wire envelope so
-	// the eventbus fail-closed schema check (P1-14) accepts the message.
-	envelope := outboxrt.MarshalDirectEnvelope(topic, topic, outbox.NewEntryID(), data)
-	if err := s.publisher.Publish(ctx, topic, envelope); err != nil {
-		s.logger.Warn("identity-manage: failed to publish event (demo mode)",
-			slog.Any("error", err), slog.String("topic", topic))
+	if err := s.emitter.Emit(ctx, entry); err != nil {
+		return fmt.Errorf("identity-manage: emit event: %w", err)
 	}
 	return nil
 }
 
-// runInTx executes fn in a transaction if txRunner is configured, otherwise
-// calls fn(ctx) directly. Nil txRunner is intentional for query-only slices;
-// Cell Init() validates txRunner presence for CUD slices before Start().
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if s.txRunner != nil {
-		return s.txRunner.RunInTx(ctx, fn)
-	}
-	return fn(ctx)
+	return s.txRunner.RunInTx(ctx, fn)
 }

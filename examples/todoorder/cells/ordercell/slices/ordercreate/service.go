@@ -40,34 +40,37 @@ func toOrderCreatedEvent(o *domain.Order) orderCreatedEvent {
 // Option configures the order-create Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for event emission.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) { s.outboxWriter = w }
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees.
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
+	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // Service handles order creation business logic.
-// Both outboxWriter and txRunner are required — the cell Init() enforces this.
-// Demo mode uses outbox.NoopWriter + persistence.NoopTxRunner for a unified
-// code path with zero fork.
+// Cell wiring injects either durable or demo defaults, but the service always
+// runs through the same Emitter + TxRunner code path.
 type Service struct {
-	repo         domain.OrderRepository
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	logger       *slog.Logger
+	repo     domain.OrderRepository
+	txRunner persistence.TxRunner
+	emitter  outbox.Emitter
+	logger   *slog.Logger
 }
 
 // NewService creates an order-create Service.
-// outboxWriter and txRunner must be set via options; the cell Init()
-// validates their presence before constructing the Service.
 func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
-		repo:   repo,
-		logger: logger,
+		repo:     repo,
+		txRunner: persistence.NoopTxRunner{},
+		emitter:  outbox.NewNoopEmitter(),
+		logger:   logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -97,27 +100,19 @@ func (s *Service) Create(ctx context.Context, item string) (*domain.Order, error
 		if err := s.repo.Create(txCtx, order); err != nil {
 			return fmt.Errorf("order-create: persist: %w", err)
 		}
-		if err := s.outboxWriter.Write(txCtx, entry); err != nil {
-			return fmt.Errorf("order-create: write outbox: %w", err)
+		if err := s.emitter.Emit(txCtx, entry); err != nil {
+			return fmt.Errorf("order-create: emit event: %w", err)
 		}
 		return nil
 	}); err != nil {
 		return nil, err
 	}
 
-	if n, ok := s.outboxWriter.(interface{ Noop() bool }); ok && n.Noop() {
-		s.logger.Debug("order-create: outbox entry processed (noop: not persisted)",
-			slog.String("order_id", order.ID),
-			slog.String("entry_id", entry.ID),
-			slog.String("topic", entry.RoutingTopic()),
-		)
-	} else {
-		s.logger.Info("order-create: outbox entry written",
-			slog.String("order_id", order.ID),
-			slog.String("entry_id", entry.ID),
-			slog.String("topic", entry.RoutingTopic()),
-		)
-	}
+	s.logger.Info("order-create: event emitted",
+		slog.String("order_id", order.ID),
+		slog.String("entry_id", entry.ID),
+		slog.String("topic", entry.RoutingTopic()),
+	)
 	return order, nil
 }
 

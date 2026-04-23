@@ -14,7 +14,6 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 )
 
 func setup() *Handler {
@@ -27,7 +26,7 @@ func setup() *Handler {
 	other.ID = "sess-victim"
 	_ = sessionRepo.Create(context.Background(), other)
 
-	svc := NewService(sessionRepo, eventbus.New(), slog.Default())
+	svc := NewService(sessionRepo, slog.Default())
 	return NewHandler(svc)
 }
 

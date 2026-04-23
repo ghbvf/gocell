@@ -7,7 +7,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -16,8 +15,7 @@ var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
 func newTestService() (*Service, *mem.AuditRepository) {
 	repo := mem.NewAuditRepository()
-	eb := eventbus.New()
-	return NewService(repo, testHMACKey, eb, slog.Default()), repo
+	return NewService(repo, testHMACKey, slog.Default()), repo
 }
 
 func TestService_VerifyChain_Empty(t *testing.T) {
