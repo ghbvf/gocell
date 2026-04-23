@@ -38,6 +38,7 @@ func LoadPGConfig(cellEnvPrefix string) adapterpg.Config {
 	}
 
 	if v := os.Getenv(prefix + "MAX_CONNS"); v != "" {
+		// n > 0: guards against passing zero to pgx which treats MaxConns=0 as unlimited.
 		if n, err := strconv.ParseInt(v, 10, 32); err == nil && n > 0 {
 			cfg.MaxConns = int32(n)
 		}

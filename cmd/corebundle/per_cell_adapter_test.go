@@ -50,7 +50,10 @@ func TestLoadPGConfig_AllFields_ParsedCorrectly(t *testing.T) {
 	assert.Equal(t, 30*time.Minute, cfg.MaxLifetime)
 }
 
-func TestLoadPGConfig_InvalidDuration_FallsBackToZero(t *testing.T) {
+// TestLoadPGConfig_InvalidDuration_SilentlyIgnored verifies that invalid
+// int/duration env values are silently ignored (field left at zero;
+// NewPool fills default via applyDefaults).
+func TestLoadPGConfig_InvalidDuration_SilentlyIgnored(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_URL", "postgres://x/db")
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_MAX_CONNS", "not-a-number")
 	t.Setenv("GOCELL_CONFIGCORE_DATABASE_IDLE_TIMEOUT", "bad-duration")
@@ -58,7 +61,7 @@ func TestLoadPGConfig_InvalidDuration_FallsBackToZero(t *testing.T) {
 
 	cfg := LoadPGConfig("CONFIGCORE")
 	assert.Equal(t, "postgres://x/db", cfg.DSN)
-	// Invalid int/duration: stays 0 (applyDefaults fills in at NewPool time).
+	// Invalid int/duration: silently ignored (field left at zero; NewPool fills default via applyDefaults).
 	assert.EqualValues(t, 0, cfg.MaxConns)
 	assert.Equal(t, time.Duration(0), cfg.IdleTimeout)
 	assert.Equal(t, time.Duration(0), cfg.MaxLifetime)

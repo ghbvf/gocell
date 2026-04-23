@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -187,4 +186,3 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 
 // loadSharedDepsForRun is an alias kept for the run() call site; delegates to
 // LoadSharedDepsFromEnv. Defined here to avoid a bare variable name collision.
-var _ = fmt.Sprintf // keep fmt import active for error formatting below

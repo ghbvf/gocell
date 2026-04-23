@@ -26,9 +26,11 @@ func (AuditCoreModule) ID() string { return "auditcore" }
 // Reads GOCELL_AUDITCORE_HMAC_KEY, GOCELL_AUDITCORE_CURSOR_KEY, and
 // GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY from the environment.
 func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
-	// Cursor codec for auditcore.
-	cursorCodec, err := loadCursorCodec(shared.Topology.AdapterMode,
+	// Cursor codec for auditcore: read env via LoadCursorKeys then build.
+	auditPrimary, auditPrevious := LoadCursorKeys("AUDITCORE")
+	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
 		"GOCELL_AUDITCORE_CURSOR_KEY", "GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY",
+		auditPrimary, auditPrevious,
 		"corebundle-audit-cursor-key-32b!", "audit")
 	if err != nil {
 		return nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)

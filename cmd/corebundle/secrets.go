@@ -51,40 +51,45 @@ func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 	return auth.NewKeySet(privKey, pubKey)
 }
 
-// loadCursorCodec loads a cursor HMAC secret from envName (with a dev-only
-// fallback to devDefault) and constructs a CursorCodec. In "real" adapter
-// mode the secret must be set and must not match a well-known demo value.
+// buildCursorCodec constructs a CursorCodec from already-read primary and
+// previous key strings. This is the low-level builder used by modules after
+// they read env via LoadCursorKeys; it does not call os.Getenv itself.
 //
-// When prevEnvName is non-empty and that env var is set, the value is loaded
-// as the previous (verification-only) key to enable the kube-apiserver-style
-// rotation lifecycle: decode tries current first, then previous. The previous
-// key is subject to the same demo-key guard as current; failures at any stage
-// are fail-fast (no silent fallback to single-key mode). If the previous env
-// is unset, the codec is constructed in single-key mode.
+// primary must be non-empty in "real" adapter mode (enforced via loadSecret
+// semantics: callers pass "" for primary when the env var was unset, which
+// triggers the real-mode fail-fast). previous may be empty (single-key mode).
 //
-// label is used in wrapping error messages.
+// envLabelForErr and prevEnvLabelForErr are used only in error messages and
+// the slog rotation log so operators can identify which env var to check.
+// devDefault is used when primary is empty in dev mode.
 //
 // ref: kube-apiserver --service-account-signing-key-file (single current) +
 // --service-account-key-file (multi verification) — same signing/verification
 // split applied to cursor HMAC tokens.
 // ref: gorilla/securecookie CodecsFromPairs — ordered key list, first match
 // wins during decode.
-func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string) (*query.CursorCodec, error) {
-	key, err := loadSecret(envName, devDefault, adapterMode)
-	if err != nil {
-		return nil, fmt.Errorf("%s cursor key: %w", label, err)
+func buildCursorCodec(adapterMode, envLabelForErr, prevEnvLabelForErr, primary, previous, devDefault, label string) (*query.CursorCodec, error) {
+	var key []byte
+	if primary != "" {
+		key = []byte(primary)
+	} else if adapterMode == "real" {
+		return nil, fmt.Errorf("%s cursor key: %s must be set in adapter mode \"real\"", label, envLabelForErr)
+	} else {
+		slog.Warn("using dev-only default; set env var for production",
+			slog.String("var", envLabelForErr),
+			slog.String("mode", "dev-fallback"),
+			slog.String("action_required", "set env var before real mode"))
+		key = []byte(devDefault)
 	}
-	if err := rejectDemoKey(adapterMode, envName, key); err != nil {
+	if err := rejectDemoKey(adapterMode, envLabelForErr, key); err != nil {
 		return nil, err
 	}
 
 	var prevKey []byte
-	if prevEnvName != "" {
-		if v := os.Getenv(prevEnvName); v != "" {
-			prevKey = []byte(v)
-			if err := rejectDemoKey(adapterMode, prevEnvName, prevKey); err != nil {
-				return nil, err
-			}
+	if previous != "" {
+		prevKey = []byte(previous)
+		if err := rejectDemoKey(adapterMode, prevEnvLabelForErr, prevKey); err != nil {
+			return nil, err
 		}
 	}
 
@@ -95,8 +100,23 @@ func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string
 	if len(prevKey) > 0 {
 		slog.Info("cursor key rotation active",
 			slog.String("label", label),
-			slog.String("current_env", envName),
-			slog.String("previous_env", prevEnvName))
+			slog.String("current_env", envLabelForErr),
+			slog.String("previous_env", prevEnvLabelForErr))
 	}
 	return codec, nil
+}
+
+// loadCursorCodec loads a cursor HMAC secret from envName (with a dev-only
+// fallback to devDefault) and constructs a CursorCodec. In "real" adapter
+// mode the secret must be set and must not match a well-known demo value.
+//
+// Deprecated: prefer LoadCursorKeys + buildCursorCodec which separates env
+// reading from codec construction. This wrapper is retained for call sites
+// that have not yet migrated.
+func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string) (*query.CursorCodec, error) {
+	primary, previous := os.Getenv(envName), ""
+	if prevEnvName != "" {
+		previous = os.Getenv(prevEnvName)
+	}
+	return buildCursorCodec(adapterMode, envName, prevEnvName, primary, previous, devDefault, label)
 }

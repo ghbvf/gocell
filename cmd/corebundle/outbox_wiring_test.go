@@ -58,6 +58,22 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 	assert.Nil(t, res, "error path must not leak a ManagedResource")
 }
 
+// TestBuildConfigCoreOpts_PGMode_MissingDSN asserts that postgres mode with an
+// empty DSN returns a non-nil error containing the env var name, so operators
+// know which variable to set. Corresponds to the fail-fast branch at
+// bundle.go:171-172.
+func TestBuildConfigCoreOpts_PGMode_MissingDSN(t *testing.T) {
+	ctx := context.Background()
+	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
+
+	res, _, err := buildConfigCoreOpts(ctx, topo, adapterpg.Config{}, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
+
+	require.Error(t, err, "postgres mode with empty DSN must return an error")
+	assert.Contains(t, err.Error(), "GOCELL_CONFIGCORE_DATABASE_URL",
+		"error must name the missing env var so operators know what to set")
+	assert.Nil(t, res, "error path must not leak a ManagedResource")
+}
+
 // TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil asserts that postgres mode
 // produces a non-nil ManagedResource with a relay worker. This test requires a
 // running PostgreSQL instance (GOCELL_CONFIGCORE_DATABASE_URL must be set); it

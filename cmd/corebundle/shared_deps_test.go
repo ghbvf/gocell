@@ -21,13 +21,12 @@ func TestSharedDeps_Validate_PostgresWithoutKeyProvider_OK(t *testing.T) {
 	}
 
 	err := deps.Validate()
-	// Will error for other missing fields, but NOT for key-provider.
-	if err != nil {
-		assert.NotContains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER",
-			"SharedDeps.Validate must not check key provider — that is ConfigCoreModule.Provide's job")
-		assert.NotContains(t, err.Error(), "GOCELL_KEY_PROVIDER",
-			"old env name must not appear in SharedDeps.Validate")
-	}
+	// Deps fields are not fully populated, so Validate must return an error.
+	require.Error(t, err, "minimal SharedDeps must fail Validate due to missing required fields")
+	assert.NotContains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER",
+		"SharedDeps.Validate must not check key provider — that is ConfigCoreModule.Provide's job")
+	assert.NotContains(t, err.Error(), "GOCELL_KEY_PROVIDER",
+		"old env name must not appear in SharedDeps.Validate")
 }
 
 // TestSharedDeps_Validate_MemoryTopology_OK verifies that memory mode doesn't
@@ -38,11 +37,10 @@ func TestSharedDeps_Validate_MemoryTopology_OK(t *testing.T) {
 	}
 
 	err := deps.Validate()
-	// Will error for other missing fields, but NOT for KeyProvider.
-	if err != nil {
-		assert.NotContains(t, err.Error(), "GOCELL_KEY_PROVIDER")
-		assert.NotContains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER")
-	}
+	// Deps fields are not fully populated, so Validate must return an error.
+	require.Error(t, err, "minimal SharedDeps must fail Validate due to missing required fields")
+	assert.NotContains(t, err.Error(), "GOCELL_KEY_PROVIDER")
+	assert.NotContains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER")
 }
 
 // TestSharedDeps_Validate_NilReceiver_Errors verifies the defensive nil check.

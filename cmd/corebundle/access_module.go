@@ -31,9 +31,11 @@ func (AccessCoreModule) ID() string { return "accesscore" }
 // Reads GOCELL_ACCESSCORE_CURSOR_KEY and GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY
 // from the environment.
 func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
-	// Cursor codec for accesscore.
-	cursorCodec, err := loadCursorCodec(shared.Topology.AdapterMode,
+	// Cursor codec for accesscore: read env via LoadCursorKeys then build.
+	accessPrimary, accessPrevious := LoadCursorKeys("ACCESSCORE")
+	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
 		"GOCELL_ACCESSCORE_CURSOR_KEY", "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
+		accessPrimary, accessPrevious,
 		"corebundle-access-cursor-key32!!", "access")
 	if err != nil {
 		return nil, nil, fmt.Errorf("accesscore cursor codec: %w", err)

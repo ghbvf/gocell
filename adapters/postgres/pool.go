@@ -25,8 +25,7 @@ const (
 
 // Config holds PostgreSQL connection pool settings.
 // All fields must be set explicitly by the caller; there is no global env-reading
-// constructor. Use cmd/corebundle.LoadPGConfig to build a Config from
-// per-cell environment variables.
+// constructor.
 type Config struct {
 	// DSN is the PostgreSQL connection string (e.g.
 	// "postgres://user:pass@localhost:5432/dbname?sslmode=disable").

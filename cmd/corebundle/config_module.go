@@ -45,9 +45,11 @@ var configStaleCipherOpts = prom.CounterOpts{
 // It reads configcore-specific environment variables directly via the
 // LoadPGConfig / LoadCursorKeys / LoadConfigCoreKeyProvider helpers.
 func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
-	// 1. Cursor codec: read configcore-namespaced env.
-	cursorCodec, err := loadCursorCodec(shared.Topology.AdapterMode,
+	// 1. Cursor codec: read configcore-namespaced env via LoadCursorKeys then build.
+	cfgPrimary, cfgPrevious := LoadCursorKeys("CONFIGCORE")
+	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
 		"GOCELL_CONFIGCORE_CURSOR_KEY", "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
+		cfgPrimary, cfgPrevious,
 		"corebundle-cfg-cursor-key--32bb!", "config")
 	if err != nil {
 		return nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
