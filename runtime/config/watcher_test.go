@@ -235,24 +235,20 @@ func TestWatcher_Debounce_CoalescesRapidWrites(t *testing.T) {
 
 	var called atomic.Int32
 	w.OnChange(func(_ WatchEvent) { called.Add(1) })
-	w.Start()
-	waitReady(t, w)
 
-	// 5 rapid writes, 10ms apart.
-	for i := range 5 {
-		touchFile(t, file, "key: v"+string(rune('1'+i)))
+	// Drive the debounce scheduler directly so this test proves the coalescing
+	// state machine instead of relying on noisy fsnotify delivery timing.
+	for range 5 {
+		w.scheduleCallback(false)
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Wait for exactly 1 debounced callback (tolerant of slow CI).
 	assert.Eventually(t, func() bool {
-		return called.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "debounce should fire at least once")
+		return called.Load() == 1
+	}, 2*time.Second, 20*time.Millisecond, "debounce should coalesce rapid schedules into one callback")
 
-	// Verify no additional callbacks arrive (debounce coalesced all writes).
-	assert.Never(t, func() bool {
-		return called.Load() > 1
-	}, 300*time.Millisecond, 50*time.Millisecond, "debounce should coalesce 5 writes into 1 callback")
+	time.Sleep(250 * time.Millisecond)
+	assert.Equal(t, int32(1), called.Load(), "debounce should not emit an extra callback after the window closes")
 }
 
 func TestWatcher_Debounce_MaxCeiling(t *testing.T) {
@@ -506,7 +502,8 @@ func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
 	require.NoError(t, err)
 	defer func() { _ = w.Close(context.Background()) }()
 
-	w.OnChange(func(_ WatchEvent) {})
+	var called atomic.Int32
+	w.OnChange(func(_ WatchEvent) { called.Add(1) })
 	w.Start()
 	waitReady(t, w)
 
@@ -516,14 +513,18 @@ func TestWatcher_Metrics_DebounceCoalesced(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
-	// Wait for debounce to fire.
-	time.Sleep(400 * time.Millisecond)
+	assert.Eventually(t, func() bool {
+		return called.Load() >= 1
+	}, 3*time.Second, 20*time.Millisecond, "rapid writes should still dispatch a debounced callback")
+
+	time.Sleep(250 * time.Millisecond)
 
 	// Each fsnotify event beyond the first resets the timer → coalesced count.
 	// We can't predict exact fsnotify event count (OS-dependent), but should
 	// have at least some coalesced events.
 	assert.Greater(t, spy.events.Load(), int32(1), "should receive multiple fsnotify events")
 	assert.Greater(t, spy.coalesced.Load(), int32(0), "debounce should record coalesced events")
+	assert.Less(t, called.Load(), int32(5), "debounce should collapse a rapid write burst into fewer callbacks than writes")
 }
 
 // ---------------------------------------------------------------------------
