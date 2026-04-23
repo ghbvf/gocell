@@ -36,6 +36,42 @@ func TestConnection_Close_RespectsCtx(t *testing.T) {
 		"Close must return promptly with pre-cancelled ctx; got %s", elapsed)
 }
 
+// TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop locks down the
+// F1 fix: even when ctx is already cancelled at entry, Close MUST signal
+// closeCh and mark the connection closed so reconnectLoop exits — otherwise
+// the goroutine leaks past process-shutdown.
+//
+// Earlier versions returned ctx.Err() before mu.Lock + close(closeCh),
+// leaving reconnectLoop running until process exit. After F1 the local
+// state-machine transitions run unconditionally and only the AMQP network
+// handshake is gated by ctx.
+func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	require.Error(t, conn.Close(cancelledCtx),
+		"pre-cancelled Close must surface ctx error from the network handshake step")
+
+	conn.mu.RLock()
+	closed := conn.closed
+	conn.mu.RUnlock()
+	assert.True(t, closed,
+		"pre-cancelled Close must still mark the connection closed so reconnectLoop exits")
+
+	// closeCh must be closed — a receive from a closed channel returns
+	// immediately with the zero value, so this select fires the closed-case
+	// without timing out.
+	select {
+	case _, ok := <-conn.closeCh:
+		assert.False(t, ok,
+			"closeCh must be closed by Close so reconnectLoop's select unblocks")
+	case <-time.After(50 * time.Millisecond):
+		t.Fatal("closeCh was not signalled after pre-cancelled Close — reconnectLoop would leak")
+	}
+}
+
 // TestConnection_Close_Idempotent verifies that a second Close call
 // returns nil immediately (the underlying connection is already closed).
 func TestConnection_Close_Idempotent(t *testing.T) {

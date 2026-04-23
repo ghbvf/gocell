@@ -667,6 +667,12 @@ func (c *Connection) ConnectionStatus() ConnectionState {
 // expiry is honoured even if the broker handshake takes longer than the
 // caller's budget allows.
 //
+// closeCh signaling and channel-pool drain run unconditionally, even when
+// ctx is already cancelled — these are local state-machine transitions that
+// must happen on every Close to prevent the reconnect loop from leaking
+// past process-shutdown. Only the AMQP network handshake is gated by ctx
+// via adapterutil.CloseWithDeadline.
+//
 // Close is idempotent: a second call returns nil immediately.
 //
 // ref: uber-go/fx app.go StopTimeout — ctx carries the shared shutdown budget.
@@ -674,10 +680,6 @@ func (c *Connection) ConnectionStatus() ConnectionState {
 // then conn.Close() with the caller's budget.
 // ref: rabbitmq/amqp091-go channel.go Close — IsClosed short-circuit pattern.
 func (c *Connection) Close(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
 	c.mu.Lock()
 	if c.closed {
 		c.mu.Unlock()
@@ -692,7 +694,9 @@ func (c *Connection) Close(ctx context.Context) error {
 
 	// conn.Close() performs a network handshake (AMQP connection.close
 	// frame exchange) and may block. The helper runs it in a goroutine so
-	// the caller's context budget is honoured.
+	// the caller's context budget is honoured. A pre-cancelled ctx makes
+	// the helper return ctx.Err() without dialing the broker — closeCh and
+	// the channel pool above have already been cleaned up.
 	return adapterutil.CloseWithDeadline(ctx, "rabbitmq", func() error {
 		if conn == nil {
 			return nil
