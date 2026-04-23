@@ -88,6 +88,9 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 			"This verifies the full wiring chain: WithMetricsProvider → autoWireHTTPMetricsCollector "+
 			"→ router.WithMetricsCollector → middleware.Metrics → RecordRequest → Prometheus registry. "+
 			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
+	assert.Contains(t, bodyStr, `cell="corebundle"`,
+		"R2: /metrics output must have cell=\"corebundle\" label (proves auto-wire derives cell label from assembly ID). "+
+			"Got /metrics body (first 400 chars): %s", truncateMetrics(bodyStr, 400))
 }
 
 // truncateMetrics returns at most n characters of s for use in assertion messages.

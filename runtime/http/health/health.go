@@ -19,8 +19,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/ghbvf/gocell/kernel/assembly"
 )
 
@@ -170,7 +168,6 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 //
 // ref: k8s.io/apiserver/pkg/server/healthz — server-side deadline, probe
 // independence from request lifecycle.
-// ref: golang.org/x/sync/errgroup — parallel probe execution pattern.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.shuttingDown.Load() {
@@ -277,13 +274,18 @@ func writeReadyzResponse(
 	writeJSON(w, httpStatus, response)
 }
 
-// runProbesParallel executes all checkers in parallel, bounded by h.deadline.
-// Each probe runs in its own goroutine; panics are recovered and surfaced as
-// unhealthy results. The probe ctx is derived from context.Background() so
-// that request-level cancellation (kubelet disconnect) does not cancel probes.
+// runProbesParallel executes all checkers in parallel, bounded by h.deadline
+// at the aggregator level. When the deadline fires, probes that have not yet
+// returned are marked with Status="timeout" and the function returns
+// immediately — their goroutines leak until the underlying probe naturally
+// exits. This is an intentional trade-off: bounding /readyz response time
+// (operational priority) over bounding goroutine lifetime. Probes MUST
+// honour ctx.Done to avoid leaks; probes that ignore ctx will leak.
+//
+// The probe ctx is derived from context.Background() so that request-level
+// cancellation (kubelet disconnect) does not cancel probes.
 //
 // ref: k8s.io/apiserver/pkg/server/healthz — background-ctx readyz deadline.
-// ref: golang.org/x/sync/errgroup — parallel execution without WaitGroup boilerplate.
 func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]ProbeResult {
 	results := make(map[string]ProbeResult, len(checkers))
 	if len(checkers) == 0 {
@@ -296,26 +298,63 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 	defer cancel()
 
 	var mu sync.Mutex
-	// Use errgroup solely for fan-out coordination; we never surface group errors
-	// (each probe's error is captured in ProbeResult). errgroup.Group (not
-	// WithContext) avoids cancelling the shared ctx on the first probe error.
-	var eg errgroup.Group
 
+	// Start one goroutine per probe; each writes its ProbeResult into
+	// results only if the deadline branch hasn't already filled that slot.
+	// NOTE: An uncooperative probe (one that ignores ctx) will leak its
+	// goroutine past this function's return — its goroutine continues
+	// running until the probe naturally exits. This is the known trade-off
+	// of hard deadline + cooperative ctx: we choose to bound /readyz
+	// response time (operational priority) over bounding goroutine
+	// lifetime. Operators SHOULD make probes honour ctx.Done.
+	var wg sync.WaitGroup
+	wg.Add(len(checkers))
 	for name, fn := range checkers {
 		name, fn := name, fn // capture loop vars
-		eg.Go(func() error {
+		go func() {
+			defer wg.Done()
 			pr := runOneProbe(ctx, fn)
 			mu.Lock()
-			results[name] = pr
+			if _, filled := results[name]; !filled {
+				results[name] = pr
+			}
 			mu.Unlock()
-			return nil // group error always nil; probe outcome lives in results
-		})
+		}()
 	}
-	// eg.Wait error is always nil by construction: every goroutine returns nil; probe
-	// outcomes live in the results map. If a future change returns non-nil from the
-	// goroutine, this discard will silently drop it — audit this line if refactoring.
-	_ = eg.Wait()
-	return results
+
+	done := make(chan struct{})
+	go func() { wg.Wait(); close(done) }()
+
+	select {
+	case <-done:
+		// All probes completed before deadline.
+	case <-ctx.Done():
+		// Deadline exceeded; fill every unfilled slot with "timeout".
+		// Late-arriving probes (see goroutine above) will see their slot
+		// already filled and skip the write.
+		mu.Lock()
+		for name := range checkers {
+			if _, ok := results[name]; !ok {
+				results[name] = ProbeResult{
+					Status:   "timeout",
+					Duration: h.deadline,
+					Err: fmt.Errorf("probe %q did not return within deadline %s (ctx: %w)",
+						name, h.deadline, ctx.Err()),
+				}
+			}
+		}
+		mu.Unlock()
+	}
+
+	// Snapshot results under lock to insulate caller from late-arriving
+	// probe goroutines that may still mutate the map.
+	mu.Lock()
+	snap := make(map[string]ProbeResult, len(results))
+	for k, v := range results {
+		snap[k] = v
+	}
+	mu.Unlock()
+	return snap
 }
 
 // runOneProbe executes a single Checker inside a recover fence and returns a

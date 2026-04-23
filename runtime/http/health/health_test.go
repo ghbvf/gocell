@@ -818,6 +818,49 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 		"truncated error must end with '...'; got %q", errField)
 }
 
+// TestReadyz_UncooperativeChecker_StillReturnsWithinDeadline covers the
+// aggregator-level hard deadline: a probe that ignores ctx.Done must NOT
+// block /readyz beyond h.deadline. The probe's goroutine continues running
+// in the background (known trade-off, documented in runProbesParallel).
+func TestReadyz_UncooperativeChecker_StillReturnsWithinDeadline(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-uncooperative", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm, WithDeadline(80*time.Millisecond))
+
+	// Checker that blocks indefinitely while completely ignoring ctx.
+	// The cleanup closes the channel so the leaked goroutine can exit when
+	// the test ends, avoiding goroutine leaks across test runs.
+	unblock := make(chan struct{})
+	t.Cleanup(func() { close(unblock) })
+	h.RegisterChecker("stuck", func(_ context.Context) error {
+		<-unblock
+		return nil
+	})
+
+	rr := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose", nil)
+
+	start := time.Now()
+	h.ReadyzHandler()(rr, req)
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 200*time.Millisecond,
+		"handler must return within ~deadline (80ms) even with uncooperative probe; got %v", elapsed)
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+
+	var body struct {
+		Status       string                    `json:"status"`
+		Dependencies map[string]map[string]any `json:"dependencies"`
+	}
+	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
+	assert.Equal(t, "unhealthy", body.Status)
+	stuck, ok := body.Dependencies["stuck"]
+	require.True(t, ok, "stuck probe must appear in verbose output")
+	assert.Equal(t, "timeout", stuck["status"])
+}
+
 // TestReadyz_VerboseDependencies_StructuredOutput verifies the new structured
 // dependency format: each entry is a map with "status", "duration_ms" fields
 // (and optionally "error" for non-healthy probes).
