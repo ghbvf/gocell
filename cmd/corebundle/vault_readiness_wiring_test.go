@@ -162,13 +162,17 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	require.NoError(t, err)
 	defer verboseResp.Body.Close()
 
+	// /readyz?verbose returns structured dependency probe results
+	// (ProbeResult schema: status + duration_ms + optional error).
 	var body struct {
-		Status       string            `json:"status"`
-		Dependencies map[string]string `json:"dependencies"`
+		Status       string                    `json:"status"`
+		Dependencies map[string]map[string]any `json:"dependencies"`
 	}
 	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
 	assert.Equal(t, "unhealthy", body.Status)
-	assert.Equal(t, "unhealthy", body.Dependencies["fake_key_provider_ready"],
+	probe, ok := body.Dependencies["fake_key_provider_ready"]
+	require.True(t, ok, "fake_key_provider_ready must appear in /readyz?verbose")
+	assert.Equal(t, "unhealthy", probe["status"],
 		"fake_key_provider_ready must appear in /readyz?verbose as unhealthy")
 
 	cancel()

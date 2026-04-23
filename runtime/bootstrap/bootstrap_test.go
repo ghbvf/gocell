@@ -1052,7 +1052,11 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if !ok {
 			return false
 		}
-		return deps[configWatcherCheckerName] == "healthy"
+		probe, ok := deps[configWatcherCheckerName].(map[string]any)
+		if !ok {
+			return false
+		}
+		return probe["status"] == "healthy"
 	}, 3*time.Second, 50*time.Millisecond, "config watcher did not become ready in time")
 
 	cancel()
@@ -1105,7 +1109,11 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 			return false
 		}
 		// Config drift checker should be registered and healthy (no drift).
-		return deps[configDriftCheckerName] == "healthy"
+		probe, ok := deps[configDriftCheckerName].(map[string]any)
+		if !ok {
+			return false
+		}
+		return probe["status"] == "healthy"
 	}, 3*time.Second, 50*time.Millisecond, "config-drift checker not found or not healthy")
 
 	cancel()
@@ -1245,7 +1253,11 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if !ok {
 			return false
 		}
-		return deps[configDriftCheckerName] == "unhealthy"
+		probe, ok := deps[configDriftCheckerName].(map[string]any)
+		if !ok {
+			return false
+		}
+		return probe["status"] == "unhealthy"
 	}, 5*time.Second, 100*time.Millisecond, "readyz should return 503 with config-drift unhealthy")
 
 	cancel()
@@ -1344,7 +1356,9 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
-	assert.Equal(t, "healthy", deps["eventrouter"])
+	erProbe, ok := deps["eventrouter"].(map[string]any)
+	require.True(t, ok, "eventrouter probe must be a structured ProbeResult")
+	assert.Equal(t, "healthy", erProbe["status"])
 
 	cancel()
 	select {
@@ -3521,7 +3535,9 @@ func TestWithBrokerHealth_RegistersChecker(t *testing.T) {
 			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 			deps, ok := body["dependencies"].(map[string]any)
 			require.True(t, ok, "response must contain dependencies map")
-			assert.Equal(t, tt.wantDepsValue, deps[tt.wantDepsKey])
+			probe, ok := deps[tt.wantDepsKey].(map[string]any)
+			require.True(t, ok, "dependency %q must be a structured ProbeResult", tt.wantDepsKey)
+			assert.Equal(t, tt.wantDepsValue, probe["status"])
 
 			cancel()
 			select {
@@ -3867,8 +3883,9 @@ func TestWithRelayHealth_TrippedBudget_Returns503(t *testing.T) {
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
-	pollStatus, _ := deps["outbox-relay-poll"].(string)
-	assert.Equal(t, "unhealthy", pollStatus, "outbox-relay-poll: status must be unhealthy")
+	pollProbe, ok := deps["outbox-relay-poll"].(map[string]any)
+	require.True(t, ok, "outbox-relay-poll must be a structured ProbeResult")
+	assert.Equal(t, "unhealthy", pollProbe["status"], "outbox-relay-poll: status must be unhealthy")
 
 	// Phase 2: store recovers — budget must reset and /readyz must return 200.
 	store.setClaimErr(nil)
