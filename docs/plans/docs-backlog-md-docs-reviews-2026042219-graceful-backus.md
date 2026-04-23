@@ -25,6 +25,8 @@
 - **问题**：安全漏洞、兼容性缺口、测试/CI 不足、tech debt、bug、死代码、文档事实漂移
 - **功能**：新端点/新能力、新模块、发布与文档、长期规划
 
+**2026-04-23 更新**：纳入 `docs/backlog_later_detail.md` 架构问题（Metadata G-1~G-6、Kernel 子模块、Adapter 分层重整、架构风险、契约增强、Spec tech-debt、WinMDM），按原等级归位。保留原始决策理由以防语境流失。
+
 ---
 
 ## PR#211–#227 核销对照（含 backlog 状态同步提示）
@@ -68,6 +70,10 @@
 | A8 verif. | **CMD-THICK-ENTRY-REDUCE-01**（P1-13 PARTIALLY）继续缩减 `cmd/corebundle/main.go` | 2h | `cmd/corebundle/` |
 | **新·P1-A** | **PRINCIPAL-UNIFIED-CONTRACT-01**（auth-federated-whistle F7）统一 Principal 契约，运行时鉴权语义收口 | 4h | `runtime/auth/` + 各 cell middleware |
 | **新·PR220-5** | **EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01** `EventRouter.AddHandler` 拆 `ConsumerGroup`（broker/dedupe）与 `CellID`（observability），消除注释"consumerGroup 必须传 cell ID"与实现矛盾 | 3h | `runtime/eventrouter/` + `kernel/outbox/` + `cells/*/cell.go` |
+| **G-1** | **FMT-11 DYNAMIC-FIELD-ISOLATION-01** (HIGH): 动态状态字段（readiness/risk/blocker）禁入非 `status-board.yaml`；严格隔离项目治理数据与源码框架事实。**理由**：之前评审发现大量元数据污染核心描述文件。 | 3h | `kernel/governance/rules_fmt.go` + 测试 |
+| **LATER-K1** | **KERNEL/WRAPPER** (P1): 契约级可观测代理（Traced wrapper），在应用边界处理自动追踪链路等切面逻辑。**理由**：`URLParam` 剥离重构时暂延；作为提高可溯源性必须补全。 | 8h | `kernel/wrapper/`（新） |
+| **LATER-K2** | **KERNEL/COMMAND** (P1): 命令队列接口支持，补充框架级 L4 操作基建。**理由**：当前 `devicecell` L4 下发仅依赖适配器透传，缺统一底座。 | 8h | `kernel/command/`（新） |
+| **LATER-SD-1** | **CONTRACT-META-01** (P1): 传输层语义一等公民化，`contract.yaml` 补 `Method / Path / PathParams / QueryParams / SuccessStatus / NoContent` 静态界定。**理由**：当前仅支持 Body JSON schema，隐式传输逻辑无治理；对标 Kratos Method Binding / goa。 | 2d | `kernel/metadata/` + `kernel/governance/` + 各 `contract.yaml` |
 
 ### P2 — 本版本内
 
@@ -75,16 +81,20 @@
 
 | ID | 任务 | 工时 | 关键文件 |
 |---|---|---|---|
-| R2 | **OBS-HTTP-COLLECTOR-AUTOWIRE-01** `WithMetricsProvider` 自动构造默认 HTTP collector | 2h 🟡 | `runtime/bootstrap/bootstrap.go` |
+| ~~R2~~ | ~~**OBS-HTTP-COLLECTOR-AUTOWIRE-01** `WithMetricsProvider` 自动构造默认 HTTP collector~~ ✅ PR#228（PR-A4） | ~~2h~~ | ~~`runtime/bootstrap/bootstrap.go`~~ |
 | R4 | **INTERNAL-LISTENER-01** `/internal/v1/*` 独立 listener 或 service-token/mTLS | 4-8h 🟡 | `runtime/bootstrap/bootstrap.go` |
-| A21 | **HEALTH-CHECKER-CTX-BUDGET-01** `Checker` 升级 `func(ctx) error` + 统一 deadline + 并行 | 3h 🟡 | `runtime/http/health/` + `kernel/lifecycle/` |
+| ~~A21~~ | ~~**HEALTH-CHECKER-CTX-BUDGET-01** `Checker` 升级 `func(ctx) error` + 统一 deadline + 并行~~ ✅ PR#228（PR-A4；含 ProbeResult 结构化 verbose 输出 + 独立派生 ctx + errgroup 并行） | ~~3h~~ | ~~`runtime/http/health/` + `kernel/lifecycle/`~~ |
 | L7 | **FMT15-NEXTCURSOR-ENFORCE-01** 治理规则强制 `hasMore`+`nextCursor` 同时存在 | 2h 🟡 | `kernel/governance/rules_fmt.go` |
 | L8 ✅ | **PAGINATION-HELPER-EXTRACT-01** 抽 `pkg/httputil/pagination.go` 公共 helper | done | `pkg/httputil/pagination.go:13` `ParsePageParamsOrWrite` 已存在并被 handler（如 `cells/configcore/slices/configread/handler.go:34-47`）消费 |
-| L11 | **GOVERNANCE-CI-MAINBRANCH-01** governance workflow 扩展到 `main`/`release/**` | 0.5h 🟡 | `.github/workflows/governance.yml` |
-| L8 | **PAGINATION-HELPER-EXTRACT-01** 抽 `pkg/httputil/pagination.go` 公共 helper | 2h 🟡 | `pkg/httputil/pagination.go`（新） |
 | L11 | **GOVERNANCE-CI-MAINBRANCH-01** governance workflow 扩展到 `main`/`release/**` — ✅ PR-A1 | resolved | `.github/workflows/governance.yml` |
 | **新·PR220-2** | **DOC-NAMING-GUARD-01** 建 `cmd/gocell/app/naming_docs_test.go` + `naming-guard.yaml`，扫活动文档禁旧 `my-app`/`sso-bff`/`core-bundle`/旧 slice 名 | 3h | `cmd/gocell/app/` + CI |
 | **新·PR220-4** | **CI-LINT-EVENT-SEMANTIC-SPLIT-01** `push` 全量 lint / `pull_request` 保留 diff 降噪；修 merge-base 退化 — ✅ PR-A1：`_build-lint.yml` reusable `workflow_call` + `ci.yml`（push 全量）+ `pr-check.yml`（PR 降噪） | resolved | `.github/workflows/_build-lint.yml` + `ci.yml` + `pr-check.yml` |
+| **G-2** | **TOPO-07 MAXCONSISTENCYLEVEL-ENFORCE-01** (MEDIUM): `actor.maxConsistencyLevel` 当前 `kernel/metadata/parser.go` 已解析，但校验阶段不阻断非合规等级。**修复**：校验阶段 fail-fast。 | 2h | `kernel/metadata/parser.go` + `kernel/governance/` |
+| **G-4** | **DEPRECATED-CONTRACT-BREAK-01** (MEDIUM): 依赖标 `deprecated` 状态 contract 当前仅 warning，未主动阻断。**修复**：CI / validate --strict 升级为 break 构建。 | 2h | `kernel/governance/` |
+| **LATER-K3** | **KERNEL/WEBHOOK** (P2): Webhook 出站 Receiver/Dispatcher 抽象模型。**理由**：附加 HMAC 安全认证 + SSRF 白名单防范；依赖 L3 Outbox Relay 稳定后。**并入 WM-4 延后项**。 | 3d | `kernel/webhook/`（新） |
+| **LATER-K4** | **KERNEL/RECONCILE** (P2): L3 弱规范最终状态收敛控制循环（Reconciler 模式）。**理由**：无实际业务紧迫需求，备赛。 | 2d | `kernel/reconcile/`（新） |
+| **LATER-K5** | **RUNTIME/SCHEDULER** (P2): Cron 表达式 + 完整定时任务支持。**理由**：当前 `PeriodicWorker` 仅固定间隔，缺分布式防重 + 并发 + Cron 调度。 | 2d | `runtime/scheduler/`（新） |
+| **LATER-AL-R** | **RMQ-STATUS-01** (P2): RabbitMQ `ConnectionStatus()` 返回裸 enum，需重构为结构化 `ConnectionState{state, message, lastError}`。**理由**：Dashboard 诊断级数据需要。 | 3h | `adapters/rabbitmq/connection.go` |
 
 #### 🔄 本 PR 拆出条目（PR-A1 lint 彻底化衍生）
 
@@ -118,6 +128,8 @@
 
 ### P3 — 长期架构演进
 
+#### Auth / Refresh 演进
+
 | ID | 任务 | 前置 |
 |---|---|---|
 | X1 | **PG-DOMAIN-REPO** 5 个域 Repository PG 实现；联动 RBAC-ASSIGN-LEVEL-UPGRADE + SEED-ROLE-IFACE + ACCESS-LEVEL-AUDIT + AUTH-CACHE 激活 | — |
@@ -127,12 +139,40 @@
 | X14 | **REFRESH-GRACE-COUNTER-01** grace 窗口重用次数上限 🟠 X15 后 | — |
 | X10 | **AUTH-REFRESH-OPAQUE-01** JWT → opaque + rotation store 🟠 X1 后 | X1 |
 | X15 | **REFRESH-OPAQUE-INTEGRATION-01** sessionrefresh/login 接线 opaque 🟠 X11 后 | X11 |
-| — | **Kernel 子模块补全** wrapper (P1) / command (P1) / webhook (P2) / reconcile (P2) / scheduler (P2) / replay (P3) / rollback (P3) | 详见 backlog_later_detail.md §2 |
-| — | **Adapter 分层重整** AL-01 Outbox Relay 调度 → runtime / AL-02 DistLock 抽象 / AL-04 auth 依赖隔离 / RMQ-STATUS-01 结构化 ConnectionState | §3 |
-| — | **ER-ARCH-01** Router `time.After(500ms)` 探测 → Subscriber `Setup()`/`Run()` 双阶段 | §4 |
-| — | **Cell 接口 ISP 拆分** 12 方法基础接口 → `Cell` + `CellLifecycle` + `CellMetadata` | §4 |
-| — | **CONTRACT-META-01** 传输层描述一等公民（Method/Path/Params/Status/NoContent） | §6 |
-| — | **Metadata 治理规则补全** G-1 FMT-11 ✅ PR-A1（parser `KnownFields(true)` 已在解析期拒绝，加 `parser_strict_test.go` 7×5 回归） / G-2 TOPO-07 ✅ PR-A1（源码已为 SeverityError，加 `TestTOPO07_EnforcesMaxConsistencyLevel` 回归）/ G-4 deprecated break ✅ PR-A1（源码已为 SeverityError + IssueForbidden，加 `TestTOPO08_BlocksDeprecatedReference` 回归）/ G-6 boundary（待 PR-A24） | §1 |
+
+#### Kernel 子模块（v1.1+）
+
+| ID | 任务 | 关键文件 | 原始决策依据 |
+|---|---|---|---|
+| LATER-K6 | **KERNEL/REPLAY** (P3) 事件溯源投影重算（Projection rebuild） | `kernel/replay/`（新） | CQRS 下数据订正；依赖 Consumer 模型非常稳定后执行 |
+| LATER-K7 | **KERNEL/ROLLBACK** (P3) Rollback 元数据模型 + 跨事件撤回原语 | `kernel/rollback/`（新） | Event sourcing 补偿语义 |
+
+#### Metadata 治理规则补全
+
+| ID | 任务 | 等级 | 原始决策依据 |
+|---|---|---|---|
+| G-6 | **ASSEMBLY-BOUNDARY-DERIVED-01** assembly `boundary.yaml` 存在性 + 一致性校验 | LOW | 派生文件，辅助验证；关联 PR220-e2 GENERATED-BOUNDARY-STRATEGY |
+
+#### Adapters 分层重整（AL-01 / AL-02 / AL-04）
+
+| ID | 任务 | 原始决策依据 |
+|---|---|---|
+| AL-01 | **OUTBOX-RELAY-RUNTIME-MIGRATE-01** `adapters/postgres/outbox_relay.go` 轮询调度 → `runtime/outbox/relay.go`；Adapter 侧仅保留 SQL 存取（Store API） | 轮询调度属框架通用 runtime 循环；Adapter 应只做 SDK 胶水 |
+| AL-02 | **DISTLOCK-RUNTIME-ABSTRACT-01** `adapters/redis/distlock.go` 续期 goroutine + TTL 刷新 → 通用 DistLock 接口到 runtime 包；Redis 仅留 NX/Eval 原语 | 同上分层约定 |
+| AL-04 | **AUTH-JWT-ABSTRACT-01** `runtime/auth` 直接依赖 `golang-jwt/jwt/v5`，违反核心依赖隔离 | 技术债，需评估；JWT 是事实标准，抽象过深 YAGNI 风险 |
+
+#### 架构风险 / 设计缺口
+
+| ID | 任务 | 原始决策依据 |
+|---|---|---|
+| LATER-ARCH-1 | **CELL-IFACE-ISP-SPLIT-01** 基础 Cell 接口 12 个方法膨胀，混合 metadata accessor + lifecycle 控制；按 ISP 拆为 `Cell` + `CellLifecycle` + `CellMetadata` | 接口隔离原则；减少实现方被迫实现不相关方法 |
+| LATER-ARCH-2 | **ER-ARCH-01 SUBSCRIBER-SETUP-RUN-SPLIT** Router 启动探测 `time.After(500ms)` 硬编码时序 → Subscriber 接口拆 `Setup()`（同步等待 Topology）+ `Run()`（异步消费） | 跨 AZ 网络慢会导致假就绪竞态；协议级整改 |
+
+#### Spec Tech-Debt
+
+| ID | 任务 | 等级 | 原始决策依据 |
+|---|---|---|---|
+| DURABLE-TYPE-01 | **PERSISTENCE-TYPE-STATIC-GUARD-01** L2/L3 持久化级别当前 assembly 打包阶段 + 启动时 dynamic Panic fail-fast；探索类型系统层面静态编译保护（仓储级能力推断） | P3 | 类型抹除限制；需泛型 + interface assertion 方案研究 |
 
 ### 触发器（Triggers，条件延后）
 
@@ -202,13 +242,14 @@
 | ID | 任务 | 工时 | 关键文件 |
 |---|---|---|---|
 | L7-ex | **EXAMPLES-STARTUP-SMOKE-01** CI 加 `examples-smoke` job | 0.5h | `.github/workflows/ci.yml` |
-| R3 | **OB-02** safe_observe broken logger 注入测试 | 1h 🟡 | `runtime/http/middleware/safe_observe_test.go` |
+| ~~R3~~ | ~~**OB-02** safe_observe broken logger 注入测试~~ ✅ PR#228（PR-A4；顺带把 `safeObserve` 签名改为 `(logger, fn)` DI + 双层 recover） | ~~1h~~ | ~~`runtime/http/middleware/safe_observe_test.go`~~ |
 | S19 | **JWT-AUDIENCE-DRIFT-INTEG-TEST-01** 真实 sessionlogin 路径 drift 检测 | 2h 🟡 | `cmd/corebundle/` |
 | S21 | **JWT-AUD-TEST-TABLE-DRIVEN-01** 9 场景改 table-driven | 1h 🟡 | `runtime/auth/jwt_aud_test.go` |
 | S22 | **REFRESH-AUD-REAL-ROUTE-TEST-01** 真实 HTTP refresh wrong-aud 测试 | 2h 🟡 | `cells/accesscore/auth_integration_test.go` |
 | S24 | **AUTH-MIDDLEWARE-AUD-REFRESH-E2E-01** `httptest.NewServer` + 真实 `AuthMiddleware` | 1h 🟡 | `runtime/auth/middleware_aud_test.go` |
 | F10 | **TEST-JOURNEY-ASSEMBLY-HARNESS-01** 28 条 `t.Skip` journey 集成测试 | 8h 🟡 | `tests/integration/` + assembly fixture |
 | A10 | **OBS-LGTM-INTEGRATION-01** 夜间 OTel collector OTLP 兼容性 | 2h 🟡 | `adapters/otel/integration_test.go` |
+| **LATER-T-1** | **ADAPTER-TSKIP-BACKFILL-01** 6 个主干 adapter 15 处 `t.Skip` 黑盒盲区，需补 Testcontainer | 1-2d | `adapters/*/*_test.go` |
 
 #### CI / 供应链
 
