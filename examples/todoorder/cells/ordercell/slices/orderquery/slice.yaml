@@ -1,0 +1,16 @@
+id: orderquery
+belongsToCell: ordercell
+contractUsages:
+  - contract: http.order.get.v1
+    role: serve
+  - contract: http.order.list.v1
+    role: serve
+verify:
+  unit:
+    - unit.orderquery.service
+  contract:
+    - contract.http.order.get.v1.serve
+    - contract.http.order.list.v1.serve
+
+allowedFiles:
+  - examples/todoorder/cells/ordercell/slices/orderquery/**

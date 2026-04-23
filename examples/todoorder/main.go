@@ -18,7 +18,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	ordercell "github.com/ghbvf/gocell/cells/ordercell"
+	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"

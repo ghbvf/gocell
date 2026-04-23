@@ -101,6 +101,16 @@ func contractDirFromID(id string) string {
 	return filepath.Join("contracts", filepath.Join(segments...))
 }
 
+func contractDirFromMeta(c *metadata.ContractMeta) string {
+	if c != nil && c.Dir != "" {
+		return c.Dir
+	}
+	if c == nil {
+		return ""
+	}
+	return contractDirFromID(c.ID)
+}
+
 // --- collection helpers ---
 
 func containsRole(roles []cell.ContractRole, target cell.ContractRole) bool {

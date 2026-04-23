@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	devicecell "github.com/ghbvf/gocell/cells/devicecell"
+	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"

@@ -36,7 +36,7 @@ func NewTargetSelector(project *metadata.ProjectMeta) *TargetSelector {
 // and returns affected targets.
 //
 // Mapping logic:
-//  1. File path -> slice (via directory convention: cells/{cellID}/slices/{sliceID}/**)
+//  1. File path -> slice (via parsed cell/slice source directories)
 //  2. Slice -> cell (via belongsToCell)
 //  3. Slice -> contracts (via contractUsages)
 //  4. Cell -> journeys (via journey.cells)
@@ -106,42 +106,61 @@ func (ts *TargetSelector) SelectFromSlice(sliceKey string) *AffectedTargets {
 	return ts.expandFromSlices(sliceSet)
 }
 
-// matchSliceFromCellsPath handles paths under cells/.
-// Returns true if the path was consumed (matched cells/ prefix).
+// matchSliceFromCellsPath handles paths under parsed cell directories
+// (cells/* and examples/*/cells/*).
+// Returns true if the path was consumed (matched a known cell path).
 // fileCellSet tracks which cells are directly hit by file paths
 // (used for L0 dependency propagation).
 func (ts *TargetSelector) matchSliceFromCellsPath(f string, sliceSet, fileCellSet map[string]struct{}) bool {
-	// Expect: cells/{cellID}/...
+	for key, s := range ts.project.Slices {
+		if s.File == "" {
+			continue
+		}
+		if pathWithin(f, path.Dir(s.File)) {
+			sliceSet[key] = struct{}{}
+			fileCellSet[s.BelongsToCell] = struct{}{}
+			return true
+		}
+	}
+
+	for cellID, c := range ts.project.Cells {
+		if c.File == "" {
+			continue
+		}
+		if !pathWithin(f, path.Dir(c.File)) {
+			continue
+		}
+		fileCellSet[cellID] = struct{}{}
+		for key, s := range ts.project.Slices {
+			if s.BelongsToCell == cellID {
+				sliceSet[key] = struct{}{}
+			}
+		}
+		return true
+	}
+	return ts.matchLegacyCellsPath(f, sliceSet, fileCellSet)
+}
+
+func (ts *TargetSelector) matchLegacyCellsPath(f string, sliceSet, fileCellSet map[string]struct{}) bool {
 	if !strings.HasPrefix(f, "cells/") {
 		return false
 	}
-
 	parts := strings.Split(f, "/")
-	// parts[0] = "cells", parts[1] = cellID, ...
 	if len(parts) < 2 {
-		return true // malformed, but under cells/
+		return true
 	}
 	cellID := parts[1]
-
-	// Check if the cell exists in the project.
 	if _, ok := ts.project.Cells[cellID]; !ok {
 		return true
 	}
-
-	// Track this cell as directly affected by a file change.
 	fileCellSet[cellID] = struct{}{}
-
-	// cells/{cellID}/slices/{sliceID}/**
 	if len(parts) >= 4 && parts[2] == "slices" {
-		sliceID := parts[3]
-		key := cellID + "/" + sliceID
+		key := cellID + "/" + parts[3]
 		if _, ok := ts.project.Slices[key]; ok {
 			sliceSet[key] = struct{}{}
 		}
 		return true
 	}
-
-	// cells/{cellID}/** (non-slices path) -> all slices of that cell.
 	for key, s := range ts.project.Slices {
 		if s.BelongsToCell == cellID {
 			sliceSet[key] = struct{}{}
@@ -155,6 +174,17 @@ func (ts *TargetSelector) matchSliceFromCellsPath(f string, sliceSet, fileCellSe
 // that reference that contract via contractUsages.
 // Returns true if the path was consumed (matched contracts/ prefix).
 func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[string]struct{}) bool {
+	matched := false
+	for contractID, c := range ts.project.Contracts {
+		if contractPathMatches(c, f) {
+			ts.addSlicesForContract(contractID, sliceSet)
+			matched = true
+		}
+	}
+	if matched {
+		return true
+	}
+
 	if !strings.HasPrefix(f, "contracts/") {
 		return false
 	}
@@ -172,7 +202,52 @@ func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[str
 		return true
 	}
 
-	// Reverse lookup: find all slices that use this contract.
+	ts.addSlicesForContract(contractID, sliceSet)
+	return true
+}
+
+func contractPathMatches(c *metadata.ContractMeta, f string) bool {
+	if c == nil {
+		return false
+	}
+	contractDir := c.Dir
+	if contractDir == "" {
+		contractDir = strings.ReplaceAll(contractDirFromID(c.ID), "\\", "/")
+	}
+	if contractDir != "" && pathWithin(f, contractDir) {
+		return true
+	}
+	for _, ref := range contractSchemaRefs(c) {
+		if ref == "" || contractDir == "" {
+			continue
+		}
+		ref = strings.ReplaceAll(ref, "\\", "/")
+		if path.Clean(path.Join(contractDir, ref)) == f {
+			return true
+		}
+	}
+	return false
+}
+
+func contractSchemaRefs(c *metadata.ContractMeta) []string {
+	refs := []string{
+		c.SchemaRefs.Request,
+		c.SchemaRefs.Response,
+		c.SchemaRefs.Payload,
+		c.SchemaRefs.Headers,
+	}
+	for _, ref := range c.SchemaRefs.Extra {
+		refs = append(refs, ref)
+	}
+	if c.Endpoints.HTTP != nil {
+		for _, resp := range c.Endpoints.HTTP.Responses {
+			refs = append(refs, resp.SchemaRef)
+		}
+	}
+	return refs
+}
+
+func (ts *TargetSelector) addSlicesForContract(contractID string, sliceSet map[string]struct{}) {
 	for key, s := range ts.project.Slices {
 		for _, cu := range s.ContractUsages {
 			if cu.Contract == contractID {
@@ -181,7 +256,6 @@ func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[str
 			}
 		}
 	}
-	return true
 }
 
 // matchFromJourneyPath handles paths under journeys/.
@@ -189,6 +263,14 @@ func (ts *TargetSelector) matchSlicesFromContractPath(f string, sliceSet map[str
 // status-board.yaml) are ignored.
 // Returns true if the path was consumed (matched journeys/ prefix).
 func (ts *TargetSelector) matchFromJourneyPath(f string, cellSet map[string]struct{}, contractSet map[string]struct{}) bool {
+	for _, journey := range ts.project.Journeys {
+		if journey.File == "" || f != journey.File {
+			continue
+		}
+		ts.addJourneyTargets(journey, cellSet, contractSet)
+		return true
+	}
+
 	if !strings.HasPrefix(f, "journeys/") {
 		return false
 	}
@@ -209,17 +291,17 @@ func (ts *TargetSelector) matchFromJourneyPath(f string, cellSet map[string]stru
 		return true
 	}
 
-	// Add journey's cells to the cell set.
+	ts.addJourneyTargets(journey, cellSet, contractSet)
+	return true
+}
+
+func (ts *TargetSelector) addJourneyTargets(journey *metadata.JourneyMeta, cellSet map[string]struct{}, contractSet map[string]struct{}) {
 	for _, cellID := range journey.Cells {
 		cellSet[cellID] = struct{}{}
 	}
-
-	// Add journey's contracts to the contract set.
 	for _, contractID := range journey.Contracts {
 		contractSet[contractID] = struct{}{}
 	}
-
-	return true
 }
 
 // matchFromAssemblyPath handles paths under assemblies/.
@@ -269,6 +351,12 @@ func (ts *TargetSelector) contractIDFromPath(f string) string {
 
 	// Replace slashes with dots to form the contract ID.
 	return strings.ReplaceAll(dir, "/", ".")
+}
+
+func pathWithin(file, dir string) bool {
+	dir = strings.TrimSuffix(path.Clean(dir), "/")
+	file = path.Clean(file)
+	return file == dir || strings.HasPrefix(file, dir+"/")
 }
 
 // expandL0Dependents checks whether any file-change-affected cell is L0,

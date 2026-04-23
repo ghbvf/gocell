@@ -73,14 +73,22 @@ type endpointsYAML struct {
 // ContractsRoot returns the absolute path to the contracts/ directory,
 // derived from the source location of this package.
 func ContractsRoot() string {
+	return filepath.Join(projectRoot(), "contracts")
+}
+
+// ExampleContractsRoot returns the absolute path to an example's contracts/
+// directory. The example name is the directory under examples/.
+func ExampleContractsRoot(example string) string {
+	return filepath.Join(projectRoot(), "examples", example, "contracts")
+}
+
+func projectRoot() string {
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
 		panic("contracttest: runtime.Caller failed")
 	}
 	// thisFile = .../pkg/contracttest/contracttest.go
-	// walk up to project root, then append contracts/
-	srcDir := filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
-	return filepath.Join(srcDir, "contracts")
+	return filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
 }
 
 // Load reads contract.yaml from contractDir, compiles all referenced
