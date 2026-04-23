@@ -13,6 +13,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	configcoretest "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
@@ -229,7 +230,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	versionBefore := entryBefore.Version
 
 	// Now inject a failing writer — simulates outbox broker down during Rollback.
-	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}
+	failingWriter := &configcoretest.RecordingWriter{Err: errors.New("outbox broker down")}
 	svcFail := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),

@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	configcoretest "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
@@ -44,7 +45,7 @@ var _ persistence.TxRunner = (*cancellingTxRunner)(nil)
 //  3. The outbox writer received no entries.
 func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{}
+	writer := &configcoretest.RecordingWriter{}
 	txRunner := &cancellingTxRunner{}
 
 	svc, err := NewService(repo, slog.Default(),
@@ -69,7 +70,7 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 		"ErrFlagNotFound expected — flag must not persist after ctx cancel rollback")
 
 	// Verify outbox has no durable entries.
-	assert.Empty(t, writer.entries, "outbox must have no entries after rollback")
+	assert.Empty(t, writer.Entries, "outbox must have no entries after rollback")
 }
 
 // TestFlagWrite_Toggle_CtxCancel_ReturnsError verifies Toggle propagates
@@ -77,7 +78,7 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	// Seed a flag so Toggle reaches the RunInTx call.
-	writer := &recordingWriter{}
+	writer := &configcoretest.RecordingWriter{}
 	seedSvc, err := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
 	require.NoError(t, err)
@@ -87,7 +88,7 @@ func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 	// Now create a service with the cancelling tx runner.
 	cancelTx := &cancellingTxRunner{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(cancelTx))
+		WithEmitter(testoutbox.MustEmitter(t, &configcoretest.RecordingWriter{})), WithTxManager(cancelTx))
 	require.NoError(t, err)
 
 	_, err = svc.Toggle(context.Background(), "toggle-cancel", true)
@@ -104,7 +105,7 @@ func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 // context cancellation and leaves the flag unchanged.
 func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{}
+	writer := &configcoretest.RecordingWriter{}
 	seedSvc, err := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
 	require.NoError(t, err)
@@ -116,7 +117,7 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 
 	cancelTx := &cancellingTxRunner{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(cancelTx))
+		WithEmitter(testoutbox.MustEmitter(t, &configcoretest.RecordingWriter{})), WithTxManager(cancelTx))
 	require.NoError(t, err)
 
 	_, err = svc.Update(context.Background(), UpdateInput{
@@ -138,7 +139,7 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 // context cancellation and leaves the flag in the repo.
 func TestFlagWrite_Delete_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{}
+	writer := &configcoretest.RecordingWriter{}
 	seedSvc, err := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
 	require.NoError(t, err)
@@ -147,7 +148,7 @@ func TestFlagWrite_Delete_CtxCancel_ReturnsError(t *testing.T) {
 
 	cancelTx := &cancellingTxRunner{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(cancelTx))
+		WithEmitter(testoutbox.MustEmitter(t, &configcoretest.RecordingWriter{})), WithTxManager(cancelTx))
 	require.NoError(t, err)
 
 	err = svc.Delete(context.Background(), "delete-cancel")

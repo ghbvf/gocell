@@ -317,7 +317,7 @@ func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManag
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
-		pool.Close()
+		_ = pool.Close(ctx)
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("WARN: failed to terminate postgres container: %v", err)
 		}

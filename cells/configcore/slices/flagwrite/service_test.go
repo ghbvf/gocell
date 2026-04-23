@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	configcoretest "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/stretchr/testify/assert"
@@ -18,21 +19,6 @@ import (
 )
 
 // --- test doubles ---
-
-type recordingWriter struct {
-	entries []outbox.Entry
-	err     error
-}
-
-func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
-	if w.err != nil {
-		return w.err
-	}
-	w.entries = append(w.entries, entry)
-	return nil
-}
-
-var _ outbox.Writer = (*recordingWriter)(nil)
 
 type noopTxRunner struct{ calls int }
 
@@ -65,10 +51,10 @@ var _ outbox.Publisher = stubPublisher{}
 
 // --- helpers ---
 
-func newDurableTestService(t *testing.T) (*Service, *mem.FlagRepository, *recordingWriter) {
+func newDurableTestService(t *testing.T) (*Service, *mem.FlagRepository, *configcoretest.RecordingWriter) {
 	t.Helper()
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{}
+	writer := &configcoretest.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)),
 		WithTxManager(&noopTxRunner{}))
@@ -103,7 +89,7 @@ func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 		name string
 		opts []Option
 	}{
-		{"only_emitter", []Option{WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{}))}},
+		{"only_emitter", []Option{WithEmitter(testoutbox.MustEmitter(t, &configcoretest.RecordingWriter{}))}},
 		{"only_tx_runner", []Option{WithTxManager(&noopTxRunner{})}},
 	}
 	for _, tc := range cases {
@@ -120,7 +106,7 @@ func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 // outbox in a single tx; repo failure also prevents outbox write.
 func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{}
+	writer := &configcoretest.RecordingWriter{}
 	tx := &noopTxRunner{}
 	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
@@ -133,8 +119,8 @@ func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "my-flag", flag.Key)
 	assert.Equal(t, 1, tx.calls, "Create must call RunInTx exactly once")
-	require.Len(t, writer.entries, 1)
-	assert.Equal(t, TopicFlagChanged, writer.entries[0].EventType)
+	require.Len(t, writer.Entries, 1)
+	assert.Equal(t, TopicFlagChanged, writer.Entries[0].EventType)
 }
 
 // TestFlagWrite_Create_RepoFails_NoOutboxWrite verifies that a tx-level
@@ -149,7 +135,7 @@ func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
 // where Write inside a rolled-back tx is genuinely discarded.
 func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{}
+	writer := &configcoretest.RecordingWriter{}
 	tx := &failingTxRunner{failErr: errors.New("tx commit failed")}
 	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
@@ -172,11 +158,11 @@ func TestFlagWrite_Toggle_EmitsFlagChangedEvent(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, flag.Enabled)
 
-	require.Len(t, writer.entries, 1)
-	assert.Equal(t, TopicFlagChanged, writer.entries[0].EventType)
+	require.Len(t, writer.Entries, 1)
+	assert.Equal(t, TopicFlagChanged, writer.Entries[0].EventType)
 
 	var payload FlagChangedPayload
-	require.NoError(t, json.Unmarshal(writer.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &payload))
 	assert.Equal(t, "toggled", payload.Action)
 	assert.Equal(t, "feature-x", payload.Key)
 	assert.True(t, payload.Enabled)
@@ -199,9 +185,9 @@ func TestFlagWrite_Update_EmitsFlagChangedEvent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "feat-update", flag.Key)
 
-	require.Len(t, writer.entries, 1)
+	require.Len(t, writer.Entries, 1)
 	var payload FlagChangedPayload
-	require.NoError(t, json.Unmarshal(writer.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &payload))
 	assert.Equal(t, "updated", payload.Action)
 	assert.Equal(t, "feat-update", payload.Key)
 }
@@ -217,9 +203,9 @@ func TestFlagWrite_Delete_EmitsFlagChangedEvent(t *testing.T) {
 	err := svc.Delete(context.Background(), "feat-delete")
 	require.NoError(t, err)
 
-	require.Len(t, writer.entries, 1)
+	require.Len(t, writer.Entries, 1)
 	var payload FlagChangedPayload
-	require.NoError(t, json.Unmarshal(writer.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &payload))
 	assert.Equal(t, "deleted", payload.Action)
 	assert.Equal(t, "feat-delete", payload.Key)
 }
@@ -228,7 +214,7 @@ func TestFlagWrite_Delete_EmitsFlagChangedEvent(t *testing.T) {
 
 func TestFlagWrite_OutboxWriteError_PropagatesFromCreate(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{err: errors.New("outbox unavailable")}
+	writer := &configcoretest.RecordingWriter{Err: errors.New("outbox unavailable")}
 	svc, err := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
 	require.NoError(t, err)
