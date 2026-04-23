@@ -159,24 +159,15 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initValidate(deps); err != nil {
 		return err
 	}
-	if err := c.initSlices(); err != nil {
-		return err
-	}
-	// Bind initialAdmin after slices so repos are ready. Bootstrap auto-discovers
-	// LifecycleHooks() and calls OnStart/OnStop — no WorkerSink plumbing needed.
-	if c.initialAdmin != nil {
-		c.initialAdmin.Bind(initialadmin.BootstrapDeps{
-			UserRepo: c.userRepo,
-			RoleRepo: c.roleRepo,
-			Logger:   c.logger,
-			Clock:    nil, // Lifecycle defaults Clock from its cfg; no per-cell override needed
-		}, c.logger)
-	}
-	return nil
+	return c.initSlices()
 }
 
 // LifecycleHooks implements cell.LifecycleContributor. Returns the initial-admin
 // hook when WithInitialAdminBootstrap was applied; nil otherwise (opt-out).
+//
+// Bootstrap phase3b calls this after Cell.Init returns, so all Cell-injected
+// repositories are available — the initialAdmin Lifecycle resolves its
+// dependencies inline here, eliminating the need for a separate Bind step.
 //
 // Bootstrap phase3b auto-discovers this interface and appends the returned hooks
 // to the Lifecycle — eliminating the old WithBootstrapWorkerSink composition-root
@@ -185,5 +176,11 @@ func (c *AccessCore) LifecycleHooks() []cell.LifecycleHook {
 	if c.initialAdmin == nil {
 		return nil
 	}
+	c.initialAdmin.Bind(initialadmin.BootstrapDeps{
+		UserRepo: c.userRepo,
+		RoleRepo: c.roleRepo,
+		Logger:   c.logger,
+		Clock:    nil,
+	}, c.logger)
 	return []cell.LifecycleHook{c.initialAdmin.Hook()}
 }

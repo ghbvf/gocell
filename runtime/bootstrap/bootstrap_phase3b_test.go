@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -10,6 +11,50 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestLifecycleHookShapeMatchesBootstrapHook is a drift guard: the field-copy
+// bridge in phase3bDiscoverLifecycleContributor silently loses any fields
+// added to bootstrap.Hook that are missing from kernel/cell.LifecycleHook
+// (or vice-versa). The reflect-based check keeps the two struct shapes in
+// lock-step: if bootstrap.Hook gains a Priority field tomorrow, this test
+// fails until cell.LifecycleHook mirrors it (or a conscious divergence is
+// documented by updating the skip-list below).
+func TestLifecycleHookShapeMatchesBootstrapHook(t *testing.T) {
+	hookT := reflect.TypeOf(Hook{})
+	cellHookT := reflect.TypeOf(cell.LifecycleHook{})
+
+	fieldSet := func(t reflect.Type) map[string]reflect.Type {
+		out := make(map[string]reflect.Type, t.NumField())
+		for i := 0; i < t.NumField(); i++ {
+			f := t.Field(i)
+			out[f.Name] = f.Type
+		}
+		return out
+	}
+
+	got := fieldSet(hookT)
+	want := fieldSet(cellHookT)
+
+	assert.Equal(t, len(want), len(got),
+		"field count drift: bootstrap.Hook has %d fields, cell.LifecycleHook has %d — update whichever is missing",
+		len(got), len(want))
+
+	for name, cellType := range want {
+		bootType, ok := got[name]
+		require.Truef(t, ok,
+			"bootstrap.Hook is missing field %q present in cell.LifecycleHook — update bootstrap.Hook or field-copy in phase3b",
+			name)
+		assert.Equalf(t, cellType.String(), bootType.String(),
+			"field %q type drift: cell.LifecycleHook has %s, bootstrap.Hook has %s",
+			name, cellType, bootType)
+	}
+	for name := range got {
+		_, ok := want[name]
+		assert.Truef(t, ok,
+			"bootstrap.Hook has field %q missing from cell.LifecycleHook — add to cell.LifecycleHook and field-copy in phase3b, or document divergence here",
+			name)
+	}
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -99,6 +144,39 @@ func TestPhase3b_EmptySliceContributor(t *testing.T) {
 
 	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
 	assert.Empty(t, ml.appended, "empty-slice LifecycleHooks must register zero hooks")
+}
+
+// TestPhase3b_DuplicateHookName_FailFast verifies phase3b rejects two cells
+// contributing a hook with the same non-empty Name — prevents silent
+// double-registration when a consumer mistakenly uses both WithLifecycle and
+// LifecycleContributor paths.
+func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
+	cellA := &lcCell{
+		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "cellA"}),
+		hooks: []cell.LifecycleHook{
+			{Name: "shared.hook", OnStart: func(_ context.Context) error { return nil }},
+		},
+	}
+	cellB := &lcCell{
+		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "cellB"}),
+		hooks: []cell.LifecycleHook{
+			{Name: "shared.hook", OnStart: func(_ context.Context) error { return nil }},
+		},
+	}
+	asm := buildAsmRegistered(t, cellA, cellB)
+	ml := &mockLifecycle{}
+	b := New()
+	b.lifecycle = ml
+
+	_, s := newPhaseState()
+	s.asm = asm
+
+	err := b.phase3bDiscoverLifecycleContributor(s)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate lifecycle hook name")
+	assert.Contains(t, err.Error(), "cellA")
+	assert.Contains(t, err.Error(), "cellB")
+	assert.Len(t, ml.appended, 1, "cellA's hook should be appended before the dup detection rolls back")
 }
 
 // TestPhase3b_NilSliceContributor verifies nil return is also a legal opt-out.

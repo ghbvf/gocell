@@ -607,27 +607,50 @@ func (b *Bootstrap) registerOneCellHealthCheckers(s *phaseState, id string, hcc 
 // Must run after phase3InitAssembly (cells need Init to have populated any
 // state the hooks close over) and before b.lifecycle.Start(ctx).
 //
+// Cross-path uniqueness: a non-empty hook Name seen earlier (either from this
+// phase or from an explicit bootstrap.WithLifecycle callback) causes phase3b
+// to fail fast rather than silently double-register. Empty Name bypasses the
+// check — callers using unnamed hooks accept the risk of duplicates.
+//
 // ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go — Hook, Append ordering.
 // ref: kernel/cell.HealthContributor — mirrored auto-discovery pattern.
 func (b *Bootstrap) phase3bDiscoverLifecycleContributor(s *phaseState) error {
+	seen := make(map[string]string) // name → first cellID that contributed it
 	for _, id := range s.asm.CellIDs() {
 		lc, ok := s.asm.Cell(id).(cell.LifecycleContributor)
 		if !ok {
 			continue
 		}
-		for _, h := range lc.LifecycleHooks() {
-			if h.OnStart == nil && h.OnStop == nil {
-				continue
+		if err := b.registerOneCellLifecycleHooks(id, lc, seen); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// registerOneCellLifecycleHooks appends the hooks from a single cell, enforcing
+// cross-cell Name uniqueness. Extracted from phase3b to keep cognitive
+// complexity under the project ceiling.
+func (b *Bootstrap) registerOneCellLifecycleHooks(id string, lc cell.LifecycleContributor, seen map[string]string) error {
+	for _, h := range lc.LifecycleHooks() {
+		if h.OnStart == nil && h.OnStop == nil {
+			continue
+		}
+		if h.Name != "" {
+			if prev, dup := seen[h.Name]; dup {
+				return fmt.Errorf("bootstrap: duplicate lifecycle hook name %q from cell %q (previously registered by cell %q)",
+					h.Name, id, prev)
 			}
-			if err := b.lifecycle.Append(Hook{
-				Name:         h.Name,
-				OnStart:      h.OnStart,
-				OnStop:       h.OnStop,
-				StartTimeout: h.StartTimeout,
-				StopTimeout:  h.StopTimeout,
-			}); err != nil {
-				return fmt.Errorf("bootstrap: cell %q lifecycle hook %q: %w", id, h.Name, err)
-			}
+			seen[h.Name] = id
+		}
+		if err := b.lifecycle.Append(Hook{
+			Name:         h.Name,
+			OnStart:      h.OnStart,
+			OnStop:       h.OnStop,
+			StartTimeout: h.StartTimeout,
+			StopTimeout:  h.StopTimeout,
+		}); err != nil {
+			return fmt.Errorf("bootstrap: cell %q lifecycle hook %q: %w", id, h.Name, err)
 		}
 	}
 	return nil
