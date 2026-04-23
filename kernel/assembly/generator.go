@@ -208,24 +208,24 @@ func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []st
 		cellSet[cellID] = true
 		cellMeta := g.cells.Get(cellID)
 		if cellMeta == nil {
-			fmt.Fprintf(h, "cell:%s:missing\n", cellID)
+			fmt.Fprintf(h, "cell:%s:missing\n", cellID) //nolint:errcheck
 			continue
 		}
-		fmt.Fprintf(h, "cell:%s:type:%s\n", cellID, cellMeta.Type)
-		fmt.Fprintf(h, "cell:%s:consistency:%s\n", cellID, cellMeta.ConsistencyLevel)
-		fmt.Fprintf(h, "cell:%s:owner:%s\n", cellID, cellMeta.Owner.Team)
-		fmt.Fprintf(h, "cell:%s:schema:%s\n", cellID, cellMeta.Schema.Primary)
+		fmt.Fprintf(h, "cell:%s:type:%s\n", cellID, cellMeta.Type)                    //nolint:errcheck
+		fmt.Fprintf(h, "cell:%s:consistency:%s\n", cellID, cellMeta.ConsistencyLevel) //nolint:errcheck
+		fmt.Fprintf(h, "cell:%s:owner:%s\n", cellID, cellMeta.Owner.Team)             //nolint:errcheck
+		fmt.Fprintf(h, "cell:%s:schema:%s\n", cellID, cellMeta.Schema.Primary)        //nolint:errcheck
 		for _, s := range cellMeta.Verify.Smoke {
-			fmt.Fprintf(h, "cell:%s:smoke:%s\n", cellID, s)
+			fmt.Fprintf(h, "cell:%s:smoke:%s\n", cellID, s) //nolint:errcheck
 		}
 	}
 
 	// Hash boundary contracts so that endpoint changes invalidate the fingerprint.
 	for _, cID := range exported {
-		fmt.Fprintf(h, "export:%s\n", cID)
+		fmt.Fprintf(h, "export:%s\n", cID) //nolint:errcheck
 	}
 	for _, cID := range imported {
-		fmt.Fprintf(h, "import:%s\n", cID)
+		fmt.Fprintf(h, "import:%s\n", cID) //nolint:errcheck
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil))
