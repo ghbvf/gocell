@@ -195,6 +195,7 @@
 | F10 | **TEST-JOURNEY-ASSEMBLY-HARNESS-01** 28 条 `t.Skip` journey 集成测试 | 8h 🟡 | `tests/integration/` + assembly fixture |
 | A10 | **OBS-LGTM-INTEGRATION-01** 夜间 OTel collector OTLP 兼容性 | 2h 🟡 | `adapters/otel/integration_test.go` |
 | N1 | **RMQ-WAITANDCLOSE-ABANDONED-GOROUTINE-TEST-01** `subscription_run.waitAndClose` 在 ctx 超时后留下 goroutine 跑完 `localWg.Wait()` 再 `close(done)`（无接收方），属于 intentional abandoned-on-timeout 模式但缺测试覆盖确认其最终退出 | 2h | `adapters/rabbitmq/subscription_run.go` + `subscription_run_test.go`（来源：PR #225 reviewer 第二轮 N1） |
+| NF-2 | **SESSIONLOGOUT-DOUBLE-REVOKE-TEST-FIX-01** `sessionlogout/service_test.go:86-93` "already revoked self logout" 用例只调 `s.Revoke()` 但漏 `repo.Update(ctx, s)`，revoke 标志未持久化；测试当前因 `RevokeByIDAndOwner` 对未撤销 session 也成功而通过——双重撤销幂等路径其实没被覆盖 | 0.5h | `cells/accesscore/slices/sessionlogout/service_test.go`（来源：PR #225 reviewer 第三轮 NF-2） |
 
 #### CI / 供应链
 
