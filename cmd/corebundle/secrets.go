@@ -4,30 +4,10 @@ package main
 import (
 	"fmt"
 	"log/slog"
-	"os"
 
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
-
-// loadSecret loads a secret from the given environment variable. In "real"
-// adapter mode, the env var is required and missing values are a hard error.
-// In dev mode, missing values fall back to devDefault with a warning.
-//
-// ref: Kubernetes two-phase validation — Complete then Validate, both fail-fast.
-func loadSecret(envKey, devDefault, adapterMode string) ([]byte, error) {
-	if v := os.Getenv(envKey); v != "" {
-		return []byte(v), nil
-	}
-	if isRealMode(adapterMode) {
-		return nil, fmt.Errorf("%s must be set in adapter mode \"real\"", envKey)
-	}
-	slog.Warn("using dev-only default; set env var for production",
-		slog.String("var", envKey),
-		slog.String("mode", "dev-fallback"),
-		slog.String("action_required", "set env var before real mode"))
-	return []byte(devDefault), nil
-}
 
 // loadKeySet returns a KeySet, preferring environment-provided keys.
 // In "real" adapter mode, env keys are required (fail-fast if missing).
@@ -54,24 +34,54 @@ func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 // cursorCodecConfig encapsulates buildCursorCodec parameters to avoid passing
 // 7 positional string arguments at every call site.
 type cursorCodecConfig struct {
-	AdapterMode  string
-	EnvLabel     string // primary env name, used only in error messages / slog
-	PrevEnvLabel string // previous env name, used only in error messages / slog
-	Primary      string
-	Previous     string
-	DevDefault   string
-	Label        string // "audit" / "config" / "access"
+	AdapterMode string
+	EnvName     string // primary env variable name, used in error messages / slog
+	PrevEnvName string // previous env variable name, used in error messages / slog
+	Primary     string
+	Previous    string
+	DevDefault  string
+	Label       string // "audit" / "config" / "access"
+}
+
+// resolveAndRejectDemoKey picks key material from the provided primary (or
+// falls back to devDefault in dev mode), fails fast in real mode when primary
+// is empty, and rejects known-demo key values. It is the shared prefix used by
+// buildCursorCodec and buildHMACKey — extracting it keeps the two public
+// builders slim and avoids SonarCloud duplication complaints on their
+// prologues.
+//
+// ref: go-zero core/service/serviceconf.go — strict mode rejects insecure
+// defaults uniformly across subsystems.
+func resolveAndRejectDemoKey(adapterMode, envLabel, primary, devDefault string) ([]byte, error) {
+	var key []byte
+	switch {
+	case primary != "":
+		key = []byte(primary)
+	case isRealMode(adapterMode):
+		return nil, fmt.Errorf("%s must be set in adapter mode \"real\"", envLabel)
+	default:
+		slog.Warn("using dev-only default; set env var for production",
+			slog.String("var", envLabel),
+			slog.String("mode", "dev-fallback"),
+			slog.String("action_required", "set env var before real mode"))
+		key = []byte(devDefault)
+	}
+	if err := rejectDemoKey(adapterMode, envLabel, key); err != nil {
+		return nil, err
+	}
+	return key, nil
 }
 
 // buildCursorCodec constructs a CursorCodec from already-read primary and
 // previous key strings. This is the low-level builder used by modules after
 // they read env via LoadCursorKeys; it does not call os.Getenv itself.
 //
-// Primary must be non-empty in "real" adapter mode (enforced via loadSecret
-// semantics: callers pass "" for primary when the env var was unset, which
-// triggers the real-mode fail-fast). Previous may be empty (single-key mode).
+// Primary must be non-empty in "real" adapter mode (enforced via
+// resolveAndRejectDemoKey: callers pass "" for primary when the env var was
+// unset, which triggers the real-mode fail-fast). Previous may be empty
+// (single-key mode).
 //
-// cfg.EnvLabel and cfg.PrevEnvLabel are used only in error messages and the
+// cfg.EnvName and cfg.PrevEnvName are used only in error messages and the
 // slog rotation log so operators can identify which env var to check.
 // cfg.DevDefault is used when primary is empty in dev mode.
 //
@@ -81,26 +91,15 @@ type cursorCodecConfig struct {
 // ref: gorilla/securecookie CodecsFromPairs — ordered key list, first match
 // wins during decode.
 func buildCursorCodec(cfg cursorCodecConfig) (*query.CursorCodec, error) {
-	var key []byte
-	if cfg.Primary != "" {
-		key = []byte(cfg.Primary)
-	} else if isRealMode(cfg.AdapterMode) {
-		return nil, fmt.Errorf("%s cursor key: %s must be set in adapter mode \"real\"", cfg.Label, cfg.EnvLabel)
-	} else {
-		slog.Warn("using dev-only default; set env var for production",
-			slog.String("var", cfg.EnvLabel),
-			slog.String("mode", "dev-fallback"),
-			slog.String("action_required", "set env var before real mode"))
-		key = []byte(cfg.DevDefault)
-	}
-	if err := rejectDemoKey(cfg.AdapterMode, cfg.EnvLabel, key); err != nil {
-		return nil, err
+	key, err := resolveAndRejectDemoKey(cfg.AdapterMode, cfg.EnvName, cfg.Primary, cfg.DevDefault)
+	if err != nil {
+		return nil, fmt.Errorf("%s cursor key: %w", cfg.Label, err)
 	}
 
 	var prevKey []byte
 	if cfg.Previous != "" {
 		prevKey = []byte(cfg.Previous)
-		if err := rejectDemoKey(cfg.AdapterMode, cfg.PrevEnvLabel, prevKey); err != nil {
+		if err := rejectDemoKey(cfg.AdapterMode, cfg.PrevEnvName, prevKey); err != nil {
 			return nil, err
 		}
 	}
@@ -112,8 +111,8 @@ func buildCursorCodec(cfg cursorCodecConfig) (*query.CursorCodec, error) {
 	if len(prevKey) > 0 {
 		slog.Info("cursor key rotation active",
 			slog.String("label", cfg.Label),
-			slog.String("current_env", cfg.EnvLabel),
-			slog.String("previous_env", cfg.PrevEnvLabel))
+			slog.String("current_env", cfg.EnvName),
+			slog.String("previous_env", cfg.PrevEnvName))
 	}
 	return codec, nil
 }
@@ -121,34 +120,22 @@ func buildCursorCodec(cfg cursorCodecConfig) (*query.CursorCodec, error) {
 // hmacKeyConfig encapsulates buildHMACKey parameters.
 type hmacKeyConfig struct {
 	AdapterMode string
-	EnvLabel    string // used in error messages
+	EnvName     string // env variable name used in error messages
 	Primary     string // provided by LoadCellHMACKey; empty → dev fallback
 	DevDefault  string // dev mode fallback value
-	Label       string // "auditcore HMAC" etc., used in error wrapping
 }
 
-// buildHMACKey loads and validates the HMAC key. Logic mirrors buildCursorCodec:
+// buildHMACKey loads and validates the HMAC key by delegating to
+// resolveAndRejectDemoKey. Logic:
 //   - primary non-empty: use directly
-//   - primary empty + real mode: fail-fast
+//   - primary empty + real mode: fail-fast with envName in error message
 //   - primary empty + dev mode: use DevDefault + slog.Warn
 //   - all paths: rejectDemoKey applied before returning
 //
+// The error message contains only the env variable name — no module label.
+// Module callers (e.g. audit_module.go) wrap with their own context label.
+//
 // ref: Kratos config/env prefix-strip convention — each module reads its own namespace.
 func buildHMACKey(cfg hmacKeyConfig) ([]byte, error) {
-	var key []byte
-	if cfg.Primary != "" {
-		key = []byte(cfg.Primary)
-	} else if isRealMode(cfg.AdapterMode) {
-		return nil, fmt.Errorf("%s: %s must be set in adapter mode \"real\"", cfg.Label, cfg.EnvLabel)
-	} else {
-		slog.Warn("using dev-only default; set env var for production",
-			slog.String("var", cfg.EnvLabel),
-			slog.String("mode", "dev-fallback"),
-			slog.String("action_required", "set env var before real mode"))
-		key = []byte(cfg.DevDefault)
-	}
-	if err := rejectDemoKey(cfg.AdapterMode, cfg.EnvLabel, key); err != nil {
-		return nil, err
-	}
-	return key, nil
+	return resolveAndRejectDemoKey(cfg.AdapterMode, cfg.EnvName, cfg.Primary, cfg.DevDefault)
 }

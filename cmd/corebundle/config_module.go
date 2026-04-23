@@ -49,13 +49,13 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	// 1. Cursor codec: read configcore-namespaced env via LoadCursorKeys then build.
 	cfgPrimary, cfgPrevious := LoadCursorKeys("CONFIGCORE")
 	cursorCodec, err := buildCursorCodec(cursorCodecConfig{
-		AdapterMode:  shared.Topology.AdapterMode,
-		EnvLabel:     "GOCELL_CONFIGCORE_CURSOR_KEY",
-		PrevEnvLabel: "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
-		Primary:      cfgPrimary,
-		Previous:     cfgPrevious,
-		DevDefault:   "corebundle-cfg-cursor-key--32bb!",
-		Label:        "config",
+		AdapterMode: shared.Topology.AdapterMode,
+		EnvName:     "GOCELL_CONFIGCORE_CURSOR_KEY",
+		PrevEnvName: "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
+		Primary:     cfgPrimary,
+		Previous:    cfgPrevious,
+		DevDefault:  "corebundle-cfg-cursor-key--32bb!",
+		Label:       "config",
 	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)

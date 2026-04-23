@@ -101,6 +101,14 @@ func defaultRuntimeOptions(
 // Operators must explicitly opt in via GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes
 // (dev/CI only) or vault-transit (production).
 //
+// Note: buildKeyProvider intentionally keeps a positional-argument signature
+// (unlike buildCursorCodec / buildHMACKey which use config structs) because
+// its input set is small, fixed, and semantically distinct per argument
+// (storageBackend determines whether encryption is required at all, the
+// other four only matter when providerName == "local-aes"). Wrapping in a
+// struct would obscure this branching logic. Revisit if a sixth argument is
+// ever needed.
+//
 // ref: kubernetes/kubernetes pkg/apiserver/admission/config.go — missing
 // EncryptionConfig in an active storage path is a startup error, not a warning.
 // ref: go-kratos/kratos config.Watch — required dependency failure aborts boot.

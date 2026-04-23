@@ -13,10 +13,9 @@ import (
 func TestBuildHMACKey_DevDefault_Succeeds(t *testing.T) {
 	key, err := buildHMACKey(hmacKeyConfig{
 		AdapterMode: "",
-		EnvLabel:    "GOCELL_AUDITCORE_HMAC_KEY",
+		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     "",
 		DevDefault:  "dev-hmac-key-replace-in-prod!!!!",
-		Label:       "auditcore HMAC",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []byte("dev-hmac-key-replace-in-prod!!!!"), key)
@@ -24,18 +23,18 @@ func TestBuildHMACKey_DevDefault_Succeeds(t *testing.T) {
 
 // TestBuildHMACKey_RealModePrimaryEmpty_FailFast asserts that in adapter
 // mode "real" an empty Primary triggers the hard-error branch, and the error
-// contains the label, env label, and adapter mode for operator diagnosis.
+// contains the env variable name and adapter mode for operator diagnosis.
+// Note: buildHMACKey no longer embeds a module label — that context is added
+// by the module caller (e.g. audit_module.go "auditcore HMAC key: ...").
 func TestBuildHMACKey_RealModePrimaryEmpty_FailFast(t *testing.T) {
 	key, err := buildHMACKey(hmacKeyConfig{
 		AdapterMode: "real",
-		EnvLabel:    "GOCELL_AUDITCORE_HMAC_KEY",
+		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     "",
 		DevDefault:  "dev-hmac-key-replace-in-prod!!!!",
-		Label:       "auditcore HMAC",
 	})
 	require.Error(t, err)
 	assert.Nil(t, key)
-	assert.Contains(t, err.Error(), "auditcore HMAC", "error must include label")
 	assert.Contains(t, err.Error(), "GOCELL_AUDITCORE_HMAC_KEY", "error must name the env var")
 	assert.Contains(t, err.Error(), "adapter mode \"real\"", "error must indicate the triggering mode")
 }
@@ -45,10 +44,9 @@ func TestBuildHMACKey_RealModePrimaryEmpty_FailFast(t *testing.T) {
 func TestBuildHMACKey_DemoKeyInRealMode_Rejected(t *testing.T) {
 	key, err := buildHMACKey(hmacKeyConfig{
 		AdapterMode: "real",
-		EnvLabel:    "GOCELL_AUDITCORE_HMAC_KEY",
+		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     "dev-hmac-key-replace-in-prod!!!!",
 		DevDefault:  "dev-hmac-key-replace-in-prod!!!!",
-		Label:       "auditcore HMAC",
 	})
 	require.Error(t, err)
 	assert.Nil(t, key)
@@ -63,10 +61,9 @@ func TestBuildHMACKey_HappyPath(t *testing.T) {
 	fresh := "this-is-a-fresh-real-hmac-key-!!"
 	key, err := buildHMACKey(hmacKeyConfig{
 		AdapterMode: "real",
-		EnvLabel:    "GOCELL_AUDITCORE_HMAC_KEY",
+		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     fresh,
 		DevDefault:  "dev-hmac-key-replace-in-prod!!!!",
-		Label:       "auditcore HMAC",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []byte(fresh), key)
@@ -78,10 +75,9 @@ func TestBuildHMACKey_DevMode_NonDemoPrimary_Succeeds(t *testing.T) {
 	primary := "custom-dev-hmac-key-value-here!!"
 	key, err := buildHMACKey(hmacKeyConfig{
 		AdapterMode: "",
-		EnvLabel:    "GOCELL_AUDITCORE_HMAC_KEY",
+		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     primary,
 		DevDefault:  "dev-hmac-key-replace-in-prod!!!!",
-		Label:       "auditcore HMAC",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []byte(primary), key)
@@ -97,10 +93,9 @@ func TestBuildHMACKey_DevMode_DemoKeyPrimary_Succeeds(t *testing.T) {
 	demoKey := "dev-hmac-key-replace-in-prod!!!!"
 	key, err := buildHMACKey(hmacKeyConfig{
 		AdapterMode: "",
-		EnvLabel:    "GOCELL_AUDITCORE_HMAC_KEY",
+		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     demoKey,
 		DevDefault:  demoKey,
-		Label:       "auditcore HMAC",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, []byte(demoKey), key,
@@ -108,25 +103,21 @@ func TestBuildHMACKey_DevMode_DemoKeyPrimary_Succeeds(t *testing.T) {
 }
 
 // TestBuildHMACKey_RealMode_ErrorFormat_NoDoubleLabel pins the expected error
-// format from buildHMACKey directly: the returned error must NOT self-embed the
-// label ("auditcore HMAC") — that context belongs to the module wrapper
-// (audit_module.go). Embedding it here causes a double-label when the module
+// format from buildHMACKey directly: the returned error must NOT self-embed a
+// module label — that context belongs to the module wrapper (audit_module.go).
+// Embedding a label in buildHMACKey causes a double-label when the module
 // prepends "auditcore HMAC key: ...".
 //
-// Expected post-fix: err.Error() == `GOCELL_AUDITCORE_HMAC_KEY must be set in
+// Expected: err.Error() == `GOCELL_AUDITCORE_HMAC_KEY must be set in
 // adapter mode "real"` (zero occurrences of "auditcore HMAC").
-//
-// This test will FAIL on HEAD where buildHMACKey emits
-// `"auditcore HMAC: GOCELL_AUDITCORE_HMAC_KEY must be set ..."`.
 //
 // Refs: PR#232 review finding P2 (double label in error chain).
 func TestBuildHMACKey_RealMode_ErrorFormat_NoDoubleLabel(t *testing.T) {
 	_, err := buildHMACKey(hmacKeyConfig{
 		AdapterMode: "real",
-		EnvLabel:    "GOCELL_AUDITCORE_HMAC_KEY",
+		EnvName:     "GOCELL_AUDITCORE_HMAC_KEY",
 		Primary:     "",
 		DevDefault:  "dev-hmac-key-replace-in-prod!!!!",
-		Label:       "auditcore HMAC",
 	})
 	require.Error(t, err)
 	// buildHMACKey itself must NOT embed the label — the module wrapper owns that.
