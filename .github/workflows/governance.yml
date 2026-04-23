@@ -2,9 +2,9 @@ name: Governance Strict
 
 on:
   push:
-    branches: [develop]
+    branches: [develop, main, 'release/**']
   pull_request:
-    branches: [develop]
+    branches: [develop, main, 'release/**']
 
 jobs:
   gocell-validate-strict:

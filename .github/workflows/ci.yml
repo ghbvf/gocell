@@ -3,97 +3,51 @@ name: CI
 on:
   push:
     branches: [develop]
-  pull_request:
-    branches: [develop]
+  # pull_request is handled by pr-check.yml which uses lint-mode: pr
+  # (--new-from-merge-base=origin/develop) to suppress pre-existing noise.
 
 jobs:
   build-test:
+    uses: ./.github/workflows/_build-lint.yml
+    with:
+      lint-mode: full
+      run-integration: true
+      run-sonar: true
+
+  integration-test:
     runs-on: ubuntu-latest
+    # No `needs: build-test` — integration-test is independent (its own
+    # checkout + go build inside `go test`). Running in parallel with
+    # build-test cuts ~2 min of wall time. Cost: a CI minute wasted on
+    # integration when unit tests break, which at current PR frequency is
+    # a worthwhile trade.
+    #
+    # testcontainers manages containers dynamically (no static services)
+    # to avoid port conflicts with host-bound services.
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-        with:
-          # Need full history so `golangci-lint --new-from-merge-base=origin/develop`
-          # can run `git merge-base` successfully.
-          fetch-depth: 0
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version: "1.25"
           cache-dependency-path: go.sum
 
-      - name: Build
-        run: go build ./...
+      - name: Integration tests (testcontainers)
+        # cmd/corebundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
+        # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
+        # examples/ssobff carries the end-to-end walkthrough test (AUTH-SETUP-01
+        # regression guard — bootstrap credential flow, password-reset gate,
+        # change-password / refresh / logout contract shape). Without this job
+        # including it, the "integration" build tag was never compiled in CI.
+        # cells/accesscore/slices/identitymanage also has an integration test
+        # (changepassword_e2e_test.go) that exercises the real AuthMiddleware.
+        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... -count=1 -timeout 15m
 
-      - name: Vet
-        run: go vet ./...
-
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
-        with:
-          version: v2.11
-          # only-new-issues uses the GitHub pull-request diff API which
-          # refuses diffs larger than 300 files; fall back to
-          # --new-from-merge-base so mass-rename PRs (repo-wide renames,
-          # metadata id sweeps) still get "new issue" filtering.
-          args: --new-from-merge-base=origin/develop
-
-      - name: Test
-        run: go test -race -coverprofile=coverage.out -coverpkg=./... ./... -count=1 -timeout 5m
-
-      - name: Validate metadata
-        run: go run ./cmd/gocell validate
-
-      - name: Check contract health
-        run: go run ./cmd/gocell check contract-health
-
-      # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
-      # The main `gocell validate` step above already covers it.
-
-      - name: Check layering — examples no internal imports
-        run: |
-          if grep -rn --include='*.go' "github.com/ghbvf/gocell/cells/.*/internal" examples/ 2>/dev/null; then
-            echo "FAIL: examples/ imports root cells/*/internal/"
-            exit 1
-          fi
-          if grep -rn --include='*.go' "github.com/ghbvf/gocell/adapters/.*/internal" examples/ 2>/dev/null; then
-            echo "FAIL: examples/ imports adapters/*/internal/"
-            exit 1
-          fi
-          echo "PASS: no internal import violations"
-
-      # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
-      # deliberately — it is not a duplicate of the Test step. The Test step
-      # uses `-coverpkg=./...` whose merged profile loses per-package fidelity
-      # (cells/adapters test binaries dilute kernel counts). The gate needs
-      # in-package kernel coverage, which requires a standalone run.
-      - name: Kernel coverage gate
-        run: |
-          go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
-          awk '
-            /coverage: \[no statements\]/ { next }
-            /outboxtest/ { next }
-            /celltest/ { next }
-            /coverage:/ {
-              cov = $0
-              sub(/^.*coverage: /, "", cov)
-              sub(/% of statements.*$/, "", cov)
-              if (cov == $0) {
-                print "FAIL: could not parse coverage line: " $0;
-                exit 1
-              }
-              if (cov + 0 < 90) {
-                print "FAIL: " $2 " coverage " cov "% < 90%";
-                exit 1
-              }
-            }
-          ' /tmp/kernel-cov.txt
-          echo "PASS: kernel coverage >= 90%"
-
-      - name: Upload coverage profile
+      - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: coverage-profile
-          path: coverage.out
+          name: coverage-integration-profile
+          path: coverage-integration.out
           retention-days: 1
 
   sonarcloud:
@@ -136,39 +90,3 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           projectBaseDir: .
-
-  integration-test:
-    runs-on: ubuntu-latest
-    # No `needs: build-test` — integration-test is independent (its own
-    # checkout + go build inside `go test`). Running in parallel with
-    # build-test cuts ~2 min of wall time. Cost: a CI minute wasted on
-    # integration when unit tests break, which at current PR frequency is
-    # a worthwhile trade.
-    #
-    # testcontainers manages containers dynamically (no static services)
-    # to avoid port conflicts with host-bound services.
-    steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
-        with:
-          go-version: "1.25"
-          cache-dependency-path: go.sum
-
-      - name: Integration tests (testcontainers)
-        # cmd/corebundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
-        # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
-        # examples/ssobff carries the end-to-end walkthrough test (AUTH-SETUP-01
-        # regression guard — bootstrap credential flow, password-reset gate,
-        # change-password / refresh / logout contract shape). Without this job
-        # including it, the "integration" build tag was never compiled in CI.
-        # cells/accesscore/slices/identitymanage also has an integration test
-        # (changepassword_e2e_test.go) that exercises the real AuthMiddleware.
-        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... -count=1 -timeout 15m
-
-      - name: Upload integration coverage profile
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: coverage-integration-profile
-          path: coverage-integration.out
-          retention-days: 1

@@ -1,0 +1,16 @@
+name: PR Check
+
+on:
+  pull_request:
+    branches: [develop, main, 'release/**']
+
+jobs:
+  build-test:
+    uses: ./.github/workflows/_build-lint.yml
+    with:
+      # lint-mode: pr activates --new-from-merge-base=origin/develop so only
+      # issues introduced by this PR are reported, not pre-existing baseline
+      # noise. See _build-lint.yml for the rationale over only-new-issues.
+      lint-mode: pr
+      run-integration: false
+      run-sonar: false

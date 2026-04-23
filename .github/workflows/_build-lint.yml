@@ -1,0 +1,114 @@
+name: Build / Lint / Test (reusable)
+
+# Reusable workflow — called by ci.yml (push, full lint) and pr-check.yml
+# (pull_request, merge-base diff lint).
+# ref: grpc-go workflow separation (testing.yml + pr-validation.yml); this
+# variant uses workflow_call to eliminate DRY duplication that grpc-go leaves
+# in its two files.
+on:
+  workflow_call:
+    inputs:
+      lint-mode:
+        description: '"full" runs golangci-lint with no filter (push baseline). "pr" uses --new-from-merge-base=origin/develop to suppress pre-existing noise on pull requests.'
+        type: string
+        required: true
+      run-integration:
+        description: "Whether to run integration tests (testcontainers). Disabled on pull_request to keep PR feedback fast."
+        type: boolean
+        default: false
+      run-sonar:
+        description: "Whether to run SonarQube scan. Disabled on pull_request; only needed on push to develop."
+        type: boolean
+        default: false
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Need full history so `golangci-lint --new-from-merge-base=origin/develop`
+          # can run `git merge-base` successfully.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
+        with:
+          version: v2.11
+          # only-new-issues uses the GitHub pull-request diff API which
+          # refuses diffs larger than 300 files; fall back to
+          # --new-from-merge-base so mass-rename PRs (repo-wide renames,
+          # metadata id sweeps) still get "new issue" filtering.
+          # On push (lint-mode: full) no filter is applied — every issue is
+          # surfaced so the develop branch stays clean as an absolute baseline.
+          args: ${{ inputs.lint-mode == 'pr' && '--new-from-merge-base=origin/develop' || '' }}
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out -coverpkg=./... ./... -count=1 -timeout 5m
+
+      - name: Validate metadata
+        run: go run ./cmd/gocell validate
+
+      - name: Check contract health
+        run: go run ./cmd/gocell check contract-health
+
+      # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
+      # The main `gocell validate` step above already covers it.
+
+      - name: Check layering — examples no internal imports
+        run: |
+          if grep -rn --include='*.go' "github.com/ghbvf/gocell/cells/.*/internal" examples/ 2>/dev/null; then
+            echo "FAIL: examples/ imports root cells/*/internal/"
+            exit 1
+          fi
+          if grep -rn --include='*.go' "github.com/ghbvf/gocell/adapters/.*/internal" examples/ 2>/dev/null; then
+            echo "FAIL: examples/ imports adapters/*/internal/"
+            exit 1
+          fi
+          echo "PASS: no internal import violations"
+
+      # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
+      # deliberately — it is not a duplicate of the Test step. The Test step
+      # uses `-coverpkg=./...` whose merged profile loses per-package fidelity
+      # (cells/adapters test binaries dilute kernel counts). The gate needs
+      # in-package kernel coverage, which requires a standalone run.
+      - name: Kernel coverage gate
+        run: |
+          go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
+          awk '
+            /coverage: \[no statements\]/ { next }
+            /outboxtest/ { next }
+            /celltest/ { next }
+            /coverage:/ {
+              cov = $0
+              sub(/^.*coverage: /, "", cov)
+              sub(/% of statements.*$/, "", cov)
+              if (cov == $0) {
+                print "FAIL: could not parse coverage line: " $0;
+                exit 1
+              }
+              if (cov + 0 < 90) {
+                print "FAIL: " $2 " coverage " cov "% < 90%";
+                exit 1
+              }
+            }
+          ' /tmp/kernel-cov.txt
+          echo "PASS: kernel coverage >= 90%"
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 1
