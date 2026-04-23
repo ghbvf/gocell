@@ -12,5 +12,9 @@ endpoints:
     path: /api/v1/access/roles/{userID}
     successStatus: 200
     noContent: false
+    responses:
+      400:
+        description: "Bad request — invalid pagination parameter or cursor"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

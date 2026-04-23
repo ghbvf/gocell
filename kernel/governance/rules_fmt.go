@@ -532,7 +532,7 @@ const codeFMT15 = "FMT-15"
 
 // validateFMT15 checks that HTTP list-style response schemas:
 //   - include "hasMore" in required fields
-//   - declare "nextCursor" as a property (not required, because PageResult uses omitempty)
+//   - include "nextCursor" in required fields and declare it as a property
 //
 // A response is a "list" when properties.data.type is "array".
 // Skipped when root is empty, for non-HTTP contracts, or when the schema file cannot be read.
@@ -601,7 +601,15 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 			codeFMT15, SeverityError, IssueRequired,
 			contractFile(c.ID),
 			fieldSchemaRefsResponse,
-			fmt.Sprintf("list response schema for contract %q must declare \"nextCursor\" property (omit from required; PageResult omits it on last page)", c.ID),
+			fmt.Sprintf("list response schema for contract %q must declare \"nextCursor\" property", c.ID),
+		))
+	}
+	if !hasNextCursorInRequired(info) {
+		results = append(results, v.newResult(
+			codeFMT15, SeverityError, IssueRequired,
+			contractFile(c.ID),
+			fieldSchemaRefsResponse,
+			fmt.Sprintf("list response schema for contract %q must include \"nextCursor\" in required fields", c.ID),
 		))
 	}
 	return results
@@ -663,9 +671,19 @@ func hasMoreInRequired(info responseSchemaInfo) bool {
 }
 
 // hasNextCursorProperty checks if "nextCursor" is declared as a schema property.
-// The field must be declared (though not in required[]) because PageResult uses
-// omitempty: nextCursor is absent from last-page responses and must not be required.
+// The field must be declared and required because PageResult always serializes
+// nextCursor, using an empty string on the last page.
 // A "nextCursor": null declaration is treated as absent (null is not a valid schema).
 func hasNextCursorProperty(info responseSchemaInfo) bool {
 	return info.Properties.NextCursor != nil && string(*info.Properties.NextCursor) != "null"
+}
+
+// hasNextCursorInRequired checks if "nextCursor" is in the JSON schema required array.
+func hasNextCursorInRequired(info responseSchemaInfo) bool {
+	for _, r := range info.Required {
+		if r == "nextCursor" {
+			return true
+		}
+	}
+	return false
 }

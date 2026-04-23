@@ -56,7 +56,7 @@ func (lp ListParams) FetchLimit() int {
 // PageResult wraps a page of results with cursor metadata.
 type PageResult[T any] struct {
 	Items      []T    `json:"data"`
-	NextCursor string `json:"nextCursor,omitempty"`
+	NextCursor string `json:"nextCursor"`
 	HasMore    bool   `json:"hasMore"`
 }
 

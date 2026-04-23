@@ -96,6 +96,9 @@ func TestService_ListPagination(t *testing.T) {
 	if page2.HasMore {
 		t.Error("expected HasMore=false for last page")
 	}
+	if page2.NextCursor != "" {
+		t.Errorf("expected empty NextCursor on last page, got %q", page2.NextCursor)
+	}
 	if len(page2.Items) != 1 {
 		t.Errorf("expected 1 item on last page, got %d", len(page2.Items))
 	}

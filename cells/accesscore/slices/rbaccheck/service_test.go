@@ -95,13 +95,26 @@ func TestService_HasRole(t *testing.T) {
 func TestService_ListRoles(t *testing.T) {
 	svc, repo := newTestService(t)
 	repo.SeedRole(&domain.Role{ID: "admin", Name: "admin"})
+	repo.SeedRole(&domain.Role{ID: "operator", Name: "operator"})
 	repo.SeedRole(&domain.Role{ID: "viewer", Name: "viewer"})
 	_, _ = repo.AssignToUser(context.Background(), "usr-1", "admin")
+	_, _ = repo.AssignToUser(context.Background(), "usr-1", "operator")
 	_, _ = repo.AssignToUser(context.Background(), "usr-1", "viewer")
 
-	result, err := svc.ListRoles(context.Background(), "usr-1", query.PageParams{Limit: 50})
+	result, err := svc.ListRoles(context.Background(), "usr-1", query.PageParams{Limit: 2})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
+	assert.True(t, result.HasMore)
+	require.NotEmpty(t, result.NextCursor)
+
+	next, err := svc.ListRoles(context.Background(), "usr-1", query.PageParams{
+		Limit:  2,
+		Cursor: result.NextCursor,
+	})
+	require.NoError(t, err)
+	assert.Len(t, next.Items, 1)
+	assert.False(t, next.HasMore)
+	assert.Empty(t, next.NextCursor)
 }
 
 func TestService_ListRolesEmptyInput(t *testing.T) {

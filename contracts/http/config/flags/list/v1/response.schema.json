@@ -20,5 +20,5 @@
     "nextCursor": { "type": "string" },
     "hasMore": { "type": "boolean" }
   },
-  "required": ["data", "hasMore"]
+  "required": ["data", "nextCursor", "hasMore"]
 }

@@ -16,6 +16,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -496,6 +497,10 @@ func (b *Bootstrap) phase5BuildHTTPRouter(s *phaseState) error {
 		}
 	}
 
+	if err := b.validateAuthVerifierForDeclaredRoutes(rtr); err != nil {
+		return err
+	}
+
 	// After RegisterRoutes has accumulated every Cell's auth declarations via
 	// auth.Declare, finalize the router so AuthMiddleware predicates (public,
 	// password-reset-exempt, delegated) reflect the aggregated metadata. Must
@@ -506,6 +511,30 @@ func (b *Bootstrap) phase5BuildHTTPRouter(s *phaseState) error {
 
 	s.rtr = rtr
 	return nil
+}
+
+func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(rtr *router.Router) error {
+	if b.authVerifier != nil {
+		return nil
+	}
+
+	var protected []string
+	for _, meta := range rtr.DeclaredAuthMetas() {
+		if meta.Public || meta.Delegated {
+			continue
+		}
+		protected = append(protected, meta.Method+" "+meta.Path)
+	}
+	if len(protected) == 0 {
+		return nil
+	}
+
+	sort.Strings(protected)
+	return fmt.Errorf(
+		"bootstrap: auth verifier required: %d protected route(s) declared without AuthMiddleware/AuthDiscovery: [%s]; "+
+			"add bootstrap.WithAuthMiddleware or bootstrap.WithAuthDiscovery, or mark the route Public/Delegated",
+		len(protected), strings.Join(protected, ", "),
+	)
 }
 
 // registerAllHealthCheckers registers option-supplied, cell-discovered, watcher,

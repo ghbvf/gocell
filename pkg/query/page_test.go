@@ -164,5 +164,6 @@ func TestMapPageResult_NilItems_JSONArray(t *testing.T) {
 	b, err := json.Marshal(got)
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"data":[]`)
+	assert.Contains(t, string(b), `"nextCursor":""`)
 	assert.NotContains(t, string(b), `"data":null`)
 }
