@@ -48,10 +48,15 @@ var configStaleCipherOpts = prom.CounterOpts{
 func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// 1. Cursor codec: read configcore-namespaced env via LoadCursorKeys then build.
 	cfgPrimary, cfgPrevious := LoadCursorKeys("CONFIGCORE")
-	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
-		"GOCELL_CONFIGCORE_CURSOR_KEY", "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
-		cfgPrimary, cfgPrevious,
-		"corebundle-cfg-cursor-key--32bb!", "config")
+	cursorCodec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  shared.Topology.AdapterMode,
+		EnvLabel:     "GOCELL_CONFIGCORE_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
+		Primary:      cfgPrimary,
+		Previous:     cfgPrevious,
+		DevDefault:   "corebundle-cfg-cursor-key--32bb!",
+		Label:        "config",
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
 	}

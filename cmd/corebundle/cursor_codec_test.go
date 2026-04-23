@@ -15,10 +15,15 @@ import (
 // adapterMode) the dev default secret produces a usable codec when primary is
 // empty, matching the dev-fallback contract.
 func TestBuildCursorCodec_DevDefault_Succeeds(t *testing.T) {
-	codec, err := buildCursorCodec("", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		"", "",
-		"corebundle-audit-cursor-key-32b!", "audit")
+	codec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      "",
+		Previous:     "",
+		DevDefault:   "corebundle-audit-cursor-key-32b!",
+		Label:        "audit",
+	})
 	require.NoError(t, err)
 	require.NotNil(t, codec)
 
@@ -30,10 +35,15 @@ func TestBuildCursorCodec_DevDefault_Succeeds(t *testing.T) {
 // mode "real" an empty primary triggers the hard-error branch, and the error
 // preserves the env-label for operator diagnosis.
 func TestBuildCursorCodec_RealModePrimaryEmpty_FailFast(t *testing.T) {
-	codec, err := buildCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		"", "",
-		"corebundle-audit-cursor-key-32b!", "audit")
+	codec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "real",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      "",
+		Previous:     "",
+		DevDefault:   "corebundle-audit-cursor-key-32b!",
+		Label:        "audit",
+	})
 	require.Error(t, err)
 	assert.Nil(t, codec)
 	assert.Contains(t, err.Error(), "GOCELL_TEST_CURSOR_KEY",
@@ -47,10 +57,15 @@ func TestBuildCursorCodec_RealModePrimaryEmpty_FailFast(t *testing.T) {
 // primary is non-empty, a well-known demo value is rejected in real mode.
 // Reachable if an operator copies the dev default into prod config.
 func TestBuildCursorCodec_DemoKeyInRealMode_Rejected(t *testing.T) {
-	_, err := buildCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		"corebundle-audit-cursor-key-32b!", "",
-		"corebundle-audit-cursor-key-32b!", "audit")
+	_, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "real",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      "corebundle-audit-cursor-key-32b!",
+		Previous:     "",
+		DevDefault:   "corebundle-audit-cursor-key-32b!",
+		Label:        "audit",
+	})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "well-known demo key",
 		"error must come from rejectDemoKey")
@@ -68,10 +83,15 @@ func TestBuildCursorCodec_WithPreviousKey_Rotation(t *testing.T) {
 	keyOld := bytes.Repeat([]byte("O"), 32)
 	keyStranger := bytes.Repeat([]byte("S"), 32)
 
-	codec, err := buildCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		string(keyNew), string(keyOld),
-		"unused-dev-default", "audit")
+	codec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "real",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      string(keyNew),
+		Previous:     string(keyOld),
+		DevDefault:   "unused-dev-default",
+		Label:        "audit",
+	})
 	require.NoError(t, err)
 
 	// Token signed by the old key (operator deployed it before the rotation)
@@ -98,10 +118,15 @@ func TestBuildCursorCodec_WithPreviousKey_Rotation(t *testing.T) {
 // than silently ignoring the rotation intent.
 func TestBuildCursorCodec_PreviousKeyShortInRealMode_FailFast(t *testing.T) {
 	keyNew := bytes.Repeat([]byte("N"), 32)
-	codec, err := buildCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		string(keyNew), "too-short",
-		"unused", "audit")
+	codec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "real",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      string(keyNew),
+		Previous:     "too-short",
+		DevDefault:   "unused",
+		Label:        "audit",
+	})
 	require.Error(t, err)
 	assert.Nil(t, codec)
 	// Error must come from NewCursorCodec previous-key length check and be
@@ -124,10 +149,15 @@ func TestBuildCursorCodec_PreviousKeyShortInRealMode_FailFast(t *testing.T) {
 // Single-key is the default stable state; rotation is a temporary window.
 func TestBuildCursorCodec_PreviousKeyEmpty_OK(t *testing.T) {
 	keyNew := bytes.Repeat([]byte("N"), 32)
-	codec, err := buildCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		string(keyNew), "",
-		"unused", "audit")
+	codec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "real",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      string(keyNew),
+		Previous:     "",
+		DevDefault:   "unused",
+		Label:        "audit",
+	})
 	require.NoError(t, err)
 	require.NotNil(t, codec)
 
@@ -144,10 +174,15 @@ func TestBuildCursorCodec_PreviousKeyEmpty_OK(t *testing.T) {
 // well-known demo value in the rotation slot.
 func TestBuildCursorCodec_PreviousKeyDemoInRealMode_Rejected(t *testing.T) {
 	keyNew := bytes.Repeat([]byte("N"), 32)
-	_, err := buildCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		string(keyNew), "corebundle-audit-cursor-key-32b!",
-		"unused", "audit")
+	_, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "real",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      string(keyNew),
+		Previous:     "corebundle-audit-cursor-key-32b!",
+		DevDefault:   "unused",
+		Label:        "audit",
+	})
 	require.Error(t, err)
 	assert.Contains(t, strings.ToLower(err.Error()), "demo")
 	assert.Contains(t, err.Error(), "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
@@ -160,10 +195,15 @@ func TestBuildCursorCodec_PreviousKeyDemoInRealMode_Rejected(t *testing.T) {
 // ref: S2-C1 — NewCursorCodec rejects identical current/previous keys.
 func TestBuildCursorCodec_CurrentEqualsPrevious_Rejected(t *testing.T) {
 	sameKey := bytes.Repeat([]byte("K"), 32)
-	codec, err := buildCursorCodec("real", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		string(sameKey), string(sameKey),
-		"unused", "audit")
+	codec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "real",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      string(sameKey),
+		Previous:     string(sameKey),
+		DevDefault:   "unused",
+		Label:        "audit",
+	})
 	require.Error(t, err)
 	assert.Nil(t, codec)
 	assert.Contains(t, err.Error(), "previous cursor key must differ from current",
@@ -174,10 +214,15 @@ func TestBuildCursorCodec_CurrentEqualsPrevious_Rejected(t *testing.T) {
 // current and previous keys are shorter than 32 bytes, the error reports the
 // current key length first (NewCursorCodec validates current before previous).
 func TestBuildCursorCodec_BothKeysShort_ReportsFirst(t *testing.T) {
-	codec, err := buildCursorCodec("", "GOCELL_TEST_CURSOR_KEY",
-		"GOCELL_TEST_CURSOR_PREVIOUS_KEY",
-		"short-current-11", "short-previous-1",
-		"unused-dev-default", "audit")
+	codec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  "",
+		EnvLabel:     "GOCELL_TEST_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_TEST_CURSOR_PREVIOUS_KEY",
+		Primary:      "short-current-11",
+		Previous:     "short-previous-1",
+		DevDefault:   "unused-dev-default",
+		Label:        "audit",
+	})
 	require.Error(t, err)
 	assert.Nil(t, codec)
 	// NewCursorCodec validates current length first; the error must mention

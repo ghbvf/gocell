@@ -184,19 +184,30 @@ func TestLoadConfigCoreKeyProvider_AllEmpty(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestLoadAuditCoreHMACKey
+// TestLoadCellHMACKey
 // ---------------------------------------------------------------------------
 
-func TestLoadAuditCoreHMACKey_ReturnsValue(t *testing.T) {
+func TestLoadCellHMACKey_AUDITCORE_ReturnsValue(t *testing.T) {
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "audit-hmac-key-value-here-32!!!!")
 
-	key := LoadAuditCoreHMACKey()
+	key := LoadCellHMACKey("AUDITCORE")
 	assert.Equal(t, "audit-hmac-key-value-here-32!!!!", key)
 }
 
-func TestLoadAuditCoreHMACKey_EmptyReturnsEmpty(t *testing.T) {
+func TestLoadCellHMACKey_AUDITCORE_EmptyReturnsEmpty(t *testing.T) {
 	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "")
 
-	key := LoadAuditCoreHMACKey()
+	key := LoadCellHMACKey("AUDITCORE")
 	assert.Equal(t, "", key)
+}
+
+func TestLoadCellHMACKey_CrossCellIsolation(t *testing.T) {
+	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "audit-hmac-key-value-here-32!!!!")
+	t.Setenv("GOCELL_CONFIGCORE_HMAC_KEY", "")
+
+	auditKey := LoadCellHMACKey("AUDITCORE")
+	configKey := LoadCellHMACKey("CONFIGCORE")
+
+	assert.Equal(t, "audit-hmac-key-value-here-32!!!!", auditKey)
+	assert.Equal(t, "", configKey, "CONFIGCORE prefix must not pick up AUDITCORE HMAC key")
 }

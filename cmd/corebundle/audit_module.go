@@ -29,21 +29,30 @@ func (AuditCoreModule) ID() string { return "auditcore" }
 func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// Cursor codec for auditcore: read env via LoadCursorKeys then build.
 	auditPrimary, auditPrevious := LoadCursorKeys("AUDITCORE")
-	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
-		"GOCELL_AUDITCORE_CURSOR_KEY", "GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY",
-		auditPrimary, auditPrevious,
-		"corebundle-audit-cursor-key-32b!", "audit")
+	cursorCodec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode:  shared.Topology.AdapterMode,
+		EnvLabel:     "GOCELL_AUDITCORE_CURSOR_KEY",
+		PrevEnvLabel: "GOCELL_AUDITCORE_CURSOR_PREVIOUS_KEY",
+		Primary:      auditPrimary,
+		Previous:     auditPrevious,
+		DevDefault:   "corebundle-audit-cursor-key-32b!",
+		Label:        "audit",
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("auditcore cursor codec: %w", err)
 	}
 
 	// HMAC key for audit hash chain.
-	hmacKeyStr, err := loadSecret("GOCELL_AUDITCORE_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!", shared.Topology.AdapterMode)
+	hmacPrimary := LoadCellHMACKey("AUDITCORE")
+	hmacKeyStr, err := buildHMACKey(hmacKeyConfig{
+		AdapterMode: shared.Topology.AdapterMode,
+		EnvLabel:    "GOCELL_AUDITCORE_HMAC_KEY",
+		Primary:     hmacPrimary,
+		DevDefault:  "dev-hmac-key-replace-in-prod!!!!",
+		Label:       "auditcore HMAC",
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
-	}
-	if err := rejectDemoKey(shared.Topology.AdapterMode, "GOCELL_AUDITCORE_HMAC_KEY", hmacKeyStr); err != nil {
-		return nil, nil, nil, err
 	}
 
 	c := auditcore.NewAuditCore(
