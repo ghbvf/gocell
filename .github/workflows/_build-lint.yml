@@ -12,14 +12,9 @@ on:
         description: '"full" runs golangci-lint with no filter (push baseline). "pr" uses --new-from-merge-base=origin/develop to suppress pre-existing noise on pull requests.'
         type: string
         required: true
-      run-integration:
-        description: "Whether to run integration tests (testcontainers). Disabled on pull_request to keep PR feedback fast."
-        type: boolean
-        default: false
-      run-sonar:
-        description: "Whether to run SonarQube scan. Disabled on pull_request; only needed on push to develop."
-        type: boolean
-        default: false
+
+permissions:
+  contents: read
 
 jobs:
   build-test:

@@ -4,6 +4,9 @@ on:
   pull_request:
     branches: [develop, main, 'release/**']
 
+permissions:
+  contents: read
+
 jobs:
   build-test:
     uses: ./.github/workflows/_build-lint.yml
@@ -12,5 +15,3 @@ jobs:
       # issues introduced by this PR are reported, not pre-existing baseline
       # noise. See _build-lint.yml for the rationale over only-new-issues.
       lint-mode: pr
-      run-integration: false
-      run-sonar: false

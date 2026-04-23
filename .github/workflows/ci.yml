@@ -11,8 +11,6 @@ jobs:
     uses: ./.github/workflows/_build-lint.yml
     with:
       lint-mode: full
-      run-integration: true
-      run-sonar: true
 
   integration-test:
     runs-on: ubuntu-latest

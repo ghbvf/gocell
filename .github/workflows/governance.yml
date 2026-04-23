@@ -23,11 +23,19 @@ jobs:
 
       - name: Scaffold rejects kebab slice names
         run: |
-          result=$(go run ./cmd/gocell scaffold slice --id=test-slice --cell=accesscore 2>&1 || true)
+          set +e
+          result=$(go run ./cmd/gocell scaffold slice --id=test-slice --cell=accesscore 2>&1)
+          exit_code=$?
+          set -e
+          echo "scaffold exit code: $exit_code"
           echo "scaffold output: $result"
+          if [ "$exit_code" -eq 0 ]; then
+            echo "FAIL: scaffold exited 0 but should have rejected kebab slice name"
+            exit 1
+          fi
           if echo "$result" | grep -q "must not contain"; then
             echo "PASS: scaffold correctly rejects kebab slice name"
           else
-            echo "FAIL: scaffold should have rejected kebab slice name"
+            echo "FAIL: scaffold rejected (exit $exit_code) but error message did not contain 'must not contain'"
             exit 1
           fi
