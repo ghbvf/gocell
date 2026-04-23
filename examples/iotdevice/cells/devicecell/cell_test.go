@@ -324,7 +324,7 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	assert.Contains(t, err.Error(), "cursor codec")
 }
 
-func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsError(t *testing.T) {
+func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithCommandRepository(mem.NewCommandRepository()),
@@ -341,8 +341,8 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsError(t *testing.T)
 	req.Header.Set("Content-Type", "application/json")
 	c.registerHandler.HandleRegister(rec, req)
 
-	assert.Equal(t, http.StatusInternalServerError, rec.Code,
-		"durable mode must not return success when device.registered publish fails")
+	assert.Equal(t, http.StatusCreated, rec.Code,
+		"device creation must stay successful after persistence even if direct publish fails")
 }
 
 func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) {

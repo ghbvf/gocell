@@ -129,7 +129,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 
 // --- L2 Hard Gate: durable-mode dependency checks ---
 
-func TestInit_DemoMode_OutboxWithoutTx_Succeeds(t *testing.T) {
+func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
@@ -139,10 +139,11 @@ func TestInit_DemoMode_OutboxWithoutTx_Succeeds(t *testing.T) {
 		// txRunner intentionally omitted
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
 
-func TestInit_DemoMode_TxWithoutOutbox_Succeeds(t *testing.T) {
+func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
@@ -152,17 +153,19 @@ func TestInit_DemoMode_TxWithoutOutbox_Succeeds(t *testing.T) {
 		// outboxWriter intentionally omitted
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
 
-func TestInit_DemoMode_NoPublisherNoOutbox_SucceedsWithNoopEmitter(t *testing.T) {
+func TestInit_DemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "explicit event sink")
 }
 
 func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
@@ -195,6 +198,18 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err, "demo mode with publisher should succeed")
+}
+
+func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithHMACKey(testHMACKey),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, err)
 }
 
 func TestAuditCore_RegisterRoutes(t *testing.T) {

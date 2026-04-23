@@ -238,9 +238,8 @@ func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunM
 	return query.RunModeForDemo(demo), configpublish.PublishFailureModeForDemo(demo)
 }
 
-// validateOutboxDeps enforces the XOR constraint (outboxWriter + txRunner
-// must be both present or both absent) and rejects noop implementations in
-// durable mode.
+// validateOutboxDeps rejects noop implementations in durable mode and requires
+// demo mode to use an explicit event sink instead of synthesized defaults.
 func (c *ConfigCore) validateOutboxDeps(deps cell.Dependencies, publishFailureMode configpublish.PublishFailureMode) error {
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "configcore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
 		return err
@@ -256,6 +255,14 @@ func (c *ConfigCore) validateOutboxDeps(deps cell.Dependencies, publishFailureMo
 		}
 		c.emitter = emitter
 		return nil
+	}
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"configcore demo mode requires outboxWriter and txRunner together; inject both explicitly")
+	}
+	if c.publisher == nil && c.outboxWriter == nil {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"configcore demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
 	}
 
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
@@ -279,7 +286,8 @@ func (c *ConfigCore) resolveDemoEmitter(publishFailureMode configpublish.Publish
 	if c.outboxWriter != nil {
 		return outbox.NewWriterEmitter(c.outboxWriter)
 	}
-	return outbox.NewNoopEmitter(), nil
+	return nil, errcode.New(errcode.ErrCellMissingOutbox,
+		"configcore demo mode requires an explicit event sink")
 }
 
 func configDirectPublishMode(mode configpublish.PublishFailureMode) outbox.DirectPublishFailureMode {

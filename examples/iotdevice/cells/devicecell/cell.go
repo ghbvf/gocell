@@ -114,15 +114,14 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 			"devicecell requires publisher; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
 	}
 
-	// Durable mode: reject noop publisher (#27c-2).
+	// Durable mode still rejects noop publishers, but direct publish remains
+	// fail-open here because this example path has no transactional outbox.
+	// The request succeeds once persistence succeeds; publish misses are
+	// operational follow-up, not create failure.
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "devicecell", c.publisher); err != nil {
 		return err
 	}
-	publishFailureMode := outbox.DirectPublishFailOpen
-	if deps.DurabilityMode == cell.DurabilityDurable {
-		publishFailureMode = outbox.DirectPublishFailClosed
-	}
-	emitter, err := outbox.NewDirectEmitter(c.publisher, publishFailureMode, c.logger)
+	emitter, err := outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, c.logger)
 	if err != nil {
 		return err
 	}

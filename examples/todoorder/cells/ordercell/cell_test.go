@@ -80,9 +80,9 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 		wantErr    bool
 	}{
 		{
-			name:       "no options succeeds with demo noop emitter",
-			opts:       nil,
-			wantSlices: 2,
+			name:    "no options fails without explicit outbox pair",
+			opts:    nil,
+			wantErr: true,
 		},
 		{
 			name: "NoopWriter + NoopTxRunner succeeds (demo mode)",
@@ -118,14 +118,14 @@ func TestOrderCell_InitDefaults(t *testing.T) {
 	}
 }
 
-func TestOrderCell_DefaultInit_DemoModeSucceedsWithNoopEmitter(t *testing.T) {
+func TestOrderCell_DefaultInit_DemoModeRequiresExplicitOutboxPair(t *testing.T) {
 	c := NewOrderCell()
 	err := c.Init(context.Background(), newTestDeps())
-	require.NoError(t, err)
-	assert.Len(t, c.OwnedSlices(), 2)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 }
 
-func TestOrderCell_DemoMode_AllowsHalfConfiguredPath(t *testing.T) {
+func TestOrderCell_DemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []Option
@@ -144,7 +144,8 @@ func TestOrderCell_DemoMode_AllowsHalfConfiguredPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewOrderCell(tt.opts...)
 			err := c.Init(context.Background(), newTestDeps())
-			require.NoError(t, err)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 		})
 	}
 }

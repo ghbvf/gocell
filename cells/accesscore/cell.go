@@ -414,6 +414,14 @@ func (c *AccessCore) resolveOutboxDeps(mode cell.DurabilityMode) error {
 		c.rbacEmitterMode = true
 		return nil
 	}
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"accesscore demo mode requires outboxWriter and txRunner together; inject both explicitly")
+	}
+	if c.publisher == nil && c.outboxWriter == nil {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"accesscore demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
+	}
 
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	emitter, emitterMode, err := c.resolveDemoEmitter()
@@ -439,7 +447,8 @@ func (c *AccessCore) resolveDemoEmitter() (outbox.Emitter, bool, error) {
 		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
 		return emitter, !isNoopDep(c.outboxWriter), err
 	}
-	return outbox.NewNoopEmitter(), false, nil
+	return nil, false, errcode.New(errcode.ErrCellMissingOutbox,
+		"accesscore demo mode requires an explicit event sink")
 }
 
 func isNoopDep(dep any) bool {

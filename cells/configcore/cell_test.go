@@ -89,7 +89,7 @@ func TestConfigCore_Startup(t *testing.T) {
 	require.NoError(t, c.Stop(ctx))
 }
 
-func TestConfigCore_InitDemoMode_AllowsHalfConfiguredPath(t *testing.T) {
+func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []Option
@@ -116,7 +116,8 @@ func TestConfigCore_InitDemoMode_AllowsHalfConfiguredPath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewConfigCore(tt.opts...)
 			err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
-			require.NoError(t, err)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "outboxWriter and txRunner")
 		})
 	}
 }
@@ -140,16 +141,27 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 	assert.Contains(t, err.Error(), "durable mode")
 }
 
-func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_SucceedsWithNoopEmitter(t *testing.T) {
+func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 	c := NewConfigCore(WithInMemoryDefaults())
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "explicit event sink")
 }
 
 func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
 		WithPublisher(eventbus.New()),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, err)
+}
+
+func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithOutboxWriter(outbox.NoopWriter{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)

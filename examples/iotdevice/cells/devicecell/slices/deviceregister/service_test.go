@@ -1,6 +1,7 @@
 package deviceregister
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -107,6 +109,25 @@ func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 	assert.Nil(t, dev)
 	assert.Contains(t, err.Error(), "emit event")
 	assert.Contains(t, err.Error(), "publish failed")
+}
+
+func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
+	repo := mem.NewDeviceRepository()
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailOpen, logger)
+	require.NoError(t, err)
+	svc := NewService(repo, logger, WithEmitter(emitter))
+
+	dev, err := svc.Register(context.Background(), "sensor-log")
+	require.NoError(t, err)
+	require.NotNil(t, dev)
+
+	logOutput := logBuf.String()
+	warnEntry := sloghelper.FindLogEntry(logOutput, "direct publish failed")
+	require.NotNil(t, warnEntry, "expected warn log for fail-open publish miss")
+	assert.Nil(t, sloghelper.FindLogEntry(logOutput, "event published"),
+		"fail-open path must not log a false published-success message")
 }
 
 func TestService_Register_DuplicateID_IsUnlikelyButHandled(t *testing.T) {

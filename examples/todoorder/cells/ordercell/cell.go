@@ -159,11 +159,11 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 		c.emitter = emitter
 		return nil
 	}
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	if c.outboxWriter == nil {
-		c.emitter = outbox.NewNoopEmitter()
-		return nil
+	if c.outboxWriter == nil || c.txRunner == nil {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"ordercell demo mode requires outboxWriter and txRunner together; inject both explicitly")
 	}
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
 	if err != nil {
 		return err

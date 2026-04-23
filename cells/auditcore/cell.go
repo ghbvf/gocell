@@ -159,8 +159,8 @@ func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
 	return nil
 }
 
-// validateOutboxDeps enforces the XOR constraint on outboxWriter/txRunner and
-// the demo-mode publisher requirement.
+// validateOutboxDeps rejects noop implementations in durable mode and requires
+// demo mode to use an explicit event sink instead of synthesized defaults.
 func (c *AuditCore) validateOutboxDeps(mode cell.DurabilityMode) error {
 	if err := cell.CheckNotNoop(mode, "auditcore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
 		return err
@@ -176,6 +176,14 @@ func (c *AuditCore) validateOutboxDeps(mode cell.DurabilityMode) error {
 		}
 		c.emitter = emitter
 		return nil
+	}
+	if (c.outboxWriter == nil) != (c.txRunner == nil) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"auditcore demo mode requires outboxWriter and txRunner together; inject both explicitly")
+	}
+	if c.publisher == nil && c.outboxWriter == nil {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"auditcore demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
 	}
 
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
@@ -199,7 +207,8 @@ func (c *AuditCore) resolveDemoEmitter() (outbox.Emitter, error) {
 	if c.outboxWriter != nil {
 		return outbox.NewWriterEmitter(c.outboxWriter)
 	}
-	return outbox.NewNoopEmitter(), nil
+	return nil, errcode.New(errcode.ErrCellMissingOutbox,
+		"auditcore demo mode requires an explicit event sink")
 }
 
 func isNoopDep(dep any) bool {
