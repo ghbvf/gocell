@@ -95,6 +95,32 @@ func TestHandler_HandleCreate_EmptyKey(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+// TestHandler_Create_BlankKey verifies that submitting an empty key returns
+// 400 + ERR_CONFIG_INVALID_INPUT + "key is required" so the client-visible
+// message uses the JSON body field name, not a Go identifier.
+func TestHandler_Create_BlankKey(t *testing.T) {
+	handler, _ := setupHandler()
+
+	w := httptest.NewRecorder()
+	body := `{"key":"","value":"v"}`
+	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = withAdmin(req)
+	handler.ServeHTTP(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ERR_CONFIG_INVALID_INPUT", resp.Error.Code)
+	assert.Equal(t, "key is required", resp.Error.Message)
+}
+
 func TestHandler_HandleCreate_UnknownField(t *testing.T) {
 	handler, _ := setupHandler()
 

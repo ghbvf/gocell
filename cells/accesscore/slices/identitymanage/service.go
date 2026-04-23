@@ -302,7 +302,7 @@ type ChangePasswordInput struct {
 // password_reset_required=true and would be rejected by the middleware.
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (dto.TokenPair, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
-		validation.F("userID", input.UserID),
+		validation.F("id", input.UserID),
 		validation.F("oldPassword", input.OldPassword),
 		validation.F("newPassword", input.NewPassword),
 	); err != nil {

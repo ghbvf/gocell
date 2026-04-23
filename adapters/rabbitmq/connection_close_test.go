@@ -45,8 +45,12 @@ func TestConnection_Close_RespectsCtx(t *testing.T) {
 // leaving reconnectLoop running until process exit. After F1 the local
 // state-machine transitions run unconditionally and only the AMQP network
 // handshake is gated by ctx.
+//
+// After the adapterutil.CloseWithDeadline fix (Finding 1): closeFn is always
+// invoked even on pre-cancelled ctx, so the underlying conn.Close() must be
+// called at least once (best-effort admitted close).
 func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
-	conn, _ := newTestConnection(t)
+	conn, mockConn := newTestConnection(t)
 
 	cancelledCtx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -70,6 +74,14 @@ func TestConnection_Close_PreCancelledCtxStillStopsReconnectLoop(t *testing.T) {
 	case <-time.After(50 * time.Millisecond):
 		t.Fatal("closeCh was not signalled after pre-cancelled Close — reconnectLoop would leak")
 	}
+
+	// Finding 1 regression guard: the underlying conn.Close() must be invoked
+	// at least once even when ctx is pre-cancelled (best-effort admitted close).
+	// Give the goroutine a short grace period to complete.
+	assert.Eventually(t, func() bool {
+		return mockConn.closeCount.Load() >= 1
+	}, 200*time.Millisecond, 5*time.Millisecond,
+		"underlying conn.Close() must be called at least once even with pre-cancelled ctx — broker must receive close frame")
 }
 
 // TestConnection_Close_Idempotent verifies that a second Close call

@@ -889,6 +889,9 @@ func (s *Subscriber) Close(ctx context.Context) error {
 		s.runsMu.Lock()
 		remaining := len(s.runs)
 		s.runsMu.Unlock()
+		slog.Warn("rabbitmq: subscriber shutdown remaining runs",
+			slog.Int("remaining_runs", remaining),
+			slog.Any("error", err))
 		return errcode.New(ErrAdapterAMQPCloseTimeout,
 			fmt.Sprintf("rabbitmq: subscriber Close timed out with %d run(s) still active",
 				remaining))

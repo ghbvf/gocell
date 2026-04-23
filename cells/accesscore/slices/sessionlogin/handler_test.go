@@ -127,3 +127,46 @@ func TestHandleLogin(t *testing.T) {
 		})
 	}
 }
+
+// assertBlankFieldError is a helper that asserts the error response contains
+// the expected errcode and a message stating "<fieldName> is required".
+func assertBlankFieldError(t *testing.T, body []byte, wantCode, wantField string) {
+	t.Helper()
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(body, &resp))
+	assert.Equal(t, wantCode, resp.Error.Code)
+	assert.Equal(t, wantField+" is required", resp.Error.Message)
+}
+
+// TestHandler_Login_BlankUsername verifies that submitting an empty username
+// returns 400 + ERR_AUTH_LOGIN_INVALID_INPUT + "username is required".
+func TestHandler_Login_BlankUsername(t *testing.T) {
+	h := setup()
+	body := `{"username":"","password":"correct-pass"}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.HandleLogin(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assertBlankFieldError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_INVALID_INPUT", "username")
+}
+
+// TestHandler_Login_BlankPassword verifies that submitting an empty password
+// returns 400 + ERR_AUTH_LOGIN_INVALID_INPUT + "password is required".
+func TestHandler_Login_BlankPassword(t *testing.T) {
+	h := setup()
+	body := `{"username":"alice","password":""}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.HandleLogin(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	assertBlankFieldError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_INVALID_INPUT", "password")
+}

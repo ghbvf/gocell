@@ -80,10 +80,15 @@ func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) er
 // it must NOT reuse this method with a bypass flag.
 func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthLogoutInvalidInput,
-		validation.F("sessionID", sessionID),
-		validation.F("callerUserID", callerUserID),
+		validation.F("id", sessionID),
 	); err != nil {
 		return err
+	}
+	if callerUserID == "" {
+		// callerUserID is derived from JWT claims by the auth middleware, not from
+		// client input. A blank value indicates a server-side auth misconfiguration,
+		// not a missing request field — expose a generic message to the client.
+		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires authenticated caller")
 	}
 
 	payload, _ := json.Marshal(map[string]any{
@@ -117,10 +122,10 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 
 // LogoutUser revokes all sessions for a user.
 func (s *Service) LogoutUser(ctx context.Context, userID string) error {
-	if err := validation.RequireNotBlank(errcode.ErrAuthLogoutInvalidInput,
-		validation.F("userID", userID),
-	); err != nil {
-		return err
+	if userID == "" {
+		// userID is a server-derived value (event payload / JWT claim), not a
+		// client-submitted field. Exposing the internal name would leak internals.
+		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires a valid user identifier")
 	}
 
 	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {

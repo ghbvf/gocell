@@ -10,6 +10,7 @@ import (
 	"math/bits"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -237,6 +238,10 @@ type mockConnection struct {
 	notifyCloseCh chan *amqp.Error
 	isClosed      bool
 	closeErr      error
+
+	// closeCount tracks how many times Close() has been called on this mock.
+	// Used to assert best-effort close behaviour in pre-cancelled ctx tests.
+	closeCount atomic.Int32
 }
 
 func newMockConnection() *mockConnection {
@@ -283,6 +288,7 @@ func (m *mockConnection) IsClosed() bool {
 }
 
 func (m *mockConnection) Close() error {
+	m.closeCount.Add(1)
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.isClosed = true

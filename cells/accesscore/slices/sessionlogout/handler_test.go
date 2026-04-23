@@ -10,9 +10,11 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -103,4 +105,21 @@ func TestHandleLogout(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, w.Code)
 		})
 	}
+}
+
+// TestHandler_Logout_BlankID tests the service directly with a blank sessionID
+// because the router pattern "/{id}" requires a non-empty path segment, making
+// an empty id unreachable via a real HTTP request. The service-level test
+// ensures the validation message uses the contract field name "id".
+func TestHandler_Logout_BlankID(t *testing.T) {
+	svc, repo := newTestService()
+	seedSession(repo, "sess-1", "usr-1")
+
+	err := svc.Logout(context.Background(), "", "usr-1")
+	require.Error(t, err)
+
+	var coded *errcode.Error
+	require.ErrorAs(t, err, &coded)
+	assert.Equal(t, errcode.ErrAuthLogoutInvalidInput, coded.Code)
+	assert.Equal(t, "id is required", coded.Message)
 }

@@ -160,6 +160,9 @@ func (p *Pool) Health(ctx context.Context) error {
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser pattern.
 func (p *Pool) Close(ctx context.Context) error {
 	return adapterutil.CloseWithDeadline(ctx, "postgres", func() error {
+		if p.inner == nil {
+			return nil
+		}
 		p.inner.Close()
 		return nil
 	})

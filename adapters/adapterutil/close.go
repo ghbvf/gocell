@@ -13,9 +13,12 @@ import (
 // completes first: closeFn's result or ctx.Err() when the context's
 // deadline/cancellation fires. The name is used for structured logging.
 //
-// If ctx is already done at entry, CloseWithDeadline returns ctx.Err()
-// without invoking closeFn. This replaces the duplicated "check-ctx +
-// goroutine + select + slog" pattern previously copied across
+// closeFn is always invoked, even when ctx is already done at entry —
+// admitted close must best-effort run. A pre-cancelled ctx still returns
+// ctx.Err() promptly via the select once both branches are ready (Go
+// selects uniformly, so the ctx.Done branch may win, but closeFn has
+// already been launched). This replaces the duplicated "goroutine +
+// select + slog" pattern previously copied across
 // postgres/redis/rabbitmq/vault adapters.
 //
 // closeFn returning a non-nil error is surfaced verbatim with no
@@ -29,18 +32,14 @@ import (
 //
 // Callers that own background goroutines (reconnect loops, watchdogs)
 // must signal those goroutines (e.g. close a stop channel) BEFORE
-// invoking CloseWithDeadline. A pre-cancelled ctx short-circuits the
-// helper without invoking closeFn — any pre-work the caller wanted to
-// run unconditionally must precede the helper call.
+// invoking CloseWithDeadline so those goroutines exit before or
+// concurrently with the underlying network close.
 //
 // ref: uber-go/fx app.go StopTimeout — shared shutdown budget pattern.
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser semantics.
 // ref: ThreeDotsLabs/watermill-amqp pkg/amqp/publisher.go Close — closeCh
 // signal then conn.Close() under the caller's budget.
 func CloseWithDeadline(ctx context.Context, name string, closeFn func() error) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
 	done := make(chan error, 1)
 	go func() {
 		err := closeFn()
