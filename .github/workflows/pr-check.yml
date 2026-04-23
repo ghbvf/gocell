@@ -1,5 +1,9 @@
 name: PR Check
 
+# Sonar quality gate runs only post-merge on push:develop to compare against
+# the baseline branch. Integration tests DO run pre-merge to prevent
+# auth/outbox/testcontainers regressions from landing silently.
+
 on:
   pull_request:
     branches: [develop, main, 'release/**']
@@ -8,10 +12,17 @@ permissions:
   contents: read
 
 jobs:
-  build-test:
+  pr-ci:
     uses: ./.github/workflows/_build-lint.yml
     with:
-      # lint-mode: pr activates --new-from-merge-base=origin/develop so only
+      # lint-mode: pr activates --new-from-merge-base=origin/<base-ref> so only
       # issues introduced by this PR are reported, not pre-existing baseline
       # noise. See _build-lint.yml for the rationale over only-new-issues.
+      # github.base_ref is the PR target branch (populated for pull_request
+      # events), ensuring PRs targeting main or release/* lint against their
+      # actual merge-base, not always develop.
       lint-mode: pr
+      base-ref: ${{ github.base_ref }}
+      run-integration: true
+      run-sonar: false
+    secrets: inherit   # needed for any secrets the reusable workflow may access

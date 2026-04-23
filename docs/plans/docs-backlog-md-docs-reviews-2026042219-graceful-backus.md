@@ -301,7 +301,7 @@ Kernel 子模块 / Metadata G-1~G-6 / Adapter 重整 / 契约增强 (BREAKING/CO
 
 ## 关键文件路径一览（按层）
 
-- 治理/诊断：`kernel/governance/rules_fmt.go`、`kernel/governance/rules_examples.go`（新）、`cmd/gocell/app/`、`cmd/gocell/`
+- 治理/诊断：`kernel/governance/rules_fmt.go`、`cmd/gocell/app/`、`cmd/gocell/`
 - 运行时：`runtime/bootstrap/bootstrap.go`、`runtime/http/health/`、`runtime/auth/`、`runtime/shutdown/`、`runtime/eventrouter/`
 - 适配器：`adapters/vault/transit_provider.go`、`adapters/postgres/pool.go`、`adapters/redis/client.go`、`adapters/rabbitmq/connection.go`、`adapters/adapterutil/`（新）
 - Cell：`cells/accesscore/cell.go`、`cells/configcore/cell.go`、`cells/accesscore/slices/rbaccheck/handler.go`、`cells/accesscore/internal/rolefetch/`（新）
