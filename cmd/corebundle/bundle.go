@@ -28,11 +28,11 @@ import (
 )
 
 // buildAssembly constructs the corebundle Assembly and registers the three
-// cells with durable mode. Extracted to keep run() cognitive complexity ≤ 15.
-func buildAssembly(ps promStack, cells ...cell.Cell) (*assembly.CoreAssembly, error) {
+// cells. Extracted to keep run() cognitive complexity ≤ 15.
+func buildAssembly(ps promStack, mode cell.DurabilityMode, cells ...cell.Cell) (*assembly.CoreAssembly, error) {
 	asm := assembly.New(assembly.Config{
 		ID:              "corebundle",
-		DurabilityMode:  cell.DurabilityDurable,
+		DurabilityMode:  mode,
 		HookObserver:    ps.hookObserver,
 		MetricsProvider: ps.metricProvider,
 		// HookTimeout omitted → assembly.DefaultHookTimeout (30s) applies.
@@ -43,6 +43,13 @@ func buildAssembly(ps promStack, cells ...cell.Cell) (*assembly.CoreAssembly, er
 		}
 	}
 	return asm, nil
+}
+
+func durabilityModeForTopology(topo bootstrap.Topology) cell.DurabilityMode {
+	if topo.AdapterMode == "real" {
+		return cell.DurabilityDurable
+	}
+	return cell.DurabilityDemo
 }
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the

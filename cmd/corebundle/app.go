@@ -15,7 +15,7 @@ import (
 // Flow:
 //  1. shared.Validate() — startup invariant check (all required deps present).
 //  2. For each module: module.Provide(ctx, shared) → cell.Cell + []bootstrap.Option.
-//  3. Return aggregated (cells, opts). The cmd layer calls buildAssembly(cells...)
+//  3. Return aggregated (cells, opts). The cmd layer calls buildAssembly(...)
 //     + bootstrap.New(opts...) to complete the wiring.
 //
 // BuildApp returns ([]cell.Cell, []bootstrap.Option, error) rather than

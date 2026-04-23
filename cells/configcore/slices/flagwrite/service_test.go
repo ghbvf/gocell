@@ -95,9 +95,9 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) *domain.Featur
 
 // --- Test: XOR violation guard ---
 
-// TestNewService_XORViolation verifies that NewService rejects half-wired
-// configs: providing only outboxWriter or only txRunner breaks L2 atomicity.
-func TestNewService_XORViolation(t *testing.T) {
+// TestNewService_AllowsHalfWiredDemoPath verifies that service construction no
+// longer uses nil-mode coupling; Cell wiring owns durable-mode validation.
+func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 	cases := []struct {
 		name string
 		opts []Option
@@ -108,8 +108,7 @@ func TestNewService_XORViolation(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			_, err := NewService(mem.NewFlagRepository(), slog.Default(), tc.opts...)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "must both be set")
+			require.NoError(t, err)
 		})
 	}
 }

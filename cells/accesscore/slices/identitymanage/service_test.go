@@ -12,8 +12,8 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -24,7 +24,7 @@ import (
 var minimalStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func newTestService() *Service {
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
 		WithTokenIssuer(minimalStubIssuer))
 	if err != nil {
 		panic("newTestService: " + err.Error())
@@ -36,7 +36,7 @@ func newTestService() *Service {
 // error when WithTokenIssuer is omitted or nil, enforcing fail-fast wiring.
 func TestNewService_RequiresTokenIssuer(t *testing.T) {
 	t.Run("no WithTokenIssuer option", func(t *testing.T) {
-		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default())
+		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default())
 		require.Error(t, err, "NewService without WithTokenIssuer must fail")
 		assert.Nil(t, svc)
 		var ec *errcode.Error
@@ -45,7 +45,7 @@ func TestNewService_RequiresTokenIssuer(t *testing.T) {
 	})
 
 	t.Run("WithTokenIssuer(nil)", func(t *testing.T) {
-		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+		svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
 			WithTokenIssuer(nil))
 		require.Error(t, err, "NewService with nil tokenIssuer must fail")
 		assert.Nil(t, svc)
@@ -101,7 +101,7 @@ func TestService_LockUnlock(t *testing.T) {
 
 func TestService_Lock_RevokesSession(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
-	svc, err := NewService(mem.NewUserRepository(), sessionRepo, eventbus.New(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), sessionRepo, slog.Default(),
 		WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
@@ -214,7 +214,7 @@ func newServiceWithIssuer(issuer TokenIssuer) (*Service, *mem.UserRepository) {
 	if effectiveIssuer == nil {
 		effectiveIssuer = minimalStubIssuer
 	}
-	svc, err := NewService(repo, mem.NewSessionRepository(), eventbus.New(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(), slog.Default(),
 		WithTokenIssuer(effectiveIssuer))
 	if err != nil {
 		panic("newServiceWithIssuer: " + err.Error())
@@ -337,7 +337,7 @@ func TestService_ChangePassword_RevokesPriorSessions(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	stub := &stubTokenIssuer{pair: dto.TokenPair{AccessToken: "new-at", SessionID: "sess-new"}}
-	svc, err := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
+	svc, err := NewService(userRepo, sessionRepo, slog.Default(),
 		WithTokenIssuer(stub))
 	require.NoError(t, err)
 
@@ -423,7 +423,7 @@ func TestService_ChangePassword_RevokeFailureAbortsAndNoToken(t *testing.T) {
 		pair: dto.TokenPair{AccessToken: "must-not-see"},
 	}
 	spyIssuer := &recordingTokenIssuer{inner: stub, called: &issuerCalled}
-	svc, err := NewService(userRepo, sessionRepo, eventbus.New(), slog.Default(),
+	svc, err := NewService(userRepo, sessionRepo, slog.Default(),
 		WithTokenIssuer(spyIssuer),
 		WithTxManager(&snapshotTxRunner{repo: userRepo, userID: "usr-cp-tx-fail"}))
 	require.NoError(t, err)
@@ -551,8 +551,10 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	fp := failingPublisher{err: errors.New("broker unavailable")}
-	svc, err := NewService(userRepo, sessionRepo, fp, slog.Default(),
-		WithTokenIssuer(&stubTokenIssuer{}))
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	require.NoError(t, err)
+	svc, err := NewService(userRepo, sessionRepo, slog.Default(),
+		WithEmitter(emitter), WithTokenIssuer(&stubTokenIssuer{}))
 	require.NoError(t, err)
 
 	user, err := svc.Create(context.Background(), CreateInput{

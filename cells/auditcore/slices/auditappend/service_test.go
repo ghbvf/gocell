@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,8 +18,7 @@ var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
 func newTestService() (*Service, *mem.AuditRepository) {
 	repo := mem.NewAuditRepository()
-	eb := eventbus.New()
-	return NewService(repo, testHMACKey, eb, slog.Default()), repo
+	return NewService(repo, testHMACKey, slog.Default()), repo
 }
 
 func TestService_HandleEvent(t *testing.T) {
@@ -93,10 +91,9 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 
 func TestService_HandleEvent_InvalidPayload_LogsWarning(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	eb := eventbus.New()
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	svc := NewService(repo, testHMACKey, eb, logger)
+	svc := NewService(repo, testHMACKey, logger)
 
 	entry := outbox.Entry{
 		ID:        "evt-bad-json",
@@ -127,14 +124,16 @@ func (f failingPublisher) Close(_ context.Context) error                       {
 func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
-	svc := NewService(repo, testHMACKey, fp, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	require.NoError(t, err)
+	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter))
 
 	entry := outbox.Entry{
 		ID:        "evt-pub-err",
 		EventType: "event.user.created.v1",
 		Payload:   mustJSON(map[string]any{"user_id": "usr-1"}),
 	}
-	err := svc.HandleEvent(context.Background(), entry)
+	err = svc.HandleEvent(context.Background(), entry)
 	require.NoError(t, err, "publish failure in demo mode should not fail append")
 	assert.Equal(t, 1, svc.ChainLen(), "entry should still be appended to chain")
 }

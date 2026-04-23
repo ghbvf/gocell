@@ -40,22 +40,35 @@ type FlagChangedPayload struct {
 // Option configures a flag-write Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
+}
+
+// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
 func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) { s.outboxWriter = w }
+	return func(s *Service) {
+		if e, err := outbox.NewWriterEmitter(w); err == nil {
+			s.emitter = e
+		}
+	}
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
+	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // Service implements flag write business logic (L2 OutboxFact).
 type Service struct {
-	repo         ports.FlagRepository
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	logger       *slog.Logger
+	repo     ports.FlagRepository
+	txRunner persistence.TxRunner
+	emitter  outbox.Emitter
+	logger   *slog.Logger
 }
 
 // NewService creates a flag-write Service.
@@ -68,17 +81,13 @@ type Service struct {
 // ref: go-micro — constructor validates coupling invariants before returning.
 func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
-		repo:   repo,
-		logger: logger,
+		repo:     repo,
+		txRunner: persistence.NoopTxRunner{},
+		emitter:  outbox.NewNoopEmitter(),
+		logger:   logger,
 	}
 	for _, o := range opts {
 		o(s)
-	}
-	// Defensive check: outboxWriter and txRunner must be set together.
-	if (s.outboxWriter != nil) != (s.txRunner != nil) {
-		return nil, errcode.New(errcode.ErrCellMissingOutbox,
-			"flagwrite: outboxWriter and txRunner must both be set or both be nil; "+
-				"providing one without the other breaks L2 atomicity")
 	}
 	return s, nil
 }
@@ -206,22 +215,11 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// runInTx executes fn in a transaction if txRunner is configured, otherwise
-// calls fn(ctx) directly. Cell Init() validates txRunner presence for CUD slices.
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if s.txRunner != nil {
-		return s.txRunner.RunInTx(ctx, fn)
-	}
-	return fn(ctx)
+	return s.txRunner.RunInTx(ctx, fn)
 }
 
 func (s *Service) emitFlagChanged(ctx context.Context, action string, flag *domain.FeatureFlag) error {
-	if s.outboxWriter == nil {
-		// Demo mode: outboxWriter is nil (txRunner is also nil per NewService invariant).
-		// This path is only reachable when Service is constructed without WithOutboxWriter,
-		// which is allowed for local demo/testing without a real broker.
-		return nil
-	}
 	// Single event identifier shared by both the transport envelope and the
 	// payload body. headers.event_id (contract idempotency key) is carried in
 	// outbox.Entry.ID at the transport level; payload.eventId mirrors it so
@@ -252,8 +250,8 @@ func (s *Service) emitFlagChanged(ctx context.Context, action string, flag *doma
 		EventType: TopicFlagChanged,
 		Payload:   payload,
 	}
-	if err := s.outboxWriter.Write(ctx, entry); err != nil {
-		return fmt.Errorf("flag-write: write outbox entry: %w", err)
+	if err := s.emitter.Emit(ctx, entry); err != nil {
+		return fmt.Errorf("flag-write: emit event: %w", err)
 	}
 	return nil
 }

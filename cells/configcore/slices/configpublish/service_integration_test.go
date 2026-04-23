@@ -63,7 +63,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 
-	svc := NewService(repo, stubPublisher{}, slog.Default(),
+	svc := NewService(repo, slog.Default(),
 		WithOutboxWriter(outboxWriter),
 		WithTxManager(txMgr),
 	)
@@ -212,7 +212,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 
 	// First: seed and publish using a good writer.
 	goodWriter := adapterpg.NewOutboxWriter()
-	svcGood := NewService(repo, stubPublisher{}, slog.Default(),
+	svcGood := NewService(repo, slog.Default(),
 		WithOutboxWriter(goodWriter),
 		WithTxManager(txMgr),
 	)
@@ -229,7 +229,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 
 	// Now inject a failing writer — simulates outbox broker down during Rollback.
 	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}
-	svcFail := NewService(repo, stubPublisher{}, slog.Default(),
+	svcFail := NewService(repo, slog.Default(),
 		WithOutboxWriter(failingWriter),
 		WithTxManager(txMgr),
 	)

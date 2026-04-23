@@ -37,7 +37,11 @@ var _ outbox.Publisher = (*recordingPublisher)(nil)
 func newContractHandler() (http.Handler, *recordingPublisher) {
 	repo := mem.NewDeviceRepository()
 	pub := &recordingPublisher{}
-	svc := NewService(repo, pub, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(pub, outbox.DirectPublishFailOpen, slog.Default())
+	if err != nil {
+		panic(err)
+	}
+	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 	mux := http.NewServeMux()
 	mux.Handle("POST /api/v1/devices", http.HandlerFunc(NewHandler(svc).HandleRegister))
 	return mux, pub

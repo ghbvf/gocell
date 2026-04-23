@@ -8,7 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
-	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,8 +23,7 @@ func (failPublisher) Close(_ context.Context) error { return nil }
 
 func newTestService() (*Service, *mem.DeviceRepository) {
 	repo := mem.NewDeviceRepository()
-	pub := eventbus.New()
-	return NewService(repo, pub, slog.Default()), repo
+	return NewService(repo, slog.Default()), repo
 }
 
 func TestService_Register(t *testing.T) {
@@ -87,7 +86,9 @@ func TestService_Register_PersistsDevice(t *testing.T) {
 
 func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 	repo := mem.NewDeviceRepository()
-	svc := NewService(repo, failPublisher{}, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailOpen, slog.Default())
+	require.NoError(t, err)
+	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 
 	dev, err := svc.Register(context.Background(), "sensor-c")
 	require.NoError(t, err, "publish failure should not propagate as error")

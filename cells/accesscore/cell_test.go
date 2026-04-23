@@ -16,7 +16,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -142,8 +141,7 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
 }
 
-func TestInit_TxRunnerXOR_OutboxWithoutTx(t *testing.T) {
-	// outboxWriter present but txRunner missing → XOR mismatch → error
+func TestInit_DemoMode_OutboxWithoutTx_Succeeds(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
@@ -156,15 +154,10 @@ func TestInit_TxRunnerXOR_OutboxWithoutTx(t *testing.T) {
 	)
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	err := c.Init(context.Background(), deps)
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, err.Error(), "txRunner")
+	require.NoError(t, err)
 }
 
-func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
-	// txRunner present but outboxWriter missing → XOR mismatch → error
+func TestInit_DemoMode_TxWithoutOutbox_Succeeds(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
@@ -177,11 +170,7 @@ func TestInit_TxRunnerXOR_TxWithoutOutbox(t *testing.T) {
 	)
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	err := c.Init(context.Background(), deps)
-	require.Error(t, err)
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
-	assert.Contains(t, err.Error(), "txRunner")
+	require.NoError(t, err)
 }
 
 func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
@@ -191,17 +180,14 @@ func TestInit_TxRunnerXOR_BothPresent(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), deps))
 }
 
-func TestInit_DemoMode_RequiresPublisher(t *testing.T) {
-	// L2 cell with neither outbox nor tx, but no publisher → error
+func TestInit_DemoMode_NoPublisherNoOutbox_SucceedsWithNoopEmitter(t *testing.T) {
 	c := NewAccessCore(
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		// no publisher, no outbox, no tx
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "publisher")
+	require.NoError(t, err)
 }
 
 func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {

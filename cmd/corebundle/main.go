@@ -2,9 +2,9 @@
 // It bootstraps configcore, accesscore, and auditcore with in-memory
 // repositories by default, suitable for development and integration testing.
 //
-// DurabilityDurable is set to reject noop placeholders (NoopWriter,
-// NoopTxRunner, DiscardPublisher) even in dev mode. Set GOCELL_ADAPTER_MODE=real
-// to require all secrets from env vars (fail-fast on missing).
+// DurabilityDemo is used in dev/memory mode so Cells auto-fill explicit no-op
+// dependencies. Set GOCELL_ADAPTER_MODE=real to switch the assembly to
+// DurabilityDurable and require all production dependencies and secrets.
 //
 // # Required env vars (all adapter modes)
 //
@@ -395,7 +395,7 @@ func run(ctx context.Context) error {
 		return err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, cells...)
+	asm, err := buildAssembly(shared.PromStack, durabilityModeForTopology(shared.Topology), cells...)
 	if err != nil {
 		return fmt.Errorf("build assembly: %w", err)
 	}

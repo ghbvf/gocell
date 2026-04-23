@@ -14,7 +14,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -25,31 +24,44 @@ const TopicConfigChanged = domain.TopicConfigChanged
 // Option configures a config-write Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
+}
+
+// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
 func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) { s.outboxWriter = w }
+	return func(s *Service) {
+		if e, err := outbox.NewWriterEmitter(w); err == nil {
+			s.emitter = e
+		}
+	}
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
+	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // Service implements config write business logic.
 type Service struct {
-	repo         ports.ConfigRepository
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	logger       *slog.Logger
+	repo     ports.ConfigRepository
+	txRunner persistence.TxRunner
+	emitter  outbox.Emitter
+	logger   *slog.Logger
 }
 
 // NewService creates a config-write Service.
-func NewService(repo ports.ConfigRepository, pub outbox.Publisher, logger *slog.Logger, opts ...Option) *Service {
+func NewService(repo ports.ConfigRepository, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
-		repo:      repo,
-		publisher: pub,
-		logger:    logger,
+		repo:     repo,
+		txRunner: persistence.NoopTxRunner{},
+		emitter:  outbox.NewNoopEmitter(),
+		logger:   logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -151,14 +163,8 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// runInTx executes fn in a transaction if txRunner is configured, otherwise
-// calls fn(ctx) directly. Nil txRunner is intentional for query-only slices;
-// Cell Init() validates txRunner presence for CUD slices before Start().
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	if s.txRunner != nil {
-		return s.txRunner.RunInTx(ctx, fn)
-	}
-	return fn(ctx)
+	return s.txRunner.RunInTx(ctx, fn)
 }
 
 func (s *Service) publishChange(ctx context.Context, action string, entry *domain.ConfigEntry) error {
@@ -175,26 +181,13 @@ func (s *Service) publishChange(ctx context.Context, action string, entry *domai
 	if err != nil {
 		return fmt.Errorf("config-write: marshal event payload: %w", err)
 	}
-	if s.outboxWriter != nil {
-		outboxEntry := outbox.Entry{
-			ID:        outbox.NewEntryID(),
-			EventType: TopicConfigChanged,
-			Payload:   payload,
-		}
-		if err := s.outboxWriter.Write(ctx, outboxEntry); err != nil {
-			return fmt.Errorf("config-write: write outbox entry: %w", err)
-		}
-		return nil
+	outboxEntry := outbox.Entry{
+		ID:        outbox.NewEntryID(),
+		EventType: TopicConfigChanged,
+		Payload:   payload,
 	}
-	// Demo mode: publisher failure is logged but not propagated since
-	// demo mode does not guarantee L2 atomicity. Wrap in v1 wire envelope so
-	// the eventbus fail-closed schema check (P1-14) accepts the message.
-	envelope := outboxrt.MarshalDirectEnvelope(TopicConfigChanged, TopicConfigChanged, outbox.NewEntryID(), payload)
-	if err := s.publisher.Publish(ctx, TopicConfigChanged, envelope); err != nil {
-		s.logger.Warn("config-write: failed to publish event (demo mode)",
-			slog.Any("error", err),
-			slog.String("key", entry.Key),
-		)
+	if err := s.emitter.Emit(ctx, outboxEntry); err != nil {
+		return fmt.Errorf("config-write: emit event: %w", err)
 	}
 	return nil
 }

@@ -9,7 +9,6 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +44,7 @@ func (f *failingTxRunner) RunInTx(_ context.Context, _ func(context.Context) err
 func TestService_WithOutboxWriter(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, testHMACKey, slog.Default(), WithOutboxWriter(ow))
 
 	// Build a small valid chain.
 	chain := domain.NewHashChain(testHMACKey)
@@ -67,7 +66,7 @@ func TestService_WithOutboxWriter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	tx := &stubTxRunner{}
-	_ = NewService(repo, testHMACKey, eventbus.New(), slog.Default(), WithTxManager(tx))
+	_ = NewService(repo, testHMACKey, slog.Default(), WithTxManager(tx))
 	// TxManager option is set — verifying it compiles and runs.
 	assert.Equal(t, 0, tx.calls)
 }
@@ -76,7 +75,7 @@ func TestService_VerifyChain_OutboxWriteError_ReturnsError(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	failErr := fmt.Errorf("outbox write failure")
 	fw := &failingOutboxWriter{err: failErr}
-	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(), WithOutboxWriter(fw))
+	svc := NewService(repo, testHMACKey, slog.Default(), WithOutboxWriter(fw))
 
 	// Build a valid chain so we reach the outbox write path.
 	chain := domain.NewHashChain(testHMACKey)
@@ -98,7 +97,7 @@ func TestService_VerifyChain_WithTxRunner_RunsInTx(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(),
+	svc := NewService(repo, testHMACKey, slog.Default(),
 		WithOutboxWriter(ow), WithTxManager(tx))
 
 	chain := domain.NewHashChain(testHMACKey)
@@ -119,7 +118,7 @@ func TestService_VerifyChain_TxRunnerError_ReturnsError(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	txErr := fmt.Errorf("db connection lost")
 	ftx := &failingTxRunner{err: txErr}
-	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(),
+	svc := NewService(repo, testHMACKey, slog.Default(),
 		WithOutboxWriter(ow), WithTxManager(ftx))
 
 	chain := domain.NewHashChain(testHMACKey)
@@ -146,7 +145,9 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	// No outboxWriter → goes through direct-publish path.
-	svc := NewService(repo, testHMACKey, fp, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	require.NoError(t, err)
+	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter))
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {
@@ -163,7 +164,7 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 func TestService_VerifyChain_InvalidChain_WithOutbox(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, testHMACKey, slog.Default(), WithOutboxWriter(ow))
 
 	chain := domain.NewHashChain(testHMACKey)
 	for i := range 3 {

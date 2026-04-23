@@ -9,16 +9,15 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func newTestService() (*Service, *mem.SessionRepository) {
 	repo := mem.NewSessionRepository()
-	eb := eventbus.New()
-	return NewService(repo, eb, slog.Default()), repo
+	return NewService(repo, slog.Default()), repo
 }
 
 func seedSession(repo *mem.SessionRepository, id, userID string) {
@@ -125,9 +124,11 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 	seedSession(repo, "sess-pub", "usr-1")
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
-	svc := NewService(repo, fp, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	require.NoError(t, err)
+	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 
-	err := svc.Logout(context.Background(), "sess-pub", "usr-1")
+	err = svc.Logout(context.Background(), "sess-pub", "usr-1")
 	require.NoError(t, err, "publish failure in demo mode should not fail logout")
 }
 

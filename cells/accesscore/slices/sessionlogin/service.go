@@ -18,7 +18,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -36,26 +35,38 @@ type TokenPair struct {
 // Option configures a session-login Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
+}
+
+// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
 func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) { s.outboxWriter = w }
+	return func(s *Service) {
+		if e, err := outbox.NewWriterEmitter(w); err == nil {
+			s.emitter = e
+		}
+	}
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
+	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // Service implements password login with JWT issuance.
 type Service struct {
-	userRepo     ports.UserRepository
-	sessionRepo  ports.SessionRepository
-	roleRepo     ports.RoleRepository
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	issuer       *auth.JWTIssuer
-	logger       *slog.Logger
+	userRepo    ports.UserRepository
+	sessionRepo ports.SessionRepository
+	roleRepo    ports.RoleRepository
+	txRunner    persistence.TxRunner
+	emitter     outbox.Emitter
+	issuer      *auth.JWTIssuer
+	logger      *slog.Logger
 }
 
 // NewService creates a session-login Service.
@@ -67,7 +78,6 @@ func NewService(
 	userRepo ports.UserRepository,
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
-	pub outbox.Publisher,
 	issuer *auth.JWTIssuer,
 	logger *slog.Logger,
 	opts ...Option,
@@ -76,7 +86,8 @@ func NewService(
 		userRepo:    userRepo,
 		sessionRepo: sessionRepo,
 		roleRepo:    roleRepo,
-		publisher:   pub,
+		txRunner:    persistence.NoopTxRunner{},
+		emitter:     outbox.NewNoopEmitter(),
 		issuer:      issuer,
 		logger:      logger,
 	}
@@ -145,8 +156,6 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 		return nil, err
 	}
 
-	s.maybePublishDirect(ctx, payload)
-
 	s.logger.Info("user logged in",
 		slog.String("user_id", user.ID), slog.String("session_id", session.ID))
 	return &TokenPair{
@@ -171,50 +180,23 @@ func (s *Service) fetchRoleNames(ctx context.Context, userID string) ([]string, 
 	return names, nil
 }
 
-// persistSession writes the session and (when configured) the outbox entry,
-// optionally wrapped in a transaction when txRunner is available.
+// persistSession writes the session and emits the outbox entry.
 func (s *Service) persistSession(ctx context.Context, session *domain.Session, payload []byte) error {
 	do := func(txCtx context.Context) error {
 		if err := s.sessionRepo.Create(txCtx, session); err != nil {
 			return fmt.Errorf("session-login: persist session: %w", err)
 		}
-		return s.writeOutboxEntry(txCtx, payload)
-	}
-	if s.txRunner != nil {
-		return s.txRunner.RunInTx(ctx, do)
-	}
-	return do(ctx)
-}
-
-// writeOutboxEntry writes a session.created outbox entry when the writer is configured.
-func (s *Service) writeOutboxEntry(ctx context.Context, payload []byte) error {
-	if s.outboxWriter == nil {
+		entry := outbox.Entry{
+			ID:        outbox.NewEntryID(),
+			EventType: TopicSessionCreated,
+			Payload:   payload,
+		}
+		if err := s.emitter.Emit(txCtx, entry); err != nil {
+			return fmt.Errorf("session-login: emit event: %w", err)
+		}
 		return nil
 	}
-	entry := outbox.Entry{
-		ID:        outbox.NewEntryID(),
-		EventType: TopicSessionCreated,
-		Payload:   payload,
-	}
-	if err := s.outboxWriter.Write(ctx, entry); err != nil {
-		return fmt.Errorf("session-login: write outbox entry: %w", err)
-	}
-	return nil
-}
-
-// maybePublishDirect publishes directly when outbox is not in use (demo mode).
-// Wraps the business payload in a v1 wire envelope so the eventbus fail-closed
-// schema check (P1-14) accepts the message and subscribers receive it.
-func (s *Service) maybePublishDirect(ctx context.Context, payload []byte) {
-	if s.outboxWriter != nil {
-		return
-	}
-	envelope := outboxrt.MarshalDirectEnvelope(TopicSessionCreated, TopicSessionCreated, outbox.NewEntryID(), payload)
-	if pubErr := s.publisher.Publish(ctx, TopicSessionCreated, envelope); pubErr != nil {
-		s.logger.Warn("session-login: failed to publish event (demo mode)",
-			slog.Any("error", pubErr),
-			slog.String("topic", TopicSessionCreated))
-	}
+	return s.txRunner.RunInTx(ctx, do)
 }
 
 // issueAccessToken signs a short-lived JWT with intent=access for calling

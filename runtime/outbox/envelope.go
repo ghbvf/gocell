@@ -1,154 +1,32 @@
 package outbox
 
-import (
-	"encoding/json"
-	"time"
+import kout "github.com/ghbvf/gocell/kernel/outbox"
 
-	kout "github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/pkg/errcode"
-)
+// EnvelopeSchemaV1 is kept for compatibility; kernel/outbox owns the value.
+const EnvelopeSchemaV1 = kout.EnvelopeSchemaV1
 
-// EnvelopeSchemaV1 is the canonical schema version for outbox wire envelopes.
-// All envelopes produced by MarshalEnvelope carry this version; UnmarshalEnvelope
-// rejects any message that does not match.
-const EnvelopeSchemaV1 = "v1"
+// ErrUnknownEnvelopeVersion is kept for compatibility; kernel/outbox owns the
+// sentinel so errors.Is works across runtime and kernel callers.
+var ErrUnknownEnvelopeVersion = kout.ErrUnknownEnvelopeVersion
 
-// ErrUnknownEnvelopeVersion is returned by UnmarshalEnvelope when the inbound
-// wire message carries an unrecognised (or absent) schemaVersion field.
-// Consumers must treat this as a permanent error and route to DLX, not retry.
-//
-// ref: Watermill message/router.go handleMessage — unknown message type → Nack, no retry
-var ErrUnknownEnvelopeVersion = errcode.New(errcode.ErrEnvelopeSchema,
-	"outbox: unknown envelope schema version")
+// WireMessage is kept for compatibility; kernel/outbox owns the wire schema.
+type WireMessage = kout.WireMessage
 
-// WireMessage is the canonical wire envelope used by outbox relay publishers
-// across all transports (in-memory eventbus, RabbitMQ, future Kafka). Transports
-// MUST unmarshal payloads through UnmarshalEnvelope to share this contract.
-//
-// Fields use camelCase JSON tags, matching the serialization produced by
-// adapters/postgres/outbox_relay.go publishAll and consumed by
-// adapters/rabbitmq/subscriber.go unmarshalDelivery. Keeping a single canonical
-// struct here replaces the duplicated outboxMessage / outboxWireMessage definitions
-// scattered across those two packages.
-//
-// ref: Watermill message.Message — payload + metadata envelope
-type WireMessage struct {
-	SchemaVersion string            `json:"schemaVersion"`
-	ID            string            `json:"id"`
-	AggregateID   string            `json:"aggregateId,omitempty"`
-	AggregateType string            `json:"aggregateType,omitempty"`
-	EventType     string            `json:"eventType"`
-	Topic         string            `json:"topic,omitempty"`
-	Payload       json.RawMessage   `json:"payload"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	Attempts      int               `json:"attempts,omitempty"`
-}
-
-// MarshalEnvelope serializes a ClaimedEntry into the wire envelope JSON.
-// The output always carries SchemaVersion = EnvelopeSchemaV1.
+// MarshalEnvelope serializes a claimed runtime entry into the canonical v1
+// wire envelope. Attempts stays runtime relay/store state and is not part of
+// the kernel-owned envelope contract.
 func MarshalEnvelope(entry ClaimedEntry) ([]byte, error) {
-	msg := WireMessage{
-		SchemaVersion: EnvelopeSchemaV1,
-		ID:            entry.ID,
-		AggregateID:   entry.AggregateID,
-		AggregateType: entry.AggregateType,
-		EventType:     entry.EventType,
-		Topic:         entry.RoutingTopic(),
-		Payload:       json.RawMessage(entry.Payload),
-		Metadata:      entry.Metadata,
-		CreatedAt:     entry.CreatedAt,
-		Attempts:      entry.Attempts,
-	}
-	b, err := json.Marshal(msg)
-	if err != nil {
-		return nil, errcode.Wrap(errcode.ErrEnvelopeSchema, "outbox: marshal envelope", err)
-	}
-	return b, nil
+	return kout.MarshalEnvelope(entry.Entry)
 }
 
-// MarshalDirectEnvelope builds a v1 wire envelope for direct-publish paths
-// (demo mode L2 cells, L4 cells without outbox writer) that do not go through
-// the relay. The returned bytes are suitable for passing to outbox.Publisher.Publish.
-//
-// eventType is the canonical event name (e.g. "event.session.created.v1") —
-// typically the same as topic for direct paths. id must be globally unique
-// (callers should use outbox.NewEntryID() to construct it). payload is the
-// business JSON bytes that handlers will receive in Entry.Payload after the
-// bus unwraps.
-//
-// Panics on empty id or eventType — these are programmer errors (internal
-// producers pass compile-time constants / NewEntryID()), not runtime
-// conditions. Follows the stdlib Must-style convention (regexp.MustCompile,
-// netip.MustParseAddr) so callers are not forced to handle unreachable
-// branches. json.Marshal of a WireMessage with valid string/byte fields
-// does not fail, so the internal marshal error is also treated as unreachable.
+// MarshalDirectEnvelope delegates direct-publish envelope construction to
+// kernel/outbox while preserving the runtime/outbox call site.
 func MarshalDirectEnvelope(topic, eventType, id string, payload []byte) []byte {
-	if id == "" {
-		panic("outbox.MarshalDirectEnvelope: empty id")
-	}
-	if eventType == "" {
-		panic("outbox.MarshalDirectEnvelope: empty eventType")
-	}
-	msg := WireMessage{
-		SchemaVersion: EnvelopeSchemaV1,
-		ID:            id,
-		EventType:     eventType,
-		Topic:         topic,
-		Payload:       json.RawMessage(payload),
-		CreatedAt:     time.Now().UTC(),
-	}
-	b, err := json.Marshal(msg)
-	if err != nil {
-		// Unreachable: WireMessage fields are strings and []byte; json.Marshal
-		// only fails on cyclic references or unsupported types, neither of which
-		// applies here. Panic so any regression surfaces at the call site.
-		panic("outbox.MarshalDirectEnvelope: json.Marshal unexpectedly failed: " + err.Error())
-	}
-	return b
+	return kout.MarshalDirectEnvelope(topic, eventType, id, payload)
 }
 
-// UnmarshalEnvelope decodes a v1 wire envelope from raw bytes into a kernel/outbox.Entry.
-//
-// Fail-closed semantics (ref: Watermill router.go, K8s workqueue fail-closed):
-//   - JSON parse failure → ErrEnvelopeSchema-coded error wrapping the json error
-//     (distinct from ErrUnknownEnvelopeVersion by sentinel identity; callers that
-//     need to distinguish parse vs schema-version use errors.Is against the
-//     sentinel, while code-based observability groups both under
-//     ErrEnvelopeSchema)
-//   - schemaVersion != "v1" (or absent) → ErrUnknownEnvelopeVersion
-//   - empty ID or EventType → ErrEnvelopeSchema error
-//
-// Legacy fallback has been removed. All producers MUST emit v1 envelopes.
-// Consumers that receive non-v1 messages must Reject (route to DLX), not retry.
+// UnmarshalEnvelope delegates envelope decoding to kernel/outbox while
+// preserving the runtime/outbox call site.
 func UnmarshalEnvelope(topic string, raw []byte) (kout.Entry, error) {
-	var msg WireMessage
-	if err := json.Unmarshal(raw, &msg); err != nil {
-		return kout.Entry{}, errcode.Wrap(errcode.ErrEnvelopeSchema,
-			"outbox: unmarshal envelope", err)
-	}
-
-	if msg.SchemaVersion != EnvelopeSchemaV1 {
-		return kout.Entry{}, ErrUnknownEnvelopeVersion
-	}
-
-	if msg.ID == "" {
-		return kout.Entry{}, errcode.New(errcode.ErrEnvelopeSchema,
-			"outbox: envelope missing required field: id")
-	}
-	if msg.EventType == "" {
-		return kout.Entry{}, errcode.New(errcode.ErrEnvelopeSchema,
-			"outbox: envelope missing required field: eventType")
-	}
-
-	return kout.Entry{
-		ID:            msg.ID,
-		AggregateID:   msg.AggregateID,
-		AggregateType: msg.AggregateType,
-		EventType:     msg.EventType,
-		Topic:         msg.Topic,
-		Payload:       []byte(msg.Payload),
-		Metadata:      msg.Metadata,
-		CreatedAt:     msg.CreatedAt,
-	}, nil
+	return kout.UnmarshalEnvelope(topic, raw)
 }

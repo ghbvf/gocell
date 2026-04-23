@@ -91,8 +91,8 @@ func NewDeviceCell(opts ...Option) *DeviceCell {
 }
 
 // Init sets up repositories, slice services, and handlers.
-// L4 Cells do not use outboxWriter (KG-07 decision). The publisher is used
-// directly for event publishing.
+// L4 Cells do not use outboxWriter (KG-07 decision). The Cell boundary
+// adapts the publisher to a direct emitter for event publishing.
 func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
@@ -118,9 +118,13 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "devicecell", c.publisher); err != nil {
 		return err
 	}
+	emitter, err := outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, c.logger)
+	if err != nil {
+		return err
+	}
 
 	// device-register slice
-	registerSvc := deviceregister.NewService(c.deviceRepo, c.publisher, c.logger)
+	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger, deviceregister.WithEmitter(emitter))
 	c.registerHandler = deviceregister.NewHandler(registerSvc)
 	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
 

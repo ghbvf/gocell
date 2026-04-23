@@ -89,7 +89,7 @@ func TestConfigCore_Startup(t *testing.T) {
 	require.NoError(t, c.Stop(ctx))
 }
 
-func TestConfigCore_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
+func TestConfigCore_InitDemoMode_AllowsHalfConfiguredPath(t *testing.T) {
 	tests := []struct {
 		name string
 		opts []Option
@@ -116,10 +116,7 @@ func TestConfigCore_InitRejectsHalfConfiguredDurablePath(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			c := NewConfigCore(tt.opts...)
 			err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
-			require.Error(t, err)
-			var ecErr *errcode.Error
-			require.ErrorAs(t, err, &ecErr)
-			assert.Equal(t, errcode.ErrCellMissingOutbox, ecErr.Code)
+			require.NoError(t, err)
 		})
 	}
 }
@@ -143,11 +140,10 @@ func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 	assert.Contains(t, err.Error(), "durable mode")
 }
 
-func TestConfigCore_InitDemoMode_RequiresPublisher(t *testing.T) {
+func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_SucceedsWithNoopEmitter(t *testing.T) {
 	c := NewConfigCore(WithInMemoryDefaults())
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "publisher")
+	require.NoError(t, err)
 }
 
 func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {

@@ -59,7 +59,7 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	outboxWriter := adapterpg.NewOutboxWriter()
 	txMgr := adapterpg.NewTxManager(pool)
 
-	svc := NewService(repo, stubPublisher{}, slog.Default(),
+	svc := NewService(repo, slog.Default(),
 		WithOutboxWriter(outboxWriter),
 		WithTxManager(txMgr),
 	)
@@ -207,7 +207,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}
 
 	txMgr := adapterpg.NewTxManager(pool)
-	svc := NewService(repo, stubPublisher{}, slog.Default(),
+	svc := NewService(repo, slog.Default(),
 		WithOutboxWriter(failingWriter),
 		WithTxManager(txMgr),
 	)

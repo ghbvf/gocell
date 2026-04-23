@@ -143,6 +143,7 @@ type ConfigCore struct {
 	publisher          outbox.Publisher
 	outboxWriter       outbox.Writer
 	txRunner           persistence.TxRunner
+	emitter            outbox.Emitter
 	cursorCodec        *query.CursorCodec
 	logger             *slog.Logger
 	keyProvider        kcrypto.KeyProvider
@@ -199,14 +200,15 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.flagRepo = cellpg.NewFlagRepository(session)
 	}
 
-	if err := c.validateOutboxDeps(deps); err != nil {
+	runMode, publishFailureMode := c.deriveModes(deps.DurabilityMode)
+
+	if err := c.validateOutboxDeps(deps, publishFailureMode); err != nil {
 		return err
 	}
 	if err := c.ensureCursorCodec(deps); err != nil {
 		return err
 	}
 
-	runMode, publishFailureMode := c.deriveModes(deps.DurabilityMode)
 	c.initWriteSlice()
 	if err := c.initReadSlice(runMode); err != nil {
 		return err
@@ -239,28 +241,57 @@ func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunM
 // validateOutboxDeps enforces the XOR constraint (outboxWriter + txRunner
 // must be both present or both absent) and rejects noop implementations in
 // durable mode.
-func (c *ConfigCore) validateOutboxDeps(deps cell.Dependencies) error {
-	// XOR constraint: both present = durable mode; both absent = demo mode.
-	if (c.outboxWriter == nil) != (c.txRunner == nil) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"configcore durable mode requires both outboxWriter and txRunner")
-	}
+func (c *ConfigCore) validateOutboxDeps(deps cell.Dependencies, publishFailureMode configpublish.PublishFailureMode) error {
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "configcore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
 		return err
 	}
-	// Demo mode: require publisher for degraded event delivery.
-	if c.outboxWriter == nil && c.txRunner == nil {
-		if c.publisher == nil {
+	if deps.DurabilityMode == cell.DurabilityDurable {
+		if c.outboxWriter == nil || c.txRunner == nil {
 			return errcode.New(errcode.ErrCellMissingOutbox,
-				"configcore requires publisher or outbox writer; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
+				"configcore durable mode requires real outboxWriter and txRunner")
 		}
-		if c.ConsistencyLevel() >= cell.L2 {
-			c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-				slog.String("cell", c.ID()),
-				slog.Int("consistency_level", int(c.ConsistencyLevel())))
+		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
+		if err != nil {
+			return err
 		}
+		c.emitter = emitter
+		return nil
+	}
+
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	emitter, err := c.resolveDemoEmitter(publishFailureMode)
+	if err != nil {
+		return err
+	}
+	c.emitter = emitter
+	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
+		c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+			slog.String("cell", c.ID()),
+			slog.Int("consistency_level", int(c.ConsistencyLevel())))
 	}
 	return nil
+}
+
+func (c *ConfigCore) resolveDemoEmitter(publishFailureMode configpublish.PublishFailureMode) (outbox.Emitter, error) {
+	if c.publisher != nil && (c.outboxWriter == nil || isNoopDep(c.outboxWriter)) {
+		return outbox.NewDirectEmitter(c.publisher, configDirectPublishMode(publishFailureMode), c.logger)
+	}
+	if c.outboxWriter != nil {
+		return outbox.NewWriterEmitter(c.outboxWriter)
+	}
+	return outbox.NewNoopEmitter(), nil
+}
+
+func configDirectPublishMode(mode configpublish.PublishFailureMode) outbox.DirectPublishFailureMode {
+	if mode.IsFailOpen() {
+		return outbox.DirectPublishFailOpen
+	}
+	return outbox.DirectPublishFailClosed
+}
+
+func isNoopDep(dep any) bool {
+	n, ok := dep.(interface{ Noop() bool })
+	return ok && n.Noop()
 }
 
 // ensureCursorCodec sets a default cursor codec in demo mode or returns an
@@ -286,14 +317,8 @@ func (c *ConfigCore) ensureCursorCodec(deps cell.Dependencies) error {
 }
 
 func (c *ConfigCore) initWriteSlice() {
-	var opts []configwrite.Option
-	if c.outboxWriter != nil {
-		opts = append(opts, configwrite.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		opts = append(opts, configwrite.WithTxManager(c.txRunner))
-	}
-	writeSvc := configwrite.NewService(c.configRepo, c.publisher, c.logger, opts...)
+	opts := []configwrite.Option{configwrite.WithEmitter(c.emitter), configwrite.WithTxManager(c.txRunner)}
+	writeSvc := configwrite.NewService(c.configRepo, c.logger, opts...)
 	c.writeHandler = configwrite.NewHandler(writeSvc)
 	c.AddSlice(cell.NewBaseSlice("configwrite", "configcore", cell.L2))
 }
@@ -309,15 +334,12 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 }
 
 func (c *ConfigCore) initPublishSlice(publishFailureMode configpublish.PublishFailureMode) {
-	var opts []configpublish.Option
-	if c.outboxWriter != nil {
-		opts = append(opts, configpublish.WithOutboxWriter(c.outboxWriter))
+	opts := []configpublish.Option{
+		configpublish.WithEmitter(c.emitter),
+		configpublish.WithTxManager(c.txRunner),
+		configpublish.WithPublishFailureMode(publishFailureMode),
 	}
-	if c.txRunner != nil {
-		opts = append(opts, configpublish.WithTxManager(c.txRunner))
-	}
-	opts = append(opts, configpublish.WithPublishFailureMode(publishFailureMode))
-	publishSvc := configpublish.NewService(c.configRepo, c.publisher, c.logger, opts...)
+	publishSvc := configpublish.NewService(c.configRepo, c.logger, opts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)
 	c.AddSlice(cell.NewBaseSlice("configpublish", "configcore", cell.L2))
 }
@@ -340,13 +362,7 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 // initFlagWriteSlice registers the flag-write L2 slice: Create/Update/Toggle/Delete
 // with transactional outbox (flag.changed.v1 event).
 func (c *ConfigCore) initFlagWriteSlice() error {
-	var opts []flagwrite.Option
-	if c.outboxWriter != nil {
-		opts = append(opts, flagwrite.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		opts = append(opts, flagwrite.WithTxManager(c.txRunner))
-	}
+	opts := []flagwrite.Option{flagwrite.WithEmitter(c.emitter), flagwrite.WithTxManager(c.txRunner)}
 	flagWriteSvc, err := flagwrite.NewService(c.flagRepo, c.logger, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init flag-write slice: %w", err)

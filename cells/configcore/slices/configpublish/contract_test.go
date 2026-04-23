@@ -21,7 +21,7 @@ import (
 func newContractService() (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
-	svc := NewService(repo, testutil.StubPublisher{}, slog.Default(),
+	svc := NewService(repo, slog.Default(),
 		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
 	return svc, repo, writer
 }

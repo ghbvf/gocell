@@ -204,6 +204,7 @@ type AccessCore struct {
 	publisher    outbox.Publisher
 	outboxWriter outbox.Writer
 	txRunner     persistence.TxRunner
+	emitter      outbox.Emitter
 	logger       *slog.Logger
 	jwtIssuer    *auth.JWTIssuer
 	jwtVerifier  *auth.JWTVerifier
@@ -224,6 +225,7 @@ type AccessCore struct {
 	authzSvc            *authorizationdecide.Service
 	rbacHandler         *rbaccheck.Handler
 	rbacRunMode         query.RunMode
+	rbacEmitterMode     bool
 	rbacAssignHandler   *rbacassign.Handler
 	configReceiveSvc    *configreceive.Service
 	rbacSessionConsumer *sessionlogout.Consumer
@@ -372,17 +374,8 @@ func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
 // initValidate performs fail-fast validation of required dependencies before
 // constructing slices. Extracted from Init to reduce cognitive complexity.
 func (c *AccessCore) initValidate(deps cell.Dependencies) error {
-	if (c.outboxWriter == nil) != (c.txRunner == nil) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"accesscore durable mode requires both outboxWriter and txRunner")
-	}
-	if err := cell.CheckNotNoop(deps.DurabilityMode, "accesscore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
+	if err := c.resolveOutboxDeps(deps.DurabilityMode); err != nil {
 		return err
-	}
-	if c.outboxWriter == nil && c.txRunner == nil {
-		if err := c.validateDemoMode(); err != nil {
-			return err
-		}
 	}
 	if c.jwtIssuer == nil || c.jwtVerifier == nil {
 		return errcode.New(errcode.ErrAuthKeyInvalid,
@@ -404,13 +397,32 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 	return nil
 }
 
-// validateDemoMode is called when both outboxWriter and txRunner are nil.
-func (c *AccessCore) validateDemoMode() error {
-	if c.publisher == nil {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"accesscore requires publisher or outbox writer; use WithPublisher(&outbox.DiscardPublisher{}) for demo mode")
+func (c *AccessCore) resolveOutboxDeps(mode cell.DurabilityMode) error {
+	if err := cell.CheckNotNoop(mode, "accesscore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
+		return err
 	}
-	if c.ConsistencyLevel() >= cell.L2 {
+	if mode == cell.DurabilityDurable {
+		if c.outboxWriter == nil || c.txRunner == nil {
+			return errcode.New(errcode.ErrCellMissingOutbox,
+				"accesscore durable mode requires real outboxWriter and txRunner")
+		}
+		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
+		if err != nil {
+			return err
+		}
+		c.emitter = emitter
+		c.rbacEmitterMode = true
+		return nil
+	}
+
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	emitter, emitterMode, err := c.resolveDemoEmitter()
+	if err != nil {
+		return err
+	}
+	c.emitter = emitter
+	c.rbacEmitterMode = emitterMode
+	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
 		c.logger.Warn("accesscore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
 			slog.String("cell", c.ID()),
 			slog.Int("consistency_level", int(c.ConsistencyLevel())))
@@ -418,32 +430,37 @@ func (c *AccessCore) validateDemoMode() error {
 	return nil
 }
 
+func (c *AccessCore) resolveDemoEmitter() (outbox.Emitter, bool, error) {
+	if c.publisher != nil && (c.outboxWriter == nil || isNoopDep(c.outboxWriter)) {
+		emitter, err := outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, c.logger)
+		return emitter, false, err
+	}
+	if c.outboxWriter != nil {
+		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
+		return emitter, !isNoopDep(c.outboxWriter), err
+	}
+	return outbox.NewNoopEmitter(), false, nil
+}
+
+func isNoopDep(dep any) bool {
+	n, ok := dep.(interface{ Noop() bool })
+	return ok && n.Noop()
+}
+
 // initSlices constructs all 9 slice services and handlers.
 // Extracted from Init to reduce cognitive complexity.
 func (c *AccessCore) initSlices() error {
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.
-	var loginOpts []sessionlogin.Option
-	if c.outboxWriter != nil {
-		loginOpts = append(loginOpts, sessionlogin.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		loginOpts = append(loginOpts, sessionlogin.WithTxManager(c.txRunner))
-	}
-	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.publisher, c.jwtIssuer, c.logger, loginOpts...)
+	loginOpts := []sessionlogin.Option{sessionlogin.WithEmitter(c.emitter), sessionlogin.WithTxManager(c.txRunner)}
+	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.jwtIssuer, c.logger, loginOpts...)
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionlogin", "accesscore", cell.L2))
 
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
-	var identityOpts []identitymanage.Option
-	if c.outboxWriter != nil {
-		identityOpts = append(identityOpts, identitymanage.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		identityOpts = append(identityOpts, identitymanage.WithTxManager(c.txRunner))
-	}
+	identityOpts := []identitymanage.Option{identitymanage.WithEmitter(c.emitter), identitymanage.WithTxManager(c.txRunner)}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
-	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionRepo, c.publisher, c.logger, identityOpts...)
+	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionRepo, c.logger, identityOpts...)
 	if err != nil {
 		return err
 	}
@@ -465,14 +482,8 @@ func (c *AccessCore) initSlices() error {
 	c.AddSlice(cell.NewBaseSlice("sessionrefresh", "accesscore", cell.L1))
 
 	// session-logout
-	var logoutOpts []sessionlogout.Option
-	if c.outboxWriter != nil {
-		logoutOpts = append(logoutOpts, sessionlogout.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		logoutOpts = append(logoutOpts, sessionlogout.WithTxManager(c.txRunner))
-	}
-	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.publisher, c.logger, logoutOpts...)
+	logoutOpts := []sessionlogout.Option{sessionlogout.WithEmitter(c.emitter), sessionlogout.WithTxManager(c.txRunner)}
+	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.logger, logoutOpts...)
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionlogout", "accesscore", cell.L2))
 
@@ -504,17 +515,14 @@ func (c *AccessCore) initSlices() error {
 // initRbacAssign constructs the rbac-assign slice. Extracted to keep initSlices
 // within cognitive complexity bounds.
 func (c *AccessCore) initRbacAssign() {
-	var rbacOpts []rbacassign.Option
-	if c.outboxWriter != nil {
-		rbacOpts = append(rbacOpts, rbacassign.WithOutboxWriter(c.outboxWriter))
-	}
-	if c.txRunner != nil {
-		rbacOpts = append(rbacOpts, rbacassign.WithTxManager(c.txRunner))
+	rbacOpts := []rbacassign.Option{rbacassign.WithTxManager(c.txRunner)}
+	if c.rbacEmitterMode {
+		rbacOpts = append(rbacOpts, rbacassign.WithEmitter(c.emitter))
 	}
 	rbacAssignSvc := rbacassign.NewService(c.roleRepo, c.sessionRepo, c.logger, rbacOpts...)
 	c.rbacAssignHandler = rbacassign.NewHandler(rbacAssignSvc)
 	rbacAssignLevel := cell.L0
-	if c.outboxWriter != nil && c.txRunner != nil {
+	if c.rbacEmitterMode {
 		rbacAssignLevel = cell.L2
 	}
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))

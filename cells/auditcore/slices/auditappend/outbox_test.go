@@ -7,7 +7,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -33,7 +32,7 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 func TestService_WithOutboxWriter(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, testHMACKey, slog.Default(), WithOutboxWriter(ow))
 
 	entry := outbox.Entry{
 		ID:        "evt-1",
@@ -49,7 +48,7 @@ func TestService_WithOutboxWriter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	tx := &stubTxRunner{}
-	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(), WithTxManager(tx))
+	svc := NewService(repo, testHMACKey, slog.Default(), WithTxManager(tx))
 
 	entry := outbox.Entry{
 		ID:        "evt-1",
@@ -65,7 +64,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := NewService(repo, testHMACKey, eventbus.New(), slog.Default(),
+	svc := NewService(repo, testHMACKey, slog.Default(),
 		WithOutboxWriter(ow), WithTxManager(tx))
 
 	entry := outbox.Entry{

@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 const (
@@ -22,35 +21,47 @@ const (
 // Option configures a session-logout Service.
 type Option func(*Service)
 
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
+}
+
+// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
 func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) { s.outboxWriter = w }
+	return func(s *Service) {
+		if e, err := outbox.NewWriterEmitter(w); err == nil {
+			s.emitter = e
+		}
+	}
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
-	return func(s *Service) { s.txRunner = tx }
+	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // Service implements session revocation.
 type Service struct {
-	sessionRepo  ports.SessionRepository
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	logger       *slog.Logger
+	sessionRepo ports.SessionRepository
+	txRunner    persistence.TxRunner
+	emitter     outbox.Emitter
+	logger      *slog.Logger
 }
 
 // NewService creates a session-logout Service.
 func NewService(
 	sessionRepo ports.SessionRepository,
-	pub outbox.Publisher,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
 	s := &Service{
 		sessionRepo: sessionRepo,
-		publisher:   pub,
+		txRunner:    persistence.NoopTxRunner{},
+		emitter:     outbox.NewNoopEmitter(),
 		logger:      logger,
 	}
 	for _, o := range opts {
@@ -59,13 +70,9 @@ func NewService(
 	return s
 }
 
-// persistRevoke wraps the session update + outbox write in a txRunner-aware call.
-// When txRunner is nil (demo mode), fn is called directly without a transaction.
+// persistRevoke wraps the session update + event emit in a transaction runner.
 func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) error) error {
-	if s.txRunner != nil {
-		return s.txRunner.RunInTx(ctx, fn)
-	}
-	return fn(ctx)
+	return s.txRunner.RunInTx(ctx, fn)
 }
 
 // Logout revokes the caller's own session identified by sessionID.
@@ -96,32 +103,19 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 		if err := s.sessionRepo.RevokeByIDAndOwner(txCtx, sessionID, callerUserID); err != nil {
 			return err
 		}
-		if s.outboxWriter != nil {
-			entry := outbox.Entry{
-				ID:        outbox.NewEntryID(),
-				EventType: TopicSessionRevoked,
-				Payload:   payload,
-			}
-			if writeErr := s.outboxWriter.Write(txCtx, entry); writeErr != nil {
-				return fmt.Errorf("session-logout: write outbox entry: %w", writeErr)
-			}
+		entry := outbox.Entry{
+			ID:        outbox.NewEntryID(),
+			EventType: TopicSessionRevoked,
+			Payload:   payload,
+		}
+		if emitErr := s.emitter.Emit(txCtx, entry); emitErr != nil {
+			return fmt.Errorf("session-logout: emit event: %w", emitErr)
 		}
 		return nil
 	}
 
 	if err := s.persistRevoke(ctx, revokeAndPublish); err != nil {
 		return err
-	}
-
-	// Fallback direct publish when outbox is not in use. Wrap in v1 wire envelope
-	// so the eventbus fail-closed schema check (P1-14) accepts the message.
-	if s.outboxWriter == nil {
-		envelope := outboxrt.MarshalDirectEnvelope(TopicSessionRevoked, TopicSessionRevoked, outbox.NewEntryID(), payload)
-		if pubErr := s.publisher.Publish(ctx, TopicSessionRevoked, envelope); pubErr != nil {
-			s.logger.Warn("session-logout: failed to publish event (demo mode)",
-				slog.Any("error", pubErr),
-				slog.String("topic", TopicSessionRevoked))
-		}
 	}
 
 	s.logger.Info("session revoked",

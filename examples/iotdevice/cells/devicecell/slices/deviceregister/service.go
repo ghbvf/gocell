@@ -12,7 +12,6 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/google/uuid"
 )
 
@@ -36,18 +35,34 @@ func toDeviceRegisteredEvent(d *domain.Device) deviceRegisteredEvent {
 
 // Service handles device registration business logic.
 type Service struct {
-	repo      domain.DeviceRepository
-	publisher outbox.Publisher
-	logger    *slog.Logger
+	repo    domain.DeviceRepository
+	emitter outbox.Emitter
+	logger  *slog.Logger
+}
+
+// Option configures a device-register Service.
+type Option func(*Service)
+
+// WithEmitter sets the event emitter.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(s *Service) {
+		if e != nil {
+			s.emitter = e
+		}
+	}
 }
 
 // NewService creates a device-register Service.
-func NewService(repo domain.DeviceRepository, publisher outbox.Publisher, logger *slog.Logger) *Service {
-	return &Service{
-		repo:      repo,
-		publisher: publisher,
-		logger:    logger,
+func NewService(repo domain.DeviceRepository, logger *slog.Logger, opts ...Option) *Service {
+	s := &Service{
+		repo:    repo,
+		emitter: outbox.NewNoopEmitter(),
+		logger:  logger,
 	}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // Register creates a new device and publishes a device.registered event.
@@ -67,17 +82,17 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 		return nil, fmt.Errorf("device-register: persist: %w", err)
 	}
 
-	// L4 Cell uses publisher.Publish directly (no outboxWriter per KG-07).
-	// Payload is wrapped in a v1 wire envelope so the eventbus fail-closed
-	// schema check (P1-14) accepts the message.
 	payload, err := json.Marshal(toDeviceRegisteredEvent(device))
 	if err != nil {
 		s.logger.Error("device-register: marshal event failed", slog.Any("error", err))
 		return device, nil
 	}
-	envelope := outboxrt.MarshalDirectEnvelope(TopicDeviceRegistered, TopicDeviceRegistered, outbox.NewEntryID(), payload)
-
-	if err := s.publisher.Publish(ctx, TopicDeviceRegistered, envelope); err != nil {
+	entry := outbox.Entry{
+		ID:        outbox.NewEntryID(),
+		EventType: TopicDeviceRegistered,
+		Payload:   payload,
+	}
+	if err := s.emitter.Emit(ctx, entry); err != nil {
 		s.logger.Error("device-register: publish event failed",
 			slog.String("device_id", device.ID),
 			slog.Any("error", err),
