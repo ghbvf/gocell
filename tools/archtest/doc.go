@@ -7,9 +7,9 @@
 //
 // Rules enforced (from CLAUDE.md):
 //
-//   LAYER-01: kernel/ may only import stdlib, pkg/, and kernel/ (allow-list)
-//   LAYER-02: cells/ must not import adapters/
-//   LAYER-03: runtime/ must not import cells/ or adapters/
-//   LAYER-04: adapters/ must not import cells/, cmd/, or examples/
-//   LAYER-05: cells/A must not import cells/B/internal/ (cross-cell isolation)
+//	LAYER-01: kernel/ may only import stdlib, pkg/, and kernel/ (allow-list)
+//	LAYER-02: cells/ must not import adapters/
+//	LAYER-03: runtime/ must not import cells/ or adapters/
+//	LAYER-04: adapters/ must not import cells/, cmd/, or examples/
+//	LAYER-05: cells/A must not import cells/B/internal/ (cross-cell isolation)
 package archtest

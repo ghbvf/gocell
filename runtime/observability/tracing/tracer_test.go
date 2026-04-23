@@ -82,9 +82,9 @@ func TestSpanSetStatus_SimpleSpan(t *testing.T) {
 // mockRecorderSpan implements both Span and SpanRecorder for testing helpers.
 type mockRecorderSpan struct {
 	simpleSpan
-	recordedErr  error
-	statusSet    bool
-	statusDesc   string
+	recordedErr error
+	statusSet   bool
+	statusDesc  string
 }
 
 func (m *mockRecorderSpan) RecordError(err error) { m.recordedErr = err }
@@ -108,4 +108,3 @@ func TestSpanSetStatus_WithRecorder(t *testing.T) {
 	assert.True(t, span.statusSet)
 	assert.Equal(t, "db timeout", span.statusDesc)
 }
-

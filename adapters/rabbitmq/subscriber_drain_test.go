@@ -147,8 +147,8 @@ func TestSubscriber_ConsumerTagTruncation(t *testing.T) {
 	longTopic := fmt.Sprintf("topic-%s", strings.Repeat("y", 100))
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       longQueue,
-		DLXExchange:     "trunc.dlx",
+		QueueName:   longQueue,
+		DLXExchange: "trunc.dlx",
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -192,8 +192,8 @@ func TestSubscriber_StopIntake_Idempotent(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "idempotent-queue",
-		DLXExchange:     "idempotent.dlx",
+		QueueName:   "idempotent-queue",
+		DLXExchange: "idempotent.dlx",
 	})
 
 	ctx := context.Background()
@@ -374,8 +374,8 @@ func TestSubscriber_StopIntake_RespectsCtx(t *testing.T) {
 	mockConn.mu.Unlock()
 
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       "ctx-respect-queue",
-		DLXExchange:     "ctx-respect.dlx",
+		QueueName:   "ctx-respect-queue",
+		DLXExchange: "ctx-respect.dlx",
 	})
 
 	// Start Subscribe so the consumerTag is registered.

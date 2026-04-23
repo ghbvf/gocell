@@ -78,6 +78,13 @@
 | **新·PR220-2** | **DOC-NAMING-GUARD-01** 建 `cmd/gocell/app/naming_docs_test.go` + `naming-guard.yaml`，扫活动文档禁旧 `my-app`/`sso-bff`/`core-bundle`/旧 slice 名 | 3h | `cmd/gocell/app/` + CI |
 | **新·PR220-4** | **CI-LINT-EVENT-SEMANTIC-SPLIT-01** `push` 全量 lint / `pull_request` 保留 diff 降噪；修 merge-base 退化 — ✅ PR-A1：`_build-lint.yml` reusable `workflow_call` + `ci.yml`（push 全量）+ `pr-check.yml`（PR 降噪） | resolved | `.github/workflows/_build-lint.yml` + `ci.yml` + `pr-check.yml` |
 
+#### 🔄 本 PR 拆出条目（PR-A1 lint 彻底化衍生）
+
+| ID | 任务 | 工时 | 关键文件 |
+|---|---|---|---|
+| V-A11b | **EXAMPLES-HARDCODE-STRING-SCAN-01** governance 扫 examples/ 源码里 cell id 字面量（如 `"sso-bff"`、`"core-bundle"`），防硬编码漂移。PR-A1 仅覆盖 parser walk 维度，字符串扫描延后。 | 3h | `kernel/governance/` + CI |
+| LINT-WEBSOCKET-MIGRATION-01 | **nhooyr.io/websocket → coder/websocket 库迁移** 21 staticcheck SA1019；PR-A1 临时 `.golangci.yml` exclude，独立 PR 完成迁移 | 4-6h | `adapters/websocket/` + `runtime/websocket/` |
+
 #### Adapter
 
 | ID | 任务 | 工时 | 关键文件 |
