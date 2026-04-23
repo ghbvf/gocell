@@ -1,4 +1,10 @@
-// Package testutil provides shared test doubles for configcore slice tests.
+// Package testutil provides test doubles and helpers scoped to the configcore
+// cell. It lives under internal/ to enforce the per-cell convention: other
+// cells (auditcore, accesscore) that need similar test doubles should define
+// their own internal/testutil rather than cross-cell-share, preserving the
+// cell isolation boundary. If a truly cross-cell test utility emerges in the
+// future, it should be elevated to cells/testutil/ or pkg/testutil/ — but
+// that decision is deferred until the need is concrete.
 package testutil
 
 import (

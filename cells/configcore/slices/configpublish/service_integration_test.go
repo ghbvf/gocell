@@ -13,7 +13,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	configcoretest "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	cctestutil "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
@@ -71,7 +71,9 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	)
 
 	cleanup := func() {
-		_ = pool.Close(ctx)
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close: %v", err)
+		}
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("WARN: failed to terminate postgres container: %v", err)
 		}
@@ -186,6 +188,7 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 // write fails during Rollback, both the config_entries update and the outbox write
 // are rolled back (transaction atomicity).
 func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
+	testutil.RequireDocker(t)
 	ctx := context.Background()
 
 	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
@@ -202,7 +205,11 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
 	require.NoError(t, err)
-	defer func() { _ = pool.Close(ctx) }()
+	defer func() {
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close: %v", err)
+		}
+	}()
 
 	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
 	require.NoError(t, err)
@@ -230,7 +237,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	versionBefore := entryBefore.Version
 
 	// Now inject a failing writer — simulates outbox broker down during Rollback.
-	failingWriter := &configcoretest.RecordingWriter{Err: errors.New("outbox broker down")}
+	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
 	svcFail := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),

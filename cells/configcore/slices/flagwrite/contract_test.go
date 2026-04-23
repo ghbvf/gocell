@@ -12,7 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
-	configcoretest "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -40,9 +40,9 @@ func newContractMux(svc *Service) *http.ServeMux {
 func newContractService(t *testing.T) *Service {
 	t.Helper()
 	repo := mem.NewFlagRepository()
-	writer := &configcoretest.RecordingWriter{}
+	writer := &testutil.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -185,9 +185,9 @@ func TestEventFlagChangedV1Publish(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.flag.changed.v1")
 
 	repo := mem.NewFlagRepository()
-	writer := &configcoretest.RecordingWriter{}
+	writer := &testutil.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
 	_, err = svc.Create(testAdminCtx(), CreateInput{Key: "event-flag", Enabled: true, Description: "ev"})
