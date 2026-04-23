@@ -422,7 +422,7 @@ func TestTransitEnvelope_VaultNeverSeesBusinessPlaintext(t *testing.T) {
 
 	auth := vaultadapter.NewStaticTokenAuth(rawClient, token)
 	client := vaultadapter.NewVaultAPIClient(rawClient)
-	p, err := vaultadapter.NewTransitKeyProvider(client, "transit", "gocell-config", auth)
+	p, err := vaultadapter.NewTransitKeyProvider(ctx, client, "transit", "gocell-config", auth)
 	require.NoError(t, err)
 
 	businessSecret := "very-sensitive-password-123"

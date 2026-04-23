@@ -143,6 +143,11 @@ type appRoleAuth struct {
 // NewAppRoleAuth creates an AuthMethod that authenticates via Vault AppRole.
 // mountPath defaults to "approle" if empty.
 //
+// NOTE: client must be non-nil; unlike NewStaticTokenAuth, AppRole auth
+// requires a real Vault client for the Login HTTP call. In unit tests, use
+// vaultapi.NewClient(vaultapi.DefaultConfig()) with any address — Login is
+// only called at auth time, not at construction time.
+//
 // ref: hashicorp/vault api/auth/approle/approle.go#NewAppRoleAuth
 func NewAppRoleAuth(client *vaultapi.Client, roleID, secretID string) (AuthMethod, error) {
 	if client == nil {
@@ -203,6 +208,11 @@ type kubernetesAuth struct {
 // NewKubernetesAuth creates an AuthMethod for Vault Kubernetes auth.
 // jwtPath defaults to the standard K8s projected volume path if empty.
 // mountPath defaults to "kubernetes" if empty.
+//
+// NOTE: client must be non-nil; unlike NewStaticTokenAuth, Kubernetes auth
+// requires a real Vault client for the Login HTTP call. In unit tests, use
+// vaultapi.NewClient(vaultapi.DefaultConfig()) with any address — Login is
+// only called at auth time, not at construction time.
 //
 // ref: hashicorp/vault api/auth/kubernetes/kubernetes.go#NewKubernetesAuth
 func NewKubernetesAuth(client *vaultapi.Client, role, jwtPath, mountPath string) (AuthMethod, error) {
@@ -382,8 +392,14 @@ func secretIDFromEnv(client *vaultapi.Client) (string, error) {
 //
 // The wrapping token is consumed on unwrap — it must not be used again.
 //
+// Thread-safety: Clone() creates an isolated copy of the client so that
+// setting the wrapping token on the clone does not affect the shared client
+// used by other goroutines. This eliminates the race window that existed when
+// the original client's token was temporarily replaced.
+//
 // ref: hashicorp/vault api/logical.go#Logical.Unwrap
 // ref: hashicorp/vault builtin/logical/transit/wrapping.go — wrapping token pattern
+// ref: hashicorp/vault api/client.go#Clone — thread-safe copy for isolated operations
 func unwrapSecretID(client *vaultapi.Client) (string, error) {
 	wrapToken := os.Getenv("VAULT_SECRET_ID_WRAPPING_TOKEN")
 	if wrapToken == "" {
@@ -391,14 +407,22 @@ func unwrapSecretID(client *vaultapi.Client) (string, error) {
 			"vault-auth: VAULT_SECRET_ID_TYPE=wrapped requires VAULT_SECRET_ID_WRAPPING_TOKEN to be set")
 	}
 
-	// Temporarily set the wrapping token on the client to perform the unwrap.
-	// We restore the client token after the call (or clear it so a subsequent
-	// Login call sets the proper app token).
-	origToken := client.Token()
-	client.SetToken(wrapToken)
-	defer client.SetToken(origToken)
+	// Clone the client so the wrapping token is set only on the isolated copy.
+	// This prevents a race window where other goroutines sharing the original
+	// client would briefly see the wrapping token instead of the app token.
+	clone, err := client.Clone()
+	if err != nil {
+		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
+			"vault-auth: clone client for unwrap", err)
+	}
+	// Vault SDK's Logical().Unwrap reads the token from the client's header
+	// (X-Vault-Token), NOT from the wrapToken body argument. SetToken is
+	// required here; passing wrapToken to Unwrap is ignored when a non-empty
+	// header is already set by the SDK.
+	// ref: hashicorp/vault api/sys_wrapping.go#Unwrap
+	clone.SetToken(wrapToken)
 
-	secret, err := client.Logical().Unwrap(wrapToken)
+	secret, err := clone.Logical().Unwrap(wrapToken)
 	if err != nil {
 		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
 			"vault-auth: unwrap AppRole secret_id (wrapping token may be expired or already consumed)", err)

@@ -176,38 +176,39 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 }
 
 // doReauth drives the re-authentication cycle after a watcher terminates.
-// It sets authHealthy=0, calls reauthenticate (with backoff), then buildWatcher.
-// Returns (newWatcher, true) on success or (nil, false) if ctx was cancelled.
+// It sets authHealthy=0, then loops forever: reauthenticate (with exponential
+// backoff) → buildWatcher. Only ctx cancellation causes the loop to exit.
+//
+// Contract: reauthenticate returns a non-nil error only when ctx is cancelled.
+// buildWatcher failures are logged and cause the loop to retry immediately
+// (reauthenticate applies its own backoff on the next attempt).
+//
+// Returns (newWatcher, true) once both reauthenticate and buildWatcher succeed,
+// or (nil, false) if ctx was cancelled.
 func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) {
 	if w.authHealthy != nil {
 		w.authHealthy.Set(0)
 	}
-	if err := w.reauthenticate(ctx); err != nil {
-		return nil, false
-	}
-	newWatcher, err := w.buildWatcher(ctx)
-	if err == nil {
-		if w.authHealthy != nil {
-			w.authHealthy.Set(1)
+	for {
+		if ctx.Err() != nil {
+			return nil, false
 		}
-		return newWatcher, true
-	}
-	// buildWatcher failed — give the re-auth loop one more chance.
-	w.logger.WarnContext(ctx, "vault-transit: failed to build new LifetimeWatcher after re-auth",
-		slog.String("error", err.Error()))
-	if err2 := w.reauthenticate(ctx); err2 != nil {
-		return nil, false
-	}
-	newWatcher, err = w.buildWatcher(ctx)
-	if err != nil {
-		w.logger.ErrorContext(ctx, "vault-transit: cannot rebuild watcher; giving up re-auth",
+		if err := w.reauthenticate(ctx); err != nil {
+			// reauthenticate returns non-nil only on ctx cancellation.
+			return nil, false
+		}
+		newWatcher, err := w.buildWatcher(ctx)
+		if err == nil {
+			if w.authHealthy != nil {
+				w.authHealthy.Set(1)
+			}
+			return newWatcher, true
+		}
+		// buildWatcher failed — log and loop back to reauthenticate.
+		// The next reauthenticate call applies its own exponential backoff.
+		w.logger.WarnContext(ctx, "vault-transit: buildWatcher failed after re-auth; will retry",
 			slog.String("error", err.Error()))
-		return nil, false
 	}
-	if w.authHealthy != nil {
-		w.authHealthy.Set(1)
-	}
-	return newWatcher, true
 }
 
 // runWatcher starts the given watcher in a goroutine and loops on its channels
@@ -284,7 +285,7 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 		_, err := w.authMethod.Login(ctx)
 		if err == nil {
 			if w.loginOutcome != nil {
-				w.loginOutcome.WithLabelValues(methodStr, "success", "").Inc()
+				w.loginOutcome.WithLabelValues(methodStr, "success", reasonNone).Inc()
 			}
 			return nil
 		}
@@ -572,13 +573,18 @@ type TransitKeyProvider struct {
 // and AuthMethod. auth is REQUIRED — pass NewStaticTokenAuth(nil, "test-token")
 // in unit tests that do not need a real Vault connection.
 //
+// ctx governs the initial Login and key existence check. If Vault is unreachable,
+// the call blocks until ctx is cancelled (or the call times out). Callers that
+// do not have a deadline should use context.WithTimeout to avoid blocking startup
+// indefinitely. NewTransitKeyProviderFromEnv uses a 30-second timeout by default.
+//
 // Construction calls auth.Login to acquire the initial token, then performs a
 // fail-fast key existence check (readLatestVersion). If the token is renewable
 // and the client implements TokenRenewer, initTokenRenewal configures the
 // background renewal + re-auth worker (not started — call Worker().Start).
 //
 // Returns an error if auth is nil, Login fails, or the key existence check fails.
-func NewTransitKeyProvider(client VaultClient, mountPath, keyName string, auth AuthMethod) (*TransitKeyProvider, error) {
+func NewTransitKeyProvider(ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod) (*TransitKeyProvider, error) {
 	if auth == nil {
 		return nil, errcode.New(errcode.ErrVaultAuthFailed,
 			"vault-transit: auth method is required (pass NewStaticTokenAuth in tests)")
@@ -598,7 +604,6 @@ func NewTransitKeyProvider(client VaultClient, mountPath, keyName string, auth A
 	}
 
 	// Perform initial login to acquire token and configure the client.
-	ctx := context.Background()
 	result, err := p.authenticate(ctx)
 	if err != nil {
 		return nil, err
@@ -676,7 +681,12 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 	keyName := os.Getenv("GOCELL_VAULT_TRANSIT_KEY")
 
 	client := NewVaultAPIClient(raw)
-	return NewTransitKeyProvider(client, mountPath, keyName, auth)
+	// Apply a 30-second startup deadline so an unreachable Vault server does not
+	// block the process indefinitely. Callers that need a custom timeout should
+	// call NewTransitKeyProvider directly with their own context.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	return NewTransitKeyProvider(ctx, client, mountPath, keyName, auth)
 }
 
 // Current returns the active KeyHandle for encrypting new values.

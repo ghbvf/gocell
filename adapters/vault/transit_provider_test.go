@@ -203,7 +203,7 @@ func (f *fakeVaultClientWithWriteOverride) Write(ctx context.Context, path strin
 // is non-renewable, so no renewal worker is started.
 func newTestProvider(t *testing.T, fake *fakeVaultClient) *TransitKeyProvider {
 	t.Helper()
-	p, err := NewTransitKeyProvider(fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -600,7 +600,7 @@ func TestVaultTransitHandle_KeyIDFromEdkPrefix(t *testing.T) {
 		}, nil
 	}
 
-	p, err2 := NewTransitKeyProvider(override, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	p, err2 := NewTransitKeyProvider(context.Background(), override, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
 	if err2 != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err2)
 	}
@@ -895,7 +895,7 @@ func (f *fakeTokenWatcher) RenewCh() <-chan *vaultapi.RenewOutput {
 // goroutine needed when no TokenRenewer is available.
 func TestTransitKeyProvider_Worker_NilWhenNoRenewal(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
-	p, err := NewTransitKeyProvider(fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -909,7 +909,7 @@ func TestTransitKeyProvider_Worker_NilWhenNoRenewal(t *testing.T) {
 // Worker() returns the configured renewal worker when one is set.
 func TestTransitKeyProvider_Worker_NonNilWhenRenewalConfigured(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
-	p, err := NewTransitKeyProvider(fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -926,7 +926,7 @@ func TestTransitKeyProvider_Worker_NonNilWhenRenewalConfigured(t *testing.T) {
 // RenewalMetrics returns nil when no renewal worker is configured.
 func TestTransitKeyProvider_RenewalMetrics_NilWhenNoRenewal(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
-	p, err := NewTransitKeyProvider(fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -941,7 +941,7 @@ func TestTransitKeyProvider_RenewalMetrics_NilWhenNoRenewal(t *testing.T) {
 // renewal worker with counters is configured.
 func TestTransitKeyProvider_RenewalMetrics_ReturnsTwoCollectors(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
-	p, err := NewTransitKeyProvider(fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -1247,7 +1247,7 @@ func TestTokenRenewalWorker_Stop_Idempotent(t *testing.T) {
 // stops the renewal worker when one is configured.
 func TestTransitKeyProvider_Close_StopsRenewalWorker(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
-	p, err := NewTransitKeyProvider(fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider: %v", err)
 	}
@@ -1463,7 +1463,7 @@ func (f *fakeAuthMethod) Login(_ context.Context) (AuthResult, error) {
 // TestNewTransitKeyProvider_NilAuth_Fails verifies that nil auth is rejected.
 func TestNewTransitKeyProvider_NilAuth_Fails(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 1}
-	_, err := NewTransitKeyProvider(fake, "transit", "gocell-config", nil)
+	_, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", nil)
 	if err == nil {
 		t.Fatal("expected error for nil AuthMethod, got nil")
 	}
@@ -1480,7 +1480,7 @@ func TestNewTransitKeyProvider_WithFakeAuth(t *testing.T) {
 		method:  MethodAppRole,
 		results: []AuthResult{{ClientToken: "fake-token", Renewable: false}},
 	}
-	p, err := NewTransitKeyProvider(fake, "transit", "gocell-config", auth)
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", auth)
 	if err != nil {
 		t.Fatalf("NewTransitKeyProvider with fakeAuth: %v", err)
 	}

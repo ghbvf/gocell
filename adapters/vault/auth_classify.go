@@ -20,6 +20,7 @@ import (
 
 // Reason labels returned by classifyAuthLoginError.
 const (
+	reasonNone         = "none" // no error — used for the success label value
 	reasonTimeout      = "timeout"
 	reasonNetwork      = "network"
 	reasonAuthInvalid  = "auth_invalid"
