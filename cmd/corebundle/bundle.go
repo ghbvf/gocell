@@ -23,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
-	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // buildAssembly constructs the corebundle Assembly and registers the three
@@ -236,33 +235,6 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg ada
 		return nil, nil, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", topo.StorageBackend))
 	}
-}
-
-// adminBootstrapWorkerOpts wires WithInitialAdminBootstrap + WithBootstrapWorkerSink
-// onto the given base accesscore options and returns the extended options together
-// with a bootstrap.Option that lazily adds the cleanup worker to the bootstrap
-// WorkerGroup.
-//
-// Lifecycle ordering: the sink fires inside asm.StartWithConfig (Step 3-4 of
-// bootstrap.Run), before the WorkerGroup starts (Step 8). worker.Lazy() resolves
-// the worker at Start() time — after the assembly has Init'd.
-//
-// When no admin exists: sink fires, adminWorker is non-nil, cleaner runs.
-// When admin already exists: sink is not called, LazyWorker.Start/Stop are no-ops.
-//
-// Thread safety: Set (writer) and Start/Stop (readers) synchronise via
-// atomic.Pointer inside worker.LazyWorker (F-OPS-2).
-//
-// ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
-func adminBootstrapWorkerOpts(base []accesscore.Option, bootstrapOpts ...accesscore.InitialAdminOption) (accessOpts []accesscore.Option, lazyWorkerOpt bootstrap.Option) {
-	lazy := worker.Lazy()
-	sink := func(w worker.Worker) { _ = lazy.Set(w) }
-	accessOpts = append(base,
-		accesscore.WithInitialAdminBootstrap(bootstrapOpts...),
-		accesscore.WithBootstrapWorkerSink(sink),
-	)
-	lazyWorkerOpt = bootstrap.WithWorkers(lazy)
-	return accessOpts, lazyWorkerOpt
 }
 
 // logInitialAdminCredPath emits a startup info log so operators know where to

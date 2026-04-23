@@ -45,7 +45,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/eventrouter"
 	"github.com/ghbvf/gocell/runtime/http/router"
-	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -172,14 +171,10 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		auth.WithExpectedIssuer("ssobff-test"))
 	require.NoError(t, err)
 
-	// The bootstrap sink captures the cleaner worker. In tests the cleaner
-	// lifecycle does not need to run — the temp dir is cleaned up by t.Cleanup.
-	var _ worker.Worker                       // ensure the import is used
-	bootstrapSink := func(_ worker.Worker) {} // intentional no-op in test
-
 	// Demo mode: no outboxWriter/txRunner — cells publish directly via the
 	// eventbus publisher. This ensures accesscore events reach auditcore's
 	// subscriber without transactional outbox machinery.
+	// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore — no sink needed.
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
@@ -187,9 +182,6 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithLogger(testLogger),
 		accesscore.WithInitialAdminBootstrap(),
-		// Sink is required by WithInitialAdminBootstrap. We capture the worker
-		// but do not run it — the temp dir is cleaned up by t.Cleanup.
-		accesscore.WithBootstrapWorkerSink(bootstrapSink),
 	)
 
 	auditHMACKey := []byte("walkthrough-test-hmac-key-32b!!!")

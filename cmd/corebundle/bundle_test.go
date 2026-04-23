@@ -21,14 +21,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// fastAdminBootstrapOpts returns accesscore InitialAdmin options that
+// fastAdminBootstrapOpts returns accesscore LifecycleOptions that
 // replace the production bcrypt cost=12 hasher with bcrypt.MinCost=4 so
 // the synchronous bcrypt call in accesscore.Init does not block phase3
 // for 5-7s on slow CI runners. The rest of the InitialAdmin path
 // (Sweep → EnsureAdmin → WriteCredentialFile → Cleaner worker registration)
 // still runs, preserving bundle_test coverage of the full wiring.
-func fastAdminBootstrapOpts() []accesscore.InitialAdminOption {
-	return []accesscore.InitialAdminOption{
+func fastAdminBootstrapOpts() []accesscore.LifecycleOption {
+	return []accesscore.LifecycleOption{
 		accesscore.WithBootstrapPasswordHasher(accesscore.BcryptHasher{Cost: bcrypt.MinCost}),
 	}
 }
