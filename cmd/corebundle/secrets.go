@@ -19,7 +19,7 @@ func loadSecret(envKey, devDefault, adapterMode string) ([]byte, error) {
 	if v := os.Getenv(envKey); v != "" {
 		return []byte(v), nil
 	}
-	if adapterMode == "real" {
+	if isRealMode(adapterMode) {
 		return nil, fmt.Errorf("%s must be set in adapter mode \"real\"", envKey)
 	}
 	slog.Warn("using dev-only default; set env var for production",
@@ -42,7 +42,7 @@ func loadKeySet(adapterMode string) (*auth.KeySet, error) {
 		slog.Info("JWT key set loaded from environment variables")
 		return ks, nil
 	}
-	if adapterMode == "real" {
+	if isRealMode(adapterMode) {
 		return nil, fmt.Errorf("real adapter mode requires JWT key env vars: %w", err)
 	}
 	// Dev mode: ephemeral keys (acceptable for development only).
@@ -72,7 +72,7 @@ func buildCursorCodec(adapterMode, envLabelForErr, prevEnvLabelForErr, primary, 
 	var key []byte
 	if primary != "" {
 		key = []byte(primary)
-	} else if adapterMode == "real" {
+	} else if isRealMode(adapterMode) {
 		return nil, fmt.Errorf("%s cursor key: %s must be set in adapter mode \"real\"", label, envLabelForErr)
 	} else {
 		slog.Warn("using dev-only default; set env var for production",

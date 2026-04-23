@@ -235,6 +235,21 @@ const (
 	// ErrConfigKeyMissing signals that a required encryption key (e.g. GOCELL_CONFIGCORE_MASTER_KEY
 	// or vault token) is absent at startup. Triggers fail-fast in postgres mode.
 	ErrConfigKeyMissing Code = "ERR_CONFIG_KEY_MISSING"
+	// ErrVaultAuthFailed signals a Vault auth method failure: missing or malformed
+	// credentials, unknown VAULT_AUTH_METHOD, AppRole / Kubernetes Login returned
+	// error, static token rejected by real-mode guard, or re-authentication loop
+	// exhausted (ctx cancelled).
+	//
+	// Distinct from ErrKeyProviderAuthFailed, which signals runtime Vault 403 on
+	// transit encrypt/decrypt paths (an in-flight operation failure). This code
+	// is used exclusively at bootstrap and background re-auth loop boundaries.
+	//
+	// Permanent at boot: operators must fix configuration before restart.
+	// During re-auth loop: ctx cancellation is the only exit condition; this
+	// code is returned when ctx is cancelled while retrying.
+	//
+	// Category: default CategoryInfra (consistent with ErrVault* / ErrKeyProvider* siblings).
+	ErrVaultAuthFailed Code = "ERR_VAULT_AUTH_FAILED"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

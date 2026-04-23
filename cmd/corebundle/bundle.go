@@ -136,7 +136,7 @@ func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prev
 		slog.Info("configcore: key provider initialized", slog.String("provider", "local-aes"))
 		return kp, nil
 	case "vault-transit":
-		kp, err := adaptervault.NewTransitKeyProviderFromEnv()
+		kp, err := adaptervault.NewTransitKeyProviderFromEnv(isRealMode(adapterMode))
 		if err != nil {
 			return nil, fmt.Errorf("vault-transit key provider: %w", err)
 		}

@@ -73,10 +73,20 @@ Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 | `GOCELL_CONFIGCORE_KEY_PROVIDER` | Selects the encryption backend for sensitive config values | — | **postgres mode** | `"local-aes"` (dev/CI) or `"vault-transit"` (production). Must be set when `GOCELL_CELL_ADAPTER_MODE=postgres`; startup fails fast otherwise. Memory mode does not encrypt. |
 | `GOCELL_CONFIGCORE_MASTER_KEY` | 32-byte hex-encoded AES key for `local-aes` provider | — | When `GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes` | Generate: `openssl rand -hex 32`. Real mode rejects well-known demo keys (case-insensitive hex comparison). |
 | `GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS` | Previous master key for key rotation | — | No | Optional; enables decryption of values encrypted with the prior key during rotation window. |
-| `VAULT_ADDR` | Vault server address | `https://127.0.0.1:8200` | When `GOCELL_CONFIGCORE_KEY_PROVIDER=vault-transit` | Standard Vault SDK env var. |
-| `VAULT_TOKEN` | Vault authentication token | — | When `GOCELL_CONFIGCORE_KEY_PROVIDER=vault-transit` | Static token path; token renewal via LifetimeWatcher is automatic when the token is renewable. Real mode will require AppRole/K8s auth in a future release (A14). |
+| `VAULT_ADDR` | Vault server address | — | When `GOCELL_CONFIGCORE_KEY_PROVIDER=vault-transit` | Standard Vault SDK env var. No default; missing value fails fast in **all modes** when the vault-transit provider is selected (not just real mode). |
+| `VAULT_AUTH_METHOD` | Vault auth method | — | When `GOCELL_CONFIGCORE_KEY_PROVIDER=vault-transit` | **Required, no default.** Accepted values: `token` (dev/CI only, rejected in real mode), `approle`, `kubernetes`. |
+| `VAULT_TOKEN` | Static Vault token for `VAULT_AUTH_METHOD=token` | — | When `VAULT_AUTH_METHOD=token` | Dev/CI only. Rejected when `GOCELL_ADAPTER_MODE=real`. |
+| `VAULT_ROLE_ID` | AppRole role ID | — | When `VAULT_AUTH_METHOD=approle` | |
+| `VAULT_SECRET_ID` | AppRole secret ID (direct mode) | — | When `VAULT_AUTH_METHOD=approle` and `VAULT_SECRET_ID_TYPE=direct` | |
+| `VAULT_SECRET_ID_TYPE` | How the secret ID is supplied | `direct` | No | `direct` (env), `wrapped` (wrapping token), or `file` (projected volume). |
+| `VAULT_SECRET_ID_WRAPPING_TOKEN` | Wrapping token for `VAULT_SECRET_ID_TYPE=wrapped` | — | When `VAULT_SECRET_ID_TYPE=wrapped` | Consumed on first use. |
+| `VAULT_SECRET_ID_FILE` | File path for `VAULT_SECRET_ID_TYPE=file` | — | When `VAULT_SECRET_ID_TYPE=file` | Typically a K8s projected volume. |
+| `VAULT_K8S_ROLE` | Vault Kubernetes auth role name | — | When `VAULT_AUTH_METHOD=kubernetes` | |
+| `VAULT_K8S_JWT_PATH` | Path to K8s projected service account JWT | `/var/run/secrets/kubernetes.io/serviceaccount/token` | No | |
+| `VAULT_K8S_MOUNT` | Vault Kubernetes auth mount path | `kubernetes` | No | |
 | `GOCELL_VAULT_TRANSIT_MOUNT` | Vault Transit secrets engine mount path | `transit` | No | |
 | `GOCELL_VAULT_TRANSIT_KEY` | Vault Transit key name | `gocell-config` | No | |
+| `GOCELL_VAULT_STARTUP_TIMEOUT` | Total startup I/O deadline (auth Login + optional unwrap + initial key metadata read) | `30s` | No | `time.ParseDuration` format (e.g. `45s`, `2m`). Must be positive; malformed or non-positive values fail fast. Increase for high-latency networks or wrapped-token paths that require multiple TLS round-trips. |
 
 ## Observability / Monitoring
 
