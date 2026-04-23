@@ -9,19 +9,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPageRequest_Normalize_Default(t *testing.T) {
-	var pr PageRequest
+func TestPageParams_Normalize_Default(t *testing.T) {
+	var pr PageParams
 	pr.Normalize()
 	assert.Equal(t, DefaultPageSize, pr.Limit)
 }
 
-func TestPageRequest_Normalize_ClampsMax(t *testing.T) {
-	pr := PageRequest{Limit: 1000}
+func TestPageParams_Normalize_ClampsMax(t *testing.T) {
+	pr := PageParams{Limit: 1000}
 	pr.Normalize()
 	assert.Equal(t, MaxPageSize, pr.Limit)
 }
 
-func TestPageRequest_Normalize_ClampsMin(t *testing.T) {
+func TestPageParams_Normalize_ClampsMin(t *testing.T) {
 	tests := []struct {
 		name  string
 		limit int
@@ -32,21 +32,21 @@ func TestPageRequest_Normalize_ClampsMin(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			pr := PageRequest{Limit: tt.limit}
+			pr := PageParams{Limit: tt.limit}
 			pr.Normalize()
 			assert.Equal(t, DefaultPageSize, pr.Limit)
 		})
 	}
 }
 
-func TestPageRequest_Normalize_KeepsValid(t *testing.T) {
-	pr := PageRequest{Limit: 100}
+func TestPageParams_Normalize_KeepsValid(t *testing.T) {
+	pr := PageParams{Limit: 100}
 	pr.Normalize()
 	assert.Equal(t, 100, pr.Limit)
 }
 
-func TestPageRequest_Normalize_PreservesCursor(t *testing.T) {
-	pr := PageRequest{Limit: 0, Cursor: "some-token"}
+func TestPageParams_Normalize_PreservesCursor(t *testing.T) {
+	pr := PageParams{Limit: 0, Cursor: "some-token"}
 	pr.Normalize()
 	assert.Equal(t, DefaultPageSize, pr.Limit)
 	assert.Equal(t, "some-token", pr.Cursor)
@@ -62,8 +62,8 @@ func TestListParams_FetchLimit_One(t *testing.T) {
 	assert.Equal(t, 2, lp.FetchLimit())
 }
 
-func TestPageRequest_Normalize_ExactMax(t *testing.T) {
-	pr := PageRequest{Limit: MaxPageSize}
+func TestPageParams_Normalize_ExactMax(t *testing.T) {
+	pr := PageParams{Limit: MaxPageSize}
 	pr.Normalize()
 	assert.Equal(t, MaxPageSize, pr.Limit)
 }
@@ -164,5 +164,6 @@ func TestMapPageResult_NilItems_JSONArray(t *testing.T) {
 	b, err := json.Marshal(got)
 	require.NoError(t, err)
 	assert.Contains(t, string(b), `"data":[]`)
+	assert.Contains(t, string(b), `"nextCursor":""`)
 	assert.NotContains(t, string(b), `"data":null`)
 }

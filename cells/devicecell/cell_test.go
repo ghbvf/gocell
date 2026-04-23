@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -36,7 +37,7 @@ func TestDeviceCell_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, deps))
-	assert.Len(t, c.OwnedSlices(), 3, "should have 3 slices")
+	assert.Len(t, c.OwnedSlices(), 4, "should have 4 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))
@@ -78,7 +79,7 @@ func TestDeviceCell_InitDefaultsRepositories(t *testing.T) {
 		DurabilityMode: cell.DurabilityDemo,
 	}
 	require.NoError(t, c.Init(ctx, deps))
-	assert.Len(t, c.OwnedSlices(), 3)
+	assert.Len(t, c.OwnedSlices(), 4)
 }
 
 func TestDeviceCell_InitNoPublisher(t *testing.T) {
@@ -107,24 +108,14 @@ func TestDeviceCell_RegisterRoutes(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	mux := &stubMux{}
+	mux := celltest.NewTestMux()
 	c.RegisterRoutes(mux)
-	assert.GreaterOrEqual(t, mux.handleCount, 3, "should register at least 3 route patterns")
+	metas := mux.DeclaredAuthMetas()
+	require.Contains(t, metas, cell.AuthRouteMeta{
+		Method: http.MethodGet,
+		Path:   "/api/v1/devices",
+	})
 }
-
-// stubMux implements cell.RouteMux for counting route registrations.
-type stubMux struct {
-	handleCount int
-}
-
-func (m *stubMux) Handle(_ string, _ http.Handler) { m.handleCount++ }
-func (m *stubMux) Route(_ string, fn func(cell.RouteMux)) {
-	m.handleCount++
-	fn(m)
-}
-func (m *stubMux) Mount(_ string, _ http.Handler)                          { m.handleCount++ }
-func (m *stubMux) Group(_ func(cell.RouteMux))                             { m.handleCount++ }
-func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
 // extractData unmarshals a JSON response and returns the "data" envelope.
 func extractData(t *testing.T, body []byte) map[string]any {
@@ -169,6 +160,27 @@ func TestDeviceCell_RouteRegisterDevice(t *testing.T) {
 
 	data := extractData(t, rec.Body.Bytes())
 	assert.NotEmpty(t, data["id"])
+}
+
+func TestDeviceCell_RouteListDevices_Authz(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	t.Run("401 no auth", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/", nil)
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusUnauthorized, rec.Code)
+	})
+
+	t.Run("403 non-admin", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/", nil)
+		req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
 }
 
 func TestDeviceCell_RouteGetStatus(t *testing.T) {

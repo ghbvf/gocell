@@ -33,6 +33,12 @@ go run ./examples/iotdevice
 
 The server starts on `:8083`.
 
+Protected routes use a fixed demo bearer token:
+
+```bash
+export IOT_ADMIN_TOKEN=iotdevice-admin-demo-token
+```
+
 ## Docker Mode
 
 Start infrastructure services, then run the application:
@@ -60,10 +66,24 @@ Response (201):
 {"id":"dev-...","name":"sensor-001","status":"online"}
 ```
 
+### List devices
+
+```bash
+curl "http://localhost:8083/api/v1/devices/?limit=50" \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
+```
+
+Response (200):
+
+```json
+{"data":[{"id":"dev-...","name":"sensor-001","status":"online","lastSeen":"..."}],"nextCursor":"","hasMore":false}
+```
+
 ### Send a command to a device
 
 ```bash
 curl -X POST http://localhost:8083/api/v1/devices/{id}/commands \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"payload":"reboot"}'
 ```
@@ -77,19 +97,21 @@ Response (201):
 ### Device polls pending commands
 
 ```bash
-curl http://localhost:8083/api/v1/devices/{id}/commands
+curl http://localhost:8083/api/v1/devices/{id}/commands \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
 ```
 
 Response (200):
 
 ```json
-{"data":[{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"pending","createdAt":"..."}],"total":1}
+{"data":[{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"pending","createdAt":"..."}],"nextCursor":"","hasMore":false}
 ```
 
 ### Device acknowledges command execution
 
 ```bash
-curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/ack
+curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/ack \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
 ```
 
 Response (200):
@@ -101,7 +123,8 @@ Response (200):
 ### Query device status
 
 ```bash
-curl http://localhost:8083/api/v1/devices/{id}/status
+curl http://localhost:8083/api/v1/devices/{id}/status \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
 ```
 
 Response (200):
@@ -132,20 +155,25 @@ DEV_ID=$(echo "$DEV" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 
 # 2. Send a command
 CMD=$(curl -s -X POST "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"payload":"reboot"}')
 echo "$CMD"
 CMD_ID=$(echo "$CMD" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 
 # 3. Device polls for pending commands
-curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/commands"
+curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
 
 # 4. Device acknowledges execution
-curl -s -X POST "http://localhost:8083/api/v1/devices/${DEV_ID}/commands/${CMD_ID}/ack"
+curl -s -X POST "http://localhost:8083/api/v1/devices/${DEV_ID}/commands/${CMD_ID}/ack" \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
 
 # 5. Verify no more pending commands
-curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/commands"
+curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
 
 # 6. Check device status
-curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/status"
+curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/status" \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
 ```

@@ -70,10 +70,10 @@ curl http://localhost:8082/api/v1/orders/
 Response (200):
 
 ```json
-{"data":[...],"hasMore":false}
+{"data":[...],"nextCursor":"","hasMore":false}
 ```
 
-When another page exists, the response also includes `nextCursor`.
+When another page exists, `nextCursor` contains the opaque token for the next request.
 
 ### Get order by ID
 

@@ -1,7 +1,6 @@
 package devicecommand
 
 import (
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -107,13 +106,8 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 	deviceID := r.PathValue("id")
 
-	pageReq, err := httputil.ParsePageRequest(r)
-	if err != nil {
-		slog.Warn("pagination: request validation failed",
-			slog.String("error", err.Error()),
-			slog.String("path", r.URL.Path),
-		)
-		httputil.WriteDomainError(r.Context(), w, err)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
+	if !ok {
 		return
 	}
 

@@ -86,16 +86,16 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, payload string) (*domai
 // ListPending returns a paginated page of pending commands for the given device.
 // Sort: created_at ASC, id ASC (FIFO -- oldest pending commands first).
 // This is the poll endpoint used by devices in the L4 latent model.
-func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq query.PageRequest) (query.PageResult[*domain.Command], error) {
+func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq query.PageParams) (query.PageResult[*domain.Command], error) {
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
 		return query.PageResult[*domain.Command]{}, fmt.Errorf("device-command: lookup device: %w", err)
 	}
 	qctx := query.QueryContext("endpoint", "device-command", "deviceId", deviceID)
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[*domain.Command]{
-		Codec:    s.codec,
-		Request:  pageReq,
-		Sort:     pendingSort,
-		QueryCtx: qctx,
+		Codec:      s.codec,
+		PageParams: pageReq,
+		Sort:       pendingSort,
+		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]*domain.Command, error) {
 			cmds, err := s.cmdRepo.ListPending(ctx, deviceID, params)
 			if err != nil {

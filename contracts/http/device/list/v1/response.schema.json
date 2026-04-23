@@ -1,0 +1,25 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.device.list.v1.response",
+  "type": "object",
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id":       { "type": "string" },
+          "name":     { "type": "string" },
+          "status":   { "type": "string" },
+          "lastSeen": { "type": "string", "format": "date-time" }
+        },
+        "required": ["id", "name", "status", "lastSeen"],
+        "additionalProperties": false
+      }
+    },
+    "nextCursor": { "type": "string" },
+    "hasMore":    { "type": "boolean" }
+  },
+  "required": ["data", "nextCursor", "hasMore"],
+  "additionalProperties": false
+}

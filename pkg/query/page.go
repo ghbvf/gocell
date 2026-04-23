@@ -17,15 +17,15 @@ const (
 	SortDESC SortDir = "DESC"
 )
 
-// PageRequest holds pagination parameters parsed from an HTTP request.
-type PageRequest struct {
+// PageParams holds pagination parameters parsed from an HTTP request.
+type PageParams struct {
 	Limit  int    // requested page size
 	Cursor string // opaque cursor token; empty for first page
 }
 
 // Normalize clamps Limit to [1, MaxPageSize], applying DefaultPageSize
 // for zero or negative values.
-func (p *PageRequest) Normalize() {
+func (p *PageParams) Normalize() {
 	if p.Limit <= 0 {
 		p.Limit = DefaultPageSize
 	}
@@ -56,7 +56,7 @@ func (lp ListParams) FetchLimit() int {
 // PageResult wraps a page of results with cursor metadata.
 type PageResult[T any] struct {
 	Items      []T    `json:"data"`
-	NextCursor string `json:"nextCursor,omitempty"`
+	NextCursor string `json:"nextCursor"`
 	HasMore    bool   `json:"hasMore"`
 }
 

@@ -3367,15 +3367,17 @@ func TestFMT14(t *testing.T) {
 	}
 }
 
-// --- FMT-15: list response schema must include hasMore in required and declare nextCursor in properties ---
+// --- FMT-15: list response schema must require hasMore and nextCursor ---
 
 func TestFMT15(t *testing.T) {
-	// valid: nextCursor declared in properties, hasMore in required
-	validListSchema := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data","hasMore"]}`
-	// missing hasMore from required (nextCursor still in properties)
-	missingHasMore := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data"]}`
-	// missing nextCursor from properties (hasMore still in required)
-	missingNextCursor := `{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data","hasMore"]}`
+	// valid: nextCursor declared in properties, hasMore and nextCursor in required
+	validListSchema := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data","nextCursor","hasMore"]}`
+	// missing hasMore from required (nextCursor still in properties and required)
+	missingHasMore := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data","nextCursor"]}`
+	// missing nextCursor from properties (nextCursor still in required)
+	missingNextCursorProperty := `{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data","nextCursor","hasMore"]}`
+	// missing nextCursor from required (nextCursor still in properties)
+	missingNextCursorRequired := `{"properties":{"data":{"type":"array","items":{"type":"object"}},"nextCursor":{"type":"string"}},"required":["data","hasMore"]}`
 	singleObject := `{"properties":{"data":{"type":"object"}},"required":["data"]}`
 	invalidJSON := `{not json`
 
@@ -3388,7 +3390,7 @@ func TestFMT15(t *testing.T) {
 		wantSeverity Severity // if non-empty, each result must have this severity; defaults to SeverityError
 	}{
 		{
-			name: "list schema with hasMore in required and nextCursor in properties",
+			name: "list schema with hasMore and nextCursor required",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
@@ -3408,7 +3410,15 @@ func TestFMT15(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
-			readFile:  func(_ string) ([]byte, error) { return []byte(missingNextCursor), nil },
+			readFile:  func(_ string) ([]byte, error) { return []byte(missingNextCursorProperty), nil },
+			wantCount: 1,
+		},
+		{
+			name: "list schema missing nextCursor in required",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			readFile:  func(_ string) ([]byte, error) { return []byte(missingNextCursorRequired), nil },
 			wantCount: 1,
 		},
 		{
@@ -3419,7 +3429,7 @@ func TestFMT15(t *testing.T) {
 			readFile: func(_ string) ([]byte, error) {
 				return []byte(`{"properties":{"data":{"type":"array","items":{"type":"object"}}},"required":["data"]}`), nil
 			},
-			wantCount: 2,
+			wantCount: 3,
 		},
 		{
 			name: "non-list schema skipped",
@@ -3441,7 +3451,7 @@ func TestFMT15(t *testing.T) {
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
 			readFile: func(_ string) ([]byte, error) {
-				return []byte(`{"properties":{"data":{"type":"array"},"nextCursor":null},"required":["data","hasMore"]}`), nil
+				return []byte(`{"properties":{"data":{"type":"array"},"nextCursor":null},"required":["data","nextCursor","hasMore"]}`), nil
 			},
 			wantCount: 1,
 		},

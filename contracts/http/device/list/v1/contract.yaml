@@ -1,20 +1,20 @@
-id: http.auth.role.list.v1
+id: http.device.list.v1
 kind: http
-ownerCell: accesscore
+ownerCell: devicecell
 consistencyLevel: L0
 lifecycle: active
 endpoints:
-  server: accesscore
+  server: devicecell
   clients:
     - edge-bff
   http:
     method: GET
-    path: /api/v1/access/roles/{userID}
+    path: /api/v1/devices/
     successStatus: 200
     noContent: false
     responses:
       400:
         description: "Bad request — invalid pagination parameter or cursor"
-        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

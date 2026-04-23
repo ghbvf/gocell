@@ -10,7 +10,7 @@ func TestHttpConfigFlagsListV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.flags.list.v1")
 
-	c.ValidateResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}],"hasMore":false}`))
+	c.ValidateResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}],"nextCursor":"","hasMore":false}`))
 	c.MustRejectResponse(t, []byte(`{"data":"not-array","hasMore":false}`))
 }
 

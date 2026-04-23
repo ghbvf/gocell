@@ -90,10 +90,11 @@ type routeRegisterCell struct {
 	method    string
 	path      string
 	handler   http.HandlerFunc
+	public    bool
 	delegated bool
 }
 
-func newRouteRegisterCell(id, method, path string, h http.HandlerFunc, delegated bool) *routeRegisterCell {
+func newRouteRegisterCell(id, method, path string, h http.HandlerFunc, public, delegated bool) *routeRegisterCell {
 	return &routeRegisterCell{
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{
 			ID:   id,
@@ -102,6 +103,7 @@ func newRouteRegisterCell(id, method, path string, h http.HandlerFunc, delegated
 		method:    method,
 		path:      path,
 		handler:   h,
+		public:    public,
 		delegated: delegated,
 	}
 }
@@ -111,6 +113,7 @@ func (c *routeRegisterCell) RegisterRoutes(mux cell.RouteMux) {
 		Method:    c.method,
 		Path:      c.path,
 		Handler:   c.handler,
+		Public:    c.public,
 		Delegated: c.delegated,
 	})
 }
@@ -134,12 +137,12 @@ func TestWithInternalEndpointGuard_Wiring(t *testing.T) {
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			internalHit.Add(1)
 			w.WriteHeader(http.StatusOK)
-		}), true)
+		}), false, true)
 	apiCell := newRouteRegisterCell("api-cell", http.MethodGet, "/api/v1/users",
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			apiHit.Add(1)
 			w.WriteHeader(http.StatusOK)
-		}), false)
+		}), true, false)
 
 	require.NoError(t, asm.Register(internalCell))
 	require.NoError(t, asm.Register(apiCell))
@@ -233,11 +236,11 @@ func TestWithInternalEndpointGuard_BypassesJWT(t *testing.T) {
 	internalCell := newRouteRegisterCell("internal-cell", http.MethodGet, "/internal/v1/roles",
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK) // only reached if guard allows
-		}), true)
+		}), false, true)
 	apiCell := newRouteRegisterCell("api-cell", http.MethodGet, "/api/v1/users",
 		http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
-		}), false)
+		}), false, false)
 
 	require.NoError(t, asm.Register(internalCell))
 	require.NoError(t, asm.Register(apiCell))

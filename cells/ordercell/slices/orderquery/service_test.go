@@ -106,7 +106,7 @@ func TestService_List_FirstPage(t *testing.T) {
 	repo := seedRepo(seed...)
 	svc := mustNewService(repo, testCodec())
 
-	result, err := svc.List(context.Background(), query.PageRequest{Limit: 3})
+	result, err := svc.List(context.Background(), query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 3)
 	assert.True(t, result.HasMore)
@@ -130,12 +130,12 @@ func TestService_List_WithCursor(t *testing.T) {
 	svc := mustNewService(repo, testCodec())
 
 	// Get first page
-	page1, err := svc.List(context.Background(), query.PageRequest{Limit: 3})
+	page1, err := svc.List(context.Background(), query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 
 	// Get second page using cursor
-	page2, err := svc.List(context.Background(), query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	page2, err := svc.List(context.Background(), query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.NoError(t, err)
 	assert.Len(t, page2.Items, 3)
 	// Second page should continue where first left off
@@ -146,7 +146,7 @@ func TestService_List_InvalidCursor(t *testing.T) {
 	repo := seedRepo()
 	svc := mustNewService(repo, testCodec())
 
-	_, err := svc.List(context.Background(), query.PageRequest{Cursor: "garbage-token"})
+	_, err := svc.List(context.Background(), query.PageParams{Cursor: "garbage-token"})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -162,7 +162,7 @@ func TestService_List_LastPage(t *testing.T) {
 	repo := seedRepo(seed...)
 	svc := mustNewService(repo, testCodec())
 
-	result, err := svc.List(context.Background(), query.PageRequest{Limit: 10})
+	result, err := svc.List(context.Background(), query.PageParams{Limit: 10})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 2)
 	assert.False(t, result.HasMore)
@@ -173,7 +173,7 @@ func TestService_List_Empty(t *testing.T) {
 	repo := seedRepo()
 	svc := mustNewService(repo, testCodec())
 
-	result, err := svc.List(context.Background(), query.PageRequest{})
+	result, err := svc.List(context.Background(), query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 	assert.False(t, result.HasMore)
@@ -202,7 +202,7 @@ func TestService_List_ScopeMismatch(t *testing.T) {
 	})
 	svc := mustNewService(repo, codec)
 
-	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	_, err = svc.List(context.Background(), query.PageParams{Cursor: token})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -226,7 +226,7 @@ func TestService_List_ContextMismatch(t *testing.T) {
 	})
 	svc := mustNewService(repo, codec)
 
-	_, err = svc.List(context.Background(), query.PageRequest{Cursor: token})
+	_, err = svc.List(context.Background(), query.PageParams{Cursor: token})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)

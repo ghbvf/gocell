@@ -33,6 +33,8 @@ type Command struct {
 type DeviceRepository interface {
 	Create(ctx context.Context, device *Device) error
 	GetByID(ctx context.Context, id string) (*Device, error)
+	// List returns a paginated list of devices sorted by name ASC, id ASC.
+	List(ctx context.Context, params query.ListParams) ([]*Device, error)
 }
 
 // CommandRepository abstracts command persistence.

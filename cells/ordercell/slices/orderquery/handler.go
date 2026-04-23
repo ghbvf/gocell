@@ -1,7 +1,6 @@
 package orderquery
 
 import (
-	"log/slog"
 	"net/http"
 	"time"
 
@@ -53,13 +52,8 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 
 // HandleList handles GET /api/v1/orders?limit=N&cursor=TOKEN.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
-	pageReq, err := httputil.ParsePageRequest(r)
-	if err != nil {
-		slog.Warn("pagination: request validation failed",
-			slog.String("error", err.Error()),
-			slog.String("path", r.URL.Path),
-		)
-		httputil.WriteDomainError(r.Context(), w, err)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
+	if !ok {
 		return
 	}
 

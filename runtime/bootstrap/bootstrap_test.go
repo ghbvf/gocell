@@ -4090,6 +4090,50 @@ func (c *duplicateAuthCell) RegisterRoutes(mux cell.RouteMux) {
 	})
 }
 
+type protectedAuthCell struct {
+	*cell.BaseCell
+}
+
+func newProtectedAuthCell(id string) *protectedAuthCell {
+	return &protectedAuthCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+	}
+}
+
+func (c *protectedAuthCell) RegisterRoutes(mux cell.RouteMux) {
+	auth.Declare(mux, auth.RouteDecl{
+		Method: "GET",
+		Path:   "/api/v1/protected",
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+		Policy: auth.Authenticated(),
+	})
+}
+
+func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-protected-auth", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newProtectedAuthCell("protected-auth-cell")))
+
+	b := New(
+		WithAssembly(asm),
+		WithShutdownTimeout(time.Second),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	err := b.Run(ctx)
+	require.Error(t, err, "Bootstrap.Run must reject protected route declarations without an auth verifier")
+	assert.Contains(t, err.Error(), "auth verifier required")
+	assert.Contains(t, err.Error(), "GET /api/v1/protected")
+	assert.Contains(t, err.Error(), "WithAuthMiddleware")
+	assert.Contains(t, err.Error(), "WithAuthDiscovery")
+}
+
 func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 	// F8: a cell that declares the same (method, path) twice causes FinalizeAuth
 	// to fail. Bootstrap.Run must propagate the error and roll back (stop the

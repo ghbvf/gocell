@@ -20,8 +20,8 @@ type CursorErrorFunc func(ctx context.Context, phase string, err error)
 type PagedQueryConfig[T any] struct {
 	// Codec signs and verifies cursor tokens.
 	Codec *CursorCodec
-	// Request holds the client-supplied limit and cursor token.
-	Request PageRequest
+	// PageParams holds the client-supplied limit and cursor token.
+	PageParams PageParams
 	// Sort defines the keyset column ordering for this query.
 	Sort []SortColumn
 	// QueryCtx is the fingerprint from QueryContext(); must match between page requests.
@@ -51,7 +51,7 @@ func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (Pag
 		return PageResult[T]{}, errcode.New(errcode.ErrInternal,
 			"paged query misconfigured: Codec, Fetch, and Extract must not be nil")
 	}
-	cfg.Request.Normalize()
+	cfg.PageParams.Normalize()
 
 	cursorValues, fallback, err := resolveCursor(ctx, cfg)
 	if err != nil {
@@ -62,7 +62,7 @@ func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (Pag
 	}
 
 	params := ListParams{
-		Limit:        cfg.Request.Limit,
+		Limit:        cfg.PageParams.Limit,
 		CursorValues: cursorValues,
 		Sort:         cfg.Sort,
 	}
@@ -72,7 +72,7 @@ func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (Pag
 		return PageResult[T]{}, err
 	}
 
-	return BuildPageResult(items, cfg.Request.Limit, cfg.Codec, cfg.Sort, cfg.QueryCtx, cfg.Extract)
+	return BuildPageResult(items, cfg.PageParams.Limit, cfg.Codec, cfg.Sort, cfg.QueryCtx, cfg.Extract)
 }
 
 // resolveCursor decodes and validates the cursor token. Returns the keyset
@@ -83,11 +83,11 @@ func ExecutePagedQuery[T any](ctx context.Context, cfg PagedQueryConfig[T]) (Pag
 // Scope/context mismatches always return an error because they indicate a
 // client bug (cross-endpoint cursor reuse), not a transient key issue.
 func resolveCursor[T any](ctx context.Context, cfg PagedQueryConfig[T]) ([]any, bool, error) {
-	if cfg.Request.Cursor == "" {
+	if cfg.PageParams.Cursor == "" {
 		return nil, false, nil
 	}
 
-	cur, err := cfg.Codec.Decode(cfg.Request.Cursor)
+	cur, err := cfg.Codec.Decode(cfg.PageParams.Cursor)
 	if err != nil {
 		reportCursorErr(ctx, cfg.OnCursorErr, CursorPhaseDecode, err)
 		if cfg.RunMode.IsDemo() {
@@ -112,12 +112,12 @@ func reportCursorErr(ctx context.Context, fn CursorErrorFunc, phase string, err 
 
 func fetchFirstPage[T any](ctx context.Context, cfg PagedQueryConfig[T]) (PageResult[T], error) {
 	params := ListParams{
-		Limit: cfg.Request.Limit,
+		Limit: cfg.PageParams.Limit,
 		Sort:  cfg.Sort,
 	}
 	items, err := cfg.Fetch(ctx, params)
 	if err != nil {
 		return PageResult[T]{}, err
 	}
-	return BuildPageResult(items, cfg.Request.Limit, cfg.Codec, cfg.Sort, cfg.QueryCtx, cfg.Extract)
+	return BuildPageResult(items, cfg.PageParams.Limit, cfg.Codec, cfg.Sort, cfg.QueryCtx, cfg.Extract)
 }

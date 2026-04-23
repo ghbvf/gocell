@@ -130,7 +130,7 @@ func TestService_ListPending(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := svc.ListPending(ctx, tc.deviceID, query.PageRequest{})
+			result, err := svc.ListPending(ctx, tc.deviceID, query.PageParams{})
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -216,13 +216,13 @@ func TestService_ListPending_CursorDeviceMismatch(t *testing.T) {
 	}
 
 	// Get first page for dev-A.
-	page1, err := svc.ListPending(ctx, "dev-A", query.PageRequest{Limit: 3})
+	page1, err := svc.ListPending(ctx, "dev-A", query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	// Replay the cursor against dev-B — must fail with context mismatch.
-	_, err = svc.ListPending(ctx, "dev-B", query.PageRequest{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.ListPending(ctx, "dev-B", query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -240,7 +240,7 @@ func TestService_Enqueue_ThenListPending_ThenAck(t *testing.T) {
 	require.NoError(t, err)
 
 	// List pending should include the command.
-	result, err := svc.ListPending(ctx, "dev-1", query.PageRequest{})
+	result, err := svc.ListPending(ctx, "dev-1", query.PageParams{})
 	require.NoError(t, err)
 	assert.Len(t, result.Items, 1)
 	assert.Equal(t, cmd.ID, result.Items[0].ID)
@@ -249,7 +249,7 @@ func TestService_Enqueue_ThenListPending_ThenAck(t *testing.T) {
 	require.NoError(t, svc.Ack(ctx, "dev-1", cmd.ID))
 
 	// List pending should be empty after ack.
-	result, err = svc.ListPending(ctx, "dev-1", query.PageRequest{})
+	result, err = svc.ListPending(ctx, "dev-1", query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 }

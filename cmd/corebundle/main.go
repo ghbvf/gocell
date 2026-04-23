@@ -154,13 +154,14 @@ func loadCursorCodec(adapterMode, envName, prevEnvName, devDefault, label string
 	return codec, nil
 }
 
-// cursorCodecs holds the parsed cursor codecs for auditcore and configcore.
+// cursorCodecs holds the parsed cursor codecs for auditcore, configcore, and accesscore.
 type cursorCodecs struct {
-	audit  *query.CursorCodec
-	config *query.CursorCodec
+	audit      *query.CursorCodec
+	config     *query.CursorCodec
+	accessCore *query.CursorCodec
 }
 
-// loadAllCursorCodecs loads and validates the audit and config cursor codecs.
+// loadAllCursorCodecs loads and validates the audit, config, and access cursor codecs.
 // Extracted from run() to reduce cognitive complexity.
 func loadAllCursorCodecs(adapterMode string) (cursorCodecs, error) {
 	audit, err := loadCursorCodec(adapterMode,
@@ -175,7 +176,13 @@ func loadAllCursorCodecs(adapterMode string) (cursorCodecs, error) {
 	if err != nil {
 		return cursorCodecs{}, err
 	}
-	return cursorCodecs{audit: audit, config: cfg}, nil
+	ac, err := loadCursorCodec(adapterMode,
+		"GOCELL_ACCESS_CURSOR_KEY", "GOCELL_ACCESS_CURSOR_PREVIOUS_KEY",
+		"corebundle-access-cursor-key32!!", "access")
+	if err != nil {
+		return cursorCodecs{}, err
+	}
+	return cursorCodecs{audit: audit, config: cfg, accessCore: ac}, nil
 }
 
 // validateModeCoupling enforces that the DATA plane (cellAdapterMode) and

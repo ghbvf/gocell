@@ -117,7 +117,7 @@ func TestCommandDeviceCommandListV1Handle(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "command.device-command.list.v1")
 
-	c.ValidateResponse(t, []byte(`{"data":[{"id":"cmd-1","deviceId":"d-1","payload":"reboot","status":"pending","createdAt":"2026-01-01T00:00:00Z"}],"hasMore":false}`))
+	c.ValidateResponse(t, []byte(`{"data":[{"id":"cmd-1","deviceId":"d-1","payload":"reboot","status":"pending","createdAt":"2026-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))
 	c.MustRejectResponse(t, []byte(`{"data":"not-array","hasMore":false}`))
 }
 

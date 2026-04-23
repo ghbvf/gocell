@@ -137,13 +137,8 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		filters.To = t
 	}
 
-	pageReq, err := httputil.ParsePageRequest(r)
-	if err != nil {
-		slog.Warn("pagination: request validation failed",
-			slog.String("error", err.Error()),
-			slog.String("path", r.URL.Path),
-		)
-		httputil.WriteDomainError(r.Context(), w, err)
+	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
+	if !ok {
 		return
 	}
 

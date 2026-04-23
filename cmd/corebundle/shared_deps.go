@@ -33,7 +33,7 @@ type SharedDeps struct {
 	// PromStack holds the Prometheus registry, hook observer, and metric provider.
 	PromStack promStack
 
-	// CursorCodecs holds the audit and config cursor codecs.
+	// CursorCodecs holds the audit, config, and access cursor codecs.
 	CursorCodecs cursorCodecs
 
 	// HMACKey is the HMAC secret for auditcore chain authentication.
@@ -107,6 +107,9 @@ func (d *SharedDeps) validateCore() []error {
 	}
 	if d.CursorCodecs.config == nil {
 		missing("CursorCodecs.config")
+	}
+	if d.CursorCodecs.accessCore == nil {
+		missing("CursorCodecs.accessCore")
 	}
 	if len(d.HMACKey) == 0 {
 		missing("HMACKey")

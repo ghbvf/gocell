@@ -32,10 +32,12 @@ Missing required variables cause fail-fast before any assembly initialization.
 | Variable | Purpose | Default (dev) | Required |
 |---|---|---|---|
 | `GOCELL_HMAC_KEY` | HMAC key for session HMAC chains | `dev-hmac-key-replace-in-prod!!!!` | **Real mode** |
-| `GOCELL_AUDIT_CURSOR_KEY` | HMAC key for audit cursor codec | `corebundle-audit-cursor-key-32!` | **Real mode** |
+| `GOCELL_AUDIT_CURSOR_KEY` | HMAC key for audit cursor codec | `corebundle-audit-cursor-key-32b!` | **Real mode** |
 | `GOCELL_AUDIT_CURSOR_PREVIOUS_KEY` | Previous audit cursor key (rotation) | — | No |
-| `GOCELL_CONFIG_CURSOR_KEY` | HMAC key for config cursor codec | `corebundle-cfg-cursor-key--32b!` | **Real mode** |
+| `GOCELL_CONFIG_CURSOR_KEY` | HMAC key for config cursor codec | `corebundle-cfg-cursor-key--32bb!` | **Real mode** |
 | `GOCELL_CONFIG_CURSOR_PREVIOUS_KEY` | Previous config cursor key (rotation) | — | No |
+| `GOCELL_ACCESS_CURSOR_KEY` | HMAC key for access cursor codec | `corebundle-access-cursor-key32!!` | **Real mode** |
+| `GOCELL_ACCESS_CURSOR_PREVIOUS_KEY` | Previous access cursor key (rotation) | — | No |
 
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
 

@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -34,6 +35,20 @@ func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 
 var _ persistence.TxRunner = noopTxRunner{}
 
+type durableTxRunner struct{}
+
+func (durableTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+var _ persistence.TxRunner = durableTxRunner{}
+
+type durableOutboxWriter struct{}
+
+func (durableOutboxWriter) Write(_ context.Context, _ outbox.Entry) error { return nil }
+
+var _ outbox.Writer = durableOutboxWriter{}
+
 // testPassword is a fixed test-only credential used to seed users in E2E tests.
 // Not a real secret — safe to appear in test source code.
 const testPassword = "secret123" //nolint:gosec // test-only credential
@@ -42,6 +57,7 @@ var (
 	testKeySet, _, _ = auth.MustNewTestKeySet()
 	testIssuer       = mustIssuer(testKeySet)
 	testVerifier     = mustVerifier(testKeySet)
+	testCursorCodec  = mustCursorCodec()
 )
 
 func mustIssuer(ks *auth.KeySet) *auth.JWTIssuer {
@@ -61,6 +77,14 @@ func mustVerifier(ks *auth.KeySet) *auth.JWTVerifier {
 	return v
 }
 
+func mustCursorCodec() *query.CursorCodec {
+	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
+	if err != nil {
+		panic("test setup: " + err.Error())
+	}
+	return codec
+}
+
 func newTestCell() *AccessCore {
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
@@ -71,6 +95,20 @@ func newTestCell() *AccessCore {
 		WithJWTVerifier(testVerifier),
 		WithOutboxWriter(outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
+	)
+}
+
+func newDurableTestCell() *AccessCore {
+	return NewAccessCore(
+		WithUserRepository(mem.NewUserRepository()),
+		WithSessionRepository(mem.NewSessionRepository()),
+		WithRoleRepository(mem.NewRoleRepository()),
+		WithPublisher(eventbus.New()),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithCursorCodec(testCursorCodec),
+		WithOutboxWriter(durableOutboxWriter{}),
+		WithTxManager(durableTxRunner{}),
 	)
 }
 
@@ -232,6 +270,27 @@ func TestAccessCore_TokenVerifierAndAuthorizer(t *testing.T) {
 
 	assert.NotNil(t, c.TokenVerifier())
 	assert.NotNil(t, c.Authorizer())
+}
+
+func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
+	c := newDurableTestCell()
+	ctx := context.Background()
+	deps := cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDurable,
+	}
+	require.NoError(t, c.Init(ctx, deps))
+
+	r := router.New()
+	c.RegisterRoutes(r)
+	require.NoError(t, r.FinalizeAuth())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/usr-1?cursor=not-a-valid-cursor", nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
 func TestAccessCore_RegisterRoutes(t *testing.T) {
