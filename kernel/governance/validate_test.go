@@ -3,7 +3,9 @@ package governance
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -3720,4 +3722,140 @@ func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueInvalid, got[0].IssueType)
 	assert.Contains(t, got[0].Message, "banana")
+}
+
+// --- TOPO-07 invariant gate (G-2): consumer actor maxConsistencyLevel ---
+// Regression gates that pin the invariants validated by validateTOPO07 so
+// that future refactors cannot silently remove the consumer-side check.
+// Backlog item G-2 / V-A11.
+
+func TestTOPO07_EnforcesMaxConsistencyLevel(t *testing.T) {
+	tests := []struct {
+		name          string
+		setup         func(*metadata.ProjectMeta)
+		wantCount     int
+		wantSeverity  Severity
+		wantIssueType IssueType
+		wantFile      string
+	}{
+		{
+			name: "malformed actor maxConsistencyLevel reports IssueInvalid on actors.yaml",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = append(pm.Actors, metadata.ActorMeta{
+					ID:                  "edge-bff",
+					Type:                "external",
+					MaxConsistencyLevel: "L7",
+				})
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount:     1,
+			wantSeverity:  SeverityError,
+			wantIssueType: IssueInvalid,
+			wantFile:      "actors.yaml",
+		},
+		{
+			name: "contract consistencyLevel exceeds actor max reports IssueMismatch on contract file",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
+				}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+				// http.auth.login.v1 is L1, edge-bff max is L0: violation
+			},
+			wantCount:     1,
+			wantSeverity:  SeverityError,
+			wantIssueType: IssueMismatch,
+			wantFile:      contractFile("http.auth.login.v1"),
+		},
+		{
+			name: "actor with no maxConsistencyLevel is unconstrained — zero results",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Actors = []metadata.ActorMeta{
+					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: ""},
+				}
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateTOPO07(), "TOPO-07")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, tt.wantSeverity, r.Severity)
+				assert.Equal(t, tt.wantIssueType, r.IssueType)
+				if tt.wantFile != "" {
+					assert.Equal(t, tt.wantFile, r.File)
+				}
+			}
+		})
+	}
+}
+
+// --- TOPO-08 invariant gate (G-4): deprecated contract reference blocking ---
+// Regression gates that pin the invariants validated by validateTOPO08.
+// Backlog item G-4 / V-A11.
+
+func TestTOPO08_BlocksDeprecatedReference(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name: "slice references deprecated contract — SeverityError IssueForbidden on slice.yaml",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
+				// accesscore/session-login references http.auth.login.v1
+			},
+			wantCount: 1,
+		},
+		{
+			name: "slice references active contract — zero results",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Lifecycle = "active"
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateTOPO08(), "TOPO-08")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueForbidden, r.IssueType)
+				assert.Equal(t, sliceFile("accesscore/session-login"), r.File)
+				assert.Equal(t, "contractUsages[0].contract", r.Field)
+			}
+		})
+	}
+}
+
+// --- Parser examples/ walk coverage (V-A11) ---
+// Confirms that Parser.ParseFS includes cells under examples/*/cells/**/cell.yaml
+// in ProjectMeta.Cells. Backlog item V-A11.
+
+func TestProjectWalksExamples(t *testing.T) {
+	fsys := fstest.MapFS{
+		"examples/demo/cells/foocell/cell.yaml": {
+			Data: []byte("id: foocell\ntype: support\nconsistencyLevel: L0\nowner:\n  team: demo\n  role: cell-owner\nverify:\n  smoke:\n    - smoke.foocell.startup\n"),
+		},
+	}
+
+	parser := metadata.NewParser(".")
+	pm, err := parser.ParseFS(fsys)
+	require.NoError(t, err)
+
+	cell, ok := pm.Cells["foocell"]
+	require.True(t, ok, "Cells map should contain foocell from examples/demo/cells/foocell/cell.yaml")
+	assert.True(t, strings.HasPrefix(cell.File, "examples/demo/"),
+		"cell.File should start with examples/demo/, got %q", cell.File)
 }
