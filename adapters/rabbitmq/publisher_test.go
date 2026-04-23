@@ -42,6 +42,8 @@ func TestPublisher_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 	elapsed := time.Since(start)
 
 	require.Error(t, err, "Close with pre-cancelled ctx must return error")
+	assert.ErrorIs(t, err, context.Canceled,
+		"Close with pre-cancelled ctx must return context.Canceled, got: %v", err)
 	assert.Less(t, elapsed, 50*time.Millisecond,
 		"Close must return promptly with pre-cancelled ctx; got %s", elapsed)
 }

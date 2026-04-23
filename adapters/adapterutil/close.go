@@ -23,6 +23,9 @@ import (
 // has already fired and closeFn returns an error after the fact, that
 // error is logged at Warn under "adapter close error after budget
 // exceeded" so operators can correlate late failures with the timeout.
+// On successful completion the helper also logs at Info under
+// "adapter closed" so operators can correlate adapter shutdowns
+// with the surrounding lifecycle events.
 //
 // Callers that own background goroutines (reconnect loops, watchdogs)
 // must signal those goroutines (e.g. close a stop channel) BEFORE

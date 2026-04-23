@@ -8,6 +8,32 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+// assertValidationResult is a t.Helper that validates the outcome of a
+// RequireNotBlank call. When wantMessage is empty it asserts nil error;
+// otherwise it asserts a *errcode.Error with the expected code and message.
+func assertValidationResult(t *testing.T, err error, wantCode errcode.Code, wantMessage string) {
+	t.Helper()
+	if wantMessage == "" {
+		if err != nil {
+			t.Fatalf("expected nil error, got %v", err)
+		}
+		return
+	}
+	if err == nil {
+		t.Fatalf("expected error with message %q, got nil", wantMessage)
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T", err)
+	}
+	if ec.Code != wantCode {
+		t.Errorf("code = %q, want %q", ec.Code, wantCode)
+	}
+	if ec.Message != wantMessage {
+		t.Errorf("message = %q, want %q", ec.Message, wantMessage)
+	}
+}
+
 // All fields in a single RequireNotBlank call share one errcode by design —
 // each slice domain has one validation code (ErrAuthIdentityInvalidInput,
 // ErrConfigInvalidInput, etc.), and the helper preserves that classification.
@@ -73,25 +99,7 @@ func TestRequireNotBlank(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			err := validation.RequireNotBlank(code, tt.fields...)
-			if tt.wantMessage == "" {
-				if err != nil {
-					t.Fatalf("expected nil error, got %v", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Fatalf("expected error with message %q, got nil", tt.wantMessage)
-			}
-			var ec *errcode.Error
-			if !errors.As(err, &ec) {
-				t.Fatalf("expected *errcode.Error, got %T", err)
-			}
-			if ec.Code != tt.wantCode {
-				t.Errorf("code = %q, want %q", ec.Code, tt.wantCode)
-			}
-			if ec.Message != tt.wantMessage {
-				t.Errorf("message = %q, want %q", ec.Message, tt.wantMessage)
-			}
+			assertValidationResult(t, err, tt.wantCode, tt.wantMessage)
 		})
 	}
 }
