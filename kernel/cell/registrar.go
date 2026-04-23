@@ -274,6 +274,23 @@ type ConfigKeyFilterer interface {
 // interfaces never depend on runtime/. Bootstrap copies these fields into
 // its own bootstrap.Hook at phase3b discovery time.
 //
+// Field semantics:
+//   - Name: diagnostic identifier used in slog fields (hook.start/hook.stop).
+//     Empty string is accepted; bootstrap will still run the hook.
+//   - OnStart / OnStop: nil is treated as no-op. A hook with both nil is
+//     silently skipped by phase3b (it would never do anything).
+//   - StartTimeout / StopTimeout: 0 → use bootstrap default (30s / 10s via
+//     LifecycleConfig). Negative → no deadline applied. See
+//     runtime/bootstrap/lifecycle.go applyTimeout().
+//
+// OnStart is expected to return promptly — do not block waiting on ctx.Done.
+// Use OnStop for teardown. Long-running background work must be launched in a
+// goroutine whose cancellation is triggered by OnStop.
+//
+// EXPERIMENTAL: contract is stable across the PR-A5a release but the blocking
+// semantics (above) may be further formalized once a second Cell adopts the
+// interface.
+//
 // ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go Hook — adopted.
 // ref: kernel/cell.HealthContributor — symmetric discovery pattern.
 type LifecycleHook struct {
@@ -284,9 +301,15 @@ type LifecycleHook struct {
 	StopTimeout  time.Duration
 }
 
-// LifecycleContributor is auto-discovered by bootstrap at phase3b. Each cell
-// returning a non-empty slice has its hooks appended to the bootstrap
-// Lifecycle in Cell registration order. Return nil or empty slice to opt out.
+// LifecycleContributor is auto-discovered by bootstrap at phase3b and its
+// hooks appended to the bootstrap Lifecycle in Cell registration order
+// (via assembly.CellIDs). Returning nil or an empty slice opts out — no
+// hook is registered. Hooks with both OnStart and OnStop nil are silently
+// skipped.
+//
+// Bootstrap calls LifecycleHooks once per cell, after Cell.Init completes
+// and before bootstrap.Lifecycle.Start runs. OnStart closures may reference
+// per-cell state populated during Init (e.g., injected repositories).
 type LifecycleContributor interface {
 	LifecycleHooks() []LifecycleHook
 }

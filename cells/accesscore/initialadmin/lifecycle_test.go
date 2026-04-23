@@ -274,6 +274,34 @@ func TestLifecycle_StartFail_CleanerRemainsNil(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// 8. stop-before-start race — stop() winning the lock before start() spawns
+//     the cleaner goroutine must still produce a clean, nil-error state.
+// ---------------------------------------------------------------------------
+
+func TestLifecycle_StopBeforeStart_AbortsCleanlyNoGoroutineLeak(t *testing.T) {
+	opts := makeLifecycleCfgOpts(t)
+	l := NewLifecycle(opts...)
+
+	deps := makeLifecycleDeps(t)
+	l.Bind(deps, deps.Logger)
+	hook := l.Hook()
+
+	// stop() first — marks stopped=true.
+	require.NoError(t, hook.OnStop(context.Background()))
+
+	// start() after stop must not spawn a goroutine; it should call result.Stop
+	// for the cleaner-that-would-have-run and return nil.
+	require.NoError(t, hook.OnStart(context.Background()))
+
+	l.mu.Lock()
+	cleaner := l.cleaner
+	done := l.done
+	l.mu.Unlock()
+	assert.Nil(t, cleaner, "cleaner field must stay nil after stopped start")
+	assert.Nil(t, done, "done channel must stay nil — no goroutine spawned")
+}
+
+// ---------------------------------------------------------------------------
 // fakeClock — used in option tests
 // ---------------------------------------------------------------------------
 

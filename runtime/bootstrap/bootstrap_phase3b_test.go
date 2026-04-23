@@ -80,6 +80,46 @@ func TestPhase3b_NoCellImplementsContributor(t *testing.T) {
 	assert.Empty(t, ml.appended, "no hooks expected when no cell implements LifecycleContributor")
 }
 
+// TestPhase3b_EmptySliceContributor verifies a cell implementing
+// LifecycleContributor but returning an empty slice (non-nil) is a legal
+// opt-out — phase3b must treat it identically to nil return.
+func TestPhase3b_EmptySliceContributor(t *testing.T) {
+	lc := &lcCell{
+		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycell"}),
+		hooks:    []cell.LifecycleHook{}, // non-nil empty
+	}
+	asm := buildAsmRegistered(t, lc)
+
+	ml := &mockLifecycle{}
+	b := New()
+	b.lifecycle = ml
+
+	_, s := newPhaseState()
+	s.asm = asm
+
+	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	assert.Empty(t, ml.appended, "empty-slice LifecycleHooks must register zero hooks")
+}
+
+// TestPhase3b_NilSliceContributor verifies nil return is also a legal opt-out.
+func TestPhase3b_NilSliceContributor(t *testing.T) {
+	lc := &lcCell{
+		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "mycell"}),
+		hooks:    nil,
+	}
+	asm := buildAsmRegistered(t, lc)
+
+	ml := &mockLifecycle{}
+	b := New()
+	b.lifecycle = ml
+
+	_, s := newPhaseState()
+	s.asm = asm
+
+	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	assert.Empty(t, ml.appended, "nil LifecycleHooks must register zero hooks")
+}
+
 // TestPhase3b_OneCellTwoHooks verifies both hooks are appended in declaration order.
 func TestPhase3b_OneCellTwoHooks(t *testing.T) {
 	hooks := []cell.LifecycleHook{

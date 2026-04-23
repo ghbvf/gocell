@@ -171,6 +171,23 @@ func TestResolveEmitter(t *testing.T) {
 			},
 			wantDurable: false,
 		},
+		{
+			// K: demo + real pub + real writer + real tx → WriterEmitter wins
+			// (writer-present-and-non-noop branch is preferred over publisher).
+			// Durable=true because outboxWriter is non-noop; publisher silently ignored.
+			// Documenting this preference here prevents regressions of the dual-sink
+			// contract.
+			name: "K_demo_pub_and_real_writer",
+			cfg: cell.EmitterConfig{
+				CellID:            "testcell",
+				Mode:              cell.DurabilityDemo,
+				Publisher:         realPub,
+				OutboxWriter:      realW,
+				TxRunner:          realTx,
+				DirectPublishMode: outbox.DirectPublishFailOpen,
+			},
+			wantDurable: true,
+		},
 	}
 
 	for _, tc := range tests {

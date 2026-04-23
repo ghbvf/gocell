@@ -39,13 +39,23 @@ type config struct {
 //
 // Hook() is safe to call before Bind; the OnStart closure reads Bind state
 // at invocation time (bootstrap.Lifecycle.Start happens after Cell.Init).
+//
+// OnStart returns promptly after launching the cleaner in a background
+// goroutine: Cleaner.Start blocks on ctx.Done() waiting for TTL expiry,
+// which exceeds bootstrap.Hook.StartTimeout (30s default). The goroutine
+// uses an internal runCtx derived from context.Background; OnStop cancels
+// it to drain the goroutine and then calls cleaner.Stop for explicit
+// timer cancellation.
 type Lifecycle struct {
-	cfg     config
-	deps    BootstrapDeps
-	logger  *slog.Logger
-	cleaner worker.Worker
-	mu      sync.Mutex
-	bound   bool
+	cfg       config
+	deps      BootstrapDeps
+	logger    *slog.Logger
+	cleaner   worker.Worker
+	cancelRun context.CancelFunc
+	done      chan struct{} // closed when cleaner goroutine exits
+	mu        sync.Mutex
+	bound     bool
+	stopped   bool // set by stop() so a racing start() aborts cleanly
 }
 
 // LifecycleOption configures a Lifecycle instance.
@@ -188,26 +198,72 @@ func (l *Lifecycle) start(ctx context.Context) error {
 		return nil // admin exists + no orphan → no cleanup needed
 	}
 
-	// Assign under lock before Start so stop() can reach the cleaner even if
-	// Start blocks indefinitely waiting on ctx.Done().
+	// Derive a long-lived runCtx from background so Cleaner.Start (which blocks
+	// on <-ctx.Done()) is not killed by bootstrap.Hook.StartTimeout (30s). OnStop
+	// cancels runCtx to drain the goroutine.
+	//
+	// A concurrent stop() racing with start() is handled by stopped=true: if
+	// stop ran first, we cancel runCtx immediately and do not spawn the
+	// cleaner goroutine (calling Cleaner.Start on a stopped cleaner is an error
+	// per the Cleaner contract).
+	runCtx, cancel := context.WithCancel(context.Background())
 	l.mu.Lock()
+	if l.stopped {
+		l.mu.Unlock()
+		cancel()
+		// Explicit Stop is idempotent and clears any registered timer that Sweep
+		// or EnsureAdmin may have installed before stop() raced in.
+		if err := result.Stop(ctx); err != nil {
+			return fmt.Errorf("initialadmin: stop raced cleaner: %w", err)
+		}
+		return nil
+	}
 	l.cleaner = result
+	l.cancelRun = cancel
+	l.done = make(chan struct{})
+	done := l.done
 	l.mu.Unlock()
 
-	// Start cleaner timer; blocks until ctx is cancelled or TTL fires.
-	if err := result.Start(ctx); err != nil {
-		return fmt.Errorf("initialadmin: start cleaner: %w", err)
-	}
+	go func() {
+		defer close(done)
+		if err := result.Start(runCtx); err != nil {
+			logger.ErrorContext(runCtx, "initial admin cleaner exited with error",
+				slog.String("event", "initial_admin_cleaner_error"),
+				slog.Any("error", err))
+		}
+	}()
 	return nil
 }
 
 func (l *Lifecycle) stop(ctx context.Context) error {
 	l.mu.Lock()
 	cleaner := l.cleaner
+	cancel := l.cancelRun
+	done := l.done
 	l.cleaner = nil
+	l.cancelRun = nil
+	l.done = nil
+	l.stopped = true
 	l.mu.Unlock()
 	if cleaner == nil {
 		return nil
 	}
-	return cleaner.Stop(ctx)
+
+	// Cancel runCtx so Cleaner.Start returns; then explicit Stop for timer
+	// cancellation (Cleaner.Stop is idempotent).
+	if cancel != nil {
+		cancel()
+	}
+	stopErr := cleaner.Stop(ctx)
+
+	// Wait for the cleaner goroutine to exit so OnStop returning signals a
+	// fully-drained subsystem. Bounded by caller ctx.
+	if done != nil {
+		select {
+		case <-done:
+		case <-ctx.Done():
+			// Caller deadline reached; return best-effort.
+		}
+	}
+	return stopErr
 }
