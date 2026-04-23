@@ -57,7 +57,7 @@
 |---|---|---|---|
 | P1-4 | **OUTPUT-JSON-SARIF-01** 诊断模型统一（单一 `Issue` struct → 多 printer 映射） | 6h 🟡 | `cmd/gocell/` + `kernel/governance/` |
 | L7-FMT15b | **CONFIG-GET-DUAL-MODE-SPLIT-01** 拆 `contracts/http/config/get/v1` oneOf 合并 | 2h | `contracts/http/config/get/v1/` + `cells/configcore/slices/configread/` |
-| A11 verif. | **GOVERNANCE-EXAMPLES-COVERAGE-01**（P1-17）governance 规则扫 `examples/` 硬编码 | 3h | `kernel/governance/rules_examples.go`（新） |
+| A11 verif. | **GOVERNANCE-EXAMPLES-COVERAGE-01**（P1-17）governance 规则扫 `examples/` 硬编码 — ✅ PR-A1：parser `fs.WalkDir(".", ...)` 已自然覆盖 `examples/**`，根 `gocell validate --strict` 即拉全；新增 `TestProjectWalksExamples` 回归测试固化；放弃新建 `rules_examples.go` | resolved | `kernel/governance/validate_test.go` |
 | A5 verif. | **VALIDATION-HELPER-EXTRACT-01**（P1-4）抽 `pkg/validation.RequireNotBlank` | 2h | `pkg/validation/`（新） |
 | A8 verif. | **CMD-THICK-ENTRY-REDUCE-01**（P1-13 PARTIALLY）继续缩减 `cmd/corebundle/main.go` | 2h | `cmd/corebundle/` |
 | **新·P1-A** | **PRINCIPAL-UNIFIED-CONTRACT-01**（auth-federated-whistle F7）统一 Principal 契约，运行时鉴权语义收口 | 4h | `runtime/auth/` + 各 cell middleware |
@@ -74,9 +74,9 @@
 | A21 | **HEALTH-CHECKER-CTX-BUDGET-01** `Checker` 升级 `func(ctx) error` + 统一 deadline + 并行 | 3h 🟡 | `runtime/http/health/` + `kernel/lifecycle/` |
 | L7 | **FMT15-NEXTCURSOR-ENFORCE-01** 治理规则强制 `hasMore`+`nextCursor` 同时存在 | 2h 🟡 | `kernel/governance/rules_fmt.go` |
 | L8 | **PAGINATION-HELPER-EXTRACT-01** 抽 `pkg/httputil/pagination.go` 公共 helper | 2h 🟡 | `pkg/httputil/pagination.go`（新） |
-| L11 | **GOVERNANCE-CI-MAINBRANCH-01** governance workflow 扩展到 `main`/`release/**` | 0.5h 🟡 | `.github/workflows/governance.yml` |
+| L11 | **GOVERNANCE-CI-MAINBRANCH-01** governance workflow 扩展到 `main`/`release/**` — ✅ PR-A1 | resolved | `.github/workflows/governance.yml` |
 | **新·PR220-2** | **DOC-NAMING-GUARD-01** 建 `cmd/gocell/app/naming_docs_test.go` + `naming-guard.yaml`，扫活动文档禁旧 `my-app`/`sso-bff`/`core-bundle`/旧 slice 名 | 3h | `cmd/gocell/app/` + CI |
-| **新·PR220-4** | **CI-LINT-EVENT-SEMANTIC-SPLIT-01** `push` 全量 lint / `pull_request` 保留 diff 降噪；修 merge-base 退化 | 1h | `.github/workflows/ci.yml` |
+| **新·PR220-4** | **CI-LINT-EVENT-SEMANTIC-SPLIT-01** `push` 全量 lint / `pull_request` 保留 diff 降噪；修 merge-base 退化 — ✅ PR-A1：`_build-lint.yml` reusable `workflow_call` + `ci.yml`（push 全量）+ `pr-check.yml`（PR 降噪） | resolved | `.github/workflows/_build-lint.yml` + `ci.yml` + `pr-check.yml` |
 
 #### Adapter
 
@@ -117,7 +117,7 @@
 | — | **ER-ARCH-01** Router `time.After(500ms)` 探测 → Subscriber `Setup()`/`Run()` 双阶段 | §4 |
 | — | **Cell 接口 ISP 拆分** 12 方法基础接口 → `Cell` + `CellLifecycle` + `CellMetadata` | §4 |
 | — | **CONTRACT-META-01** 传输层描述一等公民（Method/Path/Params/Status/NoContent） | §6 |
-| — | **Metadata 治理规则补全** G-1 FMT-11 / G-2 TOPO-07 / G-4 deprecated break / G-6 boundary | §1 |
+| — | **Metadata 治理规则补全** G-1 FMT-11 ✅ PR-A1（parser `KnownFields(true)` 已在解析期拒绝，加 `parser_strict_test.go` 7×5 回归） / G-2 TOPO-07 ✅ PR-A1（源码已为 SeverityError，加 `TestTOPO07_EnforcesMaxConsistencyLevel` 回归）/ G-4 deprecated break ✅ PR-A1（源码已为 SeverityError + IssueForbidden，加 `TestTOPO08_BlocksDeprecatedReference` 回归）/ G-6 boundary（待 PR-A24） | §1 |
 
 ### 触发器（Triggers，条件延后）
 
