@@ -2,6 +2,7 @@ package auditappend
 
 import (
 	"context"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
@@ -29,10 +30,10 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 
 // --- tests ---
 
-func TestService_WithOutboxWriter(t *testing.T) {
+func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, testHMACKey, slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	entry := outbox.Entry{
 		ID:        "evt-1",
@@ -65,7 +66,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
 	svc := NewService(repo, testHMACKey, slog.Default(),
-		WithOutboxWriter(ow), WithTxManager(tx))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 
 	entry := outbox.Entry{
 		ID:        "evt-1",

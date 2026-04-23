@@ -33,15 +33,6 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) {
-		if e, err := outbox.NewWriterEmitter(w); err == nil {
-			s.emitter = e
-		}
-	}
-}
-
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }

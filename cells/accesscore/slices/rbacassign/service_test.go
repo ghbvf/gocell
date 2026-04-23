@@ -240,7 +240,7 @@ func TestService_Assign_SessionRevokeFail_ReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), "session revoke failed")
 }
 
-// TestService_DemoMode_* proves that in demo mode (no WithOutboxWriter / WithTxManager),
+// TestService_DemoMode_* proves that in demo mode (no WithEmitter / WithTxManager),
 // sessionRepo.RevokeByUserID is still called exactly once per Assign and Revoke, preserving
 // backward-compatible dual-write behaviour.
 func TestService_DemoMode_Assign_CallsSessionRevoke(t *testing.T) {

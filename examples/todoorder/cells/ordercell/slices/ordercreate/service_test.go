@@ -34,6 +34,13 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 
 var _ outbox.Writer = (*recordingWriter)(nil)
 
+func mustEmitter(t testing.TB, w outbox.Writer) outbox.Emitter {
+	t.Helper()
+	emitter, err := outbox.NewWriterEmitter(w)
+	require.NoError(t, err)
+	return emitter
+}
+
 type stubTxRunner struct {
 	calls int
 }
@@ -67,7 +74,7 @@ func TestService_Create(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(mem.NewOrderRepository(), slog.Default(),
-				WithOutboxWriter(outbox.NoopWriter{}),
+				WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 				WithTxManager(persistence.NoopTxRunner{}),
 			)
 
@@ -93,7 +100,7 @@ func TestService_Create_WritesOutboxEntry(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{}
 	txRunner := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithOutboxWriter(writer), WithTxManager(txRunner))
+	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner))
 
 	order, err := svc.Create(context.Background(), "outbox-item")
 	require.NoError(t, err)
@@ -112,7 +119,7 @@ func TestService_Create_OutboxWriterFailureReturnsError(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
 	txRunner := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithOutboxWriter(writer), WithTxManager(txRunner))
+	svc := NewService(repo, slog.Default(), WithEmitter(mustEmitter(t, writer)), WithTxManager(txRunner))
 
 	order, err := svc.Create(context.Background(), "outbox-item")
 	require.Error(t, err)
@@ -133,7 +140,7 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 	// Demo mode: NoopWriter validates entries then discards. Same outbox code path.
 	repo := mem.NewOrderRepository()
 	svc := NewService(repo, slog.Default(),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 
@@ -146,7 +153,7 @@ func TestService_Create_NoopWriterDemoPath(t *testing.T) {
 func TestService_Create_PersistsOrder(t *testing.T) {
 	repo := mem.NewOrderRepository()
 	svc := NewService(repo, slog.Default(),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 
@@ -170,7 +177,7 @@ func (failRepo) Create(_ context.Context, _ *domain.Order) error {
 
 func TestService_Create_RepoFailure(t *testing.T) {
 	svc := NewService(failRepo{}, slog.Default(),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 

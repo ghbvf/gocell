@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -160,10 +161,10 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 
 // --- outbox/tx service tests ---
 
-func TestService_WithOutboxWriter(t *testing.T) {
+func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
-		WithOutboxWriter(ow), WithTokenIssuer(outboxStubIssuer))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{
@@ -191,7 +192,7 @@ func TestService_WithTxManager(t *testing.T) {
 func TestService_Lock_WithOutbox(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
-		WithOutboxWriter(ow), WithTokenIssuer(outboxStubIssuer))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
 	user, err := svc.Create(context.Background(), CreateInput{
@@ -236,7 +237,7 @@ func TestService_Update_EmptyID(t *testing.T) {
 func TestService_Create_OutboxWriteError(t *testing.T) {
 	ow := &stubOutboxWriter{err: errors.New("outbox unavailable")}
 	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
-		WithOutboxWriter(ow), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{
@@ -250,7 +251,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	repo := mem.NewUserRepository()
 	// Create user with working outbox
 	svcCreate, err := NewService(repo, mem.NewSessionRepository(), slog.Default(),
-		WithOutboxWriter(&stubOutboxWriter{}), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+		WithEmitter(testoutbox.MustEmitter(t, &stubOutboxWriter{})), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 	user, err := svcCreate.Create(context.Background(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
@@ -260,7 +261,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	// Lock with failing outbox
 	failWriter := &stubOutboxWriter{err: errors.New("outbox unavailable")}
 	svcLock, err := NewService(repo, mem.NewSessionRepository(), slog.Default(),
-		WithOutboxWriter(failWriter), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
+		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
 	err = svcLock.Lock(context.Background(), user.ID)

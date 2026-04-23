@@ -3,6 +3,7 @@ package identitymanage
 import (
 	"context"
 	"encoding/json"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -63,7 +64,7 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 	t.Helper()
 	writer := &contractRecordingWriter{}
 	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(contractTxRunner{}), WithTokenIssuer(contractStubIssuer))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(contractTxRunner{}), WithTokenIssuer(contractStubIssuer))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithOutbox: %v", err)
 	}

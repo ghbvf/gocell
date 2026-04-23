@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 	"time"
@@ -69,7 +70,7 @@ func newDurableTestService(t *testing.T) (*Service, *mem.FlagRepository, *record
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer),
+		WithEmitter(testoutbox.MustEmitter(t, writer)),
 		WithTxManager(&noopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)
@@ -102,7 +103,7 @@ func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 		name string
 		opts []Option
 	}{
-		{"only_outbox_writer", []Option{WithOutboxWriter(&recordingWriter{})}},
+		{"only_emitter", []Option{WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{}))}},
 		{"only_tx_runner", []Option{WithTxManager(&noopTxRunner{})}},
 	}
 	for _, tc := range cases {
@@ -122,7 +123,7 @@ func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
 	writer := &recordingWriter{}
 	tx := &noopTxRunner{}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(tx))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 	require.NoError(t, err)
 
 	flag, err := svc.Create(context.Background(), CreateInput{
@@ -151,7 +152,7 @@ func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
 	writer := &recordingWriter{}
 	tx := &failingTxRunner{failErr: errors.New("tx commit failed")}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(tx))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
@@ -229,7 +230,7 @@ func TestFlagWrite_OutboxWriteError_PropagatesFromCreate(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	writer := &recordingWriter{err: errors.New("outbox unavailable")}
 	svc, err := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&noopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})

@@ -49,15 +49,6 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) {
-		if e, err := outbox.NewWriterEmitter(w); err == nil {
-			s.emitter = e
-		}
-	}
-}
-
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
@@ -72,13 +63,9 @@ type Service struct {
 }
 
 // NewService creates a flag-write Service.
-//
-// Defensive invariant: outboxWriter and txRunner must either both be set or
-// both be nil (demo mode). Providing one without the other is a wiring error
-// that breaks L2 atomicity and is returned as an error so callers can fail-fast
-// at construction time rather than at the first CUD operation.
-//
-// ref: go-micro — constructor validates coupling invariants before returning.
+// Cell wiring decides whether the injected emitter/runner pair is backed by a
+// durable outbox path or by demo defaults; the service always runs through the
+// same TxRunner + Emitter abstractions.
 func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
 		repo:     repo,

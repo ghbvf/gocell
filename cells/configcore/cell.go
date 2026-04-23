@@ -213,7 +213,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initReadSlice(runMode); err != nil {
 		return err
 	}
-	c.initPublishSlice(publishFailureMode)
+	c.initPublishSlice()
 	c.initSubscribeSlice()
 	if err := c.initFlagSlice(runMode); err != nil {
 		return err
@@ -333,11 +333,10 @@ func (c *ConfigCore) initReadSlice(runMode query.RunMode) error {
 	return nil
 }
 
-func (c *ConfigCore) initPublishSlice(publishFailureMode configpublish.PublishFailureMode) {
+func (c *ConfigCore) initPublishSlice() {
 	opts := []configpublish.Option{
 		configpublish.WithEmitter(c.emitter),
 		configpublish.WithTxManager(c.txRunner),
-		configpublish.WithPublishFailureMode(publishFailureMode),
 	}
 	publishSvc := configpublish.NewService(c.configRepo, c.logger, opts...)
 	c.publishHandler = configpublish.NewHandler(publishSvc)

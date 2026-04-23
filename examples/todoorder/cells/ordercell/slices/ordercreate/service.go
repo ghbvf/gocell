@@ -49,24 +49,14 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) {
-		if e, err := outbox.NewWriterEmitter(w); err == nil {
-			s.emitter = e
-		}
-	}
-}
-
 // WithTxManager sets the TxRunner for transactional guarantees.
 func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // Service handles order creation business logic.
-// Both outboxWriter and txRunner are required — the cell Init() enforces this.
-// Demo mode uses outbox.NoopWriter + persistence.NoopTxRunner for a unified
-// code path with zero fork.
+// Cell wiring injects either durable or demo defaults, but the service always
+// runs through the same Emitter + TxRunner code path.
 type Service struct {
 	repo     domain.OrderRepository
 	txRunner persistence.TxRunner
@@ -75,8 +65,6 @@ type Service struct {
 }
 
 // NewService creates an order-create Service.
-// outboxWriter and txRunner must be set via options; the cell Init()
-// validates their presence before constructing the Service.
 func NewService(repo domain.OrderRepository, logger *slog.Logger, opts ...Option) *Service {
 	s := &Service{
 		repo:     repo,

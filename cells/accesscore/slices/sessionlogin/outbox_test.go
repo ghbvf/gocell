@@ -2,6 +2,7 @@ package sessionlogin
 
 import (
 	"context"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
@@ -42,11 +43,11 @@ func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 	_ = repo.Create(context.Background(), user)
 }
 
-func TestService_WithOutboxWriter(t *testing.T) {
+func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	ow := &stubOutboxWriter{}
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
-		testIssuer, slog.Default(), WithOutboxWriter(ow))
+		testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))

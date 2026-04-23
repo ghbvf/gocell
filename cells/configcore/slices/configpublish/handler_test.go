@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -379,10 +380,10 @@ func TestHandler_HandleRollback_InvalidVersion(t *testing.T) {
 
 // --- outbox/tx tests ---
 
-func TestService_WithOutboxWriter(t *testing.T) {
+func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedForService(repo, "k1", "v1")
 	_, err := svc.Publish(context.Background(), "k1")
@@ -407,7 +408,7 @@ func TestService_WithTxManager(t *testing.T) {
 func TestService_Rollback_WithOutbox(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedForService(repo, "k3", "v3")
 	_, err := svc.Publish(context.Background(), "k3")

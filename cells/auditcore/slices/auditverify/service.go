@@ -37,15 +37,6 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) {
-		if e, err := outbox.NewWriterEmitter(w); err == nil {
-			s.emitter = e
-		}
-	}
-}
-
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
@@ -95,7 +86,9 @@ func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult,
 		EntriesChecked:    len(entries),
 	}
 
-	// Publish verification result via outbox (durable) or direct publish (demo).
+	// Publish the verification result through the injected emitter. Cell wiring
+	// decides whether that emitter is backed by durable outbox delivery or demo
+	// direct delivery.
 	payload, err := json.Marshal(map[string]any{
 		"valid":             valid,
 		"firstInvalidIndex": firstInvalid,

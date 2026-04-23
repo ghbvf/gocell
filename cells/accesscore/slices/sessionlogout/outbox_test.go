@@ -2,6 +2,7 @@ package sessionlogout
 
 import (
 	"context"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
@@ -29,10 +30,10 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 
 // --- tests ---
 
-func TestService_WithOutboxWriter(t *testing.T) {
+func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewSessionRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), WithOutboxWriter(ow))
+	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedSession(repo, "sess-1", "usr-1")
 
@@ -58,7 +59,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
 	svc := NewService(repo, slog.Default(),
-		WithOutboxWriter(ow), WithTxManager(tx))
+		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 
 	seedSession(repo, "sess-1", "usr-1")
 

@@ -5,6 +5,7 @@ package configwrite
 import (
 	"context"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
@@ -60,7 +61,7 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	txMgr := adapterpg.NewTxManager(pool)
 
 	svc := NewService(repo, slog.Default(),
-		WithOutboxWriter(outboxWriter),
+		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(txMgr),
 	)
 
@@ -208,7 +209,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 
 	txMgr := adapterpg.NewTxManager(pool)
 	svc := NewService(repo, slog.Default(),
-		WithOutboxWriter(failingWriter),
+		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),
 	)
 

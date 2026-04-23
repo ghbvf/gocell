@@ -32,26 +32,10 @@ const (
 // Option configures a config-publish Service.
 type Option func(*Service)
 
-func directPublishMode(mode PublishFailureMode) outbox.DirectPublishFailureMode {
-	if mode.IsFailOpen() {
-		return outbox.DirectPublishFailOpen
-	}
-	return outbox.DirectPublishFailClosed
-}
-
 // WithEmitter sets the event emitter.
 func WithEmitter(e outbox.Emitter) Option {
 	return func(s *Service) {
 		if e != nil {
-			s.emitter = e
-		}
-	}
-}
-
-// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) {
-		if e, err := outbox.NewWriterEmitter(w); err == nil {
 			s.emitter = e
 		}
 	}
@@ -62,22 +46,12 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
-// WithPublishFailureMode records direct-publisher failure intent for Cell-level
-// emitter construction. Zero value is fail-closed (safe production default).
-//
-// S10 MODE-SEMANTIC-SPLIT-01: separated from query.RunMode so read-path cursor
-// tolerance and write-path publisher failure semantics evolve independently.
-func WithPublishFailureMode(mode PublishFailureMode) Option {
-	return func(s *Service) { s.publishFailureMode = mode }
-}
-
 // Service implements config publish/rollback business logic.
 type Service struct {
-	repo               ports.ConfigRepository
-	txRunner           persistence.TxRunner
-	emitter            outbox.Emitter
-	publishFailureMode PublishFailureMode
-	logger             *slog.Logger
+	repo     ports.ConfigRepository
+	txRunner persistence.TxRunner
+	emitter  outbox.Emitter
+	logger   *slog.Logger
 }
 
 // NewService creates a config-publish Service.

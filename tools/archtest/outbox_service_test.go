@@ -21,6 +21,7 @@ const (
 	outboxServiceRuleDirectPublish   = "OUTBOX-SERVICE-02"
 	outboxServiceRuleRuntimeOutbox   = "OUTBOX-SERVICE-03"
 	outboxServiceRulePublisherMode   = "OUTBOX-SERVICE-04"
+	outboxServiceRuleWriterAdapter   = "OUTBOX-SERVICE-05_no_writer_adapter_option"
 	outboxRuntimeImportRelPath       = "runtime/outbox"
 	outboxServiceGlobReadablePattern = "cells/**/slices/**/service.go"
 )
@@ -65,6 +66,10 @@ func TestSliceServicesDoNotBypassTransactionalOutbox(t *testing.T) {
 	t.Run("OUTBOX-SERVICE-04_no_publisher_mode_parsing", func(t *testing.T) {
 		assert.Empty(t, byRule[outboxServiceRulePublisherMode],
 			"%s must not depend on outbox.Publisher or construct DirectEmitter; Cell boundary owns mode parsing", outboxServiceGlobReadablePattern)
+	})
+	t.Run("OUTBOX-SERVICE-05_no_writer_adapter_option", func(t *testing.T) {
+		assert.Empty(t, byRule[outboxServiceRuleWriterAdapter],
+			"%s must not define WithOutboxWriter; service layer owns WithEmitter / WithTxManager only", outboxServiceGlobReadablePattern)
 	})
 }
 
@@ -147,6 +152,23 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch expr := n.(type) {
+		case *ast.FuncDecl:
+			if isWithOutboxWriterFunc(expr) {
+				violations = append(violations, outboxServiceViolation{
+					Rule:    outboxServiceRuleWriterAdapter,
+					File:    rel,
+					Line:    fset.Position(expr.Pos()).Line,
+					Message: "service layer must not define WithOutboxWriter adapter option",
+				})
+			}
+			if isPublisherModeParsingFunc(expr) {
+				violations = append(violations, outboxServiceViolation{
+					Rule:    outboxServiceRulePublisherMode,
+					File:    rel,
+					Line:    fset.Position(expr.Pos()).Line,
+					Message: "service layer must not define direct-publisher mode helpers/options",
+				})
+			}
 		case *ast.BinaryExpr:
 			if isTxRunnerNilComparison(expr) {
 				violations = append(violations, outboxServiceViolation{
@@ -182,11 +204,45 @@ func checkSliceServiceOutboxFile(root, modPath, path string) ([]outboxServiceVio
 					Message: "service layer must not expose outbox.Publisher dependencies",
 				})
 			}
+			if isOutboxDirectPublishModeSelector(expr) {
+				violations = append(violations, outboxServiceViolation{
+					Rule:    outboxServiceRulePublisherMode,
+					File:    rel,
+					Line:    fset.Position(expr.Pos()).Line,
+					Message: "service layer must not reference outbox direct-publish mode types or constants",
+				})
+			}
+		case *ast.Field:
+			if hasPublisherModeState(expr.Names) || isPublishFailureModeExpr(expr.Type) {
+				violations = append(violations, outboxServiceViolation{
+					Rule:    outboxServiceRulePublisherMode,
+					File:    rel,
+					Line:    fset.Position(expr.Pos()).Line,
+					Message: "service layer must not store publisher mode state",
+				})
+			}
+		case *ast.Ident:
+			if isPublisherModeIdent(expr) {
+				violations = append(violations, outboxServiceViolation{
+					Rule:    outboxServiceRulePublisherMode,
+					File:    rel,
+					Line:    fset.Position(expr.Pos()).Line,
+					Message: "service layer must not define or use direct-publisher mode names",
+				})
+			}
 		}
 		return true
 	})
 
 	return violations, nil
+}
+
+func isWithOutboxWriterFunc(fn *ast.FuncDecl) bool {
+	return fn.Name.Name == "WithOutboxWriter"
+}
+
+func isPublisherModeParsingFunc(fn *ast.FuncDecl) bool {
+	return fn.Name.Name == "WithPublishFailureMode" || fn.Name.Name == "directPublishMode"
 }
 
 func isTxRunnerNilComparison(expr *ast.BinaryExpr) bool {
@@ -226,6 +282,48 @@ func isDirectEmitterConstructor(call *ast.CallExpr) bool {
 func isOutboxPublisherSelector(expr *ast.SelectorExpr) bool {
 	ident, ok := expr.X.(*ast.Ident)
 	return ok && ident.Name == "outbox" && expr.Sel.Name == "Publisher"
+}
+
+func isOutboxDirectPublishModeSelector(expr *ast.SelectorExpr) bool {
+	ident, ok := expr.X.(*ast.Ident)
+	if !ok || ident.Name != "outbox" {
+		return false
+	}
+	switch expr.Sel.Name {
+	case "DirectPublishFailureMode", "DirectPublishFailOpen", "DirectPublishFailClosed":
+		return true
+	default:
+		return false
+	}
+}
+
+func hasPublisherModeState(names []*ast.Ident) bool {
+	for _, name := range names {
+		if name != nil && name.Name == "publishFailureMode" {
+			return true
+		}
+	}
+	return false
+}
+
+func isPublishFailureModeExpr(expr ast.Expr) bool {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name == "PublishFailureMode"
+	case *ast.SelectorExpr:
+		return e.Sel.Name == "PublishFailureMode"
+	default:
+		return false
+	}
+}
+
+func isPublisherModeIdent(id *ast.Ident) bool {
+	switch id.Name {
+	case "WithPublishFailureMode", "directPublishMode", "publishFailureMode":
+		return true
+	default:
+		return false
+	}
 }
 
 func groupOutboxServiceViolations(violations []outboxServiceViolation) map[string][]string {

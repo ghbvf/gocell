@@ -3,6 +3,7 @@ package configwrite
 import (
 	"context"
 	"encoding/json"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -18,11 +19,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func newContractService() (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+func newContractService(t testing.TB) (*Service, *mem.ConfigRepository, *testutil.RecordingWriter) {
+	t.Helper()
 	repo := mem.NewConfigRepository()
 	writer := &testutil.RecordingWriter{}
 	svc := NewService(repo, slog.Default(),
-		WithOutboxWriter(writer), WithTxManager(&testutil.NoopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	return svc, repo, writer
 }
 
@@ -44,7 +46,7 @@ func newContractMux(svc *Service) *http.ServeMux {
 func TestHttpConfigWriteV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.write.v1")
-	svc, _, _ := newContractService()
+	svc, _, _ := newContractService(t)
 
 	mux := newContractMux(svc)
 
@@ -66,7 +68,7 @@ func TestHttpConfigWriteV1Serve(t *testing.T) {
 // are tested here alongside the happy-path contract test so that auth-guard
 // regressions are caught at the contract boundary, not just in unit tests.
 func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
-	svc, _, _ := newContractService()
+	svc, _, _ := newContractService(t)
 	mux := newContractMux(svc)
 	body := `{"key":"app.name","value":"myapp"}`
 
@@ -107,7 +109,7 @@ func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 func TestEventConfigChangedV1Publish_Create(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
-	svc, _, writer := newContractService()
+	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "app.name", Value: "myapp"})
 	require.NoError(t, err)
@@ -123,7 +125,7 @@ func TestEventConfigChangedV1Publish_Create(t *testing.T) {
 func TestEventConfigChangedV1Publish_Update(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
-	svc, _, writer := newContractService()
+	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
@@ -141,7 +143,7 @@ func TestEventConfigChangedV1Publish_Update(t *testing.T) {
 func TestEventConfigChangedV1Publish_Delete(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
-	svc, _, writer := newContractService()
+	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)

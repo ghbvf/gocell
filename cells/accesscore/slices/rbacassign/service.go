@@ -15,21 +15,16 @@ import (
 
 // Service handles RBAC role assignment and revocation.
 //
-// Durable mode (outboxWriter + txRunner both non-nil): writes role row and
-// event.role.{assigned,revoked}.v1 outbox entry atomically in one DB transaction.
-// Session revocation is handled asynchronously by sessionlogout.Consumer which
-// subscribes to both topics. This provides L2 OutboxFact atomicity — the partial-commit
-// window from the legacy dual-write is eliminated.
+// When the Cell injects an emitter for asynchronous role-change delivery, the
+// role mutation and event.role.{assigned,revoked}.v1 emission run in one
+// transaction and session revocation moves to the sessionlogout consumer.
 //
-// Demo mode (both nil): preserves today's synchronous dual-write behaviour —
-// roleRepo.{AssignToUser,RemoveFromUserIfNotLast} then sessionRepo.RevokeByUserID
-// in-process. Suitable for in-memory repos where "transaction" semantics are
-// implicit within a single goroutine.
+// With the default noop emitter, the service preserves the in-process
+// role-change + session-revoke flow used by demo and in-memory wiring.
 //
-// Idempotent no-op handling (both modes): the role repository reports whether
-// the call actually changed state. On no-op (repeat assign or revoke-non-member),
-// no outbox entry is written and no session revoke is triggered — the operation
-// is externally invisible, preventing false role-change facts.
+// The role repository reports whether the call actually changed state. On a
+// no-op (repeat assign or revoke-non-member), no event is emitted and no
+// session revoke is triggered, preventing false role-change facts.
 //
 // ref: Watermill SQL outbox + sessionlogin/service.go persistSession pattern.
 type Service struct {
@@ -54,25 +49,15 @@ func WithEmitter(e outbox.Emitter) Option {
 	}
 }
 
-// WithOutboxWriter adapts an outbox.Writer for existing tests and wiring.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(s *Service) {
-		if e, err := outbox.NewWriterEmitter(w); err == nil {
-			s.emitter = e
-			s.syncSessionRevocation = false
-		}
-	}
-}
-
-// WithTxManager sets the TxRunner for L2 atomicity (must be paired with WithOutboxWriter).
+// WithTxManager sets the TxRunner for L2 atomicity (must be paired with WithEmitter).
 func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
 // NewService creates a new rbac-assign service.
-// In durable mode (both WithOutboxWriter and WithTxManager provided), session
-// revocation is delegated to the sessionlogout consumer via the outbox.
-// In demo mode (no opts), the legacy dual-write is used.
+// When WithEmitter is provided, session revocation is delegated to the
+// sessionlogout consumer. With default options, the legacy in-process revoke
+// path is used.
 func NewService(
 	roleRepo ports.RoleRepository,
 	sessionRepo ports.SessionRepository,
@@ -115,10 +100,11 @@ func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dt
 	return nil
 }
 
-// persistChange wraps a role mutation + outbox write in a single transaction (durable mode)
-// or delegates to the legacy dual-write (demo mode). writeFn returns whether the repository
-// actually mutated state; the outbox entry (durable) or session revoke (demo) is skipped
-// on a no-op so repeat calls do not publish false role-change facts.
+// persistChange wraps a role mutation in the configured transaction runner.
+// When an async emitter is configured it also emits the role-change event; with
+// the default noop emitter it keeps the in-process session revoke path. writeFn
+// returns whether the repository actually mutated state, so no-op calls never
+// emit false role-change facts.
 func (s *Service) persistChange(
 	ctx context.Context,
 	writeFn func(ctx context.Context) (changed bool, err error),

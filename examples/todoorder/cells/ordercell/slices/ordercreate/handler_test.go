@@ -39,10 +39,11 @@ func TestOrderCreateResponse_Fields(t *testing.T) {
 	assert.Contains(t, s, `"status"`)
 }
 
-func newTestHandler() *Handler {
+func newTestHandler(t testing.TB) *Handler {
+	t.Helper()
 	repo := mem.NewOrderRepository()
 	svc := NewService(repo, slog.Default(),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithEmitter(mustEmitter(t, outbox.NoopWriter{})),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	return NewHandler(svc)
@@ -83,7 +84,7 @@ func TestHandleCreate(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			h := newTestHandler()
+			h := newTestHandler(t)
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(tt.body))
 			req.Header.Set("Content-Type", "application/json")
@@ -97,7 +98,7 @@ func TestHandleCreate(t *testing.T) {
 }
 
 func TestHandleCreate_ResponseBody(t *testing.T) {
-	h := newTestHandler()
+	h := newTestHandler(t)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(`{"item":"laptop"}`))
 	req.Header.Set("Content-Type", "application/json")

@@ -5,6 +5,7 @@ package configpublish
 import (
 	"context"
 	"errors"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 	"time"
@@ -64,7 +65,7 @@ func setupPublishBundle(t *testing.T) (publishServiceBundle, func()) {
 	txMgr := adapterpg.NewTxManager(pool)
 
 	svc := NewService(repo, slog.Default(),
-		WithOutboxWriter(outboxWriter),
+		WithEmitter(testoutbox.MustEmitter(t, outboxWriter)),
 		WithTxManager(txMgr),
 	)
 
@@ -213,7 +214,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	// First: seed and publish using a good writer.
 	goodWriter := adapterpg.NewOutboxWriter()
 	svcGood := NewService(repo, slog.Default(),
-		WithOutboxWriter(goodWriter),
+		WithEmitter(testoutbox.MustEmitter(t, goodWriter)),
 		WithTxManager(txMgr),
 	)
 
@@ -230,7 +231,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	// Now inject a failing writer — simulates outbox broker down during Rollback.
 	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}
 	svcFail := NewService(repo, slog.Default(),
-		WithOutboxWriter(failingWriter),
+		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),
 	)
 
