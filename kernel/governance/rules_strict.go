@@ -138,6 +138,9 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 			continue
 		}
 		expected := fmt.Sprintf("cells/%s/slices/%s/", s.CellDir, s.Dir)
+		if s.File != "" {
+			expected = strings.TrimSuffix(s.File, "slice.yaml")
+		}
 		first := s.AllowedFiles[0]
 		// Normalize: strip trailing ** or glob suffix for comparison.
 		normalized := strings.TrimSuffix(first, "**")

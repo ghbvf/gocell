@@ -1,6 +1,6 @@
 # cells/ 层规则
 
-cells/ 包含各业务 Cell 的实现（accesscore / auditcore / configcore 等），每个 Cell 下含 `slices/`。
+根 `cells/` 只包含平台 Cell 的实现（accesscore / auditcore / configcore），每个 Cell 下含 `slices/`。示例 Cell 放在 `examples/*/cells/`，同样接受 metadata/governance 校验。
 
 ## 依赖约束
 

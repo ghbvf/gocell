@@ -3367,6 +3367,29 @@ func TestFMT14(t *testing.T) {
 	}
 }
 
+func TestFMT14_ExamplePathSuggestion(t *testing.T) {
+	pm := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"ordercell": {ID: "ordercell"},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"ordercell/ordercreate": {
+				ID:            "ordercreate",
+				BelongsToCell: "ordercell",
+				File:          "examples/todoorder/cells/ordercell/slices/ordercreate/slice.yaml",
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	val := NewValidator(pm, "")
+	got := findByCode(val.validateFMT14(), "FMT-14")
+	require.Len(t, got, 1)
+	assert.Contains(t, got[0].Message, `examples/todoorder/cells/ordercell/slices/ordercreate/**`)
+}
+
 // --- FMT-15: list response schema must require hasMore and nextCursor ---
 
 func TestFMT15(t *testing.T) {

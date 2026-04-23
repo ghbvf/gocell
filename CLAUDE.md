@@ -18,16 +18,16 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 
 ```
 kernel/       — Cell/Slice 运行时 + 治理工具（底座灵魂）
-cells/        — Cell 实现（accesscore / auditcore / configcore），每个 Cell 下含 slices/
-contracts/    — 跨 Cell 边界契约（按 {kind}/{domain-path}/{version}/ 组织）
-journeys/     — Journey 验收规格（J-*.yaml）+ status-board.yaml（动态交付状态）
+cells/        — 平台 Cell 实现（accesscore / auditcore / configcore），每个 Cell 下含 slices/
+contracts/    — 平台跨 Cell 边界契约（按 {kind}/{domain-path}/{version}/ 组织）
+journeys/     — 平台 Journey 验收规格（J-*.yaml）+ status-board.yaml（动态交付状态）
 assemblies/   — 物理打包配置（assembly.yaml）
 fixtures/     — 测试夹具（fixture-*.yaml，供 run-journey 使用）
 runtime/      — 通用运行时（http / auth / worker / observability）
 adapters/     — 外部系统适配（postgres / redis / rabbitmq / websocket / s3 / oidc）
 pkg/          — 共享工具包（errcode / ctxkeys / httputil / query）
 cmd/          — CLI 入口（gocell validate / scaffold / generate / check / verify）
-examples/     — 示例项目（ssobff / todoorder / iotdevice）
+examples/     — 示例项目（ssobff / todoorder / iotdevice），可内置示例 cells/contracts/journeys
 generated/    — 工具生成产物（indexes / 派生视图，禁止手工编辑）
 actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型的系统）
 ```

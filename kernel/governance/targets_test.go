@@ -467,3 +467,97 @@ func TestSelectFromFiles_L0DependencyTracking(t *testing.T) {
 		})
 	}
 }
+
+func TestSelectFromFiles_ExampleMetadataPaths(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"ordercell": {
+				ID:               "ordercell",
+				ConsistencyLevel: "L2",
+				File:             "examples/todoorder/cells/ordercell/cell.yaml",
+			},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"ordercell/ordercreate": {
+				ID:            "ordercreate",
+				BelongsToCell: "ordercell",
+				File:          "examples/todoorder/cells/ordercell/slices/ordercreate/slice.yaml",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.order.create.v1", Role: "serve"},
+				},
+			},
+			"ordercell/orderquery": {
+				ID:            "orderquery",
+				BelongsToCell: "ordercell",
+				File:          "examples/todoorder/cells/ordercell/slices/orderquery/slice.yaml",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: "http.order.list.v1", Role: "serve"},
+				},
+			},
+		},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.order.create.v1": {
+				ID:        "http.order.create.v1",
+				Kind:      "http",
+				OwnerCell: "ordercell",
+				Dir:       "examples/todoorder/contracts/http/order/create/v1",
+				File:      "examples/todoorder/contracts/http/order/create/v1/contract.yaml",
+				Endpoints: metadata.EndpointsMeta{
+					HTTP: &metadata.HTTPTransportMeta{
+						Responses: map[int]metadata.HTTPResponseMeta{
+							400: {SchemaRef: "../../../../shared/errors/error-response-v1.schema.json"},
+						},
+					},
+				},
+			},
+			"http.order.list.v1": {
+				ID:        "http.order.list.v1",
+				Kind:      "http",
+				OwnerCell: "ordercell",
+				Dir:       "examples/todoorder/contracts/http/order/list/v1",
+				File:      "examples/todoorder/contracts/http/order/list/v1/contract.yaml",
+				Endpoints: metadata.EndpointsMeta{
+					HTTP: &metadata.HTTPTransportMeta{
+						Responses: map[int]metadata.HTTPResponseMeta{
+							400: {SchemaRef: "../../../../shared/errors/error-response-v1.schema.json"},
+						},
+					},
+				},
+			},
+		},
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-ordercreate": {
+				ID:        "J-ordercreate",
+				Cells:     []string{"ordercell"},
+				Contracts: []string{"http.order.create.v1"},
+				File:      "examples/todoorder/journeys/J-ordercreate.yaml",
+			},
+		},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	ts := NewTargetSelector(project)
+
+	cellResult := ts.SelectFromFiles([]string{"examples/todoorder/cells/ordercell/cell.go"})
+	assert.Equal(t, []string{"ordercell/ordercreate", "ordercell/orderquery"}, cellResult.Slices)
+	assert.Equal(t, []string{"ordercell"}, cellResult.Cells)
+	assert.Equal(t, []string{"http.order.create.v1", "http.order.list.v1"}, cellResult.Contracts)
+	assert.Equal(t, []string{"J-ordercreate"}, cellResult.Journeys)
+
+	contractResult := ts.SelectFromFiles([]string{"examples/todoorder/contracts/http/order/create/v1/contract.yaml"})
+	assert.Equal(t, []string{"ordercell/ordercreate"}, contractResult.Slices)
+	assert.Equal(t, []string{"ordercell"}, contractResult.Cells)
+	assert.Equal(t, []string{"http.order.create.v1"}, contractResult.Contracts)
+	assert.Equal(t, []string{"J-ordercreate"}, contractResult.Journeys)
+
+	sharedSchemaResult := ts.SelectFromFiles([]string{"examples/todoorder/contracts/shared/errors/error-response-v1.schema.json"})
+	assert.Equal(t, []string{"ordercell/ordercreate", "ordercell/orderquery"}, sharedSchemaResult.Slices)
+	assert.Equal(t, []string{"ordercell"}, sharedSchemaResult.Cells)
+	assert.Equal(t, []string{"http.order.create.v1", "http.order.list.v1"}, sharedSchemaResult.Contracts)
+	assert.Equal(t, []string{"J-ordercreate"}, sharedSchemaResult.Journeys)
+
+	journeyResult := ts.SelectFromFiles([]string{"examples/todoorder/journeys/J-ordercreate.yaml"})
+	assert.Equal(t, []string{"ordercell/ordercreate", "ordercell/orderquery"}, journeyResult.Slices)
+	assert.Equal(t, []string{"ordercell"}, journeyResult.Cells)
+	assert.Equal(t, []string{"http.order.create.v1", "http.order.list.v1"}, journeyResult.Contracts)
+	assert.Equal(t, []string{"J-ordercreate"}, journeyResult.Journeys)
+}

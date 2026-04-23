@@ -46,16 +46,16 @@ jobs:
       - name: Check contract health
         run: go run ./cmd/gocell check contract-health
 
-      # NOTE: Example metadata (cell.yaml/slice.yaml) lives under cells/ and contracts/,
-      # not under examples/. The main `gocell validate` step above already covers them.
+      # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
+      # The main `gocell validate` step above already covers it.
 
       - name: Check layering — examples no internal imports
         run: |
-          if grep -rn "cells/.*/internal" examples/ 2>/dev/null; then
-            echo "FAIL: examples/ imports cells/*/internal/"
+          if grep -rn --include='*.go' "github.com/ghbvf/gocell/cells/.*/internal" examples/ 2>/dev/null; then
+            echo "FAIL: examples/ imports root cells/*/internal/"
             exit 1
           fi
-          if grep -rn "adapters/.*/internal" examples/ 2>/dev/null; then
+          if grep -rn --include='*.go' "github.com/ghbvf/gocell/adapters/.*/internal" examples/ 2>/dev/null; then
             echo "FAIL: examples/ imports adapters/*/internal/"
             exit 1
           fi

@@ -234,9 +234,7 @@ func (v *Validator) validateREF12() []ValidationResult {
 	}
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		// Derive the contract directory from the contract ID.
-		// Contract ID format: "http.auth.login.v1" -> "contracts/http/auth/login/v1/"
-		contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
+		contractDir := filepath.Join(v.root, contractDirFromMeta(c))
 		results = append(results, v.checkREF12SchemaRefs(c, contractDir)...)
 		results = append(results, v.checkREF12Responses(c, contractDir)...)
 	}

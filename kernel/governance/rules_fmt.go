@@ -518,13 +518,26 @@ func (v *Validator) validateFMT14() []ValidationResult {
 				sliceFile(key),
 				"allowedFiles",
 				fmt.Sprintf(
-					"slice %q must declare explicit allowedFiles (e.g., [\"cells/%s/slices/%s/**\"])",
-					s.ID, s.BelongsToCell, s.ID,
+					"slice %q must declare explicit allowedFiles (e.g., [%q])",
+					s.ID, allowedFilesExample(s),
 				),
 			))
 		}
 	}
 	return results
+}
+
+func allowedFilesExample(s *metadata.SliceMeta) string {
+	if s != nil && s.File != "" {
+		dir := strings.TrimSuffix(strings.ReplaceAll(s.File, "\\", "/"), "slice.yaml")
+		if dir != s.File {
+			return dir + "**"
+		}
+	}
+	if s == nil {
+		return "cells/<cell>/slices/<slice>/**"
+	}
+	return fmt.Sprintf("cells/%s/slices/%s/**", s.BelongsToCell, s.ID)
 }
 
 // codeFMT15 is the rule code for HTTP list response schema validation.
@@ -553,7 +566,7 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 	if c.Kind != "http" || c.SchemaRefs.Response == "" {
 		return nil
 	}
-	contractDir := filepath.Join(v.root, contractDirFromID(c.ID))
+	contractDir := filepath.Join(v.root, contractDirFromMeta(c))
 	schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
 	if !IsWithinRoot(v.root, schemaPath) {
 		return nil

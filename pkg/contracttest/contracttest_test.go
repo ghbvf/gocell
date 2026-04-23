@@ -75,6 +75,14 @@ func TestLoadByID(t *testing.T) {
 	}
 }
 
+func TestExampleContractsRoot(t *testing.T) {
+	root := ExampleContractsRoot("todoorder")
+	wantSuffix := filepath.Join("examples", "todoorder", "contracts")
+	if !strings.HasSuffix(root, wantSuffix) {
+		t.Fatalf("ExampleContractsRoot suffix = %q, want %q", root, wantSuffix)
+	}
+}
+
 func TestValidateRequest_Valid(t *testing.T) {
 	c := LoadByID(t, testdataRoot(), "http.test.valid.v1")
 	c.ValidateRequest(t, []byte(`{"username":"alice","email":"alice@example.com"}`))

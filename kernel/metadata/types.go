@@ -25,6 +25,7 @@ type CellMeta struct {
 	Verify           CellVerifyMeta `yaml:"verify"`
 	L0Dependencies   []L0DepMeta    `yaml:"l0Dependencies"`
 	Dir              string         `yaml:"-"` // directory segment under cells/, set by parser
+	File             string         `yaml:"-"` // parsed cell.yaml path relative to project root
 }
 
 // OwnerMeta identifies the team responsible for a Cell or Journey.
@@ -65,6 +66,7 @@ type SliceMeta struct {
 	AllowedFiles   []string        `yaml:"allowedFiles,omitempty"`
 	Dir            string          `yaml:"-"` // slice directory segment, set by parser
 	CellDir        string          `yaml:"-"` // parent cell directory segment, set by parser
+	File           string          `yaml:"-"` // parsed slice.yaml path relative to project root
 }
 
 // ContractUsage declares a Slice's participation in a Contract.
@@ -101,6 +103,8 @@ type ContractMeta struct {
 	IdempotencyKey    string         `yaml:"idempotencyKey,omitempty"`
 	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
 	Description       string         `yaml:"description,omitempty"`
+	Dir               string         `yaml:"-"` // parsed contract version directory relative to project root
+	File              string         `yaml:"-"` // parsed contract.yaml path relative to project root
 }
 
 // ProviderEndpoint returns the provider cell/actor ID for this contract
@@ -158,6 +162,7 @@ type JourneyMeta struct {
 	Cells        []string        `yaml:"cells"`
 	Contracts    []string        `yaml:"contracts"`
 	PassCriteria []PassCriterion `yaml:"passCriteria"`
+	File         string          `yaml:"-"` // parsed journey YAML path relative to project root
 }
 
 // PassCriterion is a single acceptance criterion within a Journey.
@@ -173,6 +178,7 @@ type AssemblyMeta struct {
 	Cells []string  `yaml:"cells"`
 	Build BuildMeta `yaml:"build"`
 	Dir   string    `yaml:"-"` // directory segment under assemblies/, set by parser
+	File  string    `yaml:"-"` // parsed assembly.yaml path relative to project root
 }
 
 // BuildMeta holds the build configuration for an Assembly.

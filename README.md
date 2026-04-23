@@ -225,14 +225,14 @@ asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: cell.DurabilityDe
 
 ```
 ├── kernel/       — Cell/Slice runtime + governance tools (framework core)
-├── cells/        — Cell implementations (accesscore / auditcore / configcore / ordercell / devicecell)
-├── contracts/    — Cross-Cell boundary contracts ({kind}/{domain}/{version}/)
-├── journeys/     — Journey acceptance specs + status-board.yaml
+├── cells/        — Platform Cell implementations (accesscore / auditcore / configcore)
+├── contracts/    — Platform cross-Cell boundary contracts ({kind}/{domain}/{version}/)
+├── journeys/     — Platform Journey acceptance specs + status-board.yaml
 ├── runtime/      — HTTP middleware, auth, worker, observability, bootstrap
 ├── adapters/     — External system adapters (postgres / redis / rabbitmq / websocket / s3 / oidc)
 ├── pkg/          — Shared utilities (errcode / ctxkeys / httputil / query)
 ├── cmd/          — CLI (gocell validate [--strict] / scaffold / generate / check / verify)
-├── examples/     — Example projects (sso-bff / todo-order / iot-device)
+├── examples/     — Example projects; may include example-local cells/contracts/journeys
 ├── templates/    — Project templates (ADR / cell-design / contract-review / runbook / postmortem / grafana)
 └── generated/    — Tool-generated artifacts (indexes, derived views)
 ```

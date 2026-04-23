@@ -93,8 +93,8 @@ func TestCellDemoKeys_AreAllInWellKnownDemoKeys(t *testing.T) {
 	cellDemoKeys := []string{
 		"gocell-demo-AUDIT--CORE-key-32!!", // cells/auditcore/cell.go
 		"gocell-demo-CONFIG-CORE-key-32!!", // cells/configcore/cell.go
-		"gocell-demo-ORDER-CELL-key-32b!!", // cells/ordercell/cell.go
-		"gocell-demo-DEVICE-CELL-key-32!!", // cells/devicecell/cell.go
+		"gocell-demo-ORDER-CELL-key-32b!!", // examples/todoorder/cells/ordercell/cell.go
+		"gocell-demo-DEVICE-CELL-key-32!!", // examples/iotdevice/cells/devicecell/cell.go
 	}
 	wellKnownSet := make(map[string]bool, len(wellKnownDemoKeys))
 	for _, k := range wellKnownDemoKeys {

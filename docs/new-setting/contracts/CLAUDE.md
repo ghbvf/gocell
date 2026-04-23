@@ -1,10 +1,10 @@
 # contracts/ 层规则
 
-contracts/ 存放跨 Cell 边界契约，按 `{kind}/{domain-path}/{version}/` 组织。
+根 `contracts/` 存放平台跨 Cell 边界契约，按 `{kind}/{domain-path}/{version}/` 组织。示例专属契约放在 `examples/*/contracts/`，根目录执行 `gocell validate` 时会一并扫描。
 
 ## 修改后必做
 
-修改 `contracts/` 下任何文件后，**必须**运行：
+修改 `contracts/` 或 `examples/*/contracts/` 下任何文件后，**必须**运行：
 
 ```bash
 go run ./cmd/gocell validate

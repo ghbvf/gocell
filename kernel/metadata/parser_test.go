@@ -139,6 +139,80 @@ build:
 	}
 }
 
+func TestParser_ParseFS_ExampleMetadata(t *testing.T) {
+	fsys := fstest.MapFS{
+		"examples/todoorder/cells/ordercell/cell.yaml": &fstest.MapFile{Data: []byte(`id: ordercell
+type: core
+consistencyLevel: L2
+owner:
+  team: examples
+  role: order-owner
+schema:
+  primary: orders
+verify:
+  smoke:
+    - smoke.ordercell.startup
+`)},
+		"examples/todoorder/cells/ordercell/slices/ordercreate/slice.yaml": &fstest.MapFile{Data: []byte(`id: ordercreate
+belongsToCell: ordercell
+contractUsages:
+  - contract: http.order.create.v1
+    role: serve
+verify:
+  unit:
+    - unit.ordercreate.service
+  contract:
+    - contract.http.order.create.v1.serve
+allowedFiles:
+  - examples/todoorder/cells/ordercell/slices/ordercreate/**
+`)},
+		"examples/todoorder/contracts/http/order/create/v1/contract.yaml": &fstest.MapFile{Data: []byte(`id: http.order.create.v1
+kind: http
+ownerCell: ordercell
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: ordercell
+  clients:
+    - edge-bff
+`)},
+		"examples/todoorder/journeys/J-ordercreate.yaml": &fstest.MapFile{Data: []byte(`id: J-ordercreate
+goal: Create order
+owner:
+  team: examples
+  role: order-owner
+cells:
+  - ordercell
+contracts:
+  - http.order.create.v1
+passCriteria: []
+`)},
+	}
+
+	pm, err := NewParser("").ParseFS(fsys)
+	require.NoError(t, err)
+
+	cell := pm.Cells["ordercell"]
+	require.NotNil(t, cell)
+	assert.Equal(t, "ordercell", cell.Dir)
+	assert.Equal(t, "examples/todoorder/cells/ordercell/cell.yaml", cell.File)
+
+	slice := pm.Slices["ordercell/ordercreate"]
+	require.NotNil(t, slice)
+	assert.Equal(t, "ordercell", slice.CellDir)
+	assert.Equal(t, "ordercreate", slice.Dir)
+	assert.Equal(t, "examples/todoorder/cells/ordercell/slices/ordercreate/slice.yaml", slice.File)
+
+	contract := pm.Contracts["http.order.create.v1"]
+	require.NotNil(t, contract)
+	assert.Equal(t, "examples/todoorder/contracts/http/order/create/v1", contract.Dir)
+	assert.Equal(t, "examples/todoorder/contracts/http/order/create/v1/contract.yaml", contract.File)
+
+	journey := pm.Journeys["J-ordercreate"]
+	require.NotNil(t, journey)
+	assert.Equal(t, "examples/todoorder/journeys/J-ordercreate.yaml", journey.File)
+}
+
 func TestParseFS_FullProject(t *testing.T) {
 	p := NewParser("")
 	pm, err := p.ParseFS(fullProjectFS())

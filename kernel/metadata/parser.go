@@ -83,37 +83,32 @@ func (p *Parser) ParseFS(fsys fs.FS) (*ProjectMeta, error) {
 	return pm, nil
 }
 
-// matchCellYAML matches paths like cells/*/cell.yaml (exactly 3 segments).
+// matchCellYAML matches cells/*/cell.yaml and examples/*/cells/*/cell.yaml.
 func matchCellYAML(path string) bool {
-	parts := splitPath(path)
-	return len(parts) == 3 && parts[0] == "cells" && parts[2] == "cell.yaml"
+	_, ok := cellDirFromPath(path)
+	return ok
 }
 
-// matchSliceYAML matches paths like cells/*/slices/*/slice.yaml (exactly 5 segments).
+// matchSliceYAML matches cells/*/slices/*/slice.yaml and
+// examples/*/cells/*/slices/*/slice.yaml.
 func matchSliceYAML(path string) bool {
-	parts := splitPath(path)
-	return len(parts) == 5 && parts[0] == "cells" && parts[2] == "slices" && parts[4] == "slice.yaml"
+	_, _, ok := sliceDirsFromPath(path)
+	return ok
 }
 
-// matchContractYAML matches paths like contracts/{kind}/{...}/{version}/contract.yaml.
+// matchContractYAML matches paths like contracts/{kind}/{...}/{version}/contract.yaml
+// and examples/*/contracts/{kind}/{...}/{version}/contract.yaml.
 // The path must start with "contracts/" and end with "contract.yaml", with at least
 // 4 segments between (kind + at least one domain segment + version).
 func matchContractYAML(path string) bool {
-	parts := splitPath(path)
-	if len(parts) < 5 {
-		return false
-	}
-	return parts[0] == "contracts" && parts[len(parts)-1] == "contract.yaml"
+	_, ok := contractDirFromPath(path)
+	return ok
 }
 
-// matchJourneyYAML matches paths like journeys/J-*.yaml (exactly 2 segments).
+// matchJourneyYAML matches journeys/J-*.yaml and examples/*/journeys/J-*.yaml.
 func matchJourneyYAML(path string) bool {
-	parts := splitPath(path)
-	if len(parts) != 2 || parts[0] != "journeys" {
-		return false
-	}
-	name := parts[1]
-	return strings.HasPrefix(name, "J-") && strings.HasSuffix(name, ".yaml")
+	_, ok := journeyIDFromPath(path)
+	return ok
 }
 
 // matchAssemblyYAML matches paths like assemblies/*/assembly.yaml (exactly 3 segments).
@@ -127,6 +122,56 @@ func splitPath(path string) []string {
 	// Normalise to forward slashes for consistent matching.
 	clean := filepath.ToSlash(path)
 	return strings.Split(clean, "/")
+}
+
+func cellDirFromPath(path string) (string, bool) {
+	parts := splitPath(path)
+	if len(parts) == 3 && parts[0] == "cells" && parts[2] == "cell.yaml" {
+		return parts[1], true
+	}
+	if len(parts) == 5 && parts[0] == "examples" && parts[2] == "cells" && parts[4] == "cell.yaml" {
+		return parts[3], true
+	}
+	return "", false
+}
+
+func sliceDirsFromPath(path string) (cellDir, sliceDir string, ok bool) {
+	parts := splitPath(path)
+	if len(parts) == 5 && parts[0] == "cells" && parts[2] == "slices" && parts[4] == "slice.yaml" {
+		return parts[1], parts[3], true
+	}
+	if len(parts) == 7 && parts[0] == "examples" && parts[2] == "cells" && parts[4] == "slices" && parts[6] == "slice.yaml" {
+		return parts[3], parts[5], true
+	}
+	return "", "", false
+}
+
+func contractDirFromPath(path string) (string, bool) {
+	parts := splitPath(path)
+	if len(parts) >= 5 && parts[0] == "contracts" && parts[len(parts)-1] == "contract.yaml" {
+		return strings.Join(parts[:len(parts)-1], "/"), true
+	}
+	if len(parts) >= 7 && parts[0] == "examples" && parts[2] == "contracts" && parts[len(parts)-1] == "contract.yaml" {
+		return strings.Join(parts[:len(parts)-1], "/"), true
+	}
+	return "", false
+}
+
+func journeyIDFromPath(path string) (string, bool) {
+	parts := splitPath(path)
+	var name string
+	switch {
+	case len(parts) == 2 && parts[0] == "journeys":
+		name = parts[1]
+	case len(parts) == 4 && parts[0] == "examples" && parts[2] == "journeys":
+		name = parts[3]
+	default:
+		return "", false
+	}
+	if !strings.HasPrefix(name, "J-") || !strings.HasSuffix(name, ".yaml") {
+		return "", false
+	}
+	return strings.TrimSuffix(name, ".yaml"), true
 }
 
 // --- individual parsers ---
@@ -146,9 +191,9 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	}
 	// Record the real filesystem directory so strict rules (REF-04) can
 	// compare it against m.ID instead of self-comparing against the map key.
-	// matchCellYAML guarantees len(parts) == 3 && parts[0] == "cells".
-	parts := splitPath(path)
-	m.Dir = parts[1]
+	cellDir, _ := cellDirFromPath(path)
+	m.Dir = cellDir
+	m.File = path
 	if _, exists := pm.Cells[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate cell ID %q: %s and previous", m.ID, path))
@@ -176,11 +221,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	}
 
 	// G-7: auto-derive belongsToCell from path.
-	// matchSliceYAML guarantees len(parts)==5 && parts[0]=="cells",
-	// so parts[1] is always the cellID and parts[3] is the slice directory.
-	parts := splitPath(path)
-	cellID := parts[1]
-	sliceDir := parts[3]
+	cellID, sliceDir, _ := sliceDirsFromPath(path)
 
 	if m.BelongsToCell == "" {
 		m.BelongsToCell = cellID
@@ -196,6 +237,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	// governance gate.
 	m.Dir = sliceDir
 	m.CellDir = cellID
+	m.File = path
 
 	key := cellID + "/" + m.ID
 	if _, exists := pm.Slices[key]; exists {
@@ -228,6 +270,8 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if m.OwnerCell == "" {
 		m.OwnerCell = m.ProviderEndpoint()
 	}
+	m.Dir, _ = contractDirFromPath(path)
+	m.File = path
 
 	if _, exists := pm.Contracts[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -250,6 +294,7 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("journey id is empty in %s", path))
 	}
+	m.File = path
 	if _, exists := pm.Journeys[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate journey ID %q: %s and previous", m.ID, path))
@@ -276,6 +321,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	// parts[0]=="assemblies", so parts[1] is always the assembly directory.
 	parts := splitPath(path)
 	m.Dir = parts[1]
+	m.File = path
 	if _, exists := pm.Assemblies[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate assembly ID %q: %s and previous", m.ID, path))
