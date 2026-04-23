@@ -11,10 +11,11 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/initialadmin"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/worker"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -59,13 +60,45 @@ func newCellFixedSource() *fixedReaderForCell {
 	return &fixedReaderForCell{data: b}
 }
 
+// spinLifecycle simulates bootstrap phase3b: constructs a bootstrap.Lifecycle,
+// registers AccessCore's LifecycleHooks into it, and calls Start. The returned
+// stop function triggers Stop when called (safe to defer). If Start fails,
+// startErr is non-nil and stop is still safe to call.
+func spinLifecycle(t *testing.T, ctx context.Context, ac *AccessCore) (stop func(), startErr error) {
+	t.Helper()
+	lc := bootstrap.NewLifecycle(bootstrap.LifecycleConfig{})
+	for _, hook := range ac.LifecycleHooks() {
+		if err := lc.Append(bootstrap.Hook{
+			Name:         hook.Name,
+			OnStart:      hook.OnStart,
+			OnStop:       hook.OnStop,
+			StartTimeout: hook.StartTimeout,
+			StopTimeout:  hook.StopTimeout,
+		}); err != nil {
+			t.Fatalf("spinLifecycle: Append failed: %v", err)
+		}
+	}
+	startErr = lc.Start(ctx)
+	stop = func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = lc.Stop(stopCtx)
+	}
+	return stop, startErr
+}
+
+func testDeps() cell.Dependencies {
+	return cell.Dependencies{
+		Config:         make(map[string]any),
+		DurabilityMode: cell.DurabilityDemo,
+	}
+}
+
 // newTestCellWithBootstrap constructs a fully wired AccessCore using mem repos
-// and the provided bootstrap options. The sink parameter (if non-nil) is wired
-// via WithBootstrapWorkerSink.
+// and the provided bootstrap options.
 func newTestCellWithBootstrap(
 	t *testing.T,
-	bootstrapOpts []InitialAdminOption,
-	sink func(worker.Worker),
+	bootstrapOpts []initialadmin.LifecycleOption,
 ) *AccessCore {
 	t.Helper()
 	opts := []Option{
@@ -79,76 +112,69 @@ func newTestCellWithBootstrap(
 	if len(bootstrapOpts) > 0 {
 		opts = append(opts, WithInitialAdminBootstrap(bootstrapOpts...))
 	}
-	if sink != nil {
-		opts = append(opts, WithBootstrapWorkerSink(sink))
-	}
 	return NewAccessCore(opts...)
 }
 
-func testDeps() cell.Dependencies {
-	return cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-	}
-}
-
-// TestInit_WithInitialAdminBootstrap_RegistersCleanerViaSink verifies that when
-// no admin exists, bootstrap runs successfully and the sink receives a non-nil
-// worker.
-func TestInit_WithInitialAdminBootstrap_RegistersCleanerViaSink(t *testing.T) {
+// TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered verifies that when
+// no admin exists, bootstrap runs successfully via spinLifecycle and the hook
+// name matches the expected constant.
+func TestInit_WithInitialAdminBootstrap_LifecycleHookRegistered(t *testing.T) {
 	dir := t.TempDir()
 
-	var receivedWorkers []worker.Worker
-	sink := func(w worker.Worker) { receivedWorkers = append(receivedWorkers, w) }
-
-	bootstrapOpts := []InitialAdminOption{
-		WithBootstrapCredentialPath(filepath.Join(dir, "initial_admin_password")),
-		WithBootstrapTTL(time.Hour),
-		withBootstrapPasswordSource(newCellFixedSource()),
+	bootstrapOpts := []initialadmin.LifecycleOption{
+		initialadmin.WithCredentialPath(filepath.Join(dir, "initial_admin_password")),
+		initialadmin.WithTTL(time.Hour),
+		initialadmin.WithPasswordSourceForTesting(newCellFixedSource()),
+		initialadmin.WithPasswordHasher(initialadmin.BcryptHasher{Cost: 4}),
 	}
 
-	c := newTestCellWithBootstrap(t, bootstrapOpts, sink)
-	require.NoError(t, c.Init(context.Background(), testDeps()))
+	ac := newTestCellWithBootstrap(t, bootstrapOpts)
+	require.NoError(t, ac.Init(context.Background(), testDeps()))
 
-	require.Len(t, receivedWorkers, 1, "sink must receive exactly one cleaner worker")
-	assert.NotNil(t, receivedWorkers[0])
-}
+	hooks := ac.LifecycleHooks()
+	require.Len(t, hooks, 1, "WithInitialAdminBootstrap must contribute exactly one hook")
+	assert.Equal(t, "accesscore.initial-admin-bootstrap", hooks[0].Name)
 
-// TestInit_BootstrapMissingSink_FailsFast verifies that Init returns an error
-// when WithInitialAdminBootstrap is set without WithBootstrapWorkerSink.
-func TestInit_BootstrapMissingSink_FailsFast(t *testing.T) {
-	dir := t.TempDir()
-	bootstrapOpts := []InitialAdminOption{
-		WithBootstrapCredentialPath(filepath.Join(dir, "initial_admin_password")),
-		WithBootstrapTTL(time.Hour),
-		withBootstrapPasswordSource(newCellFixedSource()),
-	}
-	// No sink provided.
-	c := newTestCellWithBootstrap(t, bootstrapOpts, nil)
-	err := c.Init(context.Background(), testDeps())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "WithBootstrapWorkerSink")
+	// spinLifecycle uses a cancellable context so the cleaner's Start() returns
+	// promptly once we cancel (no need to wait for real TTL).
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stopCh := make(chan struct{})
+	var startErr error
+	go func() {
+		defer close(stopCh)
+		var stop func()
+		stop, startErr = spinLifecycle(t, ctx, ac)
+		defer stop()
+		// wait for test to cancel
+		<-ctx.Done()
+	}()
+
+	// Give start time to reach cleaner.Start then cancel to unblock.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-stopCh
+	require.NoError(t, startErr)
 }
 
 // TestInit_BootstrapDefaultBehaviorIsNoop verifies that when
 // WithInitialAdminBootstrap is NOT set, Init succeeds without creating any
-// user and without calling the sink.
+// user and LifecycleHooks returns nil.
 func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 	userRepo := mem.NewUserRepository()
-	var sinkCalled bool
 
-	c := NewAccessCore(
+	ac := NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
 		WithPublisher(noopPublisher{}),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithBootstrapWorkerSink(func(w worker.Worker) { sinkCalled = true }),
 	)
-	require.NoError(t, c.Init(context.Background(), testDeps()))
+	require.NoError(t, ac.Init(context.Background(), testDeps()))
 
-	assert.False(t, sinkCalled, "sink must not be called when bootstrap is not configured")
+	assert.Nil(t, ac.LifecycleHooks(), "LifecycleHooks must return nil when bootstrap is not configured (opt-out)")
 
 	// No users should exist in the repo.
 	_, err := userRepo.GetByUsername(context.Background(), "admin")
@@ -156,8 +182,8 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 }
 
 // TestInit_BootstrapAlreadyHasAdmin_NilCleaner verifies that when an admin
-// already exists and no orphan cred file is present, bootstrap is a no-op and
-// the sink is not called.
+// already exists and no orphan cred file is present, spinLifecycle succeeds
+// without blocking (no cleaner assigned).
 func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 	dir := t.TempDir()
 	userRepo := mem.NewUserRepository()
@@ -174,16 +200,14 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 	_, err = roleRepo.AssignToUser(context.Background(), adminUser.ID, domain.RoleAdmin)
 	require.NoError(t, err)
 
-	var sinkCalled bool
-	sink := func(w worker.Worker) { sinkCalled = true }
-
-	bootstrapOpts := []InitialAdminOption{
-		WithBootstrapCredentialPath(filepath.Join(dir, "initial_admin_password")),
-		WithBootstrapTTL(time.Hour),
-		withBootstrapPasswordSource(newCellFixedSource()),
+	bootstrapOpts := []initialadmin.LifecycleOption{
+		initialadmin.WithCredentialPath(filepath.Join(dir, "initial_admin_password")),
+		initialadmin.WithTTL(time.Hour),
+		initialadmin.WithPasswordSourceForTesting(newCellFixedSource()),
+		initialadmin.WithPasswordHasher(initialadmin.BcryptHasher{Cost: 4}),
 	}
 
-	c := NewAccessCore(
+	ac := NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(roleRepo),
@@ -191,22 +215,24 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithInitialAdminBootstrap(bootstrapOpts...),
-		WithBootstrapWorkerSink(sink),
 	)
-	require.NoError(t, c.Init(context.Background(), testDeps()))
+	require.NoError(t, ac.Init(context.Background(), testDeps()))
 
-	assert.False(t, sinkCalled, "sink must not be called when admin already exists (bootstrap silent skip)")
+	// Admin already exists and no orphan file → spinLifecycle returns immediately.
+	stop, startErr := spinLifecycle(t, context.Background(), ac)
+	defer stop()
+	require.NoError(t, startErr, "bootstrap must silently skip when admin already exists")
 }
 
 // TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered verifies
 // P1-16 full fix: when adminExists==true AND a fresh (not-yet-expired) orphan
-// credential file is present, Sweep returns a Cleaner worker and the sink is
-// called with that worker so the runtime can clean up after the remaining TTL.
+// credential file is present, the lifecycle hook starts a sweep cleaner and the
+// fresh orphan file is retained (Cleaner removes it only after its TTL fires).
 //
 // Execution path under test:
 //  1. Sweep finds fresh orphan → returns sweepCleaner (non-nil)
 //  2. EnsureAdmin sees admin already exists → returns (nil, nil)
-//  3. runInitialAdminBootstrap routes to sweepCleaner → sink(sweepCleaner)
+//  3. Lifecycle.start routes to sweepCleaner → cleaner.Start(ctx)
 func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *testing.T) {
 	dir := t.TempDir()
 	credPath := filepath.Join(dir, "initial_admin_password")
@@ -225,20 +251,16 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 	require.NoError(t, err)
 
 	// Write a fresh orphan credential file (expires_at = now + 30m).
-	// This simulates a prior run where the cleaner was never started because
-	// adminExists was true and the old code did not register any cleaner.
 	require.NoError(t, writeFreshOrphanFile(t, credPath, 30*time.Minute))
 
-	var receivedWorkers []worker.Worker
-	sink := func(w worker.Worker) { receivedWorkers = append(receivedWorkers, w) }
-
-	bootstrapOpts := []InitialAdminOption{
-		WithBootstrapCredentialPath(credPath),
-		WithBootstrapTTL(time.Hour),
-		withBootstrapPasswordSource(newCellFixedSource()),
+	bootstrapOpts := []initialadmin.LifecycleOption{
+		initialadmin.WithCredentialPath(credPath),
+		initialadmin.WithTTL(time.Hour),
+		initialadmin.WithPasswordSourceForTesting(newCellFixedSource()),
+		initialadmin.WithPasswordHasher(initialadmin.BcryptHasher{Cost: 4}),
 	}
 
-	c := NewAccessCore(
+	ac := NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(roleRepo),
@@ -246,35 +268,52 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithInitialAdminBootstrap(bootstrapOpts...),
-		WithBootstrapWorkerSink(sink),
 	)
-	require.NoError(t, c.Init(context.Background(), testDeps()))
+	require.NoError(t, ac.Init(context.Background(), testDeps()))
 
-	// P1-16: the sink must be called with the sweepCleaner so the orphan file
-	// is removed after its remaining TTL, even though EnsureAdmin was a no-op.
-	require.Len(t, receivedWorkers, 1, "sink must receive exactly one sweep-cleaner worker for fresh orphan file")
-	assert.NotNil(t, receivedWorkers[0], "sweep-cleaner worker must be non-nil")
+	hooks := ac.LifecycleHooks()
+	require.Len(t, hooks, 1)
 
-	// The fresh orphan file must still be present (not yet expired — Cleaner
-	// removes it only after its TTL fires, which is runtime behaviour).
+	// Use cancellable ctx: the sweep cleaner blocks in Start until ctx.Done or TTL.
+	ctx, cancel := context.WithCancel(context.Background())
+
+	stopCh := make(chan error, 1)
+	var stop func()
+	go func() {
+		var sErr error
+		stop, sErr = spinLifecycle(t, ctx, ac)
+		stopCh <- sErr
+	}()
+
+	// Wait for cleaner.Start to be reached (cleaner assigned inside start()).
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+
+	startErr := <-stopCh
+	if stop != nil {
+		stop()
+	}
+	require.NoError(t, startErr)
+
+	// P1-16: the fresh orphan file must still be present (not yet expired).
 	_, statErr := os.Stat(credPath)
 	assert.NoError(t, statErr, "fresh orphan file must be retained; Cleaner removes it at runtime after TTL")
 }
 
 // TestInit_BootstrapUser_HasPasswordResetRequired verifies that the bootstrap
-// user has PasswordResetRequired=true after Init.
+// user has PasswordResetRequired=true after the lifecycle hook runs.
 func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 	dir := t.TempDir()
 	userRepo := mem.NewUserRepository()
 
-	bootstrapOpts := []InitialAdminOption{
-		WithBootstrapCredentialPath(filepath.Join(dir, "initial_admin_password")),
-		WithBootstrapTTL(time.Hour),
-		withBootstrapPasswordSource(newCellFixedSource()),
+	bootstrapOpts := []initialadmin.LifecycleOption{
+		initialadmin.WithCredentialPath(filepath.Join(dir, "initial_admin_password")),
+		initialadmin.WithTTL(time.Hour),
+		initialadmin.WithPasswordSourceForTesting(newCellFixedSource()),
+		initialadmin.WithPasswordHasher(initialadmin.BcryptHasher{Cost: 4}),
 	}
 
-	var receivedWorker worker.Worker
-	c := NewAccessCore(
+	ac := NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
@@ -282,10 +321,27 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithInitialAdminBootstrap(bootstrapOpts...),
-		WithBootstrapWorkerSink(func(w worker.Worker) { receivedWorker = w }),
 	)
-	require.NoError(t, c.Init(context.Background(), testDeps()))
-	assert.NotNil(t, receivedWorker)
+	require.NoError(t, ac.Init(context.Background(), testDeps()))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stopCh := make(chan struct{})
+	var startErr error
+	go func() {
+		defer close(stopCh)
+		stop, sErr := spinLifecycle(t, ctx, ac)
+		startErr = sErr
+		defer stop()
+		<-ctx.Done()
+	}()
+
+	// Give cleaner time to start, then cancel.
+	time.Sleep(50 * time.Millisecond)
+	cancel()
+	<-stopCh
+	require.NoError(t, startErr)
 
 	user, err := userRepo.GetByUsername(context.Background(), "admin")
 	require.NoError(t, err)

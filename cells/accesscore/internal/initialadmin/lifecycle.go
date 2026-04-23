@@ -72,6 +72,16 @@ func withPasswordSource(r io.Reader) LifecycleOption {
 	return func(l *Lifecycle) { l.cfg.PasswordSource = r }
 }
 
+// WithPasswordSourceForTesting overrides the entropy source used to generate
+// the initial-admin password. For testing only; production uses crypto/rand.Reader.
+//
+// Exposed (rather than unexported withPasswordSource) so that cell-level tests
+// in package accesscore can inject a deterministic source without crossing the
+// internal/ boundary via an unexported symbol.
+func WithPasswordSourceForTesting(r io.Reader) LifecycleOption {
+	return func(l *Lifecycle) { l.cfg.PasswordSource = r }
+}
+
 // WithScheduler overrides the cleanup scheduler (tests use fakeScheduler).
 func WithScheduler(s Scheduler) LifecycleOption { return func(l *Lifecycle) { l.cfg.Scheduler = s } }
 
