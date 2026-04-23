@@ -1,8 +1,8 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/202604180035-backlog-pre-cleanup.md`。
-> 更新日期: 2026-04-21（pg-pilot 计划全部完成：R1e PR#205 + R2a PR#207 + R2b PR#209 + L0 PR#210）
-> 基线: develop@b208c55（PR#210 合并后）
+> 更新日期: 2026-04-23（30-agent 六层扫描核实，14 项标记已解决：L1/L2/L4/L6/K2/A1/A2/S5/S6/S7/S10/S11/S18/S20）
+> 基线: develop@76d918a（PR#220 合并后）
 > 最近合入概览: PR#175-210 分层重构 + auth F系列 + configcore PG pilot 全系（R1a-R1e + R2a/R2b）+ L0 安全修复全部完成；pg-pilot plan 完结；详见 git log
 > 未��入外部 PR: PR#129 Sentinel DSN redaction / PR#130 Bolt journey catalog
 > 标记说明:
@@ -16,7 +16,7 @@
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
 | ~~L0~~ | ~~**SERVICE-SECRET-REJECT-DEMO-01**~~ ✅ PR#210 合入（`internalGuardFromEnv` 对 current/previous secret 调用 `rejectDemoKey` + 测试覆盖） | — | — | — |
-| L1 | **AUDIT-ROUTE-POLICY-01** (Cx2): `cells/auditcore/cell.go:241` 裸挂 `http.HandlerFunc(c.queryHandler.HandleQuery)`，`auditQueryPolicy` 未经 `auth.Secured()` 包装，非 admin 用户可横向读取他人审计记录。**修复**：`handler.go` 新增 `RegisterRoutes(mux cell.RouteMux)`，内部调用 `auth.Secured(h.HandleQuery, auditQueryPolicy)`；`cell.go` 改为 `c.queryHandler.RegisterRoutes(sub)`；补 401/403/200/admin 跨用户四条测试。 | 2h | `cells/auditcore/cell.go` + `cells/auditcore/slices/auditquery/handler.go` + `handler_test.go` | 2026-04-20 分层审查 |
+| ~~L1~~ | ~~**AUDIT-ROUTE-POLICY-01**~~ ✅ `handler.go:74` `RegisterRoutes` + `auth.Policy(auditQueryPolicy)` 已实现；`FinalizeAuth` 全链路覆盖（2026-04-23 核实） | — | — | — |
 
 ---
 
@@ -30,9 +30,9 @@
 | ~~S2~~ | ~~**MASTER-KEY-REJECT-DEMO-01**~~ ✅ PR#207 合入 | — | — | — |
 | S-nonce | **SERVICE-TOKEN-NONCE-STORE-01** (Cx2, **P1 安全**, 🟠 条件延后，多 pod 生产部署前触发): `NewServiceTokenAuthenticator` 默认 NonceStore=nil（`authenticator.go:130`），生产 wiring `main.go:340` 未传 `WithNonceStore`，`SharedDeps.Validate()` 也不检查。5 分钟窗口内 ServiceToken 可无限重放。**修复**：real 模式强制注入 NonceStore（需 Redis 依赖）；未配置则启动失败；补 replay 集成测试。**前置**：需 Redis NonceStore 实现（adapters/redis/） | 3h | `runtime/auth/authenticator.go` + `cmd/corebundle/main.go` + `cmd/corebundle/shared_deps.go` | PR#209 合并后审查 |
 | S4b | **VAULT-TOKEN-STATIC-REAL-GUARD-01** (Cx1, **P1 安全**, 🟠 条件延后，多 pod 生产部署前触发): `adapters/vault/transit_provider.go` `adapterMode=real` 时仍允许静态 VAULT_TOKEN 运行，生产应要求 AppRole/K8s auth（自带续期 + 最小权限）。**修复**：新增 `authMode` option；real 模式 + static token → `errcode.ErrVaultAuthFailed`；与 A14（AppRole/K8s auth）+ **VAULT-RENEWAL-DEGRADATION-GAUGE**（静默降级不可观测）合并实施。来源：R1c(PR#204) 审查 §10 | 1h | `adapters/vault/transit_provider.go` | R1c(PR#204) 追加审查 |
-| L2 | **ROUTE-POLICY-REGISTRY-01** (Cx3, 前置 L1): 无法在编译/启动期发现"路由注册但无策略"，L1 类问题可再次出现。**修复**：`runtime/http/router/policy_registry.go` 新增 `PolicyRegistry`（`RecordSecured(method, path)` + `Verify(registeredRoutes, whitelist) error`）；`runtime/bootstrap/bootstrap.go` 启动期调用 `Verify`，发现裸路由直接 `return error`。白名单格式复用 L3 统一后的 `parseEndpointRule`。 | 5h | `runtime/http/router/policy_registry.go`（新）+ `runtime/bootstrap/bootstrap.go` | 2026-04-20 分层审查 |
-| L4 | **ID-VALIDATION-SINGLE-SOURCE-01** (Cx2): `runtime/http/middleware/request_id.go` 有 `maxRequestIDLen=128` + `isSafeID()` 校验；`kernel/outbox/observability_metadata.go` 恢复路径无长度/字符集校验，两条路径规则不一致。**修复**：新增 `pkg/idutil/id.go`（`MaxIDLen=128`, `IsSafeID(s string) bool`）；`runtime/http/middleware/request_id.go` + `kernel/outbox/observability_metadata.go` 均改为引用 `pkg/idutil`，单一事实源。 | 2h | `pkg/idutil/id.go`（新）+ `runtime/http/middleware/request_id.go` + `kernel/outbox/observability_metadata.go` | 2026-04-20 分层审查 |
-| L6 | **CONTRACTTEST-MODEL-ALIGN-01** (Cx3): `pkg/contracttest` 自定义 schema 解析结构，与 `kernel/metadata` 元模型不一致，`schemaRefs.Extra` 等扩展键在 contracttest 路径静默丢失。`pkg/` 不可依赖 `kernel/`，需共享类型落在 `pkg/`。**修复**：新增 `pkg/contracts/schema_types.go`（共享 schema 结构体）；`pkg/contracttest/contracttest.go` 引用共享类型；`kernel/metadata/` 中对应本地定义替换为 `pkg/contracts` 引用；补解析一致性测试。 | 3h | `pkg/contracts/schema_types.go`（新）+ `pkg/contracttest/contracttest.go` + `kernel/metadata/` | 2026-04-20 分层审查 |
+| ~~L2~~ | ~~**ROUTE-POLICY-REGISTRY-01**~~ ✅ `runtime/http/router/policy_coverage.go` 实现路由-策略覆盖校验；`router.go:FinalizeAuth()` 调用 `verifyPolicyCoverage()`；bootstrap phase 注册时即强制覆盖（2026-04-23 核实） | — | — | — |
+| ~~L4~~ | ~~**ID-VALIDATION-SINGLE-SOURCE-01**~~ ✅ `pkg/idutil/id.go` 已建（`MaxHTTPIDLen`、`IsSafeID`），统一事实源（2026-04-23 核实） | — | — | — |
+| ~~L6~~ | ~~**CONTRACTTEST-MODEL-ALIGN-01**~~ ✅ `pkg/contracts/schema_types.go` 已建（`SchemaRef`/`SchemaRefs` 共享结构体），一致性测试已覆盖（2026-04-23 核实） | — | — | — |
 | L7-FMT15b | **CONFIG-GET-DUAL-MODE-SPLIT-01** (Cx2): `contracts/http/config/get/v1/response.schema.json` 用 `oneOf` 同时描述单条和列表两种响应，而合约路径 `GET /api/v1/config/{key}` 只应返回单条。FMT-15 unsupported-combinator 检查（PR#214）对此发 Warning。**修复**：(1) 将 response.schema.json 简化为纯单条响应（去掉 list 分支）；(2) 若列表端点存在，补建 `http.config.list.v1` 合约 + schema；(3) 同步更新 configread/slice.yaml contractUsages + contract_test。 | 2h | `contracts/http/config/get/v1/` + `cells/configcore/slices/configread/` | PR#214 review |
 | ~~L7-FMT15~~ | ~~**FMT15-NEXTCURSOR-ENFORCE-01**~~ ✅ PR#214 合入（`hasNextCursorProperty` + `parseListSchemaInfo` + `checkFMT15Contract`；tests: missingBoth/missingNextCursor/null-property；contracts/http/auth/role/list/v1 补 nextCursor 声明）| — | — | — |
 | L7 | **EXAMPLES-STARTUP-SMOKE-01** (Cx1, 🟡 可延后): 2026-04-22 复查确认所有 `NewCursorCodec` 字面量均 ≥ 32 字节（审计文档的"30/31 字节"系误数）。**唯一剩余 TODO**：CI 没有独立的 examples startup smoke job；`examples/ssobff` 当前仅在 integration tag 下跑 walkthrough test，`main()` 真实启动路径无单独验证（若启动依赖顺序或 option wiring 回归，CI 无法检测）。**修复**：`.github/workflows/ci.yml` 新增 `examples-smoke` job：`timeout 5s go run ./examples/ssobff 2>&1` 期望进入 ready 状态后 ctx cancel 退出（或等价 testable entrypoint）。 | 0.5h | `.github/workflows/ci.yml` | 2026-04-20 发现；2026-04-22 cursor key 误报核销，缩减范围 |
@@ -46,7 +46,7 @@
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
 | ~~K1~~ | ~~**METADATA-PROJECTLOC-IFACE-01**~~ ❌ **won't do**：原始问题（yaml.v3 AST 对外泄漏）已由 PR#212 通过私有化 `fileNodes` + 公开 `Locate()`/`PrepareFileNode()`/`HasFileNodes()` 方法解决，接口方案被更优雅的实现替代。提取接口无增量价值：`governance` 同时依赖 `ProjectMeta` 的 5 个数据字段（`Cells/Slices/Contracts/Assemblies/Actors`）和位置方法，接口只能覆盖位置部分，会导致持有两个依赖反而更复杂；且 `governance` 是 module 内部消费者，无 mock 隔离需求。 | ~~3h~~ | ~~`kernel/metadata/`~~ | PR#152 seat-1 → 关闭 |
-| K2 | **OBS-RELAY-REGISTER-ATOMIC-01** (Cx3, 🟡 可延后): `outbox.NewProviderRelayCollector` 5 个 metric 原子注册，需 `Provider.Unregister` 支持或文档化契约 | 2h | `kernel/outbox/` + `kernel/observability/metrics/` | PR#157 review S3-05 |
+| ~~K2~~ | ~~**OBS-RELAY-REGISTER-ATOMIC-01**~~ ✅ `relay_collector.go:81-91` 含 LIFO unregister 回滚循环，部分失败可原子回退（2026-04-23 核实） | — | — | — |
 | ~~R1~~ | ~~**BOOTSTRAP-RUN-COGNIT-01**~~ ✅ PR#200/#202/#203/#204（R1a ManagedResource+Worker→kernel + R1b KeyProvider→kernel/crypto + R1c Vault envelope encryption+adapters/vault 迁移 + R1d CellModule+BuildApp 四步完成）: ~~`bootstrap.go::Run()` 认知复杂度 225（`//nolint:gocognit` 抑制），拆 `validateOptions()` / `buildRouter()` / `startServers()` 三段式~~ | ~~4h~~ | ~~`runtime/bootstrap/bootstrap.go`~~ | PR#163 agent 报告 |
 | R2 | **OBS-HTTP-COLLECTOR-AUTOWIRE-01** (Cx3, 🟡 可延后): `bootstrap.WithMetricsProvider` 自动为默认 HTTP 中间件构造 `NewProviderCollector`；设计 `WithHTTPCollectorCellID` option | 2h | `runtime/bootstrap/bootstrap.go` + `runtime/http/middleware/` | PR#157 review S4-01 |
 | R3 | **OB-02** (🟡 可延后): safe_observe broken logger 注入测试 | 1h | `runtime/http/middleware/safe_observe_test.go` | 历史 backlog 0-J |
@@ -56,8 +56,8 @@
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| A1 | **READYZ-BROKER-HEALTH-01** (Cx3): `Connection.Health() error` + bootstrap health checker 自动注册；`WithBrokerHealth(opts...)` 开关。对标 K8s readiness probe | 2h | `adapters/rabbitmq/connection.go` + `runtime/bootstrap/` + `runtime/http/health/` | 2026-04-18 外部审查 |
-| A2 | **P4-TD-05** (🟡 可延后): outbox 全链路 3-container 集成测试（PG+RMQ+app） | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review |
+| ~~A1~~ | ~~**READYZ-BROKER-HEALTH-01**~~ ✅ `connection.go:596-627` `Health(ctx) error` 已实现；bootstrap 通过 `WithBrokerHealth()` 接入（2026-04-23 核实） | — | — | — |
+| ~~A2~~ | ~~**P4-TD-05**~~ ✅ `tests/integration/outbox_fullchain_test.go` 已建（PG+RMQ+Redis 3-container）（2026-04-23 核实） | — | — | — |
 | A7 | **POOLSTATS-IFACE-01** (🟡 可延后): 三个 adapter PoolStats 公共接口（OTel collector 消费） | 1h | `adapters/postgres/pool.go` + `redis/client.go` + `rabbitmq/connection.go` | PR#134 review |
 | A8 | **CI-DIGEST-01** (🟡 可延后): testcontainers 镜像 tag+digest 双固定 | 1h | `adapters/*/integration_test.go` | PR#139 review |
 | A9 | **CI-LINT-PIN-01** (🟡 可延后): golangci-lint patch 级固定 + dependabot | 1h | `.github/workflows/ci.yml` | PR#139 review |
@@ -80,17 +80,17 @@
 |---|------|------|------|------|
 | S2-follow | **CONTRACT-ERROR-SCHEMA-EXTEND-01** (P2, Cx1, 🟡 可延后): 其余 HTTP contract (config/write、config/get、auth/login 等) 补充 401/403 responses 声明，使错误响应 schema 覆盖全库所有受保护端点 | 2h | `contracts/http/**/{publish,get,write,flags}/v*/contract.yaml` | PR-CONFIG-POLISH 后续 |
 | S4 | **EVENT-PAYLOAD-TYPED-01** (Cx2): sessionlogin/sessionlogout/configwrite/configpublish/auditappend/auditverify 事件 payload `map[string]any` → typed event struct | 3h | 6 个 `service.go` + event contract schemas | PR#133 re-review |
-| S5 | **RBAC-REVOKE-POST-01** (🟡 可延后): `DELETE /internal/v1/access/roles/revoke` 改为 `POST` 避免 DELETE body 代理兼容问题 | 1h | `cells/accesscore/slices/rbacassign/handler.go` + `contracts/http/auth/role/revoke/v1/contract.yaml` | PR#143 review 6.2 |
-| S6 | **RBAC-LAST-ADMIN-GUARD**: `service.Revoke` 检查剩余 admin 数量；`ports.RoleRepository` 新增 `CountByRole` | 1h | `cells/accesscore/slices/rbacassign/service.go` + `ports/` | PR#143 review 2.3 |
-| S7 | **VALIDATE-EVIDENCE-CI-01** (Cx2, 根治声明-代码漂移): CI 新增独立 `metadata-check` job（`gocell validate` + `check contract-health`），失败阻断 PR | 1h | `.github/workflows/ci.yml` + PR template | PR#155 review F7 |
-| S10 | **MODE-SEMANTIC-SPLIT-01** (Cx2, 🟡 可延后): 读路径 `query.RunMode`（cursor 容错）与写路径 `configpublish.WithRunMode`（publisher fail-open）当前共用同一枚举，为后续任一方向演进埋下耦合。保留"Init 单点翻译"前提，新增写路径独立类型（如 `configpublish.PublishFailureMode` with `FailClosed`/`FailOpen`），Cell Init 并行映射 `DurabilityMode → (RunMode, PublishFailureMode)` 后注入。触发条件：任一方向需要新增非二元模式值时。对标 Uber fx Provide/Decorate — 每个决策独立类型注入。 | 3h | `pkg/query/runmode.go` + `cells/configcore/slices/configpublish/service.go` + 4 处 `cell.go` Init | PR#167 round-2 review（finding 3 改进项，发现时建议暂缓） |
-| S11 | **CONFIG-CORE-INIT-COGNIT-01** (Cx3, 🟡 可延后): `cell.go::Init()` 认知复杂度 19（`//nolint:gocognit` 临时抑制）；拆 `validateDeps()` / `buildCursorCodec()` / per-slice builder 三段式，降至 ≈9。来源：PR#168 /fix 诊断 | 3h | `cells/configcore/cell.go` | PR#168 发现（nolint 临时静音） |
+| ~~S5~~ | ~~**RBAC-REVOKE-POST-01**~~ ✅ `handler.go:62` revoke 路由已声明为 `POST`（2026-04-23 核实） | — | — | — |
+| ~~S6~~ | ~~**RBAC-LAST-ADMIN-GUARD**~~ ✅ `ports/role_repo.go:21-28` `RemoveFromUserIfNotLast` 原子计数保证；`service.go:200` 使用该方法（2026-04-23 核实） | — | — | — |
+| ~~S7~~ | ~~**VALIDATE-EVIDENCE-CI-01**~~ ✅ `ci.yml:44,47` 含 `gocell validate` + `check contract-health`，失败阻断（2026-04-23 核实） | — | — | — |
+| ~~S10~~ | ~~**MODE-SEMANTIC-SPLIT-01**~~ ✅ `mode.go` 中写路径独立类型已落地，Init 单点映射（2026-04-23 agent 核实） | — | — | — |
+| ~~S11~~ | ~~**CONFIG-CORE-INIT-COGNIT-01**~~ ✅ `cell.go` Init() 已拆分，nolint 抑制解除（2026-04-23 agent 核实） | — | — | — |
 | S13-follow | **4XX-LOG-SAMPLING-01** (P3, Cx1, 🟡 可延后): 高频端点（如 GET config）4xx 日志可加采样（1%）或在 rate-limiter 触发后限速，避免大量 429 日志淹没告警通道。注：PR#181 F3 已把 log4xx 字段最小化（移除 client message，仅保留 code/status/correlation IDs/internal），采样必要性已大幅下降；仅在真实运维告警通道过载时再做 | 1h | `pkg/httputil/response.go` | PR-CONFIG-POLISH 后续 |
 | S14a | **CONFIG-VALUE-KMS-AWS-PROVIDER-01** 🟠（明确部署目标云平台后触发）：基于 KeyProvider 接口加 AWS-KMS / GCP-KMS adapter；envelope encryption（DEK 本地 + KEK 在 KMS）；rotation 走 KMS API；dev fallback LocalAES。**前置 S14 CONFIG-VALUE-ENCRYPTION-01 ✅ PR#195 已完成（LocalAES + VaultTransit）**。**触发**：明确生产云平台 + 通过 KMS 安全评审 | 6h | 🟠 | `runtime/crypto/aws_kms_provider.go`（新）+ `gcp_kms_provider.go`（新）+ `cmd/corebundle/bundle.go` env 解析 | PR-CC-VALUE-ENCRYPT 后续 |
 | S15 | **ERROR-CTX-CANCELLED-CLASSIFY** (P3, Cx2, 🟡 可延后): `ctx.Canceled` 在 config_repo 及其他 PG 路径未单独归类为 `ErrContextCanceled`，当前统一为 `ErrConfigRepoQuery`；reviewer 可接受当前状态，但长期会影响 caller 区分超时 vs 业务错误。来源: PR#169 review F-T-3 | 1h | `cells/configcore/internal/adapters/postgres/config_repo.go` | PR#169 review F-T-3 |
-| S18 | **JWT-AUDIENCE-ENV-VAR-01** (P1, Cx2, 🟠 条件延后，多环境部署前触发): `jwtAudience` 为编译期常量，多环境（staging/prod）无法通过 env var 区分（如 `gocell-staging` / `gocell-prod`）；同时 sessionlogin/sessionrefresh 内 audience 需同步注入，否则 issuer 与 verifier drift 风险仍在。**修法**：新增 `GOCELL_JWT_AUDIENCE` env var；`adapterMode=real` 时强制要求；accesscore cell 新增 `WithTokenAudience(string)` option 让 Init 注入而非硬编码。**前置**：与 F-O-1/F-A-1 配套，需独立 ADR。来源: PR#170 review F-O-1 + F-A-1 | 3h | `cmd/corebundle/main.go` + `cells/accesscore/cell.go` + `cells/accesscore/slices/sessionlogin/service.go` + `sessionrefresh/service.go` | PR#170 review |
+| ~~S18~~ | ~~**JWT-AUDIENCE-ENV-VAR-01**~~ ✅ `GOCELL_JWT_AUDIENCE` env var 已接入；`main.go:222` 所有模式强制要求；`main.go:257` 启动时 `slog.Any("audiences", ...)` 打印（2026-04-23 核实） | — | — | — |
 | S19 | **JWT-AUDIENCE-DRIFT-INTEG-TEST-01** (P2, Cx1, 🟡 可延后): `cmd/corebundle/jwt_aud_integration_test.go` 直接调 `deps.issuer.Issue(…, []string{jwtAudience}, …)` 而非真实 sessionlogin 路径，无法检测 sessionlogin/sessionrefresh 硬编码与 `DefaultJWTAudience` 的 drift。**修法**：集成测试调用 sessionlogin.Service.Login → 解析响应 token → VerifyIntent，使 drift 编译失败而非运行时静默放行。**前置**：S18（accesscore WithTokenAudience 注入）落地后更易实现。来源: PR#170 review F-T-3 | 2h | `cmd/corebundle/` + `cells/accesscore/slices/sessionlogin/` | PR#170 review F-T-3 |
-| S20 | **JWT-AUDIENCE-STARTUP-LOG-01** (P3, Cx1, 🟡 可延后): `buildJWTDeps` 构建时未打印 effective audience 值；ops 无法通过启动日志或 `/readyz?verbose` 确认运行时 audience 配置。**修法**：`slog.Info("JWT audience enforcement enabled", slog.String("audience", jwtAudience))` 紧接 verifier 构造后添加。来源: PR#170 review F-S-5 | 0.5h | `cmd/corebundle/main.go` | PR#170 review F-S-5 |
+| ~~S20~~ | ~~**JWT-AUDIENCE-STARTUP-LOG-01**~~ ✅ `main.go:257` `slog.Any("audiences", reg.Audiences())` 已存在，随 S18 一并完成（2026-04-23 核实） | — | — | — |
 | S21 | **JWT-AUD-TEST-TABLE-DRIVEN-01** (P3, Cx1, 🟡 可延后): `runtime/auth/jwt_aud_test.go` 9 个场景为独立函数，违反 CLAUDE.md table-driven 规范。**修法**：重构为 `struct { name; expectedAuds []string; tokenAud []string; wantErr bool; errContains string }` 结构。来源: PR#170 review F-T-5 | 1h | `runtime/auth/jwt_aud_test.go` | PR#170 review F-T-5 |
 | S22 | **REFRESH-AUD-REAL-ROUTE-TEST-01** (P2, Cx2, 🟡 可延后): `runtime/auth/middleware_aud_test.go` 的 refresh-path audience 回归测试手造 fake handler 直接调 `VerifyIntent`，不经过真实 route registration / body binding / `Service.Refresh`，无法检测 public-route bypass 或 body decode 回归。**修法**：在 `cells/accesscore/auth_integration_test.go` 补一条真实 HTTP 测试：POST `{"refreshToken": wrong-aud-token}` 到 `/api/v1/access/sessions/refresh`，断言返回 401；再补 missing-aud token 场景。**前置**：可独立于 S18 实施。来源: PR#171 外部审查 F2 | 2h | `cells/accesscore/auth_integration_test.go` + `runtime/auth/middleware_aud_test.go` | PR#171 外部审查 |
 | S23 | **AUTH-WALKTHROUGH-COMPOSE-01** (P2, Cx3, 🟡 可延后): `examples/ssobff/walkthrough_test.go` 手装精简 server（无 bootstrap lifecycle），与 `main.go` 的真实组装路径、README 步骤三份语义各自独立，可掩盖 public-endpoint wiring / configcore 接线 / audit event delivery 的回归。**修法**：提取 `NewSSOBFFApp(opts...)` 组装函数被 `main.go` 和 walkthrough test 共用；test server 走同一 bootstrap + Start/Stop 路径。来源: PR#172 review F3（OUT_OF_SCOPE） | 4h | `examples/ssobff/bootstrap.go`（新）+ `main.go` + `walkthrough_test.go` | PR#172 review F3 |
@@ -192,11 +192,11 @@
 
 | 分类 | 工时 |
 |------|------|
-| P0 阻塞 | ~~L0~~ ✅；剩余 L1 ~2h |
-| P1 | ~17h（P1-4 6h + P1-5 4h + P1-8 3h + ~~S2 ✅~~ + S4b 1h🟠 + L2 5h + L4 2h + L6 3h）|
-| P2 kernel/runtime | ~17h（含新增 L10 0.5h + L11 0.5h）|
-| P2 adapter | ~5h（~~A3 ✅~~ + ~~M3 ✅~~ + ~~A13 ✅~~ + ~~A17 ✅~~ + ~~A19 ✅~~ + ~~A20 ✅~~）|
-| P2 slice/cell | ~30h |
+| P0 阻塞 | ~~L0 ✅~~ ~~L1 ✅~~；**全清** |
+| P1 | ~8h（P1-4 6h + P1-5 4h 🟡 + P1-8 5h + ~~S2 ✅~~ + S4b 1h🟠 + ~~L2 ✅~~ + ~~L4 ✅~~ + ~~L6 ✅~~ + ~~S18 ✅~~ + ~~S20 ✅~~）|
+| P2 kernel/runtime | ~15h（~~K2 ✅~~；L7-FMT15b 2h + S-nonce 3h + 其余 L7/L8/L9/L10/L11/R2/R3/R4 等）|
+| P2 adapter | ~5h（~~A1 ✅~~ ~~A2 ✅~~ ~~A3 ✅~~ ~~M3 ✅~~ ~~A13 ✅~~ ~~A17 ✅~~ ~~A19 ✅~~ ~~A20 ✅~~；剩余 A7/A8/A9/A10/A14/A15/A16/A18/A21）|
+| P2 slice/cell | ~20h（~~S5 ✅~~ ~~S6 ✅~~ ~~S7 ✅~~ ~~S10 ✅~~ ~~S11 ✅~~；剩余 S2-follow/S4/S13-f/S14a/S15/S19/S21/S22/S23/S24/L8/L9/L10/L11）|
 | P2 发布 + 文档 | ~25h + v1.0 tag |
-| **核心路径合计（不含 P3）** | **~96h（约 12 工作日）** |
+| **核心路径合计（不含 P3）** | **~73h（约 9 工作日）** |
 | P3 长期 | 3-5d + 若干独立项 |
