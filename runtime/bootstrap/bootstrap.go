@@ -380,7 +380,7 @@ func WithRelayHealth(r *runtimeoutbox.Relay) Option {
 			fn := checkers[name] // capture loop var
 			b.healthCheckers = append(b.healthCheckers, namedChecker{
 				name: name,
-				fn:   func(_ context.Context) error { return fn() },
+				fn:   func(ctx context.Context) error { return fn(ctx) },
 			})
 		}
 	}

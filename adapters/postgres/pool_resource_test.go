@@ -161,7 +161,7 @@ func TestPGResource_CheckerTimeout(t *testing.T) {
 		t.Fatal("checker fn must not be nil")
 	}
 
-	if err := fn(); err != nil {
+	if err := fn(context.Background()); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
@@ -192,10 +192,10 @@ func TestPGResource_CheckerUsesIndependentCtx(t *testing.T) {
 		t.Fatal("checker fn must not be nil")
 	}
 
-	// Even though we call fn with no outer context here, the checker must have
-	// built an independent context from context.Background(). Verify the
-	// received context has a deadline roughly 5s in the future.
-	if err := fn(); err != nil {
+	// Even though we call fn with context.Background() here, the checker must
+	// apply an inner 5s timeout. Verify the received context has a deadline
+	// roughly 5s in the future.
+	if err := fn(context.Background()); err != nil {
 		t.Fatalf("checker returned unexpected error: %v", err)
 	}
 	if receivedCtx == nil {

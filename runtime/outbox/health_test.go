@@ -56,7 +56,7 @@ func TestFailureBudget_BelowThreshold_NotTripped(t *testing.T) {
 	for i := range threshold - 1 {
 		fb.Record(errors.New("err"))
 		assert.Falsef(t, fb.Tripped(), "should not trip after %d failures", i+1)
-		assert.Nilf(t, fb.Checker()(), "Checker should return nil before threshold, got error after %d failures", i+1)
+		assert.Nilf(t, fb.Checker()(context.Background()), "Checker should return nil before threshold, got error after %d failures", i+1)
 	}
 
 	assert.Equal(t, int64(threshold-1), fb.ConsecutiveFailures())
@@ -76,7 +76,7 @@ func TestFailureBudget_AtThreshold_Trips(t *testing.T) {
 
 	assert.True(t, fb.Tripped(), "should trip exactly at threshold")
 	require.NotNil(t, fb.Checker(), "Checker must not be nil when tripped")
-	checkerErr := fb.Checker()()
+	checkerErr := fb.Checker()(context.Background())
 	require.Error(t, checkerErr)
 	assert.Contains(t, checkerErr.Error(), "relay-test")
 }
@@ -98,7 +98,7 @@ func TestFailureBudget_SuccessResets(t *testing.T) {
 
 	assert.False(t, fb.Tripped(), "success must reset tripped state")
 	assert.Equal(t, int64(0), fb.ConsecutiveFailures(), "success must zero consecutive failures")
-	assert.Nil(t, fb.Checker()(), "Checker must return nil after reset")
+	assert.Nil(t, fb.Checker()(context.Background()), "Checker must return nil after reset")
 }
 
 // ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ func TestFailureBudget_Reset_ClearsState(t *testing.T) {
 	fb.Reset()
 	assert.False(t, fb.Tripped(), "Reset must clear tripped state")
 	assert.Equal(t, int64(0), fb.ConsecutiveFailures(), "Reset must clear consecutive failure count")
-	assert.Nil(t, fb.Checker()(), "Checker must return nil (healthy) after Reset")
+	assert.Nil(t, fb.Checker()(context.Background()), "Checker must return nil (healthy) after Reset")
 
 	// Verify reset budget can trip again after threshold new failures.
 	for range threshold {

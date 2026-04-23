@@ -40,9 +40,9 @@ type fakeManagedResource struct {
 	w           kworker.Worker
 }
 
-func (f *fakeManagedResource) Checkers() map[string]func() error {
-	return map[string]func() error{
-		f.name: func() error { return nil },
+func (f *fakeManagedResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		f.name: func(context.Context) error { return nil },
 	}
 }
 

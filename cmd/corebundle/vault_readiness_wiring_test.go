@@ -45,9 +45,9 @@ func (f *fakeKeyProvider) Rotate(_ context.Context) (string, error) {
 
 // --- kernellifecycle.ManagedResource ---
 
-func (f *fakeKeyProvider) Checkers() map[string]func() error {
-	return map[string]func() error{
-		"fake_key_provider_ready": func() error { return f.probeErr },
+func (f *fakeKeyProvider) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		"fake_key_provider_ready": func(context.Context) error { return f.probeErr },
 	}
 }
 

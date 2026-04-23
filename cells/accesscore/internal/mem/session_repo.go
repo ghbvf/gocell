@@ -30,8 +30,10 @@ func NewSessionRepository() *SessionRepository {
 }
 
 // Health returns nil for in-memory repositories (always available).
-// Future DB-backed implementations should check connection liveness.
-func (r *SessionRepository) Health() error {
+// The ctx parameter is accepted for interface compatibility; in-memory stores
+// have no network I/O to cancel. Future DB-backed implementations should
+// honour ctx for connection liveness checks.
+func (r *SessionRepository) Health(_ context.Context) error {
 	return nil
 }
 

@@ -1,6 +1,7 @@
 package outbox
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"sync/atomic"
@@ -116,16 +117,19 @@ func (b *FailureBudget) recordSuccess() {
 	}
 }
 
-// Checker returns a func() error suitable for use as a health.Checker.
-// When threshold is 0 (disabled), returns nil.
+// Checker returns a func(context.Context) error suitable for use as a
+// health.Checker. When threshold is 0 (disabled), returns nil.
 // When the budget is not tripped, the returned func returns nil.
 // When tripped, the returned func returns an error containing the budget name
 // and threshold.
-func (b *FailureBudget) Checker() func() error {
+//
+// The context parameter is accepted for interface compatibility but is not used:
+// the budget check is a pure atomic-read operation with no I/O.
+func (b *FailureBudget) Checker() func(context.Context) error {
 	if b.threshold <= 0 {
 		return nil
 	}
-	return func() error {
+	return func(context.Context) error {
 		if !b.tripped.Load() {
 			return nil
 		}

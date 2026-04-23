@@ -258,10 +258,12 @@ func NewAccessCore(opts ...Option) *AccessCore {
 // ports.HealthCheckable. Both in-memory and real adapters implement
 // HealthCheckable, so the probe is present in all modes. Returns an
 // empty map only when sessionRepo is nil (no repo injected at all).
-func (c *AccessCore) HealthCheckers() map[string]func() error {
-	checkers := make(map[string]func() error)
+func (c *AccessCore) HealthCheckers() map[string]func(context.Context) error {
+	checkers := make(map[string]func(context.Context) error)
 	if hc, ok := c.sessionRepo.(ports.HealthCheckable); ok {
-		checkers["session-store"] = hc.Health
+		checkers["session-store"] = func(ctx context.Context) error {
+			return hc.Health(ctx)
+		}
 	}
 	return checkers
 }
