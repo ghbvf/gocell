@@ -10,6 +10,17 @@
 > - 第二轮修正（基于现状复核）：F3/F6 非"已完工"而是"基础设施完工+应用层仍有过渡态"；PR-A5a A5 lifecycle 迁移从 0.5h 修正为 2-3h；PR-A14 拆分为 A14a MIN（Wave 1 必做）+ A14b FULL（Wave 3）；新增 PR-A27 CONFIGWRITE-RETURNING / PR-A28 CONFIG-DOCS / PR-A29 AUTH-REFRESH-MAIN（X11+X15 上提 Wave 2 必做）/ PR-A32 SELECTOR-CLOSURE / PR-A33 REFRESH-OPAQUE-POLISH
 > - 第三轮修正：工期从虚高"95 工作日 / v1.0 路径 40-45d"校正为**净编码 36d / v1.0 双人 ~3 周**
 > - 识别已完工基石：F1 JWT Registry / F5 Errcode Classifier / F7 Principal API / L10 / S42 / F2 PG RefreshStore（详见末尾"已完工基石声明"）
+>
+> 2026-04-24 更新（第五轮 · PR-A5a delivered）:
+> - **PR-A5a 已落地**（分支 `refactor/513-pr-a5a-lifecycle-autodiscovery`，PR #234）。实际工期 ~10h（vs 原估 6-7h），因升级为**彻底方案**：
+>   - V-A15 cell.go 拆分：`cells/accesscore/cell.go` 625 → 173 行，新建 `cell_init.go`(189) + `cell_routes.go`(112)
+>   - V-A16：RunnerOrNoop 已由 PR #224 落地；本 PR 顺手删 identitymanage/rbacassign 残留 `runInTx()` 死层 wrapper
+>   - A5：`WithBootstrapWorkerSink` / `bootstrapWorkerSink` / `adminBootstrapWorkerOpts` / `worker.Lazy()` 彻底删除
+>   - **超出原范围的优雅升级**（用户指示"方案要彻底"）：
+>     1. 新增 `kernel/cell.LifecycleContributor` 接口 + `runtime/bootstrap` phase3b 自动发现，镜像既有 HealthContributor 模式，消灭 composition root 手写 `bootstrap.WithLifecycle` boilerplate
+>     2. 新增 `kernel/cell.ResolveEmitter` 抽取三 cell（accesscore/configcore/auditcore）重复的 durability-mode emitter 解析逻辑（-145 行）
+>     3. `cells/accesscore/internal/initialadmin/` 搬出 `internal/` 到 `cells/accesscore/initialadmin/`，成为一等公开 subpackage（类比 slices/），新增 `Lifecycle` 编排类型
+> - **对下游 PR 的影响**：PR-A5b（configcore 拆分）现已复用 `cell.ResolveEmitter`（无需再重复抽），只剩 cell.go 物理拆分；PR-A5c OUTBOX-EMITTER-UNIFY 的 Emitter 抽象已大部分由 PR #224 落地，剩余工作被本 PR 的 `ResolveEmitter` + PR-A5a 的模式间接推进
 
 ---
 
@@ -131,7 +142,7 @@
 
 ---
 
-### PR-A5a accesscore cell.go 拆分 + TxRunner helper + initialadmin lifecycle 迁移（🔴 发布前必做，预计 6-7h）
+### PR-A5a accesscore cell.go 拆分 + TxRunner helper + initialadmin lifecycle 迁移（✅ **已交付 @ 2026-04-24 via PR #234** / 分支 `refactor/513-pr-a5a-lifecycle-autodiscovery`）
 
 **主线**：
 - **V-A15 CELL-GO-SPLIT-01**（P2-7）accesscore/cell.go 582 行拆 `cell_routes.go` + `cell_events.go` + `cell_lifecycle.go`（2h）
