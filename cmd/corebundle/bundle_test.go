@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -27,9 +27,9 @@ import (
 // for 5-7s on slow CI runners. The rest of the InitialAdmin path
 // (Sweep → EnsureAdmin → WriteCredentialFile → Cleaner worker registration)
 // still runs, preserving bundle_test coverage of the full wiring.
-func fastAdminBootstrapOpts() []accesscore.LifecycleOption {
-	return []accesscore.LifecycleOption{
-		accesscore.WithBootstrapPasswordHasher(accesscore.BcryptHasher{Cost: bcrypt.MinCost}),
+func fastAdminBootstrapOpts() []initialadmin.LifecycleOption {
+	return []initialadmin.LifecycleOption{
+		initialadmin.WithPasswordHasher(initialadmin.BcryptHasher{Cost: bcrypt.MinCost}),
 	}
 }
 

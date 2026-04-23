@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -20,7 +21,7 @@ type AccessCoreModule struct {
 	// InitialAdminOpts are additional options for the initial-admin bootstrap
 	// path. Production leaves this nil so default bcrypt cost=12 is used.
 	// Tests inject a low-cost hasher to avoid blocking CI.
-	InitialAdminOpts []accesscore.LifecycleOption
+	InitialAdminOpts []initialadmin.LifecycleOption
 }
 
 // ID returns the stable identifier used in error messages.

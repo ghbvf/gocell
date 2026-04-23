@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/initialadmin"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 )
 
 // TestWriteCredentialFile_MkdirAllError exercises the MkdirAll failure branch

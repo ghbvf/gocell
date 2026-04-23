@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/initialadmin"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 )
 
 func makePayload(username, password string) initialadmin.CredentialPayload {

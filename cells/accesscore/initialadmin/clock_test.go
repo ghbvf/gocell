@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/initialadmin"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 )
 
 func TestRealClock_Now(t *testing.T) {

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"testing/iotest"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/initialadmin"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 )
 
 func TestGeneratePassword_LengthAndCharset(t *testing.T) {
