@@ -1,0 +1,761 @@
+# 架构项 PR 实施计划
+
+> 日期: 2026-04-23
+> 来源: `docs/plans/docs-backlog-md-docs-reviews-2026042219-graceful-backus.md` 架构层（P1/P2/P3）+ `202604191515-auth-federated-whistle.md`（F1-F7 基石）+ `202604211245-024-auth-rebaseline-implementation-plan.md`（A/B/C）+ `202604200313-v1.0-pre-release-plan.md` 残余
+> 基线: `develop @ f32d54d`（PR#222 合入后）
+> 目标: 把架构层约 40 条任务 + auth/config 域剩余任务拆成 35 个内聚 PR，明确 wave 顺序、搭车关系、依赖、风险
+> **工期**: 净编码 ~36 工作日（~288h）；双人并行 + buffer **~30 工作日（~6 周）**；v1.0 路径（Wave 1+2）双人 **~13-15 工作日（~3 周）**
+> 2026-04-23 更新:
+> - 第一轮融入：3 条搭车（PR-A5a/A5b/A6）+ 6 条新 PR（A25-A30 auth/config）
+> - 第二轮修正（基于现状复核）：F3/F6 非"已完工"而是"基础设施完工+应用层仍有过渡态"；PR-A5a A5 lifecycle 迁移从 0.5h 修正为 2-3h；PR-A14 拆分为 A14a MIN（Wave 1 必做）+ A14b FULL（Wave 3）；新增 PR-A27 CONFIGWRITE-RETURNING / PR-A28 CONFIG-DOCS / PR-A29 AUTH-REFRESH-MAIN（X11+X15 上提 Wave 2 必做）/ PR-A32 SELECTOR-CLOSURE / PR-A33 REFRESH-OPAQUE-POLISH
+> - 第三轮修正：工期从虚高"95 工作日 / v1.0 路径 40-45d"校正为**净编码 36d / v1.0 双人 ~3 周**
+> - 识别已完工基石：F1 JWT Registry / F5 Errcode Classifier / F7 Principal API / L10 / S42 / F2 PG RefreshStore（详见末尾"已完工基石声明"）
+
+---
+
+## 设计原则
+
+1. **文件亲缘**：同目录或同模块的修改塞进同一 PR，降低 review 成本
+2. **语义内聚**：按"治理规则"、"Auth 收口"、"Contract spec"等单一主题切分
+3. **抽取先于业务**：先落 helper / 新接口，再把业务切换过去（V-A14 adapterutil 先于 V-A15 cell 拆分用到）
+4. **Cx3 独立审**：高复杂度（CONTRACT-META-01、kernel/wrapper、INTERNAL-LISTENER）独立 PR，防互相污染 review
+5. **风险由低到高**：pkg helper / CI 治理 → 业务 cell 拆分 → 协议级改造（ER-ARCH-01、Subscriber Setup/Run）
+
+---
+
+## PR 切分总览
+
+35 个 PR 分 4 Wave，**净编码合计 ~36 工作日**（288h），含 P3 长期架构。
+
+| Wave | 目标 | PR 数 | 净编码 | 含 buffer（单人/双人） |
+|---|---|---|---|---|
+| **Wave 1** — 低风险抽取 + 治理 + auth v1.0 必做 + config 样板收敛 + INTERNAL-LISTENER-MIN | 为后续业务改造铺平基础 + 发布硬约束 | 14 | 9.3d | 13d / 6-7d（三路 worktree 并行） |
+| **Wave 2** — 中等架构收口 + auth refresh 主链 + auth 测试 + DX | Contract 模型 / kernel 新模块 + refresh opaque 主链（X11+X15）+ auth 收尾 | 8 | 8.5d | 12d / 7-8d（A9 Cx3 是瓶颈） |
+| **Wave 3** — P2 架构延展 + INTERNAL-LISTENER-FULL + F3 Selector 收尾 | v1.1 kernel 子模块 + listener 完整版 | 6 | 8.75d | 12d / 7d |
+| **Wave 4** — P3 长期架构演进 + refresh opaque 收尾 | 分层重整 / 接口拆分 / 类型保护 / refresh polish | 7 | 9.5d | 13d / 8d |
+| **合计** | | 35 | **~36d** | **~50d / ~30d** |
+
+> **v1.0 路径（Wave 1 + Wave 2）**：净编码 ~18d；含 buffer **单人 ~25d（~5 周）/ 双人并行 ~13-15d（~3 周）**。
+>
+> Buffer 1.4x 乘数含 review 往返、integration 调试、Cx3/Cx4 ADR 讨论。实际 PR 编码时间通常只占项目时间 60-70%。
+
+> **⚠️ 发布前必做（🔴 硬约束）**：PR-A25 / PR-A26 / PR-A14a / PR-A27 / PR-A28（Wave 1 auth+config v1.0 必做）+ PR-A29（Wave 2 refresh 主链）+ PR-A5a 修正（initialadmin Lifecycle 迁移，~2-3h 不是 0.5h）。
+> **🟡 已完工基石（不占 Wave 计划）**：F1 JWT Registry / F3 Selector 基础设施 / F5 Errcode Classifier / F6 Lifecycle 基础设施 / L10 RoleInternalAdmin / S42 ROLELIST-CURSOR。详见末尾"已完工基石声明"章节。
+
+---
+
+## Wave 1 — 低风险抽取 + 治理（~5 工作日）
+
+> 先落这批：纯 helper 抽取 + governance 规则扩展 + 入口缩减，review 快、冲突小、可并行 worktree。
+
+### PR-A1 治理规则 + CI 门禁打底（预计 10h）
+
+**主线**：
+- **G-1 FMT-11 DYNAMIC-FIELD-ISOLATION-01**（HIGH）动态状态字段禁入非 status-board
+- **G-2 TOPO-07 MAXCONSISTENCYLEVEL-ENFORCE** actor 一致性级别校验阻断
+- **G-4 DEPRECATED-CONTRACT-BREAK** deprecated contract 依赖从 warning 升级 break
+- **V-A11 GOVERNANCE-EXAMPLES-COVERAGE**（P1-17）governance 扫 `examples/` 硬编码
+
+**搭车**：
+- **L11 GOVERNANCE-CI-MAINBRANCH-01** governance workflow 扩展到 main/release（0.5h，同 workflow 文件）
+- **PR220-4 CI-LINT-EVENT-SEMANTIC-SPLIT-01** push 全量 lint / pull_request 降噪（1h，CI 治理面）
+- **PR220-2 DOC-NAMING-GUARD-01** 文档 naming guard（3h，需先完成 PR220-1 / PR220-e1 文档收敛，否则立即打红）
+
+**文件面**：`kernel/governance/` + `.github/workflows/`
+
+**风险**：低；主要是新规则首次 strict gate 时会打红现状，需先跑 `gocell validate --strict` 盘点现状并修。
+
+---
+
+### PR-A2 pkg 共享 helper 三连（预计 7h）
+
+**主线**：
+- **V-A5 VALIDATION-HELPER-EXTRACT-01**（P1-4）`pkg/validation.RequireNotBlank`（2h）
+- **L8 PAGINATION-HELPER-EXTRACT-01** `pkg/httputil/pagination.go` 统一分页错误处理（2h）
+- **V-A14 ADAPTER-CLOSE-HELPER-01**（P2-5）`adapters/adapterutil/CloseWithDeadline`（2h）
+- **A7 POOLSTATS-IFACE-01** 三 adapter 公共 PoolStats 接口（1h）
+
+**搭车理由**：全是 helper 抽取，`runtime/auth/*.go` 6+ 处 token=="" 改造 + 分页 handler 各 slice 改造可同 PR 完成。
+
+**文件面**：`pkg/validation/`（新） + `pkg/httputil/` + `adapters/adapterutil/`（新） + `adapters/{postgres,redis,rabbitmq}/`
+
+**风险**：低；纯抽取无语义变化，CI 测试基本覆盖。
+
+---
+
+### PR-A3 入口收口 + per-cell adapter（预计 4h）
+
+**主线**：
+- **V-A8 CMD-THICK-ENTRY-REDUCE-01**（P1-13 PARTIALLY）`cmd/corebundle/main.go` 继续缩减（2h）
+- **T6 GOCELL-PER-CELL-ADAPTER-01** 全局 env 拆单 cell adapter 配置（2h，PR-X-PG-REPO-ACCESS 强制前置）
+
+**搭车理由**：同在 `cmd/corebundle/` 下，wiring 逻辑耦合。T6 完成后 main.go 体量自然进一步下降。
+
+**文件面**：`cmd/corebundle/`
+
+**风险**：低；wiring 重排。
+
+---
+
+### PR-A4 运行时可观测收口（预计 6h）
+
+**主线**：
+- **R2 OBS-HTTP-COLLECTOR-AUTOWIRE-01** `WithMetricsProvider` 自动构造默认 HTTP collector（2h）
+- **A21 HEALTH-CHECKER-CTX-BUDGET-01** `Checker` 升级 `func(ctx) error` + 统一 deadline + 并行（3h）
+
+**搭车**：
+- **R3 OB-02** safe_observe broken logger 注入测试（1h）
+
+**搭车理由**：同在 `runtime/http/{middleware,health}` 面，middleware/health 是同一 request 生命周期。
+
+**文件面**：`runtime/bootstrap/bootstrap.go` + `runtime/http/middleware/` + `runtime/http/health/` + `kernel/lifecycle/managed_resource.go`
+
+**风险**：中；`Checker` 签名升级涉及所有 `Checkers()` 实现，需同 PR 同步改 adapters + cells 的所有实现。
+
+---
+
+### PR-A5a accesscore cell.go 拆分 + TxRunner helper + initialadmin lifecycle 迁移（🔴 发布前必做，预计 6-7h）
+
+**主线**：
+- **V-A15 CELL-GO-SPLIT-01**（P2-7）accesscore/cell.go 582 行拆 `cell_routes.go` + `cell_events.go` + `cell_lifecycle.go`（2h）
+
+**搭车**：
+- **V-A16 RUN-IN-TX-HELPER-01**（P2-8）`kernel/persistence.TxRunner` 加 helper（2h）
+- **A5 AUTH-INITIALADMIN-LIFECYCLE-MIGRATE-01**（auth-federated F6 应用层 + auth-rebaseline A5）**完整迁移**：删除 `accesscore.WithBootstrapWorkerSink` option + `bootstrapWorkerSink` 字段 + `runInitialAdminBootstrap` 的 worker sink 分支；`initialadmin.Sweep` + `Bootstrapper.EnsureAdmin` 改为注册 `bootstrap.Lifecycle.Hook`（`OnStart` 做 sweep+ensure，`OnStop` 做最终 cleanup）；同步更新 `examples/ssobff/` + `examples/*/` 所有 assembly 入口（2-3h）
+
+**搭车理由**：
+- V-A16：accesscore 拆分时会重构多个调用 `RunInTx` 的地方，helper 抽出与 cell 拆分同步替换
+- A5：sweep + EnsureAdmin 整段代码从 `cell.go` 迁到 `cell_lifecycle.go`；lifecycle hook 注册属于生命周期面，与 V-A15 拆分目标高度一致；deleting `WithBootstrapWorkerSink` 是打破 worker sink 间接层的唯一时机（不搭车就要再开独立 PR touch 同区）
+
+**文件面**：`cells/accesscore/cell*.go` + `cells/accesscore/internal/initialadmin/*.go` + `kernel/persistence/` + `examples/*/`（assembly 入口适配）
+
+**风险**：中-高；`WithBootstrapWorkerSink` 是 public API，examples 全量适配；PR 应附带 migration note。
+
+---
+
+### PR-A5b configcore cell.go 拆分 + config_repo 错误归类（预计 3h）
+
+**主线**：
+- **V-A15 CELL-GO-SPLIT-01**（P2-7）configcore/cell.go 431 行拆 `cell_routes.go` + `cell_events.go` + `cell_lifecycle.go`（2h）
+
+**搭车**：
+- **S15 ERROR-CTX-CANCELLED-CLASSIFY-01** `cells/configcore/internal/adapters/postgres/config_repo.go` `ctx.Canceled` 归类用 `errcode.IsInfraError`，消除 domain-notfound 误判（1h）
+
+**搭车理由**：同 configcore 包；S15 改的是 repo 层错误分支，会 touch `cell_events.go` 或 `cell_lifecycle.go` 里的事件订阅/日志路径。F5 Errcode Classifier 已完工（`pkg/errcode/classify.go`），应用零阻塞。
+
+**文件面**：`cells/configcore/cell*.go` + `cells/configcore/internal/adapters/postgres/config_repo.go`
+
+**依赖**：PR-A5a 落地后再做，复用其 TxRunner helper。
+
+---
+
+### PR-A6 EventRouter 身份拆分 + typed event payload + marshal err 显式（预计 7h）
+
+**主线**：
+- **PR220-5 EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01** `ConsumerGroup`（broker）与 `CellID`（observability）拆两字段（3h）
+
+**搭车**：
+- **S4 EVENT-PAYLOAD-TYPED-01** 6 event 的 `map[string]any` → typed struct（3h）
+- **S41 MARSHAL-ERR-EXPLICIT-01** `sessionlogin/service.go:140` + `sessionlogout/service.go:90` 两处 `_, _ = json.Marshal(...)` 改为显式处理（1h）
+
+**搭车理由**：都触及 subscription 注册面 + event payload contract；S4 改事件 schema 时 EventRouter 接口同时用到；S41 正好是 sessionlogin/logout 的事件发布路径，S4 把 `map[string]any` 改 typed struct 时原地消除 `_, _ =`。
+
+**文件面**：`runtime/eventrouter/` + `kernel/outbox/` + `cells/*/cell.go` + 6 个 event `service.go` + event contract schemas
+
+**风险**：中；broker queue 命名和 observability label 解耦，现有测试需同步跑通。
+
+---
+
+### PR-A7 Principal 契约统一 + rolefetch 收口（预计 6h）
+
+**主线**：
+- **P1-A PRINCIPAL-UNIFIED-CONTRACT-01** Principal 契约（definition + accessor + ctx 挂载）统一（4h）
+
+**搭车**：
+- **V-A17 FETCH-ROLE-NAMES-DEDUP-01**（P2-9）抽 `cells/accesscore/internal/rolefetch`，`FetchRolesStrict`/`FetchRolesLenient`（2h）
+
+**搭车理由**：Principal 统一时会重写 `sessionlogin:162 fail-closed` / `sessionrefresh:199 fail-open` 的角色查询路径，rolefetch 拆分同步完成。
+
+**文件面**：`runtime/auth/` + 各 cell middleware + `cells/accesscore/internal/rolefetch/`（新）
+
+**风险**：中；auth 关键路径，需 integration test 全覆盖。
+
+---
+
+### PR-A8 Vault auth 批量（预计 5h，含安全项）
+
+**主线**：
+- **A14 VAULT-AUTH-PLUGGABLE-01** AppRole / K8s auth 可插拔（3h）
+
+**搭车**：
+- **S4b VAULT-TOKEN-STATIC-REAL-GUARD-01**（P1 安全 🟠）real 模式 + static token → `ErrVaultAuthFailed`（1h）
+- **VAULT-RENEWAL-DEGRADATION-GAUGE** 静默降级指标（1h，已在 A14 描述内合并）
+
+**搭车理由**：同文件 `adapters/vault/transit_provider.go`，AppRole 接入后 S4b guard 自动生效，degradation gauge 也在同一 init 路径。
+
+**文件面**：`adapters/vault/transit_provider.go`
+
+**风险**：中；生产 auth 链路变化，需 HCP/Enterprise 环境手验。
+
+---
+
+### PR-A14a INTERNAL-LISTENER-MIN（🔴 发布前必做，~4h）
+
+**主线**：
+- **R4-MIN INTERNAL-LISTENER-MIN** 最小双 listener：`primary` + `internal` 两个 `http.Server`，`/internal/v1/*` 仅 internal listener 承载；保留 `bootstrap.WithInternalEndpointGuard` prefix 守卫作为双保险（不删）
+- **不做**：health listener、mTLS、完整 RouteGroup 声明式 API、签名破坏性变更——都留给 PR-A14b
+
+**搭车**：
+- 无（独立 PR；避免与 A14b 完整版混入）
+
+**拆分理由**：
+- 发布前用户必须看到 `/internal/v1/*` 端口隔离（访问 primary:8080 `/internal/v1/` 得 404），否则控制面 exposed
+- 完整 RouteGroup 签名破坏性 + cell API 签名变动风险太大，延到 v1.1
+
+**文件面**：`runtime/bootstrap/bootstrap.go` + `cmd/corebundle/bundle.go`
+
+**依赖**：无
+
+**风险**：中；需集测 primary/internal 双端口；保留 guard 做兼容。
+
+---
+
+### PR-A25 AUTH-PROD-HARDENING（🟠 real 模式前触发，~4h）
+
+**主线**：
+- **S-nonce SERVICE-TOKEN-NONCE-STORE-ENFORCE-01** real 模式强制 `WithNonceStore` + 缺失即启动失败（3h）
+- **S32 CONTROLPLANE-TOKEN-PROD-GATE-01** real 模式断言 service-token/mTLS 至少一项（1h）
+
+**搭车理由**：两项都是 real 模式 fail-fast，在 `cmd/corebundle/main.go` + `runtime/auth/authenticator.go` 同一面；S32 的 CI real-mode smoke 也顺便加
+
+**文件面**：`runtime/auth/authenticator.go` + `cmd/corebundle/main.go` + `cmd/corebundle/shared_deps.go`
+
+**风险**：低-中；CI smoke 要新建 real 模式 job
+
+---
+
+### PR-A26 AUTH-SETUP-ENDPOINT（🔴 v1.0 必做 P0，~4h）
+
+**主线**：
+- **P1-19 AUTH-SETUP-ENDPOINT-01**：
+  - ① 新 slice `cells/accesscore/slices/setup/`
+  - ② 新 contract `contracts/http/auth/setup/status/v1/` + `contracts/http/auth/setup/admin/v1/`
+  - ③ `GET /api/v1/setup/status`（Public）返回 `{hasAdmin: bool}`
+  - ④ `POST /api/v1/setup/admin`（Public）无 admin 时创建，已有则 409
+  - ⑤ 两端点 `auth.Declare Public: true`
+
+**搭车**：无（纯新建 slice，独立 blast radius）
+
+**文件面**：新 `cells/accesscore/slices/setup/` + 新 `contracts/http/auth/setup/`
+
+**风险**：低；新功能，现有测试不动
+
+---
+
+### PR-A27 CONFIGWRITE-RETURNING-CONSOLIDATE（🔴 发布前必做，~5h）
+
+**主线**：
+- **CONFIGWRITE-RETURNING-01** `cells/configcore/slices/configwrite/service.go` Create/Update/Delete 三方法按 `flagwrite` PR#216 模式重写，改原子 `RETURNING` 消除 TOCTOU：
+  - `Update` 改 `repo.Update(ctx, key, value) (*ConfigEntry, error)`（单 SQL RETURNING，消除事务外 `GetByKey` 预读）
+  - `Delete` 改 `repo.Delete(ctx, key) (deleted *ConfigEntry, error)`（RETURNING 老值用于 outbox 发布）
+  - `Create` 保持 INSERT RETURNING
+- **搭车**：`configpublish` 同 TOCTOU 修复（如适用）
+- 同步更新 `config_repo.go` + repo interface + 契约测试
+
+**搭车理由**：configwrite 样板债是"其他 cell 若复制 config-core 写法会带坑"，发布前必须收敛到 flagwrite 统一原子模式
+
+**文件面**：`cells/configcore/slices/configwrite/service.go` + `cells/configcore/slices/configpublish/service.go` + `cells/configcore/internal/ports/config_repo.go` + `cells/configcore/internal/adapters/postgres/config_repo.go`
+
+**风险**：中；repo interface 签名变化，需全量 test 跑通
+
+---
+
+### PR-A28 CONFIG-DOCS-REWRITE（🟡 发布前应做，~2-4h）
+
+**主线**：
+- **DOC-PG-CELL-TEMPLATE-REWRITE-01** `docs/patterns/pg-cell-template.md` 重写：
+  - 删除旧 `AppDepsFromEnv` + `GOCELL_DATABASE_URL` 入口，改讲 `cmd/corebundle/BuildApp(opts...)` + per-cell adapter options
+  - 把加密/stale cipher/AAD/migration 010 forward-only 从通用模板剥离到 `docs/patterns/config-core-encryption-appendix.md`（新）
+  - 顶端加 deprecation 顶栏（若无法 1d 完成全量重写）
+
+**降级方案**：若发布前工期紧，最低做法——顶部加"过时"警告 + 指向 `docs/guides/integration-testing.md` 入口（1h）
+
+**搭车**：无
+
+**文件面**：`docs/patterns/pg-cell-template.md` + `docs/patterns/config-core-encryption-appendix.md`（新，可选）
+
+**风险**：低（纯文档）
+
+---
+
+## Wave 2 — 中等架构收口（~12 工作日）
+
+### PR-A9 CONTRACT-META-01 传输层一等公民（Cx3，~3d）
+
+**主线**：
+- **LATER-SD-1 CONTRACT-META-01**（P1）`contract.yaml` 补 `Method / Path / PathParams / QueryParams / SuccessStatus / NoContent` 静态界定
+
+**搭车**：
+- **L7-FMT15b CONFIG-GET-DUAL-MODE-SPLIT-01** 拆 `contracts/http/config/get/v1` oneOf 合并（2h）
+- **S2-follow CONTRACT-ERROR-SCHEMA-EXTEND-01** 其余 HTTP contract 补 401/403（2h）
+
+**搭车理由**：都在 `contract.yaml` 结构面；CONTRACT-META-01 改 metadata parser 时顺便把 config/get 合约 + 错误响应格式一起处理。
+
+**文件面**：`kernel/metadata/` + `kernel/governance/` + 所有 `contracts/http/**/contract.yaml`
+
+**风险**：高；全仓 contract.yaml 都要升级；需 codegen 同步。建议独立 PR，Cx3 人工决策先输出方案再干。
+
+---
+
+### PR-A10 OUTPUT-JSON-SARIF 诊断模型（~6h）
+
+**主线**：
+- **P1-4 OUTPUT-JSON-SARIF-01** 统一诊断模型（单一 `Issue` struct → text/JSON/SARIF 三 printer）
+
+**搭车**：无（独立 refactor，不挂 review 其他内容）
+
+**文件面**：`cmd/gocell/` + `kernel/governance/` 序列化
+
+**风险**：低-中；输出格式改动，需保证 legacy text 输出兼容 CI consumer。
+
+---
+
+### PR-A11 KERNEL/WRAPPER（P1，~1d）
+
+**主线**：
+- **LATER-K1 KERNEL/WRAPPER** 契约级可观测代理（Traced wrapper）
+
+**搭车**：无（独立新模块）
+
+**文件面**：`kernel/wrapper/`（新）
+
+**依赖**：PR-A9 CONTRACT-META-01 落地后，wrapper 能拿到完整 Method/Path 信息做 trace span 标注。
+
+**风险**：中；Tracing 埋点语义定义需 ADR。
+
+---
+
+### PR-A12 KERNEL/COMMAND（P1，~1d）
+
+**主线**：
+- **LATER-K2 KERNEL/COMMAND** 命令队列接口 + L4 操作底座
+
+**搭车**：
+- 可考虑 devicecell 的 HandleEnqueue 迁到新底座（**T3 DEVICE-ENQUEUE-RBAC** 触发器项 0/6 的预埋点）
+
+**文件面**：`kernel/command/`（新）+ `cells/devicecell/slices/devicecommand/`
+
+**风险**：中；定义 L4 下发语义，影响未来设备管理类 cell 设计。
+
+---
+
+### PR-A13 PR#220 遗留：文档事实源重写（~4h）
+
+**主线**（问题层，但从 PR220 拆分报告推荐放此顺序）：
+- **PR220-1 DOC-CAPABILITY-INVENTORY-REWRITE-01** 按真实 route 重写 `capability-inventory.md` + 其他活动文档
+- **PR220-1b DOC-IOTDEVICE-README-ENVELOPE-01** iotdevice 响应补 `data` 包装
+- **PR220-e1 NAMING-BASELINE-CONTRADICTION-01** baseline 自身矛盾修正
+- **PR220-e3 STATUS-BOARD-J-ORDERCREATE-01** status-board 补条目 + checkRef
+
+**搭车理由**：都是文档事实源漂移一次性扫清，给 PR-A1 里的 PR220-2 DOC-NAMING-GUARD 提供干净基线。
+
+**文件面**：`docs/design/*.md` + `docs/architecture/*.md` + `examples/iotdevice/README.md` + `journeys/*.yaml`
+
+**依赖建议顺序**：PR-A13 (docs clean) → PR-A1 再启用 DOC-NAMING-GUARD。
+
+---
+
+### PR-A29 AUTH-REFRESH-MAIN（🔴 发布前必做，X11 + X15，~10h）
+
+**主线**（按**强依赖顺序**执行，两阶段一个 PR 内完成或拆两个子 PR 串行）：
+- **X11 REFRESH-HMAC-SPLIT-01**（4h）`adapters/postgres/refresh_store.go` 改 token 存储为 `selector|verifier` 两段式：
+  - DB 存 `selector TEXT` 明文 + `verifier_hash TEXT`（SHA-256(verifier)）
+  - `Issue` 生成 `selector(16B) + "." + verifier(32B)` base64url 字符串
+  - `Rotate` CAS 条件改 `selector = $1 AND verifier_hash = sha256($2)`
+  - Migration `009_refresh_tokens_hmac_split.sql`（新列 + 回填 NULL）
+  - ref: Hydra / Zitadel
+- **X15 REFRESH-OPAQUE-INTEGRATION-01**（6h）`sessionlogin/service.go` + `sessionrefresh/service.go` 切换主链：
+  - 不再走 JWT refresh 旋转，改调 `refresh.Store.Issue/Rotate/Revoke`
+  - 返回给客户端的 refresh token 从 JWT string → opaque `selector.verifier`
+  - 移除旧 `GetByPreviousRefreshToken` 应用层 reuse 检测（store CAS 内聚）
+  - 对外 contract schema 更新（token length 变化）
+  - `cmd/corebundle/access_module.go` wiring 切换
+
+**硬依赖**：**X11 必须在 X15 之前**——X15 明文 token 入库后再改 HMAC-split 格式需要数据迁移
+
+**搭车**：无（两步已是一个主题，不再搭其他）
+
+**文件面**：`adapters/postgres/refresh_store.go` + migration 009 + `runtime/auth/refresh/` + `cells/accesscore/slices/sessionlogin/service.go` + `cells/accesscore/slices/sessionrefresh/service.go` + `cells/accesscore/access_module.go` + `cmd/corebundle/`
+
+**风险**：高；主链重构 + CAS SQL + 对外 token 格式变化；必须 `go test -race -tags=integration` 全通过
+
+---
+
+### PR-A30 AUTH-TEST-COVERAGE（~6h）
+
+**主线**：
+- **S19 JWT-AUDIENCE-DRIFT-INTEG-TEST-01** 真实 sessionlogin 路径 audience drift 检测（2h）
+- **S21 JWT-AUD-TEST-TABLE-DRIVEN-01** `runtime/auth/jwt_aud_test.go` 9 场景改 table-driven（1h）
+- **S22 REFRESH-AUD-REAL-ROUTE-TEST-01** 真实 HTTP refresh wrong/missing aud 集测（2h）
+- **S24 AUTH-MIDDLEWARE-AUD-REFRESH-E2E-01** `httptest.NewServer` + 真实 `AuthMiddleware` e2e（1h）
+
+**搭车**：无
+
+**搭车理由**：全是 auth 回归测试，F1 / F7 已完工后本批测试阻力最小；独立 PR 便于 review
+
+**文件面**：`runtime/auth/jwt_aud_test.go` + `runtime/auth/middleware_aud_test.go` + `cells/accesscore/auth_integration_test.go` + `cmd/corebundle/`
+
+**依赖**：PR-A29 完成（refresh 主链切换后测试用例需对齐新 opaque path）
+
+---
+
+### PR-A31 AUTH-FIRSTRUN-DX（~2h）
+
+**主线**：
+- **C2-A LOGIN-USERID-RESPONSE** `sessionlogin/service.go` 登录响应补 `userId` 字段
+- **C2-B 403-HINT-RESOLVED-PATH** `runtime/auth/middleware.go` 403 错误 hint 包含 resolved path
+- **C2-C README-MACOS-BASE64** `examples/ssobff/README.md` macOS `base64` flag 可移植化（去 Linux 特定参数）
+
+**搭车**：无
+
+**文件面**：`cells/accesscore/slices/sessionlogin/` + `runtime/auth/middleware.go` + `examples/ssobff/README.md`
+
+**风险**：低；DX 打磨
+
+---
+
+## Wave 3 — P2 架构延展（~10 工作日）
+
+### PR-A14b INTERNAL-LISTENER-FULL（Cx4，~1d，v1.1）
+
+> **注**：已拆分成 PR-A14a（Wave 1 最小双 listener）+ PR-A14b（Wave 3 完整版）。本条是完整版。
+
+**主线**：
+- **R4 INTERNAL-LISTENER-FULL** 在 PR-A14a 最小双 listener 基础上升级完整 RouteGroup：新增 `health` listener（`/healthz|/readyz|/metrics`）+ service-token/mTLS 策略 + `bootstrap.WithRouteGroup` 声明式 API + 编译期 listener 引用校验
+- **依赖**：PR-A14a 已合入（primary + internal 双 listener 基座已稳定）
+
+**搭车**：
+- 配合 **PR-A32 SELECTOR-CLOSURE** 在本 PR 后删除 `bootstrap.WithInternalEndpointGuard` 过渡层（F3 彻底收尾）
+
+**文件面**：`runtime/bootstrap/bootstrap.go` + `runtime/http/router/group.go`（新）+ 全部 Cell 路由注册 API
+
+**风险**：高；签名破坏性变更，所有 cell 需同步更新。
+
+---
+
+### PR-A15 KERNEL/WEBHOOK（P2，~3d，并入 WM-4）
+
+**主线**：
+- **LATER-K3 KERNEL/WEBHOOK** Webhook 出站 Receiver/Dispatcher 抽象（含 HMAC + SSRF 白名单）
+- **WM-32 mTLS 中间件**（WinMDM defer，同批，因 mTLS 也是 outbound 安全面）
+
+**搭车理由**：Webhook outbound 和 mTLS 同属出站安全层；WM-4 六席位已通过 P2 defer，本 PR 落地。
+
+**前置**：L3 Outbox Relay 必须稳定（当前 L2 已稳），且 SSRF 策略需评审通过。
+
+**文件面**：`kernel/webhook/`（新） + `runtime/http/outbound/`（可能新）
+
+**风险**：高；SSRF 策略 + HMAC 签名需安全评审。
+
+---
+
+### PR-A16 KERNEL/RECONCILE（P2，~2d）
+
+**主线**：
+- **LATER-K4 KERNEL/RECONCILE** L3 收敛控制循环（Reconciler 模式）
+
+**搭车**：
+- **LATER-F-1 L3-PROJECTION-REFERENCE-CELL-01** `examples/l3projection/` 官方样板代码（功能 P3）
+
+**搭车理由**：L3 Reconciler 模式发布时官方补 L3 reference cell 示范业务实现。
+
+**文件面**：`kernel/reconcile/`（新） + `examples/l3projection/`（新）
+
+**风险**：中；Reconciler API 设计需 ADR。
+
+---
+
+### PR-A17 RUNTIME/SCHEDULER（P2，~2d）
+
+**主线**：
+- **LATER-K5 RUNTIME/SCHEDULER** Cron + 完整定时任务支持（分布式防重 + 并发）
+
+**搭车**：
+- **WM-18 延迟消息原语**（WinMDM defer）—— scheduler 稳定后探索 RabbitMQ `x-delayed-message`
+
+**搭车理由**：都属定时调度；WM-18 依赖 scheduler 稳定后方可实现。
+
+**文件面**：`runtime/scheduler/`（新） + 可能 `adapters/rabbitmq/delayed.go`
+
+**风险**：中；分布式协调依赖 Redis/etcd；测试桩需覆盖。
+
+---
+
+### PR-A18 Vault 多租户 + 剩余优化（~5h）
+
+**主线**：
+- **A15 VAULT-NAMESPACE-MULTITENANT-01** HCP Vault namespace 支持（1h）
+- **A16 VAULT-DATAKEY-ENDPOINT-01** datakey/plaintext endpoint（2h，🟠 S14a 触发）
+- **A18 VAULT-ROTATE-OPTIMISTIC-LOCK-01** 无锁 rotate + 写锁仅 version cache（2h）
+- **LATER-AL-R RMQ-STATUS-01** RabbitMQ 结构化 ConnectionState（3h）
+
+**搭车理由**：前三项都在 `adapters/vault/transit_provider.go`；RMQ-STATUS-01 是 adapter 层可观测的类似改造，一起合并验证 adapter 层 health/status 一致性。
+
+**文件面**：`adapters/vault/transit_provider.go` + `adapters/rabbitmq/connection.go`
+
+**风险**：低-中。
+
+---
+
+### PR-A32 SELECTOR-CLOSURE（~1h）
+
+**主线**：
+- **F3-CLOSURE SELECTOR-GUARD-REMOVE-01** 删除 `cmd/corebundle/bundle.go:81` 的 `bootstrap.WithInternalEndpointGuard("/internal/v1/", shared.InternalGuard)` 过渡层
+- 更新 `cmd/corebundle/shared_deps.go` 中 `InternalGuard` 字段（若不再被引用可删）
+- 更新相关集成测试（改走 listener 端口隔离而非 prefix 守卫）
+
+**搭车**：无
+
+**依赖**：**必须 PR-A14b INTERNAL-LISTENER-FULL 合入后**（listener 端口隔离生效，prefix guard 才能安全移除）
+
+**文件面**：`cmd/corebundle/bundle.go` + `cmd/corebundle/shared_deps.go` + 相关 `*_test.go`
+
+**风险**：低；纯清理，listener 隔离已由 PR-A14b 保证
+
+---
+
+## Wave 4 — P3 长期架构演进（~2-3 周）
+
+### PR-A19 AL-01 Outbox Relay → runtime（~1-1.5d）
+
+**主线**：
+- **AL-01 OUTBOX-RELAY-RUNTIME-MIGRATE-01** `adapters/postgres/outbox_relay.go` 轮询调度 → `runtime/outbox/relay.go`；Adapter 仅留 Store API
+
+**搭车**：无（纯分层重整，独立）
+
+**文件面**：`adapters/postgres/outbox_relay.go` + `runtime/outbox/`（新）
+
+**风险**：中；依赖注入链会变，需 integration test。
+
+---
+
+### PR-A20 AL-02 DistLock → runtime 抽象（~1d）
+
+**主线**：
+- **AL-02 DISTLOCK-RUNTIME-ABSTRACT-01** 续期 goroutine + TTL 刷新 → 通用 DistLock 接口；Redis 仅留 NX/Eval 原语
+
+**搭车**：无
+
+**文件面**：`adapters/redis/distlock.go` + `runtime/distlock/`（新）
+
+---
+
+### PR-A21 AL-04 Auth JWT 依赖评估（~0.5-1d）
+
+**主线**：
+- **AL-04 AUTH-JWT-ABSTRACT-01** `runtime/auth` 直接依赖 `golang-jwt/jwt/v5`，评估抽象必要性
+
+**决策点**：JWT 是事实标准；可能结论为 "won't do"（维持现状，补文档说明）。
+
+**搭车**：**T5 AUTH-SIGNER-01**（trigger）若 golang-jwt v6 发布则一并处理。
+
+**文件面**：`runtime/auth/`
+
+---
+
+### PR-A22 Cell ISP 拆分（~1.5d）
+
+**主线**：
+- **LATER-ARCH-1 CELL-IFACE-ISP-SPLIT-01** 12 方法基础接口 → `Cell` + `CellLifecycle` + `CellMetadata`
+
+**搭车**：无（影响所有 cell 实现，独立 PR 做分阶段迁移）
+
+**文件面**：`kernel/cell/` + 所有 `cells/*/cell.go`
+
+**风险**：高；接口破坏性变更，所有 cell + examples 需同步更新。
+
+---
+
+### PR-A23 ER-ARCH-01 Subscriber Setup/Run 双阶段（~2d）
+
+**主线**：
+- **LATER-ARCH-2 ER-ARCH-01** Router 启动探测 `time.After(500ms)` → Subscriber 接口拆 `Setup()` + `Run()`
+
+**搭车**：无（协议级改造，独立）
+
+**文件面**：`kernel/outbox/subscriber.go` + `runtime/eventrouter/` + `adapters/rabbitmq/subscriber.go` + `adapters/memory/subscriber.go`
+
+**风险**：高；所有 Subscriber 实现需升级；时序竞态修复需跨 AZ 测试验证。
+
+---
+
+### PR-A24 DURABLE-TYPE-01 + G-6 + kernel/replay + rollback（~2d）
+
+**主线**（打包长期债）：
+- **DURABLE-TYPE-01** L2/L3 持久化级别类型系统静态保护研究 + 实现
+- **G-6 ASSEMBLY-BOUNDARY-DERIVED-01** boundary.yaml 存在性 + 一致性校验（关联 PR220-e2 GENERATED-BOUNDARY-STRATEGY 决策）
+- **LATER-K6 KERNEL/REPLAY** 投影重算（v1.1）
+- **LATER-K7 KERNEL/ROLLBACK** Rollback 元数据模型（v1.1）
+
+**搭车理由**：都是低频、独立新模块；打包成一个 v1.1 sprint。
+
+**文件面**：`kernel/replay/`（新） + `kernel/rollback/`（新） + `kernel/governance/` + metadata 类型探索
+
+**风险**：低（业务不紧迫），可随时排期。
+
+---
+
+### PR-A33 REFRESH-OPAQUE-POLISH（X12 + X13 + X14，~8h）
+
+**主线**：
+- **X12 REFRESH-IDLE-EXPIRE-01**（3h）`refresh_store.go` 加 `idle_expires_at` 滑动窗口；每次 Rotate 刷新 `last_used + idle_ttl`；ref: Zitadel
+- **X14 REFRESH-GRACE-COUNTER-01**（2h）`first_used_at` + `used_times` 列，grace 窗口内重用次数上限（默认 3）触发 `ErrTokenReused`；ref: Hydra Fosite
+- **X13 REFRESH-PARTITION-01**（3h，🟠 生产流量阈值后）`refresh_tokens` 按 `expires_at` range 分区，`DROP PARTITION` 替代批量 DELETE（migration 012）
+
+**搭车理由**：全部在 `adapters/postgres/refresh_store.go` + migrations；X12/X14 语义补强，X13 性能扩容，一批合测试工作量集中
+
+**依赖**：**PR-A29 AUTH-REFRESH-MAIN 已合入**（主链 opaque 生效）
+
+**文件面**：`adapters/postgres/refresh_store.go` + migration 010/011/012 + `runtime/auth/refresh/policy.go`
+
+**风险**：中；分区涉及数据迁移，建议 X13 单独 staging 演练
+
+---
+
+## PR 依赖关系图
+
+```
+Wave 1 (可并行，无相互依赖)：
+  PR-A1 治理规则 ─┬─ 对 PR-A13 docs clean 有软依赖
+  PR-A2 pkg helper
+  PR-A3 入口 + per-cell adapter
+  PR-A4 运行时可观测
+  PR-A5a accesscore 拆分 + A5 lifecycle 迁移 ──→ PR-A5b configcore 拆分 + S15 ctx 分类
+  PR-A6 EventRouter 拆分 + S4 typed + S41 marshal
+  PR-A7 Principal 契约（F7）
+  PR-A8 Vault auth
+  PR-A14a INTERNAL-LISTENER-MIN 🔴 发布前必做（独立 listener 最小版）
+  PR-A25 AUTH-PROD-HARDENING 🟠 （S-nonce + S32，real 模式前触发）
+  PR-A26 AUTH-SETUP-ENDPOINT 🔴 （P1-19 setup slice + contract）
+  PR-A27 CONFIGWRITE-RETURNING 🔴 （configwrite TOCTOU 收敛）
+  PR-A28 CONFIG-DOCS-REWRITE 🟡 （pg-cell-template 重写）
+
+Wave 2：
+  PR-A9 CONTRACT-META-01 ──→ PR-A11 kernel/wrapper
+  PR-A10 JSON-SARIF（独立）
+  PR-A12 kernel/command（独立）
+  PR-A13 docs clean ─────→ 激活 PR-A1 里的 DOC-NAMING-GUARD
+  PR-A29 AUTH-REFRESH-MAIN 🔴 （X11 HMAC-split → X15 opaque 主链切换，强依赖 X11 先）
+  PR-A30 AUTH-TEST-COVERAGE（S19+S21+S22+S24，依赖 PR-A29）
+  PR-A31 AUTH-FIRSTRUN-DX（login userId + 403 hint + macOS base64）
+
+Wave 3：
+  PR-A14b INTERNAL-LISTENER-FULL（完整 RouteGroup + health + mTLS，依赖 PR-A14a）
+  PR-A32 SELECTOR-CLOSURE（删 WithInternalEndpointGuard，依赖 PR-A14b）
+  PR-A15 kernel/webhook（依赖 L3 Outbox 稳定）
+  PR-A16 kernel/reconcile + LATER-F-1 L3 示例
+  PR-A17 runtime/scheduler + WM-18
+  PR-A18 Vault + RMQ 剩余
+
+Wave 4 (v1.1+)：
+  PR-A19 AL-01 Outbox → runtime
+  PR-A20 AL-02 DistLock → runtime
+  PR-A21 AL-04 Auth JWT 评估
+  PR-A22 Cell ISP 拆分
+  PR-A23 ER-ARCH-01 Subscriber Setup/Run
+  PR-A24 DURABLE-TYPE + G-6 + replay/rollback
+  PR-A33 REFRESH-OPAQUE-POLISH（X12 idle + X14 grace + X13 partition，依赖 PR-A29）
+```
+
+---
+
+## 关键搭车矩阵
+
+| 主 PR | 搭车项 | 搭车理由 |
+|---|---|---|
+| PR-A1 治理规则 | L11 + PR220-4 + PR220-2 | 同 CI/governance 面 |
+| PR-A2 pkg helper | A7 POOLSTATS-IFACE | 同为 adapter 抽象 |
+| PR-A3 入口 | T6 per-cell adapter | 同 cmd/corebundle wiring |
+| PR-A4 可观测 | R3 OB-02 | 同 runtime/http/middleware |
+| PR-A5a accesscore | V-A16 TxRunner helper + **A5 initialadmin lifecycle 迁移** | accesscore 拆分触发 RunInTx 替换；sweep/EnsureAdmin 迁 lifecycle.Hook 必须同期做（删 WithBootstrapWorkerSink） |
+| PR-A5b configcore | **S15 config_repo ctx.Canceled 归类** | 同 cell；复用 F5 `IsInfraError` |
+| PR-A6 EventRouter | S4 typed event payload + **S41 marshal err 显式** | 同事件注册+payload 链路；sessionlogin/logout 事件发布路径原地修 |
+| PR-A7 Principal | V-A17 rolefetch | Principal 重写触及角色查询路径 |
+| PR-A8 Vault auth | S4b + DEGRADATION-GAUGE | 同 transit_provider.go |
+| PR-A9 CONTRACT-META | L7-FMT15b + S2-follow | 同 contract.yaml 结构 |
+| PR-A13 docs clean | PR220-1/1b/e1/e3 | 文档事实源一次性扫清 |
+| PR-A14b listener-full | **PR-A32 SELECTOR-CLOSURE** | listener 隔离生效后删 prefix guard |
+| PR-A15 webhook | WM-32 mTLS | 同出站安全 |
+| PR-A16 reconcile | LATER-F-1 L3 示例 | 新机制 + 官方样板同发 |
+| PR-A17 scheduler | WM-18 延迟消息 | WM-18 依赖 scheduler |
+| PR-A18 Vault 剩余 | RMQ-STATUS-01 | 同 adapter health/status 面 |
+| PR-A25 auth-prod-harden | S-nonce + S32 | real 模式 fail-fast 同面 |
+| PR-A29 auth-refresh-main | X11 → X15（强依赖顺序） | HMAC-split 必须在 opaque integration 之前，否则需数据迁移 |
+| PR-A33 refresh-polish | X12 + X13 + X14 | 全在 refresh_store.go + migrations |
+
+---
+
+## 推荐执行顺序
+
+> 下面的 Week 编号按**双人并行 + buffer**给出（每周 ~5 个净工作日）。单人场景把每周拉长到 1.8 倍即可。
+
+**Week 1**（Wave 1 前半 ~5d 净）：PR-A1（10h）+ PR-A2（7h）+ PR-A3（4h）+ PR-A14a（4h）—— 四路并行 worktree，基础设施打底
+
+**Week 2**（Wave 1 中段 ~5d 净）：PR-A4（6h）+ PR-A5a（6-7h A5 lifecycle）+ PR-A5b（3h）+ PR-A6（7h）+ PR-A7（6h）—— cell 内部重组 + EventRouter + Principal 契约
+
+**Week 3**（Wave 1 收尾 + Wave 2 启动 ~5d 净）：PR-A8 Vault（5h）+ PR-A25 AUTH-PROD-HARDENING（4h）+ PR-A26 AUTH-SETUP-ENDPOINT（4h）+ PR-A27 CONFIGWRITE-RETURNING（5h）+ PR-A28 CONFIG-DOCS（3h）+ PR-A13 docs clean（4h）—— Wave 1 发布硬约束全部落地
+
+**Week 4**（Wave 2 重磅 ~5d 净）：PR-A9 CONTRACT-META-01（3d Cx3 瓶颈）+ PR-A29 AUTH-REFRESH-MAIN（X11→X15 串行 10h 🔴）并行
+
+**Week 5**（Wave 2 收尾 ~3.5d 净）：PR-A10 JSON-SARIF（6h）+ PR-A11 wrapper（1d）+ PR-A12 command（1d）+ PR-A30 AUTH-TEST-COVERAGE（6h）+ PR-A31 AUTH-FIRSTRUN-DX（2h）
+
+**🎯 v1.0 发布节点 @ Week 5 末**（双人）/ **Week 8-9 末**（单人）：Wave 1 + Wave 2 全部落地
+
+**Week 6-8**（Wave 3，可与问题/功能层并行，~8-9d 净）：PR-A14b INTERNAL-LISTENER-FULL → PR-A32 SELECTOR-CLOSURE → PR-A15 webhook → PR-A16 reconcile → PR-A17 scheduler → PR-A18
+
+**v1.1+**（Wave 4，~10d 净）：长期债 PR-A19 ~ PR-A24 + PR-A33 refresh polish，按季度排
+
+---
+
+## 验证方式
+
+每个 PR 必须：
+1. 本地跑 `golangci-lint run ./修改的包/...` 0 issues
+2. 接口变更需跑 `go build -tags=integration ./...`
+3. Cx3 复杂度 PR（A9/A14a/A14b/A15/A22/A23/A29）先输出方案 ADR，6 席位审通过后开工
+4. 高风险 PR（A14a/A14b INTERNAL-LISTENER、A15 webhook、A22 Cell ISP、A23 ER-ARCH-01、**A29 REFRESH-MAIN**）必须走 `/ultrareview`
+5. 🔴 标记 PR（发布前必做）必须跑完整 `go test -race -tags=integration ./...`
+
+完成标志：
+- `gocell validate --strict` 0 error
+- `gocell check contract-health` 0 warning（CONTRACT-META-01 落地后 + 所有 contract.yaml 升级后）
+- v1.0 release 前 Wave 1-2 全部落地（含 PR-A29 refresh 主链）；Wave 3 按需；Wave 4 v1.1+
+
+---
+
+## 已完工基石声明（不占 Wave 计划）
+
+> 2026-04-23 扫描现状时识别——以下 auth/config 基石已落地，无需再排 PR，只在本计划附注供读者对齐。
+
+| 基石 / 条目 | 来源 PR / 位置 | 完工状态 |
+|---|---|---|
+| **F1 JWT Registry** | `runtime/auth/config/registry.go` + `cmd/corebundle/main.go:225` | ✅ 单一事实源；吸收 S18 + S31 + S20 |
+| **F3 Selector 基础设施** | `runtime/auth/exempt.go` + `auth.Declare` + `cmd/corebundle/bundle_hardening_test.go` 守护 | ✅ 吸收 S35 + S39；**剩余过渡层清理**见 PR-A32 SELECTOR-CLOSURE |
+| **F5 Errcode Classifier** | `pkg/errcode/classify.go`（Category + IsInfraError + IsDomainNotFound + IsExpected4xx） | ✅ 吸收 P1-18 + S40 + S43 |
+| **F6 Lifecycle 基础设施** | `runtime/bootstrap/lifecycle.go` + `runtime/worker/lazy.go` | ✅ 框架到位；**应用层迁移**（initialadmin）见 PR-A5a 搭车的 A5 |
+| **F7 Principal API** | `runtime/auth/principal.go` + 5 处 handler 已用 `auth.FromContext` | ✅ claims 直读已清零；**统一契约剩余收口**见 PR-A7 P1-A |
+| **L10 RoleInternalAdmin** | PR#218（627a8e6） | ✅ internal rbac-assign 已用 `auth.RoleInternalAdmin` |
+| **S42 ROLELIST-CURSOR** | `rbaccheck/handler.go:82` 用 `query.MapPageResult` | ✅ 真实游标返回 |
+| **F2 PG RefreshStore** | PR#213 | ✅ 基础设施完工；**主链切换**见 PR-A29 |
+
+---
+
+## 备注
+
+- **非架构项不在本计划**：问题层（安全/兼容/测试/CI/bug/docs）和功能层（发布/新端点）走独立排期，见 `docs/plans/docs-backlog-md-docs-reviews-2026042219-graceful-backus.md` 对应章节
+- **已完成项不重复**：L7 FMT15（PR#214）、L10（PR#218）、L1/L2/L4/L6（相关 PR）已核销，不列入；详见上方"已完工基石声明"
+- **触发器项**：T1/T2/T4/T5 按条件延后；T3 已触发点埋在 PR-A12
+- **auth/config 域源计划已委托本计划**：
+  - `docs/plans/202604191515-auth-federated-whistle.md` F1-F7 → F1/F3/F5/F6/F7 基础完工（见"已完工基石声明"）；F2 剩余 → PR-A29；F4 → PR-A14a/A14b
+  - `docs/plans/202604211245-024-auth-rebaseline-implementation-plan.md` A/B/C → A1 已 PR#218；A2 → PR-A25；A3 → PR-A29；A4 → PR-A14a/A14b；A5 → PR-A5a 搭车；B1 → PR-A30；B2 → PR-A6 搭车 + 已完工；C1 已 PR#216；C2 → PR-A31；C3 → PR-A14b
+  - `docs/plans/202604200313-v1.0-pre-release-plan.md` Batch 5 PR-AUTH-SETUP（P1-19） → PR-A26；Batch 6 S4（typed） → PR-A6 搭车
