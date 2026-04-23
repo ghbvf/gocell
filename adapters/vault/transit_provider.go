@@ -180,8 +180,11 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 // backoff) → buildWatcher. Only ctx cancellation causes the loop to exit.
 //
 // Contract: reauthenticate returns a non-nil error only when ctx is cancelled.
-// buildWatcher failures are logged and cause the loop to retry immediately
-// (reauthenticate applies its own backoff on the next attempt).
+// buildWatcher failures are logged and cause the loop to sleep (with exponential
+// backoff, capped at reauthBackoffCap) before retrying. This prevents a hot
+// loop when Vault is healthy (Login succeeds) but NewLifetimeWatcher consistently
+// fails (e.g. SDK issue). The backoff is local to doReauth — it is separate from
+// the backoff inside reauthenticate.
 //
 // Returns (newWatcher, true) once both reauthenticate and buildWatcher succeed,
 // or (nil, false) if ctx was cancelled.
@@ -189,6 +192,7 @@ func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) 
 	if w.authHealthy != nil {
 		w.authHealthy.Set(0)
 	}
+	watcherBackoff := reauthBackoffInitial
 	for {
 		if ctx.Err() != nil {
 			return nil, false
@@ -204,10 +208,21 @@ func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) 
 			}
 			return newWatcher, true
 		}
-		// buildWatcher failed — log and loop back to reauthenticate.
-		// The next reauthenticate call applies its own exponential backoff.
-		w.logger.WarnContext(ctx, "vault-transit: buildWatcher failed after re-auth; will retry",
-			slog.String("error", err.Error()))
+		// buildWatcher failed — sleep with exponential backoff before retrying.
+		// Without this sleep, a Vault deployment that accepts Login but rejects
+		// NewLifetimeWatcher would spin the CPU at 100%.
+		w.logger.WarnContext(ctx, "vault-transit: buildWatcher failed after re-auth; retrying",
+			slog.String("error", err.Error()),
+			slog.Duration("backoff", watcherBackoff))
+		select {
+		case <-ctx.Done():
+			return nil, false
+		case <-time.After(watcherBackoff):
+		}
+		watcherBackoff *= 2
+		if watcherBackoff > reauthBackoffCap {
+			watcherBackoff = reauthBackoffCap
+		}
 	}
 }
 
@@ -562,6 +577,12 @@ type TransitKeyProvider struct {
 	// authMethod stored so renewal worker can re-authenticate.
 	authMethod AuthMethod
 
+	// authRenewable records whether the initial auth produced a renewable token.
+	// False for MethodToken or for misconfigured AppRole/K8s roles that return
+	// non-renewable tokens. Exposed via Renewable() so NewTransitKeyProviderFromEnv
+	// can reject non-renewable tokens in real mode (F-4a).
+	authRenewable bool
+
 	// renewalWorker manages background Vault token renewal.
 	// nil when auth result is not renewable (e.g. static token) or when the
 	// VaultClient does not implement TokenRenewer (e.g. test fakes).
@@ -608,6 +629,7 @@ func NewTransitKeyProvider(ctx context.Context, client VaultClient, mountPath, k
 	if err != nil {
 		return nil, err
 	}
+	p.authRenewable = result.Renewable
 
 	// Fail-fast: verify the key exists.
 	if _, err = p.readLatestVersion(ctx); err != nil {
@@ -652,10 +674,16 @@ func (p *TransitKeyProvider) authenticate(ctx context.Context) (AuthResult, erro
 // ref: hashicorp/vault api/client.go@main — DefaultConfig + NewClient
 // ref: hashicorp/vault api/auth/approle/approle.go — AppRole auth
 func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
-	cfg := vaultapi.DefaultConfig()
-	if addr := os.Getenv("VAULT_ADDR"); addr != "" {
-		cfg.Address = addr
+	// F-2: VAULT_ADDR is required — fail fast rather than silently defaulting to
+	// the SDK loopback address (https://127.0.0.1:8200), which contradicts docs
+	// that mark VAULT_ADDR as required and hides misconfigurations.
+	addr := os.Getenv("VAULT_ADDR")
+	if addr == "" {
+		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+			"vault-transit: VAULT_ADDR is required (known values: Vault server address, e.g. https://vault.example.internal:8200)")
 	}
+	cfg := vaultapi.DefaultConfig()
+	cfg.Address = addr
 
 	// Fail-fast: construction failure is a configuration error, not an encrypt error.
 	raw, err := vaultapi.NewClient(cfg)
@@ -664,8 +692,16 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 			"vault-transit: create vault api client (check VAULT_ADDR)", err)
 	}
 
+	// F-3a: Create the startup context FIRST so all I/O (including the wrapping
+	// token unwrap in NewAuthMethodFromEnv) respects the 30-second deadline.
+	// The original code created the ctx AFTER NewAuthMethodFromEnv, allowing
+	// unwrapSecretID to block ~120s on an unreachable Vault.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	// Build auth method from env. VAULT_AUTH_METHOD is required.
-	auth, err := NewAuthMethodFromEnv(raw)
+	// ctx is passed so the wrapped secret-ID unwrap call is bounded (F-3a).
+	auth, err := NewAuthMethodFromEnv(ctx, raw)
 	if err != nil {
 		return nil, err
 	}
@@ -681,12 +717,23 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 	keyName := os.Getenv("GOCELL_VAULT_TRANSIT_KEY")
 
 	client := NewVaultAPIClient(raw)
-	// Apply a 30-second startup deadline so an unreachable Vault server does not
-	// block the process indefinitely. Callers that need a custom timeout should
-	// call NewTransitKeyProvider directly with their own context.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-	return NewTransitKeyProvider(ctx, client, mountPath, keyName, auth)
+	p, err := NewTransitKeyProvider(ctx, client, mountPath, keyName, auth)
+	if err != nil {
+		return nil, err
+	}
+
+	// F-4a: In real mode, reject non-renewable tokens. A non-renewable token
+	// means the background renewal worker was not started, so the token will
+	// silently expire without any alerting. Operators must configure the Vault
+	// role to issue renewable tokens (token_type=default or service with
+	// renewable=true).
+	if realMode && !p.Renewable() {
+		_ = p.Close(context.Background())
+		return nil, errcode.New(errcode.ErrVaultAuthFailed,
+			"vault-transit: non-renewable token rejected in real mode — configure the Vault role to issue renewable tokens (token_type=default or service with renewable=true)")
+	}
+
+	return p, nil
 }
 
 // Current returns the active KeyHandle for encrypting new values.
@@ -1003,6 +1050,15 @@ func (p *TransitKeyProvider) Worker() worker.Worker {
 	}
 	return p.renewalWorker
 }
+
+// Renewable reports whether the initial auth produced a renewable token.
+// False for MethodToken or for misconfigured AppRole/K8s roles that return
+// non-renewable tokens. When false, the background renewal worker is not
+// started and operators will not be alerted when the token approaches expiry.
+//
+// In real mode, NewTransitKeyProviderFromEnv rejects a non-renewable result
+// (F-4a): operators must configure the Vault role to issue renewable tokens.
+func (p *TransitKeyProvider) Renewable() bool { return p.authRenewable }
 
 // Close stops the token renewal worker (if configured) and satisfies the
 // lifecycle.ManagedResource contract. The underlying VaultClient manages

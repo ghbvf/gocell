@@ -257,3 +257,63 @@ func (r *nthSuccessWatcherRenewer) NewLifetimeWatcher(_ *vaultapi.LifetimeWatche
 	// Do not call Start/Stop/DoneCh/RenewCh on this watcher in this test.
 	return new(vaultapi.LifetimeWatcher), nil
 }
+
+// ---------------------------------------------------------------------------
+// F-4b: doReauth applies backoff after buildWatcher failures (not a hot loop)
+// ---------------------------------------------------------------------------
+
+// TestDoReauth_BuildWatcherFailureBackoff verifies that consecutive buildWatcher
+// failures do NOT hot-loop. Specifically: after N failures of NewLifetimeWatcher,
+// the call count within a bounded wall-clock window must not exceed N+1.
+//
+// Without the F-4b fix, the tight loop would call NewLifetimeWatcher hundreds
+// of times per second when Login always succeeds. With the fix, the first
+// backoff of reauthBackoffInitial (1s) enforces at most N+1 calls in the window.
+//
+// We use a short window (slightly over reauthBackoffInitial) and assert that
+// the renewer was called at most N+1 times. This avoids timer races while still
+// distinguishing the "no sleep" hot-loop from the "sleeping" correct case.
+func TestDoReauth_BuildWatcherFailureBackoff(t *testing.T) {
+	const failCount = 2
+
+	fakeAuth := &fakeAuthMethod{
+		method: MethodAppRole,
+		// No errs → default: returns non-renewable token each call.
+	}
+
+	watcherErr := errcode.New(errcode.ErrKeyProviderAuthFailed, "watcher fail")
+	var callMu sync.Mutex
+	var callCount int
+	renewer := &nthSuccessWatcherRenewer{
+		mu:           &callMu,
+		callCountPtr: &callCount,
+		failUntil:    failCount,
+		failErr:      watcherErr,
+	}
+
+	w := &tokenRenewalWorker{
+		client:     renewer,
+		authMethod: fakeAuth,
+		logger:     slog.Default(),
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	// doReauth will fail the first failCount times, then succeed (or ctx expires).
+	// With backoff, the first sleep is reauthBackoffInitial (1s) which is longer
+	// than our 200ms window, so only failCount+1 calls at most are expected.
+	w.doReauth(ctx)
+
+	callMu.Lock()
+	got := callCount
+	callMu.Unlock()
+
+	// Allow up to failCount+1 calls (the failCount failures plus at most the
+	// first retry attempt when the backoff wakes after ctx expiry).
+	// Without the fix, this could be in the hundreds.
+	if got > failCount+1 {
+		t.Errorf("buildWatcher called %d times within 200ms window; want <= %d (backoff must be applied after failure)",
+			got, failCount+1)
+	}
+}

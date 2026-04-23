@@ -24,6 +24,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	vaultapi "github.com/hashicorp/vault/api"
 
@@ -86,6 +87,22 @@ type AuthMethod interface {
 }
 
 // ---------------------------------------------------------------------------
+// SecretIDProvider
+// ---------------------------------------------------------------------------
+
+// SecretIDProvider supplies a secret_id on demand. Different sources have
+// different refresh semantics:
+//   - direct  — returns the same value every call (env var / static config)
+//   - wrapped — returns the unwrapped value from the wrapping token; the
+//     wrapping token is single-use, so subsequent calls return the cached value
+//     (a new wrapping token requires a restart)
+//   - file    — re-reads the file on every call to pick up orchestrator rotations
+//
+// ref: external-secrets/external-secrets — resolves credential references at Login time
+// ref: HashiCorp Vault Agent — re-reads AppRole file on each auto-auth cycle
+type SecretIDProvider func(ctx context.Context) (string, error)
+
+// ---------------------------------------------------------------------------
 // staticTokenAuth
 // ---------------------------------------------------------------------------
 
@@ -130,18 +147,22 @@ func (a *staticTokenAuth) Login(_ context.Context) (AuthResult, error) {
 
 // appRoleAuth implements AuthMethod for Vault AppRole auth.
 // It calls auth/{mountPath}/login with role_id + secret_id.
+// secretIDSource is called on each Login to pick up rotated secret_id files
+// (file mode) or return the cached value (direct / wrapped mode).
 //
 // ref: hashicorp/vault api/auth/approle/approle.go — NewAppRoleAuth + Login
 // ref: hashicorp/vault builtin/credential/approle/path_login.go — login endpoint
+// ref: external-secrets/external-secrets — resolves credentials at Login time
 type appRoleAuth struct {
-	client    *vaultapi.Client
-	roleID    string
-	secretID  string
-	mountPath string // default: "approle"
+	client         *vaultapi.Client
+	roleID         string
+	secretIDSource SecretIDProvider
+	mountPath      string // default: "approle"
 }
 
 // NewAppRoleAuth creates an AuthMethod that authenticates via Vault AppRole.
 // mountPath defaults to "approle" if empty.
+// secretIDSource is called on each Login to obtain the current secret_id.
 //
 // NOTE: client must be non-nil; unlike NewStaticTokenAuth, AppRole auth
 // requires a real Vault client for the Login HTTP call. In unit tests, use
@@ -149,7 +170,7 @@ type appRoleAuth struct {
 // only called at auth time, not at construction time.
 //
 // ref: hashicorp/vault api/auth/approle/approle.go#NewAppRoleAuth
-func NewAppRoleAuth(client *vaultapi.Client, roleID, secretID string) (AuthMethod, error) {
+func NewAppRoleAuth(client *vaultapi.Client, roleID string, secretIDSource SecretIDProvider) (AuthMethod, error) {
 	if client == nil {
 		return nil, errcode.New(errcode.ErrVaultAuthFailed,
 			"vault-auth: AppRole auth requires a non-nil Vault client")
@@ -158,29 +179,36 @@ func NewAppRoleAuth(client *vaultapi.Client, roleID, secretID string) (AuthMetho
 		return nil, errcode.New(errcode.ErrVaultAuthFailed,
 			"vault-auth: AppRole auth requires VAULT_ROLE_ID")
 	}
-	if secretID == "" {
+	if secretIDSource == nil {
 		return nil, errcode.New(errcode.ErrVaultAuthFailed,
-			"vault-auth: AppRole auth requires a secret ID")
+			"vault-auth: AppRole auth requires a non-nil SecretIDProvider")
 	}
 	return &appRoleAuth{
-		client:    client,
-		roleID:    roleID,
-		secretID:  secretID,
-		mountPath: "approle",
+		client:         client,
+		roleID:         roleID,
+		secretIDSource: secretIDSource,
+		mountPath:      "approle",
 	}, nil
 }
 
 func (a *appRoleAuth) Method() Method { return MethodAppRole }
 
-// Login calls auth/approle/login with role_id and secret_id, sets the resulting
-// token on the client, and returns an AuthResult.
+// Login resolves the current secret_id via secretIDSource (which may re-read
+// a file for rotation support), then calls auth/approle/login with role_id and
+// secret_id, sets the resulting token on the client, and returns an AuthResult.
 //
 // ref: hashicorp/vault api/auth/approle/approle.go#Login
+// ref: external-secrets/external-secrets — resolves credential references at Login time
 func (a *appRoleAuth) Login(ctx context.Context) (AuthResult, error) {
+	secretID, err := a.secretIDSource(ctx)
+	if err != nil {
+		return AuthResult{}, err
+	}
+
 	path := "auth/" + a.mountPath + "/login"
 	secret, err := a.client.Logical().WriteWithContext(ctx, path, map[string]any{
 		"role_id":   a.roleID,
-		"secret_id": a.secretID,
+		"secret_id": secretID,
 	})
 	if err != nil {
 		return AuthResult{}, errcode.Wrap(errcode.ErrVaultAuthFailed,
@@ -298,6 +326,9 @@ func extractAuthResult(client *vaultapi.Client, secret *vaultapi.Secret) (AuthRe
 // environment variable. The client parameter is used by AppRole and Kubernetes
 // auth to issue the login call and set the resulting token.
 //
+// ctx is used to bound the wrapping token unwrap call when
+// VAULT_SECRET_ID_TYPE=wrapped (F-3a: unwrap must respect the startup deadline).
+//
 // Required:
 //   - VAULT_AUTH_METHOD = token | approle | kubernetes  (no default — fail-fast)
 //
@@ -309,11 +340,11 @@ func extractAuthResult(client *vaultapi.Client, secret *vaultapi.Secret) (AuthRe
 // AppRole secret ID types (VAULT_SECRET_ID_TYPE, default: direct):
 //   - direct:  read VAULT_SECRET_ID
 //   - wrapped: read VAULT_SECRET_ID_WRAPPING_TOKEN, unwrap via Vault sys/unwrap
-//   - file:    read VAULT_SECRET_ID_FILE path, load secret_id from disk
+//   - file:    read VAULT_SECRET_ID_FILE path, re-read on every Login call
 //
 // ref: hashicorp/vault api/auth/approle/approle.go — SecretID variants
-// ref: hashicorp/vault api/logical.go#Logical.Unwrap — wrapping token unwrap
-func NewAuthMethodFromEnv(client *vaultapi.Client) (AuthMethod, error) {
+// ref: hashicorp/vault api/logical.go#Logical.UnwrapWithContext — wrapping token unwrap
+func NewAuthMethodFromEnv(ctx context.Context, client *vaultapi.Client) (AuthMethod, error) {
 	method := os.Getenv("VAULT_AUTH_METHOD")
 	switch method {
 	case string(MethodToken):
@@ -330,11 +361,11 @@ func NewAuthMethodFromEnv(client *vaultapi.Client) (AuthMethod, error) {
 			return nil, errcode.New(errcode.ErrVaultAuthFailed,
 				"vault-auth: VAULT_AUTH_METHOD=approle requires VAULT_ROLE_ID to be set")
 		}
-		secretID, err := secretIDFromEnv(client)
+		secretIDSource, err := secretIDFromEnv(ctx, client)
 		if err != nil {
 			return nil, err
 		}
-		return NewAppRoleAuth(client, roleID, secretID)
+		return NewAppRoleAuth(client, roleID, secretIDSource)
 
 	case string(MethodKubernetes):
 		role := os.Getenv("VAULT_K8S_ROLE")
@@ -356,39 +387,73 @@ func NewAuthMethodFromEnv(client *vaultapi.Client) (AuthMethod, error) {
 // secretIDFromEnv — AppRole secret ID loading (direct / wrapped / file)
 // ---------------------------------------------------------------------------
 
-// secretIDFromEnv loads the AppRole secret_id based on VAULT_SECRET_ID_TYPE.
+// secretIDFromEnv returns a SecretIDProvider based on VAULT_SECRET_ID_TYPE.
 // Default is "direct" for backwards-compatibility in dev/CI.
 //
+// The caller supplies ctx for the wrapped case: unwrapping consumes the
+// single-use wrapping token immediately so it respects the startup deadline (F-3a).
+//
 // ref: hashicorp/vault api/auth/approle/approle.go — SecretID.FromString / FromFile
-// ref: hashicorp/vault api/logical.go#Logical.Unwrap — wrapping token
-func secretIDFromEnv(client *vaultapi.Client) (string, error) {
+// ref: hashicorp/vault api/logical.go#Logical.UnwrapWithContext — wrapping token
+// ref: external-secrets/external-secrets — resolves credentials at Login time
+// ref: HashiCorp Vault Agent — re-reads AppRole file on each auto-auth cycle
+func secretIDFromEnv(ctx context.Context, client *vaultapi.Client) (SecretIDProvider, error) {
 	secretIDType := os.Getenv("VAULT_SECRET_ID_TYPE")
 	if secretIDType == "" {
 		secretIDType = "direct"
 	}
 	switch secretIDType {
 	case "direct":
-		secretID := os.Getenv("VAULT_SECRET_ID")
-		if secretID == "" {
-			return "", errcode.New(errcode.ErrVaultAuthFailed,
+		s := os.Getenv("VAULT_SECRET_ID")
+		if s == "" {
+			return nil, errcode.New(errcode.ErrVaultAuthFailed,
 				"vault-auth: VAULT_SECRET_ID_TYPE=direct requires VAULT_SECRET_ID to be set")
 		}
-		return secretID, nil
+		return func(_ context.Context) (string, error) { return s, nil }, nil
 
 	case "wrapped":
-		return unwrapSecretID(client)
+		// Unwrap NOW using the caller's ctx (e.g. the 30s startup deadline).
+		// Wrapping tokens are single-use — cache the result for subsequent Login calls.
+		// A new wrapping token requires a process restart.
+		unwrapped, err := unwrapSecretID(ctx, client)
+		if err != nil {
+			return nil, err
+		}
+		return func(_ context.Context) (string, error) { return unwrapped, nil }, nil
 
 	case "file":
-		return secretIDFromFile()
+		filePath := os.Getenv("VAULT_SECRET_ID_FILE")
+		if filePath == "" {
+			return nil, errcode.New(errcode.ErrVaultAuthFailed,
+				"vault-auth: VAULT_SECRET_ID_TYPE=file requires VAULT_SECRET_ID_FILE to be set")
+		}
+		// Re-read on every Login call so orchestrator-rotated projected volumes
+		// are picked up without a process restart (F-3c).
+		return func(_ context.Context) (string, error) {
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
+					fmt.Sprintf("vault-auth: read secret_id from file %s", filePath), err)
+			}
+			s := strings.TrimSpace(string(data))
+			if s == "" {
+				return "", errcode.New(errcode.ErrVaultAuthFailed,
+					"vault-auth: secret_id file is empty: "+filePath)
+			}
+			return s, nil
+		}, nil
 
 	default:
-		return "", errcode.New(errcode.ErrVaultAuthFailed,
+		return nil, errcode.New(errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-auth: unknown VAULT_SECRET_ID_TYPE %q (known values: direct, wrapped, file)", secretIDType))
 	}
 }
 
 // unwrapSecretID reads VAULT_SECRET_ID_WRAPPING_TOKEN and unwraps it via
 // Vault sys/wrapping/unwrap to obtain the real secret_id.
+//
+// ctx is used to bound the unwrap call — the caller passes the startup
+// deadline so an unreachable Vault does not block indefinitely (F-3a).
 //
 // The wrapping token is consumed on unwrap — it must not be used again.
 //
@@ -397,10 +462,10 @@ func secretIDFromEnv(client *vaultapi.Client) (string, error) {
 // used by other goroutines. This eliminates the race window that existed when
 // the original client's token was temporarily replaced.
 //
-// ref: hashicorp/vault api/logical.go#Logical.Unwrap
+// ref: hashicorp/vault api/logical.go#Logical.UnwrapWithContext
 // ref: hashicorp/vault builtin/logical/transit/wrapping.go — wrapping token pattern
 // ref: hashicorp/vault api/client.go#Clone — thread-safe copy for isolated operations
-func unwrapSecretID(client *vaultapi.Client) (string, error) {
+func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error) {
 	wrapToken := os.Getenv("VAULT_SECRET_ID_WRAPPING_TOKEN")
 	if wrapToken == "" {
 		return "", errcode.New(errcode.ErrVaultAuthFailed,
@@ -415,14 +480,14 @@ func unwrapSecretID(client *vaultapi.Client) (string, error) {
 		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
 			"vault-auth: clone client for unwrap", err)
 	}
-	// Vault SDK's Logical().Unwrap reads the token from the client's header
-	// (X-Vault-Token), NOT from the wrapToken body argument. SetToken is
-	// required here; passing wrapToken to Unwrap is ignored when a non-empty
-	// header is already set by the SDK.
+	// Vault SDK's Logical().UnwrapWithContext reads the token from the client's
+	// header (X-Vault-Token), NOT from the wrapToken body argument. SetToken is
+	// required here; passing wrapToken to UnwrapWithContext is ignored when a
+	// non-empty header is already set by the SDK.
 	// ref: hashicorp/vault api/sys_wrapping.go#Unwrap
 	clone.SetToken(wrapToken)
 
-	secret, err := clone.Logical().Unwrap(wrapToken)
+	secret, err := clone.Logical().UnwrapWithContext(ctx, wrapToken)
 	if err != nil {
 		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
 			"vault-auth: unwrap AppRole secret_id (wrapping token may be expired or already consumed)", err)
@@ -439,8 +504,11 @@ func unwrapSecretID(client *vaultapi.Client) (string, error) {
 	return secretID, nil
 }
 
-// secretIDFromFile reads the AppRole secret_id from a file at
-// VAULT_SECRET_ID_FILE (e.g. a K8s projected volume injected by a trusted orchestrator).
+// secretIDFromFile reads the AppRole secret_id once from a file at
+// VAULT_SECRET_ID_FILE. This is the legacy single-read helper kept for
+// compatibility with tests that call it directly.
+// New callers should use secretIDFromEnv (file case) which returns a provider
+// that re-reads the file on each Login call.
 func secretIDFromFile() (string, error) {
 	filePath := os.Getenv("VAULT_SECRET_ID_FILE")
 	if filePath == "" {
@@ -452,7 +520,7 @@ func secretIDFromFile() (string, error) {
 		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-auth: read secret_id from file %s", filePath), err)
 	}
-	secretID := string(data)
+	secretID := strings.TrimSpace(string(data))
 	if secretID == "" {
 		return "", errcode.New(errcode.ErrVaultAuthFailed,
 			fmt.Sprintf("vault-auth: secret_id file is empty: %s", filePath))

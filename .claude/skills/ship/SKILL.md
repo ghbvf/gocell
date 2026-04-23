@@ -87,11 +87,12 @@ PR body 包含：Summary、`Refs: <ID>`、`ref: framework file`、Test plan chec
 
 **L4**：并行 6 个 `reviewer` agent（正确性 / 安全 / 测试 / 运维可观测 / 开发者体验 / 架构合规）。全部完成后汇总 findings 表（含 Cx 分级）。
 
+Review结束后查看（`gh pr checks <编号>`），禁止自动循环等待CI结束
 ---
 
 ## 阶段 8：Fix
 
-对 Cx1/Cx2 IN_SCOPE findings 派发 `developer` agent 执行 `/fix <finding>`；Cx3/Cx4 和 OUT_OF_SCOPE 收集到阶段 9。Fix 后 push，查 CI（`gh pr checks <编号>`），CI 失败修复后再 push。
+对 Cx1/Cx2 IN_SCOPE findings 派发 `developer` agent 执行 `/fix <finding>`；Cx3/Cx4 和 OUT_OF_SCOPE 收集到阶段 9。
 
 ---
 

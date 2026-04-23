@@ -1492,5 +1492,59 @@ func TestNewTransitKeyProvider_WithFakeAuth(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// F-4a: Renewable() getter and real-mode non-renewable rejection
+// ---------------------------------------------------------------------------
+
+// TestTransitKeyProvider_Renewable_FalseForStaticToken verifies that
+// Renewable() returns false when the auth method produced a non-renewable token
+// (e.g. static VAULT_TOKEN, MethodToken).
+func TestTransitKeyProvider_Renewable_FalseForStaticToken(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	p, err := NewTransitKeyProvider(
+		context.Background(), fake, "transit", "gocell-config",
+		NewStaticTokenAuth(nil, "test-token"),
+	)
+	if err != nil {
+		t.Fatalf("NewTransitKeyProvider: %v", err)
+	}
+	if p.Renewable() {
+		t.Error("Renewable() = true, want false for static token")
+	}
+}
+
+// TestTransitKeyProvider_Renewable_TrueForRenewableAuth verifies that
+// Renewable() returns true when the auth method produced a renewable token.
+func TestTransitKeyProvider_Renewable_TrueForRenewableAuth(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 1}
+	auth := &fakeAuthMethod{
+		method:  MethodAppRole,
+		results: []AuthResult{{ClientToken: "fake-token", Renewable: true}},
+	}
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", auth)
+	if err != nil {
+		t.Fatalf("NewTransitKeyProvider: %v", err)
+	}
+	// Note: the renewal worker is not started (fakeVaultClient does not implement
+	// TokenRenewer), so authRenewable is set but renewalWorker is nil.
+	if !p.Renewable() {
+		t.Error("Renewable() = false, want true for renewable auth result")
+	}
+}
+
+// TestNewTransitKeyProviderFromEnv_MissingVaultAddr_Fails verifies F-2:
+// when VAULT_ADDR is not set, NewTransitKeyProviderFromEnv fails fast with
+// ErrVaultAuthFailed instead of silently using the SDK loopback default.
+func TestNewTransitKeyProviderFromEnv_MissingVaultAddr_Fails(t *testing.T) {
+	setEnv(t, "VAULT_ADDR", "")
+	_, err := NewTransitKeyProviderFromEnv(false)
+	if err == nil {
+		t.Fatal("expected error when VAULT_ADDR is unset, got nil")
+	}
+	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
+		t.Errorf("expected ErrVaultAuthFailed in error chain, got: %v", err)
+	}
+}
+
 // Note: TestStaticTokenAuth_* and TestAssertForRealMode_* tests live in
 // auth_test.go — they test auth.go directly, not TransitKeyProvider.
