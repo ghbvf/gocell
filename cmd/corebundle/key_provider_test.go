@@ -104,6 +104,7 @@ func TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast(t *testing.T) {
 	// connection failure as a startup error (transient, but still fatal at
 	// startup since the fail-fast check runs in NewTransitKeyProviderFromEnv).
 	t.Setenv("VAULT_ADDR", "http://127.0.0.1:1")
+	t.Setenv("VAULT_AUTH_METHOD", "token")
 	t.Setenv("VAULT_TOKEN", "test-token")
 
 	kp, err := buildKeyProvider("postgres", "dev", "vault-transit", "", "")
@@ -111,6 +112,10 @@ func TestBuildKeyProvider_VaultTransit_InvalidAddr_FailsFast(t *testing.T) {
 	assert.Nil(t, kp)
 	assert.Contains(t, err.Error(), "vault-transit",
 		"error must identify provider so operators can route the alert")
+	// Confirm we actually reached the readLatestVersion / network-error path,
+	// not the earlier env-validation path.
+	assert.NotContains(t, err.Error(), "VAULT_AUTH_METHOD is required",
+		"test should exercise the unreachable-VAULT_ADDR path, not env validation")
 }
 
 // TestBuildKeyProvider_LocalAES_DemoKey_UpperCase_RealMode_Rejected verifies
