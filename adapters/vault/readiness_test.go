@@ -157,7 +157,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 		checkers := p.Checkers()
 		probe := checkers["vault_transit_ready"]
 		require.NotNil(t, probe)
-		probeErr := probe()
+		probeErr := probe(context.Background())
 		require.Error(t, probeErr, "probe must return error after transit unmount")
 		isKeyNotFound := isErrCode(probeErr, errcode.ErrKeyProviderKeyNotFound)
 		isTransient := isErrCode(probeErr, errcode.ErrKeyProviderTransient)
