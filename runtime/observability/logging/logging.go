@@ -14,6 +14,10 @@ import (
 	"log/slog"
 	"os"
 
+	// Cell-model keys (cell/slice/journey) live in kernel/ctxkeys; generic
+	// obs/networking keys (request/trace/span/correlation/real IP) live in
+	// pkg/ctxkeys. pkg/ must not depend on kernel/, so dual-import is the
+	// intentional resolution — do not collapse into a single package.
 	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )

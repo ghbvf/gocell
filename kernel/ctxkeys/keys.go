@@ -17,7 +17,9 @@ func WithCellID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, CellID, id)
 }
 
-// CellIDFrom extracts the cell ID from ctx. The boolean indicates presence.
+// CellIDFrom extracts the cell ID from ctx. The boolean reports whether the
+// key was present; it can be true with an empty value, so callers that treat
+// "" as invalid must check both ok and v != "".
 func CellIDFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(CellID).(string)
 	return v, ok
@@ -28,7 +30,9 @@ func WithSliceID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, SliceID, id)
 }
 
-// SliceIDFrom extracts the slice ID from ctx. The boolean indicates presence.
+// SliceIDFrom extracts the slice ID from ctx. The boolean reports whether the
+// key was present; it can be true with an empty value, so callers that treat
+// "" as invalid must check both ok and v != "".
 func SliceIDFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(SliceID).(string)
 	return v, ok
@@ -39,7 +43,9 @@ func WithJourneyID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, JourneyID, id)
 }
 
-// JourneyIDFrom extracts the journey ID from ctx. The boolean indicates presence.
+// JourneyIDFrom extracts the journey ID from ctx. The boolean reports whether
+// the key was present; it can be true with an empty value, so callers that
+// treat "" as invalid must check both ok and v != "".
 func JourneyIDFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(JourneyID).(string)
 	return v, ok
