@@ -62,6 +62,15 @@ var safeMethods = map[string]bool{
 	http.MethodTrace:   true,
 }
 
+// csrfState holds the normalized configuration for a CSRF middleware instance.
+type csrfState struct {
+	exactOrigins     map[string]bool
+	wildcardPatterns []string
+	excluded         []string
+	allowSameSite    bool
+	allowMissing     bool
+}
+
 // CSRF returns middleware that validates request origin using Sec-Fetch-Site,
 // Origin, and Referer headers. It provides defense-in-depth for APIs that may
 // use bearer tokens (JWT) or cookie-based sessions.
@@ -78,11 +87,13 @@ func CSRF(cfg CSRFConfig) func(http.Handler) http.Handler {
 			exactOrigins[norm] = true
 		}
 	}
-
-	excluded := cfg.ExcludedPathPrefixes
-	allowSameSite := cfg.AllowSameSite
-	allowMissing := cfg.AllowMissingOrigin
-
+	st := csrfState{
+		exactOrigins:     exactOrigins,
+		wildcardPatterns: wildcardPatterns,
+		excluded:         cfg.ExcludedPathPrefixes,
+		allowSameSite:    cfg.AllowSameSite,
+		allowMissing:     cfg.AllowMissingOrigin,
+	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Step 1: Safe methods bypass.
@@ -90,77 +101,109 @@ func CSRF(cfg CSRFConfig) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
-
 			// Step 2: Excluded paths bypass.
 			// Normalize path to prevent traversal (e.g., /a/../b → /b).
-			cleanPath := path.Clean(r.URL.Path)
-			if isExcludedPath(cleanPath, excluded) {
+			if isExcludedPath(path.Clean(r.URL.Path), st.excluded) {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			// Step 3: Sec-Fetch-Site validation.
-			if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" {
-				switch sfs {
-				case "same-origin":
-					w.Header().Add("Vary", "Origin")
-					next.ServeHTTP(w, r)
-					return
-				case "none":
-					w.Header().Add("Vary", "Origin")
-					next.ServeHTTP(w, r)
-					return
-				case "same-site":
-					if !allowSameSite {
-						rejectCSRF(w, r, "same-site not allowed")
-						return
-					}
-					// AllowSameSite=true: fall through to Origin/Referer
-					// validation — do NOT blindly allow. A malicious
-					// subdomain could send same-site requests.
-				default: // "cross-site" or unknown
-					rejectCSRF(w, r, "cross-site or unknown Sec-Fetch-Site: "+sfs)
-					return
-				}
-			}
-
-			// Step 4: Origin header validation.
-			if origin := r.Header.Get("Origin"); origin != "" {
-				if origin == "null" {
-					// Origin: null is sent by sandboxed iframes, data: URLs,
-					// and redirects — treat as untrusted.
-					rejectCSRF(w, r, "null origin")
-					return
-				}
-				if matchOrigin(origin, exactOrigins, wildcardPatterns) {
-					w.Header().Add("Vary", "Origin")
-					next.ServeHTTP(w, r)
-					return
-				}
-				rejectCSRF(w, r, "origin not trusted: "+origin)
+			// Steps 3-6: origin signal validation.
+			if !st.checkOriginSignals(w, r) {
 				return
 			}
-
-			// Step 5: Referer header fallback.
-			if referer := r.Header.Get("Referer"); referer != "" {
-				refOrigin := extractOrigin(referer)
-				if refOrigin != "" && matchOrigin(refOrigin, exactOrigins, wildcardPatterns) {
-					w.Header().Add("Vary", "Origin")
-					next.ServeHTTP(w, r)
-					return
-				}
-				rejectCSRF(w, r, "referer not trusted: "+referer)
-				return
-			}
-
-			// Step 6: No origin signals at all.
-			if allowMissing {
-				next.ServeHTTP(w, r)
-				return
-			}
-			rejectCSRF(w, r, "no origin signal present")
+			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// checkOriginSignals validates the Sec-Fetch-Site, Origin, and Referer headers
+// in sequence. Returns true if the request may proceed, false if it was
+// rejected (rejection response already written to w).
+func (st *csrfState) checkOriginSignals(w http.ResponseWriter, r *http.Request) bool {
+	// Step 3: Sec-Fetch-Site validation.
+	if sfs := r.Header.Get("Sec-Fetch-Site"); sfs != "" {
+		return st.checkSecFetchSite(w, r, sfs)
+	}
+	// Step 4: Origin header validation.
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return st.checkOriginHeader(w, r, origin)
+	}
+	// Step 5: Referer header fallback.
+	if referer := r.Header.Get("Referer"); referer != "" {
+		return st.checkRefererHeader(w, r, referer)
+	}
+	// Step 6: No origin signals at all.
+	if st.allowMissing {
+		return true
+	}
+	rejectCSRF(w, r, "no origin signal present")
+	return false
+}
+
+// checkSecFetchSite handles Sec-Fetch-Site validation (step 3).
+// Returns true if the request may proceed or must fall through to further
+// validation; false if it was rejected.
+func (st *csrfState) checkSecFetchSite(w http.ResponseWriter, r *http.Request, sfs string) bool {
+	switch sfs {
+	case "same-origin", "none":
+		w.Header().Add("Vary", "Origin")
+		return true
+	case "same-site":
+		if !st.allowSameSite {
+			rejectCSRF(w, r, "same-site not allowed")
+			return false
+		}
+		// AllowSameSite=true: fall through to Origin/Referer
+		// validation — do NOT blindly allow. A malicious
+		// subdomain could send same-site requests.
+		return st.checkOriginSignalsNoSFS(w, r)
+	default: // "cross-site" or unknown
+		rejectCSRF(w, r, "cross-site or unknown Sec-Fetch-Site: "+sfs)
+		return false
+	}
+}
+
+// checkOriginSignalsNoSFS checks Origin and Referer when Sec-Fetch-Site
+// already passed but did not grant access (same-site with AllowSameSite=true).
+func (st *csrfState) checkOriginSignalsNoSFS(w http.ResponseWriter, r *http.Request) bool {
+	if origin := r.Header.Get("Origin"); origin != "" {
+		return st.checkOriginHeader(w, r, origin)
+	}
+	if referer := r.Header.Get("Referer"); referer != "" {
+		return st.checkRefererHeader(w, r, referer)
+	}
+	if st.allowMissing {
+		return true
+	}
+	rejectCSRF(w, r, "no origin signal present")
+	return false
+}
+
+// checkOriginHeader validates the Origin header (step 4).
+func (st *csrfState) checkOriginHeader(w http.ResponseWriter, r *http.Request, origin string) bool {
+	if origin == "null" {
+		// Origin: null is sent by sandboxed iframes, data: URLs,
+		// and redirects — treat as untrusted.
+		rejectCSRF(w, r, "null origin")
+		return false
+	}
+	if matchOrigin(origin, st.exactOrigins, st.wildcardPatterns) {
+		w.Header().Add("Vary", "Origin")
+		return true
+	}
+	rejectCSRF(w, r, "origin not trusted: "+origin)
+	return false
+}
+
+// checkRefererHeader validates the Referer header (step 5).
+func (st *csrfState) checkRefererHeader(w http.ResponseWriter, r *http.Request, referer string) bool {
+	refOrigin := extractOrigin(referer)
+	if refOrigin != "" && matchOrigin(refOrigin, st.exactOrigins, st.wildcardPatterns) {
+		w.Header().Add("Vary", "Origin")
+		return true
+	}
+	rejectCSRF(w, r, "referer not trusted: "+referer)
+	return false
 }
 
 func rejectCSRF(w http.ResponseWriter, r *http.Request, reason string) {

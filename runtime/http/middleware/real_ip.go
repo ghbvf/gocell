@@ -133,47 +133,47 @@ func realIPMiddleware(checker *proxyChecker) func(http.Handler) http.Handler {
 
 func extractIP(r *http.Request, checker *proxyChecker) string {
 	remoteHost := remoteAddrHost(r.RemoteAddr)
-
-	if checker.empty() {
+	if checker.empty() || !checker.isTrusted(remoteHost) {
 		return remoteHost
 	}
-
-	if !checker.isTrusted(remoteHost) {
-		return remoteHost
-	}
-
-	// Prefer X-Forwarded-For, scanning right-to-left.
-	// The rightmost untrusted IP is the client.
-	//
-	// ref: gin-gonic/gin — XFF tokens validated with ParseIP
-	// ref: labstack/echo — XFF tokens validated, invalid skipped
+	// Prefer X-Forwarded-For, then X-Real-Ip, then remote addr.
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		parts := strings.Split(xff, ",")
-		for i := len(parts) - 1; i >= 0; i-- {
-			ip := normalizeIPToken(strings.TrimSpace(parts[i]))
-			if ip == "" {
-				continue
-			}
-			if !checker.isTrusted(ip) {
-				return ip
-			}
-		}
-		// All valid IPs in XFF are trusted — return leftmost valid as the client.
-		for _, part := range parts {
-			if ip := normalizeIPToken(strings.TrimSpace(part)); ip != "" {
-				return ip
-			}
+		if ip := extractIPFromXFF(xff, checker); ip != "" {
+			return ip
 		}
 	}
-
-	// Fall back to X-Real-Ip.
 	if xri := r.Header.Get("X-Real-Ip"); xri != "" {
 		if ip := normalizeIPToken(strings.TrimSpace(xri)); ip != "" {
 			return ip
 		}
 	}
-
 	return remoteHost
+}
+
+// extractIPFromXFF scans the X-Forwarded-For header right-to-left and returns
+// the first untrusted IP (the real client). If all valid IPs are trusted, it
+// returns the leftmost valid IP. Returns "" if the header contains no valid IPs.
+//
+// ref: gin-gonic/gin — XFF tokens validated with ParseIP
+// ref: labstack/echo — XFF tokens validated, invalid skipped
+func extractIPFromXFF(xff string, checker *proxyChecker) string {
+	parts := strings.Split(xff, ",")
+	for i := len(parts) - 1; i >= 0; i-- {
+		ip := normalizeIPToken(strings.TrimSpace(parts[i]))
+		if ip == "" {
+			continue
+		}
+		if !checker.isTrusted(ip) {
+			return ip
+		}
+	}
+	// All valid IPs in XFF are trusted — return leftmost valid as the client.
+	for _, part := range parts {
+		if ip := normalizeIPToken(strings.TrimSpace(part)); ip != "" {
+			return ip
+		}
+	}
+	return ""
 }
 
 // normalizeIPToken validates and normalizes an IP string from a header value.

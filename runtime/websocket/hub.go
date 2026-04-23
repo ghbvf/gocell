@@ -489,37 +489,42 @@ func (h *Hub) pingAll(ctx context.Context) {
 		pingCtx, cancel := context.WithTimeout(ctx, h.config.PingTimeout)
 		err := entry.conn.Ping(pingCtx)
 		cancel()
-
-		if err != nil {
-			h.connMu.Lock()
-			current, ok := h.conns[connID]
-			if ok {
-				current.pingMisses++
-				if current.pingMisses >= h.config.PingMissMax {
-					delete(h.conns, connID)
-					h.connMu.Unlock()
-					slog.Warn("websocket hub: ping threshold exceeded, removing connection",
-						slog.String("conn_id", connID),
-						slog.Int("misses", current.pingMisses),
-					)
-					current.cancel()
-					_ = current.conn.Close()
-				} else {
-					h.connMu.Unlock()
-					slog.Debug("websocket hub: ping missed",
-						slog.String("conn_id", connID),
-						slog.Int("misses", current.pingMisses),
-					)
-				}
-			} else {
-				h.connMu.Unlock()
-			}
-		} else {
-			h.connMu.Lock()
-			if current, ok := h.conns[connID]; ok {
-				current.pingMisses = 0
-			}
-			h.connMu.Unlock()
-		}
+		h.handlePingResult(connID, err)
 	}
+}
+
+// handlePingResult records a successful ping or increments the miss counter.
+// On miss-threshold breach it removes the connection and cancels its context.
+func (h *Hub) handlePingResult(connID string, pingErr error) {
+	if pingErr == nil {
+		h.connMu.Lock()
+		if current, ok := h.conns[connID]; ok {
+			current.pingMisses = 0
+		}
+		h.connMu.Unlock()
+		return
+	}
+	h.connMu.Lock()
+	current, ok := h.conns[connID]
+	if !ok {
+		h.connMu.Unlock()
+		return
+	}
+	current.pingMisses++
+	if current.pingMisses >= h.config.PingMissMax {
+		delete(h.conns, connID)
+		h.connMu.Unlock()
+		slog.Warn("websocket hub: ping threshold exceeded, removing connection",
+			slog.String("conn_id", connID),
+			slog.Int("misses", current.pingMisses),
+		)
+		current.cancel()
+		_ = current.conn.Close()
+		return
+	}
+	h.connMu.Unlock()
+	slog.Debug("websocket hub: ping missed",
+		slog.String("conn_id", connID),
+		slog.Int("misses", current.pingMisses),
+	)
 }
