@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"testing"
 
+	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -26,7 +27,7 @@ func TestContextHandler_JSON_WithAllContextValues(t *testing.T) {
 	ctx = ctxkeys.WithSpanID(ctx, "span-xyz")
 	ctx = ctxkeys.WithRequestID(ctx, "req-123")
 	ctx = ctxkeys.WithCorrelationID(ctx, "corr-123")
-	ctx = ctxkeys.WithCellID(ctx, "accesscore")
+	ctx = kctxkeys.WithCellID(ctx, "accesscore")
 
 	logger.InfoContext(ctx, "test message", slog.String("extra", "value"))
 

@@ -1,6 +1,3 @@
-// Package ctxkeys provides typed context keys and helper functions for
-// propagating GoCell identifiers (cell, slice, correlation, journey, trace,
-// span) through context.Context.
 package ctxkeys
 
 import "context"
@@ -8,43 +5,14 @@ import "context"
 // ctxKey is an unexported type to prevent key collisions with other packages.
 type ctxKey string
 
-// Context key constants used across the GoCell framework.
+// Generic observability and networking context keys.
 const (
-	CellID        ctxKey = "cell_id"
-	SliceID       ctxKey = "slice_id"
 	CorrelationID ctxKey = "correlation_id"
-	JourneyID     ctxKey = "journey_id"
 	TraceID       ctxKey = "trace_id"
 	SpanID        ctxKey = "span_id"
 	RequestID     ctxKey = "request_id"
 	RealIP        ctxKey = "real_ip"
 )
-
-// --- CellID ---
-
-// WithCellID returns a new context carrying the given cell ID.
-func WithCellID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, CellID, id)
-}
-
-// CellIDFrom extracts the cell ID from ctx. The boolean indicates presence.
-func CellIDFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(CellID).(string)
-	return v, ok
-}
-
-// --- SliceID ---
-
-// WithSliceID returns a new context carrying the given slice ID.
-func WithSliceID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, SliceID, id)
-}
-
-// SliceIDFrom extracts the slice ID from ctx. The boolean indicates presence.
-func SliceIDFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(SliceID).(string)
-	return v, ok
-}
 
 // --- CorrelationID ---
 
@@ -56,19 +24,6 @@ func WithCorrelationID(ctx context.Context, id string) context.Context {
 // CorrelationIDFrom extracts the correlation ID from ctx. The boolean indicates presence.
 func CorrelationIDFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(CorrelationID).(string)
-	return v, ok
-}
-
-// --- JourneyID ---
-
-// WithJourneyID returns a new context carrying the given journey ID.
-func WithJourneyID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, JourneyID, id)
-}
-
-// JourneyIDFrom extracts the journey ID from ctx. The boolean indicates presence.
-func JourneyIDFrom(ctx context.Context) (string, bool) {
-	v, ok := ctx.Value(JourneyID).(string)
 	return v, ok
 }
 

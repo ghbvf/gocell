@@ -7,42 +7,6 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestCellIDRoundTrip(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-	}{
-		{name: "normal id", value: "accesscore"},
-		{name: "empty string", value: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := WithCellID(context.Background(), tt.value)
-			got, ok := CellIDFrom(ctx)
-			assert.True(t, ok)
-			assert.Equal(t, tt.value, got)
-		})
-	}
-}
-
-func TestSliceIDRoundTrip(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-	}{
-		{name: "normal id", value: "auth-login"},
-		{name: "empty string", value: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := WithSliceID(context.Background(), tt.value)
-			got, ok := SliceIDFrom(ctx)
-			assert.True(t, ok)
-			assert.Equal(t, tt.value, got)
-		})
-	}
-}
-
 func TestCorrelationIDRoundTrip(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -55,24 +19,6 @@ func TestCorrelationIDRoundTrip(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := WithCorrelationID(context.Background(), tt.value)
 			got, ok := CorrelationIDFrom(ctx)
-			assert.True(t, ok)
-			assert.Equal(t, tt.value, got)
-		})
-	}
-}
-
-func TestJourneyIDRoundTrip(t *testing.T) {
-	tests := []struct {
-		name  string
-		value string
-	}{
-		{name: "journey id", value: "J-SSO-001"},
-		{name: "empty string", value: ""},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ctx := WithJourneyID(context.Background(), tt.value)
-			got, ok := JourneyIDFrom(ctx)
 			assert.True(t, ok)
 			assert.Equal(t, tt.value, got)
 		})
@@ -159,10 +105,7 @@ func TestFromMissingKey(t *testing.T) {
 		name string
 		fn   func(context.Context) (string, bool)
 	}{
-		{name: "CellID missing", fn: CellIDFrom},
-		{name: "SliceID missing", fn: SliceIDFrom},
 		{name: "CorrelationID missing", fn: CorrelationIDFrom},
-		{name: "JourneyID missing", fn: JourneyIDFrom},
 		{name: "TraceID missing", fn: TraceIDFrom},
 		{name: "SpanID missing", fn: SpanIDFrom},
 		{name: "RequestID missing", fn: RequestIDFrom},
@@ -180,30 +123,15 @@ func TestFromMissingKey(t *testing.T) {
 
 func TestMultipleKeysInSameContext(t *testing.T) {
 	ctx := context.Background()
-	ctx = WithCellID(ctx, "accesscore")
-	ctx = WithSliceID(ctx, "auth-login")
 	ctx = WithCorrelationID(ctx, "corr-123")
-	ctx = WithJourneyID(ctx, "J-SSO-001")
 	ctx = WithTraceID(ctx, "trace-abc")
 	ctx = WithSpanID(ctx, "span-xyz")
 	ctx = WithRequestID(ctx, "req-001")
 	ctx = WithRealIP(ctx, "10.0.0.1")
 
-	cellID, ok := CellIDFrom(ctx)
-	assert.True(t, ok)
-	assert.Equal(t, "accesscore", cellID)
-
-	sliceID, ok := SliceIDFrom(ctx)
-	assert.True(t, ok)
-	assert.Equal(t, "auth-login", sliceID)
-
 	corrID, ok := CorrelationIDFrom(ctx)
 	assert.True(t, ok)
 	assert.Equal(t, "corr-123", corrID)
-
-	journeyID, ok := JourneyIDFrom(ctx)
-	assert.True(t, ok)
-	assert.Equal(t, "J-SSO-001", journeyID)
 
 	traceID, ok := TraceIDFrom(ctx)
 	assert.True(t, ok)
