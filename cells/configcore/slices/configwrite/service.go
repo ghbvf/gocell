@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/google/uuid"
 )
 
@@ -69,8 +70,10 @@ type CreateInput struct {
 
 // Create creates a new config entry and publishes a change event.
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.ConfigEntry, error) {
-	if input.Key == "" {
-		return nil, errcode.New(errcode.ErrConfigInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrConfigInvalidInput,
+		validation.F("key", input.Key),
+	); err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
@@ -111,8 +114,10 @@ type UpdateInput struct {
 // pre-read is needed here. The entire update and outbox write are wrapped in
 // a single transaction for L2 atomicity.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.ConfigEntry, error) {
-	if input.Key == "" {
-		return nil, errcode.New(errcode.ErrConfigInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrConfigInvalidInput,
+		validation.F("key", input.Key),
+	); err != nil {
+		return nil, err
 	}
 
 	var updated *domain.ConfigEntry
@@ -133,8 +138,10 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 
 // Delete removes a config entry by key and publishes a change event.
 func (s *Service) Delete(ctx context.Context, key string) error {
-	if key == "" {
-		return errcode.New(errcode.ErrConfigInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrConfigInvalidInput,
+		validation.F("key", key),
+	); err != nil {
+		return err
 	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {

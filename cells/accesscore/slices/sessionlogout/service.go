@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 const (
@@ -78,11 +79,16 @@ func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) er
 // Admin-side force logout belongs to a separate endpoint (not yet implemented);
 // it must NOT reuse this method with a bypass flag.
 func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) error {
-	if sessionID == "" {
-		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "session ID is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthLogoutInvalidInput,
+		validation.F("id", sessionID),
+	); err != nil {
+		return err
 	}
 	if callerUserID == "" {
-		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "caller user ID is required")
+		// callerUserID is derived from JWT claims by the auth middleware, not from
+		// client input. A blank value indicates a server-side auth misconfiguration,
+		// not a missing request field — expose a generic message to the client.
+		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires authenticated caller")
 	}
 
 	payload, _ := json.Marshal(map[string]any{
@@ -117,7 +123,9 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 // LogoutUser revokes all sessions for a user.
 func (s *Service) LogoutUser(ctx context.Context, userID string) error {
 	if userID == "" {
-		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "user ID is required")
+		// userID is a server-derived value (event payload / JWT claim), not a
+		// client-submitted field. Exposing the internal name would leak internals.
+		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires a valid user identifier")
 	}
 
 	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {

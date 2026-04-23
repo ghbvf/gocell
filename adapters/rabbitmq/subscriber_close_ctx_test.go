@@ -265,6 +265,32 @@ func TestSubscriber_Close_CancelledCtxReturnsImmediately(t *testing.T) {
 		"Close with pre-cancelled ctx must return < 50ms; got %s", elapsed)
 }
 
+// TestSubscriber_Close_PreCancelledCtx verifies the pre-cancelled ctx path
+// (subscriber.go ctx.Err() early-return) returns the raw context.Canceled
+// sentinel and does NOT collapse into ErrAdapterAMQPCloseTimeout, which is
+// reserved for the wg.Wait deadline-exceeded path.
+func TestSubscriber_Close_PreCancelledCtx(t *testing.T) {
+	t.Parallel()
+
+	conn, _ := newTestConnection(t)
+	sub := newSubNoShutdown(conn, "pre-cancel-path-queue", "pre-cancel-path.dlx")
+
+	cancelledCtx, cancel := context.WithCancel(context.Background())
+	cancel() // already cancelled before Close is invoked
+
+	start := time.Now()
+	err := sub.Close(cancelledCtx)
+	elapsed := time.Since(start)
+
+	require.Error(t, err, "Close with pre-cancelled ctx must return error")
+	assert.ErrorIs(t, err, context.Canceled,
+		"pre-cancelled path must return context.Canceled, got: %v", err)
+	assert.NotContains(t, err.Error(), string(ErrAdapterAMQPCloseTimeout),
+		"pre-cancelled path must NOT produce the wg.Wait timeout sentinel")
+	assert.Less(t, elapsed, 50*time.Millisecond,
+		"Close with pre-cancelled ctx must return < 50ms; got %s", elapsed)
+}
+
 // TestSubscriber_Close_GracefulWithAmpleBudget: ctx 5s + handler 50ms → nil + clean.
 func TestSubscriber_Close_GracefulWithAmpleBudget(t *testing.T) {
 	conn, mockConn := newTestConnection(t)

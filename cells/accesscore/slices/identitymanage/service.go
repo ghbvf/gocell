@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/google/uuid"
 )
 
@@ -102,8 +103,10 @@ type CreateInput struct {
 // Create creates a new user and publishes an event.
 // The plain-text password is bcrypt-hashed before storage.
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, error) {
-	if input.Password == "" {
-		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "password is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("password", input.Password),
+	); err != nil {
+		return nil, err
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(input.Password), domain.BcryptCost)
@@ -160,8 +163,10 @@ type UpdateInput struct {
 // Update modifies user attributes using JSON merge patch semantics:
 // only non-nil fields are applied; missing fields are left unchanged.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, error) {
-	if input.ID == "" {
-		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "id is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("id", input.ID),
+	); err != nil {
+		return nil, err
 	}
 
 	user, err := s.repo.GetByID(ctx, input.ID)
@@ -201,8 +206,10 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 
 // Delete removes a user.
 func (s *Service) Delete(ctx context.Context, id string) error {
-	if id == "" {
-		return errcode.New(errcode.ErrAuthIdentityInvalidInput, "id is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("id", id),
+	); err != nil {
+		return err
 	}
 	if err := s.repo.Delete(ctx, id); err != nil {
 		return fmt.Errorf("identity-manage: delete: %w", err)
@@ -213,8 +220,10 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 
 // Lock locks a user account and publishes an event.
 func (s *Service) Lock(ctx context.Context, id string) error {
-	if id == "" {
-		return errcode.New(errcode.ErrAuthIdentityInvalidInput, "id is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("id", id),
+	); err != nil {
+		return err
 	}
 
 	user, err := s.repo.GetByID(ctx, id)
@@ -249,8 +258,10 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 
 // Unlock unlocks a user account.
 func (s *Service) Unlock(ctx context.Context, id string) error {
-	if id == "" {
-		return errcode.New(errcode.ErrAuthIdentityInvalidInput, "id is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("id", id),
+	); err != nil {
+		return err
 	}
 
 	user, err := s.repo.GetByID(ctx, id)
@@ -290,8 +301,12 @@ type ChangePasswordInput struct {
 // without a forced re-login — this is critical when the old token carried
 // password_reset_required=true and would be rejected by the middleware.
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (dto.TokenPair, error) {
-	if input.UserID == "" || input.OldPassword == "" || input.NewPassword == "" {
-		return dto.TokenPair{}, errcode.New(errcode.ErrAuthIdentityInvalidInput, "userID, oldPassword and newPassword are required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("id", input.UserID),
+		validation.F("oldPassword", input.OldPassword),
+		validation.F("newPassword", input.NewPassword),
+	); err != nil {
+		return dto.TokenPair{}, err
 	}
 
 	// Step 2: Cheap equality check before the expensive bcrypt call.

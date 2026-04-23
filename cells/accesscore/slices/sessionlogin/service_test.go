@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -250,6 +251,43 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	assert.Equal(t, u.ID, session.UserID)
 	assert.False(t, session.IsRevoked(), "newly issued session must not be revoked")
 	assert.False(t, session.IsExpired(), "newly issued session must not be expired")
+}
+
+// TestService_Login_BlankFieldsRejected verifies that RequireNotBlank is
+// wired correctly: blank username and blank password each return
+// ErrAuthLoginInvalidInput with an "is required" message.
+func TestService_Login_BlankFieldsRejected(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		input       LoginInput
+		wantMessage string
+	}{
+		{
+			name:        "blank username rejected",
+			input:       LoginInput{Username: "", Password: "p"},
+			wantMessage: "username is required",
+		},
+		{
+			name:        "blank password rejected",
+			input:       LoginInput{Username: "u", Password: ""},
+			wantMessage: "password is required",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			svc, _ := newTestService()
+			_, err := svc.Login(context.Background(), tt.input)
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec, "expected *errcode.Error")
+			assert.Equal(t, errcode.ErrAuthLoginInvalidInput, ec.Code)
+			assert.Contains(t, ec.Message, tt.wantMessage)
+		})
+	}
 }
 
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {

@@ -57,8 +57,8 @@
 |---|---|---|---|
 | P1-4 | **OUTPUT-JSON-SARIF-01** 诊断模型统一（单一 `Issue` struct → 多 printer 映射） | 6h 🟡 | `cmd/gocell/` + `kernel/governance/` |
 | L7-FMT15b | **CONFIG-GET-DUAL-MODE-SPLIT-01** 拆 `contracts/http/config/get/v1` oneOf 合并 | 2h | `contracts/http/config/get/v1/` + `cells/configcore/slices/configread/` |
+| A5 verif. ✅ | **VALIDATION-HELPER-EXTRACT-01**（P1-4）抽 `pkg/validation.RequireNotBlank` | PR-A2 (#508) | `pkg/validation/validation.go` `NamedValue` + `F()` + `RequireNotBlank` 已抽，26 处 service 层 blank-check 已迁（runtime/auth & sessionvalidate JWT claim & auditappend fallback chain 不适用） |
 | A11 verif. | **GOVERNANCE-EXAMPLES-COVERAGE-01**（P1-17）governance 规则扫 `examples/` 硬编码 — ✅ PR-A1：parser `fs.WalkDir(".", ...)` 已自然覆盖 `examples/**`，根 `gocell validate --strict` 即拉全；新增 `TestProjectWalksExamples` 回归测试固化；放弃新建 `rules_examples.go` | resolved | `kernel/governance/validate_test.go` |
-| A5 verif. | **VALIDATION-HELPER-EXTRACT-01**（P1-4）抽 `pkg/validation.RequireNotBlank` | 2h | `pkg/validation/`（新） |
 | A8 verif. | **CMD-THICK-ENTRY-REDUCE-01**（P1-13 PARTIALLY）继续缩减 `cmd/corebundle/main.go` | 2h | `cmd/corebundle/` |
 | **新·P1-A** | **PRINCIPAL-UNIFIED-CONTRACT-01**（auth-federated-whistle F7）统一 Principal 契约，运行时鉴权语义收口 | 4h | `runtime/auth/` + 各 cell middleware |
 | **新·PR220-5** | **EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01** `EventRouter.AddHandler` 拆 `ConsumerGroup`（broker/dedupe）与 `CellID`（observability），消除注释"consumerGroup 必须传 cell ID"与实现矛盾 | 3h | `runtime/eventrouter/` + `kernel/outbox/` + `cells/*/cell.go` |
@@ -73,6 +73,8 @@
 | R4 | **INTERNAL-LISTENER-01** `/internal/v1/*` 独立 listener 或 service-token/mTLS | 4-8h 🟡 | `runtime/bootstrap/bootstrap.go` |
 | A21 | **HEALTH-CHECKER-CTX-BUDGET-01** `Checker` 升级 `func(ctx) error` + 统一 deadline + 并行 | 3h 🟡 | `runtime/http/health/` + `kernel/lifecycle/` |
 | L7 | **FMT15-NEXTCURSOR-ENFORCE-01** 治理规则强制 `hasMore`+`nextCursor` 同时存在 | 2h 🟡 | `kernel/governance/rules_fmt.go` |
+| L8 ✅ | **PAGINATION-HELPER-EXTRACT-01** 抽 `pkg/httputil/pagination.go` 公共 helper | done | `pkg/httputil/pagination.go:13` `ParsePageParamsOrWrite` 已存在并被 handler（如 `cells/configcore/slices/configread/handler.go:34-47`）消费 |
+| L11 | **GOVERNANCE-CI-MAINBRANCH-01** governance workflow 扩展到 `main`/`release/**` | 0.5h 🟡 | `.github/workflows/governance.yml` |
 | L8 | **PAGINATION-HELPER-EXTRACT-01** 抽 `pkg/httputil/pagination.go` 公共 helper | 2h 🟡 | `pkg/httputil/pagination.go`（新） |
 | L11 | **GOVERNANCE-CI-MAINBRANCH-01** governance workflow 扩展到 `main`/`release/**` — ✅ PR-A1 | resolved | `.github/workflows/governance.yml` |
 | **新·PR220-2** | **DOC-NAMING-GUARD-01** 建 `cmd/gocell/app/naming_docs_test.go` + `naming-guard.yaml`，扫活动文档禁旧 `my-app`/`sso-bff`/`core-bundle`/旧 slice 名 | 3h | `cmd/gocell/app/` + CI |
@@ -89,8 +91,8 @@
 
 | ID | 任务 | 工时 | 关键文件 |
 |---|---|---|---|
-| A7 | **POOLSTATS-IFACE-01** 三 adapter 公共 PoolStats 接口 | 1h 🟡 | `adapters/postgres/pool.go` + `redis/client.go` + `rabbitmq/connection.go` |
-| A14 verif. | **ADAPTER-CLOSE-HELPER-01**（P2-5）抽 `adapterutil.CloseWithDeadline` | 2h | `adapters/adapterutil/`（新） |
+| A7 ✅ | **POOLSTATS-IFACE-01** 三 adapter 公共 PoolStats 接口 | done | `runtime/observability/poolstats/statter.go:50` `Statter` + `Snapshot` 已统一；postgres/redis/rabbitmq 三 adapter 均已实现并被 OTel collector 消费 |
+| A14 verif. ✅ | **ADAPTER-CLOSE-HELPER-01**（P2-5）抽 `adapterutil.CloseWithDeadline` | PR-A2 (#508) | `adapters/adapterutil/close.go` 抽出 + 5 adapter Close 迁移（postgres/redis/rabbitmq×3）；vault Stop 是非阻塞调用，不在 helper 适用范围 |
 | A14 | **VAULT-AUTH-PLUGGABLE-01** AppRole / K8s auth（并入 S4b + DEGRADATION-GAUGE） | 3h 🟡 | `adapters/vault/transit_provider.go` |
 | A15 | **VAULT-NAMESPACE-MULTITENANT-01** | 1h 🟡 | `adapters/vault/transit_provider.go` |
 | A16 | **VAULT-DATAKEY-ENDPOINT-01** 🟠 S14a 触发 | 2h 🟡 | `adapters/vault/transit_provider.go` |

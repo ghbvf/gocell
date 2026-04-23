@@ -71,19 +71,21 @@
 
 ---
 
-### PR-A2 pkg 共享 helper 三连（预计 7h）
+### PR-A2 pkg 共享 helper 三连 ✅ 已落地 PR #508（实际净编码 5-6h）
 
-**主线**：
-- **V-A5 VALIDATION-HELPER-EXTRACT-01**（P1-4）`pkg/validation.RequireNotBlank`（2h）
-- **L8 PAGINATION-HELPER-EXTRACT-01** `pkg/httputil/pagination.go` 统一分页错误处理（2h）
-- **V-A14 ADAPTER-CLOSE-HELPER-01**（P2-5）`adapters/adapterutil/CloseWithDeadline`（2h）
-- **A7 POOLSTATS-IFACE-01** 三 adapter 公共 PoolStats 接口（1h）
+> **实际范围修正**：探索发现 L8 / A7 已在仓库内完工，本 PR 实际只做 V-A5 + V-A14 + backlog 状态回灌。
 
-**搭车理由**：全是 helper 抽取，`runtime/auth/*.go` 6+ 处 token=="" 改造 + 分页 handler 各 slice 改造可同 PR 完成。
+**实际主线**：
+- **V-A5 VALIDATION-HELPER-EXTRACT-01** ✅ `pkg/validation/validation.go` `NamedValue` + `F()` + variadic `RequireNotBlank`；26 处 service 层 blank-check 迁移（runtime/auth 语义不同站点 + sessionvalidate JWT claim + auditappend fallback 共 3 类站点不适用）
+- **V-A14 ADAPTER-CLOSE-HELPER-01** ✅ `adapters/adapterutil/close.go` `CloseWithDeadline`（吸收 slog 日志，归一为 `<name>: closed` / `<name>: close budget exceeded`）；5 adapter 迁移（postgres/redis/rabbitmq×3）
+- **L8 PAGINATION-HELPER-EXTRACT-01** ✅ pre-existing — `pkg/httputil/pagination.go:13` `ParsePageParamsOrWrite` 已存在并被 handler 消费
+- **A7 POOLSTATS-IFACE-01** ✅ pre-existing — `runtime/observability/poolstats/statter.go:50` `Statter` + `Snapshot` 已统一，三 adapter 实现 + OTel collector 消费
 
-**文件面**：`pkg/validation/`（新） + `pkg/httputil/` + `adapters/adapterutil/`（新） + `adapters/{postgres,redis,rabbitmq}/`
+**搭车实际**：runtime/auth/*.go 多数 `token == ""` 站点语义是"无凭证透传"或 authz 断言，**不适用** validation helper（保持原样）；helper 主战场是 cells/*/slices/*/service.go。
 
-**风险**：低；纯抽取无语义变化，CI 测试基本覆盖。
+**文件面**：`pkg/validation/`（新） + `adapters/adapterutil/`（新） + `adapters/{postgres,redis,rabbitmq}/` + `cells/{accesscore,configcore}/slices/*/service.go`
+
+**风险**：低；helper 是净增 API，被迁移的代码点是调用方样板替换；adapter Close 公共签名 `Close(ctx) error` 未变。日志消息归一是破坏性改动（旧 `"postgres pool closed"` → 新 `"postgres: closed"`），按"不保留向后兼容"原则接受。
 
 ---
 

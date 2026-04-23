@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // flagSort defines the default sort for flag listings.
@@ -87,11 +88,11 @@ func (s *Service) List(ctx context.Context, pageReq query.PageParams) (query.Pag
 
 // Evaluate checks if a flag is enabled for the given subject.
 func (s *Service) Evaluate(ctx context.Context, key, subject string) (*EvaluateResult, error) {
-	if key == "" {
-		return nil, errcode.New(errcode.ErrFlagInvalidInput, "key is required")
-	}
-	if subject == "" {
-		return nil, errcode.New(errcode.ErrFlagInvalidInput, "subject is required")
+	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+		validation.F("key", key),
+		validation.F("subject", subject),
+	); err != nil {
+		return nil, err
 	}
 
 	flag, err := s.repo.GetByKey(ctx, key)

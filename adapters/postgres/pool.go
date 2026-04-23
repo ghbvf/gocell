@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -158,25 +159,13 @@ func (p *Pool) Health(ctx context.Context) error {
 // ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget.
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser pattern.
 func (p *Pool) Close(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	done := make(chan struct{})
-	go func() {
+	return adapterutil.CloseWithDeadline(ctx, "postgres", func() error {
+		if p.inner == nil {
+			return nil
+		}
 		p.inner.Close()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		slog.Info("postgres pool closed")
 		return nil
-	case <-ctx.Done():
-		slog.Warn("postgres: pool close budget exceeded",
-			slog.Any("error", ctx.Err()))
-		return ctx.Err()
-	}
+	})
 }
 
 // PoolStats holds structured connection pool statistics.

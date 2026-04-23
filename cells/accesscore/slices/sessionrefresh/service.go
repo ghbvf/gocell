@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -82,8 +83,10 @@ func NewService(
 // after a successful refresh. If a previously rotated-out token is reused,
 // the entire session is revoked (reuse detection).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
-	if refreshToken == "" {
-		return nil, errcode.New(errcode.ErrAuthRefreshInvalidInput, "refresh token is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthRefreshInvalidInput,
+		validation.F("refreshToken", refreshToken),
+	); err != nil {
+		return nil, err
 	}
 	if err := s.verifyRefreshToken(ctx, refreshToken); err != nil {
 		return nil, err

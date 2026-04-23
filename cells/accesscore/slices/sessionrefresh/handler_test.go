@@ -142,3 +142,26 @@ func TestHandleRefresh(t *testing.T) {
 		})
 	}
 }
+
+// TestHandler_Refresh_BlankToken verifies that submitting an empty refreshToken
+// returns 400 + ERR_AUTH_REFRESH_INVALID_INPUT + "refreshToken is required".
+func TestHandler_Refresh_BlankToken(t *testing.T) {
+	h, _ := setup()
+	body := `{"refreshToken":""}`
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/refresh", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	h.HandleRefresh(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	var resp struct {
+		Error struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ERR_AUTH_REFRESH_INVALID_INPUT", resp.Error.Code)
+	assert.Equal(t, "refreshToken is required", resp.Error.Message)
+}

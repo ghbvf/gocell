@@ -9,6 +9,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -54,25 +55,10 @@ func (p *Publisher) Close(ctx context.Context) error {
 	}
 	p.mu.Unlock()
 
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	done := make(chan struct{})
-	go func() {
+	return adapterutil.CloseWithDeadline(ctx, "rabbitmq-publisher", func() error {
 		p.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		slog.Info("rabbitmq: publisher closed gracefully")
 		return nil
-	case <-ctx.Done():
-		slog.Warn("rabbitmq: publisher close budget exceeded",
-			slog.Any("error", ctx.Err()))
-		return ctx.Err()
-	}
+	})
 }
 
 // Publish sends a message to the given topic (exchange) with publisher confirms.

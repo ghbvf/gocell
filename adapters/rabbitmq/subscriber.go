@@ -12,6 +12,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
@@ -870,27 +871,27 @@ func (s *Subscriber) Close(ctx context.Context) error {
 	}
 	close(s.closeCh)
 
+	// Pre-cancelled ctx returns raw context.Canceled — no in-flight wait
+	// happened, so callers and tests see the canonical context error rather
+	// than the timeout-with-context sentinel reserved for wg.Wait expiry.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	// Wait for all in-flight processDelivery goroutines (global wg).
-	done := make(chan struct{})
-	go func() {
+	// Wait for all in-flight processDelivery goroutines (global wg). On
+	// deadline expiry the helper logs "<name>: close budget exceeded"; we
+	// then attach the remaining-run count to the returned sentinel so
+	// operators can see what was still active.
+	if err := adapterutil.CloseWithDeadline(ctx, "rabbitmq-subscriber", func() error {
 		s.wg.Wait()
-		close(done)
-	}()
-
-	select {
-	case <-done:
-		slog.Info("rabbitmq: subscriber closed gracefully")
-	case <-ctx.Done():
+		return nil
+	}); err != nil {
 		s.runsMu.Lock()
 		remaining := len(s.runs)
 		s.runsMu.Unlock()
-		slog.Warn("rabbitmq: subscriber shutdown budget exceeded",
-			slog.Any("error", ctx.Err()),
-			slog.Int("remaining_runs", remaining))
+		slog.Warn("rabbitmq: subscriber shutdown remaining runs",
+			slog.Int("remaining_runs", remaining),
+			slog.Any("error", err))
 		return errcode.New(ErrAdapterAMQPCloseTimeout,
 			fmt.Sprintf("rabbitmq: subscriber Close timed out with %d run(s) still active",
 				remaining))
