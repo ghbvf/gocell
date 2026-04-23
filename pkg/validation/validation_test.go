@@ -8,6 +8,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+// All fields in a single RequireNotBlank call share one errcode by design —
+// each slice domain has one validation code (ErrAuthIdentityInvalidInput,
+// ErrConfigInvalidInput, etc.), and the helper preserves that classification.
+// TestRequireNotBlank_PreservesCallerCode covers the multi-code dimension.
 func TestRequireNotBlank(t *testing.T) {
 	t.Parallel()
 
@@ -54,6 +58,10 @@ func TestRequireNotBlank(t *testing.T) {
 			},
 			wantCode:    code,
 			wantMessage: "name is required",
+		},
+		{
+			name:   "whitespace-only value passes (not trimmed)",
+			fields: []validation.NamedValue{validation.F("id", "  ")},
 		},
 		{
 			name:   "zero fields returns nil",

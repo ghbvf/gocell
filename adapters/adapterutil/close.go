@@ -11,9 +11,7 @@ import (
 
 // CloseWithDeadline runs closeFn in a goroutine and returns whichever
 // completes first: closeFn's result or ctx.Err() when the context's
-// deadline/cancellation fires. The name is used for structured logging —
-// "<name>: closed" at Info on success, "<name>: close budget exceeded"
-// at Warn on deadline expiry.
+// deadline/cancellation fires. The name is used for structured logging.
 //
 // If ctx is already done at entry, CloseWithDeadline returns ctx.Err()
 // without invoking closeFn. This replaces the duplicated "check-ctx +
@@ -21,8 +19,16 @@ import (
 // postgres/redis/rabbitmq/vault adapters.
 //
 // closeFn returning a non-nil error is surfaced verbatim with no
-// additional logging — adapters are expected to wrap sentinel codes
-// (e.g. errcode.Wrap(ErrAdapterRedisConnect, ...)) before return.
+// additional logging when the receiver is still waiting. If the deadline
+// has already fired and closeFn returns an error after the fact, that
+// error is logged at Warn under "adapter close error after budget
+// exceeded" so operators can correlate late failures with the timeout.
+//
+// Callers that own background goroutines (reconnect loops, watchdogs)
+// must signal those goroutines (e.g. close a stop channel) BEFORE
+// invoking CloseWithDeadline. A pre-cancelled ctx short-circuits the
+// helper without invoking closeFn — any pre-work the caller wanted to
+// run unconditionally must precede the helper call.
 //
 // ref: uber-go/fx app.go StopTimeout — shared shutdown budget pattern.
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser semantics.
@@ -33,16 +39,30 @@ func CloseWithDeadline(ctx context.Context, name string, closeFn func() error) e
 		return err
 	}
 	done := make(chan error, 1)
-	go func() { done <- closeFn() }()
+	go func() {
+		err := closeFn()
+		select {
+		case done <- err:
+		default:
+			// Deadline already fired and the receiver returned. Surface the
+			// late close error so operators can see what eventually happened.
+			if err != nil {
+				slog.Warn("adapter close error after budget exceeded",
+					slog.String("component", name),
+					slog.Any("error", err))
+			}
+		}
+	}()
 	select {
 	case err := <-done:
 		if err != nil {
 			return err
 		}
-		slog.Info(name + ": closed")
+		slog.Info("adapter closed", slog.String("component", name))
 		return nil
 	case <-ctx.Done():
-		slog.Warn(name+": close budget exceeded",
+		slog.Warn("adapter close budget exceeded",
+			slog.String("component", name),
 			slog.Any("error", ctx.Err()))
 		return ctx.Err()
 	}
