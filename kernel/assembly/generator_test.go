@@ -57,7 +57,7 @@ func buildTestProject() *metadata.ProjectMeta {
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.configcore.config"}},
 			},
 		},
-		Slices:    make(map[string]*metadata.SliceMeta),
+		Slices: make(map[string]*metadata.SliceMeta),
 		Contracts: map[string]*metadata.ContractMeta{
 			"http/auth/login/v1": {
 				ID:        "http/auth/login/v1",

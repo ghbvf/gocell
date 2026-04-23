@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
 // validateVERIFY01 checks that every contractUsage has a matching
@@ -16,43 +17,56 @@ import (
 func (v *Validator) validateVERIFY01() []ValidationResult {
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
-		// Build lookup sets for verify.contract entries and waivers.
-		verifySet := make(map[string]bool)
-		for _, vc := range s.Verify.Contract {
-			verifySet[vc] = true
-		}
-		waiverSet := make(map[string]bool)
-		for _, w := range s.Verify.Waivers {
-			// Only non-empty, parseable, and not-yet-expired waivers are valid.
-			if w.ExpiresAt == "" {
-				continue // missing expiresAt, invalid waiver
-			}
-			t, err := time.Parse("2006-01-02", w.ExpiresAt)
-			if err != nil {
-				continue // unparseable expiresAt, invalid waiver
-			}
-			if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
-				continue // expired waiver, not valid
-			}
-			waiverSet[w.Contract] = true
-		}
+		results = append(results, v.validateSliceVERIFY01(key, s)...)
+	}
+	return results
+}
 
-		for i, cu := range s.ContractUsages {
-			verifyKey := fmt.Sprintf("contract.%s.%s", cu.Contract, cu.Role)
-			if !verifySet[verifyKey] && !waiverSet[cu.Contract] {
-				results = append(results, v.newResult(
-					"VERIFY-01", SeverityError, IssueRequired,
-					sliceFile(key),
-					fmt.Sprintf("contractUsages[%d]", i),
-					fmt.Sprintf(
-						"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
-						cu.Contract, cu.Role, s.ID,
-					),
-				))
-			}
+// validateSliceVERIFY01 checks a single slice's contractUsages against its
+// verify.contract entries and active waivers.
+func (v *Validator) validateSliceVERIFY01(key string, s *metadata.SliceMeta) []ValidationResult {
+	verifySet := make(map[string]bool, len(s.Verify.Contract))
+	for _, vc := range s.Verify.Contract {
+		verifySet[vc] = true
+	}
+	waiverSet := v.buildActiveWaiverSet(s)
+
+	var results []ValidationResult
+	for i, cu := range s.ContractUsages {
+		verifyKey := fmt.Sprintf("contract.%s.%s", cu.Contract, cu.Role)
+		if !verifySet[verifyKey] && !waiverSet[cu.Contract] {
+			results = append(results, v.newResult(
+				"VERIFY-01", SeverityError, IssueRequired,
+				sliceFile(key),
+				fmt.Sprintf("contractUsages[%d]", i),
+				fmt.Sprintf(
+					"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
+					cu.Contract, cu.Role, s.ID,
+				),
+			))
 		}
 	}
 	return results
+}
+
+// buildActiveWaiverSet returns the set of contract IDs covered by a
+// non-expired, parseable waiver in the slice.
+func (v *Validator) buildActiveWaiverSet(s *metadata.SliceMeta) map[string]bool {
+	waiverSet := make(map[string]bool, len(s.Verify.Waivers))
+	for _, w := range s.Verify.Waivers {
+		if w.ExpiresAt == "" {
+			continue // missing expiresAt, invalid waiver
+		}
+		t, err := time.Parse("2006-01-02", w.ExpiresAt)
+		if err != nil {
+			continue // unparseable expiresAt, invalid waiver
+		}
+		if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
+			continue // expired waiver, not valid
+		}
+		waiverSet[w.Contract] = true
+	}
+	return waiverSet
 }
 
 // validateVERIFY02 checks waiver required fields and expiry.
@@ -61,58 +75,65 @@ func (v *Validator) validateVERIFY02() []ValidationResult {
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
 		for i, w := range s.Verify.Waivers {
-			if w.Contract == "" {
-				results = append(results, v.newResult(
-					"VERIFY-02", SeverityError, IssueRequired,
-					sliceFile(key),
-					fmt.Sprintf("verify.waivers[%d].contract", i),
-					"waiver.contract is required",
-				))
-			}
-			if w.Owner == "" {
-				results = append(results, v.newResult(
-					"VERIFY-02", SeverityError, IssueRequired,
-					sliceFile(key),
-					fmt.Sprintf("verify.waivers[%d].owner", i),
-					fmt.Sprintf("waiver.owner is required for contract %q", w.Contract),
-				))
-			}
-			if w.Reason == "" {
-				results = append(results, v.newResult(
-					"VERIFY-02", SeverityError, IssueRequired,
-					sliceFile(key),
-					fmt.Sprintf("verify.waivers[%d].reason", i),
-					fmt.Sprintf("waiver.reason is required for contract %q", w.Contract),
-				))
-			}
-			if w.ExpiresAt == "" {
-				results = append(results, v.newResult(
-					"VERIFY-02", SeverityError, IssueRequired,
-					sliceFile(key),
-					fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-					fmt.Sprintf("waiver.expiresAt is required for contract %q", w.Contract),
-				))
-				continue
-			}
-			t, err := time.Parse("2006-01-02", w.ExpiresAt)
-			if err != nil {
-				results = append(results, v.newResult(
-					"VERIFY-02", SeverityError, IssueInvalid,
-					sliceFile(key),
-					fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-					fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD)", w.ExpiresAt),
-				))
-				continue
-			}
-			if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
-				results = append(results, v.newResult(
-					"VERIFY-02", SeverityError, IssueInvalid,
-					sliceFile(key),
-					fmt.Sprintf("verify.waivers[%d].expiresAt", i),
-					fmt.Sprintf("waiver for contract %q expired on %s", w.Contract, w.ExpiresAt),
-				))
-			}
+			results = append(results, v.validateWaiverVERIFY02(sliceFile(key), i, w)...)
 		}
+	}
+	return results
+}
+
+// validateWaiverVERIFY02 validates a single waiver's required fields and expiry.
+func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.WaiverMeta) []ValidationResult {
+	var results []ValidationResult
+	if w.Contract == "" {
+		results = append(results, v.newResult(
+			"VERIFY-02", SeverityError, IssueRequired,
+			file,
+			fmt.Sprintf("verify.waivers[%d].contract", i),
+			"waiver.contract is required",
+		))
+	}
+	if w.Owner == "" {
+		results = append(results, v.newResult(
+			"VERIFY-02", SeverityError, IssueRequired,
+			file,
+			fmt.Sprintf("verify.waivers[%d].owner", i),
+			fmt.Sprintf("waiver.owner is required for contract %q", w.Contract),
+		))
+	}
+	if w.Reason == "" {
+		results = append(results, v.newResult(
+			"VERIFY-02", SeverityError, IssueRequired,
+			file,
+			fmt.Sprintf("verify.waivers[%d].reason", i),
+			fmt.Sprintf("waiver.reason is required for contract %q", w.Contract),
+		))
+	}
+	if w.ExpiresAt == "" {
+		results = append(results, v.newResult(
+			"VERIFY-02", SeverityError, IssueRequired,
+			file,
+			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+			fmt.Sprintf("waiver.expiresAt is required for contract %q", w.Contract),
+		))
+		return results
+	}
+	t, err := time.Parse("2006-01-02", w.ExpiresAt)
+	if err != nil {
+		results = append(results, v.newResult(
+			"VERIFY-02", SeverityError, IssueInvalid,
+			file,
+			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+			fmt.Sprintf("waiver expiresAt %q is not a valid date (expected YYYY-MM-DD)", w.ExpiresAt),
+		))
+		return results
+	}
+	if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
+		results = append(results, v.newResult(
+			"VERIFY-02", SeverityError, IssueInvalid,
+			file,
+			fmt.Sprintf("verify.waivers[%d].expiresAt", i),
+			fmt.Sprintf("waiver for contract %q expired on %s", w.Contract, w.ExpiresAt),
+		))
 	}
 	return results
 }
@@ -164,24 +185,7 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 		if _, isCell := v.project.Cells[providerID]; !isCell {
 			continue
 		}
-
-		found := false
-		for _, s := range v.project.Slices {
-			if s.BelongsToCell != providerID {
-				continue
-			}
-			for _, cu := range s.ContractUsages {
-				if cu.Contract == c.ID && cell.IsProviderRole(cell.ContractRole(cu.Role)) {
-					found = true
-					break
-				}
-			}
-			if found {
-				break
-			}
-		}
-
-		if !found {
+		if !v.hasProviderSlice(c.ID, providerID) {
 			results = append(results, v.newResult(
 				"VERIFY-04", SeverityError, IssueRequired,
 				contractFile(c.ID),
@@ -194,6 +198,22 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 		}
 	}
 	return results
+}
+
+// hasProviderSlice returns true if any slice belonging to providerCell declares
+// a provider-role contractUsage for the given contract ID.
+func (v *Validator) hasProviderSlice(contractID, providerCell string) bool {
+	for _, s := range v.project.Slices {
+		if s.BelongsToCell != providerCell {
+			continue
+		}
+		for _, cu := range s.ContractUsages {
+			if cu.Contract == contractID && cell.IsProviderRole(cell.ContractRole(cu.Role)) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validRefPrefixes is the set of allowed first segments in a verify ref.

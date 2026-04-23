@@ -114,42 +114,11 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			return
 		}
 		verbose := h.verboseAllowed(r)
-		cellHealth := h.assembly.Health()
-
-		var cells map[string]string
-		if verbose {
-			cells = make(map[string]string, len(cellHealth))
-		}
-		allHealthy := true
-		for id, hs := range cellHealth {
-			if verbose {
-				cells[id] = hs.Status
-			}
-			if hs.Status != "healthy" {
-				allHealthy = false
-			}
-		}
-
-		h.mu.RLock()
-		checkersCopy := make(map[string]Checker, len(h.checkers))
-		for k, v := range h.checkers {
-			checkersCopy[k] = v
-		}
-		h.mu.RUnlock()
-
-		var dependencies map[string]string
-		if verbose {
-			dependencies = make(map[string]string, len(checkersCopy))
-		}
-		for name, fn := range checkersCopy {
-			status := "healthy"
-			if err := fn(); err != nil {
-				status = "unhealthy"
-				allHealthy = false
-			}
-			if verbose {
-				dependencies[name] = status
-			}
+		allHealthy, cells := h.aggregateCellHealth(verbose)
+		checkersCopy := h.copyCheckers()
+		depHealthy, dependencies := h.aggregateCheckerHealth(checkersCopy, verbose)
+		if !depHealthy {
+			allHealthy = false
 		}
 
 		status := "healthy"
@@ -158,10 +127,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			status = "unhealthy"
 			httpStatus = http.StatusServiceUnavailable
 		}
-
-		response := map[string]any{
-			"status": status,
-		}
+		response := map[string]any{"status": status}
 		if verbose {
 			response["cells"] = cells
 			response["dependencies"] = dependencies
@@ -171,9 +137,58 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			}
 			h.mu.RUnlock()
 		}
-
 		writeJSON(w, httpStatus, response)
 	}
+}
+
+// aggregateCellHealth checks all cell health statuses. When verbose is true it
+// also builds a name→status map for the response body.
+func (h *Handler) aggregateCellHealth(verbose bool) (allHealthy bool, cells map[string]string) {
+	allHealthy = true
+	cellHealth := h.assembly.Health()
+	if verbose {
+		cells = make(map[string]string, len(cellHealth))
+	}
+	for id, hs := range cellHealth {
+		if verbose {
+			cells[id] = hs.Status
+		}
+		if hs.Status != "healthy" {
+			allHealthy = false
+		}
+	}
+	return allHealthy, cells
+}
+
+// copyCheckers returns a snapshot of the registered checkers under a read lock.
+func (h *Handler) copyCheckers() map[string]Checker {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	cp := make(map[string]Checker, len(h.checkers))
+	for k, v := range h.checkers {
+		cp[k] = v
+	}
+	return cp
+}
+
+// aggregateCheckerHealth runs all checkers. When verbose is true it also
+// builds a name→status map for the response body.
+func (h *Handler) aggregateCheckerHealth(checkers map[string]Checker, verbose bool) (allHealthy bool, deps map[string]string) {
+	allHealthy = true
+	if verbose {
+		deps = make(map[string]string, len(checkers))
+	}
+	for name, fn := range checkers {
+		status := "healthy"
+		if err := fn(); err != nil {
+			status = "unhealthy"
+			allHealthy = false
+		}
+		if verbose {
+			deps[name] = status
+		}
+	}
+	return allHealthy, deps
 }
 
 // verboseAllowed returns true when the request is allowed to see verbose output.

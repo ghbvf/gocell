@@ -137,9 +137,9 @@ func TestContractRegistry_ByKind(t *testing.T) {
 
 func TestContractRegistry_ByOwner(t *testing.T) {
 	tests := []struct {
-		name    string
-		cellID  string
-		count   int
+		name   string
+		cellID string
+		count  int
 	}{
 		{"accesscore owns 2", "accesscore", 2},
 		{"auditcore owns 2", "auditcore", 2},
@@ -402,7 +402,7 @@ func TestCellRegistry_NilEntries(t *testing.T) {
 			"nil":   nil,
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"valid/s1": {ID: "s1", BelongsToCell: "valid"},
+			"valid/s1":  {ID: "s1", BelongsToCell: "valid"},
 			"valid/nil": nil,
 		},
 	}

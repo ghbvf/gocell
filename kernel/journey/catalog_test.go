@@ -112,10 +112,10 @@ func TestGet(t *testing.T) {
 	c := NewCatalog(buildTestProject())
 
 	tests := []struct {
-		name   string
-		id     string
+		name    string
+		id      string
 		wantNil bool
-		wantID string
+		wantID  string
 	}{
 		{name: "existing journey", id: "J-ssologin", wantNil: false, wantID: "J-ssologin"},
 		{name: "non-existing journey", id: "J-does-not-exist", wantNil: true},
@@ -403,9 +403,9 @@ func TestValidate(t *testing.T) {
 		"configcore": {},
 	}
 	allContracts := map[string]struct{}{
-		"event.user.created.v1":            {},
-		"http.auth.login.v1":               {},
-		"event.session.created.v1":         {},
+		"event.user.created.v1":             {},
+		"http.auth.login.v1":                {},
+		"event.session.created.v1":          {},
 		"event.audit.integrity-verified.v1": {},
 	}
 

@@ -7,8 +7,8 @@ import (
 	"nhooyr.io/websocket"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/google/uuid"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
+	"github.com/google/uuid"
 )
 
 // UpgradeConfig configures the WebSocket upgrade handler.

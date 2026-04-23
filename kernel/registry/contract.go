@@ -13,8 +13,8 @@ import (
 // ContractRegistry provides indexed access to contracts.
 type ContractRegistry struct {
 	contracts map[string]*metadata.ContractMeta
-	byKind    map[string][]*metadata.ContractMeta  // keyed by kind string
-	byOwner   map[string][]*metadata.ContractMeta  // keyed by ownerCell
+	byKind    map[string][]*metadata.ContractMeta // keyed by kind string
+	byOwner   map[string][]*metadata.ContractMeta // keyed by ownerCell
 }
 
 // NewContractRegistry builds a registry from parsed project metadata.

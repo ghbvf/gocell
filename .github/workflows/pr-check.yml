@@ -1,0 +1,30 @@
+name: PR Check
+
+# SonarCloud runs on both pull_request (PR decoration + quality gate) and
+# push:develop (baseline analysis). Running it here closes the same shift-left
+# gap that was fixed for integration-test: quality gates must fire before merge,
+# not after. Fork PRs cannot access secrets.SONAR_TOKEN and are guarded in
+# _build-lint.yml — they still get build-test + integration-test coverage.
+
+on:
+  pull_request:
+    branches: [develop, main, 'release/**']
+
+permissions:
+  contents: read
+
+jobs:
+  pr-ci:
+    uses: ./.github/workflows/_build-lint.yml
+    with:
+      # lint-mode: pr activates --new-from-merge-base=origin/<base-ref> so only
+      # issues introduced by this PR are reported, not pre-existing baseline
+      # noise. See _build-lint.yml for the rationale over only-new-issues.
+      # github.base_ref is the PR target branch (populated for pull_request
+      # events), ensuring PRs targeting main or release/* lint against their
+      # actual merge-base, not always develop.
+      lint-mode: pr
+      base-ref: ${{ github.base_ref }}
+      run-integration: true
+      run-sonar: true
+    secrets: inherit   # needed for any secrets the reusable workflow may access

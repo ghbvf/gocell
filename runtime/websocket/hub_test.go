@@ -23,9 +23,9 @@ func TestMain(m *testing.M) {
 
 type fakeConn struct {
 	id      string
-	readCh  chan []byte    // send data to simulate client messages; close to end Read
-	closeCh chan struct{}  // closed on Close() to unblock Read
-	readyCh chan struct{}  // closed on first Read call (replaces time.Sleep)
+	readCh  chan []byte   // send data to simulate client messages; close to end Read
+	closeCh chan struct{} // closed on Close() to unblock Read
+	readyCh chan struct{} // closed on first Read call (replaces time.Sleep)
 
 	mu         sync.Mutex
 	closed     bool

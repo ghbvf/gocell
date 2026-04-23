@@ -48,22 +48,26 @@
 
 > 先落这批：纯 helper 抽取 + governance 规则扩展 + 入口缩减，review 快、冲突小、可并行 worktree。
 
-### PR-A1 治理规则 + CI 门禁打底（预计 10h）
+### PR-A1 治理规则 + CI 门禁打底 — ✅ 已完工
 
-**主线**：
-- **G-1 FMT-11 DYNAMIC-FIELD-ISOLATION-01**（HIGH）动态状态字段禁入非 status-board
-- **G-2 TOPO-07 MAXCONSISTENCYLEVEL-ENFORCE** actor 一致性级别校验阻断
-- **G-4 DEPRECATED-CONTRACT-BREAK** deprecated contract 依赖从 warning 升级 break
-- **V-A11 GOVERNANCE-EXAMPLES-COVERAGE**（P1-17）governance 扫 `examples/` 硬编码
+**实况摘要**：探索阶段发现主线 4 条中有 3 条已在源码层实现（parser `KnownFields(true)` + TOPO-07/08 `SeverityError`）。实际落地为**零新治理规则代码 + 一套回归测试 + 一组可复用 CI workflow**。
 
-**搭车**：
-- **L11 GOVERNANCE-CI-MAINBRANCH-01** governance workflow 扩展到 main/release（0.5h，同 workflow 文件）
-- **PR220-4 CI-LINT-EVENT-SEMANTIC-SPLIT-01** push 全量 lint / pull_request 降噪（1h，CI 治理面）
-- **PR220-2 DOC-NAMING-GUARD-01** 文档 naming guard（3h，需先完成 PR220-1 / PR220-e1 文档收敛，否则立即打红）
+**主线**（含实际做法）：
+- **G-1 FMT-11 DYNAMIC-FIELD-ISOLATION-01** ✅ — `kernel/metadata/parser.go:414` `dec2.KnownFields(true)` 已解析期拒绝；新增 `kernel/metadata/parser_strict_test.go`（7 dynamic × 5 file types = 35 rejection + 3 status-board 接受回归）
+- **G-2 TOPO-07 MAXCONSISTENCYLEVEL-ENFORCE** ✅ — `kernel/governance/rules_topo.go:273-293` 已 `SeverityError`；新增 `TestTOPO07_EnforcesMaxConsistencyLevel`（3 cases）
+- **G-4 DEPRECATED-CONTRACT-BREAK** ✅ — `rules_topo.go:323-324` 已 `SeverityError, IssueForbidden`；新增 `TestTOPO08_BlocksDeprecatedReference`（2 cases）
+- **V-A11 GOVERNANCE-EXAMPLES-COVERAGE** ✅ — parser `fs.WalkDir(".", ...)` 已自然覆盖 examples/**；新增 `TestProjectWalksExamples` 固化；放弃原计划新增 `rules_examples.go`；**放弃原 `--root=examples/*` matrix CI**（examples 引用根 `actors.yaml`，standalone `gocell validate` 会报 5-10 REF-14 错误）
 
-**文件面**：`kernel/governance/` + `.github/workflows/`
+**搭车**（含实际做法）：
+- **L11 GOVERNANCE-CI-MAINBRANCH-01** ✅ — governance.yml 触发扩 `[develop, main, 'release/**']`
+- **PR220-4 CI-LINT-EVENT-SEMANTIC-SPLIT-01** ✅ — 采用 reusable `workflow_call` 模式：新建 `_build-lint.yml`，`ci.yml`（push 触发，full lint）+ 新建 `pr-check.yml`（pull_request 触发，`--new-from-merge-base`），ci.yml 净瘦身 175→93 行，零重复
 
-**风险**：低；主要是新规则首次 strict gate 时会打红现状，需先跑 `gocell validate --strict` 盘点现状并修。
+**搭车转移**：
+- **PR220-2 DOC-NAMING-GUARD-01** → **转移到 PR-A13**：baseline 试跑发现 develop HEAD 有 109 处 kebab 硬编码（capability-inventory.md / capability-map.md / master-plan.md / roadmap/* / examples READMEs / templates/adr.md），同时 PR-A13 文档事实源重写本就要处理这批文件，合并处理更经济。架构 plan 本节原注（"需先完成 PR220-1 / PR220-e1 文档收敛"）已印证。
+
+**文件面**：`kernel/metadata/parser_strict_test.go`（新） + `kernel/governance/validate_test.go`（扩） + `.github/workflows/_build-lint.yml`（新） + `pr-check.yml`（新） + `ci.yml` + `governance.yml` + `CLAUDE.md`（补注 parser 强制） + backlog 关单。
+
+**实际工时**：~5h（比计划 10h 少一半，因 3 条主线已实现，只需补回归测试 + CI 重构）。
 
 ---
 
@@ -349,19 +353,20 @@
 
 ---
 
-### PR-A13 PR#220 遗留：文档事实源重写（~4h）
+### PR-A13 PR#220 遗留：文档事实源重写 + DOC-NAMING-GUARD 启用（~6h）
 
 **主线**（问题层，但从 PR220 拆分报告推荐放此顺序）：
 - **PR220-1 DOC-CAPABILITY-INVENTORY-REWRITE-01** 按真实 route 重写 `capability-inventory.md` + 其他活动文档
 - **PR220-1b DOC-IOTDEVICE-README-ENVELOPE-01** iotdevice 响应补 `data` 包装
 - **PR220-e1 NAMING-BASELINE-CONTRADICTION-01** baseline 自身矛盾修正
 - **PR220-e3 STATUS-BOARD-J-ORDERCREATE-01** status-board 补条目 + checkRef
+- **PR220-2 DOC-NAMING-GUARD-01**（由 PR-A1 下沉此处，~2h）迁入 `worktrees/501-naming-no-dash` 的 `naming-guard.yaml`（58 禁字面量）+ `naming_docs_test.go` 到 `kernel/governance/`；PR-A1 baseline 探测 109 处 hits 分布于本 PR 本就要改的核心文档，合并处理更经济
 
-**搭车理由**：都是文档事实源漂移一次性扫清，给 PR-A1 里的 PR220-2 DOC-NAMING-GUARD 提供干净基线。
+**搭车理由**：都是文档事实源漂移一次性扫清；本 PR 清完后 naming-guard 可直接启用，无需分两步。
 
-**文件面**：`docs/design/*.md` + `docs/architecture/*.md` + `examples/iotdevice/README.md` + `journeys/*.yaml`
+**文件面**：`docs/design/*.md` + `docs/architecture/*.md` + `examples/iotdevice/README.md` + `journeys/*.yaml` + `docs/architecture/naming-guard.yaml`（迁入）+ `kernel/governance/naming_docs_test.go`（新）
 
-**依赖建议顺序**：PR-A13 (docs clean) → PR-A1 再启用 DOC-NAMING-GUARD。
+**执行顺序**：先清文档（PR220-1/1b/e1/e3）→ 跑 `go test ./kernel/governance/ -run TestActiveDocsAndTemplates_NoLegacyNamingExamples` 0 hit → 迁入 yaml+test → 提交。
 
 ---
 
@@ -673,7 +678,7 @@ Wave 4 (v1.1+)：
 
 | 主 PR | 搭车项 | 搭车理由 |
 |---|---|---|
-| PR-A1 治理规则 | L11 + PR220-4 + PR220-2 | 同 CI/governance 面 |
+| PR-A1 治理规则 | L11 + PR220-4 | 同 CI/governance 面（PR220-2 下沉 PR-A13） |
 | PR-A2 pkg helper | A7 POOLSTATS-IFACE | 同为 adapter 抽象 |
 | PR-A3 入口 | T6 per-cell adapter | 同 cmd/corebundle wiring |
 | PR-A4 可观测 | R3 OB-02 | 同 runtime/http/middleware |
@@ -703,7 +708,7 @@ Wave 4 (v1.1+)：
 
 **Week 2**（Wave 1 中段 ~5d 净）：PR-A4（6h）+ PR-A5a（6-7h A5 lifecycle）+ PR-A5b（3h）+ PR-A6（7h）+ PR-A7（6h）—— cell 内部重组 + EventRouter + Principal 契约
 
-**Week 3**（Wave 1 收尾 + Wave 2 启动 ~5d 净）：PR-A8 Vault（5h）+ PR-A25 AUTH-PROD-HARDENING（4h）+ PR-A26 AUTH-SETUP-ENDPOINT（4h）+ PR-A27 CONFIGWRITE-RETURNING（5h）+ PR-A28 CONFIG-DOCS（3h）+ PR-A13 docs clean（4h）—— Wave 1 发布硬约束全部落地
+**Week 3**（Wave 1 收尾 + Wave 2 启动 ~5d 净）：PR-A8 Vault（5h）+ PR-A25 AUTH-PROD-HARDENING（4h）+ PR-A26 AUTH-SETUP-ENDPOINT（4h）+ PR-A27 CONFIGWRITE-RETURNING（5h）+ PR-A28 CONFIG-DOCS（3h）+ PR-A13 docs clean（6h）—— Wave 1 发布硬约束全部落地
 
 **Week 4**（Wave 2 重磅 ~5d 净）：PR-A9 CONTRACT-META-01（3d Cx3 瓶颈）+ PR-A29 AUTH-REFRESH-MAIN（X11→X15 串行 10h 🔴）并行
 

@@ -1,0 +1,209 @@
+name: Build / Lint / Test (reusable)
+
+# Reusable workflow — called by ci.yml (push, full lint) and pr-check.yml
+# (pull_request, merge-base diff lint).
+# ref: grpc-go workflow separation (testing.yml + pr-validation.yml); this
+# variant uses workflow_call to eliminate DRY duplication that grpc-go leaves
+# in its two files.
+on:
+  workflow_call:
+    inputs:
+      lint-mode:
+        description: '"full" runs golangci-lint with no filter (push baseline). "pr" uses --new-from-merge-base=origin/<base-ref> to suppress pre-existing noise on pull requests.'
+        type: string
+        required: true
+      base-ref:
+        description: 'For lint-mode=pr: the PR target branch name (e.g. "develop", "main"). Ignored when lint-mode=full.'
+        type: string
+        default: develop
+      run-integration:
+        description: 'When true, runs the integration-test job (testcontainers, ~10m). Default false.'
+        type: boolean
+        default: false
+      run-sonar:
+        description: 'When true, runs the sonarcloud job (needs both build-test + integration-test coverage). Default false. Requires secrets.SONAR_TOKEN. Must not be true when run-integration is false — sonarcloud needs both coverage profiles.'
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Need full history so `golangci-lint --new-from-merge-base=origin/<base-ref>`
+          # can run `git merge-base` successfully.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
+        with:
+          version: v2.11
+          # only-new-issues uses the GitHub pull-request diff API which
+          # refuses diffs larger than 300 files; fall back to
+          # --new-from-merge-base so mass-rename PRs (repo-wide renames,
+          # metadata id sweeps) still get "new issue" filtering.
+          # On push (lint-mode: full) no filter is applied — every issue is
+          # surfaced so the develop branch stays clean as an absolute baseline.
+          # On pr (lint-mode: pr) use origin/<base-ref> so PRs targeting main
+          # or release/* lint against their actual merge-base, not develop.
+          args: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
+
+      - name: Test
+        run: go test -race -coverprofile=coverage.out -coverpkg=./... ./... -count=1 -timeout 5m
+
+      - name: Validate metadata
+        run: go run ./cmd/gocell validate
+
+      - name: Check contract health
+        run: go run ./cmd/gocell check contract-health
+
+      # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
+      # The main `gocell validate` step above already covers it.
+
+      - name: Check layering — examples no internal imports
+        run: |
+          if grep -rn --include='*.go' "github.com/ghbvf/gocell/cells/.*/internal" examples/ 2>/dev/null; then
+            echo "FAIL: examples/ imports root cells/*/internal/"
+            exit 1
+          fi
+          if grep -rn --include='*.go' "github.com/ghbvf/gocell/adapters/.*/internal" examples/ 2>/dev/null; then
+            echo "FAIL: examples/ imports adapters/*/internal/"
+            exit 1
+          fi
+          echo "PASS: no internal import violations"
+
+      # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
+      # deliberately — it is not a duplicate of the Test step. The Test step
+      # uses `-coverpkg=./...` whose merged profile loses per-package fidelity
+      # (cells/adapters test binaries dilute kernel counts). The gate needs
+      # in-package kernel coverage, which requires a standalone run.
+      - name: Kernel coverage gate
+        run: |
+          go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
+          awk '
+            /coverage: \[no statements\]/ { next }
+            /outboxtest/ { next }
+            /celltest/ { next }
+            /coverage:/ {
+              cov = $0
+              sub(/^.*coverage: /, "", cov)
+              sub(/% of statements.*$/, "", cov)
+              if (cov == $0) {
+                print "FAIL: could not parse coverage line: " $0;
+                exit 1
+              }
+              if (cov + 0 < 90) {
+                print "FAIL: " $2 " coverage " cov "% < 90%";
+                exit 1
+              }
+            }
+          ' /tmp/kernel-cov.txt
+          echo "PASS: kernel coverage >= 90%"
+
+      - name: Upload coverage profile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-profile
+          path: coverage.out
+          retention-days: 1
+
+  integration-test:
+    if: ${{ inputs.run-integration }}
+    runs-on: ubuntu-latest
+    # No `needs: build-test` — integration-test is independent (its own
+    # checkout + go build inside `go test`). Running in parallel with
+    # build-test cuts ~2 min of wall time. Cost: a CI minute wasted on
+    # integration when unit tests break, which at current PR frequency is
+    # a worthwhile trade.
+    #
+    # testcontainers manages containers dynamically (no static services)
+    # to avoid port conflicts with host-bound services.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      - name: Integration tests (testcontainers)
+        # cmd/corebundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
+        # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
+        # examples/ssobff carries the end-to-end walkthrough test (AUTH-SETUP-01
+        # regression guard — bootstrap credential flow, password-reset gate,
+        # change-password / refresh / logout contract shape). Without this job
+        # including it, the "integration" build tag was never compiled in CI.
+        # cells/accesscore/slices/identitymanage also has an integration test
+        # (changepassword_e2e_test.go) that exercises the real AuthMiddleware.
+        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... -count=1 -timeout 15m
+
+      - name: Upload integration coverage profile
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: coverage-integration-profile
+          path: coverage-integration.out
+          retention-days: 1
+
+  # Fork-PR guard: fork PRs cannot access org secrets (secrets.SONAR_TOKEN is
+  # empty for forks), which would cause this job to fail with an opaque auth
+  # error and block the PR with a red check. Guard: skip sonar when the PR head
+  # repo differs from the base repo (i.e. fork PR). Fork PRs still receive full
+  # build-test + integration-test coverage; they just lack SonarCloud
+  # decoration/quality gate, which is acceptable — the quality gate fires again
+  # post-merge on the push:develop run where the token is always available.
+  sonarcloud:
+    if: ${{ inputs.run-sonar && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    needs: [build-test, integration-test]
+    # Depends on both build-test (unit coverage) and integration-test
+    # (integration coverage) so SonarCloud receives the merged profile.
+    # This ensures new code in DB-path branches (schema_guard, outbox_relay)
+    # counts toward the coverage gate.
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - name: Download unit coverage profile
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-profile
+
+      - name: Download integration coverage profile
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: coverage-integration-profile
+
+      - name: Merge coverage profiles
+        run: |
+          # Concatenate: keep header from unit profile, append data lines from
+          # integration profile (skip the "mode:" header line to avoid duplicate).
+          cat coverage.out > coverage-merged.out
+          tail -n +2 coverage-integration.out >> coverage-merged.out
+
+      - name: Cache SonarQube packages
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ~/.sonar/cache
+          key: ${{ runner.os }}-sonar
+          restore-keys: ${{ runner.os }}-sonar
+
+      - name: SonarQube Scan
+        uses: SonarSource/sonarqube-scan-action@299e4b793aaa83bf2aba7c9c14bedbb485688ec4 # v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          projectBaseDir: .
