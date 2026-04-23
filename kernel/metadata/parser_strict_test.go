@@ -14,6 +14,8 @@ package metadata
 
 import (
 	"errors"
+	"fmt"
+	"regexp"
 	"testing"
 	"testing/fstest"
 
@@ -57,6 +59,14 @@ verify:
   contract: []
 `
 
+// minimalActorYAML is the smallest valid actors.yaml element.
+// actors.yaml is a YAML sequence at the top level ([]ActorMeta), so injection
+// inserts the dynamic field as a sibling of id/type within the sequence entry.
+const minimalActorYAML = `- id: test-actor
+  type: external
+  maxConsistencyLevel: L2
+`
+
 // minimalContractYAML is the smallest valid contract.yaml content.
 const minimalContractYAML = `id: http.test.v1
 kind: http
@@ -96,7 +106,7 @@ type yamlKind struct {
 	peerFiles fstest.MapFS // additional files the walker needs to not choke
 }
 
-// metadataKinds enumerates the five YAML types under test.
+// metadataKinds enumerates the six YAML types under test.
 var metadataKinds = []yamlKind{
 	{
 		name:     "cell",
@@ -104,6 +114,10 @@ var metadataKinds = []yamlKind{
 		baseYAML: minimalCellYAML,
 	},
 	{
+		// B6: parser.parseSlice is unconditional — it does not check for the
+		// existence of a peer cell.yaml before decoding slice.yaml. The
+		// walkDir switch dispatches on path pattern alone (matchSliceYAML).
+		// These slice rejection cases are therefore genuine and not fake-green.
 		name:     "slice",
 		path:     "cells/testcell/slices/testslice/slice.yaml",
 		baseYAML: minimalSliceYAML,
@@ -123,12 +137,28 @@ var metadataKinds = []yamlKind{
 		path:     "journeys/J-test.yaml",
 		baseYAML: minimalJourneyYAML,
 	},
+	{
+		// actors.yaml is a YAML sequence ([]ActorMeta). The dynamic field is
+		// injected as a sibling key within the single sequence element, not at
+		// the document root, so the injection template differs from the map
+		// kinds above. minimalActorYAML already contains "- id: ..." at
+		// column 0; we append "  <field>: injected-value\n" (2-space indent)
+		// to insert the field inside that sequence element.
+		name:     "actor",
+		path:     "actors.yaml",
+		baseYAML: minimalActorYAML,
+	},
 }
 
-// TestParser_StrictKnownFields_RejectsDynamicFields is the 5×7 rejection matrix.
+// lineNumberRe matches the "line N" substring that yaml.v3 includes in
+// KnownFields rejection errors. Future yaml.v3 upgrades that drop line
+// numbers will cause this assertion to fail, surfacing the regression.
+var lineNumberRe = regexp.MustCompile(`line \d+`)
+
+// TestParser_StrictKnownFields_RejectsDynamicFields is the 6×7 rejection matrix.
 // For each (YAML type, dynamic field) pair it constructs a minimal valid
-// YAML file, injects the dynamic field at the top level, and asserts that
-// ParseFS returns an ErrMetadataInvalid error whose message names the field.
+// YAML file, injects the dynamic field, and asserts that ParseFS returns an
+// ErrMetadataInvalid error whose message names the field and includes a line number.
 func TestParser_StrictKnownFields_RejectsDynamicFields(t *testing.T) {
 	for _, kind := range metadataKinds {
 		kind := kind // capture
@@ -136,8 +166,16 @@ func TestParser_StrictKnownFields_RejectsDynamicFields(t *testing.T) {
 			field := field // capture
 			name := kind.name + "_rejects_" + field
 			t.Run(name, func(t *testing.T) {
-				// Build the injected YAML by appending the dynamic field at top level.
-				injected := kind.baseYAML + field + ": injected-value\n"
+				// Build the injected YAML. For map-based YAML kinds the dynamic
+				// field is appended at the document root (column 0). For
+				// actors.yaml (a sequence), the field is indented 2 spaces so it
+				// lands inside the single sequence element.
+				var injected string
+				if kind.name == "actor" {
+					injected = kind.baseYAML + "  " + field + ": injected-value\n"
+				} else {
+					injected = kind.baseYAML + field + ": injected-value\n"
+				}
 
 				fsys := fstest.MapFS{
 					kind.path: &fstest.MapFile{Data: []byte(injected)},
@@ -157,7 +195,9 @@ func TestParser_StrictKnownFields_RejectsDynamicFields(t *testing.T) {
 					"expected *errcode.Error, got %T: %v", err, err)
 				assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
 				assert.Contains(t, err.Error(), field,
-					"error message must name the offending field")
+					fmt.Sprintf("expected error to contain field %q but got: %s", field, err.Error()))
+				assert.True(t, lineNumberRe.MatchString(err.Error()),
+					fmt.Sprintf("expected error to contain 'line N' (yaml.v3 line number) but got: %s", err.Error()))
 			})
 		}
 	}
@@ -235,7 +275,55 @@ func TestParser_StrictKnownFields_StatusBoardRejectsNonStructFields(t *testing.T
 				"expected *errcode.Error, got %T: %v", err, err)
 			assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
 			assert.Contains(t, err.Error(), field,
-				"error message must name the offending field")
+				fmt.Sprintf("expected error to contain field %q but got: %s", field, err.Error()))
+			assert.True(t, lineNumberRe.MatchString(err.Error()),
+				fmt.Sprintf("expected error to contain 'line N' (yaml.v3 line number) but got: %s", err.Error()))
 		})
 	}
+}
+
+// TestParser_StrictKnownFields_RejectsNestedDynamicFields proves that
+// yaml.KnownFields(true) propagates into nested structs. It injects an
+// unknown field under the "owner" sub-struct of a cell.yaml and asserts
+// rejection.
+func TestParser_StrictKnownFields_RejectsNestedDynamicFields(t *testing.T) {
+	// owner.readiness is not a field on OwnerMeta; KnownFields must reject it.
+	injected := minimalCellYAML + "  readiness: \"x\"\n" // indented under owner block
+
+	// Re-construct with explicit nested injection: append a readiness key
+	// inside the owner mapping. We do this by building a fresh YAML that
+	// places readiness inside owner rather than at the top level, to exercise
+	// nested-struct KnownFields propagation specifically.
+	injectedNested := `id: testcell
+type: core
+consistencyLevel: L1
+owner:
+  team: test
+  role: cell-owner
+  readiness: "x"
+schema:
+  primary: cell_test
+verify:
+  smoke:
+    - smoke.testcell.startup
+`
+	_ = injected // top-level variant not used in this test
+
+	fsys := fstest.MapFS{
+		"cells/testcell/cell.yaml": &fstest.MapFile{Data: []byte(injectedNested)},
+	}
+
+	p := NewParser("")
+	_, err := p.ParseFS(fsys)
+
+	require.Error(t, err, "expected rejection of nested field 'readiness' inside owner")
+
+	var ecErr *errcode.Error
+	require.True(t, errors.As(err, &ecErr),
+		"expected *errcode.Error, got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrMetadataInvalid, ecErr.Code)
+	assert.Contains(t, err.Error(), "readiness",
+		fmt.Sprintf("expected error to contain 'readiness' but got: %s", err.Error()))
+	assert.True(t, lineNumberRe.MatchString(err.Error()),
+		fmt.Sprintf("expected error to contain 'line N' but got: %s", err.Error()))
 }

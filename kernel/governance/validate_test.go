@@ -2967,9 +2967,11 @@ func TestFMT13(t *testing.T) {
 
 func TestTOPO07(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(*metadata.ProjectMeta)
-		wantCount int
+		name          string
+		setup         func(*metadata.ProjectMeta)
+		wantCount     int
+		wantIssueType IssueType // zero value = no assertion on IssueType
+		wantFile      string    // empty = no file assertion
 	}{
 		{
 			name:      "no actor consumers",
@@ -2988,7 +2990,7 @@ func TestTOPO07(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "consumer actor exceeds max level",
+			name: "consumer actor exceeds max level — IssueMismatch on contract file",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
 					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
@@ -2996,7 +2998,9 @@ func TestTOPO07(t *testing.T) {
 				// http.auth.login.v1 is L1, edge-bff max is L0: violation
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 			},
-			wantCount: 1,
+			wantCount:     1,
+			wantIssueType: IssueMismatch,
+			wantFile:      contractFile("http.auth.login.v1"),
 		},
 		{
 			name: "consumer actor with no max level (unconstrained)",
@@ -3009,14 +3013,16 @@ func TestTOPO07(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "consumer actor with malformed max level",
+			name: "consumer actor with malformed max level — IssueInvalid on actors.yaml",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
 					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "INVALID"},
 				}
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 			},
-			wantCount: 1,
+			wantCount:     1,
+			wantIssueType: IssueInvalid,
+			wantFile:      "actors.yaml",
 		},
 		{
 			name: "cell consumer is not checked by TOPO-07",
@@ -3066,8 +3072,17 @@ func TestTOPO07(t *testing.T) {
 			val := NewValidator(pm, "")
 			got := findByCode(val.validateTOPO07(), "TOPO-07")
 			assert.Len(t, got, tt.wantCount)
+			if tt.wantCount == 0 {
+				return
+			}
 			for _, r := range got {
 				assert.Equal(t, SeverityError, r.Severity)
+				if tt.wantIssueType != "" {
+					assert.Equal(t, tt.wantIssueType, r.IssueType)
+				}
+				if tt.wantFile != "" {
+					assert.Equal(t, tt.wantFile, r.File)
+				}
 			}
 		})
 	}
@@ -3155,6 +3170,7 @@ func TestTOPO08(t *testing.T) {
 		name      string
 		setup     func(*metadata.ProjectMeta)
 		wantCount int
+		wantFile  string // empty = no file assertion (zero-result cases)
 	}{
 		{
 			name:      "no deprecated contracts",
@@ -3162,11 +3178,12 @@ func TestTOPO08(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "deprecated contract referenced by slice is error",
+			name: "deprecated contract referenced by slice — IssueForbidden on slice.yaml",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
 			},
 			wantCount: 1, // session-login uses http.auth.login.v1
+			wantFile:  sliceFile("accesscore/session-login"),
 		},
 		{
 			name: "deprecated contract referenced by multiple slices",
@@ -3197,11 +3214,15 @@ func TestTOPO08(t *testing.T) {
 			val := NewValidator(pm, "")
 			got := findByCode(val.validateTOPO08(), "TOPO-08")
 			assert.Len(t, got, tt.wantCount)
+			if tt.wantCount == 0 {
+				return
+			}
 			for _, r := range got {
 				assert.Equal(t, SeverityError, r.Severity)
 				assert.Equal(t, IssueForbidden, r.IssueType)
-				if tt.wantCount > 0 {
-					assert.Contains(t, r.Message, "ownerCell")
+				assert.Contains(t, r.Message, "ownerCell")
+				if tt.wantFile != "" {
+					assert.Equal(t, tt.wantFile, r.File)
 				}
 			}
 		})
@@ -3722,121 +3743,6 @@ func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueInvalid, got[0].IssueType)
 	assert.Contains(t, got[0].Message, "banana")
-}
-
-// --- TOPO-07 invariant gate (G-2): consumer actor maxConsistencyLevel ---
-// Regression gates that pin the invariants validated by validateTOPO07 so
-// that future refactors cannot silently remove the consumer-side check.
-// Backlog item G-2 / V-A11.
-
-func TestTOPO07_EnforcesMaxConsistencyLevel(t *testing.T) {
-	tests := []struct {
-		name          string
-		setup         func(*metadata.ProjectMeta)
-		wantCount     int
-		wantSeverity  Severity
-		wantIssueType IssueType
-		wantFile      string
-	}{
-		{
-			name: "malformed actor maxConsistencyLevel reports IssueInvalid on actors.yaml",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Actors = append(pm.Actors, metadata.ActorMeta{
-					ID:                  "edge-bff",
-					Type:                "external",
-					MaxConsistencyLevel: "L7",
-				})
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
-			},
-			wantCount:     1,
-			wantSeverity:  SeverityError,
-			wantIssueType: IssueInvalid,
-			wantFile:      "actors.yaml",
-		},
-		{
-			name: "contract consistencyLevel exceeds actor max reports IssueMismatch on contract file",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
-				}
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
-				// http.auth.login.v1 is L1, edge-bff max is L0: violation
-			},
-			wantCount:     1,
-			wantSeverity:  SeverityError,
-			wantIssueType: IssueMismatch,
-			wantFile:      contractFile("http.auth.login.v1"),
-		},
-		{
-			name: "actor with no maxConsistencyLevel is unconstrained — zero results",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: ""},
-				}
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
-			},
-			wantCount: 0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pm := validProject()
-			tt.setup(pm)
-			val := NewValidator(pm, "")
-			got := findByCode(val.validateTOPO07(), "TOPO-07")
-			assert.Len(t, got, tt.wantCount)
-			for _, r := range got {
-				assert.Equal(t, tt.wantSeverity, r.Severity)
-				assert.Equal(t, tt.wantIssueType, r.IssueType)
-				if tt.wantFile != "" {
-					assert.Equal(t, tt.wantFile, r.File)
-				}
-			}
-		})
-	}
-}
-
-// --- TOPO-08 invariant gate (G-4): deprecated contract reference blocking ---
-// Regression gates that pin the invariants validated by validateTOPO08.
-// Backlog item G-4 / V-A11.
-
-func TestTOPO08_BlocksDeprecatedReference(t *testing.T) {
-	tests := []struct {
-		name      string
-		setup     func(*metadata.ProjectMeta)
-		wantCount int
-	}{
-		{
-			name: "slice references deprecated contract — SeverityError IssueForbidden on slice.yaml",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
-				// accesscore/session-login references http.auth.login.v1
-			},
-			wantCount: 1,
-		},
-		{
-			name: "slice references active contract — zero results",
-			setup: func(pm *metadata.ProjectMeta) {
-				pm.Contracts["http.auth.login.v1"].Lifecycle = "active"
-			},
-			wantCount: 0,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pm := validProject()
-			tt.setup(pm)
-			val := NewValidator(pm, "")
-			got := findByCode(val.validateTOPO08(), "TOPO-08")
-			assert.Len(t, got, tt.wantCount)
-			for _, r := range got {
-				assert.Equal(t, SeverityError, r.Severity)
-				assert.Equal(t, IssueForbidden, r.IssueType)
-				assert.Equal(t, sliceFile("accesscore/session-login"), r.File)
-				assert.Equal(t, "contractUsages[0].contract", r.Field)
-			}
-		})
-	}
 }
 
 // --- Parser examples/ walk coverage (V-A11) ---
