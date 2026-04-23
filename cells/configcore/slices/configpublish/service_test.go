@@ -106,6 +106,20 @@ func TestService_Rollback(t *testing.T) {
 			version: 1,
 			wantErr: true,
 		},
+		{
+			name:    "zero version rejected",
+			setup:   func(_ *Service, _ *mem.ConfigRepository) {},
+			key:     "app.name",
+			version: 0,
+			wantErr: true,
+		},
+		{
+			name:    "negative version rejected",
+			setup:   func(_ *Service, _ *mem.ConfigRepository) {},
+			key:     "app.name",
+			version: -1,
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -118,6 +132,11 @@ func TestService_Rollback(t *testing.T) {
 			entry, err := svc.Rollback(context.Background(), tt.key, tt.version)
 			if tt.wantErr {
 				assert.Error(t, err)
+				var ec *errcode.Error
+				if errors.As(err, &ec) {
+					assert.Equal(t, errcode.ErrConfigPublishInvalidInput, ec.Code,
+						"validation errors must surface ErrConfigPublishInvalidInput")
+				}
 			} else {
 				require.NoError(t, err)
 				assert.Equal(t, "v1", entry.Value)
