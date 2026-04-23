@@ -1,5 +1,7 @@
 package ports
 
+import "context"
+
 // HealthCheckable is an optional interface for infrastructure components that
 // can report their health status. Repository implementations should implement
 // this when they depend on external resources (database, cache) whose
@@ -11,5 +13,5 @@ package ports
 // explicit: future real adapters implementing SessionRepository SHOULD also
 // implement HealthCheckable so that session store availability is observable.
 type HealthCheckable interface {
-	Health() error
+	Health(ctx context.Context) error
 }

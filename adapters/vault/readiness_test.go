@@ -49,7 +49,7 @@ func TestTransitReadiness_Healthy(t *testing.T) {
 	require.True(t, ok, "Checkers must contain 'vault_transit_ready' key")
 	require.NotNil(t, probe, "vault_transit_ready probe must not be nil")
 
-	err := probe()
+	err := probe(context.Background())
 	assert.NoError(t, err, "vault_transit_ready probe should return nil for healthy vault")
 }
 
@@ -87,7 +87,7 @@ func TestTransitReadiness_MountDeleted(t *testing.T) {
 	probe := checkers["vault_transit_ready"]
 	require.NotNil(t, probe)
 
-	probeErr := probe()
+	probeErr := probe(context.Background())
 	require.Error(t, probeErr, "vault_transit_ready must return error when transit mount is deleted")
 
 	// classifyVaultReadError routes 404 → ErrKeyProviderKeyNotFound (mount absent).
@@ -130,7 +130,7 @@ func TestTransitReadiness_ContextTimeout(t *testing.T) {
 
 	// The probe internally uses context.WithTimeout(3s), but since we also set
 	// a 500ms HTTP client timeout, it will fail fast.
-	probeErr := probe()
+	probeErr := probe(context.Background())
 	require.Error(t, probeErr, "probe must return error when vault is unreachable")
 
 	assert.True(t, isErrCode(probeErr, errcode.ErrKeyProviderTransient),
@@ -215,7 +215,7 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 	checkers := p.Checkers()
 	probe := checkers["vault_transit_ready"]
 	require.NotNil(t, probe)
-	require.NoError(t, probe(), "probe must succeed with valid child token (policy grants transit read)")
+	require.NoError(t, probe(context.Background()), "probe must succeed with valid child token (policy grants transit read)")
 
 	// Revoke the child token via revoke-accessor using the high-level API.
 	// Root token can revoke any accessor without knowing the child token value.
@@ -225,7 +225,7 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 	// After revocation, Vault returns HTTP 403 → classifyVaultReadError maps to
 	// ErrKeyProviderAuthFailed (token revoked / permission denied), which is
 	// semantically distinct from ErrKeyProviderKeyNotFound (404 / missing key).
-	probeErr := probe()
+	probeErr := probe(context.Background())
 	require.Error(t, probeErr, "probe must fail after token is revoked")
 
 	assert.True(t, isErrCode(probeErr, errcode.ErrKeyProviderAuthFailed),

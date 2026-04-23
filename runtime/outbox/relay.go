@@ -648,8 +648,8 @@ func (r *Relay) cappedDelay(d time.Duration) time.Duration {
 // and register them unconditionally.
 //
 // ref: controller-runtime/pkg/healthz AddReadyzCheck — named-checker aggregation.
-func (r *Relay) HealthCheckers() map[string]func() error {
-	m := make(map[string]func() error)
+func (r *Relay) HealthCheckers() map[string]func(context.Context) error {
+	m := make(map[string]func(context.Context) error)
 	if r.pollBudget != nil {
 		m["outbox-relay-poll"] = r.pollBudget.Checker()
 	}

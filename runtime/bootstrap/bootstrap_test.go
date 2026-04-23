@@ -560,7 +560,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithHealthChecker("rabbitmq", func() error { return nil }),
+		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -589,7 +589,9 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
-	assert.Equal(t, "healthy", deps["rabbitmq"])
+	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
+	require.True(t, ok, "rabbitmq entry must be a map")
+	assert.Equal(t, "healthy", rabbitmq["status"])
 
 	cancel()
 	select {
@@ -611,7 +613,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithHealthChecker("rabbitmq", func() error {
+		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			return fmt.Errorf("connection closed")
 		}),
 	)
@@ -642,7 +644,9 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
-	assert.Equal(t, "unhealthy", deps["rabbitmq"])
+	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
+	require.True(t, ok, "rabbitmq entry must be a map")
+	assert.Equal(t, "unhealthy", rabbitmq["status"])
 
 	cancel()
 	select {
@@ -709,17 +713,17 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 // healthContribCell is a Cell that implements cell.HealthContributor.
 type healthContribCell struct {
 	*cell.BaseCell
-	checkers map[string]func() error
+	checkers map[string]func(context.Context) error
 }
 
-func newHealthContribCell(id string, checkers map[string]func() error) *healthContribCell {
+func newHealthContribCell(id string, checkers map[string]func(context.Context) error) *healthContribCell {
 	return &healthContribCell{
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
 		checkers: checkers,
 	}
 }
 
-func (c *healthContribCell) HealthCheckers() map[string]func() error {
+func (c *healthContribCell) HealthCheckers() map[string]func(context.Context) error {
 	return c.checkers
 }
 
@@ -730,8 +734,8 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-contrib", DurabilityMode: cell.DurabilityDemo})
-	hcc := newHealthContribCell("accesscore", map[string]func() error{
-		"session-store": func() error { return nil },
+	hcc := newHealthContribCell("accesscore", map[string]func(context.Context) error{
+		"session-store": func(_ context.Context) error { return nil },
 	})
 	require.NoError(t, asm.Register(hcc))
 
@@ -765,7 +769,9 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
-	assert.Equal(t, "healthy", deps["session-store"],
+	sessionStore, ok := deps["session-store"].(map[string]any)
+	require.True(t, ok, "session-store entry must be a map")
+	assert.Equal(t, "healthy", sessionStore["status"],
 		"HealthContributor-discovered probe should appear in /readyz verbose")
 
 	cancel()
@@ -783,11 +789,11 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 
 	asm := assembly.New(assembly.Config{ID: "test-hc-dup", DurabilityMode: cell.DurabilityDemo})
 	// Two cells both return "session-store" probe — should conflict.
-	require.NoError(t, asm.Register(newHealthContribCell("cell-a", map[string]func() error{
-		"session-store": func() error { return nil },
+	require.NoError(t, asm.Register(newHealthContribCell("cell-a", map[string]func(context.Context) error{
+		"session-store": func(_ context.Context) error { return nil },
 	})))
-	require.NoError(t, asm.Register(newHealthContribCell("cell-b", map[string]func() error{
-		"session-store": func() error { return nil },
+	require.NoError(t, asm.Register(newHealthContribCell("cell-b", map[string]func(context.Context) error{
+		"session-store": func(_ context.Context) error { return nil },
 	})))
 
 	b := New(
@@ -807,7 +813,7 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 
 func TestWithHealthChecker_EmptyName_ReturnsError(t *testing.T) {
 	b := New(
-		WithHealthChecker("", func() error { return nil }),
+		WithHealthChecker("", func(_ context.Context) error { return nil }),
 	)
 	err := b.Run(context.Background())
 	require.Error(t, err)
@@ -825,7 +831,7 @@ func TestWithHealthChecker_ValidationBeforeSideEffects(t *testing.T) {
 	defer slog.SetDefault(oldDefault)
 
 	b := New(
-		WithHealthChecker("", func() error { return nil }),
+		WithHealthChecker("", func(_ context.Context) error { return nil }),
 		WithConfig("/nonexistent/config.yaml", "TEST"), // would fail if reached
 	)
 	err := b.Run(context.Background())
@@ -882,8 +888,8 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithHealthChecker("rabbitmq", func() error { return nil }),
-		WithHealthChecker("postgres", func() error { return fmt.Errorf("connection refused") }),
+		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
+		WithHealthChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -912,8 +918,12 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
-	assert.Equal(t, "healthy", deps["rabbitmq"], "rabbitmq checker should be healthy")
-	assert.Equal(t, "unhealthy", deps["postgres"], "postgres checker should be unhealthy")
+	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
+	require.True(t, ok, "rabbitmq entry must be a map")
+	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
+	postgresEntry, ok := deps["postgres"].(map[string]any)
+	require.True(t, ok, "postgres entry must be a map")
+	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
 	assert.Equal(t, "unhealthy", body["status"], "overall status must be unhealthy")
 
 	cancel()
@@ -939,7 +949,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 		WithAssembly(asm),
 		WithListener(ln),
 		WithShutdownTimeout(2*time.Second),
-		WithHealthChecker("rabbitmq", func() error {
+		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			if unhealthy.Load() {
 				return fmt.Errorf("connection lost")
 			}
@@ -1042,7 +1052,11 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if !ok {
 			return false
 		}
-		return deps[configWatcherCheckerName] == "healthy"
+		probe, ok := deps[configWatcherCheckerName].(map[string]any)
+		if !ok {
+			return false
+		}
+		return probe["status"] == "healthy"
 	}, 3*time.Second, 50*time.Millisecond, "config watcher did not become ready in time")
 
 	cancel()
@@ -1095,7 +1109,11 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 			return false
 		}
 		// Config drift checker should be registered and healthy (no drift).
-		return deps[configDriftCheckerName] == "healthy"
+		probe, ok := deps[configDriftCheckerName].(map[string]any)
+		if !ok {
+			return false
+		}
+		return probe["status"] == "healthy"
 	}, 3*time.Second, 50*time.Millisecond, "config-drift checker not found or not healthy")
 
 	cancel()
@@ -1235,7 +1253,11 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if !ok {
 			return false
 		}
-		return deps[configDriftCheckerName] == "unhealthy"
+		probe, ok := deps[configDriftCheckerName].(map[string]any)
+		if !ok {
+			return false
+		}
+		return probe["status"] == "unhealthy"
 	}, 5*time.Second, 100*time.Millisecond, "readyz should return 503 with config-drift unhealthy")
 
 	cancel()
@@ -1282,7 +1304,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithHealthChecker("config-watcher", func() error { return nil }),
+		WithHealthChecker("config-watcher", func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -1334,7 +1356,9 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
-	assert.Equal(t, "healthy", deps["eventrouter"])
+	erProbe, ok := deps["eventrouter"].(map[string]any)
+	require.True(t, ok, "eventrouter probe must be a structured ProbeResult")
+	assert.Equal(t, "healthy", erProbe["status"])
 
 	cancel()
 	select {
@@ -3511,7 +3535,9 @@ func TestWithBrokerHealth_RegistersChecker(t *testing.T) {
 			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 			deps, ok := body["dependencies"].(map[string]any)
 			require.True(t, ok, "response must contain dependencies map")
-			assert.Equal(t, tt.wantDepsValue, deps[tt.wantDepsKey])
+			probe, ok := deps[tt.wantDepsKey].(map[string]any)
+			require.True(t, ok, "dependency %q must be a structured ProbeResult", tt.wantDepsKey)
+			assert.Equal(t, tt.wantDepsValue, probe["status"])
 
 			cancel()
 			select {
@@ -3857,8 +3883,9 @@ func TestWithRelayHealth_TrippedBudget_Returns503(t *testing.T) {
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
-	pollStatus, _ := deps["outbox-relay-poll"].(string)
-	assert.Equal(t, "unhealthy", pollStatus, "outbox-relay-poll: status must be unhealthy")
+	pollProbe, ok := deps["outbox-relay-poll"].(map[string]any)
+	require.True(t, ok, "outbox-relay-poll must be a structured ProbeResult")
+	assert.Equal(t, "unhealthy", pollProbe["status"], "outbox-relay-poll: status must be unhealthy")
 
 	// Phase 2: store recovers — budget must reset and /readyz must return 200.
 	store.setClaimErr(nil)

@@ -765,6 +765,10 @@ const transitReadinessTimeout = 3 * time.Second
 //   - The transit mount is enabled.
 //   - The named key exists.
 //
+// The probe accepts a ctx from the /readyz handler; it further caps its own
+// wait at transitReadinessTimeout (3 s) so a slow Vault does not hold the
+// /readyz response indefinitely.
+//
 // This is intentionally NOT sys/health — sys/health only reports whether the
 // Vault process is running and unsealed; it does NOT verify that the transit
 // mount or the specific key are accessible. (vault#28846)
@@ -772,12 +776,12 @@ const transitReadinessTimeout = 3 * time.Second
 // ref: external-secrets/external-secrets pkg/provider/vault — ValidateStore
 //
 //	uses auth/token/lookup-self + business-path probe, not sys/health
-func (p *TransitKeyProvider) Checkers() map[string]func() error {
-	return map[string]func() error{
-		"vault_transit_ready": func() error {
-			ctx, cancel := context.WithTimeout(context.Background(), transitReadinessTimeout)
+func (p *TransitKeyProvider) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		"vault_transit_ready": func(ctx context.Context) error {
+			probeCtx, cancel := context.WithTimeout(ctx, transitReadinessTimeout)
 			defer cancel()
-			_, err := p.readLatestVersion(ctx)
+			_, err := p.readLatestVersion(probeCtx)
 			return err
 		},
 	}

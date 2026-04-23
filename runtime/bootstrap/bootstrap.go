@@ -75,6 +75,21 @@ func WithAssembly(asm *assembly.CoreAssembly) Option {
 	}
 }
 
+// WithAssemblyID sets the cell ID label used in HTTP metrics emitted by the
+// auto-wired metrics collector (R2).
+//
+// Recommended to set this matching asm.ID() when using WithAssembly(asm);
+// omit to reuse assembly ID (auto-derived). Explicit value overrides
+// assembly-derived.
+//
+// When neither WithAssemblyID nor WithAssembly is used, Bootstrap defaults
+// to "default" (the ID of the auto-built assembly).
+func WithAssemblyID(id string) Option {
+	return func(b *Bootstrap) {
+		b.assemblyID = id
+	}
+}
+
 // WithWorkers adds background workers.
 func WithWorkers(ws ...worker.Worker) Option {
 	return func(b *Bootstrap) {
@@ -274,12 +289,25 @@ func WithListener(ln net.Listener) Option {
 // wire adapter health probes (e.g., conn.Health for RabbitMQ) without
 // bootstrap depending on adapter types.
 //
-// Accepts func() error so callers do not need to import runtime/http/health.
-// Validation (empty name, nil fn) is deferred to Run() where it fires at
-// Step 0 before any component starts, returning an error directly.
-func WithHealthChecker(name string, fn func() error) Option {
+// Accepts func(context.Context) error so callers can honour the /readyz probe
+// deadline. Validation (empty name, nil fn) is deferred to Run() where it fires
+// at Step 0 before any component starts, returning an error directly.
+func WithHealthChecker(name string, fn func(context.Context) error) Option {
 	return func(b *Bootstrap) {
 		b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
+	}
+}
+
+// WithReadyzDeadline overrides the per-probe deadline for /readyz. All
+// registered checkers must complete within this duration; checkers that exceed
+// it are reported as status="timeout". A zero or negative value uses the
+// health.Handler default (5 s, Kubernetes readiness probe convention).
+//
+// ref: k8s.io/apiserver/pkg/server/healthz — server-side readyz deadline
+// independent of the kubelet HTTP connection deadline.
+func WithReadyzDeadline(d time.Duration) Option {
+	return func(b *Bootstrap) {
+		b.readyzDeadline = d
 	}
 }
 
@@ -321,9 +349,7 @@ func WithBrokerHealth(bc BrokerHealthChecker) Option {
 		}
 		b.healthCheckers = append(b.healthCheckers, namedChecker{
 			name: "rabbitmq",
-			fn: func() error {
-				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
+			fn: func(ctx context.Context) error {
 				return bc.Health(ctx)
 			},
 		})
@@ -356,7 +382,11 @@ func WithRelayHealth(r *runtimeoutbox.Relay) Option {
 		}
 		sort.Strings(names)
 		for _, name := range names {
-			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: checkers[name]})
+			fn := checkers[name] // capture loop var
+			b.healthCheckers = append(b.healthCheckers, namedChecker{
+				name: name,
+				fn:   func(ctx context.Context) error { return fn(ctx) },
+			})
 		}
 	}
 }
@@ -573,8 +603,8 @@ func WithLifecycle(fn func(lc Lifecycle)) Option {
 
 // namedChecker pairs a readiness probe name with its check function.
 type namedChecker struct {
-	name string       // unique identifier shown in /readyz?verbose output
-	fn   func() error // nil return = healthy; non-nil = unhealthy
+	name string                      // unique identifier shown in /readyz?verbose output
+	fn   func(context.Context) error // nil return = healthy; non-nil = unhealthy
 }
 
 // Bootstrap orchestrates the GoCell application lifecycle.
@@ -632,6 +662,14 @@ type Bootstrap struct {
 	// relayHealthNil is set by WithRelayHealth when a nil relay is passed.
 	// Checked at Run() to fail-fast rather than silently skipping relay health.
 	relayHealthNil bool
+
+	// readyzDeadline overrides the per-probe deadline for /readyz.
+	// Zero means use health.Handler default (5 s).
+	readyzDeadline time.Duration
+
+	// assemblyID is the cell ID label used in HTTP metrics emitted by the
+	// auto-wired metrics collector. Defaults to "default" when empty.
+	assemblyID string
 
 	// lifecycle fields wired by WithLifecycle* options.
 	lifecycle                    Lifecycle

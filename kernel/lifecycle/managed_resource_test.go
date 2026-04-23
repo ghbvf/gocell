@@ -10,8 +10,8 @@ import (
 
 type fakeResource struct{}
 
-func (fakeResource) Checkers() map[string]func() error {
-	return map[string]func() error{"fake": func() error { return nil }}
+func (fakeResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{"fake": func(_ context.Context) error { return nil }}
 }
 func (fakeResource) Worker() worker.Worker         { return nil }
 func (fakeResource) Close(_ context.Context) error { return nil }

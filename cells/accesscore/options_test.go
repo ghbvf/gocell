@@ -31,7 +31,7 @@ func TestHealthCheckers_InMemory(t *testing.T) {
 	c := NewAccessCore(WithInMemoryDefaults())
 	checkers := c.HealthCheckers()
 	require.Contains(t, checkers, "session-store", "in-memory session repo implements Health()")
-	assert.NoError(t, checkers["session-store"]())
+	assert.NoError(t, checkers["session-store"](context.Background()))
 }
 
 func TestHealthCheckers_NilRepo(t *testing.T) {

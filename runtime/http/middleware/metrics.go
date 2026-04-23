@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"log/slog"
 	"net/http"
 	"time"
 
@@ -27,7 +28,7 @@ func Metrics(collector metrics.Collector) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(w, r)
 
-			safeObserve(func() {
+			safeObserve(slog.Default(), func() {
 				route := RoutePatternFromCtx(r.Context())
 				collector.RecordRequest(r.Method, route, state.Status(), time.Since(start).Seconds())
 			})

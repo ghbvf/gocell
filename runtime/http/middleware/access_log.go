@@ -30,7 +30,7 @@ func AccessLog(next http.Handler) http.Handler {
 
 		next.ServeHTTP(w, r)
 
-		safeObserve(func() {
+		safeObserve(slog.Default(), func() {
 			duration := time.Since(start)
 			route := RoutePatternFromCtx(r.Context())
 			attrs := []any{

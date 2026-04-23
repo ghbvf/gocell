@@ -695,7 +695,7 @@ func TestRelay_PollFailureBudget_TripsAfterConsecutiveFailures(t *testing.T) {
 		if !ok {
 			return false
 		}
-		return fn() != nil
+		return fn(context.Background()) != nil
 	}, 2*time.Second, 5*time.Millisecond, "poll budget must trip after consecutive failures")
 }
 
@@ -712,7 +712,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 	require.Eventually(t, func() bool {
 		checkers := relay.HealthCheckers()
 		fn, ok := checkers["outbox-relay-poll"]
-		return ok && fn() != nil
+		return ok && fn(context.Background()) != nil
 	}, 2*time.Second, 5*time.Millisecond, "budget must trip")
 
 	// Clear the error so poll succeeds.
@@ -722,7 +722,7 @@ func TestRelay_PollFailureBudget_ResetsOnSuccess(t *testing.T) {
 	require.Eventually(t, func() bool {
 		checkers := relay.HealthCheckers()
 		fn, ok := checkers["outbox-relay-poll"]
-		return ok && fn() == nil
+		return ok && fn(context.Background()) == nil
 	}, 2*time.Second, 5*time.Millisecond, "poll budget must reset after success")
 }
 
@@ -739,7 +739,7 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 	require.Eventually(t, func() bool {
 		checkers := relay.HealthCheckers()
 		fn, ok := checkers["outbox-relay-reclaim"]
-		return ok && fn() != nil
+		return ok && fn(context.Background()) != nil
 	}, 2*time.Second, 5*time.Millisecond, "reclaim budget must trip")
 
 	// Verify poll checker exists upfront (fail-fast if absent, catching silent skips).
@@ -749,7 +749,7 @@ func TestRelay_ReclaimFailureBudget_Independent(t *testing.T) {
 
 	// Poll checker must never become unhealthy while only reclaim fails.
 	assert.Never(t, func() bool {
-		return pollChecker() != nil
+		return pollChecker(context.Background()) != nil
 	}, 100*time.Millisecond, 5*time.Millisecond, "poll budget should not trip while only reclaim fails")
 }
 
@@ -766,7 +766,7 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 	require.Eventually(t, func() bool {
 		checkers := relay.HealthCheckers()
 		fn, ok := checkers["outbox-relay-cleanup"]
-		return ok && fn() != nil
+		return ok && fn(context.Background()) != nil
 	}, 2*time.Second, 5*time.Millisecond, "cleanup budget must trip")
 
 	// Verify poll checker exists upfront (fail-fast if absent, catching silent skips).
@@ -776,7 +776,7 @@ func TestRelay_CleanupFailureBudget_Independent(t *testing.T) {
 
 	// Poll checker must never become unhealthy while only cleanup fails.
 	assert.Never(t, func() bool {
-		return pollChecker2() != nil
+		return pollChecker2(context.Background()) != nil
 	}, 100*time.Millisecond, 5*time.Millisecond, "poll budget should not trip while only cleanup fails")
 }
 
@@ -820,7 +820,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	require.Eventually(t, func() bool {
 		checkers := relay.HealthCheckers()
 		fn, ok := checkers["outbox-relay-poll"]
-		return ok && fn() != nil
+		return ok && fn(context.Background()) != nil
 	}, 2*time.Second, 5*time.Millisecond, "poll budget must trip during first run")
 
 	stop() // gracefully stop; defer in Start resets readyCh for next Start
@@ -854,7 +854,7 @@ func TestRelay_CanRestartAfterTrip_ResetsBudget(t *testing.T) {
 	// healthy because Reset() cleared the stale trip from the first run.
 	checkers := relay.HealthCheckers()
 	require.Contains(t, checkers, "outbox-relay-poll", "poll checker must be registered on second run")
-	assert.Nil(t, checkers["outbox-relay-poll"](), "poll checker must be healthy immediately after restart (Reset cleared stale trip)")
+	assert.Nil(t, checkers["outbox-relay-poll"](context.Background()), "poll checker must be healthy immediately after restart (Reset cleared stale trip)")
 }
 
 func TestRelay_Ready_ReturnsReadyChannel(t *testing.T) {

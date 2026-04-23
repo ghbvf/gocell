@@ -22,6 +22,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -29,6 +30,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventrouter"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -72,11 +74,11 @@ func newPhaseState() (context.Context, *phaseState) {
 
 // registerHealthChecker adds a named readiness checker to hh, returning an
 // error on duplicate names (instead of panicking like hh.RegisterChecker).
-func (s *phaseState) registerHealthChecker(name string, fn func() error) error {
+func (s *phaseState) registerHealthChecker(name string, fn func(context.Context) error) error {
 	if _, exists := s.registeredCheckers[name]; exists {
 		return fmt.Errorf("bootstrap: duplicate health checker %q", name)
 	}
-	s.hh.RegisterChecker(name, health.Checker(fn))
+	s.hh.RegisterChecker(name, fn)
 	s.registeredCheckers[name] = struct{}{}
 	return nil
 }
@@ -471,7 +473,11 @@ func (b *Bootstrap) invokeCellReload(id string, cr cell.ConfigReloader, evt cell
 // phase5BuildHTTPRouter builds the HTTP router, registers health checkers,
 // registers cell HTTP routes, and sets s.hh and s.rtr.
 func (b *Bootstrap) phase5BuildHTTPRouter(s *phaseState) error {
-	hh := health.New(s.asm)
+	var hhOpts []health.Option
+	if b.readyzDeadline > 0 {
+		hhOpts = append(hhOpts, health.WithDeadline(b.readyzDeadline))
+	}
+	hh := health.New(s.asm, hhOpts...)
 	if b.adapterInfo != nil {
 		hh.SetAdapterInfo(b.adapterInfo)
 	}
@@ -549,7 +555,10 @@ func (b *Bootstrap) registerAllHealthCheckers(s *phaseState) error {
 		return err
 	}
 	if s.cfgWatcher != nil {
-		if err := s.registerHealthChecker(configWatcherCheckerName, s.cfgWatcher.Health); err != nil {
+		cfgHealth := s.cfgWatcher.Health // func() error — wrap to ctx-aware signature
+		if err := s.registerHealthChecker(configWatcherCheckerName, func(_ context.Context) error {
+			return cfgHealth()
+		}); err != nil {
 			return err
 		}
 	}
@@ -600,7 +609,7 @@ func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {
 	if !gOK || !ogOK {
 		return nil
 	}
-	return s.registerHealthChecker(configDriftCheckerName, func() error {
+	return s.registerHealthChecker(configDriftCheckerName, func(_ context.Context) error {
 		if config.HasDrift(cfg) {
 			return fmt.Errorf("config drift: generation %d, observed %d",
 				g.Generation(), og.ObservedGeneration())
@@ -613,6 +622,13 @@ func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {
 func (b *Bootstrap) buildRouter(s *phaseState, hh *health.Handler) (*router.Router, error) {
 	opts := make([]router.Option, 0, len(b.routerOpts)+4)
 	opts = append(opts, b.routerOpts...)
+
+	// R2: auto-wire HTTP metrics collector when a Provider is configured.
+	opts, err := b.autoWireHTTPMetricsCollector(opts)
+	if err != nil {
+		return nil, err
+	}
+
 	if b.authVerifier != nil {
 		authOpts, err := b.buildAuthRouterOptions(s)
 		if err != nil {
@@ -629,6 +645,50 @@ func (b *Bootstrap) buildRouter(s *phaseState, hh *health.Handler) (*router.Rout
 		return nil, fmt.Errorf("bootstrap: %w", err)
 	}
 	return rtr, nil
+}
+
+// autoWireHTTPMetricsCollector adds a router.WithMetricsCollector option when
+// b.metricsProvider is a real (non-Nop) provider. When no provider is set, the
+// opts slice is returned unchanged.
+//
+// R2 wiring rule: if callers already passed router.WithMetricsCollector via
+// WithRouterOptions AND also called WithMetricsProvider, the auto-wired
+// collector construction will fail with a duplicate-name error. The error is
+// wrapped with an actionable message that tells operators which side to remove.
+//
+// ref: runtime/observability/metrics.NewProviderCollector — provider-neutral
+// HTTP collector that records http_requests_total + http_request_duration_seconds.
+func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router.Option, error) {
+	if b.metricsProvider == nil {
+		return opts, nil
+	}
+	// NopProvider is the default when no provider is injected; skip auto-wire
+	// to avoid allocating a no-op collector on every bootstrap startup.
+	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
+		return opts, nil
+	}
+	// Derive cell ID from the most specific source available:
+	//  1. Explicit WithAssemblyID — caller's intent takes precedence.
+	//  2. Pre-built assembly's ID (b.assembly.ID()) — avoids requiring callers
+	//     to repeat the assembly ID when using WithAssembly(asm).
+	//  3. Fallback "default" — matches the ID used by the auto-built assembly.
+	cellID := b.assemblyID
+	if cellID == "" && b.assembly != nil {
+		cellID = b.assembly.ID()
+	}
+	if cellID == "" {
+		cellID = "default"
+	}
+	collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{
+		CellID: cellID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf(
+			"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the HTTP collector; "+
+				"do not also pass router.WithMetricsCollector via WithRouterOptions. "+
+				"Remove one side: %w", err)
+	}
+	return append(opts, router.WithMetricsCollector(collector)), nil
 }
 
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics options.
@@ -688,7 +748,10 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		return nil
 	}
 
-	if err := s.registerHealthChecker(eventRouterCheckerName, evtRouter.Health); err != nil {
+	evtHealth := evtRouter.Health // func() error — wrap to ctx-aware signature
+	if err := s.registerHealthChecker(eventRouterCheckerName, func(_ context.Context) error {
+		return evtHealth()
+	}); err != nil {
 		return err
 	}
 

@@ -58,7 +58,7 @@ func TestUserRepository_ConcurrentCreateAndGet(t *testing.T) {
 
 func TestSessionRepository_Health(t *testing.T) {
 	repo := NewSessionRepository()
-	assert.NoError(t, repo.Health(), "in-memory session repo is always healthy")
+	assert.NoError(t, repo.Health(context.Background()), "in-memory session repo is always healthy")
 }
 
 // TestSessionRepository_ConcurrentCreateAndGet verifies that concurrent

@@ -23,9 +23,9 @@ type fakeResource struct {
 	closed   bool
 }
 
-func (f *fakeResource) Checkers() map[string]func() error {
-	return map[string]func() error{
-		f.name: func() error { return f.checkErr },
+func (f *fakeResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		f.name: func(_ context.Context) error { return f.checkErr },
 	}
 }
 
@@ -197,9 +197,9 @@ type trackingResource struct {
 	closeOrder *[]string
 }
 
-func (r *trackingResource) Checkers() map[string]func() error {
-	return map[string]func() error{
-		r.name: func() error { return nil },
+func (r *trackingResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		r.name: func(_ context.Context) error { return nil },
 	}
 }
 

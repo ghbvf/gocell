@@ -18,9 +18,10 @@ import (
 // Server interface as a resource-management contract.
 type ManagedResource interface {
 	// Checkers returns named health probe functions that contribute to /readyz.
-	// Each key is a unique checker name; each value is a func() error probe
-	// (nil return = healthy, non-nil = unhealthy). An empty map is valid.
-	Checkers() map[string]func() error
+	// Each key is a unique checker name; each value is a context-aware probe
+	// (nil return = healthy, non-nil = unhealthy). The context carries the
+	// /readyz deadline so probes can honour cancellation. An empty map is valid.
+	Checkers() map[string]func(context.Context) error
 
 	// Worker returns the optional background worker for this resource.
 	// Returning nil means no background goroutine is needed; bootstrap skips

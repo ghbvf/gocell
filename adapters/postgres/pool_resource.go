@@ -57,22 +57,25 @@ func NewPGResource(pool *Pool, relay kworker.Worker) (*PGResource, error) {
 }
 
 // Checkers returns a single health probe named after r.name that pings the PG
-// pool. Each probe call creates a fresh 5-second context from context.Background()
-// so that a SIGTERM cancelling the parent context does not cause the probe to
-// fail immediately — K8s cannot distinguish "PG down" from "process shutting
-// down" if the outer ctx is passed directly.
+// pool. The probe accepts a ctx from the /readyz handler so that a deliberate
+// deadline (e.g. WithReadyzDeadline) propagates into the probe; the probe
+// further caps its own wait at 5 s via an inner context.WithTimeout so that a
+// slow PG does not hold the /readyz response indefinitely.
+//
+// ctx is derived from context.Background() by the readyz handler to avoid
+// kubelet/LB client-ctx cancellation; this probe further bounds at 5s.
 //
 // ref: cmd/corebundle/main.go:230-241 (pgHealthCheckerOpts) — same rationale,
 // same 5s timeout, now centralised here.
 // ref: Kubernetes readyz — external dependencies contribute named checks.
-func (r *PGResource) Checkers() map[string]func() error {
+func (r *PGResource) Checkers() map[string]func(context.Context) error {
 	healthFn := r.healthFunc
 	if healthFn == nil {
 		healthFn = r.pool.Health
 	}
-	return map[string]func() error{
-		r.name: func() error {
-			probeCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	return map[string]func(context.Context) error{
+		r.name: func(ctx context.Context) error {
+			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 			defer cancel()
 			return healthFn(probeCtx)
 		},

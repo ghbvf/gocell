@@ -24,7 +24,7 @@ func TestPhase0_AcceptsValidOptions(t *testing.T) {
 }
 
 func TestPhase0_RejectsEmptyHealthCheckerName(t *testing.T) {
-	b := New(WithHealthChecker("", func() error { return nil }))
+	b := New(WithHealthChecker("", func(_ context.Context) error { return nil }))
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "health checker name must not be empty")
