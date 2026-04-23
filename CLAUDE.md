@@ -48,7 +48,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
   - 所有 slice / cell / assembly 的目录名和 id 必须为 no-dash 格式；由 `gocell validate --strict` 拦截（FMT-16 扫目录、FMT-C1 扫 cell id、FMT-A1 扫 assembly id）
 - Cell 之间只通过 contract 通信，禁止直接 import 另一个 Cell 的 internal/
   - 例外：L0 Cell（纯计算库）可被同一 assembly 内的兄弟 Cell 直接 import，无需 contract
-- 动态交付状态（readiness / risk / blocker / done / verified / nextAction / updatedAt）只在 `journeys/status-board.yaml`，禁止出现在 cell.yaml / slice.yaml / contract.yaml / assembly.yaml / journey.yaml — 由 `kernel/metadata` parser 的 `yaml.KnownFields(true)` 在解析期强制拒绝
+- 动态交付状态（readiness / risk / blocker / done / verified / nextAction / updatedAt）只有 `risk` / `blocker` / `updatedAt` 三字段在 `journeys/status-board.yaml` 的 `StatusBoardEntry` 中合法；其余字段（readiness / done / verified / nextAction）以及所有这些字段出现在 cell.yaml / slice.yaml / contract.yaml / assembly.yaml / journey.yaml 中，均被 `kernel/metadata` parser 的 `yaml.KnownFields(true)` 在解析期拒绝
 - `lifecycle`（draft / active / deprecated）是治理字段，允许写在 contract.yaml 中
 - cell.yaml 不维护 slices、journeys、contracts 反向索引；如需汇总视图，由工具生成
 - 禁止使用旧字段名：cellId / sliceId / contractId / assemblyId / ownedSlices / authoritativeData / producer / consumers / callsContracts / publishes / consumes（详见 metadata-model-v3.md 迁移附录）

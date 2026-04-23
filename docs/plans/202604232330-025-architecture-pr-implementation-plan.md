@@ -708,7 +708,7 @@ Wave 4 (v1.1+)：
 
 **Week 2**（Wave 1 中段 ~5d 净）：PR-A4（6h）+ PR-A5a（6-7h A5 lifecycle）+ PR-A5b（3h）+ PR-A6（7h）+ PR-A7（6h）—— cell 内部重组 + EventRouter + Principal 契约
 
-**Week 3**（Wave 1 收尾 + Wave 2 启动 ~5d 净）：PR-A8 Vault（5h）+ PR-A25 AUTH-PROD-HARDENING（4h）+ PR-A26 AUTH-SETUP-ENDPOINT（4h）+ PR-A27 CONFIGWRITE-RETURNING（5h）+ PR-A28 CONFIG-DOCS（3h）+ PR-A13 docs clean（4h）—— Wave 1 发布硬约束全部落地
+**Week 3**（Wave 1 收尾 + Wave 2 启动 ~5d 净）：PR-A8 Vault（5h）+ PR-A25 AUTH-PROD-HARDENING（4h）+ PR-A26 AUTH-SETUP-ENDPOINT（4h）+ PR-A27 CONFIGWRITE-RETURNING（5h）+ PR-A28 CONFIG-DOCS（3h）+ PR-A13 docs clean（6h）—— Wave 1 发布硬约束全部落地
 
 **Week 4**（Wave 2 重磅 ~5d 净）：PR-A9 CONTRACT-META-01（3d Cx3 瓶颈）+ PR-A29 AUTH-REFRESH-MAIN（X11→X15 串行 10h 🔴）并行
 
