@@ -10,14 +10,16 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
+type parsePageParamsCase struct {
+	name       string
+	query      string
+	wantOK     bool
+	wantLimit  int
+	wantStatus int
+}
+
 func TestParsePageParamsOrWrite(t *testing.T) {
-	tests := []struct {
-		name       string
-		query      string
-		wantOK     bool
-		wantLimit  int
-		wantStatus int
-	}{
+	tests := []parsePageParamsCase{
 		{
 			name:      "no params uses default",
 			query:     "",
@@ -51,26 +53,65 @@ func TestParsePageParamsOrWrite(t *testing.T) {
 
 			pr, ok := httputil.ParsePageParamsOrWrite(w, r)
 
-			if ok != tc.wantOK {
-				t.Errorf("ok=%v, want %v", ok, tc.wantOK)
-			}
-			if tc.wantOK && pr.Limit != tc.wantLimit {
-				t.Errorf("Limit=%d, want %d", pr.Limit, tc.wantLimit)
-			}
-			if !tc.wantOK && w.Code != tc.wantStatus {
-				t.Errorf("HTTP status=%d, want %d", w.Code, tc.wantStatus)
-			}
-			if tc.wantOK && w.Code != 0 && w.Code != http.StatusOK {
-				t.Errorf("unexpected write on ok=true: HTTP status=%d", w.Code)
-			}
-			if !tc.wantOK {
-				var body map[string]any
-				if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
-					t.Errorf("response body is not JSON: %v", err)
-				} else if _, ok := body["error"]; !ok {
-					t.Errorf("response body missing 'error' field: %s", w.Body.String())
-				}
-			}
+			assertParsePageParamsResult(t, tc, pr, ok, w)
 		})
+	}
+}
+
+func assertParsePageParamsResult(
+	t *testing.T,
+	tc parsePageParamsCase,
+	pr query.PageParams,
+	ok bool,
+	w *httptest.ResponseRecorder,
+) {
+	t.Helper()
+
+	if ok != tc.wantOK {
+		t.Errorf("ok=%v, want %v", ok, tc.wantOK)
+		return
+	}
+	if tc.wantOK {
+		assertParsePageParamsSuccess(t, tc, pr, w)
+		return
+	}
+	assertParsePageParamsError(t, tc, w)
+}
+
+func assertParsePageParamsSuccess(
+	t *testing.T,
+	tc parsePageParamsCase,
+	pr query.PageParams,
+	w *httptest.ResponseRecorder,
+) {
+	t.Helper()
+
+	if pr.Limit != tc.wantLimit {
+		t.Errorf("Limit=%d, want %d", pr.Limit, tc.wantLimit)
+	}
+	if w.Code != 0 && w.Code != http.StatusOK {
+		t.Errorf("unexpected write on ok=true: HTTP status=%d", w.Code)
+	}
+}
+
+func assertParsePageParamsError(t *testing.T, tc parsePageParamsCase, w *httptest.ResponseRecorder) {
+	t.Helper()
+
+	if w.Code != tc.wantStatus {
+		t.Errorf("HTTP status=%d, want %d", w.Code, tc.wantStatus)
+	}
+	assertJSONErrorEnvelope(t, w)
+}
+
+func assertJSONErrorEnvelope(t *testing.T, w *httptest.ResponseRecorder) {
+	t.Helper()
+
+	var body map[string]any
+	if err := json.NewDecoder(w.Body).Decode(&body); err != nil {
+		t.Errorf("response body is not JSON: %v", err)
+		return
+	}
+	if _, ok := body["error"]; !ok {
+		t.Errorf("response body missing 'error' field: %s", w.Body.String())
 	}
 }
