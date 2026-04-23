@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -33,11 +34,10 @@ var _ outbox.Publisher = discardPublisher{}
 // Regression guard for A11: if the relay is accidentally wired in memory mode
 // it would try to Start() without a real DB and either panic or block.
 func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
-	t.Setenv("GOCELL_PG_DSN", "") // ensure no PG connection is attempted
-
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "memory"}
-	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
+	// Pass an empty Config; DSN check is only reached in postgres mode.
+	res, opts, err := buildConfigCoreOpts(ctx, topo, adapterpg.Config{}, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.NoError(t, err)
 	assert.Nil(t, res, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
@@ -51,7 +51,7 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "cassandra"}
-	res, _, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
+	res, _, err := buildConfigCoreOpts(ctx, topo, adapterpg.Config{}, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cassandra")
@@ -60,21 +60,22 @@ func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 
 // TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil asserts that postgres mode
 // produces a non-nil ManagedResource with a relay worker. This test requires a
-// running PostgreSQL instance (GOCELL_PG_DSN must be set); it skips gracefully if
-// the DSN is absent so it does not block unit test suites.
+// running PostgreSQL instance (GOCELL_CONFIGCORE_DATABASE_URL must be set); it
+// skips gracefully if the DSN is absent so it does not block unit test suites.
 //
 // The assertion that res != nil is the critical regression check for A11: before
 // the fix, buildConfigCoreOpts never returned a relay, so the bootstrap could not
 // register it.
 func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
-	pgDSN, ok := os.LookupEnv("GOCELL_PG_DSN")
+	pgDSN, ok := os.LookupEnv("GOCELL_CONFIGCORE_DATABASE_URL")
 	if !ok || pgDSN == "" {
-		t.Skip("GOCELL_PG_DSN not set; skipping PG-mode relay wiring test")
+		t.Skip("GOCELL_CONFIGCORE_DATABASE_URL not set; skipping PG-mode relay wiring test")
 	}
 
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
-	res, opts, err := buildConfigCoreOpts(ctx, topo, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
+	pgCfg := adapterpg.Config{DSN: pgDSN}
+	res, opts, err := buildConfigCoreOpts(ctx, topo, pgCfg, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.NoError(t, err, "postgres mode must not error when DSN is valid")
 	require.NotNil(t, res, "postgres mode must return a non-nil ManagedResource (wraps pool + relay)")

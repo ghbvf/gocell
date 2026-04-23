@@ -89,7 +89,7 @@ func doJSON(t *testing.T, method, path string, body any, token string) *http.Res
 //
 // Container requirements:
 //   - PostgreSQL (GOCELL_DATABASE_URL set in compose env)
-//   - corebundle with GOCELL_KEY_PROVIDER=local-aes + GOCELL_MASTER_KEY set
+//   - corebundle with GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes + GOCELL_CONFIGCORE_MASTER_KEY set
 //   - GOCELL_CELL_ADAPTER_MODE=postgres
 func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
 	t.Skip("e2e: requires docker compose environment — run: docker compose -f tests/e2e/docker-compose.e2e.yaml up -d")

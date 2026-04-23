@@ -461,19 +461,18 @@ if e.Sensitive && len(valueCipher) > 0 && valueKeyID != nil && *valueKeyID != ""
 ### Provider selection at startup
 
 ```
-GOCELL_KEY_PROVIDER=local-aes      → LocalAESKeyProvider (dev/CI)
-GOCELL_KEY_PROVIDER=vault-transit  → adapters/vault.TransitKeyProvider (production, envelope mode)
-(unset)                            → NoopTransformer (dev mode, plaintext)
+GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes      → LocalAESKeyProvider (dev/CI)
+GOCELL_CONFIGCORE_KEY_PROVIDER=vault-transit  → adapters/vault.TransitKeyProvider (production, envelope mode)
+(unset)                                        → NoopTransformer (dev mode, plaintext)
 ```
 
-When `GOCELL_KEY_PROVIDER` is unset and storage backend is `postgres`,
-`buildKeyProvider` logs a structured Warn (not an error) so that operators
-who haven't yet configured encryption are notified without breaking deployments.
+When `GOCELL_CONFIGCORE_KEY_PROVIDER` is unset and storage backend is `postgres`,
+`buildKeyProvider` fails fast so that operators must explicitly configure encryption.
 
 Fail-fast applies for invalid values:
 ```
-GOCELL_KEY_PROVIDER=unknown → ErrValidationFailed at startup
-GOCELL_MASTER_KEY not set with local-aes → ErrValidationFailed at startup
+GOCELL_CONFIGCORE_KEY_PROVIDER=unknown → ErrValidationFailed at startup
+GOCELL_CONFIGCORE_MASTER_KEY not set with local-aes → ErrValidationFailed at startup
 ```
 
 ### Wiring in cell.go (deferred construction)
@@ -571,9 +570,9 @@ already-encrypted rows regardless of their key ID. Key-rotation migration
 ### LocalAES key loading
 
 ```
-GOCELL_MASTER_KEY          64-char hex or base64 (required)
-GOCELL_MASTER_KEY_PREVIOUS 64-char hex or base64 (optional; enables reading
-                            pre-rotation ciphertext after KEK rotation)
+GOCELL_CONFIGCORE_MASTER_KEY          64-char hex or base64 (required)
+GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS 64-char hex or base64 (optional; enables reading
+                                       pre-rotation ciphertext after KEK rotation)
 ```
 
 LocalAES does not call an external KMS — keys are loaded from environment
@@ -698,9 +697,9 @@ func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
 Required environment:
 ```
 GOCELL_CELL_ADAPTER_MODE=postgres
-GOCELL_KEY_PROVIDER=local-aes
-GOCELL_MASTER_KEY=<64-char hex>
-GOCELL_DATABASE_URL=postgres://...
+GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes
+GOCELL_CONFIGCORE_MASTER_KEY=<64-char hex>
+GOCELL_CONFIGCORE_DATABASE_URL=postgres://...
 E2E_ADMIN_TOKEN=<jwt>
 ```
 

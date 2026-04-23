@@ -187,7 +187,7 @@ func TestRun_InvalidAdapterMode_ReturnsError(t *testing.T) {
 func TestRun_MissingJWTIssuer_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	t.Setenv("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
+	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -203,7 +203,7 @@ func TestRun_MissingJWTIssuer_FailsFast(t *testing.T) {
 func TestRun_MissingJWTAudience_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "")
-	t.Setenv("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
+	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -220,22 +220,22 @@ func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
 	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
-	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
-	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
-	t.Setenv("GOCELL_ACCESS_CURSOR_KEY", "")
+	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	err := run(ctx)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "GOCELL_ACCESS_CURSOR_KEY")
+	assert.Contains(t, err.Error(), "GOCELL_ACCESSCORE_CURSOR_KEY")
 }
 
 // TestRun_RealMode_MissingVerboseToken_FailsFast ensures the H1-6
@@ -251,13 +251,13 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
 	// Secrets required in real mode (would otherwise fail earlier than
 	// the verbose-token check; we want verbose-token to be the trip-wire).
-	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
-	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
-	t.Setenv("GOCELL_ACCESS_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
+	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	// The trip-wire: verbose token is empty.
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "")
@@ -281,13 +281,13 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
-	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
-	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
-	t.Setenv("GOCELL_ACCESS_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
+	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	// The trip-wire: metrics token is empty.
@@ -311,13 +311,13 @@ func TestRun_RealMode_MissingServiceSecret_FailsFast(t *testing.T) {
 	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
-	t.Setenv("GOCELL_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
+	t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", "prod-hmac-key-replace-32bytes!!!")
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-	t.Setenv("GOCELL_AUDIT_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
-	t.Setenv("GOCELL_CONFIG_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
-	t.Setenv("GOCELL_ACCESS_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
+	t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", "audit-cursor-key-32-bytes-padded!")
+	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
+	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
 	// The trip-wire: service secret is empty.
@@ -398,13 +398,13 @@ func generateTestPEM(t *testing.T) (privPEM, pubPEM []byte) {
 
 // TestBootstrap_DemoModeUsesInMemory verifies that when GOCELL_CELL_ADAPTER_MODE
 // is unset (or empty), run() selects the in-memory storage path for configcore
-// and does not attempt to connect to PostgreSQL (no GOCELL_PG_DSN required).
+// and does not attempt to connect to PostgreSQL (no GOCELL_CONFIGCORE_DATABASE_URL required).
 // Guards against regression where the default could be accidentally flipped to
 // "postgres" and break dev/test setups.
 func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
-	// Ensure both GOCELL_CELL_ADAPTER_MODE and GOCELL_PG_DSN are unset.
+	// Ensure GOCELL_CELL_ADAPTER_MODE is unset (selects in-memory path).
+	// GOCELL_CONFIGCORE_DATABASE_URL is not read in memory mode — no DSN required.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "")
-	t.Setenv("GOCELL_PG_DSN", "")
 	// Set GOCELL_STATE_DIR to a writable temp dir so WithInitialAdminBootstrap
 	// can write the credential file (default /run/gocell is not writable in CI).
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
@@ -468,28 +468,28 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 	}{
 		{
 			name:  "HMAC demo literal rejected",
-			patch: envPatch{"GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!"},
-			want:  "GOCELL_HMAC_KEY",
+			patch: envPatch{"GOCELL_AUDITCORE_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!"},
+			want:  "GOCELL_AUDITCORE_HMAC_KEY",
 		},
 		{
 			name:  "audit cursor demo literal rejected",
-			patch: envPatch{"GOCELL_AUDIT_CURSOR_KEY", "corebundle-audit-cursor-key-32b!"},
-			want:  "GOCELL_AUDIT_CURSOR_KEY",
+			patch: envPatch{"GOCELL_AUDITCORE_CURSOR_KEY", "corebundle-audit-cursor-key-32b!"},
+			want:  "GOCELL_AUDITCORE_CURSOR_KEY",
 		},
 		{
 			name:  "config cursor demo literal rejected",
-			patch: envPatch{"GOCELL_CONFIG_CURSOR_KEY", "corebundle-cfg-cursor-key--32bb!"},
-			want:  "GOCELL_CONFIG_CURSOR_KEY",
+			patch: envPatch{"GOCELL_CONFIGCORE_CURSOR_KEY", "corebundle-cfg-cursor-key--32bb!"},
+			want:  "GOCELL_CONFIGCORE_CURSOR_KEY",
 		},
 		{
 			name:  "access cursor demo literal rejected",
-			patch: envPatch{"GOCELL_ACCESS_CURSOR_KEY", "corebundle-access-cursor-key32!!"},
-			want:  "GOCELL_ACCESS_CURSOR_KEY",
+			patch: envPatch{"GOCELL_ACCESSCORE_CURSOR_KEY", "corebundle-access-cursor-key32!!"},
+			want:  "GOCELL_ACCESSCORE_CURSOR_KEY",
 		},
 		{
 			name:  "access cursor cell demo literal rejected",
-			patch: envPatch{"GOCELL_ACCESS_CURSOR_KEY", "gocell-demo-ACCESS-CORE-key-32!!"},
-			want:  "GOCELL_ACCESS_CURSOR_KEY",
+			patch: envPatch{"GOCELL_ACCESSCORE_CURSOR_KEY", "gocell-demo-ACCESS-CORE-key-32!!"},
+			want:  "GOCELL_ACCESSCORE_CURSOR_KEY",
 		},
 		{
 			name:  "service secret demo literal rejected",
@@ -510,13 +510,13 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 			t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 			t.Setenv(auth.EnvJWTPrevPublicKey, "")
-			t.Setenv("GOCELL_HMAC_KEY", freshHMAC)
+			t.Setenv("GOCELL_AUDITCORE_HMAC_KEY", freshHMAC)
 			// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 			t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
 			t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
-			t.Setenv("GOCELL_AUDIT_CURSOR_KEY", freshAudit)
-			t.Setenv("GOCELL_CONFIG_CURSOR_KEY", freshConfig)
-			t.Setenv("GOCELL_ACCESS_CURSOR_KEY", freshAccess)
+			t.Setenv("GOCELL_AUDITCORE_CURSOR_KEY", freshAudit)
+			t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", freshConfig)
+			t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", freshAccess)
 			t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 			t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 			t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")

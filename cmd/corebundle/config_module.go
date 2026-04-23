@@ -22,7 +22,7 @@ type ConfigCoreModule struct {
 	// non-nil. Production code leaves this unset; tests use it to inject a
 	// fake KeyProvider (e.g. one that also implements
 	// kernel/lifecycle.ManagedResource) and assert wiring behaviour without
-	// touching GOCELL_KEY_PROVIDER / GOCELL_MASTER_KEY / Vault.
+	// touching GOCELL_CONFIGCORE_KEY_PROVIDER / GOCELL_CONFIGCORE_MASTER_KEY / Vault.
 	KeyProviderOverride kcrypto.KeyProvider
 }
 
@@ -42,18 +42,31 @@ var configStaleCipherOpts = prom.CounterOpts{
 
 // Provide resolves all configcore-specific dependencies and returns the
 // constructed cell and any bootstrap.Options (e.g. WithManagedResource).
+// It reads configcore-specific environment variables directly via the
+// LoadPGConfig / LoadCursorKeys / LoadConfigCoreKeyProvider helpers.
 func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, error) {
+	// 1. Cursor codec: read configcore-namespaced env.
+	cursorCodec, err := loadCursorCodec(shared.Topology.AdapterMode,
+		"GOCELL_CONFIGCORE_CURSOR_KEY", "GOCELL_CONFIGCORE_CURSOR_PREVIOUS_KEY",
+		"corebundle-cfg-cursor-key--32bb!", "config")
+	if err != nil {
+		return nil, nil, fmt.Errorf("configcore cursor codec: %w", err)
+	}
+
+	// 2. KeyProvider: read configcore-namespaced env (or use test override).
 	kp := m.KeyProviderOverride
 	if kp == nil {
-		var err error
-		kp, err = buildKeyProvider(shared.Topology.StorageBackend, shared.Topology.AdapterMode, shared.KeyProviderName)
+		providerName, masterKey, prevMasterKey := LoadConfigCoreKeyProvider()
+		kp, err = buildKeyProvider(shared.Topology.StorageBackend, shared.Topology.AdapterMode, providerName, masterKey, prevMasterKey)
 		if err != nil {
 			return nil, nil, fmt.Errorf("configcore key provider: %w", err)
 		}
 	}
 	vt := keyProviderToTransformer(kp)
 
-	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, shared.Topology, shared.EventBus, shared.PromStack.metricProvider, vt)
+	// 3. PG pool: read configcore-namespaced env.
+	pgCfg := LoadPGConfig("CONFIGCORE")
+	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus, shared.PromStack.metricProvider, vt)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -70,7 +83,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 
 	baseOpts := []configcore.Option{
 		configcore.WithPublisher(shared.EventBus),
-		configcore.WithCursorCodec(shared.CursorCodecs.config),
+		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithOnStaleCipherMetric(staleCipherCounter),
 	}
 	if vt != nil {

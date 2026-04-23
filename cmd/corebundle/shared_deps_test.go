@@ -8,39 +8,47 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestSharedDeps_Validate_PostgresWithoutKeyProvider_Fails verifies that
-// SharedDeps.Validate() returns an error when StorageBackend=postgres but
-// KeyProviderName is empty. This is defense-in-depth: buildKeyProvider
-// also checks this, but Validate catches test-constructed SharedDeps.
-func TestSharedDeps_Validate_PostgresWithoutKeyProvider_Fails(t *testing.T) {
+// TestSharedDeps_Validate_PostgresWithoutKeyProvider_OK verifies that
+// SharedDeps.Validate() no longer checks KeyProvider presence — that check
+// was moved to ConfigCoreModule.Provide (per-cell responsibility).
+// A postgres SharedDeps with no key-provider field should still pass Validate().
+func TestSharedDeps_Validate_PostgresWithoutKeyProvider_OK(t *testing.T) {
+	// Build a minimal postgres SharedDeps; other required fields are nil,
+	// so Validate will still error, but NOT for the key-provider check.
 	deps := &SharedDeps{
-		Topology:        bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		KeyProviderName: "", // explicitly empty
-		// Deliberately leave other fields zero to isolate this check.
-		// Validate will also report other missing fields, but we just need
-		// to find our specific error in the joined result.
+		Topology: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		// Deliberately leave other fields zero to isolate the specific check.
 	}
 
 	err := deps.Validate()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "GOCELL_KEY_PROVIDER")
+	// Will error for other missing fields, but NOT for key-provider.
+	if err != nil {
+		assert.NotContains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER",
+			"SharedDeps.Validate must not check key provider — that is ConfigCoreModule.Provide's job")
+		assert.NotContains(t, err.Error(), "GOCELL_KEY_PROVIDER",
+			"old env name must not appear in SharedDeps.Validate")
+	}
 }
 
-// TestSharedDeps_Validate_MemoryWithoutKeyProvider_OK verifies that
-// memory mode doesn't require KeyProviderName.
-func TestSharedDeps_Validate_MemoryWithoutKeyProvider_OK(t *testing.T) {
-	// Build a minimal SharedDeps for memory mode.
-	// This test only asserts that the KeyProvider check doesn't fire;
-	// other fields will still be missing, so Validate will still error.
-	// We check that the specific "GOCELL_KEY_PROVIDER" message is NOT in the error.
+// TestSharedDeps_Validate_MemoryTopology_OK verifies that memory mode doesn't
+// require any key-provider configuration.
+func TestSharedDeps_Validate_MemoryTopology_OK(t *testing.T) {
 	deps := &SharedDeps{
-		Topology:        bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
-		KeyProviderName: "", // empty is valid for non-postgres
+		Topology: bootstrap.Topology{StorageBackend: "memory", AdapterMode: "dev"},
 	}
 
 	err := deps.Validate()
 	// Will error for other missing fields, but NOT for KeyProvider.
 	if err != nil {
 		assert.NotContains(t, err.Error(), "GOCELL_KEY_PROVIDER")
+		assert.NotContains(t, err.Error(), "GOCELL_CONFIGCORE_KEY_PROVIDER")
 	}
+}
+
+// TestSharedDeps_Validate_NilReceiver_Errors verifies the defensive nil check.
+func TestSharedDeps_Validate_NilReceiver_Errors(t *testing.T) {
+	var deps *SharedDeps
+	err := deps.Validate()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil receiver")
 }

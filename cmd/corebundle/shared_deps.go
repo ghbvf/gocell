@@ -14,8 +14,8 @@ import (
 )
 
 // SharedDeps holds cross-cutting dependencies required by every Cell module.
-// Cell-specific dependencies (KeyProvider, PGResource, cellOpts) are managed
-// by the corresponding *_module.go file.
+// Cell-specific dependencies (KeyProvider, PGResource, cursor codecs, HMAC key)
+// are managed by the corresponding *_module.go file.
 //
 // SharedDeps is passed directly to BuildApp and each CellModule.Provide,
 // giving type-safe access to all cross-cutting fields without type-assertion.
@@ -33,12 +33,6 @@ type SharedDeps struct {
 	// PromStack holds the Prometheus registry, hook observer, and metric provider.
 	PromStack promStack
 
-	// CursorCodecs holds the audit, config, and access cursor codecs.
-	CursorCodecs cursorCodecs
-
-	// HMACKey is the HMAC secret for auditcore chain authentication.
-	HMACKey []byte
-
 	// EventBus is the in-process event bus used for both publish and subscribe.
 	EventBus *eventbus.InMemoryEventBus
 
@@ -55,18 +49,14 @@ type SharedDeps struct {
 	// production topology; may be empty in dev mode.
 	VerboseToken string
 
-	// KeyProviderName is the value of GOCELL_KEY_PROVIDER read once at startup.
-	// Empty means no encryption configured (valid only for non-postgres backends).
-	KeyProviderName string
-
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
 }
 
 // Validate is the startup invariant check for all cross-cutting dependencies.
-// Storage-specific invariants (PGResource) are checked inside
-// ConfigCoreModule.Provide, not here.
+// Storage-specific invariants (PGResource, cursor codecs, HMAC key) are checked
+// inside the corresponding CellModule.Provide, not here.
 //
 // ref: kubernetes/kubernetes cmd/kube-apiserver/app/options/validation.go —
 // validates all fields before any component is constructed.
@@ -102,25 +92,8 @@ func (d *SharedDeps) validateCore() []error {
 	if d.PromStack.metricProvider == nil {
 		missing("PromStack.metricProvider")
 	}
-	if d.CursorCodecs.audit == nil {
-		missing("CursorCodecs.audit")
-	}
-	if d.CursorCodecs.config == nil {
-		missing("CursorCodecs.config")
-	}
-	if d.CursorCodecs.accessCore == nil {
-		missing("CursorCodecs.accessCore")
-	}
-	if len(d.HMACKey) == 0 {
-		missing("HMACKey")
-	}
 	if d.EventBus == nil {
 		missing("EventBus")
-	}
-	if d.Topology.StorageBackend == "postgres" && d.KeyProviderName == "" {
-		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
-			"SharedDeps: GOCELL_KEY_PROVIDER must be set when StorageBackend=postgres "+
-				"(defense-in-depth; configcore module also validates this)"))
 	}
 	return errs
 }
@@ -152,7 +125,8 @@ func (d *SharedDeps) validateControlPlane() []error {
 
 // LoadSharedDepsFromEnv reads all environment variables and builds a fully
 // populated SharedDeps for cross-cutting concerns. Cell-specific dependencies
-// are constructed in each CellModule.Provide.
+// (cursor codecs, HMAC key, KeyProvider, PG config) are constructed in each
+// CellModule.Provide.
 //
 // ref: go-zero serviceconf.MustLoad — single parse-validate call at startup.
 func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
@@ -161,22 +135,8 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		return nil, err
 	}
 	adapterMode := topo.AdapterMode
-	keyProviderName := os.Getenv("GOCELL_KEY_PROVIDER")
-
-	hmacKey, err := loadSecret("GOCELL_HMAC_KEY", "dev-hmac-key-replace-in-prod!!!!", adapterMode)
-	if err != nil {
-		return nil, fmt.Errorf("HMAC key: %w", err)
-	}
-	if err := rejectDemoKey(adapterMode, "GOCELL_HMAC_KEY", hmacKey); err != nil {
-		return nil, err
-	}
 
 	jwt, err := buildJWTDeps(adapterMode)
-	if err != nil {
-		return nil, err
-	}
-
-	codecs, err := loadAllCursorCodecs(adapterMode)
 	if err != nil {
 		return nil, err
 	}
@@ -209,17 +169,14 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		slog.String("effective", topo.AdapterInfo()["mode"]))
 
 	deps := &SharedDeps{
-		Topology:        topo,
-		JWTDeps:         jwt,
-		PromStack:       ps,
-		CursorCodecs:    codecs,
-		HMACKey:         hmacKey,
-		EventBus:        eb,
-		InternalGuard:   internalGuard,
-		MetricsToken:    metricsToken,
-		VerboseToken:    verboseToken,
-		KeyProviderName: keyProviderName,
-		metricsHandler:  metricsHandler,
+		Topology:       topo,
+		JWTDeps:        jwt,
+		PromStack:      ps,
+		EventBus:       eb,
+		InternalGuard:  internalGuard,
+		MetricsToken:   metricsToken,
+		VerboseToken:   verboseToken,
+		metricsHandler: metricsHandler,
 	}
 
 	if err := deps.Validate(); err != nil {
@@ -227,3 +184,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 	return deps, nil
 }
+
+// loadSharedDepsForRun is an alias kept for the run() call site; delegates to
+// LoadSharedDepsFromEnv. Defined here to avoid a bare variable name collision.
+var _ = fmt.Sprintf // keep fmt import active for error formatting below

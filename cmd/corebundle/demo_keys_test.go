@@ -29,14 +29,14 @@ func TestRejectDemoKey_RealMode_RejectsEachDemoValue(t *testing.T) {
 
 func TestRejectDemoKey_RealMode_AcceptsFreshSecret(t *testing.T) {
 	fresh := bytes.Repeat([]byte("z"), 32)
-	err := rejectDemoKey("real", "GOCELL_AUDIT_CURSOR_KEY", fresh)
+	err := rejectDemoKey("real", "GOCELL_AUDITCORE_CURSOR_KEY", fresh)
 	require.NoError(t, err, "real mode must accept a non-demo secret")
 }
 
 func TestRejectDemoKey_RealMode_EmptyKeyPasses(t *testing.T) {
 	// Empty keys are handled upstream by loadSecret; rejectDemoKey must not
 	// treat them as a demo match (len mismatch).
-	err := rejectDemoKey("real", "GOCELL_AUDIT_CURSOR_KEY", nil)
+	err := rejectDemoKey("real", "GOCELL_AUDITCORE_CURSOR_KEY", nil)
 	require.NoError(t, err)
 }
 
@@ -50,9 +50,9 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	// Note: GOCELL_SERVICE_SECRET has no dev-default (empty disables the guard
 	// in dev mode); rejectDemoKey is called directly in internalGuardFromEnv.
 	devDefaults := []string{
-		"dev-hmac-key-replace-in-prod!!!!", // loadSecret("GOCELL_HMAC_KEY", ...)
-		"corebundle-audit-cursor-key-32b!", // loadCursorCodec("GOCELL_AUDIT_CURSOR_KEY", ...)
-		"corebundle-cfg-cursor-key--32bb!", // loadCursorCodec("GOCELL_CONFIG_CURSOR_KEY", ...)
+		"dev-hmac-key-replace-in-prod!!!!", // loadSecret("GOCELL_AUDITCORE_HMAC_KEY", ...)
+		"corebundle-audit-cursor-key-32b!", // loadCursorCodec("GOCELL_AUDITCORE_CURSOR_KEY", ...)
+		"corebundle-cfg-cursor-key--32bb!", // loadCursorCodec("GOCELL_CONFIGCORE_CURSOR_KEY", ...)
 	}
 	for _, dd := range devDefaults {
 		dd := dd
