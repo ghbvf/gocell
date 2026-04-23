@@ -25,6 +25,7 @@ package cell
 // third-party dependencies.
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -221,8 +222,9 @@ type ConfigChangeEvent struct {
 // has no additional probes beyond the base Cell.Health() status. Probe
 // names MUST be unique across all cells; bootstrap fails fast on duplicates.
 //
-// Thread safety: the returned func() error values are called on every
-// /readyz HTTP request and MUST be safe for concurrent invocation.
+// Thread safety: the returned func(context.Context) error values are called
+// on every /readyz HTTP request and MUST be safe for concurrent invocation.
+// The context carries the /readyz deadline so probes can honour cancellation.
 //
 // ref: Kubernetes PodSpec — explicit readinessProbe/livenessProbe per container
 // Adopted: explicit named probes. Deviated: returned as map, not declarative YAML.
@@ -230,7 +232,7 @@ type ConfigChangeEvent struct {
 // ref: uber-go/fx Lifecycle.Append — each module registers own health hooks
 // Adopted: cell-owned probes. Deviated: discovery-based, not explicit registration.
 type HealthContributor interface {
-	HealthCheckers() map[string]func() error
+	HealthCheckers() map[string]func(context.Context) error
 }
 
 // ConfigReloader is optionally implemented by Cells that need to react to

@@ -62,8 +62,10 @@ func isNilManagedResource(r kernellifecycle.ManagedResource) bool {
 // registration order; Run() iterates teardowns in reverse to achieve LIFO.
 func (b *Bootstrap) expandManagedResources() {
 	for _, r := range b.managedResources {
-		// Expand health checkers.
+		// Expand health checkers: r.Checkers() now returns
+		// map[string]func(context.Context) error matching namedChecker.fn type.
 		for name, fn := range r.Checkers() {
+			fn := fn // capture
 			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
 		}
 		// Expand worker (skip nil).

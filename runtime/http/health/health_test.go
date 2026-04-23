@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -119,7 +120,7 @@ func TestReadyzHandler(t *testing.T) {
 			}
 
 			h := New(asm)
-			h.RegisterChecker("db", func() error { return tt.checkerErr })
+			h.RegisterChecker("db", func(_ context.Context) error { return tt.checkerErr })
 
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
@@ -153,8 +154,8 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
-	h.RegisterChecker("rabbitmq", func() error { return nil })
-	h.RegisterChecker("postgres", func() error { return fmt.Errorf("connection refused") })
+	h.RegisterChecker("rabbitmq", func(_ context.Context) error { return nil })
+	h.RegisterChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") })
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose", nil)
@@ -168,8 +169,14 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
-	assert.Equal(t, "healthy", deps["rabbitmq"], "rabbitmq checker should be healthy")
-	assert.Equal(t, "unhealthy", deps["postgres"], "postgres checker should be unhealthy")
+	// Dependencies are now map[string]map[string]any
+	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
+	require.True(t, ok, "rabbitmq entry must be a map")
+	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
+
+	postgresEntry, ok := deps["postgres"].(map[string]any)
+	require.True(t, ok, "postgres entry must be a map")
+	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
 }
 
 func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
@@ -203,7 +210,7 @@ func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
-	h.RegisterChecker("db", func() error { return nil })
+	h.RegisterChecker("db", func(_ context.Context) error { return nil })
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -228,7 +235,7 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
-	h.RegisterChecker("db", func() error { return nil })
+	h.RegisterChecker("db", func(_ context.Context) error { return nil })
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
@@ -244,7 +251,9 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 	assert.Equal(t, "healthy", cells["cell-1"])
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
-	assert.Equal(t, "healthy", deps["db"])
+	dbEntry, ok := deps["db"].(map[string]any)
+	require.True(t, ok, "db dependency must be a map")
+	assert.Equal(t, "healthy", dbEntry["status"])
 }
 
 func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
@@ -302,7 +311,7 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
-	h.RegisterChecker("db", func() error { return fmt.Errorf("connection refused") })
+	h.RegisterChecker("db", func(_ context.Context) error { return fmt.Errorf("connection refused") })
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
@@ -349,10 +358,10 @@ func TestReadyzVerboseQueryParsing(t *testing.T) {
 func TestRegisterChecker_DuplicatePanics(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	h := New(asm)
-	h.RegisterChecker("db", func() error { return nil })
+	h.RegisterChecker("db", func(_ context.Context) error { return nil })
 
 	assert.PanicsWithValue(t, `health: duplicate checker name "db"`, func() {
-		h.RegisterChecker("db", func() error { return nil })
+		h.RegisterChecker("db", func(_ context.Context) error { return nil })
 	})
 }
 
@@ -405,7 +414,7 @@ func newStartedHandler(t *testing.T) *Handler {
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 	h := New(asm)
-	h.RegisterChecker("db", func() error { return nil })
+	h.RegisterChecker("db", func(_ context.Context) error { return nil })
 	return h
 }
 
@@ -504,4 +513,188 @@ func TestEmptyAssembly(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	assert.Equal(t, "healthy", body["status"])
+}
+
+// --- New parallel / deadline / panic tests (PR-A4 phase 5a) ---
+
+// TestReadyz_ParallelFasterThanSerial verifies that /readyz runs checkers in
+// parallel. With 3 checkers that each sleep 100 ms, the total wall-clock time
+// must be well below 300 ms (serial cost).
+func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-parallel", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	// Use a generous deadline so these tests do not time out.
+	h := New(asm, WithDeadline(2*time.Second))
+	for _, name := range []string{"probe-a", "probe-b", "probe-c"} {
+		h.RegisterChecker(name, func(_ context.Context) error {
+			time.Sleep(100 * time.Millisecond)
+			return nil
+		})
+	}
+
+	start := time.Now()
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+	elapsed := time.Since(start)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	// Parallel execution should finish in ~100 ms; give generous budget of 200 ms.
+	assert.Less(t, elapsed, 200*time.Millisecond,
+		"3 parallel 100-ms probes must finish in < 200ms (serial would be ~300ms); got %v", elapsed)
+}
+
+// TestReadyz_DeadlineExceeded verifies that a probe which exceeds the deadline
+// is reported as status="timeout" with an error containing "deadline exceeded",
+// and the aggregate returns 503.
+func TestReadyz_DeadlineExceeded(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-deadline", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm, WithDeadline(50*time.Millisecond))
+	h.RegisterChecker("slow", func(ctx context.Context) error {
+		select {
+		case <-time.After(500 * time.Millisecond):
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "unhealthy", body["status"])
+
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose output must contain dependencies")
+	slowEntry, ok := deps["slow"].(map[string]any)
+	require.True(t, ok, "slow entry must be a map")
+	assert.Equal(t, "timeout", slowEntry["status"], "exceeded-deadline probe must be status=timeout")
+	errStr, hasErr := slowEntry["error"].(string)
+	require.True(t, hasErr, "timeout probe must include error field")
+	assert.Contains(t, errStr, "deadline exceeded",
+		"error field must mention 'deadline exceeded'")
+}
+
+// TestReadyz_IndependentOfRequestCtx verifies that /readyz probes are NOT
+// cancelled when the HTTP request context is cancelled (e.g. kubelet disconnect).
+// The probe ctx must derive from context.Background(), not r.Context().
+func TestReadyz_IndependentOfRequestCtx(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-indep", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	probeDone := make(chan struct{})
+	h := New(asm, WithDeadline(2*time.Second))
+	h.RegisterChecker("slow-probe", func(ctx context.Context) error {
+		// Probe takes 100 ms but the HTTP request ctx will be cancelled
+		// almost immediately — probe must NOT be affected.
+		time.Sleep(100 * time.Millisecond)
+		close(probeDone)
+		return nil
+	})
+
+	// Use a cancellable request ctx and cancel it before the probe finishes.
+	reqCtx, reqCancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil).WithContext(reqCtx)
+	rec := httptest.NewRecorder()
+
+	// Cancel request ctx after a very short time (before probe finishes).
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		reqCancel()
+	}()
+
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	// Probe must still complete even though the request ctx was cancelled.
+	select {
+	case <-probeDone:
+		// expected
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("probe was cancelled by request ctx; must use background ctx")
+	}
+	// Aggregate result must be healthy (probe returned nil after sleeping).
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// TestReadyz_ProbePanic_Caught verifies that a panic inside a checker is
+// recovered, the checker reports status=unhealthy, and the HTTP handler
+// does not crash.
+func TestReadyz_ProbePanic_Caught(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-panic", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm, WithDeadline(2*time.Second))
+	h.RegisterChecker("panicking", func(_ context.Context) error {
+		panic("something went very wrong")
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+
+	// Must not crash the process.
+	require.NotPanics(t, func() {
+		h.ReadyzHandler().ServeHTTP(rec, req)
+	})
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	assert.Equal(t, "unhealthy", body["status"])
+
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose output must contain dependencies")
+	panicEntry, ok := deps["panicking"].(map[string]any)
+	require.True(t, ok, "panicking entry must be present")
+	assert.Equal(t, "unhealthy", panicEntry["status"])
+}
+
+// TestReadyz_VerboseDependencies_StructuredOutput verifies the new structured
+// dependency format: each entry is a map with "status", "duration_ms" fields
+// (and optionally "error" for non-healthy probes).
+func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-structured", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.RegisterChecker("ok-probe", func(_ context.Context) error { return nil })
+	h.RegisterChecker("fail-probe", func(_ context.Context) error { return fmt.Errorf("disk full") })
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok)
+
+	okEntry, ok := deps["ok-probe"].(map[string]any)
+	require.True(t, ok, "ok-probe must be a structured map")
+	assert.Equal(t, "healthy", okEntry["status"])
+	_, hasDur := okEntry["duration_ms"]
+	assert.True(t, hasDur, "duration_ms must be present")
+	_, hasErr := okEntry["error"]
+	assert.False(t, hasErr, "healthy probe must not have error field")
+
+	failEntry, ok := deps["fail-probe"].(map[string]any)
+	require.True(t, ok, "fail-probe must be a structured map")
+	assert.Equal(t, "unhealthy", failEntry["status"])
+	errStr, hasErr := failEntry["error"].(string)
+	assert.True(t, hasErr, "unhealthy probe must include error field")
+	assert.Contains(t, errStr, "disk full")
 }

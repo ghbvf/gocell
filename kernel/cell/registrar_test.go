@@ -299,20 +299,20 @@ func TestConfigReloader_ReturnsError(t *testing.T) {
 // healthContributorCell implements HealthContributor.
 type healthContributorCell struct {
 	BaseCell
-	checkers map[string]func() error
+	checkers map[string]func(context.Context) error
 }
 
 var _ HealthContributor = (*healthContributorCell)(nil)
 
-func (c *healthContributorCell) HealthCheckers() map[string]func() error {
+func (c *healthContributorCell) HealthCheckers() map[string]func(context.Context) error {
 	return c.checkers
 }
 
 func TestHealthContributor_TypeAssertion(t *testing.T) {
 	hc := &healthContributorCell{
 		BaseCell: *NewBaseCell(CellMetadata{ID: "accesscore"}),
-		checkers: map[string]func() error{
-			"session-store": func() error { return nil },
+		checkers: map[string]func(context.Context) error{
+			"session-store": func(_ context.Context) error { return nil },
 		},
 	}
 
@@ -322,7 +322,7 @@ func TestHealthContributor_TypeAssertion(t *testing.T) {
 
 	checkers := hcc.HealthCheckers()
 	assert.Contains(t, checkers, "session-store")
-	assert.NoError(t, checkers["session-store"]())
+	assert.NoError(t, checkers["session-store"](context.Background()))
 }
 
 func TestHealthContributor_NegativeTypeAssertion(t *testing.T) {
@@ -336,7 +336,7 @@ func TestHealthContributor_NegativeTypeAssertion(t *testing.T) {
 func TestHealthContributor_EmptyMap(t *testing.T) {
 	hc := &healthContributorCell{
 		BaseCell: *NewBaseCell(CellMetadata{ID: "no-probes"}),
-		checkers: map[string]func() error{},
+		checkers: map[string]func(context.Context) error{},
 	}
 	assert.Empty(t, hc.HealthCheckers())
 }
