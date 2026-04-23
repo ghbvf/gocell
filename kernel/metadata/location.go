@@ -56,15 +56,29 @@ func Find(root *yaml.Node, path string) (*yaml.Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("metadata: invalid path %q: %w", path, err)
 	}
-
-	cur := root
-	if cur.Kind == yaml.DocumentNode {
-		if len(cur.Content) == 0 {
-			return nil, fmt.Errorf("metadata: Find on empty document")
-		}
-		cur = cur.Content[0]
+	cur, err := unwrapDocument(root)
+	if err != nil {
+		return nil, err
 	}
+	return walkSegments(cur, segs)
+}
 
+// unwrapDocument returns the root content node of a DocumentNode, or the node
+// itself if it is not a document. Returns an error for empty documents.
+func unwrapDocument(n *yaml.Node) (*yaml.Node, error) {
+	if n.Kind != yaml.DocumentNode {
+		return n, nil
+	}
+	if len(n.Content) == 0 {
+		return nil, fmt.Errorf("metadata: Find on empty document")
+	}
+	return n.Content[0], nil
+}
+
+// walkSegments traverses the parsed path segments starting from cur and
+// returns the resulting node, or an error if any step fails.
+func walkSegments(cur *yaml.Node, segs []pathSegment) (*yaml.Node, error) {
+	var err error
 	for i, seg := range segs {
 		if seg.field != "" {
 			cur, err = stepField(cur, seg.field)

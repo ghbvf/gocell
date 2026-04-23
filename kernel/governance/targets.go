@@ -364,10 +364,17 @@ func pathWithin(file, dir string) bool {
 // l0Dependencies. fileCellSet covers L0 cells that may have no slices
 // (and thus no entries in sliceSet).
 func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}, fileCellSet map[string]struct{}) {
-	// Collect L0 cell IDs from file-path-derived sources.
-	l0Cells := make(map[string]struct{})
+	l0Cells := ts.collectL0CellsFromSlices(sliceSet)
+	ts.collectL0CellsFromFileSet(fileCellSet, l0Cells)
+	if len(l0Cells) > 0 {
+		ts.propagateL0DependentSlices(sliceSet, l0Cells)
+	}
+}
 
-	// From sliceSet: slice-level file changes.
+// collectL0CellsFromSlices builds a set of L0 cell IDs from the slice-key set.
+// It looks up each slice's owning cell and checks its consistency level.
+func (ts *TargetSelector) collectL0CellsFromSlices(sliceSet map[string]struct{}) map[string]struct{} {
+	l0Cells := make(map[string]struct{})
 	for key := range sliceSet {
 		s, ok := ts.project.Slices[key]
 		if !ok {
@@ -381,8 +388,12 @@ func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}, fileC
 			l0Cells[c.ID] = struct{}{}
 		}
 	}
+	return l0Cells
+}
 
-	// From fileCellSet: cell-level file changes (covers L0 cells with no slices).
+// collectL0CellsFromFileSet adds L0 cell IDs from the cell-level file-change set
+// into the existing l0Cells map. This covers L0 cells that have no slices.
+func (ts *TargetSelector) collectL0CellsFromFileSet(fileCellSet map[string]struct{}, l0Cells map[string]struct{}) {
 	for cellID := range fileCellSet {
 		c, ok := ts.project.Cells[cellID]
 		if !ok {
@@ -392,25 +403,32 @@ func (ts *TargetSelector) expandL0Dependents(sliceSet map[string]struct{}, fileC
 			l0Cells[c.ID] = struct{}{}
 		}
 	}
+}
 
-	if len(l0Cells) == 0 {
-		return
-	}
-
-	// Find all cells that depend on any affected L0 cell.
+// propagateL0DependentSlices adds all slices owned by cells that declare an
+// l0Dependency on any cell in l0Cells into sliceSet.
+func (ts *TargetSelector) propagateL0DependentSlices(sliceSet map[string]struct{}, l0Cells map[string]struct{}) {
 	for _, c := range ts.project.Cells {
-		for _, dep := range c.L0Dependencies {
-			if _, ok := l0Cells[dep.Cell]; ok {
-				// Add all slices of the dependent cell.
-				for key, s := range ts.project.Slices {
-					if s.BelongsToCell == c.ID {
-						sliceSet[key] = struct{}{}
-					}
-				}
-				break // no need to check more deps for this cell
+		if !cellDependsOnL0(c.L0Dependencies, l0Cells) {
+			continue
+		}
+		for key, s := range ts.project.Slices {
+			if s.BelongsToCell == c.ID {
+				sliceSet[key] = struct{}{}
 			}
 		}
 	}
+}
+
+// cellDependsOnL0 returns true if any of the given l0Dependencies targets a
+// cell in the l0Cells set.
+func cellDependsOnL0(deps []metadata.L0DepMeta, l0Cells map[string]struct{}) bool {
+	for _, dep := range deps {
+		if _, ok := l0Cells[dep.Cell]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // expandFromSlices takes a set of slice keys and expands to the full

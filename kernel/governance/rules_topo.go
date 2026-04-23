@@ -93,9 +93,29 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 // actual provider's consistencyLevel. The provider is determined from
 // endpoints (not ownerCell, which is a governance field that may differ).
 func (v *Validator) validateTOPO04() []ValidationResult {
-	// Build actor lookup for external providers.
-	actorMaxLevel := make(map[string]cell.Level)
-	actorMalformed := make(map[string]string) // ID -> raw invalid value
+	actorMaxLevel, actorMalformed := v.buildActorLevelMaps()
+
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		contractLevel, err := cell.ParseLevel(c.ConsistencyLevel)
+		if err != nil {
+			continue // FMT-03 covers invalid levels
+		}
+		providerID := contractProvider(c)
+		if providerID == "" {
+			continue // REF covers missing provider
+		}
+		results = append(results, v.checkContractProviderLevel(c, contractLevel, providerID, actorMaxLevel, actorMalformed)...)
+	}
+	return results
+}
+
+// buildActorLevelMaps scans all actors and returns two maps:
+//   - actorMaxLevel: actor ID → parsed Level (valid entries only)
+//   - actorMalformed: actor ID → raw invalid maxConsistencyLevel string
+func (v *Validator) buildActorLevelMaps() (actorMaxLevel map[string]cell.Level, actorMalformed map[string]string) {
+	actorMaxLevel = make(map[string]cell.Level)
+	actorMalformed = make(map[string]string)
 	for _, a := range v.project.Actors {
 		if a.MaxConsistencyLevel == "" {
 			continue // no constraint declared — unconstrained
@@ -107,70 +127,66 @@ func (v *Validator) validateTOPO04() []ValidationResult {
 		}
 		actorMaxLevel[a.ID] = lvl
 	}
+	return actorMaxLevel, actorMalformed
+}
 
-	var results []ValidationResult
-	for _, c := range v.project.Contracts {
-		contractLevel, err := cell.ParseLevel(c.ConsistencyLevel)
+// checkContractProviderLevel returns TOPO-04 findings for a single contract,
+// considering whether the provider is a Cell, a malformed-level Actor, or a
+// valid-level Actor.
+func (v *Validator) checkContractProviderLevel(
+	c *metadata.ContractMeta,
+	contractLevel cell.Level,
+	providerID string,
+	actorMaxLevel map[string]cell.Level,
+	actorMalformed map[string]string,
+) []ValidationResult {
+	// Check if provider is a Cell.
+	if providerCell, ok := v.project.Cells[providerID]; ok {
+		providerLevel, err := cell.ParseLevel(providerCell.ConsistencyLevel)
 		if err != nil {
-			continue // FMT-03 covers invalid levels
+			return nil
 		}
-
-		providerID := contractProvider(c)
-		if providerID == "" {
-			continue // REF covers missing provider
-		}
-
-		// Check if provider is a Cell.
-		if providerCell, ok := v.project.Cells[providerID]; ok {
-			providerLevel, err := cell.ParseLevel(providerCell.ConsistencyLevel)
-			if err != nil {
-				continue
-			}
-			if contractLevel > providerLevel {
-				results = append(results, v.newResult(
-					"TOPO-04", SeverityError, IssueMismatch,
-					contractFile(c.ID),
-					"consistencyLevel",
-					fmt.Sprintf(
-						"contract %q consistencyLevel %s exceeds provider cell %q level %s",
-						c.ID, c.ConsistencyLevel, providerID, providerCell.ConsistencyLevel,
-					),
-				))
-			}
-			continue
-		}
-
-		// Check if provider is an external Actor with malformed level.
-		if rawVal, malformed := actorMalformed[providerID]; malformed {
-			results = append(results, v.newResult(
-				"TOPO-04", SeverityError, IssueInvalid,
-				"actors.yaml",
-				actorFieldPath(v.project.Actors, providerID, "maxConsistencyLevel"),
+		if contractLevel > providerLevel {
+			return []ValidationResult{v.newResult(
+				"TOPO-04", SeverityError, IssueMismatch,
+				contractFile(c.ID),
+				"consistencyLevel",
 				fmt.Sprintf(
-					"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
-					c.ID, providerID, rawVal,
+					"contract %q consistencyLevel %s exceeds provider cell %q level %s",
+					c.ID, c.ConsistencyLevel, providerID, providerCell.ConsistencyLevel,
 				),
-			))
-			continue
+			)}
 		}
-
-		// Check if provider is an external Actor with valid level.
-		if maxLvl, ok := actorMaxLevel[providerID]; ok {
-			if contractLevel > maxLvl {
-				results = append(results, v.newResult(
-					"TOPO-04", SeverityError, IssueMismatch,
-					contractFile(c.ID),
-					"consistencyLevel",
-					fmt.Sprintf(
-						"contract %q consistencyLevel %s exceeds external actor %q maxConsistencyLevel %s",
-						c.ID, c.ConsistencyLevel, providerID, maxLvl,
-					),
-				))
-			}
-		}
-		// If provider is neither a Cell nor an Actor, REF rules cover that.
+		return nil
 	}
-	return results
+
+	// Check if provider is an external Actor with malformed level.
+	if rawVal, malformed := actorMalformed[providerID]; malformed {
+		return []ValidationResult{v.newResult(
+			"TOPO-04", SeverityError, IssueInvalid,
+			"actors.yaml",
+			actorFieldPath(v.project.Actors, providerID, "maxConsistencyLevel"),
+			fmt.Sprintf(
+				"cannot verify contract %q consistency: external actor %q has invalid maxConsistencyLevel %q (must be L0-L4)",
+				c.ID, providerID, rawVal,
+			),
+		)}
+	}
+
+	// Check if provider is an external Actor with valid level.
+	if maxLvl, ok := actorMaxLevel[providerID]; ok && contractLevel > maxLvl {
+		return []ValidationResult{v.newResult(
+			"TOPO-04", SeverityError, IssueMismatch,
+			contractFile(c.ID),
+			"consistencyLevel",
+			fmt.Sprintf(
+				"contract %q consistencyLevel %s exceeds external actor %q maxConsistencyLevel %s",
+				c.ID, c.ConsistencyLevel, providerID, maxLvl,
+			),
+		)}
+	}
+	// If provider is neither a Cell nor an Actor, REF rules cover that.
+	return nil
 }
 
 // validateTOPO05 checks that L0 cells do not appear in any contract's endpoints.

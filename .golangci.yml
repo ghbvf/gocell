@@ -21,6 +21,11 @@ linters:
       - path: ^examples/
         linters:
           - errcheck
+      # TODO: nhooyr.io/websocket → coder/websocket migration;
+      # see backlog LINT-WEBSOCKET-MIGRATION-01 (adapters/websocket/ + runtime/websocket/).
+      - path: websocket
+        linters:
+          - staticcheck
     paths:
       - generated
       - vendor

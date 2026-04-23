@@ -3,7 +3,9 @@ package governance
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -2965,9 +2967,11 @@ func TestFMT13(t *testing.T) {
 
 func TestTOPO07(t *testing.T) {
 	tests := []struct {
-		name      string
-		setup     func(*metadata.ProjectMeta)
-		wantCount int
+		name          string
+		setup         func(*metadata.ProjectMeta)
+		wantCount     int
+		wantIssueType IssueType // zero value = no assertion on IssueType
+		wantFile      string    // empty = no file assertion
 	}{
 		{
 			name:      "no actor consumers",
@@ -2986,7 +2990,7 @@ func TestTOPO07(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "consumer actor exceeds max level",
+			name: "consumer actor exceeds max level — IssueMismatch on contract file",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
 					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
@@ -2994,7 +2998,9 @@ func TestTOPO07(t *testing.T) {
 				// http.auth.login.v1 is L1, edge-bff max is L0: violation
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 			},
-			wantCount: 1,
+			wantCount:     1,
+			wantIssueType: IssueMismatch,
+			wantFile:      contractFile("http.auth.login.v1"),
 		},
 		{
 			name: "consumer actor with no max level (unconstrained)",
@@ -3007,14 +3013,16 @@ func TestTOPO07(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "consumer actor with malformed max level",
+			name: "consumer actor with malformed max level — IssueInvalid on actors.yaml",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
 					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "INVALID"},
 				}
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 			},
-			wantCount: 1,
+			wantCount:     1,
+			wantIssueType: IssueInvalid,
+			wantFile:      "actors.yaml",
 		},
 		{
 			name: "cell consumer is not checked by TOPO-07",
@@ -3064,8 +3072,17 @@ func TestTOPO07(t *testing.T) {
 			val := NewValidator(pm, "")
 			got := findByCode(val.validateTOPO07(), "TOPO-07")
 			assert.Len(t, got, tt.wantCount)
+			if tt.wantCount == 0 {
+				return
+			}
 			for _, r := range got {
 				assert.Equal(t, SeverityError, r.Severity)
+				if tt.wantIssueType != "" {
+					assert.Equal(t, tt.wantIssueType, r.IssueType)
+				}
+				if tt.wantFile != "" {
+					assert.Equal(t, tt.wantFile, r.File)
+				}
 			}
 		})
 	}
@@ -3153,6 +3170,7 @@ func TestTOPO08(t *testing.T) {
 		name      string
 		setup     func(*metadata.ProjectMeta)
 		wantCount int
+		wantFile  string // empty = no file assertion (zero-result cases)
 	}{
 		{
 			name:      "no deprecated contracts",
@@ -3160,11 +3178,12 @@ func TestTOPO08(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "deprecated contract referenced by slice is error",
+			name: "deprecated contract referenced by slice — IssueForbidden on slice.yaml",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
 			},
 			wantCount: 1, // session-login uses http.auth.login.v1
+			wantFile:  sliceFile("accesscore/session-login"),
 		},
 		{
 			name: "deprecated contract referenced by multiple slices",
@@ -3195,11 +3214,15 @@ func TestTOPO08(t *testing.T) {
 			val := NewValidator(pm, "")
 			got := findByCode(val.validateTOPO08(), "TOPO-08")
 			assert.Len(t, got, tt.wantCount)
+			if tt.wantCount == 0 {
+				return
+			}
 			for _, r := range got {
 				assert.Equal(t, SeverityError, r.Severity)
 				assert.Equal(t, IssueForbidden, r.IssueType)
-				if tt.wantCount > 0 {
-					assert.Contains(t, r.Message, "ownerCell")
+				assert.Contains(t, r.Message, "ownerCell")
+				if tt.wantFile != "" {
+					assert.Equal(t, tt.wantFile, r.File)
 				}
 			}
 		})
@@ -3720,4 +3743,25 @@ func TestOUTGUARD01_InvalidDurabilityMode(t *testing.T) {
 	assert.Equal(t, SeverityError, got[0].Severity)
 	assert.Equal(t, IssueInvalid, got[0].IssueType)
 	assert.Contains(t, got[0].Message, "banana")
+}
+
+// --- Parser examples/ walk coverage (V-A11) ---
+// Confirms that Parser.ParseFS includes cells under examples/*/cells/**/cell.yaml
+// in ProjectMeta.Cells. Backlog item V-A11.
+
+func TestProjectWalksExamples(t *testing.T) {
+	fsys := fstest.MapFS{
+		"examples/demo/cells/foocell/cell.yaml": {
+			Data: []byte("id: foocell\ntype: support\nconsistencyLevel: L0\nowner:\n  team: demo\n  role: cell-owner\nverify:\n  smoke:\n    - smoke.foocell.startup\n"),
+		},
+	}
+
+	parser := metadata.NewParser(".")
+	pm, err := parser.ParseFS(fsys)
+	require.NoError(t, err)
+
+	cell, ok := pm.Cells["foocell"]
+	require.True(t, ok, "Cells map should contain foocell from examples/demo/cells/foocell/cell.yaml")
+	assert.True(t, strings.HasPrefix(cell.File, "examples/demo/"),
+		"cell.File should start with examples/demo/, got %q", cell.File)
 }

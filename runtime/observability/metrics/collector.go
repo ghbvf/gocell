@@ -26,15 +26,15 @@ type Collector interface {
 // Snapshot is a point-in-time view of recorded metrics.
 type Snapshot struct {
 	// Key is "method route status" (e.g. "GET /api/v1/users/{id} 200").
-	RequestCounts    map[string]int64
-	DurationSumsMs   map[string]int64
+	RequestCounts  map[string]int64
+	DurationSumsMs map[string]int64
 }
 
 // InMemoryCollector is a simple in-memory metrics collector for development
 // and testing. It records request counts and cumulative duration.
 type InMemoryCollector struct {
-	mu       sync.RWMutex
-	counts   map[string]*atomic.Int64
+	mu        sync.RWMutex
+	counts    map[string]*atomic.Int64
 	durations map[string]*atomic.Int64 // cumulative duration in microseconds
 }
 
@@ -104,11 +104,11 @@ func (c *InMemoryCollector) Handler() http.Handler {
 		w.Header().Set("Content-Type", "application/json")
 
 		type entry struct {
-			Method      string `json:"method"`
-			Route       string `json:"route"`
-			Status      int    `json:"status"`
-			Count       int64  `json:"count"`
-			DurationMs  int64  `json:"duration_sum_ms"`
+			Method     string `json:"method"`
+			Route      string `json:"route"`
+			Status     int    `json:"status"`
+			Count      int64  `json:"count"`
+			DurationMs int64  `json:"duration_sum_ms"`
 		}
 
 		var entries []entry
@@ -131,4 +131,3 @@ func (c *InMemoryCollector) Handler() http.Handler {
 		})
 	})
 }
-

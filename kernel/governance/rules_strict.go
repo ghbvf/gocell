@@ -69,54 +69,32 @@ func (v *Validator) validateFMT16(strict bool) []ValidationResult {
 	}
 	var results []ValidationResult
 	for key, s := range v.project.Slices {
-		if s.Dir == "" {
-			continue
-		}
-		if strings.Contains(s.Dir, "-") {
-			results = append(results, v.newResult(
-				"FMT-16", SeverityError, IssueInvalid,
-				sliceFile(key),
-				"id",
-				fmt.Sprintf(
-					"slice %q uses kebab-case directory %q; kebab-case slice directories are disallowed in strict mode (rename to %q)",
-					s.ID, s.Dir, strings.ReplaceAll(s.Dir, "-", ""),
-				),
-			))
-		}
+		results = append(results, v.checkKebabDir(s.Dir, s.ID, sliceFile(key), "slice")...)
 	}
 	for _, c := range v.project.Cells {
-		if c.Dir == "" {
-			continue
-		}
-		if strings.Contains(c.Dir, "-") {
-			results = append(results, v.newResult(
-				"FMT-16", SeverityError, IssueInvalid,
-				cellFile(c.ID),
-				"id",
-				fmt.Sprintf(
-					"cell %q uses kebab-case directory %q; kebab-case cell directories are disallowed in strict mode (rename to %q)",
-					c.ID, c.Dir, strings.ReplaceAll(c.Dir, "-", ""),
-				),
-			))
-		}
+		results = append(results, v.checkKebabDir(c.Dir, c.ID, cellFile(c.ID), "cell")...)
 	}
 	for _, a := range v.project.Assemblies {
-		if a.Dir == "" {
-			continue
-		}
-		if strings.Contains(a.Dir, "-") {
-			results = append(results, v.newResult(
-				"FMT-16", SeverityError, IssueInvalid,
-				assemblyFile(a.ID),
-				"id",
-				fmt.Sprintf(
-					"assembly %q uses kebab-case directory %q; kebab-case assembly directories are disallowed in strict mode (rename to %q)",
-					a.ID, a.Dir, strings.ReplaceAll(a.Dir, "-", ""),
-				),
-			))
-		}
+		results = append(results, v.checkKebabDir(a.Dir, a.ID, assemblyFile(a.ID), "assembly")...)
 	}
 	return results
+}
+
+// checkKebabDir returns a FMT-16 error if dir is non-empty and contains '-'.
+// kind is one of "slice", "cell", "assembly" — used only in the error message.
+func (v *Validator) checkKebabDir(dir, id, file, kind string) []ValidationResult {
+	if dir == "" || !strings.Contains(dir, "-") {
+		return nil
+	}
+	return []ValidationResult{v.newResult(
+		"FMT-16", SeverityError, IssueInvalid,
+		file,
+		"id",
+		fmt.Sprintf(
+			"%s %q uses kebab-case directory %q; kebab-case %s directories are disallowed in strict mode (rename to %q)",
+			kind, id, dir, kind, strings.ReplaceAll(dir, "-", ""),
+		),
+	)}
 }
 
 // validateFMT17 checks that the first entry in slice.yaml allowedFiles matches
