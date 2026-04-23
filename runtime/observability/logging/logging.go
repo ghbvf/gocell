@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"os"
 
+	kctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
@@ -105,7 +106,7 @@ func extractContextAttrs(ctx context.Context) []slog.Attr {
 	if v, ok := ctxkeys.CorrelationIDFrom(ctx); ok && v != "" {
 		attrs = append(attrs, slog.String("correlation_id", v))
 	}
-	if v, ok := ctxkeys.CellIDFrom(ctx); ok && v != "" {
+	if v, ok := kctxkeys.CellIDFrom(ctx); ok && v != "" {
 		attrs = append(attrs, slog.String("cell_id", v))
 	}
 
