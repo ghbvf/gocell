@@ -159,8 +159,15 @@ jobs:
           path: coverage-integration.out
           retention-days: 1
 
+  # Fork-PR guard: fork PRs cannot access org secrets (secrets.SONAR_TOKEN is
+  # empty for forks), which would cause this job to fail with an opaque auth
+  # error and block the PR with a red check. Guard: skip sonar when the PR head
+  # repo differs from the base repo (i.e. fork PR). Fork PRs still receive full
+  # build-test + integration-test coverage; they just lack SonarCloud
+  # decoration/quality gate, which is acceptable — the quality gate fires again
+  # post-merge on the push:develop run where the token is always available.
   sonarcloud:
-    if: ${{ inputs.run-sonar }}
+    if: ${{ inputs.run-sonar && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     needs: [build-test, integration-test]
     # Depends on both build-test (unit coverage) and integration-test
