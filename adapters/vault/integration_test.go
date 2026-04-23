@@ -61,15 +61,17 @@ func startVaultContainer(t *testing.T) (addr, token string, teardown func()) {
 }
 
 // newProviderFromEnv is a test helper that sets the standard Vault env vars and
-// calls NewTransitKeyProviderFromEnv(). Relies on t.Setenv for cleanup.
+// calls NewTransitKeyProviderFromEnv(realMode=false). Relies on t.Setenv for cleanup.
+// Uses VAULT_AUTH_METHOD=token for integration tests (dev/CI style).
 func newProviderFromEnv(t *testing.T, addr, token string) *vaultadapter.TransitKeyProvider {
 	t.Helper()
 	t.Setenv("VAULT_ADDR", addr)
+	t.Setenv("VAULT_AUTH_METHOD", "token")
 	t.Setenv("VAULT_TOKEN", token)
 	t.Setenv("GOCELL_VAULT_TRANSIT_MOUNT", "transit")
 	t.Setenv("GOCELL_VAULT_TRANSIT_KEY", "gocell-config")
 
-	p, err := vaultadapter.NewTransitKeyProviderFromEnv()
+	p, err := vaultadapter.NewTransitKeyProviderFromEnv(false /* realMode */)
 	require.NoError(t, err, "NewTransitKeyProviderFromEnv should succeed with running vault")
 	return p
 }
@@ -112,6 +114,118 @@ func TestTransitEnvelope_RoundTrip(t *testing.T) {
 	recovered, err := handle.Decrypt(ctx, ct, nonce, edk, aad)
 	require.NoError(t, err)
 	assert.Equal(t, plaintext, recovered, "round-trip must recover original plaintext")
+}
+
+// ---------------------------------------------------------------------------
+// TC-INT-A: AppRole auth — full encrypt/decrypt round-trip using AppRole auth.
+// Verifies that NewTransitKeyProviderFromEnv works with VAULT_AUTH_METHOD=approle.
+// ---------------------------------------------------------------------------
+
+// TestTransitEnvelope_AppRoleAuth_RoundTrip verifies that when Vault AppRole is
+// configured (role_id + secret_id), NewTransitKeyProviderFromEnv constructs a
+// working provider that can encrypt and decrypt.
+//
+// The test enables AppRole on the Vault dev container, creates a role with the
+// required transit policy, and generates a secret_id for the role.
+func TestTransitEnvelope_AppRoleAuth_RoundTrip(t *testing.T) {
+	ctx := context.Background()
+	addr, rootToken, teardown := startVaultContainer(t)
+	defer teardown()
+
+	// Build an admin client to configure AppRole.
+	adminCfg := vaultapi.DefaultConfig()
+	adminCfg.Address = addr
+	adminClient, err := vaultapi.NewClient(adminCfg)
+	require.NoError(t, err)
+	adminClient.SetToken(rootToken)
+
+	// Enable AppRole auth engine.
+	_, err = adminClient.Logical().Write("sys/auth/approle", map[string]any{
+		"type": "approle",
+	})
+	require.NoError(t, err, "enable approle auth engine")
+
+	// Create a policy granting transit encrypt/decrypt/read access.
+	_, err = adminClient.Logical().Write("sys/policies/acl/gocell-transit", map[string]any{
+		"policy": `
+path "transit/encrypt/gocell-config" { capabilities = ["create","update"] }
+path "transit/decrypt/gocell-config" { capabilities = ["create","update"] }
+path "transit/keys/gocell-config"    { capabilities = ["read"] }
+path "transit/keys/gocell-config/rotate" { capabilities = ["create","update"] }
+`,
+	})
+	require.NoError(t, err, "create transit policy")
+
+	// Create an AppRole that uses the policy.
+	_, err = adminClient.Logical().Write("auth/approle/role/gocell", map[string]any{
+		"token_policies": "gocell-transit",
+		"token_ttl":      "5m",
+		"token_max_ttl":  "10m",
+	})
+	require.NoError(t, err, "create approle role")
+
+	// Read role_id and generate a secret_id.
+	roleIDSecret, err := adminClient.Logical().Read("auth/approle/role/gocell/role-id")
+	require.NoError(t, err, "read role_id")
+	roleID, ok := roleIDSecret.Data["role_id"].(string)
+	require.True(t, ok, "role_id must be a string")
+
+	secretIDSecret, err := adminClient.Logical().Write("auth/approle/role/gocell/secret-id", map[string]any{})
+	require.NoError(t, err, "generate secret_id")
+	secretID, ok := secretIDSecret.Data["secret_id"].(string)
+	require.True(t, ok, "secret_id must be a string")
+
+	// Configure env for NewTransitKeyProviderFromEnv with AppRole.
+	t.Setenv("VAULT_ADDR", addr)
+	t.Setenv("VAULT_AUTH_METHOD", "approle")
+	t.Setenv("VAULT_ROLE_ID", roleID)
+	t.Setenv("VAULT_SECRET_ID_TYPE", "direct")
+	t.Setenv("VAULT_SECRET_ID", secretID)
+	t.Setenv("GOCELL_VAULT_TRANSIT_MOUNT", "transit")
+	t.Setenv("GOCELL_VAULT_TRANSIT_KEY", "gocell-config")
+
+	p, err := vaultadapter.NewTransitKeyProviderFromEnv(false /* realMode */)
+	require.NoError(t, err, "NewTransitKeyProviderFromEnv with AppRole must succeed")
+
+	handle, err := p.Current(ctx)
+	require.NoError(t, err)
+	assert.Contains(t, handle.ID(), "vault-transit:v")
+
+	plaintext := []byte("approle-encrypted-secret")
+	aad := []byte("cell:configcore/key:approle_test")
+
+	ct, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, aad)
+	require.NoError(t, err)
+
+	recovered, err := handle.Decrypt(ctx, ct, nonce, edk, aad)
+	require.NoError(t, err)
+	assert.Equal(t, plaintext, recovered, "AppRole auth: round-trip must recover original plaintext")
+}
+
+// ---------------------------------------------------------------------------
+// TC-INT-B: Real-mode static token rejection.
+// Verifies that GOCELL_ADAPTER_MODE=real + VAULT_AUTH_METHOD=token fails fast.
+// ---------------------------------------------------------------------------
+
+// TestNewTransitKeyProviderFromEnv_RealMode_RejectsStaticToken verifies that
+// when realMode=true and VAULT_AUTH_METHOD=token, construction fails with
+// ErrVaultAuthFailed (S4b security fix). No Vault container is needed — the
+// error is returned before any network call.
+func TestNewTransitKeyProviderFromEnv_RealMode_RejectsStaticToken(t *testing.T) {
+	t.Setenv("VAULT_ADDR", "http://127.0.0.1:8200") // irrelevant — fails before connecting
+	t.Setenv("VAULT_AUTH_METHOD", "token")
+	t.Setenv("VAULT_TOKEN", "dev-root-token")
+	t.Setenv("GOCELL_VAULT_TRANSIT_MOUNT", "transit")
+	t.Setenv("GOCELL_VAULT_TRANSIT_KEY", "gocell-config")
+
+	_, err := vaultadapter.NewTransitKeyProviderFromEnv(true /* realMode */)
+	require.Error(t, err, "NewTransitKeyProviderFromEnv in real mode with static token must fail")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec),
+		"error must be errcode.Error, got: %T %v", err, err)
+	assert.Equal(t, errcode.ErrVaultAuthFailed, ec.Code,
+		"real-mode static token rejection must surface as ErrVaultAuthFailed")
 }
 
 // ---------------------------------------------------------------------------
@@ -306,8 +420,10 @@ func TestTransitEnvelope_VaultNeverSeesBusinessPlaintext(t *testing.T) {
 	require.NoError(t, err)
 	rawClient.SetToken(token)
 
+	auth := vaultadapter.NewStaticTokenAuth(rawClient, token)
 	client := vaultadapter.NewVaultAPIClient(rawClient)
-	p := vaultadapter.NewTransitKeyProvider(client, "transit", "gocell-config")
+	p, err := vaultadapter.NewTransitKeyProvider(client, "transit", "gocell-config", auth)
+	require.NoError(t, err)
 
 	businessSecret := "very-sensitive-password-123"
 	plaintext := []byte(businessSecret)
