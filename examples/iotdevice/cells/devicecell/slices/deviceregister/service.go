@@ -97,6 +97,7 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 			slog.String("device_id", device.ID),
 			slog.Any("error", err),
 		)
+		return nil, fmt.Errorf("device-register: emit event: %w", err)
 	} else {
 		s.logger.Info("device-register: event published",
 			slog.String("device_id", device.ID),

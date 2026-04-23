@@ -46,7 +46,7 @@ func buildAssembly(ps promStack, mode cell.DurabilityMode, cells ...cell.Cell) (
 }
 
 func durabilityModeForTopology(topo bootstrap.Topology) cell.DurabilityMode {
-	if topo.AdapterMode == "real" {
+	if topo.StorageBackend == "postgres" {
 		return cell.DurabilityDurable
 	}
 	return cell.DurabilityDemo

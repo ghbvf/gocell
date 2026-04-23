@@ -1,8 +1,10 @@
 package devicecell
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -25,6 +28,21 @@ func newTestCell() *DeviceCell {
 		WithCommandRepository(mem.NewCommandRepository()),
 		WithPublisher(eventbus.New()),
 	)
+}
+
+type failingPublisher struct{}
+
+func (failingPublisher) Publish(_ context.Context, _ string, _ []byte) error {
+	return errors.New("publish failed")
+}
+
+func (failingPublisher) Close(_ context.Context) error { return nil }
+
+func newTestCursorCodec(t *testing.T) *query.CursorCodec {
+	t.Helper()
+	codec, err := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
+	require.NoError(t, err)
+	return codec
 }
 
 func TestDeviceCell_Lifecycle(t *testing.T) {
@@ -304,4 +322,45 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	require.ErrorAs(t, err, &ecErr)
 	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 	assert.Contains(t, err.Error(), "cursor codec")
+}
+
+func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsError(t *testing.T) {
+	c := NewDeviceCell(
+		WithDeviceRepository(mem.NewDeviceRepository()),
+		WithCommandRepository(mem.NewCommandRepository()),
+		WithPublisher(failingPublisher{}),
+		WithCursorCodec(newTestCursorCodec(t)),
+	)
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config:         map[string]any{},
+		DurabilityMode: cell.DurabilityDurable,
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-fail"}`))
+	req.Header.Set("Content-Type", "application/json")
+	c.registerHandler.HandleRegister(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code,
+		"durable mode must not return success when device.registered publish fails")
+}
+
+func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
+	c := NewDeviceCell(
+		WithDeviceRepository(mem.NewDeviceRepository()),
+		WithCommandRepository(mem.NewCommandRepository()),
+		WithPublisher(failingPublisher{}),
+	)
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
+		Config:         map[string]any{},
+		DurabilityMode: cell.DurabilityDemo,
+	}))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/", strings.NewReader(`{"name":"sensor-demo"}`))
+	req.Header.Set("Content-Type", "application/json")
+	c.registerHandler.HandleRegister(rec, req)
+
+	assert.Equal(t, http.StatusCreated, rec.Code,
+		"demo mode keeps direct publish fail-open behavior")
 }

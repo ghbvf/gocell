@@ -33,6 +33,22 @@ func newStubCell(id string) *stubCell {
 	return &stubCell{BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore})}
 }
 
+func findAccessLogEntry(logs []byte, wantPath string) (map[string]any, bool) {
+	for _, line := range bytes.Split(logs, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry["msg"] == "http request" && entry["path"] == wantPath {
+			return entry, true
+		}
+	}
+	return nil, false
+}
+
 func TestRouterImplementsRouteMux(t *testing.T) {
 	r := New()
 	var mux cell.RouteMux = r
@@ -184,23 +200,9 @@ func TestPanicRequestRecordedInAccessLog(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 
-	// Parse all JSON log entries and find the access log (level=INFO, msg="http request").
-	var found bool
-	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
-		if len(line) == 0 {
-			continue
-		}
-		var entry map[string]any
-		if err := json.Unmarshal(line, &entry); err != nil {
-			continue
-		}
-		if entry["msg"] == "http request" {
-			found = true
-			assert.Equal(t, float64(500), entry["status"], "access log must capture status 500 for panic requests")
-			break
-		}
-	}
-	assert.True(t, found, "access log entry must exist for panic request")
+	entry, found := findAccessLogEntry(buf.Bytes(), "/boom")
+	require.True(t, found, "access log entry must exist for panic request")
+	assert.Equal(t, float64(500), entry["status"], "access log must capture status 500 for panic requests")
 }
 
 func TestPanicRequestRecordedInMetrics(t *testing.T) {
@@ -243,22 +245,9 @@ func TestNormalRequestUnchanged(t *testing.T) {
 	assert.Equal(t, `{"data":"ok"}`, rec.Body.String())
 
 	// Verify access log has status 200.
-	var found bool
-	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
-		if len(line) == 0 {
-			continue
-		}
-		var entry map[string]any
-		if err := json.Unmarshal(line, &entry); err != nil {
-			continue
-		}
-		if entry["msg"] == "http request" {
-			found = true
-			assert.Equal(t, float64(200), entry["status"])
-			break
-		}
-	}
-	assert.True(t, found, "access log entry must exist")
+	entry, found := findAccessLogEntry(buf.Bytes(), "/ok")
+	require.True(t, found, "access log entry must exist")
+	assert.Equal(t, float64(200), entry["status"])
 
 	// Verify metrics recorded status 200.
 	snap := mc.Snapshot()
@@ -454,22 +443,9 @@ func TestWithTracer_TraceIDInAccessLog(t *testing.T) {
 	r.ServeHTTP(rec, req)
 
 	// Parse the access log entry and check for trace_id.
-	var found bool
-	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
-		if len(line) == 0 {
-			continue
-		}
-		var entry map[string]any
-		if err := json.Unmarshal(line, &entry); err != nil {
-			continue
-		}
-		if entry["msg"] == "http request" {
-			found = true
-			assert.NotEmpty(t, entry["trace_id"], "access log must include trace_id when tracing is configured")
-			break
-		}
-	}
-	assert.True(t, found, "access log entry must exist")
+	entry, found := findAccessLogEntry(buf.Bytes(), "/log-trace")
+	require.True(t, found, "access log entry must exist")
+	assert.NotEmpty(t, entry["trace_id"], "access log must include trace_id when tracing is configured")
 }
 
 func TestAccessLog_IncludesRealIP(t *testing.T) {
@@ -492,24 +468,11 @@ func TestAccessLog_IncludesRealIP(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// Parse all JSON log entries and find the access log (msg="http request").
-	var found bool
-	for _, line := range bytes.Split(buf.Bytes(), []byte("\n")) {
-		if len(line) == 0 {
-			continue
-		}
-		var entry map[string]any
-		if err := json.Unmarshal(line, &entry); err != nil {
-			continue
-		}
-		if entry["msg"] == "http request" {
-			found = true
-			assert.Equal(t, "203.0.113.50", entry["real_ip"],
-				"access log must include real_ip extracted from X-Forwarded-For")
-			break
-		}
-	}
-	assert.True(t, found, "access log entry must exist")
+	// Parse all JSON log entries and find the access log for this request.
+	entry, found := findAccessLogEntry(buf.Bytes(), "/real-ip-test")
+	require.True(t, found, "access log entry must exist")
+	assert.Equal(t, "203.0.113.50", entry["real_ip"],
+		"access log must include real_ip extracted from X-Forwarded-For")
 }
 
 func TestWithTracer_PanicRequestTraced(t *testing.T) {

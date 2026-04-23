@@ -221,12 +221,12 @@ asm := assembly.New(assembly.Config{ID: "prod", DurabilityMode: cell.DurabilityD
 asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: cell.DurabilityDemo})
 ```
 
-`cmd/corebundle` maps real adapter topology to `DurabilityDurable`; development
-and memory topologies use `DurabilityDemo` so examples can run without a
-database or broker. Demo mode is explicit: Cells inject `NoopTxRunner` /
-`NoopEmitter` when dependencies are absent, or a direct `outbox.Emitter` when a
-publisher is supplied without a durable writer. Durable mode never silently
-falls back to those no-op dependencies.
+`cmd/corebundle` maps PostgreSQL storage topology to `DurabilityDurable`;
+development and memory storage topologies use `DurabilityDemo` so examples can
+run without a database or broker. Demo mode is explicit: Cells inject
+`NoopTxRunner` / `NoopEmitter` when dependencies are absent, or a direct
+`outbox.Emitter` when a publisher is supplied without a durable writer. Durable
+mode never silently falls back to those no-op dependencies.
 
 ## Architecture
 

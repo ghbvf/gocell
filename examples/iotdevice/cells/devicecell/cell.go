@@ -118,7 +118,11 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "devicecell", c.publisher); err != nil {
 		return err
 	}
-	emitter, err := outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, c.logger)
+	publishFailureMode := outbox.DirectPublishFailOpen
+	if deps.DurabilityMode == cell.DurabilityDurable {
+		publishFailureMode = outbox.DirectPublishFailClosed
+	}
+	emitter, err := outbox.NewDirectEmitter(c.publisher, publishFailureMode, c.logger)
 	if err != nil {
 		return err
 	}

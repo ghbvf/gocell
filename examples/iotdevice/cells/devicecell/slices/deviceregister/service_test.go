@@ -96,6 +96,19 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 	assert.NotEmpty(t, dev.ID)
 }
 
+func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
+	repo := mem.NewDeviceRepository()
+	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailClosed, slog.Default())
+	require.NoError(t, err)
+	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
+
+	dev, err := svc.Register(context.Background(), "sensor-c")
+	require.Error(t, err, "fail-closed publish failure must propagate")
+	assert.Nil(t, dev)
+	assert.Contains(t, err.Error(), "emit event")
+	assert.Contains(t, err.Error(), "publish failed")
+}
+
 func TestService_Register_DuplicateID_IsUnlikelyButHandled(t *testing.T) {
 	// Since uuid.NewString generates random IDs, duplicate is practically
 	// impossible. We verify two sequential calls succeed without collision.

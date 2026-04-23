@@ -2,9 +2,10 @@
 // It bootstraps configcore, accesscore, and auditcore with in-memory
 // repositories by default, suitable for development and integration testing.
 //
-// DurabilityDemo is used in dev/memory mode so Cells auto-fill explicit no-op
-// dependencies. Set GOCELL_ADAPTER_MODE=real to switch the assembly to
-// DurabilityDurable and require all production dependencies and secrets.
+// DurabilityDemo is used with memory storage so Cells auto-fill explicit no-op
+// dependencies. Set GOCELL_CELL_ADAPTER_MODE=postgres to switch the assembly
+// to DurabilityDurable and require real writer/tx dependencies; set
+// GOCELL_ADAPTER_MODE=real to enable production control-plane secret checks.
 //
 // # Required env vars (all adapter modes)
 //
