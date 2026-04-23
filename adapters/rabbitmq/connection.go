@@ -14,6 +14,7 @@ import (
 
 	amqp "github.com/rabbitmq/amqp091-go"
 
+	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -689,35 +690,18 @@ func (c *Connection) Close(ctx context.Context) error {
 
 	c.drainChannelPool()
 
-	if conn == nil {
-		slog.Info("rabbitmq: connection closed")
-		return nil
-	}
-
 	// conn.Close() performs a network handshake (AMQP connection.close
-	// frame exchange) and may block. Run it in a goroutine so we can
-	// respect the caller's context budget.
-	done := make(chan error, 1)
-	go func() {
+	// frame exchange) and may block. The helper runs it in a goroutine so
+	// the caller's context budget is honoured.
+	return adapterutil.CloseWithDeadline(ctx, "rabbitmq", func() error {
+		if conn == nil {
+			return nil
+		}
 		if err := conn.Close(); err != nil {
-			done <- errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: close connection", err)
-			return
+			return errcode.Wrap(ErrAdapterAMQPConnect, "rabbitmq: close connection", err)
 		}
-		done <- nil
-	}()
-
-	select {
-	case err := <-done:
-		if err != nil {
-			return err
-		}
-		slog.Info("rabbitmq: connection closed")
 		return nil
-	case <-ctx.Done():
-		slog.Warn("rabbitmq: connection close budget exceeded",
-			slog.Any("error", ctx.Err()))
-		return ctx.Err()
-	}
+	})
 }
 
 // WaitConnected blocks until the connection is established, a permanent error
