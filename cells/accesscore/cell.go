@@ -5,12 +5,8 @@ package accesscore
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
-	"path/filepath"
-	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/initialadmin"
@@ -31,15 +27,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell              = (*AccessCore)(nil)
-	_ cell.HTTPRegistrar     = (*AccessCore)(nil)
-	_ cell.HealthContributor = (*AccessCore)(nil)
-	_ cell.EventRegistrar    = (*AccessCore)(nil)
+	_ cell.Cell                 = (*AccessCore)(nil)
+	_ cell.HTTPRegistrar        = (*AccessCore)(nil)
+	_ cell.HealthContributor    = (*AccessCore)(nil)
+	_ cell.EventRegistrar       = (*AccessCore)(nil)
+	_ cell.LifecycleContributor = (*AccessCore)(nil)
 )
 
 // Option configures an AccessCore Cell.
@@ -115,84 +111,14 @@ func WithInMemoryDefaults() Option {
 	}
 }
 
-// initialAdminConfig holds the parsed options for WithInitialAdminBootstrap.
-type initialAdminConfig struct {
-	username       string
-	credentialPath string
-	ttl            time.Duration
-	passwordSource io.Reader // nil → crypto/rand.Reader (default in GeneratePassword)
-	scheduler      initialadmin.Scheduler
-	clock          initialadmin.Clock
-	// hasher produces the bcrypt hash for the generated admin password.
-	// nil → initialadmin.DefaultPasswordHasher() (bcrypt cost=12). Tests
-	// inject a fast hasher to avoid 5-7s bcrypt cost=12 blocking phase3.
-	hasher initialadmin.PasswordHasher
-}
-
-// InitialAdminOption configures WithInitialAdminBootstrap.
-type InitialAdminOption func(*initialAdminConfig)
-
-// WithBootstrapUsername overrides the admin username (default: "admin").
-func WithBootstrapUsername(u string) InitialAdminOption {
-	return func(c *initialAdminConfig) { c.username = u }
-}
-
-// WithBootstrapCredentialPath overrides the credential file path.
-// Default resolution: GOCELL_STATE_DIR/initial_admin_password →
-// /run/gocell/initial_admin_password.
-func WithBootstrapCredentialPath(p string) InitialAdminOption {
-	return func(c *initialAdminConfig) { c.credentialPath = p }
-}
-
-// WithBootstrapTTL overrides the credential file TTL (default: 24h).
-func WithBootstrapTTL(d time.Duration) InitialAdminOption {
-	return func(c *initialAdminConfig) { c.ttl = d }
-}
-
-// withBootstrapPasswordSource is an unexported helper used by tests to inject
-// a deterministic password source. Production code always uses the default
-// crypto/rand.Reader via GeneratePassword.
-func withBootstrapPasswordSource(r io.Reader) InitialAdminOption {
-	return func(c *initialAdminConfig) { c.passwordSource = r }
-}
-
-// WithBootstrapPasswordHasher overrides the password hasher used to produce
-// the admin's bcrypt hash. Production leaves this unset (defaults to bcrypt
-// cost=12). Tests inject initialadmin.BcryptHasher{Cost: bcrypt.MinCost}
-// so the bundle_test TestBuildBootstrap_* startup path does not block on
-// the 5-7s production-strength bcrypt computation on slow CI runners.
-//
-// ref: uber-go/fx — expensive dependencies exposed as options so tests can
-// swap in fast stubs without diverging from the production wire graph.
-func WithBootstrapPasswordHasher(h initialadmin.PasswordHasher) InitialAdminOption {
-	return func(c *initialAdminConfig) { c.hasher = h }
-}
-
 // WithInitialAdminBootstrap enables first-run admin bootstrap (scheme H).
-//
-// During Init, if no user holds the admin role, a random password is generated,
-// written to a credential file (mode 0600), and the returned cleanup worker
-// removes the file after the configured TTL.
-//
-// Must be paired with WithBootstrapWorkerSink so the cleanup worker is handed
-// to a lifecycle manager (e.g., bootstrap.WithWorkers). Init fails fast if the
-// sink is missing.
+// Bootstrap auto-discovers the returned Lifecycle via cell.LifecycleContributor
+// (kernel/cell.LifecycleContributor → runtime/bootstrap phase3b) and wires
+// OnStart/OnStop — no composition-root plumbing required.
 //
 // ref: docs/architecture/202604181900-adr-auth-setup-first-run.md (scheme H)
-func WithInitialAdminBootstrap(opts ...InitialAdminOption) Option {
-	cfg := &initialAdminConfig{}
-	for _, o := range opts {
-		o(cfg)
-	}
-	return func(c *AccessCore) { c.initialAdminCfg = cfg }
-}
-
-// WithBootstrapWorkerSink injects a sink function that receives the cleanup
-// worker produced by the bootstrap sequence. The caller must hand this worker
-// to a lifecycle manager (e.g., bootstrap.WithWorkers). A non-nil sink is
-// required whenever WithInitialAdminBootstrap is used.
-func WithBootstrapWorkerSink(sink func(worker.Worker)) Option {
-	return func(c *AccessCore) { c.bootstrapWorkerSink = sink }
+func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
+	return func(c *AccessCore) { c.initialAdmin = initialadmin.NewLifecycle(opts...) }
 }
 
 // AccessCore is the accesscore Cell implementation.
@@ -210,9 +136,9 @@ type AccessCore struct {
 	jwtVerifier  *auth.JWTVerifier
 	cursorCodec  *query.CursorCodec
 
-	// Bootstrap configuration (set via WithInitialAdminBootstrap).
-	initialAdminCfg     *initialAdminConfig
-	bootstrapWorkerSink func(worker.Worker)
+	// initialAdmin wires first-run admin bootstrap via LifecycleContributor;
+	// nil means the feature is disabled.
+	initialAdmin *initialadmin.Lifecycle
 
 	// Slice handlers.
 	identityHandler *identitymanage.Handler
@@ -283,102 +209,35 @@ func (c *AccessCore) Authorizer() auth.Authorizer {
 	return c.authzSvc
 }
 
-// runInitialAdminBootstrap executes the first-run admin bootstrap when
-// WithInitialAdminBootstrap has been configured. It validates that
-// WithBootstrapWorkerSink is also set, runs Sweep to remove any expired
-// orphan credential files (P1-16), then delegates to Bootstrapper.EnsureAdmin.
-// A no-op (nil cfg) means the bootstrap feature is disabled.
-//
-// Sweep runs unconditionally before EnsureAdmin so that an expired cred file
-// from a previous run never blocks EnsureAdmin's WriteCredentialFile, even when
-// adminExists==true causes EnsureAdmin to skip creation (pure sweep still runs).
-func (c *AccessCore) runInitialAdminBootstrap(ctx context.Context) error {
-	if c.initialAdminCfg == nil {
-		return nil
-	}
-	if c.bootstrapWorkerSink == nil {
-		return errcode.New(errcode.ErrCellInvalidConfig,
-			"WithInitialAdminBootstrap requires WithBootstrapWorkerSink; example:\n"+
-				"  var w worker.Worker\n"+
-				"  accesscore.WithInitialAdminBootstrap(),\n"+
-				"  accesscore.WithBootstrapWorkerSink(func(x worker.Worker) { w = x }),\n"+
-				"  /* later */ bootstrap.WithWorkers(w)")
-	}
-
-	// Sweep expired orphan credential files before EnsureAdmin attempts to write
-	// a new one. This closes the P1-16 gap where adminExists==true caused
-	// EnsureAdmin to return early without cleaning orphan cred files, and also
-	// prevents WriteCredentialFile from failing with ErrCredFileExists when an
-	// expired file already occupies the path.
-	//
-	// When a fresh (not-yet-expired) orphan file is found, Sweep returns a
-	// Cleaner worker that will remove the file after its remaining TTL. This
-	// closes the runtime window where a fresh orphan file would otherwise persist
-	// until the next process restart (P1-16 full fix).
-	var sweepStateDir string
-	if c.initialAdminCfg.credentialPath != "" {
-		sweepStateDir = filepath.Dir(c.initialAdminCfg.credentialPath)
-	}
-	sweepCleaner, err := initialadmin.Sweep(ctx, initialadmin.SweepConfig{
-		StateDir:  sweepStateDir,
-		Clock:     c.initialAdminCfg.clock,
-		Scheduler: c.initialAdminCfg.scheduler,
-		Logger:    c.logger,
-	})
-	if err != nil {
-		return fmt.Errorf("accesscore: bootstrap sweep: %w", err)
-	}
-
-	bsDeps := initialadmin.BootstrapDeps{
-		UserRepo: c.userRepo,
-		RoleRepo: c.roleRepo,
-		Logger:   c.logger,
-		Clock:    c.initialAdminCfg.clock,
-	}
-	bsCfg := initialadmin.BootstrapConfig{
-		Username:       c.initialAdminCfg.username,
-		CredentialPath: c.initialAdminCfg.credentialPath,
-		TTL:            c.initialAdminCfg.ttl,
-		PasswordSource: c.initialAdminCfg.passwordSource,
-		Scheduler:      c.initialAdminCfg.scheduler,
-		Hasher:         c.initialAdminCfg.hasher,
-	}
-	bs, err := initialadmin.NewBootstrapper(bsDeps, bsCfg)
-	if err != nil {
-		return fmt.Errorf("accesscore: bootstrap construct: %w", err)
-	}
-	adminWorker, err := bs.EnsureAdmin(ctx)
-	if err != nil {
-		return fmt.Errorf("accesscore: bootstrap admin: %w", err)
-	}
-
-	// Priority: adminWorker (new admin created) > sweepCleaner (fresh orphan).
-	// The two are mutually exclusive in the normal case:
-	//   - adminWorker != nil  ↔  EnsureAdmin wrote a new cred file (admin was absent)
-	//   - sweepCleaner != nil ↔  Sweep found a fresh orphan file (admin likely exists)
-	// If both are non-nil (pathological interrupted-bootstrap state), prefer
-	// adminWorker because the new cred file is authoritative.
-	var resultWorker worker.Worker
-	switch {
-	case adminWorker != nil:
-		resultWorker = adminWorker
-	case sweepCleaner != nil:
-		resultWorker = sweepCleaner
-	default:
-		resultWorker = nil // admin exists + no orphan file → nothing to clean
-	}
-	if resultWorker != nil {
-		c.bootstrapWorkerSink(resultWorker)
-	}
-	return nil
-}
-
 // initValidate performs fail-fast validation of required dependencies before
 // constructing slices. Extracted from Init to reduce cognitive complexity.
 func (c *AccessCore) initValidate(deps cell.Dependencies) error {
-	if err := c.resolveOutboxDeps(deps.DurabilityMode); err != nil {
+	// Resolve outbox emitter via shared kernel helper (mirrors configcore/auditcore).
+	// Pass raw c.txRunner so ResolveEmitter can detect nil/noop pairing; wrap
+	// with RunnerOrNoop only after outcome is determined.
+	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
+		CellID:            "accesscore",
+		Mode:              deps.DurabilityMode,
+		Publisher:         c.publisher,
+		OutboxWriter:      c.outboxWriter,
+		TxRunner:          c.txRunner,
+		Logger:            c.logger,
+		DirectPublishMode: outbox.DirectPublishFailOpen,
+	})
+	if err != nil {
 		return err
 	}
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	c.emitter = outcome.Emitter
+	c.rbacEmitterMode = outcome.Durable
+
+	// L2 warning: running without transactional outbox degrades atomicity guarantees.
+	if !outcome.Durable && c.ConsistencyLevel() >= cell.L2 {
+		c.logger.Warn("accesscore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+			slog.String("cell", c.ID()),
+			slog.Int("consistency_level", int(c.ConsistencyLevel())))
+	}
+
 	if c.jwtIssuer == nil || c.jwtVerifier == nil {
 		return errcode.New(errcode.ErrAuthKeyInvalid,
 			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
@@ -397,65 +256,6 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 	}
 	c.rbacRunMode = query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
 	return nil
-}
-
-func (c *AccessCore) resolveOutboxDeps(mode cell.DurabilityMode) error {
-	if err := cell.CheckNotNoop(mode, "accesscore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
-		return err
-	}
-	if mode == cell.DurabilityDurable {
-		if c.outboxWriter == nil || c.txRunner == nil {
-			return errcode.New(errcode.ErrCellMissingOutbox,
-				"accesscore durable mode requires real outboxWriter and txRunner")
-		}
-		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
-		if err != nil {
-			return err
-		}
-		c.emitter = emitter
-		c.rbacEmitterMode = true
-		return nil
-	}
-	if (c.outboxWriter == nil) != (c.txRunner == nil) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"accesscore demo mode requires outboxWriter and txRunner together; inject both explicitly")
-	}
-	if c.publisher == nil && c.outboxWriter == nil {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"accesscore demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
-	}
-
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	emitter, emitterMode, err := c.resolveDemoEmitter()
-	if err != nil {
-		return err
-	}
-	c.emitter = emitter
-	c.rbacEmitterMode = emitterMode
-	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
-		c.logger.Warn("accesscore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())))
-	}
-	return nil
-}
-
-func (c *AccessCore) resolveDemoEmitter() (outbox.Emitter, bool, error) {
-	if c.publisher != nil && (c.outboxWriter == nil || isNoopDep(c.outboxWriter)) {
-		emitter, err := outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, c.logger)
-		return emitter, false, err
-	}
-	if c.outboxWriter != nil {
-		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
-		return emitter, !isNoopDep(c.outboxWriter), err
-	}
-	return nil, false, errcode.New(errcode.ErrCellMissingOutbox,
-		"accesscore demo mode requires an explicit event sink")
-}
-
-func isNoopDep(dep any) bool {
-	n, ok := dep.(interface{ Noop() bool })
-	return ok && n.Noop()
 }
 
 // initSlices constructs all 9 slice services and handlers.
@@ -547,15 +347,33 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initValidate(deps); err != nil {
 		return err
 	}
-	// Initial admin bootstrap (scheme H): run before constructing slices so
-	// that the admin user is available for login immediately after Init returns.
-	if err := c.runInitialAdminBootstrap(ctx); err != nil {
-		return err
-	}
 	if err := c.initSlices(); err != nil {
 		return err
 	}
+	// Bind initialAdmin after slices so repos are ready. Bootstrap auto-discovers
+	// LifecycleHooks() and calls OnStart/OnStop — no WorkerSink plumbing needed.
+	if c.initialAdmin != nil {
+		c.initialAdmin.Bind(initialadmin.BootstrapDeps{
+			UserRepo: c.userRepo,
+			RoleRepo: c.roleRepo,
+			Logger:   c.logger,
+			Clock:    nil, // Lifecycle defaults Clock from its cfg; no per-cell override needed
+		}, c.logger)
+	}
 	return nil
+}
+
+// LifecycleHooks implements cell.LifecycleContributor. Returns the initial-admin
+// hook when WithInitialAdminBootstrap was applied; nil otherwise (opt-out).
+//
+// Bootstrap phase3b auto-discovers this interface and appends the returned hooks
+// to the Lifecycle — eliminating the old WithBootstrapWorkerSink composition-root
+// plumbing.
+func (c *AccessCore) LifecycleHooks() []cell.LifecycleHook {
+	if c.initialAdmin == nil {
+		return nil
+	}
+	return []cell.LifecycleHook{c.initialAdmin.Hook()}
 }
 
 // RegisterRoutes registers HTTP routes for accesscore.
