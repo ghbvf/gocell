@@ -311,6 +311,11 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrWSHubNotRunning:      http.StatusServiceUnavailable,
 	errcode.ErrWSMaxConns:           http.StatusServiceUnavailable,
 	errcode.ErrRelayBudgetExhausted: http.StatusServiceUnavailable,
+	// Vault / key-provider unavailability: infra down rather than internal bug.
+	// 503 lets upstream load balancers and clients apply retry semantics
+	// (Retry-After, circuit breakers) — matching ErrCircuitOpen's model.
+	errcode.ErrVaultAuthFailed:      http.StatusServiceUnavailable,
+	errcode.ErrKeyProviderTransient: http.StatusServiceUnavailable,
 
 	// --- 500 Internal Server Error ---
 	errcode.ErrInternal:               http.StatusInternalServerError,
@@ -346,10 +351,11 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrKeyProviderEncryptFailed: http.StatusInternalServerError,
 	errcode.ErrKeyProviderDecryptFailed: http.StatusInternalServerError,
 	errcode.ErrKeyProviderRotateFailed:  http.StatusInternalServerError,
-	errcode.ErrKeyProviderTransient:     http.StatusInternalServerError,
 	errcode.ErrConfigDecryptFailed:      http.StatusInternalServerError,
 	errcode.ErrConfigKeyMissing:         http.StatusInternalServerError,
-	errcode.ErrVaultAuthFailed:          http.StatusInternalServerError,
+	// Note: ErrKeyProviderTransient and ErrVaultAuthFailed are mapped to 503
+	// in the section above — infrastructure unavailability is retryable and
+	// should not be conflated with internal bugs.
 
 	// --- 501 Not Implemented ---
 	errcode.ErrNotImplemented: http.StatusNotImplemented,

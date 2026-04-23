@@ -13,6 +13,8 @@ import (
 	"testing"
 
 	vaultapi "github.com/hashicorp/vault/api"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestClassifyAuthLoginError_Table(t *testing.T) {
@@ -93,12 +95,18 @@ func TestClassifyAuthLoginError_Table(t *testing.T) {
 			want: reasonOther,
 		},
 		{
-			name: "vault 404 → other (not auth_invalid, not server_error)",
+			name: "vault 404 (mount/path misrouted) → auth_invalid",
 			err: &vaultapi.ResponseError{
 				StatusCode: 404,
 				Errors:     []string{"no handler for route"},
 			},
-			want: reasonOther,
+			want: reasonAuthInvalid,
+		},
+		{
+			name: "vault 400/403/404 via errcode.Wrap → auth_invalid (errors.As unwraps)",
+			err: errcode.Wrap(errcode.ErrVaultAuthFailed, "login",
+				&vaultapi.ResponseError{StatusCode: 400, Errors: []string{"invalid role_id"}}),
+			want: reasonAuthInvalid,
 		},
 	}
 

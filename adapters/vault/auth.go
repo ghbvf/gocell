@@ -480,14 +480,16 @@ func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error
 		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
 			"vault-auth: clone client for unwrap", err)
 	}
-	// Vault SDK's Logical().UnwrapWithContext reads the token from the client's
-	// header (X-Vault-Token), NOT from the wrapToken body argument. SetToken is
-	// required here; passing wrapToken to UnwrapWithContext is ignored when a
-	// non-empty header is already set by the SDK.
+	// Vault SDK contract: Logical().UnwrapWithContext reads the client token
+	// from the X-Vault-Token header (set via clone.SetToken). The body argument
+	// is used only as a fallback when the header token is absent (root-token
+	// unwrap variant). We always use header-based auth here, so we pass "" as
+	// the body arg — passing wrapToken twice is redundant and creates ambiguity
+	// if the SDK's dual-path behaviour changes in a future version.
 	// ref: hashicorp/vault api/sys_wrapping.go#Unwrap
 	clone.SetToken(wrapToken)
 
-	secret, err := clone.Logical().UnwrapWithContext(ctx, wrapToken)
+	secret, err := clone.Logical().UnwrapWithContext(ctx, "")
 	if err != nil {
 		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
 			"vault-auth: unwrap AppRole secret_id (wrapping token may be expired or already consumed)", err)
@@ -500,30 +502,6 @@ func unwrapSecretID(ctx context.Context, client *vaultapi.Client) (string, error
 	if !ok || secretID == "" {
 		return "", errcode.New(errcode.ErrVaultAuthFailed,
 			"vault-auth: unwrapped data missing string 'secret_id' field")
-	}
-	return secretID, nil
-}
-
-// secretIDFromFile reads the AppRole secret_id once from a file at
-// VAULT_SECRET_ID_FILE. This is the legacy single-read helper kept for
-// compatibility with tests that call it directly.
-// New callers should use secretIDFromEnv (file case) which returns a provider
-// that re-reads the file on each Login call.
-func secretIDFromFile() (string, error) {
-	filePath := os.Getenv("VAULT_SECRET_ID_FILE")
-	if filePath == "" {
-		return "", errcode.New(errcode.ErrVaultAuthFailed,
-			"vault-auth: VAULT_SECRET_ID_TYPE=file requires VAULT_SECRET_ID_FILE to be set")
-	}
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", errcode.Wrap(errcode.ErrVaultAuthFailed,
-			fmt.Sprintf("vault-auth: read secret_id from file %s", filePath), err)
-	}
-	secretID := strings.TrimSpace(string(data))
-	if secretID == "" {
-		return "", errcode.New(errcode.ErrVaultAuthFailed,
-			fmt.Sprintf("vault-auth: secret_id file is empty: %s", filePath))
 	}
 	return secretID, nil
 }

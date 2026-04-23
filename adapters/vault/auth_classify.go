@@ -34,10 +34,18 @@ const (
 //
 //   - timeout        — context deadline exceeded or net.Error.Timeout()
 //   - network        — net.OpError, connection refused/reset (no HTTP response)
-//   - auth_invalid   — Vault 400 or 403 (bad credentials, role not found, …)
+//   - auth_invalid   — Vault 400, 403, or 404 (bad credentials, role/mount/path
+//     not found — all operator-fixable configuration errors)
 //   - unwrap_failed  — error message mentions wrapping token / unwrap
 //   - server_error   — Vault 5xx
 //   - other          — anything else
+//
+// Note on errcode wrapping: callers (e.g. authMethod.Login implementations)
+// typically wrap errors via errcode.Wrap before returning. This function relies
+// on errors.As, which walks the Unwrap chain (*errcode.Error implements Unwrap),
+// so it continues to find the underlying *vaultapi.ResponseError / net.OpError
+// even after one or more errcode.Wrap layers. The step-4 message heuristic is
+// a fallback for errors that never carried a typed cause (pure errcode.New calls).
 //
 // ref: transit_provider.go#classifyVaultEncryptError — matching style
 // ref: hashicorp/vault api/logical.go#ResponseError — *vaultapi.ResponseError
@@ -65,7 +73,11 @@ func classifyAuthLoginError(err error) string {
 	var respErr *vaultapi.ResponseError
 	if errors.As(err, &respErr) {
 		switch {
-		case respErr.StatusCode == 400 || respErr.StatusCode == 403:
+		case respErr.StatusCode == 400 || respErr.StatusCode == 403 || respErr.StatusCode == 404:
+			// 400/403: bad credentials / role_id / secret_id.
+			// 404: auth mount missing or path misrouted (operator misconfig).
+			// All three are user-actionable "credential/config is wrong" — same
+			// remediation class, so we collapse them under auth_invalid.
 			return reasonAuthInvalid
 		case respErr.StatusCode >= 500:
 			return reasonServerError

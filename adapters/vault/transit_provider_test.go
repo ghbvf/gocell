@@ -1548,3 +1548,81 @@ func TestNewTransitKeyProviderFromEnv_MissingVaultAddr_Fails(t *testing.T) {
 
 // Note: TestStaticTokenAuth_* and TestAssertForRealMode_* tests live in
 // auth_test.go — they test auth.go directly, not TransitKeyProvider.
+
+// TestNewTransitKeyProviderFromEnv_RealModeGuardPrecedesVaultIO pins the
+// ordering contract documented on NewTransitKeyProviderFromEnv: when
+// realMode=true and VAULT_AUTH_METHOD=token, AssertForRealMode must reject the
+// configuration BEFORE NewTransitKeyProvider attempts any Vault network I/O.
+//
+// The test proves this structurally: it configures an unreachable VAULT_ADDR
+// and verifies the returned error originates from AssertForRealMode (message
+// "static VAULT_TOKEN is not allowed in real mode") rather than a network
+// timeout. If someone reorders the calls and puts NewTransitKeyProvider before
+// AssertForRealMode, this test will fail because the error message will be a
+// connection/timeout error instead.
+func TestNewTransitKeyProviderFromEnv_RealModeGuardPrecedesVaultIO(t *testing.T) {
+	// Unreachable address — if the guard runs before NewTransitKeyProvider we
+	// should never dial it. Use a short startup timeout so a regression would
+	// surface as a timeout error quickly rather than hanging the test.
+	setEnv(t,
+		"VAULT_ADDR", "http://127.0.0.1:1",
+		"VAULT_AUTH_METHOD", "token",
+		"VAULT_TOKEN", "test-token-not-a-demo",
+		startupTimeoutEnvVar, "2s",
+	)
+
+	_, err := NewTransitKeyProviderFromEnv(true /* realMode */)
+	if err == nil {
+		t.Fatal("expected error in real mode with VAULT_AUTH_METHOD=token, got nil")
+	}
+	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
+		t.Errorf("expected ErrVaultAuthFailed in error chain, got: %v", err)
+	}
+	// The AssertForRealMode error carries this exact phrase; a network
+	// timeout / connection-refused error would not.
+	if !strings.Contains(err.Error(), "static VAULT_TOKEN is not allowed in real mode") {
+		t.Errorf("expected AssertForRealMode rejection message; got: %v\n"+
+			"this usually means the real-mode guard ran AFTER NewTransitKeyProvider — check ordering in NewTransitKeyProviderFromEnv",
+			err)
+	}
+}
+
+// TestResolveStartupTimeout_EnvOverride verifies the GOCELL_VAULT_STARTUP_TIMEOUT
+// escape hatch works and rejects malformed / non-positive values.
+func TestResolveStartupTimeout_EnvOverride(t *testing.T) {
+	cases := []struct {
+		name    string
+		env     string
+		want    time.Duration
+		wantErr bool
+	}{
+		{name: "unset → default", env: "", want: defaultStartupTimeout},
+		{name: "45s override", env: "45s", want: 45 * time.Second},
+		{name: "2m override", env: "2m", want: 2 * time.Minute},
+		{name: "malformed", env: "not-a-duration", wantErr: true},
+		{name: "zero rejected", env: "0s", wantErr: true},
+		{name: "negative rejected", env: "-1s", wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setEnv(t, startupTimeoutEnvVar, tc.env)
+			// setEnv treats empty string as unset, matching our "default" case.
+			got, err := resolveStartupTimeout()
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("resolveStartupTimeout(%q) = nil err; want error", tc.env)
+				}
+				if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
+					t.Errorf("wrong error code; got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveStartupTimeout(%q) unexpected err: %v", tc.env, err)
+			}
+			if got != tc.want {
+				t.Errorf("resolveStartupTimeout(%q) = %v, want %v", tc.env, got, tc.want)
+			}
+		})
+	}
+}

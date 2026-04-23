@@ -30,6 +30,36 @@ const reauthBackoffInitial = time.Second
 // reauthBackoffCap is the maximum backoff interval for re-authentication retries.
 const reauthBackoffCap = 60 * time.Second
 
+// defaultStartupTimeout bounds the total time spent on Vault-facing startup I/O
+// (auth Login, optional wrap-token unwrap, initial key metadata read). Override
+// via GOCELL_VAULT_STARTUP_TIMEOUT (a time.ParseDuration string, e.g. "45s").
+const defaultStartupTimeout = 30 * time.Second
+
+// startupTimeoutEnvVar is the env var used to override defaultStartupTimeout.
+const startupTimeoutEnvVar = "GOCELL_VAULT_STARTUP_TIMEOUT"
+
+// resolveStartupTimeout returns the startup deadline for Vault-facing I/O,
+// honouring GOCELL_VAULT_STARTUP_TIMEOUT when set. Accepts any time.ParseDuration
+// string (e.g. "45s", "2m"). Returns an error on malformed or non-positive values
+// rather than silently falling back to the default — misconfiguration should be
+// visible at startup.
+func resolveStartupTimeout() (time.Duration, error) {
+	raw := os.Getenv(startupTimeoutEnvVar)
+	if raw == "" {
+		return defaultStartupTimeout, nil
+	}
+	d, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, errcode.Wrap(errcode.ErrVaultAuthFailed,
+			fmt.Sprintf("vault-transit: invalid %s=%q (expected time.ParseDuration format, e.g. 45s)", startupTimeoutEnvVar, raw), err)
+	}
+	if d <= 0 {
+		return 0, errcode.New(errcode.ErrVaultAuthFailed,
+			fmt.Sprintf("vault-transit: %s=%q must be positive", startupTimeoutEnvVar, raw))
+	}
+	return d, nil
+}
+
 // vaultKeyIDPrefix is the prefix for all Vault Transit key IDs returned by
 // this provider. Matches the "vault-transit:vN" format parsed from the Vault
 // ciphertext prefix "vault:vN:".
@@ -137,10 +167,17 @@ type tokenRenewalWorker struct {
 	authHealthy  prometheus.Gauge       // gocell_vault_token_auth_healthy (1=healthy, 0=re-authing)
 	loginOutcome *prometheus.CounterVec // gocell_vault_auth_login_total{method,result,reason}
 
-	// Internal state protected by stopOnce/mu.
+	// Internal state protected by mu.
+	//
+	// Stop() and runWatcher's ctx.Done branch may both attempt to stop a
+	// watcher; we rely on Vault SDK LifetimeWatcher.Stop being idempotent
+	// (internally guarded by sync.Once) rather than guarding with a shared
+	// sync.Once here — a shared Once could let one path claim the slot while
+	// currentWatcher has just been swapped by doReauth, leaving the new
+	// watcher unstopped. See:
+	// ref: hashicorp/vault api/lifetime_watcher.go#Stop — idempotent via sync.Once
 	mu             sync.Mutex
 	currentWatcher tokenWatcher
-	stopOnce       sync.Once
 }
 
 // Start blocks until ctx is cancelled. On each watcher termination it
@@ -157,11 +194,16 @@ func (w *tokenRenewalWorker) Start(ctx context.Context) error {
 	watcher := w.currentWatcher
 	w.mu.Unlock()
 
+	// currentWatcher is set by initTokenRenewal during construction. A nil value
+	// here indicates a programming error (e.g. Start called on a worker that
+	// skipped initialization) and must not be silently swallowed.
+	if watcher == nil {
+		return errcode.New(errcode.ErrVaultAuthFailed,
+			"vault-transit: renewal worker started with nil watcher (initTokenRenewal skipped?)")
+	}
+
 	for {
-		if watcher == nil {
-			return nil
-		}
-		if done := w.runWatcher(ctx, watcher); done {
+		if w.runWatcher(ctx, watcher) {
 			return nil
 		}
 		newWatcher, ok := w.doReauth(ctx)
@@ -236,12 +278,17 @@ func (w *tokenRenewalWorker) runWatcher(ctx context.Context, watcher tokenWatche
 	for {
 		select {
 		case <-ctx.Done():
-			w.stopOnce.Do(func() { watcher.Stop() })
+			// Stop the watcher passed to this invocation directly. Using a
+			// shared sync.Once with Stop() would race with doReauth replacing
+			// currentWatcher, potentially leaving the newly-built watcher
+			// running. LifetimeWatcher.Stop is internally idempotent, so
+			// calling it here and from Stop() concurrently is safe.
+			watcher.Stop()
 			return true
 		case err, ok := <-watcher.DoneCh():
 			return w.handleDoneCh(ctx, err, ok)
 		case renewal, ok := <-watcher.RenewCh():
-			if done := w.handleRenewCh(ctx, renewal, ok); done {
+			if w.handleRenewCh(ctx, renewal, ok) {
 				return true
 			}
 		}
@@ -346,16 +393,20 @@ func (w *tokenRenewalWorker) buildWatcher(ctx context.Context) (tokenWatcher, er
 	return &vaultLifetimeWatcherAdapter{w: raw}, nil
 }
 
-// Stop signals the current watcher to stop. Idempotent via stopOnce.
+// Stop signals the currently-active watcher to stop. Idempotent: safe to call
+// multiple times and safe to call concurrently with runWatcher's own ctx.Done
+// cleanup path (the underlying LifetimeWatcher.Stop is guarded by sync.Once).
+//
+// Stop alone does not terminate the Start goroutine; callers shutting the
+// worker down must cancel the context passed to Start (the typical
+// ManagedResource.Stop contract: cancel parent ctx, then call Stop()).
 func (w *tokenRenewalWorker) Stop(_ context.Context) error {
-	w.stopOnce.Do(func() {
-		w.mu.Lock()
-		watcher := w.currentWatcher
-		w.mu.Unlock()
-		if watcher != nil {
-			watcher.Stop()
-		}
-	})
+	w.mu.Lock()
+	watcher := w.currentWatcher
+	w.mu.Unlock()
+	if watcher != nil {
+		watcher.Stop()
+	}
 	return nil
 }
 
@@ -671,6 +722,12 @@ func (p *TransitKeyProvider) authenticate(ctx context.Context) (AuthResult, erro
 // When realMode is true, static VAULT_TOKEN is rejected (ErrVaultAuthFailed).
 // Operators must use approle or kubernetes in production.
 //
+// Ordering constraint — the real-mode guard (AssertForRealMode) runs BEFORE
+// NewTransitKeyProvider so that a rejected token configuration fails fast
+// without spending the Vault round-trip for Login + key metadata read. Do
+// not reorder without understanding the security/perf implication: a misconfig
+// that would be rejected in real mode should never perform Vault I/O.
+//
 // ref: hashicorp/vault api/client.go@main — DefaultConfig + NewClient
 // ref: hashicorp/vault api/auth/approle/approle.go — AppRole auth
 func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
@@ -693,10 +750,14 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 	}
 
 	// F-3a: Create the startup context FIRST so all I/O (including the wrapping
-	// token unwrap in NewAuthMethodFromEnv) respects the 30-second deadline.
+	// token unwrap in NewAuthMethodFromEnv) respects the startup deadline.
 	// The original code created the ctx AFTER NewAuthMethodFromEnv, allowing
 	// unwrapSecretID to block ~120s on an unreachable Vault.
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	startupTimeout, err := resolveStartupTimeout()
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), startupTimeout)
 	defer cancel()
 
 	// Build auth method from env. VAULT_AUTH_METHOD is required.
@@ -707,6 +768,8 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 	}
 
 	// Real-mode guard: static token is not allowed in production.
+	// IMPORTANT: this MUST run before NewTransitKeyProvider so a rejected
+	// configuration fails fast without spending the Login + key metadata I/O.
 	if realMode {
 		if err = AssertForRealMode(auth); err != nil {
 			return nil, err
@@ -1022,6 +1085,15 @@ func (p *TransitKeyProvider) Checkers() map[string]func(context.Context) error {
 // auth observability. The composition root must register these with its
 // prometheus.Registerer so that renewal counters appear in /metrics scrapes.
 // Returns nil when no renewal worker is configured (e.g. static token / no TokenRenewer).
+//
+// IMPORTANT: each TransitKeyProvider instance constructs a fresh set of
+// collectors with identical metric names. Callers MUST register these to a
+// dedicated *prometheus.Registry (or a scoped Registerer), NOT to
+// prometheus.DefaultRegisterer — registering two instances' collectors to the
+// same Registerer panics with "duplicate metrics collector registration"
+// (the SDK enforces uniqueness of name+label tuples per Registerer). In tests
+// that construct multiple providers, use prometheus.NewRegistry() per instance
+// or guard with prometheus.WrapRegistererWith() labels.
 func (p *TransitKeyProvider) RenewalMetrics() []prometheus.Collector {
 	if p.renewalWorker == nil {
 		return nil

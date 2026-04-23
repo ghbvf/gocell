@@ -465,43 +465,91 @@ func TestNewKubernetesAuth_EmptyRole_Fails(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// secretIDFromFile — edge cases
+// secretIDFromEnv (file mode) — edge cases
+//
+// These tests exercise the VAULT_SECRET_ID_TYPE=file branch of secretIDFromEnv
+// end-to-end: they construct the provider via the same code path production
+// uses, then invoke the returned closure to trigger the actual file read.
+// This pins F-3c (re-read on every Login) and keeps the file-provider's file
+// read + trim + empty-check logic covered without a parallel helper.
 // ---------------------------------------------------------------------------
 
-func TestSecretIDFromFile_EmptyFile_Fails(t *testing.T) {
-	// Write an empty file and verify we get ErrVaultAuthFailed.
+// fileProviderForTest builds the secretIDFromEnv provider for file mode.
+// Returns the provider and any construction error. Clients may invoke the
+// returned provider to trigger the actual os.ReadFile.
+func fileProviderForTest(t *testing.T, path string) (SecretIDProvider, error) {
+	t.Helper()
+	setEnv(t,
+		"VAULT_SECRET_ID_TYPE", "file",
+		"VAULT_SECRET_ID_FILE", path,
+	)
+	// secretIDFromEnv(file) does not use the *vaultapi.Client argument, so nil
+	// is safe here; the closure captures only filePath.
+	return secretIDFromEnv(context.Background(), nil)
+}
+
+func TestSecretIDFromEnv_FileMode_EmptyFile_Fails(t *testing.T) {
+	// Empty file: provider constructs OK (filePath is set); invocation trips
+	// the in-closure empty-string guard.
 	path := writeTempFile(t, "")
-	setEnv(t, "VAULT_SECRET_ID_FILE", path)
-	_, err := secretIDFromFile()
-	if err == nil {
-		t.Fatal("expected error for empty secret_id file, got nil")
+	provider, err := fileProviderForTest(t, path)
+	if err != nil {
+		t.Fatalf("provider construction unexpectedly failed: %v", err)
 	}
-	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
-		t.Errorf("want ErrVaultAuthFailed, got: %v", err)
+	_, invokeErr := provider(context.Background())
+	if invokeErr == nil {
+		t.Fatal("expected error for empty secret_id file on provider invocation, got nil")
 	}
-}
-
-func TestSecretIDFromFile_NonexistentFile_Fails(t *testing.T) {
-	setEnv(t, "VAULT_SECRET_ID_FILE", "/no/such/file/secret_id_xyz")
-	_, err := secretIDFromFile()
-	if err == nil {
-		t.Fatal("expected error for nonexistent file, got nil")
-	}
-	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
-		t.Errorf("want ErrVaultAuthFailed, got: %v", err)
+	if !errChainHasCode(invokeErr, errcode.ErrVaultAuthFailed) {
+		t.Errorf("want ErrVaultAuthFailed, got: %v", invokeErr)
 	}
 }
 
-func TestSecretIDFromFile_ValidFile_ReturnsContent(t *testing.T) {
+func TestSecretIDFromEnv_FileMode_NonexistentFile_Fails(t *testing.T) {
+	// Nonexistent file: provider construction succeeds (no pre-read); the
+	// os.ReadFile inside the closure is what fails.
+	provider, err := fileProviderForTest(t, "/no/such/file/secret_id_xyz")
+	if err != nil {
+		t.Fatalf("provider construction unexpectedly failed: %v", err)
+	}
+	_, invokeErr := provider(context.Background())
+	if invokeErr == nil {
+		t.Fatal("expected error for nonexistent file on provider invocation, got nil")
+	}
+	if !errChainHasCode(invokeErr, errcode.ErrVaultAuthFailed) {
+		t.Errorf("want ErrVaultAuthFailed, got: %v", invokeErr)
+	}
+}
+
+func TestSecretIDFromEnv_FileMode_ValidFile_ReturnsContent(t *testing.T) {
 	const wantID = "s3cr3t-id-from-file"
 	path := writeTempFile(t, wantID)
-	setEnv(t, "VAULT_SECRET_ID_FILE", path)
-	got, err := secretIDFromFile()
+	provider, err := fileProviderForTest(t, path)
 	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("provider construction failed: %v", err)
+	}
+	got, err := provider(context.Background())
+	if err != nil {
+		t.Fatalf("provider invocation: %v", err)
 	}
 	if got != wantID {
-		t.Errorf("secretIDFromFile() = %q, want %q", got, wantID)
+		t.Errorf("file provider returned %q, want %q", got, wantID)
+	}
+}
+
+func TestSecretIDFromEnv_FileMode_MissingFileEnv_Fails(t *testing.T) {
+	// VAULT_SECRET_ID_FILE unset: construction itself fails fast (before any
+	// provider invocation).
+	setEnv(t,
+		"VAULT_SECRET_ID_TYPE", "file",
+		"VAULT_SECRET_ID_FILE", "",
+	)
+	_, err := secretIDFromEnv(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error when VAULT_SECRET_ID_FILE is unset, got nil")
+	}
+	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
+		t.Errorf("want ErrVaultAuthFailed, got: %v", err)
 	}
 }
 
@@ -585,8 +633,9 @@ func TestUnwrapSecretID_NilSecret_ReturnsErrVaultAuthFailed(t *testing.T) {
 // TestAppRole_File_ReReadsOnLogin verifies the F-3c fix: when using
 // VAULT_SECRET_ID_TYPE=file, appRoleAuth re-reads the secret_id file on every
 // Login call so orchestrator-rotated projected volumes are picked up without a
-// restart. This was broken before F-3c because secretIDFromFile read the file
-// once at construction and baked the value into the struct.
+// restart. Before F-3c the file was read once at construction and the value
+// was baked into the auth struct, so rotated projected volumes required a
+// process restart to take effect.
 //
 // Test flow:
 //  1. Write "first-secret" to a temp file.

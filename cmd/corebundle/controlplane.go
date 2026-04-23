@@ -26,7 +26,7 @@ import (
 func internalGuardFromEnv(adapterMode string) (func(http.Handler) http.Handler, error) {
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
-		if adapterMode == "real" {
+		if isRealMode(adapterMode) {
 			return nil, errcode.New(errcode.ErrValidationFailed,
 				"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*")
 		}

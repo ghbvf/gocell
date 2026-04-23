@@ -24,12 +24,17 @@ import (
 )
 
 // TestReauthenticate_BackoffInterruptedByCtxCancel verifies that reauthenticate
-// returns quickly (within 100 ms after cancellation) even when it is sleeping
-// through an exponential backoff interval.
+// responds to ctx cancellation during its exponential backoff sleep.
 //
 // Setup: fakeAuthMethod always fails → reauthenticate enters the sleep.
 // The test cancels ctx while reauthenticate is sleeping and asserts that the
-// function unblocks within 100 ms of cancellation.
+// function returns before the full backoff interval would have elapsed —
+// proving the sleep was interrupted rather than serviced to completion.
+//
+// The invariant is expressed in terms of reauthBackoffInitial (the backoff
+// duration the loop is in) rather than a magic wall-clock number: a CI runner
+// with heavy CPU contention still passes as long as interruption happened
+// before the full backoff could elapse.
 func TestReauthenticate_BackoffInterruptedByCtxCancel(t *testing.T) {
 	permErr := errcode.New(errcode.ErrVaultAuthFailed, "always fails")
 	fakeAuth := &fakeAuthMethod{
@@ -60,18 +65,17 @@ func TestReauthenticate_BackoffInterruptedByCtxCancel(t *testing.T) {
 	cancelAt := time.Now()
 	cancel()
 
+	// Safety net: 2× backoff covers worst-case scheduling but still fails loud
+	// if the sleep really isn't interruptible.
 	select {
 	case err := <-done:
 		elapsed := time.Since(cancelAt)
-		// Must return quickly — not stuck waiting for the full backoff interval.
-		if elapsed > 100*time.Millisecond {
-			t.Errorf("reauthenticate took %v to exit after ctx cancel (want < 100ms)", elapsed)
-		}
-		if err == nil {
-			t.Error("reauthenticate must return non-nil error on ctx cancel")
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("reauthenticate did not return after ctx cancel (backoff not interruptible)")
+		require.NotNil(t, err, "reauthenticate must return non-nil error on ctx cancel")
+		require.Less(t, elapsed, reauthBackoffInitial,
+			"reauthenticate returned after %v; expected < %v (the full backoff) — ctx cancel did not interrupt the sleep",
+			elapsed, reauthBackoffInitial)
+	case <-time.After(2 * reauthBackoffInitial):
+		t.Fatalf("reauthenticate did not return within 2×backoff (%v) after ctx cancel", 2*reauthBackoffInitial)
 	}
 }
 
