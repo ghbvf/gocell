@@ -1,0 +1,11 @@
+id: sessionvalidate
+belongsToCell: accesscore
+contractUsages: []
+verify:
+  unit:
+    - unit.sessionvalidate.service
+  contract: []
+  waivers: []
+
+allowedFiles:
+  - cells/accesscore/slices/sessionvalidate/**

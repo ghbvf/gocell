@@ -1,6 +1,6 @@
 # GoCell Environment Variables Reference
 
-This document lists all environment variables consumed by `cmd/core-bundle` at startup.
+This document lists all environment variables consumed by `cmd/corebundle` at startup.
 Variables without a default value are **required** in the indicated adapter mode.
 Missing required variables cause fail-fast before any assembly initialization.
 
@@ -32,9 +32,9 @@ Missing required variables cause fail-fast before any assembly initialization.
 | Variable | Purpose | Default (dev) | Required |
 |---|---|---|---|
 | `GOCELL_HMAC_KEY` | HMAC key for session HMAC chains | `dev-hmac-key-replace-in-prod!!!!` | **Real mode** |
-| `GOCELL_AUDIT_CURSOR_KEY` | HMAC key for audit cursor codec | `core-bundle-audit-cursor-key-32!` | **Real mode** |
+| `GOCELL_AUDIT_CURSOR_KEY` | HMAC key for audit cursor codec | `corebundle-audit-cursor-key-32!` | **Real mode** |
 | `GOCELL_AUDIT_CURSOR_PREVIOUS_KEY` | Previous audit cursor key (rotation) | — | No |
-| `GOCELL_CONFIG_CURSOR_KEY` | HMAC key for config cursor codec | `core-bundle-cfg-cursor-key--32b!` | **Real mode** |
+| `GOCELL_CONFIG_CURSOR_KEY` | HMAC key for config cursor codec | `corebundle-cfg-cursor-key--32b!` | **Real mode** |
 | `GOCELL_CONFIG_CURSOR_PREVIOUS_KEY` | Previous config cursor key (rotation) | — | No |
 
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)

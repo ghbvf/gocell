@@ -66,7 +66,7 @@ func layerOf(modPrefix, importPath string) string {
 	return parts[0]
 }
 
-// cellOf extracts the cell ID (e.g. "access-core") from a cells/ package path.
+// cellOf extracts the cell ID (e.g. "accesscore") from a cells/ package path.
 // Returns "" if not under cells/.
 func cellOf(modPrefix, importPath string) string {
 	cellsPrefix := modPrefix + "cells/"
@@ -242,11 +242,11 @@ func TestLayerOf(t *testing.T) {
 		{"github.com/ghbvf/gocell/runtime/auth", "runtime"},
 		{"github.com/ghbvf/gocell/runtime/http/middleware", "runtime"},
 		{"github.com/ghbvf/gocell/adapters/postgres", "adapters"},
-		{"github.com/ghbvf/gocell/cells/access-core", "cells"},
-		{"github.com/ghbvf/gocell/cells/access-core/internal/domain", "cells"},
+		{"github.com/ghbvf/gocell/cells/accesscore", "cells"},
+		{"github.com/ghbvf/gocell/cells/accesscore/internal/domain", "cells"},
 		{"github.com/ghbvf/gocell/pkg/errcode", "pkg"},
 		{"github.com/ghbvf/gocell/cmd/gocell", "cmd"},
-		{"github.com/ghbvf/gocell/examples/sso-bff", "examples"},
+		{"github.com/ghbvf/gocell/examples/ssobff", "examples"},
 		{"github.com/ghbvf/gocell/tools/archtest", "tools"},
 		// Module root package returns "" (no layer segment after prefix).
 		{"github.com/ghbvf/gocell", ""},
@@ -268,10 +268,10 @@ func TestCellOf(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"github.com/ghbvf/gocell/cells/access-core", "access-core"},
-		{"github.com/ghbvf/gocell/cells/access-core/internal/domain", "access-core"},
-		{"github.com/ghbvf/gocell/cells/audit-core/slices/auditappend", "audit-core"},
-		{"github.com/ghbvf/gocell/cells/config-core", "config-core"},
+		{"github.com/ghbvf/gocell/cells/accesscore", "accesscore"},
+		{"github.com/ghbvf/gocell/cells/accesscore/internal/domain", "accesscore"},
+		{"github.com/ghbvf/gocell/cells/auditcore/slices/auditappend", "auditcore"},
+		{"github.com/ghbvf/gocell/cells/configcore", "configcore"},
 		// Non-cell paths return "".
 		{"github.com/ghbvf/gocell/kernel/cell", ""},
 		{"github.com/ghbvf/gocell/runtime/auth", ""},
@@ -289,9 +289,9 @@ func TestIsInternal(t *testing.T) {
 		input string
 		want  bool
 	}{
-		{"github.com/ghbvf/gocell/cells/access-core/internal/domain", true},
-		{"github.com/ghbvf/gocell/cells/audit-core/internal", true},
-		{"github.com/ghbvf/gocell/cells/access-core/slices/sessionlogin", false},
+		{"github.com/ghbvf/gocell/cells/accesscore/internal/domain", true},
+		{"github.com/ghbvf/gocell/cells/auditcore/internal", true},
+		{"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin", false},
 		{"github.com/ghbvf/gocell/kernel/cell", false},
 		{"github.com/ghbvf/gocell/runtime/auth", false},
 	}
@@ -335,7 +335,7 @@ func TestCheckLayering(t *testing.T) {
 			name: "LAYER-01 violation: kernel imports cells",
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/kernel/assembly", Imports: []string{
-					"github.com/ghbvf/gocell/cells/access-core", // forbidden
+					"github.com/ghbvf/gocell/cells/accesscore", // forbidden
 				}},
 			},
 			wantRules: []string{"LAYER-01"},
@@ -373,7 +373,7 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "LAYER-02 violation: cells imports adapters",
 			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/access-core", Imports: []string{
+				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
 					"github.com/ghbvf/gocell/kernel/cell",
 					"github.com/ghbvf/gocell/adapters/postgres", // forbidden
 				}},
@@ -383,7 +383,7 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "LAYER-02 clean: cells imports kernel + runtime (allowed)",
 			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/access-core", Imports: []string{
+				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
 					"github.com/ghbvf/gocell/kernel/cell",
 					"github.com/ghbvf/gocell/runtime/auth",
 				}},
@@ -394,7 +394,7 @@ func TestCheckLayering(t *testing.T) {
 			name: "LAYER-03 violation: runtime imports cells",
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/runtime/eventbus", Imports: []string{
-					"github.com/ghbvf/gocell/cells/audit-core", // forbidden
+					"github.com/ghbvf/gocell/cells/auditcore", // forbidden
 				}},
 			},
 			wantRules: []string{"LAYER-03"},
@@ -422,7 +422,7 @@ func TestCheckLayering(t *testing.T) {
 			name: "LAYER-04 violation: adapters imports cells",
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/adapters/redis", Imports: []string{
-					"github.com/ghbvf/gocell/cells/config-core", // forbidden
+					"github.com/ghbvf/gocell/cells/configcore", // forbidden
 				}},
 			},
 			wantRules: []string{"LAYER-04"},
@@ -440,7 +440,7 @@ func TestCheckLayering(t *testing.T) {
 			name: "LAYER-04 violation: adapters imports examples",
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/adapters/redis", Imports: []string{
-					"github.com/ghbvf/gocell/examples/sso-bff", // forbidden
+					"github.com/ghbvf/gocell/examples/ssobff", // forbidden
 				}},
 			},
 			wantRules: []string{"LAYER-04"},
@@ -458,8 +458,8 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "LAYER-05 violation: cross-cell internal import",
 			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/audit-core/slices/auditappend", Imports: []string{
-					"github.com/ghbvf/gocell/cells/access-core/internal/domain", // forbidden
+				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore/slices/auditappend", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/internal/domain", // forbidden
 				}},
 			},
 			wantRules: []string{"LAYER-05"},
@@ -467,8 +467,8 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "LAYER-05 clean: same-cell internal import (allowed)",
 			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/cells/audit-core/slices/auditappend", Imports: []string{
-					"github.com/ghbvf/gocell/cells/audit-core/internal/domain", // same cell, OK
+				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore/slices/auditappend", Imports: []string{
+					"github.com/ghbvf/gocell/cells/auditcore/internal/domain", // same cell, OK
 				}},
 			},
 			wantRules: nil,
@@ -479,7 +479,7 @@ func TestCheckLayering(t *testing.T) {
 				{ImportPath: "github.com/ghbvf/gocell/kernel/cell", Imports: []string{
 					"github.com/ghbvf/gocell/runtime/auth",
 				}},
-				{ImportPath: "github.com/ghbvf/gocell/cells/access-core", Imports: []string{
+				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
 					"github.com/ghbvf/gocell/adapters/postgres",
 				}},
 				{ImportPath: "github.com/ghbvf/gocell/runtime/worker", Imports: []string{
@@ -495,7 +495,7 @@ func TestCheckLayering(t *testing.T) {
 					"github.com/ghbvf/gocell/kernel/cell",
 					"github.com/ghbvf/gocell/runtime/auth",
 					"github.com/ghbvf/gocell/adapters/postgres",
-					"github.com/ghbvf/gocell/cells/access-core",
+					"github.com/ghbvf/gocell/cells/accesscore",
 				}},
 			},
 			wantRules: nil,
@@ -503,11 +503,11 @@ func TestCheckLayering(t *testing.T) {
 		{
 			name: "clean: examples imports all layers (unrestricted)",
 			pkgs: []pkgInfo{
-				{ImportPath: "github.com/ghbvf/gocell/examples/sso-bff", Imports: []string{
+				{ImportPath: "github.com/ghbvf/gocell/examples/ssobff", Imports: []string{
 					"github.com/ghbvf/gocell/kernel/cell",
 					"github.com/ghbvf/gocell/runtime/auth",
 					"github.com/ghbvf/gocell/adapters/postgres",
-					"github.com/ghbvf/gocell/cells/access-core",
+					"github.com/ghbvf/gocell/cells/accesscore",
 				}},
 			},
 			wantRules: nil,

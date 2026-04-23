@@ -98,7 +98,7 @@ func TestTransitEnvelope_RoundTrip(t *testing.T) {
 	assert.Contains(t, handle.ID(), "vault-transit:v")
 
 	plaintext := []byte("prod-api-secret")
-	aad := []byte("cell:config-core/key:api_key")
+	aad := []byte("cell:configcore/key:api_key")
 
 	ct, nonce, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -140,13 +140,13 @@ func TestTransitEnvelope_AADMismatch_FailsClosed(t *testing.T) {
 	require.NoError(t, err)
 
 	plaintext := []byte("secret-value")
-	encryptAAD := []byte("cell:config-core/key:row_a")
+	encryptAAD := []byte("cell:configcore/key:row_a")
 
 	ct, nonce, edk, _, err := handle.Encrypt(ctx, plaintext, encryptAAD)
 	require.NoError(t, err)
 
 	// Attempt cross-row replay: decrypt with a different AAD.
-	wrongAAD := []byte("cell:config-core/key:row_b")
+	wrongAAD := []byte("cell:configcore/key:row_b")
 	_, err = handle.Decrypt(ctx, ct, nonce, edk, wrongAAD)
 	require.Error(t, err, "decrypting with mismatched AAD must fail-closed (cross-row replay blocked)")
 
@@ -179,7 +179,7 @@ func TestTransitEnvelope_RotateThenDecryptOldCiphertext(t *testing.T) {
 	assert.Contains(t, handle1.ID(), "vault-transit:v1", "initial key must be v1")
 
 	plaintext := []byte("pre-rotation-value")
-	aad := []byte("cell:config-core/key:old_key")
+	aad := []byte("cell:configcore/key:old_key")
 
 	ct1, nonce1, edk1, keyID1, err := handle1.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)
@@ -311,7 +311,7 @@ func TestTransitEnvelope_VaultNeverSeesBusinessPlaintext(t *testing.T) {
 
 	businessSecret := "very-sensitive-password-123"
 	plaintext := []byte(businessSecret)
-	aad := []byte("cell:config-core/key:api_key")
+	aad := []byte("cell:configcore/key:api_key")
 
 	handle, err := p.Current(ctx)
 	require.NoError(t, err)
@@ -379,7 +379,7 @@ func TestTransitEnvelope_KeyIDFromEncryptResponse(t *testing.T) {
 	handleID := handle.ID()
 
 	plaintext := []byte("key-id-check-value")
-	aad := []byte("cell:config-core/key:key_id_test")
+	aad := []byte("cell:configcore/key:key_id_test")
 
 	_, _, edk, keyID, err := handle.Encrypt(ctx, plaintext, aad)
 	require.NoError(t, err)

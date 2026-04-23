@@ -32,8 +32,8 @@
 
 | 任务 | 工时 | 涉及文件 | 验收 |
 |------|------|----------|------|
-| **AUTH-TOKEN-INTENT-01** (P0, Cx3): Issue() 增 `TokenIntent`（access/refresh）→ JWT `aud` claim；verifier 按请求 scope 拒绝 intent 不匹配的 token；`/auth/refresh` 只接受 `intent=refresh`，其余路径只接受 `intent=access` | 5h | `runtime/auth/jwt.go` + `runtime/auth/middleware.go` + `cells/access-core/slices/{sessionlogin,sessionrefresh,sessionvalidate}/service.go` | 集成测试：① refresh token → /api/v1/* 业务接口 401；② access token → /auth/refresh 401 |
-| **AUTH-INT-REACHABILITY-01** (P1, Cx2) [搭车]: 带合法 token 的 handler 到达性断言 + public handler 精确状态/响应断言（当前仅匿名→401 + public→非401 太弱） | 1.5h | `cells/access-core/slices/*/auth_integration_test.go` | 验证路由丢失/方法错误/handler 500 能被捕获 |
+| **AUTH-TOKEN-INTENT-01** (P0, Cx3): Issue() 增 `TokenIntent`（access/refresh）→ JWT `aud` claim；verifier 按请求 scope 拒绝 intent 不匹配的 token；`/auth/refresh` 只接受 `intent=refresh`，其余路径只接受 `intent=access` | 5h | `runtime/auth/jwt.go` + `runtime/auth/middleware.go` + `cells/accesscore/slices/{sessionlogin,sessionrefresh,sessionvalidate}/service.go` | 集成测试：① refresh token → /api/v1/* 业务接口 401；② access token → /auth/refresh 401 |
+| **AUTH-INT-REACHABILITY-01** (P1, Cx2) [搭车]: 带合法 token 的 handler 到达性断言 + public handler 精确状态/响应断言（当前仅匿名→401 + public→非401 太弱） | 1.5h | `cells/accesscore/slices/*/auth_integration_test.go` | 验证路由丢失/方法错误/handler 500 能被捕获 |
 
 > 同批 PR 一次落地：AUTH-INT-REACHABILITY-01 改的正是 PR-SAFE-2 会碰到的测试文件，搭车合规。
 
@@ -41,7 +41,7 @@
 
 | 任务 | 工时 | 涉及文件 | 验收 |
 |------|------|----------|------|
-| **AUTHZ-WRITE-CONFIG-WRITE-01** (P0, Cx2): configwrite 的 create/update/delete 三端点加 `auth.RequireAnyRole(ctx, "admin")`，与 publish/rollback 的 admin gate 对齐；把 `roleAdmin` const 提到 `cells/config-core/internal/dto/authz.go` 共享 | 1.5h | `cells/config-core/slices/configwrite/handler.go` + `cells/config-core/internal/dto/authz.go` (新建) | 401/403/200 三状态测试 + happy-path 注入 admin 上下文 |
+| **AUTHZ-WRITE-CONFIG-WRITE-01** (P0, Cx2): configwrite 的 create/update/delete 三端点加 `auth.RequireAnyRole(ctx, "admin")`，与 publish/rollback 的 admin gate 对齐；把 `roleAdmin` const 提到 `cells/configcore/internal/dto/authz.go` 共享 | 1.5h | `cells/configcore/slices/configwrite/handler.go` + `cells/configcore/internal/dto/authz.go` (新建) | 401/403/200 三状态测试 + happy-path 注入 admin 上下文 |
 
 ### PR-HEALTH: readyz 纳入 broker 连通状态（P2，并行可做）
 

@@ -9,7 +9,7 @@ GoCell provides Cell/Slice runtime primitives, governance toolchain, and built-i
 ```bash
 git clone https://github.com/ghbvf/gocell.git
 cd gocell
-go run ./examples/todo-order
+go run ./examples/todoorder
 ```
 
 Open another terminal:
@@ -200,9 +200,9 @@ curl http://localhost:8080/api/v1/hello
 
 | Example | Complexity | What it demonstrates |
 |---------|-----------|---------------------|
-| [todo-order](examples/todo-order/) | Medium | Custom Cell, CRUD, outbox event publish, RabbitMQ consume |
-| [sso-bff](examples/sso-bff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
-| [iot-device](examples/iot-device/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
+| [todo-order](examples/todoorder/) | Medium | Custom Cell, CRUD, outbox event publish, RabbitMQ consume |
+| [sso-bff](examples/ssobff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
+| [iot-device](examples/iotdevice/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
 
 ## Runtime Modes
 
@@ -211,7 +211,7 @@ GoCell assemblies must declare a `DurabilityMode` explicitly (zero value is reje
 | Mode | Value | Noop Allowed | Use Case |
 |------|-------|-------------|----------|
 | `DurabilityDemo` | 1 | Yes — `NoopWriter`, `NoopTxRunner`, `DiscardPublisher` accepted | Development, unit tests, examples |
-| `DurabilityDurable` | 2 | No — `CheckNotNoop` rejects at `Init()` | Production (`cmd/core-bundle`) |
+| `DurabilityDurable` | 2 | No — `CheckNotNoop` rejects at `Init()` | Production (`cmd/corebundle`) |
 
 ```go
 // Production
@@ -225,7 +225,7 @@ asm := assembly.New(assembly.Config{ID: "dev", DurabilityMode: cell.DurabilityDe
 
 ```
 ├── kernel/       — Cell/Slice runtime + governance tools (framework core)
-├── cells/        — Cell implementations (access-core / audit-core / config-core / order-cell / device-cell)
+├── cells/        — Cell implementations (accesscore / auditcore / configcore / ordercell / devicecell)
 ├── contracts/    — Cross-Cell boundary contracts ({kind}/{domain}/{version}/)
 ├── journeys/     — Journey acceptance specs + status-board.yaml
 ├── runtime/      — HTTP middleware, auth, worker, observability, bootstrap
@@ -249,9 +249,9 @@ examples/  ← all layers
 
 ## Built-in Cells
 
-- **access-core** — Identity management, JWT session lifecycle (RS256), RBAC authorization (7 Slices)
-- **audit-core** — Tamper-proof audit trail with HMAC-SHA256 hash chain (4 Slices)
-- **config-core** — Configuration management with versioning, publishing, and feature flags (5 Slices)
+- **accesscore** — Identity management, JWT session lifecycle (RS256), RBAC authorization (7 Slices)
+- **auditcore** — Tamper-proof audit trail with HMAC-SHA256 hash chain (4 Slices)
+- **configcore** — Configuration management with versioning, publishing, and feature flags (5 Slices)
 
 ## Adapters
 
@@ -274,7 +274,7 @@ The transactional outbox is split across three layers — write at the cell, sto
 // 1. Write inside the cell's business transaction (any package)
 postgres.NewOutboxWriter().Write(txCtx, entry)
 
-// 2. Compose the relay at bootstrap (cmd/core-bundle, examples, etc.)
+// 2. Compose the relay at bootstrap (cmd/corebundle, examples, etc.)
 store := postgres.NewOutboxStore(pool.DB())
 relay := outbox.NewRelay(store, publisher, outbox.DefaultRelayConfig())
 // relay implements worker.Worker — register with bootstrap to manage lifecycle.

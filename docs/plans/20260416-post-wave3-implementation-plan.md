@@ -13,17 +13,17 @@
 
 | # | 模块 | 问题详情 | 前置 | 工时 | 涉及文件 | 来源 |
 |---|------|---------|------|------|---------|------|
-| H1-1 | cmd/core-bundle | **PROD-KEY-FAILFAST**: `loadKeySet` 空值 adapterMode 走 dev 分支，用 `MustGenerateTestKeyPair` 生成临时 RSA 密钥。生产误配时密钥可预测、重启后全部 token 失效。`validateAdapterMode` 拒绝了 `real`（未实现）和未知值，但允许空值默认走 dev — 需拆分 dev/prod 启动路径，生产缺密钥直接 fail-fast | Wave 3 | 2h | `cmd/core-bundle/main.go` | PR#137-138 集成审查 P0 |
-| H1-2 | cells/access-core | **IDENTITY-AUTHZ-01**: identitymanage 全部 7 个 handler 端点（create/get/update/patch/delete/lock/unlock）仅鉴权无授权，任何有效 JWT 可执行管理操作。对比 device-command 和 rbaccheck 已有 `RequireSelfOrRole`。需加 `RequireRole("admin")` 或 `RequireSelfOrRole` | Wave 3 | 1.5h | `cells/access-core/slices/identitymanage/handler.go` + `handler_test.go` | PR#137-138 集成审查 P1 |
-| H1-3 | kernel/cell | **DURABLE-NIL-GUARD**: `CheckNotNoop` (durability.go:74) 对 nil 依赖 `continue` 跳过，不拒绝。DurabilityDurable + outboxWriter=nil + txRunner=nil 时 CheckNotNoop 全部通过，cell 以 demo 语义运行。access-core/config-core/audit-core 均存在此路径。需在 durable 模式下强制 nil 也报错 | Wave 3 | 1.5h | `kernel/cell/durability.go` + 5 个 `cell.go` | PR#137-138 集成审查 P1 |
+| H1-1 | cmd/corebundle | **PROD-KEY-FAILFAST**: `loadKeySet` 空值 adapterMode 走 dev 分支，用 `MustGenerateTestKeyPair` 生成临时 RSA 密钥。生产误配时密钥可预测、重启后全部 token 失效。`validateAdapterMode` 拒绝了 `real`（未实现）和未知值，但允许空值默认走 dev — 需拆分 dev/prod 启动路径，生产缺密钥直接 fail-fast | Wave 3 | 2h | `cmd/corebundle/main.go` | PR#137-138 集成审查 P0 |
+| H1-2 | cells/accesscore | **IDENTITY-AUTHZ-01**: identitymanage 全部 7 个 handler 端点（create/get/update/patch/delete/lock/unlock）仅鉴权无授权，任何有效 JWT 可执行管理操作。对比 device-command 和 rbaccheck 已有 `RequireSelfOrRole`。需加 `RequireRole("admin")` 或 `RequireSelfOrRole` | Wave 3 | 1.5h | `cells/accesscore/slices/identitymanage/handler.go` + `handler_test.go` | PR#137-138 集成审查 P1 |
+| H1-3 | kernel/cell | **DURABLE-NIL-GUARD**: `CheckNotNoop` (durability.go:74) 对 nil 依赖 `continue` 跳过，不拒绝。DurabilityDurable + outboxWriter=nil + txRunner=nil 时 CheckNotNoop 全部通过，cell 以 demo 语义运行。accesscore/configcore/auditcore 均存在此路径。需在 durable 模式下强制 nil 也报错 | Wave 3 | 1.5h | `kernel/cell/durability.go` + 5 个 `cell.go` | PR#137-138 集成审查 P1 |
 
 ### PR-H2: 契约补全（P1，~3h）
 
 | # | 模块 | 问题详情 | 前置 | 工时 | 涉及文件 | 来源 |
 |---|------|---------|------|------|---------|------|
-| H2-1 | contracts/config | **CONFIG-ROLLBACK-CONTRACT**: `cell.go:214` 注册了 `POST /{key}/rollback` 路由，handler_test 有覆盖，但 `contracts/http/config/` 下无 rollback 目录 — 无 contract.yaml/schema/contract_test。路由暴露但契约体系无定义 | PR-H1 | 1.5h | `contracts/http/config/rollback/v1/` + `cells/config-core/slices/configpublish/contract_test.go` + `slice.yaml` | PR#137-138 集成审查 P1 |
-| H2-2 | contracts/config | **CONFIGPUBLISH-REDACT-01**: publish 响应 schema `response.schema.json` 将 `value` 列为 required，未复用 configwrite 的 `RedactedValue` 脱敏逻辑。敏感配置值明文返回 | 无 | 0.5h | `cells/config-core/slices/configpublish/handler.go` + `contracts/http/config/publish/v1/response.schema.json` | PR#138 review P1-5 (138a) |
-| H2-3 | contracts/access | **IDENTITY-PATCH-CONTRACT**: identitymanage PATCH 无 contract schema（#27s 遗漏端点），未知字段策略未在 schema 层声明 | 无 | 1h | `contracts/http/auth/identity/patch/v1/` + `cells/access-core/slices/identitymanage/contract_test.go` | PR#138 review P2 |
+| H2-1 | contracts/config | **CONFIG-ROLLBACK-CONTRACT**: `cell.go:214` 注册了 `POST /{key}/rollback` 路由，handler_test 有覆盖，但 `contracts/http/config/` 下无 rollback 目录 — 无 contract.yaml/schema/contract_test。路由暴露但契约体系无定义 | PR-H1 | 1.5h | `contracts/http/config/rollback/v1/` + `cells/configcore/slices/configpublish/contract_test.go` + `slice.yaml` | PR#137-138 集成审查 P1 |
+| H2-2 | contracts/config | **CONFIGPUBLISH-REDACT-01**: publish 响应 schema `response.schema.json` 将 `value` 列为 required，未复用 configwrite 的 `RedactedValue` 脱敏逻辑。敏感配置值明文返回 | 无 | 0.5h | `cells/configcore/slices/configpublish/handler.go` + `contracts/http/config/publish/v1/response.schema.json` | PR#138 review P1-5 (138a) |
+| H2-3 | contracts/access | **IDENTITY-PATCH-CONTRACT**: identitymanage PATCH 无 contract schema（#27s 遗漏端点），未知字段策略未在 schema 层声明 | 无 | 1h | `contracts/http/auth/identity/patch/v1/` + `cells/accesscore/slices/identitymanage/contract_test.go` | PR#138 review P2 |
 
 ### 其他契约缺口（已验证，搭 PR-H2 或独立）
 
@@ -45,7 +45,7 @@
 | EF-1 | pkg/httputil | **DECODE-STR-01**: `classifyDecodeError` 用字符串匹配分类 JSON 解析错误，脆弱且依赖标准库错误文案。需改为类型断言 | 无 | 1.5h | `pkg/httputil/decode.go` + `decode_test.go` | 6B |
 | EF-2 | runtime/http | **REQID-RAND-ERR**: `request_id.go:109` `_, _ = rand.Read(buf[:])` 错误被吞，违反 error-handling.md 第 3 条。需改为显式 err + slog.Error | 无 | 0.5h | `runtime/http/middleware/request_id.go` | PR#112-136 集成审查 P2-6 |
 | EF-3 | pkg/httputil | **HT-02**: `WriteDecodeError` 无显式测试，需覆盖 ErrValidationFailed→400、ErrBodyTooLarge→413、ErrInternal→500、plain error fallback | 无 | 1h | `pkg/httputil/response_test.go` | 历史 backlog 0-I |
-| EF-4 | cmd/core-bundle | **MAIN-TEST-CLEANUP**: `TestLoadKeySet_UnknownMode_StillGeneratesEphemeral` 是不可达语义残留（`validateAdapterMode` 在入口已拒绝未知值），应删除 | 无 | 0.5h | `cmd/core-bundle/main_test.go` | PR#135 review P2 |
+| EF-4 | cmd/corebundle | **MAIN-TEST-CLEANUP**: `TestLoadKeySet_UnknownMode_StillGeneratesEphemeral` 是不可达语义残留（`validateAdapterMode` 在入口已拒绝未知值），应删除 | 无 | 0.5h | `cmd/corebundle/main_test.go` | PR#135 review P2 |
 | EF-5 | CI | **#19 CI 增强**: golangci-lint 集成 + testcontainers 镜像 pin 到 patch 版本（当前 `3.12-management-alpine` floating tag）+ contract YAML CI 校验 | 无 | 2.5h | `.github/ci.yml` + `adapters/*/integration_test.go` | 6B + PR#124 review S4-F1 |
 | EF-6 | kernel/cell | **#27b SLICE-ALLOWEDFILES-01**: 全部 slice 默认 allowedFiles 用 kebab-case 目录拼接，但 Go 包目录是 no-dash — glob 永远不匹配。需改 `BaseSlice.AllowedFiles()` 默认逻辑或系统性补 allowedFiles | 无 | 2h | `kernel/cell/base.go` + all `slice.yaml` | PR#119 review |
 
@@ -53,7 +53,7 @@
 
 | # | 模块 | 问题详情 | 前置 | 工时 | 涉及文件 | 来源 |
 |---|------|---------|------|------|---------|------|
-| R-1 | docs | **#5 AUTH-DX-01**: README curl 示例过期（refresh 参数名错、logout jq 失败、audit 字段名错）+ sso-bff README 缺 refresh/user/event demo + seed 用户创建说明 | PR-H1+H2 | 4h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review |
+| R-1 | docs | **#5 AUTH-DX-01**: README curl 示例过期（refresh 参数名错、logout jq 失败、audit 字段名错）+ sso-bff README 缺 refresh/user/event demo + seed 用户创建说明 | PR-H1+H2 | 4h | `README.md` + `cells/accesscore/internal/mem/` + `examples/ssobff/README.md` | 6B + P4 review |
 
 ### PR-TPUB: 独立穿插（~4h）
 
@@ -91,7 +91,7 @@
 | B8-10 | cells | **#15 CURSOR-TEST-01 + CUR-HDL-01**: 5 个分页入口补 malformed/missing-scope/cross-context 三类回归 | v1.0 | 3h | `cells/*/handler_test.go` + `service_test.go` | 6A review |
 | B8-11 | pkg/query | **WM-6-F6/F7/F1**: 泛型 cursor helper + cursor 日志收口 + prod guard | v1.0 | 2h | `pkg/query/` | WM-6 |
 | B8-12 | cells | **TX-NIL-01**: txRunner nil-safe 行为未文档化 | v1.0 | 0.5h | `cells/*/service.go` | 历史 backlog |
-| B8-13 | cells/audit-core | **#32 CURSOR-P2-02**: cursor 可观测 invalid 结构化日志 | v1.0 | 1h | `cells/audit-core/` | 6A review |
+| B8-13 | cells/auditcore | **#32 CURSOR-P2-02**: cursor 可观测 invalid 结构化日志 | v1.0 | 1h | `cells/auditcore/` | 6A review |
 | — | kernel/persistence | ~~#27e NOOP-TX-SHARED-01~~ | — | — | — | ✅ PR#136 |
 
 ### PR-B8-META: metadata parser（~2.5h）
@@ -117,11 +117,11 @@
 | B8-20 | runtime/auth | **AUTH-SLOG-01**: KeySet/servicetoken 注入 slog.Handler 替代全局 `slog.SetDefault`，消除并行测试风险 | v1.0 | 2h | `runtime/auth/` | PR#131 review |
 | B8-21 | runtime/auth | **AUTH-NOWFUNC-01**: `var nowFunc` 包级状态改为实例字段注入 | v1.0 | 1h | `runtime/auth/jwt.go` | PR#131 review |
 
-### PR-B8-ACCESS: access-core 重构（~4h）
+### PR-B8-ACCESS: accesscore 重构（~4h）
 
 | # | 模块 | 问题详情 | 前置 | 工时 | 涉及文件 | 来源 |
 |---|------|---------|------|------|---------|------|
-| B8-22 | cells/access-core | **P3-TD-11**: domain 模型拆分 User/Session/Role（前置: Session TOCTOU ✅ PR#119） | v1.0 | 4h | `cells/access-core/internal/domain/` | Phase 2 review |
+| B8-22 | cells/accesscore | **P3-TD-11**: domain 模型拆分 User/Session/Role（前置: Session TOCTOU ✅ PR#119） | v1.0 | 4h | `cells/accesscore/internal/domain/` | Phase 2 review |
 
 ### PR-B8-INTEG: 集成测试补全（~6h）
 
@@ -129,7 +129,7 @@
 |---|------|---------|------|------|---------|------|
 | B8-23 | adapters | **P4-TD-05**: outbox 全链路 3-container 集成测试（PG+RMQ+app） | v1.0 | 2h | `adapters/postgres/` + `adapters/rabbitmq/` | Phase 4 review |
 | B8-24 | adapters/postgres | **RL-INT-01**: Relay PG 集成测试 | v1.0 | 2h | `adapters/postgres/outbox_relay_test.go` | PR#46 review |
-| B8-25 | cells/audit-core | **P2-T-02**: audit e2e 测试 (J-audit-login-trail) | v1.0 | 2h | `cells/audit-core/` | Phase 2 review |
+| B8-25 | cells/auditcore | **P2-T-02**: audit e2e 测试 (J-auditlogintrail) | v1.0 | 2h | `cells/auditcore/` | Phase 2 review |
 
 ### PR-B8-MIGRATE: 迁移+订阅（~3h）
 
@@ -209,7 +209,7 @@
 | # | 模块 | 问题详情 | 前置 | 工时 | 涉及文件 | 来源 |
 |---|------|---------|------|------|---------|------|
 | B8-44 | docs | **#26**: `.env.example` 补 `GOCELL_S3_REGION=us-east-1` | v1.0 | 0.5h | `.env.example` | 6B |
-| B8-45 | CI | **#27 CONTRACT-CI**: order-cell/device-cell contract YAML CI 未校验 | v1.0 | 1h | `.github/workflows/ci.yml` | 6B |
+| B8-45 | CI | **#27 CONTRACT-CI**: ordercell/devicecell contract YAML CI 未校验 | v1.0 | 1h | `.github/workflows/ci.yml` | 6B |
 | B8-46 | cmd | **F-7 BUILD-OUTDIR-01**: 统一 `go build -o bin/` 输出目录 | v1.0 | 0.5h | `Makefile` 或 build scripts | 6B |
 | B8-47 | kernel/cell | **#17 WM17-F2-2 + F4-3**: Hook 增强 ctx 超时 + Prometheus metrics via HookObserver 接口 | v1.0 | 3h | `kernel/cell/` | WM-17 |
 | B8-48 | runtime/resilience | **#18 CB-IFACE-01 + CB-ENCAP-01**: circuit breaker Allow/Report 拆分 + 消除 gobreaker import | v1.0 | 2h | `runtime/resilience/circuitbreaker/` | 6B |
@@ -229,7 +229,7 @@
 | R1C2-F03 | runtime/worker | WorkerGroup.Start 首个失败不取消 | **已修** — cancel() 调用到位 | 历史 backlog Tier 2 |
 | P4-TD-01 | kernel/outbox | 共享 NoopOutboxWriter | **已修** — `outbox.NoopWriter{}` PR#136 | 历史 backlog |
 | P4-TD-03 | runtime/auth | IssueTestToken HS256 死代码 | **已修** — HS256 rejection test + jwt.go 拒绝 | 历史 backlog |
-| P4-TD-04 | cells/order-cell | L2 无 outboxWriter enforce | **已修** — PR#135 CheckNotNoop | 历史 backlog |
+| P4-TD-04 | cells/ordercell | L2 无 outboxWriter enforce | **已修** — PR#135 CheckNotNoop | 历史 backlog |
 | WM-12 | tools/archtest | archtest 边界守护 | **已实现** — 17.7KB 测试 | WM-12 |
 
 **未修历史残留需登记:**
@@ -246,7 +246,7 @@
 |---|------|---------|------|----------|------|
 | TC-1 | runtime/bootstrap | **28c AUTH-PROVIDER-EXPORT-01**: `authProvider` 接口 unexported，与 `HTTPRegistrar`/`EventRegistrar` (exported) 不一致。kernel→runtime/auth 层依赖限制无法直接移动 | 1h | 第二个 auth provider cell | PR#127 review |
 | TC-2 | runtime/auth | **28g AUTH-ISSUE-OPTIONS-01**: `JWTIssuer.Issue()` 4 参数，重构为 `IssueOptions` struct | 1h | Issue() 第 5 个参数 | PR#127 review |
-| TC-3 | cells/device-cell | **28h DEVICE-ENQUEUE-RBAC**: HandleEnqueue 无设备维度鉴权 — 当前为 operator 管理端点。PR#138 已加 `RequireSelfOrRole`，但资源级（按 deviceId 鉴权）未实现 | 2h | 多租户 operator | PR#125 review |
+| TC-3 | cells/devicecell | **28h DEVICE-ENQUEUE-RBAC**: HandleEnqueue 无设备维度鉴权 — 当前为 operator 管理端点。PR#138 已加 `RequireSelfOrRole`，但资源级（按 deviceId 鉴权）未实现 | 2h | 多租户 operator | PR#125 review |
 
 ---
 

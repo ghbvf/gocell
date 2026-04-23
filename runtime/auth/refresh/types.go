@@ -1,5 +1,5 @@
 // Package refresh provides the server-side opaque refresh token store interface
-// and in-memory implementation used by the access-core session slices.
+// and in-memory implementation used by the accesscore session slices.
 //
 // Design origin: F2 Refresh Token Opaque + Server-side Store from
 // docs/plans/202604191515-auth-federated-whistle.md §F2.

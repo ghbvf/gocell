@@ -42,7 +42,7 @@ Reference: adapted from docs/archive/constitution-from-winmdm.md (v1.3.0),
 | 层 | 目录 | 职责 | 可依赖 |
 |---|------|------|--------|
 | kernel | `kernel/` | Cell/Slice 运行时 + 治理工具（底座灵魂） | stdlib + `pkg/` + `gopkg.in/yaml.v3` |
-| cells | `cells/` | Cell 实现（access-core / audit-core / config-core） | `kernel/` + `runtime/` |
+| cells | `cells/` | Cell 实现（accesscore / auditcore / configcore） | `kernel/` + `runtime/` |
 | runtime | `runtime/` | 通用运行时（http / auth / worker / observability） | `kernel/` + `pkg/` |
 | adapters | `adapters/` | 外部系统适配（postgres / redis / oidc / s3 等） | `kernel/` + `runtime/` 定义的接口 |
 | pkg | `pkg/` | 共享工具包（errcode / ctxkeys） | stdlib |
@@ -60,7 +60,7 @@ Reference: adapted from docs/archive/constitution-from-winmdm.md (v1.3.0),
 
 Cell 三种子类型：
 
-- **core** — 强一致性状态机（如 access-core、audit-core、config-core）
+- **core** — 强一致性状态机（如 accesscore、auditcore、configcore）
 - **edge** — 边缘节点 Cell
 - **support** — 辅助 Cell
 

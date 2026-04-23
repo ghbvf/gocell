@@ -1,0 +1,9 @@
+id: corebundle
+cells:
+  - accesscore
+  - auditcore
+  - configcore
+build:
+  entrypoint: cmd/corebundle/main.go
+  binary: corebundle
+  deployTemplate: k8s

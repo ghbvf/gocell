@@ -11,6 +11,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          # Need full history so `golangci-lint --new-from-merge-base=origin/develop`
+          # can run `git merge-base` successfully.
+          fetch-depth: 0
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
@@ -27,7 +31,11 @@ jobs:
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           version: v2.11
-          only-new-issues: true
+          # only-new-issues uses the GitHub pull-request diff API which
+          # refuses diffs larger than 300 files; fall back to
+          # --new-from-merge-base so mass-rename PRs (repo-wide renames,
+          # metadata id sweeps) still get "new issue" filtering.
+          args: --new-from-merge-base=origin/develop
 
       - name: Test
         run: go test -race -coverprofile=coverage.out -coverpkg=./... ./... -count=1 -timeout 5m
@@ -148,15 +156,15 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Integration tests (testcontainers)
-        # cmd/core-bundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
+        # cmd/corebundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
         # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
-        # examples/sso-bff carries the end-to-end walkthrough test (AUTH-SETUP-01
+        # examples/ssobff carries the end-to-end walkthrough test (AUTH-SETUP-01
         # regression guard — bootstrap credential flow, password-reset gate,
         # change-password / refresh / logout contract shape). Without this job
         # including it, the "integration" build tag was never compiled in CI.
-        # cells/access-core/slices/identitymanage also has an integration test
+        # cells/accesscore/slices/identitymanage also has an integration test
         # (changepassword_e2e_test.go) that exercises the real AuthMiddleware.
-        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/core-bundle/... ./examples/sso-bff/... ./cells/access-core/slices/identitymanage/... -count=1 -timeout 15m
+        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... -count=1 -timeout 15m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

@@ -47,13 +47,13 @@ func TestHookOutcomeConstants(t *testing.T) {
 func TestHookEventFields(t *testing.T) {
 	err := errors.New("boom")
 	evt := HookEvent{
-		CellID:   "access-core",
+		CellID:   "accesscore",
 		Hook:     HookBeforeStart,
 		Outcome:  OutcomeFailure,
 		Duration: 42 * time.Millisecond,
 		Err:      err,
 	}
-	assert.Equal(t, "access-core", evt.CellID)
+	assert.Equal(t, "accesscore", evt.CellID)
 	assert.Equal(t, HookBeforeStart, evt.Hook)
 	assert.Equal(t, OutcomeFailure, evt.Outcome)
 	assert.Equal(t, 42*time.Millisecond, evt.Duration)

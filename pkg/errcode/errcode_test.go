@@ -23,8 +23,8 @@ func TestNew(t *testing.T) {
 		{
 			name:    "cell not found",
 			code:    ErrCellNotFound,
-			message: "cell access-core does not exist",
-			wantStr: "[ERR_CELL_NOT_FOUND] cell access-core does not exist",
+			message: "cell accesscore does not exist",
+			wantStr: "[ERR_CELL_NOT_FOUND] cell accesscore does not exist",
 		},
 		{
 			name:    "dependency cycle",
@@ -102,11 +102,11 @@ func TestWithDetails(t *testing.T) {
 			base: New(ErrSliceNotFound, "slice not found"),
 			details: map[string]any{
 				"sliceId": "auth-login",
-				"cellId":  "access-core",
+				"cellId":  "accesscore",
 			},
 			wantDetails: map[string]any{
 				"sliceId": "auth-login",
-				"cellId":  "access-core",
+				"cellId":  "accesscore",
 			},
 		},
 		{

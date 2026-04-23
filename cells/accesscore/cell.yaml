@@ -1,0 +1,13 @@
+id: accesscore
+type: core
+consistencyLevel: L2
+durabilityMode: durable
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_access_core
+verify:
+  smoke:
+    - smoke.accesscore.startup
+l0Dependencies: []

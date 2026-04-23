@@ -310,7 +310,7 @@
         "description": "The GoCell Cell identifier to monitor",
         "type": "textbox",
         "current": {
-          "value": "access-core"
+          "value": "accesscore"
         }
       },
       {

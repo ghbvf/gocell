@@ -2,7 +2,7 @@
 
 ## Overview
 
-GoCell integration tests verify adapter behaviour against real infrastructure (PostgreSQL, Redis, RabbitMQ, MinIO, Keycloak) and end-to-end journey scenarios with a fully assembled core-bundle.
+GoCell integration tests verify adapter behaviour against real infrastructure (PostgreSQL, Redis, RabbitMQ, MinIO, Keycloak) and end-to-end journey scenarios with a fully assembled corebundle.
 
 All integration test files use the `//go:build integration` build tag so they are excluded from the default `go test ./...` run.
 

@@ -50,7 +50,7 @@ docs/new-setting/
 |---------|---------|----------|
 | 改 `kernel/crypto/*.go` | 根 CLAUDE + 7 个 rules | 根 CLAUDE（精简）+ `kernel/CLAUDE.md` + go-standards + observability |
 | 改 `runtime/auth/*.go` | 同上全量 | 根 CLAUDE + `runtime/CLAUDE.md` + go-standards + observability + error-handling |
-| 改 `cells/access-core/` | 同上全量 | 根 CLAUDE + `cells/CLAUDE.md` + eventbus + error-handling + api-versioning |
+| 改 `cells/accesscore/` | 同上全量 | 根 CLAUDE + `cells/CLAUDE.md` + eventbus + error-handling + api-versioning |
 | 改 `adapters/postgres/` | 同上全量 | 根 CLAUDE + `adapters/CLAUDE.md` + go-standards + observability |
 | 改 `pkg/errcode/` | 同上全量 | 根 CLAUDE + `pkg/CLAUDE.md` + go-standards |
 | 改 `contracts/` | 同上全量 | 根 CLAUDE + `contracts/CLAUDE.md` |

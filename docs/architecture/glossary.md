@@ -7,7 +7,7 @@
 运行时、数据主权和部署的边界。拥有权威数据，通过契约发布/消费。
 
 三种类型：
-- **core** — 强一致性状态机（如 access-core、audit-core、config-core）
+- **core** — 强一致性状态机（如 accesscore、auditcore、configcore）
 - **edge** — 边缘节点
 - **support** — 辅助服务
 
@@ -108,7 +108,7 @@ Coordination 包括：outbox、consumed markers、replay checkpoints、job lease
 稳定边界声明。
 
 ```yaml
-id: access-core              # 必填，== 目录名
+id: accesscore              # 必填，== 目录名
 type: core                   # core | edge | support
 consistencyLevel: L2         # L0-L4
 owner:
@@ -118,7 +118,7 @@ schema:
   primary: cell_access_core  # L0 可选
 verify:
   smoke:
-    - smoke.access-core.startup
+    - smoke.accesscore.startup
 l0Dependencies:              # 仅在导入 L0 Cell 时声明
   - cell: shared-crypto
     reason: 确定性哈希工具
@@ -132,7 +132,7 @@ l0Dependencies:              # 仅在导入 L0 Cell 时声明
 
 ```yaml
 id: session-login            # 必填，== 目录名
-belongsToCell: access-core   # derived-anchor，可省略
+belongsToCell: accesscore   # derived-anchor，可省略
 contractUsages:
   - contract: http.auth.login.v1
     role: serve
@@ -159,11 +159,11 @@ verify:
 ```yaml
 id: http.auth.login.v1       # 必填
 kind: http                   # http | event | command | projection
-ownerCell: access-core       # 缺省 = 提供方，可省略
+ownerCell: accesscore       # 缺省 = 提供方，可省略
 consistencyLevel: L1
 lifecycle: active             # draft | active | deprecated
 endpoints:
-  server: access-core
+  server: accesscore
   clients:
     - edge-bff
 schemaRefs:
@@ -178,14 +178,14 @@ schemaRefs:
 物理打包声明。手工编写只管 `id / cells / build`。
 
 ```yaml
-id: core-bundle
+id: corebundle
 cells:
-  - access-core
-  - audit-core
-  - config-core
+  - accesscore
+  - auditcore
+  - configcore
 build:
-  entrypoint: cmd/core-bundle/main.go
-  binary: core-bundle
+  entrypoint: cmd/corebundle/main.go
+  binary: corebundle
   deployTemplate: k8s
 ```
 

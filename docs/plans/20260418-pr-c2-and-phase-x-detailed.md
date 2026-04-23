@@ -16,20 +16,20 @@
 
 - 把 PR-C1 沉淀的 PG 接线跑通 **3-container 真实 e2e**（P4-TD-05）
 - 清理 **CONFIG-DEMO-FAILOPEN-01**（durable/demo 分界线真正压实）
-- 产出 **pilot 模板文档**（`docs/patterns/pg-cell-template.md`），让 access-core / audit-core 批量迁移按套路走
+- 产出 **pilot 模板文档**（`docs/patterns/pg-cell-template.md`），让 accesscore / auditcore 批量迁移按套路走
 - 验证 **durable fail-fast 矩阵**（PR#165 固化的 L2 契约在真 PG 下）
 
 ### 范围
 
 **IN scope**:
-- docker-compose 3-container（PG + RabbitMQ + core-bundle app）
+- docker-compose 3-container（PG + RabbitMQ + corebundle app）
 - 端到端 journey：`config write → PG config_entries + outbox_entries 原子 → relay → RMQ → subscriber`
 - 移除 `configpublish.WithDemoFailOpen` option + 调用点
 - fail-fast 矩阵测试（PG 断开 / outbox relay 挂 / RMQ 挂 时的行为）
 - pilot 模板文档（7 节：migration / repo / session / TxManager / wire / test / lifecycle）
 
 **OUT of scope**（推到 Phase X）:
-- access-core / audit-core 的实际 PG 迁移（PR-X-PG-REPO）
+- accesscore / auditcore 的实际 PG 迁移（PR-X-PG-REPO）
 - S15 拓扑单一源重构
 - S16 资源框架化
 - KMS 字段加密（S13）
@@ -46,9 +46,9 @@
 - 删掉 `WithDemoFailOpen` option 定义和所有调用点（grep 确认清零）
 
 **文件**:
-- `cells/config-core/slices/configpublish/service.go`（改）
-- `cells/config-core/slices/configpublish/service_test.go`（新增测试）
-- `cells/config-core/cell.go`（删 `WithDemoFailOpen` 调用，已由 WithRunMode 替代）
+- `cells/configcore/slices/configpublish/service.go`（改）
+- `cells/configcore/slices/configpublish/service_test.go`（新增测试）
+- `cells/configcore/cell.go`（删 `WithDemoFailOpen` 调用，已由 WithRunMode 替代）
 
 #### Task C2-2: durable fail-fast 矩阵（1.5h, Cx2）
 
@@ -65,7 +65,7 @@
 | Migration 未跑 | `configwrite.Create` 返回 `relation "config_entries" does not exist` 包装为 `ErrAdapterPGQuery` |
 
 **文件**:
-- `cells/config-core/slices/configwrite/service_failfast_test.go`（新）
+- `cells/configcore/slices/configwrite/service_failfast_test.go`（新）
 - `adapters/postgres/outbox_relay_failfast_test.go`（新，relay 退到 dead 的断言）
 
 #### Task C2-3: 3-container e2e compose + journey（1.5h, Cx2）
@@ -75,7 +75,7 @@
 services:
   postgres: postgres:16-alpine + migration init container
   rabbitmq: rabbitmq:3-management
-  core-bundle: build from repo + GOCELL_CELL_ADAPTER_MODE=postgres GOCELL_ADAPTER_MODE=real
+  corebundle: build from repo + GOCELL_CELL_ADAPTER_MODE=postgres GOCELL_ADAPTER_MODE=real
 ```
 
 **journey 测试**: 用 Go `testing` 驱动 docker-compose up/down：
@@ -98,7 +98,7 @@ services:
 4. **TxManager 注入** — `cell.go` 加 `WithPostgresDefaults` + `WithTxManager`；slice service 用 TxRunner 包域写+outbox 写
 5. **Migration 约定** — goose v3 + `-- +goose no transaction` + CONCURRENTLY 索引；migration 不可改
 6. **测试三层** — unit（sqlmock/fake session）→ integration（testcontainers）→ e2e（compose）
-7. **Wire 接线** — `cmd/core-bundle/main.go` 的 `buildXxxCoreOpts` 模式 + pool 生命周期
+7. **Wire 接线** — `cmd/corebundle/main.go` 的 `buildXxxCoreOpts` 模式 + pool 生命周期
 
 每节配一段 PR-C1 的真实代码 snippet 作为参考。
 
@@ -106,14 +106,14 @@ services:
 
 ```bash
 # Unit + Integration
-go test ./cells/config-core/... ./adapters/postgres/... -race -count=1
-go test -tags=integration ./cells/config-core/... ./adapters/postgres/...
+go test ./cells/configcore/... ./adapters/postgres/... -race -count=1
+go test -tags=integration ./cells/configcore/... ./adapters/postgres/...
 
 # e2e
 go test -tags=e2e ./tests/e2e/... -count=1
 
 # Lint + validate + coverage
-golangci-lint run ./cells/config-core/... ./adapters/postgres/...
+golangci-lint run ./cells/configcore/... ./adapters/postgres/...
 go run ./cmd/gocell validate
 # SonarCloud coverage ≥ 80% on new code
 ```
@@ -151,13 +151,13 @@ go run ./cmd/gocell validate
 │                                                              │
 │  PR-C2（pilot 模板）                                         │
 │       │                                                      │
-│       ├──→ PR-X-PG-REPO-ACCESS（access-core PG 迁移）       │
+│       ├──→ PR-X-PG-REPO-ACCESS（accesscore PG 迁移）       │
 │       │                                                      │
-│       └──→ PR-X-PG-REPO-AUDIT（audit-core PG 迁移）         │
+│       └──→ PR-X-PG-REPO-AUDIT（auditcore PG 迁移）         │
 │                                                              │
 │  并行（不依赖 pilot，独立 PR）:                              │
 │                                                              │
-│  PR-X-INIT-COGNIT          S10 config-core Init 拆分         │
+│  PR-X-INIT-COGNIT          S10 configcore Init 拆分         │
 │  PR-X-TOPOLOGY-SSOT        S15 运行拓扑单一源重构            │
 │  PR-X-POOL-FRAMEWORK       S16 资源框架化                    │
 │  PR-X-KMS-ADR              S13 字段加密 ADR（独立 PR）       │
@@ -172,7 +172,7 @@ go run ./cmd/gocell validate
 
 ---
 
-### PR-X-PG-REPO-ACCESS — access-core 迁移（2d）
+### PR-X-PG-REPO-ACCESS — accesscore 迁移（2d）
 
 **前置**: PR-C2 合并 + T6 GOCELL-PER-CELL-ADAPTER-01 先做
 
@@ -185,17 +185,17 @@ go run ./cmd/gocell validate
 - 联动 `SEED-ROLE-IFACE-01` 去 type assertion
 - 联动 `ACCESS-LEVEL-AUDIT-01` slice.yaml 校正
 
-**前置 T6 理由**: access-core 接 PG 就是第 2 个 cell 用 PG，必须先把全局 `GOCELL_CELL_ADAPTER_MODE` 拆成 `GOCELL_CONFIG_CORE_ADAPTER_MODE` + `GOCELL_ACCESS_CORE_ADAPTER_MODE`，否则 config-core 和 access-core 被锁同步切换。
+**前置 T6 理由**: accesscore 接 PG 就是第 2 个 cell 用 PG，必须先把全局 `GOCELL_CELL_ADAPTER_MODE` 拆成 `GOCELL_CONFIG_CORE_ADAPTER_MODE` + `GOCELL_ACCESS_CORE_ADAPTER_MODE`，否则 configcore 和 accesscore 被锁同步切换。
 
 **文件**（~20 files）:
 - `adapters/postgres/migrations/006_create_users_sessions_roles.sql`（新）
-- `cells/access-core/internal/adapters/postgres/*.go`（5 个 repo）
-- `cells/access-core/cell.go`（加 `WithPostgresDefaults`）
-- `cells/access-core/slices/sessionlogin|sessionrefresh|sessionvalidate|sessionlogout/service.go`（RunInTx 包装）
-- `cmd/core-bundle/main.go`（新增 `buildAccessCoreOpts`）
-- `cmd/core-bundle/main_test.go`（补测）
+- `cells/accesscore/internal/adapters/postgres/*.go`（5 个 repo）
+- `cells/accesscore/cell.go`（加 `WithPostgresDefaults`）
+- `cells/accesscore/slices/sessionlogin|sessionrefresh|sessionvalidate|sessionlogout/service.go`（RunInTx 包装）
+- `cmd/corebundle/main.go`（新增 `buildAccessCoreOpts`）
+- `cmd/corebundle/main_test.go`（补测）
 
-### PR-X-PG-REPO-AUDIT — audit-core 迁移（1d）
+### PR-X-PG-REPO-AUDIT — auditcore 迁移（1d）
 
 **前置**: PR-X-PG-REPO-ACCESS 合并（验证两 cell PG 共存 + T6 生效）
 
@@ -203,24 +203,24 @@ go run ./cmd/gocell validate
 - Migration 007: `audit_entries` + `audit_hmac_chain` 2 张表
 - PG Repository 实现 2 个（AuditRepo + AuditCursorRepo）
 - HMAC 链完整性约束：`ALTER TABLE ADD CONSTRAINT audit_hmac_chain_prev_ref`
-- audit-core 典型查询是分页 `ORDER BY created_at DESC`，需要 `CREATE INDEX CONCURRENTLY idx_audit_entries_created_at`
+- auditcore 典型查询是分页 `ORDER BY created_at DESC`，需要 `CREATE INDEX CONCURRENTLY idx_audit_entries_created_at`
 - auditappend slice 用 RunInTx 写域 + outbox
 
 **HMAC 链特殊处理**: audit 链式 HMAC 必须串行写入（当前版本的 HMAC 基于上一行），PG 层加 `FOR UPDATE` 锁上一行保证链的原子性。
 
 **文件**（~15 files）:
 - `adapters/postgres/migrations/007_create_audit_tables.sql`
-- `cells/audit-core/internal/adapters/postgres/*.go`
-- `cells/audit-core/cell.go` + `auditappend/service.go`
-- `cmd/core-bundle/main.go`（新增 `buildAuditCoreOpts`）
+- `cells/auditcore/internal/adapters/postgres/*.go`
+- `cells/auditcore/cell.go` + `auditappend/service.go`
+- `cmd/corebundle/main.go`（新增 `buildAuditCoreOpts`）
 
 ---
 
-### PR-X-INIT-COGNIT — config-core Init 拆分（3h, Cx3）
+### PR-X-INIT-COGNIT — configcore Init 拆分（3h, Cx3）
 
 **独立于 PG 迁移**，可与 pilot 并行。
 
-**现状**: `cells/config-core/cell.go::Init()` 认知复杂度 19（`//nolint:gocognit` 临时抑制）。
+**现状**: `cells/configcore/cell.go::Init()` 认知复杂度 19（`//nolint:gocognit` 临时抑制）。
 
 **拆分**:
 ```go
@@ -241,8 +241,8 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 **目标**: `Init()` 复杂度 ≤9，每个 helper ≤6。
 
 **文件**:
-- `cells/config-core/cell.go`
-- `cells/config-core/cell_test.go`（补每个 helper 的单元测试）
+- `cells/configcore/cell.go`
+- `cells/configcore/cell_test.go`（补每个 helper 的单元测试）
 
 ---
 
@@ -269,7 +269,7 @@ func Resolve(env Env) (Topology, error) { ... }  // 读 env + 校验一致性
 ```
 
 **集成点**（替代当前分散的 env 读取）:
-- `cmd/core-bundle/main.go`: 启动时 `topology, err := topology.Resolve(...)` 一次解析，全程只传 `topology`
+- `cmd/corebundle/main.go`: 启动时 `topology, err := topology.Resolve(...)` 一次解析，全程只传 `topology`
 - `loadSecret` / `loadKeySet` / `loadCursorCodec` 改签名接 `topology.KeyMode`
 - `buildMetricsHandler` / `buildVerboseOpts` 改签名接 `topology.RequireProductionControlPlane()`
 - `buildConfigCoreOpts` 改接 `topology.DataStoreMode`
@@ -287,7 +287,7 @@ func Resolve(env Env) (Topology, error) { ... }  // 读 env + 校验一致性
 
 **文件**（~12 files）:
 - `runtime/topology/topology.go`（新）+ 单测
-- `cmd/core-bundle/main.go`（重构）
+- `cmd/corebundle/main.go`（重构）
 - 若干 helper 签名更新
 
 ---
@@ -313,7 +313,7 @@ func WithManagedResource(r resource.Resource) Option { ... }
 **适配**:
 - `adapters/postgres.Pool` 实现 `resource.Resource`（Name "postgres" + 已有 Health + Close）
 - `adapters/redis.Client`、`adapters/rabbitmq.Connection` 同步实现（追加，不必本 PR）
-- `cmd/core-bundle/main.go` 把 `defer pool.Close()` + `pgHealthCheckerOpts` 替换为 `bootstrap.WithManagedResource(pool)`
+- `cmd/corebundle/main.go` 把 `defer pool.Close()` + `pgHealthCheckerOpts` 替换为 `bootstrap.WithManagedResource(pool)`
 
 **对标**:
 - Uber fx `lifecycle.Append(fx.Hook{OnStart, OnStop})`
@@ -326,7 +326,7 @@ func WithManagedResource(r resource.Resource) Option { ... }
 - `kernel/resource/lifecycle.go`（新）+ 单测
 - `runtime/bootstrap/bootstrap.go`（WithManagedResource + LIFO shutdown）
 - `adapters/postgres/pool.go`（实现接口）
-- `cmd/core-bundle/main.go`（用新 API 替代手接）
+- `cmd/corebundle/main.go`（用新 API 替代手接）
 
 ---
 
@@ -345,7 +345,7 @@ func WithManagedResource(r resource.Resource) Option { ... }
 
 2. **实施 PR**（3d）：
    - Migration 008 加列
-   - `cells/config-core/internal/crypto/` 新 package
+   - `cells/configcore/internal/crypto/` 新 package
    - `config_repo.go` 写时 encrypt，读时 decrypt
    - Backfill 脚本
 
@@ -415,9 +415,9 @@ func WithManagedResource(r resource.Resource) Option { ... }
 | 风险 | 影响 | 缓解 |
 |------|------|------|
 | PR-X-PG-REPO-ACCESS session 迁移涉及 Redis cache 激活（AUTH-CACHE-01），联动复杂 | 工时膨胀 | 先 PR-X-PG-REPO-ACCESS 只做 PG（Redis 先留 in-memory），AUTH-CACHE-01 独立小 PR |
-| PR-X-TOPOLOGY-SSOT 改 `cmd/core-bundle/main.go` 核心调用 | 回归面 | 先写 `topology.Resolve` 单测覆盖边界，再替换；覆盖率 100% 再合 |
+| PR-X-TOPOLOGY-SSOT 改 `cmd/corebundle/main.go` 核心调用 | 回归面 | 先写 `topology.Resolve` 单测覆盖边界，再替换；覆盖率 100% 再合 |
 | PR-X-POOL-FRAMEWORK 升级 bootstrap API | 所有 cell 接线可能需要适配 | 保持老 API 兼容；新 API 标 recommended；dev message 引导迁移 |
-| HMAC 链锁争用（audit-core） | 写吞吐降低 | PG 行锁 `FOR UPDATE` 只在 AuditAppend 路径用；测量写延迟 P99；必要时改为 advisory lock |
+| HMAC 链锁争用（auditcore） | 写吞吐降低 | PG 行锁 `FOR UPDATE` 只在 AuditAppend 路径用；测量写延迟 P99；必要时改为 advisory lock |
 | KMS ADR 选型争议 | 排期拖延 | 先 ADR-only PR 聚焦决策；选型共识后再排实施 PR |
 
 ---

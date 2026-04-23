@@ -133,7 +133,7 @@ func TestRunGenerateAssembly_WithModule(t *testing.T) {
 }
 
 func TestRunVerifySlice_ValidID(t *testing.T) {
-	err := runVerify([]string{"slice", "--id=access-core/identitymanage"})
+	err := runVerify([]string{"slice", "--id=accesscore/identitymanage"})
 	// verifySlice either passes or returns a verify error — never panics.
 	if err != nil {
 		assert.Contains(t, err.Error(), "verify slice",
@@ -142,7 +142,7 @@ func TestRunVerifySlice_ValidID(t *testing.T) {
 }
 
 func TestRunVerifyCell_ValidID(t *testing.T) {
-	err := runVerify([]string{"cell", "--id=access-core"})
+	err := runVerify([]string{"cell", "--id=accesscore"})
 	if err != nil {
 		assert.Contains(t, err.Error(), "verify cell",
 			"error should come from the verify pipeline, not a crash")
@@ -150,7 +150,7 @@ func TestRunVerifyCell_ValidID(t *testing.T) {
 }
 
 func TestRunVerifyJourney_ValidID(t *testing.T) {
-	err := runVerify([]string{"journey", "--id=J-user-onboarding"})
+	err := runVerify([]string{"journey", "--id=J-useronboarding"})
 	if err != nil {
 		assert.Contains(t, err.Error(), "verify journey",
 			"error should come from the verify pipeline, not a crash")

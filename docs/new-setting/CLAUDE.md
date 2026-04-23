@@ -14,7 +14,7 @@
 
 ```
 kernel/       — Cell/Slice 运行时 + 治理工具（底座灵魂）
-cells/        — Cell 实现（access-core / audit-core / config-core）
+cells/        — Cell 实现（accesscore / auditcore / configcore）
 contracts/    — 跨 Cell 边界契约（按 {kind}/{domain-path}/{version}/ 组织）
 journeys/     — Journey 验收规格（J-*.yaml）+ status-board.yaml
 assemblies/   — 物理打包配置（assembly.yaml）

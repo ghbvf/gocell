@@ -28,8 +28,8 @@
 - **L0**：计算分区，纯函数库，同 assembly 内直接导入，不参与契约。
 
 ```yaml
-# cells/access-core/cell.yaml
-id: access-core
+# cells/accesscore/cell.yaml
+id: accesscore
 type: core
 consistencyLevel: L2
 owner:
@@ -39,7 +39,7 @@ schema:
   primary: cell_access_core
 verify:
   smoke:
-    - smoke.access-core.startup
+    - smoke.accesscore.startup
 l0Dependencies:           # 仅在导入 L0 Cell 时声明
   - cell: shared-crypto
     reason: 确定性哈希工具
@@ -52,9 +52,9 @@ l0Dependencies:           # 仅在导入 L0 Cell 时声明
 实现映射。slice 是**依赖真相的唯一写入方**。
 
 ```yaml
-# cells/access-core/slices/sessionlogin/slice.yaml
+# cells/accesscore/slices/sessionlogin/slice.yaml
 id: sessionlogin
-belongsToCell: access-core       # derived-anchor，可省略
+belongsToCell: accesscore       # derived-anchor，可省略
 contractUsages:
   - contract: http.auth.login.v1
     role: serve
@@ -87,11 +87,11 @@ verify:
 # contracts/http/auth/login/v1/contract.yaml
 id: http.auth.login.v1
 kind: http                        # derived-anchor，可省略
-ownerCell: access-core            # 缺省 = provider，可省略
+ownerCell: accesscore            # 缺省 = provider，可省略
 consistencyLevel: L1
 lifecycle: active
 endpoints:
-  server: access-core
+  server: accesscore
   clients:
     - edge-bff
 schemaRefs:
@@ -120,26 +120,26 @@ Projection 额外必填：`replayable`。
 验收真相。定义"完成"的含义。**不是依赖真相。**
 
 ```yaml
-# journeys/J-sso-login.yaml
-id: J-sso-login
+# journeys/J-ssologin.yaml
+id: J-ssologin
 goal: 用户完成 SSO 登录并获得有效 session
 owner:
   team: platform
   role: journey-owner
 cells:                            # 路由锚点（best-effort，非穷举）
-  - access-core
-  - audit-core
-  - config-core
+  - accesscore
+  - auditcore
+  - configcore
 contracts:                        # 验收策展（仅列被 passCriteria 直接断言的）
   - http.auth.login.v1
   - event.session.created.v1
 passCriteria:
   - text: OIDC 重定向完成
     mode: auto
-    checkRef: journey.J-sso-login.oidc-redirect
+    checkRef: journey.J-ssologin.oidc-redirect
   - text: Session 写入数据库
     mode: auto
-    checkRef: journey.J-sso-login.session-db
+    checkRef: journey.J-ssologin.session-db
   - text: 安全审查签核
     mode: manual
 ```
@@ -152,7 +152,7 @@ passCriteria:
 
 ```yaml
 # journeys/status-board.yaml
-- journeyId: J-sso-login
+- journeyId: J-ssologin
   state: doing
   risk: low
   blocker: ""
@@ -166,27 +166,27 @@ passCriteria:
 物理打包。手工编写只管 `id` / `cells` / `build`。边界信息由工具生成到独立文件。
 
 ```yaml
-# assemblies/core-bundle/assembly.yaml（手工编写）
-id: core-bundle
+# assemblies/corebundle/assembly.yaml（手工编写）
+id: corebundle
 cells:
-  - access-core
-  - audit-core
-  - config-core
+  - accesscore
+  - auditcore
+  - configcore
 build:
-  entrypoint: cmd/core-bundle/main.go
-  binary: core-bundle
+  entrypoint: cmd/corebundle/main.go
+  binary: corebundle
   deployTemplate: k8s
 ```
 
 ```yaml
-# assemblies/core-bundle/generated/boundary.yaml（工具生成，禁止手编）
+# assemblies/corebundle/generated/boundary.yaml（工具生成，禁止手编）
 generatedAt: "2026-04-04T10:30:00Z"
 sourceFingerprint: "sha256:b5e6f7..."
 exportedContracts:
   - http.auth.login.v1
 importedContracts: []
 smokeTargets:
-  - smoke.access-core.startup
+  - smoke.accesscore.startup
 ```
 
 ### Actor 注册表

@@ -151,7 +151,7 @@ func NewSubscriber(conn *Connection, config SubscriberConfig) *Subscriber {
 // resolveQueueName derives the queue name from config and runtime parameters.
 // Priority (highest to lowest):
 //  1. config.QueueName (explicit static override)
-//  2. runtime consumerGroup + topic (e.g. "audit-core.session.created")
+//  2. runtime consumerGroup + topic (e.g. "auditcore.session.created")
 //  3. config.ConsumerGroup + topic (from SubscriberConfig)
 //  4. topic name as-is (backward compatible fallback)
 func (s *Subscriber) resolveQueueName(topic, consumerGroup string) string {

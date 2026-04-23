@@ -222,10 +222,10 @@ deps := &AppDeps{
 
 ### What BuildBootstrap does
 
-1. Builds config-core cell (in-memory defaults when `configCellOpts` is nil,
+1. Builds configcore cell (in-memory defaults when `configCellOpts` is nil,
    otherwise uses the production adapter options).
-2. Builds access-core with `adminBootstrapWorkerOpts` (lazy admin cleaner).
-3. Builds audit-core.
+2. Builds accesscore with `adminBootstrapWorkerOpts` (lazy admin cleaner).
+3. Builds auditcore.
 4. Registers all three cells in `CoreAssembly`.
 5. Assembles all `bootstrap.Option` slices including `WithManagedResource`
    (if `PGResource` is non-nil), internal guard (if `InternalGuard` is
@@ -267,7 +267,7 @@ commit, driven by the `outbox_entries` table.
 ref: Unleash/unleash src/lib/db/feature-environment-store.ts  
 ref: Watermill router pattern — event publishing decoupled from HTTP handler  
 
-### Service implementation (from `cells/config-core/slices/flagwrite/service.go`)
+### Service implementation (from `cells/configcore/slices/flagwrite/service.go`)
 
 ```go
 // L2 OutboxFact: repo writes + outbox writes are wrapped in a single RunInTx
@@ -658,7 +658,7 @@ require.Error(t, err, "AAD mismatch must fail-closed")
 
 ### Layer 2 — testcontainers (real PG schema)
 
-Integration tests in `cells/config-core/internal/adapters/postgres/*_test.go`
+Integration tests in `cells/configcore/internal/adapters/postgres/*_test.go`
 use `testcontainers-go` to spin up a real PostgreSQL instance and run
 migrations 001–010 before the test suite. These tests exercise the full
 repository path including cipher columns.
@@ -678,12 +678,12 @@ func TestConfigRepository_Encrypt_Decrypt_IntegrationRoundTrip(t *testing.T) {
 }
 ```
 
-Run with: `go test -tags=integration -timeout=120s ./cells/config-core/...`
+Run with: `go test -tags=integration -timeout=120s ./cells/configcore/...`
 
 ### Layer 3 — e2e compose (full assembly)
 
 E2E tests in `tests/e2e/config_pilot_e2e_test.go` validate the full HTTP API
-with a running core-bundle, PostgreSQL, and optionally Vault:
+with a running corebundle, PostgreSQL, and optionally Vault:
 
 ```go
 //go:build e2e
@@ -711,7 +711,7 @@ Run with: `go test -tags=e2e -timeout=120s ./tests/e2e/...`
 | Layer | Package | Minimum |
 |-------|---------|---------|
 | Unit | `runtime/crypto/` | ≥ 90% |
-| Unit | `cells/config-core/internal/adapters/postgres/` | ≥ 80% |
+| Unit | `cells/configcore/internal/adapters/postgres/` | ≥ 80% |
 | Integration | cipher columns round-trip | required (no skip) |
 | E2E | all `t.Skip` stubs | acceptable — activated by compose environment |
 

@@ -32,17 +32,17 @@
 | # | 任务 | 工时 | 优先级 | 文件 | 来源 |
 |---|------|------|--------|------|------|
 | X10 | **AUTH-REFRESH-OPAQUE-01** 🟠（PG-REPO 域上线后触发）：refresh token 改 opaque string + server-side rotation store（RFC 6819 §5.2.2.2）| 1-2d | 🟠 | `runtime/auth/` + `adapters/postgres/` | PR#166 R1-F2-7 |
-| S18 | **JWT-AUDIENCE-ENV-VAR-01** (P1, Cx2, 🟠 条件延后，多环境部署前触发): `jwtAudience` 为编译期常量，多环境无法通过 env var 区分；`GOCELL_JWT_AUDIENCE` env var + `WithTokenAudience(string)` option；`real` 模式下非空强制；sessionlogin/sessionrefresh 同步注入。前置：独立 ADR | 3h | 🟠 | `cmd/core-bundle/main.go` + `cells/access-core/cell.go` + sessionlogin/sessionrefresh | PR#170 review F-O-1 |
-| S19 | **JWT-AUDIENCE-DRIFT-INTEG-TEST-01** (P2, Cx1, 🟡 可延后，S18 落地后易实现): 集成测试调用 sessionlogin.Service.Login → 解析 token → VerifyIntent，检测 audience drift 编译失败 | 2h | 🟡 | `cmd/core-bundle/` + `cells/access-core/slices/sessionlogin/` | PR#170 review F-T-3 |
-| S20 | **JWT-AUDIENCE-STARTUP-LOG-01** (P3, Cx1, 🟡 可延后): `buildJWTDeps` 构建时打印 effective audience | 0.5h | 🟡 | `cmd/core-bundle/main.go` | PR#170 review F-S-5 |
+| S18 | **JWT-AUDIENCE-ENV-VAR-01** (P1, Cx2, 🟠 条件延后，多环境部署前触发): `jwtAudience` 为编译期常量，多环境无法通过 env var 区分；`GOCELL_JWT_AUDIENCE` env var + `WithTokenAudience(string)` option；`real` 模式下非空强制；sessionlogin/sessionrefresh 同步注入。前置：独立 ADR | 3h | 🟠 | `cmd/corebundle/main.go` + `cells/accesscore/cell.go` + sessionlogin/sessionrefresh | PR#170 review F-O-1 |
+| S19 | **JWT-AUDIENCE-DRIFT-INTEG-TEST-01** (P2, Cx1, 🟡 可延后，S18 落地后易实现): 集成测试调用 sessionlogin.Service.Login → 解析 token → VerifyIntent，检测 audience drift 编译失败 | 2h | 🟡 | `cmd/corebundle/` + `cells/accesscore/slices/sessionlogin/` | PR#170 review F-T-3 |
+| S20 | **JWT-AUDIENCE-STARTUP-LOG-01** (P3, Cx1, 🟡 可延后): `buildJWTDeps` 构建时打印 effective audience | 0.5h | 🟡 | `cmd/corebundle/main.go` | PR#170 review F-S-5 |
 | S21 | **JWT-AUD-TEST-TABLE-DRIVEN-01** (P3, Cx1, 🟡 可延后): `runtime/auth/jwt_aud_test.go` 9 个场景重构为 table-driven | 1h | 🟡 | `runtime/auth/jwt_aud_test.go` | PR#170 review F-T-5 |
-| S22 | **REFRESH-AUD-REAL-ROUTE-TEST-01** (P2, Cx2, 🟡 可延后): 补真实 HTTP 路由测试：POST `{"refreshToken": wrong-aud-token}` → `/api/v1/access/sessions/refresh` 断言 401 | 2h | 🟡 | `cells/access-core/auth_integration_test.go` | PR#171 外部审查 F2 |
-| S31 | **JWT-ISSUER-STRICT-01** 🟡 (P2, Cx2)：`VerifyIntent` 缺 issuer 强约束；`WithExpectedIssuer` option + real 模式非空强制 + 负向测试。建议搭车 S18 | 1h | 🟡 | `runtime/auth/jwt.go` + `cmd/core-bundle/main.go` | 2026-04-18 六席审查 |
-| S32 | **CONTROLPLANE-TOKEN-PROD-GATE-01** 🟠（real 模式部署前触发）：`real` 下断言 service-token/mTLS 至少一项 + CI real-mode smoke | 1h | 🟠 | `cmd/core-bundle/main.go` + `runtime/bootstrap/bootstrap.go` | 2026-04-18 六席审查 |
-| S39 | **INITIALADMIN-IFACE-NAMING-01** (P3, Cx1, 🟡 可延后): `initialadmin/clock.go` 与 `scheduler.go` 单方法接口不符合 Go `-er` 命名约定 | 15min | 🟡 | `cells/access-core/internal/initialadmin/clock.go` + `scheduler.go` | SonarCloud 2026-04-18 |
-| P1-17 | **REFRESH-JTI-UNIQUENESS-01** (P1, Cx2): refresh token 同秒并发可产出同值 token，reuse 检测被绕过。**修复**: Issue 引入 `jti: uuid` 唯一因子 | 3h | P1 | `runtime/auth/jwt.go` + `cells/access-core/slices/sessionrefresh/service.go` | 2026-04-18 Auth 域审查 |
-| S41 | **MARSHAL-ERR-IGNORE-01** (P2, Cx1): access-core 事件发布路径 `json.Marshal` 错误被 `_ = ` 静默丢弃。**修复**: 显式处理 marshal 错误，带上下文返回调用方 | 1h | P2 | `cells/access-core/slices/*/service.go`（涉及事件发布 slice）| 2026-04-18 Auth 域审查 |
-| S42 | **ROLELIST-CURSOR-01** (P2, Cx1): `GET /api/v1/access/roles` 缺 `nextCursor` 字段。**修复**: v1 增量补 `nextCursor`，同步更新 response.schema.json | 1h | P2 | `cells/access-core/slices/*/handler.go` + `contracts/http/auth/roles/list/v1/response.schema.json` | 2026-04-18 Auth 域审查 |
+| S22 | **REFRESH-AUD-REAL-ROUTE-TEST-01** (P2, Cx2, 🟡 可延后): 补真实 HTTP 路由测试：POST `{"refreshToken": wrong-aud-token}` → `/api/v1/access/sessions/refresh` 断言 401 | 2h | 🟡 | `cells/accesscore/auth_integration_test.go` | PR#171 外部审查 F2 |
+| S31 | **JWT-ISSUER-STRICT-01** 🟡 (P2, Cx2)：`VerifyIntent` 缺 issuer 强约束；`WithExpectedIssuer` option + real 模式非空强制 + 负向测试。建议搭车 S18 | 1h | 🟡 | `runtime/auth/jwt.go` + `cmd/corebundle/main.go` | 2026-04-18 六席审查 |
+| S32 | **CONTROLPLANE-TOKEN-PROD-GATE-01** 🟠（real 模式部署前触发）：`real` 下断言 service-token/mTLS 至少一项 + CI real-mode smoke | 1h | 🟠 | `cmd/corebundle/main.go` + `runtime/bootstrap/bootstrap.go` | 2026-04-18 六席审查 |
+| S39 | **INITIALADMIN-IFACE-NAMING-01** (P3, Cx1, 🟡 可延后): `initialadmin/clock.go` 与 `scheduler.go` 单方法接口不符合 Go `-er` 命名约定 | 15min | 🟡 | `cells/accesscore/internal/initialadmin/clock.go` + `scheduler.go` | SonarCloud 2026-04-18 |
+| P1-17 | **REFRESH-JTI-UNIQUENESS-01** (P1, Cx2): refresh token 同秒并发可产出同值 token，reuse 检测被绕过。**修复**: Issue 引入 `jti: uuid` 唯一因子 | 3h | P1 | `runtime/auth/jwt.go` + `cells/accesscore/slices/sessionrefresh/service.go` | 2026-04-18 Auth 域审查 |
+| S41 | **MARSHAL-ERR-IGNORE-01** (P2, Cx1): accesscore 事件发布路径 `json.Marshal` 错误被 `_ = ` 静默丢弃。**修复**: 显式处理 marshal 错误，带上下文返回调用方 | 1h | P2 | `cells/accesscore/slices/*/service.go`（涉及事件发布 slice）| 2026-04-18 Auth 域审查 |
+| S42 | **ROLELIST-CURSOR-01** (P2, Cx1): `GET /api/v1/access/roles` 缺 `nextCursor` 字段。**修复**: v1 增量补 `nextCursor`，同步更新 response.schema.json | 1h | P2 | `cells/accesscore/slices/*/handler.go` + `contracts/http/auth/roles/list/v1/response.schema.json` | 2026-04-18 Auth 域审查 |
 
 **域内 PR 拆分**：
 
@@ -87,7 +87,7 @@
 | PR-OUTBOX-A13-CONCURRENCY | A13：subscriber 串行/并发裁决 | 1-3h |
 | PR-OUTBOX-A14-DEDUP | A14：exponentialDelay 去重（ExponentialDelay 单一真源）| 1-2h |
 
-> **注意**：BOOTSTRAP-WIRE-RMQ-BROKER-HEALTH-01 是条件延后项 — `cmd/core-bundle` 接入真实 RabbitMQ connection 时触发（2h，🟠）。
+> **注意**：BOOTSTRAP-WIRE-RMQ-BROKER-HEALTH-01 是条件延后项 — `cmd/corebundle` 接入真实 RabbitMQ connection 时触发（2h，🟠）。
 
 ---
 
@@ -121,7 +121,7 @@
 
 **目标**：将 6 个 slice 的事件 payload 从 `map[string]any` 升级为 typed event struct，提升事件契约稳定性和类型安全。
 
-**域间依赖**：S4 改动 3 个 cell（access-core + config-core + audit-core），建议 Auth 域稳定后再做，避免 rebase 冲突。
+**域间依赖**：S4 改动 3 个 cell（accesscore + configcore + auditcore），建议 Auth 域稳定后再做，避免 rebase 冲突。
 
 | # | 任务 | 工时 | 优先级 | 文件 | 来源 |
 |---|------|------|--------|------|------|
@@ -143,12 +143,12 @@
 
 | # | 任务 | 工时 | 优先级 | 文件 | 来源 |
 |---|------|------|--------|------|------|
-| P1-19 | **AUTH-SETUP-ENDPOINT-01** (P1, Cx2): ① `GET /api/v1/setup/status`；② `POST /api/v1/setup/admin`（无 admin 时创建，已有则 409）；③ `cells/access-core/slices/setup/` slice + `contracts/http/auth/setup/` 合约；④ 两端点加入 `WithPublicEndpoints` | 4h | P1 | `cells/access-core/slices/setup/`（新）+ `contracts/http/auth/setup/`（新）+ `cmd/core-bundle/main.go` | P1-12 拆出 2026-04-18 |
-| P1-8 | **FEAT-1 DEVICE-LIST-API**：新建 `device-list` slice + `GET /api/v1/devices` 分页 + contract + contract_test | 3h | P1 | `cells/device-cell/slices/device-list/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
-| P1-9 | **FEAT-2 FLAG-WRITE-API**：`PUT /api/v1/config/flags/{key}` 写入端点 + contract + contract_test | 3h | P1 | `cells/config-core/slices/configwrite/` + `contracts/http/config/flags/write/v1/` | backend_issues.md #2 |
-| P1-13 | **SSO-BFF-WALKTHROUGH-JWT-FIX-01** (P0 DX, Cx1)：README walkthrough 第 10/11 步未携带 JWT，401；补 Bearer header + walkthrough test 断言 | 1h | P1 | `examples/sso-bff/README.md` + `examples/sso-bff/walkthrough_test.go` | 2026-04-18 六席审查 |
-| S23 | **AUTH-WALKTHROUGH-COMPOSE-01** (P2, Cx3, 🟡 可延后): 提取 `NewSSOBFFApp(opts...)` 被 `main.go` 和 walkthrough test 共用；test server 走同一 bootstrap + Start/Stop 路径 | 4h | 🟡 | `examples/sso-bff/bootstrap.go`（新）+ `main.go` + `walkthrough_test.go` | PR#172 review F3 |
-| S34 | **AUTH-ADMIN-FORCE-RESET-01** (P2, Cx2, 🟡 可延后): Admin 强制重置端点 `POST /api/v1/access/users/{id}/password/reset`；生成临时密码 + `PasswordResetRequired=true` | 4h | 🟡 | `cells/access-core/slices/identitymanage/` + `contracts/http/auth/user/reset/v1/`（新）| PR#183 reviewer round 2 P1-2 |
+| P1-19 | **AUTH-SETUP-ENDPOINT-01** (P1, Cx2): ① `GET /api/v1/setup/status`；② `POST /api/v1/setup/admin`（无 admin 时创建，已有则 409）；③ `cells/accesscore/slices/setup/` slice + `contracts/http/auth/setup/` 合约；④ 两端点加入 `WithPublicEndpoints` | 4h | P1 | `cells/accesscore/slices/setup/`（新）+ `contracts/http/auth/setup/`（新）+ `cmd/corebundle/main.go` | P1-12 拆出 2026-04-18 |
+| P1-8 | **FEAT-1 DEVICE-LIST-API**：新建 `device-list` slice + `GET /api/v1/devices` 分页 + contract + contract_test | 3h | P1 | `cells/devicecell/slices/device-list/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
+| P1-9 | **FEAT-2 FLAG-WRITE-API**：`PUT /api/v1/config/flags/{key}` 写入端点 + contract + contract_test | 3h | P1 | `cells/configcore/slices/configwrite/` + `contracts/http/config/flags/write/v1/` | backend_issues.md #2 |
+| P1-13 | **SSO-BFF-WALKTHROUGH-JWT-FIX-01** (P0 DX, Cx1)：README walkthrough 第 10/11 步未携带 JWT，401；补 Bearer header + walkthrough test 断言 | 1h | P1 | `examples/ssobff/README.md` + `examples/ssobff/walkthrough_test.go` | 2026-04-18 六席审查 |
+| S23 | **AUTH-WALKTHROUGH-COMPOSE-01** (P2, Cx3, 🟡 可延后): 提取 `NewSSOBFFApp(opts...)` 被 `main.go` 和 walkthrough test 共用；test server 走同一 bootstrap + Start/Stop 路径 | 4h | 🟡 | `examples/ssobff/bootstrap.go`（新）+ `main.go` + `walkthrough_test.go` | PR#172 review F3 |
+| S34 | **AUTH-ADMIN-FORCE-RESET-01** (P2, Cx2, 🟡 可延后): Admin 强制重置端点 `POST /api/v1/access/users/{id}/password/reset`；生成临时密码 + `PasswordResetRequired=true` | 4h | 🟡 | `cells/accesscore/slices/identitymanage/` + `contracts/http/auth/user/reset/v1/`（新）| PR#183 reviewer round 2 P1-2 |
 | F2 | **SYSTEM-TOPOLOGY-API** 🟡：`GET /internal/v1/system/topology` 返回 cell/slice/contract 拓扑 JSON | 4h | 🟡 | 新 slice 或 `runtime/bootstrap/` | 历史 Batch 8 |
 
 **域内 PR 拆分**：
@@ -207,8 +207,8 @@
 | A8 | **CI-DIGEST-01** 🟡：testcontainers 镜像 tag+digest 双固定 | 1h | 🟡 | `adapters/*/integration_test.go` | PR#139 review |
 | A9 | **CI-LINT-PIN-01** 🟡：golangci-lint patch 级固定 + dependabot | 1h | 🟡 | `.github/workflows/ci.yml` | PR#139 review |
 | X9 | **LINT-MODERN-01** 🟡 (P3, Cx2)：全仓 modernization 清理（rangeint / stringsseq / nhooyr.io→coder/websocket）；独立 PR，不混功能 | 6h | 🟡 P3 | 全仓 | PR#163 post-review |
-| S33 | **WALKTHROUGH-CI-SMOKE-01** 🟡 (P2, Cx1)：`examples/sso-bff/walkthrough_test.go` 带 `//go:build integration` 未进 CI 主门禁；增 `walkthrough-smoke` job 或拆 unit subtests | 1h | 🟡 | `.github/workflows/ci.yml` + `examples/sso-bff/walkthrough_test.go` | 2026-04-18 六席审查 |
-| F3 | **P2-T-02 audit e2e 测试**：Journey 级验收（audit-core + access-core 全链路）| 2h | P2 | `journeys/` + integration test | 历史 Batch 8 |
+| S33 | **WALKTHROUGH-CI-SMOKE-01** 🟡 (P2, Cx1)：`examples/ssobff/walkthrough_test.go` 带 `//go:build integration` 未进 CI 主门禁；增 `walkthrough-smoke` job 或拆 unit subtests | 1h | 🟡 | `.github/workflows/ci.yml` + `examples/ssobff/walkthrough_test.go` | 2026-04-18 六席审查 |
+| F3 | **P2-T-02 audit e2e 测试**：Journey 级验收（auditcore + accesscore 全链路）| 2h | P2 | `journeys/` + integration test | 历史 Batch 8 |
 | F10 | **TEST-JOURNEY-ASSEMBLY-HARNESS-01** (Cx3, 🟡 可延后): `tests/integration/journey_test.go` 全部 28 条均 `t.Skip`；建 full-assembly harness 后统一恢复 | 8h | 🟡 | `tests/integration/` + assembly fixture | PR#166 R2-P2 |
 
 **域内 PR 拆分**：
@@ -225,7 +225,7 @@
 
 ## 域 11：PG-REPO 大项（Phase X，独立排期）
 
-**目标**：完成 access-core/audit-core/device-cell 的 PostgreSQL Repository 实现，激活 Redis session cache，完成 RBAC level 升级，使所有 cell 脱离内存存储。
+**目标**：完成 accesscore/auditcore/devicecell 的 PostgreSQL Repository 实现，激活 Redis session cache，完成 RBAC level 升级，使所有 cell 脱离内存存储。
 
 **域间依赖**：最重量级的独立大项。本域完成后可触发 Auth 域 X10（AUTH-REFRESH-OPAQUE-01）。
 
@@ -234,8 +234,8 @@
 | # | 任务 | 工时 | 备注 |
 |---|------|------|------|
 | X1-DDL | migration DDL：users / sessions / roles / devices+commands | 0.5d | `adapters/postgres/migrations/006+.sql` |
-| X1-ACCESS | access-core PG repo（User / Session / Role）| 1d | `cells/access-core/internal/adapters/postgres/`（新建）|
-| X1-AUDIT | audit-core / device-cell / order-cell PG repo | 0.5-1d | `cells/*/internal/adapters/postgres/` |
+| X1-ACCESS | accesscore PG repo（User / Session / Role）| 1d | `cells/accesscore/internal/adapters/postgres/`（新建）|
+| X1-AUDIT | auditcore / devicecell / ordercell PG repo | 0.5-1d | `cells/*/internal/adapters/postgres/` |
 | X1-LINK | 落地联动：RBAC-ASSIGN-LEVEL-UPGRADE-01 L0→L1 + SEED-ROLE-IFACE-01 去 type assertion + ACCESS-LEVEL-AUDIT-01 slice.yaml 校正 + AUTH-CACHE-01 激活 Redis session cache | 1-2d | 同 PR 或紧邻 PR |
 | S16 | **RUNTIME-TOPOLOGY-SINGLE-SOURCE-01** 🟡 (P2, Cx3)：运行拓扑单一事实源，消除 ENV 分裂（最小修复已合 PR#169；彻底方案随本域）| 6h | PR#169 review F-NEW-2 |
 | S17 | **POOL-FRAMEWORK-LIFECYCLE-01** 🟡 (P2, Cx3)：外部资源提升为 bootstrap 托管，统一 LIFO shutdown + 自动 health checker 注册（最小修复已合；彻底方案随本域）| 4h | PR#169 review F-NEW-3 |
@@ -246,8 +246,8 @@
 | PR | 内容 | 工时 |
 |----|------|------|
 | PR-PGREPO-DDL | X1-DDL：006+ migration DDL | 0.5d |
-| PR-PGREPO-ACCESS | X1-ACCESS：access-core PG repo + 集成测试 | 1d |
-| PR-PGREPO-AUDIT-DEVICE | X1-AUDIT：audit-core + device-cell PG repo | 0.5-1d |
+| PR-PGREPO-ACCESS | X1-ACCESS：accesscore PG repo + 集成测试 | 1d |
+| PR-PGREPO-AUDIT-DEVICE | X1-AUDIT：auditcore + devicecell PG repo | 0.5-1d |
 | PR-PGREPO-LINK | X1-LINK：落地联动（RBAC level + seed + cache 激活）| 1-2d |
 | PR-PGREPO-TOPOLOGY | S16 + S17：runtime topology 单一事实源 + pool 托管（🟡 搭车）| 10h |
 
@@ -301,5 +301,5 @@ Wave 5（Phase X，独立大项，发布后按需排期）
 | T10 | RMQ-STATTER-RENAME-01 | 独立小 PR，可随时做（无阻塞，15min）|
 | T11 | AUTH-LOADKEYSFROMENV-UNEXPORT-01 | 独立小 PR，可随时做（无阻塞，30min）|
 | P1-3a | CORS-OPTIONS-PUBLIC-ENDPOINT-01 | 新增 CORS middleware 时评估 OPTIONS * 是否加入公共端点 |
-| A13 | BOOTSTRAP-WIRE-RMQ-BROKER-HEALTH-01 | cmd/core-bundle 接入真实 RabbitMQ connection（替换 in-memory eventbus）|
+| A13 | BOOTSTRAP-WIRE-RMQ-BROKER-HEALTH-01 | cmd/corebundle 接入真实 RabbitMQ connection（替换 in-memory eventbus）|
 | S14a | CONFIG-VALUE-KMS-AWS-PROVIDER-01 | 明确生产云平台 + 通过 KMS 安全评审（前置 S14 ✅ PR#195 已完成）|

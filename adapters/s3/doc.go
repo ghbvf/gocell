@@ -1,6 +1,6 @@
 // Package s3 provides a thin adapter over aws-sdk-go-v2 for S3-compatible
 // object storage. It implements the ObjectUploader interface used by
-// cells/audit-core and other consumers.
+// cells/auditcore and other consumers.
 //
 // This package intentionally does NOT re-export SDK types. For operations
 // beyond Upload and Health (e.g., download, delete, presigned URLs), use

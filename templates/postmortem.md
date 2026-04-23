@@ -20,7 +20,7 @@
 
 <!-- One sentence describing what happened and its impact. -->
 
-{e.g. "A database connection pool exhaustion in access-core caused 503 errors for all login requests for 2 hours."}
+{e.g. "A database connection pool exhaustion in accesscore caused 503 errors for all login requests for 2 hours."}
 
 ---
 

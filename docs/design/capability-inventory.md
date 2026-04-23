@@ -11,8 +11,8 @@
 | **kernel/** | 11 包 | 全部 IMPL | cell/assembly/metadata/governance/outbox/idempotency/journey/registry/scaffold/slice + schemas |
 | **runtime/** | 11 子包 | 全部 IMPL | auth/bootstrap/config/eventbus/http×3/observability×3/shutdown/worker |
 | **adapters/** | 6 包 | 全部 IMPL | postgres/redis/rabbitmq/oidc/s3/websocket |
-| **cells/** | 3 Cell, 16 slices | 全部 IMPL | access-core(7s) / audit-core(4s) / config-core(5s) |
-| **cmd/** | 2 CLI | 全部 IMPL | gocell (validate/scaffold/generate/check/verify) + core-bundle |
+| **cells/** | 3 Cell, 16 slices | 全部 IMPL | accesscore(7s) / auditcore(4s) / configcore(5s) |
+| **cmd/** | 2 CLI | 全部 IMPL | gocell (validate/scaffold/generate/check/verify) + corebundle |
 | **pkg/** | 5 包 | 全部 IMPL | errcode/ctxkeys/httputil/id/uid |
 | **contracts/** | 13 YAML | 声明完成 | 5 HTTP + 8 Event |
 | **journeys/** | 8 YAML | 声明完成 | SSO/onboarding/lockout/refresh/logout/audit-trail/hot-reload/rollback |
@@ -202,7 +202,7 @@
 
 ## 5. Cells 层（3 Cell, 16 Slices）
 
-### 5.1 access-core (L2, core)
+### 5.1 accesscore (L2, core)
 | Slice | 功能 | 端点 |
 |-------|------|------|
 | session-login | 密码登录 + JWT 签发 | POST /api/v1/access/sessions/login |
@@ -217,7 +217,7 @@ Domain: User (PasswordHash/Status/CreatedAt) + Session (TokenPair/ExpiresAt/Prev
 Ports: UserRepository + SessionRepository + RoleRepository
 Adapters: internal/mem (in-memory)
 
-### 5.2 audit-core (L3, core)
+### 5.2 auditcore (L3, core)
 | Slice | 功能 |
 |-------|------|
 | audit-append | 事件追加 + HMAC-SHA256 hash chain |
@@ -229,7 +229,7 @@ Domain: AuditEntry (PrevHash/Hash/Payload)
 Ports: AuditRepository + ArchiveStore
 Adapters: internal/mem + internal/adapters/postgres (AuditRepository PG) + internal/adapters/s3archive (ArchiveStore wrapper)
 
-### 5.3 config-core (L2, core)
+### 5.3 configcore (L2, core)
 | Slice | 功能 |
 |-------|------|
 | config-read | 配置读取 |
@@ -258,8 +258,8 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 | `gocell check` | 架构分析（依赖/拓扑） |
 | `gocell verify slice/cell/journey` | 运行测试 |
 
-### core-bundle
-- 3 Cell 运行时入口（access-core + audit-core + config-core）
+### corebundle
+- 3 Cell 运行时入口（accesscore + auditcore + configcore）
 - adapter 接线（环境变量切换 in-memory / real）
 
 ---
@@ -269,23 +269,23 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 ### HTTP Contracts
 | ID | Owner | Level |
 |----|-------|-------|
-| http.auth.login.v1 | access-core | L1 |
-| http.auth.me.v1 | access-core | L1 |
-| http.auth.refresh.v1 | access-core | L1 |
-| http.config.get.v1 | config-core | L1 |
-| http.config.flags.v1 | config-core | L1 |
+| http.auth.login.v1 | accesscore | L1 |
+| http.auth.me.v1 | accesscore | L1 |
+| http.auth.refresh.v1 | accesscore | L1 |
+| http.config.get.v1 | configcore | L1 |
+| http.config.flags.v1 | configcore | L1 |
 
 ### Event Contracts
 | ID | Owner | Level | 特性 |
 |----|-------|-------|------|
-| event.session.created.v1 | access-core | L2 | replayable, at-least-once |
-| event.session.revoked.v1 | access-core | L2 | replayable, at-least-once |
-| event.user.created.v1 | access-core | L2 | replayable |
-| event.user.locked.v1 | access-core | L2 | replayable |
-| event.audit.appended.v1 | audit-core | L3 | replayable, at-least-once |
-| event.audit.integrity-verified.v1 | audit-core | L3 | — |
-| event.config.changed.v1 | config-core | L2 | replayable |
-| event.config.rollback.v1 | config-core | L2 | replayable |
+| event.session.created.v1 | accesscore | L2 | replayable, at-least-once |
+| event.session.revoked.v1 | accesscore | L2 | replayable, at-least-once |
+| event.user.created.v1 | accesscore | L2 | replayable |
+| event.user.locked.v1 | accesscore | L2 | replayable |
+| event.audit.appended.v1 | auditcore | L3 | replayable, at-least-once |
+| event.audit.integrity-verified.v1 | auditcore | L3 | — |
+| event.config.changed.v1 | configcore | L2 | replayable |
+| event.config.rollback.v1 | configcore | L2 | replayable |
 
 ---
 
@@ -293,14 +293,14 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 
 | Journey | 涉及 Cell | 类型 |
 |---------|----------|------|
-| J-sso-login | access-core, audit-core, config-core | 跨 Cell |
-| J-user-onboarding | access-core | 单 Cell |
-| J-account-lockout | access-core | 单 Cell |
-| J-session-refresh | access-core | 单 Cell |
-| J-session-logout | access-core | 单 Cell |
-| J-audit-login-trail | audit-core, access-core | 跨 Cell |
-| J-config-hot-reload | config-core | 单 Cell |
-| J-config-rollback | config-core | 单 Cell |
+| J-ssologin | accesscore, auditcore, configcore | 跨 Cell |
+| J-useronboarding | accesscore | 单 Cell |
+| J-accountlockout | accesscore | 单 Cell |
+| J-sessionrefresh | accesscore | 单 Cell |
+| J-sessionlogout | accesscore | 单 Cell |
+| J-auditlogintrail | auditcore, accesscore | 跨 Cell |
+| J-confighotreload | configcore | 单 Cell |
+| J-configrollback | configcore | 单 Cell |
 
 ---
 
@@ -354,9 +354,9 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 
 | 项目 | 类型 |
 |------|------|
-| examples/sso-bff | 示例：SSO 完整登录 |
-| examples/todo-order | 示例：CRUD + 事件驱动 |
-| examples/iot-device | 示例：L4 设备管理 |
+| examples/ssobff | 示例：SSO 完整登录 |
+| examples/todoorder | 示例：CRUD + 事件驱动 |
+| examples/iotdevice | 示例：L4 设备管理 |
 | testcontainers 真实集成测试 | tech-debt |
 | RS256 完全默认化 | tech-debt |
 | CI pipeline | tech-debt |

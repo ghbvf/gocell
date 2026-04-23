@@ -38,7 +38,7 @@ func TestTracer_SpanNameAndAttributes(t *testing.T) {
 	tr, exp, _ := newInMemoryTracer(t)
 
 	ctx, span := tr.Start(context.Background(), "outer-op")
-	span.SetAttribute("cell.id", "access-core")
+	span.SetAttribute("cell.id", "accesscore")
 	span.SetAttribute("retry.count", 3)
 	tracing.SpanSetStatus(span, false, "")
 	span.End()
@@ -55,7 +55,7 @@ func TestTracer_SpanNameAndAttributes(t *testing.T) {
 	gotCellID := false
 	gotRetry := false
 	for _, kv := range s.Attributes {
-		if string(kv.Key) == "cell.id" && kv.Value.AsString() == "access-core" {
+		if string(kv.Key) == "cell.id" && kv.Value.AsString() == "accesscore" {
 			gotCellID = true
 		}
 		if string(kv.Key) == "retry.count" && kv.Value.AsInt64() == 3 {

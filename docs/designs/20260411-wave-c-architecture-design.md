@@ -44,11 +44,11 @@ deps := cell.Dependencies{
 | Cell | `deps.Cells` | `deps.Contracts` | `deps.Config` |
 |------|-------------|-----------------|---------------|
 | BaseCell (`base.go:91`) | No | No | No |
-| AccessCore (`access-core/cell.go:161`) | No | No | Yes -- `deps.Config["access.signing_key"]` |
-| AuditCore (`audit-core/cell.go:112`) | No | No | Yes -- `deps.Config["audit.hmac_key"]` |
-| ConfigCore (`config-core/cell.go:103`) | No | No | No |
-| DeviceCell (`device-cell/cell.go:84`) | No | No | No |
-| OrderCell (`order-cell/cell.go:75`) | No | No | No |
+| AccessCore (`accesscore/cell.go:161`) | No | No | Yes -- `deps.Config["access.signing_key"]` |
+| AuditCore (`auditcore/cell.go:112`) | No | No | Yes -- `deps.Config["audit.hmac_key"]` |
+| ConfigCore (`configcore/cell.go:103`) | No | No | No |
+| DeviceCell (`devicecell/cell.go:84`) | No | No | No |
+| OrderCell (`ordercell/cell.go:75`) | No | No | No |
 | failInitCell (`assembly_test.go:49`) | No | No | No |
 
 **Result: Zero callers use `deps.Cells` or `deps.Contracts`.** Only two cells use `deps.Config` for fallback key resolution. All dependencies (outboxWriter, publisher, repos) are injected via functional options at construction time, not via `Dependencies`.
@@ -310,13 +310,13 @@ type Writer interface {
 
 | Call Site | File | Pattern |
 |-----------|------|---------|
-| sessionlogin | `access-core/slices/sessionlogin/service.go:159` | Single entry in tx |
-| sessionlogout | `access-core/slices/sessionlogout/service.go:95` | Single entry in tx |
-| identitymanage | `access-core/slices/identitymanage/service.go:224` | Single entry, no tx |
-| auditappend | `audit-core/slices/auditappend/service.go:118` | Single entry in tx |
-| auditverify | `audit-core/slices/auditverify/service.go:99` | Single entry, no tx |
-| configwrite | `config-core/slices/configwrite/service.go:178` | Single entry, no tx |
-| configpublish | `config-core/slices/configpublish/service.go:162` | Single entry, no tx |
+| sessionlogin | `accesscore/slices/sessionlogin/service.go:159` | Single entry in tx |
+| sessionlogout | `accesscore/slices/sessionlogout/service.go:95` | Single entry in tx |
+| identitymanage | `accesscore/slices/identitymanage/service.go:224` | Single entry, no tx |
+| auditappend | `auditcore/slices/auditappend/service.go:118` | Single entry in tx |
+| auditverify | `auditcore/slices/auditverify/service.go:99` | Single entry, no tx |
+| configwrite | `configcore/slices/configwrite/service.go:178` | Single entry, no tx |
+| configpublish | `configcore/slices/configpublish/service.go:162` | Single entry, no tx |
 
 PR#68 added `Entry.Validate()` (`outbox.go:44-52`) which provides input validation. The postgres implementation (`adapters/postgres/outbox_writer.go:37-84`) performs one INSERT per call within a context-embedded transaction.
 

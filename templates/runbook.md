@@ -61,7 +61,7 @@ Example verbose response:
 {
    "status": "healthy",
    "cells": {
-      "access-core": "healthy"
+      "accesscore": "healthy"
    },
    "dependencies": {
       "config-watcher": "healthy"

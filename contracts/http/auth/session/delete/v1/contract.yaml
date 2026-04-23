@@ -1,10 +1,10 @@
 id: http.auth.session.delete.v1
 kind: http
-ownerCell: access-core
+ownerCell: accesscore
 consistencyLevel: L1
 lifecycle: active
 endpoints:
-  server: access-core
+  server: accesscore
   clients:
     - edge-bff
   http:

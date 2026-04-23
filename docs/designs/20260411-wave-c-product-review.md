@@ -38,7 +38,7 @@ The `Cell.Init(ctx, deps Dependencies)` signature is unchanged, so any code that
 
 2. **[开发者体验]** The remaining `Dependencies` struct has a single field (`Config map[string]any`). The design correctly notes Option B (ConfigProvider interface) as a future evolution. However, a single-field struct is awkward for Go developers -- they will wonder why this isn't just `map[string]any` directly. **Recommendation**: Add a godoc comment explaining why the struct wrapper exists (extensibility, future fields like `Secrets` or `ServiceLocator`).
 
-3. **[开发者体验]** The `noopWriter` pattern is duplicated 4 times across test files and once in `examples/sso-bff/main.go`. The backlog already tracks `P4-TD-01: shared NoopOutboxWriter`. Consider bundling this cleanup into the same PR since it touches the same files.
+3. **[开发者体验]** The `noopWriter` pattern is duplicated 4 times across test files and once in `examples/ssobff/main.go`. The backlog already tracks `P4-TD-01: shared NoopOutboxWriter`. Consider bundling this cleanup into the same PR since it touches the same files.
 
 ### 1.4 Acceptance Criteria
 

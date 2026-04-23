@@ -1,10 +1,10 @@
 id: http.config.flags.list.v1
 kind: http
-ownerCell: config-core
+ownerCell: configcore
 consistencyLevel: L1
 lifecycle: active
 endpoints:
-  server: config-core
+  server: configcore
   clients:
     - edge-bff
   http:

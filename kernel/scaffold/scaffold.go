@@ -200,7 +200,10 @@ func (s *Scaffolder) CreateContract(opts ContractOpts) error {
 	return s.renderToFile(tplName, outPath, opts)
 }
 
-// CreateJourney creates journeys/J-{name}.yaml (or journeys/{id}.yaml if id starts with "J-").
+// CreateJourney creates journeys/J-{name}.yaml (or journeys/{id}.yaml if id
+// starts with "J-"). The no-dash naming convention applies to the portion
+// after the J- namespace prefix: any secondary dashes are stripped so that
+// generated ids/filenames satisfy FMT-16 style rules out of the box.
 func (s *Scaffolder) CreateJourney(opts JourneyOpts) error {
 	if err := validatePathComponent(opts.ID, "journey ID"); err != nil {
 		return err
@@ -215,10 +218,15 @@ func (s *Scaffolder) CreateJourney(opts JourneyOpts) error {
 		return errcode.New(ErrScaffoldInvalidOpts, "journey must reference at least one cell")
 	}
 
-	// Normalize: ensure ID carries the J- prefix for both filename and template.
+	// Normalize: ensure ID carries the J- prefix for both filename and template,
+	// then drop any secondary dashes after the prefix. Journey ids keep the
+	// J- namespace but the name portion is no-dash (e.g. J-ssologin, not
+	// J-sso-login). Stripping here means users can pass legacy kebab ids
+	// (from docs or old muscle memory) and still get compliant output.
 	if !strings.HasPrefix(opts.ID, "J-") {
 		opts.ID = "J-" + opts.ID
 	}
+	opts.ID = "J-" + strings.ReplaceAll(opts.ID[2:], "-", "")
 	filename := opts.ID + ".yaml"
 
 	dir := filepath.Join(s.root, "journeys")

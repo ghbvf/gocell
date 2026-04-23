@@ -62,7 +62,7 @@ func NewPGResource(pool *Pool, relay kworker.Worker) (*PGResource, error) {
 // fail immediately — K8s cannot distinguish "PG down" from "process shutting
 // down" if the outer ctx is passed directly.
 //
-// ref: cmd/core-bundle/main.go:230-241 (pgHealthCheckerOpts) — same rationale,
+// ref: cmd/corebundle/main.go:230-241 (pgHealthCheckerOpts) — same rationale,
 // same 5s timeout, now centralised here.
 // ref: Kubernetes readyz — external dependencies contribute named checks.
 func (r *PGResource) Checkers() map[string]func() error {

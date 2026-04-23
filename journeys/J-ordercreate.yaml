@@ -1,0 +1,15 @@
+id: J-ordercreate
+goal: "Create an order over HTTP and emit order-created through the configured runtime path"
+owner:
+  team: examples
+  role: order-owner
+cells:
+  - ordercell
+contracts:
+  - http.order.create.v1
+  - event.order-created.v1
+passCriteria:
+  - text: "POST /api/v1/orders/ returns 201 with order ID"
+    mode: auto
+  - text: "Demo mode emits order-created best-effort in-process; durable outbox delivery requires outboxWriter + txManager + relay wiring"
+    mode: manual

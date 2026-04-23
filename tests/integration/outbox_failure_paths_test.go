@@ -22,7 +22,7 @@ import (
 //
 // These tests reinstate the failure-path coverage that was previously held in
 // adapters/postgres/outbox_relay_integration_test.go (deleted in S30 Phase F)
-// against the new wiring used by cmd/core-bundle:
+// against the new wiring used by cmd/corebundle:
 //
 //     pgStore := postgres.NewOutboxStore(pool.DB())
 //     relay   := outboxruntime.NewRelay(pgStore, publisher, cfg)

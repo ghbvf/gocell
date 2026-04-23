@@ -1,0 +1,11 @@
+id: authorizationdecide
+belongsToCell: accesscore
+contractUsages: []
+verify:
+  unit:
+    - unit.authorizationdecide.service
+  contract: []
+  waivers: []
+
+allowedFiles:
+  - cells/accesscore/slices/authorizationdecide/**

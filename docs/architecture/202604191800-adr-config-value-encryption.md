@@ -3,7 +3,7 @@
 **Date**: 2026-04-19  
 **Status**: Accepted  
 **Deciders**: platform team  
-**Scope**: config-core sensitive=true values; extensible to access-core / audit-core
+**Scope**: configcore sensitive=true values; extensible to accesscore / auditcore
 
 ---
 
@@ -98,7 +98,7 @@ Implementations:
 ### ValueTransformer thin wrapper
 
 `ValueTransformer` calls `KeyProvider.Current()` for writes and `KeyProvider.ByID(keyID)` for reads.
-It also computes the AAD (`cell:config-core/key:{configKey}`) to prevent ciphertext transplant attacks.
+It also computes the AAD (`cell:configcore/key:{configKey}`) to prevent ciphertext transplant attacks.
 
 ```go
 type ValueTransformer interface {
@@ -175,7 +175,7 @@ API call. Vault uses this context for HMAC binding — the decrypt call fails if
 does not match what was provided during encryption.
 
 Both providers therefore provide equivalent cross-row replay prevention:
-- AAD = `cell:config-core/key:{configKey}` (constructed by `crypto.AADForConfig`)
+- AAD = `cell:configcore/key:{configKey}` (constructed by `crypto.AADForConfig`)
 - Mismatched AAD (e.g. transplanted ciphertext from key "db_password" to "api_key") → decrypt error → `ErrConfigDecryptFailed`
 
 ref: hashicorp/vault builtin/logical/transit/path_encrypt.go — "context" field semantics

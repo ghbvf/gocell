@@ -180,7 +180,7 @@ func TestKeyHandle_EncryptDecrypt_AADConsistent(t *testing.T) {
 	ctx := context.Background()
 	h := &fakeKeyHandle{id: "test-key"}
 	plaintext := []byte("super-secret-value")
-	aad := []byte("cell:config-core/key:api_key")
+	aad := []byte("cell:configcore/key:api_key")
 
 	// Round-trip with matching AAD should succeed.
 	cipher, nonce, edk, _, err := h.Encrypt(ctx, plaintext, aad)
@@ -191,7 +191,7 @@ func TestKeyHandle_EncryptDecrypt_AADConsistent(t *testing.T) {
 	assert.Equal(t, plaintext, recovered)
 
 	// Different AAD must fail.
-	_, err = h.Decrypt(ctx, cipher, nonce, edk, []byte("cell:config-core/key:other_key"))
+	_, err = h.Decrypt(ctx, cipher, nonce, edk, []byte("cell:configcore/key:other_key"))
 	require.Error(t, err, "different AAD should produce a decrypt error")
 }
 

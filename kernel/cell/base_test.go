@@ -48,14 +48,14 @@ func TestBaseCellLifecycle(t *testing.T) {
 
 func TestBaseCellAccessors(t *testing.T) {
 	meta := CellMetadata{
-		ID:               "config-core",
+		ID:               "configcore",
 		Type:             CellTypeSupport,
 		ConsistencyLevel: L1,
 		Owner:            Owner{Team: "infra", Role: "maintainer"},
 	}
 	c := NewBaseCell(meta)
 
-	assert.Equal(t, "config-core", c.ID())
+	assert.Equal(t, "configcore", c.ID())
 	assert.Equal(t, CellTypeSupport, c.Type())
 	assert.Equal(t, L1, c.ConsistencyLevel())
 	assert.Equal(t, meta, c.Metadata())
@@ -279,10 +279,10 @@ func TestBaseCellConcurrentAddAndRead(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseSliceAccessors(t *testing.T) {
-	s := NewBaseSlice("login-slice", "access-core", L1)
+	s := NewBaseSlice("login-slice", "accesscore", L1)
 
 	assert.Equal(t, "login-slice", s.ID())
-	assert.Equal(t, "access-core", s.BelongsToCell())
+	assert.Equal(t, "accesscore", s.BelongsToCell())
 	assert.Equal(t, L1, s.ConsistencyLevel())
 }
 
@@ -309,19 +309,19 @@ func TestBaseSliceVerify(t *testing.T) {
 }
 
 func TestBaseSliceAllowedFilesNilWhenUnset(t *testing.T) {
-	s := NewBaseSlice("login", "access-core", L1)
+	s := NewBaseSlice("login", "accesscore", L1)
 	assert.Nil(t, s.AllowedFiles(), "unset AllowedFiles returns nil — convention defaults are metadata-only (FMT-14)")
 }
 
 func TestBaseSliceAllowedFilesExplicit(t *testing.T) {
-	s := NewBaseSlice("login", "access-core", L1)
-	custom := []string{"cells/access-core/slices/login/**"}
+	s := NewBaseSlice("login", "accesscore", L1)
+	custom := []string{"cells/accesscore/slices/login/**"}
 	s.SetAllowedFiles(custom)
 	assert.Equal(t, custom, s.AllowedFiles())
 }
 
 func TestBaseSliceAllowedFilesCopiesSlice(t *testing.T) {
-	s := NewBaseSlice("login", "access-core", L1)
+	s := NewBaseSlice("login", "accesscore", L1)
 	s.SetAllowedFiles([]string{"a/**", "b/**"})
 	got := s.AllowedFiles()
 	got[0] = "mutated"
@@ -344,17 +344,17 @@ func TestBaseSliceAffectedJourneys(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestBaseContractAccessors(t *testing.T) {
-	c := NewBaseContract("session-api", ContractHTTP, "access-core", L2)
+	c := NewBaseContract("session-api", ContractHTTP, "accesscore", L2)
 
 	assert.Equal(t, "session-api", c.ID())
 	assert.Equal(t, ContractHTTP, c.Kind())
-	assert.Equal(t, "access-core", c.OwnerCell())
+	assert.Equal(t, "accesscore", c.OwnerCell())
 	assert.Equal(t, L2, c.ConsistencyLevel())
 	assert.Equal(t, LifecycleActive, c.Lifecycle(), "default lifecycle should be active")
 }
 
 func TestBaseContractSetLifecycle(t *testing.T) {
-	c := NewBaseContract("api-v1", ContractHTTP, "access-core", L1)
+	c := NewBaseContract("api-v1", ContractHTTP, "accesscore", L1)
 	assert.Equal(t, LifecycleActive, c.Lifecycle(), "default should be active")
 
 	tests := []struct {

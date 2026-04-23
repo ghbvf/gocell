@@ -18,7 +18,7 @@ Cell-native Go 工程底座。只保留稳定的开发规则和架构约束。
 
 ```
 kernel/       — Cell/Slice 运行时 + 治理工具（底座灵魂）
-cells/        — Cell 实现（access-core / audit-core / config-core），每个 Cell 下含 slices/
+cells/        — Cell 实现（accesscore / auditcore / configcore），每个 Cell 下含 slices/
 contracts/    — 跨 Cell 边界契约（按 {kind}/{domain-path}/{version}/ 组织）
 journeys/     — Journey 验收规格（J-*.yaml）+ status-board.yaml（动态交付状态）
 assemblies/   — 物理打包配置（assembly.yaml）
@@ -27,7 +27,7 @@ runtime/      — 通用运行时（http / auth / worker / observability）
 adapters/     — 外部系统适配（postgres / redis / rabbitmq / websocket / s3 / oidc）
 pkg/          — 共享工具包（errcode / ctxkeys / httputil / query）
 cmd/          — CLI 入口（gocell validate / scaffold / generate / check / verify）
-examples/     — 示例项目（sso-bff / todo-order / iot-device）
+examples/     — 示例项目（ssobff / todoorder / iotdevice）
 generated/    — 工具生成产物（indexes / 派生视图，禁止手工编辑）
 actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型的系统）
 ```
@@ -45,7 +45,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 - 每个 Cell 必须有 cell.yaml（必填：id / type / consistencyLevel / owner / schema.primary / verify.smoke）
 - 每个 Slice 必须有 slice.yaml（必填：id / belongsToCell / contractUsages / verify.unit / verify.contract）
   - owner、consistencyLevel 缺省时继承 cell.yaml；allowedFiles 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）
-  - slice.id 与目录名必须为 no-dash 格式；kebab-case 由 `gocell validate --strict` FMT-16 拦截
+  - 所有 slice / cell / assembly 的目录名和 id 必须为 no-dash 格式；由 `gocell validate --strict` 拦截（FMT-16 扫目录、FMT-C1 扫 cell id、FMT-A1 扫 assembly id）
 - Cell 之间只通过 contract 通信，禁止直接 import 另一个 Cell 的 internal/
   - 例外：L0 Cell（纯计算库）可被同一 assembly 内的兄弟 Cell 直接 import，无需 contract
 - 动态交付状态（readiness / risk / blocker / done / verified / nextAction / updatedAt）只在 `journeys/status-board.yaml`，禁止出现在 cell.yaml / slice.yaml / contract.yaml / assembly.yaml

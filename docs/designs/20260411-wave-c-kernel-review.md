@@ -29,7 +29,7 @@
 
 **Verdict**: Option A (narrow to Config-only) is sound. The change improves layering isolation by removing a mechanism through which cells could bypass contract-mediated communication. The design document's impact analysis is accurate -- zero functional breakage, only struct literal compilation in tests.
 
-**Correction to design document**: The document states "~15 test file updates" but actual evidence shows approximately 20 test sites across 5 cell test files (access-core, audit-core, config-core, device-cell, order-cell) plus `kernel/cell/base_test.go` and `kernel/assembly/assembly_test.go`. The `base_test.go` sites use `Dependencies{}` without named fields, so they compile without change. The real count is:
+**Correction to design document**: The document states "~15 test file updates" but actual evidence shows approximately 20 test sites across 5 cell test files (accesscore, auditcore, configcore, devicecell, ordercell) plus `kernel/cell/base_test.go` and `kernel/assembly/assembly_test.go`. The `base_test.go` sites use `Dependencies{}` without named fields, so they compile without change. The real count is:
 - 1 production file (`assembly.go`) -- remove 2 lines
 - 5 cell test files -- remove `Cells:` and `Contracts:` field assignments (~20 sites)
 - 0 changes to `base_test.go` (uses positional `Dependencies{}`)

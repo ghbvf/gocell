@@ -14,7 +14,7 @@ type resolvedRef struct {
 	RunPattern string // CamelCase -run regex pattern
 }
 
-// resolveRef parses a structured ref like "journey.J-sso-login.session-revoke"
+// resolveRef parses a structured ref like "journey.J-ssologin.session-revoke"
 // and returns the resolved go test package and -run pattern.
 //
 // Supported formats:

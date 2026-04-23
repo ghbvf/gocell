@@ -19,7 +19,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ```
 # 单一问题
 /fix session refresh 有并发问题
-/fix cells/access-core/slices/sessionrefresh/service.go:81
+/fix cells/accesscore/slices/sessionrefresh/service.go:81
 /fix P3-TD-10
 
 # 多方审查报告（批量输入）

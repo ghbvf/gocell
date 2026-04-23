@@ -12,7 +12,7 @@ func TestCellIDRoundTrip(t *testing.T) {
 		name  string
 		value string
 	}{
-		{name: "normal id", value: "access-core"},
+		{name: "normal id", value: "accesscore"},
 		{name: "empty string", value: ""},
 	}
 	for _, tt := range tests {
@@ -180,7 +180,7 @@ func TestFromMissingKey(t *testing.T) {
 
 func TestMultipleKeysInSameContext(t *testing.T) {
 	ctx := context.Background()
-	ctx = WithCellID(ctx, "access-core")
+	ctx = WithCellID(ctx, "accesscore")
 	ctx = WithSliceID(ctx, "auth-login")
 	ctx = WithCorrelationID(ctx, "corr-123")
 	ctx = WithJourneyID(ctx, "J-SSO-001")
@@ -191,7 +191,7 @@ func TestMultipleKeysInSameContext(t *testing.T) {
 
 	cellID, ok := CellIDFrom(ctx)
 	assert.True(t, ok)
-	assert.Equal(t, "access-core", cellID)
+	assert.Equal(t, "accesscore", cellID)
 
 	sliceID, ok := SliceIDFrom(ctx)
 	assert.True(t, ok)

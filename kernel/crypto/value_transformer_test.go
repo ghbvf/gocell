@@ -40,7 +40,7 @@ func TestValueTransformer_InterfaceMethods(t *testing.T) {
 	var tr kcrypto.ValueTransformer = fakeTransformer{}
 
 	plaintext := []byte("secret-value")
-	aad := []byte("cell:test-cell/key:test-key") // AADForConfig moved to cells/config-core/internal/crypto
+	aad := []byte("cell:test-cell/key:test-key") // AADForConfig moved to cells/configcore/internal/crypto
 
 	ct, keyID, nonce, edk, err := tr.Encrypt(ctx, plaintext, aad)
 	if err != nil {

@@ -1,12 +1,12 @@
 id: event.user.locked.v1
 kind: event
-ownerCell: access-core
+ownerCell: accesscore
 consistencyLevel: L2
 lifecycle: active
 endpoints:
-  publisher: access-core
+  publisher: accesscore
   subscribers:
-    - audit-core
+    - auditcore
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json

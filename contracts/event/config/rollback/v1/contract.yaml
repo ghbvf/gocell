@@ -1,13 +1,13 @@
 id: event.config.rollback.v1
 kind: event
-ownerCell: config-core
+ownerCell: configcore
 consistencyLevel: L2
 lifecycle: active
 endpoints:
-  publisher: config-core
+  publisher: configcore
   subscribers:
-    - access-core
-    - audit-core
+    - accesscore
+    - auditcore
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json

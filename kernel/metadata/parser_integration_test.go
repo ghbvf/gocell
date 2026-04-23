@@ -30,7 +30,7 @@ func TestParseRealProject(t *testing.T) {
 	// --- Cells: at least the 3 original cells (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Cells), 3, "expected at least 3 cells")
 	assert.LessOrEqual(t, len(pm.Cells), 6, "unexpected extra cells parsed — update this bound if new cells were added intentionally")
-	for _, id := range []string{"access-core", "audit-core", "config-core"} {
+	for _, id := range []string{"accesscore", "auditcore", "configcore"} {
 		assert.Contains(t, pm.Cells, id, "missing cell %s", id)
 	}
 
@@ -38,25 +38,25 @@ func TestParseRealProject(t *testing.T) {
 	assert.GreaterOrEqual(t, len(pm.Slices), 19, "expected at least 19 slices")
 	assert.LessOrEqual(t, len(pm.Slices), 30, "unexpected extra slices parsed — update this bound if new slices were added intentionally")
 	expectedSlices := []string{
-		"access-core/sessionlogin",
-		"access-core/sessionvalidate",
-		"access-core/rbaccheck",
-		"access-core/identitymanage",
-		"access-core/sessionrefresh",
-		"access-core/sessionlogout",
-		"access-core/authorizationdecide",
-		"access-core/rbacassign",
-		"access-core/configreceive",
-		"audit-core/auditappend",
-		"audit-core/auditquery",
-		"audit-core/auditverify",
-		"audit-core/auditarchive",
-		"config-core/configread",
-		"config-core/configwrite",
-		"config-core/configpublish",
-		"config-core/configsubscribe",
-		"config-core/featureflag",
-		"config-core/flagwrite",
+		"accesscore/sessionlogin",
+		"accesscore/sessionvalidate",
+		"accesscore/rbaccheck",
+		"accesscore/identitymanage",
+		"accesscore/sessionrefresh",
+		"accesscore/sessionlogout",
+		"accesscore/authorizationdecide",
+		"accesscore/rbacassign",
+		"accesscore/configreceive",
+		"auditcore/auditappend",
+		"auditcore/auditquery",
+		"auditcore/auditverify",
+		"auditcore/auditarchive",
+		"configcore/configread",
+		"configcore/configwrite",
+		"configcore/configpublish",
+		"configcore/configsubscribe",
+		"configcore/featureflag",
+		"configcore/flagwrite",
 	}
 	for _, key := range expectedSlices {
 		assert.Contains(t, pm.Slices, key, "missing slice %s", key)
@@ -99,14 +99,14 @@ func TestParseRealProject(t *testing.T) {
 	assert.GreaterOrEqual(t, len(pm.Journeys), 8, "expected at least 8 journeys")
 	assert.LessOrEqual(t, len(pm.Journeys), 12, "unexpected extra journeys parsed — update this bound if new journeys were added intentionally")
 	expectedJourneys := []string{
-		"J-sso-login",
-		"J-session-refresh",
-		"J-session-logout",
-		"J-user-onboarding",
-		"J-account-lockout",
-		"J-audit-login-trail",
-		"J-config-hot-reload",
-		"J-config-rollback",
+		"J-ssologin",
+		"J-sessionrefresh",
+		"J-sessionlogout",
+		"J-useronboarding",
+		"J-accountlockout",
+		"J-auditlogintrail",
+		"J-confighotreload",
+		"J-configrollback",
 	}
 	for _, id := range expectedJourneys {
 		assert.Contains(t, pm.Journeys, id, "missing journey %s", id)
@@ -115,7 +115,7 @@ func TestParseRealProject(t *testing.T) {
 	// --- Assemblies: at least the 1 original assembly (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Assemblies), 1, "expected at least 1 assembly")
 	assert.LessOrEqual(t, len(pm.Assemblies), 3, "unexpected extra assemblies parsed — update this bound if new assemblies were added intentionally")
-	assert.Contains(t, pm.Assemblies, "core-bundle")
+	assert.Contains(t, pm.Assemblies, "corebundle")
 
 	// --- Status Board: at least the 8 original entries (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.StatusBoard), 8, "expected at least 8 status-board entries")
@@ -126,7 +126,7 @@ func TestParseRealProject(t *testing.T) {
 	assert.Equal(t, "edge-bff", pm.Actors[0].ID)
 
 	// Spot-check a well-known cell.
-	ac := pm.Cells["access-core"]
+	ac := pm.Cells["accesscore"]
 	require.NotNil(t, ac)
 	assert.Equal(t, "core", ac.Type)
 	assert.Equal(t, "L2", ac.ConsistencyLevel)
@@ -137,7 +137,7 @@ func TestParseRealProject(t *testing.T) {
 	require.NotNil(t, login)
 	assert.Equal(t, "http", login.Kind)
 	assert.Equal(t, "active", login.Lifecycle)
-	assert.Equal(t, "access-core", login.Endpoints.Server)
+	assert.Equal(t, "accesscore", login.Endpoints.Server)
 
 	// Spot-check an event contract.
 	evt := pm.Contracts["event.session.created.v1"]

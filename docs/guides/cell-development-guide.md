@@ -2,7 +2,7 @@
 
 ## Cell 是什么
 
-Cell 是 GoCell 的核心业务单元，封装了一组相关的 Slice（功能切片）。每个 Cell 拥有独立的数据所有权、一致性等级和生命周期。Cell 之间通过 Contract 通信，禁止直接 import 其他 Cell 的 internal 包。GoCell 内置了 3 个 Cell：config-core（配置管理）、access-core（认证授权）、audit-core（审计追踪）。
+Cell 是 GoCell 的核心业务单元，封装了一组相关的 Slice（功能切片）。每个 Cell 拥有独立的数据所有权、一致性等级和生命周期。Cell 之间通过 Contract 通信，禁止直接 import 其他 Cell 的 internal 包。GoCell 内置了 3 个 Cell：configcore（配置管理）、accesscore（认证授权）、auditcore（审计追踪）。
 
 ## 创建自定义 Cell
 

@@ -1,6 +1,6 @@
 # cells/ 层规则
 
-cells/ 包含各业务 Cell 的实现（access-core / audit-core / config-core 等），每个 Cell 下含 `slices/`。
+cells/ 包含各业务 Cell 的实现（accesscore / auditcore / configcore 等），每个 Cell 下含 `slices/`。
 
 ## 依赖约束
 

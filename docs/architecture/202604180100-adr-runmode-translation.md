@@ -67,10 +67,10 @@ pkg/       允许依赖: 标准库         禁止依赖: kernel/ cells/ runtime/
 - 统一 configpublish：`WithDemoFailOpen` 删除，改用 `WithRunMode`（PR-P-QUERY）
 - PR#175：`configpublish.WithRunMode` 删除（死代码），write path 不再有 RunMode 消费
 - 调用点：
-  - `cells/config-core/cell.go::Init` — 单次翻译，下发给 config-read / feature-flag（config-publish 已移除）
-  - `cells/audit-core/cell.go::Init`
-  - `cells/order-cell/cell.go::Init`
-  - `cells/device-cell/cell.go::Init`
+  - `cells/configcore/cell.go::Init` — 单次翻译，下发给 config-read / feature-flag（config-publish 已移除）
+  - `cells/auditcore/cell.go::Init`
+  - `cells/ordercell/cell.go::Init`
+  - `cells/devicecell/cell.go::Init`
 
 ## 扩展路径
 

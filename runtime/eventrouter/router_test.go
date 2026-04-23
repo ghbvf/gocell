@@ -665,8 +665,8 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 	sub := &recordingGroupSubscriber{}
 	r := New(sub)
 
-	r.AddHandler("session.created", noopHandler, "audit-core")
-	r.AddHandler("config.changed", noopHandler, "config-core")
+	r.AddHandler("session.created", noopHandler, "auditcore")
+	r.AddHandler("config.changed", noopHandler, "configcore")
 	r.AddHandler("legacy.event", noopHandler, "legacy-cell")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -690,8 +690,8 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 		groupByTopic[c.Topic] = c.ConsumerGroup
 	}
 
-	assert.Equal(t, "audit-core", groupByTopic["session.created"])
-	assert.Equal(t, "config-core", groupByTopic["config.changed"])
+	assert.Equal(t, "auditcore", groupByTopic["session.created"])
+	assert.Equal(t, "configcore", groupByTopic["config.changed"])
 	assert.Equal(t, "legacy-cell", groupByTopic["legacy.event"])
 }
 

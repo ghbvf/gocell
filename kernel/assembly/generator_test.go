@@ -19,42 +19,42 @@ import (
 // suitable for testing boundary computation.
 //
 // Layout:
-//   - assembly "sso-bff" contains cells: access-core, audit-core
-//   - cell "config-core" is outside the assembly
-//   - contract "http/auth/login" (http): server=access-core, clients=[config-core]
+//   - assembly "ssobff" contains cells: accesscore, auditcore
+//   - cell "configcore" is outside the assembly
+//   - contract "http/auth/login" (http): server=accesscore, clients=[configcore]
 //     → exported (provider inside, consumer outside)
-//   - contract "event/session/created" (event): publisher=access-core, subscribers=[audit-core]
+//   - contract "event/session/created" (event): publisher=accesscore, subscribers=[auditcore]
 //     → NOT exported (all consumers inside)
-//   - contract "event/config/changed" (event): publisher=config-core, subscribers=[access-core]
+//   - contract "event/config/changed" (event): publisher=configcore, subscribers=[accesscore]
 //     → imported (provider outside, consumer inside)
-//   - contract "http/auth/me" (http): server=access-core, clients=[]
+//   - contract "http/auth/me" (http): server=accesscore, clients=[]
 //     → exported (provider inside, consumers empty)
 func buildTestProject() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "identity", Role: "maintainer"},
 				Schema:           metadata.SchemaMeta{Primary: "users"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.access-core.auth", "smoke.access-core.session"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.auth", "smoke.accesscore.session"}},
 			},
-			"audit-core": {
-				ID:               "audit-core",
+			"auditcore": {
+				ID:               "auditcore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "compliance", Role: "maintainer"},
 				Schema:           metadata.SchemaMeta{Primary: "audit_logs"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.audit-core.audit"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore.audit"}},
 			},
-			"config-core": {
-				ID:               "config-core",
+			"configcore": {
+				ID:               "configcore",
 				Type:             "support",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "maintainer"},
 				Schema:           metadata.SchemaMeta{Primary: "config_entries"},
-				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.config-core.config"}},
+				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.configcore.config"}},
 			},
 		},
 		Slices:    make(map[string]*metadata.SliceMeta),
@@ -62,49 +62,49 @@ func buildTestProject() *metadata.ProjectMeta {
 			"http/auth/login/v1": {
 				ID:        "http/auth/login/v1",
 				Kind:      "http",
-				OwnerCell: "access-core",
+				OwnerCell: "accesscore",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "access-core",
-					Clients: []string{"config-core"},
+					Server:  "accesscore",
+					Clients: []string{"configcore"},
 				},
 			},
 			"event/session/created/v1": {
 				ID:        "event/session/created/v1",
 				Kind:      "event",
-				OwnerCell: "access-core",
+				OwnerCell: "accesscore",
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "access-core",
-					Subscribers: []string{"audit-core"},
+					Publisher:   "accesscore",
+					Subscribers: []string{"auditcore"},
 				},
 			},
 			"event/config/changed/v1": {
 				ID:        "event/config/changed/v1",
 				Kind:      "event",
-				OwnerCell: "config-core",
+				OwnerCell: "configcore",
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "config-core",
-					Subscribers: []string{"access-core"},
+					Publisher:   "configcore",
+					Subscribers: []string{"accesscore"},
 				},
 			},
 			"http/auth/me/v1": {
 				ID:        "http/auth/me/v1",
 				Kind:      "http",
-				OwnerCell: "access-core",
+				OwnerCell: "accesscore",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "access-core",
+					Server:  "accesscore",
 					Clients: []string{},
 				},
 			},
 		},
 		Journeys: make(map[string]*metadata.JourneyMeta),
 		Assemblies: map[string]*metadata.AssemblyMeta{
-			"sso-bff": {
-				ID:    "sso-bff",
-				Cells: []string{"access-core", "audit-core"},
+			"ssobff": {
+				ID:    "ssobff",
+				Cells: []string{"accesscore", "auditcore"},
 				Build: metadata.BuildMeta{
-					Entrypoint:     "cmd/sso-bff/main.go",
-					Binary:         "sso-bff",
-					DeployTemplate: "k8s/sso-bff.yaml",
+					Entrypoint:     "cmd/ssobff/main.go",
+					Binary:         "ssobff",
+					DeployTemplate: "k8s/ssobff.yaml",
 				},
 			},
 		},
@@ -121,30 +121,30 @@ func TestGenerateEntrypoint_ContainsAssemblyID(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateEntrypoint("sso-bff")
+	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, `assembly.Config{ID: "sso-bff", DurabilityMode: cell.DurabilityDemo}`)
+	assert.Contains(t, content, `assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDemo}`)
 }
 
 func TestGenerateEntrypoint_ContainsCellComments(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateEntrypoint("sso-bff")
+	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, "access-core")
-	assert.Contains(t, content, "audit-core")
+	assert.Contains(t, content, "accesscore")
+	assert.Contains(t, content, "auditcore")
 }
 
 func TestGenerateEntrypoint_ContainsModulePath(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateEntrypoint("sso-bff")
+	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -155,7 +155,7 @@ func TestGenerateEntrypoint_ContainsDoNotEdit(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateEntrypoint("sso-bff")
+	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -182,15 +182,15 @@ func TestGenerateBoundary_ExportedContracts(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
 
-	// http/auth/login/v1: provider=access-core (inside), consumer=config-core (outside) → exported
+	// http/auth/login/v1: provider=accesscore (inside), consumer=configcore (outside) → exported
 	assert.Contains(t, content, "http/auth/login/v1")
 
-	// http/auth/me/v1: provider=access-core (inside), consumers=[] → exported
+	// http/auth/me/v1: provider=accesscore (inside), consumers=[] → exported
 	assert.Contains(t, content, "http/auth/me/v1")
 }
 
@@ -198,12 +198,12 @@ func TestGenerateBoundary_NotExportedWhenAllConsumersInside(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
 
-	// event/session/created/v1: provider=access-core (inside), subscriber=audit-core (inside)
+	// event/session/created/v1: provider=accesscore (inside), subscriber=auditcore (inside)
 	// → NOT exported (all consumers inside)
 	// It should NOT appear in the exportedContracts section.
 	lines := strings.Split(content, "\n")
@@ -237,12 +237,12 @@ func TestGenerateBoundary_ImportedContracts(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
 
-	// event/config/changed/v1: provider=config-core (outside), subscriber=access-core (inside) → imported
+	// event/config/changed/v1: provider=configcore (outside), subscriber=accesscore (inside) → imported
 	lines := strings.Split(content, "\n")
 	inImported := false
 	found := false
@@ -266,26 +266,26 @@ func TestGenerateBoundary_SmokeTargets(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
 
-	// access-core smoke: smoke.access-core.auth, smoke.access-core.session
-	// audit-core smoke: smoke.audit-core.audit
-	assert.Contains(t, content, "smoke.access-core.auth")
-	assert.Contains(t, content, "smoke.access-core.session")
-	assert.Contains(t, content, "smoke.audit-core.audit")
+	// accesscore smoke: smoke.accesscore.auth, smoke.accesscore.session
+	// auditcore smoke: smoke.auditcore.audit
+	assert.Contains(t, content, "smoke.accesscore.auth")
+	assert.Contains(t, content, "smoke.accesscore.session")
+	assert.Contains(t, content, "smoke.auditcore.audit")
 
-	// config-core smoke should NOT appear (config-core is outside assembly)
-	assert.NotContains(t, content, "smoke.config-core.config")
+	// configcore smoke should NOT appear (configcore is outside assembly)
+	assert.NotContains(t, content, "smoke.configcore.config")
 }
 
 func TestGenerateBoundary_FingerprintNonEmpty(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
@@ -306,11 +306,11 @@ func TestGenerateBoundary_ContainsAssemblyID(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, "assemblyId: sso-bff")
+	assert.Contains(t, content, "assemblyId: ssobff")
 }
 
 func TestGenerateBoundary_NotFoundAssembly(t *testing.T) {
@@ -364,7 +364,7 @@ func TestGenerateEntrypoint_EmptyAssembly(t *testing.T) {
 	content := string(out)
 	assert.Contains(t, content, `assembly.Config{ID: "empty", DurabilityMode: cell.DurabilityDemo}`)
 	// No cell comments expected
-	assert.NotContains(t, content, "access-core")
+	assert.NotContains(t, content, "accesscore")
 }
 
 // ---------------------------------------------------------------------------
@@ -375,12 +375,12 @@ func TestSourceFingerprint_Deterministic(t *testing.T) {
 	project := buildTestProject()
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	cellSet := map[string]bool{"access-core": true, "audit-core": true}
+	cellSet := map[string]bool{"accesscore": true, "auditcore": true}
 	exported, imported, err := gen.computeBoundaryContracts(cellSet)
 	require.NoError(t, err)
 
-	fp1 := gen.sourceFingerprint("sso-bff", exported, imported)
-	fp2 := gen.sourceFingerprint("sso-bff", exported, imported)
+	fp1 := gen.sourceFingerprint("ssobff", exported, imported)
+	fp2 := gen.sourceFingerprint("ssobff", exported, imported)
 
 	assert.Equal(t, fp1, fp2, "fingerprint should be deterministic")
 	assert.Len(t, fp1, 64)
@@ -401,40 +401,40 @@ func TestSourceFingerprint_NotFoundReturnsEmpty(t *testing.T) {
 func TestGenerateBoundary_CommandAndProjectionKinds(t *testing.T) {
 	project := buildTestProject()
 
-	// Add a command contract: handler=audit-core (inside), invokers=[config-core] (outside)
+	// Add a command contract: handler=auditcore (inside), invokers=[configcore] (outside)
 	project.Contracts["command/audit/archive/v1"] = &metadata.ContractMeta{
 		ID:        "command/audit/archive/v1",
 		Kind:      "command",
-		OwnerCell: "audit-core",
+		OwnerCell: "auditcore",
 		Endpoints: metadata.EndpointsMeta{
-			Handler:  "audit-core",
-			Invokers: []string{"config-core"},
+			Handler:  "auditcore",
+			Invokers: []string{"configcore"},
 		},
 	}
 
-	// Add a projection contract: provider=config-core (outside), readers=[audit-core] (inside)
+	// Add a projection contract: provider=configcore (outside), readers=[auditcore] (inside)
 	project.Contracts["projection/config/snapshot/v1"] = &metadata.ContractMeta{
 		ID:        "projection/config/snapshot/v1",
 		Kind:      "projection",
-		OwnerCell: "config-core",
+		OwnerCell: "configcore",
 		Endpoints: metadata.EndpointsMeta{
-			Provider: "config-core",
-			Readers:  []string{"audit-core"},
+			Provider: "configcore",
+			Readers:  []string{"auditcore"},
 		},
 	}
 
 	// Rebuild generator to pick up new contracts
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	out, err := gen.GenerateBoundary("sso-bff")
+	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
 
 	content := string(out)
 
-	// command/audit/archive/v1: handler=audit-core (inside), invoker=config-core (outside) → exported
+	// command/audit/archive/v1: handler=auditcore (inside), invoker=configcore (outside) → exported
 	assert.Contains(t, content, "command/audit/archive/v1")
 
-	// projection/config/snapshot/v1: provider=config-core (outside), reader=audit-core (inside) → imported
+	// projection/config/snapshot/v1: provider=configcore (outside), reader=auditcore (inside) → imported
 	assert.Contains(t, content, "projection/config/snapshot/v1")
 }
 
@@ -447,12 +447,12 @@ func TestGenerateBoundary_UnknownKindReturnsError(t *testing.T) {
 	project.Contracts["unknown.kind.v1"] = &metadata.ContractMeta{
 		ID:        "unknown.kind.v1",
 		Kind:      "grpc", // unknown kind
-		OwnerCell: "access-core",
-		Endpoints: metadata.EndpointsMeta{Server: "access-core"},
+		OwnerCell: "accesscore",
+		Endpoints: metadata.EndpointsMeta{Server: "accesscore"},
 	}
 	gen := NewGenerator(project, "github.com/ghbvf/gocell")
 
-	_, err := gen.GenerateBoundary("sso-bff")
+	_, err := gen.GenerateBoundary("ssobff")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unknown.kind.v1")
 

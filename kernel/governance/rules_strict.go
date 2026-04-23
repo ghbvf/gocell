@@ -8,25 +8,29 @@ import (
 // ValidateStrict runs all standard validation rules and, when strict is true,
 // additionally enforces the following strict-only checks as errors:
 //
-//   - FMT-16: slice directory contains '-' (kebab-case disallowed in strict mode)
+//   - FMT-16: slice / cell / assembly directory contains '-' (kebab-case disallowed)
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
+//   - FMT-C1: cell.yaml id contains '-' (kebab-case cell id disallowed)
+//   - FMT-A1: assembly.yaml id contains '-' (kebab-case assembly id disallowed)
 //
-// When strict is false the method is equivalent to Validate() — FMT-16 and
-// FMT-17 emit nothing (they are strict-only rules; non-strict mode is silent
-// by design, there is no warning severity to "upgrade" from).
+// When strict is false the method is equivalent to Validate() — strict-only
+// rules emit nothing (they are strict-only by design, there is no warning
+// severity to "upgrade" from).
 func (v *Validator) ValidateStrict(strict bool) []ValidationResult {
 	results := v.Validate()
 	results = append(results, v.validateFMT16(strict)...)
 	results = append(results, v.validateFMT17(strict)...)
+	results = append(results, v.validateFMTC1(strict)...)
+	results = append(results, v.validateFMTA1(strict)...)
 	return results
 }
 
 // ValidateStrictFailFast is equivalent to ValidateStrict(true) but uses
 // ValidateFailFast as its base pass instead of Validate. The base pass
-// short-circuits on the first SeverityError; FMT-16 and FMT-17 are only
-// appended when the base pass finds no errors. This gives --strict --fail-fast
-// true single-error semantics: if any standard rule fires, FMT-16/17 are
-// skipped entirely.
+// short-circuits on the first SeverityError; strict-only rules are only
+// appended when the base pass finds no errors. Rules are appended
+// incrementally; as soon as any rule produces an error the accumulation
+// stops, matching --strict --fail-fast's single-error semantics.
 func (v *Validator) ValidateStrictFailFast() []ValidationResult {
 	results := v.ValidateFailFast()
 	if HasErrors(results) {
@@ -37,18 +41,28 @@ func (v *Validator) ValidateStrictFailFast() []ValidationResult {
 		return results
 	}
 	results = append(results, v.validateFMT17(true)...)
+	if HasErrors(results) {
+		return results
+	}
+	results = append(results, v.validateFMTC1(true)...)
+	if HasErrors(results) {
+		return results
+	}
+	results = append(results, v.validateFMTA1(true)...)
 	return results
 }
 
-// validateFMT16 checks that no slice directory contains '-' (kebab-case).
-// In strict mode this is a SeverityError; in non-strict mode it is silent.
+// validateFMT16 checks that no slice, cell, or assembly directory contains
+// '-' (kebab-case). In strict mode this is a SeverityError; in non-strict
+// mode it is silent.
 //
 // The check reads the filesystem directory segment captured by the parser
-// (SliceMeta.Dir), not the map key or slice.id. This matters: a slice can
-// live under a kebab directory while declaring a no-dash id in slice.yaml,
-// and pre-Dir implementations that read the map key saw only the id and let
-// the kebab directory slip through. Slices synthesized in tests without a
-// Dir are skipped (Dir != "" is the "parsed from disk" signal).
+// (SliceMeta.Dir / CellMeta.Dir / AssemblyMeta.Dir), not the map key or
+// yaml id. This matters: a directory can live under a kebab name while
+// declaring a no-dash id in yaml, and pre-Dir implementations that read
+// only the id let kebab directories slip through. Entries synthesized in
+// tests without a Dir are skipped (Dir != "" is the "parsed from disk"
+// signal).
 func (v *Validator) validateFMT16(strict bool) []ValidationResult {
 	if !strict {
 		return nil
@@ -66,6 +80,38 @@ func (v *Validator) validateFMT16(strict bool) []ValidationResult {
 				fmt.Sprintf(
 					"slice %q uses kebab-case directory %q; kebab-case slice directories are disallowed in strict mode (rename to %q)",
 					s.ID, s.Dir, strings.ReplaceAll(s.Dir, "-", ""),
+				),
+			))
+		}
+	}
+	for _, c := range v.project.Cells {
+		if c.Dir == "" {
+			continue
+		}
+		if strings.Contains(c.Dir, "-") {
+			results = append(results, v.newResult(
+				"FMT-16", SeverityError, IssueInvalid,
+				cellFile(c.ID),
+				"id",
+				fmt.Sprintf(
+					"cell %q uses kebab-case directory %q; kebab-case cell directories are disallowed in strict mode (rename to %q)",
+					c.ID, c.Dir, strings.ReplaceAll(c.Dir, "-", ""),
+				),
+			))
+		}
+	}
+	for _, a := range v.project.Assemblies {
+		if a.Dir == "" {
+			continue
+		}
+		if strings.Contains(a.Dir, "-") {
+			results = append(results, v.newResult(
+				"FMT-16", SeverityError, IssueInvalid,
+				assemblyFile(a.ID),
+				"id",
+				fmt.Sprintf(
+					"assembly %q uses kebab-case directory %q; kebab-case assembly directories are disallowed in strict mode (rename to %q)",
+					a.ID, a.Dir, strings.ReplaceAll(a.Dir, "-", ""),
 				),
 			))
 		}
@@ -107,6 +153,62 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 				),
 			))
 		}
+	}
+	return results
+}
+
+// validateFMTC1 checks that no cell.yaml declares a kebab-case id (contains '-').
+// In strict mode this is a SeverityError; in non-strict mode it is silent.
+//
+// This complements FMT-16: FMT-16 catches kebab filesystem directories, while
+// FMT-C1 catches kebab yaml ids even when the directory is already no-dash
+// (e.g. during a migration where id is fixed last). A clean project passes
+// both; a half-migrated project typically trips one of them.
+func (v *Validator) validateFMTC1(strict bool) []ValidationResult {
+	if !strict {
+		return nil
+	}
+	var results []ValidationResult
+	for _, c := range v.project.Cells {
+		if !strings.Contains(c.ID, "-") {
+			continue
+		}
+		results = append(results, v.newResult(
+			"FMT-C1", SeverityError, IssueInvalid,
+			cellFile(c.ID),
+			"id",
+			fmt.Sprintf(
+				"cell id %q contains '-'; kebab-case cell ids are disallowed in strict mode (rename to %q)",
+				c.ID, strings.ReplaceAll(c.ID, "-", ""),
+			),
+		))
+	}
+	return results
+}
+
+// validateFMTA1 checks that no assembly.yaml declares a kebab-case id. In
+// strict mode this is a SeverityError; in non-strict mode it is silent.
+//
+// Mirrors FMT-C1 for assemblies. Assembly ids are referenced by binary name
+// and deploy templates, so a kebab id leaks into filesystem and CI artifacts.
+func (v *Validator) validateFMTA1(strict bool) []ValidationResult {
+	if !strict {
+		return nil
+	}
+	var results []ValidationResult
+	for _, a := range v.project.Assemblies {
+		if !strings.Contains(a.ID, "-") {
+			continue
+		}
+		results = append(results, v.newResult(
+			"FMT-A1", SeverityError, IssueInvalid,
+			assemblyFile(a.ID),
+			"id",
+			fmt.Sprintf(
+				"assembly id %q contains '-'; kebab-case assembly ids are disallowed in strict mode (rename to %q)",
+				a.ID, strings.ReplaceAll(a.ID, "-", ""),
+			),
+		))
 	}
 	return results
 }

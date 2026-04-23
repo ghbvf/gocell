@@ -172,6 +172,7 @@ type AssemblyMeta struct {
 	ID    string    `yaml:"id"`
 	Cells []string  `yaml:"cells"`
 	Build BuildMeta `yaml:"build"`
+	Dir   string    `yaml:"-"` // directory segment under assemblies/, set by parser
 }
 
 // BuildMeta holds the build configuration for an Assembly.

@@ -21,7 +21,7 @@ const (
 	DurabilityDemo DurabilityMode = iota + 1
 
 	// DurabilityDurable rejects noop implementations at Init() time.
-	// Used by production assemblies (e.g., cmd/core-bundle).
+	// Used by production assemblies (e.g., cmd/corebundle).
 	DurabilityDurable
 )
 

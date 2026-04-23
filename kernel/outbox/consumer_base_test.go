@@ -755,8 +755,8 @@ func TestConsumerBase_DifferentConsumerGroupsNoCollision(t *testing.T) {
 	receipt2 := &fakeReceipt{}
 	claimer2 := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt2}
 
-	sub1 := Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-audit-core"}
-	sub2 := Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-config-core"}
+	sub1 := Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-auditcore"}
+	sub2 := Subscription{Topic: "session.created.v1", ConsumerGroup: "cg-configcore"}
 
 	cb1, err := NewConsumerBase(claimer1, ConsumerBaseConfig{})
 	require.NoError(t, err)
@@ -793,8 +793,8 @@ func TestConsumerBase_DifferentConsumerGroupsNoCollision(t *testing.T) {
 	key2 := claimer2.calls[0]
 	claimer2.mu.Unlock()
 
-	assert.Equal(t, "cg-audit-core:shared-event-id-001", key1)
-	assert.Equal(t, "cg-config-core:shared-event-id-001", key2)
+	assert.Equal(t, "cg-auditcore:shared-event-id-001", key1)
+	assert.Equal(t, "cg-configcore:shared-event-id-001", key2)
 	assert.NotEqual(t, key1, key2, "idempotency keys must differ across ConsumerGroups")
 }
 

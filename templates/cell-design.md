@@ -7,7 +7,7 @@
 
 | Field              | Value                                                    |
 |--------------------|----------------------------------------------------------|
-| Cell ID            | {cell-id, e.g. access-core}                              |
+| Cell ID            | {cell-id, e.g. accesscore}                              |
 | Type               | {core / edge / support}                                  |
 | Consistency Level  | {L0 / L1 / L2 / L3 / L4}                                |
 | Owner              | {team or individual}                                     |

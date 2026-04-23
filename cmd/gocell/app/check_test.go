@@ -27,7 +27,7 @@ func TestValidateContractHealth(t *testing.T) {
 				{
 					ID:        "http.order.create.v1",
 					Kind:      "http",
-					OwnerCell: "order-cell",
+					OwnerCell: "ordercell",
 					Lifecycle: "active",
 					SchemaRefs: metadata.SchemaRefsMeta{
 						Request:  "request.schema.json",
@@ -37,7 +37,7 @@ func TestValidateContractHealth(t *testing.T) {
 				{
 					ID:        "event.order-created.v1",
 					Kind:      "event",
-					OwnerCell: "order-cell",
+					OwnerCell: "ordercell",
 					Lifecycle: "active",
 				},
 			},

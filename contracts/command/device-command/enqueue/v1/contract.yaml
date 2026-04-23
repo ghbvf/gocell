@@ -1,10 +1,10 @@
 id: command.device-command.enqueue.v1
 kind: command
-ownerCell: device-cell
+ownerCell: devicecell
 consistencyLevel: L4
 lifecycle: active
 endpoints:
-  handler: device-cell
+  handler: devicecell
   invokers: []
 schemaRefs:
   request: request.schema.json

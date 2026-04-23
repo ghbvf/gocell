@@ -110,7 +110,7 @@ func New(cfg Config) (*Client, error) {
 func (c *Client) SDK() *awss3.Client { return c.s3 }
 
 // Upload stores an object. Implements the ObjectUploader interface used
-// by cells/audit-core/s3archive.
+// by cells/auditcore/s3archive.
 func (c *Client) Upload(ctx context.Context, key string, data []byte, contentType string) error {
 	if contentType == "" {
 		contentType = "application/octet-stream"

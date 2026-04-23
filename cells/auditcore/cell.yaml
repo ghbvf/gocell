@@ -1,0 +1,13 @@
+id: auditcore
+type: core
+consistencyLevel: L2
+durabilityMode: durable
+owner:
+  team: platform
+  role: cell-owner
+schema:
+  primary: cell_audit_core
+verify:
+  smoke:
+    - smoke.auditcore.startup
+l0Dependencies: []

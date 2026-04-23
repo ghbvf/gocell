@@ -38,14 +38,14 @@
 |--------|---------|
 | runtime | `TokenIntent` enum（access/refresh）→ `Issue()` 新入参 → `token_use` claim + JOSE `typ` header；新增 `IntentTokenVerifier.VerifyIntent`；`AuthMiddleware` 签名收紧为 `IntentTokenVerifier`（编译期强制）|
 | slice | 3 个 slice service 传 intent；`/auth/refresh` 只接 refresh、其它只接 access |
-| test | 3 个 intent_test.go（sessionlogin/sessionrefresh/sessionvalidate）+ `cells/access-core/auth_integration_test.go` |
+| test | 3 个 intent_test.go（sessionlogin/sessionrefresh/sessionvalidate）+ `cells/accesscore/auth_integration_test.go` |
 | 遗留 | **P1-11 PR-R-AUTH-AUD-VALIDATION**：`VerifyIntent` 未按 RFC 8725 §3.3 验证 `aud` claim → 已登入 Phase R 待做（4h）|
 
 ### ✅ PR-P0-AUTHZ-CONFIGWRITE: config 管理面授权收口（PR#168 已合入）
 
 | 改动层 | 落地要点 |
 |--------|---------|
-| slice | configwrite create/update/delete 三端点加 `auth.RequireAnyRole(ctx, "admin")`；`roleAdmin` const 提取到 `cells/config-core/internal/dto/authz.go`；补 401/403/200 测试 |
+| slice | configwrite create/update/delete 三端点加 `auth.RequireAnyRole(ctx, "admin")`；`roleAdmin` const 提取到 `cells/configcore/internal/dto/authz.go`；补 401/403/200 测试 |
 | 遗留 | S11 CONFIG-CORE-INIT-COGNIT-01（nolint 临时抑制，3h）/ S12 AUTH-GUARD-INLINE-UNIFY-01（全库统一待做，2h）/ S13 CONFIGWRITE-4XX-OBSERVABILITY-01（1h）→ 已登入 Phase S |
 
 ### PR-P0-READYZ-BROKER: broker 健康纳入 readyz（已顺延至 Phase A，2h）
@@ -121,7 +121,7 @@ Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:goco
 
 | 任务 | 工时 | 涉及文件 | 来源 |
 |------|------|----------|------|
-| **PR-R-AUTH-AUD-VALIDATION** (P1, Cx2): `VerifyIntent` 未按 RFC 8725 §3.3 验证 `aud` claim；verifier 强制 `aud == expected`，`cmd/core-bundle/main.go` 传入 audience + audience mismatch 集成测试 | 4h | `runtime/auth/jwt.go` + `cmd/core-bundle/main.go` | PR#166 R1-F2-5（backlog P1-11）|
+| **PR-R-AUTH-AUD-VALIDATION** (P1, Cx2): `VerifyIntent` 未按 RFC 8725 §3.3 验证 `aud` claim；verifier 强制 `aud == expected`，`cmd/corebundle/main.go` 传入 audience + audience mismatch 集成测试 | 4h | `runtime/auth/jwt.go` + `cmd/corebundle/main.go` | PR#166 R1-F2-5（backlog P1-11）|
 
 ### PR-R-AUTH-STRICT (🟡 可延后): legacy token strict 模式（搭车，1h，产品确认后）
 
@@ -183,12 +183,12 @@ Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:goco
 
 > 底座稳固后做。顺序：错误分类 → 授权/契约完整性 → DTO/事件 typing。
 
-### PR-S-CONFIG-HARDEN: config-core 错误语义 + demo 路径（5h）
+### PR-S-CONFIG-HARDEN: configcore 错误语义 + demo 路径（5h）
 
 | 任务 | 工时 | 涉及文件 | 来源 |
 |------|------|----------|------|
-| **CONFIG-DEMO-FAILOPEN-01** (P1, Cx2): `configpublish/service.go:188-194` demo 模式 publisher 失败仅 `logger.Warn` 后 `return nil`，与 L2 声明不符；durable 模式移除 fail-open，demo fail-open 仅保留在显式 `DiscardPublisher{}` 或 `Assembly.Mode == Demo` | 2h | `cells/config-core/slices/configpublish/service.go` | PR#157 post-merge review |
-| **REPO-SCAN-CLASSIFY-01** (P2, Cx2, 🟠 条件延后，PG-DOMAIN-REPO 接线前必做): `config_repo.go::GetByKey` / `GetVersion` 把所有 Scan 错误映射为 `ErrConfigRepoNotFound`；改用 `errors.Is(err, sql.ErrNoRows)` 判 not found，其他返回 `ErrInternal` 保留 `InternalMessage` | 2h | `cells/config-core/internal/adapters/postgres/config_repo.go` | PR#157 post-merge review |
+| **CONFIG-DEMO-FAILOPEN-01** (P1, Cx2): `configpublish/service.go:188-194` demo 模式 publisher 失败仅 `logger.Warn` 后 `return nil`，与 L2 声明不符；durable 模式移除 fail-open，demo fail-open 仅保留在显式 `DiscardPublisher{}` 或 `Assembly.Mode == Demo` | 2h | `cells/configcore/slices/configpublish/service.go` | PR#157 post-merge review |
+| **REPO-SCAN-CLASSIFY-01** (P2, Cx2, 🟠 条件延后，PG-DOMAIN-REPO 接线前必做): `config_repo.go::GetByKey` / `GetVersion` 把所有 Scan 错误映射为 `ErrConfigRepoNotFound`；改用 `errors.Is(err, sql.ErrNoRows)` 判 not found，其他返回 `ErrInternal` 保留 `InternalMessage` | 2h | `cells/configcore/internal/adapters/postgres/config_repo.go` | PR#157 post-merge review |
 | **CONTRACT-ERROR-SCHEMA-01** (P2, Cx1, 🟡 可延后): `publish/v1` + `rollback/v1` contract.yaml `responses` 新增 401/403 entries 引用共享错误 schema | 1h | `contracts/http/config/{publish,rollback}/v1/contract.yaml` | PR#157 post-merge review |
 
 ### PR-S-DTO-EVENT: DTO nil 语义 + 事件 typed payload（6h）
@@ -202,8 +202,8 @@ Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:goco
 
 | 任务 | 工时 | 涉及文件 | 来源 |
 |------|------|----------|------|
-| **RBAC-REVOKE-POST-01** (🟡 可延后): `DELETE /internal/v1/access/roles/revoke` 改为 `POST` 避免 DELETE body 代理兼容问题 | 1h | `cells/access-core/slices/rbacassign/handler.go` + `contracts/http/auth/role/revoke/v1/contract.yaml` | PR#143 review 6.2 |
-| **RBAC-LAST-ADMIN-GUARD**: `service.Revoke` 检查剩余 admin 数量；`ports.RoleRepository` 新增 `CountByRole` | 1h | `cells/access-core/slices/rbacassign/service.go` + `ports/` | PR#143 review 2.3 |
+| **RBAC-REVOKE-POST-01** (🟡 可延后): `DELETE /internal/v1/access/roles/revoke` 改为 `POST` 避免 DELETE body 代理兼容问题 | 1h | `cells/accesscore/slices/rbacassign/handler.go` + `contracts/http/auth/role/revoke/v1/contract.yaml` | PR#143 review 6.2 |
+| **RBAC-LAST-ADMIN-GUARD**: `service.Revoke` 检查剩余 admin 数量；`ports.RoleRepository` 新增 `CountByRole` | 1h | `cells/accesscore/slices/rbacassign/service.go` + `ports/` | PR#143 review 2.3 |
 | **VALIDATE-EVIDENCE-CI-01** (P2, Cx2, 根治声明-代码漂移): CI 新增独立 `metadata-check` job（`gocell validate` + `check contract-health`），失败阻断 PR；PR template 增"metadata gate"勾选项 | 1h | `.github/workflows/ci.yml` + PR template | PR#155 review F7 |
 | **GOCELL-VALIDATE-FMT-REDESIGN** (P3, 搭车): `printResult` 改为 `[CODE] msg (field: X) / at file:line:col` 两行格式支持 IDE 点击跳转 — 已在 Phase K PR-K-VALIDATOR 搭车覆盖 | — | — | PR#152 follow-up |
 
@@ -211,7 +211,7 @@ Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:goco
 
 | 任务 | 工时 | 涉及文件 | 来源 |
 |------|------|----------|------|
-| **H1-7 RBAC-OUTBOX-MIGRATION** (P2): `rbacassign.Service` "角色变更 → 会话失效"双写 → transactional outbox 原子写入 + consumer 异步失效 session；前置 outbox consumer 基础设施 | 6h | `cells/access-core/slices/rbacassign/service.go` + `cells/access-core/slices/sessionlogout/consumer.go`（新） + contract event schemas | PR#149 review round 2 |
+| **H1-7 RBAC-OUTBOX-MIGRATION** (P2): `rbacassign.Service` "角色变更 → 会话失效"双写 → transactional outbox 原子写入 + consumer 异步失效 session；前置 outbox consumer 基础设施 | 6h | `cells/accesscore/slices/rbacassign/service.go` + `cells/accesscore/slices/sessionlogout/consumer.go`（新） + contract event schemas | PR#149 review round 2 |
 
 ### PR-S-TECH-DEBT: PR#168/169 review 积压（🟡 全部可延后，~20h）
 
@@ -219,13 +219,13 @@ Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:goco
 
 | 任务 | 工时 | 涉及文件 | 来源（backlog #）|
 |------|------|----------|------|
-| **MODE-SEMANTIC-SPLIT-01** (S10): 读路径 `query.RunMode` 与写路径 `configpublish.WithRunMode` 共用同一枚举耦合；触发条件：任一方向需新增非二元模式值 | 3h | `pkg/query/runmode.go` + `cells/config-core/slices/configpublish/service.go` | S10 / PR#167 |
-| **CONFIG-CORE-INIT-COGNIT-01** (S11): `cell.go::Init()` 认知复杂度 19（nolint 临时抑制）；拆三段式降至 ≈9 | 3h | `cells/config-core/cell.go` | S11 / PR#168 |
+| **MODE-SEMANTIC-SPLIT-01** (S10): 读路径 `query.RunMode` 与写路径 `configpublish.WithRunMode` 共用同一枚举耦合；触发条件：任一方向需新增非二元模式值 | 3h | `pkg/query/runmode.go` + `cells/configcore/slices/configpublish/service.go` | S10 / PR#167 |
+| **CONFIG-CORE-INIT-COGNIT-01** (S11): `cell.go::Init()` 认知复杂度 19（nolint 临时抑制）；拆三段式降至 ≈9 | 3h | `cells/configcore/cell.go` | S11 / PR#168 |
 | **AUTH-GUARD-INLINE-UNIFY-01** (S12): 全库 11 处 inline guard 统一，跨 3 cell | 2h | `cells/*/slices/*/handler.go` × 11 | S12 / PR#168 |
 | **CONFIGWRITE-4XX-OBSERVABILITY-01** (S13): `writeErrcodeError` 4xx 分支加 code+path+request_id 采样日志 | 1h | `pkg/httputil/response.go` | S13 / PR#168 |
 | **CONFIG-VALUE-ENCRYPTION-01** (S14, Cx3): sensitive=true 明文存储；需 KMS 选型 + key rotation ADR，独立 PR | — | PG adapter + migrations | S14 / PR#169 |
-| **ERROR-CTX-CANCELLED-CLASSIFY** (S15, P3): `ctx.Canceled` 归类为 `ErrContextCanceled` | 1h | `cells/config-core/internal/adapters/postgres/config_repo.go` | S15 / PR#169 |
-| **RUNTIME-TOPOLOGY-SINGLE-SOURCE-01** (S16, Cx3): 已解析运行拓扑抽象为单一事实源，驱动 repo wiring / adapterInfo / /readyz / /metrics；彻底消除 ENV 分裂 | 6h | `cmd/core-bundle/main.go` + 新 runtime 抽象 | S16 / PR#169 |
+| **ERROR-CTX-CANCELLED-CLASSIFY** (S15, P3): `ctx.Canceled` 归类为 `ErrContextCanceled` | 1h | `cells/configcore/internal/adapters/postgres/config_repo.go` | S15 / PR#169 |
+| **RUNTIME-TOPOLOGY-SINGLE-SOURCE-01** (S16, Cx3): 已解析运行拓扑抽象为单一事实源，驱动 repo wiring / adapterInfo / /readyz / /metrics；彻底消除 ENV 分裂 | 6h | `cmd/corebundle/main.go` + 新 runtime 抽象 | S16 / PR#169 |
 | **POOL-FRAMEWORK-LIFECYCLE-01** (S17, Cx3): 外部资源提升为 bootstrap 托管，统一 LIFO shutdown + 自动 health checker 注册 | 4h | `runtime/bootstrap/` + `kernel/assembly/` | S17 / PR#169 |
 
 ---
@@ -238,15 +238,15 @@ Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:goco
 
 | 任务 | 工时 | 涉及文件 | 来源 |
 |------|------|----------|------|
-| **FEAT-1 DEVICE-LIST-API** (P1): 新建 `device-list` slice + `GET /api/v1/devices` 分页 + contract + contract_test；同步验证 Phase K 的 CONTRACT-LIST-LINT-01 规则 | 3h | `cells/device-cell/slices/device-list/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
-| **FEAT-2 FLAG-WRITE-API** (P1): `PUT /api/v1/config/flags/{key}` 写入端点 + contract + contract_test | 3h | `cells/config-core/slices/configwrite/` + `contracts/http/config/flags/write/v1/` | backend_issues.md #2 |
+| **FEAT-1 DEVICE-LIST-API** (P1): 新建 `device-list` slice + `GET /api/v1/devices` 分页 + contract + contract_test；同步验证 Phase K 的 CONTRACT-LIST-LINT-01 规则 | 3h | `cells/devicecell/slices/device-list/` + `contracts/http/device/list/v1/` | backend_issues.md #1 |
+| **FEAT-2 FLAG-WRITE-API** (P1): `PUT /api/v1/config/flags/{key}` 写入端点 + contract + contract_test | 3h | `cells/configcore/slices/configwrite/` + `contracts/http/config/flags/write/v1/` | backend_issues.md #2 |
 | **SYSTEM-TOPOLOGY-API** (🟡 可延后): `GET /internal/v1/system/topology` 返回 cell/slice/contract 拓扑 JSON；基于 `kernel/registry` 现有数据构建 | 4h | 新 slice 或 `runtime/bootstrap/` | 历史 Batch 8 |
 
 ### PR-F-DOC: 文档 + 示例收口（7h）
 
 | 任务 | 工时 | 涉及文件 | 来源 |
 |------|------|----------|------|
-| **#5 AUTH-DX-01**: README + seed 用户 + sso-bff walkthrough；修复 refresh curl `sessionId`→`refreshToken`、logout 204 空 body jq 坑、audit `.createdAt` vs `.Timestamp` | 4h | `README.md` + `cells/access-core/internal/mem/` + `examples/sso-bff/README.md` | 6B + P4 review |
+| **#5 AUTH-DX-01**: README + seed 用户 + sso-bff walkthrough；修复 refresh curl `sessionId`→`refreshToken`、logout 204 空 body jq 坑、audit `.createdAt` vs `.Timestamp` | 4h | `README.md` + `cells/accesscore/internal/mem/` + `examples/ssobff/README.md` | 6B + P4 review |
 | ~~**ADR-RUNMODE-TRANSLATION-01**~~ ✅ 已随 PR-P-QUERY 合入 `docs/architecture/202604180100-adr-runmode-translation.md` | — | — | PR#165 reviewer F1-1 |
 | **P2-T-02 audit e2e 测试**: Journey 级验收 | 2h | `journeys/` + integration test | 历史 Batch 8 |
 
@@ -273,16 +273,16 @@ Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:goco
 |------|------|----------|
 | `004_create_config_entries_and_versions.sql`（CONFIG-VERSIONS-MIGRATION-01）| ✅ | `adapters/postgres/migrations/` |
 | `005_recreate_outbox_pending_concurrent.sql` | ✅ | `adapters/postgres/migrations/` |
-| config-core PG repo（`config_repo.go` + `session.go`）+ 集成测试 | ✅ | `cells/config-core/internal/adapters/postgres/` |
-| `GOCELL_CELL_ADAPTER_MODE` config-core 接线（cmd/core-bundle）| ✅ | `cmd/core-bundle/main.go` |
+| configcore PG repo（`config_repo.go` + `session.go`）+ 集成测试 | ✅ | `cells/configcore/internal/adapters/postgres/` |
+| `GOCELL_CELL_ADAPTER_MODE` configcore 接线（cmd/corebundle）| ✅ | `cmd/corebundle/main.go` |
 
 #### 待做（剩余 ~2-4d）
 
 | 任务 | 工时 | 涉及文件 |
 |------|------|----------|
-| migration DDL：users / sessions / roles / devices+commands（access-core + audit-core + device-cell）| 0.5d | `adapters/postgres/migrations/006+.sql` |
-| access-core PG repo（User / Session / Role）| 1d | `cells/access-core/internal/adapters/postgres/`（新建）|
-| audit-core / device-cell / order-cell PG repo | 0.5-1d | `cells/*/internal/adapters/postgres/` |
+| migration DDL：users / sessions / roles / devices+commands（accesscore + auditcore + devicecell）| 0.5d | `adapters/postgres/migrations/006+.sql` |
+| accesscore PG repo（User / Session / Role）| 1d | `cells/accesscore/internal/adapters/postgres/`（新建）|
+| auditcore / devicecell / ordercell PG repo | 0.5-1d | `cells/*/internal/adapters/postgres/` |
 | 落地联动（同 PR 或紧邻 PR）：**RBAC-ASSIGN-LEVEL-UPGRADE-01** L0→L1；**SEED-ROLE-IFACE-01** 去 type assertion；**ACCESS-LEVEL-AUDIT-01** slice.yaml 校正；**AUTH-CACHE-01 激活** Redis session cache | 1-2d | 联动点 |
 
 ### PR-X-ADAPTER-SPLIT: adapter 分层重整（4h）
@@ -306,7 +306,7 @@ Run() 225 → 10，拆 10 个 phase 方法（phase0..phase10），`//nolint:goco
 | **WM-36 SecureCookie key rotation** | 1.5d | WM-35 |
 | **WM-7 泛型 BulkResult** | 1d | 设计面广 |
 
-### access-core 长期重构
+### accesscore 长期重构
 
 | 任务 | 工时 | 前置 |
 |------|------|------|
@@ -386,7 +386,7 @@ Phase F     功能 + 发布           ~14h + 发布活动  ← ADR ✅ 已合
   Wave 4 Review + v1.0 tag
 
 Phase X     大型独立 + 长期重构    按需排期
-  PG-REPO (进行中: config-core ✅ PR#169；剩余 access/audit/device ~2-4d) / ADAPTER-SPLIT (4h) / LINT-MODERN (6h)
+  PG-REPO (进行中: configcore ✅ PR#169；剩余 access/audit/device ~2-4d) / ADAPTER-SPLIT (4h) / LINT-MODERN (6h)
   AUTH-REFRESH-OPAQUE (1-2d, 🟠 PG-REPO 后触发)
   WM-35/36/7 / P3-TD-11 / AUTH-CACHE-01 / SOL-B-01
 
@@ -417,7 +417,7 @@ Phase X     大型独立 + 长期重构    按需排期
 | Phase A PR-A-HARDEN 合并 READYZ-BROKER + POOLSTATS 同改 `connection.go` | PR 内部冲突 | 同一 PR 一次改完，避免两次 rebase；文件级原子 |
 | Phase R PR-R-INTERNAL-LISTENER 可能超时 | 拖慢关键路径 | Cx4 工时 4-8h 上界；若实施发现 blast radius 大，降级到 Phase X |
 | Phase K PR-K-VALIDATOR 改 kernel 接口（Issue struct + ProjectLocator） | 上层 cmd/governance 回归 | 保留旧签名，新 JSON printer 走新接口；Governance 规则按顺序迁移 |
-| Phase S 依赖 Phase A 完成（REPO-SCAN-CLASSIFY 需要 PG adapter 错误语义稳定）| 串行阻塞 | Phase S 只 touch cells/config-core/internal/adapters/postgres，不触 PG repo 接口；Phase A/S 可真并行 |
+| Phase S 依赖 Phase A 完成（REPO-SCAN-CLASSIFY 需要 PG adapter 错误语义稳定）| 串行阻塞 | Phase S 只 touch cells/configcore/internal/adapters/postgres，不触 PG repo 接口；Phase A/S 可真并行 |
 | 外部审查 F1-3 决策复议风险 | 若重开会牵动 PG-REPO 前置 | 2026-04-18 复核维持决策，风险收敛 |
 | AUTH-SIGNER-01 前置 golang-jwt v6 不可控 | 阻塞 | 已标记触发条件项，不占工作量 |
 

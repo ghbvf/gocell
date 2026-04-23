@@ -18,7 +18,7 @@ func prepareNode(t *testing.T, pm *metadata.ProjectMeta, file, src string) {
 // TestValidator_Locate_KnownField: locate returns the line/column for an
 // existing field in the stored yaml.Node.
 func TestValidator_Locate_KnownField(t *testing.T) {
-	src := "id: access-core\n" + // line 1
+	src := "id: accesscore\n" + // line 1
 		"type: core\n" + // line 2
 		"owner:\n" + // line 3
 		"  team: platform\n" // line 4
@@ -26,14 +26,14 @@ func TestValidator_Locate_KnownField(t *testing.T) {
 	pm := &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{},
 	}
-	prepareNode(t, pm, "cells/access-core/cell.yaml", src)
+	prepareNode(t, pm, "cells/accesscore/cell.yaml", src)
 	v := NewValidator(pm, "")
 
-	line, col := v.locate("cells/access-core/cell.yaml", "id")
+	line, col := v.locate("cells/accesscore/cell.yaml", "id")
 	assert.Equal(t, 1, line, "id line")
 	assert.Positive(t, col, "id column")
 
-	line, col = v.locate("cells/access-core/cell.yaml", "owner.team")
+	line, col = v.locate("cells/accesscore/cell.yaml", "owner.team")
 	assert.Equal(t, 4, line, "owner.team line")
 	assert.Positive(t, col, "owner.team column")
 }
@@ -67,7 +67,7 @@ func TestValidator_Locate_Fallbacks(t *testing.T) {
 // TestValidator_NewResult_AutoFillsLocation: newResult constructs a
 // ValidationResult and auto-populates Line/Column from the stored Node.
 func TestValidator_NewResult_AutoFillsLocation(t *testing.T) {
-	src := "id: access-core\n" + // line 1
+	src := "id: accesscore\n" + // line 1
 		"contractUsages:\n" + // line 2
 		"  - contract: http.a.v1\n" + // line 3
 		"    role: serve\n" + // line 4

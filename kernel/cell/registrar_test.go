@@ -119,7 +119,7 @@ var (
 // ---------------------------------------------------------------------------
 
 func TestHTTPRegistrar_TypeAssertion(t *testing.T) {
-	hc := &httpCell{BaseCell: *NewBaseCell(CellMetadata{ID: "access-core"})}
+	hc := &httpCell{BaseCell: *NewBaseCell(CellMetadata{ID: "accesscore"})}
 
 	// The bootstrap pattern: type-assert from Cell interface.
 	var c Cell = hc
@@ -142,7 +142,7 @@ func TestHTTPRegistrar_NegativeTypeAssertion(t *testing.T) {
 }
 
 func TestEventRegistrar_TypeAssertion(t *testing.T) {
-	ec := &eventCell{BaseCell: *NewBaseCell(CellMetadata{ID: "audit-core"})}
+	ec := &eventCell{BaseCell: *NewBaseCell(CellMetadata{ID: "auditcore"})}
 
 	var c Cell = ec
 	r, ok := c.(EventRegistrar)
@@ -256,7 +256,7 @@ func TestConfigReloader_NegativeTypeAssertion(t *testing.T) {
 }
 
 func TestConfigReloader_DualHTTPAndReloader(t *testing.T) {
-	hrc := &httpAndReloaderCell{BaseCell: *NewBaseCell(CellMetadata{ID: "access-core"})}
+	hrc := &httpAndReloaderCell{BaseCell: *NewBaseCell(CellMetadata{ID: "accesscore"})}
 
 	var c Cell = hrc
 
@@ -310,7 +310,7 @@ func (c *healthContributorCell) HealthCheckers() map[string]func() error {
 
 func TestHealthContributor_TypeAssertion(t *testing.T) {
 	hc := &healthContributorCell{
-		BaseCell: *NewBaseCell(CellMetadata{ID: "access-core"}),
+		BaseCell: *NewBaseCell(CellMetadata{ID: "accesscore"}),
 		checkers: map[string]func() error{
 			"session-store": func() error { return nil },
 		},

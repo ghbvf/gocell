@@ -17,68 +17,68 @@ import (
 func testProject() *metadata.ProjectMeta {
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
-			"access-core": {
-				ID:               "access-core",
+			"accesscore": {
+				ID:               "accesscore",
 				Type:             "core",
 				ConsistencyLevel: "L2",
 				Owner:            metadata.OwnerMeta{Team: "identity", Role: "backend"},
 			},
-			"audit-core": {
-				ID:               "audit-core",
+			"auditcore": {
+				ID:               "auditcore",
 				Type:             "core",
 				ConsistencyLevel: "L1",
 				Owner:            metadata.OwnerMeta{Team: "compliance", Role: "backend"},
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
-			"access-core/session-create": {
+			"accesscore/session-create": {
 				ID:            "session-create",
-				BelongsToCell: "access-core",
+				BelongsToCell: "accesscore",
 			},
-			"access-core/session-refresh": {
+			"accesscore/session-refresh": {
 				ID:            "session-refresh",
-				BelongsToCell: "access-core",
+				BelongsToCell: "accesscore",
 			},
-			"audit-core/audit-write": {
+			"auditcore/audit-write": {
 				ID:            "audit-write",
-				BelongsToCell: "audit-core",
+				BelongsToCell: "auditcore",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
 			"http-auth-login-v1": {
 				ID:        "http-auth-login-v1",
 				Kind:      "http",
-				OwnerCell: "access-core",
+				OwnerCell: "accesscore",
 				Endpoints: metadata.EndpointsMeta{
-					Server:  "access-core",
+					Server:  "accesscore",
 					Clients: []string{"edge-gateway", "admin-bff"},
 				},
 			},
 			"event-session-created-v1": {
 				ID:        "event-session-created-v1",
 				Kind:      "event",
-				OwnerCell: "access-core",
+				OwnerCell: "accesscore",
 				Endpoints: metadata.EndpointsMeta{
-					Publisher:   "access-core",
-					Subscribers: []string{"audit-core", "config-core"},
+					Publisher:   "accesscore",
+					Subscribers: []string{"auditcore", "configcore"},
 				},
 			},
 			"command-audit-archive-v1": {
 				ID:        "command-audit-archive-v1",
 				Kind:      "command",
-				OwnerCell: "audit-core",
+				OwnerCell: "auditcore",
 				Endpoints: metadata.EndpointsMeta{
-					Handler:  "audit-core",
-					Invokers: []string{"access-core"},
+					Handler:  "auditcore",
+					Invokers: []string{"accesscore"},
 				},
 			},
 			"projection-audit-summary-v1": {
 				ID:        "projection-audit-summary-v1",
 				Kind:      "projection",
-				OwnerCell: "audit-core",
+				OwnerCell: "auditcore",
 				Endpoints: metadata.EndpointsMeta{
-					Provider: "audit-core",
-					Readers:  []string{"access-core", "config-core"},
+					Provider: "auditcore",
+					Readers:  []string{"accesscore", "configcore"},
 				},
 			},
 		},
@@ -141,9 +141,9 @@ func TestContractRegistry_ByOwner(t *testing.T) {
 		cellID  string
 		count   int
 	}{
-		{"access-core owns 2", "access-core", 2},
-		{"audit-core owns 2", "audit-core", 2},
-		{"unknown cell", "config-core", 0},
+		{"accesscore owns 2", "accesscore", 2},
+		{"auditcore owns 2", "auditcore", 2},
+		{"unknown cell", "configcore", 0},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
@@ -160,10 +160,10 @@ func TestContractRegistry_Provider(t *testing.T) {
 		contractID string
 		want       string
 	}{
-		{"http provider is server", "http-auth-login-v1", "access-core"},
-		{"event provider is publisher", "event-session-created-v1", "access-core"},
-		{"command provider is handler", "command-audit-archive-v1", "audit-core"},
-		{"projection provider is provider", "projection-audit-summary-v1", "audit-core"},
+		{"http provider is server", "http-auth-login-v1", "accesscore"},
+		{"event provider is publisher", "event-session-created-v1", "accesscore"},
+		{"command provider is handler", "command-audit-archive-v1", "auditcore"},
+		{"projection provider is provider", "projection-audit-summary-v1", "auditcore"},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
@@ -193,9 +193,9 @@ func TestContractRegistry_Consumers(t *testing.T) {
 		want       []string
 	}{
 		{"http consumers are clients", "http-auth-login-v1", []string{"edge-gateway", "admin-bff"}},
-		{"event consumers are subscribers", "event-session-created-v1", []string{"audit-core", "config-core"}},
-		{"command consumers are invokers", "command-audit-archive-v1", []string{"access-core"}},
-		{"projection consumers are readers", "projection-audit-summary-v1", []string{"access-core", "config-core"}},
+		{"event consumers are subscribers", "event-session-created-v1", []string{"auditcore", "configcore"}},
+		{"command consumers are invokers", "command-audit-archive-v1", []string{"accesscore"}},
+		{"projection consumers are readers", "projection-audit-summary-v1", []string{"accesscore", "configcore"}},
 	}
 	reg := registry.NewContractRegistry(testProject())
 	for _, tt := range tests {
@@ -271,8 +271,8 @@ func TestCellRegistry_Get(t *testing.T) {
 		wantID string
 		found  bool
 	}{
-		{"existing cell", "access-core", "access-core", true},
-		{"another existing", "audit-core", "audit-core", true},
+		{"existing cell", "accesscore", "accesscore", true},
+		{"another existing", "auditcore", "auditcore", true},
 		{"not found", "nonexistent", "", false},
 	}
 	reg := registry.NewCellRegistry(testProject())
@@ -295,9 +295,9 @@ func TestCellRegistry_SlicesFor(t *testing.T) {
 		cellID string
 		count  int
 	}{
-		{"access-core has 2 slices", "access-core", 2},
-		{"audit-core has 1 slice", "audit-core", 1},
-		{"unknown cell has 0", "config-core", 0},
+		{"accesscore has 2 slices", "accesscore", 2},
+		{"auditcore has 1 slice", "auditcore", 1},
+		{"unknown cell has 0", "configcore", 0},
 	}
 	reg := registry.NewCellRegistry(testProject())
 	for _, tt := range tests {
@@ -311,7 +311,7 @@ func TestCellRegistry_SlicesFor(t *testing.T) {
 func TestCellRegistry_AllIDs(t *testing.T) {
 	reg := registry.NewCellRegistry(testProject())
 	ids := reg.AllIDs()
-	expected := []string{"access-core", "audit-core"}
+	expected := []string{"accesscore", "auditcore"}
 	assert.Equal(t, expected, ids)
 }
 
@@ -472,26 +472,26 @@ func TestContractRegistry_Consumers_DeepCopy(t *testing.T) {
 
 func TestCellRegistry_Get_DeepCopy(t *testing.T) {
 	proj := testProject()
-	proj.Cells["access-core"].Verify.Smoke = []string{"smoke.startup"}
+	proj.Cells["accesscore"].Verify.Smoke = []string{"smoke.startup"}
 	reg := registry.NewCellRegistry(proj)
-	got := reg.Get("access-core")
+	got := reg.Get("accesscore")
 	require.NotNil(t, got)
 
 	got.Verify.Smoke[0] = "MUTATED"
 	got.ID = "MUTATED"
 
-	original := reg.Get("access-core")
-	assert.Equal(t, "access-core", original.ID)
+	original := reg.Get("accesscore")
+	assert.Equal(t, "accesscore", original.ID)
 	assert.NotEqual(t, "MUTATED", original.Verify.Smoke[0])
 }
 
 func TestCellRegistry_SlicesFor_DeepCopy(t *testing.T) {
 	proj := testProject()
-	proj.Slices["access-core/session-create"].ContractUsages = []metadata.ContractUsage{
+	proj.Slices["accesscore/session-create"].ContractUsages = []metadata.ContractUsage{
 		{Contract: "http-auth-login-v1", Role: "serve"},
 	}
 	reg := registry.NewCellRegistry(proj)
-	got := reg.SlicesFor("access-core")
+	got := reg.SlicesFor("accesscore")
 	require.NotEmpty(t, got)
 
 	// Find the slice with contract usages.
@@ -506,7 +506,7 @@ func TestCellRegistry_SlicesFor_DeepCopy(t *testing.T) {
 
 	target.ContractUsages[0].Role = "MUTATED"
 
-	fresh := reg.SlicesFor("access-core")
+	fresh := reg.SlicesFor("accesscore")
 	for _, s := range fresh {
 		for _, cu := range s.ContractUsages {
 			assert.NotEqual(t, "MUTATED", cu.Role)

@@ -2,7 +2,7 @@
 
 ## 概览
 
-首次启动 GoCell 时，access-core cell 自动检测 admin role 是否有 user。若无，生成随机密码
+首次启动 GoCell 时，accesscore cell 自动检测 admin role 是否有 user。若无，生成随机密码
 并写入凭据文件（0600 权限），同时启动 24h TTL worker 自动销毁该文件。运维通过读取凭据文件
 获取首登密码，登录后被强制改密（middleware 拦截非改密/登出端点）。
 
@@ -26,7 +26,7 @@ GOCELL_STATE_DIR=/var/lib/gocell
 
 目录权限：`0700`，文件权限：`0600`
 
-文件格式（由 `cells/access-core/internal/initialadmin/credfile.go::WriteCredentialFile` 生成）：
+文件格式（由 `cells/accesscore/internal/initialadmin/credfile.go::WriteCredentialFile` 生成）：
 
 ```
 # GoCell initial admin credential
@@ -113,7 +113,7 @@ kubectl exec -it gocell -- cat /run/gocell/initial_admin_password
 
 ```bash
 export GOCELL_STATE_DIR=$TMPDIR/gocell
-go run ./examples/sso-bff
+go run ./examples/ssobff
 ```
 
 读取凭据：

@@ -18,25 +18,25 @@ func TestValidateLabels(t *testing.T) {
 		{
 			name:     "exact match",
 			expected: []string{"cell_id", "outcome"},
-			got:      metrics.Labels{"cell_id": "access-core", "outcome": "success"},
+			got:      metrics.Labels{"cell_id": "accesscore", "outcome": "success"},
 			wantErr:  false,
 		},
 		{
 			name:     "missing key",
 			expected: []string{"cell_id", "outcome"},
-			got:      metrics.Labels{"cell_id": "access-core"},
+			got:      metrics.Labels{"cell_id": "accesscore"},
 			wantErr:  true,
 		},
 		{
 			name:     "extra key",
 			expected: []string{"cell_id"},
-			got:      metrics.Labels{"cell_id": "access-core", "stray": "x"},
+			got:      metrics.Labels{"cell_id": "accesscore", "stray": "x"},
 			wantErr:  true,
 		},
 		{
 			name:     "wrong key",
 			expected: []string{"cell_id"},
-			got:      metrics.Labels{"cellid": "access-core"},
+			got:      metrics.Labels{"cellid": "accesscore"},
 			wantErr:  true,
 		},
 		{

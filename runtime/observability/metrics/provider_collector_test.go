@@ -29,7 +29,7 @@ func TestProviderCollector_NopProviderNoPanic(t *testing.T) {
 
 func TestProviderCollector_EmitsExpectedLabels(t *testing.T) {
 	p := newSpyProvider()
-	c, err := metrics.NewProviderCollector(p, metrics.ProviderCollectorConfig{CellID: "access-core"})
+	c, err := metrics.NewProviderCollector(p, metrics.ProviderCollectorConfig{CellID: "accesscore"})
 	if err != nil {
 		t.Fatalf("NewProviderCollector: %v", err)
 	}
@@ -44,7 +44,7 @@ func TestProviderCollector_EmitsExpectedLabels(t *testing.T) {
 		"method": "GET",
 		"route":  "/api/v1/sessions",
 		"status": "200",
-		"cell":   "access-core",
+		"cell":   "accesscore",
 	}
 	for k, v := range wants {
 		if got[k] != v {
