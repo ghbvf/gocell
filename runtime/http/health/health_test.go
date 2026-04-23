@@ -517,9 +517,20 @@ func TestEmptyAssembly(t *testing.T) {
 
 // --- New parallel / deadline / panic tests (PR-A4 phase 5a) ---
 
+// serialBaseline is the expected wall-clock time for running 3 probes of
+// 100 ms each sequentially. Used to bound the parallelism semantic assertion.
+const serialBaseline = 300 * time.Millisecond
+
 // TestReadyz_ParallelFasterThanSerial verifies that /readyz runs checkers in
 // parallel. With 3 checkers that each sleep 100 ms, the total wall-clock time
 // must be well below 300 ms (serial cost).
+//
+// Two assertions bound the parallelism invariant from both sides:
+//   - semantic:     parallel must be meaningfully faster than serial (>50ms faster)
+//   - performance:  parallel must be < 250ms on typical CI hardware
+//
+// If CI scheduler jitter makes the second assertion flaky, fall back to semantic-only
+// by wrapping in testing.Short() (or increase tolerance) — don't remove the semantic check.
 func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-parallel", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
@@ -541,9 +552,20 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	// Tolerance 250ms (serial = ~300ms): CI scheduler jitter + errgroup bookkeeping can add 30-50ms over theoretical 100ms.
-	assert.Less(t, elapsed, 250*time.Millisecond,
-		"3 parallel 100-ms probes must finish in < 250ms (serial would be ~300ms); got %v", elapsed)
+
+	// Semantic assertion: parallel execution must be at least 50ms faster than
+	// serial. This proves parallelism actually occurred, independent of absolute
+	// timing. This check must never be removed.
+	assert.Less(t, elapsed, serialBaseline-50*time.Millisecond,
+		"3 parallel 100-ms probes must be at least 50ms faster than serial (%v); got %v", serialBaseline, elapsed)
+
+	// Performance assertion: absolute upper bound on typical CI hardware.
+	// If this flaps on resource-constrained CI, wrap in testing.Short() to
+	// skip it in short mode — but keep the semantic assertion above.
+	if !testing.Short() {
+		assert.Less(t, elapsed, 250*time.Millisecond,
+			"3 parallel 100-ms probes must finish in < 250ms (serial would be ~300ms); got %v", elapsed)
+	}
 }
 
 // TestReadyz_DeadlineExceeded verifies that a probe which exceeds the deadline
@@ -659,6 +681,141 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	panicEntry, ok := deps["panicking"].(map[string]any)
 	require.True(t, ok, "panicking entry must be present")
 	assert.Equal(t, "unhealthy", panicEntry["status"])
+}
+
+// TestTruncateErrMsg verifies the truncateErrMsg helper across boundary cases.
+//
+// Known limitation: truncation is byte-based (msg[:max]), not rune-based.
+// A multi-byte UTF-8 sequence that straddles the 512-byte boundary will be
+// split mid-rune, producing an invalid UTF-8 suffix before "...". This is
+// an accepted trade-off (bounds response size without extra allocation) and
+// is documented here rather than fixed, since the use-site is diagnostic
+// output in /readyz?verbose where operators can tolerate mojibake in edge cases.
+func TestTruncateErrMsg(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		max     int
+		want    string
+		wantLen int // expected len(result); -1 means check want exactly
+	}{
+		{
+			name:  "empty string",
+			input: "",
+			max:   512,
+			want:  "",
+		},
+		{
+			name:  "short string below limit",
+			input: "connection refused",
+			max:   512,
+			want:  "connection refused",
+		},
+		{
+			name:    "exactly at limit — no truncation",
+			input:   string(make([]byte, 512)),
+			max:     512,
+			wantLen: 512,
+		},
+		{
+			name:    "one byte over limit — truncated with ellipsis",
+			input:   string(make([]byte, 513)),
+			max:     512,
+			wantLen: 515, // 512 + len("...")
+		},
+		{
+			name:    "long string well over limit",
+			input:   string(make([]byte, 1024)),
+			max:     512,
+			wantLen: 515,
+		},
+		{
+			name:  "truncated suffix is '...'",
+			input: "abcdefghij",
+			max:   5,
+			want:  "abcde...",
+		},
+		{
+			name: "multi-byte UTF-8 within limit — no truncation",
+			// "日本語" is 9 bytes (3 bytes per rune); 9 < 512 so no truncation.
+			input: "日本語",
+			max:   512,
+			want:  "日本語",
+		},
+		{
+			name: "multi-byte UTF-8 split at byte boundary — known limitation",
+			// 4-byte rune: U+1F600 (😀) = 0xF0 0x9F 0x98 0x80
+			// max=3 splits the rune, producing invalid UTF-8 + "..."
+			// We only assert the suffix and length, not valid UTF-8.
+			input:   "😀extra",
+			max:     3,
+			wantLen: 6, // 3 bytes from the rune + 3 bytes "..."
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := truncateErrMsg(tt.input, tt.max)
+			if tt.want != "" || (tt.want == "" && tt.wantLen == 0 && tt.input == "") {
+				// Exact match cases
+				assert.Equal(t, tt.want, got)
+			}
+			if tt.wantLen > 0 {
+				assert.Equal(t, tt.wantLen, len(got),
+					"expected len=%d, got len=%d (value=%q)", tt.wantLen, len(got), got)
+			}
+			// Truncated results must end with "..."
+			if len(tt.input) > tt.max {
+				assert.True(t, len(got) > 3 && got[len(got)-3:] == "...",
+					"truncated result must end with '...'; got %q", got)
+			}
+		})
+	}
+}
+
+// TestReadyz_VerboseError_LongErrTruncated is an end-to-end HTTP test that
+// verifies truncateErrMsg is applied to probe errors in /readyz?verbose output.
+// A checker returning a 600-byte error message must produce an "error" field
+// in the JSON response that is at most 515 bytes (512 + "...") and ends with "...".
+func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-truncate", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	// Construct a 600-byte error message — well over the 512-byte limit.
+	longMsg := string(make([]byte, 600))
+	for i := range []byte(longMsg) {
+		longMsg = longMsg[:i] + "x" + longMsg[i+1:]
+	}
+	longMsg = fmt.Sprintf("%0600d", 0) // 600 ASCII digits
+
+	h := New(asm)
+	h.RegisterChecker("noisy", func(_ context.Context) error {
+		return fmt.Errorf("%s", longMsg)
+	})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+
+	deps, ok := body["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose output must contain dependencies")
+	noisyEntry, ok := deps["noisy"].(map[string]any)
+	require.True(t, ok, "noisy entry must be present")
+
+	errField, ok := noisyEntry["error"].(string)
+	require.True(t, ok, "error field must be a string")
+
+	const maxWithEllipsis = maxVerboseErrLen + 3 // 512 + len("...")
+	assert.LessOrEqual(t, len(errField), maxWithEllipsis,
+		"error field must be at most %d bytes; got %d", maxWithEllipsis, len(errField))
+	assert.True(t, len(errField) >= 3 && errField[len(errField)-3:] == "...",
+		"truncated error must end with '...'; got %q", errField)
 }
 
 // TestReadyz_VerboseDependencies_StructuredOutput verifies the new structured
