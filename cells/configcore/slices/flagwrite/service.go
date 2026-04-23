@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/google/uuid"
 )
 
@@ -97,8 +98,10 @@ type UpdateInput struct {
 
 // Create creates a new feature flag and emits flag.changed.v1 (action=created).
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.FeatureFlag, error) {
-	if input.Key == "" {
-		return nil, errcode.New(errcode.ErrFlagInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+		validation.F("key", input.Key),
+	); err != nil {
+		return nil, err
 	}
 
 	now := time.Now()
@@ -130,8 +133,10 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 // The repo UPDATE uses version=version+1 RETURNING to eliminate the read-modify-write
 // TOCTOU race: two concurrent Updates both see the same DB-authoritative version.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.FeatureFlag, error) {
-	if input.Key == "" {
-		return nil, errcode.New(errcode.ErrFlagInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+		validation.F("key", input.Key),
+	); err != nil {
+		return nil, err
 	}
 
 	var updated *domain.FeatureFlag
@@ -156,8 +161,10 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Featur
 // Toggle toggles the enabled state of a feature flag and emits flag.changed.v1 (action=toggled).
 // Toggle does not overwrite rollout_percentage or description.
 func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
-	if key == "" {
-		return nil, errcode.New(errcode.ErrFlagInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+		validation.F("key", key),
+	); err != nil {
+		return nil, err
 	}
 
 	var updated *domain.FeatureFlag
@@ -184,8 +191,10 @@ func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain
 // the read-before-delete TOCTOU race where a concurrent Update could change the
 // flag between GetByKey and DELETE.
 func (s *Service) Delete(ctx context.Context, key string) error {
-	if key == "" {
-		return errcode.New(errcode.ErrFlagInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
+		validation.F("key", key),
+	); err != nil {
+		return err
 	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {

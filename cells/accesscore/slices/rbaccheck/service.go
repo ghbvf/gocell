@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 var roleSort = []query.SortColumn{
@@ -37,8 +38,11 @@ func NewService(roleRepo ports.RoleRepository, codec *query.CursorCodec, logger 
 
 // HasRole checks if a user has the specified role.
 func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, error) {
-	if userID == "" || roleName == "" {
-		return false, errcode.New(errcode.ErrAuthRBACInvalidInput, "userID and roleName are required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
+		validation.F("userID", userID),
+		validation.F("roleName", roleName),
+	); err != nil {
+		return false, err
 	}
 
 	roles, err := s.roleRepo.GetByUserID(ctx, userID)
@@ -56,8 +60,10 @@ func (s *Service) HasRole(ctx context.Context, userID, roleName string) (bool, e
 
 // ListRoles returns a paginated page of roles assigned to userID.
 func (s *Service) ListRoles(ctx context.Context, userID string, pageReq query.PageParams) (query.PageResult[*domain.Role], error) {
-	if userID == "" {
-		return query.PageResult[*domain.Role]{}, errcode.New(errcode.ErrAuthRBACInvalidInput, "userID is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
+		validation.F("userID", userID),
+	); err != nil {
+		return query.PageResult[*domain.Role]{}, err
 	}
 
 	qctx := query.QueryContext("endpoint", "rbac-list-roles", "userId", userID)

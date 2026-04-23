@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 const (
@@ -78,11 +79,11 @@ func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) er
 // Admin-side force logout belongs to a separate endpoint (not yet implemented);
 // it must NOT reuse this method with a bypass flag.
 func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) error {
-	if sessionID == "" {
-		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "session ID is required")
-	}
-	if callerUserID == "" {
-		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "caller user ID is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthLogoutInvalidInput,
+		validation.F("sessionID", sessionID),
+		validation.F("callerUserID", callerUserID),
+	); err != nil {
+		return err
 	}
 
 	payload, _ := json.Marshal(map[string]any{
@@ -116,8 +117,10 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 
 // LogoutUser revokes all sessions for a user.
 func (s *Service) LogoutUser(ctx context.Context, userID string) error {
-	if userID == "" {
-		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "user ID is required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthLogoutInvalidInput,
+		validation.F("userID", userID),
+	); err != nil {
+		return err
 	}
 
 	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {

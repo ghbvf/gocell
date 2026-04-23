@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // Service handles RBAC role assignment and revocation.
@@ -142,8 +143,11 @@ func (s *Service) persistChange(
 // Assign assigns a role to a user. Idempotent: re-assignment is a no-op —
 // no outbox entry is written and no session is revoked.
 func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
-	if userID == "" || roleID == "" {
-		return errcode.New(errcode.ErrAuthRBACInvalidInput, "userId and roleId are required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
+		validation.F("userId", userID),
+		validation.F("roleId", roleID),
+	); err != nil {
+		return err
 	}
 
 	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionAssigned}
@@ -176,8 +180,11 @@ func (s *Service) Assign(ctx context.Context, userID, roleID string) error {
 // is a no-op — no outbox entry is written and no session is revoked. Last-admin
 // guard is enforced atomically by RemoveFromUserIfNotLast (no TOCTOU gap).
 func (s *Service) Revoke(ctx context.Context, userID, roleID string) error {
-	if userID == "" || roleID == "" {
-		return errcode.New(errcode.ErrAuthRBACInvalidInput, "userId and roleId are required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthRBACInvalidInput,
+		validation.F("userId", userID),
+		validation.F("roleId", roleID),
+	); err != nil {
+		return err
 	}
 
 	evt := dto.RoleChangedEvent{UserID: userID, RoleID: roleID, Action: dto.ActionRevoked}

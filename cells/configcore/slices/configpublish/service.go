@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/google/uuid"
 )
 
@@ -71,8 +72,10 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, opts ...Option
 // Publish creates a versioned snapshot of a config entry.
 // All reads happen inside runInTx so the snapshot is consistent with the write.
 func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersion, error) {
-	if key == "" {
-		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrConfigPublishInvalidInput,
+		validation.F("key", key),
+	); err != nil {
+		return nil, err
 	}
 
 	var version *domain.ConfigVersion
@@ -121,8 +124,10 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 // to eliminate the TOCTOU stale-read race where a concurrent write could change
 // the entry between the reads and the update.
 func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (*domain.ConfigEntry, error) {
-	if key == "" {
-		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput, "key is required")
+	if err := validation.RequireNotBlank(errcode.ErrConfigPublishInvalidInput,
+		validation.F("key", key),
+	); err != nil {
+		return nil, err
 	}
 	if targetVersion < 1 {
 		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput,

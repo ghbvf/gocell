@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/google/uuid"
 )
@@ -96,8 +97,11 @@ type LoginInput struct {
 
 // Login authenticates a user and returns a JWT token pair.
 func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, error) {
-	if input.Username == "" || input.Password == "" {
-		return nil, errcode.New(errcode.ErrAuthLoginInvalidInput, "username and password are required")
+	if err := validation.RequireNotBlank(errcode.ErrAuthLoginInvalidInput,
+		validation.F("username", input.Username),
+		validation.F("password", input.Password),
+	); err != nil {
+		return nil, err
 	}
 
 	user, err := s.userRepo.GetByUsername(ctx, input.Username)
