@@ -516,6 +516,11 @@ func (a *CoreAssembly) emitHookEvent(e cell.HookEvent) {
 	a.cfg.HookObserver.OnHookEvent(e)
 }
 
+// ID returns the assembly's identifier as set in Config.ID.
+func (a *CoreAssembly) ID() string {
+	return a.id
+}
+
 // CellIDs returns the IDs of all registered cells in registration order.
 func (a *CoreAssembly) CellIDs() []string {
 	a.mu.Lock()

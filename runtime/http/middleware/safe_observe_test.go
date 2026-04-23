@@ -54,6 +54,12 @@ func (p *panicCollector) RecordRequest(_, _ string, _ int, _ float64) {
 
 // --- new cases for broken logger behaviour ---
 
+// brokenHandler.Handle returns a non-nil error, which slog.Logger.Error discards
+// by design (slog docs). This handler verifies safeObserve does not propagate
+// logger Handle errors. The "real" double-recover coverage is
+// TestSafeObserve_BrokenLogger_Handle_Panic, where Handle panics and the inner
+// defer recovers.
+//
 // brokenHandler is a slog.Handler whose Handle method returns a non-nil error.
 // Used to verify that safeObserve swallows a logger error without escaping.
 type brokenHandler struct {
@@ -99,6 +105,13 @@ func (e errBrokenHandleVal) Error() string { return string(e) }
 // TestSafeObserve_BrokenLogger_Handle_Error verifies that when the slog.Handler
 // returns a non-nil error from Handle, safeObserve still absorbs the fn panic
 // without propagating any panic or error to the caller.
+//
+// Note: slog.Logger.Error silently discards the error returned by Handler.Handle
+// (per slog design — the log call itself has no error return). Consequently,
+// this test exercises the path where safeObserve's outer recover fires and logs
+// via a broken handler, but the Handle error is never visible to safeObserve.
+// The actual double-recover contract (inner defer catching a panicking logger)
+// is exercised by TestSafeObserve_BrokenLogger_Handle_Panic.
 func TestSafeObserve_BrokenLogger_Handle_Error(t *testing.T) {
 	logger := slog.New(newBrokenHandler())
 

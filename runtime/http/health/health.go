@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/subtle"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -23,6 +24,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 )
 
+// maxVerboseErrLen is the maximum length of a probe error string included in
+// /readyz?verbose output. Error strings exceeding this limit are truncated
+// with an ellipsis to bound response size and limit accidental exposure of
+// long, potentially sensitive diagnostic messages.
+const maxVerboseErrLen = 512
+
 // Checker is a named readiness probe. Returning a non-nil error marks the
 // check as unhealthy. The context carries the deadline set on the Handler
 // (default 5 s, matching Kubernetes readiness probe convention).
@@ -34,7 +41,10 @@ type Checker = func(context.Context) error
 type ProbeResult struct {
 	Status   string        // "healthy" | "unhealthy" | "timeout"
 	Duration time.Duration // wall-clock time spent inside the probe
-	Err      error         // non-nil when Status != "healthy"
+	// Err is exposed in /readyz?verbose output (truncated to maxVerboseErrLen).
+	// Probe implementations MUST NOT include connection strings, tokens, or
+	// other secrets in the error message.
+	Err error // non-nil when Status != "healthy"
 }
 
 // Option configures a Handler.
@@ -228,7 +238,7 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 				"duration_ms": pr.Duration.Milliseconds(),
 			}
 			if pr.Err != nil {
-				entry["error"] = pr.Err.Error()
+				entry["error"] = truncateErrMsg(pr.Err.Error(), maxVerboseErrLen)
 			}
 			dependencies[name] = entry
 		}
@@ -301,7 +311,10 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 			return nil // group error always nil; probe outcome lives in results
 		})
 	}
-	_ = eg.Wait() // always nil; safe to ignore
+	// eg.Wait error is always nil by construction: every goroutine returns nil; probe
+	// outcomes live in the results map. If a future change returns non-nil from the
+	// goroutine, this discard will silently drop it — audit this line if refactoring.
+	_ = eg.Wait()
 	return results
 }
 
@@ -339,7 +352,7 @@ func isDeadlineError(ctx context.Context, err error) bool {
 	if ctx.Err() == context.DeadlineExceeded {
 		return true
 	}
-	return strings.Contains(err.Error(), context.DeadlineExceeded.Error())
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 // verboseAllowed returns true when the request is allowed to see verbose output.
@@ -384,6 +397,16 @@ func readyzVerbose(r *http.Request) bool {
 		}
 	}
 	return false
+}
+
+// truncateErrMsg limits msg to max runes, appending "..." when truncated.
+// Used to bound error strings written into /readyz?verbose output so that
+// a single verbose entry cannot carry unbounded diagnostic text.
+func truncateErrMsg(msg string, max int) string {
+	if len(msg) <= max {
+		return msg
+	}
+	return msg[:max] + "..."
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, v any) {

@@ -541,9 +541,9 @@ func TestReadyz_ParallelFasterThanSerial(t *testing.T) {
 	elapsed := time.Since(start)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	// Parallel execution should finish in ~100 ms; give generous budget of 200 ms.
-	assert.Less(t, elapsed, 200*time.Millisecond,
-		"3 parallel 100-ms probes must finish in < 200ms (serial would be ~300ms); got %v", elapsed)
+	// Tolerance 250ms (serial = ~300ms): CI scheduler jitter + errgroup bookkeeping can add 30-50ms over theoretical 100ms.
+	assert.Less(t, elapsed, 250*time.Millisecond,
+		"3 parallel 100-ms probes must finish in < 250ms (serial would be ~300ms); got %v", elapsed)
 }
 
 // TestReadyz_DeadlineExceeded verifies that a probe which exceeds the deadline

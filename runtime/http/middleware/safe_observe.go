@@ -18,6 +18,13 @@ import (
 // that a broken slog.Handler (e.g. one that panics in Handle) cannot escape
 // safeObserve and kill the request-serving goroutine.
 //
+// Design note: Callers in production currently pass slog.Default() at the
+// call site. This is an explicit choice — it lets test code inject a broken
+// logger via function argument (cleaner than slog.SetDefault global mutation).
+// If the middleware gains a composition-root-injected logger in the future,
+// the call site becomes safeObserve(mw.logger, fn) without changing this
+// function's contract.
+//
 // ref: prometheus/client_golang promhttp — instrumentation handler panics
 // are silently dropped rather than propagated to the caller.
 func safeObserve(logger *slog.Logger, fn func()) {

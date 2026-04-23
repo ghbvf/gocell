@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"sync"
 	"testing"
@@ -208,4 +209,72 @@ func TestBootstrap_AutoWire_UsesAssemblyID(t *testing.T) {
 	counters := spy.counters()
 	assert.True(t, slices.Contains(counters, "http_requests_total"),
 		"http_requests_total must be registered; got %v", counters)
+}
+
+// TestAutoWireHTTPMetricsCollector_FromAssembly verifies that when WithAssembly
+// is used without an explicit WithAssemblyID, autoWireHTTPMetricsCollector
+// derives the cell ID from the assembly's own ID (asm.ID()) rather than
+// falling back to "default". This is the R2 auto-derive behaviour.
+func TestAutoWireHTTPMetricsCollector_FromAssembly(t *testing.T) {
+	spy := &registrationSpy{}
+	asm := assembly.New(assembly.Config{ID: "test-cell", DurabilityMode: cell.DurabilityDemo})
+	t.Cleanup(asm.Shutdown)
+
+	// WithAssembly without WithAssemblyID: ID should be derived from asm.ID().
+	b := New(WithMetricsProvider(spy), WithAssembly(asm))
+
+	opts, err := b.autoWireHTTPMetricsCollector(nil)
+	require.NoError(t, err, "autoWireHTTPMetricsCollector must succeed when assembly ID is auto-derived")
+	require.Len(t, opts, 1, "must add exactly one router.Option (WithMetricsCollector)")
+
+	// Metrics must be registered via the spy provider.
+	counters := spy.counters()
+	assert.True(t, slices.Contains(counters, "http_requests_total"),
+		"http_requests_total must be registered; got counters %v", counters)
+}
+
+// TestAutoWireHTTPMetricsCollector_Conflict verifies that when the provider
+// returns an error for http_requests_total registration (simulating a caller
+// who also passed router.WithMetricsCollector via WithRouterOptions and the
+// underlying registry enforces unique metric names),
+// autoWireHTTPMetricsCollector returns an error containing both
+// "metrics auto-wire conflict" and a "WithRouterOptions" hint.
+func TestAutoWireHTTPMetricsCollector_Conflict(t *testing.T) {
+	// alwaysFailProvider returns an error on any CounterVec registration,
+	// simulating a registry that already has the metric registered.
+	conflict := &alwaysFailCounterProvider{
+		triggerName: "http_requests_total",
+	}
+
+	b := New(WithMetricsProvider(conflict))
+
+	_, autoErr := b.autoWireHTTPMetricsCollector(nil)
+	require.Error(t, autoErr, "registration error must propagate as a conflict error")
+	assert.Contains(t, autoErr.Error(), "metrics auto-wire conflict",
+		"error must mention 'metrics auto-wire conflict'; got: %v", autoErr)
+	assert.Contains(t, autoErr.Error(), "WithRouterOptions",
+		"error must include 'WithRouterOptions' hint; got: %v", autoErr)
+}
+
+// alwaysFailCounterProvider is a test-only metrics.Provider that returns an
+// error whenever triggerName is registered, simulating a duplicate-name
+// rejection from a real metrics backend.
+type alwaysFailCounterProvider struct {
+	triggerName string
+	nop         kernelmetrics.NopProvider
+}
+
+func (p *alwaysFailCounterProvider) CounterVec(opts kernelmetrics.CounterOpts) (kernelmetrics.CounterVec, error) {
+	if opts.Name == p.triggerName {
+		return nil, fmt.Errorf("duplicate metric %q", opts.Name)
+	}
+	return p.nop.CounterVec(opts)
+}
+
+func (p *alwaysFailCounterProvider) HistogramVec(opts kernelmetrics.HistogramOpts) (kernelmetrics.HistogramVec, error) {
+	return p.nop.HistogramVec(opts)
+}
+
+func (p *alwaysFailCounterProvider) Unregister(col kernelmetrics.Collector) error {
+	return p.nop.Unregister(col)
 }

@@ -76,9 +76,14 @@ func WithAssembly(asm *assembly.CoreAssembly) Option {
 }
 
 // WithAssemblyID sets the cell ID label used in HTTP metrics emitted by the
-// auto-wired metrics collector (R2). When not set, Bootstrap defaults to "default".
-// Required only when using WithAssembly + WithMetricsProvider and wanting a
-// specific cell label (e.g., the assembly config ID) on http_requests_total.
+// auto-wired metrics collector (R2).
+//
+// Recommended to set this matching asm.ID() when using WithAssembly(asm);
+// omit to reuse assembly ID (auto-derived). Explicit value overrides
+// assembly-derived.
+//
+// When neither WithAssemblyID nor WithAssembly is used, Bootstrap defaults
+// to "default" (the ID of the auto-built assembly).
 func WithAssemblyID(id string) Option {
 	return func(b *Bootstrap) {
 		b.assemblyID = id

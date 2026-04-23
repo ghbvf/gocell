@@ -667,9 +667,15 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
 		return opts, nil
 	}
-	// Derive cell ID: use the pre-built assembly's config ID if available,
-	// otherwise fall back to "default" (the ID used by the auto-built assembly).
+	// Derive cell ID from the most specific source available:
+	//  1. Explicit WithAssemblyID — caller's intent takes precedence.
+	//  2. Pre-built assembly's ID (b.assembly.ID()) — avoids requiring callers
+	//     to repeat the assembly ID when using WithAssembly(asm).
+	//  3. Fallback "default" — matches the ID used by the auto-built assembly.
 	cellID := b.assemblyID
+	if cellID == "" && b.assembly != nil {
+		cellID = b.assembly.ID()
+	}
 	if cellID == "" {
 		cellID = "default"
 	}
