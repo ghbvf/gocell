@@ -833,6 +833,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.phase3InitAssembly(ctx, s); err != nil {
 		return rollback(err)
 	}
+	if err := b.phase3bDiscoverLifecycleContributor(s); err != nil {
+		return rollback(err)
+	}
 	// Lifecycle Start — fail-fast; LIFO rollback is handled by Lifecycle itself.
 	// Registered after the asm.Stop teardown (phase3) so that lifecycle.Stop
 	// executes before asm.Stop in the LIFO teardown sequence, letting hooks

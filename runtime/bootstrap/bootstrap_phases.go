@@ -600,6 +600,39 @@ func (b *Bootstrap) registerOneCellHealthCheckers(s *phaseState, id string, hcc 
 	return nil
 }
 
+// phase3bDiscoverLifecycleContributor auto-registers lifecycle hooks from all
+// cells implementing cell.LifecycleContributor. Mirrors registerCellHealthCheckers
+// (above) to keep the discovery pattern symmetric.
+//
+// Must run after phase3InitAssembly (cells need Init to have populated any
+// state the hooks close over) and before b.lifecycle.Start(ctx).
+//
+// ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go — Hook, Append ordering.
+// ref: kernel/cell.HealthContributor — mirrored auto-discovery pattern.
+func (b *Bootstrap) phase3bDiscoverLifecycleContributor(s *phaseState) error {
+	for _, id := range s.asm.CellIDs() {
+		lc, ok := s.asm.Cell(id).(cell.LifecycleContributor)
+		if !ok {
+			continue
+		}
+		for _, h := range lc.LifecycleHooks() {
+			if h.OnStart == nil && h.OnStop == nil {
+				continue
+			}
+			if err := b.lifecycle.Append(Hook{
+				Name:         h.Name,
+				OnStart:      h.OnStart,
+				OnStop:       h.OnStop,
+				StartTimeout: h.StartTimeout,
+				StopTimeout:  h.StopTimeout,
+			}); err != nil {
+				return fmt.Errorf("bootstrap: cell %q lifecycle hook %q: %w", id, h.Name, err)
+			}
+		}
+	}
+	return nil
+}
+
 // registerConfigDriftChecker registers the config-drift health probe when the
 // config supports generation tracking.
 func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {

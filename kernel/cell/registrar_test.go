@@ -398,6 +398,70 @@ func TestAuthRouteMeta_ZeroValue(t *testing.T) {
 	assert.False(t, m.Delegated)
 }
 
+// ---------------------------------------------------------------------------
+// LifecycleContributor
+// ---------------------------------------------------------------------------
+
+// lifecycleContributorCell implements LifecycleContributor for testing.
+type lifecycleContributorCell struct {
+	BaseCell
+	hooks []LifecycleHook
+}
+
+var _ LifecycleContributor = (*lifecycleContributorCell)(nil)
+
+func (c *lifecycleContributorCell) LifecycleHooks() []LifecycleHook {
+	return c.hooks
+}
+
+func TestLifecycleContributor_ReturnsTwoHooks(t *testing.T) {
+	onStart1 := func(_ context.Context) error { return nil }
+	onStop1 := func(_ context.Context) error { return nil }
+	onStart2 := func(_ context.Context) error { return nil }
+
+	lcc := &lifecycleContributorCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "mycore"}),
+		hooks: []LifecycleHook{
+			{Name: "hook-alpha", OnStart: onStart1, OnStop: onStop1},
+			{Name: "hook-beta", OnStart: onStart2},
+		},
+	}
+
+	var c Cell = lcc
+	lc, ok := c.(LifecycleContributor)
+	assert.True(t, ok, "lifecycleContributorCell should satisfy LifecycleContributor")
+
+	hooks := lc.LifecycleHooks()
+	assert.Len(t, hooks, 2)
+	assert.Equal(t, "hook-alpha", hooks[0].Name)
+	assert.Equal(t, "hook-beta", hooks[1].Name)
+}
+
+func TestLifecycleContributor_ReturnsNil(t *testing.T) {
+	lcc := &lifecycleContributorCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "mycore"}),
+		hooks:    nil,
+	}
+	hooks := lcc.LifecycleHooks()
+	assert.Nil(t, hooks, "nil return is a valid opt-out")
+}
+
+func TestLifecycleContributor_ReturnsEmptySlice(t *testing.T) {
+	lcc := &lifecycleContributorCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "mycore"}),
+		hooks:    []LifecycleHook{},
+	}
+	hooks := lcc.LifecycleHooks()
+	assert.Empty(t, hooks, "empty slice is a valid opt-out")
+}
+
+func TestLifecycleContributor_NegativeTypeAssertion(t *testing.T) {
+	plain := NewBaseCell(CellMetadata{ID: "plain-cell"})
+	var c Cell = plain
+	_, ok := c.(LifecycleContributor)
+	assert.False(t, ok, "plain BaseCell should NOT satisfy LifecycleContributor")
+}
+
 func TestAuthRouteDeclarer_InterfaceAssertion(t *testing.T) {
 	// *http.ServeMux does NOT satisfy AuthRouteDeclarer — auth.Declare falls
 	// back to route-only registration in that case.

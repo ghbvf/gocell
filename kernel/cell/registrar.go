@@ -27,6 +27,7 @@ package cell
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -267,4 +268,25 @@ type ConfigReloader interface {
 // ref: go-micro config/default.go — Watch(path...) key-scoped observation
 type ConfigKeyFilterer interface {
 	ConfigKeyPrefixes() []string
+}
+
+// LifecycleHook mirrors bootstrap.Hook shape but lives in kernel/ so Cell
+// interfaces never depend on runtime/. Bootstrap copies these fields into
+// its own bootstrap.Hook at phase3b discovery time.
+//
+// ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go Hook — adopted.
+// ref: kernel/cell.HealthContributor — symmetric discovery pattern.
+type LifecycleHook struct {
+	Name         string
+	OnStart      func(ctx context.Context) error
+	OnStop       func(ctx context.Context) error
+	StartTimeout time.Duration
+	StopTimeout  time.Duration
+}
+
+// LifecycleContributor is auto-discovered by bootstrap at phase3b. Each cell
+// returning a non-empty slice has its hooks appended to the bootstrap
+// Lifecycle in Cell registration order. Return nil or empty slice to opt out.
+type LifecycleContributor interface {
+	LifecycleHooks() []LifecycleHook
 }
