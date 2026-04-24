@@ -58,32 +58,32 @@ func TestRouteDecl_Validate_Panics(t *testing.T) {
 		{
 			name:    "empty Method",
 			decl:    RouteDecl{Path: "/x", Handler: noopHandler},
-			wantMsg: "Method must not be empty",
+			wantMsg: "auth.Mount: Method must not be empty",
 		},
 		{
 			name:    "unknown Method",
 			decl:    RouteDecl{Method: "FOO", Path: "/x", Handler: noopHandler},
-			wantMsg: "not recognised",
+			wantMsg: "auth.Mount: method \"FOO\" not recognised",
 		},
 		{
 			name:    "lowercase Method",
 			decl:    RouteDecl{Method: "post", Path: "/x", Handler: noopHandler},
-			wantMsg: "upper-case",
+			wantMsg: "auth.Mount: Method \"post\" must be upper-case",
 		},
 		{
 			name:    "relative Path",
 			decl:    RouteDecl{Method: "GET", Path: "relative", Handler: noopHandler},
-			wantMsg: "must start with '/'",
+			wantMsg: "auth.Mount: Path \"relative\" must start with '/'",
 		},
 		{
 			name:    "empty Path",
 			decl:    RouteDecl{Method: "GET", Path: "", Handler: noopHandler},
-			wantMsg: "must start with '/'",
+			wantMsg: "auth.Mount: Path \"\" must start with '/'",
 		},
 		{
 			name:    "nil Handler",
 			decl:    RouteDecl{Method: "GET", Path: "/x"},
-			wantMsg: "Handler must not be nil",
+			wantMsg: "auth.Mount: Handler must not be nil",
 		},
 		{
 			name: "Public with Policy",
@@ -94,7 +94,7 @@ func TestRouteDecl_Validate_Panics(t *testing.T) {
 				Public:  true,
 				Policy:  Authenticated(),
 			},
-			wantMsg: "Public=true conflicts with non-nil Policy",
+			wantMsg: "auth.Mount POST /login: Public=true conflicts with non-nil Policy",
 		},
 		{
 			name: "Public with PasswordResetExempt",
@@ -105,7 +105,7 @@ func TestRouteDecl_Validate_Panics(t *testing.T) {
 				Public:              true,
 				PasswordResetExempt: true,
 			},
-			wantMsg: "Public=true conflicts with PasswordResetExempt=true",
+			wantMsg: "auth.Mount GET /x: Public=true conflicts with PasswordResetExempt=true",
 		},
 	}
 	for _, tc := range cases {

@@ -89,20 +89,19 @@ func Mount(mux cell.RouteHandler, r Route) {
 	pattern := r.Method + " " + cleanedPath
 	handler := r.Handler
 
+	// RequirePolicy is applied BEFORE wrapper.HTTPHandler (inner layer) so
+	// that policy denials (403) still produce a complete contract span
+	// annotated with gocell.contract.id. Unauth traffic volume is handled
+	// via a sampler if needed — that is orthogonal to layering.
+	if r.Policy != nil {
+		handler = RequirePolicy(r.Policy)(handler)
+	}
 	if r.Contract.ID != "" {
 		// Span attributes use the fully-qualified Contract.Path so
 		// observability dashboards bucket spans by full route even when
 		// cells register under chi sub-routes (the mux-relative path differs
 		// from the visible server path).
 		handler = wrapper.HTTPHandler(r.Contract, handler)
-	}
-	// RequirePolicy wraps OUTERMOST so policy denials short-circuit before
-	// the wrapper starts a span — a 403 emitted by a failed Policy is
-	// untraced by the contract span, and only the generic auth middleware
-	// records it. Do NOT swap this order: swapping would emit a span for
-	// every pre-auth reject and flood observability backends.
-	if r.Policy != nil {
-		handler = RequirePolicy(r.Policy)(handler)
 	}
 	mux.Handle(pattern, handler)
 
@@ -141,6 +140,14 @@ func (r Route) validateContractShape() {
 		panic(fmt.Sprintf(
 			"auth.Mount: Route.Method %q does not match Contract.Method %q",
 			r.Method, r.Contract.Method))
+	}
+	if r.Contract.Path == "" {
+		panic("auth.Mount: Contract.Path must not be empty when Contract.ID is set")
+	}
+	if !strings.HasSuffix(r.Contract.Path, path.Clean(r.Path)) {
+		panic(fmt.Sprintf(
+			"auth.Mount: Route.Path %q is not a suffix of Contract.Path %q",
+			r.Path, r.Contract.Path))
 	}
 }
 
