@@ -78,12 +78,14 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	require.NoError(t, err)
 
 	return &SharedDeps{
-		Topology:         bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
-		JWTDeps:          jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:        ps,
-		EventBus:         eb,
-		PrimaryHTTPAddr:  ":0",
-		InternalHTTPAddr: ":0",
+		Topology:  bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
+		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack: ps,
+		EventBus:  eb,
+		// PR-A14a: PrimaryHTTPAddr/InternalHTTPAddr left empty. Tests that
+		// drive the full BuildApp path must inject listeners via
+		// WithPrimaryListener + WithInternalListener so bind addrs are
+		// unused; phase0 accepts either an addr or a listener per side.
 	}
 }
 
@@ -111,12 +113,11 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	require.NoError(t, err)
 
 	deps := &SharedDeps{
-		Topology:         topo,
-		JWTDeps:          jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:        ps,
-		EventBus:         eventbus.New(),
-		PrimaryHTTPAddr:  ":0",
-		InternalHTTPAddr: ":0",
+		Topology:  topo,
+		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack: ps,
+		EventBus:  eventbus.New(),
+		// PR-A14a: addrs intentionally empty; tests drive via listener injection.
 	}
 	if topo.RequireProductionControlPlane() {
 		deps.MetricsToken = "test-metrics"

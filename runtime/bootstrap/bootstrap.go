@@ -443,23 +443,24 @@ func isNilBrokerHealthChecker(bc BrokerHealthChecker) bool {
 	}
 }
 
-// validateHTTPListenerAddrs fail-fasts when the primary / internal addresses
-// are mis-configured. Both addresses must be non-empty and distinct so Run()
-// never tries to bind two HTTP servers on the same port (the second would
-// fail with an "address already in use" error after the first had already
-// started).
+// validateHTTPListenerAddrs fail-fasts on mis-configured HTTP listeners. Each
+// side (primary / internal) must have either a non-empty bind address OR a
+// caller-injected listener — a listener renders its addr irrelevant because
+// the socket is already bound. When both sides bind from addr fields, the
+// addrs must differ so Run() never tries to bind two sockets on the same port.
 //
 // PR-A14a: replaces validateInternalGuard. Internal middleware wiring no
 // longer requires a prefix because routes are dispatched by Router.Route at
 // registration time.
 func (b *Bootstrap) validateHTTPListenerAddrs() error {
-	if b.primaryAddr == "" {
-		return fmt.Errorf("bootstrap: primary HTTP addr must not be empty; use WithHTTPPrimaryAddr")
+	if b.primaryListener == nil && b.primaryAddr == "" {
+		return fmt.Errorf("bootstrap: primary HTTP addr or listener required; use WithHTTPPrimaryAddr or WithPrimaryListener")
 	}
-	if b.internalAddr == "" {
-		return fmt.Errorf("bootstrap: internal HTTP addr must not be empty; use WithHTTPInternalAddr")
+	if b.internalListener == nil && b.internalAddr == "" {
+		return fmt.Errorf("bootstrap: internal HTTP addr or listener required; use WithHTTPInternalAddr or WithInternalListener")
 	}
-	if b.primaryAddr == b.internalAddr && b.primaryListener == nil && b.internalListener == nil {
+	// Same-addr collision only matters when both sides bind via addr.
+	if b.primaryListener == nil && b.internalListener == nil && b.primaryAddr == b.internalAddr {
 		return fmt.Errorf("bootstrap: primary and internal HTTP addrs must differ (both %q)", b.primaryAddr)
 	}
 	return nil

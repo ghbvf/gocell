@@ -502,21 +502,24 @@ func (r *Router) buildPublicMux() {
 
 // buildInternalMux wires the internal-listener middleware chain onto
 // r.internalMux. Cells' /internal/v1/* routes land here via Router.Route/
-// Handle/Mount dispatch. The chain intentionally omits JWT AuthMiddleware;
-// callers inject service-token or mTLS middleware via WithInternalMiddleware.
+// Handle/Mount dispatch.
 //
-// Chain: [RateLimit] → [CircuitBreaker] → [InternalMiddleware...] → BodyLimit → handler.
-// Recovery + SecurityHeaders are NOT inherited (outerMux only wraps publicMux).
-// The internal listener is exposed on a separate port, typically bound to an
-// internal network segment, so the baseline security headers differ from
-// public. Operators can still add middleware here explicitly.
+// Chain: [InternalMiddleware...] → BodyLimit → handler.
+//
+// Deliberate omissions (PR-A14a design):
+//   - JWT AuthMiddleware — the internal mux lives on a separate listener
+//     with service-token / mTLS via WithInternalMiddleware as the sole
+//     authentication layer.
+//   - RateLimit and CircuitBreaker — these are public-edge DoS defences.
+//     Sharing the same instances across both muxes would couple internal
+//     traffic to the public circuit state (attacker poking the internal
+//     port could open the public breaker). Internal traffic is from
+//     authenticated service callers and is expected to be low-volume;
+//     operators who need internal throttling can install their own
+//     middleware via WithInternalMiddleware.
+//   - Recovery + SecurityHeaders — outerMux only wraps publicMux; internal
+//     relies on caller-supplied middleware for any headers it needs.
 func (r *Router) buildInternalMux() {
-	if r.rateLimiter != nil {
-		r.internalMux.Use(middleware.RateLimit(r.rateLimiter))
-	}
-	if r.circuitBreaker != nil {
-		r.internalMux.Use(middleware.CircuitBreaker(r.circuitBreaker))
-	}
 	for _, mw := range r.internalMiddlewares {
 		r.internalMux.Use(mw)
 	}
