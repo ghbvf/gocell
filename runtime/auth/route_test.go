@@ -125,12 +125,20 @@ func TestMount_HandlerNil_Panics(t *testing.T) {
 }
 
 func TestMount_PathNormalised(t *testing.T) {
-	mux := newCaptureMux()
-	Mount(mux, Route{
-		Method:  "GET",
-		Path:    "/a//b/../c",
-		Handler: noopHandler,
-	})
-	require.Len(t, mux.metas, 1)
-	assert.Equal(t, "/a/c", mux.metas[0].Path)
+	cases := []struct {
+		in, want string
+	}{
+		{in: "/a//b/../c", want: "/a/c"},
+		{in: "/login/", want: "/login"}, // path.Clean strips trailing slashes
+		{in: "/api/v1/access/login", want: "/api/v1/access/login"},
+		{in: "/a//b", want: "/a/b"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			mux := newCaptureMux()
+			Mount(mux, Route{Method: "GET", Path: tc.in, Handler: noopHandler})
+			require.Len(t, mux.metas, 1)
+			assert.Equal(t, tc.want, mux.metas[0].Path)
+		})
+	}
 }

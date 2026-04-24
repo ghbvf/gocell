@@ -100,9 +100,13 @@ func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) ht
 			tracing.SpanSetName(span, r.Method+" "+route)
 
 			status := state.Status()
+			// Emit http.status_code as int64 for cross-span type consistency —
+			// kernel/wrapper.HTTPHandler uses int64 on the inner contract span,
+			// and OTel collector pipelines that switch on attribute type must
+			// see the same type across sibling spans in one trace. (F-02)
 			span.SetAttributes(
 				tracing.Attr{Key: "http.route", Value: route},
-				tracing.Attr{Key: "http.status_code", Value: status},
+				tracing.Attr{Key: "http.status_code", Value: int64(status)},
 			)
 
 			// 5xx → error span; 4xx and below → unset (otelhttp convention).

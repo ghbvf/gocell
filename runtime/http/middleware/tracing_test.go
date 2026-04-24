@@ -267,7 +267,7 @@ func TestTracing_HttpRouteAttribute(t *testing.T) {
 	spans := spy.Spans()
 	require.Len(t, spans, 1)
 	assert.Equal(t, "/api/v1/orders/{orderID}", spans[0].Attr("http.route"))
-	assert.Equal(t, 201, spans[0].Attr("http.status_code"))
+	assert.Equal(t, int64(201), spans[0].Attr("http.status_code"))
 }
 
 // --- Span status tests (otelhttp alignment) ---

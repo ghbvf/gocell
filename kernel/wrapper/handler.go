@@ -102,6 +102,13 @@ func defaultEventSpanName(spec ContractSpec) string {
 // spec is validated at call time; invalid specs or nil handlers panic (fail-fast
 // at registration time beats a silent miss at request time).
 //
+// Span coexistence note: when this handler is composed below the global
+// runtime/http/middleware.Tracing middleware, a single HTTP request yields
+// two spans — an outer request span annotated with the chi route pattern,
+// and an inner contract span annotated with spec.Path. Dashboards aggregating
+// by http.route will see both; future work (PR-A11-M) will phase out the
+// outer middleware once every route carries a contract spec.
+//
 // ref: riandyrn/otelchi middleware.go — span name + status lifecycle.
 func HTTPHandler(spec ContractSpec, next http.Handler, opts ...Option) http.Handler {
 	validateHTTPHandlerArgs(spec, next)
@@ -202,8 +209,12 @@ func (r *statusRecorder) WriteHeader(code int) {
 }
 
 func (r *statusRecorder) Write(b []byte) (int, error) {
+	// statusRecorder.status is seeded to http.StatusOK at construction
+	// (see serveTraced), so first Write without prior WriteHeader only
+	// needs to mark the header as committed — the implicit 200 is
+	// already in place. We track this flag so a subsequent WriteHeader
+	// call cannot retroactively change the captured span attribute.
 	if !r.wroteHeader {
-		r.status = http.StatusOK
 		r.wroteHeader = true
 	}
 	return r.ResponseWriter.Write(b)

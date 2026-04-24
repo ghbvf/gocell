@@ -27,8 +27,21 @@ import (
 type Route struct {
 	// Contract is the ContractSpec to bind to this route. Optional. When
 	// set, wrapper.HTTPHandler wraps Handler and span attributes use
-	// Contract.Path (fully-qualified) as http.route. Contract.Method MUST
-	// equal Route.Method when both are present.
+	// Contract.Path (fully-qualified) as http.route.
+	//
+	// Note: Route.Method / Route.Path and Contract.Method / Contract.Path
+	// play DIFFERENT roles and are NOT redundant copies of each other:
+	//   - Route.Method / Route.Path drive the mux registration pattern
+	//     (chi-sub-route-relative).
+	//   - Contract.Method / Contract.Path drive the span attribute values
+	//     (fully qualified — useful for dashboards even when a cell mounts
+	//     under a chi sub-route prefix).
+	// Keeping both lets a cell nest under sub.Route("/api/v1/access") and
+	// still emit fully-qualified http.route on the span. When Contract.Method
+	// is populated Mount asserts Contract.Method == Route.Method so the verb
+	// at least cannot drift; Contract.Path is NOT checked against Route.Path
+	// (the sub-route prefix is invisible at this layer — FMT-17 will police
+	// that drift statically in a follow-up PR).
 	Contract wrapper.ContractSpec
 
 	// Handler is the inner http.Handler.
@@ -83,6 +96,11 @@ func Mount(mux cell.RouteHandler, r Route) {
 		// from the visible server path).
 		handler = wrapper.HTTPHandler(r.Contract, handler)
 	}
+	// RequirePolicy wraps OUTERMOST so policy denials short-circuit before
+	// the wrapper starts a span — a 403 emitted by a failed Policy is
+	// untraced by the contract span, and only the generic auth middleware
+	// records it. Do NOT swap this order: swapping would emit a span for
+	// every pre-auth reject and flood observability backends.
 	if r.Policy != nil {
 		handler = RequirePolicy(r.Policy)(handler)
 	}

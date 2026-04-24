@@ -19,9 +19,13 @@ import (
 // http.auth.login.v1 (POST /api/v1/access/sessions/login). Hand-coded
 // alongside the Mount call so every span annotation trail (gocell.contract.id,
 // gocell.contract.transport, http.method, http.route) matches the YAML in
-// contracts/http/auth/login/v1/contract.yaml — a future governance rule
-// (FMT-17 SPEC-CONTRACT-SYNC) will cross-reference this literal against the
-// YAML at validate time so drift fails in CI.
+// contracts/http/auth/login/v1/contract.yaml.
+//
+// TODO(FMT-17): until PR-A11-V ships the SPEC-CONTRACT-SYNC governance rule,
+// this literal has no CI-level cross-check against the YAML — rename the
+// contract path in YAML without updating this literal and span attributes
+// silently go stale. Search for `TODO(FMT-17)` to surface all unguarded
+// literals once the rule lands.
 var httpAuthLoginV1 = wrapper.ContractSpec{
 	ID:        "http.auth.login.v1",
 	Kind:      "http",
