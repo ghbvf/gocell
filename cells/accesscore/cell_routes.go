@@ -1,49 +1,18 @@
+// cell_routes.go wires AccessCore's HTTP routes and event subscriptions.
+// Cross-cutting service providers (HealthCheckers, TokenVerifier, Authorizer)
+// live in cell_providers.go; constructor + options in cell.go; Init() and
+// slice construction in cell_init.go.
 package accesscore
 
 import (
-	"context"
 	"net/http"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
-	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
-
-// HealthCheckers implements cell.HealthContributor. Returns named readiness
-// probes for internal components. Bootstrap auto-discovers this interface
-// and registers probes in /readyz.
-//
-// Currently exposes "session-store" when the session repo implements
-// ports.HealthCheckable. Both in-memory and real adapters implement
-// HealthCheckable, so the probe is present in all modes. Returns an
-// empty map only when sessionRepo is nil (no repo injected at all).
-func (c *AccessCore) HealthCheckers() map[string]func(context.Context) error {
-	checkers := make(map[string]func(context.Context) error)
-	if hc, ok := c.sessionRepo.(ports.HealthCheckable); ok {
-		checkers["session-store"] = func(ctx context.Context) error {
-			return hc.Health(ctx)
-		}
-	}
-	return checkers
-}
-
-// TokenVerifier returns the session-validate service. It satisfies
-// auth.IntentTokenVerifier so it can be plugged into AuthMiddleware without
-// a runtime type assertion.
-func (c *AccessCore) TokenVerifier() auth.IntentTokenVerifier {
-	if c.validateSvc == nil {
-		return nil
-	}
-	return c.validateSvc
-}
-
-// Authorizer returns the authorization-decide service (implements auth.Authorizer).
-func (c *AccessCore) Authorizer() auth.Authorizer {
-	return c.authzSvc
-}
 
 // RegisterRoutes registers HTTP routes for accesscore.
 func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
