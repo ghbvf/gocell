@@ -264,12 +264,17 @@ func WithPolicyCoverageWhitelist(patterns []string) Option {
 // matcher are no longer needed because internal routes never reach the
 // public-mux middleware chain.
 type Router struct {
-	outerMux                   *chi.Mux // wraps publicMux + infra routes; served on primary listener
-	publicMux                  *chi.Mux // /api/v1/* + non-internal business routes
-	internalMux                *chi.Mux // /internal/v1/* routes; served on internal listener
-	healthHandler              *health.Handler
-	metricsCollector           metrics.Collector
-	metricsHandler             http.Handler
+	outerMux         *chi.Mux // wraps publicMux + infra routes; served on primary listener
+	publicMux        *chi.Mux // /api/v1/* + non-internal business routes
+	internalMux      *chi.Mux // /internal/v1/* routes; served on internal listener
+	healthHandler    *health.Handler
+	metricsCollector metrics.Collector
+	metricsHandler   http.Handler
+	// tracer is typed as tracing.Tracer (which is a type alias of
+	// wrapper.Tracer per ADR-KERNEL-WRAPPER-CONTRACT-OBS-01 §1). Exposed
+	// via WrapperTracer() to satisfy wrapper.TracerCarrier so auth.Mount
+	// on this Router / its nested chiRouterAdapter can pull the tracer
+	// when wrapping contract-bound routes.
 	tracer                     tracing.Tracer
 	tracingOpts                []middleware.TracingOption
 	requestIDOpts              []middleware.RequestIDOption
@@ -947,7 +952,15 @@ type chiRouterAdapter struct {
 	cr       chi.Router
 	prefix   string
 	declarer kcell.AuthRouteDeclarer
-	tracer   wrapper.Tracer
+	// tracer is snapshot-copied from the parent Router at sub-mux
+	// construction time (Route / Group / With each propagate it into the
+	// new adapter). Router.WithTracer MUST therefore be applied before any
+	// Route/Group/With call — options run during New(), and nested
+	// adapters are only created on demand after, so this invariant holds
+	// for all supported construction orders today. If a future refactor
+	// ever allows post-construction tracer mutation on Router, this field
+	// would need to be re-read lazily rather than snapshotted.
+	tracer wrapper.Tracer
 }
 
 // Compile-time check: chiRouterAdapter forwards AuthRouteMeta so Cells that

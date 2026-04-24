@@ -86,16 +86,22 @@ type Router struct {
 	handlers     []handlerConfig
 	mu           sync.Mutex
 	readyTimeout time.Duration
-	tracer       wrapper.Tracer
-	running      chan struct{}
-	runGuard     sync.Once // ensures Run is called at most once
-	runningOnce  sync.Once // ensures close(r.running) is called at most once
-	cancel       context.CancelFunc
-	wg           sync.WaitGroup
-	statusMu     sync.RWMutex
-	started      bool
-	shutdown     bool
-	healthErr    error
+	// tracer is set exactly once by WithTracer during New() construction and is
+	// effectively immutable afterwards — no other code path writes to it. The
+	// "configure-in-New, read-in-method" pattern makes reads lock-free without
+	// racing: Options fire before New returns, so AddContractHandler's
+	// unlocked tracer read is safe by happens-before from the constructor
+	// return. Do not add a post-construction setter.
+	tracer      wrapper.Tracer
+	running     chan struct{}
+	runGuard    sync.Once // ensures Run is called at most once
+	runningOnce sync.Once // ensures close(r.running) is called at most once
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	statusMu    sync.RWMutex
+	started     bool
+	shutdown    bool
+	healthErr   error
 }
 
 // Compile-time interface check.
@@ -116,9 +122,14 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 
 // AddHandler registers an untraced subscription intent. It MUST be called
 // before Run. Panics if topic is empty, handler is nil, or consumerGroup is
-// empty. Prefer AddContractHandler for new subscriptions — legacy AddHandler
-// remains for subscriptions not yet migrated to a ContractSpec (tracked by
-// PR-A11-M).
+// empty.
+//
+// Deprecated-for-new-code: Prefer AddContractHandler so CONSUME spans carry
+// gocell.contract.id / messaging.destination. AddHandler remains for call
+// sites not yet migrated to a ContractSpec; PR-A11-M tracks the mechanical
+// migration and will remove this method afterwards. The marker intentionally
+// avoids the staticcheck-recognised "Deprecated:" form so the legacy call
+// sites during the migration window do not spam SA1019 diagnostics.
 //
 // consumerGroup identifies the logical consumer group for this handler.
 // Handlers in the same group compete for messages on the same topic;

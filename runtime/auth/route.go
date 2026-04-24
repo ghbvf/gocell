@@ -150,6 +150,12 @@ func (r Route) validateContractShape() {
 	if r.Contract.Path == "" {
 		panic("auth.Mount: Contract.Path must not be empty when Contract.ID is set")
 	}
+	// HasSuffix catches the common typo where Route.Path and Contract.Path
+	// disagree on the sub-route-relative segment, but it is not tight enough
+	// to detect cross-contract collisions (a bare "/{id}" is a suffix of
+	// every "/.../{id}" contract). PR-A11-V (FMT-17 SPEC-CONTRACT-SYNC) will
+	// replace this with a YAML-driven exact-prefix check at
+	// `gocell validate --strict` time.
 	if !strings.HasSuffix(r.Contract.Path, path.Clean(r.Path)) {
 		panic(fmt.Sprintf(
 			"auth.Mount: Route.Path %q is not a suffix of Contract.Path %q",

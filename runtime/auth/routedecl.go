@@ -51,8 +51,14 @@ type RouteDecl struct {
 // Declare registers an HTTP route. It is the legacy entry point retained
 // so pre-Mount Cells keep compiling; internally it forwards to Mount with
 // Contract left zero (route is registered untraced by wrapper, as before).
-// Prefer Mount + a wrapper.ContractSpec in new code so trace spans carry
-// gocell.contract.id automatically.
+//
+// Deprecated-for-new-code: Prefer auth.Mount + a wrapper.ContractSpec so
+// trace spans carry gocell.contract.id automatically. PR-A11-M tracks the
+// mechanical migration of all remaining Declare call sites; once it lands,
+// both Declare and RouteDecl will be deleted. The marker is intentionally
+// "Deprecated-for-new-code" rather than the staticcheck-recognised
+// "Deprecated:" so the ~33 legacy call sites pending migration do not
+// spam SA1019 diagnostics during the transition window.
 //
 // ref: go-zero rest/engine route metadata; Kratos transport/http server
 // Route — registration-time auth context is the single source of truth.

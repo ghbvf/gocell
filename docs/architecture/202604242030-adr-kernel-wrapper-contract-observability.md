@@ -265,8 +265,10 @@ can proceed gradually without double-counting any requests.
   can drift from `contracts/**.yaml`, but `Contract.Path` vs
   `Route.Path` suffix invariance is now a runtime-validated
   precondition, closing the most common mistake.
-- `auth.Declare` stays in-tree during the migration window. Two APIs
-  co-existing is noise; future cleanup PR-A11-M + PR-A11-B close this.
+- `auth.Declare` + `EventRouter.AddHandler(topic, ...)` stay in-tree as
+  untraced shims during the migration window. Two APIs co-existing is
+  noise; future cleanup PR-A11-M closes this (PR-A11-B landed in round 3 —
+  see §4 round-3 update and the Follow-ups section).
 - Unauthorized traffic now produces spans (cost of §6's policy-inside
   model). Apply `http.status_code` samplers downstream if volume
   becomes a backend cost issue.
