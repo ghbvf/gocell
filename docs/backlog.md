@@ -31,6 +31,7 @@
 | ~~S2~~ | ~~**MASTER-KEY-REJECT-DEMO-01**~~ ✅ PR#207 合入 | — | — | — |
 | S-nonce | **SERVICE-TOKEN-NONCE-STORE-01** (Cx2, **P1 安全**, 🟠 条件延后，多 pod 生产部署前触发): `NewServiceTokenAuthenticator` 默认 NonceStore=nil（`authenticator.go:130`），生产 wiring `main.go:340` 未传 `WithNonceStore`，`SharedDeps.Validate()` 也不检查。5 分钟窗口内 ServiceToken 可无限重放。**修复**：real 模式强制注入 NonceStore（需 Redis 依赖）；未配置则启动失败；补 replay 集成测试。**前置**：需 Redis NonceStore 实现（adapters/redis/） | 3h | `runtime/auth/authenticator.go` + `cmd/corebundle/main.go` + `cmd/corebundle/shared_deps.go` | PR#209 合并后审查 |
 | S4b | **VAULT-TOKEN-STATIC-REAL-GUARD-01** (Cx1, **P1 安全**, 🟠 条件延后，多 pod 生产部署前触发): `adapters/vault/transit_provider.go` `adapterMode=real` 时仍允许静态 VAULT_TOKEN 运行，生产应要求 AppRole/K8s auth（自带续期 + 最小权限）。**修复**：新增 `authMode` option；real 模式 + static token → `errcode.ErrVaultAuthFailed`；与 A14（AppRole/K8s auth）+ **VAULT-RENEWAL-DEGRADATION-GAUGE**（静默降级不可观测）合并实施。来源：R1c(PR#204) 审查 §10 | 1h | `adapters/vault/transit_provider.go` | R1c(PR#204) 追加审查 |
+| S-5xx-code-mask | **5XX-ERRCODE-RESPONSE-MASK-01** (Cx2, **安全加固**, 🟡 可延后): 所有 5xx 错误响应的 `error.code` 字段直接透传 `errcode.Code` 字符串（如 `ERR_KEY_PROVIDER_AUTH_FAILED` / `ERR_AUTH_ROLE_FETCH_FAILED` / `ERR_VAULT_AUTH_FAILED` / `ERR_CONFIG_DECRYPT_FAILED` 等 20+ 个 500/503 code）。`httputil.WriteError` 已把 message 统一成 `"internal server error"`，但 code 字符串未屏蔽，攻击者可据此区分基础设施故障类型（密钥服务 / Vault / 角色仓库），构成轻度枚举泄漏。**修复**：`httputil.WriteError`/`writeErrcodeError` 在 `status>=500` 时把响应中的 `code` 统一改为 `ERR_INTERNAL`（或 503 改为 `ERR_SERVICE_UNAVAILABLE`），原 code 保留到 slog 供 operator 观测；客户端只见通用码。**影响面**：`pkg/httputil/response_test.go` 多个 `wantStatus: 5xx` + code 断言用例需要翻新；一并审计 `ErrKeyProviderTransient` / `ErrVaultAuthFailed` / `ErrCircuitOpen` 503 是否统一成 `ERR_SERVICE_UNAVAILABLE`。 | 3h | `pkg/httputil/response.go` + `pkg/httputil/response_test.go` | PR#241 六维度审查 F2+F3（OUT_OF_SCOPE） |
 | ~~L2~~ | ~~**ROUTE-POLICY-REGISTRY-01**~~ ✅ `runtime/http/router/policy_coverage.go` 实现路由-策略覆盖校验；`router.go:FinalizeAuth()` 调用 `verifyPolicyCoverage()`；bootstrap phase 注册时即强制覆盖（2026-04-23 核实） | — | — | — |
 | ~~L4~~ | ~~**ID-VALIDATION-SINGLE-SOURCE-01**~~ ✅ `pkg/idutil/id.go` 已建（`MaxHTTPIDLen`、`IsSafeID`），统一事实源（2026-04-23 核实） | — | — | — |
 | ~~L6~~ | ~~**CONTRACTTEST-MODEL-ALIGN-01**~~ ✅ `pkg/contracts/schema_types.go` 已建（`SchemaRef`/`SchemaRefs` 共享结构体），一致性测试已覆盖（2026-04-23 核实） | — | — | — |
@@ -229,10 +230,11 @@
 | 分类 | 工时 |
 |------|------|
 | P0 阻塞 | ~~L0 ✅~~ ~~L1 ✅~~；**全清** |
-| P1 | ~38h（原 8h + 新增 P1-A 4h + P1-19 4h + PR220-1/1b 2.5h + PR220-3 4h + PR220-5 3h + PR220-e1 0.5h + V-A2~V-A11/V-A19 合计 ~12h）|
+| P1 | ~34h（原 38h 扣除 P1-A 4h ✅ pre-existing）|
 | P2 kernel/runtime | ~19h（原 15h + PR220-2 3h + PR220-4 1h）|
 | P2 adapter | ~9h（原 5h + V-A14 2h + PR225-N1 2h）|
-| P2 slice/cell | ~36h（原 20h + V-A15 4h + V-A16 2h + PR224-D1 6h + PR225-NF2 0.5h + V-A17 2h + T6 2h + FEAT-1-残余 3h + PR220-e2 1h + PR220-e3 0.5h；~~L10 ✅~~ 核销）|
+| P2 slice/cell | ~34h（原 36h 扣除 V-A17 2h ✅ PR-A7 落地）|
+| 安全加固（可延后） | +3h（S-5xx-code-mask 新登记，PR#241 review 溢出）|
 | P2 发布 + 文档 | ~25h + v1.0 tag |
 | **核心路径合计（不含 P3）** | **~127.5h（约 16 工作日）** |
 | P3 长期 | 3-5d + 若干独立项 |
