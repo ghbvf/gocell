@@ -438,8 +438,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		status2, body2 := doReq()
 		assert.Equal(t, http.StatusUnauthorized, status2,
 			"replay of same nonce within TTL must be rejected by the guard")
-		assert.Contains(t, body2, "ERR_AUTH_UNAUTHORIZED",
-			"replay response must carry the auth error code; body=%s", body2)
+		assert.Contains(t, body2, "ERR_AUTH_REPLAY_DETECTED",
+			"replay response must carry the replay-specific error code; body=%s", body2)
 	})
 
 	// /api/v1/* on primary without token → 401 from JWT auth (guard not involved).

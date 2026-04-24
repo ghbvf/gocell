@@ -44,6 +44,8 @@ func setRealModeEnv(t *testing.T, dsn string) {
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	// F1: in real mode, in-memory nonce store requires explicit single-pod opt-in.
+	t.Setenv("GOCELL_SINGLE_POD", "1")
 
 	// Production control-plane tokens
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
@@ -147,7 +149,8 @@ func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
 	_ = pgRes.Close(ctx)
 	_ = provisional // satisfy linter: ensure we use the variable after nil-check
 
-	// Confirm the interface is satisfied (compile-time: implicit via require.NotEmpty,
-	// runtime: explicit type assertion to document the expected type).
-	var _ kernellifecycle.ManagedResource = pgRes
+	// Confirm the interface is satisfied at runtime (compile-time is implicit via
+	// the provisional[0] read above). The conversion documents the expected type
+	// without tripping staticcheck QF1011.
+	_ = kernellifecycle.ManagedResource(pgRes)
 }
