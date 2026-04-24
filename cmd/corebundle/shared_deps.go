@@ -177,13 +177,29 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		slog.String("requested", adapterMode),
 		slog.String("effective", topo.AdapterInfo()["mode"]))
 
+	// PR-A14a: surface the pre-PR-A14a env var rename so operators upgrading
+	// from a single-listener binary see a clear signal if they have only the
+	// old var set. Without this warn the addrs would silently fall through
+	// to defaults, binding 8080/9090 instead of whatever the old
+	// GOCELL_HTTP_ADDR pointed at.
+	if legacy := os.Getenv("GOCELL_HTTP_ADDR"); legacy != "" {
+		if os.Getenv("GOCELL_HTTP_PRIMARY_ADDR") == "" && os.Getenv("GOCELL_HTTP_INTERNAL_ADDR") == "" {
+			slog.Warn("GOCELL_HTTP_ADDR is no longer consumed (PR-A14a dual-listener); set GOCELL_HTTP_PRIMARY_ADDR and GOCELL_HTTP_INTERNAL_ADDR instead",
+				slog.String("legacy_value", legacy))
+		}
+	}
+
 	primaryAddr := os.Getenv("GOCELL_HTTP_PRIMARY_ADDR")
 	if primaryAddr == "" {
 		primaryAddr = ":8080"
 	}
 	internalAddr := os.Getenv("GOCELL_HTTP_INTERNAL_ADDR")
 	if internalAddr == "" {
-		internalAddr = ":9090"
+		// Default to loopback so a dev-mode deployment without a
+		// service-token guard is not trivially reachable across the
+		// network. Operators binding to an internal VPC interface must set
+		// GOCELL_HTTP_INTERNAL_ADDR explicitly.
+		internalAddr = "127.0.0.1:9090"
 	}
 
 	deps := &SharedDeps{

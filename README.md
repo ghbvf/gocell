@@ -181,7 +181,9 @@ func main() {
 
     app := bootstrap.New(
         bootstrap.WithAssembly(asm),
-        bootstrap.WithHTTPAddr(":8080"),
+        // PR-A14a dual listener — primary (public + infra) + internal (/internal/v1/*).
+        bootstrap.WithHTTPPrimaryAddr(":8080"),
+        bootstrap.WithHTTPInternalAddr("127.0.0.1:9090"),
     )
     app.Run(ctx)
 }

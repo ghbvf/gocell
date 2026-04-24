@@ -732,11 +732,14 @@ type Bootstrap struct {
 // phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{
-		// PR-A14a: dual listener defaults. 8080 = public (business/api/infra);
-		// 9090 = internal (control-plane /internal/v1/*). Override with
-		// WithHTTPPrimaryAddr / WithHTTPInternalAddr.
+		// PR-A14a: dual listener defaults. primary 8080 = public (business /
+		// api / infra); internal 127.0.0.1:9090 = control-plane /internal/v1/*.
+		// The internal listener defaults to loopback so dev-mode deployments
+		// without a service-token guard are not trivially reachable across
+		// the network. Override with WithHTTPPrimaryAddr / WithHTTPInternalAddr
+		// (production: bind internal to an internal-VPC interface).
 		primaryAddr:          ":8080",
-		internalAddr:         ":9090",
+		internalAddr:         "127.0.0.1:9090",
 		shutdownTimeout:      shutdown.DefaultTimeout,
 		configWatcherFactory: config.NewWatcher,
 		metricsProvider:      kernelmetrics.NopProvider{},

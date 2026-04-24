@@ -964,17 +964,28 @@ func (b *Bootstrap) resolveInternalListener() (ln net.Listener, owned bool, err 
 // shutdownBothServers drains the primary and internal servers in parallel
 // under the shared shutCtx budget. Both Shutdown calls receive the same
 // deadline; the aggregated error (if any) is joined via errors.Join so
-// operators see every failure.
+// operators see every failure. Per-listener completion is logged so
+// operators can pinpoint a stuck listener when one finishes and the other
+// hangs past the deadline.
 func shutdownBothServers(ctx context.Context, primary, internal *http.Server) error {
 	slog.Info("bootstrap: draining HTTP servers")
-	errCh := make(chan error, 2)
-	go func() { errCh <- primary.Shutdown(ctx) }()
-	go func() { errCh <- internal.Shutdown(ctx) }()
+	type drainResult struct {
+		name string
+		err  error
+	}
+	resultCh := make(chan drainResult, 2)
+	go func() { resultCh <- drainResult{name: "primary", err: primary.Shutdown(ctx)} }()
+	go func() { resultCh <- drainResult{name: "internal", err: internal.Shutdown(ctx)} }()
 	var errs []error
 	for i := 0; i < 2; i++ {
-		if err := <-errCh; err != nil {
-			errs = append(errs, err)
+		r := <-resultCh
+		if r.err != nil {
+			slog.Error("bootstrap: HTTP listener drain failed",
+				slog.String("listener", r.name), slog.Any("error", r.err))
+			errs = append(errs, fmt.Errorf("%s listener: %w", r.name, r.err))
+			continue
 		}
+		slog.Info("bootstrap: HTTP listener drained", slog.String("listener", r.name))
 	}
 	return errors.Join(errs...)
 }

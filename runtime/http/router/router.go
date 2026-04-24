@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -405,8 +406,14 @@ func NewE(opts ...Option) (*Router, error) {
 
 // primaryInternalPrefix404 writes a 404 JSON body for /internal/v1/* requests
 // that reach the primary listener. The response shape matches other router
-// not-found paths so clients and gateway logs see a uniform error code.
-func primaryInternalPrefix404(w http.ResponseWriter, _ *http.Request) {
+// not-found paths so clients and gateway logs see a uniform error code. The
+// X-Request-ID header is mirrored so operators correlating gateway logs by
+// request ID can locate these 404s in application observability without
+// scraping access logs.
+func primaryInternalPrefix404(w http.ResponseWriter, r *http.Request) {
+	if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok && reqID != "" {
+		w.Header().Set("X-Request-ID", reqID)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusNotFound)
 	_, _ = w.Write([]byte(`{"error":{"code":"ERR_NOT_FOUND","message":"not found"}}`))
@@ -504,7 +511,7 @@ func (r *Router) buildPublicMux() {
 // r.internalMux. Cells' /internal/v1/* routes land here via Router.Route/
 // Handle/Mount dispatch.
 //
-// Chain: [InternalMiddleware...] → BodyLimit → handler.
+// Chain: Recovery → [InternalMiddleware...] → BodyLimit → handler.
 //
 // Deliberate omissions (PR-A14a design):
 //   - JWT AuthMiddleware — the internal mux lives on a separate listener
@@ -517,9 +524,15 @@ func (r *Router) buildPublicMux() {
 //     authenticated service callers and is expected to be low-volume;
 //     operators who need internal throttling can install their own
 //     middleware via WithInternalMiddleware.
-//   - Recovery + SecurityHeaders — outerMux only wraps publicMux; internal
-//     relies on caller-supplied middleware for any headers it needs.
+//   - SecurityHeaders — outerMux only wraps publicMux; internal relies on
+//     caller-supplied middleware for any headers it needs.
+//
+// Kept:
+//   - Recovery — a panic in an internal handler must not crash the process.
+//     Recovery is a safety net, not an edge defence, so including it here
+//     does not couple internal traffic to public rate-limit / circuit state.
 func (r *Router) buildInternalMux() {
+	r.internalMux.Use(middleware.Recovery)
 	for _, mw := range r.internalMiddlewares {
 		r.internalMux.Use(mw)
 	}
@@ -577,9 +590,12 @@ func (r *Router) pickMux(pattern string) *chi.Mux {
 //
 //   - chi-style pattern:   "/internal/v1/foo"
 //   - Go 1.22 ServeMux:    "GET /internal/v1/foo"
+//
+// Uses `idx > 0` so a leading space (malformed pattern) does not strip a
+// valid '/...' prefix into the "internal" bucket.
 func pathPartStartsWithInternalPrefix(pattern string) bool {
 	pathPart := pattern
-	if idx := strings.Index(pattern, " "); idx >= 0 {
+	if idx := strings.Index(pattern, " "); idx > 0 {
 		pathPart = pattern[idx+1:]
 	}
 	return strings.HasPrefix(pathPart, internalPathPrefix)
@@ -669,16 +685,6 @@ func (r *Router) PublicHandler() http.Handler {
 // a separate port bound to an internal network segment (9090 by default).
 func (r *Router) InternalHandler() http.Handler {
 	return r.internalMux
-}
-
-// Handler is retained for backward compatibility with older callers that
-// used a single handler entry point. It returns PublicHandler — PR-A14a
-// makes the dual-handler split explicit via PublicHandler + InternalHandler.
-//
-// Deprecated: use PublicHandler for the primary listener or InternalHandler
-// for the internal listener.
-func (r *Router) Handler() http.Handler {
-	return r.outerMux
 }
 
 // DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
