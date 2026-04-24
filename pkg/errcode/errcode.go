@@ -86,6 +86,13 @@ const (
 	ErrAuthRBACInvalidInput  Code = "ERR_AUTH_RBAC_INVALID_INPUT"
 	ErrAuthKeyMissing        Code = "ERR_AUTH_KEY_MISSING"
 	ErrAuthSelfDelete        Code = "ERR_AUTH_SELF_DELETE"
+	// ErrAuthRoleFetchFailed signals that role-name resolution at the time of
+	// session-token issuance failed due to an infrastructure fault (RoleRepository
+	// unavailable, query error, etc.). Session minting is fail-closed: callers
+	// must abort login / refresh / token re-issuance rather than sign a token
+	// carrying empty roles, which would look like a successful authentication
+	// but silently strip every RBAC capability. Maps to HTTP 500.
+	ErrAuthRoleFetchFailed Code = "ERR_AUTH_ROLE_FETCH_FAILED"
 	// ErrAuthPasswordResetRequired signals that the authenticated subject must
 	// change their password before accessing business endpoints. The middleware
 	// enforces this when the JWT claim password_reset_required is true.

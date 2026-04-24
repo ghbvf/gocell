@@ -290,6 +290,91 @@ func TestService_Login_BlankFieldsRejected(t *testing.T) {
 	}
 }
 
+// brokenRoleRepo returns a fixed error from GetByUserID so tests can exercise
+// fail-closed paths in Login / IssueForUser without a real DB outage.
+type brokenRoleRepo struct {
+	mem.RoleRepository
+	err error
+}
+
+func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Role, error) {
+	return nil, b.err
+}
+
+// countingSessionRepo wraps mem.SessionRepository and counts Create calls so
+// fail-closed tests can assert the session write never happened.
+type countingSessionRepo struct {
+	*mem.SessionRepository
+	creates int
+}
+
+func (c *countingSessionRepo) Create(ctx context.Context, s *domain.Session) error {
+	c.creates++
+	return c.SessionRepository.Create(ctx, s)
+}
+
+// countingEmitter counts Emit calls so the fail-closed test can prove the
+// role-fetch failure short-circuits before the event-emit stage.
+type countingEmitter struct {
+	count int
+}
+
+func (c *countingEmitter) Emit(_ context.Context, _ outbox.Entry) error {
+	c.count++
+	return nil
+}
+
+// TestService_Login_RoleFetchFailure_AbortsLogin asserts that when the
+// RoleRepository is unavailable, Login fails fast with ErrAuthRoleFetchFailed
+// and does NOT persist the session or emit the session.created event. This is
+// the fail-closed contract from PR-A7 / sessionmint: the alternative (sign a
+// token with empty roles) silently strips every RBAC capability from a
+// seemingly-authenticated user.
+func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &countingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
+	seedUser(userRepo, "role-outage", "pass123")
+
+	emitter := &countingEmitter{}
+	svc := NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default(), WithEmitter(emitter))
+
+	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
+	require.Error(t, err, "Login must fail when role fetch fails")
+	assert.Nil(t, pair, "no token pair on failure")
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRoleFetchFailed, ec.Code,
+		"fail-closed: role fetch failure surfaces as ErrAuthRoleFetchFailed")
+
+	assert.Equal(t, 0, sessionRepo.creates, "no session must be persisted on fail-closed")
+	assert.Equal(t, 0, emitter.count, "no session.created event on fail-closed")
+}
+
+// TestService_IssueForUser_RoleFetchFailure_AbortsIssue asserts the same
+// fail-closed contract for the IssueForUser path (change-password flow).
+func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &countingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
+	seedUser(userRepo, "issue-outage", "pass123")
+	u, err := userRepo.GetByUsername(context.Background(), "issue-outage")
+	require.NoError(t, err)
+
+	svc := NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default())
+
+	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	require.Error(t, err, "IssueForUser must fail when role fetch fails")
+	assert.Empty(t, pair.AccessToken)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRoleFetchFailed, ec.Code)
+
+	assert.Equal(t, 0, sessionRepo.creates, "no session must be persisted on fail-closed")
+}
+
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()

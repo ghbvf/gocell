@@ -32,19 +32,6 @@ func NewService(verifier auth.IntentTokenVerifier, sessionRepo ports.SessionRepo
 	return &Service{verifier: verifier, sessionRepo: sessionRepo, logger: logger}
 }
 
-// Verify validates the token string and returns decoded Claims.
-// It delegates JWT verification to the injected TokenVerifier (RS256) and
-// additionally:
-//   - requires the token to declare token_use=access (intent check); refresh
-//     tokens replayed at business endpoints are rejected as invalid.
-//   - checks session revocation status when the SessionID claim is present.
-//
-// All failure modes map to the uniform errMsgAuthFailed response to prevent
-// token-type and session-state enumeration.
-func (s *Service) Verify(ctx context.Context, tokenStr string) (auth.Claims, error) {
-	return s.VerifyIntent(ctx, tokenStr, auth.TokenIntentAccess)
-}
-
 // VerifyIntent validates an access token. This service is intentionally
 // scoped to access tokens (session-revocation checks presume a business
 // endpoint), so any expected intent other than TokenIntentAccess is rejected

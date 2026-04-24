@@ -30,7 +30,7 @@ func init() {
 	}
 }
 
-func TestService_Verify(t *testing.T) {
+func TestService_VerifyIntent(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 
 	// Seed an active session for revocation tests.
@@ -148,7 +148,7 @@ func TestService_Verify(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(testVerifier, sessionRepo, slog.Default())
 
-			claims, err := svc.Verify(context.Background(), tt.token())
+			claims, err := svc.VerifyIntent(context.Background(), tt.token(), auth.TokenIntentAccess)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -163,14 +163,14 @@ func TestService_Verify(t *testing.T) {
 	}
 }
 
-func TestService_Verify_NilSessionRepo(t *testing.T) {
+func TestService_VerifyIntent_NilSessionRepo(t *testing.T) {
 	// When sessionRepo is nil (backward compatibility), sid claim is ignored.
 	svc := NewService(testVerifier, nil, slog.Default())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-any")
 	require.NoError(t, err)
 
-	claims, err := svc.Verify(context.Background(), tok)
+	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-1", claims.Subject)
 }
@@ -195,26 +195,26 @@ func (errorSessionRepo) RevokeByIDAndOwner(_ context.Context, _, _ string) error
 	return nil
 }
 
-func TestService_Verify_DBError_FailsClosed(t *testing.T) {
+func TestService_VerifyIntent_DBError_FailsClosed(t *testing.T) {
 	// Infrastructure errors (not just "not found") must also fail-closed.
 	svc := NewService(testVerifier, errorSessionRepo{}, slog.Default())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour, "sess-db-fail")
 	require.NoError(t, err)
 
-	_, err = svc.Verify(context.Background(), tok)
+	_, err = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.Error(t, err, "DB errors must cause verification failure (fail-closed)")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN")
 }
 
-func TestService_Verify_NilSessionRepo_NoSid(t *testing.T) {
+func TestService_VerifyIntent_NilSessionRepo_NoSid(t *testing.T) {
 	// When sessionRepo is nil (demo mode), tokens without sid are accepted.
 	svc := NewService(testVerifier, nil, slog.Default())
 
 	tok, err := IssueTestToken(testPrivKey, "usr-1", nil, time.Hour)
 	require.NoError(t, err)
 
-	claims, err := svc.Verify(context.Background(), tok)
+	claims, err := svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-1", claims.Subject)
 }
@@ -286,7 +286,7 @@ func TestLogSessionLookupError_LogLevel(t *testing.T) {
 			tok, err := IssueTestToken(testPrivKey, "usr-log", nil, time.Hour, "sess-log-test")
 			require.NoError(t, err)
 
-			_, _ = svc.Verify(context.Background(), tok)
+			_, _ = svc.VerifyIntent(context.Background(), tok, auth.TokenIntentAccess)
 
 			logOutput := buf.String()
 			require.NotEmpty(t, logOutput, "expected at least one log line")
