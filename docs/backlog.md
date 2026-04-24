@@ -90,7 +90,7 @@
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| ~~A1~~ | ~~**READYZ-BROKER-HEALTH-01**~~ ✅ `connection.go:596-627` `Health(ctx) error` 已实现；bootstrap 通过 `WithBrokerHealth()` 接入（2026-04-23 核实） | — | — | — |
+| ~~A1~~ | ~~**READYZ-BROKER-HEALTH-01**~~ ✅ `connection.go::Health(ctx) error` 已实现；bootstrap 通过 `WithManagedResource(conn)` 接入（PR-A18 起；前身 `WithBrokerHealth` / `BrokerHealthChecker` 已删除，probe 名 `"rabbitmq"` → `"rabbitmq_ready"`） | — | — | — |
 | ~~A2~~ | ~~**P4-TD-05**~~ ✅ `tests/integration/outbox_fullchain_test.go` 已建（PG+RMQ+Redis 3-container）（2026-04-23 核实） | — | — | — |
 | A7 | **POOLSTATS-IFACE-01** (🟡 可延后): 三个 adapter PoolStats 公共接口（OTel collector 消费） | 1h | `adapters/postgres/pool.go` + `redis/client.go` + `rabbitmq/connection.go` | PR#134 review |
 | A8 | **CI-DIGEST-01** (🟡 可延后): testcontainers 镜像 tag+digest 双固定 | 1h | `adapters/*/integration_test.go` | PR#139 review |

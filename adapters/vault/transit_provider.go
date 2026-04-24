@@ -610,6 +610,7 @@ func (h *vaultTransitHandle) unwrapDEKWithVault(ctx context.Context, edk []byte)
 //
 // Environment variables (standard Vault SDK env vars):
 //   - VAULT_ADDR:                  Vault server address
+//   - VAULT_NAMESPACE:             (HCP / Vault Enterprise) namespace; applied via SetNamespace before all I/O. Empty = root namespace.
 //   - VAULT_AUTH_METHOD:           auth method (token|approle|kubernetes) — REQUIRED
 //   - VAULT_TOKEN:                 (token method) Vault token
 //   - VAULT_ROLE_ID:               (approle method)
@@ -664,9 +665,11 @@ type TransitKeyProvider struct {
 // indefinitely. NewTransitKeyProviderFromEnv uses a 30-second timeout by default.
 //
 // Construction calls auth.Login to acquire the initial token, then performs a
-// fail-fast key existence check (readLatestVersion). If the token is renewable
-// and the client implements TokenRenewer, initTokenRenewal configures the
-// background renewal + re-auth worker (not started — call Worker().Start).
+// fail-fast key existence check (readLatestVersion). The check doubles as the
+// initial cachedLatestVersion seed, so the first Current() call after
+// construction is served lock-free without a Vault round-trip. If the token is
+// renewable and the client implements TokenRenewer, initTokenRenewal configures
+// the background renewal + re-auth worker (not started — call Worker().Start).
 //
 // Returns an error if auth is nil, Login fails, or the key existence check fails.
 func NewTransitKeyProvider(ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod) (*TransitKeyProvider, error) {

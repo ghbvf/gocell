@@ -33,9 +33,11 @@ Old expectation:
 {
   "status": "healthy",
   "cells": {"cell-1": "healthy"},
-  "dependencies": {"rabbitmq": "healthy"}
+  "dependencies": {"rabbitmq_ready": "healthy"}
 }
 ```
+
+> Note: PR-A18 renamed the broker probe from `"rabbitmq"` → `"rabbitmq_ready"` for parity with sibling adapter probe names (`vault_transit_ready` etc.). Wiring is via `bootstrap.WithManagedResource(conn)` — the legacy `WithBrokerHealth` Option was removed.
 
 New default expectation:
 

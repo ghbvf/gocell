@@ -850,7 +850,7 @@ Wave 3：
   PR-A15 kernel/webhook（依赖 L3 Outbox 稳定）
   PR-A16 kernel/reconcile + LATER-F-1 L3 示例
   PR-A17 runtime/scheduler + WM-18
-  PR-A18 Vault + RMQ 剩余
+  ~~PR-A18 Vault + RMQ 剩余~~ ✅ 已落地（PR#240）
   PR-A35 READYZ-POLISH（verbose token deny + uncooperative checker guardrails）
   PR-A36 HTTP-METRICS-LABEL-REALIGN（🟠 多 cell assembly 前触发）
 
@@ -885,7 +885,7 @@ Wave 4 (v1.1+)：
 | PR-A15 webhook | WM-32 mTLS | 同出站安全 |
 | PR-A16 reconcile | LATER-F-1 L3 示例 | 新机制 + 官方样板同发 |
 | PR-A17 scheduler | WM-18 延迟消息 | WM-18 依赖 scheduler |
-| PR-A18 Vault 剩余 | RMQ-STATUS-01 | 同 adapter health/status 面 |
+| ~~PR-A18 Vault 剩余~~ ✅ | ~~RMQ-STATUS-01~~ ✅（ManagedResource wiring 已交付）；backlog_later_detail §3 RMQ-STATUS-01（结构化诊断字段）仍开放，属独立未来项 | 同 adapter health/status 面 |
 | PR-A25 auth-prod-harden | S-nonce + S32 | real 模式 fail-fast 同面 |
 | PR-A29 auth-refresh-main | X11 → X15（强依赖顺序） | HMAC-split 必须在 opaque integration 之前，否则需数据迁移 |
 | PR-A33 refresh-polish | X12 + X13 + X14 | 全在 refresh_store.go + migrations |

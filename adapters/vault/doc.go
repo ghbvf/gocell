@@ -9,11 +9,15 @@
 //
 // This package uses envelope encryption (对标 k8s KMS v2):
 //
-//  1. A fresh 32-byte DEK is generated locally per plaintext.
+//  1. Vault Transit `/datakey/plaintext` returns a server-generated 32-byte DEK
+//     (HSM-backed in HCP) plus its wrapped EDK in a single round-trip.
 //  2. The DEK encrypts the plaintext via AES-GCM with the caller-supplied AAD.
-//  3. Vault Transit wraps (encrypts) the DEK; the wrapped DEK (edk) is stored
-//     alongside the ciphertext.
-//  4. On decrypt the edk is unwrapped by Vault and used to decrypt locally.
+//  3. The wrapped EDK ("vault:vN:...") is returned alongside the ciphertext for
+//     storage; the keyID is parsed from the EDK prefix at encrypt time.
+//  4. On decrypt the EDK is unwrapped by Vault `/transit/decrypt` and used to
+//     decrypt locally. The decrypt endpoint accepts EDKs minted by either the
+//     current `/datakey/plaintext` path or the legacy `/transit/encrypt` path,
+//     preserving storage compatibility for ciphertexts written before PR-A18.
 //
 // This pattern eliminates server-side exposure of plaintext and ensures AAD
 // binding is enforced at the local AES-GCM layer (not just as a Vault context
@@ -22,5 +26,5 @@
 // # References
 //
 // ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/envelope.go@master
-// ref: hashicorp/vault builtin/logical/transit/path_encrypt.go@main
+// ref: hashicorp/vault api-docs/secret/transit POST /transit/datakey/plaintext/:name
 package vault

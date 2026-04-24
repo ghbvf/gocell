@@ -54,6 +54,44 @@ func TestConnection_Checkers_HonorsCtxDeadline(t *testing.T) {
 	}
 }
 
+func TestConnection_Checkers_UnhealthyDisconnected(t *testing.T) {
+	conn, _ := newTestConnection(t)
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+
+	// Force the state machine into Disconnected without going through reconnect
+	// machinery — the probe must surface the reconnecting error code.
+	conn.mu.Lock()
+	conn.state = StateDisconnected
+	conn.mu.Unlock()
+
+	err := conn.Checkers()["rabbitmq_ready"](context.Background())
+	if err == nil {
+		t.Fatal("rabbitmq_ready in StateDisconnected must return an error, got nil")
+	}
+	if !errors.Is(err, errHealthReconnecting) {
+		t.Errorf("rabbitmq_ready error = %v, want errHealthReconnecting (ErrAdapterAMQPReconnecting)", err)
+	}
+}
+
+func TestConnection_Checkers_UnhealthyTerminal(t *testing.T) {
+	conn, _ := newTestConnection(t)
+	t.Cleanup(func() { _ = conn.Close(context.Background()) })
+
+	terminalErr := errors.New("simulated permanent broker failure")
+	conn.mu.Lock()
+	conn.state = StateTerminal
+	conn.permanentErr = terminalErr
+	conn.mu.Unlock()
+
+	err := conn.Checkers()["rabbitmq_ready"](context.Background())
+	if err == nil {
+		t.Fatal("rabbitmq_ready in StateTerminal must return permanentErr, got nil")
+	}
+	if !errors.Is(err, terminalErr) {
+		t.Errorf("rabbitmq_ready error = %v, want %v", err, terminalErr)
+	}
+}
+
 func TestConnection_Worker_ReturnsNil(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	t.Cleanup(func() { _ = conn.Close(context.Background()) })
