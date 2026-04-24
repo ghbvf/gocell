@@ -11,27 +11,27 @@ import (
 )
 
 // Route is the contract-first replacement for RouteDecl. A Cell registers
-// an HTTP handler by calling Mount with a Route whose Contract carries the
-// wire-level metadata (contract id, method, path) — wrapper.HTTPHandler is
-// automatically composed over Handler so every route emits a span tagged
-// with gocell.contract.id / kind / transport + http.method / route /
-// status_code. Policy / Public / PasswordResetExempt / Delegated remain on
-// Route (they describe auth-middleware bypass semantics, not contract shape).
+// an HTTP handler by calling Mount. Method + Path are the mux-relative
+// registration pair (honouring chi sub-routes); Contract, when populated,
+// carries the fully-qualified wire-level metadata (contract id, full path)
+// so wrapper.HTTPHandler annotates every span with gocell.contract.id /
+// kind / transport + http.method / route (using Contract.Path, the full
+// fully-qualified path template) + http.status_code. Policy / Public /
+// PasswordResetExempt / Delegated remain on Route — they describe auth-
+// middleware bypass semantics, not contract shape.
 //
 // Legacy callers can still use Declare(RouteDecl{...}); it forwards to
-// Mount without populating Contract — those routes remain untraced by
+// Mount without populating Contract. Those routes remain untraced by
 // wrapper and will be migrated one by one in subsequent PRs until Declare
 // and RouteDecl are retired.
 type Route struct {
-	// Contract is the ContractSpec to bind to this route. When non-zero,
-	// Method/Path are derived from Contract (Method/Path fields on Route
-	// must be left empty). The zero value selects the legacy behaviour:
-	// Method/Path fields must be provided instead.
+	// Contract is the ContractSpec to bind to this route. Optional. When
+	// set, wrapper.HTTPHandler wraps Handler and span attributes use
+	// Contract.Path (fully-qualified) as http.route. Contract.Method MUST
+	// equal Route.Method when both are present.
 	Contract wrapper.ContractSpec
 
-	// Handler is the inner http.Handler. Mount wraps it via
-	// wrapper.HTTPHandler (if Contract is non-zero) and then composes the
-	// Policy enforcement guard on top.
+	// Handler is the inner http.Handler.
 	Handler http.Handler
 
 	// Policy is the per-route authorization policy enforced by
@@ -44,18 +44,22 @@ type Route struct {
 	Public bool
 
 	// PasswordResetExempt allows reset-required tokens through this route.
-	// Handlers are responsible for tighter checks (e.g. verifying the
-	// session owns the reset).
 	PasswordResetExempt bool
 
 	// Delegated marks an /internal/v1/* route. FinalizeAuth validates the
 	// Delegated ⇔ path-prefix implication so discrepancies fail at startup.
 	Delegated bool
 
-	// Method and Path are used only when Contract is zero-value. For new
-	// code prefer setting Contract and leaving these blank.
+	// Method is the HTTP verb; required.
 	Method string
-	Path   string
+
+	// Path is the mux-relative path (respects chi sub-routing); required.
+	// When Contract is set, Path is the chi-sub-route-relative registration
+	// path; the FULLY-QUALIFIED http.route span attribute is read from
+	// Contract.Path instead. The FMT-17 governance rule (future) cross-
+	// references the sub-route prefix + Path against Contract.Path at
+	// validate time so drift fails fast in CI.
+	Path string
 }
 
 // Mount registers the Route on mux. It validates the fields, composes the
@@ -66,20 +70,18 @@ type Route struct {
 // Mount panics on invalid configurations (fail-fast at startup is preferred
 // over a silent runtime drift).
 func Mount(mux cell.RouteHandler, r Route) {
-	method, rawPath := r.resolveMethodAndPath()
-	r.validateOrPanic(method, rawPath)
+	r.validateOrPanic(r.Method, r.Path)
 
-	cleanedPath := path.Clean(rawPath)
-	pattern := method + " " + cleanedPath
+	cleanedPath := path.Clean(r.Path)
+	pattern := r.Method + " " + cleanedPath
 	handler := r.Handler
 
 	if r.Contract.ID != "" {
-		// Validate again with canonical Method/Path so wrapper.ContractSpec
-		// is internally consistent even when Route carried overrides.
-		spec := r.Contract
-		spec.Method = method
-		spec.Path = cleanedPath
-		handler = wrapper.HTTPHandler(spec, handler)
+		// Span attributes use the fully-qualified Contract.Path so
+		// observability dashboards bucket spans by full route even when
+		// cells register under chi sub-routes (the mux-relative path differs
+		// from the visible server path).
+		handler = wrapper.HTTPHandler(r.Contract, handler)
 	}
 	if r.Policy != nil {
 		handler = RequirePolicy(r.Policy)(handler)
@@ -88,23 +90,13 @@ func Mount(mux cell.RouteHandler, r Route) {
 
 	if declarer, ok := mux.(cell.AuthRouteDeclarer); ok {
 		declarer.DeclareAuthMeta(cell.AuthRouteMeta{
-			Method:              method,
+			Method:              r.Method,
 			Path:                cleanedPath,
 			Public:              r.Public,
 			PasswordResetExempt: r.PasswordResetExempt,
 			Delegated:           r.Delegated,
 		})
 	}
-}
-
-// resolveMethodAndPath picks the source of the wire-level method/path:
-// Contract when populated (contract-first API), otherwise the legacy
-// Method/Path fields on Route. It does not validate beyond non-empty.
-func (r Route) resolveMethodAndPath() (string, string) {
-	if r.Contract.ID != "" && r.Contract.Kind == "http" {
-		return r.Contract.Method, r.Contract.Path
-	}
-	return r.Method, r.Path
 }
 
 func (r Route) validateOrPanic(method, rawPath string) {
@@ -127,8 +119,10 @@ func (r Route) validateContractShape() {
 	if r.Contract.Kind != "http" {
 		panic(fmt.Sprintf("auth.Mount: Contract.Kind %q must be \"http\"", r.Contract.Kind))
 	}
-	if r.Method != "" || r.Path != "" {
-		panic("auth.Mount: Route.Method/Path must be empty when Contract is set")
+	if r.Contract.Method != "" && r.Contract.Method != r.Method {
+		panic(fmt.Sprintf(
+			"auth.Mount: Route.Method %q does not match Contract.Method %q",
+			r.Method, r.Contract.Method))
 	}
 }
 

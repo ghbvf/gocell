@@ -11,8 +11,24 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// httpAuthLoginV1 is the wrapper.ContractSpec literal for contract
+// http.auth.login.v1 (POST /api/v1/access/sessions/login). Hand-coded
+// alongside the Mount call so every span annotation trail (gocell.contract.id,
+// gocell.contract.transport, http.method, http.route) matches the YAML in
+// contracts/http/auth/login/v1/contract.yaml — a future governance rule
+// (FMT-17 SPEC-CONTRACT-SYNC) will cross-reference this literal against the
+// YAML at validate time so drift fails in CI.
+var httpAuthLoginV1 = wrapper.ContractSpec{
+	ID:        "http.auth.login.v1",
+	Kind:      "http",
+	Transport: "http",
+	Method:    "POST",
+	Path:      "/api/v1/access/sessions/login",
+}
 
 // RegisterRoutes registers HTTP routes for accesscore.
 func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
@@ -50,11 +66,12 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 		// PasswordResetExempt so a token carrying password_reset_required=true
 		// can still reach this endpoint.
 		sub.Route("/sessions", func(s cell.RouteMux) {
-			auth.Declare(s, auth.RouteDecl{
-				Method:  "POST",
-				Path:    "/login",
-				Handler: http.HandlerFunc(c.loginHandler.HandleLogin),
-				Public:  true,
+			auth.Mount(s, auth.Route{
+				Contract: httpAuthLoginV1,
+				Method:   "POST",
+				Path:     "/login",
+				Handler:  http.HandlerFunc(c.loginHandler.HandleLogin),
+				Public:   true,
 			})
 			auth.Declare(s, auth.RouteDecl{
 				Method:  "POST",

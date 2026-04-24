@@ -21,11 +21,13 @@ func loginContractSpec() wrapper.ContractSpec {
 	}
 }
 
-func TestMount_ContractDrivenRoute_DerivesMethodAndPath(t *testing.T) {
+func TestMount_ContractDrivenRoute_RegistersAtRouteMethodPath(t *testing.T) {
 	mux := newCaptureMux()
 	var handlerCalled bool
 	Mount(mux, Route{
 		Contract: loginContractSpec(),
+		Method:   "POST",
+		Path:     "/api/v1/auth/login",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			handlerCalled = true
 			w.WriteHeader(http.StatusOK)
@@ -49,6 +51,8 @@ func TestMount_ContractDrivenRoute_WrapsHandlerForContractID(t *testing.T) {
 	var seenContract string
 	Mount(mux, Route{
 		Contract: loginContractSpec(),
+		Method:   "POST",
+		Path:     "/api/v1/auth/login",
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			seenContract = wrapper.ContractIDFromContext(r.Context())
 			w.WriteHeader(http.StatusOK)
@@ -63,17 +67,17 @@ func TestMount_ContractDrivenRoute_WrapsHandlerForContractID(t *testing.T) {
 		"wrapper.HTTPHandler must have installed ContractID into context")
 }
 
-func TestMount_PanicsWhenContractAndLegacyFieldsCollide(t *testing.T) {
+func TestMount_PanicsWhenContractMethodMismatchesRoute(t *testing.T) {
 	defer func() {
 		r := recover()
 		require.NotNil(t, r, "expected panic")
-		assert.Contains(t, r.(string), "Route.Method/Path must be empty when Contract is set")
+		assert.Contains(t, r.(string), "does not match Contract.Method")
 	}()
 	Mount(newCaptureMux(), Route{
-		Contract: loginContractSpec(),
-		Handler:  noopHandler,
-		Method:   "POST",
+		Contract: loginContractSpec(), // Contract.Method = "POST"
+		Method:   "GET",               // deliberate mismatch
 		Path:     "/api/v1/auth/login",
+		Handler:  noopHandler,
 	})
 }
 
@@ -85,6 +89,8 @@ func TestMount_PanicsOnNonHTTPContractKind(t *testing.T) {
 	}()
 	Mount(newCaptureMux(), Route{
 		Contract: wrapper.ContractSpec{ID: "event.x.v1", Kind: "event", Transport: "amqp", Topic: "x"},
+		Method:   "POST",
+		Path:     "/x",
 		Handler:  noopHandler,
 	})
 }
@@ -115,7 +121,7 @@ func TestMount_HandlerNil_Panics(t *testing.T) {
 		r := recover()
 		require.NotNil(t, r, "expected panic")
 	}()
-	Mount(newCaptureMux(), Route{Contract: loginContractSpec()})
+	Mount(newCaptureMux(), Route{Contract: loginContractSpec(), Method: "POST", Path: "/x"})
 }
 
 func TestMount_PathNormalised(t *testing.T) {
