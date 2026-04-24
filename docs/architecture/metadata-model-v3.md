@@ -41,7 +41,7 @@ verify:
   smoke:
     - smoke.accesscore.startup
 l0Dependencies:           # 仅在导入 L0 Cell 时声明
-  - cell: shared-crypto
+  - cell: sharedcrypto
     reason: 确定性哈希工具
 ```
 
@@ -75,7 +75,7 @@ verify:
       expiresAt: 2026-06-01
 ```
 
-目录约定：`cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。Slice ID 使用无连字符的 nodash 小写格式（例如 `sessionlogin`，而非 `session-login`），由 `gocell validate --strict` FMT-16/REF-05 拦截。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）。
+目录约定：`cells/{cell-id}/slices/{slice-id}/slice.yaml`，且 `slice.id` == 目录名。Slice ID 使用 no-dash 小写格式（例如 `sessionlogin`）；旧式带连字符拼写由 `gocell validate --strict` 的 FMT-16 / REF-05 / DOC-NAME-01 拦截。`owner` / `consistencyLevel` 继承自 Cell。`allowedFiles` 必填（FMT-14 治理规则强制，`gocell scaffold` 生成初始值）。
 
 **slice id 命名约束**：slice.id 和目录名必须为 no-dash 格式（不含 `-`）；kebab-case 由 FMT-16 治理规则在 `gocell validate --strict` 下升级为 error。`allowedFiles` 首段必须与 slice 目录匹配（FMT-17）。
 

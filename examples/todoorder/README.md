@@ -1,4 +1,4 @@
-# todo-order Example
+# todoorder Example
 
 A minimal order management application demonstrating the GoCell "golden path":
 creating a business Cell with HTTP endpoints and a switchable event emission path.
@@ -6,8 +6,8 @@ creating a business Cell with HTTP endpoints and a switchable event emission pat
 ## Architecture
 
 - **ordercell** (L2 OutboxFact): manages order lifecycle
-  - **order-create** slice: POST creates an order and emits `event.order-created.v1`
-  - **order-query** slice: GET retrieves orders by ID or lists all
+  - **ordercreate** slice: POST creates an order and emits the order creation event
+  - **orderquery** slice: GET retrieves orders by ID or lists all
 
 ## Runtime Modes
 

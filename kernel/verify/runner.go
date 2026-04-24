@@ -176,7 +176,7 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 			result.Passed = false
 			continue
 		}
-		pkg, extraArgs := r.resolveJourneyPkg(resolved)
+		pkg, extraArgs := r.resolveJourneyPkg(j, resolved)
 		args := append([]string{pkg, "-v", "-run", resolved.RunPattern}, extraArgs...)
 		res := runGoTest(ctx, r.root, args)
 		recordResult(result, ref, res, pkg, resolved.RunPattern)
@@ -231,12 +231,20 @@ func recordResult(result *VerifyResult, name string, res goTestResult, pkg, patt
 	}
 }
 
-// resolveJourneyPkg determines the Go test package and extra args for a journey ref.
-// Prefers ./tests/integration/... (with -tags=integration) if present,
-// falls back to ./journeys/..., then ./... as last resort.
-func (r *Runner) resolveJourneyPkg(ref resolvedRef) (pkg string, extraArgs []string) {
+// resolveJourneyPkg determines the Go test package and extra args for a journey
+// ref. Example-local journey files run against their owning example tree;
+// project-level journeys still prefer ./tests/integration/... with integration
+// tags, then ./journeys/..., then ./... as last resort.
+func (r *Runner) resolveJourneyPkg(j *metadata.JourneyMeta, ref resolvedRef) (pkg string, extraArgs []string) {
 	if ref.Pkg != "" {
 		return ref.Pkg, nil
+	}
+	if j != nil {
+		if exampleName, ok := exampleNameFromJourneyFile(j.File); ok {
+			if dirExists(filepath.Join(r.root, "examples", exampleName)) {
+				return fmt.Sprintf("./examples/%s/...", exampleName), nil
+			}
+		}
 	}
 	if dirExists(filepath.Join(r.root, "tests", "integration")) {
 		return "./tests/integration/...", []string{"-tags=integration"}
@@ -245,6 +253,17 @@ func (r *Runner) resolveJourneyPkg(ref resolvedRef) (pkg string, extraArgs []str
 		return "./journeys/...", nil
 	}
 	return "./...", nil
+}
+
+func exampleNameFromJourneyFile(file string) (string, bool) {
+	parts := strings.Split(filepath.ToSlash(file), "/")
+	if len(parts) < 4 {
+		return "", false
+	}
+	if parts[0] != "examples" || parts[1] == "" || parts[2] != "journeys" {
+		return "", false
+	}
+	return parts[1], true
 }
 
 // resolveSlicePkg determines the Go test package path for a slice.

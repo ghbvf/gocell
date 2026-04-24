@@ -1,4 +1,4 @@
-# sso-bff Example
+# ssobff Example
 
 A single-process SSO BFF (Backend For Frontend) demonstrating how to compose the three
 built-in GoCell Cells into one assembly:
