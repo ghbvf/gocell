@@ -10,7 +10,17 @@ endpoints:
   http:
     method: GET
     path: /api/v1/access/roles/{userID}/{roleName}
+    pathParams:
+      userID:
+        type: string
+        format: uuid
+      roleName:
+        type: string
     successStatus: 200
     noContent: false
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

@@ -10,7 +10,21 @@ endpoints:
   http:
     method: GET
     path: /api/v1/audit/entries
+    queryParams:
+      cursor:
+        type: string
+        required: false
+      limit:
+        type: integer
+        required: false
     successStatus: 200
     noContent: false
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks admin role"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

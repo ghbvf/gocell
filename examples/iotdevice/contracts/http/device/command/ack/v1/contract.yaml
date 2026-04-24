@@ -10,6 +10,11 @@ endpoints:
   http:
     method: POST
     path: /api/v1/devices/{id}/commands/{cmdId}/ack
+    pathParams:
+      id:
+        type: string
+      cmdId:
+        type: string
     successStatus: 200
     noContent: false
 schemaRefs:

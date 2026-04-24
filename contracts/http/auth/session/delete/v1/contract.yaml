@@ -10,7 +10,15 @@ endpoints:
   http:
     method: DELETE
     path: /api/v1/access/sessions/{id}
+    pathParams:
+      id:
+        type: string
+        format: uuid
     successStatus: 204
     noContent: true
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
