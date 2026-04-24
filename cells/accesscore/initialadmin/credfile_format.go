@@ -37,7 +37,7 @@ func splitLines(s string) []string {
 //	username=<username>
 //	password=<password>
 //	expires_at=<unix timestamp>
-func formatPayload(w io.Writer, p CredentialPayload) error {
+func formatPayload(w io.Writer, p credentialPayload) error {
 	now := time.Now().UTC()
 	content := fmt.Sprintf(
 		"# GoCell initial admin credential\n"+

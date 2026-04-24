@@ -140,7 +140,7 @@ jobs:
         run: go build ./...
 
       - name: Cross-platform smoke tests
-        run: go test -coverprofile=coverage-os-smoke-${{ runner.os }}.out -covermode=atomic ./cells/accesscore/internal/initialadmin ./cells/accesscore ./runtime/shutdown ./runtime/config ./kernel/governance ./pkg/contracttest ./cmd/corebundle/... ./examples/ssobff/... -count=1 -timeout 5m
+        run: go test -coverprofile=coverage-os-smoke-${{ runner.os }}.out -covermode=atomic ./cells/accesscore/initialadmin ./cells/accesscore ./runtime/shutdown ./runtime/config ./kernel/governance ./pkg/contracttest ./cmd/corebundle/... ./examples/ssobff/... -count=1 -timeout 5m
 
       - name: Upload OS smoke coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

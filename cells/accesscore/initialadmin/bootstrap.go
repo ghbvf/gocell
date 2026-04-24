@@ -36,8 +36,8 @@ type BootstrapDeps struct {
 	Clock    Clock
 }
 
-// BootstrapConfig controls the bootstrap behaviour.
-type BootstrapConfig struct {
+// bootstrapConfig controls the bootstrap behaviour.
+type bootstrapConfig struct {
 	// Username is the admin username to create. Defaults to "admin".
 	Username string
 	// CredentialPath is the absolute path for the credential file.
@@ -48,28 +48,28 @@ type BootstrapConfig struct {
 	// PasswordSource is the entropy source for password generation.
 	// Defaults to crypto/rand.Reader.
 	PasswordSource io.Reader
-	// Scheduler is used by the returned Cleaner. Defaults to RealScheduler{}.
+	// Scheduler is used by the returned cleaner. Defaults to realScheduler{}.
 	Scheduler Scheduler
 	// Hasher produces the bcrypt-compatible hash stored in the user record.
-	// Defaults to DefaultPasswordHasher() (bcrypt cost=12). Tests inject a
+	// Defaults to defaultPasswordHasher() (bcrypt cost=12). Tests inject a
 	// low-cost hasher (bcrypt.MinCost=4) to avoid blocking the startup
 	// sequence — bcrypt cost=12 takes 5-7s on a slow CI runner and blocks
 	// phase3→phase7 of bootstrap.Run, making /healthz appear unready.
 	Hasher PasswordHasher
 }
 
-// Bootstrapper orchestrates initial admin creation: CountByRole → generate
+// bootstrapper orchestrates initial admin creation: CountByRole → generate
 // password → bcrypt → create user (PasswordResetRequired=true) → assign admin
-// role → WriteCredentialFile → return Cleaner worker.
-type Bootstrapper struct {
+// role → writeCredentialFile → return cleaner worker.
+type bootstrapper struct {
 	deps BootstrapDeps
-	cfg  BootstrapConfig
+	cfg  bootstrapConfig
 }
 
-// NewBootstrapper validates deps and cfg, applies defaults, and returns a
-// ready Bootstrapper. Returns an error when required fields are missing or cfg
+// newBootstrapper validates deps and cfg, applies defaults, and returns a
+// ready bootstrapper. Returns an error when required fields are missing or cfg
 // values are invalid.
-func NewBootstrapper(deps BootstrapDeps, cfg BootstrapConfig) (*Bootstrapper, error) {
+func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, error) {
 	if deps.UserRepo == nil {
 		return nil, fmt.Errorf("initialadmin: bootstrapper requires UserRepo")
 	}
@@ -98,13 +98,13 @@ func NewBootstrapper(deps BootstrapDeps, cfg BootstrapConfig) (*Bootstrapper, er
 		cfg.TTL = defaultTTL
 	}
 	if deps.Clock == nil {
-		deps.Clock = RealClock{}
+		deps.Clock = realClock{}
 	}
 	if cfg.Hasher == nil {
-		cfg.Hasher = DefaultPasswordHasher()
+		cfg.Hasher = defaultPasswordHasher()
 	}
 
-	return &Bootstrapper{deps: deps, cfg: cfg}, nil
+	return &bootstrapper{deps: deps, cfg: cfg}, nil
 }
 
 // ResolveCredentialPath returns the credential file path for the given stateDir.
@@ -134,36 +134,36 @@ func ResolveCredentialPath(stateDir string) (string, error) {
 	return filepath.Clean(filepath.Join(dir, "initial_admin_password")), nil
 }
 
-// resolveCredentialPath is the internal convenience wrapper used by NewBootstrapper.
+// resolveCredentialPath is the internal convenience wrapper used by newBootstrapper.
 // It panics (via log.Fatal path) only in the programmatic sense; callers should
 // use ResolveCredentialPath directly when they need to handle the error.
 func resolveCredentialPath() (string, error) {
 	return ResolveCredentialPath("")
 }
 
-// EnsureAdmin executes the bootstrap sequence. It is idempotent: if an admin
+// ensureAdmin executes the bootstrap sequence. It is idempotent: if an admin
 // user already exists (CountByRole > 0), it returns (nil, nil) without any
 // side effects.
 //
-// Before creating the admin user, EnsureAdmin probes that the credential file
-// directory is writable (probeWriteable). If the probe fails, EnsureAdmin
+// Before creating the admin user, ensureAdmin probes that the credential file
+// directory is writable (probeWriteable). If the probe fails, ensureAdmin
 // aborts before creating any user, giving an actionable error at startup time.
 //
-// Compensating rollback (F3): if WriteCredentialFile fails after the user and
-// role assignment have been created, EnsureAdmin best-effort removes the role
+// Compensating rollback (F3): if writeCredentialFile fails after the user and
+// role assignment have been created, ensureAdmin best-effort removes the role
 // assignment and user before returning. This keeps the next startup on a clean
 // slate (adminExists==false) instead of leaving the cluster stuck on
 // "admin row exists but no one knows the password" — which previously required
 // manual SQL to recover.
 //
-// On success it returns a worker.Worker (Cleaner) that removes the credential
+// On success it returns a worker.Worker (cleaner) that removes the credential
 // file after the configured TTL. Callers must hand the cleaner to a lifecycle
 // manager (e.g., bootstrap.WithWorkers).
 //
-// Sweep (P1-16) is intentionally NOT called here — it is scheduled independently
+// sweep (P1-16) is intentionally NOT called here — it is scheduled independently
 // at the composition root via SweepHook so that orphan cred files are cleaned
-// even when adminExists==true causes EnsureAdmin to return early.
-func (b *Bootstrapper) EnsureAdmin(ctx context.Context) (worker.Worker, error) {
+// even when adminExists==true causes ensureAdmin to return early.
+func (b *bootstrapper) ensureAdmin(ctx context.Context) (worker.Worker, error) {
 	// Check whether an admin already exists.
 	exists, err := b.adminExists(ctx)
 	if err != nil {
@@ -207,11 +207,11 @@ func (b *Bootstrapper) EnsureAdmin(ctx context.Context) (worker.Worker, error) {
 }
 
 // compensateAfterCredFileFailure best-effort removes the role assignment and
-// user row after WriteCredentialFile fails. Errors are logged but not
+// user row after writeCredentialFile fails. Errors are logged but not
 // surfaced — the operator's immediate concern is the credfile failure, and a
 // stale row at most forces a manual recount on next startup. We log rather
 // than silent-drop so ops can spot leaked rows and clean them up explicitly.
-func (b *Bootstrapper) compensateAfterCredFileFailure(ctx context.Context, userID string) {
+func (b *bootstrapper) compensateAfterCredFileFailure(ctx context.Context, userID string) {
 	if err := b.deps.RoleRepo.RemoveFromUser(ctx, userID, domain.RoleAdmin); err != nil {
 		b.deps.Logger.Error("initial admin bootstrap: compensating role unassign failed",
 			slog.String("event", "initial_admin_bootstrap_compensate"),
@@ -235,7 +235,7 @@ func (b *Bootstrapper) compensateAfterCredFileFailure(ctx context.Context, userI
 // actionable message if the directory is not writable or cannot be created.
 // On macOS, if the path starts with /run/, the error message includes a hint
 // to set GOCELL_STATE_DIR=$TMPDIR/gocell (P2-11).
-func (b *Bootstrapper) probeWriteable() error {
+func (b *bootstrapper) probeWriteable() error {
 	dir := filepath.Dir(b.cfg.CredentialPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return maybeMacOSHint(b.cfg.CredentialPath,
@@ -263,7 +263,7 @@ func maybeMacOSHint(credPath string, err error) error {
 }
 
 // adminExists checks if at least one user holds the admin role.
-func (b *Bootstrapper) adminExists(ctx context.Context) (bool, error) {
+func (b *bootstrapper) adminExists(ctx context.Context) (bool, error) {
 	count, err := b.deps.RoleRepo.CountByRole(ctx, domain.RoleAdmin)
 	if err != nil {
 		return false, fmt.Errorf("initialadmin: count admin users: %w", err)
@@ -280,8 +280,8 @@ func (b *Bootstrapper) adminExists(ctx context.Context) (bool, error) {
 
 // generateAndHash creates a random password and returns (plaintext, bcrypt hash).
 // The intermediate byte slice is zeroed after hashing.
-func (b *Bootstrapper) generateAndHash() (password string, hash []byte, err error) {
-	password, err = GeneratePassword(b.cfg.PasswordSource)
+func (b *bootstrapper) generateAndHash() (password string, hash []byte, err error) {
+	password, err = generatePassword(b.cfg.PasswordSource)
 	if err != nil {
 		return "", nil, fmt.Errorf("initialadmin: generate password: %w", err)
 	}
@@ -300,7 +300,7 @@ func (b *Bootstrapper) generateAndHash() (password string, hash []byte, err erro
 
 // ensureRoleAndCreateUser idempotently creates the admin role and user.
 // Returns nil user (no error) on a concurrent-bootstrap silent skip.
-func (b *Bootstrapper) ensureRoleAndCreateUser(ctx context.Context, hash []byte) (*domain.User, error) {
+func (b *bootstrapper) ensureRoleAndCreateUser(ctx context.Context, hash []byte) (*domain.User, error) {
 	adminRole := &domain.Role{
 		ID:   domain.RoleAdmin,
 		Name: domain.RoleAdmin,
@@ -377,7 +377,7 @@ func (b *Bootstrapper) ensureRoleAndCreateUser(ctx context.Context, hash []byte)
 // ref: GitLab db/fixtures/production/001_admin.rb (single-tx, no compensation),
 // Keycloak ApplianceBootstrap.createMasterRealmAdminUser (catch duplicate,
 // return false), Vault operator init (detect partial-init, resume).
-func (b *Bootstrapper) resolveDuplicateUser(ctx context.Context, createErr error) (*domain.User, error) {
+func (b *bootstrapper) resolveDuplicateUser(ctx context.Context, createErr error) (*domain.User, error) {
 	var ecErr *errcode.Error
 	if !errors.As(createErr, &ecErr) || ecErr.Code != errcode.ErrAuthUserDuplicate {
 		return nil, fmt.Errorf("initialadmin: create user: %w", createErr)
@@ -407,18 +407,18 @@ func (b *Bootstrapper) resolveDuplicateUser(ctx context.Context, createErr error
 }
 
 // writeFileAndMakeCleaner writes the credential file and constructs the cleanup worker.
-// IMPORTANT: password is only referenced here and inside CredentialPayload — it is not
+// IMPORTANT: password is only referenced here and inside credentialPayload — it is not
 // stored in any struct field and is not accessible after this function returns.
-func (b *Bootstrapper) writeFileAndMakeCleaner(password string) (worker.Worker, error) {
+func (b *bootstrapper) writeFileAndMakeCleaner(password string) (worker.Worker, error) {
 	expiresAt := b.deps.Clock.Now().Add(b.cfg.TTL)
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  b.cfg.Username,
 		Password:  password,
 		ExpiresAt: expiresAt,
 	}
-	if err := WriteCredentialFile(b.cfg.CredentialPath, payload); err != nil {
+	if err := writeCredentialFile(b.cfg.CredentialPath, payload); err != nil {
 		// IMPORTANT: do NOT include `password` in any log attribute below.
-		// Caller (Bootstrapper.EnsureAdmin) runs compensateAfterCredFileFailure so the
+		// Caller (bootstrapper.ensureAdmin) runs compensateAfterCredFileFailure so the
 		// user + role assignment are rolled back; next startup starts clean.
 		b.deps.Logger.Error("initial admin bootstrap: credential file write failed; compensating",
 			slog.String("event", "initial_admin_bootstrap"),
@@ -436,7 +436,7 @@ func (b *Bootstrapper) writeFileAndMakeCleaner(password string) (worker.Worker, 
 		slog.Time("expires_at", expiresAt),
 	)
 
-	cleaner, err := NewCleaner(CleanerConfig{
+	cleaner, err := newCleaner(cleanerConfig{
 		Path:      b.cfg.CredentialPath,
 		TTL:       b.cfg.TTL,
 		Clock:     b.deps.Clock,

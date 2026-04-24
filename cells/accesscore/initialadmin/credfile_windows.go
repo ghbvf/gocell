@@ -11,7 +11,7 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func RemoveCredentialFile(path string) error {
+func removeCredentialFile(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -28,9 +28,9 @@ func RemoveCredentialFile(path string) error {
 	}
 	if tampered {
 		if checkErr != nil {
-			return fmt.Errorf("%w: windows ACL check failed: %v", ErrCredFileTampered, checkErr)
+			return fmt.Errorf("%w: windows ACL check failed: %v", errCredFileTampered, checkErr)
 		}
-		return fmt.Errorf("%w: windows credential ACL is not restricted", ErrCredFileTampered)
+		return fmt.Errorf("%w: windows credential ACL is not restricted", errCredFileTampered)
 	}
 	return nil
 }

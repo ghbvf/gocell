@@ -23,13 +23,13 @@ func secureCredentialFinalFile(string) error {
 	return nil
 }
 
-// RemoveCredentialFile safely removes the credential file at path:
+// removeCredentialFile safely removes the credential file at path:
 //   - If the file does not exist, returns nil (idempotent).
 //   - If the file's permission is not 0o600, removes the file unconditionally
 //     (security intent: destroy the credential regardless of tampering) and
-//     returns a wrapped ErrCredFileTampered so the caller can log the anomaly.
+//     returns a wrapped errCredFileTampered so the caller can log the anomaly.
 //   - Otherwise removes the file.
-func RemoveCredentialFile(path string) error {
+func removeCredentialFile(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -45,7 +45,7 @@ func RemoveCredentialFile(path string) error {
 	}
 
 	if tampered {
-		return fmt.Errorf("%w: got mode %o, want 0600", ErrCredFileTampered, info.Mode().Perm())
+		return fmt.Errorf("%w: got mode %o, want 0600", errCredFileTampered, info.Mode().Perm())
 	}
 
 	return nil

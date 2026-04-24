@@ -33,26 +33,26 @@ func TestBootstrapperEnsureAdmin_CrossPlatformFirstRun(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	credPath := filepath.Join(t.TempDir(), "initial_admin_password")
 
-	bs, err := NewBootstrapper(BootstrapDeps{
+	bs, err := newBootstrapper(BootstrapDeps{
 		UserRepo: userRepo,
 		RoleRepo: roleRepo,
 		Logger:   newCrossPlatformTestLogger(),
-	}, BootstrapConfig{
+	}, bootstrapConfig{
 		CredentialPath: credPath,
 		TTL:            time.Hour,
 		PasswordSource: &crossPlatformFixedReader{data: []byte("0123456789abcdef")},
 		Hasher:         BcryptHasher{Cost: bcrypt.MinCost},
 	})
 	if err != nil {
-		t.Fatalf("NewBootstrapper: %v", err)
+		t.Fatalf("newBootstrapper: %v", err)
 	}
 
-	cleaner, err := bs.EnsureAdmin(context.Background())
+	cleaner, err := bs.ensureAdmin(context.Background())
 	if err != nil {
-		t.Fatalf("EnsureAdmin: %v", err)
+		t.Fatalf("ensureAdmin: %v", err)
 	}
 	if cleaner == nil {
-		t.Fatal("EnsureAdmin returned nil cleaner on first run")
+		t.Fatal("ensureAdmin returned nil cleaner on first run")
 	}
 
 	data, err := os.ReadFile(credPath)

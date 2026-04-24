@@ -21,7 +21,7 @@ func TestFormatPayload_WriterError(t *testing.T) {
 	t.Parallel()
 
 	w := brokenWriter{err: io.ErrClosedPipe}
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "secret",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
@@ -36,7 +36,7 @@ func TestFormatPayload_Content(t *testing.T) {
 	t.Parallel()
 
 	var sb strings.Builder
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  "root",
 		Password:  "hunter2",
 		ExpiresAt: time.Unix(1713456000, 0),
@@ -66,11 +66,11 @@ func TestWriteCredentialFile_WritePayloadError(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "initial_admin_password")
-	err := WriteCredentialFile(path, CredentialPayload{
+	err := writeCredentialFile(path, credentialPayload{
 		Username:  "admin",
 		Password:  "pass",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
-	}, withPayloadWriter(func(_ io.Writer, _ CredentialPayload) error {
+	}, withPayloadWriter(func(_ io.Writer, _ credentialPayload) error {
 		return io.ErrClosedPipe
 	}))
 	if err == nil {
@@ -95,7 +95,7 @@ func TestWriteCredentialFile_RenameError(t *testing.T) {
 		t.Fatalf("setup: MkdirAll: %v", err)
 	}
 
-	// Stat on path succeeds (it's a directory) → ErrCredFileExists is returned
+	// Stat on path succeeds (it's a directory) → errCredFileExists is returned
 	// before we even reach rename.  To get past that check we need a stat that
 	// says "path does not exist" but rename that still fails.
 	// Use parent-dir chmod instead: make parent read-only so rename (which
@@ -105,7 +105,7 @@ func TestWriteCredentialFile_RenameError(t *testing.T) {
 	_ = os.RemoveAll(path)
 
 	// Write file once (succeeds).
-	if err := WriteCredentialFile(path, CredentialPayload{
+	if err := writeCredentialFile(path, credentialPayload{
 		Username:  "admin",
 		Password:  "pass",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
@@ -113,7 +113,7 @@ func TestWriteCredentialFile_RenameError(t *testing.T) {
 		t.Fatalf("first write: %v", err)
 	}
 
-	// Remove the file so second call doesn't hit ErrCredFileExists.
+	// Remove the file so second call doesn't hit errCredFileExists.
 	_ = os.Remove(path)
 
 	// Make parent directory read-only so rename fails.
@@ -122,7 +122,7 @@ func TestWriteCredentialFile_RenameError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
-	err := WriteCredentialFile(path, CredentialPayload{
+	err := writeCredentialFile(path, credentialPayload{
 		Username:  "admin",
 		Password:  "pass2",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
@@ -159,7 +159,7 @@ func TestRemoveCredentialFile_StatError(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
 
-	err = RemoveCredentialFile(path)
+	err = removeCredentialFile(path)
 	if err == nil {
 		t.Fatal("expected error from stat on inaccessible path, got nil")
 	}

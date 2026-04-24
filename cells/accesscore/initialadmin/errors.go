@@ -6,23 +6,19 @@ import "errors"
 //
 // These sentinels intentionally use errors.New rather than the project-wide
 // errcode package: they are package-internal signalling values used only within
-// this package (WriteCredentialFile, RemoveCredentialFile) and tested via
+// this package (writeCredentialFile, removeCredentialFile) and tested via
 // errors.Is in callers that live in the same package. They are never returned
 // through the HTTP boundary or exposed as API error codes, so the errcode
 // convention ("no bare errors.New for external-facing errors") does not apply
 // here.
 var (
-	// ErrUnsupportedPlatform is returned by platform-specific credential file
-	// operations on targets that do not provide a secure implementation.
-	ErrUnsupportedPlatform = errors.New("initialadmin: bootstrap not supported on this platform")
-
-	// ErrCredFileExists is returned by WriteCredentialFile when the target path
+	// errCredFileExists is returned by writeCredentialFile when the target path
 	// already exists. This prevents a second bootstrap run from silently
 	// overwriting an existing credential.
-	ErrCredFileExists = errors.New("initialadmin: credential file already exists")
+	errCredFileExists = errors.New("initialadmin: credential file already exists")
 
-	// ErrCredFileTampered is returned by RemoveCredentialFile when the file
+	// errCredFileTampered is returned by removeCredentialFile when the file
 	// permission is not 0600, indicating the file may have been modified by an
 	// operator or malicious process.
-	ErrCredFileTampered = errors.New("initialadmin: credential file mode unexpectedly changed")
+	errCredFileTampered = errors.New("initialadmin: credential file mode unexpectedly changed")
 )

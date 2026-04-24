@@ -45,7 +45,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/eventrouter"
 	"github.com/ghbvf/gocell/runtime/http/router"
-	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -172,14 +171,10 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		auth.WithExpectedIssuer("ssobff-test"))
 	require.NoError(t, err)
 
-	// The bootstrap sink captures the cleaner worker. In tests the cleaner
-	// lifecycle does not need to run — the temp dir is cleaned up by t.Cleanup.
-	var _ worker.Worker                       // ensure the import is used
-	bootstrapSink := func(_ worker.Worker) {} // intentional no-op in test
-
 	// Demo mode: no outboxWriter/txRunner — cells publish directly via the
 	// eventbus publisher. This ensures accesscore events reach auditcore's
 	// subscriber without transactional outbox machinery.
+	// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore — no sink needed.
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
@@ -187,9 +182,6 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithLogger(testLogger),
 		accesscore.WithInitialAdminBootstrap(),
-		// Sink is required by WithInitialAdminBootstrap. We capture the worker
-		// but do not run it — the temp dir is cleaned up by t.Cleanup.
-		accesscore.WithBootstrapWorkerSink(bootstrapSink),
 	)
 
 	auditHMACKey := []byte("walkthrough-test-hmac-key-32b!!!")
@@ -223,6 +215,18 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	require.NoError(t, ac.Init(ctx, deps))
 	require.NoError(t, auc.Init(ctx, deps))
 	require.NoError(t, cc.Init(ctx, deps))
+
+	// This test harness bypasses bootstrap.Run, so phase3b's
+	// LifecycleContributor auto-discovery never fires. Drive the hooks
+	// manually here so initial-admin credential-file generation actually
+	// happens. Production code (examples/ssobff/main.go, cmd/corebundle)
+	// goes through bootstrap.Run and does NOT need this block.
+	lifecycleHooks := ac.LifecycleHooks()
+	for _, h := range lifecycleHooks {
+		if h.OnStart != nil {
+			require.NoError(t, h.OnStart(ctx))
+		}
+	}
 
 	// F3: public routes (login, refresh) and PasswordResetExempt routes
 	// (change-password, logout) are declared via auth.Declare inside accesscore's
@@ -258,6 +262,12 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	srv := httptest.NewServer(r)
 	cleanup := func() {
 		srv.Close()
+		// LIFO rollback of lifecycle hooks (mirrors bootstrap.Lifecycle.Stop).
+		for i := len(lifecycleHooks) - 1; i >= 0; i-- {
+			if lifecycleHooks[i].OnStop != nil {
+				_ = lifecycleHooks[i].OnStop(ctx)
+			}
+		}
 		evtCancel()
 		<-evtDone
 	}

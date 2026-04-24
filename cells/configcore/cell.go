@@ -202,9 +202,21 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 
 	runMode, publishFailureMode := c.deriveModes(deps.DurabilityMode)
 
-	if err := c.validateOutboxDeps(deps, publishFailureMode); err != nil {
+	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
+		CellID:            "configcore",
+		Mode:              deps.DurabilityMode,
+		Publisher:         c.publisher,
+		OutboxWriter:      c.outboxWriter,
+		TxRunner:          c.txRunner,
+		Logger:            c.logger,
+		DirectPublishMode: configDirectPublishMode(publishFailureMode),
+	})
+	if err != nil {
 		return err
 	}
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	c.emitter = outcome.Emitter
+
 	if err := c.ensureCursorCodec(deps); err != nil {
 		return err
 	}
@@ -238,68 +250,11 @@ func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunM
 	return query.RunModeForDemo(demo), configpublish.PublishFailureModeForDemo(demo)
 }
 
-// validateOutboxDeps rejects noop implementations in durable mode and requires
-// demo mode to use an explicit event sink instead of synthesized defaults.
-func (c *ConfigCore) validateOutboxDeps(deps cell.Dependencies, publishFailureMode configpublish.PublishFailureMode) error {
-	if err := cell.CheckNotNoop(deps.DurabilityMode, "configcore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
-		return err
-	}
-	if deps.DurabilityMode == cell.DurabilityDurable {
-		if c.outboxWriter == nil || c.txRunner == nil {
-			return errcode.New(errcode.ErrCellMissingOutbox,
-				"configcore durable mode requires real outboxWriter and txRunner")
-		}
-		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
-		if err != nil {
-			return err
-		}
-		c.emitter = emitter
-		return nil
-	}
-	if (c.outboxWriter == nil) != (c.txRunner == nil) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"configcore demo mode requires outboxWriter and txRunner together; inject both explicitly")
-	}
-	if c.publisher == nil && c.outboxWriter == nil {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"configcore demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
-	}
-
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	emitter, err := c.resolveDemoEmitter(publishFailureMode)
-	if err != nil {
-		return err
-	}
-	c.emitter = emitter
-	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
-		c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())))
-	}
-	return nil
-}
-
-func (c *ConfigCore) resolveDemoEmitter(publishFailureMode configpublish.PublishFailureMode) (outbox.Emitter, error) {
-	if c.publisher != nil && (c.outboxWriter == nil || isNoopDep(c.outboxWriter)) {
-		return outbox.NewDirectEmitter(c.publisher, configDirectPublishMode(publishFailureMode), c.logger)
-	}
-	if c.outboxWriter != nil {
-		return outbox.NewWriterEmitter(c.outboxWriter)
-	}
-	return nil, errcode.New(errcode.ErrCellMissingOutbox,
-		"configcore demo mode requires an explicit event sink")
-}
-
 func configDirectPublishMode(mode configpublish.PublishFailureMode) outbox.DirectPublishFailureMode {
 	if mode.IsFailOpen() {
 		return outbox.DirectPublishFailOpen
 	}
 	return outbox.DirectPublishFailClosed
-}
-
-func isNoopDep(dep any) bool {
-	n, ok := dep.(interface{ Noop() bool })
-	return ok && n.Noop()
 }
 
 // ensureCursorCodec sets a default cursor codec in demo mode or returns an

@@ -128,9 +128,20 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
-	if err := c.validateOutboxDeps(deps.DurabilityMode); err != nil {
+	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
+		CellID:            "auditcore",
+		Mode:              deps.DurabilityMode,
+		Publisher:         c.publisher,
+		OutboxWriter:      c.outboxWriter,
+		TxRunner:          c.txRunner,
+		Logger:            c.logger,
+		DirectPublishMode: outbox.DirectPublishFailOpen,
+	})
+	if err != nil {
 		return err
 	}
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	c.emitter = outcome.Emitter
 	c.initSlices()
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
@@ -157,63 +168,6 @@ func (c *AuditCore) resolveHMACKey(cfg map[string]any) error {
 			"auditcore: HMAC key is required (set via WithHMACKey or config audit.hmac_key)")
 	}
 	return nil
-}
-
-// validateOutboxDeps rejects noop implementations in durable mode and requires
-// demo mode to use an explicit event sink instead of synthesized defaults.
-func (c *AuditCore) validateOutboxDeps(mode cell.DurabilityMode) error {
-	if err := cell.CheckNotNoop(mode, "auditcore", c.outboxWriter, c.txRunner, c.publisher); err != nil {
-		return err
-	}
-	if mode == cell.DurabilityDurable {
-		if c.outboxWriter == nil || c.txRunner == nil {
-			return errcode.New(errcode.ErrCellMissingOutbox,
-				"auditcore durable mode requires real outboxWriter and txRunner")
-		}
-		emitter, err := outbox.NewWriterEmitter(c.outboxWriter)
-		if err != nil {
-			return err
-		}
-		c.emitter = emitter
-		return nil
-	}
-	if (c.outboxWriter == nil) != (c.txRunner == nil) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"auditcore demo mode requires outboxWriter and txRunner together; inject both explicitly")
-	}
-	if c.publisher == nil && c.outboxWriter == nil {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"auditcore demo mode requires an explicit event sink; provide publisher or outboxWriter+txRunner")
-	}
-
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	emitter, err := c.resolveDemoEmitter()
-	if err != nil {
-		return err
-	}
-	c.emitter = emitter
-	if c.ConsistencyLevel() >= cell.L2 && c.outboxWriter == nil {
-		c.logger.Warn("auditcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())))
-	}
-	return nil
-}
-
-func (c *AuditCore) resolveDemoEmitter() (outbox.Emitter, error) {
-	if c.publisher != nil && (c.outboxWriter == nil || isNoopDep(c.outboxWriter)) {
-		return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, c.logger)
-	}
-	if c.outboxWriter != nil {
-		return outbox.NewWriterEmitter(c.outboxWriter)
-	}
-	return nil, errcode.New(errcode.ErrCellMissingOutbox,
-		"auditcore demo mode requires an explicit event sink")
-}
-
-func isNoopDep(dep any) bool {
-	n, ok := dep.(interface{ Noop() bool })
-	return ok && n.Noop()
 }
 
 // initSlices constructs and registers the audit-append, audit-verify, and

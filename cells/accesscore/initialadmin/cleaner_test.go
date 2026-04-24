@@ -172,34 +172,34 @@ func writeTestCredFile(t *testing.T, path string) {
 		t.Fatalf("create dir: %v", err)
 	}
 	// Write a proper credential file with expires_at so Start() can recover the TTL.
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "test-pass",
 		ExpiresAt: time.Now().Add(24 * time.Hour),
 	}
-	if err := WriteCredentialFile(path, payload); err != nil {
+	if err := writeCredentialFile(path, payload); err != nil {
 		t.Fatalf("write cred file: %v", err)
 	}
 }
 
-func newTestCleaner(t *testing.T, path string, sched *fakeScheduler, handler *capturingHandler) *Cleaner {
+func newTestCleaner(t *testing.T, path string, sched *fakeScheduler, handler *capturingHandler) *cleaner {
 	t.Helper()
 	logger := slog.New(handler)
-	c, err := NewCleaner(CleanerConfig{
+	c, err := newCleaner(cleanerConfig{
 		Path:      path,
 		TTL:       24 * time.Hour,
 		Logger:    logger,
 		Scheduler: sched,
 	})
 	if err != nil {
-		t.Fatalf("NewCleaner: %v", err)
+		t.Fatalf("newCleaner: %v", err)
 	}
 	return c
 }
 
 // startBackground launches c.Start in a goroutine and returns a cancel func +
 // a channel that closes when Start returns.
-func startBackground(c *Cleaner) (cancel context.CancelFunc, done <-chan struct{}) {
+func startBackground(c *cleaner) (cancel context.CancelFunc, done <-chan struct{}) {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan struct{})
 	go func() {
@@ -388,7 +388,7 @@ func TestCleaner_StartAfterStop(t *testing.T) {
 
 // TestCleaner_LogsWarnOnTamperedFile verifies that when the credential file has
 // been tampered (mode changed), expire() logs at Warn level (not Error) because
-// RemoveCredentialFile now deletes the file even when tampered (P1-1 fix).
+// removeCredentialFile now deletes the file even when tampered (P1-1 fix).
 func TestCleaner_LogsWarnOnTamperedFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "initial_admin_password")
@@ -460,7 +460,7 @@ func TestCleaner_TamperedFileStillDeleted(t *testing.T) {
 }
 
 func TestRealScheduler_AfterFunc(t *testing.T) {
-	s := RealScheduler{}
+	s := realScheduler{}
 	called := make(chan struct{})
 	c := s.AfterFunc(1*time.Millisecond, func() { close(called) })
 	// Must return a Cancellable.
@@ -471,7 +471,7 @@ func TestRealScheduler_AfterFunc(t *testing.T) {
 	case <-called:
 		// fired as expected
 	case <-time.After(500 * time.Millisecond):
-		t.Error("RealScheduler timer did not fire")
+		t.Error("realScheduler timer did not fire")
 	}
 }
 
@@ -486,12 +486,12 @@ func writeTestCredFileWithExpiry(t *testing.T, path string, expiresAt time.Time)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatalf("create dir: %v", err)
 	}
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "test-pass",
 		ExpiresAt: expiresAt,
 	}
-	if err := WriteCredentialFile(path, payload); err != nil {
+	if err := writeCredentialFile(path, payload); err != nil {
 		t.Fatalf("write cred file with expiry: %v", err)
 	}
 }
@@ -510,7 +510,7 @@ func TestCleaner_RecoversTTLFromFileExpiresAt(t *testing.T) {
 
 	sched := newFakeScheduler()
 	handler := &capturingHandler{}
-	c, err := NewCleaner(CleanerConfig{
+	c, err := newCleaner(cleanerConfig{
 		Path:      path,
 		TTL:       24 * time.Hour, // original TTL — Start must ignore this for restart path
 		Logger:    slog.New(handler),
@@ -550,7 +550,7 @@ func TestCleaner_AlreadyExpired_ImmediateDelete(t *testing.T) {
 
 	sched := newFakeScheduler()
 	handler := &capturingHandler{}
-	c, err := NewCleaner(CleanerConfig{
+	c, err := newCleaner(cleanerConfig{
 		Path:      path,
 		TTL:       24 * time.Hour,
 		Logger:    slog.New(handler),
@@ -584,7 +584,7 @@ func TestCleaner_NoFile_NoOp(t *testing.T) {
 
 	sched := newFakeScheduler()
 	handler := &capturingHandler{}
-	c, err := NewCleaner(CleanerConfig{
+	c, err := newCleaner(cleanerConfig{
 		Path:      path,
 		TTL:       24 * time.Hour,
 		Logger:    slog.New(handler),
@@ -616,11 +616,11 @@ func TestCleaner_NoFile_NoOp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// NewCleaner validation tests
+// newCleaner validation tests
 // ---------------------------------------------------------------------------
 
 func TestNewCleaner_MissingPath(t *testing.T) {
-	_, err := NewCleaner(CleanerConfig{
+	_, err := newCleaner(cleanerConfig{
 		Path:   "",
 		TTL:    24 * time.Hour,
 		Logger: slog.Default(),
@@ -631,7 +631,7 @@ func TestNewCleaner_MissingPath(t *testing.T) {
 }
 
 func TestNewCleaner_ZeroTTL(t *testing.T) {
-	_, err := NewCleaner(CleanerConfig{
+	_, err := newCleaner(cleanerConfig{
 		Path:   "/tmp/x",
 		TTL:    0,
 		Logger: slog.Default(),
@@ -642,7 +642,7 @@ func TestNewCleaner_ZeroTTL(t *testing.T) {
 }
 
 func TestNewCleaner_NilLogger(t *testing.T) {
-	_, err := NewCleaner(CleanerConfig{
+	_, err := newCleaner(cleanerConfig{
 		Path:   "/tmp/x",
 		TTL:    24 * time.Hour,
 		Logger: nil,
@@ -653,11 +653,11 @@ func TestNewCleaner_NilLogger(t *testing.T) {
 }
 
 func TestNewCleaner_DefaultsApplied(t *testing.T) {
-	c, err := NewCleaner(CleanerConfig{
+	c, err := newCleaner(cleanerConfig{
 		Path:   "/tmp/x",
 		TTL:    24 * time.Hour,
 		Logger: slog.Default(),
-		// Clock and Scheduler omitted → should default to RealClock/RealScheduler
+		// Clock and Scheduler omitted → should default to realClock/realScheduler
 	})
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

@@ -13,14 +13,14 @@ import (
 
 func TestWriteCredentialFile_WindowsRestrictedACL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "initial_admin_password")
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "secret",
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
 
-	if err := WriteCredentialFile(path, payload); err != nil {
-		t.Fatalf("WriteCredentialFile: %v", err)
+	if err := writeCredentialFile(path, payload); err != nil {
+		t.Fatalf("writeCredentialFile: %v", err)
 	}
 	restricted, err := credentialFileACLRestricted(path)
 	if err != nil {
@@ -33,13 +33,13 @@ func TestWriteCredentialFile_WindowsRestrictedACL(t *testing.T) {
 
 func TestRemoveCredentialFile_WindowsDeletesTamperedACL(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "initial_admin_password")
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "secret",
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
-	if err := WriteCredentialFile(path, payload); err != nil {
-		t.Fatalf("WriteCredentialFile: %v", err)
+	if err := writeCredentialFile(path, payload); err != nil {
+		t.Fatalf("writeCredentialFile: %v", err)
 	}
 
 	worldSID, err := windows.CreateWellKnownSid(windows.WinWorldSid)
@@ -64,8 +64,8 @@ func TestRemoveCredentialFile_WindowsDeletesTamperedACL(t *testing.T) {
 		t.Fatalf("SetNamedSecurityInfo: %v", err)
 	}
 
-	err = RemoveCredentialFile(path)
-	if !errors.Is(err, ErrCredFileTampered) {
-		t.Fatalf("RemoveCredentialFile error = %v, want ErrCredFileTampered", err)
+	err = removeCredentialFile(path)
+	if !errors.Is(err, errCredFileTampered) {
+		t.Fatalf("removeCredentialFile error = %v, want errCredFileTampered", err)
 	}
 }
