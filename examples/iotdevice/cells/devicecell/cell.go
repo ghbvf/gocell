@@ -218,20 +218,19 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
-// Contract spec literals for devicecell. Examples are not backed by a
-// contracts/**/contract.yaml (FMT-18 exempts examples/**), but the Mount
-// registration still enforces Method/Path shape at startup.
+// Contract spec literals for devicecell. FMT-18 exempts examples/**, so keep
+// these aligned with examples/iotdevice/contracts/** by convention.
 var (
 	specDeviceRegister = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.register.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/devices/",
+		ID: "http.device.register.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/devices",
 	}
 	specDeviceList = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.list.v1", Kind: "http", Transport: "http",
+		ID: "http.device.list.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/api/v1/devices/",
 	}
 	specDeviceStatus = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.status.v1", Kind: "http", Transport: "http",
+		ID: "http.device.status.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/api/v1/devices/{id}/status",
 	}
 )
