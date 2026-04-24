@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -85,6 +86,27 @@ type PGRefreshStore struct {
 	rand   io.Reader
 }
 
+type refreshRow struct {
+	id           uuid.UUID
+	sessionID    string
+	subjectID    string
+	verifierHash []byte
+	createdAt    time.Time
+	expiresAt    time.Time
+	rotatedAt    *time.Time
+	revokedAt    *time.Time
+}
+
+func (r refreshRow) toToken() *refresh.Token {
+	return &refresh.Token{
+		ID:        r.id,
+		SessionID: r.sessionID,
+		SubjectID: r.subjectID,
+		CreatedAt: r.createdAt,
+		ExpiresAt: r.expiresAt,
+	}
+}
+
 // NewRefreshStore constructs a PGRefreshStore.
 func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Clock, randReader io.Reader) *PGRefreshStore {
 	if pool == nil {
@@ -110,15 +132,21 @@ func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Cl
 	}
 }
 
-// generatePair reads 16 + 32 random bytes.
-func (s *PGRefreshStore) generatePair() (selector []byte, verifier []byte, err error) {
-	sel := make([]byte, refresh.SelectorLen)
-	ver := make([]byte, refresh.VerifierLen)
-	if _, err := io.ReadFull(s.rand, sel); err != nil {
-		return nil, nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: selector rng", err)
+// execCtx executes a SQL statement against the ambient transaction in ctx when
+// one is present (F1: join caller's tx so refresh revokes are atomic with the
+// session revoke). Falls back to the pool when no tx is in context.
+func (s *PGRefreshStore) execCtx(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if tx, ok := TxFromContext(ctx); ok {
+		return tx.Exec(ctx, sql, args...)
 	}
-	if _, err := io.ReadFull(s.rand, ver); err != nil {
-		return nil, nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: verifier rng", err)
+	return s.pool.Exec(ctx, sql, args...)
+}
+
+// generatePair delegates to the shared refresh.GeneratePair helper (F10).
+func (s *PGRefreshStore) generatePair() (selector []byte, verifier []byte, err error) {
+	sel, ver, err := refresh.GeneratePair(s.rand)
+	if err != nil {
+		return nil, nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: rng", err)
 	}
 	return sel, ver, nil
 }
@@ -134,7 +162,7 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	id := uuid.New()
 	verHash := sha256.Sum256(ver)
 
-	if _, err := s.pool.Exec(ctx, insertRowSQL,
+	if _, err := s.execCtx(ctx, insertRowSQL,
 		id, uuid.NullUUID{}, sessionID, subjectID, sel, verHash[:], now, expiresAt,
 	); err != nil {
 		return "", nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: issue", err)
@@ -149,6 +177,49 @@ func (s *PGRefreshStore) Issue(ctx context.Context, sessionID, subjectID string)
 	}, nil
 }
 
+// Peek validates the presented wire token without advancing the lineage.
+func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.Token, error) {
+	sel, ver, ok := refresh.ParseOpaque(presented)
+	if !ok {
+		return nil, rejectWithReason("malformed", "")
+	}
+
+	if ambientTx, ok := TxFromContext(ctx); ok {
+		row, err := s.validatePresentedInTx(ctx, ambientTx, sel, ver)
+		if err != nil && !errors.Is(err, refresh.ErrRejected) {
+			return nil, err
+		}
+		if err != nil {
+			return nil, err
+		}
+		return row.toToken(), nil
+	}
+
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: peek begin", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = tx.Rollback(context.WithoutCancel(ctx))
+		}
+	}()
+
+	row, err := s.validatePresentedInTx(ctx, tx, sel, ver)
+	if err != nil && !errors.Is(err, refresh.ErrRejected) {
+		return nil, err
+	}
+	if cErr := tx.Commit(ctx); cErr != nil {
+		return nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: peek commit", cErr)
+	}
+	committed = true
+	if err != nil {
+		return nil, err
+	}
+	return row.toToken(), nil
+}
+
 // Rotate advances the chain. See Store.Rotate contract for branch behaviour.
 //
 // Non-happy paths funnel through rejectWithReason and return refresh.ErrRejected
@@ -159,6 +230,17 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
 		return "", nil, rejectWithReason("malformed", "")
+	}
+
+	// F1: if the caller already holds a transaction (e.g. sessionlogout wrapping
+	// RevokeSession + outbox in RunInTx), reuse it so the rotation is atomic with
+	// the outer operation. In that case the caller is responsible for commit/rollback.
+	if ambientTx, ok := TxFromContext(ctx); ok {
+		wire, tok, err := s.rotateInTx(ctx, ambientTx, sel, ver)
+		if err != nil && !errors.Is(err, refresh.ErrRejected) {
+			return "", nil, err
+		}
+		return wire, tok, err
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -190,106 +272,111 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 
 // rotateInTx orchestrates the Rotate branches within an open transaction.
 func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []byte) (string, *refresh.Token, error) {
-	var (
-		parentID     uuid.UUID
-		sessionID    string
-		subjectID    string
-		verifierHash []byte
-		createdAt    time.Time
-		expiresAt    time.Time
-		rotatedAt    *time.Time
-		revokedAt    *time.Time
-	)
-	err := tx.QueryRow(ctx, selectBySelectorSQL, sel).Scan(
-		&parentID, &sessionID, &subjectID,
-		&verifierHash, &createdAt, &expiresAt, &rotatedAt, &revokedAt,
-	)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, rejectWithReason("selector_miss", "")
-	}
+	row, err := s.validatePresentedInTx(ctx, tx, sel, ver)
 	if err != nil {
-		return "", nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: rotate select", err)
+		return "", nil, err
 	}
 
-	presentedHash := sha256.Sum256(ver)
-	if subtle.ConstantTimeCompare(presentedHash[:], verifierHash) != 1 {
-		return "", nil, rejectWithReason("verifier_miss", sessionID)
-	}
-
-	now := s.clock.Now()
-	if revokedAt != nil {
-		return "", nil, rejectWithReason("revoked", sessionID)
-	}
-	if !expiresAt.After(now) {
-		return "", nil, rejectWithReason("expired", sessionID)
-	}
-
-	if rotatedAt != nil && now.Sub(*rotatedAt) > s.policy.ReuseInterval {
-		if _, execErr := tx.Exec(ctx, revokeSessionSQL, now, sessionID); execErr != nil {
-			return "", nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
-		}
-		slog.Error("refresh token reuse detected",
-			slog.String("session_id", sessionID),
-			slog.String("reason", "reuse_detected"),
-		)
-		return "", nil, refresh.ErrRejected
-	}
-
-	// Happy path or grace retry — INSERT a child and flip parent.rotated_at
-	// iff this is the first rotation.
+	// Happy path or grace retry — INSERT a child whose parent_id points to
+	// row.id (the current generation), then flip row.id.rotated_at iff this is
+	// the first rotation.
 	newSel, newVer, err := s.generatePair()
 	if err != nil {
 		return "", nil, err
 	}
+	now := s.clock.Now()
 	newID := uuid.New()
 	newHash := sha256.Sum256(newVer)
 	newExpires := now.Add(s.policy.MaxAge)
 
 	if _, err := tx.Exec(ctx, insertRowSQL,
-		newID, uuid.NullUUID{UUID: parentID, Valid: true},
-		sessionID, subjectID, newSel, newHash[:], now, newExpires,
+		newID, uuid.NullUUID{UUID: row.id, Valid: true},
+		row.sessionID, row.subjectID, newSel, newHash[:], now, newExpires,
 	); err != nil {
 		return "", nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: rotate insert child", err)
 	}
 
-	if rotatedAt == nil {
-		if _, err := tx.Exec(ctx, markRotatedSQL, now, parentID); err != nil {
+	if row.rotatedAt == nil {
+		if _, err := tx.Exec(ctx, markRotatedSQL, now, row.id); err != nil {
 			return "", nil, errcode.Wrap(ErrAdapterPGQuery, "refresh store: mark parent rotated", err)
 		}
 	}
 
 	return refresh.EncodeOpaque(newSel, newVer), &refresh.Token{
 		ID:        newID,
-		SessionID: sessionID,
-		SubjectID: subjectID,
+		SessionID: row.sessionID,
+		SubjectID: row.subjectID,
 		CreatedAt: now,
 		ExpiresAt: newExpires,
 	}, nil
 }
 
+func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, tx pgx.Tx, sel, ver []byte) (refreshRow, error) {
+	var row refreshRow
+	err := tx.QueryRow(ctx, selectBySelectorSQL, sel).Scan(
+		&row.id, &row.sessionID, &row.subjectID,
+		&row.verifierHash, &row.createdAt, &row.expiresAt, &row.rotatedAt, &row.revokedAt,
+	)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return refreshRow{}, rejectWithReason("selector_miss", "")
+	}
+	if err != nil {
+		return refreshRow{}, errcode.Wrap(ErrAdapterPGQuery, "refresh store: token select", err)
+	}
+
+	presentedHash := sha256.Sum256(ver)
+	if subtle.ConstantTimeCompare(presentedHash[:], row.verifierHash) != 1 {
+		return refreshRow{}, rejectWithReason("verifier_miss", row.sessionID)
+	}
+
+	now := s.clock.Now()
+	if row.revokedAt != nil {
+		return refreshRow{}, rejectWithReason("revoked", row.sessionID)
+	}
+	if !row.expiresAt.After(now) {
+		return refreshRow{}, rejectWithReason("expired", row.sessionID)
+	}
+
+	if row.rotatedAt != nil && now.Sub(*row.rotatedAt) > s.policy.ReuseInterval {
+		if _, execErr := tx.Exec(ctx, revokeSessionSQL, now, row.sessionID); execErr != nil {
+			return refreshRow{}, errcode.Wrap(ErrAdapterPGQuery, "refresh store: reuse cascade", execErr)
+		}
+		slog.Error("refresh token reuse detected",
+			slog.String("session_id", row.sessionID),
+			slog.String("reason", "reuse_detected"),
+		)
+		return refreshRow{}, refresh.ErrRejected
+	}
+
+	return row, nil
+}
+
 // RevokeSession marks every row in the session_id lineage as revoked.
+// Uses the ambient transaction from ctx when present (F1).
 func (s *PGRefreshStore) RevokeSession(ctx context.Context, sessionID string) error {
 	now := s.clock.Now()
-	if _, err := s.pool.Exec(ctx, revokeSessionSQL, now, sessionID); err != nil {
+	if _, err := s.execCtx(ctx, revokeSessionSQL, now, sessionID); err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery, "refresh store: revoke session", err)
 	}
 	return nil
 }
 
 // RevokeUser marks every row owned by subjectID as revoked.
+// Uses the ambient transaction from ctx when present (F1).
 func (s *PGRefreshStore) RevokeUser(ctx context.Context, subjectID string) error {
 	now := s.clock.Now()
-	if _, err := s.pool.Exec(ctx, revokeUserSQL, now, subjectID); err != nil {
+	if _, err := s.execCtx(ctx, revokeUserSQL, now, subjectID); err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery, "refresh store: revoke user", err)
 	}
 	return nil
 }
 
 // GC removes rows whose expires_at < olderThan in batches of gcBatchSize.
+// Uses the ambient transaction from ctx when present (F1).
 func (s *PGRefreshStore) GC(ctx context.Context, olderThan time.Time) (int, error) {
 	total := 0
 	for {
-		ct, err := s.pool.Exec(ctx, gcBatchSQL, olderThan, gcBatchSize)
+		ct, err := s.execCtx(ctx, gcBatchSQL, olderThan, gcBatchSize)
 		if err != nil {
 			return total, errcode.Wrap(ErrAdapterPGQuery, "refresh store: gc batch", err)
 		}

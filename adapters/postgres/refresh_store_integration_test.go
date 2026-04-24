@@ -168,3 +168,90 @@ func TestMigration012_StructuralAssertions(t *testing.T) {
 		})
 	}
 }
+
+// ---------------------------------------------------------------------------
+// TestPGRefreshStore_DMLState — F16: verify raw DB state after Issue → Rotate → RevokeSession
+// ---------------------------------------------------------------------------
+
+// TestPGRefreshStore_DMLState asserts the append-only row state after each
+// mutating operation: Issue, Rotate, and RevokeSession.
+func TestPGRefreshStore_DMLState(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	p := isolatedSchemaPool(t, ctx, base)
+	migrator, err := NewMigrator(p, MigrationsFS(), "schema_migrations_dml_state")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	policy := refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: 7 * 24 * time.Hour}
+	store := NewRefreshStore(p.DB(), policy, clock, nil)
+
+	const sessionID = "sess-dml-state"
+	const subjectID = "usr-dml-state"
+
+	// Step 1: Issue — expect one row, rotated_at IS NULL, revoked_at IS NULL.
+	wire, tok, err := store.Issue(ctx, sessionID, subjectID)
+	require.NoError(t, err)
+	require.NotEmpty(t, wire)
+	require.NotNil(t, tok)
+
+	t.Run("after_Issue_one_row_no_flags", func(t *testing.T) {
+		var rowCount int
+		var rotatedAt, revokedAt *time.Time
+		err := p.DB().QueryRow(ctx,
+			`SELECT count(*), max(rotated_at), max(revoked_at)
+			 FROM refresh_tokens WHERE session_id = $1`, sessionID).
+			Scan(&rowCount, &rotatedAt, &revokedAt)
+		require.NoError(t, err)
+		assert.Equal(t, 1, rowCount, "Issue must insert exactly one row")
+		assert.Nil(t, rotatedAt, "after Issue rotated_at must be NULL")
+		assert.Nil(t, revokedAt, "after Issue revoked_at must be NULL")
+	})
+
+	// Step 2: Rotate — expect TWO rows; original has rotated_at IS NOT NULL;
+	// child row's parent_id equals the original row's id.
+	newWire, newTok, err := store.Rotate(ctx, wire)
+	require.NoError(t, err)
+	require.NotEmpty(t, newWire)
+	require.NotNil(t, newTok)
+
+	t.Run("after_Rotate_two_rows_parent_rotated", func(t *testing.T) {
+		var rowCount int
+		err := p.DB().QueryRow(ctx,
+			`SELECT count(*) FROM refresh_tokens WHERE session_id = $1`, sessionID).
+			Scan(&rowCount)
+		require.NoError(t, err)
+		assert.Equal(t, 2, rowCount, "Rotate must append a child row (total = 2)")
+
+		// Original row must be rotated.
+		var origRotatedAt *time.Time
+		err = p.DB().QueryRow(ctx,
+			`SELECT rotated_at FROM refresh_tokens WHERE id = $1`, tok.ID).
+			Scan(&origRotatedAt)
+		require.NoError(t, err)
+		assert.NotNil(t, origRotatedAt, "original row rotated_at must be set after Rotate")
+
+		// Child row must point back to the original (parent_id = original.id).
+		var parentID interface{}
+		err = p.DB().QueryRow(ctx,
+			`SELECT parent_id FROM refresh_tokens WHERE id = $1`, newTok.ID).
+			Scan(&parentID)
+		require.NoError(t, err)
+		assert.NotNil(t, parentID, "child row parent_id must equal the original row id")
+	})
+
+	// Step 3: RevokeSession — ALL rows for the session must have revoked_at IS NOT NULL.
+	require.NoError(t, store.RevokeSession(ctx, sessionID))
+
+	t.Run("after_RevokeSession_all_rows_revoked", func(t *testing.T) {
+		var unrevokedCount int
+		err := p.DB().QueryRow(ctx,
+			`SELECT count(*) FROM refresh_tokens WHERE session_id = $1 AND revoked_at IS NULL`, sessionID).
+			Scan(&unrevokedCount)
+		require.NoError(t, err)
+		assert.Zero(t, unrevokedCount, "after RevokeSession all rows must have revoked_at set")
+	})
+}

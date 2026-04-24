@@ -21,18 +21,14 @@ import (
 // intentMockVerifier returns distinct results per expected intent so the
 // middleware's call path can be observed.
 type intentMockVerifier struct {
-	accessClaims  Claims
-	accessErr     error
-	refreshClaims Claims
-	refreshErr    error
+	accessClaims Claims
+	accessErr    error
 }
 
 func (v *intentMockVerifier) VerifyIntent(_ context.Context, _ string, expected TokenIntent) (Claims, error) {
 	switch expected {
 	case TokenIntentAccess:
 		return v.accessClaims, v.accessErr
-	case TokenIntentRefresh:
-		return v.refreshClaims, v.refreshErr
 	default:
 		return Claims{}, errcode.New(errcode.ErrAuthInvalidTokenIntent, "unknown intent")
 	}

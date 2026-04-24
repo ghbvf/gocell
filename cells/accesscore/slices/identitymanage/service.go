@@ -86,6 +86,18 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
+	if repo == nil {
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: user repository is required")
+	}
+	if sessionRepo == nil {
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: session repository is required")
+	}
+	if refreshStore == nil {
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: refresh store is required")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{
 		repo:         repo,
 		sessionRepo:  sessionRepo,
@@ -330,6 +342,16 @@ type ChangePasswordInput struct {
 // The token pair is issued synchronously so the client can replace stale tokens
 // without a forced re-login — this is critical when the old token carried
 // password_reset_required=true and would be rejected by the middleware.
+//
+// IssueForUser tx trade-off (F18): IssueForUser is intentionally called
+// OUTSIDE the write transaction. It creates a brand-new session that must not
+// be swept by the RevokeByUserID call inside the tx; including it in the tx
+// would roll back a legitimate new session if token signing fails. The
+// observable trade-off is: if IssueForUser fails after the tx commits, the
+// password change is durable but the caller must re-login to obtain a token.
+// This is preferable to the inverse (rolling back a committed password change
+// because signing failed), and consistent with the principle that credential
+// rotation should not be undone by a transient signing-key unavailability.
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (dto.TokenPair, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", input.UserID),

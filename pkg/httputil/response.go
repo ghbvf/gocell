@@ -310,11 +310,12 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
 
 	// --- 503 Service Unavailable ---
-	errcode.ErrCircuitOpen:          http.StatusServiceUnavailable,
-	errcode.ErrWSHubStopping:        http.StatusServiceUnavailable,
-	errcode.ErrWSHubNotRunning:      http.StatusServiceUnavailable,
-	errcode.ErrWSMaxConns:           http.StatusServiceUnavailable,
-	errcode.ErrRelayBudgetExhausted: http.StatusServiceUnavailable,
+	errcode.ErrCircuitOpen:            http.StatusServiceUnavailable,
+	errcode.ErrWSHubStopping:          http.StatusServiceUnavailable,
+	errcode.ErrWSHubNotRunning:        http.StatusServiceUnavailable,
+	errcode.ErrWSMaxConns:             http.StatusServiceUnavailable,
+	errcode.ErrRelayBudgetExhausted:   http.StatusServiceUnavailable,
+	errcode.ErrAuthRefreshUnavailable: http.StatusServiceUnavailable,
 	// Vault / key-provider unavailability: infra down rather than internal bug.
 	// 503 lets upstream load balancers and clients apply retry semantics
 	// (Retry-After, circuit breakers) — matching ErrCircuitOpen's model.

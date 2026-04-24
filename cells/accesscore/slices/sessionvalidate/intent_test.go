@@ -23,8 +23,7 @@ func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {
 
 	svc := NewService(verifier, nil, slog.Default())
 
-	refreshTok, err := IssueTestTokenWithIntent(priv, auth.TokenIntentRefresh,
-		"usr-attacker", nil, time.Hour)
+	refreshTok, err := IssueLegacyRefreshJWT(priv, "usr-attacker", time.Hour)
 	require.NoError(t, err)
 
 	_, err = svc.VerifyIntent(context.Background(), refreshTok, auth.TokenIntentAccess)

@@ -18,10 +18,12 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
 // resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
@@ -74,6 +76,9 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		return errcode.New(errcode.ErrCellMissingTokenIssuer,
 			"refresh.Store required: use WithRefreshStore (durable) or WithInMemoryDefaults (demo)")
 	}
+	if err := c.initRefreshGC(); err != nil {
+		return err
+	}
 	if c.cursorCodec == nil {
 		if deps.DurabilityMode == cell.DurabilityDurable {
 			return errcode.New(errcode.ErrCellMissingCodec,
@@ -87,6 +92,28 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		c.logger.Warn("accesscore: using default cursor codec (demo mode)")
 	}
 	c.rbacRunMode = query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo)
+	return nil
+}
+
+func (c *AccessCore) initRefreshGC() error {
+	if !c.refreshGCEnabled {
+		return nil
+	}
+	if c.refreshGCInterval <= 0 {
+		return errcode.New(errcode.ErrCellInvalidConfig, "accesscore refresh GC interval must be positive")
+	}
+	if c.refreshGCRetention <= 0 {
+		return errcode.New(errcode.ErrCellInvalidConfig, "accesscore refresh GC retention must be positive")
+	}
+	provider := c.metricsProvider
+	if provider == nil {
+		provider = metrics.NopProvider{}
+	}
+	collector, err := refresh.NewProviderGCCollector(provider)
+	if err != nil {
+		return err
+	}
+	c.refreshGCCollector = collector
 	return nil
 }
 
@@ -219,8 +246,12 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 // Mirrors fx Hook.callerFrame / Kubernetes controller-runtime Runnable.GetName()
 // — getters must not mutate.
 func (c *AccessCore) LifecycleHooks() []cell.LifecycleHook {
-	if c.initialAdmin == nil {
-		return nil
+	var hooks []cell.LifecycleHook
+	if c.initialAdmin != nil {
+		hooks = append(hooks, c.initialAdmin.Hook())
 	}
-	return []cell.LifecycleHook{c.initialAdmin.Hook()}
+	if c.refreshGCEnabled {
+		hooks = append(hooks, c.refreshGCHook())
+	}
+	return hooks
 }

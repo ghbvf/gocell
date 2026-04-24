@@ -2,6 +2,7 @@ package refresh
 
 import (
 	"encoding/base64"
+	"io"
 	"strings"
 )
 
@@ -25,6 +26,23 @@ const WireLen = 22 + 1 + 43
 // wireSeparator is the delimiter between selector and verifier halves.
 // Matches ory/fosite token/hmac/hmacsha.go convention.
 const wireSeparator = "."
+
+// GeneratePair reads SelectorLen + VerifierLen random bytes from rand.
+// Returns distinct buffers; never returns the same buffer twice.
+//
+// Both memstore and the postgres adapter delegate to this helper (F10) so
+// the generation logic lives in exactly one place.
+func GeneratePair(rand io.Reader) (selector, verifier []byte, err error) {
+	sel := make([]byte, SelectorLen)
+	ver := make([]byte, VerifierLen)
+	if _, err := io.ReadFull(rand, sel); err != nil {
+		return nil, nil, err
+	}
+	if _, err := io.ReadFull(rand, ver); err != nil {
+		return nil, nil, err
+	}
+	return sel, ver, nil
+}
 
 // EncodeOpaque renders selector || separator || verifier as a URL-safe,
 // base64 no-padding string. Callers hand this to clients verbatim.

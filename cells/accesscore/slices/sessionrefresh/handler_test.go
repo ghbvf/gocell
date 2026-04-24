@@ -16,6 +16,8 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
 // testIssuer is declared in service_test.go
@@ -43,6 +45,29 @@ func setup() (*Handler, string) {
 
 	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
 	return NewHandler(svc), wireToken
+}
+
+type unavailableRefreshStore struct {
+	refresh.Store
+}
+
+func (s unavailableRefreshStore) Peek(context.Context, string) (*refresh.Token, error) {
+	return nil, errcode.NewInfra(errcode.ErrInternal, "refresh db unavailable")
+}
+
+func assertErrorBody(t *testing.T, body []byte, code, message string) {
+	t.Helper()
+	var resp struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(body, &resp))
+	assert.Equal(t, code, resp.Error.Code)
+	assert.Equal(t, message, resp.Error.Message)
+	assert.NotNil(t, resp.Error.Details)
 }
 
 func TestToTokenPairResponse_NilInput(t *testing.T) {
@@ -118,6 +143,9 @@ func TestHandleRefresh(t *testing.T) {
 			name:       "invalid token returns 401",
 			body:       `{"refreshToken":"not.a.valid.opaque.token"}`,
 			wantStatus: http.StatusUnauthorized,
+			checkBody: func(t *testing.T, body []byte) {
+				assertErrorBody(t, body, "ERR_AUTH_REFRESH_FAILED", "invalid refresh token")
+			},
 		},
 		{
 			name:       "unknown field returns 400",
@@ -138,6 +166,22 @@ func TestHandleRefresh(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	userRepo := mem.NewUserRepository()
+	store := unavailableRefreshStore{Store: newTestRefreshStore()}
+	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default())
+	h := NewHandler(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/refresh", strings.NewReader(`{"refreshToken":"opaque"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.HandleRefresh(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assertErrorBody(t, w.Body.Bytes(), "ERR_AUTH_REFRESH_UNAVAILABLE", "internal server error")
 }
 
 // TestHandler_Refresh_BlankToken verifies that submitting an empty refreshToken

@@ -1,5 +1,5 @@
 // Package sessionlogin implements the session-login slice: password-based login
-// with JWT issuance.
+// with JWT access token and opaque refresh token issuance.
 package sessionlogin
 
 import (
@@ -78,6 +78,24 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
+	if userRepo == nil {
+		panic("sessionlogin.NewService: userRepo must not be nil")
+	}
+	if sessionRepo == nil {
+		panic("sessionlogin.NewService: sessionRepo must not be nil")
+	}
+	if roleRepo == nil {
+		panic("sessionlogin.NewService: roleRepo must not be nil")
+	}
+	if refreshStore == nil {
+		panic("sessionlogin.NewService: refreshStore must not be nil")
+	}
+	if issuer == nil {
+		panic("sessionlogin.NewService: issuer must not be nil")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{
 		userRepo:     userRepo,
 		sessionRepo:  sessionRepo,
@@ -137,20 +155,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 		return nil, err
 	}
 
-	refreshWire, _, err := s.refreshStore.Issue(ctx, sessionID, user.ID)
-	if err != nil {
-		s.logger.Error("session-login: refresh store issue failed",
-			slog.Any("error", err), slog.String("user_id", user.ID))
-		return nil, errcode.New(errcode.ErrAuthLoginFailed, "refresh store unavailable")
-	}
-
 	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: create session: %w", err)
 	}
 	session.ID = sessionID
 
-	if err := s.persistSession(ctx, session, user.ID); err != nil {
+	refreshWire, err := s.persistSessionWithRefresh(ctx, session, user.ID, true)
+	if err != nil {
 		return nil, err
 	}
 
@@ -165,18 +177,52 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	}, nil
 }
 
-// persistSession writes the session and emits the outbox entry.
-func (s *Service) persistSession(ctx context.Context, session *domain.Session, userID string) error {
+// persistSessionWithRefresh writes the session, issues the refresh root, and
+// emits the outbox entry inside the same transaction boundary when a durable
+// TxRunner is configured. In demo mode it compensates the already-created
+// session if refresh issuance fails.
+func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID string, emitCreated bool) (string, error) {
+	var refreshWire string
 	do := func(txCtx context.Context) error {
 		if err := s.sessionRepo.Create(txCtx, session); err != nil {
 			return fmt.Errorf("session-login: persist session: %w", err)
 		}
-		return outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
+		wire, _, err := s.refreshStore.Issue(txCtx, session.ID, userID)
+		if err != nil {
+			s.logger.Error("session-login: refresh store issue failed",
+				slog.Any("error", err), slog.String("user_id", userID))
+			_ = s.sessionRepo.Delete(context.WithoutCancel(txCtx), session.ID)
+			return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+		}
+		refreshWire = wire
+		if !emitCreated {
+			return nil
+		}
+		if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
 			SessionID: session.ID,
 			UserID:    userID,
-		})
+		}); err != nil {
+			s.cleanupIssuedSession(txCtx, session.ID)
+			return fmt.Errorf("session-login: emit event: %w", err)
+		}
+		return nil
 	}
-	return s.txRunner.RunInTx(ctx, do)
+	if err := s.txRunner.RunInTx(ctx, do); err != nil {
+		return "", err
+	}
+	return refreshWire, nil
+}
+
+func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
+	cleanupCtx := context.WithoutCancel(ctx)
+	if err := s.refreshStore.RevokeSession(cleanupCtx, sessionID); err != nil {
+		s.logger.Error("session-login: cleanup refresh chain failed",
+			slog.Any("error", err), slog.String("session_id", sessionID))
+	}
+	if err := s.sessionRepo.Delete(cleanupCtx, sessionID); err != nil {
+		s.logger.Error("session-login: cleanup session failed",
+			slog.Any("error", err), slog.String("session_id", sessionID))
+	}
 }
 
 // IssueForUser issues a fresh token pair for a user by ID. It re-fetches the
@@ -213,21 +259,15 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		return dto.TokenPair{}, err
 	}
 
-	refreshWire, _, err := s.refreshStore.Issue(ctx, sessionID, userID)
-	if err != nil {
-		s.logger.Error("session-login: IssueForUser refresh store issue failed",
-			slog.Any("error", err), slog.String("user_id", userID))
-		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginFailed, "refresh store unavailable")
-	}
-
 	// Persist the session so sessionvalidate can look it up by sid claim.
 	session, err := domain.NewSession(userID, minted.AccessToken, minted.ExpiresAt)
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser create session: %w", err)
 	}
 	session.ID = sessionID
-	if err := s.sessionRepo.Create(ctx, session); err != nil {
-		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser persist session: %w", err)
+	refreshWire, err := s.persistSessionWithRefresh(ctx, session, userID, false)
+	if err != nil {
+		return dto.TokenPair{}, err
 	}
 
 	s.logger.Info("session-login: IssueForUser issued new session",

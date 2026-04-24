@@ -7,7 +7,8 @@
 // rejection paths, T9 RevokeSession cascade, T10 concurrent Rotate CAS,
 // T11 ExpiresAt calculation, T12 errcode sentinel category, T13 GC cleanup,
 // T14 concurrent goroutine race model, T15 reuse-after-grace cascade,
-// T16 grace-inside-interval, T17 parse-failure uniformity, T18 RevokeUser.
+// T16 grace-inside-interval, T17 parse-failure uniformity, T18 RevokeUser,
+// T19 Peek preflight.
 package storetest
 
 import (
@@ -79,6 +80,14 @@ func mustRotate(t *testing.T, store refresh.Store, wire string) (string, *refres
 	return newWire, tok
 }
 
+func mustPeek(t *testing.T, store refresh.Store, wire string) *refresh.Token {
+	t.Helper()
+	tok, err := store.Peek(context.Background(), wire)
+	require.NoError(t, err, "Peek(%q)", wire)
+	require.NotNil(t, tok, "Peek returned nil token")
+	return tok
+}
+
 // RunContractSuite runs T1-T18 against factory. Each T is a t.Run sub-test.
 func RunContractSuite(t *testing.T, factory Factory) {
 	t.Helper()
@@ -100,6 +109,7 @@ func RunContractSuite(t *testing.T, factory Factory) {
 	t.Run("T16_Rotate_GraceInsideInterval_DistinctWire", func(t *testing.T) { t.Parallel(); runT16GraceInside(t, factory) })
 	t.Run("T17_Rotate_ParseFailure_Uniform", func(t *testing.T) { t.Parallel(); runT17ParseFailure(t, factory) })
 	t.Run("T18_RevokeUser_OnlyTargetSubject", func(t *testing.T) { t.Parallel(); runT18RevokeUser(t, factory) })
+	t.Run("T19_Peek_DoesNotAdvanceLineage", func(t *testing.T) { t.Parallel(); runT19PeekDoesNotAdvance(t, factory) })
 }
 
 // runT1IssueBasic: Issue wire length 66, Token has ID/session/subject/times,
@@ -265,15 +275,19 @@ func runT10ConcurrentCAS(t *testing.T, factory Factory) {
 
 	distinct := make(map[string]struct{})
 	errs := 0
+	badWires := 0
 	for r := range results {
 		if r.err != nil {
 			errs++
 			continue
 		}
-		assert.Len(t, r.wire, refresh.WireLen)
+		if len(r.wire) != refresh.WireLen {
+			badWires++
+		}
 		distinct[r.wire] = struct{}{}
 	}
 	assert.Zero(t, errs, "all concurrent Rotates within grace window must succeed")
+	assert.Zero(t, badWires, "every concurrent Rotate must return a wire of length WireLen")
 	assert.Equal(t, goroutines, len(distinct), "each Rotate must yield a distinct wire")
 }
 
@@ -389,6 +403,8 @@ func runT16GraceInside(t *testing.T, factory Factory) {
 	assert.NoError(t, err)
 	_, _, err = store.Rotate(context.Background(), child2)
 	assert.NoError(t, err)
+	_, _, err = store.Rotate(context.Background(), child3)
+	assert.NoError(t, err, "child3 must also be independently live")
 }
 
 // runT17ParseFailure: every shape of malformed wire token returns ErrRejected
@@ -401,7 +417,7 @@ func runT17ParseFailure(t *testing.T, factory Factory) {
 		"no-dot-at-all",
 		"two.dots.here",
 		".",
-		strings.Repeat("a", 66),             // correct length, no dot at position 22
+		strings.Repeat("a", 66), // correct length, no dot at position 22
 		strings.Repeat("!", 22) + "." + strings.Repeat("b", 43),
 	}
 	for _, in := range cases {
@@ -430,6 +446,24 @@ func runT18RevokeUser(t *testing.T, factory Factory) {
 
 	// Unknown subject is a no-op.
 	require.NoError(t, store.RevokeUser(ctx, "nobody"))
+}
+
+func runT19PeekDoesNotAdvance(t *testing.T, factory Factory) {
+	store, _ := factory(t, defaultPolicy)
+
+	parentWire, parentTok := mustIssue(t, store, "sess-19", "user-19")
+	peeked := mustPeek(t, store, parentWire)
+	assert.Equal(t, parentTok.ID, peeked.ID)
+	assert.Equal(t, "sess-19", peeked.SessionID)
+
+	childWire, childTok := mustRotate(t, store, parentWire)
+	assert.NotEqual(t, parentWire, childWire)
+	assert.NotEqual(t, parentTok.ID, childTok.ID)
+
+	// The parent is now rotated but still inside grace; Peek must report the
+	// presented parent metadata and still avoid issuing another child.
+	peekedAgain := mustPeek(t, store, parentWire)
+	assert.Equal(t, parentTok.ID, peekedAgain.ID)
 }
 
 // Silence unused-imports guard when errcode isn't needed (defensive).

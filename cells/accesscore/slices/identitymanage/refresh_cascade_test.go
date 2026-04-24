@@ -43,12 +43,20 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	wire, _, err := refreshStore.Issue(ctx, "sess-dave", user.ID)
 	require.NoError(t, err)
 
+	// F13: issue a second user's wire token first — it must survive the Lock.
+	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-lock", "other-user-lock")
+	require.NoError(t, err)
+
 	require.NoError(t, svc.Lock(ctx, user.ID))
 
 	// Rotating the pre-lock refresh token must be rejected.
 	_, _, err = refreshStore.Rotate(ctx, wire)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, refresh.ErrRejected), "refresh token after Lock must be rejected")
+
+	// F13: the other user's chain must survive the Lock.
+	_, _, err = refreshStore.Rotate(ctx, otherWire)
+	assert.NoError(t, err, "other user's refresh chain must survive Lock(user.ID)")
 }
 
 func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
@@ -68,6 +76,10 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	wire, _, err := refreshStore.Issue(ctx, "sess-eve", user.ID)
 	require.NoError(t, err)
 
+	// F13: issue a second user's wire token first — it must survive the ChangePassword.
+	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-cp", "other-user-cp")
+	require.NoError(t, err)
+
 	_, err = svc.ChangePassword(ctx, ChangePasswordInput{
 		UserID:      user.ID,
 		OldPassword: "old-P@ssw0rd!",
@@ -79,6 +91,10 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, refresh.ErrRejected),
 		"refresh token after ChangePassword must be rejected")
+
+	// F13: the other user's chain must survive the ChangePassword.
+	_, _, err = refreshStore.Rotate(ctx, otherWire)
+	assert.NoError(t, err, "other user's refresh chain must survive ChangePassword(user.ID)")
 }
 
 func TestService_Delete_RevokesRefreshChain(t *testing.T) {
@@ -97,10 +113,18 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	wire, _, err := refreshStore.Issue(ctx, "sess-frank", user.ID)
 	require.NoError(t, err)
 
+	// F13: issue a second user's wire token first — it must survive the Delete.
+	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-del", "other-user-del")
+	require.NoError(t, err)
+
 	require.NoError(t, svc.Delete(ctx, user.ID))
 
 	_, _, err = refreshStore.Rotate(ctx, wire)
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, refresh.ErrRejected),
 		"refresh token after Delete must be rejected")
+
+	// F13: the other user's chain must survive the Delete.
+	_, _, err = refreshStore.Rotate(ctx, otherWire)
+	assert.NoError(t, err, "other user's refresh chain must survive Delete(user.ID)")
 }

@@ -183,6 +183,8 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 		"fail-closed: role fetch failure surfaces as ErrAuthRoleFetchFailed")
 
 	assert.Equal(t, 0, sessionRepo.updates, "session must not be updated on fail-closed")
+	_, _, err = refreshStore.Rotate(context.Background(), wireToken)
+	require.NoError(t, err, "role fetch failure must not advance the refresh lineage")
 }
 
 func TestService_Refresh(t *testing.T) {
@@ -410,7 +412,7 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 // user clears PasswordResetRequired, the next refresh produces a new access
 // token with password_reset_required=false.
 func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
-	svc, sessionRepo, userRepo := newTestServiceWithUserRepo()
+	_, sessionRepo, userRepo := newTestServiceWithUserRepo()
 
 	// Seed a user with reset flag = false (already cleared).
 	hash, _ := bcrypt.GenerateFromPassword([]byte("pass"), bcrypt.MinCost)
@@ -419,10 +421,9 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 	// PasswordResetRequired is false by default.
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
-	// We need the refreshStore from the service — recreate with known refreshStore.
+	// Recreate with a known refreshStore so we can issue and rotate wire tokens.
 	refreshStore := newTestRefreshStore()
 	svc2 := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
-	_ = svc // suppress unused var
 
 	sess, _ := domain.NewSession("usr-ref-clear", "at", time.Now().Add(time.Hour))
 	sess.ID = "sess-ref-clear"
@@ -498,7 +499,11 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "infra error must cause Refresh to fail")
 	assert.Nil(t, pair)
-	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED")
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+	_, _, err = refreshStore.Rotate(context.Background(), wireToken)
+	require.NoError(t, err, "session lookup infra failure must not rotate or revoke the presented token")
 }
 
 // infraGetByIDRepo overrides GetByID to return an infra error.
@@ -509,4 +514,59 @@ type infraGetByIDRepo struct {
 
 func (r *infraGetByIDRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
 	return nil, r.infraErr
+}
+
+// spyRefreshStore wraps a real refresh.Store and records RevokeSession calls.
+// Used by F14 to assert cascade-revoke is triggered on session-not-found.
+type spyRefreshStore struct {
+	refresh.Store
+	mu             sync.Mutex
+	revokeSessionN int
+	lastSessionID  string
+}
+
+func (s *spyRefreshStore) RevokeSession(ctx context.Context, sessionID string) error {
+	s.mu.Lock()
+	s.revokeSessionN++
+	s.lastSessionID = sessionID
+	s.mu.Unlock()
+	return s.Store.RevokeSession(ctx, sessionID)
+}
+
+// TestService_Refresh_SessionNotFound_CascadeRevokes verifies that when
+// sessionRepo.GetByID returns a domain ErrSessionNotFound (not an infra error),
+// Refresh returns ErrAuthRefreshFailed AND calls RevokeSession on the rotated
+// token so the newly-issued child cannot be used by an attacker. (F14)
+func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
+	notFoundErr := errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+
+	// Use issueTestWireToken to set up the refreshStore; then swap in a spy
+	// and a sessionRepo stub so GetByID returns not-found.
+	_, _, innerStore, wireToken := issueTestWireToken(t, "usr-notfound", "sess-notfound")
+
+	spy := &spyRefreshStore{Store: innerStore}
+	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
+	svc := NewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err, "session-not-found must cause Refresh to fail")
+	assert.Nil(t, pair)
+	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED")
+
+	spy.mu.Lock()
+	n := spy.revokeSessionN
+	spy.mu.Unlock()
+	assert.Equal(t, 1, n, "RevokeSession must be called once on session-not-found")
+}
+
+// sessionNotFoundRepo returns a domain not-found error from GetByID.
+type sessionNotFoundRepo struct {
+	mem.SessionRepository
+	notFoundErr error
+}
+
+func (r *sessionNotFoundRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
+	return nil, r.notFoundErr
 }

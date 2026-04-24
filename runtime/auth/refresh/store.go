@@ -10,7 +10,7 @@ import (
 // model: Issue and Rotate only INSERT rows; rotated_at and revoked_at are
 // one-way timestamp flips; verifier_hash is never updated in place.
 //
-// Every unhappy Rotate path returns ErrRejected. Internal diagnostic
+// Every unhappy Peek/Rotate path returns ErrRejected. Internal diagnostic
 // reasons surface through the slog structured field "reason", not through
 // error shape (enumeration / timing side-channel defence).
 //
@@ -24,6 +24,20 @@ type Store interface {
 	//
 	// Consistency: L1 LocalTx — single INSERT, no outbox event.
 	Issue(ctx context.Context, sessionID, subjectID string) (wire string, tok *Token, err error)
+
+	// Peek validates the presented wire token and returns the metadata for the
+	// currently-presented row without issuing a child and without flipping
+	// rotated_at. Callers use this for no-side-effect preflight checks before
+	// deciding whether to commit a rotation.
+	//
+	// Branches and public error shape match Rotate exactly. Implementations
+	// MUST still cascade-revoke on reuse detection beyond Policy.ReuseInterval;
+	// that is a security response to an attack, not a successful state advance.
+	//
+	// Consistency: L1 LocalTx — read-only for valid tokens and non-reuse
+	// rejections; reuse-detection cascade revoke is committed before returning
+	// ErrRejected.
+	Peek(ctx context.Context, presentedWire string) (tok *Token, err error)
 
 	// Rotate consumes the presented wire token and advances the chain by
 	// issuing a new child. Returns the new wire token alongside its

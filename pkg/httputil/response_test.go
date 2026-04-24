@@ -119,6 +119,7 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		{errcode.ErrWSHubStopping, http.StatusServiceUnavailable},
 		{errcode.ErrWSHubNotRunning, http.StatusServiceUnavailable},
 		{errcode.ErrWSMaxConns, http.StatusServiceUnavailable},
+		{errcode.ErrAuthRefreshUnavailable, http.StatusServiceUnavailable},
 
 		// 501 Not Implemented
 		{errcode.ErrNotImplemented, http.StatusNotImplemented},

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
@@ -81,6 +82,8 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		accesscore.WithJWTIssuer(shared.JWTDeps.issuer),
 		accesscore.WithJWTVerifier(shared.JWTDeps.verifier),
 		accesscore.WithCursorCodec(cursorCodec),
+		accesscore.WithRefreshMetricsProvider(shared.PromStack.metricProvider),
+		accesscore.WithRefreshGC(time.Hour, 24*time.Hour),
 	}
 	if m.ForceBootstrap || os.Getenv(AdminProvisionModeEnv) == "bootstrap" {
 		accessOpts = append(accessOpts, accesscore.WithInitialAdminBootstrap(m.InitialAdminOpts...))

@@ -51,6 +51,15 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
+	if sessionRepo == nil {
+		panic("sessionlogout.NewService: sessionRepo must not be nil")
+	}
+	if refreshStore == nil {
+		panic("sessionlogout.NewService: refreshStore must not be nil")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{
 		sessionRepo:  sessionRepo,
 		refreshStore: refreshStore,
@@ -114,16 +123,23 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 }
 
 // LogoutUser revokes all sessions AND the refresh-token chains for the user.
+// Both operations are wrapped in a transaction (F2) so a partial failure does
+// not leave refresh chains live while sessions are revoked or vice-versa.
 func (s *Service) LogoutUser(ctx context.Context, userID string) error {
 	if userID == "" {
 		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires a valid user identifier")
 	}
 
-	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
-		return fmt.Errorf("session-logout: revoke all: %w", err)
-	}
-	if err := s.refreshStore.RevokeUser(ctx, userID); err != nil {
-		return fmt.Errorf("session-logout: revoke refresh chains: %w", err)
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := s.sessionRepo.RevokeByUserID(txCtx, userID); err != nil {
+			return fmt.Errorf("session-logout: revoke all: %w", err)
+		}
+		if err := s.refreshStore.RevokeUser(txCtx, userID); err != nil {
+			return fmt.Errorf("session-logout: revoke refresh chains: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	s.logger.Info("all sessions revoked for user", slog.String("user_id", userID))

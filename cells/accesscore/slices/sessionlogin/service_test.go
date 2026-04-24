@@ -27,6 +27,31 @@ func newTestRefreshStore() refresh.Store {
 	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
+type failingIssueRefreshStore struct {
+	refresh.Store
+	err error
+}
+
+func (s failingIssueRefreshStore) Issue(context.Context, string, string) (string, *refresh.Token, error) {
+	return "", nil, s.err
+}
+
+type trackingSessionRepo struct {
+	*mem.SessionRepository
+	created []string
+	deleted []string
+}
+
+func (r *trackingSessionRepo) Create(ctx context.Context, session *domain.Session) error {
+	r.created = append(r.created, session.ID)
+	return r.SessionRepository.Create(ctx, session)
+}
+
+func (r *trackingSessionRepo) Delete(ctx context.Context, id string) error {
+	r.deleted = append(r.deleted, id)
+	return r.SessionRepository.Delete(ctx, id)
+}
+
 var (
 	testKeySet, _, _ = auth.MustNewTestKeySet()
 	testIssuer       *auth.JWTIssuer
@@ -144,6 +169,26 @@ func TestService_Login(t *testing.T) {
 	}
 }
 
+func TestService_Login_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := mem.NewRoleRepository()
+	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
+	svc := NewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default())
+	seedUser(userRepo, "refresh-down", "pass123")
+
+	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
+	require.Error(t, err)
+	assert.Nil(t, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+	require.Len(t, sessionRepo.created, 1)
+	require.Equal(t, sessionRepo.created, sessionRepo.deleted)
+	_, lookupErr := sessionRepo.GetByID(context.Background(), sessionRepo.created[0])
+	require.Error(t, lookupErr, "failed refresh issue must not leave an orphan session in demo/noop tx mode")
+}
+
 func TestService_Login_TokensContainSessionID(t *testing.T) {
 	svc, userRepo := newTestService()
 	seedUser(userRepo, "sid-user", "pass123")
@@ -254,6 +299,26 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	assert.Equal(t, u.ID, session.UserID)
 	assert.False(t, session.IsRevoked(), "newly issued session must not be revoked")
 	assert.False(t, session.IsExpired(), "newly issued session must not be expired")
+}
+
+func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := mem.NewRoleRepository()
+	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
+	svc := NewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default())
+	seedUser(userRepo, "issue-refresh-down", "pass123")
+	u, err := userRepo.GetByUsername(context.Background(), "issue-refresh-down")
+	require.NoError(t, err)
+
+	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	require.Error(t, err)
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+	require.Len(t, sessionRepo.created, 1)
+	require.Equal(t, sessionRepo.created, sessionRepo.deleted)
 }
 
 // TestService_Login_BlankFieldsRejected verifies that RequireNotBlank is

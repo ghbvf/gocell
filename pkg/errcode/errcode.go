@@ -78,10 +78,11 @@ const (
 	ErrAuthLogoutInvalidInput   Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
 	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
 	ErrAuthRefreshFailed        Code = "ERR_AUTH_REFRESH_FAILED"
+	ErrAuthRefreshUnavailable   Code = "ERR_AUTH_REFRESH_UNAVAILABLE"
 	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN"
-	ErrAuthRBACInvalidInput  Code = "ERR_AUTH_RBAC_INVALID_INPUT"
-	ErrAuthKeyMissing        Code = "ERR_AUTH_KEY_MISSING"
-	ErrAuthSelfDelete        Code = "ERR_AUTH_SELF_DELETE"
+	ErrAuthRBACInvalidInput     Code = "ERR_AUTH_RBAC_INVALID_INPUT"
+	ErrAuthKeyMissing           Code = "ERR_AUTH_KEY_MISSING"
+	ErrAuthSelfDelete           Code = "ERR_AUTH_SELF_DELETE"
 	// ErrAuthRoleFetchFailed signals that role-name resolution at the time of
 	// session-token issuance failed due to an infrastructure fault (RoleRepository
 	// unavailable, query error, etc.). Session minting is fail-closed: callers

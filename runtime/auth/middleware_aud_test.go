@@ -6,10 +6,8 @@ package auth
 // JWTVerifier chain via httptest.ResponseRecorder, ensuring that
 // wrong/missing-audience tokens are rejected before reaching any handler.
 //
-// TestAuthMiddleware_WrongAudience_RefreshPath_Returns401 tests the refresh
-// path pattern, where production code calls verifier.VerifyIntent directly
-// (refresh endpoints extract the bearer token and call VerifyIntent themselves,
-// rather than relying on AuthMiddleware).
+// TestAuthMiddleware_WrongAudience_DirectVerify_Returns401 tests callers that
+// invoke VerifyIntent directly rather than through AuthMiddleware.
 
 import (
 	"net/http"
@@ -74,23 +72,19 @@ func TestAuthMiddleware_MissingAudience_Returns401(t *testing.T) {
 		"missing-audience access token must be rejected by AuthMiddleware before reaching handler")
 }
 
-func TestAuthMiddleware_WrongAudience_RefreshPath_Returns401(t *testing.T) {
+func TestAuthMiddleware_WrongAudience_DirectVerify_Returns401(t *testing.T) {
 	issuer, verifier := buildAudTestPair(t)
-	// Issue a refresh token (right intent) but wrong audience
-	token, err := issuer.Issue(TokenIntentRefresh, "alice", IssueOptions{
+	token, err := issuer.Issue(TokenIntentAccess, "alice", IssueOptions{
 		Audience: []string{"other-service"},
 	})
 	require.NoError(t, err)
 
-	// Mirrors the production refresh-endpoint pattern: the handler extracts the
-	// bearer token and calls VerifyIntent directly (AuthMiddleware is not in the
-	// chain for refresh paths). Validates that audience enforcement holds there too.
-	refreshHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	directVerifyHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		bearer := r.Header.Get("Authorization")
 		if len(bearer) > 7 {
 			bearer = bearer[7:]
 		}
-		_, err := verifier.VerifyIntent(r.Context(), bearer, TokenIntentRefresh)
+		_, err := verifier.VerifyIntent(r.Context(), bearer, TokenIntentAccess)
 		if err != nil {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
@@ -101,8 +95,8 @@ func TestAuthMiddleware_WrongAudience_RefreshPath_Returns401(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/auth/refresh", nil)
 	req.Header.Set("Authorization", "Bearer "+token)
 	rec := httptest.NewRecorder()
-	refreshHandler.ServeHTTP(rec, req)
+	directVerifyHandler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
-		"wrong-audience refresh token must be rejected before reaching refresh handler")
+		"wrong-audience token must be rejected by direct VerifyIntent callers")
 }

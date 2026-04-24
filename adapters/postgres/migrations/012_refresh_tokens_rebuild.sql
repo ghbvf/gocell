@@ -17,12 +17,43 @@
 -- production deployments. This migration drops and recreates the table; no
 -- data is preserved. After a deploy every developer re-authenticates once.
 --
+-- ATOMIC CUTOVER REQUIRED: this schema change is incompatible with
+-- pre-PR-A29 pods. You cannot canary-deploy by routing traffic to mixed-
+-- version pods while the migration runs — old pods write the legacy token
+-- column format which this schema does not have, and new pods expect the
+-- selector/verifier columns which the old schema does not have. Deploy
+-- all pods atomically (blue/green or full rolling restart with migration
+-- run first, old pods drained before new pods receive traffic).
+--
 -- ref: ory/fosite token/hmac/hmacsha.go (base64url nopad + constant-time compare)
 -- ref: ory/hydra persistence/sql/persister_oauth2.go (CAS chain + reuse cascade)
 -- ref: zitadel/zitadel internal/api/oidc/token_refresh.go (revoke-on-use baseline)
 
 -- +goose Up
 SET LOCAL lock_timeout = '5s';
+
+-- Pre-flight row-count guard: fresh DBs proceed automatically, but an existing
+-- refresh_tokens table with rows requires an explicit operator confirmation
+-- because every active refresh session will be invalidated.
+--
+-- To allow this destructive rebuild on a known-safe database, run goose with
+-- a connection option that sets:
+--   gocell.allow_destructive_refresh_tokens_rebuild=true
+-- Example libpq options:
+--   options='-c gocell.allow_destructive_refresh_tokens_rebuild=true'
+DO $$
+DECLARE
+    row_count bigint;
+BEGIN
+    IF to_regclass('refresh_tokens') IS NOT NULL THEN
+        SELECT count(*) INTO row_count FROM refresh_tokens;
+        IF row_count > 0
+           AND lower(coalesce(current_setting('gocell.allow_destructive_refresh_tokens_rebuild', true), '')) <> 'true' THEN
+            RAISE EXCEPTION 'migration 012 refused: refresh_tokens has % rows; set gocell.allow_destructive_refresh_tokens_rebuild=true only after an approved destructive cutover',
+                row_count;
+        END IF;
+    END IF;
+END $$;
 
 DROP INDEX IF EXISTS idx_refresh_tokens_expires;
 DROP INDEX IF EXISTS idx_refresh_tokens_session;
@@ -75,7 +106,23 @@ CREATE INDEX idx_refresh_tokens_parent
     ON refresh_tokens (parent_id);
 
 -- +goose Down
+-- WARNING: IRREVERSIBLE DATA LOSS.
+-- On-call rollback path is BINARY ROLLBACK ONLY — do NOT run `goose down` on
+-- production. Running down recreates the pre-PR-A29 schema (legacy token/
+-- obsolete_token columns) which is INCOMPATIBLE with the new binary. The new
+-- binary expects selector/verifier_hash columns and will fail to start against
+-- the old schema. To rollback safely: (1) deploy the old binary, THEN
+-- (2) run `goose down` to restore the old schema. Attempting to run `goose
+-- down` while the new binary is live will cause immediate auth failures.
+--
 -- Recreate the pre-X11 schema shape. Token data is not recoverable.
+DO $$
+BEGIN
+    IF lower(coalesce(current_setting('gocell.allow_destructive_refresh_tokens_down', true), '')) <> 'true' THEN
+        RAISE EXCEPTION 'migration 012 down refused: destructive rollback disabled; set gocell.allow_destructive_refresh_tokens_down=true only after old binary is deployed';
+    END IF;
+END $$;
+
 DROP INDEX IF EXISTS idx_refresh_tokens_parent;
 DROP INDEX IF EXISTS idx_refresh_tokens_expires;
 DROP INDEX IF EXISTS idx_refresh_tokens_subject;

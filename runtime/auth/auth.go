@@ -10,9 +10,9 @@ import (
 	"time"
 )
 
-// TokenIntent distinguishes how a JWT is meant to be used, preventing
-// token-confusion attacks where a refresh token is replayed at a business
-// endpoint, or an access token is submitted to /auth/refresh.
+// TokenIntent distinguishes how a JWT is meant to be used. GoCell only issues
+// access JWTs; refresh tokens are opaque selector/verifier wire tokens owned by
+// runtime/auth/refresh, not JWT intents.
 //
 // ref: RFC 9068 §2.1 (typ: at+jwt), RFC 8725 §3.11 (token confusion defense)
 // ref: AWS Cognito token_use claim ("access"/"id"), Keycloak TokenUtil.java
@@ -22,15 +22,11 @@ const (
 	// TokenIntentAccess marks a short-lived credential for calling business
 	// endpoints. Verifier rejects any access token replayed at /auth/refresh.
 	TokenIntentAccess TokenIntent = "access"
-	// TokenIntentRefresh marks a long-lived credential consumed only by
-	// /auth/refresh to rotate the session. Verifier rejects any refresh token
-	// presented at a business endpoint.
-	TokenIntentRefresh TokenIntent = "refresh"
 )
 
 // IsValid reports whether the intent is one of the known enum values.
 func (t TokenIntent) IsValid() bool {
-	return t == TokenIntentAccess || t == TokenIntentRefresh
+	return t == TokenIntentAccess
 }
 
 // Claims represents the decoded token claims.
@@ -66,7 +62,7 @@ type Claims struct {
 
 // IntentTokenVerifier verifies an authentication token, requiring both
 // cryptographic validity and a declared intent (token_use claim + typ header)
-// that matches the expected usage scope (access vs. refresh). Audience is
+// that matches the expected usage scope. Audience is
 // enforced when the verifier is configured with WithExpectedAudiences.
 //
 // This is the only verification interface in GoCell. The narrower TokenVerifier

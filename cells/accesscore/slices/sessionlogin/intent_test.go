@@ -31,6 +31,6 @@ func TestService_Login_IssuesDistinctIntents(t *testing.T) {
 	_, err = testVerifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentAccess)
 	require.Error(t, err, "opaque refresh token must NOT verify as access JWT intent")
 
-	_, err = testVerifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentRefresh)
+	_, err = testVerifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntent("refresh"))
 	require.Error(t, err, "access token must NOT verify as refresh intent")
 }

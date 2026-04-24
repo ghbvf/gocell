@@ -85,15 +85,7 @@ func New(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) refre
 }
 
 func (s *store) generatePair() (selector []byte, verifier []byte, err error) {
-	sel := make([]byte, refresh.SelectorLen)
-	ver := make([]byte, refresh.VerifierLen)
-	if _, err := io.ReadFull(s.rand, sel); err != nil {
-		return nil, nil, err
-	}
-	if _, err := io.ReadFull(s.rand, ver); err != nil {
-		return nil, nil, err
-	}
-	return sel, ver, nil
+	return refresh.GeneratePair(s.rand)
 }
 
 // Issue creates a new refresh chain root. L1 LocalTx.
@@ -121,6 +113,23 @@ func (s *store) Issue(_ context.Context, sessionID, subjectID string) (string, *
 	return refresh.EncodeOpaque(sel, ver), rec.toToken(), nil
 }
 
+// Peek validates the presented wire token without advancing the lineage.
+func (s *store) Peek(_ context.Context, presented string) (*refresh.Token, error) {
+	sel, ver, ok := refresh.ParseOpaque(presented)
+	if !ok {
+		return nil, rejectWithReason("malformed")
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	rec, err := s.validatePresentedLocked(sel, ver)
+	if err != nil {
+		return nil, err
+	}
+	return rec.toToken(), nil
+}
+
 // Rotate advances the chain one generation by appending a child record.
 // See Store.Rotate contract for branch behaviour.
 func (s *store) Rotate(_ context.Context, presented string) (string, *refresh.Token, error) {
@@ -132,36 +141,11 @@ func (s *store) Rotate(_ context.Context, presented string) (string, *refresh.To
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	rec, err := s.validatePresentedLocked(sel, ver)
+	if err != nil {
+		return "", nil, err
+	}
 	now := s.clock.Now()
-
-	rec := s.findBySelectorLocked(sel)
-	if rec == nil {
-		return "", nil, rejectWithReason("selector_miss")
-	}
-
-	presentedHash := sha256.Sum256(ver)
-	if subtle.ConstantTimeCompare(presentedHash[:], rec.verifierHash[:]) != 1 {
-		return "", nil, rejectWithReason("verifier_miss")
-	}
-	if rec.isRevoked() {
-		return "", nil, rejectWithReason("revoked")
-	}
-	if !rec.expiresAt.After(now) {
-		return "", nil, rejectWithReason("expired")
-	}
-
-	if rec.isRotated() {
-		// Parent already rotated — either grace retry or reuse attack.
-		if now.Sub(rec.rotatedAt) > s.policy.ReuseInterval {
-			s.revokeSessionLocked(rec.sessionID, now)
-			slog.Error("refresh token reuse detected",
-				slog.String("session_id", rec.sessionID),
-				slog.String("reason", "reuse_detected"),
-			)
-			return "", nil, refresh.ErrRejected
-		}
-		// Grace retry — fall through to issue a new sibling child.
-	}
 
 	// Happy path or grace retry — both issue a child.
 	newSel, newVer, err := s.generatePair()
@@ -186,6 +170,39 @@ func (s *store) Rotate(_ context.Context, presented string) (string, *refresh.To
 	}
 
 	return refresh.EncodeOpaque(newSel, newVer), child.toToken(), nil
+}
+
+func (s *store) validatePresentedLocked(sel, ver []byte) (*tokenRecord, error) {
+	now := s.clock.Now()
+	rec := s.findBySelectorLocked(sel)
+	if rec == nil {
+		return nil, rejectWithReason("selector_miss")
+	}
+
+	presentedHash := sha256.Sum256(ver)
+	if subtle.ConstantTimeCompare(presentedHash[:], rec.verifierHash[:]) != 1 {
+		return nil, rejectWithReason("verifier_miss")
+	}
+	if rec.isRevoked() {
+		return nil, rejectWithReason("revoked")
+	}
+	if !rec.expiresAt.After(now) {
+		return nil, rejectWithReason("expired")
+	}
+
+	if rec.isRotated() {
+		// Parent already rotated — either grace retry or reuse attack.
+		if now.Sub(rec.rotatedAt) > s.policy.ReuseInterval {
+			s.revokeSessionLocked(rec.sessionID, now)
+			slog.Error("refresh token reuse detected",
+				slog.String("session_id", rec.sessionID),
+				slog.String("reason", "reuse_detected"),
+			)
+			return nil, refresh.ErrRejected
+		}
+	}
+
+	return rec, nil
 }
 
 // RevokeSession marks every row in the session_id lineage as revoked.

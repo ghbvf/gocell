@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -29,8 +30,8 @@ import (
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 )
 
-// defaultRefreshPolicy is used when no WithRefreshStore option is supplied.
-// Matches Hydra's grace_period and a 7-day max age.
+// defaultRefreshPolicy is used only by WithInMemoryDefaults for demo/testing.
+// Durable mode must inject an explicit store via WithRefreshStore.
 var defaultRefreshPolicy = refresh.Policy{
 	ReuseInterval: 2 * time.Second,
 	MaxAge:        7 * 24 * time.Hour,
@@ -142,6 +143,20 @@ func WithRefreshStore(store refresh.Store) Option {
 	return func(c *AccessCore) { c.refreshStore = store }
 }
 
+// WithRefreshGC enables the refresh-token GC lifecycle worker.
+func WithRefreshGC(interval, retention time.Duration) Option {
+	return func(c *AccessCore) {
+		c.refreshGCEnabled = true
+		c.refreshGCInterval = interval
+		c.refreshGCRetention = retention
+	}
+}
+
+// WithRefreshMetricsProvider sets the metrics provider used by refresh GC.
+func WithRefreshMetricsProvider(p metrics.Provider) Option {
+	return func(c *AccessCore) { c.metricsProvider = p }
+}
+
 // ResolveBootstrapCredentialPath returns the credential file path using the
 // same resolution logic as the internal Bootstrapper: stateDir overrides
 // GOCELL_STATE_DIR, which overrides the platform default state directory.
@@ -197,6 +212,13 @@ type AccessCore struct {
 	jwtIssuer   *auth.JWTIssuer
 	jwtVerifier *auth.JWTVerifier
 	cursorCodec *query.CursorCodec
+
+	metricsProvider    metrics.Provider
+	refreshGCEnabled   bool
+	refreshGCInterval  time.Duration
+	refreshGCRetention time.Duration
+	refreshGCCollector refresh.GCCollector
+	refreshGC          *refresh.GCWorker
 
 	// initialAdmin wires first-run admin bootstrap via LifecycleContributor;
 	// nil means the feature is disabled.
