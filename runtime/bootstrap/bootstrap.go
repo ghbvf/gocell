@@ -61,10 +61,32 @@ func WithConfig(yamlPath, envPrefix string) Option {
 	}
 }
 
-// WithHTTPAddr sets the HTTP listen address (default ":8080").
-func WithHTTPAddr(addr string) Option {
+// WithHTTPPrimaryAddr sets the primary HTTP listen address used for
+// /api/v1/*, public routes, and infra endpoints (/healthz, /readyz, /metrics).
+// Default (when this option is absent) is ":8080".
+//
+// PR-A14a: replaces the former single-listener WithHTTPAddr. See also
+// WithHTTPInternalAddr for the /internal/v1/* listener.
+func WithHTTPPrimaryAddr(addr string) Option {
 	return func(b *Bootstrap) {
-		b.httpAddr = addr
+		b.primaryAddr = addr
+	}
+}
+
+// WithHTTPInternalAddr sets the internal HTTP listen address dedicated to
+// /internal/v1/* routes (control-plane). Default (when this option is absent)
+// is ":9090".
+//
+// Operators should bind the internal listener to an internal network segment
+// so that service-token / mTLS enforcement is the primary line of defence
+// for control-plane traffic. Mounting infra endpoints or /api/v1/* on this
+// listener returns 404 — the mux physically excludes them.
+//
+// PR-A14a: the internal listener + `WithInternalMiddleware` replace the
+// pre-PR-A14a path-prefix guard.
+func WithHTTPInternalAddr(addr string) Option {
+	return func(b *Bootstrap) {
+		b.internalAddr = addr
 	}
 }
 
@@ -276,11 +298,21 @@ func WithPreShutdownDelay(d time.Duration) Option {
 	}
 }
 
-// WithListener sets a pre-built net.Listener for the HTTP server,
-// useful in tests to avoid port conflicts.
-func WithListener(ln net.Listener) Option {
+// WithPrimaryListener sets a pre-built net.Listener for the primary HTTP
+// server, useful in tests to avoid port conflicts. When set, the value from
+// WithHTTPPrimaryAddr is ignored for bind purposes (the listener's own
+// address is used for logging).
+func WithPrimaryListener(ln net.Listener) Option {
 	return func(b *Bootstrap) {
-		b.listener = ln
+		b.primaryListener = ln
+	}
+}
+
+// WithInternalListener sets a pre-built net.Listener for the internal HTTP
+// server. Mirrors WithPrimaryListener for the control-plane listener.
+func WithInternalListener(ln net.Listener) Option {
+	return func(b *Bootstrap) {
+		b.internalListener = ln
 	}
 }
 
@@ -411,24 +443,25 @@ func isNilBrokerHealthChecker(bc BrokerHealthChecker) bool {
 	}
 }
 
-// validateInternalGuard validates the internal endpoint guard configuration.
-// Returns an error when prefix or guard violate their constraints so Run()
-// can fail-fast before any side effects.
-func (b *Bootstrap) validateInternalGuard() error {
-	if b.internalGuardPrefix == "" && b.internalGuard == nil {
-		return nil // option not used
+// validateHTTPListenerAddrs fail-fasts on mis-configured HTTP listeners. Each
+// side (primary / internal) must have either a non-empty bind address OR a
+// caller-injected listener — a listener renders its addr irrelevant because
+// the socket is already bound. When both sides bind from addr fields, the
+// addrs must differ so Run() never tries to bind two sockets on the same port.
+//
+// PR-A14a: replaces validateInternalGuard. Internal middleware wiring no
+// longer requires a prefix because routes are dispatched by Router.Route at
+// registration time.
+func (b *Bootstrap) validateHTTPListenerAddrs() error {
+	if b.primaryListener == nil && b.primaryAddr == "" {
+		return fmt.Errorf("bootstrap: primary HTTP addr or listener required; use WithHTTPPrimaryAddr or WithPrimaryListener")
 	}
-	if b.internalGuardPrefix == "" {
-		return fmt.Errorf("bootstrap: internal guard prefix must not be empty")
+	if b.internalListener == nil && b.internalAddr == "" {
+		return fmt.Errorf("bootstrap: internal HTTP addr or listener required; use WithHTTPInternalAddr or WithInternalListener")
 	}
-	if !strings.HasPrefix(b.internalGuardPrefix, "/") {
-		return fmt.Errorf("bootstrap: internal guard prefix %q must start with '/'", b.internalGuardPrefix)
-	}
-	if !strings.HasSuffix(b.internalGuardPrefix, "/") {
-		return fmt.Errorf("bootstrap: internal guard prefix %q must end with '/'", b.internalGuardPrefix)
-	}
-	if b.internalGuard == nil {
-		return fmt.Errorf("bootstrap: internal guard must not be nil when prefix %q is set", b.internalGuardPrefix)
+	// Same-addr collision only matters when both sides bind via addr.
+	if b.primaryListener == nil && b.internalListener == nil && b.primaryAddr == b.internalAddr {
+		return fmt.Errorf("bootstrap: primary and internal HTTP addrs must differ (both %q)", b.primaryAddr)
 	}
 	return nil
 }
@@ -532,28 +565,22 @@ func WithMetricsProvider(p kernelmetrics.Provider) Option {
 	}
 }
 
-// WithInternalEndpointGuard registers a guard middleware that protects every
-// HTTP route whose path starts with prefix. The canonical value for prefix is
-// "/internal/v1/" (must start and end with '/').
+// WithInternalMiddleware appends one or more middleware factories to the
+// internal HTTP listener's mux. Callers use this to install the service-token
+// (HMAC) / mTLS authentication middleware that protects /internal/v1/*
+// routes — those routes are physically mounted on the internal mux, so this
+// is the sole authentication layer between the network and the handler.
 //
-// guard is a standard http.Handler middleware factory (func(http.Handler) http.Handler).
-// Run() validates both constraints and returns an error immediately (fail-fast)
-// when either is violated:
-//   - prefix empty / not starting with '/' / not ending with '/'
-//   - guard nil
+// Each middleware must be non-nil; NewE returns an error when any entry is nil.
 //
-// The guard is wired into the router's business mux via
-// router.WithInternalPathPrefixGuard; infrastructure endpoints (/healthz,
-// /readyz, /metrics) are on outerMux and are never reached by the guard.
+// PR-A14a: replaces WithInternalEndpointGuard(prefix, guard). The prefix
+// parameter is no longer needed because /internal/v1/* routes land on a
+// physically separate mux by Router construction.
 //
-// Actual token-validation logic lives in the guard function — this option is
-// a pure wiring point (injection, not policy).
-//
-// ref: go-kratos/kratos middleware/selector — default-deny + Option injection.
-func WithInternalEndpointGuard(prefix string, guard func(http.Handler) http.Handler) Option {
+// ref: go-kratos/kratos middleware — per-transport middleware chains.
+func WithInternalMiddleware(mws ...func(http.Handler) http.Handler) Option {
 	return func(b *Bootstrap) {
-		b.internalGuardPrefix = prefix
-		b.internalGuard = guard
+		b.internalMiddlewares = append(b.internalMiddlewares, mws...)
 	}
 }
 
@@ -611,7 +638,8 @@ type namedChecker struct {
 type Bootstrap struct {
 	configPath                  string
 	envPrefix                   string
-	httpAddr                    string
+	primaryAddr                 string // PR-A14a: primary HTTP listener addr (public, /api/v1/*, infra)
+	internalAddr                string // PR-A14a: internal HTTP listener addr (/internal/v1/*)
 	assembly                    *assembly.CoreAssembly
 	workers                     []worker.Worker
 	publisher                   outbox.Publisher
@@ -621,7 +649,8 @@ type Bootstrap struct {
 	authDiscovery               bool // true when WithAuthDiscovery was called
 	shutdownTimeout             time.Duration
 	preShutdownDelay            time.Duration
-	listener                    net.Listener
+	primaryListener             net.Listener // PR-A14a: pre-bound listener for primary server (tests)
+	internalListener            net.Listener // PR-A14a: pre-bound listener for internal server (tests)
 	healthCheckers              []namedChecker
 	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
 	verboseToken                string            // token for /readyz?verbose access control
@@ -653,11 +682,10 @@ type Bootstrap struct {
 	// probe. Mirrors the circuitBreakerNil contract.
 	brokerHealthNil bool
 
-	// internalGuardPrefix and internalGuard hold the configuration set by
-	// WithInternalEndpointGuard. Both are forwarded to the router at Run()
-	// time via router.WithInternalPathPrefixGuard after prefix validation.
-	internalGuardPrefix string
-	internalGuard       func(http.Handler) http.Handler
+	// internalMiddlewares hold the ordered middleware stack applied to the
+	// internal mux by WithInternalMiddleware. Forwarded to the router at
+	// Run() time via router.WithInternalMiddleware.
+	internalMiddlewares []func(http.Handler) http.Handler
 
 	// relayHealthNil is set by WithRelayHealth when a nil relay is passed.
 	// Checked at Run() to fail-fast rather than silently skipping relay health.
@@ -704,7 +732,14 @@ type Bootstrap struct {
 // phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{
-		httpAddr:             ":8080",
+		// PR-A14a: dual listener defaults. primary 8080 = public (business /
+		// api / infra); internal 127.0.0.1:9090 = control-plane /internal/v1/*.
+		// The internal listener defaults to loopback so dev-mode deployments
+		// without a service-token guard are not trivially reachable across
+		// the network. Override with WithHTTPPrimaryAddr / WithHTTPInternalAddr
+		// (production: bind internal to an internal-VPC interface).
+		primaryAddr:          ":8080",
+		internalAddr:         "127.0.0.1:9090",
 		shutdownTimeout:      shutdown.DefaultTimeout,
 		configWatcherFactory: config.NewWatcher,
 		metricsProvider:      kernelmetrics.NopProvider{},

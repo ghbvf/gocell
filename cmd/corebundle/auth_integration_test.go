@@ -100,7 +100,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	// inside accesscore's RegisterRoutes. WithAuthDiscovery discovers the verifier.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(ln),
+		bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
 		bootstrap.WithAuthDiscovery(),
@@ -136,9 +136,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		{http.MethodPost, "/api/v1/config/some-key/rollback"},
 		{http.MethodGet, "/api/v1/audit/entries"},
 		{http.MethodGet, "/api/v1/flags/"},
-		// Internal admin endpoints (PR-A RBAC closure).
-		{http.MethodPost, "/internal/v1/access/roles/assign"},
-		{http.MethodPost, "/internal/v1/access/roles/revoke"},
+		// PR-A14a: /internal/v1/* routes no longer live on the primary
+		// listener; they are asserted separately below as a 404 contract.
 	}
 
 	for _, tc := range protectedRoutes {
@@ -157,6 +156,24 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 			require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 			errObj := body["error"].(map[string]any)
 			assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", errObj["code"])
+		})
+	}
+
+	// PR-A14a: primary listener must 404 /internal/v1/* (port-level isolation).
+	for _, tc := range []struct {
+		method, path string
+	}{
+		{http.MethodPost, "/internal/v1/access/roles/assign"},
+		{http.MethodPost, "/internal/v1/access/roles/revoke"},
+	} {
+		t.Run(fmt.Sprintf("primary_404s_%s_%s", tc.method, tc.path), func(t *testing.T) {
+			req, err := http.NewRequest(tc.method, fmt.Sprintf("http://%s%s", addr, tc.path), nil)
+			require.NoError(t, err)
+			resp, err := testHTTPClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+				"primary listener must 404 %s %s (PR-A14a port-level isolation)", tc.method, tc.path)
 		})
 	}
 
@@ -279,17 +296,21 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	// /internal/v1/* endpoints are auto-delegated by WithInternalEndpointGuard:
-	// JWT AuthMiddleware skips those paths entirely and the guard becomes the sole
-	// authentication layer. F3: public routes (login, refresh) are declared by
-	// accesscore via auth.Declare(Public:true); WithAuthDiscovery discovers the verifier.
+	// PR-A14a: /internal/v1/* endpoints live on a physically separate internal
+	// listener. JWT AuthMiddleware is never installed on the internal mux —
+	// WithInternalMiddleware(guard) is the sole authentication layer for the
+	// control plane. F3: public routes (login, refresh) are declared by
+	// accesscore via auth.Declare(Public:true); WithAuthDiscovery discovers
+	// the verifier and wires it onto the primary mux only.
+	internalLn := newCorebundleLocalListener(t)
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(ln),
+		bootstrap.WithPrimaryListener(ln),
+		bootstrap.WithInternalListener(internalLn),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
 		bootstrap.WithAuthDiscovery(),
-		bootstrap.WithInternalEndpointGuard("/internal/v1/", guard),
+		bootstrap.WithInternalMiddleware(guard),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -297,6 +318,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	go func() { done <- app.Run(ctx) }()
 
 	addr := ln.Addr().String()
+	internalAddr := internalLn.Addr().String()
 	require.Eventually(t, func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
 		if err != nil {
@@ -306,10 +328,20 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 
-	// Request /internal/v1/* without Authorization → 401 from guard.
+	// PR-A14a primary isolation: primary listener must 404 any /internal/v1/*
+	// request — those routes never reach the public mux.
+	t.Run("primary_404s_internal_prefix", func(t *testing.T) {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/internal/v1/access/roles/assign", addr))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
+			"primary listener must 404 /internal/v1/* (port-level isolation)")
+	})
+
+	// Internal listener + /internal/v1/* without service token → 401 from guard.
 	t.Run("internal_without_service_token_401", func(t *testing.T) {
 		req, err := http.NewRequest(http.MethodPost,
-			fmt.Sprintf("http://%s/internal/v1/access/roles/assign", addr), nil)
+			fmt.Sprintf("http://%s/internal/v1/access/roles/assign", internalAddr), nil)
 		require.NoError(t, err)
 		resp, err := testHTTPClient.Do(req)
 		require.NoError(t, err)
@@ -318,11 +350,8 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 			"/internal/v1/* without service token must return 401 from guard")
 	})
 
-	// Request /internal/v1/access/roles/assign with valid service token + valid body.
-	// Chain: JWT-delegated → ServiceTokenMiddleware (sets RoleInternalAdmin principal)
-	// → RequirePolicy(AnyRole(RoleInternalAdmin)) → handler.
-	// The role "nonexistent" is not seeded, so the handler returns 404 with
-	// ERR_AUTH_ROLE_NOT_FOUND — proving guard passed AND policy passed AND handler ran.
+	// Internal listener + service token → guard passes → policy passes →
+	// handler returns 404 ERR_AUTH_ROLE_NOT_FOUND (role not seeded).
 	t.Run("internal_assign_service_token_policy_passes_to_handler", func(t *testing.T) {
 		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
 		token := auth.GenerateServiceToken(ring,
@@ -330,7 +359,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		require.NotEmpty(t, token)
 
 		req, err := http.NewRequest(http.MethodPost,
-			fmt.Sprintf("http://%s/internal/v1/access/roles/assign", addr), body)
+			fmt.Sprintf("http://%s/internal/v1/access/roles/assign", internalAddr), body)
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "ServiceToken "+token)
 		req.Header.Set("Content-Type", "application/json")
@@ -340,15 +369,14 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// 404 = guard passed (not 401) + policy passed (not 403) + handler ran (role not found).
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 			"expected guard+policy to pass and handler to return 404 (role not found); body=%s", bodyBytes)
 		assert.Contains(t, string(bodyBytes), "ERR_AUTH_ROLE_NOT_FOUND",
 			"response must contain role-not-found error code; body=%s", bodyBytes)
 	})
 
-	// Same chain for revoke: service token → guard passes → policy passes → handler returns 200
-	// (revoke of unassigned role is idempotent no-op).
+	// Internal listener + service token → guard passes → policy passes →
+	// handler returns 200 (idempotent revoke of unassigned role).
 	t.Run("internal_revoke_service_token_policy_passes_to_handler", func(t *testing.T) {
 		body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
 		token := auth.GenerateServiceToken(ring,
@@ -356,7 +384,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		require.NotEmpty(t, token)
 
 		req, err := http.NewRequest(http.MethodPost,
-			fmt.Sprintf("http://%s/internal/v1/access/roles/revoke", addr), body)
+			fmt.Sprintf("http://%s/internal/v1/access/roles/revoke", internalAddr), body)
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "ServiceToken "+token)
 		req.Header.Set("Content-Type", "application/json")
@@ -366,14 +394,13 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		bodyBytes, _ := io.ReadAll(resp.Body)
 		resp.Body.Close()
 
-		// 200 = guard passed + policy passed + handler ran (idempotent no-op for unassigned role).
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
 			"expected guard+policy to pass and handler to return 200 (idempotent revoke); body=%s", bodyBytes)
 		assert.Contains(t, string(bodyBytes), `"revoked"`,
 			"response must contain revoke result; body=%s", bodyBytes)
 	})
 
-	// /api/v1/* without token → 401 from JWT auth (guard not involved).
+	// /api/v1/* on primary without token → 401 from JWT auth (guard not involved).
 	t.Run("api_without_token_401_from_jwt_auth", func(t *testing.T) {
 		req, err := http.NewRequest(http.MethodGet,
 			fmt.Sprintf("http://%s/api/v1/access/users/x", addr), nil)

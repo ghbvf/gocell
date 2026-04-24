@@ -50,7 +50,8 @@ func TestRun_WithWorkers_Shutdown(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithWorkers(w),
 	)

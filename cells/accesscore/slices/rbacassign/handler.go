@@ -56,14 +56,14 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 		Path:      "/assign",
 		Handler:   http.HandlerFunc(h.handleAssign),
 		Policy:    internalAdminPolicy,
-		Delegated: true, // JWT auth delegated to WithInternalPathPrefixGuard; Policy still enforces role.
+		Delegated: true, // PR-A14a: route lives on internalMux (service-token via bootstrap.WithInternalMiddleware); Policy still enforces role.
 	})
 	auth.Declare(mux, auth.RouteDecl{
 		Method:    "POST",
 		Path:      "/revoke",
 		Handler:   http.HandlerFunc(h.handleRevoke),
 		Policy:    internalAdminPolicy,
-		Delegated: true, // JWT auth delegated to WithInternalPathPrefixGuard; Policy still enforces role.
+		Delegated: true, // PR-A14a: route lives on internalMux (service-token via bootstrap.WithInternalMiddleware); Policy still enforces role.
 	})
 }
 

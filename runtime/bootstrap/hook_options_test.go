@@ -96,7 +96,8 @@ func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
 		WithAssembly(asm),
 		WithHookObserver(bootstrapObs), // must be ignored
 		WithHookTimeout(time.Second),   // must be ignored
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithPublisher(eb),
 		WithSubscriber(eb),
 		WithShutdownTimeout(2*time.Second),

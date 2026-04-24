@@ -239,24 +239,25 @@
 
 ---
 
-### PR-A14a INTERNAL-LISTENER-MIN（🔴 发布前必做，~4h）
+### PR-A14a INTERNAL-LISTENER-MIN（🔴 发布前必做，~7h；**彻底重构版，吸收 PR-A32**）
 
-**主线**：
-- **R4-MIN INTERNAL-LISTENER-MIN** 最小双 listener：`primary` + `internal` 两个 `http.Server`，`/internal/v1/*` 仅 internal listener 承载；保留 `bootstrap.WithInternalEndpointGuard` prefix 守卫作为双保险（不删）
-- **不做**：health listener、mTLS、完整 RouteGroup 声明式 API、签名破坏性变更——都留给 PR-A14b
+**实际主线**（物理双 mux + 吸收 PR-A32 F3-CLOSURE）：
+- **R4-MIN DUAL-PHYSICAL-MUX** `runtime/http/router/router.go` 从「单 mux + prefix-guard 中间件」重构为 `publicMux + internalMux` 物理双 mux；`Route/Handle/Mount` 按 pattern 前缀自动分流；新增 `Router.PublicHandler()` / `InternalHandler()`；新增 `WithInternalMiddleware(mw ...)`；outerMux 显式 404 `/internal/v1/*`（primary listener 边缘隔离）
+- **R4-MIN DUAL-SERVER** `runtime/bootstrap/bootstrap_phases.go::phase7StartHTTPServer` 启动 2 个 `http.Server`（primary + internal），pre-bind 两 listener 同步 fail-fast，parallel shutdown via errgroup
+- **R4-MIN CONSISTENCY-ASSERTION** `FinalizeAuth` 启动期断言 `Delegated: true` ⇔ `/internal/v1/*`
+- **PR-A32 吸收**：`bootstrap.WithInternalEndpointGuard(prefix, guard)` / `router.WithInternalPathPrefixGuard` / `auth.WithDelegatedMatcher` / `authDelegatedMatcher` 全部删除；F3-CLOSURE 已完成
 
-**搭车**：
-- 无（独立 PR；避免与 A14b 完整版混入）
+**破坏性变更**（CLAUDE.md「Review 和重构时不考虑向后兼容」认可）：
+- `bootstrap.WithHTTPAddr` → 删除；新 `WithHTTPPrimaryAddr` + `WithHTTPInternalAddr`
+- `bootstrap.WithListener` → 删除；新 `WithPrimaryListener` + `WithInternalListener`
+- `bootstrap.WithInternalEndpointGuard(prefix, guard)` → `WithInternalMiddleware(mw)`（无 prefix 参数）
+- `auth.RouteDecl.Delegated` 职责改：从「驱动 JWT matcher」变为「`/internal/v1/*` 一致性标记」，由 FinalizeAuth 做启动期校验
 
-**拆分理由**：
-- 发布前用户必须看到 `/internal/v1/*` 端口隔离（访问 primary:8080 `/internal/v1/` 得 404），否则控制面 exposed
-- 完整 RouteGroup 签名破坏性 + cell API 签名变动风险太大，延到 v1.1
-
-**文件面**：`runtime/bootstrap/bootstrap.go` + `cmd/corebundle/bundle.go`
+**文件面**：`runtime/http/router/router.go` + `runtime/bootstrap/{bootstrap,bootstrap_phases}.go` + `runtime/auth/{middleware,options}.go` + `cmd/corebundle/{bundle,shared_deps}.go` + 全部测试迁移 + `docs/ops/env-vars.md` + `.claude/rules/gocell/runtime-api.md` + 示例 README
 
 **依赖**：无
 
-**风险**：中；需集测 primary/internal 双端口；保留 guard 做兼容。
+**风险**：中；签名破坏性变更，全部调用方（cell tests / corebundle tests / examples）同步迁移完成，全仓库 `go test ./... -race` + `golangci-lint run` 0 issues 通过。
 
 ---
 
@@ -545,20 +546,9 @@
 
 ---
 
-### PR-A32 SELECTOR-CLOSURE（~1h）
+### ~~PR-A32 SELECTOR-CLOSURE~~（已吸收进 PR-A14a）
 
-**主线**：
-- **F3-CLOSURE SELECTOR-GUARD-REMOVE-01** 删除 `cmd/corebundle/bundle.go:81` 的 `bootstrap.WithInternalEndpointGuard("/internal/v1/", shared.InternalGuard)` 过渡层
-- 更新 `cmd/corebundle/shared_deps.go` 中 `InternalGuard` 字段（若不再被引用可删）
-- 更新相关集成测试（改走 listener 端口隔离而非 prefix 守卫）
-
-**搭车**：无
-
-**依赖**：**必须 PR-A14b INTERNAL-LISTENER-FULL 合入后**（listener 端口隔离生效，prefix guard 才能安全移除）
-
-**文件面**：`cmd/corebundle/bundle.go` + `cmd/corebundle/shared_deps.go` + 相关 `*_test.go`
-
-**风险**：低；纯清理，listener 隔离已由 PR-A14b 保证
+**状态**：PR-A14a 彻底重构为物理双 mux 后，`WithInternalEndpointGuard` / `WithInternalPathPrefixGuard` / `authDelegatedMatcher` 已全部删除；F3-CLOSURE SELECTOR-GUARD-REMOVE-01 已完成。Wave 3 无需再开独立 PR。
 
 ---
 

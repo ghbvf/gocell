@@ -71,13 +71,14 @@ func TestPhase0_RejectsMutuallyExclusiveAuthOptions(t *testing.T) {
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
 
-func TestPhase0_ValidatesInternalGuard(t *testing.T) {
+func TestPhase0_ValidatesInternalMiddleware(t *testing.T) {
+	// PR-A14a: nil middleware in the internal-mux chain is rejected at phase 0
+	// so the authoritative auth layer cannot be silently disabled.
 	b := New()
-	b.internalGuardPrefix = "/internal/v1/"
-	b.internalGuard = nil // guard prefix set but guard nil
+	b.internalMiddlewares = append(b.internalMiddlewares, nil)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "internal guard must not be nil")
+	assert.Contains(t, err.Error(), "nil")
 }
 
 // --- phase1LoadConfig tests ---

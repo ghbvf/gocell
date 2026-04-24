@@ -15,7 +15,7 @@ All dependencies are in-memory (no external services required).
 go run ./examples/ssobff
 ```
 
-The server starts on `:8081`.
+The server starts with primary listener on `:8081` (API + infra) and internal listener on `:9081` (control-plane).
 
 ## Seed User
 

@@ -30,7 +30,7 @@ No external dependencies required. Uses an in-memory repository and in-process e
 go run ./examples/todoorder
 ```
 
-The server starts on `:8082`.
+The server starts with primary listener on `:8082` (API + infra) and internal listener on `:9082` (control-plane).
 
 ## Docker Mode
 

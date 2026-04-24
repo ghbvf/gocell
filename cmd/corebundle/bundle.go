@@ -66,7 +66,11 @@ func defaultRuntimeOptions(
 ) []bootstrap.Option {
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithHTTPAddr(":8080"),
+		// PR-A14a: dual listener — primary (public/api, infra endpoints) +
+		// internal (/internal/v1/* control-plane). Defaults align with
+		// docs/ops/env-vars.md and examples/*/docker-compose.yml.
+		bootstrap.WithHTTPPrimaryAddr(shared.PrimaryHTTPAddr),
+		bootstrap.WithHTTPInternalAddr(shared.InternalHTTPAddr),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
@@ -83,7 +87,9 @@ func defaultRuntimeOptions(
 		opts = append(opts, bootstrap.WithVerboseToken(shared.VerboseToken))
 	}
 	if shared.InternalGuard != nil {
-		opts = append(opts, bootstrap.WithInternalEndpointGuard("/internal/v1/", shared.InternalGuard))
+		// PR-A14a: InternalGuard attaches to the internal listener's mux chain
+		// as the sole authentication layer for /internal/v1/*.
+		opts = append(opts, bootstrap.WithInternalMiddleware(shared.InternalGuard))
 	}
 	return opts
 }

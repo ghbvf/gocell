@@ -70,7 +70,8 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res),
 	)
 
@@ -109,7 +110,8 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res),
 	)
 
@@ -159,7 +161,8 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 		WithManagedResource(res3),
@@ -217,7 +220,8 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res),
 	)
 
@@ -248,7 +252,8 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 	)
@@ -333,7 +338,8 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res),
 	)
 

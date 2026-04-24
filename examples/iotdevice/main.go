@@ -82,7 +82,7 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithHTTPAddr(":8083"),
+		bootstrap.WithHTTPPrimaryAddr(":8083"), bootstrap.WithHTTPInternalAddr(":9083"),
 		bootstrap.WithAuthMiddleware(demoTokenVerifier{}),
 	)
 

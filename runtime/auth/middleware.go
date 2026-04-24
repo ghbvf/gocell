@@ -21,10 +21,15 @@ import (
 // plugged into business routes must be able to enforce it at the type level,
 // so we refuse to compile call sites that pass an intent-unaware verifier.
 //
-// Public-endpoint bypass and delegated-auth configuration is provided through
-// AuthOption values (WithPublicEndpointMatcher, WithDelegatedMatcher). The
-// Router installs these via lazy closures during FinalizeAuth so that route
-// declarations from all Cells are aggregated before the predicates are compiled.
+// Public-endpoint bypass is provided through AuthOption values
+// (WithPublicEndpointMatcher). The Router installs this via a lazy closure
+// during FinalizeAuth so that route declarations from all Cells are aggregated
+// before the predicate is compiled.
+//
+// PR-A14a: the previous WithDelegatedMatcher option was removed. Routes that
+// delegate JWT authentication to another credential (service-token, mTLS)
+// now live on a physically separate internal listener+mux and never reach
+// this middleware — no in-band bypass predicate is needed.
 //
 // ref: go-kratos/kratos — public bypass via selector at composition layer
 // ref: go-zero — JWT opt-in per route group, no hidden runtime defaults
@@ -38,17 +43,10 @@ func AuthMiddleware(verifier IntentTokenVerifier, opts ...AuthOption) func(http.
 	if isPublic == nil {
 		isPublic = func(*http.Request) bool { return false }
 	}
-	// delegated = authentication is deferred to downstream middleware
-	// (service-token guard, mTLS, ...) for that route.
-	isDelegated := cfg.delegatedMatcher // nil = no delegated paths
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if isPublic(r) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			if isDelegated != nil && isDelegated(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

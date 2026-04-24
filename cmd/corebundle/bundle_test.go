@@ -82,6 +82,10 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack: ps,
 		EventBus:  eb,
+		// PR-A14a: PrimaryHTTPAddr/InternalHTTPAddr left empty. Tests that
+		// drive the full BuildApp path must inject listeners via
+		// WithPrimaryListener + WithInternalListener so bind addrs are
+		// unused; phase0 accepts either an addr or a listener per side.
 	}
 }
 
@@ -113,6 +117,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack: ps,
 		EventBus:  eventbus.New(),
+		// PR-A14a: addrs intentionally empty; tests drive via listener injection.
 	}
 	if topo.RequireProductionControlPlane() {
 		deps.MetricsToken = "test-metrics"
@@ -292,7 +297,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithListener(ln))
+	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -349,7 +354,7 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	require.NoError(t, err)
 
 	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(ln),
+		bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)),
 		bootstrap.WithManagedResource(fakePG),
 	)
 	require.NoError(t, err)
@@ -389,7 +394,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithListener(ln))
+	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
