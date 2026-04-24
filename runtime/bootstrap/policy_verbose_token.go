@@ -6,13 +6,40 @@ package bootstrap
 // when the ?verbose query parameter is present, the request must supply a
 // matching token in a configured header; mismatch returns 401 JSON.
 // Requests without ?verbose pass through unconditionally.
+//
+// ARCH-04: PolicyVerboseToken is intended for the /readyz sub-group only.
+// Applying it to a broader mux works but is semantically narrower than the
+// name implies. Document clearly: mount this policy only on the route group
+// or sub-router that serves /readyz; do not apply it at listener level unless
+// all endpoints share the verbose-token guard semantics.
 
 import (
+	"crypto/subtle"
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
+
+// policyVerboseActive reports whether the request has opted into verbose mode.
+// Mirrors the semantics of health.readyzVerbose so that the policy and handler
+// agree on when verbose mode is active (SEC-06).
+// Accepted forms: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
+// Rejected: ?verbose=false, ?verbose=0, ?verbose=anything-else.
+func policyVerboseActive(r *http.Request) bool {
+	values, ok := r.URL.Query()["verbose"]
+	if !ok {
+		return false
+	}
+	for _, v := range values {
+		switch strings.TrimSpace(strings.ToLower(v)) {
+		case "", "1", "true":
+			return true
+		}
+	}
+	return false
+}
 
 // verboseTokenErrorBody is the canonical 401 response body for a token mismatch.
 // Pre-encoded once to avoid per-request JSON marshalling overhead.
@@ -49,15 +76,18 @@ func (p *policyVerboseToken) middleware() func(http.Handler) http.Handler {
 	token := p.token
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Only enforce when ?verbose query parameter is present (any value,
-			// including the bare "?verbose" form which url.Values.Has detects).
-			if !r.URL.Query().Has("verbose") {
+			// SEC-06: only enforce when ?verbose is semantically "on" — same
+			// logic as health.readyzVerbose to prevent false 401s when
+			// ?verbose=false is passed (e.g. by k8s probes).
+			// Accepted: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
+			if !policyVerboseActive(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
 			// ?verbose present — require matching header.
+			// SEC-02: use constant-time comparison to prevent timing oracle attacks.
 			got := r.Header.Get(headerName)
-			if got != token {
+			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write(verboseTokenErrorBody)

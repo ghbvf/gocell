@@ -30,7 +30,7 @@ func (p *policyJWT) Apply(mux *chi.Mux) {
 // ref: zeromicro/go-zero rest/server.go — WithJwt at server option level, fail-fast on empty secret.
 func PolicyJWT(v auth.IntentTokenVerifier, opts ...auth.AuthOption) *policyJWT {
 	if v == nil {
-		panic("bootstrap: PolicyJWT verifier must not be nil")
+		panic("bootstrap: PolicyJWT verifier must not be nil; use WithAuthDiscovery() to discover from an authProvider cell")
 	}
 	return &policyJWT{verifier: v, opts: opts}
 }

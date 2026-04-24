@@ -9,28 +9,25 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// mtlsConfig holds options for PolicyMTLS.
-type mtlsConfig struct {
-	clientAuth tls.ClientAuthType
-}
-
 // MTLSOption configures PolicyMTLS behavior.
-type MTLSOption func(*mtlsConfig)
-
-// WithMTLSClientAuth sets the TLS client authentication requirement.
-// Default is tls.RequireAndVerifyClientCert.
-func WithMTLSClientAuth(t tls.ClientAuthType) MTLSOption {
-	return func(c *mtlsConfig) {
-		c.clientAuth = t
-	}
-}
+// SEC-01: WithMTLSClientAuth was removed because the clientAuth field was
+// never propagated to the listener's tls.Config. The TLS client authentication
+// requirement (e.g. tls.RequireAndVerifyClientCert) must be set directly on
+// the listener's *tls.Config passed via WithListenerTLS; PolicyMTLS ships as
+// pool-verification middleware only.
+type MTLSOption func(*policyMTLS)
 
 // policyMTLS verifies mutual TLS peer certificates against a CA pool.
 // Cert rotation is explicitly out of scope (plan-acknowledged); pool is
 // loaded once at construction time.
+//
+// Note: this policy only validates that at least one peer certificate chains
+// to the configured CA pool. To require TLS client certificates at the TLS
+// handshake level, set tls.Config.ClientAuth = tls.RequireAndVerifyClientCert
+// on the listener's *tls.Config (via WithListenerTLS). PolicyMTLS is a
+// defence-in-depth check that runs at the HTTP handler level after TLS terminates.
 type policyMTLS struct {
 	pool *x509.CertPool
-	cfg  mtlsConfig
 }
 
 func (p *policyMTLS) Describe() string { return "mtls" }
@@ -79,14 +76,28 @@ func verifyMTLSPeerCerts(r *http.Request, pool *x509.CertPool) bool {
 // Note: certificate rotation is out of scope for this PR; the pool is loaded
 // once at construction time. A future PR may add pool refresh via WatcherOption.
 //
+// Note: to enforce TLS client certificate requirement at the handshake level,
+// set tls.Config.ClientAuth = tls.RequireAndVerifyClientCert on the listener's
+// *tls.Config via WithListenerTLS. PolicyMTLS only validates the peer certificate
+// chain at the HTTP handler level.
+//
 // ref: go-kratos/kratos transport/http/server.go — TLS config at server build time.
 func PolicyMTLS(pool *x509.CertPool, opts ...MTLSOption) *policyMTLS {
 	if pool == nil {
 		panic("bootstrap: PolicyMTLS pool must not be nil")
 	}
-	cfg := mtlsConfig{clientAuth: tls.RequireAndVerifyClientCert}
+	p := &policyMTLS{pool: pool}
 	for _, o := range opts {
-		o(&cfg)
+		o(p)
 	}
-	return &policyMTLS{pool: pool, cfg: cfg}
+	return p
+}
+
+// WithMTLSClientAuth is retained as a no-op MTLSOption for source compatibility
+// during migration. TLS ClientAuth type must be set directly on the listener's
+// *tls.Config via WithListenerTLS — see PolicyMTLS documentation.
+//
+// Deprecated: set tls.Config.ClientAuth on the listener's *tls.Config instead.
+func WithMTLSClientAuth(_ tls.ClientAuthType) MTLSOption {
+	return func(_ *policyMTLS) {}
 }
