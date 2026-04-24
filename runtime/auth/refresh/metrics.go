@@ -31,6 +31,13 @@ func NewProviderGCCollector(p metrics.Provider) (*ProviderGCCollector, error) {
 	if p == nil {
 		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid, "refresh gc metrics provider must not be nil")
 	}
+	var registered []metrics.Collector
+	cleanup := func() {
+		for _, c := range registered {
+			_ = p.Unregister(c)
+		}
+	}
+
 	runs, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "auth_refresh_gc_runs_total",
 		Help:       "Total number of refresh-token GC runs by result.",
@@ -39,14 +46,17 @@ func NewProviderGCCollector(p metrics.Provider) (*ProviderGCCollector, error) {
 	if err != nil {
 		return nil, fmt.Errorf("refresh gc: register auth_refresh_gc_runs_total: %w", err)
 	}
+	registered = append(registered, runs)
 	removed, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "auth_refresh_gc_removed_total",
 		Help:       "Total number of refresh-token rows removed by GC.",
 		LabelNames: []string{"result"},
 	})
 	if err != nil {
+		cleanup()
 		return nil, fmt.Errorf("refresh gc: register auth_refresh_gc_removed_total: %w", err)
 	}
+	registered = append(registered, removed)
 	duration, err := p.HistogramVec(metrics.HistogramOpts{
 		Name:       "auth_refresh_gc_duration_seconds",
 		Help:       "Duration of refresh-token GC runs in seconds.",
@@ -54,6 +64,7 @@ func NewProviderGCCollector(p metrics.Provider) (*ProviderGCCollector, error) {
 		Buckets:    []float64{.001, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5},
 	})
 	if err != nil {
+		cleanup()
 		return nil, fmt.Errorf("refresh gc: register auth_refresh_gc_duration_seconds: %w", err)
 	}
 	return &ProviderGCCollector{runs: runs, removed: removed, duration: duration}, nil

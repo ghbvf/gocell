@@ -41,6 +41,9 @@ WHERE selector = $1
 ORDER BY created_at DESC
 LIMIT 1`
 
+	lockSessionSQL = `
+SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`
+
 	markRotatedSQL = `
 UPDATE refresh_tokens
 SET rotated_at = $1
@@ -184,17 +187,6 @@ func (s *PGRefreshStore) Peek(ctx context.Context, presented string) (*refresh.T
 		return nil, rejectWithReason("malformed", "")
 	}
 
-	if ambientTx, ok := TxFromContext(ctx); ok {
-		row, err := s.validatePresentedInTx(ctx, ambientTx, sel, ver)
-		if err != nil && !errors.Is(err, refresh.ErrRejected) {
-			return nil, err
-		}
-		if err != nil {
-			return nil, err
-		}
-		return row.toToken(), nil
-	}
-
 	tx, err := s.pool.Begin(ctx)
 	if err != nil {
 		return nil, errcode.Wrap(ErrAdapterPGConnect, "refresh store: peek begin", err)
@@ -230,17 +222,6 @@ func (s *PGRefreshStore) Rotate(ctx context.Context, presented string) (string, 
 	sel, ver, ok := refresh.ParseOpaque(presented)
 	if !ok {
 		return "", nil, rejectWithReason("malformed", "")
-	}
-
-	// F1: if the caller already holds a transaction (e.g. sessionlogout wrapping
-	// RevokeSession + outbox in RunInTx), reuse it so the rotation is atomic with
-	// the outer operation. In that case the caller is responsible for commit/rollback.
-	if ambientTx, ok := TxFromContext(ctx); ok {
-		wire, tok, err := s.rotateInTx(ctx, ambientTx, sel, ver)
-		if err != nil && !errors.Is(err, refresh.ErrRejected) {
-			return "", nil, err
-		}
-		return wire, tok, err
 	}
 
 	tx, err := s.pool.Begin(ctx)
@@ -312,6 +293,26 @@ func (s *PGRefreshStore) rotateInTx(ctx context.Context, tx pgx.Tx, sel, ver []b
 }
 
 func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, tx pgx.Tx, sel, ver []byte) (refreshRow, error) {
+	row, err := s.selectBySelectorInTx(ctx, tx, sel)
+	if err != nil {
+		return refreshRow{}, err
+	}
+	if err := s.lockSessionInTx(ctx, tx, row.sessionID); err != nil {
+		return refreshRow{}, err
+	}
+
+	// Re-read after acquiring the per-session advisory lock. This closes the
+	// READ COMMITTED race where a child rotation validates before a concurrent
+	// reuse-detection transaction revokes the session, then inserts a new child
+	// after the cascade has already run.
+	row, err = s.selectBySelectorInTx(ctx, tx, sel)
+	if err != nil {
+		return refreshRow{}, err
+	}
+	return s.validateRow(ctx, tx, row, ver)
+}
+
+func (s *PGRefreshStore) selectBySelectorInTx(ctx context.Context, tx pgx.Tx, sel []byte) (refreshRow, error) {
 	var row refreshRow
 	err := tx.QueryRow(ctx, selectBySelectorSQL, sel).Scan(
 		&row.id, &row.sessionID, &row.subjectID,
@@ -323,7 +324,17 @@ func (s *PGRefreshStore) validatePresentedInTx(ctx context.Context, tx pgx.Tx, s
 	if err != nil {
 		return refreshRow{}, errcode.Wrap(ErrAdapterPGQuery, "refresh store: token select", err)
 	}
+	return row, nil
+}
 
+func (s *PGRefreshStore) lockSessionInTx(ctx context.Context, tx pgx.Tx, sessionID string) error {
+	if _, err := tx.Exec(ctx, lockSessionSQL, sessionID); err != nil {
+		return errcode.Wrap(ErrAdapterPGQuery, "refresh store: session lock", err)
+	}
+	return nil
+}
+
+func (s *PGRefreshStore) validateRow(ctx context.Context, tx pgx.Tx, row refreshRow, ver []byte) (refreshRow, error) {
 	presentedHash := sha256.Sum256(ver)
 	if subtle.ConstantTimeCompare(presentedHash[:], row.verifierHash) != 1 {
 		return refreshRow{}, rejectWithReason("verifier_miss", row.sessionID)

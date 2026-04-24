@@ -255,3 +255,76 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 		assert.Zero(t, unrevokedCount, "after RevokeSession all rows must have revoked_at set")
 	})
 }
+
+func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	p := isolatedSchemaPool(t, ctx, base)
+	migrator, err := NewMigrator(p, MigrationsFS(), "schema_migrations_reuse_ambient")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	store := NewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	txm := NewTxManager(p)
+
+	parentWire, _, err := store.Issue(ctx, "sess-reuse-ambient", "usr-reuse-ambient")
+	require.NoError(t, err)
+	childWire, _, err := store.Rotate(ctx, parentWire)
+	require.NoError(t, err)
+	clock.Advance(3 * time.Second)
+
+	err = txm.RunInTx(ctx, func(txCtx context.Context) error {
+		_, peekErr := store.Peek(txCtx, parentWire)
+		require.ErrorIs(t, peekErr, refresh.ErrRejected)
+		return fmt.Errorf("force outer rollback")
+	})
+	require.Error(t, err)
+
+	_, _, err = store.Rotate(ctx, childWire)
+	require.ErrorIs(t, err, refresh.ErrRejected, "reuse cascade must commit independently of caller rollback")
+}
+
+func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing.T) {
+	base, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	p := isolatedSchemaPool(t, ctx, base)
+	migrator, err := NewMigrator(p, MigrationsFS(), "schema_migrations_reuse_lock")
+	require.NoError(t, err)
+	require.NoError(t, migrator.Up(ctx))
+
+	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+	store := NewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+
+	parentWire, _, err := store.Issue(ctx, "sess-reuse-lock", "usr-reuse-lock")
+	require.NoError(t, err)
+	childWire, _, err := store.Rotate(ctx, parentWire)
+	require.NoError(t, err)
+
+	tx, err := p.DB().Begin(ctx)
+	require.NoError(t, err)
+	_, err = tx.Exec(ctx, lockSessionSQL, "sess-reuse-lock")
+	require.NoError(t, err)
+
+	done := make(chan error, 1)
+	go func() {
+		_, _, rotateErr := store.Rotate(ctx, childWire)
+		done <- rotateErr
+	}()
+
+	time.Sleep(100 * time.Millisecond)
+	_, err = tx.Exec(ctx, revokeSessionSQL, clock.Now(), "sess-reuse-lock")
+	require.NoError(t, err)
+	require.NoError(t, tx.Commit(ctx))
+
+	select {
+	case err := <-done:
+		require.ErrorIs(t, err, refresh.ErrRejected)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Rotate(child) did not unblock after reuse cascade committed")
+	}
+}

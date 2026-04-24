@@ -8,7 +8,7 @@
 // T11 ExpiresAt calculation, T12 errcode sentinel category, T13 GC cleanup,
 // T14 concurrent goroutine race model, T15 reuse-after-grace cascade,
 // T16 grace-inside-interval, T17 parse-failure uniformity, T18 RevokeUser,
-// T19 Peek preflight.
+// T19-T20 Peek preflight/rejection.
 package storetest
 
 import (
@@ -110,6 +110,10 @@ func RunContractSuite(t *testing.T, factory Factory) {
 	t.Run("T17_Rotate_ParseFailure_Uniform", func(t *testing.T) { t.Parallel(); runT17ParseFailure(t, factory) })
 	t.Run("T18_RevokeUser_OnlyTargetSubject", func(t *testing.T) { t.Parallel(); runT18RevokeUser(t, factory) })
 	t.Run("T19_Peek_DoesNotAdvanceLineage", func(t *testing.T) { t.Parallel(); runT19PeekDoesNotAdvance(t, factory) })
+	t.Run("T20_Peek_RejectionParityAndReuseCascade", func(t *testing.T) {
+		t.Parallel()
+		runT20PeekRejectionParityAndReuseCascade(t, factory)
+	})
 }
 
 // runT1IssueBasic: Issue wire length 66, Token has ID/session/subject/times,
@@ -464,6 +468,34 @@ func runT19PeekDoesNotAdvance(t *testing.T, factory Factory) {
 	// presented parent metadata and still avoid issuing another child.
 	peekedAgain := mustPeek(t, store, parentWire)
 	assert.Equal(t, parentTok.ID, peekedAgain.ID)
+}
+
+func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
+	store, clock := factory(t, refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour})
+	ctx := context.Background()
+
+	_, err := store.Peek(ctx, "malformed")
+	assert.ErrorIs(t, err, refresh.ErrRejected, "malformed Peek must reject like Rotate")
+
+	revokedWire, _ := mustIssue(t, store, "sess-20-revoked", "user-20")
+	require.NoError(t, store.RevokeSession(ctx, "sess-20-revoked"))
+	_, err = store.Peek(ctx, revokedWire)
+	assert.ErrorIs(t, err, refresh.ErrRejected, "revoked Peek must reject like Rotate")
+
+	expiredWire, _ := mustIssue(t, store, "sess-20-expired", "user-20")
+	clock.Advance(2 * time.Hour)
+	_, err = store.Peek(ctx, expiredWire)
+	assert.ErrorIs(t, err, refresh.ErrRejected, "expired Peek must reject like Rotate")
+
+	store, clock = factory(t, refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour})
+	parentWire, _ := mustIssue(t, store, "sess-20-reuse", "user-20")
+	childWire, _ := mustRotate(t, store, parentWire)
+	clock.Advance(3 * time.Second)
+
+	_, err = store.Peek(ctx, parentWire)
+	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must reject")
+	_, _, err = store.Rotate(ctx, childWire)
+	assert.ErrorIs(t, err, refresh.ErrRejected, "reuse Peek must cascade revoke the session")
 }
 
 // Silence unused-imports guard when errcode isn't needed (defensive).

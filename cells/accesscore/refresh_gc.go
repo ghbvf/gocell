@@ -33,7 +33,9 @@ func (c *AccessCore) refreshGCHook() cell.LifecycleHook {
 				return nil
 			}
 			err := c.refreshGC.Stop(ctx)
-			c.refreshGC = nil
+			if err == nil {
+				c.refreshGC = nil
+			}
 			return err
 		},
 	}

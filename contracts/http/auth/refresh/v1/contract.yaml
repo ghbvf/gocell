@@ -15,13 +15,13 @@ endpoints:
     responses:
       400:
         description: Invalid refresh request.
-        schemaRef: ../../../../../shared/errors/error-response-v1.schema.json
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
       401:
         description: Refresh token rejected.
-        schemaRef: ../../../../../shared/errors/error-response-v1.schema.json
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
       503:
         description: Refresh store unavailable.
-        schemaRef: ../../../../../shared/errors/error-response-v1.schema.json
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

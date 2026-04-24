@@ -72,6 +72,18 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		return errcode.New(errcode.ErrAuthKeyInvalid,
 			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
 	}
+	if c.userRepo == nil {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			"accesscore requires a user repository: use WithUserRepository or WithInMemoryDefaults")
+	}
+	if c.sessionRepo == nil {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			"accesscore requires a session repository: use WithSessionRepository or WithInMemoryDefaults")
+	}
+	if c.roleRepo == nil {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			"accesscore requires a role repository: use WithRoleRepository or WithInMemoryDefaults")
+	}
 	if c.refreshStore == nil {
 		return errcode.New(errcode.ErrCellMissingTokenIssuer,
 			"refresh.Store required: use WithRefreshStore (durable) or WithInMemoryDefaults (demo)")

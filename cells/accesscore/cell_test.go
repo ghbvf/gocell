@@ -151,6 +151,22 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
 }
 
+func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.T) {
+	c := NewAccessCore(
+		WithOutboxDeps(eventbus.New(), nil),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+	)
+
+	var err error
+	require.NotPanics(t, func() {
+		err = c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "user repository")
+}
+
 func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
