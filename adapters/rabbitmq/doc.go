@@ -43,8 +43,7 @@
 // Connection implements both lifecycle.ContextCloser and lifecycle.ManagedResource:
 // composition roots register it via bootstrap.WithManagedResource(conn) and the
 // "rabbitmq_ready" probe (wrapping Health(ctx)) is exposed on /readyz
-// automatically. The legacy bootstrap.WithBrokerHealth / BrokerHealthChecker
-// option was removed in PR-A18 — ManagedResource is the only supported wiring.
+// automatically.
 //
 // ref: ThreeDotsLabs/watermill-amqp — reconnect + ACK/NACK + channel lifecycle
 // ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget

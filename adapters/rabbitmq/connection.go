@@ -663,25 +663,20 @@ func (c *Connection) ConnectionStatus() ConnectionState {
 }
 
 // Compile-time assertion: Connection satisfies lifecycle.ManagedResource.
-//
-// PR-A18: this replaces the legacy bootstrap.WithBrokerHealth /
-// BrokerHealthChecker wiring (which has been removed). Composition roots now
-// register the connection via bootstrap.WithManagedResource(conn) — the
-// "rabbitmq_ready" probe is exposed automatically.
+// Composition roots wire the connection via bootstrap.WithManagedResource(conn)
+// — the "rabbitmq_ready" probe is exposed automatically.
 var _ lifecycle.ManagedResource = (*Connection)(nil)
 
 // Checkers returns the rabbitmq_ready probe for /readyz integration.
 //
-// The probe wraps Health(ctx) which already honours ctx (early cancel) and
-// reads the in-memory state machine fed by NotifyClose. No broker round-trip
-// per probe — that would amplify load on every readyz hit. Liveness vs
-// readiness signals come from the reconnect loop's NotifyClose feedback.
+// The probe wraps Health(ctx) which honours ctx (early cancel) and reads the
+// in-memory state machine fed by NotifyClose. No broker round-trip per probe —
+// that would amplify load on every /readyz hit. Liveness vs readiness signals
+// come from the reconnect loop's NotifyClose feedback.
 //
-// Probe name change vs legacy: the deleted bootstrap.WithBrokerHealth registered
-// the broker probe under "rabbitmq". The ManagedResource path uses
-// "rabbitmq_ready" for parity with sibling adapter probe names
-// ("vault_transit_ready", etc.). Operators consuming the /readyz?verbose
-// dependencies map should update dashboards / alert rules accordingly.
+// The probe name carries the _ready suffix for parity with sibling adapter
+// probes (vault_transit_ready, etc.); operator dashboards and alert rules
+// consuming /readyz?verbose dependencies must reference the suffixed name.
 //
 // ref: kernel/lifecycle/managed_resource.go::Checkers — contract: nil = healthy.
 // ref: adapters/vault/transit_provider.go::Checkers — sibling adapter pattern.
