@@ -41,7 +41,7 @@ type config struct {
 // at invocation time (bootstrap.Lifecycle.Start happens after Cell.Init).
 //
 // OnStart returns promptly after launching the cleaner in a background
-// goroutine: Cleaner.Start blocks on ctx.Done() waiting for TTL expiry,
+// goroutine: cleaner.Start blocks on ctx.Done() waiting for TTL expiry,
 // which exceeds bootstrap.Hook.StartTimeout (30s default). The goroutine
 // uses an internal runCtx derived from context.Background; OnStop cancels
 // it to drain the goroutine and then calls cleaner.Stop for explicit
@@ -141,21 +141,21 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	logger := l.logger
 	l.mu.Unlock()
 
-	// Sweep expired orphan credential files before EnsureAdmin attempts to write
+	// sweep expired orphan credential files before ensureAdmin attempts to write
 	// a new one. This closes the P1-16 gap where adminExists==true caused
-	// EnsureAdmin to return early without cleaning orphan cred files, and also
-	// prevents WriteCredentialFile from failing with ErrCredFileExists when an
+	// ensureAdmin to return early without cleaning orphan cred files, and also
+	// prevents writeCredentialFile from failing with errCredFileExists when an
 	// expired file already occupies the path.
 	//
-	// When a fresh (not-yet-expired) orphan file is found, Sweep returns a
-	// Cleaner worker that will remove the file after its remaining TTL. This
+	// When a fresh (not-yet-expired) orphan file is found, sweep returns a
+	// cleaner worker that will remove the file after its remaining TTL. This
 	// closes the runtime window where a fresh orphan file would otherwise persist
 	// until the next process restart (P1-16 full fix).
 	var sweepStateDir string
 	if cfg.CredentialPath != "" {
 		sweepStateDir = filepath.Dir(cfg.CredentialPath)
 	}
-	sweepCleaner, err := Sweep(ctx, SweepConfig{
+	sweepCleaner, err := sweep(ctx, sweepConfig{
 		StateDir:  sweepStateDir,
 		Clock:     cfg.Clock,
 		Scheduler: cfg.Scheduler,
@@ -165,12 +165,12 @@ func (l *Lifecycle) start(ctx context.Context) error {
 		return fmt.Errorf("initialadmin: sweep: %w", err)
 	}
 
-	bs, err := NewBootstrapper(BootstrapDeps{
+	bs, err := newBootstrapper(BootstrapDeps{
 		UserRepo: deps.UserRepo,
 		RoleRepo: deps.RoleRepo,
 		Logger:   logger,
 		Clock:    cfg.Clock,
-	}, BootstrapConfig{
+	}, bootstrapConfig{
 		Username:       cfg.Username,
 		CredentialPath: cfg.CredentialPath,
 		TTL:            cfg.TTL,
@@ -181,7 +181,7 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("initialadmin: construct: %w", err)
 	}
-	adminWorker, err := bs.EnsureAdmin(ctx)
+	adminWorker, err := bs.ensureAdmin(ctx)
 	if err != nil {
 		return fmt.Errorf("initialadmin: ensure: %w", err)
 	}
@@ -198,21 +198,21 @@ func (l *Lifecycle) start(ctx context.Context) error {
 		return nil // admin exists + no orphan → no cleanup needed
 	}
 
-	// Derive a long-lived runCtx from background so Cleaner.Start (which blocks
+	// Derive a long-lived runCtx from background so cleaner.Start (which blocks
 	// on <-ctx.Done()) is not killed by bootstrap.Hook.StartTimeout (30s). OnStop
 	// cancels runCtx to drain the goroutine.
 	//
 	// A concurrent stop() racing with start() is handled by stopped=true: if
 	// stop ran first, we cancel runCtx immediately and do not spawn the
-	// cleaner goroutine (calling Cleaner.Start on a stopped cleaner is an error
-	// per the Cleaner contract).
+	// cleaner goroutine (calling cleaner.Start on a stopped cleaner is an error
+	// per the cleaner contract).
 	runCtx, cancel := context.WithCancel(context.Background())
 	l.mu.Lock()
 	if l.stopped {
 		l.mu.Unlock()
 		cancel()
-		// Explicit Stop is idempotent and clears any registered timer that Sweep
-		// or EnsureAdmin may have installed before stop() raced in.
+		// Explicit Stop is idempotent and clears any registered timer that sweep
+		// or ensureAdmin may have installed before stop() raced in.
 		if err := result.Stop(ctx); err != nil {
 			return fmt.Errorf("initialadmin: stop raced cleaner: %w", err)
 		}
@@ -249,8 +249,8 @@ func (l *Lifecycle) stop(ctx context.Context) error {
 		return nil
 	}
 
-	// Cancel runCtx so Cleaner.Start returns; then explicit Stop for timer
-	// cancellation (Cleaner.Stop is idempotent).
+	// Cancel runCtx so cleaner.Start returns; then explicit Stop for timer
+	// cancellation (cleaner.Stop is idempotent).
 	if cancel != nil {
 		cancel()
 	}

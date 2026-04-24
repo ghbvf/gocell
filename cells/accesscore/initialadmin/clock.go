@@ -3,13 +3,13 @@ package initialadmin
 import "time"
 
 // Clock abstracts time retrieval to allow deterministic testing.
-// Production code uses RealClock{}; tests may inject a fake implementation.
+// Production code uses realClock{}; tests may inject a fake implementation.
 type Clock interface {
 	Now() time.Time
 }
 
-// RealClock implements Clock using the system wall clock.
-type RealClock struct{}
+// realClock implements Clock using the system wall clock.
+type realClock struct{}
 
 // Now returns the current wall-clock time.
-func (RealClock) Now() time.Time { return time.Now() }
+func (realClock) Now() time.Time { return time.Now() }

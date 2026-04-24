@@ -1,17 +1,15 @@
-package initialadmin_test
+package initialadmin
 
 import (
 	"io"
 	"testing"
 	"testing/iotest"
-
-	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 )
 
 func TestGeneratePassword_LengthAndCharset(t *testing.T) {
 	t.Parallel()
 
-	password, err := initialadmin.GeneratePassword(nil) // nil uses crypto/rand.Reader internally
+	password, err := generatePassword(nil) // nil uses crypto/rand.Reader internally
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -48,7 +46,7 @@ func TestGeneratePassword_Uniqueness(t *testing.T) {
 
 	seen := make(map[string]struct{}, 1000)
 	for i := range 1000 {
-		pw, err := initialadmin.GeneratePassword(nil)
+		pw, err := generatePassword(nil)
 		if err != nil {
 			t.Fatalf("iteration %d: unexpected error: %v", i, err)
 		}
@@ -63,7 +61,7 @@ func TestGeneratePassword_RandReaderError(t *testing.T) {
 	t.Parallel()
 
 	errReader := iotest.ErrReader(io.ErrUnexpectedEOF)
-	_, err := initialadmin.GeneratePassword(errReader)
+	_, err := generatePassword(errReader)
 	if err == nil {
 		t.Fatal("expected error from failing reader, got nil")
 	}

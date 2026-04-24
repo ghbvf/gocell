@@ -166,12 +166,12 @@ func TestLifecycle_StartWithBind_RepeatRun_AdminExists_NoCleaner(t *testing.T) {
 	logger := deps.Logger
 
 	// Pre-populate admin by running a bootstrap first.
-	bs, err := NewBootstrapper(BootstrapDeps{
+	bs, err := newBootstrapper(BootstrapDeps{
 		UserRepo: deps.UserRepo,
 		RoleRepo: deps.RoleRepo,
 		Logger:   logger,
 		Clock:    l.cfg.Clock,
-	}, BootstrapConfig{
+	}, bootstrapConfig{
 		CredentialPath: l.cfg.CredentialPath,
 		TTL:            l.cfg.TTL,
 		PasswordSource: newFixedPasswordSource(),
@@ -179,17 +179,17 @@ func TestLifecycle_StartWithBind_RepeatRun_AdminExists_NoCleaner(t *testing.T) {
 		Hasher:         l.cfg.Hasher,
 	})
 	require.NoError(t, err)
-	firstWorker, err := bs.EnsureAdmin(context.Background())
+	firstWorker, err := bs.ensureAdmin(context.Background())
 	require.NoError(t, err)
 	// Stop the first cleaner so its credential file TTL doesn't interfere.
 	if firstWorker != nil {
 		require.NoError(t, firstWorker.Stop(context.Background()))
 	}
 
-	// Now start Lifecycle — admin exists, Sweep may find a fresh cred file from
+	// Now start Lifecycle — admin exists, sweep may find a fresh cred file from
 	// the first run. We remove it to ensure a pure "no orphan" scenario.
 	if l.cfg.CredentialPath != "" {
-		_ = RemoveCredentialFile(l.cfg.CredentialPath)
+		_ = removeCredentialFile(l.cfg.CredentialPath)
 	}
 
 	l.Bind(deps, logger)
@@ -249,7 +249,7 @@ func TestLifecycle_Stop_AfterStart(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestLifecycle_StartFail_CleanerRemainsNil(t *testing.T) {
-	// Use an invalid TTL that will cause NewBootstrapper to fail.
+	// Use an invalid TTL that will cause newBootstrapper to fail.
 	l := NewLifecycle(
 		WithCredentialPath(filepath.Join(t.TempDir(), "cred")),
 		WithTTL(-1*time.Second), // invalid TTL

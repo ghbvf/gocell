@@ -7,26 +7,26 @@ import (
 	"time"
 )
 
-// WriteCredentialFile is not supported on non-unix platforms.
-// Returns ErrUnsupportedPlatform on all calls.
-func WriteCredentialFile(_ string, _ CredentialPayload, _ ...WriteCredentialFileOption) error {
-	return fmt.Errorf("%w: WriteCredentialFile", ErrUnsupportedPlatform)
+// writeCredentialFile is not supported on non-unix platforms.
+// Returns errUnsupportedPlatform on all calls.
+func writeCredentialFile(_ string, _ credentialPayload, _ ...writeCredentialFileOption) error {
+	return fmt.Errorf("%w: writeCredentialFile", errUnsupportedPlatform)
 }
 
-// RemoveCredentialFile is not supported on non-unix platforms.
-// Returns ErrUnsupportedPlatform on all calls.
-func RemoveCredentialFile(_ string) error {
-	return fmt.Errorf("%w: RemoveCredentialFile", ErrUnsupportedPlatform)
+// removeCredentialFile is not supported on non-unix platforms.
+// Returns errUnsupportedPlatform on all calls.
+func removeCredentialFile(_ string) error {
+	return fmt.Errorf("%w: removeCredentialFile", errUnsupportedPlatform)
 }
 
-// ReadCredentialExpiresAt is not supported on non-unix platforms.
-// Returns ErrUnsupportedPlatform on all calls.
-func ReadCredentialExpiresAt(_ string) (time.Time, error) {
-	return time.Time{}, fmt.Errorf("%w: ReadCredentialExpiresAt", ErrUnsupportedPlatform)
+// readCredentialExpiresAt is not supported on non-unix platforms.
+// Returns errUnsupportedPlatform on all calls.
+func readCredentialExpiresAt(_ string) (time.Time, error) {
+	return time.Time{}, fmt.Errorf("%w: readCredentialExpiresAt", errUnsupportedPlatform)
 }
 
 // ResolveCredentialPath is not supported on non-unix platforms.
-// Returns ErrUnsupportedPlatform on all calls.
+// Returns errUnsupportedPlatform on all calls.
 func ResolveCredentialPath(_ string) (string, error) {
-	return "", fmt.Errorf("%w: ResolveCredentialPath", ErrUnsupportedPlatform)
+	return "", fmt.Errorf("%w: ResolveCredentialPath", errUnsupportedPlatform)
 }

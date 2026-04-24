@@ -1,21 +1,19 @@
-package initialadmin_test
+package initialadmin
 
 import (
 	"testing"
 	"time"
-
-	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 )
 
 func TestRealClock_Now(t *testing.T) {
 	t.Parallel()
 
 	before := time.Now()
-	c := initialadmin.RealClock{}
+	c := realClock{}
 	got := c.Now()
 	after := time.Now()
 
 	if got.Before(before) || got.After(after) {
-		t.Errorf("RealClock.Now() = %v, want between %v and %v", got, before, after)
+		t.Errorf("realClock.Now() = %v, want between %v and %v", got, before, after)
 	}
 }

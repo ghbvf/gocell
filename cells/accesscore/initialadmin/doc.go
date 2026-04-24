@@ -11,7 +11,7 @@
 // L1 LocalTx — bootstrap writes (a) the admin user and role binding via the
 // accesscore repositories and (b) the credential file side-by-side on the
 // host filesystem. Both succeed or neither takes effect for the caller: the
-// credential-file write happens inside EnsureAdmin after the user insert and
+// credential-file write happens inside ensureAdmin after the user insert and
 // is followed by a best-effort rollback if the password hash assignment
 // fails. No outbox emission or cross-cell event is involved; see
 // cells/accesscore/cell.yaml for cell-level declaration.
@@ -49,10 +49,10 @@
 //
 // # Blocking semantics
 //
-// [Lifecycle] runs the Cleaner in a background goroutine so that
-// bootstrap.Hook.StartTimeout (30s default) is not starved: Cleaner.Start
+// [Lifecycle] runs the cleaner in a background goroutine so that
+// bootstrap.Hook.StartTimeout (30s default) is not starved: cleaner.Start
 // blocks on ctx.Done() waiting for TTL. OnStop cancels an internal runCtx
-// to drain the goroutine before calling Cleaner.Stop for explicit timer
+// to drain the goroutine before calling cleaner.Stop for explicit timer
 // cancellation.
 //
 // # Scheme H reference

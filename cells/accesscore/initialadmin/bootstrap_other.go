@@ -13,9 +13,9 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
-// ErrUnsupportedPlatform is returned by Bootstrapper.EnsureAdmin on non-unix
-// platforms where WriteCredentialFile (unix-only, mode 0600) is unavailable.
-var ErrUnsupportedPlatform = errors.New("initialadmin: bootstrap not supported on this platform")
+// errUnsupportedPlatform is returned by bootstrapper.ensureAdmin on non-unix
+// platforms where writeCredentialFile (unix-only, mode 0600) is unavailable.
+var errUnsupportedPlatform = errors.New("initialadmin: bootstrap not supported on this platform")
 
 // BootstrapDeps holds the injected repository and utility dependencies.
 type BootstrapDeps struct {
@@ -25,8 +25,8 @@ type BootstrapDeps struct {
 	Clock    Clock
 }
 
-// BootstrapConfig controls the bootstrap behaviour.
-type BootstrapConfig struct {
+// bootstrapConfig controls the bootstrap behaviour.
+type bootstrapConfig struct {
 	Username       string
 	CredentialPath string
 	TTL            time.Duration
@@ -34,15 +34,15 @@ type BootstrapConfig struct {
 	Scheduler      Scheduler
 }
 
-// Bootstrapper is a stub on non-unix platforms.
-type Bootstrapper struct{}
+// bootstrapper is a stub on non-unix platforms.
+type bootstrapper struct{}
 
-// NewBootstrapper returns ErrUnsupportedPlatform on non-unix platforms.
-func NewBootstrapper(_ BootstrapDeps, _ BootstrapConfig) (*Bootstrapper, error) {
-	return nil, ErrUnsupportedPlatform
+// newBootstrapper returns errUnsupportedPlatform on non-unix platforms.
+func newBootstrapper(_ BootstrapDeps, _ bootstrapConfig) (*bootstrapper, error) {
+	return nil, errUnsupportedPlatform
 }
 
-// EnsureAdmin always returns ErrUnsupportedPlatform on non-unix platforms.
-func (b *Bootstrapper) EnsureAdmin(_ context.Context) (worker.Worker, error) {
-	return nil, ErrUnsupportedPlatform
+// ensureAdmin always returns errUnsupportedPlatform on non-unix platforms.
+func (b *bootstrapper) ensureAdmin(_ context.Context) (worker.Worker, error) {
+	return nil, errUnsupportedPlatform
 }

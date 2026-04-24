@@ -14,10 +14,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
-// Compile-time assertion: Cleaner must implement worker.Worker.
-var _ worker.Worker = (*Cleaner)(nil)
+// Compile-time assertion: cleaner must implement worker.Worker.
+var _ worker.Worker = (*cleaner)(nil)
 
-// cleanerState tracks the lifecycle of a Cleaner.
+// cleanerState tracks the lifecycle of a cleaner.
 type cleanerState int
 
 const (
@@ -26,21 +26,21 @@ const (
 	stateStopped                     // Stop called or ctx cancelled
 )
 
-// CleanerConfig holds the configuration for creating a Cleaner.
-type CleanerConfig struct {
+// cleanerConfig holds the configuration for creating a cleaner.
+type cleanerConfig struct {
 	// Path is the credential file path to remove when TTL expires. Required.
 	Path string
 	// TTL is the duration after Start before the credential file is removed. Required; must be > 0.
 	TTL time.Duration
-	// Clock is optional; defaults to RealClock{}.
+	// Clock is optional; defaults to realClock{}.
 	Clock Clock
-	// Scheduler is optional; defaults to RealScheduler{}.
+	// Scheduler is optional; defaults to realScheduler{}.
 	Scheduler Scheduler
 	// Logger is required.
 	Logger *slog.Logger
 }
 
-// Cleaner implements worker.Worker. It removes the initial-admin credential
+// cleaner implements worker.Worker. It removes the initial-admin credential
 // file after a configurable TTL, protecting against credential leakage in
 // long-running deployments.
 //
@@ -49,7 +49,7 @@ type CleanerConfig struct {
 //     (early stop) or immediately if already stopped.
 //   - Stop(ctx): cancels the pending timer; idempotent.
 //   - Start after Stop returns an error (no reuse).
-type Cleaner struct {
+type cleaner struct {
 	path      string
 	ttl       time.Duration
 	clock     Clock
@@ -61,9 +61,9 @@ type Cleaner struct {
 	canceller Cancellable // non-nil between Start and expiry/stop
 }
 
-// NewCleaner constructs a Cleaner from cfg. Returns an error if path is empty,
+// newCleaner constructs a cleaner from cfg. Returns an error if path is empty,
 // TTL ≤ 0, or logger is nil.
-func NewCleaner(cfg CleanerConfig) (*Cleaner, error) {
+func newCleaner(cfg cleanerConfig) (*cleaner, error) {
 	if cfg.Path == "" {
 		return nil, fmt.Errorf("initialadmin: cleaner path must not be empty")
 	}
@@ -76,14 +76,14 @@ func NewCleaner(cfg CleanerConfig) (*Cleaner, error) {
 
 	clk := cfg.Clock
 	if clk == nil {
-		clk = RealClock{}
+		clk = realClock{}
 	}
 	sched := cfg.Scheduler
 	if sched == nil {
-		sched = RealScheduler{}
+		sched = realScheduler{}
 	}
 
-	return &Cleaner{
+	return &cleaner{
 		path:      cfg.Path,
 		ttl:       cfg.TTL,
 		clock:     clk,
@@ -100,7 +100,7 @@ func NewCleaner(cfg CleanerConfig) (*Cleaner, error) {
 // expire() is called synchronously before Start blocks.
 //
 // If Stop was already called before Start, an error is returned immediately.
-func (c *Cleaner) Start(ctx context.Context) error {
+func (c *cleaner) Start(ctx context.Context) error {
 	c.mu.Lock()
 	if c.state == stateStopped {
 		c.mu.Unlock()
@@ -159,8 +159,8 @@ func (c *Cleaner) Start(ctx context.Context) error {
 // resolveRemaining reads the expires_at from the credential file and returns
 // the duration until expiry (may be negative if already expired).
 // Returns an error when the file does not exist or cannot be parsed.
-func (c *Cleaner) resolveRemaining() (time.Duration, error) {
-	expiresAt, err := ReadCredentialExpiresAt(c.path)
+func (c *cleaner) resolveRemaining() (time.Duration, error) {
+	expiresAt, err := readCredentialExpiresAt(c.path)
 	if err != nil {
 		return 0, err
 	}
@@ -170,7 +170,7 @@ func (c *Cleaner) resolveRemaining() (time.Duration, error) {
 // Stop cancels the pending TTL timer. It is safe to call multiple times
 // (idempotent). If the timer has already fired, Stop has no effect on the
 // removal that already occurred.
-func (c *Cleaner) Stop(_ context.Context) error {
+func (c *cleaner) Stop(_ context.Context) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -183,22 +183,22 @@ func (c *Cleaner) Stop(_ context.Context) error {
 
 // expire is the internal callback invoked by the scheduler after TTL elapses.
 // It removes the credential file and logs the outcome.
-func (c *Cleaner) expire() {
+func (c *cleaner) expire() {
 	// Check existence before removal to distinguish "removed now" from
-	// "already gone by operator" — both result in nil from RemoveCredentialFile,
+	// "already gone by operator" — both result in nil from removeCredentialFile,
 	// but we log at different levels.
 	_, statErr := os.Stat(c.path)
 	fileExisted := statErr == nil
 
-	err := RemoveCredentialFile(c.path)
+	err := removeCredentialFile(c.path)
 
 	c.mu.Lock()
 	c.state = stateStopped
 	c.mu.Unlock()
 
 	switch {
-	case errors.Is(err, ErrCredFileTampered):
-		// File permissions were tampered, but RemoveCredentialFile still deleted
+	case errors.Is(err, errCredFileTampered):
+		// File permissions were tampered, but removeCredentialFile still deleted
 		// the file before returning (P1-1 fix). Log at Warn: credential has been
 		// destroyed, but the anomaly warrants operator attention.
 		c.logger.Warn("initial admin credential file had unexpected mode; deleted anyway (tamper detected)",
