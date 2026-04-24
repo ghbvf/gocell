@@ -53,6 +53,12 @@ func attrToKeyValue(a wrapper.Attr) attribute.KeyValue {
 		return attribute.Float64(a.Key, v)
 	case bool:
 		return attribute.Bool(a.Key, v)
+	case []byte:
+		// Emit []byte as readable UTF-8 rather than fmt.Sprint's decimal
+		// byte-slice form (e.g. "[98 121 116 101 115]"). Consumers that
+		// log request/response payload snapshots would otherwise see
+		// unreadable output in their tracing backends.
+		return attribute.String(a.Key, string(v))
 	default:
 		return attribute.String(a.Key, fmt.Sprint(v))
 	}

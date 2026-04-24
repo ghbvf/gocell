@@ -91,7 +91,8 @@ func TestTracer_SetAttribute(t *testing.T) {
 		wrapper.Attr{Key: "int64_key", Value: int64(100)},
 		wrapper.Attr{Key: "float_key", Value: 3.14},
 		wrapper.Attr{Key: "bool_key", Value: true},
-		wrapper.Attr{Key: "fallback_key", Value: []byte("bytes")},
+		wrapper.Attr{Key: "bytes_key", Value: []byte("bytes")},
+		wrapper.Attr{Key: "fallback_key", Value: struct{ X int }{X: 1}},
 	)
 
 	span.End()
@@ -99,9 +100,21 @@ func TestTracer_SetAttribute(t *testing.T) {
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 
-	// Verify attributes were set (at least one).
-	attrs := spans[0].Attributes
-	assert.NotEmpty(t, attrs, "span should have attributes")
+	// Build attribute map for precise assertions.
+	got := make(map[string]string, len(spans[0].Attributes))
+	for _, kv := range spans[0].Attributes {
+		got[string(kv.Key)] = kv.Value.Emit()
+	}
+
+	// A6-d: []byte must emit as readable UTF-8, not fmt.Sprint's decimal
+	// byte-slice form ("[98 121 116 101 115]").
+	assert.Equal(t, "bytes", got["bytes_key"],
+		"[]byte attributes must emit as UTF-8 string, got %q", got["bytes_key"])
+	// fallback_key (unknown type) still flows through fmt.Sprint.
+	assert.Equal(t, "{1}", got["fallback_key"])
+	assert.Equal(t, "value", got["str_key"])
+	assert.Equal(t, "42", got["int_key"])
+	assert.Equal(t, "100", got["int64_key"])
 }
 
 func TestTracer_NestedSpansShareTraceID(t *testing.T) {
