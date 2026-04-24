@@ -77,5 +77,26 @@ func (noopSpan) SetAttributes(_ ...Attr)          {}
 func (noopSpan) RecordError(_ error)              {}
 func (noopSpan) SetStatus(_ StatusCode, _ string) {}
 func (noopSpan) End()                             {}
+func (noopSpan) SetName(_ string)                 {}
 
 var noopSpanInstance Span = noopSpan{}
+
+// SpanRenamer is an optional interface that a Span implementation MAY
+// support when the final span name is only known after the handler / routing
+// completes (e.g. chi matches the path template post-ServeHTTP). Helpers
+// that want to stay compatible with Span implementations lacking rename
+// support should use SetSpanName instead of a direct type assertion.
+//
+// ref: riandyrn/otelchi middleware.go — chi routes are known after ServeHTTP
+// so span.name is adjusted in two phases.
+type SpanRenamer interface {
+	SetName(name string)
+}
+
+// SetSpanName invokes SetName if the span implements SpanRenamer. Spans that
+// do not support rename are silently skipped.
+func SetSpanName(s Span, name string) {
+	if r, ok := s.(SpanRenamer); ok {
+		r.SetName(name)
+	}
+}

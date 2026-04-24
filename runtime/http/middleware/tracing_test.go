@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/go-chi/chi/v5"
@@ -140,16 +141,20 @@ func (s *spySpan) End()                {}
 func (s *spySpan) TraceID() string     { return "spy-trace" }
 func (s *spySpan) SpanID() string      { return "spy-span" }
 func (s *spySpan) SetName(name string) { s.mu.Lock(); s.name = name; s.mu.Unlock() }
-func (s *spySpan) SetAttribute(key string, val any) {
+
+func (s *spySpan) SetAttributes(attrs ...wrapper.Attr) {
 	s.mu.Lock()
-	s.attrs[key] = val
+	for _, a := range attrs {
+		s.attrs[a.Key] = a.Value
+	}
 	s.mu.Unlock()
 }
 
-// SpanRecorder methods — capture SetStatus/RecordError calls.
-func (s *spySpan) SetStatus(isError bool, description string) {
+// SetStatus captures the kernel/wrapper-shaped status signal.
+func (s *spySpan) SetStatus(code wrapper.StatusCode, description string) {
 	s.mu.Lock()
-	s.attrs["_status_error"] = isError
+	s.attrs["_status_code"] = code
+	s.attrs["_status_error"] = code == wrapper.StatusError
 	s.attrs["_status_desc"] = description
 	s.mu.Unlock()
 }
@@ -178,8 +183,11 @@ type spyTracer struct {
 	spans []*spySpan
 }
 
-func (st *spyTracer) Start(ctx context.Context, name string) (context.Context, tracing.Span) {
+func (st *spyTracer) Start(ctx context.Context, name string, attrs ...wrapper.Attr) (context.Context, tracing.Span) {
 	span := &spySpan{name: name, attrs: make(map[string]any)}
+	if len(attrs) > 0 {
+		span.SetAttributes(attrs...)
+	}
 	st.mu.Lock()
 	st.spans = append(st.spans, span)
 	st.mu.Unlock()

@@ -95,11 +95,17 @@ func NewTracerFromTracerProvider(tp oteltrace.TracerProvider, serviceName string
 }
 
 // Start creates a new span with the given name. The returned context carries
-// the span and its trace/span IDs propagated via ctxkeys.
-func (t *Tracer) Start(ctx context.Context, name string) (context.Context, tracing.Span) {
+// the span and its trace/span IDs propagated via ctxkeys. Accepts variadic
+// wrapper.Attr so kernel/wrapper callers can hand attributes in at Start;
+// attrs are applied on the returned Span immediately via SetAttributes.
+func (t *Tracer) Start(ctx context.Context, name string, attrs ...tracing.Attr) (context.Context, tracing.Span) {
 	ctx, span := t.inner.Start(ctx, name)
 	sc := span.SpanContext()
 	ctx = ctxkeys.WithTraceID(ctx, sc.TraceID().String())
 	ctx = ctxkeys.WithSpanID(ctx, sc.SpanID().String())
-	return ctx, &otelSpan{inner: span}
+	out := &otelSpan{inner: span}
+	if len(attrs) > 0 {
+		out.SetAttributes(attrs...)
+	}
+	return ctx, out
 }

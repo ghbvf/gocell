@@ -3,20 +3,22 @@ package otel
 import (
 	"fmt"
 
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
-// Compile-time checks: otelSpan implements tracing.Span, SpanRecorder, and SpanRenamer.
+// Compile-time checks: otelSpan implements tracing.Span (aliased to
+// wrapper.Span) and wrapper.SpanRenamer.
 var (
-	_ tracing.Span         = (*otelSpan)(nil)
-	_ tracing.SpanRecorder = (*otelSpan)(nil)
-	_ tracing.SpanRenamer  = (*otelSpan)(nil)
+	_ tracing.Span        = (*otelSpan)(nil)
+	_ wrapper.SpanRenamer = (*otelSpan)(nil)
 )
 
-// otelSpan wraps an OTel trace.Span to implement the tracing.Span interface.
+// otelSpan wraps an OTel trace.Span to implement the kernel/wrapper.Span
+// interface (re-exported as tracing.Span for backwards-compatible callers).
 type otelSpan struct {
 	inner oteltrace.Span
 }
@@ -26,22 +28,33 @@ func (s *otelSpan) End() {
 	s.inner.End()
 }
 
-// SetAttribute records a key-value pair on the span. It uses a type switch
+// SetAttributes records key-value pairs on the span. It uses a type switch
 // to map Go types to the correct OTel attribute constructors.
-func (s *otelSpan) SetAttribute(key string, value any) {
-	switch v := value.(type) {
+func (s *otelSpan) SetAttributes(attrs ...wrapper.Attr) {
+	if len(attrs) == 0 {
+		return
+	}
+	kvs := make([]attribute.KeyValue, 0, len(attrs))
+	for _, a := range attrs {
+		kvs = append(kvs, attrToKeyValue(a))
+	}
+	s.inner.SetAttributes(kvs...)
+}
+
+func attrToKeyValue(a wrapper.Attr) attribute.KeyValue {
+	switch v := a.Value.(type) {
 	case string:
-		s.inner.SetAttributes(attribute.String(key, v))
+		return attribute.String(a.Key, v)
 	case int:
-		s.inner.SetAttributes(attribute.Int(key, v))
+		return attribute.Int(a.Key, v)
 	case int64:
-		s.inner.SetAttributes(attribute.Int64(key, v))
+		return attribute.Int64(a.Key, v)
 	case float64:
-		s.inner.SetAttributes(attribute.Float64(key, v))
+		return attribute.Float64(a.Key, v)
 	case bool:
-		s.inner.SetAttributes(attribute.Bool(key, v))
+		return attribute.Bool(a.Key, v)
 	default:
-		s.inner.SetAttributes(attribute.String(key, fmt.Sprint(v)))
+		return attribute.String(a.Key, fmt.Sprint(v))
 	}
 }
 
@@ -50,13 +63,14 @@ func (s *otelSpan) RecordError(err error) {
 	s.inner.RecordError(err)
 }
 
-// SetStatus sets the span status. isError=true marks the span as failed.
-func (s *otelSpan) SetStatus(isError bool, description string) {
-	if isError {
+// SetStatus sets the span status. wrapper.StatusError maps to codes.Error;
+// wrapper.StatusOK maps to codes.Ok.
+func (s *otelSpan) SetStatus(code wrapper.StatusCode, description string) {
+	if code == wrapper.StatusError {
 		s.inner.SetStatus(codes.Error, description)
-	} else {
-		s.inner.SetStatus(codes.Ok, "")
+		return
 	}
+	s.inner.SetStatus(codes.Ok, "")
 }
 
 // TraceID returns the trace identifier.

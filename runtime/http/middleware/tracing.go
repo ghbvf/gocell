@@ -79,8 +79,10 @@ func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) ht
 
 			// Record linked remote context for public endpoints.
 			if isPublic && remoteSpanCtx.IsValid() && remoteSpanCtx.IsRemote() {
-				span.SetAttribute("linked.trace_id", remoteSpanCtx.TraceID().String())
-				span.SetAttribute("linked.span_id", remoteSpanCtx.SpanID().String())
+				span.SetAttributes(
+					tracing.Attr{Key: "linked.trace_id", Value: remoteSpanCtx.TraceID().String()},
+					tracing.Attr{Key: "linked.span_id", Value: remoteSpanCtx.SpanID().String()},
+				)
 			}
 
 			state := RecorderStateFrom(ctx)
@@ -96,10 +98,12 @@ func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) ht
 			// After routing, use low-cardinality route pattern.
 			route := RoutePatternFromCtx(r.Context())
 			tracing.SpanSetName(span, r.Method+" "+route)
-			span.SetAttribute("http.route", route)
 
 			status := state.Status()
-			span.SetAttribute("http.status_code", status)
+			span.SetAttributes(
+				tracing.Attr{Key: "http.route", Value: route},
+				tracing.Attr{Key: "http.status_code", Value: status},
+			)
 
 			// 5xx → error span; 4xx and below → unset (otelhttp convention).
 			if status >= 500 {
