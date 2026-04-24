@@ -67,21 +67,21 @@ func isolatedSchemaPool(t *testing.T, ctx context.Context, base *Pool) *Pool {
 }
 
 // ---------------------------------------------------------------------------
-// TestMigration007_StructuralAssertions
+// TestMigration012_StructuralAssertions
 // ---------------------------------------------------------------------------
 
-// TestMigration007_StructuralAssertions verifies the column layout and index
-// set of the refresh_tokens table after migration 007 is applied
-// (P2-Cx2 structural evidence).
-func TestMigration007_StructuralAssertions(t *testing.T) {
+// TestMigration012_StructuralAssertions verifies the column layout and index
+// set of the refresh_tokens table after migration 012 rebuilds it for the
+// append-only selector/verifier model.
+func TestMigration012_StructuralAssertions(t *testing.T) {
 	pool, cleanup := setupPostgres(t)
 	defer cleanup()
 
 	ctx := context.Background()
 
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_007_struct")
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_012_struct")
 	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
+	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations through 012")
 
 	// --- table exists ---
 	t.Run("refresh_tokens_table_exists", func(t *testing.T) {
@@ -90,13 +90,14 @@ func TestMigration007_StructuralAssertions(t *testing.T) {
 			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'refresh_tokens')").
 			Scan(&exists)
 		require.NoError(t, err)
-		assert.True(t, exists, "refresh_tokens table must exist after migration 007")
+		assert.True(t, exists, "refresh_tokens table must exist after migration 012")
 	})
 
-	// --- columns ---
+	// --- columns (new append-only schema) ---
 	wantColumns := []string{
-		"id", "token", "obsolete_token", "session_id", "subject_id",
-		"created_at", "last_used", "expires_at", "revoked_at",
+		"id", "parent_id", "session_id", "subject_id",
+		"selector", "verifier_hash",
+		"created_at", "expires_at", "rotated_at", "revoked_at",
 	}
 	for _, col := range wantColumns {
 		col := col
@@ -112,12 +113,30 @@ func TestMigration007_StructuralAssertions(t *testing.T) {
 		})
 	}
 
-	// --- indexes ---
+	// --- old columns must be gone ---
+	deletedColumns := []string{"token", "obsolete_token", "last_used"}
+	for _, col := range deletedColumns {
+		col := col
+		t.Run("refresh_tokens_missing_col_"+col, func(t *testing.T) {
+			var exists bool
+			err := pool.DB().QueryRow(ctx,
+				`SELECT EXISTS (
+					SELECT 1 FROM information_schema.columns
+					WHERE table_name = 'refresh_tokens' AND column_name = $1
+				)`, col).Scan(&exists)
+			require.NoError(t, err)
+			assert.Falsef(t, exists, "refresh_tokens must NOT have legacy column %q", col)
+		})
+	}
+
+	// --- indexes (new names) ---
 	wantIndexes := []string{
-		"idx_refresh_tokens_token_active",
-		"idx_refresh_tokens_obsolete_active",
+		"idx_refresh_tokens_selector_live",
+		"idx_refresh_tokens_selector",
 		"idx_refresh_tokens_session",
+		"idx_refresh_tokens_subject",
 		"idx_refresh_tokens_expires",
+		"idx_refresh_tokens_parent",
 	}
 	for _, idx := range wantIndexes {
 		idx := idx
@@ -127,34 +146,25 @@ func TestMigration007_StructuralAssertions(t *testing.T) {
 				"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)", idx).
 				Scan(&exists)
 			require.NoError(t, err)
-			assert.Truef(t, exists, "index %q must exist after migration 007", idx)
+			assert.Truef(t, exists, "index %q must exist after migration 012", idx)
 		})
 	}
-}
 
-// ---------------------------------------------------------------------------
-// TestMigration011_StructuralAssertions
-// ---------------------------------------------------------------------------
-
-// TestMigration011_StructuralAssertions verifies that migration 011 creates
-// the non-partial idx_refresh_tokens_token index covering all rows
-// (P2-Cx2 structural evidence).
-func TestMigration011_StructuralAssertions(t *testing.T) {
-	pool, cleanup := setupPostgres(t)
-	defer cleanup()
-
-	ctx := context.Background()
-
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_011_struct")
-	require.NoError(t, err)
-	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations including 011")
-
-	t.Run("idx_refresh_tokens_token_exists", func(t *testing.T) {
-		var exists bool
-		err := pool.DB().QueryRow(ctx,
-			"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = 'idx_refresh_tokens_token')").
-			Scan(&exists)
-		require.NoError(t, err)
-		assert.True(t, exists, "idx_refresh_tokens_token must exist after migration 011")
-	})
+	// --- legacy indexes must be gone ---
+	deletedIndexes := []string{
+		"idx_refresh_tokens_token_active",
+		"idx_refresh_tokens_obsolete_active",
+		"idx_refresh_tokens_token",
+	}
+	for _, idx := range deletedIndexes {
+		idx := idx
+		t.Run("index_missing_"+idx, func(t *testing.T) {
+			var exists bool
+			err := pool.DB().QueryRow(ctx,
+				"SELECT EXISTS (SELECT 1 FROM pg_indexes WHERE indexname = $1)", idx).
+				Scan(&exists)
+			require.NoError(t, err)
+			assert.Falsef(t, exists, "legacy index %q must NOT exist after migration 012", idx)
+		})
+	}
 }
