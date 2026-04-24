@@ -7,6 +7,7 @@ import (
 	"sync"
 	"testing"
 
+	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -431,4 +432,33 @@ func TestTracing_NilPublicEndpointFn_AllTrusted(t *testing.T) {
 
 	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", gotTraceID,
 		"nil publicEndpointFn must default to trusted upstream (backward compat)")
+}
+
+// TestTracing_SkipsWhenContractIDAlreadyInContext verifies A6-a: when a
+// contract span is already active (ContractID in ctx), the outer Tracing
+// middleware delegates to next without starting an additional span.
+// This prevents duplicate spans for contract-bound routes.
+func TestTracing_SkipsWhenContractIDAlreadyInContext(t *testing.T) {
+	spy := &spyTracer{}
+
+	var innerCalled bool
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		innerCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	// Pre-set ContractID in the request context to simulate wrapper.HTTPHandler
+	// having already started a contract span before this middleware sees the request.
+	ctx := context.Background()
+	ctx = kernelctxkeys.WithContractID(ctx, "http.orders.get.v1")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/1", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.True(t, innerCalled, "inner handler must still be called when skipping outer span")
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// No span should have been created by the outer Tracing middleware.
+	spans := spy.Spans()
+	assert.Empty(t, spans, "Tracing must not create a span when ContractID is already in ctx")
 }

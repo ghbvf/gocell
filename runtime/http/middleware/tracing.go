@@ -3,6 +3,7 @@ package middleware
 import (
 	"net/http"
 
+	"github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -50,6 +51,10 @@ func WithPublicEndpointFn(fn func(*http.Request) bool) TracingOption {
 // When a RecorderState exists in the context (created by the Recorder
 // middleware), Tracing reuses it. Otherwise it creates its own to
 // capture http.status_code as a standalone middleware.
+//
+// When a contract span is already active (ContractID present in context via
+// wrapper.HTTPHandler), the outer request span is skipped to prevent duplicate
+// spans for contract-bound routes.
 func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) http.Handler {
 	var cfg tracingConfig
 	for _, o := range opts {
@@ -58,61 +63,73 @@ func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) ht
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx := r.Context()
-
-			isPublic := cfg.publicEndpointFn != nil && cfg.publicEndpointFn(r)
-
-			// Extract remote span context for linking (before deciding to use it).
-			extractedCtx := extractTraceContext(ctx, r.Header)
-			remoteSpanCtx := oteltrace.SpanContextFromContext(extractedCtx)
-
-			if !isPublic {
-				// Trusted upstream: continue the upstream trace.
-				ctx = extractedCtx
+			// Skip outer span when a contract span covers this request.
+			// wrapper.HTTPHandler sets ContractID before calling next, so if it
+			// is present here, a contract span is already active.
+			if _, ok := ctxkeys.ContractIDFrom(r.Context()); ok {
+				next.ServeHTTP(w, r)
+				return
 			}
-			// Public endpoint: ctx stays clean → tracer creates new root.
-
-			// Start span with tentative name using raw path.
-			// After routing, the span is renamed to use the route pattern.
-			ctx, span := tracer.Start(ctx, r.Method+" "+r.URL.Path)
-			defer span.End()
-
-			// Record linked remote context for public endpoints.
-			if isPublic && remoteSpanCtx.IsValid() && remoteSpanCtx.IsRemote() {
-				span.SetAttributes(
-					tracing.Attr{Key: "linked.trace_id", Value: remoteSpanCtx.TraceID().String()},
-					tracing.Attr{Key: "linked.span_id", Value: remoteSpanCtx.SpanID().String()},
-				)
-			}
-
-			state := RecorderStateFrom(ctx)
-			if state == nil {
-				var wrapped http.ResponseWriter
-				state, wrapped = NewRecorder(w)
-				w = wrapped
-				ctx = WithRecorderState(ctx, state)
-			}
-
-			next.ServeHTTP(w, r.WithContext(ctx))
-
-			// After routing, use low-cardinality route pattern.
-			route := RoutePatternFromCtx(r.Context())
-			tracing.SpanSetName(span, r.Method+" "+route)
-
-			status := state.Status()
-			// Emit http.status_code as int64 for cross-span type consistency —
-			// kernel/wrapper.HTTPHandler uses int64 on the inner contract span,
-			// and OTel collector pipelines that switch on attribute type must
-			// see the same type across sibling spans in one trace. (F-02)
-			span.SetAttributes(
-				tracing.Attr{Key: "http.route", Value: route},
-				tracing.Attr{Key: "http.status_code", Value: int64(status)},
-			)
-
-			// 5xx → error span; 4xx and below → unset (otelhttp convention).
-			if status >= 500 {
-				tracing.SpanSetStatus(span, true, http.StatusText(status))
-			}
+			serveSpanned(tracer, cfg, next, w, r)
 		})
+	}
+}
+
+// serveSpanned starts the outer request span, delegates to next, then
+// finalises the span. Extracted to keep Tracing's cognitive complexity ≤ 15.
+func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
+	isPublic := cfg.publicEndpointFn != nil && cfg.publicEndpointFn(r)
+
+	// Extract remote span context for linking (before deciding to use it).
+	extractedCtx := extractTraceContext(ctx, r.Header)
+	remoteSpanCtx := oteltrace.SpanContextFromContext(extractedCtx)
+
+	if !isPublic {
+		// Trusted upstream: continue the upstream trace.
+		ctx = extractedCtx
+	}
+	// Public endpoint: ctx stays clean → tracer creates new root.
+
+	// Start span with tentative name using raw path.
+	// After routing, the span is renamed to use the route pattern.
+	ctx, span := tracer.Start(ctx, r.Method+" "+r.URL.Path)
+	defer span.End()
+
+	// Record linked remote context for public endpoints.
+	if isPublic && remoteSpanCtx.IsValid() && remoteSpanCtx.IsRemote() {
+		span.SetAttributes(
+			tracing.Attr{Key: "linked.trace_id", Value: remoteSpanCtx.TraceID().String()},
+			tracing.Attr{Key: "linked.span_id", Value: remoteSpanCtx.SpanID().String()},
+		)
+	}
+
+	state := RecorderStateFrom(ctx)
+	if state == nil {
+		var wrapped http.ResponseWriter
+		state, wrapped = NewRecorder(w)
+		w = wrapped
+		ctx = WithRecorderState(ctx, state)
+	}
+
+	next.ServeHTTP(w, r.WithContext(ctx))
+
+	// After routing, use low-cardinality route pattern.
+	route := RoutePatternFromCtx(r.Context())
+	tracing.SpanSetName(span, r.Method+" "+route)
+
+	status := state.Status()
+	// Emit http.status_code as int64 for cross-span type consistency —
+	// kernel/wrapper.HTTPHandler uses int64 on the inner contract span,
+	// and OTel collector pipelines that switch on attribute type must
+	// see the same type across sibling spans in one trace. (F-02)
+	span.SetAttributes(
+		tracing.Attr{Key: "http.route", Value: route},
+		tracing.Attr{Key: "http.status_code", Value: int64(status)},
+	)
+
+	// 5xx → error span; 4xx and below → unset (otelhttp convention).
+	if status >= 500 {
+		tracing.SpanSetStatus(span, true, http.StatusText(status))
 	}
 }
