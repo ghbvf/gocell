@@ -48,17 +48,20 @@ func TestRegisterSubscriptions(t *testing.T) {
 
 	r := &celltest.StubEventRouter{}
 	require.NoError(t, c.RegisterSubscriptions(r))
-	// accesscore now registers 3 topic handlers:
-	//   1. event.config.changed.v1    (config-receive, consumer group: accesscore)
-	//   2. event.role.assigned.v1     (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
-	//   3. event.role.revoked.v1      (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
-	assert.Equal(t, 3, r.HandlerCount(), "accesscore should register 3 topic handlers")
-	assert.Equal(t, "event.config.changed.v1", r.Topics[0])
+	// accesscore now registers 4 topic handlers:
+	//   1. event.config.entry-written.v1      (config-receive, consumer group: accesscore)
+	//   2. event.config.version-published.v1  (config-receive, consumer group: accesscore)
+	//   3. event.role.assigned.v1             (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
+	//   4. event.role.revoked.v1              (rbac-session-sync, consumer group: accesscore-rbac-session-sync)
+	assert.Equal(t, 4, r.HandlerCount(), "accesscore should register 4 topic handlers")
+	assert.Equal(t, "event.config.entry-written.v1", r.Topics[0])
 	assert.Equal(t, "accesscore", r.ConsumerGroups[0])
-	assert.Equal(t, "event.role.assigned.v1", r.Topics[1])
-	assert.Equal(t, "accesscore-rbac-session-sync", r.ConsumerGroups[1])
-	assert.Equal(t, "event.role.revoked.v1", r.Topics[2])
+	assert.Equal(t, "event.config.version-published.v1", r.Topics[1])
+	assert.Equal(t, "accesscore", r.ConsumerGroups[1])
+	assert.Equal(t, "event.role.assigned.v1", r.Topics[2])
 	assert.Equal(t, "accesscore-rbac-session-sync", r.ConsumerGroups[2])
+	assert.Equal(t, "event.role.revoked.v1", r.Topics[3])
+	assert.Equal(t, "accesscore-rbac-session-sync", r.ConsumerGroups[3])
 }
 
 func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {

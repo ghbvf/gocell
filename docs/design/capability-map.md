@@ -213,7 +213,7 @@ Produces: event.audit.integrity-verified.v1
 一致性：L2
 Slices: configread / configwrite / configpublish / configsubscribe / featureflag / flagwrite
 Journeys: J-confighotreload / J-configrollback
-Produces: event.config.changed.v1 / event.config.rollback.v1 / http.config.get.v1
+Produces: event.config.entry-written.v1 / event.config.version-published.v1 / event.config.rollback.v1 / http.config.get.v1
 ```
 
 **三个 Cell 之间的交互：**

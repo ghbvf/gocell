@@ -55,11 +55,12 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-// configChangedBusinessPayload is the business event shape that
-// cells/configcore/slices/configsubscribe/service.go expects. If the relay's
-// wire envelope reaches subscribers unwrapped (F1 bug), these fields will all
-// be empty and the regression guard fires.
-type configChangedBusinessPayload struct {
+// configEntryWrittenBusinessPayload is the business event shape that
+// cells/configcore/slices/configsubscribe/service.go expects on
+// event.config.entry-written.v1. If the relay's wire envelope reaches
+// subscribers unwrapped (F1 bug), these fields will all be empty and the
+// regression guard fires.
+type configEntryWrittenBusinessPayload struct {
 	Action string `json:"action"`
 	Key    string `json:"key"`
 	Value  string `json:"value"`
@@ -126,11 +127,11 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
 	// This is the F1 regression guard: if the bus forwards envelope-wrapped
 	// bytes as-is, the business payload parse below gets empty fields.
-	const topic = "event.config.changed.v1"
+	const topic = "event.config.entry-written.v1"
 
 	type received struct {
 		entry   outbox.Entry
-		payload configChangedBusinessPayload
+		payload configEntryWrittenBusinessPayload
 		parsed  bool
 	}
 	var (
@@ -142,7 +143,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	defer subCancel()
 	go func() {
 		_ = eb.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "e2e-test"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			var p configChangedBusinessPayload
+			var p configEntryWrittenBusinessPayload
 			err := json.Unmarshal(e.Payload, &p)
 			recvMu.Lock()
 			recvs = append(recvs, received{entry: e, payload: p, parsed: err == nil})

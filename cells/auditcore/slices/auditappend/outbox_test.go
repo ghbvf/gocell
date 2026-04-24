@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
@@ -38,12 +39,12 @@ func TestService_WithEmitter(t *testing.T) {
 	entry := outbox.Entry{
 		ID:        "evt-1",
 		EventType: "event.user.created.v1",
-		Payload:   mustJSON(map[string]any{"user_id": "usr-1"}),
+		Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
 	}
 	require.NoError(t, svc.HandleEvent(context.Background(), entry))
 
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, TopicAuditAppended, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicAuditAppended, ow.entries[0].EventType)
 }
 
 func TestService_WithTxManager(t *testing.T) {
@@ -54,7 +55,7 @@ func TestService_WithTxManager(t *testing.T) {
 	entry := outbox.Entry{
 		ID:        "evt-1",
 		EventType: "event.user.created.v1",
-		Payload:   mustJSON(map[string]any{"user_id": "usr-1"}),
+		Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
 	}
 	require.NoError(t, svc.HandleEvent(context.Background(), entry))
 
@@ -71,22 +72,22 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	entry := outbox.Entry{
 		ID:        "evt-1",
 		EventType: "event.session.created.v1",
-		Payload:   mustJSON(map[string]any{"session_id": "sess-1", "user_id": "usr-1"}),
+		Payload:   mustJSON(map[string]any{"sessionId": "sess-1", "userId": "usr-1"}),
 	}
 	require.NoError(t, svc.HandleEvent(context.Background(), entry))
 
 	assert.Equal(t, 1, tx.calls)
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, TopicAuditAppended, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicAuditAppended, ow.entries[0].EventType)
 }
 
 func TestService_HandleEvent_SystemActor(t *testing.T) {
-	// Test that entries without user_id get "system" as actor.
+	// Test that entries without userId get "system" as actor.
 	svc, _ := newTestService()
 	entry := outbox.Entry{
 		ID:        "evt-sys",
-		EventType: "event.config.changed.v1",
-		Payload:   mustJSON(map[string]any{"key": "app.name"}), // no user_id
+		EventType: "event.config.entry-written.v1",
+		Payload:   mustJSON(map[string]any{"key": "app.name"}), // no userId
 	}
 	require.NoError(t, svc.HandleEvent(context.Background(), entry))
 	assert.Equal(t, 1, svc.ChainLen())

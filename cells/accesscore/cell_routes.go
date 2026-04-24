@@ -43,9 +43,10 @@ var (
 	// validation because the literal scanner only sees string literals.
 	// EventSpec makes the id==topic identity explicit and FMT-18 sees the
 	// ID literal in the call.
-	specEventConfigChanged = wrapper.EventSpec("event.config.changed.v1", "amqp")
-	specEventRoleAssigned  = wrapper.EventSpec("event.role.assigned.v1", "amqp")
-	specEventRoleRevoked   = wrapper.EventSpec("event.role.revoked.v1", "amqp")
+	specEventConfigEntryWritten     = wrapper.EventSpec("event.config.entry-written.v1", "amqp")
+	specEventConfigVersionPublished = wrapper.EventSpec("event.config.version-published.v1", "amqp")
+	specEventRoleAssigned           = wrapper.EventSpec("event.role.assigned.v1", "amqp")
+	specEventRoleRevoked            = wrapper.EventSpec("event.role.revoked.v1", "amqp")
 )
 
 // RegisterRoutes registers HTTP routes for accesscore.
@@ -110,9 +111,12 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 // RegisterSubscriptions declares event subscriptions for accesscore.
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
-	// config-receive: config.changed events from configcore.
-	handler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEvent)
-	r.AddContractHandler(specEventConfigChanged, handler, "accesscore")
+	// config-receive: config entry-written + version-published from configcore.
+	entryHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryWritten)
+	r.AddContractHandler(specEventConfigEntryWritten, entryHandler, "accesscore")
+
+	publishedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleVersionPublished)
+	r.AddContractHandler(specEventConfigVersionPublished, publishedHandler, "accesscore")
 
 	// rbac-session-sync: invalidate sessions on role assignment or revocation.
 	// Same handler + same consumer group across both topics — HandleRoleChanged

@@ -97,7 +97,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 	entry := writer.entries[0]
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
-	c.MustRejectPayload(t, []byte(`{"session_id":"s"}`))
+	c.MustRejectPayload(t, []byte(`{"sessionId":"s"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
 

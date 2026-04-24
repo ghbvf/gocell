@@ -13,8 +13,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// TopicConfigChanged is re-exported from domain for this package's callers.
-const TopicConfigChanged = domain.TopicConfigChanged
+// Re-exported from domain so external callers / tests can refer to the topic
+// without importing internal/domain directly.
+const (
+	TopicConfigEntryWritten     = domain.TopicConfigEntryWritten
+	TopicConfigVersionPublished = domain.TopicConfigVersionPublished
+)
 
 // Cache holds the latest config values observed from events.
 type Cache struct {
@@ -56,60 +60,66 @@ func (s *Service) Cache() *Cache {
 	return s.cache
 }
 
-// HandleEvent processes a config change event. This is the callback registered
-// with the event bus subscriber.
+// HandleEntryWritten processes an event.config.entry-written.v1 event.
 //
-// Consumer: cg-configcore-config-changed
+// Consumer: cg-configcore-entry-written
 // Idempotency key: N/A (in-memory cache, idempotent by nature)
 // ACK timing: after cache update
 // Retry: transient errors -> NACK+backoff / permanent errors -> dead letter
-func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
-	var event struct {
-		Action string `json:"action"`
-		Key    string `json:"key"`
-		Value  string `json:"value"`
-	}
-
+func (s *Service) HandleEntryWritten(_ context.Context, entry outbox.Entry) error {
+	var event domain.ConfigEntryWrittenEvent
 	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		s.logger.Error("config-subscribe: failed to unmarshal event, routing to dead letter",
+		s.logger.Error("config-subscribe: failed to unmarshal entry-written event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		// Permanent error: malformed payload must not be retried.
-		// WrapLegacyHandler detects PermanentError and returns DispositionReject.
-		//
-		// ref: configreceive/service.go:53 — same pattern
-		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal payload: %w", err))
+		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-written payload: %w", err))
 	}
 
 	switch event.Action {
-	case "deleted":
+	case domain.ConfigEntryActionDeleted:
 		s.cache.mu.Lock()
 		delete(s.cache.values, event.Key)
 		s.cache.mu.Unlock()
 		s.logger.Info("config-subscribe: key deleted from cache",
 			slog.String("key", event.Key))
-	case "created", "updated":
+	case domain.ConfigEntryActionCreated, domain.ConfigEntryActionUpdated:
 		s.cache.mu.Lock()
 		s.cache.values[event.Key] = event.Value
 		s.cache.mu.Unlock()
 		s.logger.Info("config-subscribe: cache updated",
-			slog.String("key", event.Key), slog.String("action", event.Action))
-	case "published":
-		// Published events carry config_id+version but no value — skip cache
-		// update to avoid overwriting with empty string. The actual value is
-		// already in cache from the preceding created/updated event.
-		s.logger.Info("config-subscribe: published event (no cache update)",
-			slog.String("key", event.Key))
+			slog.String("key", event.Key), slog.String("action", string(event.Action)))
 	default:
 		// Fail-closed: unknown actions are permanent errors routed to DLX.
-		// The cache is NOT modified.
 		//
 		// ref: K8s workqueue fail-closed semantics; Watermill Nack on unknown type
-		s.logger.Warn("config-subscribe: unknown action, routing to dead letter",
-			slog.String("action", event.Action), slog.String("key", event.Key))
+		s.logger.Warn("config-subscribe: unknown action on entry-written, routing to dead letter",
+			slog.String("action", string(event.Action)), slog.String("key", event.Key))
 		return outbox.NewPermanentError(
 			fmt.Errorf("unknown action %q for key %q", event.Action, event.Key),
 		)
 	}
 
+	return nil
+}
+
+// HandleVersionPublished processes an event.config.version-published.v1 event.
+// Versioned snapshots carry key + configId + version + sensitive but no value
+// — the cache is not updated (the latest value is already there from the
+// preceding entry-written event).
+//
+// Consumer: cg-configcore-version-published
+// Idempotency key: N/A (no side effects, inherently idempotent)
+// ACK timing: after log emission
+// Retry: transient errors -> N/A (no retries needed) / permanent errors -> dead letter
+func (s *Service) HandleVersionPublished(_ context.Context, entry outbox.Entry) error {
+	var event domain.ConfigVersionPublishedEvent
+	if err := json.Unmarshal(entry.Payload, &event); err != nil {
+		s.logger.Error("config-subscribe: failed to unmarshal version-published event, routing to dead letter",
+			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal version-published payload: %w", err))
+	}
+
+	s.logger.Info("config-subscribe: version published (no cache update)",
+		slog.String("key", event.Key),
+		slog.Int("version", event.Version))
 	return nil
 }

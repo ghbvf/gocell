@@ -213,7 +213,7 @@
 | rbaccheck | RBAC 角色查询与检查 | GET /api/v1/access/roles/{userID}, GET /api/v1/access/roles/{userID}/{roleName} |
 | rbacassign | RBAC 角色授予/撤销 | POST /internal/v1/access/roles/assign, POST /internal/v1/access/roles/revoke |
 | authorizationdecide | 权限决策 | internal service capability; no public HTTP route |
-| configreceive | 配置变更接收 | event.config.changed.v1 subscriber |
+| configreceive | 配置变更接收 | event.config.entry-written.v1 + event.config.version-published.v1 subscriber |
 
 Domain: User (PasswordHash/Status/CreatedAt) + Session (TokenPair/ExpiresAt/PreviousRefreshToken) + Role
 Ports: UserRepository + SessionRepository + RoleRepository

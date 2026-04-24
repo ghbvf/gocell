@@ -297,7 +297,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1, "outbox writer should receive one entry")
-	assert.Equal(t, TopicConfigChanged, ow.entries[0].EventType)
+	assert.Equal(t, domain.TopicConfigEntryWritten, ow.entries[0].EventType)
 }
 
 func TestService_WithTxManager(t *testing.T) {

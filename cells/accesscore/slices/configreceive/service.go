@@ -13,23 +13,33 @@ import (
 )
 
 const (
-	// TopicConfigChanged is the event topic consumed by this slice.
-	TopicConfigChanged = "event.config.changed.v1"
+	// TopicConfigEntryWritten is the entry-write topic consumed by this slice.
+	TopicConfigEntryWritten = "event.config.entry-written.v1"
+	// TopicConfigVersionPublished is the version-snapshot topic consumed by this slice.
+	TopicConfigVersionPublished = "event.config.version-published.v1"
 )
 
-// ConfigChangedEvent is the payload for event.config.changed.v1.
-// Matches contracts/event/config/changed/v1/payload.schema.json.
-type ConfigChangedEvent struct {
-	Action   string `json:"action"`
-	Key      string `json:"key"`
-	Value    string `json:"value,omitempty"`
-	Version  int    `json:"version,omitempty"`
-	ConfigID string `json:"config_id,omitempty"`
+// ConfigEntryWrittenEvent is the payload for event.config.entry-written.v1.
+// Mirrors configcore/internal/domain/config_events.go shape without importing
+// another cell's internal/ — cross-cell imports are forbidden by CLAUDE.md.
+type ConfigEntryWrittenEvent struct {
+	Action  string `json:"action"`
+	Key     string `json:"key"`
+	Value   string `json:"value,omitempty"`
+	Version int    `json:"version,omitempty"`
+}
+
+// ConfigVersionPublishedEvent is the payload for event.config.version-published.v1.
+type ConfigVersionPublishedEvent struct {
+	Key       string `json:"key"`
+	ConfigID  string `json:"configId"`
+	Version   int    `json:"version"`
+	Sensitive bool   `json:"sensitive"`
 }
 
 // Service consumes config change events for accesscore.
 //
-// Consumer: cg-accesscore-config-changed
+// Consumer: cg-accesscore-config-events
 // Idempotency: log-only (no side effects), inherently idempotent
 // Disposition: Ack on success / Reject on permanent unmarshal error
 // DLX: broker-native via DispositionReject → Nack(requeue=false)
@@ -42,15 +52,14 @@ func NewService(logger *slog.Logger) *Service {
 	return &Service{logger: logger}
 }
 
-// HandleEvent processes a config change event. This is the callback registered
-// with the event bus subscriber via outbox.WrapLegacyHandler.
-func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
-	var event ConfigChangedEvent
+// HandleEntryWritten processes an event.config.entry-written.v1 event.
+func (s *Service) HandleEntryWritten(_ context.Context, entry outbox.Entry) error {
+	var event ConfigEntryWrittenEvent
 
 	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		s.logger.Error("config-receive: failed to unmarshal event, routing to dead letter",
+		s.logger.Error("config-receive: failed to unmarshal entry-written event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal payload: %w", err))
+		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-written payload: %w", err))
 	}
 
 	switch event.Action {
@@ -59,9 +68,6 @@ func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
 			slog.String("key", event.Key), slog.String("action", event.Action))
 	case "deleted":
 		s.logger.Info("config-receive: config deleted",
-			slog.String("key", event.Key))
-	case "published":
-		s.logger.Info("config-receive: config published (no action)",
 			slog.String("key", event.Key))
 	default:
 		// Fail-closed: unknown actions are permanent errors routed to DLX.
@@ -74,5 +80,21 @@ func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
 		)
 	}
 
+	return nil
+}
+
+// HandleVersionPublished processes an event.config.version-published.v1 event.
+func (s *Service) HandleVersionPublished(_ context.Context, entry outbox.Entry) error {
+	var event ConfigVersionPublishedEvent
+
+	if err := json.Unmarshal(entry.Payload, &event); err != nil {
+		s.logger.Error("config-receive: failed to unmarshal version-published event, routing to dead letter",
+			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal version-published payload: %w", err))
+	}
+
+	s.logger.Info("config-receive: config version published",
+		slog.String("key", event.Key),
+		slog.Int("version", event.Version))
 	return nil
 }

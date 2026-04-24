@@ -4,19 +4,15 @@ package sessionlogout
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
-)
-
-const (
-	TopicSessionRevoked = "event.session.revoked.v1"
 )
 
 // Option configures a session-logout Service.
@@ -91,24 +87,15 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires authenticated caller")
 	}
 
-	payload, _ := json.Marshal(map[string]any{
-		"session_id": sessionID, "user_id": callerUserID,
-	})
-
 	// Wrap the owner-scoped revoke + outbox write in a transaction for L2 atomicity.
 	revokeAndPublish := func(txCtx context.Context) error {
 		if err := s.sessionRepo.RevokeByIDAndOwner(txCtx, sessionID, callerUserID); err != nil {
 			return err
 		}
-		entry := outbox.Entry{
-			ID:        outbox.NewEntryID(),
-			EventType: TopicSessionRevoked,
-			Payload:   payload,
-		}
-		if emitErr := s.emitter.Emit(txCtx, entry); emitErr != nil {
-			return fmt.Errorf("session-logout: emit event: %w", emitErr)
-		}
-		return nil
+		return outbox.Emit(txCtx, s.emitter, dto.TopicSessionRevoked, dto.SessionRevokedEvent{
+			SessionID: sessionID,
+			UserID:    callerUserID,
+		})
 	}
 
 	if err := s.persistRevoke(ctx, revokeAndPublish); err != nil {

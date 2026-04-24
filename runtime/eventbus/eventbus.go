@@ -24,11 +24,6 @@ const (
 	maxRetries     = 3
 	baseRetryDelay = 100 * time.Millisecond
 	maxRetryDelay  = 30 * time.Second
-
-	// TopicConfigChanged is the canonical event topic for config change
-	// events. Cells that publish or subscribe to config changes should
-	// reference this constant instead of defining their own.
-	TopicConfigChanged = "event.config.changed.v1"
 )
 
 // DeadLetter represents a message that exhausted retries.

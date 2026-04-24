@@ -11,7 +11,9 @@ contractUsages:
     role: subscribe
   - contract: event.user.locked.v1
     role: subscribe
-  - contract: event.config.changed.v1
+  - contract: event.config.entry-written.v1
+    role: subscribe
+  - contract: event.config.version-published.v1
     role: subscribe
   - contract: event.config.rollback.v1
     role: subscribe
@@ -24,7 +26,8 @@ verify:
     - contract.event.session.revoked.v1.subscribe
     - contract.event.user.created.v1.subscribe
     - contract.event.user.locked.v1.subscribe
-    - contract.event.config.changed.v1.subscribe
+    - contract.event.config.entry-written.v1.subscribe
+    - contract.event.config.version-published.v1.subscribe
     - contract.event.config.rollback.v1.subscribe
   waivers: []
 

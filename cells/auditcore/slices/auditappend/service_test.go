@@ -33,7 +33,7 @@ func TestService_HandleEvent(t *testing.T) {
 			entry: outbox.Entry{
 				ID:        "evt-1",
 				EventType: "event.user.created.v1",
-				Payload:   mustJSON(map[string]any{"user_id": "usr-1"}),
+				Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
 			},
 			wantChain: 1,
 		},
@@ -42,7 +42,7 @@ func TestService_HandleEvent(t *testing.T) {
 			entry: outbox.Entry{
 				ID:        "evt-2",
 				EventType: "event.session.created.v1",
-				Payload:   mustJSON(map[string]any{"session_id": "sess-1", "user_id": "usr-1"}),
+				Payload:   mustJSON(map[string]any{"sessionId": "sess-1", "userId": "usr-1"}),
 			},
 			wantChain: 1,
 		},
@@ -50,7 +50,7 @@ func TestService_HandleEvent(t *testing.T) {
 			name: "empty payload",
 			entry: outbox.Entry{
 				ID:        "evt-3",
-				EventType: "event.config.changed.v1",
+				EventType: "event.config.entry-written.v1",
 				Payload:   []byte("{}"),
 			},
 			wantChain: 1,
@@ -80,7 +80,7 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 		entry := outbox.Entry{
 			ID:        "evt-" + string(rune('0'+i)),
 			EventType: "event.user.created.v1",
-			Payload:   mustJSON(map[string]any{"user_id": "usr-1"}),
+			Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
 		}
 		require.NoError(t, svc.HandleEvent(context.Background(), entry))
 	}
@@ -131,7 +131,7 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 	entry := outbox.Entry{
 		ID:        "evt-pub-err",
 		EventType: "event.user.created.v1",
-		Payload:   mustJSON(map[string]any{"user_id": "usr-1"}),
+		Payload:   mustJSON(map[string]any{"userId": "usr-1"}),
 	}
 	err = svc.HandleEvent(context.Background(), entry)
 	require.NoError(t, err, "publish failure in demo mode should not fail append")

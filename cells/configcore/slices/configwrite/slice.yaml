@@ -7,7 +7,7 @@ contractUsages:
     role: serve
   - contract: http.config.delete.v1
     role: serve
-  - contract: event.config.changed.v1
+  - contract: event.config.entry-written.v1
     role: publish
 verify:
   unit:
@@ -16,7 +16,7 @@ verify:
     - contract.http.config.write.v1.serve
     - contract.http.config.update.v1.serve
     - contract.http.config.delete.v1.serve
-    - contract.event.config.changed.v1.publish
+    - contract.event.config.entry-written.v1.publish
   waivers: []
 
 allowedFiles:

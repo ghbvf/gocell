@@ -110,9 +110,9 @@ func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 
 // --- Event contract tests ---
 
-func TestEventConfigChangedV1Publish_Create(t *testing.T) {
+func TestEventConfigEntryWrittenV1Publish_Create(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	c := contracttest.LoadByID(t, root, "event.config.entry-written.v1")
 	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "app.name", Value: "myapp"})
@@ -122,13 +122,13 @@ func TestEventConfigChangedV1Publish_Create(t *testing.T) {
 	entry := writer.Entries[0]
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
-	c.MustRejectPayload(t, []byte(`{"action":"created","key":"app.name"}`))
+	c.MustRejectPayload(t, []byte(`{"action":"created"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
-func TestEventConfigChangedV1Publish_Update(t *testing.T) {
+func TestEventConfigEntryWrittenV1Publish_Update(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	c := contracttest.LoadByID(t, root, "event.config.entry-written.v1")
 	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v1"})
@@ -144,9 +144,9 @@ func TestEventConfigChangedV1Publish_Update(t *testing.T) {
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
 }
 
-func TestEventConfigChangedV1Publish_Delete(t *testing.T) {
+func TestEventConfigEntryWrittenV1Publish_Delete(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	c := contracttest.LoadByID(t, root, "event.config.entry-written.v1")
 	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})

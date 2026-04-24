@@ -6,21 +6,22 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func makeEntry(action, key, value string) outbox.Entry {
-	payload, _ := json.Marshal(map[string]any{
-		"action": action,
-		"key":    key,
-		"value":  value,
+func makeEntryWritten(action domain.ConfigEntryWrittenAction, key, value string) outbox.Entry {
+	payload, _ := json.Marshal(domain.ConfigEntryWrittenEvent{
+		Action: action,
+		Key:    key,
+		Value:  value,
 	})
 	return outbox.Entry{ID: "test-1", Payload: payload}
 }
 
-func TestService_HandleEvent(t *testing.T) {
+func TestService_HandleEntryWritten(t *testing.T) {
 	tests := []struct {
 		name      string
 		events    []outbox.Entry
@@ -30,21 +31,27 @@ func TestService_HandleEvent(t *testing.T) {
 	}{
 		{
 			name:      "created event updates cache",
-			events:    []outbox.Entry{makeEntry("created", "app.name", "gocell")},
+			events:    []outbox.Entry{makeEntryWritten(domain.ConfigEntryActionCreated, "app.name", "gocell")},
 			wantKey:   "app.name",
 			wantValue: "gocell",
 			wantLen:   1,
 		},
 		{
-			name:      "updated event updates cache",
-			events:    []outbox.Entry{makeEntry("created", "k", "v1"), makeEntry("updated", "k", "v2")},
+			name: "updated event updates cache",
+			events: []outbox.Entry{
+				makeEntryWritten(domain.ConfigEntryActionCreated, "k", "v1"),
+				makeEntryWritten(domain.ConfigEntryActionUpdated, "k", "v2"),
+			},
 			wantKey:   "k",
 			wantValue: "v2",
 			wantLen:   1,
 		},
 		{
-			name:    "deleted event removes from cache",
-			events:  []outbox.Entry{makeEntry("created", "k", "v"), makeEntry("deleted", "k", "")},
+			name: "deleted event removes from cache",
+			events: []outbox.Entry{
+				makeEntryWritten(domain.ConfigEntryActionCreated, "k", "v"),
+				makeEntryWritten(domain.ConfigEntryActionDeleted, "k", ""),
+			},
 			wantKey: "k",
 			wantLen: 0,
 		},
@@ -55,7 +62,7 @@ func TestService_HandleEvent(t *testing.T) {
 			svc := NewService(slog.Default())
 
 			for _, e := range tt.events {
-				err := svc.HandleEvent(context.Background(), e)
+				err := svc.HandleEntryWritten(context.Background(), e)
 				require.NoError(t, err)
 			}
 
@@ -69,12 +76,12 @@ func TestService_HandleEvent(t *testing.T) {
 	}
 }
 
-func TestService_HandleEvent_InvalidPayload(t *testing.T) {
+func TestService_HandleEntryWritten_InvalidPayload(t *testing.T) {
 	svc := NewService(slog.Default())
 	entry := outbox.Entry{ID: "bad", Payload: []byte("not-json")}
 
 	// Should return PermanentError so WrapLegacyHandler routes to DLX, not retry.
-	err := svc.HandleEvent(context.Background(), entry)
+	err := svc.HandleEntryWritten(context.Background(), entry)
 	require.Error(t, err)
 	assert.Equal(t, 0, svc.Cache().Len())
 
@@ -86,7 +93,7 @@ func TestService_HandleEvent_InvalidPayload(t *testing.T) {
 // chain: invalid payload → PermanentError → WrapLegacyHandler → DispositionReject.
 func TestWrapLegacyHandler_InvalidPayload_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
-	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+	handler := outbox.WrapLegacyHandler(svc.HandleEntryWritten)
 
 	entry := outbox.Entry{ID: "bad", Payload: []byte("not-json")}
 	result := handler(context.Background(), entry)
@@ -96,15 +103,15 @@ func TestWrapLegacyHandler_InvalidPayload_Reject(t *testing.T) {
 	assert.Error(t, result.Err)
 }
 
-// TestHandleEvent_UnknownAction_PermanentError verifies that an unknown action
+// TestHandleEntryWritten_UnknownAction_PermanentError verifies that an unknown action
 // returns a PermanentError (fail-closed, P1-14 A3). The cache must not be modified.
-func TestHandleEvent_UnknownAction_PermanentError(t *testing.T) {
+func TestHandleEntryWritten_UnknownAction_PermanentError(t *testing.T) {
 	svc := NewService(slog.Default())
 	// Pre-populate cache so we can verify it stays unchanged.
-	_ = svc.HandleEvent(context.Background(), makeEntry("created", "existing.key", "existing-value"))
+	_ = svc.HandleEntryWritten(context.Background(), makeEntryWritten(domain.ConfigEntryActionCreated, "existing.key", "existing-value"))
 
-	entry := makeEntry("bogus", "some.key", "")
-	err := svc.HandleEvent(context.Background(), entry)
+	entry := makeEntryWritten(domain.ConfigEntryWrittenAction("bogus"), "some.key", "")
+	err := svc.HandleEntryWritten(context.Background(), entry)
 
 	require.Error(t, err, "unknown action must return error")
 
@@ -120,16 +127,50 @@ func TestHandleEvent_UnknownAction_PermanentError(t *testing.T) {
 	assert.Equal(t, "existing-value", v)
 }
 
-// TestHandleEvent_UnknownAction_WrapLegacyHandler_Reject verifies the full
+// TestHandleEntryWritten_UnknownAction_WrapLegacyHandler_Reject verifies the full
 // disposition chain: unknown action → PermanentError → WrapLegacyHandler → DispositionReject.
-func TestHandleEvent_UnknownAction_WrapLegacyHandler_Reject(t *testing.T) {
+func TestHandleEntryWritten_UnknownAction_WrapLegacyHandler_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
-	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+	handler := outbox.WrapLegacyHandler(svc.HandleEntryWritten)
 
-	entry := makeEntry("bogus", "some.key", "")
+	entry := makeEntryWritten(domain.ConfigEntryWrittenAction("bogus"), "some.key", "")
 	result := handler(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition,
 		"unknown action via WrapLegacyHandler must produce DispositionReject")
 	assert.Error(t, result.Err)
+}
+
+// TestService_HandleVersionPublished confirms the version-published handler
+// decodes the typed payload and does not touch the cache.
+func TestService_HandleVersionPublished(t *testing.T) {
+	svc := NewService(slog.Default())
+	// Seed the cache — the version-published handler must leave it alone.
+	_ = svc.HandleEntryWritten(context.Background(), makeEntryWritten(domain.ConfigEntryActionCreated, "seeded", "val"))
+
+	payload, err := json.Marshal(domain.ConfigVersionPublishedEvent{
+		Key:       "seeded",
+		ConfigID:  "cfg-123",
+		Version:   2,
+		Sensitive: false,
+	})
+	require.NoError(t, err)
+	entry := outbox.Entry{ID: "vp-1", Payload: payload}
+
+	require.NoError(t, svc.HandleVersionPublished(context.Background(), entry))
+	assert.Equal(t, 1, svc.Cache().Len(), "version-published must not touch cache")
+	v, ok := svc.Cache().Get("seeded")
+	require.True(t, ok)
+	assert.Equal(t, "val", v)
+}
+
+func TestService_HandleVersionPublished_InvalidPayload(t *testing.T) {
+	svc := NewService(slog.Default())
+	entry := outbox.Entry{ID: "bad", Payload: []byte("not-json")}
+
+	err := svc.HandleVersionPublished(context.Background(), entry)
+	require.Error(t, err)
+
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, err, &permErr, "invalid payload must be PermanentError")
 }

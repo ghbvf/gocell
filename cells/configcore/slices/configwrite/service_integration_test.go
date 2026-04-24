@@ -107,7 +107,7 @@ func TestCreate_AtomicWithOutbox(t *testing.T) {
 	assert.Equal(t, 1, entry.Version)
 
 	// Outbox-side: Create's L2 co-commit must have added exactly one
-	// event.config.changed.v1 row, atomically with the config_entries row.
+	// event.config.entry-written.v1 row, atomically with the config_entries row.
 	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
 	assert.Equal(t, 1, after-before,
 		"Create must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigChanged)

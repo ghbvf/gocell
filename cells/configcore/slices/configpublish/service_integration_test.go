@@ -145,7 +145,7 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 	assert.Equal(t, "publish-value", got.Value)
 
 	// Outbox-side: Publish's L2 co-commit must have added exactly one
-	// event.config.changed.v1 row to outbox_entries in the same tx.
+	// event.config.version-published.v1 row to outbox_entries in the same tx.
 	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
 	assert.Equal(t, 1, after-before,
 		"Publish must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigChanged)

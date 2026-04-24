@@ -499,10 +499,6 @@ func TestHealth(t *testing.T) {
 	assert.Equal(t, "closed", bus.Health())
 }
 
-func TestTopicConfigChangedConstant(t *testing.T) {
-	assert.Equal(t, "event.config.changed.v1", TopicConfigChanged)
-}
-
 func TestSubscribe_CleansUpOnExit(t *testing.T) {
 	bus := New(WithBufferSize(16))
 	defer func() { _ = bus.Close(context.Background()) }()

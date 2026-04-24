@@ -21,8 +21,8 @@ func TestEventSessionCreatedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.session.created.v1")
 
-	c.ValidatePayload(t, []byte(`{"session_id":"sess-1","user_id":"usr-1"}`))
+	c.ValidatePayload(t, []byte(`{"sessionId":"sess-1","userId":"usr-1"}`))
 	c.ValidateHeaders(t, []byte(`{"event_id":"evt-123"}`))
-	c.MustRejectPayload(t, []byte(`{"session_id":"sess-1"}`))
+	c.MustRejectPayload(t, []byte(`{"sessionId":"sess-1"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }

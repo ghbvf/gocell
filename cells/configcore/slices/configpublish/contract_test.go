@@ -199,9 +199,9 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 
 // --- Event contract tests ---
 
-func TestEventConfigChangedV1Publish(t *testing.T) {
+func TestEventConfigVersionPublishedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	c := contracttest.LoadByID(t, root, "event.config.version-published.v1")
 	svc, repo, writer := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
 
@@ -212,7 +212,7 @@ func TestEventConfigChangedV1Publish(t *testing.T) {
 	entry := writer.Entries[0]
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
-	c.MustRejectPayload(t, []byte(`{"action":"published","key":"app.name"}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
@@ -234,6 +234,6 @@ func TestEventConfigRollbackV1Publish(t *testing.T) {
 	entry := writer.Entries[0]
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
-	c.MustRejectPayload(t, []byte(`{"action":"rollback","key":"app.name"}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name"}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }

@@ -9,18 +9,15 @@ import (
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
+	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/google/uuid"
 )
 
-const (
-	TopicAuditAppended = "event.audit.appended.v1"
-)
-
 // Topics lists the event topics consumed by audit-append. The handler is
-// payload-agnostic — it extracts actor_id when the payload carries user_id,
+// payload-agnostic — it extracts userId when the payload carries one,
 // otherwise falls back to "system", so adding a topic here is purely additive.
 // Each topic must also list auditcore as a subscriber in its contract.yaml.
 var Topics = []string{
@@ -28,7 +25,8 @@ var Topics = []string{
 	"event.user.locked.v1",
 	"event.session.created.v1",
 	"event.session.revoked.v1",
-	"event.config.changed.v1",
+	"event.config.entry-written.v1",
+	"event.config.version-published.v1",
 	"event.config.rollback.v1",
 	"event.role.assigned.v1",
 	"event.role.revoked.v1",
@@ -91,13 +89,11 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Extract actor_id from payload if present. Legacy snake_case events
-	// (session.created, user.created, etc.) carry user_id; new camelCase
-	// events (role.assigned, role.revoked) carry userId — accept either so
-	// actor attribution works uniformly across event schemas.
+	// Extract userId from payload when present. Upstream events carry userId
+	// uniformly (camelCase) after PR-A6; topics that don't identify an actor
+	// (e.g. config events) simply yield empty → actorID falls back to "system".
 	var payload struct {
-		UserIDSnake string `json:"user_id"`
-		UserIDCamel string `json:"userId"`
+		UserID string `json:"userId"`
 	}
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
 		s.logger.Warn("audit-append: failed to extract actor from payload",
@@ -106,10 +102,7 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 			slog.String("event_type", entry.EventType))
 	}
 
-	actorID := payload.UserIDSnake
-	if actorID == "" {
-		actorID = payload.UserIDCamel
-	}
+	actorID := payload.UserID
 	if actorID == "" {
 		actorID = "system"
 	}
@@ -118,20 +111,13 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	auditEntry := s.chain.Append(entry.ID, entry.EventType, actorID, entry.Payload)
 	auditEntry.ID = "audit" + "-" + uuid.NewString()
 
-	// Publish audit.appended event.
-	appendedPayload, err := json.Marshal(map[string]any{
-		"audit_entry_id": auditEntry.ID,
-		"event_type":     entry.EventType,
-	})
-	if err != nil {
-		s.logger.Error("audit-append: failed to marshal appended event payload",
-			slog.Any("error", err),
-			slog.String("event_id", entry.ID))
-		return err
+	appendedEvent := dto.AuditAppendedEvent{
+		AuditEntryID: auditEntry.ID,
+		EventType:    entry.EventType,
 	}
 
 	// Persist + outbox write in a transaction for L2 atomicity.
-	persistFn := s.buildPersistFn(auditEntry, appendedPayload)
+	persistFn := s.buildPersistFn(auditEntry, appendedEvent)
 	persistErr := s.runPersist(ctx, persistFn)
 	if persistErr != nil {
 		s.logger.Error("audit-append: failed to persist entry",
@@ -147,16 +133,12 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 
 // buildPersistFn returns a transaction function that persists the audit entry
 // and writes the outbox event.
-func (s *Service) buildPersistFn(auditEntry *domain.AuditEntry, appendedPayload []byte) func(context.Context) error {
+func (s *Service) buildPersistFn(auditEntry *domain.AuditEntry, event dto.AuditAppendedEvent) func(context.Context) error {
 	return func(txCtx context.Context) error {
 		if err := s.repo.Append(txCtx, auditEntry); err != nil {
 			return err
 		}
-		return s.emitter.Emit(txCtx, outbox.Entry{
-			ID:        outbox.NewEntryID(),
-			EventType: TopicAuditAppended,
-			Payload:   appendedPayload,
-		})
+		return outbox.Emit(txCtx, s.emitter, dto.TopicAuditAppended, event)
 	}
 }
 
