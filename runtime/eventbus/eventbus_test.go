@@ -12,7 +12,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -22,15 +21,13 @@ import (
 // envelope schema check introduced in P1-14 (A1/A2).
 func makeTestEnvelope(t testing.TB, topic string, payload []byte, id string) []byte {
 	t.Helper()
-	entry := outboxrt.ClaimedEntry{
-		Entry: outbox.Entry{
-			ID:        id,
-			EventType: topic,
-			Topic:     topic,
-			Payload:   payload,
-		},
+	entry := outbox.Entry{
+		ID:        id,
+		EventType: topic,
+		Topic:     topic,
+		Payload:   payload,
 	}
-	b, err := outboxrt.MarshalEnvelope(entry)
+	b, err := outbox.MarshalEnvelope(entry)
 	if err != nil {
 		t.Fatalf("makeTestEnvelope: %v", err)
 	}

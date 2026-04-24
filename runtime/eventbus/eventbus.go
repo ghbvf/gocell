@@ -18,7 +18,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 const (
@@ -580,5 +579,5 @@ func releaseReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string
 //
 // ref: Watermill message/router.go handleMessage — handler error → Nack, no skip
 func unmarshalInboundEntry(topic string, payload []byte) (outbox.Entry, error) {
-	return outboxrt.UnmarshalEnvelope(topic, payload)
+	return outbox.UnmarshalEnvelope(topic, payload)
 }

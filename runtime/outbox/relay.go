@@ -460,12 +460,13 @@ func (r *Relay) pollOnce(ctx context.Context) error {
 }
 
 // publishBatch publishes each entry to the broker outside of any transaction.
-// Uses MarshalEnvelope to produce the wire envelope with camelCase JSON keys.
+// Uses kernel/outbox.MarshalEnvelope to produce the wire envelope with
+// camelCase JSON keys.
 // ref: Watermill router.go publishBatch — per-message outcome, no batch atomicity
 func (r *Relay) publishBatch(ctx context.Context, entries []ClaimedEntry) []publishResult {
 	results := make([]publishResult, len(entries))
 	for i, e := range entries {
-		payload, marshalErr := MarshalEnvelope(e)
+		payload, marshalErr := kout.MarshalEnvelope(e.Entry)
 		if marshalErr != nil {
 			results[i] = publishResult{entry: e, err: marshalErr}
 			continue

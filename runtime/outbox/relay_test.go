@@ -181,7 +181,7 @@ func TestRelay_HappyPath_ClaimPublishMarkPublished(t *testing.T) {
 	// Verify wire envelope contains correct payload.
 	captured := pub.Captured()
 	require.Len(t, captured, 3)
-	var msg outbox.WireMessage
+	var msg kout.WireMessage
 	require.NoError(t, json.Unmarshal(captured[0].payload, &msg))
 	assert.NotEmpty(t, msg.ID)
 	assert.NotEmpty(t, msg.EventType)
@@ -493,7 +493,7 @@ func TestRelay_EnvelopePayload_IsCorrect(t *testing.T) {
 	require.Len(t, captured, 1)
 	assert.Equal(t, "orders.v1", captured[0].topic, "topic from entry.Topic must be used")
 
-	var msg outbox.WireMessage
+	var msg kout.WireMessage
 	require.NoError(t, json.Unmarshal(captured[0].payload, &msg))
 	assert.Equal(t, "env-test", msg.ID)
 	assert.Equal(t, "agg-1", msg.AggregateID)
