@@ -50,6 +50,13 @@ func TestLifecycleHookShapeMatchesBootstrapHook(t *testing.T) {
 	got := fieldSet(hookT)
 	want := fieldSet(cellHookT)
 
+	// Pin runtimeOnlyHookFields size: silent whitelist growth would let a
+	// future field slip in without an accompanying kernel.LifecycleHook
+	// mirror decision. Update this constant and the corresponding map entry
+	// together, with a comment explaining why the new field is runtime-only.
+	assert.Len(t, runtimeOnlyHookFields, 1,
+		"runtimeOnlyHookFields must stay minimal; update this assertion and the map entry together with a reason comment")
+
 	// Every kernel-side field MUST be present on bootstrap.Hook with matching
 	// type — phase3b must never drop caller-supplied fields.
 	for name, cellType := range want {
@@ -167,10 +174,12 @@ func TestPhase3b_EmptySliceContributor(t *testing.T) {
 	assert.Empty(t, ml.appended, "empty-slice LifecycleHooks must register zero hooks")
 }
 
-// TestPhase3b_DuplicateHookName_FailFast verifies phase3b rejects two cells
-// contributing a hook with the same non-empty Name — prevents silent
-// double-registration when a consumer mistakenly uses both WithLifecycle and
-// LifecycleContributor paths.
+// TestPhase3b_DuplicateHookName_FailFast verifies that when two cells
+// contribute a hook with the same non-empty Name, the second Append call
+// fails and phase3b surfaces the conflict with the contributing cell id.
+// Duplicate-Name detection itself lives in Lifecycle.Append (single source
+// of truth, see TestLifecycle_AppendRejectsDuplicateName); phase3b only
+// wraps the error with cellID/hookName context.
 func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 	cellA := &lcCell{
 		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "cellA"}),
@@ -185,19 +194,40 @@ func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 		},
 	}
 	asm := buildAsmRegistered(t, cellA, cellB)
-	ml := &mockLifecycle{}
 	b := New()
-	b.lifecycle = ml
+	// Use the real lifecycle so Append's dup-name guard actually fires;
+	// mockLifecycle has no state tracking.
+	b.lifecycle = NewLifecycle(LifecycleConfig{})
 
 	_, s := newPhaseState()
 	s.asm = asm
 
 	err := b.phase3bDiscoverLifecycleContributor(s)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate lifecycle hook name")
-	assert.Contains(t, err.Error(), "cellA")
-	assert.Contains(t, err.Error(), "cellB")
-	assert.Len(t, ml.appended, 1, "cellA's hook should be appended before the dup detection rolls back")
+	assert.ErrorIs(t, err, ErrDuplicateHookName, "must surface ErrDuplicateHookName via %%w chain")
+	assert.Contains(t, err.Error(), "cellB", "second cell id must appear in wrapped error")
+	assert.Contains(t, err.Error(), "shared.hook", "dup hook name must appear in wrapped error")
+}
+
+// TestLifecycle_AppendRejectsDuplicateName locks Append's dup-name guard at
+// the layer that both phase3b auto-discovery and WithLifecycle composition
+// funnel through. If this layer slips, the phase3b wrapper test above
+// still fails — but this test catches the regression sooner + documents
+// the sentinel (ErrDuplicateHookName) publicly.
+func TestLifecycle_AppendRejectsDuplicateName(t *testing.T) {
+	lc := NewLifecycle(LifecycleConfig{})
+	noop := func(_ context.Context) error { return nil }
+
+	require.NoError(t, lc.Append(Hook{Name: "foo", OnStart: noop}))
+
+	// Same Name via a WithLifecycle-style direct Append must fail.
+	err := lc.Append(Hook{Name: "foo", OnStop: noop})
+	require.Error(t, err)
+	assert.ErrorIs(t, err, ErrDuplicateHookName)
+
+	// Empty Name is still allowed — callers accept the diagnostic cost.
+	require.NoError(t, lc.Append(Hook{OnStart: noop}))
+	require.NoError(t, lc.Append(Hook{OnStart: noop}))
 }
 
 // TestPhase3b_NilSliceContributor verifies nil return is also a legal opt-out.

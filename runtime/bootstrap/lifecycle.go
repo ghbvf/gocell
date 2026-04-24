@@ -9,6 +9,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -22,6 +23,16 @@ import (
 // Callers may use errors.Is(err, ErrLifecycleAlreadyStarted) for sentinel
 // checks; the pointer identity is stable for the lifetime of the process.
 var ErrLifecycleAlreadyStarted = errcode.New(errcode.ErrBootstrapLifecycle, "lifecycle already started")
+
+// ErrDuplicateHookName is returned by Append when a non-empty Hook.Name has
+// already been registered. The single source of truth for duplicate-name
+// detection lives here so that phase3b (LifecycleContributor auto-discovery)
+// and WithLifecycle (explicit composition-root Append) share the same guard
+// without having to re-synchronise per-path "seen" maps.
+//
+// Empty Name bypasses the check — callers that deliberately register nameless
+// hooks accept the risk of duplicates (diagnostic cost, not correctness).
+var ErrDuplicateHookName = errcode.New(errcode.ErrBootstrapLifecycle, "duplicate lifecycle hook name")
 
 const (
 	// DefaultStartTimeout is the default per-hook start deadline.
@@ -85,7 +96,8 @@ type lifecycle struct {
 	mu           sync.Mutex
 	state        lifecycleState
 	hooks        []Hook
-	numStarted   int // number of hooks whose OnStart succeeded
+	names        map[string]struct{} // tracks non-empty Hook.Name for dup detection
+	numStarted   int                 // number of hooks whose OnStart succeeded
 	defaultStart time.Duration
 	defaultStop  time.Duration
 	logger       *slog.Logger
@@ -107,6 +119,7 @@ func NewLifecycle(cfg LifecycleConfig) Lifecycle {
 	}
 	return &lifecycle{
 		state:        stateStopped,
+		names:        make(map[string]struct{}),
 		defaultStart: defaultStart,
 		defaultStop:  defaultStop,
 		logger:       logger,
@@ -114,13 +127,22 @@ func NewLifecycle(cfg LifecycleConfig) Lifecycle {
 }
 
 // Append registers a Hook. Returns ErrLifecycleAlreadyStarted if the
-// lifecycle is not in stopped state.
+// lifecycle is not in stopped state, or ErrDuplicateHookName when h.Name
+// is non-empty and already registered. Empty Name is allowed through so
+// callers who deliberately register nameless hooks accept the diagnostic
+// cost of duplicates.
 func (lc *lifecycle) Append(h Hook) error {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 	switch lc.state {
 	case stateStarting, stateStarted, stateStopping, stateIncompleteStart:
 		return ErrLifecycleAlreadyStarted
+	}
+	if h.Name != "" {
+		if _, dup := lc.names[h.Name]; dup {
+			return fmt.Errorf("%w: %q", ErrDuplicateHookName, h.Name)
+		}
+		lc.names[h.Name] = struct{}{}
 	}
 	lc.hooks = append(lc.hooks, h)
 	return nil

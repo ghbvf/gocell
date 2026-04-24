@@ -151,7 +151,10 @@ func (c *AccessCore) initRbacAssign() {
 	c.AddSlice(cell.NewBaseSlice("rbacassign", "accesscore", rbacAssignLevel))
 }
 
-// Init constructs all 9 slices.
+// Init constructs all 9 slices and wires the initial-admin Lifecycle (when
+// WithInitialAdminBootstrap is active) so LifecycleHooks() remains a pure
+// getter — the kernel.LifecycleContributor contract promises "called after
+// Cell.Init completes", which is precisely where we inject deps.
 func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
@@ -159,28 +162,30 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.initValidate(deps); err != nil {
 		return err
 	}
-	return c.initSlices()
+	if err := c.initSlices(); err != nil {
+		return err
+	}
+	if c.initialAdmin != nil {
+		c.initialAdmin.Bind(initialadmin.BootstrapDeps{
+			UserRepo: c.userRepo,
+			RoleRepo: c.roleRepo,
+			Logger:   c.logger,
+			Clock:    nil,
+		}, c.logger)
+	}
+	return nil
 }
 
 // LifecycleHooks implements cell.LifecycleContributor. Returns the initial-admin
 // hook when WithInitialAdminBootstrap was applied; nil otherwise (opt-out).
 //
-// Bootstrap phase3b calls this after Cell.Init returns, so all Cell-injected
-// repositories are available — the initialAdmin Lifecycle resolves its
-// dependencies inline here, eliminating the need for a separate Bind step.
-//
-// Bootstrap phase3b auto-discovers this interface and appends the returned hooks
-// to the Lifecycle — eliminating the old WithBootstrapWorkerSink composition-root
-// plumbing.
+// Pure getter by design: the Bind side-effect lives in Init (see above), so
+// callers can invoke LifecycleHooks multiple times without double-binding.
+// Mirrors fx Hook.callerFrame / Kubernetes controller-runtime Runnable.GetName()
+// — getters must not mutate.
 func (c *AccessCore) LifecycleHooks() []cell.LifecycleHook {
 	if c.initialAdmin == nil {
 		return nil
 	}
-	c.initialAdmin.Bind(initialadmin.BootstrapDeps{
-		UserRepo: c.userRepo,
-		RoleRepo: c.roleRepo,
-		Logger:   c.logger,
-		Clock:    nil,
-	}, c.logger)
 	return []cell.LifecycleHook{c.initialAdmin.Hook()}
 }
