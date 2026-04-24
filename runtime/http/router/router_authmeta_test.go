@@ -56,12 +56,15 @@ func TestAuthDeclare_NestedRoute_ForwardsWithPrefix(t *testing.T) {
 	//       a.Route("/sessions", func(s) { auth.Mount(s, Route{...}) })
 	//   })})
 	// The adapter chain must compose the mount prefixes so the declared
-	// meta reaches the Router with the full path.
+	// meta reaches the Router with the full path. Production convention:
+	// Contract.Path is fully qualified (matches contracts/http/**/v1/
+	// contract.yaml), and auth.Mount strips the nested mux prefix to
+	// derive the chi-relative registration path.
 	r.Route("/api/v1", func(v1 kcell.RouteMux) {
 		v1.Route("/access", func(a kcell.RouteMux) {
 			a.Route("/sessions", func(s kcell.RouteMux) {
-				auth.Mount(s, auth.Route{Contract: testHTTPContract("POST", "/login"), Handler: okHandler, Public: true})
-				auth.Mount(s, auth.Route{Contract: testHTTPContract("DELETE", "/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
+				auth.Mount(s, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
+				auth.Mount(s, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
 			})
 		})
 	})
