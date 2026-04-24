@@ -1,3 +1,6 @@
+// cell_init.go hosts ConfigCore.Init() and the initXxxSlice helpers that
+// construct the six slices during cell initialization. Runtime request-path
+// code lives in cell_routes.go; constructor + options live in cell.go.
 package configcore
 
 import (
@@ -56,6 +59,13 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	c.emitter = outcome.Emitter
+
+	// L2 warning: running without transactional outbox degrades atomicity guarantees.
+	if !outcome.Durable && c.ConsistencyLevel() >= cell.L2 {
+		c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+			slog.String("cell", c.ID()),
+			slog.Int("consistency_level", int(c.ConsistencyLevel())))
+	}
 
 	if err := c.ensureCursorCodec(deps); err != nil {
 		return err

@@ -1,3 +1,6 @@
+// cell_routes.go hosts ConfigCore.RegisterRoutes (HTTP endpoint registration)
+// and ConfigCore.RegisterSubscriptions (outbox event handler registration).
+// Init-time wiring lives in cell_init.go.
 package configcore
 
 import (

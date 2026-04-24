@@ -19,15 +19,26 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// ctxCanceledInfraError returns an infra error for context cancellation /
-// deadline exceeded conditions. Used as a pre-check in scan-or-map helpers to
-// prevent ctx.Canceled from being misclassified as a domain not-found event.
-func ctxCanceledInfraError(ctx context.Context, err error, op, key string) *errcode.Error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return errcode.WrapInfra(errcode.ErrConfigRepoQuery,
-			fmt.Sprintf("config repo: %s ctx canceled key=%s", op, key), err)
+// ctxCanceledError returns an infra-category errcode for context.Canceled /
+// context.DeadlineExceeded errors surfaced during a scan. Emits a slog.Warn
+// at call origin so operators can distinguish client cancellation from real
+// DB outages (both map to HTTP 500) in log aggregators even when the response
+// write fails due to the same cancellation.
+func (r *ConfigRepository) ctxCanceledError(ctx context.Context, op, key string, err error) *errcode.Error {
+	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+		return nil
 	}
-	return nil
+	r.logger.WarnContext(ctx, "config repo: request context canceled during scan",
+		slog.String("op", op),
+		slog.String("key", key),
+		slog.String("cause", err.Error()))
+	return &errcode.Error{
+		Code:            errcode.ErrConfigRepoQuery,
+		Message:         "config repo query failed",
+		InternalMessage: fmt.Sprintf("config repo: %s ctx canceled key=%s", op, key),
+		Cause:           err,
+		Category:        errcode.CategoryInfra,
+	}
 }
 
 // DBTX abstracts the database operations needed by ConfigRepository.
@@ -159,8 +170,13 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 	aad := configcrypto.AADForConfig(cellID, key)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
-		return "", errcode.WrapInfra(errcode.ErrConfigDecryptFailed,
-			fmt.Sprintf("config repo: decrypt failed for key %s", key), err)
+		return "", &errcode.Error{
+			Code:            errcode.ErrConfigDecryptFailed,
+			Message:         "config repo: decrypt failed",
+			InternalMessage: fmt.Sprintf("config repo: decrypt failed for key %s", key),
+			Cause:           err,
+			Category:        errcode.CategoryInfra,
+		}
 	}
 	return string(pt), nil
 }
@@ -193,8 +209,13 @@ func (r *ConfigRepository) decryptVersionValue(ctx context.Context, configID str
 	aad := configcrypto.AADForVersion(cellID, configID)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
-		return "", errcode.WrapInfra(errcode.ErrConfigDecryptFailed,
-			fmt.Sprintf("config repo: decrypt version failed for config_id %s", configID), err)
+		return "", &errcode.Error{
+			Code:            errcode.ErrConfigDecryptFailed,
+			Message:         "config repo: decrypt version failed",
+			InternalMessage: fmt.Sprintf("config repo: decrypt version failed for config_id %s", configID),
+			Cause:           err,
+			Category:        errcode.CategoryInfra,
+		}
 	}
 	return string(pt), nil
 }
@@ -287,12 +308,12 @@ func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKey
 //
 // op is the method name used only in InternalMessage for operator debugging;
 // key is the lookup key surfaced the same way.
-func scanConfigOrMapError(ctx context.Context, row Row, op, key string) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
+func (r *ConfigRepository) scanConfigOrMapError(ctx context.Context, row Row, op, key string) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
 	e, ct, keyID, edk, nonce, err := scanConfigRow(row)
 	if err == nil {
 		return e, ct, keyID, edk, nonce, nil
 	}
-	if infraErr := ctxCanceledInfraError(ctx, err, op, key); infraErr != nil {
+	if infraErr := r.ctxCanceledError(ctx, op, key, err); infraErr != nil {
 		return nil, nil, nil, nil, nil, infraErr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -349,7 +370,7 @@ func (r *ConfigRepository) decryptScannedEntry(ctx context.Context, e *domain.Co
 func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.ConfigEntry, error) {
 	const q = `SELECT ` + configEntryColumns + ` FROM config_entries WHERE key = $1`
 	row := r.resolveDB(ctx).QueryRow(ctx, q, key)
-	e, ct, keyID, edk, nonce, err := scanConfigOrMapError(ctx, row, "GetByKey", key)
+	e, ct, keyID, edk, nonce, err := r.scanConfigOrMapError(ctx, row, "GetByKey", key)
 	if err != nil {
 		return nil, err
 	}
@@ -404,7 +425,7 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 	var sensitive bool
 	selectRow := db.QueryRow(ctx, selectQ, key)
 	if scanErr := selectRow.Scan(&sensitive); scanErr != nil {
-		if infraErr := ctxCanceledInfraError(ctx, scanErr, "Update", key); infraErr != nil {
+		if infraErr := r.ctxCanceledError(ctx, "Update", key, scanErr); infraErr != nil {
 			return nil, infraErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
@@ -425,7 +446,7 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 		}
 	}
 
-	return r.doUpdate(ctx, db, key, value, sensitive)
+	return r.doUpdate(ctx, db, "Update", key, value, sensitive)
 }
 
 // UpdateForRollback atomically sets value AND sensitive, increments version.
@@ -436,13 +457,14 @@ func (r *ConfigRepository) UpdateForRollback(ctx context.Context, key string, va
 	if err != nil {
 		return nil, err
 	}
-	return r.doUpdate(ctx, db, key, value, sensitive)
+	return r.doUpdate(ctx, db, "UpdateForRollback", key, value, sensitive)
 }
 
 // doUpdate performs the actual UPDATE...RETURNING for both Update and
-// UpdateForRollback. sensitive is the resolved flag (read by caller or provided
-// directly). For sensitive=true: re-encrypts value and writes cipher columns.
-func (r *ConfigRepository) doUpdate(ctx context.Context, db DBTX, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
+// UpdateForRollback. op identifies the calling method for InternalMessage context.
+// sensitive is the resolved flag (read by caller or provided directly).
+// For sensitive=true: re-encrypts value and writes cipher columns.
+func (r *ConfigRepository) doUpdate(ctx context.Context, db DBTX, op, key string, value string, sensitive bool) (*domain.ConfigEntry, error) {
 	var row Row
 	if sensitive {
 		ct, keyID, nonce, edk, encErr := r.encryptValue(ctx, key, value)
@@ -466,7 +488,7 @@ func (r *ConfigRepository) doUpdate(ctx context.Context, db DBTX, key string, va
 		row = db.QueryRow(ctx, q, value, key)
 	}
 
-	e, ct, keyID, edk, nonce, scanErr := scanConfigOrMapError(ctx, row, "Update", key)
+	e, ct, keyID, edk, nonce, scanErr := r.scanConfigOrMapError(ctx, row, op, key)
 	if scanErr != nil {
 		return nil, scanErr
 	}
@@ -487,7 +509,7 @@ func (r *ConfigRepository) Delete(ctx context.Context, key string) (*domain.Conf
 		return nil, err
 	}
 	row := db.QueryRow(ctx, q, key)
-	e, ct, keyID, edk, nonce, scanErr := scanConfigOrMapError(ctx, row, "Delete", key)
+	e, ct, keyID, edk, nonce, scanErr := r.scanConfigOrMapError(ctx, row, "Delete", key)
 	if scanErr != nil {
 		return nil, scanErr
 	}
@@ -643,7 +665,7 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 		&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.Sensitive, &v.PublishedAt,
 		&valueCipher, &valueKeyID, &valueEDK, &valueNonce,
 	); err != nil {
-		if infraErr := ctxCanceledInfraError(ctx, err, "GetVersion", configID); infraErr != nil {
+		if infraErr := r.ctxCanceledError(ctx, "GetVersion", configID, err); infraErr != nil {
 			return nil, infraErr
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
