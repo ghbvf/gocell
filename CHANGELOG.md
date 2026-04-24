@@ -6,6 +6,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed (Breaking) — PR-A35 READYZ-POLISH
+
+- **`GOCELL_READYZ_VERBOSE_TOKEN` is now required in every adapter mode.**
+  Before PR-A35 an unset token silently left `/readyz?verbose` open; the
+  startup path now refuses to boot with
+  `ERR_CONTROLPLANE_VERBOSE_TOKEN_MISSING`. Upgrade paths:
+  - **Production**: set `GOCELL_READYZ_VERBOSE_TOKEN` to a high-entropy
+    secret. This is also the only supported path — `VERBOSE_DISABLED=1` is
+    refused in `GOCELL_ADAPTER_MODE=real`.
+  - **Dev / docker-compose / CI smoke**: set
+    `GOCELL_READYZ_VERBOSE_DISABLED=1` to waive the endpoint. The project
+    `docker-compose.yml` is updated to include this by default.
+- `/readyz?verbose` with a missing or mismatched `X-Readyz-Token` now
+  returns `401 ERR_READYZ_VERBOSE_DENIED` (previously: silent 200
+  downgrade). Kubernetes `readinessProbe` **must** use the bare
+  `/readyz` — any existing probe pointed at `/readyz?verbose` will mark
+  healthy pods as NotReady.
+- `/healthz` and `/readyz` responses now use the project-standard envelope
+  (`{"data": {...}}` / `{"error": {"code","message","details"}}`). New
+  error codes `ERR_READYZ_UNHEALTHY` (503) and `ERR_READYZ_SHUTTING_DOWN`
+  (503). Consumers that parsed the body directly for `status` must walk
+  through `data` (success) or `error.details` (failure).
+
 ### Added
 - **PR-A14a dual HTTP listener** — `runtime/bootstrap` now runs two `http.Server` instances: `primary` (default `:8080`, serves `/api/v1/*` + `/healthz` + `/readyz` + `/metrics`) and `internal` (default `127.0.0.1:9090`, serves `/internal/v1/*` only). `runtime/http/router.Router` physically splits routes across `publicMux` + `internalMux` via prefix dispatch; the primary listener explicitly 404s `/internal/v1/*` so the internal prefix never leaks through public AuthMiddleware. `ref: go-kratos/kratos app.go L95-122 errgroup goroutine-pair; ory/kratos cmd/daemon/serve.go named public/admin constructors; kubernetes/apiserver pkg/server/secure_serving.go pre-bind listener`.
 - `bootstrap.WithHTTPPrimaryAddr` / `WithHTTPInternalAddr` — new option pair replacing `WithHTTPAddr`.

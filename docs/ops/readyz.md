@@ -44,11 +44,19 @@ readinessProbe:
     path: /readyz          # not /readyz?verbose
     port: 8080
   periodSeconds: 10
+  # timeoutSeconds MUST be greater than the handler's probe deadline
+  # (bootstrap.WithReadyzDeadline, default 5s) so a slow dependency
+  # probe does not cause kubelet to time out its TCP call before the
+  # handler has a chance to respond. singleflight makes this ceiling
+  # shared across a burst of kubelet + LB + manual probes, so the
+  # handler will not be faster than its slowest single probe pass.
+  timeoutSeconds: 6
 livenessProbe:
   httpGet:
     path: /healthz
     port: 8080
   periodSeconds: 10
+  timeoutSeconds: 2        # /healthz is cheap — process-level liveness only
 ```
 
 ## Verbose output (debug / on-call)
@@ -174,12 +182,12 @@ ctx.Done. This means:
   timeout). The aggregator is not affected.
 - Pathological probes that never terminate (`select{}`, `for{}` with no
   exit) still leak their inner goroutine. These are unit-test bugs, not
-  operational problems; run the `health.CheckCtxRespected` helper in your
+  operational problems; run the `healthtest.CheckCtxRespected` helper in your
   probe's own tests to catch them:
 
   ```go
   func TestMyProbe_RespectsCtx(t *testing.T) {
-      health.CheckCtxRespected(t, myProbe, 100*time.Millisecond)
+      healthtest.CheckCtxRespected(t, myProbe, 100*time.Millisecond)
   }
   ```
 

@@ -21,6 +21,7 @@ package health
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // maxVerboseErrLen is the maximum length of a probe error string included in
@@ -253,7 +255,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		}
 		verbose, denied := h.verboseDecision(r)
 		if denied {
-			h.sendVerboseDenied(w)
+			h.sendVerboseDenied(w, r)
 			return
 		}
 
@@ -490,17 +492,22 @@ func runOneProbe(ctx context.Context, fn Checker) (pr ProbeResult) {
 	return pr
 }
 
-// isDeadlineError reports whether the probe ended via context cancellation
-// rather than a domain-level failure. It returns true for both
-// DeadlineExceeded (aggregator timed the probe out) and Canceled (test
-// harnesses, shutdown paths) so operators see a uniform "timeout" status
-// instead of Canceled being reported as domain-level unhealthy. Distinct
-// semantics are still preserved in pr.Err for diagnostics.
+// isDeadlineError reports whether the probe ended because the aggregator's
+// deadline expired (versus a domain-level failure).
+//
+// The probe ctx is derived from `context.WithTimeout(context.Background(),
+// h.deadline)`, so ctx.Err() is DeadlineExceeded on timeout — never
+// Canceled. wrapCtxSafe forwards ctx.Err() when ctx triggers first, again
+// DeadlineExceeded. That leaves `errors.Is(err, context.Canceled)` to
+// match only client-library internal wrapping (pgx/go-redis etc. in the
+// middle of a failed I/O), which is a genuine unhealthy signal, not a
+// timeout. Matching Canceled here would route real unhealthy probes into
+// the "timeout" status bucket and pollute dashboards / alert rules.
 func isDeadlineError(ctx context.Context, err error) bool {
 	if ctx.Err() != nil {
 		return true
 	}
-	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
+	return errors.Is(err, context.DeadlineExceeded)
 }
 
 // verboseDecision inspects the request and returns:
@@ -532,7 +539,14 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 			slog.String("remote_addr", r.RemoteAddr))
 		return false, true
 	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get(VerboseTokenHeader)), []byte(token)) == 1 {
+	// Compare SHA-256 digests rather than the raw byte slices so a caller
+	// cannot learn the configured token length via timing: subtle.Compare
+	// short-circuits on length mismatch, which turns the bare-bytes variant
+	// into a length oracle. Hashing both sides normalises to a fixed 32
+	// bytes regardless of input length.
+	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseTokenHeader)))
+	configured := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(submitted[:], configured[:]) == 1 {
 		return true, false
 	}
 	slog.Warn("readyz: verbose token mismatch; denying",
@@ -541,16 +555,18 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 }
 
 // sendVerboseDenied writes the 401 response for a rejected verbose request.
-// Body uses the project-standard errcode envelope (code/message/details) so
-// machine-side monitoring can distinguish this from other 401s (e.g. JWT
-// failures elsewhere). The details map is empty today but the key is
-// present so consumers can rely on the shape.
-func (h *Handler) sendVerboseDenied(w http.ResponseWriter) {
-	writeJSON(w, http.StatusUnauthorized, envelopeError(
-		errcode.ErrReadyzVerboseDenied,
+// Uses httputil.WritePublicError so the response carries request_id (when
+// set by middleware) in the canonical envelope shape shared with business
+// 4xx responses. Machine-side monitoring can therefore correlate denied
+// verbose probes with other request-level signals via the same field.
+func (h *Handler) sendVerboseDenied(w http.ResponseWriter, r *http.Request) {
+	httputil.WritePublicError(
+		r.Context(),
+		w,
+		http.StatusUnauthorized,
+		string(errcode.ErrReadyzVerboseDenied),
 		"verbose output requires a matching X-Readyz-Token header",
-		nil,
-	))
+	)
 }
 
 // readyzVerbose returns true when the request opts in to detailed output.

@@ -103,6 +103,16 @@ func (d *SharedDeps) Validate() error {
 // topology to anyone who can reach the port.
 func (d *SharedDeps) validateVerboseEndpoint() []error {
 	if d.VerboseDisabled {
+		// Both set is not a hard validation failure — VerboseDisabled
+		// wins, Handler will serve the plain aggregate body regardless of
+		// the token. But it is almost certainly a misconfiguration: the
+		// operator either wanted token-gated access (drop the DISABLED
+		// flag) or wanted to waive verbose entirely (unset the TOKEN).
+		// Surface it as a Warn so operators can spot it in startup logs.
+		if d.VerboseToken != "" {
+			slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN is set but GOCELL_READYZ_VERBOSE_DISABLED=1 overrides it; " +
+				"the token will not be enforced. Drop one of the two env vars to remove the ambiguity.")
+		}
 		return nil
 	}
 	if d.VerboseToken != "" {

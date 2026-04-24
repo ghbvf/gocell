@@ -3,7 +3,6 @@ package health
 import (
 	"context"
 	"fmt"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,32 +19,30 @@ func TestWrapCtxSafe_ReturnsOnCtxDone_InnerIgnoresCtx(t *testing.T) {
 	unblock := make(chan struct{})
 	t.Cleanup(func() { close(unblock) })
 
-	var innerStarted atomic.Bool
+	innerReady := make(chan struct{})
 	wrapped := wrapCtxSafe(func(_ context.Context) error {
-		innerStarted.Store(true)
+		close(innerReady) // happens-before signal: inner fn is parked
 		<-unblock
 		return nil
 	})
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	started := make(chan struct{})
 	type result struct {
 		err     error
 		elapsed time.Duration
 	}
 	resCh := make(chan result, 1)
 	go func() {
-		close(started)
 		start := time.Now()
 		err := wrapped(ctx)
 		resCh <- result{err: err, elapsed: time.Since(start)}
 	}()
-	<-started
 
-	// Give the inner goroutine a chance to register before cancel fires,
-	// so we're testing the cancel path rather than a start-race.
-	time.Sleep(10 * time.Millisecond)
+	// Wait for a happens-before signal instead of sleeping: innerReady is
+	// closed by the inner fn before it blocks on unblock, so we are
+	// guaranteed the cancel path (not a start-race) is exercised.
+	<-innerReady
 	cancel()
 
 	select {
@@ -57,7 +54,6 @@ func TestWrapCtxSafe_ReturnsOnCtxDone_InnerIgnoresCtx(t *testing.T) {
 	case <-time.After(500 * time.Millisecond):
 		t.Fatalf("wrapped Checker did not return within 500ms of ctx cancel")
 	}
-	assert.True(t, innerStarted.Load(), "inner fn should have started")
 }
 
 // TestWrapCtxSafe_PropagatesError_WhenInnerReturnsFirst covers the happy
@@ -120,43 +116,7 @@ func TestWrapCtxSafe_NilInput(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil checker")
 }
 
-// TestCheckCtxRespected_PassesOnCooperativeProbe is a minimal smoke test for
-// the exported CheckCtxRespected helper that probe authors will use in
-// their own unit tests. A cooperative probe must cause zero failures.
-func TestCheckCtxRespected_PassesOnCooperativeProbe(t *testing.T) {
-	cooperative := func(ctx context.Context) error {
-		<-ctx.Done()
-		return ctx.Err()
-	}
-	// Use a sub-test so any t.Errorf inside CheckCtxRespected is visible
-	// but doesn't fail the parent test for a probe that actually cooperates.
-	CheckCtxRespected(t, cooperative, 50*time.Millisecond)
-}
-
-// TestCheckCtxRespected_DetectsUncooperativeProbe exercises the failure
-// path by running the helper against a deliberately-stuck probe, capturing
-// the t.Errorf call via a testing.TB spy.
-func TestCheckCtxRespected_DetectsUncooperativeProbe(t *testing.T) {
-	unblock := make(chan struct{})
-	t.Cleanup(func() { close(unblock) })
-	stuck := func(_ context.Context) error {
-		<-unblock
-		return nil
-	}
-	spy := &tbSpy{TB: t}
-	CheckCtxRespected(spy, stuck, 30*time.Millisecond)
-	assert.True(t, spy.errored, "CheckCtxRespected must flag an uncooperative probe")
-	assert.Contains(t, spy.lastMsg, "did not return within")
-}
-
-// tbSpy captures t.Errorf calls without failing the enclosing test.
-type tbSpy struct {
-	testing.TB
-	errored bool
-	lastMsg string
-}
-
-func (s *tbSpy) Errorf(format string, args ...any) {
-	s.errored = true
-	s.lastMsg = fmt.Sprintf(format, args...)
-}
+// CheckCtxRespected lives in runtime/http/healthtest so the testing import
+// does not leak into the production health package. See
+// runtime/http/healthtest/healthtest_test.go for the equivalent
+// cooperative/uncooperative coverage.

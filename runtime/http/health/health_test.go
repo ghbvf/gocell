@@ -981,6 +981,54 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
 }
 
+// TestReadyz_UncooperativeChecker_VerboseReportsTimeout covers the verbose
+// branch of the uncooperative-probe contract. When wrapCtxSafe's outer
+// Checker returns ctx.Err() (DeadlineExceeded) the probe result must be
+// tagged "timeout" in the verbose body so dashboards can distinguish
+// "probe overran" from domain-level "probe failed". Regression guard for
+// F4 — the previous sweep lost this coverage when the earlier test was
+// flipped to WithVerboseDisabled.
+func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-uncooperative-verbose", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm, WithDeadline(80*time.Millisecond))
+	h.SetVerboseToken(testVerboseToken)
+
+	unblock := make(chan struct{})
+	t.Cleanup(func() { close(unblock) })
+	h.RegisterChecker("stuck", func(_ context.Context) error {
+		<-unblock
+		return nil
+	})
+
+	rr := httptest.NewRecorder()
+	req := newVerboseRequest("/readyz?verbose=true")
+	start := time.Now()
+	h.ReadyzHandler()(rr, req)
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 200*time.Millisecond,
+		"handler must return within ~deadline even with uncooperative probe; got %v", elapsed)
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+
+	errObj := errorBody(t, rr)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy verbose response must include details")
+	deps, ok := details["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose details must carry dependencies map")
+	stuck, ok := deps["stuck"].(map[string]any)
+	require.True(t, ok, "stuck probe must be present in verbose dependencies")
+	assert.Equal(t, "timeout", stuck["status"],
+		"uncooperative probe must be surfaced as status=timeout (not unhealthy)")
+	errStr, hasErr := stuck["error"].(string)
+	require.True(t, hasErr, "timeout probe must include error string")
+	assert.Contains(t, errStr, "deadline",
+		"timeout probe error must mention deadline; got %q", errStr)
+}
+
 // TestReadyz_VerboseDependencies_StructuredOutput verifies the new structured
 // dependency format: each entry is a map with "status", "duration_ms" fields
 // (and optionally "error" for non-healthy probes).

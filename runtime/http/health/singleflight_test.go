@@ -18,51 +18,78 @@ import (
 )
 
 // TestReadyz_Singleflight_DedupsConcurrentRequests verifies that a burst of
-// concurrent /readyz calls share one probe execution. The probe's call
-// counter must stay small (≤ 2) even with many concurrent HTTP requests,
-// and every response body must carry a consistent aggregate status.
+// concurrent /readyz calls share one probe execution. The probe execution
+// counter must stay strictly less than the number of requests even with a
+// large concurrent burst.
 //
-// The tolerance of 2 (rather than 1) accounts for a follow-up request that
-// lands after the first call's probe pass has just completed — singleflight
-// only coalesces in-flight duplicates, not back-to-back requests.
+// Test shape follows golang.org/x/sync/singleflight TestDoDupSuppress:
+//   - WaitGroup barrier so every goroutine is parked at the same instant
+//     before the probe is invoked
+//   - atomic counter on probe entry
+//   - loose assertion `0 < calls < n` rather than a magic tolerance — the
+//     exact call count depends on scheduling and is not part of the
+//     contract; what matters is that dedup actually happens.
+//
+// ref: golang.org/x/sync/singleflight/singleflight_test.go#TestDoDupSuppress
 func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-sf", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	var callCount atomic.Int32
+	// probeRelease gates every probe execution so the first goroutine into
+	// singleflight blocks and every subsequent caller finds the slot held.
+	// Closing the channel at the end of the barrier phase lets all in-flight
+	// probes drain in parallel. Without this, the probe's own timer could
+	// race the barrier release and the dedup window would close early.
+	probeRelease := make(chan struct{})
 	h := New(asm, WithVerboseDisabled(), WithDeadline(2*time.Second))
-	// Cooperative slow probe so the first call holds the singleflight slot
-	// open long enough to absorb the rest of the burst.
 	h.RegisterChecker("slow", func(ctx context.Context) error {
 		callCount.Add(1)
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-time.After(80 * time.Millisecond):
+		case <-probeRelease:
 			return nil
 		}
 	})
 
 	const concurrency = 16
-	var wg sync.WaitGroup
-	wg.Add(concurrency)
+	// readyWG signals that every goroutine has reached the barrier.
+	// doneWG waits for the HTTP handler return once the burst is released.
+	var readyWG, doneWG sync.WaitGroup
+	readyWG.Add(concurrency)
+	doneWG.Add(concurrency)
+	release := make(chan struct{})
+
 	bodies := make([][]byte, concurrency)
 	for i := 0; i < concurrency; i++ {
 		i := i
 		go func() {
-			defer wg.Done()
+			defer doneWG.Done()
+			readyWG.Done()
+			<-release // all goroutines cross this gate simultaneously
 			rec := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
 			h.ReadyzHandler().ServeHTTP(rec, req)
 			bodies[i] = rec.Body.Bytes()
 		}()
 	}
-	wg.Wait()
+	readyWG.Wait() // every goroutine parked at the barrier
+	close(release) // fire them all at once — maximises the dedup window
+	// Let the first-in-goroutine enter singleflight and hold the slot for the
+	// rest of the burst. The probe blocks on probeRelease, so once we unblock
+	// it every in-flight caller's shared result is ready to return.
+	time.Sleep(20 * time.Millisecond)
+	close(probeRelease)
+	doneWG.Wait()
 
-	assert.LessOrEqualf(t, callCount.Load(), int32(2),
-		"singleflight must dedup concurrent probes; got %d probe executions for %d requests",
-		callCount.Load(), concurrency)
+	calls := callCount.Load()
+	assert.Greaterf(t, calls, int32(0),
+		"probe must have been invoked at least once; got %d", calls)
+	assert.Lessf(t, calls, int32(concurrency),
+		"singleflight must collapse %d concurrent probes to strictly fewer executions; got %d",
+		concurrency, calls)
 
 	// Every response must parse and carry a status field — exact value not
 	// asserted because singleflight guarantees all sharers see the same
