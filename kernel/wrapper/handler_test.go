@@ -111,21 +111,13 @@ func okHandler(status int) http.Handler {
 	})
 }
 
-// setSpyTracer installs tr as the package-level tracer and registers cleanup.
-func setSpyTracer(t *testing.T, tr *spyTracer) {
-	t.Helper()
-	wrapper.SetTracer(tr)
-	t.Cleanup(wrapper.ResetTracerForTest)
-}
-
 // ── Tests ─────────────────────────────────────────────────────────────────
 
 func TestHTTPHandler_EmitsSpanWithContractAttrs(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
 
 	spec := loginSpec()
-	h := wrapper.HTTPHandler(spec, okHandler(http.StatusOK))
+	h := wrapper.HTTPHandler(tr, spec, okHandler(http.StatusOK))
 
 	req := httptest.NewRequest(spec.Method, spec.Path, nil)
 	rec := httptest.NewRecorder()
@@ -159,9 +151,7 @@ func TestHTTPHandler_EmitsSpanWithContractAttrs(t *testing.T) {
 
 func TestHTTPHandler_MarksErrorOn5xx(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(http.StatusInternalServerError))
+	h := wrapper.HTTPHandler(tr, loginSpec(), okHandler(http.StatusInternalServerError))
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -177,9 +167,7 @@ func TestHTTPHandler_MarksErrorOn5xx(t *testing.T) {
 
 func TestHTTPHandler_DoesNotMarkError_On4xx(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(http.StatusBadRequest))
+	h := wrapper.HTTPHandler(tr, loginSpec(), okHandler(http.StatusBadRequest))
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -194,10 +182,8 @@ func TestHTTPHandler_DoesNotMarkError_On4xx(t *testing.T) {
 
 func TestHTTPHandler_CapturesDefault200WhenHandlerWritesNoStatus(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	// Handler never calls WriteHeader; stdlib defaults to 200 on first Write.
-	h := wrapper.HTTPHandler(loginSpec(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := wrapper.HTTPHandler(tr, loginSpec(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("hi"))
 	}))
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
@@ -211,10 +197,8 @@ func TestHTTPHandler_CapturesDefault200WhenHandlerWritesNoStatus(t *testing.T) {
 
 func TestHTTPHandler_CapturesImplicit200_OnEmptyResponse(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	// Handler never writes body nor header; stdlib still sends 200 OK.
-	h := wrapper.HTTPHandler(loginSpec(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	h := wrapper.HTTPHandler(tr, loginSpec(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -239,7 +223,7 @@ func TestHTTPHandler_PanicsOnInvalidSpec(t *testing.T) {
 					t.Errorf("expected panic for %+v", s)
 				}
 			}()
-			_ = wrapper.HTTPHandler(s, okHandler(200))
+			_ = wrapper.HTTPHandler(wrapper.NoopTracer{}, s, okHandler(200))
 		}(spec)
 	}
 }
@@ -251,16 +235,14 @@ func TestHTTPHandler_PanicsOnNilHandler(t *testing.T) {
 			t.Fatal("expected panic on nil handler")
 		}
 	}()
-	_ = wrapper.HTTPHandler(loginSpec(), nil)
+	_ = wrapper.HTTPHandler(wrapper.NoopTracer{}, loginSpec(), nil)
 }
 
 func TestHTTPHandler_Filter_SkipsTracing(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	called := false
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { called = true; w.WriteHeader(200) })
-	h := wrapper.HTTPHandler(loginSpec(), inner,
+	h := wrapper.HTTPHandler(tr, loginSpec(), inner,
 		wrapper.WithFilter(func(r *http.Request) bool { return true }),
 	)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
@@ -275,14 +257,12 @@ func TestHTTPHandler_Filter_SkipsTracing(t *testing.T) {
 
 func TestHTTPHandler_PutsContractIDInContext(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	var seen string
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seen = wrapper.ContractIDFromContext(r.Context())
 		w.WriteHeader(200)
 	})
-	h := wrapper.HTTPHandler(loginSpec(), inner)
+	h := wrapper.HTTPHandler(tr, loginSpec(), inner)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -291,11 +271,25 @@ func TestHTTPHandler_PutsContractIDInContext(t *testing.T) {
 	}
 }
 
-func TestHTTPHandler_NoopTracer_DoesNotPanic(t *testing.T) {
-	wrapper.SetTracer(wrapper.NoopTracer{})
-	t.Cleanup(wrapper.ResetTracerForTest)
+// TestHTTPHandler_NilTracer_FallsBackToNoop verifies the nil→NoopTracer
+// fallback: a Router constructed without WithTracer still serves requests
+// correctly (spans are silently discarded).
+func TestHTTPHandler_NilTracer_FallsBackToNoop(t *testing.T) {
+	t.Parallel()
+	h := wrapper.HTTPHandler(nil, loginSpec(), okHandler(200))
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Errorf("inner handler didn't run; code=%d", rec.Code)
+	}
+}
 
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(200))
+// TestHTTPHandler_ExplicitNoopTracer_DoesNotPanic parallels the above but with
+// an explicit NoopTracer{} to cover the normal typed-noop path.
+func TestHTTPHandler_ExplicitNoopTracer_DoesNotPanic(t *testing.T) {
+	t.Parallel()
+	h := wrapper.HTTPHandler(wrapper.NoopTracer{}, loginSpec(), okHandler(200))
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -306,13 +300,11 @@ func TestHTTPHandler_NoopTracer_DoesNotPanic(t *testing.T) {
 
 func TestHTTPHandler_RecordsErrorAndStatus_OnHandlerPanic(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	boom := errors.New("boom")
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		panic(boom)
 	})
-	h := wrapper.HTTPHandler(loginSpec(), inner)
+	h := wrapper.HTTPHandler(tr, loginSpec(), inner)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	rec := httptest.NewRecorder()
 
@@ -334,32 +326,11 @@ func TestHTTPHandler_RecordsErrorAndStatus_OnHandlerPanic(t *testing.T) {
 	h.ServeHTTP(rec, req)
 }
 
-// TestHTTPHandler_PanicsIfTracerNotSet verifies that a request with no tracer
-// set results in a descriptive panic.
-func TestHTTPHandler_PanicsIfTracerNotSet(t *testing.T) {
-	// Ensure tracer is in unset state (reset after test).
-	wrapper.ResetTracerForTest()
-	t.Cleanup(wrapper.ResetTracerForTest)
-
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(200))
-	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic when tracer not set")
-		}
-	}()
-	h.ServeHTTP(httptest.NewRecorder(), req)
-}
-
 // TestHTTPHandler_ConcurrentRequests_UniqueSpans — 50 parallel requests must
 // each produce their own span without data races (run under `go test -race`).
 func TestHTTPHandler_ConcurrentRequests_UniqueSpans(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(200))
+	h := wrapper.HTTPHandler(tr, loginSpec(), okHandler(200))
 	const N = 50
 	var wg sync.WaitGroup
 	wg.Add(N)
@@ -385,8 +356,6 @@ func TestHTTPHandler_ConcurrentRequests_UniqueSpans(t *testing.T) {
 // concurrent construction+usage, not concurrent access to the same instance.
 func TestStatusRecorder_ConcurrentRequests_NoRace(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	var wg sync.WaitGroup
 	const N = 100
 	wg.Add(N)
@@ -395,7 +364,7 @@ func TestStatusRecorder_ConcurrentRequests_NoRace(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			status := 200 + (i % 10)
-			h := wrapper.HTTPHandler(loginSpec(), okHandler(status))
+			h := wrapper.HTTPHandler(tr, loginSpec(), okHandler(status))
 			req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 			h.ServeHTTP(httptest.NewRecorder(), req)
 		}()
@@ -407,3 +376,29 @@ func TestStatusRecorder_ConcurrentRequests_NoRace(t *testing.T) {
 		t.Fatalf("expected %d spans, got %d", N, len(tr.spans))
 	}
 }
+
+// TestTracerFromCarrier verifies the optional TracerCarrier pattern: when a
+// mux-like type implements WrapperTracer() it is pulled; otherwise the helper
+// falls back to NoopTracer{}.
+func TestTracerFromCarrier(t *testing.T) {
+	t.Parallel()
+	tr := &spyTracer{}
+	carrier := fakeCarrier{tr: tr}
+	if got := wrapper.TracerFromCarrier(carrier); got != tr {
+		t.Errorf("TracerFromCarrier: got %T, want spyTracer", got)
+	}
+	// Non-carrier value returns NoopTracer.
+	got := wrapper.TracerFromCarrier(struct{}{})
+	if _, ok := got.(wrapper.NoopTracer); !ok {
+		t.Errorf("TracerFromCarrier non-carrier: got %T, want NoopTracer", got)
+	}
+	// Carrier returning nil tracer also falls back to NoopTracer.
+	got = wrapper.TracerFromCarrier(fakeCarrier{tr: nil})
+	if _, ok := got.(wrapper.NoopTracer); !ok {
+		t.Errorf("TracerFromCarrier nil-tracer carrier: got %T, want NoopTracer", got)
+	}
+}
+
+type fakeCarrier struct{ tr wrapper.Tracer }
+
+func (c fakeCarrier) WrapperTracer() wrapper.Tracer { return c.tr }

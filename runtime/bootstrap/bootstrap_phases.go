@@ -25,7 +25,6 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -213,24 +212,15 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 		s.addCloser(cl)
 	}
 
-	// Wire the kernel/wrapper package-level tracer. wrapper.HTTPHandler and
-	// wrapper.WrapConsumer call tracer.Start on every request; the package-level
-	// global must be set before any HTTP request is served (phase7).
-	// ref: slog.SetDefault / otel.SetTracerProvider — package-level setter.
-	b.wireWrapperTracer()
-	return nil
-}
-
-// wireWrapperTracer installs b.wrapperTracer as the package-level kernel/wrapper
-// tracer. Falls back to wrapper.NoopTracer{} with a slog.Warn when no tracer
-// was configured via WithTracer — spans are discarded but no panic occurs.
-func (b *Bootstrap) wireWrapperTracer() {
-	if b.wrapperTracer != nil {
-		wrapper.SetTracer(b.wrapperTracer)
-		return
+	// Tracer wiring: b.wrapperTracer is threaded into router.WithTracer
+	// (phase7, HTTP side) and eventrouter.WithTracer (phase6, consumer side)
+	// at the construction call sites. When WithTracer was not supplied,
+	// wrapper.HTTPHandler / wrapper.WrapConsumer fall back to NoopTracer so
+	// spans degrade silently — no package-level setup needed.
+	if b.wrapperTracer == nil {
+		slog.Warn("bootstrap: no tracer provided, wrapper spans will be no-op; use WithTracer to enable distributed tracing")
 	}
-	slog.Warn("bootstrap: no tracer provided, wrapper spans will be no-op; use WithTracer to enable distributed tracing")
-	wrapper.SetTracer(wrapper.NoopTracer{})
+	return nil
 }
 
 // phase2InitPubSub initialises the publisher and subscriber.
@@ -819,6 +809,12 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	var evtRouterOpts []eventrouter.Option
 	if b.eventRouterReadyTimeoutSet {
 		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.eventRouterReadyTimeout))
+	}
+	// Thread the wrapper.Tracer from WithTracer into the event router so
+	// AddContractHandler wraps subscribers with wrapper.WrapConsumer at
+	// registration time. Nil tracer → WrapConsumer falls back to NoopTracer.
+	if b.wrapperTracer != nil {
+		evtRouterOpts = append(evtRouterOpts, eventrouter.WithTracer(b.wrapperTracer))
 	}
 	evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
 		Inner:      sub,

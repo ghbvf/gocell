@@ -101,7 +101,13 @@ func Mount(mux cell.RouteHandler, r Route) {
 		// observability dashboards bucket spans by full route even when
 		// cells register under chi sub-routes (the mux-relative path differs
 		// from the visible server path).
-		handler = wrapper.HTTPHandler(r.Contract, handler)
+		//
+		// Tracer is pulled from the mux via the optional TracerCarrier
+		// interface (implemented by runtime/http/router.Router + its nested
+		// adapters). Muxes that do not carry a tracer (stdlib *http.ServeMux
+		// in early-boot tests, fakes) fall back to wrapper.NoopTracer{} so
+		// registration never panics on missing wiring.
+		handler = wrapper.HTTPHandler(wrapper.TracerFromCarrier(mux), r.Contract, handler)
 	}
 	mux.Handle(pattern, handler)
 

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -66,6 +67,10 @@ type mockEventRouter struct {
 
 func (m *mockEventRouter) AddHandler(topic string, _ outbox.EntryHandler, _ string) {
 	m.topics = append(m.topics, topic)
+}
+
+func (m *mockEventRouter) AddContractHandler(spec wrapper.ContractSpec, _ outbox.EntryHandler, _ string) {
+	m.topics = append(m.topics, spec.Topic)
 }
 
 // Compile-time check.

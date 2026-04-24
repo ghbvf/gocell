@@ -54,41 +54,43 @@ type Tracer interface {
 	Start(ctx context.Context, spanName string, attrs ...Attr) (context.Context, Span)
 }
 
-// panicIfNotSetTracer is the zero-value sentinel. It panics immediately on
-// Start() so that a missing SetTracer call surfaces at the first request, not
-// silently emitting no-op spans.
+// TracerCarrier is an optional interface implemented by runtime infrastructure
+// types (e.g. runtime/http/router.Router, runtime/eventrouter.Router) that
+// carry a per-instance Tracer. Callers such as runtime/auth.Mount type-assert
+// the mux/event-router to TracerCarrier at registration time to pull the
+// tracer before passing it to HTTPHandler / WrapConsumer.
 //
-// ref: slog.Default() / otel.GetTracerProvider() — package-level global with
-// explicit registration; unregistered state panics fast rather than silently
-// degrading.
-type panicIfNotSetTracer struct{}
-
-func (panicIfNotSetTracer) Start(_ context.Context, _ string, _ ...Attr) (context.Context, Span) {
-	panic("kernel/wrapper: tracer not set — runtime.bootstrap must call wrapper.SetTracer before serving")
+// Rationale: kernel/wrapper stays stateless — no package-level mutable tracer.
+// Ownership of the live Tracer lives in the runtime infrastructure that
+// observes traffic, so wiring is enforced at construction time (Router /
+// eventrouter.Router require the tracer from bootstrap). Intermediaries
+// (test fakes, stdlib *http.ServeMux) that do not implement TracerCarrier
+// cause callers to fall back to NoopTracer{} — spans silently degrade rather
+// than panic.
+type TracerCarrier interface {
+	// WrapperTracer returns the Tracer associated with this carrier. It MAY
+	// return nil; callers MUST treat nil as NoopTracer{}.
+	WrapperTracer() Tracer
 }
 
-// tracer is the package-level singleton. Zero value is panicIfNotSetTracer so
-// any request before SetTracer panics immediately, surfacing wiring errors
-// on day 0. runtime/bootstrap calls SetTracer(b.tracer) during startup.
-var tracer Tracer = panicIfNotSetTracer{} //nolint:gochecknoglobals
-
-// SetTracer installs the package-level tracer. t must not be nil. Call once
-// during process startup (e.g. from runtime/bootstrap.phase1LoadConfig or
-// equivalent). Subsequent calls replace the active tracer — valid for testing
-// but should not be needed in production.
-//
-// ref: slog.SetDefault / otel.SetTracerProvider — package-level setter pattern.
-func SetTracer(t Tracer) {
-	if t == nil {
-		panic("kernel/wrapper.SetTracer: t must not be nil")
+// TracerFromCarrier returns the Tracer from c when c implements TracerCarrier
+// with a non-nil tracer; otherwise it returns NoopTracer{}. Use this helper
+// instead of a bare type assertion so the nil-tracer fallback stays consistent
+// across call sites.
+func TracerFromCarrier(c any) Tracer {
+	if tc, ok := c.(TracerCarrier); ok {
+		if tr := tc.WrapperTracer(); tr != nil {
+			return tr
+		}
 	}
-	tracer = t
+	return NoopTracer{}
 }
 
 // NoopTracer is a zero-allocation Tracer. Use it in tests that exercise the
 // wrapper path without an adapter dependency, or as the fallback when no
-// runtime tracer is wired (runtime/bootstrap falls back to NoopTracer{} with
-// a slog.Warn when WithTracer is not supplied).
+// runtime tracer is wired — HTTPHandler / WrapConsumer substitute NoopTracer{}
+// for a nil Tracer argument so missing wiring degrades silently rather than
+// panicking.
 type NoopTracer struct{}
 
 // Compile-time: NoopTracer implements Tracer with a value receiver so zero
@@ -130,11 +132,4 @@ func SetSpanName(s Span, name string) {
 	if r, ok := s.(SpanRenamer); ok {
 		r.SetName(name)
 	}
-}
-
-// resetTracerForTest restores the package-level tracer to panicIfNotSetTracer.
-// Only callable from _test.go files in package wrapper or wrapper_test.
-// Use t.Cleanup(wrapper.resetTracerForTest) in tests that call SetTracer.
-func resetTracerForTest() {
-	tracer = panicIfNotSetTracer{}
 }

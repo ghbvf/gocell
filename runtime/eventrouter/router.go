@@ -25,6 +25,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 // DefaultReadyTimeout bounds Phase 3 of Run() so a subscriber that never
@@ -58,6 +59,17 @@ func WithReadyTimeout(d time.Duration) Option {
 	return func(r *Router) { r.readyTimeout = d }
 }
 
+// WithTracer sets the Tracer used by AddContractHandler to wrap subscribers
+// with wrapper.WrapConsumer at registration time. Nil is treated as unset;
+// AddContractHandler substitutes wrapper.NoopTracer{} so spans are silently
+// discarded rather than panicking when bootstrap runs without a tracer.
+// Call from bootstrap — AddContractHandler reads r.tracer at registration
+// time, so WithTracer MUST be applied before any Cell.RegisterSubscriptions
+// call.
+func WithTracer(t wrapper.Tracer) Option {
+	return func(r *Router) { r.tracer = t }
+}
+
 type handlerConfig struct {
 	topic         string
 	handler       outbox.EntryHandler
@@ -74,6 +86,7 @@ type Router struct {
 	handlers     []handlerConfig
 	mu           sync.Mutex
 	readyTimeout time.Duration
+	tracer       wrapper.Tracer
 	running      chan struct{}
 	runGuard     sync.Once // ensures Run is called at most once
 	runningOnce  sync.Once // ensures close(r.running) is called at most once
@@ -101,8 +114,11 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 	return r
 }
 
-// AddHandler registers a subscription intent. It MUST be called before Run.
-// Panics if topic is empty, handler is nil, or consumerGroup is empty.
+// AddHandler registers an untraced subscription intent. It MUST be called
+// before Run. Panics if topic is empty, handler is nil, or consumerGroup is
+// empty. Prefer AddContractHandler for new subscriptions — legacy AddHandler
+// remains for subscriptions not yet migrated to a ContractSpec (tracked by
+// PR-A11-M).
 //
 // consumerGroup identifies the logical consumer group for this handler.
 // Handlers in the same group compete for messages on the same topic;
@@ -123,6 +139,37 @@ func (r *Router) AddHandler(topic string, handler outbox.EntryHandler, consumerG
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.handlers = append(r.handlers, handlerConfig{topic: topic, handler: handler, consumerGroup: consumerGroup})
+}
+
+// AddContractHandler registers a contract-first subscription intent. The
+// handler is wrapped with wrapper.WrapConsumer at registration time using
+// the Router-owned Tracer (injected via WithTracer), so every consumed
+// entry produces a CONSUME span annotated with gocell.contract.id / kind /
+// transport + messaging.system / destination.
+//
+// spec.Kind MUST be "event" and spec.Topic MUST be set (WrapConsumer
+// panics otherwise). topic used for the Subscriber.Setup /Subscribe
+// lifecycle is derived from spec.Topic — callers do not pass a separate
+// topic string.
+//
+// When no Tracer was configured on the Router (WithTracer not applied or
+// passed nil), WrapConsumer falls back to wrapper.NoopTracer{} so spans
+// are silently discarded rather than panicking; handler behaviour is
+// otherwise identical to AddHandler.
+func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) {
+	if handler == nil {
+		panic("eventrouter: AddContractHandler called with nil handler")
+	}
+	if consumerGroup == "" {
+		panic("eventrouter: AddContractHandler called with empty consumerGroup; cells must declare their identity")
+	}
+	// WrapConsumer validates the spec (Kind == "event", Topic set, etc.) and
+	// panics on invalid input — registration-time fail-fast is the right
+	// shape here.
+	wrapped := wrapper.WrapConsumer(r.tracer, spec, handler)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.handlers = append(r.handlers, handlerConfig{topic: spec.Topic, handler: wrapped, consumerGroup: consumerGroup})
 }
 
 // errAlreadyRunning is returned if Run is called more than once.

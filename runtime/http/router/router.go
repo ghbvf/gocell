@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -29,6 +30,8 @@ import (
 // Compile-time checks.
 var _ kcell.RouteMux = (*Router)(nil)
 var _ kcell.AuthRouteDeclarer = (*Router)(nil)
+var _ wrapper.TracerCarrier = (*Router)(nil)
+var _ wrapper.TracerCarrier = (*chiRouterAdapter)(nil)
 
 // Option configures a Router.
 type Option func(*Router)
@@ -613,7 +616,7 @@ func (r *Router) Handle(pattern string, handler http.Handler) {
 // Route("/internal/v1/...") to scope onto the internal mux.
 func (r *Router) Group(fn func(kcell.RouteMux)) {
 	r.publicMux.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, declarer: r}
+		sub := &chiRouterAdapter{cr: cr, declarer: r, tracer: r.tracer}
 		fn(sub)
 	})
 }
@@ -626,7 +629,7 @@ func (r *Router) Group(fn func(kcell.RouteMux)) {
 // mux chosen at the top level.
 func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
 	r.pickMux(pattern).Route(pattern, func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r}
+		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r, tracer: r.tracer}
 		fn(sub)
 	})
 }
@@ -643,7 +646,16 @@ func (r *Router) Mount(prefix string, handler http.Handler) {
 // returned adapter inherits the public mux; use Route("/internal/v1/...").With
 // if middleware should scope onto the internal mux.
 func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: r.publicMux.With(mw...), declarer: r}
+	return &chiRouterAdapter{cr: r.publicMux.With(mw...), declarer: r, tracer: r.tracer}
+}
+
+// WrapperTracer implements wrapper.TracerCarrier so auth.Mount (and any
+// future contract-aware registration helper) can pull the runtime-owned
+// Tracer without reaching into package-level globals. Returns nil when no
+// WithTracer option was applied; callers fall back to wrapper.NoopTracer{}
+// via wrapper.TracerFromCarrier.
+func (r *Router) WrapperTracer() wrapper.Tracer {
+	return r.tracer
 }
 
 // ServeHTTP delegates to PublicHandler so the Router stays drop-in for code
@@ -935,6 +947,7 @@ type chiRouterAdapter struct {
 	cr       chi.Router
 	prefix   string
 	declarer kcell.AuthRouteDeclarer
+	tracer   wrapper.Tracer
 }
 
 // Compile-time check: chiRouterAdapter forwards AuthRouteMeta so Cells that
@@ -953,6 +966,7 @@ func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 			cr:       cr,
 			prefix:   joinPrefix(a.prefix, pattern),
 			declarer: a.declarer,
+			tracer:   a.tracer,
 		}
 		fn(sub)
 	})
@@ -990,13 +1004,20 @@ func (a *chiRouterAdapter) guardNestedInternalRegistration(op, pattern string) {
 
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
 	a.cr.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer}
+		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer, tracer: a.tracer}
 		fn(sub)
 	})
 }
 
 func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer}
+	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer, tracer: a.tracer}
+}
+
+// WrapperTracer implements wrapper.TracerCarrier so auth.Mount pulls the
+// Router-rooted Tracer when registering a contract-bound route on a nested
+// sub-mux (Route / Group / With adapters inherit the parent's tracer).
+func (a *chiRouterAdapter) WrapperTracer() wrapper.Tracer {
+	return a.tracer
 }
 
 // DeclareAuthMeta composes the adapter's mount prefix with the declared path

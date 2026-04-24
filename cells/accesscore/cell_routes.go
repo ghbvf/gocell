@@ -34,6 +34,23 @@ var httpAuthLoginV1 = wrapper.ContractSpec{
 	Path:      "/api/v1/access/sessions/login",
 }
 
+// eventConfigChangedV1 is the wrapper.ContractSpec literal for contract
+// event.config.changed.v1. Hand-coded alongside the AddContractHandler call
+// so every consumer span (gocell.contract.id, messaging.system,
+// messaging.destination) matches the YAML in
+// contracts/event/config/changed/v1/contract.yaml.
+//
+// TODO(FMT-17): same governance gap as httpAuthLoginV1 — until PR-A11-V
+// ships SPEC-CONTRACT-SYNC, renaming the topic in YAML without updating
+// this literal silently drifts span attributes. Search for `TODO(FMT-17)`
+// to surface all unguarded literals.
+var eventConfigChangedV1 = wrapper.ContractSpec{
+	ID:        "event.config.changed.v1",
+	Kind:      "event",
+	Transport: "amqp",
+	Topic:     configreceive.TopicConfigChanged,
+}
+
 // RegisterRoutes registers HTTP routes for accesscore.
 func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1/access", func(sub cell.RouteMux) {
@@ -111,8 +128,11 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
 	// config-receive: config.changed events from configcore.
+	// Contract-first registration (pilot for PR-A11-B) — the Router wraps
+	// the handler with wrapper.WrapConsumer so every consumed entry emits a
+	// CONSUME span annotated with gocell.contract.id / messaging.destination.
 	handler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEvent)
-	r.AddHandler(configreceive.TopicConfigChanged, handler, "accesscore")
+	r.AddContractHandler(eventConfigChangedV1, handler, "accesscore")
 
 	// rbac-session-sync: invalidate sessions on role assignment or revocation.
 	// Both topics share the same handler and consumer group — HandleRoleChanged is topic-agnostic.

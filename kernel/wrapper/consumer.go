@@ -36,7 +36,7 @@ type ConsumerFunc = outbox.EntryHandler
 
 // WrapConsumer wraps fn with a traced span + contract-id context derivation.
 // The wrapper:
-//   - starts a span named "CONSUME {topic}" using the package-level tracer
+//   - starts a span named "CONSUME {topic}" using the supplied tracer
 //   - sets gocell.contract.id / kind / transport, messaging.system /
 //     destination attrs
 //   - SetStatus(Error) + RecordError for any Requeue / Reject disposition
@@ -45,11 +45,12 @@ type ConsumerFunc = outbox.EntryHandler
 //   - propagates contract id through the context passed to fn
 //   - defers recoverAndFinish so a panic in fn ends the span before re-panicking
 //
-// spec must have Kind == "event" and Topic set; fn must be non-nil.
+// tr is the Tracer supplied by the runtime infrastructure (typically
+// runtime/eventrouter.Router). A nil tr falls back to NoopTracer{} — spans
+// are silently discarded rather than panicking.
 //
-// The package-level tracer must be set before the first event is consumed
-// (call wrapper.SetTracer in runtime/bootstrap or equivalent).
-func WrapConsumer(spec ContractSpec, fn ConsumerFunc) ConsumerFunc {
+// spec must have Kind == "event" and Topic set; fn must be non-nil.
+func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc) ConsumerFunc {
 	if fn == nil {
 		panic("wrapper.WrapConsumer: fn must not be nil")
 	}
@@ -58,6 +59,9 @@ func WrapConsumer(spec ContractSpec, fn ConsumerFunc) ConsumerFunc {
 	}
 	if err := spec.Validate(); err != nil {
 		panic(err.Error())
+	}
+	if tr == nil {
+		tr = NoopTracer{}
 	}
 
 	baseAttrs := []Attr{
@@ -70,7 +74,7 @@ func WrapConsumer(spec ContractSpec, fn ConsumerFunc) ConsumerFunc {
 
 	return func(ctx context.Context, entry outbox.Entry) (res outbox.HandleResult) {
 		ctx = ctxkeys.WithContractID(ctx, spec.ID)
-		ctx, span := tracer.Start(ctx, defaultEventSpanName(spec))
+		ctx, span := tr.Start(ctx, defaultEventSpanName(spec))
 		span.SetAttributes(baseAttrs...)
 		defer func() { recoverAndFinish(span, recover()) }()
 

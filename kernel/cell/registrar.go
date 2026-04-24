@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 // ---------------------------------------------------------------------------
@@ -157,9 +158,10 @@ type AuthRouteDeclarer interface {
 	DeclareAuthMeta(meta AuthRouteMeta)
 }
 
-// EventRouter declares event subscriptions. Cells call AddHandler during
-// RegisterSubscriptions to declare intent; the caller (bootstrap/Router)
-// is responsible for starting consumption.
+// EventRouter declares event subscriptions. Cells call AddHandler (legacy,
+// untraced) or AddContractHandler (contract-first, emits WrapConsumer spans)
+// during RegisterSubscriptions to declare intent; the caller
+// (bootstrap/Router) is responsible for starting consumption.
 //
 // The minimal interface lives in kernel/cell so Cells can depend on it
 // without importing runtime/. The concrete implementation is in
@@ -173,8 +175,16 @@ type AuthRouteDeclarer interface {
 // Same group competes; different groups each get a full copy (fanout).
 // consumerGroup MUST NOT be empty — Cells must declare their identity
 // to ensure portable dispatch semantics across all backends.
+//
+// AddContractHandler mirrors the HTTP-side auth.Mount(Route{Contract, ...})
+// shape for the consumer side: the ContractSpec is the source of truth for
+// the topic + observability metadata, so the Router wraps the handler with
+// wrapper.WrapConsumer at registration time using the Router-owned Tracer.
+// Legacy AddHandler remains as a shim for subscriptions not yet migrated to
+// a ContractSpec (tracked by PR-A11-M).
 type EventRouter interface {
 	AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string)
+	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string)
 }
 
 // EventRegistrar is optionally implemented by Cells that subscribe to events.

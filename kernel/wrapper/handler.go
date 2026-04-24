@@ -9,7 +9,8 @@ import (
 )
 
 // HandlerOption configures an HTTPHandler invocation. Only filter-related
-// options remain after the tracer was moved to the package-level global (A1).
+// options remain; Tracer ownership lives on the caller side (runtime/http
+// /router — passed explicitly to HTTPHandler).
 type HandlerOption func(*handlerConfig)
 
 type handlerConfig struct {
@@ -22,7 +23,7 @@ type handlerConfig struct {
 //
 // Example (health probes):
 //
-//	wrapper.HTTPHandler(spec, h, wrapper.WithFilter(wrapper.DefaultProbeFilter))
+//	wrapper.HTTPHandler(tr, spec, h, wrapper.WithFilter(wrapper.DefaultProbeFilter))
 //
 // ref: open-telemetry/opentelemetry-go-contrib otelhttp/config.go — Filter type.
 func WithFilter(pred func(*http.Request) bool) HandlerOption {
@@ -52,22 +53,27 @@ func defaultEventSpanName(spec ContractSpec) string {
 
 // HTTPHandler wraps next with a traced span + metric-friendly attributes
 // derived from spec. The returned handler:
-//   - starts a span named "{METHOD} {path_template}" using the package-level tracer
+//   - starts a span named "{METHOD} {path_template}" using the supplied tracer
 //   - sets gocell.contract.id / kind / transport, http.method / route attrs
 //   - captures the response status code and sets StatusError for 5xx
 //   - propagates contract id into the request context via ctxkeys.ContractID
 //   - re-panics any handler panic, but records it + marks span status=Error first
 //
-// spec is validated at call time; invalid specs or nil handlers panic (fail-fast
-// at registration time beats a silent miss at request time).
+// tr is the Tracer supplied by the runtime infrastructure (typically
+// runtime/http/router.Router). A nil tr falls back to NoopTracer{} — spans
+// are silently discarded rather than panicking — so callers that construct
+// HTTPHandler without a wired tracer (early-boot, tests using stdlib muxes)
+// still produce correctly-dispatched HTTP responses.
 //
-// The package-level tracer must be set before the first request arrives (call
-// wrapper.SetTracer in runtime/bootstrap or equivalent). If SetTracer was never
-// called the first request panics with a descriptive message.
+// spec is validated at call time; invalid specs or nil handlers panic
+// (fail-fast at registration time beats a silent miss at request time).
 //
 // ref: riandyrn/otelchi middleware.go — span name + status lifecycle.
-func HTTPHandler(spec ContractSpec, next http.Handler, opts ...HandlerOption) http.Handler {
+func HTTPHandler(tr Tracer, spec ContractSpec, next http.Handler, opts ...HandlerOption) http.Handler {
 	validateHTTPHandlerArgs(spec, next)
+	if tr == nil {
+		tr = NoopTracer{}
+	}
 
 	var cfg handlerConfig
 	for _, opt := range opts {
@@ -80,7 +86,7 @@ func HTTPHandler(spec ContractSpec, next http.Handler, opts ...HandlerOption) ht
 			next.ServeHTTP(w, r)
 			return
 		}
-		serveTraced(baseAttrs, spec, next, w, r)
+		serveTraced(tr, baseAttrs, spec, next, w, r)
 	})
 }
 
@@ -106,9 +112,9 @@ func httpBaseAttrs(spec ContractSpec) []Attr {
 	}
 }
 
-func serveTraced(baseAttrs []Attr, spec ContractSpec, next http.Handler, w http.ResponseWriter, r *http.Request) {
+func serveTraced(tr Tracer, baseAttrs []Attr, spec ContractSpec, next http.Handler, w http.ResponseWriter, r *http.Request) {
 	ctx := ctxkeys.WithContractID(r.Context(), spec.ID)
-	ctx, span := tracer.Start(ctx, defaultHTTPSpanName(spec, r))
+	ctx, span := tr.Start(ctx, defaultHTTPSpanName(spec, r))
 	span.SetAttributes(baseAttrs...)
 
 	sw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}

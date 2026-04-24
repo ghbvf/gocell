@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -23,9 +24,12 @@ var noopHandler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 
 // captureMux pairs a stdlib ServeMux with an AuthRouteDeclarer counter so
 // tests can assert both sides of auth.Declare's dispatch in a single mux.
+// Also implements wrapper.TracerCarrier so Mount-level tests can inject a
+// spy Tracer without reaching for a process-wide global.
 type captureMux struct {
 	*http.ServeMux
-	metas []cell.AuthRouteMeta
+	metas  []cell.AuthRouteMeta
+	tracer wrapper.Tracer
 }
 
 func newCaptureMux() *captureMux {
@@ -40,9 +44,17 @@ func (m *captureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) {
 	m.metas = append(m.metas, meta)
 }
 
+// WrapperTracer implements wrapper.TracerCarrier — tests that need a concrete
+// Tracer (e.g. span-attribute assertions) set mux.tracer before calling Mount;
+// tests that don't care leave it nil and fall through to NoopTracer{}.
+func (m *captureMux) WrapperTracer() wrapper.Tracer {
+	return m.tracer
+}
+
 var (
 	_ cell.RouteHandler      = (*captureMux)(nil)
 	_ cell.AuthRouteDeclarer = (*captureMux)(nil)
+	_ wrapper.TracerCarrier  = (*captureMux)(nil)
 )
 
 // ---------------------------------------------------------------------------

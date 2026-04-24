@@ -1,6 +1,6 @@
 # ADR: kernel/wrapper — Contract-level Observable Proxy
 
-> Date: 2026-04-24 (revised after two review rounds)
+> Date: 2026-04-24 (revised after three review rounds)
 > Status: Accepted
 > Context PR: PR-A11 (`refactor/520-pr-a11-kernel-wrapper`)
 > Tag: ADR-KERNEL-WRAPPER-CONTRACT-OBS-01
@@ -8,7 +8,15 @@
 > **Revision note**: §3 auth.Mount policy ordering and §4 consumer
 > observability are superseded in-place by §6 and §7 below (decisions 5-7
 > added after review rounds 1+2 surfaced the silent-noop and panic-leak
-> defects). §1/§2 remain unchanged.
+> defects). Round 3 replaced the package-level-global §5 with
+> constructor-injected tracer ownership at the runtime infrastructure
+> layer (Router / eventrouter.Router) after integration test
+> `examples/ssobff/walkthrough` panicked at first request because the
+> test-embedded bootstrap never called `SetTracer` — the "fail loud on
+> unset" design turned every new bootstrap entry point into a landmine
+> instead of surfacing a real wiring bug. §4 is also updated: consumer
+> WrapConsumer wiring is now in-scope for PR-A11 (symmetric with HTTP
+> side) rather than deferred. §1/§2 remain unchanged.
 
 ## Context
 
@@ -103,35 +111,104 @@ recover still sees it. HTTPHandler shares the same `recoverAndFinish`
 primitive in `kernel/wrapper/lifecycle.go`, eliminating the pre-review
 asymmetry where HTTP recovered panics but consumers leaked spans.
 
-Wire-up to `kernel/outbox.ConsumerBase` / `runtime/eventrouter` is
-deferred to a follow-up PR-A11-B (see backlog) so the event-consumer
-migration does not entangle with the current HTTP-side refactor.
+Consumer wire-up (review round 3): `runtime/eventrouter.Router` gains a
+`AddContractHandler(spec, handler, consumerGroup)` method — the
+symmetric mirror of `auth.Mount(Route{Contract, ...})`. It wraps the
+handler with `wrapper.WrapConsumer(r.tracer, spec, handler)` at
+registration time using the Router-owned Tracer (injected via a new
+`eventrouter.WithTracer` option during `bootstrap.phase6StartEventRouter`).
+The legacy `AddHandler(topic, handler, cg)` stays as an untraced shim
+for the remaining subscribers that PR-A11-M sweeps into contract
+literals. One pilot cell (accesscore's `configreceive` subscription,
+contract `event.config.changed.v1`) migrates to
+`AddContractHandler` in this PR so the design is validated end-to-end
+on both HTTP and event surfaces before `ContractSpec`'s shape is
+frozen — previously deferring the consumer side to PR-A11-B would have
+locked in the value-type fields based on the HTTP pilot alone.
 
-### 5. Tracer Injection: Package-Level Global (supersedes the Option pattern)
+### 5. Tracer Injection: Constructor-owned at runtime infrastructure layer
 
-`kernel/wrapper` owns a package-level `var tracer Tracer`. The zero value
-is `panicIfNotSetTracer{}` — its `Start` panics with a message naming
-`runtime.bootstrap` as the required caller, so any first request on a
-mis-wired binary fails loudly on day 0 rather than silently producing
-noop spans.
+`kernel/wrapper` stays **stateless** — no package-level `var`, no
+`SetTracer`. `HTTPHandler(tr, spec, next, opts...)` and
+`WrapConsumer(tr, spec, fn)` accept the `Tracer` as a positional
+parameter; a nil `tr` falls back to `NoopTracer{}` at the call site
+(fail-open). The `Tracer` + `Span` interfaces, the `NoopTracer` value,
+and the optional `TracerCarrier` helper all live in `kernel/wrapper`;
+nothing in that package is mutable after program start.
 
-`wrapper.SetTracer(t)` is the single write path and is called exactly
-once by `runtime/bootstrap.phase1LoadConfig`. When no tracer was
-supplied via `Bootstrap.WithTracer`, phase1 falls back to
-`wrapper.NoopTracer{}` with a `slog.Warn` so the wiring gap is visible
-in operator logs without breaking startup.
+Ownership of the live `Tracer` belongs to the runtime infrastructure
+types that observe traffic:
 
-`HTTPHandler` and `WrapConsumer` now take no tracer parameter and no
-`WithTracer` option. `HandlerOption` retains only `WithFilter` for
-probe suppression (`wrapper.DefaultProbeFilter` matches
-`/healthz` / `/readyz` / `/livez`).
+- `runtime/http/router.Router` carries a `tracer wrapper.Tracer` field
+  (seeded by the existing `router.WithTracer` option) and exposes it
+  via `WrapperTracer()` which satisfies the new
+  `wrapper.TracerCarrier` interface. Nested sub-muxes constructed by
+  `Route` / `Group` / `With` inherit the parent's tracer. `auth.Mount`
+  pulls the tracer via `wrapper.TracerFromCarrier(mux)` before calling
+  `wrapper.HTTPHandler(...)` — a type assertion lookup so legacy mux
+  types (`*http.ServeMux` in tests, stubs) that do not implement
+  `TracerCarrier` transparently get `NoopTracer{}`.
+- `runtime/eventrouter.Router` carries a `tracer wrapper.Tracer` field
+  set via `eventrouter.WithTracer(...)`. `AddContractHandler` uses it
+  to wrap subscribers with `WrapConsumer` at registration time.
+- `runtime/bootstrap` threads the `Bootstrap.wrapperTracer` (captured
+  by `WithTracer`) into both `router.WithTracer` (phase7) and
+  `eventrouter.WithTracer` (phase6). No process-wide `SetTracer` is
+  needed — the construction calls that receive the tracer are both
+  compile-checked, so a new bootstrap entry point cannot accidentally
+  drop the wiring and panic at first request.
 
-Rationale: matches `log/slog.Default()` / `otel.GetTracerProvider()` /
-Kratos `otel.Tracer(name)` / Watermill-otel `otel.Tracer(...)` — the
-industry-standard "process-wide singleton, injected once by the
-application entrypoint" pattern. Kernel LAYER-01 stays clean because
-`SetTracer` is a kernel-defined API and runtime → kernel is the
-allowed direction.
+Cells never see the tracer. `RegisterRoutes(mux cell.RouteMux)` and
+`RegisterSubscriptions(r cell.EventRouter)` keep their existing
+signatures; `auth.Mount(mux, Route{Contract, ...})` and
+`r.AddContractHandler(spec, handler, "cellID")` are the contract-first
+registration verbs from the Cell author's perspective.
+
+Rationale — why this pattern is correct despite §E below originally
+rejecting a similar "explicit option + noop default" approach:
+
+1. **GoCell-native ownership**: `kernel/wrapper` is the value/rules layer
+   (aligned with `kernel/metadata`, `kernel/outbox` — interfaces and
+   value types, no live resources). Live `Tracer` instances are a
+   runtime resource, so they belong in the runtime infrastructure that
+   runs the request / event loop (`Router`, `eventrouter.Router`), not
+   on a kernel package-level variable.
+2. **Compile-time enforcement**: with tracer as a constructor parameter
+   on Router/eventrouter, `bootstrap` cannot forget to thread it —
+   missing an argument is a compile error. The rejected-E failure mode
+   ("no caller was passing WithTracer") was an artifact of placing
+   `WithTracer` as a functional option on HTTPHandler, where Cells —
+   not bootstrap — would have had to pass it through. Under §5,
+   bootstrap is the only caller of `router.WithTracer` /
+   `eventrouter.WithTracer`, and both APIs are pre-existing.
+3. **Test ergonomics**: spy tracers inject through `router.WithTracer`
+   (integration harness) or directly into `HTTPHandler(tr, …)` /
+   `WrapConsumer(tr, …)` (unit tests). No `SetTracer` / `ResetTracer`
+   setup/teardown dance, no race conditions on a shared package
+   variable, no `t.Parallel()` landmines. `handler_test.go` /
+   `consumer_test.go` construct a `spyTracer` per test as a local
+   value.
+4. **No landmine for future bootstraps**: every new composition root
+   (examples/ssobff's `buildWalkthroughServer`, future embedded modes,
+   sidecar tools) gets a compiled-in noop via
+   `wrapper.TracerFromCarrier` fallback. Adding `-race` tests
+   that run integration paths never surfaced a tracer-wiring bug
+   because the runtime infrastructure is the single injection site and
+   `Router` construction is the only entry.
+
+`HTTPHandler` / `WrapConsumer` / `HandlerOption` / `WithFilter` —
+filter suppression is still an orthogonal concern, retained as the
+only `HandlerOption` (probe paths skip span creation entirely).
+
+ref: `log/slog` Logger type — constructor `slog.New(handler)` is the
+preferred shape; `slog.Default()` is convenience for untyped callers,
+not the canonical API. We adopt the constructor shape uniformly
+because the runtime infrastructure layer is always typed.
+
+ref: `open-telemetry/opentelemetry-go/sdk/trace.TracerProvider` —
+construction-time configuration via options; provider instance is
+passed to instrumentations, not read from a package-level getter at
+span-creation time.
 
 ### 6. Policy Within Contract Span (supersedes §3's policy ordering)
 
@@ -190,9 +267,6 @@ can proceed gradually without double-counting any requests.
   precondition, closing the most common mistake.
 - `auth.Declare` stays in-tree during the migration window. Two APIs
   co-existing is noise; future cleanup PR-A11-M + PR-A11-B close this.
-- `kernel/outbox.ConsumerBase` + `runtime/eventrouter.Router.AddHandler`
-  keep today's topic-string API pending PR-A11-B. Event consumers
-  therefore still have no `contract_id` attribute today.
 - Unauthorized traffic now produces spans (cost of §6's policy-inside
   model). Apply `http.status_code` samplers downstream if volume
   becomes a backend cost issue.
@@ -231,49 +305,79 @@ and cannot enforce the Method/Kind invariants that `wrapper.ContractSpec`
 carries as a value type. The `Route` + `ContractSpec` split makes the
 observability contract a first-class field, not a retrofitted string.
 
-### E. Explicit Option (`WithTracer`) + `NoopTracer{}` default
-Rejected after review round 1 exposed that no caller was passing
-`WithTracer(...)` — `auth.Mount` has no tracer parameter and no ctx
-extraction, so every contract span silently became noop. Unlike
-otelhttp / Kratos / Watermill which fall back to the process-wide
-`otel.GetTracerProvider()`, kernel/wrapper's noop default had no
-second chance: zero spans on the dashboard looked identical to "we
-forgot to wire it" and "tracing is globally disabled". The §5
-package-level global + startup panic on unset surfaces wiring gaps on
-day 0 instead.
+### E. Explicit `HandlerOption` Option (`WithTracer`) + `NoopTracer{}` default
+Rejected in round 1 and **still** rejected. The round-1 defect was not
+"Option pattern bad in absolute terms" but "Option placed on the wrong
+layer": making `HTTPHandler` accept `WithTracer(...)` pushed the
+tracer wiring responsibility onto Cell authors, who had no reason to
+thread it from `Cell.RegisterRoutes` through `auth.Mount`. Zero cells
+passed it, so every contract span silently became noop. §5 puts the
+tracer on the runtime infrastructure layer (Router / eventrouter.Router
+constructors) where bootstrap is the sole caller — different pattern,
+different failure mode, which is why it works where the round-1
+HandlerOption did not.
+
+### E-prime. Package-level global `SetTracer` (the round-2 answer, reverted in round 3)
+Rejected in round 3. The round-2 package-level global worked in unit
+tests and on the round-2 integration harness, but
+`examples/ssobff/walkthrough_test` built its HTTP server directly
+(`buildWalkthroughServer`) without calling `wrapper.SetTracer`. The
+`panicIfNotSetTracer` sentinel that was supposed to surface mis-wired
+binaries on day 0 instead fired on the first `POST /login` inside
+Recovery middleware, 500ing the test. The underlying defect: any new
+bootstrap entry point becomes a landmine; "fail loud on unset" is
+indistinguishable from "fail loud on missing wiring" because the
+panic occurs deep in the HTTP stack, not at startup. §5's
+constructor-injected ownership gets the wiring guarantee via compile
+errors on `router.New` / `eventrouter.New` call sites (only
+`bootstrap` constructs them) without the landmine.
 
 ### F. Context-propagated tracer (`ctxkeys.WithTracer`)
 Rejected as a middle ground. The middleware layer setting
-`ctx.Value(tracerKey, t)` is cleaner than an Option but adds a second
-potential failure path — if a Cell somehow serves a request without
-passing through the runtime HTTP middleware chain (e.g. test
+`ctx.Value(tracerKey, t)` is cleaner than a `HandlerOption` but adds a
+second potential failure path — if a Cell somehow serves a request
+without passing through the runtime HTTP middleware chain (test
 harnesses, sidecar sockets, future embedded modes) the tracer is
-missing again. Package-level `SetTracer` bound once at startup has no
-such gap: every call site in the process shares the same instance.
-Compared against §5: ctx propagation would have required no API
-change to Mount, but kept the "multiple injection sites + partial
-wiring" failure mode alive.
+missing again. Compared against §5's construction-time injection on
+Router: ctx propagation would have added a per-request lookup in the
+hot path, plus a silent-noop failure mode for any code path that
+bypasses middleware. The §5 approach pays zero per-request cost
+(tracer is a field on the Router pulled once at registration) and
+catches the wiring gap at the `wrapper.TracerFromCarrier` type
+assertion — if a mux without `TracerCarrier` is passed, the fallback
+is visible `NoopTracer{}` that tests can assert against.
 
 ## Follow-ups (registered in docs/backlog.md)
 
 - `PR-A11-M CELL-ROUTES-MOUNT-MIGRATION-01` — migrate remaining ~33
-  HTTP routes across cells/accesscore/configcore/auditcore + examples
-  to `auth.Mount`; delete `auth.Declare` + `RouteDecl` at the end.
-- `PR-A11-B OUTBOX-CONSUMER-WRAPPER-01` — extend
-  `kernel/outbox.ConsumerBase` + `runtime/eventrouter.Router.AddHandler`
-  to accept `wrapper.ContractSpec`; migrate all existing subscribers.
+  HTTP routes and ~5 consumer subscriptions
+  (cells/accesscore/configcore/auditcore + examples) from legacy
+  `auth.Declare` / `r.AddHandler(topic, ...)` to `auth.Mount(…Route{…})` /
+  `r.AddContractHandler(spec, …)`; delete `auth.Declare` + `RouteDecl`
+  and `EventRouter.AddHandler(topic, …)` at the end.
 - `PR-A11-V FMT-17-SPEC-CONTRACT-SYNC-01` — governance rule that
   grep-scans `wrapper.ContractSpec{}` literals in cells/examples and
   cross-references against `contracts/**.yaml`; drift = validation
-  error at `gocell validate --strict`.
+  error at `gocell validate --strict`. Covers both HTTP (method/path)
+  and event (topic/kind) dimensions after §5 wired both sides.
 - `PR-A11-S LOGGING-SLOG-CONTRACT-ID-01` — teach
   `runtime/observability/logging.contextHandler` to read
   `kernel/ctxkeys.ContractID` and emit `contract_id` on every slog
   record (today it only emits trace_id/span_id/cell_id).
-- `PR-A11-R1 WRAPPER-TRACER-LINT-GUARD-01` — new FMT governance rule
-  that scans `kernel/wrapper/*.go` public function signatures and
-  rejects any `Tracer` parameter outside `SetTracer`; prevents future
-  regressions that would re-introduce the bypass path §5 eliminated.
+- `PR-A11-R1 WRAPPER-NO-PACKAGE-STATE-LINT-01` — new FMT governance
+  rule that scans `kernel/wrapper/*.go` for package-level `var`
+  declarations with interface or pointer types. §5's
+  constructor-injection discipline must stay — any regression that
+  re-introduces a `var tracer Tracer` (or similar live-resource
+  singleton) in kernel/wrapper should fail `gocell validate --strict`
+  with a hint to thread the dependency through the construction path
+  instead. Constants and immutable zero-value sentinels (NoopTracer{})
+  are allowed; the rule flags only mutable global state.
+
+Note: the prior `PR-A11-B OUTBOX-CONSUMER-WRAPPER-01` follow-up is now
+done in this PR (see §4 round-3 update). No open consumer-side
+follow-up remains at the wiring level — only the mechanical
+migration, folded into PR-A11-M.
 
 ## References
 

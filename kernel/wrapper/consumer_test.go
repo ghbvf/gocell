@@ -20,12 +20,10 @@ func eventSpec() wrapper.ContractSpec {
 
 func TestWrapConsumer_PassesAckResultThrough(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
-	w := wrapper.WrapConsumer(eventSpec(), inner)
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{EventType: "session.revoked.v1"})
 	if res.Disposition != outbox.DispositionAck {
 		t.Errorf("want Ack, got %v", res.Disposition)
@@ -53,13 +51,11 @@ func TestWrapConsumer_PassesAckResultThrough(t *testing.T) {
 
 func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	transient := errors.New("db unreachable")
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: transient}
 	}
-	w := wrapper.WrapConsumer(eventSpec(), inner)
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	if res.Disposition != outbox.DispositionRequeue {
@@ -76,13 +72,11 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 
 func TestWrapConsumer_MarksErrorOnReject(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	permanent := outbox.NewPermanentError(errors.New("schema mismatch"))
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: permanent}
 	}
-	w := wrapper.WrapConsumer(eventSpec(), inner)
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	if res.Disposition != outbox.DispositionReject {
@@ -101,7 +95,7 @@ func TestWrapConsumer_PanicsOnNonEventSpec(t *testing.T) {
 			t.Fatal("expected panic on http spec")
 		}
 	}()
-	_ = wrapper.WrapConsumer(loginSpec(), func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
+	_ = wrapper.WrapConsumer(wrapper.NoopTracer{}, loginSpec(), func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 }
@@ -113,55 +107,47 @@ func TestWrapConsumer_PanicsOnNilFn(t *testing.T) {
 			t.Fatal("expected panic on nil fn")
 		}
 	}()
-	_ = wrapper.WrapConsumer(eventSpec(), nil)
+	_ = wrapper.WrapConsumer(wrapper.NoopTracer{}, eventSpec(), nil)
 }
 
 func TestWrapConsumer_PutsContractIDInContext(t *testing.T) {
-	wrapper.SetTracer(wrapper.NoopTracer{})
-	t.Cleanup(wrapper.ResetTracerForTest)
-
+	t.Parallel()
 	var seen string
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		seen = wrapper.ContractIDFromContext(ctx)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
-	w := wrapper.WrapConsumer(eventSpec(), inner)
+	w := wrapper.WrapConsumer(wrapper.NoopTracer{}, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
 	if seen != "event.session.revoked.v1" {
 		t.Errorf("ContractID missing from ctx; got %q", seen)
 	}
 }
 
-// TestWrapConsumer_PanicsIfTracerNotSet verifies that an unset tracer panics
-// on first event delivery with a descriptive message.
-func TestWrapConsumer_PanicsIfTracerNotSet(t *testing.T) {
-	wrapper.ResetTracerForTest()
-	t.Cleanup(wrapper.ResetTracerForTest)
-
-	w := wrapper.WrapConsumer(eventSpec(), func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
+// TestWrapConsumer_NilTracer_FallsBackToNoop verifies WrapConsumer handles a
+// nil Tracer argument the same way as HTTPHandler: falls back to NoopTracer{}
+// so missing wiring never panics at event delivery time.
+func TestWrapConsumer_NilTracer_FallsBackToNoop(t *testing.T) {
+	t.Parallel()
+	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	})
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic when tracer not set")
-		}
-	}()
-	_ = w(context.Background(), outbox.Entry{})
+	}
+	w := wrapper.WrapConsumer(nil, eventSpec(), inner)
+	res := w(context.Background(), outbox.Entry{})
+	if res.Disposition != outbox.DispositionAck {
+		t.Errorf("want Ack with nil tracer, got %v", res.Disposition)
+	}
 }
 
 // TestWrapConsumer_PanicInHandler verifies that a panic in fn ends the span
 // (SetStatus=Error, RecordError called, End called) and the panic is re-thrown.
 func TestWrapConsumer_PanicInHandler(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	boom := errors.New("consumer exploded")
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		panic(boom)
 	}
-	w := wrapper.WrapConsumer(eventSpec(), inner)
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
 
 	defer func() {
 		r := recover()
@@ -189,12 +175,10 @@ func TestWrapConsumer_PanicInHandler(t *testing.T) {
 // wrapped in an error for RecordError.
 func TestWrapConsumer_PanicNonError(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
-
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		panic("string panic value")
 	}
-	w := wrapper.WrapConsumer(eventSpec(), inner)
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
 
 	defer func() {
 		_ = recover()

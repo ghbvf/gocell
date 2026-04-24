@@ -15,13 +15,12 @@ import (
 // span name (route-collapse semantics via the spec.Path template).
 func TestHTTPHandler_MultiplePathsWithSameTemplate_CollapseSpanName(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
 
 	spec := wrapper.ContractSpec{
 		ID: "http.user.get.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/api/v1/users/{id}",
 	}
-	h := wrapper.HTTPHandler(spec, okHandler(200))
+	h := wrapper.HTTPHandler(tr, spec, okHandler(200))
 
 	for _, url := range []string{"/api/v1/users/abc", "/api/v1/users/42"} {
 		req := httptest.NewRequest("GET", url, nil)
@@ -44,7 +43,6 @@ func TestHTTPHandler_MultiplePathsWithSameTemplate_CollapseSpanName(t *testing.T
 // discovery (http.NewResponseController) still works.
 func TestHTTPHandler_Unwrap_PreservesFlusher(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
 
 	var flushable bool
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -54,7 +52,7 @@ func TestHTTPHandler_Unwrap_PreservesFlusher(t *testing.T) {
 		}
 		w.WriteHeader(200)
 	})
-	h := wrapper.HTTPHandler(loginSpec(), inner)
+	h := wrapper.HTTPHandler(tr, loginSpec(), inner)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -69,12 +67,11 @@ func TestHTTPHandler_Unwrap_PreservesFlusher(t *testing.T) {
 // marks span status=Error so ops can see the misbehaviour.
 func TestWrapConsumer_InvalidDisposition_MarksErrorWithoutModifyingResult(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
 
 	inner := func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{} // Disposition == 0 (invalid)
 	}
-	w := wrapper.WrapConsumer(eventSpec(), inner)
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	if res.Disposition != 0 {
@@ -88,9 +85,8 @@ func TestWrapConsumer_InvalidDisposition_MarksErrorWithoutModifyingResult(t *tes
 // TestHTTPHandler_WithFilter_NilKeepsDefault — nil filter option is a no-op.
 func TestHTTPHandler_WithFilter_NilKeepsDefault(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
 
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(200), wrapper.WithFilter(nil))
+	h := wrapper.HTTPHandler(tr, loginSpec(), okHandler(200), wrapper.WithFilter(nil))
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if len(tr.spans) != 1 {
@@ -150,7 +146,6 @@ func TestDefaultProbeFilter(t *testing.T) {
 // DefaultProbeFilter to HTTPHandler skips span creation for probe paths.
 func TestDefaultProbeFilter_WithHTTPHandler(t *testing.T) {
 	tr := &spyTracer{}
-	setSpyTracer(t, tr)
 
 	called := false
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -164,7 +159,7 @@ func TestDefaultProbeFilter_WithHTTPHandler(t *testing.T) {
 		Method:    "GET",
 		Path:      "/healthz",
 	}
-	h := wrapper.HTTPHandler(spec, inner, wrapper.WithFilter(wrapper.DefaultProbeFilter))
+	h := wrapper.HTTPHandler(tr, spec, inner, wrapper.WithFilter(wrapper.DefaultProbeFilter))
 
 	req := httptest.NewRequest("GET", "/healthz", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)

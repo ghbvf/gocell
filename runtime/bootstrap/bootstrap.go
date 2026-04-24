@@ -143,11 +143,14 @@ func WithRouterOptions(opts ...router.Option) Option {
 	}
 }
 
-// WithTracer enables distributed tracing for HTTP requests. The tracer is
-// forwarded to the router's middleware chain via router.WithTracer and also
-// installed as the package-level kernel/wrapper tracer via wrapper.SetTracer.
-// Without this option, Bootstrap falls back to wrapper.NoopTracer{} with a
-// slog.Warn so spans are silently discarded rather than causing a panic.
+// WithTracer enables distributed tracing. The tracer is forwarded in three
+// places: router.WithTracer (outer HTTP request span middleware),
+// eventrouter.WithTracer (consumer-side wrapper.WrapConsumer span), and
+// stored on Bootstrap.wrapperTracer for future contract-aware construction
+// sites to read. Without this option, both wrapper.HTTPHandler and
+// wrapper.WrapConsumer fall back to wrapper.NoopTracer{} (nil tracer path);
+// a slog.Warn is emitted at bootstrap time so ops notice the silent
+// degrade.
 //
 // ref: go-zero — observability configuration at app level
 func WithTracer(t tracing.Tracer) Option {
@@ -654,9 +657,11 @@ type Bootstrap struct {
 	// resource registration.
 	managedResourceNil bool
 
-	// wrapperTracer is the Tracer supplied via WithTracer. When non-nil it is
-	// installed as the kernel/wrapper package-level tracer during phase1.
-	// When nil, Bootstrap falls back to wrapper.NoopTracer{} with a slog.Warn.
+	// wrapperTracer is the Tracer supplied via WithTracer. It is threaded into
+	// router.WithTracer (HTTP) and eventrouter.WithTracer (consumer) at
+	// phase6/phase7 construction. When nil, wrapper.HTTPHandler and
+	// wrapper.WrapConsumer each fall back to wrapper.NoopTracer{} at call
+	// time, and phase1 logs a slog.Warn so missing tracer wiring surfaces.
 	wrapperTracer tracing.Tracer
 }
 

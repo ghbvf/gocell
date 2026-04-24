@@ -67,18 +67,13 @@ func (t *authSpyTracer) only(tb testing.TB) *authSpySpan {
 	return t.spans[0]
 }
 
-// setAuthSpy installs tr as package-level tracer and resets to NoopTracer after test.
-func setAuthSpy(t *testing.T, tr *authSpyTracer) {
-	t.Helper()
-	wrapper.SetTracer(tr)
-	t.Cleanup(func() { wrapper.SetTracer(wrapper.NoopTracer{}) })
-}
-
-// TestMain installs a NoopTracer so all route_test.go tests that call Mount
-// with a Contract (triggering wrapper.HTTPHandler) don't panic.
-func TestMain(m *testing.M) {
-	wrapper.SetTracer(wrapper.NoopTracer{})
-	m.Run()
+// newCaptureMuxWithSpy returns a captureMux whose WrapperTracer() yields tr,
+// so Mount wires the spy into the contract-span path without relying on any
+// process-wide tracer registration.
+func newCaptureMuxWithSpy(tr *authSpyTracer) *captureMux {
+	m := newCaptureMux()
+	m.tracer = tr
+	return m
 }
 
 func loginContractSpec() wrapper.ContractSpec {
@@ -219,9 +214,7 @@ func TestMount_PathNormalised(t *testing.T) {
 // annotated with gocell.contract.id.
 func TestMount_PolicyDenyEmitsContractSpan(t *testing.T) {
 	tr := &authSpyTracer{}
-	setAuthSpy(t, tr)
-
-	mux := newCaptureMux()
+	mux := newCaptureMuxWithSpy(tr)
 	Mount(mux, Route{
 		Contract: loginContractSpec(),
 		Method:   "POST",
