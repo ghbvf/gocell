@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -57,35 +56,6 @@ func WithConfig(yamlPath, envPrefix string) Option {
 	return func(b *Bootstrap) {
 		b.configPath = yamlPath
 		b.envPrefix = envPrefix
-	}
-}
-
-// WithHTTPPrimaryAddr sets the primary HTTP listen address used for
-// /api/v1/*, public routes, and infra endpoints (/healthz, /readyz, /metrics).
-// Default (when this option is absent) is ":8080".
-//
-// PR-A14a: replaces the former single-listener WithHTTPAddr. See also
-// WithHTTPInternalAddr for the /internal/v1/* listener.
-func WithHTTPPrimaryAddr(addr string) Option {
-	return func(b *Bootstrap) {
-		b.primaryAddr = addr
-	}
-}
-
-// WithHTTPInternalAddr sets the internal HTTP listen address dedicated to
-// /internal/v1/* routes (control-plane). Default (when this option is absent)
-// is ":9090".
-//
-// Operators should bind the internal listener to an internal network segment
-// so that service-token / mTLS enforcement is the primary line of defence
-// for control-plane traffic. Mounting infra endpoints or /api/v1/* on this
-// listener returns 404 — the mux physically excludes them.
-//
-// PR-A14a: the internal listener + `WithInternalMiddleware` replace the
-// pre-PR-A14a path-prefix guard.
-func WithHTTPInternalAddr(addr string) Option {
-	return func(b *Bootstrap) {
-		b.internalAddr = addr
 	}
 }
 
@@ -233,20 +203,17 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 	}
 }
 
-// WithAuthMiddleware enables authentication for HTTP business routes with an
-// explicitly injected verifier. Use this option when the verifier must be
-// supplied directly (tests, advanced scenarios, non-cell composition); use
-// WithAuthDiscovery when a cell in the assembly exposes an AuthProvider for
-// automatic discovery.
+// WithAuthMiddleware enables JWT authentication for HTTP business routes on
+// the primary listener. The verifier is wired into the PrimaryListener's
+// router at phase5 via router.WithAuthMiddleware.
 //
-// The verifier is applied to the router's middleware chain at Run() time via
-// router.WithAuthMiddleware. Public endpoints are declared via auth.Declare
-// with Public:true inside each Cell's RegisterRoutes; Bootstrap's FinalizeAuth
-// compiles them into the router's auth predicates.
+// Public endpoints are declared via auth.Declare with Public:true inside each
+// Cell's RouteGroups; Bootstrap's FinalizeAuth compiles them into the router's
+// auth predicates.
 //
-// Infra endpoints (/healthz, /readyz, /metrics) are registered on the
-// router's outer mux and naturally bypass business-route middleware, so they
-// do not need to be declared public.
+// Use WithAuthDiscovery when a cell in the assembly exposes an AuthProvider for
+// automatic discovery; use this option when the verifier must be supplied
+// directly (tests, advanced scenarios, non-cell composition).
 //
 // ref: go-kratos/kratos — auth middleware at service level
 // ref: go-zero — per-route WithJwt() opt-in auth
@@ -258,14 +225,9 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 
 // WithAuthDiscovery opts into auth verifier discovery from the assembly.
 // When invoked, Bootstrap inspects every Cell post-Init for an AuthProvider
-// implementation and wires the discovered verifier into AuthMiddleware.
-// If no provider is found (or multiple conflicting ones), Run returns an
-// error — fail-closed.
-//
-// This is the F3 successor to the dual-purpose WithPublicEndpoints opt-in:
-// public routes are now declared via auth.Declare in each Cell, so bootstrap
-// only needs an explicit signal that "this assembly expects JWT-backed auth
-// and a provider cell will expose it".
+// implementation and wires the discovered verifier into the PrimaryListener
+// router's AuthMiddleware. If no provider is found (or multiple conflicting
+// ones), Run returns an error — fail-closed.
 //
 // Mutually exclusive with WithAuthMiddleware — that option injects the
 // verifier directly, bypassing discovery. Using both is rejected by phase 0.
@@ -294,24 +256,6 @@ func WithShutdownTimeout(d time.Duration) Option {
 func WithPreShutdownDelay(d time.Duration) Option {
 	return func(b *Bootstrap) {
 		b.preShutdownDelay = d
-	}
-}
-
-// WithPrimaryListener sets a pre-built net.Listener for the primary HTTP
-// server, useful in tests to avoid port conflicts. When set, the value from
-// WithHTTPPrimaryAddr is ignored for bind purposes (the listener's own
-// address is used for logging).
-func WithPrimaryListener(ln net.Listener) Option {
-	return func(b *Bootstrap) {
-		b.primaryListener = ln
-	}
-}
-
-// WithInternalListener sets a pre-built net.Listener for the internal HTTP
-// server. Mirrors WithPrimaryListener for the control-plane listener.
-func WithInternalListener(ln net.Listener) Option {
-	return func(b *Bootstrap) {
-		b.internalListener = ln
 	}
 }
 
@@ -377,27 +321,55 @@ func WithRelayHealth(r *runtimeoutbox.Relay) Option {
 	}
 }
 
-// validateHTTPListenerAddrs fail-fasts on mis-configured HTTP listeners. Each
-// side (primary / internal) must have either a non-empty bind address OR a
-// caller-injected listener — a listener renders its addr irrelevant because
-// the socket is already bound. When both sides bind from addr fields, the
-// addrs must differ so Run() never tries to bind two sockets on the same port.
+// validateHTTPListenerConfigs fail-fasts when no listeners are declared via
+// WithListener, or when a listener config has neither addr nor pre-bound net.
 //
-// PR-A14a: replaces validateInternalGuard. Internal middleware wiring no
-// longer requires a prefix because routes are dispatched by Router.Route at
-// registration time.
-func (b *Bootstrap) validateHTTPListenerAddrs() error {
-	if b.primaryListener == nil && b.primaryAddr == "" {
-		return fmt.Errorf("bootstrap: primary HTTP addr or listener required; use WithHTTPPrimaryAddr or WithPrimaryListener")
+// PR-A14b: replaces validateHTTPListenerAddrs. Listener configuration is now
+// declarative via WithListener; the old primaryAddr/internalAddr fields are gone.
+func (b *Bootstrap) validateHTTPListenerConfigs() error {
+	if len(b.listenerConfigs) == 0 {
+		return fmt.Errorf("bootstrap: no HTTP listeners declared; use WithListener to declare at least one listener")
 	}
-	if b.internalListener == nil && b.internalAddr == "" {
-		return fmt.Errorf("bootstrap: internal HTTP addr or listener required; use WithHTTPInternalAddr or WithInternalListener")
-	}
-	// Same-addr collision only matters when both sides bind via addr.
-	if b.primaryListener == nil && b.internalListener == nil && b.primaryAddr == b.internalAddr {
-		return fmt.Errorf("bootstrap: primary and internal HTTP addrs must differ (both %q)", b.primaryAddr)
+	for ref, cfg := range b.listenerConfigs {
+		if cfg.net == nil && cfg.addr == "" {
+			return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
+		}
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Backward-compat shims (PR-A14b migration helpers)
+//
+// These shims map the old two-listener API (WithPrimaryListener / WithInternalListener /
+// WithHTTPPrimaryAddr / WithHTTPInternalAddr) to the new declarative WithListener API.
+// They are intentionally kept simple: each shim calls WithListener internally.
+// When only a PrimaryListener (no HealthListener) is declared, phase5BuildRouters
+// falls back to mounting health endpoints on the PrimaryListener.
+// ---------------------------------------------------------------------------
+
+// WithPrimaryListener injects a pre-bound net.Listener as the PrimaryListener.
+// Deprecated: use WithListener(cell.PrimaryListener, addr, nil, WithListenerNet(ln)).
+func WithPrimaryListener(ln net.Listener) Option {
+	return WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln))
+}
+
+// WithInternalListener injects a pre-bound net.Listener as the InternalListener.
+// Deprecated: use WithListener(cell.InternalListener, addr, nil, WithListenerNet(ln)).
+func WithInternalListener(ln net.Listener) Option {
+	return WithListener(cell.InternalListener, ln.Addr().String(), nil, WithListenerNet(ln))
+}
+
+// WithHTTPPrimaryAddr sets the primary listener address.
+// Deprecated: use WithListener(cell.PrimaryListener, addr, nil).
+func WithHTTPPrimaryAddr(addr string) Option {
+	return WithListener(cell.PrimaryListener, addr, nil)
+}
+
+// WithHTTPInternalAddr sets the internal listener address.
+// Deprecated: use WithListener(cell.InternalListener, addr, nil).
+func WithHTTPInternalAddr(addr string) Option {
+	return WithListener(cell.InternalListener, addr, nil)
 }
 
 // WithAdapterInfo sets static adapter configuration metadata that is exposed
@@ -499,25 +471,6 @@ func WithMetricsProvider(p kernelmetrics.Provider) Option {
 	}
 }
 
-// WithInternalMiddleware appends one or more middleware factories to the
-// internal HTTP listener's mux. Callers use this to install the service-token
-// (HMAC) / mTLS authentication middleware that protects /internal/v1/*
-// routes — those routes are physically mounted on the internal mux, so this
-// is the sole authentication layer between the network and the handler.
-//
-// Each middleware must be non-nil; NewE returns an error when any entry is nil.
-//
-// PR-A14a: replaces WithInternalEndpointGuard(prefix, guard). The prefix
-// parameter is no longer needed because /internal/v1/* routes land on a
-// physically separate mux by Router construction.
-//
-// ref: go-kratos/kratos middleware — per-transport middleware chains.
-func WithInternalMiddleware(mws ...func(http.Handler) http.Handler) Option {
-	return func(b *Bootstrap) {
-		b.internalMiddlewares = append(b.internalMiddlewares, mws...)
-	}
-}
-
 // WithHookObserver registers a cell lifecycle hook observer for the
 // default assembly built when no WithAssembly option is supplied.
 //
@@ -572,8 +525,6 @@ type namedChecker struct {
 type Bootstrap struct {
 	configPath                  string
 	envPrefix                   string
-	primaryAddr                 string // PR-A14a: primary HTTP listener addr (public, /api/v1/*, infra)
-	internalAddr                string // PR-A14a: internal HTTP listener addr (/internal/v1/*)
 	assembly                    *assembly.CoreAssembly
 	workers                     []worker.Worker
 	publisher                   outbox.Publisher
@@ -583,8 +534,6 @@ type Bootstrap struct {
 	authDiscovery               bool // true when WithAuthDiscovery was called
 	shutdownTimeout             time.Duration
 	preShutdownDelay            time.Duration
-	primaryListener             net.Listener // PR-A14a: pre-bound listener for primary server (tests)
-	internalListener            net.Listener // PR-A14a: pre-bound listener for internal server (tests)
 	healthCheckers              []namedChecker
 	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
 	verboseToken                string            // token for /readyz?verbose access control
@@ -609,11 +558,6 @@ type Bootstrap struct {
 	// circuitBreakerNil is set by WithCircuitBreaker when a nil Allower is
 	// passed. Checked at Run() to fail-fast instead of silently skipping CB.
 	circuitBreakerNil bool
-
-	// internalMiddlewares hold the ordered middleware stack applied to the
-	// internal mux by WithInternalMiddleware. Forwarded to the router at
-	// Run() time via router.WithInternalMiddleware.
-	internalMiddlewares []func(http.Handler) http.Handler
 
 	// relayHealthNil is set by WithRelayHealth when a nil relay is passed.
 	// Checked at Run() to fail-fast rather than silently skipping relay health.
@@ -651,9 +595,7 @@ type Bootstrap struct {
 	managedResourceNil bool
 
 	// listenerConfigs holds the PR-A14b declarative listener registrations.
-	// Keyed by ListenerRef to deduplicate declarations; duplicate ref is a
-	// phase0 error detected by WithListener at option-application time (last
-	// writer wins within a single New() call — phase0 validates completeness).
+	// Keyed by ListenerRef to deduplicate declarations.
 	// Initialized lazily by the first WithListener option.
 	listenerConfigs map[cell.ListenerRef]listenerConfig
 }
@@ -667,14 +609,6 @@ type Bootstrap struct {
 // phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{
-		// PR-A14a: dual listener defaults. primary 8080 = public (business /
-		// api / infra); internal 127.0.0.1:9090 = control-plane /internal/v1/*.
-		// The internal listener defaults to loopback so dev-mode deployments
-		// without a service-token guard are not trivially reachable across
-		// the network. Override with WithHTTPPrimaryAddr / WithHTTPInternalAddr
-		// (production: bind internal to an internal-VPC interface).
-		primaryAddr:          ":8080",
-		internalAddr:         "127.0.0.1:9090",
 		shutdownTimeout:      shutdown.DefaultTimeout,
 		configWatcherFactory: config.NewWatcher,
 		metricsProvider:      kernelmetrics.NopProvider{},
@@ -820,7 +754,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	if err := b.phase4WireAuthAndWatcher(s); err != nil {
 		return rollback(err)
 	}
-	if err := b.phase5BuildHTTPRouter(s); err != nil {
+	if err := b.phase5BuildRouters(s); err != nil {
 		return rollback(err)
 	}
 	if err := b.phase6StartEventRouter(runCtx, s); err != nil {

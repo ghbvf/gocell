@@ -35,6 +35,16 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
+// frameworkPrimaryWhitelist contains the policy-coverage whitelist entries for
+// routes that bootstrap itself mounts on the primary listener without
+// auth.Declare — the internal-prefix isolation 404 handler.
+// Health probes (/healthz, /readyz) are declared via auth.Declare(Public:true)
+// inside HealthRouteGroups and do not need to be whitelisted here.
+// Using prefix form "/path/*" exempts all methods on those paths.
+var frameworkPrimaryWhitelist = []string{
+	"/internal/v1/*",
+}
+
 // phaseState extends runState with phase-local values that must be shared
 // across phases but are not part of the teardown/error-channel core.
 // All fields are set during their respective phase and read by later phases.
@@ -54,8 +64,9 @@ type phaseState struct {
 	reloads *reloadGate
 
 	// set by phase5
-	hh  *health.Handler
-	rtr *router.Router
+	hh      *health.Handler
+	rtr     *router.Router                      // primary listener's router (may be nil when no primary)
+	routers map[cell.ListenerRef]*router.Router // all per-listener routers
 
 	// registeredCheckers guards against duplicate health checker names across
 	// phases. Keyed by checker name; value is struct{}.
@@ -126,13 +137,6 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
 	}
-	// PR-A14a: validate dual HTTP listener addresses + nil internal middleware.
-	if err := b.validateHTTPListenerAddrs(); err != nil {
-		return err
-	}
-	if err := b.validateInternalMiddlewares(); err != nil {
-		return err
-	}
 	if b.relayHealthNil {
 		return fmt.Errorf("bootstrap: relay must not be nil in WithRelayHealth")
 	}
@@ -142,6 +146,12 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.authVerifier != nil && b.authDiscovery {
 		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithAuthDiscovery " +
 			"are mutually exclusive; use WithAuthDiscovery (recommended)")
+	}
+	// PR-A14b: validate declarative listener configs last — other option
+	// errors (nil checkers, nil resources, mutual exclusion) are option-level
+	// mistakes and should surface before HTTP-layout errors.
+	if err := b.validateHTTPListenerConfigs(); err != nil {
+		return err
 	}
 	return nil
 }
@@ -163,17 +173,6 @@ func (b *Bootstrap) validateHealthCheckers() error {
 			return fmt.Errorf("bootstrap: duplicate health checker name %q; each checker must have a unique name", hc.name)
 		}
 		seen[hc.name] = struct{}{}
-	}
-	return nil
-}
-
-// validateInternalMiddlewares rejects nil entries in the internal-mux chain.
-// A silent nil would disable the authoritative auth layer for /internal/v1/*.
-func (b *Bootstrap) validateInternalMiddlewares() error {
-	for i, mw := range b.internalMiddlewares {
-		if mw == nil {
-			return fmt.Errorf("bootstrap: WithInternalMiddleware entry %d must not be nil", i)
-		}
 	}
 	return nil
 }
@@ -491,9 +490,38 @@ func (b *Bootstrap) invokeCellReload(id string, cr cell.ConfigReloader, evt cell
 	return ok
 }
 
-// phase5BuildHTTPRouter builds the HTTP router, registers health checkers,
-// registers cell HTTP routes, and sets s.hh and s.rtr.
-func (b *Bootstrap) phase5BuildHTTPRouter(s *phaseState) error {
+// phase5BuildRouters builds one Router per declared listener, collects
+// RouteGroups from all RouteGroupContributor cells, mounts each group on its
+// listener's router, and finalizes auth on the primary router.
+//
+// PR-A14b: replaces the single-router phase5BuildHTTPRouter. Each listener
+// now gets its own chi.Mux root with a policy applied at build time.
+//
+// ref: go-kratos/kratos app.go — per-server middleware at build time.
+func (b *Bootstrap) phase5BuildRouters(s *phaseState) error {
+	if err := b.phase5InitHealthHandler(s); err != nil {
+		return err
+	}
+	routers, err := b.phase5BuildPerListenerRouters(s)
+	if err != nil {
+		return err
+	}
+	groups := b.phase5CollectRouteGroups(s, routers)
+	if err := b.phase5MountRouteGroups(routers, groups); err != nil {
+		return err
+	}
+	if err := b.phase5FinalizePrimaryRouter(routers); err != nil {
+		return err
+	}
+	s.routers = routers
+	if primaryRtr, ok := routers[cell.PrimaryListener]; ok {
+		s.rtr = primaryRtr
+	}
+	return nil
+}
+
+// phase5InitHealthHandler creates the health.Handler and registers checkers.
+func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	var hhOpts []health.Option
 	if b.readyzDeadline > 0 {
 		hhOpts = append(hhOpts, health.WithDeadline(b.readyzDeadline))
@@ -506,37 +534,114 @@ func (b *Bootstrap) phase5BuildHTTPRouter(s *phaseState) error {
 		hh.SetVerboseToken(b.verboseToken)
 	}
 	s.hh = hh
+	return b.registerAllHealthCheckers(s)
+}
 
-	if err := b.registerAllHealthCheckers(s); err != nil {
-		return err
+// phase5BuildPerListenerRouters creates one Router per declared listener config.
+func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.ListenerRef]*router.Router, error) {
+	routers := make(map[cell.ListenerRef]*router.Router, len(b.listenerConfigs))
+	for ref, cfg := range b.listenerConfigs {
+		rtrOpts, err := b.buildListenerRouterOpts(s, ref, cfg)
+		if err != nil {
+			return nil, err
+		}
+		rtr, err := router.NewForListener(ref, cfg.policy, rtrOpts...)
+		if err != nil {
+			return nil, fmt.Errorf("bootstrap: build router for listener %q: %w", ref.String(), err)
+		}
+		routers[ref] = rtr
 	}
+	return routers, nil
+}
 
-	rtr, err := b.buildRouter(s, hh)
-	if err != nil {
-		return err
-	}
-
-	// Register HTTP routes for all HTTPRegistrar cells.
+// phase5CollectRouteGroups resolves the health listener fallback and collects
+// RouteGroups from health, RouteGroupContributor cells, and HTTPRegistrar cells.
+func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.ListenerRef]*router.Router) []cell.RouteGroup {
+	healthRef := b.resolveHealthListenerRef(routers)
+	groups := b.remapHealthGroups(s.hh, healthRef)
 	for _, id := range s.asm.CellIDs() {
 		c := s.asm.Cell(id)
+		if rgc, ok := c.(cell.RouteGroupContributor); ok {
+			groups = append(groups, rgc.RouteGroups()...)
+			continue
+		}
 		if hr, ok := c.(cell.HTTPRegistrar); ok {
-			hr.RegisterRoutes(rtr)
+			b.mountHTTPRegistrarCompat(hr, routers)
 		}
 	}
+	return groups
+}
 
-	if err := b.validateAuthVerifierForDeclaredRoutes(rtr); err != nil {
+// resolveHealthListenerRef returns the listener that should serve health endpoints.
+// Falls back to PrimaryListener when no explicit HealthListener is declared.
+func (b *Bootstrap) resolveHealthListenerRef(routers map[cell.ListenerRef]*router.Router) cell.ListenerRef {
+	if _, ok := routers[cell.HealthListener]; ok {
+		return cell.HealthListener
+	}
+	if _, ok := routers[cell.PrimaryListener]; ok {
+		return cell.PrimaryListener
+	}
+	return cell.HealthListener
+}
+
+// remapHealthGroups returns the HealthRouteGroups with the listener field
+// updated to healthRef (when it differs from HealthListener).
+func (b *Bootstrap) remapHealthGroups(hh *health.Handler, healthRef cell.ListenerRef) []cell.RouteGroup {
+	raw := HealthRouteGroups(hh)
+	groups := make([]cell.RouteGroup, 0, len(raw))
+	for _, rg := range raw {
+		if rg.Listener == cell.HealthListener && healthRef != cell.HealthListener {
+			rg.Listener = healthRef
+		}
+		groups = append(groups, rg)
+	}
+	return groups
+}
+
+// mountHTTPRegistrarCompat mounts legacy HTTPRegistrar routes via a split mux
+// that routes /internal/v1/* to the InternalListener router.
+func (b *Bootstrap) mountHTTPRegistrarCompat(hr cell.HTTPRegistrar, routers map[cell.ListenerRef]*router.Router) {
+	primaryRtr := routers[cell.PrimaryListener]
+	internalRtr := routers[cell.InternalListener]
+	if primaryRtr != nil || internalRtr != nil {
+		split := newHTTPRegistrarSplitMux(primaryRtr, internalRtr)
+		hr.RegisterRoutes(split)
+	}
+}
+
+// phase5MountRouteGroups mounts each RouteGroup on its listener's router.
+func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.Router, groups []cell.RouteGroup) error {
+	for _, rg := range groups {
+		rtr, ok := routers[rg.Listener]
+		if !ok {
+			return fmt.Errorf("bootstrap: RouteGroup references undeclared listener %q; add WithListener(%s,...) to bootstrap options",
+				rg.Listener.String(), rg.Listener.String())
+		}
+		if rg.Register == nil {
+			return fmt.Errorf("bootstrap: RouteGroup for listener %q has nil Register function", rg.Listener.String())
+		}
+		if rg.Prefix != "" {
+			rtr.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+		} else {
+			rg.Register(rtr)
+		}
+	}
+	return nil
+}
+
+// phase5FinalizePrimaryRouter installs /internal/v1/* isolation and finalizes auth.
+func (b *Bootstrap) phase5FinalizePrimaryRouter(routers map[cell.ListenerRef]*router.Router) error {
+	primaryRtr, ok := routers[cell.PrimaryListener]
+	if !ok {
+		return nil
+	}
+	router.InstallInternalPrefixIsolation(primaryRtr)
+	if err := b.validateAuthVerifierForDeclaredRoutes(primaryRtr); err != nil {
 		return err
 	}
-
-	// After RegisterRoutes has accumulated every Cell's auth declarations via
-	// auth.Declare, finalize the router so AuthMiddleware predicates (public,
-	// password-reset-exempt, delegated) reflect the aggregated metadata. Must
-	// run before phase7 starts the HTTP listener.
-	if err := rtr.FinalizeAuth(); err != nil {
+	if err := primaryRtr.FinalizeAuth(); err != nil {
 		return fmt.Errorf("bootstrap: router finalize auth: %w", err)
 	}
-
-	s.rtr = rtr
 	return nil
 }
 
@@ -562,6 +667,35 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(rtr *router.Router) er
 			"add bootstrap.WithAuthMiddleware or bootstrap.WithAuthDiscovery, or mark the route Public/Delegated",
 		len(protected), strings.Join(protected, ", "),
 	)
+}
+
+// buildListenerRouterOpts assembles the router.Option slice for a single
+// listener's router. Auth middleware is only wired on the PrimaryListener.
+func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef, _ listenerConfig) ([]router.Option, error) {
+	opts := make([]router.Option, 0, len(b.routerOpts)+2)
+	opts = append(opts, b.routerOpts...)
+
+	// R2: auto-wire HTTP metrics collector when a Provider is configured.
+	var err error
+	opts, err = b.autoWireHTTPMetricsCollector(opts)
+	if err != nil {
+		return nil, err
+	}
+
+	// Primary listener: whitelist framework-owned routes (health + internal-
+	// prefix isolation) that are mounted without auth.Declare, and wire auth
+	// middleware when a verifier is available.
+	if ref == cell.PrimaryListener {
+		opts = append(opts, router.WithPolicyCoverageWhitelist(frameworkPrimaryWhitelist))
+		if b.authVerifier != nil {
+			authOpts, err := b.buildAuthRouterOptions(s)
+			if err != nil {
+				return nil, err
+			}
+			opts = append(opts, authOpts...)
+		}
+	}
+	return opts, nil
 }
 
 // registerAllHealthCheckers registers option-supplied, cell-discovered, watcher,
@@ -687,35 +821,6 @@ func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {
 		}
 		return nil
 	})
-}
-
-// buildRouter assembles all router options and calls router.NewE.
-func (b *Bootstrap) buildRouter(s *phaseState, hh *health.Handler) (*router.Router, error) {
-	opts := make([]router.Option, 0, len(b.routerOpts)+4)
-	opts = append(opts, b.routerOpts...)
-
-	// R2: auto-wire HTTP metrics collector when a Provider is configured.
-	opts, err := b.autoWireHTTPMetricsCollector(opts)
-	if err != nil {
-		return nil, err
-	}
-
-	if b.authVerifier != nil {
-		authOpts, err := b.buildAuthRouterOptions(s)
-		if err != nil {
-			return nil, err
-		}
-		opts = append(opts, authOpts...)
-	}
-	if len(b.internalMiddlewares) > 0 {
-		opts = append(opts, router.WithInternalMiddleware(b.internalMiddlewares...))
-	}
-	opts = append(opts, router.WithHealthHandler(hh))
-	rtr, err := router.NewE(opts...)
-	if err != nil {
-		return nil, fmt.Errorf("bootstrap: %w", err)
-	}
-	return rtr, nil
 }
 
 // autoWireHTTPMetricsCollector adds a router.WithMetricsCollector option when
@@ -863,126 +968,147 @@ func (b *Bootstrap) checkNoEventRegistrars(asm *assembly.CoreAssembly) error {
 	return nil
 }
 
-// phase7StartHTTPServer creates and starts the TWO HTTP servers (primary +
-// internal), pre-binding both listeners so port conflicts surface
-// synchronously before any goroutine is started (if the second listener fails
-// to bind, the first listener is closed). Each server runs in its own
-// goroutine; errors fan into a single buffered channel read by phase 9. The
-// LIFO teardown calls both Shutdown() calls in parallel under the shared
+// phase7StartHTTPServer creates and starts N http.Servers — one per declared
+// listener — pre-binding sockets synchronously so port conflicts surface
+// before any goroutine is started. Bind failures for listeners after the
+// first are rolled back by closing already-owned sockets. Each server runs
+// in its own goroutine; errors fan into a single buffered channel read by
+// phase9. The LIFO teardown drains all servers in parallel under the shared
 // shutCtx budget.
 //
+// PR-A14b: replaces the hard-coded primary+internal pair with a generic
+// N-server loop driven by b.listenerConfigs.
+//
 // ref: go-kratos/kratos app.go@main L95-122 — per-server goroutine pair.
-// ref: ory/kratos cmd/daemon/serve.go — named public / admin server split.
-// ref: kubernetes/apiserver pkg/server/secure_serving.go — pre-bind listener
-// to surface bind errors synchronously.
+// ref: kubernetes/apiserver pkg/server/secure_serving.go — pre-bind listener.
+// boundServer holds a resolved HTTP server and its associated listener.
+type boundServer struct {
+	name  string
+	srv   *http.Server
+	ln    net.Listener
+	owned bool // true when bootstrap bound the socket (not caller-injected)
+}
+
 func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
-	primaryLn, primaryOwned, err := b.resolvePrimaryListener()
+	servers, err := b.phase7BindListeners(s)
 	if err != nil {
-		slog.Error("bootstrap: failed to bind HTTP listener",
-			slog.String("listener", "primary"),
-			slog.String("addr", b.primaryAddr),
-			slog.Any("error", err))
-		return fmt.Errorf("bootstrap: listen primary %s: %w", b.primaryAddr, err)
+		return err
 	}
-	internalLn, _, err := b.resolveInternalListener()
-	if err != nil {
-		slog.Error("bootstrap: failed to bind HTTP listener",
-			slog.String("listener", "internal"),
-			slog.String("addr", b.internalAddr),
-			slog.Any("error", err))
-		// Close the primary listener only when Bootstrap owns it (i.e. bound
-		// it here). When the caller injected a listener via WithPrimaryListener
-		// we must NOT close it — the caller retains ownership and may want to
-		// reuse the socket on retry.
-		if primaryOwned {
-			_ = primaryLn.Close()
-		}
-		return fmt.Errorf("bootstrap: listen internal %s: %w", b.internalAddr, err)
+	if len(servers) == 0 {
+		return nil
 	}
-
-	primarySrv := &http.Server{
-		Handler:           s.rtr.PublicHandler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-	internalSrv := &http.Server{
-		Handler:           s.rtr.InternalHandler(),
-		ReadHeaderTimeout: 10 * time.Second,
-	}
-
-	// Two slots: one per server. Producers always write and then close, so the
-	// channel is safe to fan-in to a single reader in phase9.
-	httpErrCh := make(chan error, 2)
-	pending := int32(2)
-	serveAndReport := func(name string, srv *http.Server, ln net.Listener) {
-		slog.Info("bootstrap: HTTP server starting",
-			slog.String("listener", name),
-			slog.String("addr", ln.Addr().String()))
-		err := srv.Serve(ln)
-		if err != nil && !errors.Is(err, http.ErrServerClosed) {
-			httpErrCh <- fmt.Errorf("%s listener: %w", name, err)
-		}
-		if atomic.AddInt32(&pending, -1) == 0 {
-			close(httpErrCh)
-		}
-	}
-	go serveAndReport("primary", primarySrv, primaryLn)
-	go serveAndReport("internal", internalSrv, internalLn)
-
+	httpErrCh := b.phase7ServeAll(servers)
 	s.httpErrCh = httpErrCh
+	srvList := make([]*http.Server, 0, len(servers))
+	for _, bs := range servers {
+		srvList = append(srvList, bs.srv)
+	}
 	s.addTeardown(func(c context.Context) error {
-		return shutdownBothServers(c, primarySrv, internalSrv)
+		return shutdownAllServers(c, srvList)
 	})
 	return nil
 }
 
-// resolvePrimaryListener returns the caller-injected primary listener when
-// WithPrimaryListener was used; otherwise it binds b.primaryAddr. The owned
-// bool reports whether Bootstrap owns the returned listener — callers must
-// Close the listener on error only when owned=true (caller-injected listeners
-// remain the caller's responsibility).
-func (b *Bootstrap) resolvePrimaryListener() (ln net.Listener, owned bool, err error) {
-	if b.primaryListener != nil {
-		return b.primaryListener, false, nil
+// phase7BindListeners pre-binds all declared listeners synchronously. If any
+// bind fails, already-owned sockets are closed before returning the error.
+func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
+	var servers []boundServer
+	for ref, cfg := range b.listenerConfigs {
+		rtr, ok := s.routers[ref]
+		if !ok {
+			return nil, fmt.Errorf("bootstrap: no router for listener %q", ref.String())
+		}
+		ln, owned, err := resolveListener(cfg)
+		if err != nil {
+			closeOwnedSockets(servers)
+			slog.Error("bootstrap: failed to bind HTTP listener",
+				slog.String("listener", ref.String()),
+				slog.String("addr", cfg.addr),
+				slog.Any("error", err))
+			return nil, fmt.Errorf("bootstrap: listen %s %s: %w", ref.String(), cfg.addr, err)
+		}
+		servers = append(servers, boundServer{
+			name:  ref.String(),
+			srv:   &http.Server{Handler: rtr.Handler(), ReadHeaderTimeout: 10 * time.Second},
+			ln:    ln,
+			owned: owned,
+		})
 	}
-	ln, err = net.Listen("tcp", b.primaryAddr)
+	return servers, nil
+}
+
+// closeOwnedSockets closes all sockets that bootstrap owns (i.e. not caller-injected).
+func closeOwnedSockets(servers []boundServer) {
+	for _, prev := range servers {
+		if prev.owned {
+			_ = prev.ln.Close()
+		}
+	}
+}
+
+// phase7ServeAll starts all servers in background goroutines and returns a channel
+// that receives errors and is closed when all servers have stopped.
+func (b *Bootstrap) phase7ServeAll(servers []boundServer) chan error {
+	n := len(servers)
+	httpErrCh := make(chan error, n)
+	pending := int32(n)
+	for _, bs := range servers {
+		bs := bs // capture
+		go func() {
+			slog.Info("bootstrap: HTTP server starting",
+				slog.String("listener", bs.name),
+				slog.String("addr", bs.ln.Addr().String()))
+			err := bs.srv.Serve(bs.ln)
+			if err != nil && !errors.Is(err, http.ErrServerClosed) {
+				httpErrCh <- fmt.Errorf("%s listener: %w", bs.name, err)
+			}
+			if atomic.AddInt32(&pending, -1) == 0 {
+				close(httpErrCh)
+			}
+		}()
+	}
+	return httpErrCh
+}
+
+// resolveListener returns the net.Listener for a listenerConfig. When
+// cfg.net is set (caller-injected), it is returned directly (owned=false).
+// Otherwise a new TCP socket is bound to cfg.addr (owned=true).
+func resolveListener(cfg listenerConfig) (ln net.Listener, owned bool, err error) {
+	if cfg.net != nil {
+		return cfg.net, false, nil
+	}
+	ln, err = net.Listen("tcp", cfg.addr)
 	return ln, err == nil, err
 }
 
-// resolveInternalListener mirrors resolvePrimaryListener for the internal
-// listener.
-func (b *Bootstrap) resolveInternalListener() (ln net.Listener, owned bool, err error) {
-	if b.internalListener != nil {
-		return b.internalListener, false, nil
-	}
-	ln, err = net.Listen("tcp", b.internalAddr)
-	return ln, err == nil, err
-}
-
-// shutdownBothServers drains the primary and internal servers in parallel
-// under the shared shutCtx budget. Both Shutdown calls receive the same
-// deadline; the aggregated error (if any) is joined via errors.Join so
-// operators see every failure. Per-listener completion is logged so
-// operators can pinpoint a stuck listener when one finishes and the other
-// hangs past the deadline.
-func shutdownBothServers(ctx context.Context, primary, internal *http.Server) error {
+// shutdownAllServers drains all servers in parallel under the shared shutCtx
+// budget. Errors are aggregated via errors.Join so operators see every failure.
+func shutdownAllServers(ctx context.Context, servers []*http.Server) error {
 	slog.Info("bootstrap: draining HTTP servers")
 	type drainResult struct {
-		name string
-		err  error
+		err error
 	}
-	resultCh := make(chan drainResult, 2)
-	go func() { resultCh <- drainResult{name: "primary", err: primary.Shutdown(ctx)} }()
-	go func() { resultCh <- drainResult{name: "internal", err: internal.Shutdown(ctx)} }()
+	resultCh := make(chan drainResult, len(servers))
+	for i, srv := range servers {
+		srv := srv
+		idx := i
+		go func() {
+			err := srv.Shutdown(ctx)
+			if err != nil {
+				slog.Error("bootstrap: HTTP server drain failed",
+					slog.Int("server_index", idx), slog.Any("error", err))
+			} else {
+				slog.Info("bootstrap: HTTP server drained", slog.Int("server_index", idx))
+			}
+			resultCh <- drainResult{err: err}
+		}()
+	}
 	var errs []error
-	for i := 0; i < 2; i++ {
+	for range servers {
 		r := <-resultCh
 		if r.err != nil {
-			slog.Error("bootstrap: HTTP listener drain failed",
-				slog.String("listener", r.name), slog.Any("error", r.err))
-			errs = append(errs, fmt.Errorf("%s listener: %w", r.name, r.err))
-			continue
+			errs = append(errs, r.err)
 		}
-		slog.Info("bootstrap: HTTP listener drained", slog.String("listener", r.name))
 	}
 	return errors.Join(errs...)
 }
@@ -1175,4 +1301,104 @@ func (b *Bootstrap) phase10LIFOTeardown(shutCtx context.Context, s *phaseState) 
 		}
 	}
 	return errs
+}
+
+// ---------------------------------------------------------------------------
+// HTTPRegistrar compat: split mux for PR-A14b migration
+// ---------------------------------------------------------------------------
+
+const internalRoutePrefix = "/internal/v1/"
+
+// httpRegistrarSplitMux is a cell.RouteMux adapter used for backward-compat
+// HTTPRegistrar cells during the PR-A14b migration period (batch 2→3).
+//
+// It routes Handle/Route/Mount calls to the correct per-listener router:
+//   - Routes whose path prefix is /internal/v1/ → InternalListener router
+//   - All other routes → PrimaryListener router
+//
+// DeclareAuthMeta is forwarded to the correct router based on the Path field.
+// This allows dualListenerCell-style cells (registering both /api/v1/* and
+// /internal/v1/* in a single RegisterRoutes call) to work correctly with the
+// new per-listener architecture.
+//
+// When a target router is nil, Handle/DeclareAuthMeta calls for that listener
+// are silently dropped (no-op). This supports single-listener deployments.
+type httpRegistrarSplitMux struct {
+	primary  cell.RouteMux // nil when PrimaryListener is not configured
+	internal cell.RouteMux // nil when InternalListener is not configured
+}
+
+func newHTTPRegistrarSplitMux(primary, internal cell.RouteMux) *httpRegistrarSplitMux {
+	return &httpRegistrarSplitMux{primary: primary, internal: internal}
+}
+
+// targetForPattern returns the router corresponding to the path encoded in a
+// Go 1.22 ServeMux pattern ("METHOD /path" or just "/path").
+func (m *httpRegistrarSplitMux) targetForPattern(pattern string) cell.RouteMux {
+	// Extract path from "METHOD /path" or plain "/path".
+	path := pattern
+	if idx := strings.IndexByte(pattern, ' '); idx >= 0 {
+		path = strings.TrimSpace(pattern[idx+1:])
+	}
+	if strings.HasPrefix(path, internalRoutePrefix) || path == strings.TrimSuffix(internalRoutePrefix, "/") {
+		return m.internal
+	}
+	return m.primary
+}
+
+func (m *httpRegistrarSplitMux) Handle(pattern string, handler http.Handler) {
+	if target := m.targetForPattern(pattern); target != nil {
+		target.Handle(pattern, handler)
+	}
+}
+
+func (m *httpRegistrarSplitMux) Route(pattern string, fn func(cell.RouteMux)) {
+	if target := m.targetForPattern(pattern); target != nil {
+		target.Route(pattern, fn)
+	}
+}
+
+func (m *httpRegistrarSplitMux) Mount(pattern string, h http.Handler) {
+	if target := m.targetForPattern(pattern); target != nil {
+		target.Mount(pattern, h)
+	}
+}
+
+func (m *httpRegistrarSplitMux) Group(fn func(cell.RouteMux)) {
+	// Group applies fn to both routers — the cell can register on each side.
+	// Routes registered inside fn are still dispatched to the correct mux via Handle.
+	if m.primary != nil {
+		m.primary.Group(fn)
+	}
+	if m.internal != nil {
+		m.internal.Group(fn)
+	}
+}
+
+func (m *httpRegistrarSplitMux) With(mw ...func(http.Handler) http.Handler) cell.RouteMux {
+	// With() creates an inline mux — return a split mux that delegates With() to both.
+	var p, i cell.RouteMux
+	if m.primary != nil {
+		p = m.primary.With(mw...)
+	}
+	if m.internal != nil {
+		i = m.internal.With(mw...)
+	}
+	return &httpRegistrarSplitMux{primary: p, internal: i}
+}
+
+// DeclareAuthMeta implements cell.AuthRouteDeclarer, forwarding to the
+// correct router based on the meta.Path prefix.
+func (m *httpRegistrarSplitMux) DeclareAuthMeta(meta cell.AuthRouteMeta) {
+	isInternal := strings.HasPrefix(meta.Path, internalRoutePrefix) ||
+		meta.Path == strings.TrimSuffix(internalRoutePrefix, "/")
+	if isInternal {
+		if target, ok := m.internal.(cell.AuthRouteDeclarer); ok {
+			target.DeclareAuthMeta(meta)
+		}
+	} else {
+		if target, ok := m.primary.(cell.AuthRouteDeclarer); ok {
+			target.DeclareAuthMeta(meta)
+		}
+	}
 }

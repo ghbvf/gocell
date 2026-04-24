@@ -42,15 +42,11 @@ func TestWithTrustedProxies_Integration(t *testing.T) {
 		"WithTrustedProxies must pass CIDR proxies to RealIP middleware")
 }
 
-func TestRouter_PublicAndInternalHandlers(t *testing.T) {
-	// PR-A14a: PublicHandler returns outerMux (primary listener chain);
-	// InternalHandler returns internalMux (control-plane listener chain).
-	// The legacy Handler() alias was deleted.
+func TestRouter_Handler(t *testing.T) {
+	// PR-A14b: each Router has a single Handler() serving its listener's mux.
 	r := New()
-	assert.NotNil(t, r.PublicHandler())
-	assert.Equal(t, r.outerMux, r.PublicHandler())
-	assert.NotNil(t, r.InternalHandler())
-	assert.Equal(t, r.internalMux, r.InternalHandler())
+	assert.NotNil(t, r.Handler())
+	assert.Equal(t, r.mux, r.Handler())
 }
 
 func TestRouteGroup_Route(t *testing.T) {

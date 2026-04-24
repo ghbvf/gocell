@@ -493,15 +493,14 @@ func TestMetricsEndpoint_CollectorOnly_NotExposed(t *testing.T) {
 		"/metrics must not be exposed with collector-only configuration")
 }
 
-func TestMetricsEndpoint_ExposedWithHandler(t *testing.T) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("# metrics"))
-	})
-	r := New(WithMetricsHandler(handler))
+// TestMetricsEndpoint_NotOnPrimaryListener verifies that /metrics is NOT
+// served by a primary-listener router. Metrics endpoints belong exclusively
+// on the HealthListener via bootstrap.HealthRouteGroups.
+func TestMetricsEndpoint_NotOnPrimaryListener(t *testing.T) {
+	r := New() // PrimaryListener router; no health/metrics handler registered
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	r.ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
-	assert.Contains(t, rec.Body.String(), "# metrics")
+	assert.Equal(t, http.StatusNotFound, rec.Code,
+		"/metrics must 404 on a PrimaryListener router; metrics live on HealthListener")
 }

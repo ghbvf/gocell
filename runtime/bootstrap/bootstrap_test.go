@@ -24,7 +24,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -53,7 +52,32 @@ func newLocalListener(t *testing.T) net.Listener {
 	return ln
 }
 
-// waitForHealthy polls /healthz until it returns 200 or the timeout expires.
+// testListeners holds the three pre-bound listeners for a standard bootstrap test.
+type testListeners struct {
+	primary  net.Listener
+	internal net.Listener
+	health   net.Listener
+}
+
+// newTestListeners creates three pre-bound listeners and returns bootstrap.Option
+// values wiring them to PrimaryListener, InternalListener, HealthListener.
+func newTestListeners(t *testing.T) (testListeners, []Option) {
+	t.Helper()
+	tl := testListeners{
+		primary:  newLocalListener(t),
+		internal: newLocalListener(t),
+		health:   newLocalListener(t),
+	}
+	opts := []Option{
+		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), nil, WithListenerNet(tl.primary)),
+		WithListener(cell.InternalListener, tl.internal.Addr().String(), nil, WithListenerNet(tl.internal)),
+		WithListener(cell.HealthListener, tl.health.Addr().String(), nil, WithListenerNet(tl.health)),
+	}
+	return tl, opts
+}
+
+// waitForHealthy polls /healthz on the health listener until it returns 200.
+// In the PR-A14b model, /healthz lives on the HealthListener, not the primary.
 func waitForHealthy(t *testing.T, addr string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -82,7 +106,8 @@ func newTestCell(id string) *testCell {
 
 func TestNew_Defaults(t *testing.T) {
 	b := New()
-	assert.Equal(t, ":8080", b.primaryAddr)
+	// PR-A14b: no default listeners; callers must declare via WithListener.
+	assert.Nil(t, b.listenerConfigs)
 	assert.Nil(t, b.assembly)
 	assert.Nil(t, b.publisher)
 	assert.Nil(t, b.subscriber)
@@ -95,11 +120,14 @@ func TestNew_WithOptions(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
-		WithHTTPPrimaryAddr(":9090"),
+		WithListener(cell.PrimaryListener, ":9090", nil),
 		WithShutdownTimeout(5*time.Second),
 	)
 
-	assert.Equal(t, ":9090", b.primaryAddr)
+	// PR-A14b: listener addr lives in listenerConfigs, not primaryAddr.
+	cfg, ok := b.listenerConfigs[cell.PrimaryListener]
+	require.True(t, ok, "PrimaryListener config must be registered")
+	assert.Equal(t, ":9090", cfg.addr)
 	assert.Equal(t, asm, b.assembly)
 	assert.Equal(t, eb, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
@@ -133,6 +161,7 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
 		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
 	)
 
@@ -161,7 +190,10 @@ func TestNew_WithConfig(t *testing.T) {
 }
 
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
-	b := New(WithConfig("/nonexistent/config.yaml", "APP"))
+	b := New(
+		WithConfig("/nonexistent/config.yaml", "APP"),
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
+	)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
@@ -320,12 +352,12 @@ func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New()
-	b := New(
+	_, lnOpts := newTestListeners(t)
+	b := New(append([]Option{
 		WithAssembly(asm),
 		WithPublisher(eb),
 		// WithSubscriber intentionally omitted.
-		WithHTTPPrimaryAddr("127.0.0.1:0"),
-	)
+	}, lnOpts...)...)
 
 	err := b.Run(context.Background())
 	require.Error(t, err)
@@ -1293,6 +1325,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
 		WithShutdownTimeout(time.Second),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
@@ -1317,6 +1350,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
 		WithHealthChecker("config-watcher", func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(time.Second),
 	)
@@ -2462,26 +2496,22 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 // --- Framework capability protection (BOOT-OPTION-01) ---
 
 func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
+	// PR-A14b: health endpoints are now registered by bootstrap via HealthRouteGroups
+	// on the health listener (or primary as fallback). There is no router.WithHealthHandler
+	// option — health is always wired by the framework, not configurable by callers.
+	// This test verifies that /readyz returns 200 (healthy) because the framework-managed
+	// health handler is backed by the started assembly.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-health-override", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	// Create a custom health handler backed by an un-started assembly (unhealthy).
-	// If the user's handler wins, /readyz would return 503 because the custom
-	// assembly was never started.
-	customAsm := assembly.New(assembly.Config{ID: "custom-unstartled", DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, customAsm.Register(newTestCell("custom-cell")))
-	customHandler := health.New(customAsm) // un-started → always unhealthy
-
 	b := New(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
-		// User attempts to override with custom health handler.
-		WithRouterOptions(router.WithHealthHandler(customHandler)),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2491,14 +2521,12 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 	addr := ln.Addr().String()
 	waitForHealthy(t, addr)
 
-	// The framework-managed handler (backed by started asm) should respond,
-	// not the custom un-started one. Started assembly → healthy → 200.
+	// The framework-managed handler (backed by started asm) responds with 200.
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"framework health handler must win over user-supplied one; "+
-			"user handler would return 503 (un-started assembly)")
+		"framework health handler must return 200 for a started assembly")
 
 	cancel()
 	select {
@@ -4048,6 +4076,7 @@ func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -4071,8 +4100,9 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		// No WithListener: if phase5 errors correctly the listener is never reached.
-		// Use a short timeout so the test exits fast if something hangs.
+		// PR-A14b: phase0 now requires at least one listener. Phase5 errors
+		// before the listener is actually bound, so no connection is ever served.
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
 		WithShutdownTimeout(time.Second),
 	)
 
