@@ -205,7 +205,7 @@ func TestIntegration_PublishConsume(t *testing.T) {
 		Metadata:      map[string]string{"source": "integration-test"},
 	}
 
-	payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
+	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err, "marshal envelope")
 
 	// Publish the message after the subscriber is ready.
@@ -244,7 +244,7 @@ func TestIntegration_PublishOnly(t *testing.T) {
 		CreatedAt: time.Now().UTC(),
 	}
 
-	payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
+	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -332,7 +332,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 		Payload:   []byte(`{"retry":"e2e"}`),
 		CreatedAt: time.Now().UTC(),
 	}
-	payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
+	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
 
 	err = pub.Publish(ctx, topic, payload)
@@ -353,7 +353,7 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 	require.Eventually(t, func() bool {
 		select {
 		case msg := <-dlxMsgs:
-			decoded, decodeErr := outboxrt.UnmarshalEnvelope("", msg.Body)
+			decoded, decodeErr := outbox.UnmarshalEnvelope("", msg.Body)
 			if decodeErr != nil {
 				return false
 			}
@@ -506,7 +506,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 		Payload:   []byte(`{"dlx":"end-to-end"}`),
 		CreatedAt: time.Now().UTC(),
 	}
-	payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
+	payload, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err)
 
 	err = pub.Publish(ctx, topic, payload)
@@ -533,7 +533,7 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 	require.Eventually(t, func() bool {
 		select {
 		case msg := <-dlxMsgs:
-			decoded, decodeErr := outboxrt.UnmarshalEnvelope("", msg.Body)
+			decoded, decodeErr := outbox.UnmarshalEnvelope("", msg.Body)
 			if decodeErr != nil {
 				return false
 			}
