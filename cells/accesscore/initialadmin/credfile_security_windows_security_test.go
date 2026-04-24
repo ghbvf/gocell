@@ -135,39 +135,47 @@ func TestSddlHasAllowACEForSID_RejectsDenyACE(t *testing.T) {
 	}
 }
 
-// TestSddlHasAllowACEForSID_RejectsNarrowMask verifies that a narrow access
-// mask (not GA/FA) is rejected even when the ACE type is ALLOW (E3).
-// This guards against ACEs that allow only READ_CONTROL or similar subsets.
-func TestSddlHasAllowACEForSID_RejectsNarrowMask(t *testing.T) {
+// TestSddlHasAllowACEForSID_AcceptsAnyNonEmptyMask verifies that any non-empty
+// rights field in an ALLOW ACE is accepted. Windows may emit GENERIC_ALL as
+// "GA", "FA", or hex forms like "0x1f01ff" depending on OS version and NTFS
+// generic-to-specific mapping. Strict mask validation was removed to prevent
+// false-positive tamper reports (V-A12 / Failure 1). The E3 gap (no mask
+// narrowing check) is tracked in the V-A12 backlog entry.
+func TestSddlHasAllowACEForSID_AcceptsAnyNonEmptyMask(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name   string
 		sddl   string
 		sidStr string
+		want   bool
 	}{
 		{
-			name:   "READ_CONTROL mask (RC) rejected",
+			name:   "READ_CONTROL mask (RC) now accepted (E3 gap, V-A12)",
 			sddl:   "D:P(A;;RC;;;S-1-5-18)",
 			sidStr: "S-1-5-18",
+			want:   true,
 		},
 		{
-			name:   "GENERIC_READ mask (GR) rejected",
-			sddl:   "D:P(A;;GR;;;SY)",
+			name:   "hex mask 0x1f01ff accepted",
+			sddl:   "D:P(A;;0x1f01ff;;;S-1-5-18)",
 			sidStr: "S-1-5-18",
+			want:   true,
 		},
 		{
-			name:   "GENERIC_WRITE mask (GW) rejected",
-			sddl:   "D:P(A;;GW;;;S-1-5-32-544)",
-			sidStr: "S-1-5-32-544",
+			name:   "empty rights field rejected",
+			sddl:   "D:P(A;;;;;S-1-5-18)",
+			sidStr: "S-1-5-18",
+			want:   false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if sddlHasAllowACEForSID(tc.sddl, tc.sidStr) {
-				t.Errorf("sddlHasAllowACEForSID(%q, %q) = true; narrow mask must be rejected", tc.sddl, tc.sidStr)
+			got := sddlHasAllowACEForSID(tc.sddl, tc.sidStr)
+			if got != tc.want {
+				t.Errorf("sddlHasAllowACEForSID(%q, %q) = %v, want %v", tc.sddl, tc.sidStr, got, tc.want)
 			}
 		})
 	}
