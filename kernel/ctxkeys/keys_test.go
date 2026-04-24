@@ -61,6 +61,25 @@ func TestJourneyIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestContractIDRoundTrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "http contract id", value: "http.auth.login.v1"},
+		{name: "event contract id", value: "event.session.revoked.v1"},
+		{name: "empty string", value: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithContractID(context.Background(), tt.value)
+			got, ok := ContractIDFrom(ctx)
+			assert.True(t, ok)
+			assert.Equal(t, tt.value, got)
+		})
+	}
+}
+
 func TestFromMissingKey(t *testing.T) {
 	ctx := context.Background()
 
@@ -71,6 +90,7 @@ func TestFromMissingKey(t *testing.T) {
 		{name: "CellID missing", fn: CellIDFrom},
 		{name: "SliceID missing", fn: SliceIDFrom},
 		{name: "JourneyID missing", fn: JourneyIDFrom},
+		{name: "ContractID missing", fn: ContractIDFrom},
 	}
 
 	for _, tt := range tests {
