@@ -82,6 +82,7 @@
 | ID | 任务 | 工时 | 关键文件 |
 |---|---|---|---|
 | ~~R2~~ | ~~**OBS-HTTP-COLLECTOR-AUTOWIRE-01** `WithMetricsProvider` 自动构造默认 HTTP collector~~ ✅ PR#228（PR-A4） | ~~2h~~ | ~~`runtime/bootstrap/bootstrap.go`~~ |
+| R2-FOLLOW | **HTTP-METRICS-LABEL-DIMENSION-REALIGN-01** (P2, Cx2) PR#228 R2 auto-wire 后 HTTP collector 发射的 `cell` label 实际值是 assembly ID（单 cell assembly 下等价，多 cell assembly 下语义错）。决策路径：(a) 改 label 名为 `service` / `assembly` 更准；(b) 从 route registration 传入真正的 cell owner。改 label 名会破坏现有 dashboards/alerts（需评审），建议先确认 multi-cell-assembly 场景存在后再动。ref: Kratos / go-zero / OpenTelemetry HTTP semantic conventions 都将 route-level 与 service-level identity 分开。 | 2-4h | `runtime/observability/metrics/provider_collector.go` + dashboards |
 | R4 | **INTERNAL-LISTENER-01** `/internal/v1/*` 独立 listener 或 service-token/mTLS | 4-8h 🟡 | `runtime/bootstrap/bootstrap.go` |
 | ~~A21~~ | ~~**HEALTH-CHECKER-CTX-BUDGET-01** `Checker` 升级 `func(ctx) error` + 统一 deadline + 并行~~ ✅ PR#228（PR-A4；含 ProbeResult 结构化 verbose 输出 + 独立派生 ctx + errgroup 并行） | ~~3h~~ | ~~`runtime/http/health/` + `kernel/lifecycle/`~~ |
 | L7 | **FMT15-NEXTCURSOR-ENFORCE-01** 治理规则强制 `hasMore`+`nextCursor` 同时存在 | 2h 🟡 | `kernel/governance/rules_fmt.go` |
