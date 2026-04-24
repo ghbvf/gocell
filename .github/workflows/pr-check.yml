@@ -27,4 +27,5 @@ jobs:
       base-ref: ${{ github.base_ref }}
       run-integration: true
       run-sonar: true
+      run-os-smoke: true
     secrets: inherit   # needed for any secrets the reusable workflow may access

@@ -24,6 +24,10 @@ on:
         description: 'When true, runs the sonarcloud job (needs both build-test + integration-test coverage). Default false. Requires secrets.SONAR_TOKEN. Must not be true when run-integration is false — sonarcloud needs both coverage profiles.'
         type: boolean
         default: false
+      run-os-smoke:
+        description: 'When true, runs the os-smoke matrix job on macOS and Windows to verify cross-platform unit behaviour. Default false.'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -158,6 +162,22 @@ jobs:
           name: coverage-integration-profile
           path: coverage-integration.out
           retention-days: 1
+
+  os-smoke:
+    if: ${{ inputs.run-os-smoke }}
+    strategy:
+      matrix:
+        os: [macos-latest, windows-latest]
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      - name: Cross-platform unit smoke
+        run: go test -count=1 -timeout 5m ./runtime/shutdown/... ./cells/accesscore/initialadmin/... ./runtime/config/... ./kernel/governance/...
 
   # Fork-PR guard: fork PRs cannot access org secrets (secrets.SONAR_TOKEN is
   # empty for forks), which would cause this job to fail with an opaque auth
