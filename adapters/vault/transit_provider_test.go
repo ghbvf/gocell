@@ -73,9 +73,18 @@ type fakeVaultClient struct {
 
 	// Call counters (atomic so tests are race-safe even if future tests
 	// happen to run Encrypt concurrently).
+	//
+	// encryptCalls counts hits on the legacy /transit/encrypt/{key} path.
+	// Production Encrypt routes through /datakey/plaintext, so this counter
+	// doubles as a regression guard: tests assert it stays 0 unless they
+	// intentionally exercise the legacy ResponseError classification path.
+	// datakeyCalls counts hits on /transit/datakey/plaintext/{key}.
+	// readCalls counts hits on the Read method (transit/keys/{key} metadata).
 	encryptCalls atomic.Int64
+	datakeyCalls atomic.Int64
 	decryptCalls atomic.Int64
 	rotateCalls  atomic.Int64
+	readCalls    atomic.Int64
 }
 
 // compile-time assertion: fakeVaultClient satisfies the exported VaultClient interface.
@@ -118,7 +127,7 @@ func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[strin
 		// both the raw plaintext (for immediate use) and the wrapped ciphertext
 		// (for storage). Deterministic DEK keyed by the requested bit size so
 		// round-trip tests can decrypt without a separate channel.
-		f.encryptCalls.Add(1)
+		f.datakeyCalls.Add(1)
 		bits := 32 // default
 		if b, ok := data["bits"].(int); ok {
 			bits = b / 8
@@ -139,8 +148,8 @@ func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[strin
 
 	default:
 		// Assume transit/encrypt/{key} — legacy path, no longer reachable from
-		// production code (PR-A18 routed Encrypt through datakey/plaintext) but
-		// kept so legacy ResponseError tests can still exercise the fake.
+		// production Encrypt (which routes through datakey/plaintext) but kept
+		// so legacy ResponseError tests can still exercise the fake.
 		f.encryptCalls.Add(1)
 
 		rawB64, ok := data["plaintext"].(string)
@@ -170,6 +179,7 @@ func (f *fakeVaultClient) Read(ctx context.Context, path string) (map[string]any
 		return nil, f.readErr
 	}
 
+	f.readCalls.Add(1)
 	f.lastReadPath = path
 
 	// transit/keys/{key} is a GET (Read) for key metadata.
@@ -306,15 +316,19 @@ func TestVaultTransitHandle_Encrypt_CallsLocalAESAndWrapsDEK(t *testing.T) {
 	ctx := context.Background()
 	ct, nonce, edk, keyID, err := callEncrypt(t, h, ctx, []byte("secret"), []byte("row:123"))
 
-	// (a) fake client received exactly one Write call (PR-A18: datakey/plaintext path)
-	if fake.encryptCalls.Load() != 1 {
-		t.Errorf("expected 1 Vault datakey call, got %d", fake.encryptCalls.Load())
+	// (a) fake client received exactly one Write call on the datakey path;
+	//     the legacy /transit/encrypt path must remain untouched.
+	if fake.datakeyCalls.Load() != 1 {
+		t.Errorf("expected 1 datakey call, got %d", fake.datakeyCalls.Load())
+	}
+	if fake.encryptCalls.Load() != 0 {
+		t.Errorf("legacy /encrypt path must not be called by production Encrypt, got %d hits", fake.encryptCalls.Load())
 	}
 	if fake.lastWritePath != "transit/datakey/plaintext/gocell-config" {
 		t.Errorf("wrong Write path: %q, want %q", fake.lastWritePath, "transit/datakey/plaintext/gocell-config")
 	}
 
-	// (b) Write body has bits=256 (PR-A18: server-side DEK generation)
+	// (b) Write body has bits=256 (server-side DEK generation via datakey/plaintext)
 	if bits := fake.lastWriteData["bits"]; bits != 256 {
 		t.Errorf("Write data 'bits' = %v, want 256", bits)
 	}
@@ -609,7 +623,7 @@ func TestVaultTransitHandle_KeyIDFromEdkPrefix(t *testing.T) {
 		override.lastWritePath = path
 		override.lastWriteData = data
 		override.encryptCalls.Add(1)
-		// PR-A18: production path is /datakey/plaintext/{key}. Generate a deterministic
+		// Production path is /datakey/plaintext/{key}. Generate a deterministic
 		// DEK and return v7 prefix regardless of latestVersion to simulate a rotate
 		// race between Current() and the Encrypt round-trip.
 		dek := make([]byte, 32)

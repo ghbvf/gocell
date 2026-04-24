@@ -144,8 +144,8 @@ func TestTransitEnvelope_AppRoleAuth_RoundTrip(t *testing.T) {
 	})
 	require.NoError(t, err, "enable approle auth engine")
 
-	// Create a policy granting transit datakey/decrypt/read access. PR-A18 routes
-	// Encrypt through transit/datakey/plaintext (server-side DEK generation), so
+	// Create a policy granting transit datakey/decrypt/read access. Encrypt
+	// routes through transit/datakey/plaintext (server-side DEK generation), so
 	// the policy must grant capabilities on that path; the legacy transit/encrypt
 	// path is no longer invoked.
 	_, err = adminClient.Logical().Write("sys/policies/acl/gocell-transit", map[string]any{
@@ -328,7 +328,7 @@ func TestTransitEnvelope_RotateThenDecryptOldCiphertext(t *testing.T) {
 // POST /v1/transit/datakey/plaintext/* request bodies without modifying them.
 // After Encrypt() returns we inspect the captured payload.
 //
-// Key assertions (PR-A18 datakey envelope):
+// Key assertions (datakey envelope):
 //   1. The request body contains {"bits": 256} and NO "plaintext" field —
 //      Vault generates the DEK server-side; the client never sends business
 //      data on the encrypt path.
@@ -339,7 +339,7 @@ func TestTransitEnvelope_RotateThenDecryptOldCiphertext(t *testing.T) {
 
 // recordingProxy is a reverse proxy that forwards every request to the real
 // Vault backend and records the raw body of any POST/PUT to
-// /v1/transit/datakey/plaintext/* — the PR-A18 envelope encryption entrypoint.
+// /v1/transit/datakey/plaintext/* — the envelope encryption entrypoint.
 type recordingProxy struct {
 	mu          sync.Mutex
 	encryptBody []byte // last captured datakey request body
@@ -398,9 +398,9 @@ func (rp *recordingProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 // TestTransitEnvelope_VaultNeverSeesBusinessPlaintext is the key security
-// evidence test for the envelope encryption model. PR-A18 routes Encrypt
-// through transit/datakey/plaintext (server-side DEK), so the body sent to
-// Vault is even narrower than the previous local-DEK + transit/encrypt path.
+// evidence test for the envelope encryption model. Encrypt routes through
+// transit/datakey/plaintext (server-side DEK), so the body sent to Vault is
+// even narrower than the previous local-DEK + transit/encrypt path.
 //
 // Assertions:
 //
@@ -456,7 +456,7 @@ func TestTransitEnvelope_VaultNeverSeesBusinessPlaintext(t *testing.T) {
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(capturedBody, &payload), "datakey request body must be valid JSON")
 
-	// Assertion 1: body contains bits:256 and NO plaintext field. PR-A18 datakey
+	// Assertion 1: body contains bits:256 and NO plaintext field. The datakey
 	// envelope generates the DEK server-side, so the client never sends business
 	// data on the encrypt path — strictly narrower than the legacy transit/encrypt
 	// flow which had to b64-encode the DEK on the wire.

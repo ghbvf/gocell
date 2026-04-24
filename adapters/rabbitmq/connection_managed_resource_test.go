@@ -1,8 +1,7 @@
 package rabbitmq
 
-// PR-A18 RMQ-STATUS-01: Connection implements lifecycle.ManagedResource so that
-// /readyz integration goes through the standard WithManagedResource path
-// (replacing the deleted bootstrap.WithBrokerHealth / BrokerHealthChecker).
+// Connection implements lifecycle.ManagedResource — these tests lock down the
+// Checkers / Worker / probe-name contract used by bootstrap.WithManagedResource.
 
 import (
 	"context"

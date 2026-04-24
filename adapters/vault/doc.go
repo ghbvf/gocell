@@ -15,9 +15,10 @@
 //  3. The wrapped EDK ("vault:vN:...") is returned alongside the ciphertext for
 //     storage; the keyID is parsed from the EDK prefix at encrypt time.
 //  4. On decrypt the EDK is unwrapped by Vault `/transit/decrypt` and used to
-//     decrypt locally. The decrypt endpoint accepts EDKs minted by either the
-//     current `/datakey/plaintext` path or the legacy `/transit/encrypt` path,
-//     preserving storage compatibility for ciphertexts written before PR-A18.
+//     decrypt locally. The decrypt endpoint accepts EDKs in the canonical
+//     `vault:vN:...` format regardless of whether they were produced by
+//     `/datakey/plaintext` (current) or `/transit/encrypt` (legacy), so storage
+//     written before the encrypt-path switchover stays decryptable.
 //
 // This pattern eliminates server-side exposure of plaintext and ensures AAD
 // binding is enforced at the local AES-GCM layer (not just as a Vault context
