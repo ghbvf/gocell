@@ -56,7 +56,8 @@ func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell
 
 	c := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithPublisher(shared.EventBus),
+		// Demo-mode wiring: publisher only, no outboxWriter.
+		auditcore.WithOutboxDeps(shared.EventBus, nil),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(cursorCodec),
 	)

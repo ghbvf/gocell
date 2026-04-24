@@ -101,6 +101,52 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 
 var _ Emitter = (*DirectEmitter)(nil)
 
+// DurabilityReporter is an optional interface Emitter implementations may
+// expose so callers (typically Cell boundaries) can query whether this
+// emitter is backed by durable (transactional outbox) sinks. Emitters that
+// do not implement DurabilityReporter are treated as non-durable by callers
+// — the safe default for direct-publish and noop paths.
+//
+// ref: kernel/cell.EmitterOutcome.Durable — the primary consumer; Cells
+// use the reported value to decide whether optional slices (e.g. rbacassign)
+// upgrade from L0 to L2.
+type DurabilityReporter interface {
+	Durable() bool
+}
+
+// Durable reports whether this WriterEmitter is backed by a real (non-noop)
+// outbox.Writer. NoopWriter and any writer that advertises Noop()==true are
+// considered non-durable; anything else is durable.
+func (e *WriterEmitter) Durable() bool {
+	if e == nil || e.writer == nil {
+		return false
+	}
+	n, ok := e.writer.(interface{ Noop() bool })
+	return !(ok && n.Noop())
+}
+
+// Durable always returns false for DirectEmitter: direct publishing bypasses
+// the transactional outbox and therefore carries no durability guarantee by
+// design.
+func (*DirectEmitter) Durable() bool { return false }
+
+// ReportDurable returns the durability status of an Emitter, defaulting to
+// false when the implementation does not expose DurabilityReporter. Intended
+// for Cell boundaries that accept a directly-injected Emitter via WithEmitter
+// but still need to decide L2/L0 slice upgrades based on durability.
+func ReportDurable(e Emitter) bool {
+	if e == nil {
+		return false
+	}
+	r, ok := e.(DurabilityReporter)
+	return ok && r.Durable()
+}
+
+var (
+	_ DurabilityReporter = (*WriterEmitter)(nil)
+	_ DurabilityReporter = (*DirectEmitter)(nil)
+)
+
 func isNilEmitterDependency(v any) bool {
 	if v == nil {
 		return true

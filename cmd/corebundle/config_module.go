@@ -93,7 +93,8 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	}
 
 	baseOpts := []configcore.Option{
-		configcore.WithPublisher(shared.EventBus),
+		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
+		// the transactional writer; memory adapter passes writer=nil).
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithOnStaleCipherMetric(staleCipherCounter),
 	}

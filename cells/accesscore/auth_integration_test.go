@@ -66,7 +66,7 @@ func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(roleRepo),
-		WithPublisher(noopPublisher{}),
+		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		// Demo mode: no tx+outbox required.

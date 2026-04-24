@@ -24,35 +24,58 @@ import (
 // initValidate performs fail-fast validation of required dependencies before
 // constructing slices. Extracted from Init to reduce cognitive complexity.
 func (c *AccessCore) initValidate(deps cell.Dependencies) error {
-	// Resolve outbox emitter via shared kernel helper (mirrors configcore/auditcore).
-	// Pass raw c.txRunner so ResolveEmitter can detect nil/noop pairing; wrap
-	// with RunnerOrNoop only after outcome is determined.
-	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:       "accesscore",
-		Mode:         deps.DurabilityMode,
-		Publisher:    c.publisher,
-		OutboxWriter: c.outboxWriter,
-		TxRunner:     c.txRunner,
-		Logger:       c.logger,
-		// accesscore runs DirectEmitter fail-open under both modes —
-		// session revocation events are rare and dropping a publisher
-		// failure in durable mode matches demo semantics (non-critical sink).
-		// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
-		DirectPublishMode: cell.DirectPublishModeForDurability(
-			deps.DurabilityMode,
-			outbox.DirectPublishFailOpen,
-			outbox.DirectPublishFailOpen,
-		),
-	})
-	if err != nil {
-		return err
+	// Cell-boundary Emitter resolution. Two mutually exclusive paths:
+	//   (a) WithEmitter(e) was used → c.emitter is pre-populated; skip ResolveEmitter.
+	//   (b) WithOutboxDeps(pub, writer) was used → compose via cell.ResolveEmitter.
+	// Setting both simultaneously is a wiring mistake; fail fast.
+	// ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
+	hasEmitter := c.emitter != nil
+	hasPending := c.pendingOutboxPub != nil || c.pendingOutboxWriter != nil
+	if hasEmitter && hasPending {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			"accesscore: WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
 	}
+
+	var outcomeDurable bool
+	if hasEmitter {
+		// Direct-injection path: emitter already wired; consult its
+		// DurabilityReporter (defaults to false when not implemented).
+		outcomeDurable = outbox.ReportDurable(c.emitter)
+	} else {
+		// Compose path: the kernel helper owns pairing/nil validation
+		// and durable-mode fail-fast.
+		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
+			CellID:       "accesscore",
+			Mode:         deps.DurabilityMode,
+			Publisher:    c.pendingOutboxPub,
+			OutboxWriter: c.pendingOutboxWriter,
+			TxRunner:     c.txRunner,
+			Logger:       c.logger,
+			// accesscore runs DirectEmitter fail-open under both modes —
+			// session revocation events are rare and dropping a publisher
+			// failure in durable mode matches demo semantics (non-critical sink).
+			// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
+			DirectPublishMode: cell.DirectPublishModeForDurability(
+				deps.DurabilityMode,
+				outbox.DirectPublishFailOpen,
+				outbox.DirectPublishFailOpen,
+			),
+		})
+		if err != nil {
+			return err
+		}
+		c.emitter = outcome.Emitter
+		outcomeDurable = outcome.Durable
+	}
+	// Pending raw deps consumed; clear to prevent accidental later use.
+	c.pendingOutboxPub = nil
+	c.pendingOutboxWriter = nil
+
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	c.emitter = outcome.Emitter
-	c.rbacEmitterMode = outcome.Durable
+	c.rbacEmitterMode = outcomeDurable
 
 	// L2 warning: running without transactional outbox degrades atomicity guarantees.
-	if !outcome.Durable && c.ConsistencyLevel() >= cell.L2 {
+	if !outcomeDurable && c.ConsistencyLevel() >= cell.L2 {
 		c.logger.Warn("accesscore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
 			slog.String("cell", c.ID()),
 			slog.Int("consistency_level", int(c.ConsistencyLevel())))

@@ -120,3 +120,45 @@ func (p *recordingEmitterPublisher) Publish(_ context.Context, topic string, pay
 }
 
 func (p *recordingEmitterPublisher) Close(_ context.Context) error { return nil }
+
+// TestWriterEmitter_Durable covers DurabilityReporter contract on WriterEmitter.
+// Backed by NoopWriter → non-durable; backed by a real writer → durable.
+func TestWriterEmitter_Durable(t *testing.T) {
+	tests := []struct {
+		name   string
+		writer Writer
+		want   bool
+	}{
+		{name: "noop_writer_not_durable", writer: NoopWriter{}, want: false},
+		{name: "real_writer_durable", writer: &recordingEmitterWriter{}, want: true},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			e, err := NewWriterEmitter(tc.writer)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, e.Durable())
+			assert.Equal(t, tc.want, ReportDurable(e))
+		})
+	}
+}
+
+// TestDirectEmitter_Durable: DirectEmitter is always non-durable by design.
+func TestDirectEmitter_Durable(t *testing.T) {
+	e, err := NewDirectEmitter(&recordingEmitterPublisher{}, DirectPublishFailOpen)
+	require.NoError(t, err)
+	assert.False(t, e.Durable())
+	assert.False(t, ReportDurable(e))
+}
+
+// TestReportDurable_FallbackForUnknownEmitter: an Emitter that does not
+// implement DurabilityReporter is treated as non-durable (safe default).
+func TestReportDurable_FallbackForUnknownEmitter(t *testing.T) {
+	e := unknownEmitter{}
+	assert.False(t, ReportDurable(e))
+	assert.False(t, ReportDurable(nil))
+}
+
+type unknownEmitter struct{}
+
+func (unknownEmitter) Emit(_ context.Context, _ Entry) error { return nil }

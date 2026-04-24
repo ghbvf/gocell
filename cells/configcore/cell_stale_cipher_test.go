@@ -19,7 +19,7 @@ func TestWithOnStaleCipherMetric_WiresCallback(t *testing.T) {
 	c := NewConfigCore(
 		WithOnStaleCipherMetric(counter),
 		WithInMemoryDefaults(),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 	)
 	// The PG Init() wiring path (pgPool != nil → NewConfigRepository receives
 	// WithOnStaleCipher option) is covered by config_repo_encrypt_test.go:TestWithOnStaleCipher_Option.
@@ -39,7 +39,7 @@ func TestWithOnStaleCipherMetric_CounterIsLive(t *testing.T) {
 	c := NewConfigCore(
 		WithOnStaleCipherMetric(counter),
 		WithInMemoryDefaults(),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 	)
 
 	assert.Equal(t, float64(0), testutil.ToFloat64(counter))

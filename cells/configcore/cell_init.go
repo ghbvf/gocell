@@ -48,31 +48,50 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// the Cell-boundary DirectEmitter fail mode is now owned by the kernel helper.
 	runMode, _ := c.deriveModes(deps.DurabilityMode)
 
-	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:       "configcore",
-		Mode:         deps.DurabilityMode,
-		Publisher:    c.publisher,
-		OutboxWriter: c.outboxWriter,
-		TxRunner:     c.txRunner,
-		Logger:       c.logger,
-		// configcore: demo → fail-open (tolerate missing subscribers during
-		// local development); durable → fail-closed (config changes must
-		// propagate or the write fails, so operators notice misconfig).
-		// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
-		DirectPublishMode: cell.DirectPublishModeForDurability(
-			deps.DurabilityMode,
-			outbox.DirectPublishFailOpen,
-			outbox.DirectPublishFailClosed,
-		),
-	})
-	if err != nil {
-		return err
+	// Cell-boundary Emitter resolution. Two mutually exclusive paths:
+	//   (a) WithEmitter(e) was used → c.emitter is pre-populated; skip ResolveEmitter.
+	//   (b) WithOutboxDeps(pub, writer) was used → compose via cell.ResolveEmitter.
+	// Setting both simultaneously is a wiring mistake; fail fast.
+	hasEmitter := c.emitter != nil
+	hasPending := c.pendingOutboxPub != nil || c.pendingOutboxWriter != nil
+	if hasEmitter && hasPending {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			"configcore: WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
 	}
+
+	var outcomeDurable bool
+	if hasEmitter {
+		outcomeDurable = outbox.ReportDurable(c.emitter)
+	} else {
+		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
+			CellID:       "configcore",
+			Mode:         deps.DurabilityMode,
+			Publisher:    c.pendingOutboxPub,
+			OutboxWriter: c.pendingOutboxWriter,
+			TxRunner:     c.txRunner,
+			Logger:       c.logger,
+			// configcore: demo → fail-open (tolerate missing subscribers during
+			// local development); durable → fail-closed (config changes must
+			// propagate or the write fails, so operators notice misconfig).
+			// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
+			DirectPublishMode: cell.DirectPublishModeForDurability(
+				deps.DurabilityMode,
+				outbox.DirectPublishFailOpen,
+				outbox.DirectPublishFailClosed,
+			),
+		})
+		if err != nil {
+			return err
+		}
+		c.emitter = outcome.Emitter
+		outcomeDurable = outcome.Durable
+	}
+	c.pendingOutboxPub = nil
+	c.pendingOutboxWriter = nil
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	c.emitter = outcome.Emitter
 
 	// L2 warning: running without transactional outbox degrades atomicity guarantees.
-	if !outcome.Durable && c.ConsistencyLevel() >= cell.L2 {
+	if !outcomeDurable && c.ConsistencyLevel() >= cell.L2 {
 		c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
 			slog.String("cell", c.ID()),
 			slog.Int("consistency_level", int(c.ConsistencyLevel())),

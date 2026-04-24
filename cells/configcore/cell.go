@@ -43,19 +43,36 @@ func WithFlagRepository(r ports.FlagRepository) Option {
 	return func(c *ConfigCore) { c.flagRepo = r }
 }
 
-// WithPublisher sets the outbox Publisher.
-func WithPublisher(p outbox.Publisher) Option {
-	return func(c *ConfigCore) { c.publisher = p }
+// WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
+// Preferred path for tests and for composition roots that have already built
+// an Emitter. Mutually exclusive with WithOutboxDeps.
+//
+// ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(c *ConfigCore) { c.emitter = e }
+}
+
+// WithOutboxDeps wires raw outbox dependencies (Publisher + Writer). The
+// framework composes them into an outbox.Emitter at Init() time via
+// cell.ResolveEmitter.
+//
+// Accumulative: a nil argument leaves the previously-set value in place;
+// multiple calls combine their non-nil arguments. Mutually exclusive with
+// WithEmitter.
+func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+	return func(c *ConfigCore) {
+		if pub != nil {
+			c.pendingOutboxPub = pub
+		}
+		if writer != nil {
+			c.pendingOutboxWriter = writer
+		}
+	}
 }
 
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *ConfigCore) { c.logger = l }
-}
-
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(c *ConfigCore) { c.outboxWriter = w }
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
@@ -100,49 +117,52 @@ func WithOnStaleCipherMetric(c prom.Counter) Option {
 	return func(cc *ConfigCore) { cc.staleCipherCounter = c }
 }
 
-// WithPostgresDefaults wires the configcore cell with PostgreSQL-backed
-// repositories and a transactional outbox. Use this option when
+// WithPostgresPool wires configcore with a PostgreSQL-backed pool for its
+// own repositories and the shared transactional outbox. Use when
 // GOCELL_CELL_ADAPTER_MODE=postgres. The caller is responsible for applying
 // all migrations up to the current ExpectedVersion before starting; the
 // adapterpg schema guard (VerifyExpectedVersion) enforces this at startup.
 // Tables owned by configcore: config_entries / config_versions (004) and
-// feature_flags (008 table + 009 concurrent index). See
-// adapters/postgres/migrations/ for the full set.
+// feature_flags (008 table + 009 concurrent index).
 //
-// pool must be a live pgxpool.Pool; outboxWriter is the outbox.Writer that
-// writes to the outbox_entries table within the same transaction.
+// Outbox wiring is the caller's responsibility — call WithOutboxDeps(pub,
+// writer) separately (the writer shares the pool via the per-cell adapter).
 //
 // Encryption: when a KeyProvider or ValueTransformer has been configured via
 // WithKeyProvider/WithValueTransformer, the PG repo encrypts sensitive=true
 // values at the repository boundary. The transformer is resolved at Init() so
-// WithKeyProvider and WithPostgresDefaults may be called in any order.
+// WithKeyProvider and WithPostgresPool may be called in any order.
 //
 // L2 consistency: repo writes + outbox writes are wrapped in a single
 // RunInTx call per service operation.
 //
 // ref: go-zero wire — adapter selected at assembly init time, not run time.
-func WithPostgresDefaults(pool *pgxpool.Pool, outboxWriter outbox.Writer) Option {
+func WithPostgresPool(pool *pgxpool.Pool) Option {
 	return func(c *ConfigCore) {
 		// Store the pool for deferred repo construction in Init().
 		c.pgPool = pool
-		c.outboxWriter = outboxWriter
 	}
 }
 
 // ConfigCore is the configcore Cell implementation.
 type ConfigCore struct {
 	*cell.BaseCell
-	configRepo         ports.ConfigRepository
-	flagRepo           ports.FlagRepository
-	publisher          outbox.Publisher
-	outboxWriter       outbox.Writer
+	configRepo ports.ConfigRepository
+	flagRepo   ports.FlagRepository
+
+	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc for the two
+	// mutually exclusive paths). Private by construction; no exported Option
+	// takes raw outbox.Publisher/Writer arguments (archtest OUTBOX-CELL-01).
+	emitter             outbox.Emitter
+	pendingOutboxPub    outbox.Publisher
+	pendingOutboxWriter outbox.Writer
+
 	txRunner           persistence.TxRunner
-	emitter            outbox.Emitter
 	cursorCodec        *query.CursorCodec
 	logger             *slog.Logger
 	keyProvider        kcrypto.KeyProvider
 	valueTransformer   kcrypto.ValueTransformer
-	pgPool             *pgxpool.Pool // stored by WithPostgresDefaults for deferred Init()
+	pgPool             *pgxpool.Pool // stored by WithPostgresPool for deferred Init()
 	staleCipherCounter prom.Counter  // optional; incremented on stale-key reads (M3)
 
 	// Slice services and handlers.

@@ -40,19 +40,36 @@ func WithArchiveStore(s ports.ArchiveStore) Option {
 	return func(c *AuditCore) { c.archiveStore = s }
 }
 
-// WithPublisher sets the outbox Publisher.
-func WithPublisher(p outbox.Publisher) Option {
-	return func(c *AuditCore) { c.publisher = p }
+// WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
+// Preferred path for tests and composition roots. Mutually exclusive with
+// WithOutboxDeps.
+//
+// ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(c *AuditCore) { c.emitter = e }
+}
+
+// WithOutboxDeps wires raw outbox dependencies (Publisher + Writer). The
+// framework composes them into an outbox.Emitter at Init() time via
+// cell.ResolveEmitter.
+//
+// Accumulative: a nil argument leaves the previously-set value in place;
+// multiple calls combine their non-nil arguments. Mutually exclusive with
+// WithEmitter.
+func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+	return func(c *AuditCore) {
+		if pub != nil {
+			c.pendingOutboxPub = pub
+		}
+		if writer != nil {
+			c.pendingOutboxWriter = writer
+		}
+	}
 }
 
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *AuditCore) { c.logger = l }
-}
-
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(c *AuditCore) { c.outboxWriter = w }
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
@@ -84,13 +101,17 @@ type AuditCore struct {
 	*cell.BaseCell
 	auditRepo    ports.AuditRepository
 	archiveStore ports.ArchiveStore
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	emitter      outbox.Emitter
-	cursorCodec  *query.CursorCodec
-	logger       *slog.Logger
-	hmacKey      []byte
+
+	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc). Private;
+	// archtest OUTBOX-CELL-01 forbids exported raw outbox options.
+	emitter             outbox.Emitter
+	pendingOutboxPub    outbox.Publisher
+	pendingOutboxWriter outbox.Writer
+
+	txRunner    persistence.TxRunner
+	cursorCodec *query.CursorCodec
+	logger      *slog.Logger
+	hmacKey     []byte
 
 	// Slice services.
 	appendSvc    *auditappend.Service
@@ -128,28 +149,41 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
-	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:       "auditcore",
-		Mode:         deps.DurabilityMode,
-		Publisher:    c.publisher,
-		OutboxWriter: c.outboxWriter,
-		TxRunner:     c.txRunner,
-		Logger:       c.logger,
-		// auditcore runs DirectEmitter fail-open under both modes — audit
-		// events are reconcile-replayable (append-only log is the source of
-		// truth), so dropping a publisher failure is acceptable.
-		// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
-		DirectPublishMode: cell.DirectPublishModeForDurability(
-			deps.DurabilityMode,
-			outbox.DirectPublishFailOpen,
-			outbox.DirectPublishFailOpen,
-		),
-	})
-	if err != nil {
-		return err
+	// Cell-boundary Emitter resolution. Two mutually exclusive paths:
+	//   (a) WithEmitter(e) was used → c.emitter is pre-populated; skip ResolveEmitter.
+	//   (b) WithOutboxDeps(pub, writer) was used → compose via cell.ResolveEmitter.
+	hasEmitter := c.emitter != nil
+	hasPending := c.pendingOutboxPub != nil || c.pendingOutboxWriter != nil
+	if hasEmitter && hasPending {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			"auditcore: WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
 	}
+	if !hasEmitter {
+		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
+			CellID:       "auditcore",
+			Mode:         deps.DurabilityMode,
+			Publisher:    c.pendingOutboxPub,
+			OutboxWriter: c.pendingOutboxWriter,
+			TxRunner:     c.txRunner,
+			Logger:       c.logger,
+			// auditcore runs DirectEmitter fail-open under both modes — audit
+			// events are reconcile-replayable (append-only log is the source of
+			// truth), so dropping a publisher failure is acceptable.
+			// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
+			DirectPublishMode: cell.DirectPublishModeForDurability(
+				deps.DurabilityMode,
+				outbox.DirectPublishFailOpen,
+				outbox.DirectPublishFailOpen,
+			),
+		})
+		if err != nil {
+			return err
+		}
+		c.emitter = outcome.Emitter
+	}
+	c.pendingOutboxPub = nil
+	c.pendingOutboxWriter = nil
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	c.emitter = outcome.Emitter
 	c.initSlices()
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to

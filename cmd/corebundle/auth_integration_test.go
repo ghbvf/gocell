@@ -69,24 +69,21 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithPublisher(eb),
+		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithOutboxWriter(nw),
 		accesscore.WithTxManager(noopTxRunner{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
-		configcore.WithPublisher(eb),
-		configcore.WithOutboxWriter(nw),
+		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithPublisher(eb),
+		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!")),
-		auditcore.WithOutboxWriter(nw),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)
@@ -269,24 +266,21 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithPublisher(eb),
+		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithOutboxWriter(nw),
 		accesscore.WithTxManager(noopTxRunner{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
-		configcore.WithPublisher(eb),
-		configcore.WithOutboxWriter(nw),
+		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithPublisher(eb),
+		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey([]byte("guard-test-hmac-key-32-bytes!!!!!")),
-		auditcore.WithOutboxWriter(nw),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)

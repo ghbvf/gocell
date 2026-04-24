@@ -79,10 +79,9 @@ func main() {
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithInitialAdminBootstrap(),
-		accesscore.WithPublisher(eb),
+		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithOutboxWriter(nw),
 		accesscore.WithTxManager(noopTxRunner{}),
 		accesscore.WithLogger(logger),
 	)
@@ -97,9 +96,8 @@ func main() {
 	}
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithPublisher(eb),
+		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey(auditHMACKey),
-		auditcore.WithOutboxWriter(nw),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(logger),
@@ -113,8 +111,7 @@ func main() {
 	}
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
-		configcore.WithPublisher(eb),
-		configcore.WithOutboxWriter(nw),
+		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(logger),

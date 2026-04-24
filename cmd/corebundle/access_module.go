@@ -51,7 +51,9 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 
 	accessOpts := []accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithPublisher(shared.EventBus),
+		// Demo-mode wiring: publisher only, no outboxWriter — cell.ResolveEmitter
+		// picks DirectEmitter(FailOpen) and keeps L2 slices running non-durably.
+		accesscore.WithOutboxDeps(shared.EventBus, nil),
 		accesscore.WithJWTIssuer(shared.JWTDeps.issuer),
 		accesscore.WithJWTVerifier(shared.JWTDeps.verifier),
 		accesscore.WithCursorCodec(cursorCodec),
