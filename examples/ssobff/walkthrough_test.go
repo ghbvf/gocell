@@ -216,6 +216,18 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	require.NoError(t, auc.Init(ctx, deps))
 	require.NoError(t, cc.Init(ctx, deps))
 
+	// This test harness bypasses bootstrap.Run, so phase3b's
+	// LifecycleContributor auto-discovery never fires. Drive the hooks
+	// manually here so initial-admin credential-file generation actually
+	// happens. Production code (examples/ssobff/main.go, cmd/corebundle)
+	// goes through bootstrap.Run and does NOT need this block.
+	lifecycleHooks := ac.LifecycleHooks()
+	for _, h := range lifecycleHooks {
+		if h.OnStart != nil {
+			require.NoError(t, h.OnStart(ctx))
+		}
+	}
+
 	// F3: public routes (login, refresh) and PasswordResetExempt routes
 	// (change-password, logout) are declared via auth.Declare inside accesscore's
 	// RegisterRoutes. FinalizeAuth compiles them into the router's auth predicates.
@@ -250,6 +262,12 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	srv := httptest.NewServer(r)
 	cleanup := func() {
 		srv.Close()
+		// LIFO rollback of lifecycle hooks (mirrors bootstrap.Lifecycle.Stop).
+		for i := len(lifecycleHooks) - 1; i >= 0; i-- {
+			if lifecycleHooks[i].OnStop != nil {
+				_ = lifecycleHooks[i].OnStop(ctx)
+			}
+		}
 		evtCancel()
 		<-evtDone
 	}
