@@ -1,4 +1,4 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package initialadmin
 
@@ -13,8 +13,8 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
-// errUnsupportedPlatform is returned by bootstrapper.ensureAdmin on non-unix
-// platforms where writeCredentialFile (unix-only, mode 0600) is unavailable.
+// errUnsupportedPlatform is returned by bootstrapper.ensureAdmin on platforms
+// where writeCredentialFile is unavailable.
 var errUnsupportedPlatform = errors.New("initialadmin: bootstrap not supported on this platform")
 
 // BootstrapDeps holds the injected repository and utility dependencies.
@@ -34,15 +34,15 @@ type bootstrapConfig struct {
 	Scheduler      Scheduler
 }
 
-// bootstrapper is a stub on non-unix platforms.
+// bootstrapper is a stub on unsupported platforms.
 type bootstrapper struct{}
 
-// newBootstrapper returns errUnsupportedPlatform on non-unix platforms.
+// newBootstrapper returns errUnsupportedPlatform on unsupported platforms.
 func newBootstrapper(_ BootstrapDeps, _ bootstrapConfig) (*bootstrapper, error) {
 	return nil, errUnsupportedPlatform
 }
 
-// ensureAdmin always returns errUnsupportedPlatform on non-unix platforms.
+// ensureAdmin always returns errUnsupportedPlatform on unsupported platforms.
 func (b *bootstrapper) ensureAdmin(_ context.Context) (worker.Worker, error) {
 	return nil, errUnsupportedPlatform
 }

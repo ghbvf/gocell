@@ -1,4 +1,4 @@
-//go:build unix
+//go:build unix || windows
 
 package initialadmin
 
@@ -25,10 +25,6 @@ import (
 const (
 	// defaultAdminUsername is the username created when no explicit username is provided.
 	defaultAdminUsername = "admin"
-
-	// defaultCredentialPath is used when neither bootstrapConfig.CredentialPath nor
-	// GOCELL_STATE_DIR are set.
-	defaultCredentialPath = "/run/gocell/initial_admin_password"
 
 	// defaultTTL is the credential file lifetime before the cleanup worker removes it.
 	defaultTTL = 24 * time.Hour
@@ -94,7 +90,7 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 		cfg.Username = defaultAdminUsername
 	}
 	if cfg.CredentialPath == "" {
-		resolved, resolveErr := resolveCredentialPath()
+		resolved, resolveErr := ResolveCredentialPath("")
 		if resolveErr != nil {
 			return nil, resolveErr
 		}
@@ -111,36 +107,6 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 	}
 
 	return &bootstrapper{deps: deps, cfg: cfg}, nil
-}
-
-// ResolveCredentialPath returns the credential file path for the given stateDir.
-// When stateDir is empty, the GOCELL_STATE_DIR environment variable is consulted;
-// if that is also empty, the default path is used.
-//
-// stateDir (or GOCELL_STATE_DIR) must be an absolute path; a non-absolute value
-// causes a fail-fast startup error (P2-1 fix: prevents path-traversal / ambiguous
-// relative paths in credential file operations).
-//
-// The result is filepath.Clean'd to normalise redundant separators and ".." elements.
-func ResolveCredentialPath(stateDir string) (string, error) {
-	dir := stateDir
-	if dir == "" {
-		dir = os.Getenv("GOCELL_STATE_DIR")
-	}
-	if dir == "" {
-		return defaultCredentialPath, nil
-	}
-	if !filepath.IsAbs(dir) {
-		return "", fmt.Errorf("initialadmin: GOCELL_STATE_DIR must be an absolute path, got %q", dir)
-	}
-	return filepath.Clean(dir + "/initial_admin_password"), nil
-}
-
-// resolveCredentialPath is the internal convenience wrapper used by newBootstrapper.
-// It panics (via log.Fatal path) only in the programmatic sense; callers should
-// use ResolveCredentialPath directly when they need to handle the error.
-func resolveCredentialPath() (string, error) {
-	return ResolveCredentialPath("")
 }
 
 // ensureAdmin executes the bootstrap sequence. It is idempotent: if an admin
