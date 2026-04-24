@@ -55,6 +55,15 @@ func CloseWithDeadline(ctx context.Context, name string, closeFn func() error) e
 			}
 		}
 	}()
+	// Fast path: if ctx is already cancelled/expired we must return
+	// ctx.Err() — not whichever branch Go's select happens to pick. The
+	// goroutine still runs closeFn best-effort per the godoc.
+	if err := ctx.Err(); err != nil {
+		slog.Warn("adapter close budget exceeded",
+			slog.String("component", name),
+			slog.Any("error", err))
+		return err
+	}
 	select {
 	case err := <-done:
 		if err != nil {
