@@ -249,6 +249,73 @@ func TestDualMux_FinalizeAuth_RejectsInternalPathWithoutDelegated(t *testing.T) 
 	assert.Contains(t, err.Error(), "/internal/v1/")
 }
 
+// TestDualMux_PrimaryHandler_NoTrailingSlashInternalPath_404 covers a gap in
+// chi wildcard routing: `/internal/v1/*` matches only paths that have at
+// least the prefix + slash. The bare `/internal/v1` form (no trailing slash)
+// would fall through to publicMux and receive 401 from AuthMiddleware —
+// leaking that the internal prefix exists. Router installs an explicit
+// non-wildcard 404 handler to plug the gap.
+func TestDualMux_PrimaryHandler_NoTrailingSlashInternalPath_404(t *testing.T) {
+	rtr, err := NewE()
+	require.NoError(t, err)
+
+	for _, path := range []string{"/internal/v1", "/internal/v1/", "/internal/v1/anything"} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		rtr.PublicHandler().ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNotFound, rec.Code,
+			"primary handler must 404 on %q (PR-A14a isolation)", path)
+	}
+}
+
+// TestPathPartStartsWithInternalPrefix covers both pattern forms consumed by
+// chi and Go 1.22 ServeMux dispatch.
+func TestPathPartStartsWithInternalPrefix(t *testing.T) {
+	cases := []struct {
+		pattern string
+		want    bool
+	}{
+		{"/internal/v1/foo", true},
+		{"/internal/v1/", true},
+		{"GET /internal/v1/foo", true},
+		{"POST /internal/v1/access/roles/assign", true},
+		{"/api/v1/foo", false},
+		{"GET /api/v1/foo", false},
+		{"/internal/v2/foo", false},
+		{"/", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		got := pathPartStartsWithInternalPrefix(tc.pattern)
+		assert.Equal(t, tc.want, got, "pattern=%q", tc.pattern)
+	}
+}
+
+// TestDualMux_NestedAdapter_InternalRegistration_Panics verifies the adapter
+// guard from PR-A14a: a Cell must not register /internal/v1/* through a
+// nested Route/Group/With sub-scope (the adapter would silently land the
+// route on publicMux, bypassing physical isolation).
+func TestDualMux_NestedAdapter_InternalRegistration_Panics(t *testing.T) {
+	rtr, err := NewE()
+	require.NoError(t, err)
+
+	t.Run("via_Group", func(t *testing.T) {
+		assert.Panics(t, func() {
+			rtr.Group(func(sub kcell.RouteMux) {
+				sub.Route("/internal/v1/foo", func(s kcell.RouteMux) {
+					s.Handle("/", http.NotFoundHandler())
+				})
+			})
+		})
+	})
+
+	t.Run("via_With", func(t *testing.T) {
+		assert.Panics(t, func() {
+			rtr.With().Handle("/internal/v1/bar", http.NotFoundHandler())
+		})
+	})
+}
+
 // TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations confirms the happy
 // path: Delegated:true on /internal/v1/* and Delegated:false on /api/v1/*
 // both pass. Routes are registered with a policy coverage whitelist rather

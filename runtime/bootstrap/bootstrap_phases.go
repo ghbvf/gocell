@@ -829,15 +829,27 @@ func (b *Bootstrap) checkNoEventRegistrars(asm *assembly.CoreAssembly) error {
 // ref: kubernetes/apiserver pkg/server/secure_serving.go — pre-bind listener
 // to surface bind errors synchronously.
 func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
-	primaryLn, err := b.resolvePrimaryListener()
+	primaryLn, primaryOwned, err := b.resolvePrimaryListener()
 	if err != nil {
+		slog.Error("bootstrap: failed to bind HTTP listener",
+			slog.String("listener", "primary"),
+			slog.String("addr", b.primaryAddr),
+			slog.Any("error", err))
 		return fmt.Errorf("bootstrap: listen primary %s: %w", b.primaryAddr, err)
 	}
-	internalLn, err := b.resolveInternalListener()
+	internalLn, _, err := b.resolveInternalListener()
 	if err != nil {
-		// Primary listener is owned by Bootstrap; close it before returning so
-		// the caller's Run() error path does not leak a bound socket.
-		_ = primaryLn.Close()
+		slog.Error("bootstrap: failed to bind HTTP listener",
+			slog.String("listener", "internal"),
+			slog.String("addr", b.internalAddr),
+			slog.Any("error", err))
+		// Close the primary listener only when Bootstrap owns it (i.e. bound
+		// it here). When the caller injected a listener via WithPrimaryListener
+		// we must NOT close it — the caller retains ownership and may want to
+		// reuse the socket on retry.
+		if primaryOwned {
+			_ = primaryLn.Close()
+		}
 		return fmt.Errorf("bootstrap: listen internal %s: %w", b.internalAddr, err)
 	}
 
@@ -877,21 +889,26 @@ func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
 }
 
 // resolvePrimaryListener returns the caller-injected primary listener when
-// WithPrimaryListener was used; otherwise it binds b.primaryAddr.
-func (b *Bootstrap) resolvePrimaryListener() (net.Listener, error) {
+// WithPrimaryListener was used; otherwise it binds b.primaryAddr. The owned
+// bool reports whether Bootstrap owns the returned listener — callers must
+// Close the listener on error only when owned=true (caller-injected listeners
+// remain the caller's responsibility).
+func (b *Bootstrap) resolvePrimaryListener() (ln net.Listener, owned bool, err error) {
 	if b.primaryListener != nil {
-		return b.primaryListener, nil
+		return b.primaryListener, false, nil
 	}
-	return net.Listen("tcp", b.primaryAddr)
+	ln, err = net.Listen("tcp", b.primaryAddr)
+	return ln, err == nil, err
 }
 
 // resolveInternalListener mirrors resolvePrimaryListener for the internal
 // listener.
-func (b *Bootstrap) resolveInternalListener() (net.Listener, error) {
+func (b *Bootstrap) resolveInternalListener() (ln net.Listener, owned bool, err error) {
 	if b.internalListener != nil {
-		return b.internalListener, nil
+		return b.internalListener, false, nil
 	}
-	return net.Listen("tcp", b.internalAddr)
+	ln, err = net.Listen("tcp", b.internalAddr)
+	return ln, err == nil, err
 }
 
 // shutdownBothServers drains the primary and internal servers in parallel

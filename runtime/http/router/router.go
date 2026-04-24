@@ -384,7 +384,15 @@ func NewE(opts ...Option) (*Router, error) {
 	// valid-but-missing-token response on a real internal route, leaking
 	// the internal prefix. The explicit 404 enforces PR-A14a's contract
 	// "the primary listener does not know about /internal/v1/*".
+	//
+	// Two entries cover both chi wildcard match forms: `/internal/v1/*`
+	// matches `/internal/v1/` (trailing slash) and `/internal/v1/foo`;
+	// `/internal/v1` (no trailing slash) is NOT matched by the wildcard in
+	// chi, so a dedicated exact match plugs that gap (otherwise the request
+	// falls through to publicMux and receives 401 from AuthMiddleware,
+	// leaking that the prefix exists).
 	r.outerMux.Handle(internalPathPrefix+"*", http.HandlerFunc(primaryInternalPrefix404))
+	r.outerMux.Handle(strings.TrimSuffix(internalPathPrefix, "/"), http.HandlerFunc(primaryInternalPrefix404))
 
 	// Mount public mux on outerMux. Paths not matched by infra routes
 	// (/healthz, /readyz, /metrics) or the internal-prefix 404 fall through
@@ -688,9 +696,13 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 }
 
 // FinalizeAuth compiles all accumulated AuthRouteMeta declarations into
-// matchers and OR-merges them with any matchers already set by
-// WithInternalPathPrefixGuard. Bootstrap calls this after all cells have
-// completed RegisterRoutes but before Listen.
+// matchers used by the public-mux AuthMiddleware. Bootstrap calls this after
+// all cells have completed RegisterRoutes but before Listen.
+//
+// PR-A14a: also verifies Delegated=true ⇔ path starts with "/internal/v1/"
+// (the internal-mux consistency invariant) before compiling matchers, so
+// misdeclared routes fail at startup rather than silently landing on the
+// wrong mux.
 //
 // Returns an error (not a panic) so Bootstrap can perform a clean rollback:
 //   - "router: FinalizeAuth called twice"
@@ -921,10 +933,12 @@ type chiRouterAdapter struct {
 var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
 
 func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
+	a.guardNestedInternalRegistration("Handle", pattern)
 	a.cr.Handle(pattern, handler)
 }
 
 func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
+	a.guardNestedInternalRegistration("Route", pattern)
 	a.cr.Route(pattern, func(cr chi.Router) {
 		sub := &chiRouterAdapter{
 			cr:       cr,
@@ -936,7 +950,33 @@ func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 }
 
 func (a *chiRouterAdapter) Mount(pattern string, handler http.Handler) {
+	a.guardNestedInternalRegistration("Mount", pattern)
 	a.cr.Mount(pattern, handler)
+}
+
+// guardNestedInternalRegistration panics when a Cell tries to enter the
+// /internal/v1/* namespace from a sub-scope that was NOT already rooted on
+// /internal/v1/* at the top-level Router. The top-level Router.pickMux is
+// the only dispatch point that routes to internalMux; a nested adapter is
+// pinned to whichever chi.Router it was created from, so crossing into
+// /internal/v1/* from a publicMux-rooted sub-scope (Group, With, or
+// Route("/api/...")) would silently land the route on publicMux and bypass
+// PR-A14a physical isolation. When the adapter's prefix already starts with
+// /internal/v1/, nested registrations are fine — they remain in the internal
+// scope chosen at top-level dispatch.
+func (a *chiRouterAdapter) guardNestedInternalRegistration(op, pattern string) {
+	composed := joinPrefix(a.prefix, pattern)
+	if !pathPartStartsWithInternalPrefix(composed) {
+		return
+	}
+	if pathPartStartsWithInternalPrefix(a.prefix) {
+		return
+	}
+	panic(fmt.Sprintf(
+		"router: nested adapter %s(%q) crosses into /internal/v1/* from a "+
+			"non-internal sub-scope (prefix=%q); register internal routes "+
+			"directly on the top-level Router, not inside a Route/Group/With sub-scope",
+		op, pattern, a.prefix))
 }
 
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
