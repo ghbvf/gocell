@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/fsnotify/fsnotify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -148,6 +149,34 @@ func TestWatcher_AtomicReplace_RemoveRecreate(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		return called.Load() >= 1
 	}, 3*time.Second, 50*time.Millisecond, "expected callback after remove+recreate")
+}
+
+func TestWatcher_TargetLifecycleEventsAreRelevant(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	touchFile(t, file, "key: v1")
+
+	w, err := NewWatcher(file)
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	tests := []struct {
+		name string
+		op   fsnotify.Op
+	}{
+		{name: "write", op: fsnotify.Write},
+		{name: "create", op: fsnotify.Create},
+		{name: "remove", op: fsnotify.Remove},
+		{name: "rename", op: fsnotify.Rename},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			symPivot, relevant := w.isRelevantEvent(fsnotify.Event{Name: file, Op: tt.op})
+			require.False(t, symPivot)
+			require.True(t, relevant)
+		})
+	}
 }
 
 func TestWatcher_IgnoresUnrelatedFiles(t *testing.T) {

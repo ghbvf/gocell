@@ -18,7 +18,7 @@ import (
 // Detection strategy:
 //  1. DOCKER_HOST env var — if set and non-empty, assume Docker is available.
 //  2. Default Unix socket /var/run/docker.sock on Unix targets.
-//  3. `docker info` fallback for Docker Desktop / named-pipe setups.
+//  3. `docker info` fallback through fixed Docker Desktop / distro CLI paths.
 //
 // This avoids importing the Docker client SDK while remaining correct for the
 // common CI cases (socket present or DOCKER_HOST set).
@@ -47,6 +47,41 @@ func dockerAvailable() bool {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "docker", "info", "--format", "{{.ServerVersion}}")
-	return cmd.Run() == nil
+	return dockerCLIAvailable(ctx)
+}
+
+func dockerCLIAvailable(ctx context.Context) bool {
+	for _, dockerPath := range dockerCLIPaths() {
+		info, err := os.Stat(dockerPath)
+		if err != nil || info.IsDir() {
+			continue
+		}
+		cmd := exec.CommandContext(ctx, dockerPath, "info", "--format", "{{.ServerVersion}}")
+		if cmd.Run() == nil {
+			return true
+		}
+	}
+	return false
+}
+
+func dockerCLIPaths() []string {
+	switch runtime.GOOS {
+	case "windows":
+		return []string{
+			`C:\Program Files\Docker\Docker\resources\bin\docker.exe`,
+			`C:\Program Files\Docker\Docker\resources\bin\com.docker.cli.exe`,
+		}
+	case "darwin":
+		return []string{
+			"/usr/local/bin/docker",
+			"/opt/homebrew/bin/docker",
+			"/Applications/Docker.app/Contents/Resources/bin/docker",
+		}
+	default:
+		return []string{
+			"/usr/bin/docker",
+			"/usr/local/bin/docker",
+			"/snap/bin/docker",
+		}
+	}
 }

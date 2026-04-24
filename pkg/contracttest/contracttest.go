@@ -261,28 +261,7 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	if !strings.HasPrefix(filepath.Clean(fullPath), filepath.Clean(dir)) {
 		t.Fatalf("contracttest: schema path %q escapes contract directory", filename)
 	}
-	data, err := os.ReadFile(fullPath)
-	if err != nil {
-		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)
-	}
-
-	var doc any
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatalf("contracttest: parse schema JSON %q: %v", fullPath, err)
-	}
-
-	compiler := jsonschema.NewCompiler()
-	schemaURL := schemaFileURL(fullPath)
-	if err := compiler.AddResource(schemaURL, doc); err != nil {
-		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
-	}
-
-	schema, err := compiler.Compile(schemaURL)
-	if err != nil {
-		t.Fatalf("contracttest: compile schema %q: %v", fullPath, err)
-	}
-
-	return schema
+	return compileSchemaAtPath(t, fullPath)
 }
 
 // validateJSON validates data against a compiled schema.
@@ -379,8 +358,11 @@ func (c *Contract) ValidateErrorResponse(t testing.TB, status int, body []byte) 
 // like "../../../../shared/errors/...").
 func compileSchemaFileAbsolute(t testing.TB, dir, filename string) *jsonschema.Schema {
 	t.Helper()
-	fullPath := filepath.Join(dir, filename)
+	return compileSchemaAtPath(t, filepath.Join(dir, filename))
+}
 
+func compileSchemaAtPath(t testing.TB, fullPath string) *jsonschema.Schema {
+	t.Helper()
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		t.Fatalf("contracttest: read schema %q: %v", fullPath, err)

@@ -285,10 +285,15 @@ func (w *Watcher) isRelevantEvent(event fsnotify.Event) (bool, bool) {
 		}
 	}
 
-	// Direct match: Write or Create on the target file.
+	// Direct match: any lifecycle change on the target file. Some backends
+	// (notably Darwin/kqueue) report atomic replace as a Rename on the old
+	// path without a reliable Create for the replacement.
 	baseName := filepath.Base(event.Name)
 	if baseName == w.targetName {
-		if event.Has(fsnotify.Write) || event.Has(fsnotify.Create) {
+		if event.Has(fsnotify.Write) ||
+			event.Has(fsnotify.Create) ||
+			event.Has(fsnotify.Remove) ||
+			event.Has(fsnotify.Rename) {
 			return false, true
 		}
 	}
