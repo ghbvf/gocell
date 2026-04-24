@@ -14,4 +14,5 @@ jobs:
       base-ref: develop   # no-op in full mode but explicit
       run-integration: true
       run-sonar: true
+      run-os-smoke: true
     secrets: inherit   # needed so sonarcloud job can read SONAR_TOKEN

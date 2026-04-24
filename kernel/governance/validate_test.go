@@ -3,6 +3,7 @@ package governance
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -2548,6 +2549,9 @@ func TestIsWithinRoot(t *testing.T) {
 }
 
 func TestIsWithinRoot_Symlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
+	}
 	root := t.TempDir()
 	outside := t.TempDir()
 

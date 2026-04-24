@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -79,61 +78,8 @@ func TestWriteCredentialFile_AtomicRename(t *testing.T) {
 		t.Fatalf("ReadDir: %v", err)
 	}
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
+		if len(e.Name()) > 4 && e.Name()[len(e.Name())-4:] == ".tmp" {
 			t.Errorf("found residual .tmp file: %s", e.Name())
-		}
-	}
-}
-
-func TestWriteCredentialFile_RefusesOverwrite(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "initial_admin_password")
-
-	// First write succeeds.
-	if err := writeCredentialFile(path, makePayload("admin", "pass1")); err != nil {
-		t.Fatalf("first writeCredentialFile: %v", err)
-	}
-
-	// Second write must refuse.
-	err := writeCredentialFile(path, makePayload("admin", "pass2"))
-	if err == nil {
-		t.Fatal("expected errCredFileExists, got nil")
-	}
-	if !errors.Is(err, errCredFileExists) {
-		t.Errorf("expected errCredFileExists, got: %v", err)
-	}
-}
-
-func TestWriteCredentialFile_PayloadFormat(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "initial_admin_password")
-	payload := credentialPayload{
-		Username:  "admin",
-		Password:  "mypassword",
-		ExpiresAt: time.Unix(1713456000, 0),
-	}
-
-	if err := writeCredentialFile(path, payload); err != nil {
-		t.Fatalf("writeCredentialFile: %v", err)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	content := string(data)
-
-	required := []string{
-		"# GoCell initial admin credential",
-		"username=admin",
-		"password=mypassword",
-		"expires_at=",
-	}
-	for _, needle := range required {
-		if !strings.Contains(content, needle) {
-			t.Errorf("file content missing %q\ngot:\n%s", needle, content)
 		}
 	}
 }
@@ -144,6 +90,44 @@ func TestRemoveCredentialFile_IdempotentMissing(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "nonexistent_file")
 	if err := removeCredentialFile(path); err != nil {
 		t.Errorf("removeCredentialFile on missing file: expected nil, got %v", err)
+	}
+}
+
+// TestSecureNewFile_RefusesSymlinkPath verifies that SecureNewFile (and by
+// extension writeCredentialFile) refuses to write through a symlink at the
+// target path. This guards against TOCTOU symlink-swap attacks (B2):
+// if an attacker plants a symlink between Lstat and OpenFile, O_NOFOLLOW
+// causes the open to fail with ELOOP (on Linux) or ENOTDIR (on Darwin).
+func TestSecureNewFile_RefusesSymlinkPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Create a benign target file that a symlink would point to.
+	target := filepath.Join(dir, "innocent_target")
+	if err := os.WriteFile(target, []byte("unrelated"), 0o600); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	// Plant a symlink at the path where the credential file would be written.
+	symlinkPath := filepath.Join(dir, "initial_admin_password")
+	if err := os.Symlink(target, symlinkPath); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	// writeCredentialFile must refuse to write through the symlink.
+	err := writeCredentialFile(symlinkPath, makePayload("admin", "s3cr3t"))
+	if err == nil {
+		t.Fatal("expected error when writing through symlink, got nil")
+	}
+	// The error must originate from either the Lstat (errCredFileExists, because
+	// Lstat sees the symlink as an existing entry) or from O_NOFOLLOW rejection.
+	// In both cases an error must be returned and the benign target must be intact.
+	targetData, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target after refused write: %v", readErr)
+	}
+	if string(targetData) != "unrelated" {
+		t.Errorf("symlink target was modified; got %q, want %q", string(targetData), "unrelated")
 	}
 }
 

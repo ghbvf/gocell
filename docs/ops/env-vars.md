@@ -138,7 +138,19 @@ Note: the per-cell `GOCELL_<CELLID>_DATABASE_URL` variables (e.g. `GOCELL_CONFIG
 
 | Variable | Purpose | Default |
 |---|---|---|
-| `GOCELL_STATE_DIR` | Directory for stateful files (e.g. initial admin credential on first run) | `/run/gocell` |
+| `GOCELL_STATE_DIR` | Directory for stateful files (e.g. initial admin credential on first run) | Platform-specific (see below) |
+
+### Per-OS defaults for `GOCELL_STATE_DIR`
+
+When `GOCELL_STATE_DIR` is not set, GoCell selects the default state directory based on the operating system:
+
+| OS | Default path |
+|----|-------------|
+| Linux | `/run/gocell` (systemd `RuntimeDirectory` convention; tmpfs, not written to disk on reboot) |
+| macOS | `~/Library/Application Support/gocell/run` |
+| Windows | `%LOCALAPPDATA%\gocell\run` |
+
+Set `GOCELL_STATE_DIR` to override the platform default for all stateful files.
 
 ## Migration from pre-T6 env names
 

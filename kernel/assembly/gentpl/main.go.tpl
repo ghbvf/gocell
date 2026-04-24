@@ -5,11 +5,10 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 
 	"{{.Module}}/kernel/assembly"
 	"{{.Module}}/kernel/cell"
+	"{{.Module}}/runtime/shutdown"
 	// Cell imports
 {{- range .Cells}}
 	// TODO: import {{.}} cell package
@@ -24,7 +23,7 @@ func main() {
 	// TODO: app.Register({{.}}.NewCore(...))
 {{- end}}
 
-	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, cancel := shutdown.NotifyContext(context.Background())
 	defer cancel()
 
 	if err := app.Start(ctx); err != nil {

@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 )
 
@@ -51,11 +50,17 @@ func (m *Manager) Register(h Hook) {
 }
 
 // Wait blocks until SIGINT or SIGTERM is received, then runs all hooks with a
-// timeout-bounded context. If all hooks complete before the timeout, it returns
-// nil. If the timeout expires, it returns context.DeadlineExceeded.
+// timeout-bounded context. Returns nil if all hooks reported nil error. Returns
+// a joined error if any hook returned a non-nil error.
+//
+// Note: if the shutdown timeout expires mid-hook, the per-hook context is
+// cancelled. A hook that respects ctx.Done() and returns ctx.Err() will cause
+// Wait to return that error via the hook's error. If all hooks return nil (they
+// completed before the deadline), Wait returns nil — it does not return
+// context.DeadlineExceeded on its own.
 func (m *Manager) Wait() error {
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, signalsToWatch()...)
 	received := <-sig
 	signal.Stop(sig)
 
@@ -65,6 +70,18 @@ func (m *Manager) Wait() error {
 	defer cancel()
 
 	return m.runHooks(ctx)
+}
+
+// NotifyContext returns a context that is cancelled when an OS shutdown signal
+// is received (per-OS set: SIGINT+SIGTERM on Unix, os.Interrupt elsewhere).
+// Callers must call the returned cancel func to release resources.
+//
+// This is the cross-platform equivalent of signal.NotifyContext(parent,
+// syscall.SIGINT, syscall.SIGTERM) — the latter is incorrect on Windows
+// because Windows cannot deliver SIGTERM, leaving the registration silently
+// half-broken.
+func NotifyContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, signalsToWatch()...)
 }
 
 // Shutdown runs all hooks immediately with a timeout-bounded context.
@@ -91,5 +108,8 @@ func (m *Manager) runHooks(ctx context.Context) error {
 	if len(errs) > 0 {
 		return errors.Join(errs...)
 	}
-	return ctx.Err()
+	// All hooks returned nil. Do not propagate ctx.Err() here: if every hook
+	// completed successfully before the deadline, the caller should see success.
+	// A hook that wants to signal timeout should itself return ctx.Err().
+	return nil
 }
