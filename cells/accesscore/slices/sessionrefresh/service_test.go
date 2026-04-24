@@ -105,6 +105,60 @@ func issueTestToken(sub string) string {
 	return tok
 }
 
+// brokenRoleRepo simulates a RoleRepository outage for fail-closed tests.
+type brokenRoleRepo struct {
+	mem.RoleRepository
+	err error
+}
+
+func (b *brokenRoleRepo) GetByUserID(_ context.Context, _ string) ([]*domain.Role, error) {
+	return nil, b.err
+}
+
+// countingSessionRepo wraps mem.SessionRepository so tests can assert that
+// Update was never called when sessionmint fails fast.
+type countingSessionRepo struct {
+	*mem.SessionRepository
+	updates int
+}
+
+func (c *countingSessionRepo) Update(ctx context.Context, s *domain.Session) error {
+	c.updates++
+	return c.SessionRepository.Update(ctx, s)
+}
+
+// TestService_Refresh_RoleFetchFailure_AbortsRefresh asserts that when the
+// RoleRepository is unavailable, rotateAndIssue fails with ErrAuthRoleFetchFailed
+// and does NOT persist the rotated session — the fail-closed contract of
+// PR-A7 / sessionmint: never issue a silently-degraded token.
+func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
+	sessionRepo := &countingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := &brokenRoleRepo{err: fmt.Errorf("roleRepo outage")}
+	userRepo := mem.NewUserRepository()
+	u, _ := domain.NewUser("usr-rolefail", "rolefail@test.local", "hash")
+	u.ID = "usr-rolefail"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	svc := NewService(sessionRepo, roleRepo, userRepo, testIssuer, testVerifier, slog.Default())
+
+	rt := issueTestToken("usr-rolefail")
+	sess, err := domain.NewSession("usr-rolefail", "at", rt, time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-rolefail"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	pair, err := svc.Refresh(context.Background(), rt)
+	require.Error(t, err, "Refresh must fail when role fetch fails")
+	assert.Nil(t, pair, "no token pair on failure")
+
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRoleFetchFailed, ec.Code,
+		"fail-closed: role fetch failure surfaces as ErrAuthRoleFetchFailed")
+
+	assert.Equal(t, 0, sessionRepo.updates, "session must not be updated on fail-closed")
+}
+
 func TestService_Refresh(t *testing.T) {
 	tests := []struct {
 		name    string

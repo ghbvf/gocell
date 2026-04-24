@@ -112,7 +112,7 @@ func TestAuthIntent_AccessTokenReachesBusinessPath(t *testing.T) {
 	validateSvc, ok := c.TokenVerifier().(*sessionvalidate.Service)
 	require.True(t, ok, "TokenVerifier must be *sessionvalidate.Service in production wiring")
 
-	claims, err := validateSvc.Verify(context.Background(), accessToken)
+	claims, err := validateSvc.VerifyIntent(context.Background(), accessToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "legitimate access token must pass session-validate")
 	assert.NotEmpty(t, claims.Subject)
 }
@@ -123,7 +123,7 @@ func TestAuthIntent_RefreshTokenBlockedAtBusinessPath(t *testing.T) {
 	validateSvc, ok := c.TokenVerifier().(*sessionvalidate.Service)
 	require.True(t, ok)
 
-	_, err := validateSvc.Verify(context.Background(), refreshToken)
+	_, err := validateSvc.VerifyIntent(context.Background(), refreshToken, auth.TokenIntentAccess)
 	require.Error(t, err,
 		"refresh token must NOT be accepted by session-validate (token confusion defense)")
 }

@@ -1,5 +1,5 @@
-// PR-P0-AUTH-INTENT: sessionvalidate.Verify must reject refresh-intent JWTs
-// (token confusion) so that middleware never surfaces a refresh token's
+// PR-P0-AUTH-INTENT: sessionvalidate.VerifyIntent must reject refresh-intent
+// JWTs (token confusion) so that middleware never surfaces a refresh token's
 // claims to a business handler.
 package sessionvalidate
 
@@ -14,7 +14,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestService_Verify_RejectsRefreshIntentToken(t *testing.T) {
+func TestService_VerifyIntent_RejectsRefreshIntentToken(t *testing.T) {
 	priv, pub := auth.MustGenerateTestKeyPair()
 	ks, err := auth.NewKeySet(priv, pub)
 	require.NoError(t, err)
@@ -27,13 +27,13 @@ func TestService_Verify_RejectsRefreshIntentToken(t *testing.T) {
 		"usr-attacker", nil, time.Hour)
 	require.NoError(t, err)
 
-	_, err = svc.Verify(context.Background(), refreshTok)
+	_, err = svc.VerifyIntent(context.Background(), refreshTok, auth.TokenIntentAccess)
 	require.Error(t, err, "refresh-intent token must be rejected by sessionvalidate")
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN",
 		"intent mismatch maps to generic invalid-token code in response")
 }
 
-func TestService_Verify_AcceptsAccessIntentToken(t *testing.T) {
+func TestService_VerifyIntent_AcceptsAccessIntentToken(t *testing.T) {
 	priv, pub := auth.MustGenerateTestKeyPair()
 	ks, err := auth.NewKeySet(priv, pub)
 	require.NoError(t, err)
@@ -46,7 +46,7 @@ func TestService_Verify_AcceptsAccessIntentToken(t *testing.T) {
 		"usr-legit", []string{"user"}, time.Hour)
 	require.NoError(t, err)
 
-	claims, err := svc.Verify(context.Background(), accessTok)
+	claims, err := svc.VerifyIntent(context.Background(), accessTok, auth.TokenIntentAccess)
 	require.NoError(t, err)
 	assert.Equal(t, "usr-legit", claims.Subject)
 	assert.Equal(t, auth.TokenIntentAccess, claims.TokenUse)

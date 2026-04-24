@@ -217,19 +217,24 @@
 
 ---
 
-### PR-A7 Principal 契约统一 + rolefetch 收口（预计 6h）
+### PR-A7 sessionmint 统一入口 + P1-A 收尾（实际 ~4h，PR #TBD）
 
-**主线**：
-- **P1-A PRINCIPAL-UNIFIED-CONTRACT-01** Principal 契约（definition + accessor + ctx 挂载）统一（4h）
+**主线落地**：
+- **V-A17（升级版）FETCH-ROLE-NAMES-DEDUP-01** ✅ 抽 `cells/accesscore/internal/sessionmint`，单一 `Mint(ctx, deps, req)` 封装 "fetch roles (fail-closed) + issue access + issue refresh"；3 个调用点（`sessionlogin.Login` / `sessionlogin.IssueForUser` / `sessionrefresh.rotateAndIssue`）各收敛到一行；两个 slice 的 `fetchRoleNames` / `issueAccessToken` / `issueRefreshToken` 六个重复私有方法全部删除
+- **新增 `errcode.ErrAuthRoleFetchFailed`**（CategoryInfra → HTTP 500），替换 sessionlogin / sessionrefresh 两处 fail-open silent degrade（原先 roleRepo 故障时 Warn + 签空 roles token 导致用户"登录成功但 RBAC 全丢"，现在直接 abort 由客户端重试）
+- **sessionvalidate.Service.Verify() dead shim 移除**：AuthMiddleware 已直接走 `VerifyIntent`，壳函数无生产消费；9 处测试调用改用 `svc.VerifyIntent(ctx, tok, auth.TokenIntentAccess)`
 
-**搭车**：
-- **V-A17 FETCH-ROLE-NAMES-DEDUP-01**（P2-9）抽 `cells/accesscore/internal/rolefetch`，`FetchRolesStrict`/`FetchRolesLenient`（2h）
+**P1-A 状态**：✅ pre-existing — 探索实测 `runtime/auth.Principal` + `WithPrincipal/FromContext/MustFromContext` + `UnionAuthenticator` + JWT/Service `Authenticator` 早已落地；`cmd/corebundle/auth_integration_test.go:321-348` 验证 `/internal/v1` delegated → ServiceToken → `RoleInternalAdmin` 链路全绿；所有 handler 都在消费 `auth.FromContext`；无 `ctx.Value(claimsKey)` 残留。
 
-**搭车理由**：Principal 统一时会重写 `sessionlogin:162 fail-closed` / `sessionrefresh:199 fail-open` 的角色查询路径，rolefetch 拆分同步完成。
+**替代决策**：原计划 `rolefetch.FetchRolesStrict` / `FetchRolesLenient` 双变体被抛弃——两处源码实测都是 fail-open，不是一个该保留的语义；拔到 `sessionmint.Mint` 这个更高抽象消除整条流水线重复，而不是保留 Strict/Lenient 双函数分叉。
 
-**文件面**：`runtime/auth/` + 各 cell middleware + `cells/accesscore/internal/rolefetch/`（新）
+**文件面**：
+- 新：`cells/accesscore/internal/sessionmint/{sessionmint.go, sessionmint_test.go}`
+- 改：`pkg/errcode/errcode.go` + `pkg/httputil/response.go`（新 errcode + 500 映射）
+- 改：`cells/accesscore/slices/{sessionlogin, sessionrefresh, sessionvalidate}/service.go`
+- 扩测：`cells/accesscore/slices/{sessionlogin, sessionrefresh}/service_test.go`（fail-closed 回归用例）+ sessionmint 6 用例
 
-**风险**：中；auth 关键路径，需 integration test 全覆盖。
+**风险**：低；改动集中在 accesscore 内部，fail-closed 语义变化已由新测试覆盖；integration test（cmd/corebundle + identitymanage + ssobff 全部 -tags=integration 绿）确认链路无回归。
 
 ---
 

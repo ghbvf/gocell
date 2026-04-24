@@ -333,8 +333,12 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrConfigRepoQuery:        http.StatusInternalServerError,
 	errcode.ErrFlagRepoQuery:          http.StatusInternalServerError,
 	errcode.ErrAuthKeyMissing:         http.StatusInternalServerError,
-	errcode.ErrWSAlreadyStarted:       http.StatusInternalServerError,
-	errcode.ErrWSAlreadyStopped:       http.StatusInternalServerError,
+	// Role resolution failure at token-issuance time — infrastructure fault
+	// (RoleRepository unavailable). Fail-closed: callers abort authn action
+	// rather than issue a token with empty roles.
+	errcode.ErrAuthRoleFetchFailed: http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStarted:    http.StatusInternalServerError,
+	errcode.ErrWSAlreadyStopped:    http.StatusInternalServerError,
 	// Observability init failures (missing Provider, missing CellID) —
 	// these originate from composition-root misconfiguration and never
 	// escape via HTTP in practice, but the exhaustive test requires every
