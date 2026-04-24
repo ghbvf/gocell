@@ -1,9 +1,14 @@
 # ADR: kernel/wrapper — Contract-level Observable Proxy
 
-> Date: 2026-04-24
+> Date: 2026-04-24 (revised after two review rounds)
 > Status: Accepted
 > Context PR: PR-A11 (`refactor/520-pr-a11-kernel-wrapper`)
 > Tag: ADR-KERNEL-WRAPPER-CONTRACT-OBS-01
+>
+> **Revision note**: §3 auth.Mount policy ordering and §4 consumer
+> observability are superseded in-place by §6 and §7 below (decisions 5-7
+> added after review rounds 1+2 surfaced the silent-noop and panic-leak
+> defects). §1/§2 remain unchanged.
 
 ## Context
 
@@ -85,15 +90,85 @@ and verifiable.
 
 ### 4. `wrapper.WrapConsumer` for outbox event consumers
 
-`wrapper.WrapConsumer(spec, fn, opts...)` returns a contract-tagged
+`wrapper.WrapConsumer(spec, fn)` returns a contract-tagged
 `outbox.EntryHandler`. Span name `"CONSUME {topic}"`, attrs
 `gocell.contract.id` + `messaging.system` + `messaging.destination`.
 Ack / Requeue / Reject dispositions flow through unchanged; the
 wrapper only records status/error info on the span.
 
+Panic safety (review round 2): the closure installs a `defer` that
+recovers any handler panic, marks the span `StatusError` + `RecordError`,
+ends the span, then re-panics so the outer `Router.runSubscribe`
+recover still sees it. HTTPHandler shares the same `recoverAndFinish`
+primitive in `kernel/wrapper/lifecycle.go`, eliminating the pre-review
+asymmetry where HTTP recovered panics but consumers leaked spans.
+
 Wire-up to `kernel/outbox.ConsumerBase` / `runtime/eventrouter` is
 deferred to a follow-up PR-A11-B (see backlog) so the event-consumer
 migration does not entangle with the current HTTP-side refactor.
+
+### 5. Tracer Injection: Package-Level Global (supersedes the Option pattern)
+
+`kernel/wrapper` owns a package-level `var tracer Tracer`. The zero value
+is `panicIfNotSetTracer{}` — its `Start` panics with a message naming
+`runtime.bootstrap` as the required caller, so any first request on a
+mis-wired binary fails loudly on day 0 rather than silently producing
+noop spans.
+
+`wrapper.SetTracer(t)` is the single write path and is called exactly
+once by `runtime/bootstrap.phase1LoadConfig`. When no tracer was
+supplied via `Bootstrap.WithTracer`, phase1 falls back to
+`wrapper.NoopTracer{}` with a `slog.Warn` so the wiring gap is visible
+in operator logs without breaking startup.
+
+`HTTPHandler` and `WrapConsumer` now take no tracer parameter and no
+`WithTracer` option. `HandlerOption` retains only `WithFilter` for
+probe suppression (`wrapper.DefaultProbeFilter` matches
+`/healthz` / `/readyz` / `/livez`).
+
+Rationale: matches `log/slog.Default()` / `otel.GetTracerProvider()` /
+Kratos `otel.Tracer(name)` / Watermill-otel `otel.Tracer(...)` — the
+industry-standard "process-wide singleton, injected once by the
+application entrypoint" pattern. Kernel LAYER-01 stays clean because
+`SetTracer` is a kernel-defined API and runtime → kernel is the
+allowed direction.
+
+### 6. Policy Within Contract Span (supersedes §3's policy ordering)
+
+`auth.Mount` now wraps `RequirePolicy` **inside** `wrapper.HTTPHandler`.
+Policy denials (403/401) therefore emit a complete contract span
+tagged with `gocell.contract.id`, so operators aggregating error
+rates by contract see authorization failures — a dimension invisible
+under the earlier "policy outside wrapper" ordering.
+
+Cost: every pre-auth unauthorized request now produces a span.
+This is cheap in absolute terms (one span per request, same as any
+200 OK request) and orthogonal to the layering model — if unauth
+traffic ever becomes an observability cost issue, apply a sampler
+keyed on `http.status_code` rather than rearranging the middleware
+chain. Removed: the "Do NOT swap this order" comment that the initial
+PR introduced in `runtime/auth/route.go`.
+
+Contract.Path drift is now statically invariant-enforced in
+`validateContractShape`: non-empty `Contract.Path` must have
+`path.Clean(Route.Path)` as suffix, and `Contract.Kind == "http"`
+requires `Contract.Path != ""`. Prevents the silent drift that the
+earlier ADR version explicitly deferred to FMT-17 (which remains a
+follow-up PR-A11-V for the contract ⇄ YAML cross-check).
+
+### 7. Outer request span skipped when contract span covers
+
+`runtime/http/middleware/tracing.go`'s `Tracing` middleware now
+short-circuits when `ctxkeys.ContractIDFrom(ctx)` returns present —
+i.e. the inner contract span has already been opened upstream. This
+eliminates the double-span emission that the initial ADR version
+listed as a migration-window cost ("Span coexistence note"). Result:
+one request → one span, tagged with `gocell.contract.id`, as soon as
+a Cell migrates its route to `auth.Mount` + `Route.Contract`.
+
+Routes without a `Contract` continue through `middleware.Tracing`
+unchanged (chi-route-pattern span), so PR-A11-M's route migration
+can proceed gradually without double-counting any requests.
 
 ## Consequences
 
@@ -109,14 +184,18 @@ migration does not entangle with the current HTTP-side refactor.
   mechanical diff-expansions, reviewable per-cell.
 
 ### Negative
-- Until FMT-17 ships, `ContractSpec` literals can drift from YAML
-  (but today's `Method`/`Path` fields on `RouteDecl` have the exact
-  same exposure — no regression, just a deferred hardening step).
+- Until FMT-17 (PR-A11-V) ships, `ContractSpec` literal content still
+  can drift from `contracts/**.yaml`, but `Contract.Path` vs
+  `Route.Path` suffix invariance is now a runtime-validated
+  precondition, closing the most common mistake.
 - `auth.Declare` stays in-tree during the migration window. Two APIs
   co-existing is noise; future cleanup PR-A11-M + PR-A11-B close this.
 - `kernel/outbox.ConsumerBase` + `runtime/eventrouter.Router.AddHandler`
   keep today's topic-string API pending PR-A11-B. Event consumers
   therefore still have no `contract_id` attribute today.
+- Unauthorized traffic now produces spans (cost of §6's policy-inside
+  model). Apply `http.status_code` samplers downstream if volume
+  becomes a backend cost issue.
 
 ### Neutral
 - `runtime/observability/tracing` Tracer/Span interface move is source-
@@ -152,6 +231,29 @@ and cannot enforce the Method/Kind invariants that `wrapper.ContractSpec`
 carries as a value type. The `Route` + `ContractSpec` split makes the
 observability contract a first-class field, not a retrofitted string.
 
+### E. Explicit Option (`WithTracer`) + `NoopTracer{}` default
+Rejected after review round 1 exposed that no caller was passing
+`WithTracer(...)` — `auth.Mount` has no tracer parameter and no ctx
+extraction, so every contract span silently became noop. Unlike
+otelhttp / Kratos / Watermill which fall back to the process-wide
+`otel.GetTracerProvider()`, kernel/wrapper's noop default had no
+second chance: zero spans on the dashboard looked identical to "we
+forgot to wire it" and "tracing is globally disabled". The §5
+package-level global + startup panic on unset surfaces wiring gaps on
+day 0 instead.
+
+### F. Context-propagated tracer (`ctxkeys.WithTracer`)
+Rejected as a middle ground. The middleware layer setting
+`ctx.Value(tracerKey, t)` is cleaner than an Option but adds a second
+potential failure path — if a Cell somehow serves a request without
+passing through the runtime HTTP middleware chain (e.g. test
+harnesses, sidecar sockets, future embedded modes) the tracer is
+missing again. Package-level `SetTracer` bound once at startup has no
+such gap: every call site in the process shares the same instance.
+Compared against §5: ctx propagation would have required no API
+change to Mount, but kept the "multiple injection sites + partial
+wiring" failure mode alive.
+
 ## Follow-ups (registered in docs/backlog.md)
 
 - `PR-A11-M CELL-ROUTES-MOUNT-MIGRATION-01` — migrate remaining ~33
@@ -168,6 +270,10 @@ observability contract a first-class field, not a retrofitted string.
   `runtime/observability/logging.contextHandler` to read
   `kernel/ctxkeys.ContractID` and emit `contract_id` on every slog
   record (today it only emits trace_id/span_id/cell_id).
+- `PR-A11-R1 WRAPPER-TRACER-LINT-GUARD-01` — new FMT governance rule
+  that scans `kernel/wrapper/*.go` public function signatures and
+  rejects any `Tracer` parameter outside `SetTracer`; prevents future
+  regressions that would re-introduce the bypass path §5 eliminated.
 
 ## References
 
@@ -183,7 +289,13 @@ observability contract a first-class field, not a retrofitted string.
 - `ref: zeromicro/go-zero rest/handler/tracehandler.go@master` —
   explicit path parameter at registration time
 - `ref: uber-go/fx app.go@master` — construction-time injection over
-  global state
+  global state (rejected for cross-cutting tracer; accepted pattern
+  for Cell services)
+- `ref: log/slog slog.go@go1.22` — `Default()` / `SetDefault()`
+  process-wide logger singleton — §5 uses the same shape for Tracer
+- `ref: open-telemetry/opentelemetry-go otel.go@main` —
+  `GetTracerProvider()` / `SetTracerProvider()` global provider
+  pattern adopted by otelhttp / Kratos / Watermill
 - Rejected: `ref: kubernetes/apimachinery pkg/util/runtime/runtime.go@
   master` global `PanicHandlers` singleton pattern (untestable + kernel
   LAYER-01 violation)
