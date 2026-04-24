@@ -16,6 +16,10 @@ type testDoublePolicy struct {
 
 func (p testDoublePolicy) Describe() string { return p.description }
 
+// Compile-time assertion: testDoublePolicy must satisfy cell.Policy.
+// This guards against accidental breakage of the interface definition.
+var _ cell.Policy = testDoublePolicy{}
+
 func TestPolicyInterface(t *testing.T) {
 	t.Parallel()
 
