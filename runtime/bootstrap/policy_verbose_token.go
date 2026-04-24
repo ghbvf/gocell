@@ -40,7 +40,7 @@ type policyVerboseToken struct {
 
 func (p *policyVerboseToken) Describe() string { return "verbose-token" }
 
-func (p *policyVerboseToken) apply(mux *chi.Mux) {
+func (p *policyVerboseToken) Apply(mux *chi.Mux) {
 	mux.Use(p.middleware())
 }
 

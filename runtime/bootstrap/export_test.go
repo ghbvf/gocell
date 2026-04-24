@@ -12,12 +12,12 @@ import (
 
 // ApplyPolicyForTest applies the policy's middleware to mux if p implements the
 // internal mountablePolicy interface. External test packages cannot call
-// mountablePolicy.apply directly (it is unexported); this helper bridges the gap.
+// mountablePolicy.Apply directly; this helper bridges the gap.
 //
 // If p does not implement mountablePolicy (e.g., a pure cell.Policy from
 // outside runtime/bootstrap), ApplyPolicyForTest is a no-op.
 func ApplyPolicyForTest(p cell.Policy, mux *chi.Mux) {
 	if mp, ok := p.(mountablePolicy); ok {
-		mp.apply(mux)
+		mp.Apply(mux)
 	}
 }

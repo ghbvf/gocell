@@ -22,9 +22,9 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell           = (*AuditCore)(nil)
-	_ cell.HTTPRegistrar  = (*AuditCore)(nil)
-	_ cell.EventRegistrar = (*AuditCore)(nil)
+	_ cell.Cell                  = (*AuditCore)(nil)
+	_ cell.RouteGroupContributor = (*AuditCore)(nil)
+	_ cell.EventRegistrar        = (*AuditCore)(nil)
 )
 
 // Option configures an AuditCore Cell.
@@ -277,11 +277,19 @@ func (c *AuditCore) initCursorCodec(mode cell.DurabilityMode) error {
 	return nil
 }
 
-// RegisterRoutes registers HTTP routes for auditcore.
-func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
-	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
-		c.queryHandler.RegisterRoutes(sub)
-	})
+// RouteGroups declares auditcore's HTTP route groups on the PrimaryListener.
+//
+// ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
+func (c *AuditCore) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1/audit",
+			Register: func(mux cell.RouteMux) {
+				c.queryHandler.RegisterRoutes(mux)
+			},
+		},
+	}
 }
 
 // RegisterSubscriptions declares event subscriptions for all audit topics.

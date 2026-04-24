@@ -298,21 +298,23 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	// PR-A14a: /internal/v1/* endpoints live on a physically separate internal
+	// PR-A14b: /internal/v1/* endpoints live on a physically separate internal
 	// listener. JWT AuthMiddleware is never installed on the internal mux —
-	// WithInternalMiddleware(guard) is the sole authentication layer for the
-	// control plane. F3: public routes (login, refresh) are declared by
-	// accesscore via auth.Declare(Public:true); WithAuthDiscovery discovers
-	// the verifier and wires it onto the primary mux only.
+	// PolicyServiceToken is the sole authentication layer for the control plane.
+	// F3: public routes (login, refresh) are declared by accesscore via
+	// auth.Declare(Public:true); WithAuthDiscovery discovers the verifier and
+	// wires it onto the primary mux only.
+	_ = guard // guard is superseded by PolicyServiceToken below
 	internalLn := newCorebundleLocalListener(t)
+	internalPolicy := bootstrap.PolicyServiceToken(nonceStore, ring)
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPrimaryListener(ln),
-		bootstrap.WithInternalListener(internalLn),
+		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalPolicy,
+			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
 		bootstrap.WithAuthDiscovery(),
-		bootstrap.WithInternalMiddleware(guard),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

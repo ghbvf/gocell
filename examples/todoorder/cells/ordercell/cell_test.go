@@ -217,13 +217,21 @@ func TestOrderCell_DemoMode_AllowsNoopWriter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), deps))
 }
 
-func TestOrderCell_RegisterRoutes(t *testing.T) {
+func TestOrderCell_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	require.NoError(t, c.Init(ctx, newTestDeps()))
 
 	mux := &stubMux{}
-	c.RegisterRoutes(mux)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			if rg.Prefix != "" {
+				mux.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			} else {
+				rg.Register(mux)
+			}
+		}
+	}
 	assert.GreaterOrEqual(t, mux.handleCount, 3, "should register at least 3 route patterns")
 }
 
@@ -250,7 +258,15 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	require.NoError(t, c.Init(ctx, newTestDeps()))
 
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			if rg.Prefix != "" {
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			} else {
+				rg.Register(r)
+			}
+		}
+	}
 	require.NoError(t, r.FinalizeAuth())
 	return r
 }

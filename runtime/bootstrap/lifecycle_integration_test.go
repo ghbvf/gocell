@@ -55,7 +55,7 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 
 	b := bootstrap.New(
 		bootstrap.WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		bootstrap.WithInternalListener(newIntegrationListener(t)),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
 			_ = lc.Append(bootstrap.Hook{
@@ -129,7 +129,11 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 
 	boomErr := errors.New("boom")
 
+	// PR-A14b: phase0 requires a primary listener declaration even for pure
+	// lifecycle tests; inject an ephemeral listener so validation passes and
+	// Run proceeds to the lifecycle.Start phase.
 	b := bootstrap.New(
+		bootstrap.WithPrimaryListener(newIntegrationListener(t)),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
 			// Hook A: succeeds; its OnStop must run during rollback.

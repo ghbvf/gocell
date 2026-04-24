@@ -64,9 +64,10 @@ type phaseState struct {
 	reloads *reloadGate
 
 	// set by phase5
-	hh      *health.Handler
-	rtr     *router.Router                      // primary listener's router (may be nil when no primary)
-	routers map[cell.ListenerRef]*router.Router // all per-listener routers
+	hh                   *health.Handler
+	healthMetricsHandler http.Handler                        // optional /metrics handler for the HealthListener
+	rtr                  *router.Router                      // primary listener's router (may be nil when no primary)
+	routers              map[cell.ListenerRef]*router.Router // all per-listener routers
 
 	// registeredCheckers guards against duplicate health checker names across
 	// phases. Keyed by checker name; value is struct{}.
@@ -534,6 +535,7 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 		hh.SetVerboseToken(b.verboseToken)
 	}
 	s.hh = hh
+	s.healthMetricsHandler = b.healthMetricsHandler
 	return b.registerAllHealthCheckers(s)
 }
 
@@ -555,18 +557,14 @@ func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.Liste
 }
 
 // phase5CollectRouteGroups resolves the health listener fallback and collects
-// RouteGroups from health, RouteGroupContributor cells, and HTTPRegistrar cells.
+// RouteGroups from health and RouteGroupContributor cells.
 func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.ListenerRef]*router.Router) []cell.RouteGroup {
 	healthRef := b.resolveHealthListenerRef(routers)
-	groups := b.remapHealthGroups(s.hh, healthRef)
+	groups := b.remapHealthGroups(s.hh, s.healthMetricsHandler, healthRef)
 	for _, id := range s.asm.CellIDs() {
 		c := s.asm.Cell(id)
 		if rgc, ok := c.(cell.RouteGroupContributor); ok {
 			groups = append(groups, rgc.RouteGroups()...)
-			continue
-		}
-		if hr, ok := c.(cell.HTTPRegistrar); ok {
-			b.mountHTTPRegistrarCompat(hr, routers)
 		}
 	}
 	return groups
@@ -585,9 +583,10 @@ func (b *Bootstrap) resolveHealthListenerRef(routers map[cell.ListenerRef]*route
 }
 
 // remapHealthGroups returns the HealthRouteGroups with the listener field
-// updated to healthRef (when it differs from HealthListener).
-func (b *Bootstrap) remapHealthGroups(hh *health.Handler, healthRef cell.ListenerRef) []cell.RouteGroup {
-	raw := HealthRouteGroups(hh)
+// updated to healthRef (when it differs from HealthListener). The optional
+// metricsHandler is forwarded to HealthRouteGroups to mount /metrics.
+func (b *Bootstrap) remapHealthGroups(hh *health.Handler, metricsHandler http.Handler, healthRef cell.ListenerRef) []cell.RouteGroup {
+	raw := HealthRouteGroups(hh, metricsHandler)
 	groups := make([]cell.RouteGroup, 0, len(raw))
 	for _, rg := range raw {
 		if rg.Listener == cell.HealthListener && healthRef != cell.HealthListener {
@@ -596,17 +595,6 @@ func (b *Bootstrap) remapHealthGroups(hh *health.Handler, healthRef cell.Listene
 		groups = append(groups, rg)
 	}
 	return groups
-}
-
-// mountHTTPRegistrarCompat mounts legacy HTTPRegistrar routes via a split mux
-// that routes /internal/v1/* to the InternalListener router.
-func (b *Bootstrap) mountHTTPRegistrarCompat(hr cell.HTTPRegistrar, routers map[cell.ListenerRef]*router.Router) {
-	primaryRtr := routers[cell.PrimaryListener]
-	internalRtr := routers[cell.InternalListener]
-	if primaryRtr != nil || internalRtr != nil {
-		split := newHTTPRegistrarSplitMux(primaryRtr, internalRtr)
-		hr.RegisterRoutes(split)
-	}
 }
 
 // phase5MountRouteGroups mounts each RouteGroup on its listener's router.
@@ -685,8 +673,13 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 	// Primary listener: whitelist framework-owned routes (health + internal-
 	// prefix isolation) that are mounted without auth.Declare, and wire auth
 	// middleware when a verifier is available.
+	// PR-A14b: also pre-seed the public matcher with the /internal/v1/* prefix
+	// so that JWT auth middleware passes those requests through to the 404
+	// isolation handler (installed by phase5FinalizePrimaryRouter) rather than
+	// returning 401 — the port-level isolation contract requires a 404, not 401.
 	if ref == cell.PrimaryListener {
 		opts = append(opts, router.WithPolicyCoverageWhitelist(frameworkPrimaryWhitelist))
+		opts = append(opts, router.WithPublicPathPrefix("/internal/v1/"))
 		if b.authVerifier != nil {
 			authOpts, err := b.buildAuthRouterOptions(s)
 			if err != nil {
@@ -827,6 +820,12 @@ func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {
 // b.metricsProvider is a real (non-Nop) provider. When no provider is set, the
 // opts slice is returned unchanged.
 //
+// The collector is created ONCE and cached in b.httpCollector so that subsequent
+// calls (one per declared listener) reuse the same instrumented collector rather
+// than re-registering http_requests_total and http_request_duration_seconds
+// against the same Prometheus registry — which would cause a duplicate-registration
+// error on the second listener.
+//
 // R2 wiring rule: if callers already passed router.WithMetricsCollector via
 // WithRouterOptions AND also called WithMetricsProvider, the auto-wired
 // collector construction will fail with a duplicate-name error. The error is
@@ -843,28 +842,35 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
 		return opts, nil
 	}
-	// Derive cell ID from the most specific source available:
-	//  1. Explicit WithAssemblyID — caller's intent takes precedence.
-	//  2. Pre-built assembly's ID (b.assembly.ID()) — avoids requiring callers
-	//     to repeat the assembly ID when using WithAssembly(asm).
-	//  3. Fallback "default" — matches the ID used by the auto-built assembly.
-	cellID := b.assemblyID
-	if cellID == "" && b.assembly != nil {
-		cellID = b.assembly.ID()
+	// Create the collector only once (cached in b.httpCollector) so that
+	// multiple calls to buildListenerRouterOpts (one per declared listener)
+	// share the same collector and do not attempt to re-register Prometheus
+	// counters/histograms with the same names.
+	if b.httpCollector == nil {
+		// Derive cell ID from the most specific source available:
+		//  1. Explicit WithAssemblyID — caller's intent takes precedence.
+		//  2. Pre-built assembly's ID (b.assembly.ID()) — avoids requiring callers
+		//     to repeat the assembly ID when using WithAssembly(asm).
+		//  3. Fallback "default" — matches the ID used by the auto-built assembly.
+		cellID := b.assemblyID
+		if cellID == "" && b.assembly != nil {
+			cellID = b.assembly.ID()
+		}
+		if cellID == "" {
+			cellID = "default"
+		}
+		collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{
+			CellID: cellID,
+		})
+		if err != nil {
+			return nil, fmt.Errorf(
+				"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the HTTP collector; "+
+					"do not also pass router.WithMetricsCollector via WithRouterOptions. "+
+					"Remove one side: %w", err)
+		}
+		b.httpCollector = collector
 	}
-	if cellID == "" {
-		cellID = "default"
-	}
-	collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{
-		CellID: cellID,
-	})
-	if err != nil {
-		return nil, fmt.Errorf(
-			"bootstrap: metrics auto-wire conflict: WithMetricsProvider already constructs the HTTP collector; "+
-				"do not also pass router.WithMetricsCollector via WithRouterOptions. "+
-				"Remove one side: %w", err)
-	}
-	return append(opts, router.WithMetricsCollector(collector)), nil
+	return append(opts, router.WithMetricsCollector(b.httpCollector)), nil
 }
 
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics options.
@@ -1301,104 +1307,4 @@ func (b *Bootstrap) phase10LIFOTeardown(shutCtx context.Context, s *phaseState) 
 		}
 	}
 	return errs
-}
-
-// ---------------------------------------------------------------------------
-// HTTPRegistrar compat: split mux for PR-A14b migration
-// ---------------------------------------------------------------------------
-
-const internalRoutePrefix = "/internal/v1/"
-
-// httpRegistrarSplitMux is a cell.RouteMux adapter used for backward-compat
-// HTTPRegistrar cells during the PR-A14b migration period (batch 2→3).
-//
-// It routes Handle/Route/Mount calls to the correct per-listener router:
-//   - Routes whose path prefix is /internal/v1/ → InternalListener router
-//   - All other routes → PrimaryListener router
-//
-// DeclareAuthMeta is forwarded to the correct router based on the Path field.
-// This allows dualListenerCell-style cells (registering both /api/v1/* and
-// /internal/v1/* in a single RegisterRoutes call) to work correctly with the
-// new per-listener architecture.
-//
-// When a target router is nil, Handle/DeclareAuthMeta calls for that listener
-// are silently dropped (no-op). This supports single-listener deployments.
-type httpRegistrarSplitMux struct {
-	primary  cell.RouteMux // nil when PrimaryListener is not configured
-	internal cell.RouteMux // nil when InternalListener is not configured
-}
-
-func newHTTPRegistrarSplitMux(primary, internal cell.RouteMux) *httpRegistrarSplitMux {
-	return &httpRegistrarSplitMux{primary: primary, internal: internal}
-}
-
-// targetForPattern returns the router corresponding to the path encoded in a
-// Go 1.22 ServeMux pattern ("METHOD /path" or just "/path").
-func (m *httpRegistrarSplitMux) targetForPattern(pattern string) cell.RouteMux {
-	// Extract path from "METHOD /path" or plain "/path".
-	path := pattern
-	if idx := strings.IndexByte(pattern, ' '); idx >= 0 {
-		path = strings.TrimSpace(pattern[idx+1:])
-	}
-	if strings.HasPrefix(path, internalRoutePrefix) || path == strings.TrimSuffix(internalRoutePrefix, "/") {
-		return m.internal
-	}
-	return m.primary
-}
-
-func (m *httpRegistrarSplitMux) Handle(pattern string, handler http.Handler) {
-	if target := m.targetForPattern(pattern); target != nil {
-		target.Handle(pattern, handler)
-	}
-}
-
-func (m *httpRegistrarSplitMux) Route(pattern string, fn func(cell.RouteMux)) {
-	if target := m.targetForPattern(pattern); target != nil {
-		target.Route(pattern, fn)
-	}
-}
-
-func (m *httpRegistrarSplitMux) Mount(pattern string, h http.Handler) {
-	if target := m.targetForPattern(pattern); target != nil {
-		target.Mount(pattern, h)
-	}
-}
-
-func (m *httpRegistrarSplitMux) Group(fn func(cell.RouteMux)) {
-	// Group applies fn to both routers — the cell can register on each side.
-	// Routes registered inside fn are still dispatched to the correct mux via Handle.
-	if m.primary != nil {
-		m.primary.Group(fn)
-	}
-	if m.internal != nil {
-		m.internal.Group(fn)
-	}
-}
-
-func (m *httpRegistrarSplitMux) With(mw ...func(http.Handler) http.Handler) cell.RouteMux {
-	// With() creates an inline mux — return a split mux that delegates With() to both.
-	var p, i cell.RouteMux
-	if m.primary != nil {
-		p = m.primary.With(mw...)
-	}
-	if m.internal != nil {
-		i = m.internal.With(mw...)
-	}
-	return &httpRegistrarSplitMux{primary: p, internal: i}
-}
-
-// DeclareAuthMeta implements cell.AuthRouteDeclarer, forwarding to the
-// correct router based on the meta.Path prefix.
-func (m *httpRegistrarSplitMux) DeclareAuthMeta(meta cell.AuthRouteMeta) {
-	isInternal := strings.HasPrefix(meta.Path, internalRoutePrefix) ||
-		meta.Path == strings.TrimSuffix(internalRoutePrefix, "/")
-	if isInternal {
-		if target, ok := m.internal.(cell.AuthRouteDeclarer); ok {
-			target.DeclareAuthMeta(meta)
-		}
-	} else {
-		if target, ok := m.primary.(cell.AuthRouteDeclarer); ok {
-			target.DeclareAuthMeta(meta)
-		}
-	}
 }

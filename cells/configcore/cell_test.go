@@ -211,7 +211,7 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 	assert.Contains(t, err.Error(), "durable")
 }
 
-func TestConfigCore_RegisterRoutes(t *testing.T) {
+func TestConfigCore_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
@@ -220,8 +220,15 @@ func TestConfigCore_RegisterRoutes(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
+	groups := c.RouteGroups()
+	require.Len(t, groups, 1, "configcore should declare 1 route group")
+	assert.Equal(t, cell.PrimaryListener, groups[0].Listener)
+	assert.Equal(t, "/api/v1", groups[0].Prefix)
+	assert.NotNil(t, groups[0].Register)
+
+	// Verify the register function actually mounts routes.
 	mux := &stubMux{}
-	c.RegisterRoutes(mux)
+	groups[0].Register(mux)
 	assert.GreaterOrEqual(t, mux.handleCount, 2, "should register at least 2 route patterns")
 }
 
@@ -255,6 +262,7 @@ func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { ret
 
 // initCellWithRouter creates an initialized ConfigCore with routes registered
 // on a real chi-based router, ready for HTTP testing.
+// Routes are mounted via RouteGroups (PR-A14b declarative API).
 func initCellWithRouter(t *testing.T) *router.Router {
 	t.Helper()
 	c := newTestCell()
@@ -266,7 +274,13 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	require.NoError(t, c.Init(ctx, deps))
 
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Prefix != "" {
+			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+		} else {
+			rg.Register(r)
+		}
+	}
 	require.NoError(t, r.FinalizeAuth())
 	return r
 }
@@ -443,7 +457,13 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	require.NoError(t, c.Init(ctx, deps))
 
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Prefix != "" {
+			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+		} else {
+			rg.Register(r)
+		}
+	}
 	require.NoError(t, r.FinalizeAuth())
 
 	// Seed flags directly via repository (no HTTP create endpoint for flags).

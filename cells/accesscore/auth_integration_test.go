@@ -77,7 +77,15 @@ func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.
 	}))
 
 	r = router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			if rg.Prefix != "" {
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			} else {
+				rg.Register(r)
+			}
+		}
+	}
 	require.NoError(t, r.FinalizeAuth())
 
 	body := strings.NewReader(`{"username":"alice","password":"` + testPassword + `"}`)

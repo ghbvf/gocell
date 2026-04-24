@@ -334,7 +334,11 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 	require.NoError(t, c.Init(ctx, deps))
 
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+		}
+	}
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -345,7 +349,7 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, rec.Code)
 }
 
-func TestAccessCore_RegisterRoutes(t *testing.T) {
+func TestAccessCore_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
@@ -354,9 +358,24 @@ func TestAccessCore_RegisterRoutes(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	mux := &stubMux{}
-	c.RegisterRoutes(mux)
-	assert.GreaterOrEqual(t, mux.handleCount, 3, "should register at least 3 route patterns")
+	groups := c.RouteGroups()
+	require.Len(t, groups, 2, "accesscore should declare 2 route groups")
+
+	// First group: PrimaryListener at /api/v1/access.
+	assert.Equal(t, cell.PrimaryListener, groups[0].Listener)
+	assert.Equal(t, "/api/v1/access", groups[0].Prefix)
+	assert.NotNil(t, groups[0].Register)
+	primaryMux := &stubMux{}
+	groups[0].Register(primaryMux)
+	assert.GreaterOrEqual(t, primaryMux.handleCount, 3, "primary group should register at least 3 routes")
+
+	// Second group: InternalListener at /internal/v1/access.
+	assert.Equal(t, cell.InternalListener, groups[1].Listener)
+	assert.Equal(t, "/internal/v1/access", groups[1].Prefix)
+	assert.NotNil(t, groups[1].Register)
+	internalMux := &stubMux{}
+	groups[1].Register(internalMux)
+	assert.GreaterOrEqual(t, internalMux.handleCount, 1, "internal group should register at least 1 route")
 }
 
 // stubMux implements cell.RouteMux for testing.
@@ -373,10 +392,17 @@ func (m *stubMux) Mount(_ string, _ http.Handler)                          { m.h
 func (m *stubMux) Group(_ func(cell.RouteMux))                             { m.handleCount++ }
 func (m *stubMux) With(_ ...func(http.Handler) http.Handler) cell.RouteMux { return m }
 
-// initCellWithRouter creates an initialized AccessCore with routes registered
-// on a real chi-based router, ready for HTTP testing. FinalizeAuth is called
-// so the Router accepts ServeHTTP calls (required after F3 auth declaration).
-func initCellWithRouter(t *testing.T) *router.Router {
+// cellTestRouters holds the primary and internal routers built from an
+// AccessCore's RouteGroups. Tests for /api/v1/* use Primary; tests for
+// /internal/v1/* use Internal.
+type cellTestRouters struct {
+	Primary  *router.Router
+	Internal *router.Router
+}
+
+// initCellWithRouters creates an initialized AccessCore with both listener
+// routers populated. FinalizeAuth is called on each router.
+func initCellWithRouters(t *testing.T) *cellTestRouters {
 	t.Helper()
 	c := newTestCell()
 	ctx := context.Background()
@@ -386,10 +412,27 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.New()
-	c.RegisterRoutes(r)
-	require.NoError(t, r.FinalizeAuth())
-	return r
+	primary := router.New()
+	internal := router.New()
+	for _, rg := range c.RouteGroups() {
+		switch rg.Listener {
+		case cell.PrimaryListener:
+			primary.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+		case cell.InternalListener:
+			internal.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+		}
+	}
+	require.NoError(t, primary.FinalizeAuth())
+	require.NoError(t, internal.FinalizeAuth())
+	return &cellTestRouters{Primary: primary, Internal: internal}
+}
+
+// initCellWithRouter creates an initialized AccessCore with primary routes
+// registered on a real chi-based router, ready for HTTP testing of
+// /api/v1/* endpoints. FinalizeAuth is called so the Router accepts ServeHTTP.
+func initCellWithRouter(t *testing.T) *router.Router {
+	t.Helper()
+	return initCellWithRouters(t).Primary
 }
 
 func TestAccessCore_RouteSessionLogin(t *testing.T) {
@@ -495,7 +538,7 @@ func TestAccessCore_RouteUserGet(t *testing.T) {
 }
 
 func TestAccessCore_RouteRoleAssign(t *testing.T) {
-	r := initCellWithRouter(t)
+	r := initCellWithRouters(t).Internal
 
 	// Role "admin" is not seeded in newTestCell() → domain-level 404 (role not found).
 	rec := httptest.NewRecorder()
@@ -503,7 +546,7 @@ func TestAccessCore_RouteRoleAssign(t *testing.T) {
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{auth.RoleInternalAdmin}))
-	r.InternalHandler().ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
@@ -512,33 +555,33 @@ func TestAccessCore_RouteRoleAssign(t *testing.T) {
 }
 
 func TestAccessCore_RouteRoleAssign_NoAuth_Returns401(t *testing.T) {
-	r := initCellWithRouter(t)
+	r := initCellWithRouters(t).Internal
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	// No auth context.
-	r.InternalHandler().ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
 }
 
 func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
-	r := initCellWithRouter(t)
+	r := initCellWithRouters(t).Internal
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
-	r.InternalHandler().ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
 }
 
 func TestAccessCore_RouteRoleRevoke(t *testing.T) {
-	r := initCellWithRouter(t)
+	r := initCellWithRouters(t).Internal
 
 	// Revoking a role that the user does not hold is an idempotent no-op → 200.
 	rec := httptest.NewRecorder()
@@ -546,7 +589,7 @@ func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{auth.RoleInternalAdmin}))
-	r.InternalHandler().ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
@@ -554,26 +597,26 @@ func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 }
 
 func TestAccessCore_RouteRoleRevoke_NoAuth_Returns401(t *testing.T) {
-	r := initCellWithRouter(t)
+	r := initCellWithRouters(t).Internal
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	r.InternalHandler().ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
 }
 
 func TestAccessCore_RouteRoleRevoke_NonAdmin_Returns403(t *testing.T) {
-	r := initCellWithRouter(t)
+	r := initCellWithRouters(t).Internal
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
-	r.InternalHandler().ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
 }
@@ -620,7 +663,15 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 
 	// Login via HTTP handler to simulate real flow.
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			if rg.Prefix != "" {
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			} else {
+				rg.Register(r)
+			}
+		}
+	}
 	require.NoError(t, r.FinalizeAuth())
 
 	body := fmt.Sprintf(`{"username":"e2e-user","password":%q}`, testPassword)
@@ -691,7 +742,15 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 
 	// Login via HTTP.
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			if rg.Prefix != "" {
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			} else {
+				rg.Register(r)
+			}
+		}
+	}
 	require.NoError(t, r.FinalizeAuth())
 
 	loginBody := fmt.Sprintf(`{"username":"refresh-user","password":%q}`, testPassword)
@@ -844,7 +903,15 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 	}))
 
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			if rg.Prefix != "" {
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			} else {
+				rg.Register(r)
+			}
+		}
+	}
 
 	const wantPath = "/api/v1/access/users/{id}/password"
 	const wantMethod = "POST"

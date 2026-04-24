@@ -13,7 +13,7 @@ type policyJWT struct {
 
 func (p *policyJWT) Describe() string { return "jwt" }
 
-func (p *policyJWT) apply(mux *chi.Mux) {
+func (p *policyJWT) Apply(mux *chi.Mux) {
 	mux.Use(auth.AuthMiddleware(p.verifier, p.opts...))
 }
 

@@ -6,7 +6,7 @@ import "github.com/go-chi/chi/v5"
 type policyNone struct{}
 
 func (policyNone) Describe() string { return "none" }
-func (policyNone) apply(_ *chi.Mux) {}
+func (policyNone) Apply(_ *chi.Mux) {}
 
 // PolicyNone returns a cell.Policy that installs no middleware on the mux.
 // Use it for listeners that are network-isolated and require no authentication

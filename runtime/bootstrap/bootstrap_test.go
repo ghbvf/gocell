@@ -2298,7 +2298,7 @@ func TestCloneMap_DeepIsolation_NestedMap(t *testing.T) {
 
 // --- Auth middleware wiring via bootstrap ---
 
-// httpCell is a test Cell that implements HTTPRegistrar to register a business route.
+// httpCell is a test Cell that registers business routes via RouteGroups.
 type httpCell struct {
 	*cell.BaseCell
 }
@@ -2309,25 +2309,31 @@ func newHTTPCell(id string) *httpCell {
 	}
 }
 
-func (c *httpCell) RegisterRoutes(mux cell.RouteMux) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/api/v1/data",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":"ok"}`))
-		}),
-		Policy: auth.Authenticated(),
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method: http.MethodPost,
-		Path:   "/api/v1/access/sessions/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
-		}),
-		Public: true,
-	})
+func (c *httpCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) {
+			auth.Declare(mux, auth.RouteDecl{
+				Method: http.MethodGet,
+				Path:   "/api/v1/data",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Policy: auth.Authenticated(),
+			})
+			auth.Declare(mux, auth.RouteDecl{
+				Method: http.MethodPost,
+				Path:   "/api/v1/access/sessions/login",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+				}),
+				Public: true,
+			})
+		},
+	}}
 }
 
 // bootstrapTestVerifier is a minimal IntentTokenVerifier for bootstrap tests.
@@ -2403,7 +2409,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	}
 }
 
-// publicHTTPCell registers the login route as public via auth.Declare(Public:true),
+// publicHTTPCell registers routes as public via auth.Declare(Public:true),
 // following the F3 pattern where cells own their auth declarations.
 type publicHTTPCell struct {
 	*cell.BaseCell
@@ -2415,25 +2421,31 @@ func newPublicHTTPCell(id string) *publicHTTPCell {
 	}
 }
 
-func (c *publicHTTPCell) RegisterRoutes(mux cell.RouteMux) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/api/v1/data",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":"ok"}`))
-		}),
-		Public: true,
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method: http.MethodPost,
-		Path:   "/api/v1/access/sessions/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
-		}),
-		Public: true,
-	})
+func (c *publicHTTPCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) {
+			auth.Declare(mux, auth.RouteDecl{
+				Method: http.MethodGet,
+				Path:   "/api/v1/data",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Public: true,
+			})
+			auth.Declare(mux, auth.RouteDecl{
+				Method: http.MethodPost,
+				Path:   "/api/v1/access/sessions/login",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+				}),
+				Public: true,
+			})
+		},
+	}}
 }
 
 func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
@@ -2583,7 +2595,7 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 
 // --- Bootstrap tracing E2E ---
 
-// tracingTestCell is a test Cell that implements HTTPRegistrar with a
+// tracingTestCell is a test Cell that registers routes via RouteGroups with a
 // caller-supplied route registration function, used by tracing E2E tests.
 type tracingTestCell struct {
 	*cell.BaseCell
@@ -2600,10 +2612,15 @@ func newTracingTestCell(id string, fn func(mux cell.RouteMux)) *tracingTestCell 
 	}
 }
 
-func (c *tracingTestCell) RegisterRoutes(mux cell.RouteMux) {
-	if c.registerFn != nil {
-		c.registerFn(mux)
+func (c *tracingTestCell) RouteGroups() []cell.RouteGroup {
+	if c.registerFn == nil {
+		return nil
 	}
+	return []cell.RouteGroup{{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: c.registerFn,
+	}}
 }
 
 func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
@@ -2776,7 +2793,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 // --- Auth Provider discovery (post-Init cell discovery) ---
 
-// authProviderCell implements HTTPRegistrar and exposes an IntentTokenVerifier.
+// authProviderCell implements RouteGroupContributor and exposes an IntentTokenVerifier.
 type authProviderCell struct {
 	*cell.BaseCell
 	verifier auth.IntentTokenVerifier
@@ -2793,27 +2810,33 @@ func (c *authProviderCell) TokenVerifier() auth.IntentTokenVerifier {
 	return c.verifier
 }
 
-func (c *authProviderCell) RegisterRoutes(mux cell.RouteMux) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/api/v1/data",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":"ok"}`))
-		}),
-		Policy: auth.Authenticated(),
-	})
-	// F3: login is declared as a public route so auth discovery tests can verify
-	// that no-token requests bypass JWT checks on this endpoint.
-	auth.Declare(mux, auth.RouteDecl{
-		Method: http.MethodPost,
-		Path:   "/api/v1/access/sessions/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"data":"login-ok"}`))
-		}),
-		Public: true,
-	})
+func (c *authProviderCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) {
+			auth.Declare(mux, auth.RouteDecl{
+				Method: http.MethodGet,
+				Path:   "/api/v1/data",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"ok"}`))
+				}),
+				Policy: auth.Authenticated(),
+			})
+			// F3: login is declared as a public route so auth discovery tests can verify
+			// that no-token requests bypass JWT checks on this endpoint.
+			auth.Declare(mux, auth.RouteDecl{
+				Method: http.MethodPost,
+				Path:   "/api/v1/access/sessions/login",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+					_, _ = w.Write([]byte(`{"data":"login-ok"}`))
+				}),
+				Public: true,
+			})
+		},
+	}}
 }
 
 func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
@@ -3366,29 +3389,35 @@ func (c *traceCapturingCell) TokenVerifier() auth.IntentTokenVerifier {
 	return c.verifier
 }
 
-func (c *traceCapturingCell) RegisterRoutes(mux cell.RouteMux) {
-	// F3: public/ping is declared public so it creates new trace roots and
-	// rejects client-supplied request IDs.
-	auth.Declare(mux, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/api/v1/public/ping",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			tid, _ := ctxkeys.TraceIDFrom(r.Context())
-			c.gotPublic <- tid
-			w.WriteHeader(http.StatusOK)
-		}),
-		Public: true,
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/api/v1/protected/ping",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			tid, _ := ctxkeys.TraceIDFrom(r.Context())
-			c.gotProtected <- tid
-			w.WriteHeader(http.StatusOK)
-		}),
-		Policy: auth.Authenticated(),
-	})
+func (c *traceCapturingCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) {
+			// F3: public/ping is declared public so it creates new trace roots and
+			// rejects client-supplied request IDs.
+			auth.Declare(mux, auth.RouteDecl{
+				Method: http.MethodGet,
+				Path:   "/api/v1/public/ping",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					tid, _ := ctxkeys.TraceIDFrom(r.Context())
+					c.gotPublic <- tid
+					w.WriteHeader(http.StatusOK)
+				}),
+				Public: true,
+			})
+			auth.Declare(mux, auth.RouteDecl{
+				Method: http.MethodGet,
+				Path:   "/api/v1/protected/ping",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					tid, _ := ctxkeys.TraceIDFrom(r.Context())
+					c.gotProtected <- tid
+					w.WriteHeader(http.StatusOK)
+				}),
+				Policy: auth.Authenticated(),
+			})
+		},
+	}}
 }
 
 // TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored verifies the
@@ -3551,14 +3580,20 @@ func newPublicPingAuthCell(id string, verifier auth.IntentTokenVerifier) *public
 
 func (c *publicPingAuthCell) TokenVerifier() auth.IntentTokenVerifier { return c.verifier }
 
-func (c *publicPingAuthCell) RegisterRoutes(mux cell.RouteMux) {
-	// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  http.MethodGet,
-		Path:    "/api/v1/public/ping",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		Public:  true,
-	})
+func (c *publicPingAuthCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) {
+			// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
+			auth.Declare(mux, auth.RouteDecl{
+				Method:  http.MethodGet,
+				Path:    "/api/v1/public/ping",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+				Public:  true,
+			})
+		},
+	}}
 }
 
 // TestBootstrap_HEADAlias_BypassesAuth tests I-17: GET public endpoint
@@ -4027,23 +4062,29 @@ func newDuplicateAuthCell(id string) *duplicateAuthCell {
 	}
 }
 
-func (c *duplicateAuthCell) RegisterRoutes(mux cell.RouteMux) {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/api/v1/dup",
-		Handler: handler,
-		Public:  true,
-	})
-	// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/api/v1/dup",
-		Handler: handler,
-		Public:  true,
-	})
+func (c *duplicateAuthCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) {
+			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+			auth.Declare(mux, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/api/v1/dup",
+				Handler: handler,
+				Public:  true,
+			})
+			// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
+			auth.Declare(mux, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/api/v1/dup",
+				Handler: handler,
+				Public:  true,
+			})
+		},
+	}}
 }
 
 type protectedAuthCell struct {
@@ -4059,15 +4100,21 @@ func newProtectedAuthCell(id string) *protectedAuthCell {
 	}
 }
 
-func (c *protectedAuthCell) RegisterRoutes(mux cell.RouteMux) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method: "GET",
-		Path:   "/api/v1/protected",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}),
-		Policy: auth.Authenticated(),
-	})
+func (c *protectedAuthCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{{
+		Listener: cell.PrimaryListener,
+		Prefix:   "",
+		Register: func(mux cell.RouteMux) {
+			auth.Declare(mux, auth.RouteDecl{
+				Method: "GET",
+				Path:   "/api/v1/protected",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					w.WriteHeader(http.StatusOK)
+				}),
+				Policy: auth.Authenticated(),
+			})
+		},
+	}}
 }
 
 func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {

@@ -291,6 +291,98 @@ func TestLayeringRules(t *testing.T) {
 		assert.Empty(t, byRule["LAYER-06"],
 			"cell-owned public subpackages (see cellOwnedSubpackages) must only be imported by the owning cell, cmd/, or examples/")
 	})
+
+	// LAYER-07: cells/**/*.go (non-test) must not directly import the router package.
+	// Cells must go through cell.RouteMux / cell.RouteGroup — the concrete router
+	// implementation is an internal detail of runtime/http/router.
+	t.Run("LAYER-07_no_direct_router_import_in_cells", func(t *testing.T) {
+		modPath := strings.TrimSuffix(modPrefix, "/")
+		routerPkg := modPath + "/runtime/http/router"
+		var layer07violations []string
+		for _, pkg := range pkgs {
+			if layerOf(modPrefix, pkg.ImportPath) != "cells" {
+				continue
+			}
+			// Skip test packages (archtest deliberately uses go list which includes _test).
+			// The import path for external test packages ends with "_test"; internal test
+			// binaries share the same ImportPath but are not reachable from production code.
+			if strings.HasSuffix(pkg.ImportPath, "_test") {
+				continue
+			}
+			for _, imp := range pkg.Imports {
+				if imp == routerPkg {
+					layer07violations = append(layer07violations,
+						fmt.Sprintf("LAYER-07: %s imports %s (cells must not import the router directly; use cell.RouteMux / cell.RouteGroup)", pkg.ImportPath, imp))
+				}
+			}
+		}
+		assert.Empty(t, layer07violations,
+			"cells/ must not directly import runtime/http/router; route through cell.RouteGroup.Register func(cell.RouteMux)")
+	})
+
+	// LAYER-08: no Go file anywhere in the module (outside of this archtest package
+	// itself) may reference the identifier "HTTPRegistrar" — this is the final seal
+	// confirming the legacy interface has been fully removed (PR-A14b).
+	t.Run("LAYER-08_no_HTTPRegistrar_legacy_identifier", func(t *testing.T) {
+		// Exclude tools/archtest itself because the rule definition necessarily
+		// mentions the forbidden string in the test name and comments.
+		hits := grepInDir(t, root, "HTTPRegistrar", "tools/archtest")
+		if len(hits) > 0 {
+			for _, h := range hits {
+				t.Logf("LAYER-08 violation: %s", h)
+			}
+		}
+		assert.Empty(t, hits,
+			"HTTPRegistrar must not appear anywhere in the codebase; the legacy interface has been fully removed (PR-A14b)")
+	})
+}
+
+// grepInDir walks root recursively and returns "file:line:text" strings for
+// every line in a *.go file that contains the literal target string.
+// This is intentionally simple — no regex, exact substring match only.
+// excludeDirs lists directory names (relative to root) to skip entirely.
+func grepInDir(t *testing.T, root, target string, excludeDirs ...string) []string {
+	t.Helper()
+	excludeSet := make(map[string]bool, len(excludeDirs))
+	for _, d := range excludeDirs {
+		excludeSet[filepath.Join(root, d)] = true
+	}
+	var hits []string
+	err := filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			// Skip excluded dirs, hidden dirs, and vendor.
+			if excludeSet[path] {
+				return filepath.SkipDir
+			}
+			name := info.Name()
+			if name == "vendor" || (len(name) > 0 && name[0] == '.') {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			return readErr
+		}
+		scanner := bufio.NewScanner(bytes.NewReader(data))
+		lineNum := 0
+		for scanner.Scan() {
+			lineNum++
+			if strings.Contains(scanner.Text(), target) {
+				rel, _ := filepath.Rel(root, path)
+				hits = append(hits, fmt.Sprintf("%s:%d: %s", rel, lineNum, strings.TrimSpace(scanner.Text())))
+			}
+		}
+		return scanner.Err()
+	})
+	require.NoError(t, err, "error walking module root for grep")
+	return hits
 }
 
 // --- unit tests for helper functions ---

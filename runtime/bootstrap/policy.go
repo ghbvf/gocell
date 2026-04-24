@@ -14,13 +14,15 @@ import (
 // mountablePolicy is the runtime-internal extension of cell.Policy.
 // Concrete implementations must satisfy both cell.Policy (for startup logging
 // and archtest introspection) and this internal interface so bootstrap can
-// apply() their middleware to a chi.Mux at phase5.
+// Apply() their middleware to a chi.Mux at phase5.
 //
-// Cells only ever see the opaque cell.Policy interface; the apply method is
-// entirely internal to runtime/bootstrap.
+// Apply is exported so that router.applyPolicyToMux (in a sibling package) can
+// satisfy the interface via a local duck-typed check on the same exported method
+// name — Go's structural typing requires exported method names to cross package
+// boundaries.
 type mountablePolicy interface {
 	cell.Policy
-	apply(mux *chi.Mux)
+	Apply(mux *chi.Mux)
 }
 
 // policyStack composes multiple policies into a single mountablePolicy.
@@ -40,11 +42,11 @@ type policyStack struct {
 
 func (s *policyStack) Describe() string { return "stack" }
 
-func (s *policyStack) apply(mux *chi.Mux) {
-	// Apply in forward order: ps[0].apply first means ps[0]'s Use is
+func (s *policyStack) Apply(mux *chi.Mux) {
+	// Apply in forward order: ps[0].Apply first means ps[0]'s Use is
 	// registered before ps[1]'s, making ps[0] the outermost wrapper.
 	for _, p := range s.policies {
-		p.apply(mux)
+		p.Apply(mux)
 	}
 }
 

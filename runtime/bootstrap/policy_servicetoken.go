@@ -13,7 +13,7 @@ type policyServiceToken struct {
 
 func (p *policyServiceToken) Describe() string { return "service-token" }
 
-func (p *policyServiceToken) apply(mux *chi.Mux) {
+func (p *policyServiceToken) Apply(mux *chi.Mux) {
 	mux.Use(auth.ServiceTokenMiddleware(p.ring, auth.WithServiceTokenNonceStore(p.store)))
 }
 

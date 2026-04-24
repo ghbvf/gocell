@@ -52,9 +52,16 @@ type SharedDeps struct {
 
 	// InternalHTTPAddr is the bind address for the internal HTTP listener
 	// (/internal/v1/* control-plane). Env GOCELL_HTTP_INTERNAL_ADDR;
-	// default ":9090". Must be bound to an internal network segment in
+	// default "127.0.0.1:9090". Must be bound to an internal network segment in
 	// production so service-token / mTLS enforcement is the primary defence.
 	InternalHTTPAddr string
+
+	// HealthHTTPAddr is the bind address for the health+metrics listener
+	// (/healthz /readyz /metrics). Env GOCELL_HTTP_HEALTH_ADDR;
+	// default "127.0.0.1:9091". Prometheus scrape targets and k8s liveness/
+	// readiness probes must point to this address; these endpoints are no
+	// longer served on the primary HTTP port (PR-A14b breaking change).
+	HealthHTTPAddr string
 
 	// MetricsToken is the token guarding /metrics. Required in production
 	// topology; may be empty in dev mode.
@@ -222,6 +229,14 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		internalAddr = "127.0.0.1:9090"
 	}
 
+	healthAddr := os.Getenv("GOCELL_HTTP_HEALTH_ADDR")
+	if healthAddr == "" {
+		// Separate loopback port for /healthz /readyz /metrics.
+		// k8s liveness/readiness probes and Prometheus scrape targets must
+		// be updated from GOCELL_HTTP_PRIMARY_ADDR to this address (PR-A14b).
+		healthAddr = "127.0.0.1:9091"
+	}
+
 	deps := &SharedDeps{
 		Topology:         topo,
 		JWTDeps:          jwt,
@@ -230,6 +245,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		InternalGuard:    internalGuard,
 		PrimaryHTTPAddr:  primaryAddr,
 		InternalHTTPAddr: internalAddr,
+		HealthHTTPAddr:   healthAddr,
 		MetricsToken:     metricsToken,
 		VerboseToken:     verboseToken,
 		metricsHandler:   metricsHandler,

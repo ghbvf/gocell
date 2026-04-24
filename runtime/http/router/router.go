@@ -167,6 +167,24 @@ func WithPolicyCoverageWhitelist(patterns []string) Option {
 	}
 }
 
+// WithPublicPathPrefix pre-seeds the router's public-endpoint matcher so that
+// any request whose URL path begins with prefix bypasses JWT authentication.
+// Multiple calls OR-merge the predicates. The seed is applied before FinalizeAuth
+// compiles the per-route declarations, so the merged matcher includes both the
+// prefix exemption and any auth.Declare(Public:true) routes.
+//
+// Use this for framework-owned path prefixes that must be exempt from auth but
+// are not declared via auth.Declare (e.g. the /internal/v1/* 404 isolation
+// handler on the primary listener).
+func WithPublicPathPrefix(prefix string) Option {
+	return func(r *Router) {
+		seed := func(req *http.Request) bool {
+			return strings.HasPrefix(req.URL.Path, prefix)
+		}
+		r.authPublicMatcher = orMergeRequest(r.authPublicMatcher, seed)
+	}
+}
+
 // Router wraps a single chi.Mux root for ONE physical listener.
 // The observability middleware chain is baked in at construction time, and
 // the listener's default Policy is applied as an inner layer before any
@@ -365,14 +383,19 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler, defaultPolic
 }
 
 // applyPolicyToMux applies the policy's middleware to mux if it implements
-// the internal mountablePolicy interface. This function is intentionally a
-// package-level helper so tests can also call it via export_test.go.
+// the mountable interface. The exported Apply method is used (not an unexported
+// method) so that policy implementations from sibling packages (e.g.
+// runtime/bootstrap) can satisfy this interface — Go's structural typing
+// requires exported method names to cross package boundaries.
+//
+// This function is intentionally a package-level helper so tests can also call
+// it via export_test.go.
 func applyPolicyToMux(p kcell.Policy, mux *chi.Mux) {
 	type mountable interface {
-		apply(mux *chi.Mux)
+		Apply(mux *chi.Mux)
 	}
 	if mp, ok := p.(mountable); ok {
-		mp.apply(mux)
+		mp.Apply(mux)
 	}
 }
 

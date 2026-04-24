@@ -35,7 +35,7 @@ type policyMTLS struct {
 
 func (p *policyMTLS) Describe() string { return "mtls" }
 
-func (p *policyMTLS) apply(mux *chi.Mux) {
+func (p *policyMTLS) Apply(mux *chi.Mux) {
 	mux.Use(p.middleware())
 }
 

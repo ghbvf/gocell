@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
+	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/shutdown"
@@ -390,6 +392,18 @@ func WithVerboseToken(token string) Option {
 	}
 }
 
+// WithHealthMetricsHandler registers an http.Handler for the /metrics endpoint
+// on the HealthListener. During phase5 the handler is threaded into
+// HealthRouteGroups so it is mounted on the correct listener.
+//
+// A nil handler is silently ignored — /metrics is simply not registered.
+// This replaces the deleted router.WithMetricsHandler option.
+func WithHealthMetricsHandler(h http.Handler) Option {
+	return func(b *Bootstrap) {
+		b.healthMetricsHandler = h
+	}
+}
+
 // WithDisableObservabilityRestore prevents the bootstrap from registering
 // ObservabilityContextMiddleware on the event subscriber. When set, consumer
 // handlers will not have request_id/correlation_id/trace_id restored from
@@ -546,8 +560,9 @@ type Bootstrap struct {
 	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
 	hookObserver                cell.LifecycleHookObserver
 	metricsProvider             kernelmetrics.Provider
-	shutdownMet                 *shutdownMetrics // nil only when provider is nil
-	shutdownMetricsErr          error            // non-nil when metric registration failed in New
+	httpCollector               metricsmiddleware.Collector // cached auto-wired HTTP collector (created once, shared across listeners)
+	shutdownMet                 *shutdownMetrics            // nil only when provider is nil
+	shutdownMetricsErr          error                       // non-nil when metric registration failed in New
 	runOnce                     sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
@@ -598,6 +613,10 @@ type Bootstrap struct {
 	// Keyed by ListenerRef to deduplicate declarations.
 	// Initialized lazily by the first WithListener option.
 	listenerConfigs map[cell.ListenerRef]listenerConfig
+
+	// healthMetricsHandler is an optional http.Handler to mount at /metrics
+	// on the HealthListener. Set via WithHealthMetricsHandler.
+	healthMetricsHandler http.Handler
 }
 
 // New creates a Bootstrap with the given options.

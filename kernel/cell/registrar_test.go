@@ -45,19 +45,16 @@ func (m *mockRouteMux) With(_ ...func(http.Handler) http.Handler) RouteMux { ret
 // Compile-time check: mockRouteMux satisfies RouteMux.
 var _ RouteMux = (*mockRouteMux)(nil)
 
-// httpCell is a Cell that also implements HTTPRegistrar.
-type httpCell struct {
+// routeGroupCell is a Cell that implements RouteGroupContributor.
+type routeGroupCell struct {
 	BaseCell
-	registered bool
+	groups []RouteGroup
 }
 
-func (h *httpCell) RegisterRoutes(mux RouteMux) {
-	h.registered = true
-	mux.Handle("/api/v1/sessions", http.NotFoundHandler())
-}
+func (r *routeGroupCell) RouteGroups() []RouteGroup { return r.groups }
 
 // Compile-time check.
-var _ HTTPRegistrar = (*httpCell)(nil)
+var _ RouteGroupContributor = (*routeGroupCell)(nil)
 
 // mockEventRouter implements EventRouter for testing.
 type mockEventRouter struct {
@@ -88,19 +85,16 @@ func (e *eventCell) RegisterSubscriptions(r EventRouter) error {
 // Compile-time check.
 var _ EventRegistrar = (*eventCell)(nil)
 
-// dualCell implements both HTTPRegistrar and EventRegistrar.
-type dualCell struct {
+// dualRouteGroupEventCell implements both RouteGroupContributor and EventRegistrar.
+type dualRouteGroupEventCell struct {
 	BaseCell
-	httpRegistered  bool
+	groups          []RouteGroup
 	eventRegistered bool
 }
 
-func (d *dualCell) RegisterRoutes(mux RouteMux) {
-	d.httpRegistered = true
-	mux.Handle("/api/v1/devices", http.NotFoundHandler())
-}
+func (d *dualRouteGroupEventCell) RouteGroups() []RouteGroup { return d.groups }
 
-func (d *dualCell) RegisterSubscriptions(r EventRouter) error {
+func (d *dualRouteGroupEventCell) RegisterSubscriptions(r EventRouter) error {
 	d.eventRegistered = true
 	r.AddHandler("device.enrolled", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
@@ -110,35 +104,56 @@ func (d *dualCell) RegisterSubscriptions(r EventRouter) error {
 
 // Compile-time checks.
 var (
-	_ HTTPRegistrar  = (*dualCell)(nil)
-	_ EventRegistrar = (*dualCell)(nil)
+	_ RouteGroupContributor = (*dualRouteGroupEventCell)(nil)
+	_ EventRegistrar        = (*dualRouteGroupEventCell)(nil)
 )
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
-func TestHTTPRegistrar_TypeAssertion(t *testing.T) {
-	hc := &httpCell{BaseCell: *NewBaseCell(CellMetadata{ID: "accesscore"})}
+func TestRouteGroupContributor_TypeAssertion(t *testing.T) {
+	ref := PrimaryListener
+	rg := &routeGroupCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "accesscore"}),
+		groups: []RouteGroup{
+			{
+				Listener: ref,
+				Prefix:   "/api/v1/sessions",
+				Register: func(mux RouteMux) { mux.Handle("/login", http.NotFoundHandler()) },
+			},
+		},
+	}
 
 	// The bootstrap pattern: type-assert from Cell interface.
-	var c Cell = hc
-	r, ok := c.(HTTPRegistrar)
-	assert.True(t, ok, "httpCell should satisfy HTTPRegistrar")
+	var c Cell = rg
+	rgc, ok := c.(RouteGroupContributor)
+	assert.True(t, ok, "routeGroupCell should satisfy RouteGroupContributor")
 
-	mux := &mockRouteMux{}
-	r.RegisterRoutes(mux)
-
-	assert.True(t, hc.registered)
-	assert.Equal(t, []string{"/api/v1/sessions"}, mux.routes)
+	groups := rgc.RouteGroups()
+	assert.Len(t, groups, 1)
+	assert.Equal(t, ref, groups[0].Listener)
+	assert.Equal(t, "/api/v1/sessions", groups[0].Prefix)
+	assert.NotNil(t, groups[0].Register)
 }
 
-func TestHTTPRegistrar_NegativeTypeAssertion(t *testing.T) {
+func TestRouteGroupContributor_NegativeTypeAssertion(t *testing.T) {
 	plain := NewBaseCell(CellMetadata{ID: "plain-cell"})
 
 	var c Cell = plain
-	_, ok := c.(HTTPRegistrar)
-	assert.False(t, ok, "plain BaseCell should NOT satisfy HTTPRegistrar")
+	_, ok := c.(RouteGroupContributor)
+	assert.False(t, ok, "plain BaseCell should NOT satisfy RouteGroupContributor")
+}
+
+func TestRouteGroupContributor_EmptyGroups(t *testing.T) {
+	rg := &routeGroupCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "empty-cell"}),
+		groups:   nil,
+	}
+	var c Cell = rg
+	rgc, ok := c.(RouteGroupContributor)
+	assert.True(t, ok)
+	assert.Empty(t, rgc.RouteGroups(), "nil groups is a valid opt-out")
 }
 
 func TestEventRegistrar_TypeAssertion(t *testing.T) {
@@ -164,18 +179,27 @@ func TestEventRegistrar_NegativeTypeAssertion(t *testing.T) {
 	assert.False(t, ok, "plain BaseCell should NOT satisfy EventRegistrar")
 }
 
-func TestDualRegistrar_BothInterfaces(t *testing.T) {
-	dc := &dualCell{BaseCell: *NewBaseCell(CellMetadata{ID: "device-core"})}
+func TestDualRouteGroupEventCell_BothInterfaces(t *testing.T) {
+	ref := PrimaryListener
+	dc := &dualRouteGroupEventCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "device-core"}),
+		groups: []RouteGroup{
+			{
+				Listener: ref,
+				Prefix:   "/api/v1/devices",
+				Register: func(mux RouteMux) { mux.Handle("/", http.NotFoundHandler()) },
+			},
+		},
+	}
 
 	var c Cell = dc
 
-	// HTTP
-	hr, ok := c.(HTTPRegistrar)
+	// RouteGroupContributor
+	rgc, ok := c.(RouteGroupContributor)
 	assert.True(t, ok)
-	mux := &mockRouteMux{}
-	hr.RegisterRoutes(mux)
-	assert.True(t, dc.httpRegistered)
-	assert.Equal(t, []string{"/api/v1/devices"}, mux.routes)
+	groups := rgc.RouteGroups()
+	assert.Len(t, groups, 1)
+	assert.Equal(t, "/api/v1/devices", groups[0].Prefix)
 
 	// Event
 	er, ok := c.(EventRegistrar)
@@ -206,27 +230,24 @@ func (c *configReloaderCell) OnConfigReload(event ConfigChangeEvent) error {
 // Compile-time check.
 var _ ConfigReloader = (*configReloaderCell)(nil)
 
-// httpAndReloaderCell implements both HTTPRegistrar and ConfigReloader.
-type httpAndReloaderCell struct {
+// routeGroupAndReloaderCell implements both RouteGroupContributor and ConfigReloader.
+type routeGroupAndReloaderCell struct {
 	BaseCell
-	httpRegistered bool
-	lastEvent      *ConfigChangeEvent
+	groups    []RouteGroup
+	lastEvent *ConfigChangeEvent
 }
 
-func (c *httpAndReloaderCell) RegisterRoutes(mux RouteMux) {
-	c.httpRegistered = true
-	mux.Handle("/api/v1/keys", http.NotFoundHandler())
-}
+func (c *routeGroupAndReloaderCell) RouteGroups() []RouteGroup { return c.groups }
 
-func (c *httpAndReloaderCell) OnConfigReload(event ConfigChangeEvent) error {
+func (c *routeGroupAndReloaderCell) OnConfigReload(event ConfigChangeEvent) error {
 	c.lastEvent = &event
 	return nil
 }
 
 // Compile-time checks.
 var (
-	_ HTTPRegistrar  = (*httpAndReloaderCell)(nil)
-	_ ConfigReloader = (*httpAndReloaderCell)(nil)
+	_ RouteGroupContributor = (*routeGroupAndReloaderCell)(nil)
+	_ ConfigReloader        = (*routeGroupAndReloaderCell)(nil)
 )
 
 func TestConfigReloader_TypeAssertion(t *testing.T) {
@@ -255,18 +276,27 @@ func TestConfigReloader_NegativeTypeAssertion(t *testing.T) {
 	assert.False(t, ok, "plain BaseCell should NOT satisfy ConfigReloader")
 }
 
-func TestConfigReloader_DualHTTPAndReloader(t *testing.T) {
-	hrc := &httpAndReloaderCell{BaseCell: *NewBaseCell(CellMetadata{ID: "accesscore"})}
+func TestConfigReloader_DualRouteGroupAndReloader(t *testing.T) {
+	ref := PrimaryListener
+	hrc := &routeGroupAndReloaderCell{
+		BaseCell: *NewBaseCell(CellMetadata{ID: "accesscore"}),
+		groups: []RouteGroup{
+			{
+				Listener: ref,
+				Prefix:   "/api/v1/keys",
+				Register: func(mux RouteMux) { mux.Handle("/", http.NotFoundHandler()) },
+			},
+		},
+	}
 
 	var c Cell = hrc
 
-	// HTTP
-	hr, ok := c.(HTTPRegistrar)
+	// RouteGroupContributor
+	rgc, ok := c.(RouteGroupContributor)
 	assert.True(t, ok)
-	mux := &mockRouteMux{}
-	hr.RegisterRoutes(mux)
-	assert.True(t, hrc.httpRegistered)
-	assert.Equal(t, []string{"/api/v1/keys"}, mux.routes)
+	groups := rgc.RouteGroups()
+	assert.Len(t, groups, 1)
+	assert.Equal(t, "/api/v1/keys", groups[0].Prefix)
 
 	// ConfigReloader
 	cr, ok := c.(ConfigReloader)

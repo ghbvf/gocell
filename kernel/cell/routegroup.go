@@ -22,7 +22,7 @@ type RouteGroup struct {
 
 // RouteGroupContributor is implemented by cells (or other components)
 // that expose HTTP routes through the RouteGroup declarative API.
-// Replaces the legacy HTTPRegistrar.RegisterRoutes single-mux approach.
+// Replaces the legacy single-mux RegisterRoutes approach.
 //
 // Bootstrap discovers RouteGroupContributor via type assertion during
 // phase5 and calls RouteGroups() to collect all declared groups before

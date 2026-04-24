@@ -21,7 +21,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
-	"github.com/ghbvf/gocell/runtime/http/router"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 )
 
@@ -64,13 +63,25 @@ func defaultRuntimeOptions(
 	metricsHandler http.Handler,
 	adapterInfo map[string]string,
 ) []bootstrap.Option {
+	// PR-A14b: three-listener topology — primary (business routes + JWT auth),
+	// internal (/internal/v1/* + service-token auth), health (/healthz /readyz
+	// /metrics on a dedicated port).
+	//
+	// Primary listener: JWT auth is wired via WithAuthDiscovery (discovers
+	// IntentTokenVerifier from accesscore post-Init).
+	// Internal listener: PolicyServiceToken from InternalGuard (nil → PolicyNone
+	// in dev mode where GOCELL_SERVICE_SECRET is unset).
+	// Health listener: metricsHandler registered via HealthRouteGroups variadic;
+	// no auth on /healthz and /readyz; /metrics left open (HealthRouteGroups
+	// uses Public:true which is a no-op on the HealthListener's mux).
+	//
+	// ref: go-kratos/kratos app.go — per-server option pattern.
+	internalPolicy := buildInternalPolicy(shared.InternalGuard)
+
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		// PR-A14a: dual listener — primary (public/api, infra endpoints) +
-		// internal (/internal/v1/* control-plane). Defaults align with
-		// docs/ops/env-vars.md and examples/*/docker-compose.yml.
-		bootstrap.WithHTTPPrimaryAddr(shared.PrimaryHTTPAddr),
-		bootstrap.WithHTTPInternalAddr(shared.InternalHTTPAddr),
+		bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr, nil),
+		bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalPolicy),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
@@ -80,18 +91,30 @@ func defaultRuntimeOptions(
 		// needs the opt-in signal that an auth provider cell will be wired.
 		bootstrap.WithAuthDiscovery(),
 		bootstrap.WithAdapterInfo(adapterInfo),
-		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),
+		bootstrap.WithHealthMetricsHandler(metricsHandler),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
+	}
+	// Health listener is optional: when HealthHTTPAddr is empty (e.g. tests that
+	// inject PrimaryListener + InternalListener but not HealthListener), bootstrap
+	// falls back to mounting /healthz and /readyz on the PrimaryListener.
+	// Production deployments always set GOCELL_HTTP_HEALTH_ADDR.
+	if shared.HealthHTTPAddr != "" {
+		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, nil))
 	}
 	if shared.VerboseToken != "" {
 		opts = append(opts, bootstrap.WithVerboseToken(shared.VerboseToken))
 	}
-	if shared.InternalGuard != nil {
-		// PR-A14a: InternalGuard attaches to the internal listener's mux chain
-		// as the sole authentication layer for /internal/v1/*.
-		opts = append(opts, bootstrap.WithInternalMiddleware(shared.InternalGuard.Middleware()))
-	}
 	return opts
+}
+
+// buildInternalPolicy constructs the policy for the internal listener.
+// In dev mode (InternalGuard == nil) PolicyNone is used; in production the
+// InternalGuard's store and ring are promoted to PolicyServiceToken.
+func buildInternalPolicy(guard *internalGuard) cell.Policy {
+	if guard == nil {
+		return bootstrap.PolicyNone()
+	}
+	return bootstrap.PolicyServiceToken(guard.NonceStore(), guard.ring)
 }
 
 // buildKeyProvider constructs the KeyProvider from the supplied providerName,
