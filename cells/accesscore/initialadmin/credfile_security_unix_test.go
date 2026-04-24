@@ -93,6 +93,44 @@ func TestRemoveCredentialFile_IdempotentMissing(t *testing.T) {
 	}
 }
 
+// TestSecureNewFile_RefusesSymlinkPath verifies that SecureNewFile (and by
+// extension writeCredentialFile) refuses to write through a symlink at the
+// target path. This guards against TOCTOU symlink-swap attacks (B2):
+// if an attacker plants a symlink between Lstat and OpenFile, O_NOFOLLOW
+// causes the open to fail with ELOOP (on Linux) or ENOTDIR (on Darwin).
+func TestSecureNewFile_RefusesSymlinkPath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Create a benign target file that a symlink would point to.
+	target := filepath.Join(dir, "innocent_target")
+	if err := os.WriteFile(target, []byte("unrelated"), 0o600); err != nil {
+		t.Fatalf("create target: %v", err)
+	}
+
+	// Plant a symlink at the path where the credential file would be written.
+	symlinkPath := filepath.Join(dir, "initial_admin_password")
+	if err := os.Symlink(target, symlinkPath); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	// writeCredentialFile must refuse to write through the symlink.
+	err := writeCredentialFile(symlinkPath, makePayload("admin", "s3cr3t"))
+	if err == nil {
+		t.Fatal("expected error when writing through symlink, got nil")
+	}
+	// The error must originate from either the Lstat (errCredFileExists, because
+	// Lstat sees the symlink as an existing entry) or from O_NOFOLLOW rejection.
+	// In both cases an error must be returned and the benign target must be intact.
+	targetData, readErr := os.ReadFile(target)
+	if readErr != nil {
+		t.Fatalf("read target after refused write: %v", readErr)
+	}
+	if string(targetData) != "unrelated" {
+		t.Errorf("symlink target was modified; got %q, want %q", string(targetData), "unrelated")
+	}
+}
+
 // TestRemoveCredentialFile_DeletesEvenWhenModeTampered verifies that
 // removeCredentialFile removes the file even when the mode has been tampered
 // (security intent: destroy the credential regardless of the anomaly) and

@@ -39,8 +39,9 @@ func writeCredentialFile(path string, payload credentialPayload, opts ...writeCr
 		o(cfg)
 	}
 
-	// Refuse to overwrite.
-	if _, err := os.Stat(path); err == nil {
+	// Refuse to overwrite. Lstat (not Stat) so a symlink at path is detected
+	// rather than transparently followed (defense against TOCTOU symlink swap).
+	if _, err := os.Lstat(path); err == nil {
 		return fmt.Errorf("%w: %s", errCredFileExists, path)
 	}
 

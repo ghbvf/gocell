@@ -81,9 +81,9 @@ func TestVerifyOwnership_DetectsOpenedDACL(t *testing.T) {
 	}
 }
 
-// TestVerifyOwnership_AcceptsSDDLAlias verifies that sddlContainsSID accepts the
-// well-known SDDL short-form aliases that Windows may emit instead of full S-1-*
-// strings. This guards against false-positive tamper detection.
+// TestVerifyOwnership_AcceptsSDDLAlias verifies that sddlHasAllowACEForSID accepts
+// the well-known SDDL short-form aliases that Windows may emit instead of full
+// S-1-* strings. This guards against false-positive tamper detection.
 func TestVerifyOwnership_AcceptsSDDLAlias(t *testing.T) {
 	t.Parallel()
 
@@ -134,9 +134,9 @@ func TestVerifyOwnership_AcceptsSDDLAlias(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := sddlContainsSID(tc.sddl, tc.sidStr)
+			got := sddlHasAllowACEForSID(tc.sddl, tc.sidStr)
 			if got != tc.want {
-				t.Errorf("sddlContainsSID(%q, %q) = %v, want %v", tc.sddl, tc.sidStr, got, tc.want)
+				t.Errorf("sddlHasAllowACEForSID(%q, %q) = %v, want %v", tc.sddl, tc.sidStr, got, tc.want)
 			}
 		})
 	}

@@ -5,6 +5,7 @@ package initialadmin
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/sys/windows"
 )
@@ -47,8 +48,9 @@ func (w *windowsCredfile) SecureNewFile(path string) (*os.File, error) {
 }
 
 // VerifyOwnership reads the DACL of path and confirms it is PROTECTED and
-// contains exactly three ALLOW ACEs for the expected SIDs (current user,
-// Administrators, LocalSystem). Returns tampered=true on any deviation.
+// contains exactly three ALLOW ACEs (with GENERIC_ALL or FILE_ALL_ACCESS mask)
+// for the expected SIDs (current user, Administrators, LocalSystem).
+// Returns tampered=true on any deviation.
 //
 // Verification uses the SDDL string representation of the security descriptor
 // to compare SID strings — this avoids any unsafe.Pointer use in ACE walking.
@@ -60,6 +62,16 @@ func (w *windowsCredfile) VerifyOwnership(path string, _ os.FileInfo) (tampered 
 
 	if dacl == nil {
 		return true, fmt.Errorf("DACL is nil (world-readable)")
+	}
+
+	// B3: verify SE_DACL_PROTECTED — without this bit, inheritance from parent
+	// directories could silently add ACEs and widen file access.
+	control, _, ctlErr := sd.Control()
+	if ctlErr != nil {
+		return true, fmt.Errorf("get SD control bits: %w", ctlErr)
+	}
+	if control&windows.SE_DACL_PROTECTED == 0 {
+		return true, fmt.Errorf("DACL is not PROTECTED (inheritance allowed)")
 	}
 
 	// Verify ACE count — exactly 3 expected.
@@ -75,10 +87,11 @@ func (w *windowsCredfile) VerifyOwnership(path string, _ os.FileInfo) (tampered 
 
 	// Use the SDDL string representation to verify all expected SIDs are present.
 	// SECURITY_DESCRIPTOR.String() returns the SDDL without any unsafe.Pointer use.
+	// B1/E3: sddlHasAllowACEForSID enforces ALLOW ACE type AND full-access mask.
 	sddl := sd.String()
 	for j, sidStr := range expectedSIDStrings {
-		if !sddlContainsSID(sddl, sidStr) {
-			return true, fmt.Errorf("expected SID[%d] (%s) not found in DACL SDDL", j, sidStr)
+		if !sddlHasAllowACEForSID(sddl, sidStr) {
+			return true, fmt.Errorf("expected SID[%d] (%s) not found with ALLOW+full-access ACE in DACL SDDL", j, sidStr)
 		}
 	}
 
@@ -100,38 +113,83 @@ var sddlWellKnownAliases = map[string]string{
 	"S-1-5-32-544": "BA",
 }
 
-// sddlContainsSID returns true when the SDDL string contains an ALLOW ACE
-// referencing the given SID string (e.g. "S-1-5-18").
-// SDDL ALLOW ACE format: (A;...;...;...;...;<SID>)
+// allowedACETypes is the SDDL ACE type code set considered ALLOW for our DACL.
+// Per MS-DTYP §2.5.1.1, our buildDACL emits "A" (ACCESS_ALLOWED_ACE_TYPE);
+// inheritable variants (AI/AO) are accepted defensively.
+// AU (SYSTEM_AUDIT) is intentionally excluded — it is not an access-allow type.
+var allowedACETypes = []string{"A", "AI", "AO"}
+
+// allowedAccessMasks is the set of SDDL access-mask tokens accepted as full access.
+// buildDACL uses GENERIC_ALL which Windows may emit as "GA" or "FA" (FILE_ALL_ACCESS)
+// depending on the object type and Windows version.
+var allowedAccessMasks = []string{"GA", "FA"}
+
+// sddlHasAllowACEForSID returns true when sddl contains an ALLOW ACE of the
+// form (<type>;<flags>;<rights>;<obj>;<inherit>;<sid>) where:
+//   - <type> is in allowedACETypes (A / AI / AO)
+//   - <rights> is in allowedAccessMasks (GA / FA — full access)
+//   - <sid> matches sidStr (full S-1-* form) or its well-known SDDL alias
 //
-// Both the full S-1-* form and well-known SDDL aliases (SY, BA …) are
-// checked, because Windows may emit either form in SECURITY_DESCRIPTOR.String().
-func sddlContainsSID(sddl, sidStr string) bool {
+// This replaces the former sddlContainsSID which matched any ACE type including
+// DENY (D) — a DENY ACE for a SID must not count as "access granted" (B1/E3).
+func sddlHasAllowACEForSID(sddl, sidStr string) bool {
 	if len(sddl) == 0 {
 		return false
 	}
-	// Check full SID string form first.
-	if containsSubstring(sddl, ";"+sidStr+")") {
-		return true
-	}
-	// Check SDDL alias form for well-known SIDs.
-	if alias, ok := sddlWellKnownAliases[sidStr]; ok {
-		if containsSubstring(sddl, ";"+alias+")") {
-			return true
-		}
-	}
-	return false
-}
 
-// containsSubstring is a pure-Go substring search to avoid importing strings
-// in this build-tag-constrained file.
-func containsSubstring(s, substr string) bool {
-	if len(substr) > len(s) {
-		return false
+	candidates := []string{sidStr}
+	if alias, ok := sddlWellKnownAliases[sidStr]; ok {
+		candidates = append(candidates, alias)
 	}
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+
+	for _, sid := range candidates {
+		suffix := ";" + sid + ")"
+		for i := 0; i+len(suffix) <= len(sddl); i++ {
+			if sddl[i:i+len(suffix)] != suffix {
+				continue
+			}
+			// Find the opening '(' that starts this ACE.
+			open := -1
+			for j := i - 1; j >= 0; j-- {
+				if sddl[j] == '(' {
+					open = j
+					break
+				}
+				if sddl[j] == ')' {
+					// Hit a previous ACE close — this suffix is not inside an ACE.
+					break
+				}
+			}
+			if open < 0 {
+				continue
+			}
+			// ACE content between '(' and the suffix position has the form:
+			// <type>;<flags>;<rights>;<obj>;<inherit>
+			// Split on ';' to extract type (field 0) and rights (field 2).
+			aceBody := sddl[open+1 : i]
+			fields := strings.SplitN(aceBody, ";", 4)
+			if len(fields) < 3 {
+				continue
+			}
+			aceType := fields[0]
+			rights := fields[2]
+			// Confirm the ACE type is an ALLOW variant.
+			typeOK := false
+			for _, t := range allowedACETypes {
+				if aceType == t {
+					typeOK = true
+					break
+				}
+			}
+			if !typeOK {
+				continue
+			}
+			// E3: confirm the access mask grants full access.
+			for _, m := range allowedAccessMasks {
+				if rights == m {
+					return true
+				}
+			}
 		}
 	}
 	return false
