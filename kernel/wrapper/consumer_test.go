@@ -91,7 +91,7 @@ func TestWrapConsumer_MarksErrorOnReject(t *testing.T) {
 func TestWrapConsumer_PanicsOnNonEventSpec(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatal("expected panic on http spec")
 		}
 	}()
@@ -103,7 +103,7 @@ func TestWrapConsumer_PanicsOnNonEventSpec(t *testing.T) {
 func TestWrapConsumer_PanicsOnNilFn(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Fatal("expected panic on nil fn")
 		}
 	}()

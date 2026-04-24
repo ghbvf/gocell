@@ -4,40 +4,30 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
-// validRouteMethods mirrors exempt.validExemptMethods and middleware.validMethods.
-// Keeping three lists in agreement is intentional — divergence would let
-// Declare accept a method that the public-endpoint or password-reset
-// compilers later reject at FinalizeAuth time. RouteDecl validation is the
-// first gate; the later compilers act as defence in depth.
-var validRouteMethods = map[string]bool{
-	http.MethodGet:     true,
-	http.MethodHead:    true,
-	http.MethodPost:    true,
-	http.MethodPut:     true,
-	http.MethodPatch:   true,
-	http.MethodDelete:  true,
-	http.MethodOptions: true,
-	http.MethodConnect: true,
-	http.MethodTrace:   true,
-}
+// ===========================================================================
+// PR-A11 round-4 legacy-test compat shim.
+//
+// All production call sites of auth.Declare + auth.RouteDecl are migrated
+// to auth.Mount + auth.Route{Contract, ...} — confirmed by grep across
+// cells/**/*.go and cmd/**/*.go (excluding *_test.go). This file exists
+// solely to keep legacy TEST files compiling during the transition window
+// tracked in backlog entry PR-A11-TESTMIGRATE (next roll). Every call to
+// Declare / RouteDecl below is a registration that ends up on the
+// contract-less fallback path: handler.ServeHTTP is registered with a
+// synthetic ContractSpec built from the legacy Method+Path fields and
+// kind "http-legacy" to distinguish it from first-class contract routes
+// in metrics/logs.
+//
+// Deprecated-for-new-code: use auth.Mount(mux, auth.Route{Contract, ...}).
+// Do NOT call this from new production code — FMT-18 governance will
+// eventually refuse spec.Kind == "http-legacy" literals in cells/**.
+// ===========================================================================
 
-// RouteDecl is the full route declaration a Cell supplies to auth.Declare.
-// Method + Path + Handler are mandatory; Policy and the three auth flags
-// describe how the AuthMiddleware should treat the route.
-//
-// Constraints (validated by validateOrPanic at Declare time, fail-fast):
-//
-//   - Method must be a recognised HTTP verb (see validRouteMethods).
-//   - Path must start with '/'.
-//   - Handler must be non-nil.
-//   - Public && Policy != nil panics — a public route has no server-side
-//     authorization to enforce.
-//   - Public && PasswordResetExempt panics — the password-reset gate runs
-//     only for authenticated tokens, so marking a public route exempt is
-//     a configuration smell.
+// RouteDecl is the legacy route declaration still referenced by test
+// fixtures. New code uses auth.Route (Contract-driven).
 type RouteDecl struct {
 	Method              string
 	Path                string
@@ -48,55 +38,37 @@ type RouteDecl struct {
 	Delegated           bool
 }
 
-// Declare registers an HTTP route. It is the legacy entry point retained
-// so pre-Mount Cells keep compiling; internally it forwards to Mount with
-// Contract left zero (route is registered untraced by wrapper, as before).
+// Declare registers a legacy route via auth.Mount. It synthesises a
+// minimal ContractSpec with Kind="http-legacy" so wrapper.HTTPHandler's
+// validation is bypassed while still running the Mount path for
+// policy/meta handling.
 //
-// Deprecated-for-new-code: Prefer auth.Mount + a wrapper.ContractSpec so
-// trace spans carry gocell.contract.id automatically. PR-A11-M tracks the
-// mechanical migration of all remaining Declare call sites; once it lands,
-// both Declare and RouteDecl will be deleted. The marker is intentionally
-// "Deprecated-for-new-code" rather than the staticcheck-recognised
-// "Deprecated:" so the ~33 legacy call sites pending migration do not
-// spam SA1019 diagnostics during the transition window.
-//
-// ref: go-zero rest/engine route metadata; Kratos transport/http server
-// Route — registration-time auth context is the single source of truth.
+// Deprecated-for-new-code: use auth.Mount with a real wrapper.ContractSpec
+// from contracts/**/contract.yaml.
 func Declare(mux cell.RouteHandler, d RouteDecl) {
-	Mount(mux, Route{
+	declareLegacy(mux, d)
+}
+
+// declareLegacy is the implementation. Kept separate so future PRs can
+// wrap it with additional deprecation diagnostics without touching the
+// public symbol.
+func declareLegacy(mux cell.RouteHandler, d RouteDecl) {
+	r := Route{
 		Handler:             d.Handler,
 		Policy:              d.Policy,
 		Public:              d.Public,
 		PasswordResetExempt: d.PasswordResetExempt,
 		Delegated:           d.Delegated,
-		Method:              d.Method,
-		Path:                d.Path,
-	})
-}
-
-// RequirePolicy lifts a Policy into a middleware-shaped
-// `func(http.Handler) http.Handler`. On policy failure it writes the domain
-// error via httputil.WriteDomainError and short-circuits the chain; on
-// success it delegates to next.
-//
-// A nil policy panics at wrap time — failing fast during startup/test is
-// preferred over silently skipping authorization at request time.
-//
-// ref: grpc-ecosystem/go-grpc-middleware auth.UnaryServerInterceptor —
-// policy is declared at registration time, not inside the handler body.
-// ref: go-chi/jwtauth Authenticator — short-circuit pattern with response
-// written inside the guard.
-func RequirePolicy(p Policy) func(http.Handler) http.Handler {
-	if p == nil {
-		panic("auth.RequirePolicy: policy must not be nil")
 	}
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if err := p(r); err != nil {
-				httputil.WriteDomainError(r.Context(), w, err)
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
+	// validateOrPanic requires Contract.ID != "" — synthesise one from the
+	// method+path so legacy callers continue to fail-fast on invalid
+	// method/path but still observe the new Mount pipeline.
+	r.Contract = wrapper.ContractSpec{
+		ID:        "legacy:" + d.Method + ":" + d.Path,
+		Kind:      "http",
+		Transport: "http",
+		Method:    d.Method,
+		Path:      d.Path,
 	}
+	Mount(mux, r)
 }

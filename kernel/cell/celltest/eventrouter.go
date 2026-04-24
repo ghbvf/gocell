@@ -9,11 +9,9 @@ import (
 // Compile-time check: StubEventRouter implements cell.EventRouter.
 var _ cell.EventRouter = (*StubEventRouter)(nil)
 
-// StubEventRouter records AddHandler + AddContractHandler calls for testing.
-// Contracts captures the ContractSpec argument for contract-first
-// subscriptions (nil-valued zero struct when AddHandler was used); Topics
-// mirrors the resolved topic string so assertions stay uniform across the
-// legacy and contract-first registration shapes.
+// StubEventRouter records AddContractHandler calls for testing. Topics,
+// Handlers, ConsumerGroups and Contracts are parallel slices indexed by
+// registration order.
 type StubEventRouter struct {
 	Topics         []string
 	Handlers       []outbox.EntryHandler
@@ -21,24 +19,25 @@ type StubEventRouter struct {
 	Contracts      []wrapper.ContractSpec
 }
 
-// AddHandler records the topic, handler, and consumerGroup. Contracts is
-// appended with the zero-value ContractSpec so the parallel-slice invariant
-// holds.
-func (r *StubEventRouter) AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string) {
-	r.Topics = append(r.Topics, topic)
-	r.Handlers = append(r.Handlers, handler)
-	r.ConsumerGroups = append(r.ConsumerGroups, consumerGroup)
-	r.Contracts = append(r.Contracts, wrapper.ContractSpec{})
-}
-
 // AddContractHandler records the topic (derived from spec.Topic), handler,
-// consumerGroup, and the full ContractSpec so tests can assert the
-// contract-first registration shape.
+// consumerGroup, and the full ContractSpec.
 func (r *StubEventRouter) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) {
 	r.Topics = append(r.Topics, spec.Topic)
 	r.Handlers = append(r.Handlers, handler)
 	r.ConsumerGroups = append(r.ConsumerGroups, consumerGroup)
 	r.Contracts = append(r.Contracts, spec)
+}
+
+// AddHandler is the round-4 legacy-test compat shim — see comment on
+// cell.EventRouter interface. Records the topic as-is and appends a
+// zero-value ContractSpec so the parallel-slice invariant holds.
+//
+// Deprecated-for-new-code: use AddContractHandler.
+func (r *StubEventRouter) AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string) {
+	r.Topics = append(r.Topics, topic)
+	r.Handlers = append(r.Handlers, handler)
+	r.ConsumerGroups = append(r.ConsumerGroups, consumerGroup)
+	r.Contracts = append(r.Contracts, wrapper.ContractSpec{})
 }
 
 // HandlerCount returns the number of registered handlers.

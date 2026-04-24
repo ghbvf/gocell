@@ -116,6 +116,21 @@ type RouteHandler interface {
 	Handle(pattern string, handler http.Handler)
 }
 
+// PrefixedMux is optionally implemented by RouteHandler values whose chi
+// sub-router owns a mount prefix (i.e. `mux.Route("/api/v1/access", fn)`).
+// auth.Mount type-asserts to this interface to compute the chi-relative
+// registration path from a fully-qualified Contract.Path — the mount
+// prefix is stripped so chi's own prefix-composition produces the correct
+// external URL.
+//
+// runtime/http/router.Router and its nested chiRouterAdapter implement this
+// interface; plain *http.ServeMux / test stubs do not, in which case
+// auth.Mount uses Contract.Path as-is (fine because those paths are
+// typically fully-qualified already and the mux has no prefix to strip).
+type PrefixedMux interface {
+	Prefix() string
+}
+
 // AuthRouteMeta carries the auth-related attributes a slice declares when
 // registering a route. It is pure data — no Policy or Handler references —
 // so kernel/cell stays decoupled from runtime/auth.
@@ -183,22 +198,18 @@ type AuthRouteDeclarer interface {
 // Legacy AddHandler remains as a shim for subscriptions not yet migrated to
 // a ContractSpec (tracked by PR-A11-M).
 type EventRouter interface {
-	// AddHandler registers an untraced subscription intent.
-	//
-	// Deprecated-for-new-code: Prefer AddContractHandler so CONSUME spans
-	// carry gocell.contract.id / messaging.destination. AddHandler remains
-	// for call sites not yet migrated to a ContractSpec; PR-A11-M tracks
-	// the mechanical migration and will remove this method afterwards.
-	// The marker intentionally avoids the staticcheck-recognised
-	// "Deprecated:" form to keep SA1019 quiet on the ~5 legacy call sites
-	// during the migration window.
-	AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string)
-
 	// AddContractHandler registers a contract-first subscription. The
 	// concrete Router wraps handler with wrapper.WrapConsumer at
 	// registration time, so every consumed entry emits a CONSUME span
 	// annotated with gocell.contract.id / messaging.destination.
 	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string)
+
+	// AddHandler is the round-4 legacy-test compat shim. Production
+	// Cells use AddContractHandler exclusively (see PR-A11-M + backlog
+	// PR-A11-TESTMIGRATE).
+	//
+	// Deprecated-for-new-code: use AddContractHandler.
+	AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string)
 }
 
 // EventRegistrar is optionally implemented by Cells that subscribe to events.

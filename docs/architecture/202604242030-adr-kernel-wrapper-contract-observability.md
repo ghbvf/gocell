@@ -1,6 +1,6 @@
 # ADR: kernel/wrapper — Contract-level Observable Proxy
 
-> Date: 2026-04-24 (revised after three review rounds)
+> Date: 2026-04-25 (revised after four review rounds)
 > Status: Accepted
 > Context PR: PR-A11 (`refactor/520-pr-a11-kernel-wrapper`)
 > Tag: ADR-KERNEL-WRAPPER-CONTRACT-OBS-01
@@ -61,12 +61,11 @@ handler / subscription — one `var loginSpec = wrapper.ContractSpec{...}`
 per route. No runtime catalogue, no `//go:embed contracts/**` parse
 cost, no contract registry dependency injection.
 
-The duplication with YAML is intentional: it stays caught by a future
-`FMT-17 SPEC-CONTRACT-SYNC` governance rule that cross-references Go
+The duplication with YAML is intentional: it is caught by the strict
+`FMT-18 SPEC-CONTRACT-SYNC` governance rule that cross-references Go
 literal usage sites against `contracts/**.yaml` at `gocell validate
---strict` time. Until FMT-17 lands, hand-maintained literals are the
-minimum-viable path — no worse than today's `auth.RouteDecl{Method,Path}`
-duplication.
+--strict` time. Hand-maintained literals are acceptable because drift
+is now a CI failure, with no runtime catalogue or parser cost.
 
 Rationale: introducing a runtime catalogue would pull `//go:embed` + a
 YAML parse into every binary, cascade into the assembly/bootstrap wire-
@@ -81,10 +80,11 @@ higher layers without pulling in a parser.
 
 `runtime/auth.Mount(mux, Route{Contract, Handler, Policy, ...})` is the
 new route-registration entry point. `Route.Contract` is optional: when
-set, `wrapper.HTTPHandler` wraps the Handler so every request emits a
-span tagged with `gocell.contract.id` / `kind` / `transport` plus the
-standard `http.method` / `http.route` / `http.status_code`. Nil Contract
-preserves the legacy path (no contract attribute).
+set, `wrapper.HTTPHandler` wraps the Handler so the outer HTTP tracing
+middleware's single request span is tagged with `gocell.contract.id` /
+`kind` / `transport` plus the standard `http.method` / `http.route` /
+`http.status_code`. Nil Contract preserves the legacy path (no contract
+attribute).
 
 `auth.Declare` + `auth.RouteDecl` become a thin legacy shim forwarding
 to `Mount` with `Contract` left zero. All existing call sites keep
@@ -111,46 +111,56 @@ recover still sees it. HTTPHandler shares the same `recoverAndFinish`
 primitive in `kernel/wrapper/lifecycle.go`, eliminating the pre-review
 asymmetry where HTTP recovered panics but consumers leaked spans.
 
-Consumer wire-up (review round 3): `runtime/eventrouter.Router` gains a
-`AddContractHandler(spec, handler, consumerGroup)` method — the
-symmetric mirror of `auth.Mount(Route{Contract, ...})`. It wraps the
-handler with `wrapper.WrapConsumer(r.tracer, spec, handler)` at
-registration time using the Router-owned Tracer (injected via a new
-`eventrouter.WithTracer` option during `bootstrap.phase6StartEventRouter`).
-The legacy `AddHandler(topic, handler, cg)` stays as an untraced shim
-for the remaining subscribers that PR-A11-M sweeps into contract
-literals. One pilot cell (accesscore's `configreceive` subscription,
-contract `event.config.changed.v1`) migrates to
-`AddContractHandler` in this PR so the design is validated end-to-end
-on both HTTP and event surfaces before `ContractSpec`'s shape is
-frozen — previously deferring the consumer side to PR-A11-B would have
-locked in the value-type fields based on the HTTP pilot alone.
+Consumer wire-up (review round 4): `runtime/eventrouter.Router` gains
+`AddContractHandler(spec, handler, consumerGroup)` — the symmetric
+mirror of `auth.Mount(Route{Contract, ...})`. It stores the raw
+business handler plus primitive contract identity on `outbox.Subscription`;
+`bootstrap.phase6StartEventRouter` builds the subscriber middleware
+chain as:
+
+1. `outbox.ObservabilityContextMiddleware()` restores async metadata.
+2. `eventrouter.ContractTracingMiddleware(...)` wraps the subscription
+   with `wrapper.WrapConsumer`.
+3. `ConsumerBase.AsMiddleware()` and any user consumer middleware run
+   inside the contract span.
+
+This ordering is deliberate: ConsumerBase can short-circuit duplicates,
+retry claims, or downgrade final disposition. If `WrapConsumer` sits
+inside ConsumerBase, those paths either miss the contract span or report
+pre-final status. With contract tracing outside ConsumerBase, every
+consumed entry has one contract span that covers idempotency/retry and
+final disposition while still receiving trace/request metadata restored
+from the entry before the span starts.
+
+The legacy `AddHandler(topic, handler, cg)` stays as an untraced shim for
+remaining tests until PR-A11-TESTMIGRATE deletes it. Production cell
+subscriptions migrated to `AddContractHandler` in round 4.
 
 ### 5. Tracer Injection: Constructor-owned at runtime infrastructure layer
 
 `kernel/wrapper` stays **stateless** — no package-level `var`, no
-`SetTracer`. `HTTPHandler(tr, spec, next, opts...)` and
-`WrapConsumer(tr, spec, fn)` accept the `Tracer` as a positional
-parameter; a nil `tr` falls back to `NoopTracer{}` at the call site
-(fail-open). The `Tracer` + `Span` interfaces, the `NoopTracer` value,
-and the optional `TracerCarrier` helper all live in `kernel/wrapper`;
-nothing in that package is mutable after program start.
+`SetTracer`. `HTTPHandler(spec, next)` does not accept a tracer and does
+not create spans; it only contributes contract context/attributes to the
+outer request span. `WrapConsumer(tr, spec, fn)` accepts the `Tracer` as
+a positional parameter; a nil `tr` falls back to `NoopTracer{}` at the
+call site (fail-open). The `Tracer` + `Span` interfaces and the
+`NoopTracer` value live in `kernel/wrapper`; nothing in that package is
+mutable after program start.
 
 Ownership of the live `Tracer` belongs to the runtime infrastructure
 types that observe traffic:
 
 - `runtime/http/router.Router` carries a `tracer wrapper.Tracer` field
-  (seeded by the existing `router.WithTracer` option) and exposes it
-  via `WrapperTracer()` which satisfies the new
-  `wrapper.TracerCarrier` interface. Nested sub-muxes constructed by
-  `Route` / `Group` / `With` inherit the parent's tracer. `auth.Mount`
-  pulls the tracer via `wrapper.TracerFromCarrier(mux)` before calling
-  `wrapper.HTTPHandler(...)` — a type assertion lookup so legacy mux
-  types (`*http.ServeMux` in tests, stubs) that do not implement
-  `TracerCarrier` transparently get `NoopTracer{}`.
+  (seeded by the existing `router.WithTracer` option). The outer
+  `runtime/http/middleware.Tracing` middleware owns the single HTTP
+  request span. `auth.Mount` does not read the tracer; it calls
+  `wrapper.HTTPHandler(spec, handler)` so the handler can contribute
+  contract attributes to the span via `wrapper.AttrCarrier`.
 - `runtime/eventrouter.Router` carries a `tracer wrapper.Tracer` field
-  set via `eventrouter.WithTracer(...)`. `AddContractHandler` uses it
-  to wrap subscribers with `WrapConsumer` at registration time.
+  set via `eventrouter.WithTracer(...)`. `AddContractHandler` stores
+  the contract identity on `outbox.Subscription`; the bootstrap-owned
+  `ContractTracingMiddleware` consumes that identity and wraps the
+  subscription with `WrapConsumer` outside ConsumerBase.
 - `runtime/bootstrap` threads the `Bootstrap.wrapperTracer` (captured
   by `WithTracer`) into both `router.WithTracer` (phase7) and
   `eventrouter.WithTracer` (phase6). No process-wide `SetTracer` is
@@ -182,19 +192,18 @@ rejecting a similar "explicit option + noop default" approach:
    bootstrap is the only caller of `router.WithTracer` /
    `eventrouter.WithTracer`, and both APIs are pre-existing.
 3. **Test ergonomics**: spy tracers inject through `router.WithTracer`
-   (integration harness) or directly into `HTTPHandler(tr, …)` /
-   `WrapConsumer(tr, …)` (unit tests). No `SetTracer` / `ResetTracer`
-   setup/teardown dance, no race conditions on a shared package
-   variable, no `t.Parallel()` landmines. `handler_test.go` /
-   `consumer_test.go` construct a `spyTracer` per test as a local
-   value.
+   (integration harness) or directly into `WrapConsumer(tr, …)` (unit
+   tests). HTTP handler tests assert `AttrCarrier` contribution rather
+   than span creation. No `SetTracer` / `ResetTracer` setup/teardown
+   dance, no race conditions on a shared package variable, no
+   `t.Parallel()` landmines.
 4. **No landmine for future bootstraps**: every new composition root
    (examples/ssobff's `buildWalkthroughServer`, future embedded modes,
-   sidecar tools) gets a compiled-in noop via
-   `wrapper.TracerFromCarrier` fallback. Adding `-race` tests
-   that run integration paths never surfaced a tracer-wiring bug
-   because the runtime infrastructure is the single injection site and
-   `Router` construction is the only entry.
+   sidecar tools) either installs `router.WithTracer` and gets HTTP
+   request spans or intentionally runs with HTTP tracing disabled. Adding
+   `-race` tests that run integration paths never surfaced a tracer-
+   wiring bug because the runtime infrastructure is the single injection
+   site and `Router` construction is the only entry.
 
 `HTTPHandler` / `WrapConsumer` / `HandlerOption` / `WithFilter` —
 filter suppression is still an orthogonal concern, retained as the
@@ -233,19 +242,104 @@ requires `Contract.Path != ""`. Prevents the silent drift that the
 earlier ADR version explicitly deferred to FMT-17 (which remains a
 follow-up PR-A11-V for the contract ⇄ YAML cross-check).
 
-### 7. Outer request span skipped when contract span covers
+### 7. Single HTTP span owner via AttrCarrier (round-4 — supersedes the
+### earlier skip-on-ContractID approach)
 
-`runtime/http/middleware/tracing.go`'s `Tracing` middleware now
-short-circuits when `ctxkeys.ContractIDFrom(ctx)` returns present —
-i.e. the inner contract span has already been opened upstream. This
-eliminates the double-span emission that the initial ADR version
-listed as a migration-window cost ("Span coexistence note"). Result:
-one request → one span, tagged with `gocell.contract.id`, as soon as
-a Cell migrates its route to `auth.Mount` + `Route.Contract`.
+Round 3 tried to achieve "one request → one span" by making the outer
+`middleware.Tracing` skip span creation when `ctxkeys.ContractID`
+was present in the request context — relying on
+`wrapper.HTTPHandler` to set it first. This was a **temporal
+impossibility**: middleware runs before `next.ServeHTTP`, so
+ContractID is only written after the skip check has already returned.
+Every contract-bound route kept producing **two** spans (outer
+request span + inner contract span), inflating dashboard counts /
+latency histograms / sampling budget. Reviewers surfaced this in
+round 4.
 
-Routes without a `Contract` continue through `middleware.Tracing`
-unchanged (chi-route-pattern span), so PR-A11-M's route migration
-can proceed gradually without double-counting any requests.
+Round 4 reverses the ownership model:
+
+- `kernel/wrapper.HTTPHandler` no longer creates a span. It writes
+  `ctxkeys.ContractID` and appends contract base attributes
+  (`gocell.contract.id / kind / transport + http.method / route`)
+  into a shared `wrapper.AttrCarrier` that
+  `runtime/http/middleware.Tracing` installs into the request
+  context before `next.ServeHTTP`.
+- After `next.ServeHTTP` returns, `middleware.Tracing` drains the
+  carrier and late-binds every attribute onto the single
+  request-owned span it already started — the same late-binding
+  pattern chi uses for `http.route` post-routing.
+- Result: exactly **one** server span per HTTP request, always. The
+  "skip on ContractID" branch is deleted.
+
+ref: go-kratos/kratos middleware/tracing/tracing.go — middleware as
+the single HTTP server span owner; handlers contribute attributes
+not spans.
+ref: open-telemetry/opentelemetry-go-contrib otelhttp — "one
+middleware one span" invariant; route metadata is bound post-routing
+via chi RouteContext.
+
+### 8. Error Redaction Hook — `WrapConsumer(...,WithConsumerErrorRedactor)` (round 4 F5)
+
+`wrapper.ErrorRedactor` is a `func(error) error` that `WrapConsumer`
+applies to every error it records on a span (Requeue/Reject
+dispositions + handler panics). `bootstrap.WithErrorRedactor` sets
+the process-wide redactor; bootstrap passes it to
+`eventrouter.ContractTracingMiddleware`, which attaches it to every
+contract-bound `WrapConsumer` invocation. Default is the identity
+(no scrubbing), matching OTel's default; deployments in regulated
+environments plug a redactor to strip SQL fragments / token
+carriers / PII from error strings before they reach the trace
+backend.
+
+Consumer-only for now — `middleware.Tracing` does not call
+`span.RecordError` today (it relies on status-code classification),
+so an HTTP-side redactor is unnecessary. Should that change, the
+same hook is easy to thread through `middleware.WithErrorRedactor`.
+
+### 9. Governance rules: FMT-18 + FMT-19 (round 4)
+
+Two new strict-only governance rules land with this PR:
+
+- **FMT-18 SPEC-CONTRACT-SYNC**: `gocell validate --strict` scans
+  `cells/**/*.go` for `wrapper.ContractSpec{...}` literals and
+  cross-checks each against `contracts/**/contract.yaml`. Drift
+  between Kind / Method / Path (for http) or the ID lookup (for
+  event) fails the CI gate. `examples/**` is exempt — demo routes
+  frequently carry contract IDs without backing YAML by design.
+  Implements the long-deferred check the pilot
+  `TODO(FMT-17)` markers pointed at, and makes the
+  "ContractSpec is a value type duplicated alongside YAML" choice
+  in §2 safe in the long run.
+- **FMT-19 WRAPPER-NO-PACKAGE-STATE**: rejects any mutable
+  package-level variable of interface or pointer type in
+  `kernel/wrapper/*.go`. Compile-time interface checks
+  (`var _ Tracer = NoopTracer{}`) and zero-value sentinel value
+  types are fine. Guards the round-3/4 invariant that
+  `kernel/wrapper` is a stateless value+rules layer, preventing a
+  future refactor from re-introducing the package-level
+  `var tracer Tracer` that round-2 attempted.
+
+Both rules are gated behind `ValidateStrict(true)` so they only
+fire in CI `--strict` runs; day-to-day `gocell validate` is
+unaffected.
+
+### 10. Async Trace Continuation + Adapter Hygiene (round 4 review fixes)
+
+Outbox metadata now propagates W3C `traceparent` in addition to the
+legacy string `trace_id`. `MergeObservabilityMetadata` preserves an
+explicit context traceparent when present, or reconstructs one from the
+active trace/span IDs; `ContextWithObservabilityMetadata` restores it
+before the consumer middleware chain runs. `adapters/otel.Tracer.Start`
+extracts that traceparent with OTel's `TraceContext` propagator before
+starting the consumer span, so async consumers continue the publish trace
+instead of starting a new root.
+
+The same review round tightened adapter safety:
+
+- `adapters/otel` no longer exports raw `[]byte` attributes as strings;
+  it emits a redacted length + sha256 summary.
+- `runtime/observability/tracing.simpleSpan` now locks all mutable span
+  fields, satisfying the `wrapper.Span` concurrency contract.
 
 ## Consequences
 
@@ -261,14 +355,11 @@ can proceed gradually without double-counting any requests.
   mechanical diff-expansions, reviewable per-cell.
 
 ### Negative
-- Until FMT-17 (PR-A11-V) ships, `ContractSpec` literal content still
-  can drift from `contracts/**.yaml`, but `Contract.Path` vs
-  `Route.Path` suffix invariance is now a runtime-validated
-  precondition, closing the most common mistake.
 - `auth.Declare` + `EventRouter.AddHandler(topic, ...)` stay in-tree as
-  untraced shims during the migration window. Two APIs co-existing is
-  noise; future cleanup PR-A11-M closes this (PR-A11-B landed in round 3 —
-  see §4 round-3 update and the Follow-ups section).
+  legacy-test shims during the migration window. Production call sites
+  migrated to `auth.Mount` / `AddContractHandler`; future cleanup
+  PR-A11-TESTMIGRATE rewrites the remaining test surface and deletes the
+  shims.
 - Unauthorized traffic now produces spans (cost of §6's policy-inside
   model). Apply `http.status_code` samplers downstream if volume
   becomes a backend cost issue.
@@ -276,10 +367,10 @@ can proceed gradually without double-counting any requests.
 ### Neutral
 - `runtime/observability/tracing` Tracer/Span interface move is source-
   compatible via type aliases; callers see no breakage.
-- Performance: the wrapper adds one `ctxkeys.WithContractID` call, one
-  `tracer.Start` (which is the OTel call that was always there), five
-  `SetAttributes` allocations per request. Negligible in the HTTP hot
-  path (<1 µs vs. stdlib ServeHTTP cost).
+- Performance: the HTTP wrapper adds one `ctxkeys.WithContractID` call
+  and appends five attributes to the request-owned `AttrCarrier`.
+  Span creation remains owned by the existing outer HTTP tracing
+  middleware.
 
 ## Rejected Alternatives
 
@@ -343,43 +434,38 @@ harnesses, sidecar sockets, future embedded modes) the tracer is
 missing again. Compared against §5's construction-time injection on
 Router: ctx propagation would have added a per-request lookup in the
 hot path, plus a silent-noop failure mode for any code path that
-bypasses middleware. The §5 approach pays zero per-request cost
-(tracer is a field on the Router pulled once at registration) and
-catches the wiring gap at the `wrapper.TracerFromCarrier` type
-assertion — if a mux without `TracerCarrier` is passed, the fallback
-is visible `NoopTracer{}` that tests can assert against.
+bypasses middleware. The §5 approach keeps the tracer on the runtime
+Router and makes HTTP tracing an explicit router option; `auth.Mount`
+does not need any tracer lookup because HTTP contract data is contributed
+through `AttrCarrier`, not by creating a second span.
 
 ## Follow-ups (registered in docs/backlog.md)
 
-- `PR-A11-M CELL-ROUTES-MOUNT-MIGRATION-01` — migrate remaining ~33
-  HTTP routes and ~5 consumer subscriptions
-  (cells/accesscore/configcore/auditcore + examples) from legacy
-  `auth.Declare` / `r.AddHandler(topic, ...)` to `auth.Mount(…Route{…})` /
-  `r.AddContractHandler(spec, …)`; delete `auth.Declare` + `RouteDecl`
-  and `EventRouter.AddHandler(topic, …)` at the end.
-- `PR-A11-V FMT-17-SPEC-CONTRACT-SYNC-01` — governance rule that
-  grep-scans `wrapper.ContractSpec{}` literals in cells/examples and
-  cross-references against `contracts/**.yaml`; drift = validation
-  error at `gocell validate --strict`. Covers both HTTP (method/path)
-  and event (topic/kind) dimensions after §5 wired both sides.
-- `PR-A11-S LOGGING-SLOG-CONTRACT-ID-01` — teach
-  `runtime/observability/logging.contextHandler` to read
-  `kernel/ctxkeys.ContractID` and emit `contract_id` on every slog
-  record (today it only emits trace_id/span_id/cell_id).
-- `PR-A11-R1 WRAPPER-NO-PACKAGE-STATE-LINT-01` — new FMT governance
-  rule that scans `kernel/wrapper/*.go` for package-level `var`
-  declarations with interface or pointer types. §5's
-  constructor-injection discipline must stay — any regression that
-  re-introduces a `var tracer Tracer` (or similar live-resource
-  singleton) in kernel/wrapper should fail `gocell validate --strict`
-  with a hint to thread the dependency through the construction path
-  instead. Constants and immutable zero-value sentinels (NoopTracer{})
-  are allowed; the rule flags only mutable global state.
+Round 4 closed the bulk of the previously deferred items. Remaining
+follow-ups:
 
-Note: the prior `PR-A11-B OUTBOX-CONSUMER-WRAPPER-01` follow-up is now
-done in this PR (see §4 round-3 update). No open consumer-side
-follow-up remains at the wiring level — only the mechanical
-migration, folded into PR-A11-M.
+- `PR-A11-TESTMIGRATE TEST-ROUTEDECL-SUNSET-01` — production call sites
+  of `auth.Declare` / `RouteDecl` / `EventRouter.AddHandler` have been
+  fully migrated to `auth.Mount` / `AddContractHandler`. To keep the
+  enormous test-surface compiling, round 4 left `auth.Declare` /
+  `RouteDecl` and `eventrouter.Router.AddHandler` /
+  `cell.EventRouter.AddHandler` as legacy-test compat shims (each
+  marked `Deprecated-for-new-code` in godoc). This PR-A11-TESTMIGRATE
+  sweep rewrites the remaining ~60 test files to use the new APIs,
+  then deletes the shims for good. Tracked separately so review
+  fatigue does not block the substantive round-4 changes.
+- `PR-A11-SEC HTTP-SPAN-ERROR-REDACT-01` — the HTTP-side span does not
+  currently call `span.RecordError`; it classifies via status_code
+  only. Once request-level error attribution lands (planned: attach
+  handler errors to the span), wire `middleware.Tracing` with a
+  matching `WithErrorRedactor` hook so the F5 scrub rule also covers
+  the HTTP side. Default redactor is identity, deferred to the OTel
+  exporter / span processor pipeline.
+
+`PR-A11-B` (consumer WrapConsumer wiring) landed in round 3.
+`PR-A11-V` (FMT-17 cross-check) landed as FMT-18 in round 4.
+`PR-A11-R1` (no-package-state lint) landed as FMT-19 in round 4.
+`PR-A11-S` (slog contract_id) landed in round 4.
 
 ## References
 

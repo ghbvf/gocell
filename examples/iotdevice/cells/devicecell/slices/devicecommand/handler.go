@@ -6,10 +6,28 @@ import (
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Contract specs — examples not backed by contracts/ YAML; used solely for
+// Mount registration shape.
+var (
+	specCommandEnqueue = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.commands.enqueue.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/devices/{id}/commands",
+	}
+	specCommandList = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.commands.list.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/devices/{id}/commands",
+	}
+	specCommandAck = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.commands.ack.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/devices/{id}/commands/{cmdId}/ack",
+	}
 )
 
 // commandResponse is the public DTO for a kernel command.Entry, isolating
@@ -52,30 +70,14 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// RegisterRoutes registers device-command routes on the given mux.
-// No route-level policy is declared; pre-F3 devicecell had no policy
-// wrapping. Deployments that want authz should wire WithAuthDiscovery()
-// and add a Policy field or rely on AuthMiddleware's baseline JWT check.
-// Hardening devicecell authz is out of scope for the F3 migration.
+// RegisterRoutes registers device-command routes on the given mux. DEMO
+// MODE: no route-level policy — pre-F3 devicecell had no policy wrapping.
+// Deployments wanting authz wire WithAuthDiscovery() and add a Policy or
+// rely on AuthMiddleware's baseline JWT check.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	// DEMO MODE: no auth policy; see Handler godoc.
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/{id}/commands",
-		Handler: http.HandlerFunc(h.HandleEnqueue),
-	})
-	// DEMO MODE: no auth policy; see Handler godoc.
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/{id}/commands",
-		Handler: http.HandlerFunc(h.HandleListPending),
-	})
-	// DEMO MODE: no auth policy; see Handler godoc.
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/{id}/commands/{cmdId}/ack",
-		Handler: http.HandlerFunc(h.HandleAck),
-	})
+	auth.Mount(mux, auth.Route{Contract: specCommandEnqueue, Handler: http.HandlerFunc(h.HandleEnqueue)})
+	auth.Mount(mux, auth.Route{Contract: specCommandList, Handler: http.HandlerFunc(h.HandleListPending)})
+	auth.Mount(mux, auth.Route{Contract: specCommandAck, Handler: http.HandlerFunc(h.HandleAck)})
 }
 
 // enqueueRequest is the JSON body for POST /api/v1/devices/{id}/commands.

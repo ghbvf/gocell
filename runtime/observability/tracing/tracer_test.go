@@ -2,6 +2,8 @@ package tracing
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -107,4 +109,23 @@ func TestSpanSetName_GracefullyIgnoresNonRenamerSpans(t *testing.T) {
 	span := &staticSpan{name: "original"}
 	assert.NotPanics(t, func() { SpanSetName(span, "other") })
 	assert.Equal(t, "original", span.name, "static span must not be renamed")
+}
+
+func TestSimpleSpan_ConcurrentMutationSafe(t *testing.T) {
+	tracer := NewTracer("test")
+	_, span := tracer.Start(t.Context(), "op")
+	defer span.End()
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			span.SetAttributes(Attr{Key: "attempt", Value: int64(i)})
+			span.RecordError(fmt.Errorf("err-%d", i))
+			span.SetStatus(wrapper.StatusError, fmt.Sprintf("status-%d", i))
+			SpanSetName(span, fmt.Sprintf("op-%d", i))
+		}(i)
+	}
+	wg.Wait()
 }

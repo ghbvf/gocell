@@ -434,31 +434,44 @@ func TestTracing_NilPublicEndpointFn_AllTrusted(t *testing.T) {
 		"nil publicEndpointFn must default to trusted upstream (backward compat)")
 }
 
-// TestTracing_SkipsWhenContractIDAlreadyInContext verifies A6-a: when a
-// contract span is already active (ContractID in ctx), the outer Tracing
-// middleware delegates to next without starting an additional span.
-// This prevents duplicate spans for contract-bound routes.
-func TestTracing_SkipsWhenContractIDAlreadyInContext(t *testing.T) {
+// TestTracing_SingleSpanOwnership verifies round-4 F1: the outer
+// middleware is the sole HTTP server span owner. kernel/wrapper.HTTPHandler
+// no longer creates an inner span — it only writes ctxkeys.ContractID +
+// pushes contract attrs into the shared AttrCarrier that this middleware
+// late-binds onto its one span. Exactly one span per request, always.
+func TestTracing_SingleSpanOwnership(t *testing.T) {
 	spy := &spyTracer{}
 
-	var innerCalled bool
 	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		innerCalled = true
+		// Simulate what kernel/wrapper.HTTPHandler does: append contract
+		// attrs to the AttrCarrier installed by the middleware. The
+		// middleware must late-bind these to its span after next returns.
+		if carrier, ok := wrapper.AttrCarrierFrom(r.Context()); ok {
+			carrier.Attrs = append(carrier.Attrs, wrapper.Attr{
+				Key: "gocell.contract.id", Value: "http.orders.get.v1",
+			})
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 
-	// Pre-set ContractID in the request context to simulate wrapper.HTTPHandler
-	// having already started a contract span before this middleware sees the request.
 	ctx := context.Background()
 	ctx = kernelctxkeys.WithContractID(ctx, "http.orders.get.v1")
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/1", nil).WithContext(ctx)
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	assert.True(t, innerCalled, "inner handler must still be called when skipping outer span")
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	// No span should have been created by the outer Tracing middleware.
+	// Exactly one span regardless of whether ContractID was already in ctx
+	// before this middleware (the skip logic that caused double-counting
+	// was removed in round-4).
 	spans := spy.Spans()
-	assert.Empty(t, spans, "Tracing must not create a span when ContractID is already in ctx")
+	require.Len(t, spans, 1, "Tracing must be the single HTTP span owner")
+
+	// The carrier-contributed attr must land on the span post-routing.
+	spans[0].mu.Lock()
+	gotContractID := spans[0].attrs["gocell.contract.id"]
+	spans[0].mu.Unlock()
+	assert.Equal(t, "http.orders.get.v1", gotContractID,
+		"contract attrs must late-bind onto the single span")
 }

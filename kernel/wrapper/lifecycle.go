@@ -2,26 +2,36 @@ package wrapper
 
 import "fmt"
 
-// recoverAndFinish is the shared span-teardown helper for HTTPHandler and
-// WrapConsumer. It must be called from within a deferred closure so that
-// recover() captures the in-flight panic.
+// recoverAndFinishWithRedactor is the shared span-teardown helper for
+// WrapConsumer's panic path. It must be called from within a deferred
+// closure so that recover() captures the in-flight panic.
 //
 // Behaviour:
 //   - rec == nil  → no-op (normal path; caller is responsible for span.End).
-//   - rec != nil  → SetStatus(Error, "panic") + RecordError + span.End + re-panic.
+//   - rec != nil  → SetStatus(Error, "panic") + RecordError(redact(err))
+//   - span.End + re-panic.
 //
 // Re-panicking preserves the original stack for outer Recovery middleware /
 // runSubscribe goroutine supervisors.
-func recoverAndFinish(span Span, rec any) {
+//
+// redact applies the caller's ErrorRedactor to whatever error surface the
+// panic produced (err-typed panic → err; any other value → wrapped via
+// fmt.Errorf). Pass identityRedactor when redaction is disabled.
+func recoverAndFinishWithRedactor(span Span, rec any, redact ErrorRedactor) {
 	if rec == nil {
 		return
 	}
 	span.SetStatus(StatusError, "panic")
-	if err, ok := rec.(error); ok {
-		span.RecordError(err)
+	var err error
+	if e, ok := rec.(error); ok {
+		err = e
 	} else {
-		span.RecordError(fmt.Errorf("panic: %v", rec))
+		err = fmt.Errorf("panic: %v", rec)
 	}
+	if redact == nil {
+		redact = identityRedactor
+	}
+	span.RecordError(redact(err))
 	span.End()
 	panic(rec)
 }

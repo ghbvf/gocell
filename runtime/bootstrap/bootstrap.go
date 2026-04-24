@@ -25,6 +25,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -143,14 +144,12 @@ func WithRouterOptions(opts ...router.Option) Option {
 	}
 }
 
-// WithTracer enables distributed tracing. The tracer is forwarded in three
-// places: router.WithTracer (outer HTTP request span middleware),
-// eventrouter.WithTracer (consumer-side wrapper.WrapConsumer span), and
-// stored on Bootstrap.wrapperTracer for future contract-aware construction
-// sites to read. Without this option, both wrapper.HTTPHandler and
-// wrapper.WrapConsumer fall back to wrapper.NoopTracer{} (nil tracer path);
-// a slog.Warn is emitted at bootstrap time so ops notice the silent
-// degrade.
+// WithTracer enables distributed tracing. The tracer is forwarded to
+// router.WithTracer (the single HTTP request span owner) and stored on
+// Bootstrap.wrapperTracer so eventrouter.ContractTracingMiddleware can create
+// consumer-side wrapper.WrapConsumer spans. Without this option, HTTP tracing
+// is disabled and WrapConsumer falls back to wrapper.NoopTracer{}; a slog.Warn
+// is emitted at bootstrap time so ops notice the silent degrade.
 //
 // ref: go-zero — observability configuration at app level
 func WithTracer(t tracing.Tracer) Option {
@@ -449,6 +448,24 @@ func WithEventRouterReadyTimeout(d time.Duration) Option {
 	}
 }
 
+// WithErrorRedactor installs a wrapper.ErrorRedactor that scrubs error text
+// before it reaches span.RecordError on consumer-side CONSUME spans. A nil
+// fn disables redaction (identity semantics). The redactor is forwarded to
+// eventrouter.WithErrorRedactor and is propagated to every
+// wrapper.WrapConsumer invocation via AddContractHandler.
+//
+// Use when strict source-side sanitisation is required (regulated
+// environments); otherwise leave unset and let the OTel span processor /
+// exporter filter handle scrubbing at export time (see backlog
+// PR-A11-SEC).
+func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
+	return func(b *Bootstrap) {
+		if fn != nil {
+			b.errorRedactor = fn
+		}
+	}
+}
+
 // WithConsumerMiddleware registers subscriber-side middleware applied to every
 // topic handler before it is passed to the underlying Subscriber.Subscribe call.
 // Middleware is applied in registration order; each entry wraps the next, so the
@@ -663,6 +680,10 @@ type Bootstrap struct {
 	// wrapper.WrapConsumer each fall back to wrapper.NoopTracer{} at call
 	// time, and phase1 logs a slog.Warn so missing tracer wiring surfaces.
 	wrapperTracer tracing.Tracer
+
+	// errorRedactor (set via WithErrorRedactor) sanitises error text before
+	// it reaches span.RecordError on consumer spans. nil → identity.
+	errorRedactor wrapper.ErrorRedactor
 }
 
 // New creates a Bootstrap with the given options.

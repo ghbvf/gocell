@@ -77,6 +77,10 @@ func TestTracer_StartCreatesSpan(t *testing.T) {
 	spanID, ok := ctxkeys.SpanIDFrom(ctx)
 	require.True(t, ok)
 	assert.Equal(t, sSpan, spanID)
+
+	traceParent, ok := ctxkeys.TraceParentFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "00-"+sTrace+"-"+sSpan+"-01", traceParent)
 }
 
 func TestTracer_SetAttribute(t *testing.T) {
@@ -106,10 +110,9 @@ func TestTracer_SetAttribute(t *testing.T) {
 		got[string(kv.Key)] = kv.Value.Emit()
 	}
 
-	// A6-d: []byte must emit as readable UTF-8, not fmt.Sprint's decimal
-	// byte-slice form ("[98 121 116 101 115]").
-	assert.Equal(t, "bytes", got["bytes_key"],
-		"[]byte attributes must emit as UTF-8 string, got %q", got["bytes_key"])
+	assert.Equal(t, "[redacted bytes len=5 sha256=277089d91c0bdf4f]", got["bytes_key"],
+		"[]byte attributes must never export raw payload bytes")
+	assert.NotEqual(t, "bytes", got["bytes_key"])
 	// fallback_key (unknown type) still flows through fmt.Sprint.
 	assert.Equal(t, "{1}", got["fallback_key"])
 	assert.Equal(t, "value", got["str_key"])
@@ -163,6 +166,31 @@ func TestTracer_StartContinuesRemoteParent(t *testing.T) {
 	spanID, ok := ctxkeys.SpanIDFrom(ctx)
 	require.True(t, ok)
 	assert.Equal(t, sSpan, spanID)
+}
+
+func TestTracer_StartContinuesTraceParentFromCtxkeys(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	parentTraceID := mustTraceID(t, "4bf92f3577b34da6a3ce929d0e0e4736")
+	parentSpanID := mustSpanID(t, "00f067aa0ba902b7")
+	ctx := ctxkeys.WithTraceParent(context.Background(),
+		"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+
+	ctx, span := tracer.Start(ctx, "consumer")
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, parentTraceID.String(), spans[0].SpanContext.TraceID().String())
+	assert.Equal(t, parentSpanID.String(), spans[0].Parent.SpanID().String())
+	assert.NotEqual(t, parentSpanID.String(), spans[0].SpanContext.SpanID().String())
+
+	traceID, ok := ctxkeys.TraceIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, parentTraceID.String(), traceID)
+
+	spanID, ok := ctxkeys.SpanIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, spans[0].SpanContext.SpanID().String(), spanID)
 }
 
 // TestTracer_IngressPropagation_OTel proves the full HTTP ingress path:

@@ -43,6 +43,24 @@ func TestTraceIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestTraceParentRoundTrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "w3c traceparent", value: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"},
+		{name: "empty string", value: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithTraceParent(context.Background(), tt.value)
+			got, ok := TraceParentFrom(ctx)
+			assert.True(t, ok)
+			assert.Equal(t, tt.value, got)
+		})
+	}
+}
+
 func TestSpanIDRoundTrip(t *testing.T) {
 	tests := []struct {
 		name  string
@@ -107,6 +125,7 @@ func TestFromMissingKey(t *testing.T) {
 	}{
 		{name: "CorrelationID missing", fn: CorrelationIDFrom},
 		{name: "TraceID missing", fn: TraceIDFrom},
+		{name: "TraceParent missing", fn: TraceParentFrom},
 		{name: "SpanID missing", fn: SpanIDFrom},
 		{name: "RequestID missing", fn: RequestIDFrom},
 		{name: "RealIP missing", fn: RealIPFrom},
@@ -125,6 +144,7 @@ func TestMultipleKeysInSameContext(t *testing.T) {
 	ctx := context.Background()
 	ctx = WithCorrelationID(ctx, "corr-123")
 	ctx = WithTraceID(ctx, "trace-abc")
+	ctx = WithTraceParent(ctx, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
 	ctx = WithSpanID(ctx, "span-xyz")
 	ctx = WithRequestID(ctx, "req-001")
 	ctx = WithRealIP(ctx, "10.0.0.1")
@@ -136,6 +156,10 @@ func TestMultipleKeysInSameContext(t *testing.T) {
 	traceID, ok := TraceIDFrom(ctx)
 	assert.True(t, ok)
 	assert.Equal(t, "trace-abc", traceID)
+
+	traceParent, ok := TraceParentFrom(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
 
 	spanID, ok := SpanIDFrom(ctx)
 	assert.True(t, ok)

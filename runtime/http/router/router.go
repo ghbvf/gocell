@@ -18,7 +18,6 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -30,8 +29,6 @@ import (
 // Compile-time checks.
 var _ kcell.RouteMux = (*Router)(nil)
 var _ kcell.AuthRouteDeclarer = (*Router)(nil)
-var _ wrapper.TracerCarrier = (*Router)(nil)
-var _ wrapper.TracerCarrier = (*chiRouterAdapter)(nil)
 
 // Option configures a Router.
 type Option func(*Router)
@@ -270,11 +267,9 @@ type Router struct {
 	healthHandler    *health.Handler
 	metricsCollector metrics.Collector
 	metricsHandler   http.Handler
-	// tracer is typed as tracing.Tracer (which is a type alias of
-	// wrapper.Tracer per ADR-KERNEL-WRAPPER-CONTRACT-OBS-01 §1). Exposed
-	// via WrapperTracer() to satisfy wrapper.TracerCarrier so auth.Mount
-	// on this Router / its nested chiRouterAdapter can pull the tracer
-	// when wrapping contract-bound routes.
+	// tracer is used by the outer middleware.Tracing — the single request
+	// span owner (round-4 F1). It is typed as tracing.Tracer (type alias of
+	// wrapper.Tracer per ADR §1).
 	tracer                     tracing.Tracer
 	tracingOpts                []middleware.TracingOption
 	requestIDOpts              []middleware.RequestIDOption
@@ -462,7 +457,17 @@ func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
 	}
 	// Prepend so user-supplied TracingOptions / RequestIDOptions can still
 	// override (last-write-wins semantics for those slices).
-	r.tracingOpts = append([]middleware.TracingOption{middleware.WithPublicEndpointFn(lazyPublic)}, r.tracingOpts...)
+	// DefaultProbeFilter is pre-pended so /healthz, /readyz, /livez, /metrics
+	// bypass span creation at the outer mux — the one place these infra
+	// endpoints actually traverse (wrapper.HTTPHandler would never see them
+	// because they are not registered through auth.Mount).
+	r.tracingOpts = append(
+		[]middleware.TracingOption{
+			middleware.WithProbeFilter(middleware.DefaultProbeFilter),
+			middleware.WithPublicEndpointFn(lazyPublic),
+		},
+		r.tracingOpts...,
+	)
 	r.requestIDOpts = append([]middleware.RequestIDOption{middleware.WithReqIDPublicEndpointFn(lazyPublic)}, r.requestIDOpts...)
 
 	r.outerMux.Use(
@@ -621,7 +626,7 @@ func (r *Router) Handle(pattern string, handler http.Handler) {
 // Route("/internal/v1/...") to scope onto the internal mux.
 func (r *Router) Group(fn func(kcell.RouteMux)) {
 	r.publicMux.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, declarer: r, tracer: r.tracer}
+		sub := &chiRouterAdapter{cr: cr, declarer: r}
 		fn(sub)
 	})
 }
@@ -634,7 +639,7 @@ func (r *Router) Group(fn func(kcell.RouteMux)) {
 // mux chosen at the top level.
 func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
 	r.pickMux(pattern).Route(pattern, func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r, tracer: r.tracer}
+		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r}
 		fn(sub)
 	})
 }
@@ -651,16 +656,7 @@ func (r *Router) Mount(prefix string, handler http.Handler) {
 // returned adapter inherits the public mux; use Route("/internal/v1/...").With
 // if middleware should scope onto the internal mux.
 func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: r.publicMux.With(mw...), declarer: r, tracer: r.tracer}
-}
-
-// WrapperTracer implements wrapper.TracerCarrier so auth.Mount (and any
-// future contract-aware registration helper) can pull the runtime-owned
-// Tracer without reaching into package-level globals. Returns nil when no
-// WithTracer option was applied; callers fall back to wrapper.NoopTracer{}
-// via wrapper.TracerFromCarrier.
-func (r *Router) WrapperTracer() wrapper.Tracer {
-	return r.tracer
+	return &chiRouterAdapter{cr: r.publicMux.With(mw...), declarer: r}
 }
 
 // ServeHTTP delegates to PublicHandler so the Router stays drop-in for code
@@ -946,26 +942,29 @@ func orMergeMethodPath(a, b func(method, urlPath string) bool) func(string, stri
 
 // chiRouterAdapter wraps chi.Router to implement cell.RouteMux. prefix is the
 // mount prefix the adapter inherited from its parent Route; declarer points to
-// the Router-rooted AuthRouteDeclarer so nested auth.Declare calls propagate
+// the Router-rooted AuthRouteDeclarer so nested auth.Mount calls propagate
 // metadata with the fully-composed path.
+//
+// After round-4, this adapter does NOT carry a tracer — auth.Mount no longer
+// needs tracer injection because wrapper.HTTPHandler does not create spans;
+// the outer middleware.Tracing is the single HTTP span owner and holds its
+// own tracer via Router.tracer.
 type chiRouterAdapter struct {
 	cr       chi.Router
 	prefix   string
 	declarer kcell.AuthRouteDeclarer
-	// tracer is snapshot-copied from the parent Router at sub-mux
-	// construction time (Route / Group / With each propagate it into the
-	// new adapter). Router.WithTracer MUST therefore be applied before any
-	// Route/Group/With call — options run during New(), and nested
-	// adapters are only created on demand after, so this invariant holds
-	// for all supported construction orders today. If a future refactor
-	// ever allows post-construction tracer mutation on Router, this field
-	// would need to be re-read lazily rather than snapshotted.
-	tracer wrapper.Tracer
 }
 
-// Compile-time check: chiRouterAdapter forwards AuthRouteMeta so Cells that
-// declare routes under mux.Route("/api/v1", ...) reach the top-level Router.
+// Compile-time checks: chiRouterAdapter forwards AuthRouteMeta + declares
+// its mount prefix so auth.Mount can derive chi-relative registration paths
+// from fully-qualified Contract.Path literals.
 var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
+var _ kcell.PrefixedMux = (*chiRouterAdapter)(nil)
+
+// Prefix returns the sub-route mount prefix this adapter inherited from
+// its parent Route. An empty prefix means the adapter sits directly under
+// the Router (Group / top-level) and contributes no path composition.
+func (a *chiRouterAdapter) Prefix() string { return a.prefix }
 
 func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
 	a.guardNestedInternalRegistration("Handle", pattern)
@@ -979,7 +978,6 @@ func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 			cr:       cr,
 			prefix:   joinPrefix(a.prefix, pattern),
 			declarer: a.declarer,
-			tracer:   a.tracer,
 		}
 		fn(sub)
 	})
@@ -1017,20 +1015,13 @@ func (a *chiRouterAdapter) guardNestedInternalRegistration(op, pattern string) {
 
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {
 	a.cr.Group(func(cr chi.Router) {
-		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer, tracer: a.tracer}
+		sub := &chiRouterAdapter{cr: cr, prefix: a.prefix, declarer: a.declarer}
 		fn(sub)
 	})
 }
 
 func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer, tracer: a.tracer}
-}
-
-// WrapperTracer implements wrapper.TracerCarrier so auth.Mount pulls the
-// Router-rooted Tracer when registering a contract-bound route on a nested
-// sub-mux (Route / Group / With adapters inherit the parent's tracer).
-func (a *chiRouterAdapter) WrapperTracer() wrapper.Tracer {
-	return a.tracer
+	return &chiRouterAdapter{cr: a.cr.With(mw...), prefix: a.prefix, declarer: a.declarer}
 }
 
 // DeclareAuthMeta composes the adapter's mount prefix with the declared path

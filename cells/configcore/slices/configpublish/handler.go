@@ -7,8 +7,22 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Contract spec literals — cross-checked against
+// contracts/http/config/{publish,rollback}/v1/contract.yaml by FMT-18.
+var (
+	specConfigPublish = wrapper.ContractSpec{
+		ID: "http.config.publish.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/config/{key}/publish",
+	}
+	specConfigRollback = wrapper.ContractSpec{
+		ID: "http.config.rollback.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/config/{key}/rollback",
+	}
 )
 
 // ConfigVersionResponse is the public DTO for ConfigVersion.
@@ -48,22 +62,18 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// RegisterRoutes registers configpublish routes with admin-only policies on
-// any cell.RouteHandler (satisfied by both *http.ServeMux and cell.RouteMux)
-// so production wiring, contract tests, and cell-level integration tests
-// share the same auth.Declare declarations.
+// RegisterRoutes registers configpublish routes with admin-only policies
+// via auth.Mount so every request emits a contract-tagged span.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/{key}/publish",
-		Handler: http.HandlerFunc(h.HandlePublish),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specConfigPublish,
+		Handler:  http.HandlerFunc(h.HandlePublish),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/{key}/rollback",
-		Handler: http.HandlerFunc(h.HandleRollback),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specConfigRollback,
+		Handler:  http.HandlerFunc(h.HandleRollback),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
 }
 

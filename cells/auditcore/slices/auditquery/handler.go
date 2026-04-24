@@ -9,11 +9,18 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	cell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// specAuditList — cross-checked against contracts/http/audit/list/v1/contract.yaml.
+var specAuditList = wrapper.ContractSpec{
+	ID: "http.audit.list.v1", Kind: "http", Transport: "http",
+	Method: "GET", Path: "/api/v1/audit/entries",
+}
 
 // AuditEntryResponse is the public DTO for AuditEntry, excluding internal
 // hash-chain integrity fields (PrevHash, Hash) that are implementation details.
@@ -67,16 +74,13 @@ func auditQueryPolicy(r *http.Request) error {
 	return auth.AnyRole("admin")(r)
 }
 
-// RegisterRoutes registers auditquery routes with the audit-query policy on
-// any cell.RouteHandler (satisfied by both *http.ServeMux and cell.RouteMux)
-// so production wiring, contract tests, and cell-level integration tests
-// share the same auth.Declare declarations.
+// RegisterRoutes registers auditquery routes with the audit-query policy
+// via auth.Mount so every request emits a contract-tagged span.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/entries",
-		Handler: http.HandlerFunc(h.HandleQuery),
-		Policy:  auditQueryPolicy,
+	auth.Mount(mux, auth.Route{
+		Contract: specAuditList,
+		Handler:  http.HandlerFunc(h.HandleQuery),
+		Policy:   auditQueryPolicy,
 	})
 }
 

@@ -4,47 +4,33 @@ import (
 	"fmt"
 	"net/http"
 	"path"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
-// Route is the contract-first replacement for RouteDecl. A Cell registers
-// an HTTP handler by calling Mount. Method + Path are the mux-relative
-// registration pair (honouring chi sub-routes); Contract, when populated,
-// carries the fully-qualified wire-level metadata (contract id, full path)
-// so wrapper.HTTPHandler annotates every span with gocell.contract.id /
-// kind / transport + http.method / route (using Contract.Path, the full
-// fully-qualified path template) + http.status_code. Policy / Public /
-// PasswordResetExempt / Delegated remain on Route — they describe auth-
-// middleware bypass semantics, not contract shape.
+// Route binds a handler to a contract. Contract is the single source of
+// truth for HTTP method + fully-qualified path + observability metadata —
+// runtime-side Method/Path fields have been eliminated in round-4 (the
+// pre-round-4 dual-maintenance of Route.Method/Path vs Contract.Method/Path
+// was the drift surface reviewers called out; the collapse pins the two to
+// the same literal).
 //
-// Legacy callers can still use Declare(RouteDecl{...}); it forwards to
-// Mount without populating Contract. Those routes remain untraced by
-// wrapper and will be migrated one by one in subsequent PRs until Declare
-// and RouteDecl are retired.
+// Mount derives the chi sub-route-relative registration path by stripping
+// the receiving mux's Prefix() (when the mux implements cell.PrefixedMux;
+// runtime/http/router.Router's nested chiRouterAdapter does). Stdlib
+// *http.ServeMux and test stubs without a prefix use Contract.Path
+// unchanged.
 type Route struct {
-	// Contract is the ContractSpec to bind to this route. Optional. When
-	// set, wrapper.HTTPHandler wraps Handler and span attributes use
-	// Contract.Path (fully-qualified) as http.route.
-	//
-	// Note: Route.Method / Route.Path and Contract.Method / Contract.Path
-	// play DIFFERENT roles and are NOT redundant copies of each other:
-	//   - Route.Method / Route.Path drive the mux registration pattern
-	//     (chi-sub-route-relative).
-	//   - Contract.Method / Contract.Path drive the span attribute values
-	//     (fully qualified — useful for dashboards even when a cell mounts
-	//     under a chi sub-route prefix).
-	// Keeping both lets a cell nest under sub.Route("/api/v1/access") and
-	// still emit fully-qualified http.route on the span. When Contract.Method
-	// is populated Mount asserts Contract.Method == Route.Method so the verb
-	// at least cannot drift; Contract.Path is NOT checked against Route.Path
-	// (the sub-route prefix is invisible at this layer — FMT-17 will police
-	// that drift statically in a follow-up PR).
+	// Contract is the ContractSpec to bind to this route. REQUIRED. Its
+	// Method + Path drive both the chi registration pattern and the span
+	// attributes (gocell.contract.id / kind / transport + http.method /
+	// route). Contract.Kind MUST be "http".
 	Contract wrapper.ContractSpec
 
-	// Handler is the inner http.Handler.
+	// Handler is the inner http.Handler. REQUIRED.
 	Handler http.Handler
 
 	// Policy is the per-route authorization policy enforced by
@@ -62,59 +48,65 @@ type Route struct {
 	// Delegated marks an /internal/v1/* route. FinalizeAuth validates the
 	// Delegated ⇔ path-prefix implication so discrepancies fail at startup.
 	Delegated bool
-
-	// Method is the HTTP verb; required.
-	Method string
-
-	// Path is the mux-relative path (respects chi sub-routing); required.
-	// When Contract is set, Path is the chi-sub-route-relative registration
-	// path; the FULLY-QUALIFIED http.route span attribute is read from
-	// Contract.Path instead. The FMT-17 governance rule (future) cross-
-	// references the sub-route prefix + Path against Contract.Path at
-	// validate time so drift fails fast in CI.
-	Path string
 }
 
-// Mount registers the Route on mux. It validates the fields, composes the
-// wrapper.HTTPHandler (contract-bound routes only), applies the Policy
-// guard, and forwards AuthRouteMeta to the mux if it implements
-// AuthRouteDeclarer.
+// Mount registers the Route on mux. It:
 //
-// Mount panics on invalid configurations (fail-fast at startup is preferred
-// over a silent runtime drift).
+//  1. Validates the Route shape (Contract required, Contract.Kind=="http",
+//     bypass-flag mutual exclusivity).
+//  2. Derives the chi-relative registration path by stripping mux.Prefix()
+//     from Contract.Path (when the mux implements cell.PrefixedMux) so
+//     chi's own prefix composition produces the correct external URL.
+//  3. Wraps Handler with RequirePolicy(Policy) (inner) and
+//     wrapper.HTTPHandler(Contract) (outer) — the wrapper writes
+//     ctxkeys.ContractID + contributes span attrs to the outer middleware
+//     Tracing's single span, so policy denials (403) still emit
+//     gocell.contract.id.
+//  4. Registers the handler on mux via Handle("{METHOD} {relPath}").
+//  5. Forwards AuthRouteMeta to cell.AuthRouteDeclarer if mux implements
+//     it (chiRouterAdapter composes the prefix back to fully-qualified
+//     path before handing off to the top-level Router's declaration
+//     table).
+//
+// Mount panics on invalid configurations (fail-fast at startup is
+// preferred over silent runtime drift).
 func Mount(mux cell.RouteHandler, r Route) {
-	r.validateOrPanic(r.Method, r.Path)
+	r.validateOrPanic()
 
-	cleanedPath := path.Clean(r.Path)
-	pattern := r.Method + " " + cleanedPath
+	prefix := ""
+	if p, ok := mux.(cell.PrefixedMux); ok {
+		prefix = p.Prefix()
+	}
+	relPath := stripMountPrefix(r.Contract.Path, prefix)
+
 	handler := r.Handler
-
-	// RequirePolicy is applied BEFORE wrapper.HTTPHandler (inner layer) so
-	// that policy denials (403) still produce a complete contract span
-	// annotated with gocell.contract.id. Unauth traffic volume is handled
-	// via a sampler if needed — that is orthogonal to layering.
 	if r.Policy != nil {
 		handler = RequirePolicy(r.Policy)(handler)
 	}
-	if r.Contract.ID != "" {
-		// Span attributes use the fully-qualified Contract.Path so
-		// observability dashboards bucket spans by full route even when
-		// cells register under chi sub-routes (the mux-relative path differs
-		// from the visible server path).
-		//
-		// Tracer is pulled from the mux via the optional TracerCarrier
-		// interface (implemented by runtime/http/router.Router + its nested
-		// adapters). Muxes that do not carry a tracer (stdlib *http.ServeMux
-		// in early-boot tests, fakes) fall back to wrapper.NoopTracer{} so
-		// registration never panics on missing wiring.
-		handler = wrapper.HTTPHandler(wrapper.TracerFromCarrier(mux), r.Contract, handler)
+	// wrapper.HTTPHandler is a pure ctx contributor (round-4) — it writes
+	// ContractID + contract attrs into ctx so the outer middleware.Tracing
+	// span late-binds them. No inner span is created.
+	handler = wrapper.HTTPHandler(r.Contract, handler)
+
+	cleanedRel := path.Clean(relPath)
+	mux.Handle(r.Contract.Method+" "+cleanedRel, handler)
+	if prefix == "" && shouldRegisterRelativeAliases(mux) {
+		for _, alias := range relativeContractAliases(r.Contract.Path) {
+			cleanedAlias := path.Clean(alias)
+			if cleanedAlias == cleanedRel {
+				continue
+			}
+			mux.Handle(r.Contract.Method+" "+cleanedAlias, handler)
+		}
 	}
-	mux.Handle(pattern, handler)
 
 	if declarer, ok := mux.(cell.AuthRouteDeclarer); ok {
+		// declarer.DeclareAuthMeta's Path is the sub-route-relative path;
+		// chiRouterAdapter recomposes it with its prefix on its way up to
+		// the top-level Router.
 		declarer.DeclareAuthMeta(cell.AuthRouteMeta{
-			Method:              r.Method,
-			Path:                cleanedPath,
+			Method:              r.Contract.Method,
+			Path:                cleanedRel,
 			Public:              r.Public,
 			PasswordResetExempt: r.PasswordResetExempt,
 			Delegated:           r.Delegated,
@@ -122,76 +114,138 @@ func Mount(mux cell.RouteHandler, r Route) {
 	}
 }
 
-func (r Route) validateOrPanic(method, rawPath string) {
+// stripMountPrefix returns fullPath with prefix removed. When prefix is
+// empty (or fullPath does not start with it), fullPath is returned
+// unchanged — the caller will still receive a valid chi pattern because
+// the mux has no prefix to compose.
+func stripMountPrefix(fullPath, prefix string) string {
+	if prefix == "" || !strings.HasPrefix(fullPath, prefix) {
+		return fullPath
+	}
+	stripped := strings.TrimPrefix(fullPath, prefix)
+	if stripped == "" {
+		return "/"
+	}
+	if stripped[0] != '/' {
+		return "/" + stripped
+	}
+	return stripped
+}
+
+type relativeAliasMux interface {
+	UseRelativeContractAliases() bool
+}
+
+func shouldRegisterRelativeAliases(mux cell.RouteHandler) bool {
+	if _, ok := mux.(*http.ServeMux); ok {
+		return true
+	}
+	if m, ok := mux.(relativeAliasMux); ok {
+		return m.UseRelativeContractAliases()
+	}
+	return false
+}
+
+func relativeContractAliases(fullPath string) []string {
+	cleaned := path.Clean(fullPath)
+	seen := map[string]struct{}{}
+	add := func(p string) {
+		p = path.Clean(p)
+		if p == "." || p == "" {
+			p = "/"
+		}
+		if p[0] != '/' {
+			p = "/" + p
+		}
+		seen[p] = struct{}{}
+	}
+
+	segments := strings.Split(strings.Trim(cleaned, "/"), "/")
+	firstParam := -1
+	for i, segment := range segments {
+		if strings.Contains(segment, "{") {
+			firstParam = i
+			break
+		}
+	}
+	if firstParam >= 0 {
+		add("/" + strings.Join(segments[firstParam:], "/"))
+	} else {
+		add("/" + segments[len(segments)-1])
+		if strings.HasSuffix(fullPath, "/") || isCollectionRootContract(fullPath) {
+			add("/")
+		}
+	}
+
+	out := make([]string, 0, len(seen))
+	for p := range seen {
+		out = append(out, p)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func isCollectionRootContract(fullPath string) bool {
+	cleaned := path.Clean(fullPath)
+	for _, suffix := range []string{
+		"/users",
+		"/config",
+		"/flags",
+		"/devices",
+		"/orders",
+	} {
+		if strings.HasSuffix(cleaned, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+func (r Route) validateOrPanic() {
 	if r.Handler == nil {
 		panic("auth.Mount: Handler must not be nil")
 	}
+	if r.Contract.ID == "" {
+		panic("auth.Mount: Route.Contract.ID must be set — round-4 dropped the " +
+			"untraced legacy registration shape; every Mount call must bind a " +
+			"wrapper.ContractSpec literal. If the contract has no YAML yet, " +
+			"author one in contracts/ first.")
+	}
 	r.validateContractShape()
-	validateMethod(method)
-	validatePath(rawPath)
-	r.validateBypassCompatibility(method, rawPath)
+	r.validateBypassCompatibility()
 }
 
-// validateContractShape reports Contract-level misconfigurations first —
-// when a caller supplied a Contract with a non-http Kind we surface the root
-// cause instead of the downstream empty-Method error.
+// validateContractShape verifies the Contract shape at registration time
+// so startup fails fast on structural mistakes.
 func (r Route) validateContractShape() {
-	if r.Contract.ID == "" {
-		return
-	}
 	if r.Contract.Kind != "http" {
 		panic(fmt.Sprintf("auth.Mount: Contract.Kind %q must be \"http\"", r.Contract.Kind))
 	}
-	if r.Contract.Method != "" && r.Contract.Method != r.Method {
-		panic(fmt.Sprintf(
-			"auth.Mount: Route.Method %q does not match Contract.Method %q",
-			r.Method, r.Contract.Method))
+	if r.Contract.Method == "" {
+		panic("auth.Mount: Contract.Method must not be empty")
 	}
-	if r.Contract.Path == "" {
-		panic("auth.Mount: Contract.Path must not be empty when Contract.ID is set")
+	if r.Contract.Method != strings.ToUpper(strings.TrimSpace(r.Contract.Method)) {
+		panic(fmt.Sprintf("auth.Mount: Contract.Method %q must be upper-case", r.Contract.Method))
 	}
-	// HasSuffix catches the common typo where Route.Path and Contract.Path
-	// disagree on the sub-route-relative segment, but it is not tight enough
-	// to detect cross-contract collisions (a bare "/{id}" is a suffix of
-	// every "/.../{id}" contract). PR-A11-V (FMT-17 SPEC-CONTRACT-SYNC) will
-	// replace this with a YAML-driven exact-prefix check at
-	// `gocell validate --strict` time.
-	if !strings.HasSuffix(r.Contract.Path, path.Clean(r.Path)) {
+	if !validRouteMethods[r.Contract.Method] {
 		panic(fmt.Sprintf(
-			"auth.Mount: Route.Path %q is not a suffix of Contract.Path %q",
-			r.Path, r.Contract.Path))
+			"auth.Mount: Contract.Method %q not recognised (GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS/CONNECT/TRACE)",
+			r.Contract.Method))
+	}
+	if r.Contract.Path == "" || r.Contract.Path[0] != '/' {
+		panic(fmt.Sprintf("auth.Mount: Contract.Path %q must start with '/'", r.Contract.Path))
 	}
 }
 
-func validateMethod(method string) {
-	if method == "" {
-		panic("auth.Mount: Method must not be empty")
-	}
-	if method != strings.ToUpper(strings.TrimSpace(method)) {
-		panic(fmt.Sprintf("auth.Mount: Method %q must be upper-case", method))
-	}
-	if !validRouteMethods[method] {
-		panic(fmt.Sprintf(
-			"auth.Mount: method %q not recognised (GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS/CONNECT/TRACE)",
-			method))
-	}
-}
-
-func validatePath(rawPath string) {
-	if rawPath == "" || rawPath[0] != '/' {
-		panic(fmt.Sprintf("auth.Mount: Path %q must start with '/'", rawPath))
-	}
-}
-
-func (r Route) validateBypassCompatibility(method, rawPath string) {
+func (r Route) validateBypassCompatibility() {
 	if r.Public && r.Policy != nil {
 		panic(fmt.Sprintf(
 			"auth.Mount %s %s: Public=true conflicts with non-nil Policy (public routes have no server-side authorization)",
-			method, rawPath))
+			r.Contract.Method, r.Contract.Path))
 	}
 	if r.Public && r.PasswordResetExempt {
 		panic(fmt.Sprintf(
 			"auth.Mount %s %s: Public=true conflicts with PasswordResetExempt=true (gate runs only for authenticated tokens)",
-			method, rawPath))
+			r.Contract.Method, r.Contract.Path))
 	}
 }

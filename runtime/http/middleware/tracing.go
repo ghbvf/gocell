@@ -3,7 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -13,6 +13,7 @@ type TracingOption func(*tracingConfig)
 
 type tracingConfig struct {
 	publicEndpointFn func(*http.Request) bool
+	skipFn           func(*http.Request) bool
 }
 
 // WithPublicEndpointFn sets a per-request function that determines whether an
@@ -23,6 +24,36 @@ type tracingConfig struct {
 // ref: otelhttp WithPublicEndpointFn — new root + trace.Link to remote context
 func WithPublicEndpointFn(fn func(*http.Request) bool) TracingOption {
 	return func(c *tracingConfig) { c.publicEndpointFn = fn }
+}
+
+// WithProbeFilter installs a predicate that, when true for a given request,
+// bypasses outer span creation entirely (the request is forwarded to next
+// without a span). Use for health/readiness/liveness probe paths and other
+// high-rate infra traffic where span volume is cost-prohibitive.
+//
+// Combine with DefaultProbeFilter to skip the canonical probe endpoints
+// (/healthz, /readyz, /livez, /metrics) that the Router registers directly
+// on the outer mux.
+//
+// ref: open-telemetry/opentelemetry-go-contrib otelhttp/config.go — Filter type.
+func WithProbeFilter(pred func(*http.Request) bool) TracingOption {
+	return func(c *tracingConfig) {
+		if pred != nil {
+			c.skipFn = pred
+		}
+	}
+}
+
+// DefaultProbeFilter skips the canonical infra probe endpoints. Matched
+// paths (exact): /healthz, /readyz, /livez, /metrics. Router.buildOuterMux
+// applies it by default so high-frequency probe traffic does not emit spans.
+func DefaultProbeFilter(r *http.Request) bool {
+	switch r.URL.Path {
+	case "/healthz", "/readyz", "/livez", "/metrics":
+		return true
+	default:
+		return false
+	}
 }
 
 // Tracing creates an HTTP middleware that starts a span for each request.
@@ -49,12 +80,22 @@ func WithPublicEndpointFn(fn func(*http.Request) bool) TracingOption {
 // context is recorded as linked attributes (linked.trace_id, linked.span_id).
 //
 // When a RecorderState exists in the context (created by the Recorder
-// middleware), Tracing reuses it. Otherwise it creates its own to
-// capture http.status_code as a standalone middleware.
+// middleware), Tracing reuses it. Otherwise it creates its own to capture
+// http.status_code as a standalone middleware.
 //
-// When a contract span is already active (ContractID present in context via
-// wrapper.HTTPHandler), the outer request span is skipped to prevent duplicate
-// spans for contract-bound routes.
+// Single-span ownership (round-4): Tracing is the single HTTP request span
+// owner. kernel/wrapper.HTTPHandler no longer creates an inner span — it
+// writes contract id + contract-derived attributes (gocell.contract.id /
+// kind / transport) into a shared AttrCarrier that Tracing installs in ctx
+// before calling next.ServeHTTP; after next returns, Tracing late-binds the
+// collected attributes onto its span. This means every contract-bound
+// request produces exactly one server span annotated with both http.route
+// and gocell.contract.* attributes — no duplicate counting in dashboards.
+//
+// Probe bypass: when skipFn (via WithProbeFilter) returns true, Tracing
+// skips span creation entirely. This replaces the earlier wrapper-level
+// DefaultProbeFilter that never fired in practice because probe routes are
+// registered on the outer mux and bypass wrapper.HTTPHandler entirely.
 func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) http.Handler {
 	var cfg tracingConfig
 	for _, o := range opts {
@@ -63,10 +104,7 @@ func Tracing(tracer tracing.Tracer, opts ...TracingOption) func(http.Handler) ht
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip outer span when a contract span covers this request.
-			// wrapper.HTTPHandler sets ContractID before calling next, so if it
-			// is present here, a contract span is already active.
-			if _, ok := ctxkeys.ContractIDFrom(r.Context()); ok {
+			if cfg.skipFn != nil && cfg.skipFn(r) {
 				next.ServeHTTP(w, r)
 				return
 			}
@@ -90,6 +128,12 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 		ctx = extractedCtx
 	}
 	// Public endpoint: ctx stays clean → tracer creates new root.
+
+	// Install an AttrCarrier so wrapper.HTTPHandler (if the request reaches
+	// a contract-bound route) can append gocell.contract.* attrs. Tracing
+	// drains the carrier after next.ServeHTTP returns.
+	carrier := &wrapper.AttrCarrier{}
+	ctx = wrapper.WithAttrCarrier(ctx, carrier)
 
 	// Start span with tentative name using raw path.
 	// After routing, the span is renamed to use the route pattern.
@@ -119,14 +163,20 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	tracing.SpanSetName(span, r.Method+" "+route)
 
 	status := state.Status()
-	// Emit http.status_code as int64 for cross-span type consistency —
-	// kernel/wrapper.HTTPHandler uses int64 on the inner contract span,
-	// and OTel collector pipelines that switch on attribute type must
-	// see the same type across sibling spans in one trace. (F-02)
+	// Emit http.status_code as int64 for cross-span type consistency with
+	// OTel collector pipelines that switch on attribute type.
 	span.SetAttributes(
 		tracing.Attr{Key: "http.route", Value: route},
 		tracing.Attr{Key: "http.status_code", Value: int64(status)},
 	)
+
+	// Late-bind contract attributes collected by wrapper.HTTPHandler on
+	// contract-bound routes. Empty on routes without a Contract — this is
+	// the migration fallback; once PR-A11-M retires auth.Declare, every
+	// route contributes contract attrs.
+	if len(carrier.Attrs) > 0 {
+		span.SetAttributes(carrier.Attrs...)
+	}
 
 	// 5xx → error span; 4xx and below → unset (otelhttp convention).
 	if status >= 500 {

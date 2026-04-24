@@ -54,43 +54,14 @@ type Tracer interface {
 	Start(ctx context.Context, spanName string, attrs ...Attr) (context.Context, Span)
 }
 
-// TracerCarrier is an optional interface implemented by runtime infrastructure
-// types (e.g. runtime/http/router.Router, runtime/eventrouter.Router) that
-// carry a per-instance Tracer. Callers such as runtime/auth.Mount type-assert
-// the mux/event-router to TracerCarrier at registration time to pull the
-// tracer before passing it to HTTPHandler / WrapConsumer.
+// NoopTracer is a zero-allocation Tracer. Used by WrapConsumer as the
+// fallback when no runtime tracer is wired (nil Tracer argument), and by
+// tests that exercise the wrapper path without an adapter dependency.
 //
-// Rationale: kernel/wrapper stays stateless — no package-level mutable tracer.
-// Ownership of the live Tracer lives in the runtime infrastructure that
-// observes traffic, so wiring is enforced at construction time (Router /
-// eventrouter.Router require the tracer from bootstrap). Intermediaries
-// (test fakes, stdlib *http.ServeMux) that do not implement TracerCarrier
-// cause callers to fall back to NoopTracer{} — spans silently degrade rather
-// than panic.
-type TracerCarrier interface {
-	// WrapperTracer returns the Tracer associated with this carrier. It MAY
-	// return nil; callers MUST treat nil as NoopTracer{}.
-	WrapperTracer() Tracer
-}
-
-// TracerFromCarrier returns the Tracer from c when c implements TracerCarrier
-// with a non-nil tracer; otherwise it returns NoopTracer{}. Use this helper
-// instead of a bare type assertion so the nil-tracer fallback stays consistent
-// across call sites.
-func TracerFromCarrier(c any) Tracer {
-	if tc, ok := c.(TracerCarrier); ok {
-		if tr := tc.WrapperTracer(); tr != nil {
-			return tr
-		}
-	}
-	return NoopTracer{}
-}
-
-// NoopTracer is a zero-allocation Tracer. Use it in tests that exercise the
-// wrapper path without an adapter dependency, or as the fallback when no
-// runtime tracer is wired — HTTPHandler / WrapConsumer substitute NoopTracer{}
-// for a nil Tracer argument so missing wiring degrades silently rather than
-// panicking.
+// HTTPHandler no longer creates spans (the outer HTTP Tracing middleware
+// owns the single request span), so it does not reference Tracer at all —
+// NoopTracer is only used on the consumer side (WrapConsumer) where the
+// event router is the span owner and bootstrap is the tracer injector.
 type NoopTracer struct{}
 
 // Compile-time: NoopTracer implements Tracer with a value receiver so zero
@@ -104,13 +75,15 @@ func (NoopTracer) Start(ctx context.Context, _ string, _ ...Attr) (context.Conte
 }
 
 // noopSpan is a shared singleton so Span method calls never allocate.
+// All methods are intentional no-ops: this is a zero-allocation do-nothing
+// span returned by NoopTracer when tracing is disabled.
 type noopSpan struct{}
 
-func (noopSpan) SetAttributes(_ ...Attr)          {}
-func (noopSpan) RecordError(_ error)              {}
-func (noopSpan) SetStatus(_ StatusCode, _ string) {}
-func (noopSpan) End()                             {}
-func (noopSpan) SetName(_ string)                 {}
+func (noopSpan) SetAttributes(_ ...Attr)          {} // noop: see noopSpan godoc
+func (noopSpan) RecordError(_ error)              {} // noop: see noopSpan godoc
+func (noopSpan) SetStatus(_ StatusCode, _ string) {} // noop: see noopSpan godoc
+func (noopSpan) End()                             {} // noop: see noopSpan godoc
+func (noopSpan) SetName(_ string)                 {} // noop: see noopSpan godoc
 
 var noopSpanInstance Span = noopSpan{}
 

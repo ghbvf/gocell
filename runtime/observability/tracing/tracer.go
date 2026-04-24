@@ -16,6 +16,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sync"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -86,7 +87,7 @@ func (t *simpleTracer) Start(ctx context.Context, name string, attrs ...Attr) (c
 		name:    name,
 	}
 	if len(attrs) > 0 {
-		s.attrs = append(s.attrs, attrs...)
+		s.SetAttributes(attrs...)
 	}
 
 	ctx = ctxkeys.WithTraceID(ctx, traceID)
@@ -96,6 +97,7 @@ func (t *simpleTracer) Start(ctx context.Context, name string, attrs ...Attr) (c
 
 // simpleSpan is a lightweight span implementation used by simpleTracer.
 type simpleSpan struct {
+	mu      sync.Mutex
 	traceID string
 	spanID  string
 	name    string
@@ -107,14 +109,25 @@ type simpleSpan struct {
 
 // SetAttributes records key-value pairs on the span.
 func (s *simpleSpan) SetAttributes(attrs ...Attr) {
+	if len(attrs) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.attrs = append(s.attrs, attrs...)
 }
 
 // RecordError stores the most recent error attached to the span.
-func (s *simpleSpan) RecordError(err error) { s.err = err }
+func (s *simpleSpan) RecordError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
 
 // SetStatus updates the span's terminal status.
 func (s *simpleSpan) SetStatus(code wrapper.StatusCode, description string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.status = code
 	s.stDesc = description
 }
@@ -125,7 +138,11 @@ func (s *simpleSpan) End() {}
 // SetName updates the span's display name. Implementing SpanRenamer keeps
 // two-phase rename (initial "{method} {path}" → "{method} {routePattern}")
 // working for HTTP middleware that was written before kernel/wrapper.
-func (s *simpleSpan) SetName(name string) { s.name = name }
+func (s *simpleSpan) SetName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.name = name
+}
 
 // TraceID returns the trace identifier.
 func (s *simpleSpan) TraceID() string { return s.traceID }

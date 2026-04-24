@@ -215,8 +215,8 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	// Tracer wiring: b.wrapperTracer is threaded into router.WithTracer
 	// (phase7, HTTP side) and eventrouter.WithTracer (phase6, consumer side)
 	// at the construction call sites. When WithTracer was not supplied,
-	// wrapper.HTTPHandler / wrapper.WrapConsumer fall back to NoopTracer so
-	// spans degrade silently — no package-level setup needed.
+	// HTTP tracing is disabled and wrapper.WrapConsumer falls back to
+	// NoopTracer so spans degrade silently — no package-level setup needed.
 	if b.wrapperTracer == nil {
 		slog.Warn("bootstrap: no tracer provided, wrapper spans will be no-op; use WithTracer to enable distributed tracing")
 	}
@@ -804,17 +804,18 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	if !b.disableObservabilityRestore {
 		mws = append(mws, outbox.ObservabilityContextMiddleware())
 	}
+	mws = append(mws, eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor))
 	mws = append(mws, b.consumerMiddleware...)
 
 	var evtRouterOpts []eventrouter.Option
 	if b.eventRouterReadyTimeoutSet {
 		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.eventRouterReadyTimeout))
 	}
-	// Thread the wrapper.Tracer from WithTracer into the event router so
-	// AddContractHandler wraps subscribers with wrapper.WrapConsumer at
-	// registration time. Nil tracer → WrapConsumer falls back to NoopTracer.
 	if b.wrapperTracer != nil {
 		evtRouterOpts = append(evtRouterOpts, eventrouter.WithTracer(b.wrapperTracer))
+	}
+	if b.errorRedactor != nil {
+		evtRouterOpts = append(evtRouterOpts, eventrouter.WithErrorRedactor(b.errorRedactor))
 	}
 	evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
 		Inner:      sub,

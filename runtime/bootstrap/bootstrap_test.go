@@ -2708,7 +2708,11 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 }
 
 func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
-	// Verify infra endpoints (/healthz) also get tracing coverage.
+	// Round-4 F4: middleware.Tracing applies DefaultProbeFilter by default,
+	// so /healthz / /readyz / /livez / /metrics no longer produce a span
+	// (and therefore no trace_id in their access logs). This reverses the
+	// pre-round-4 behaviour where probe routes were traced by accident.
+	// High-frequency infra traffic no longer consumes span / metric budget.
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 	oldDefault := slog.Default()
@@ -2740,10 +2744,10 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 	cancel()
 	<-done
 
-	// Check access log contains trace_id for /healthz.
+	// Probe endpoint must NOT emit trace_id — F4 DefaultProbeFilter pre-empts span creation.
 	logOutput := buf.String()
-	assert.Contains(t, logOutput, "trace_id",
-		"infra endpoint /healthz must have trace_id in access log when tracing is enabled")
+	assert.NotContains(t, logOutput, "trace_id",
+		"round-4 F4: /healthz span creation is skipped by DefaultProbeFilter so no trace_id is emitted")
 }
 
 // --- Auth Provider discovery (post-Init cell discovery) ---

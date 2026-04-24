@@ -1,6 +1,8 @@
 package otel
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -54,14 +56,15 @@ func attrToKeyValue(a wrapper.Attr) attribute.KeyValue {
 	case bool:
 		return attribute.Bool(a.Key, v)
 	case []byte:
-		// Emit []byte as readable UTF-8 rather than fmt.Sprint's decimal
-		// byte-slice form (e.g. "[98 121 116 101 115]"). Consumers that
-		// log request/response payload snapshots would otherwise see
-		// unreadable output in their tracing backends.
-		return attribute.String(a.Key, string(v))
+		return attribute.String(a.Key, redactedBytesValue(v))
 	default:
 		return attribute.String(a.Key, fmt.Sprint(v))
 	}
+}
+
+func redactedBytesValue(v []byte) string {
+	sum := sha256.Sum256(v)
+	return fmt.Sprintf("[redacted bytes len=%d sha256=%s]", len(v), hex.EncodeToString(sum[:])[:16])
 }
 
 // RecordError adds an error event to the span.

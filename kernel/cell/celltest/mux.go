@@ -24,6 +24,7 @@ import (
 // Compile-time checks.
 var _ cell.RouteMux = (*TestMux)(nil)
 var _ cell.AuthRouteDeclarer = (*TestMux)(nil)
+var _ cell.PrefixedMux = (*TestMux)(nil)
 
 // TestMux adapts http.ServeMux to cell.RouteMux for testing.
 // It uses Go 1.22+ ServeMux pattern matching ("GET /path/{param}").
@@ -48,6 +49,21 @@ func NewTestMux() *TestMux {
 	m := &TestMux{ServeMux: http.NewServeMux()}
 	m.root = m // root points to itself
 	return m
+}
+
+// Prefix returns the composed mount prefix for this test mux. Root muxes
+// return ""; sub-muxes created by Route return the same prefix production
+// chiRouterAdapter exposes, allowing auth.Mount to derive chi-relative
+// registration paths from fully-qualified Contract.Path literals.
+func (m *TestMux) Prefix() string {
+	return m.prefix
+}
+
+// UseRelativeContractAliases allows auth.Mount to install compatibility
+// aliases only for root-level slice tests. Production routers do not
+// implement this method, so aliases cannot leak into served applications.
+func (m *TestMux) UseRelativeContractAliases() bool {
+	return m.prefix == ""
 }
 
 // DeclareAuthMeta records an auth route declaration.

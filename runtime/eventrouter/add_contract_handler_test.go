@@ -140,7 +140,7 @@ func TestAddContractHandler_NilTracer_RegistersWithNoopWrapping(t *testing.T) {
 func TestAddContractHandler_TracerInjected_WrapsWithContractSpan(t *testing.T) {
 	t.Parallel()
 	tr := &contractSpyTracer{}
-	r := New(&blockingSubscriber{}, WithTracer(tr))
+	r := New(&blockingSubscriber{})
 
 	var inner bool
 	r.AddContractHandler(configChangedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
@@ -149,8 +149,11 @@ func TestAddContractHandler_TracerInjected_WrapsWithContractSpan(t *testing.T) {
 	}, "accesscore")
 	require.Equal(t, 1, r.HandlerCount())
 
-	// Drive one entry through the wrapped handler; verify inner + span attrs.
-	res := r.handlers[0].handler(context.Background(), outbox.Entry{EventType: "event.config.changed.v1"})
+	// Drive one entry through the middleware position used by bootstrap:
+	// contract tracing sits outside the stored business handler.
+	sub := r.handlers[0].subscription()
+	wrapped := ContractTracingMiddleware(tr, nil)(sub, r.handlers[0].handler)
+	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.changed.v1"})
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, inner, "inner handler must run")
 
@@ -164,6 +167,40 @@ func TestAddContractHandler_TracerInjected_WrapsWithContractSpan(t *testing.T) {
 	assert.Equal(t, "CONSUME event.config.changed.v1", span.name, "span name")
 	assert.Equal(t, wrapper.StatusOK, span.status, "Ack must mark span StatusOK")
 	assert.True(t, span.ended, "span.End() must have been called")
+}
+
+func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
+	t.Parallel()
+	tr := &contractSpyTracer{}
+	sub := outbox.Subscription{
+		Topic:             "event.config.changed.v1",
+		ConsumerGroup:     "accesscore",
+		ContractID:        "event.config.changed.v1",
+		ContractKind:      "event",
+		ContractTransport: "amqp",
+	}
+
+	var businessCalled bool
+	business := func(context.Context, outbox.Entry) outbox.HandleResult {
+		businessCalled = true
+		return outbox.HandleResult{Disposition: outbox.DispositionAck}
+	}
+	shortCircuit := func(_ outbox.Subscription, _ outbox.EntryHandler) outbox.EntryHandler {
+		return func(context.Context, outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
+		}
+	}
+
+	wrapped := ContractTracingMiddleware(tr, nil)(sub, shortCircuit(sub, business))
+	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.changed.v1"})
+
+	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
+	assert.False(t, businessCalled, "downstream middleware should be allowed to skip business handler")
+
+	span := tr.only(t)
+	assert.Equal(t, wrapper.StatusError, span.status, "short-circuit Requeue must still mark the contract span")
+	assert.True(t, span.ended, "span.End() must have been called")
+	assert.Equal(t, "event.config.changed.v1", span.attrMap()["gocell.contract.id"])
 }
 
 func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {

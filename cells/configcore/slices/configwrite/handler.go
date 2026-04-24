@@ -5,8 +5,26 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Contract spec literals — cross-checked against
+// contracts/http/config/{write,update,delete}/v1/contract.yaml by FMT-18.
+var (
+	specConfigWrite = wrapper.ContractSpec{
+		ID: "http.config.write.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/config/",
+	}
+	specConfigUpdate = wrapper.ContractSpec{
+		ID: "http.config.update.v1", Kind: "http", Transport: "http",
+		Method: "PUT", Path: "/api/v1/config/{key}",
+	}
+	specConfigDelete = wrapper.ContractSpec{
+		ID: "http.config.delete.v1", Kind: "http", Transport: "http",
+		Method: "DELETE", Path: "/api/v1/config/{key}",
+	}
 )
 
 // Handler provides HTTP endpoints for config write operations.
@@ -74,26 +92,23 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 // RegisterRoutes registers configwrite routes with admin-only policies on any
-// cell.RouteHandler (satisfied by both *http.ServeMux and cell.RouteMux) so
-// production wiring, contract tests, and cell-level integration tests share
-// the same auth.Declare declarations.
+// cell.RouteHandler (satisfied by *http.ServeMux, cell.RouteMux, and the chi
+// sub-router adapter) so production wiring, contract tests, and cell-level
+// integration tests share the same auth.Mount declarations.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/",
-		Handler: http.HandlerFunc(h.HandleCreate),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specConfigWrite,
+		Handler:  http.HandlerFunc(h.HandleCreate),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "PUT",
-		Path:    "/{key}",
-		Handler: http.HandlerFunc(h.HandleUpdate),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specConfigUpdate,
+		Handler:  http.HandlerFunc(h.HandleUpdate),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "DELETE",
-		Path:    "/{key}",
-		Handler: http.HandlerFunc(h.HandleDelete),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specConfigDelete,
+		Handler:  http.HandlerFunc(h.HandleDelete),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
 }

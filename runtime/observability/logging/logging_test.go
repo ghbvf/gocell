@@ -28,6 +28,7 @@ func TestContextHandler_JSON_WithAllContextValues(t *testing.T) {
 	ctx = ctxkeys.WithRequestID(ctx, "req-123")
 	ctx = ctxkeys.WithCorrelationID(ctx, "corr-123")
 	ctx = kctxkeys.WithCellID(ctx, "accesscore")
+	ctx = kctxkeys.WithContractID(ctx, "http.auth.login.v1")
 
 	logger.InfoContext(ctx, "test message", slog.String("extra", "value"))
 
@@ -41,6 +42,7 @@ func TestContextHandler_JSON_WithAllContextValues(t *testing.T) {
 	assert.Equal(t, "req-123", entry["request_id"])
 	assert.Equal(t, "corr-123", entry["correlation_id"])
 	assert.Equal(t, "accesscore", entry["cell_id"])
+	assert.Equal(t, "http.auth.login.v1", entry["contract_id"])
 	assert.Equal(t, "value", entry["extra"])
 }
 
@@ -66,6 +68,7 @@ func TestContextHandler_NoContextValues(t *testing.T) {
 	assert.NotContains(t, entry, "request_id")
 	assert.NotContains(t, entry, "correlation_id")
 	assert.NotContains(t, entry, "cell_id")
+	assert.NotContains(t, entry, "contract_id")
 }
 
 func TestContextHandler_TextFormat(t *testing.T) {
@@ -119,4 +122,25 @@ func TestContextHandler_WithAttrs(t *testing.T) {
 
 	assert.Equal(t, "gocell", entry["service"])
 	assert.Equal(t, "trace-1", entry["trace_id"])
+}
+
+// TestContextHandler_ContractID_EmptyValueSkipped — ContractID set to empty
+// string must not emit a contract_id field (matches every other ctx-key in
+// extractContextAttrs which guards v \!= "").
+func TestContextHandler_ContractID_EmptyValueSkipped(t *testing.T) {
+	var buf bytes.Buffer
+	handler := NewHandler(Options{
+		Level:  slog.LevelInfo,
+		Format: FormatJSON,
+		Writer: &buf,
+	})
+	logger := slog.New(handler)
+
+	ctx := kctxkeys.WithContractID(context.Background(), "")
+	logger.InfoContext(ctx, "empty contract id")
+
+	var entry map[string]any
+	err := json.Unmarshal(buf.Bytes(), &entry)
+	require.NoError(t, err)
+	assert.NotContains(t, entry, "contract_id")
 }

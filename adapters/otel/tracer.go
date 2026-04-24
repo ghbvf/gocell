@@ -7,6 +7,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
+	"go.opentelemetry.io/otel/propagation"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	semconv "go.opentelemetry.io/otel/semconv/v1.26.0"
@@ -99,10 +100,15 @@ func NewTracerFromTracerProvider(tp oteltrace.TracerProvider, serviceName string
 // wrapper.Attr so kernel/wrapper callers can hand attributes in at Start;
 // attrs are applied on the returned Span immediately via SetAttributes.
 func (t *Tracer) Start(ctx context.Context, name string, attrs ...tracing.Attr) (context.Context, tracing.Span) {
+	if traceparent, ok := ctxkeys.TraceParentFrom(ctx); ok && traceparent != "" {
+		ctx = propagation.TraceContext{}.Extract(ctx, propagation.MapCarrier{"traceparent": traceparent})
+	}
 	ctx, span := t.inner.Start(ctx, name)
 	sc := span.SpanContext()
 	ctx = ctxkeys.WithTraceID(ctx, sc.TraceID().String())
 	ctx = ctxkeys.WithSpanID(ctx, sc.SpanID().String())
+	ctx = ctxkeys.WithTraceParent(ctx,
+		"00-"+sc.TraceID().String()+"-"+sc.SpanID().String()+"-"+sc.TraceFlags().String())
 	out := &otelSpan{inner: span}
 	if len(attrs) > 0 {
 		out.SetAttributes(attrs...)

@@ -7,7 +7,6 @@ package accesscore
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -15,63 +14,61 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// httpAuthLoginV1 is the wrapper.ContractSpec literal for contract
-// http.auth.login.v1 (POST /api/v1/access/sessions/login). Hand-coded
-// alongside the Mount call so every span annotation trail (gocell.contract.id,
-// gocell.contract.transport, http.method, http.route) matches the YAML in
-// contracts/http/auth/login/v1/contract.yaml.
-//
-// TODO(FMT-17): until PR-A11-V ships the SPEC-CONTRACT-SYNC governance rule,
-// this literal has no CI-level cross-check against the YAML — rename the
-// contract path in YAML without updating this literal and span attributes
-// silently go stale. Search for `TODO(FMT-17)` to surface all unguarded
-// literals once the rule lands.
-var httpAuthLoginV1 = wrapper.ContractSpec{
-	ID:        "http.auth.login.v1",
-	Kind:      "http",
-	Transport: "http",
-	Method:    "POST",
-	Path:      "/api/v1/access/sessions/login",
-}
+// Contract spec literals — one per route / subscription; cross-checked
+// against contracts/**/contract.yaml by FMT-18 governance (PR-A11-V).
+var (
+	specAuthSetupStatus = wrapper.ContractSpec{
+		ID: "http.auth.setup.status.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/access/setup/status",
+	}
+	specAuthSetupAdmin = wrapper.ContractSpec{
+		ID: "http.auth.setup.admin.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/access/setup/admin",
+	}
+	specAuthLogin = wrapper.ContractSpec{
+		ID: "http.auth.login.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/access/sessions/login",
+	}
+	specAuthRefresh = wrapper.ContractSpec{
+		ID: "http.auth.refresh.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/access/sessions/refresh",
+	}
+	specAuthSessionDelete = wrapper.ContractSpec{
+		ID: "http.auth.session.delete.v1", Kind: "http", Transport: "http",
+		Method: "DELETE", Path: "/api/v1/access/sessions/{id}",
+	}
 
-// eventConfigChangedV1 is the wrapper.ContractSpec literal for contract
-// event.config.changed.v1. Hand-coded alongside the AddContractHandler call
-// so every consumer span (gocell.contract.id, messaging.system,
-// messaging.destination) matches the YAML in
-// contracts/event/config/changed/v1/contract.yaml.
-//
-// TODO(FMT-17): same governance gap as httpAuthLoginV1 — until PR-A11-V
-// ships SPEC-CONTRACT-SYNC, renaming the topic in YAML without updating
-// this literal silently drifts span attributes. Search for `TODO(FMT-17)`
-// to surface all unguarded literals.
-var eventConfigChangedV1 = wrapper.ContractSpec{
-	ID:        "event.config.changed.v1",
-	Kind:      "event",
-	Transport: "amqp",
-	Topic:     configreceive.TopicConfigChanged,
-}
+	specEventConfigChanged = wrapper.ContractSpec{
+		ID: "event.config.changed.v1", Kind: "event", Transport: "amqp",
+		Topic: configreceive.TopicConfigChanged,
+	}
+	specEventRoleAssigned = wrapper.ContractSpec{
+		ID: "event.role.assigned.v1", Kind: "event", Transport: "amqp",
+		Topic: "event.role.assigned.v1",
+	}
+	specEventRoleRevoked = wrapper.ContractSpec{
+		ID: "event.role.revoked.v1", Kind: "event", Transport: "amqp",
+		Topic: "event.role.revoked.v1",
+	}
+)
 
 // RegisterRoutes registers HTTP routes for accesscore.
 func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1/access", func(sub cell.RouteMux) {
-		// Interactive first-run admin provisioning, scoped under /access/ so
-		// the path prefix matches Cell ownership (Consul /acl/bootstrap
-		// convention, rather than Vault's top-level /sys/init). Both endpoints
-		// are Public: no admin exists yet to authenticate against; once an
-		// admin exists, the endpoint returns 410 Gone via a fast-path Status
-		// check before bcrypt runs.
+		// Interactive first-run admin provisioning. Both endpoints are
+		// Public: no admin exists yet to authenticate against; once an admin
+		// exists, the endpoint returns 410 Gone via a fast-path Status check
+		// before bcrypt runs.
 		sub.Route("/setup", func(s cell.RouteMux) {
-			auth.Declare(s, auth.RouteDecl{
-				Method:  "GET",
-				Path:    "/status",
-				Handler: http.HandlerFunc(c.setupHandler.HandleStatus),
-				Public:  true,
+			auth.Mount(s, auth.Route{
+				Contract: specAuthSetupStatus,
+				Handler:  http.HandlerFunc(c.setupHandler.HandleStatus),
+				Public:   true,
 			})
-			auth.Declare(s, auth.RouteDecl{
-				Method:  "POST",
-				Path:    "/admin",
-				Handler: http.HandlerFunc(c.setupHandler.HandleCreateAdmin),
-				Public:  true,
+			auth.Mount(s, auth.Route{
+				Contract: specAuthSetupAdmin,
+				Handler:  http.HandlerFunc(c.setupHandler.HandleCreateAdmin),
+				Public:   true,
 			})
 		})
 
@@ -79,36 +76,26 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 		sub.Route("/users", c.identityHandler.RegisterRoutes)
 
 		// Session endpoints: /api/v1/access/sessions.
-		// Public routes, password-reset-exempt routes and their implicit hint are
-		// all declared inline here. Router.FinalizeAuth aggregates every Cell's
-		// declarations at Bootstrap phase 5.
-		// Login and refresh are public (no JWT required). Logout requires the
-		// caller to be authenticated as the session owner or an admin, and is
-		// PasswordResetExempt so a token carrying password_reset_required=true
-		// can still reach this endpoint.
+		// Router.FinalizeAuth aggregates Public + PasswordResetExempt metas
+		// across all Cells at Bootstrap phase 5.
 		sub.Route("/sessions", func(s cell.RouteMux) {
 			auth.Mount(s, auth.Route{
-				Contract: httpAuthLoginV1,
-				Method:   "POST",
-				Path:     "/login",
+				Contract: specAuthLogin,
 				Handler:  http.HandlerFunc(c.loginHandler.HandleLogin),
 				Public:   true,
 			})
-			auth.Declare(s, auth.RouteDecl{
-				Method:  "POST",
-				Path:    "/refresh",
-				Handler: http.HandlerFunc(c.refreshHandler.HandleRefresh),
-				Public:  true,
+			auth.Mount(s, auth.Route{
+				Contract: specAuthRefresh,
+				Handler:  http.HandlerFunc(c.refreshHandler.HandleRefresh),
+				Public:   true,
 			})
-			// Logout: {id} is a session id, NOT a user id, so the route-level
-			// policy cannot be SelfOr("id", admin). Session ownership is enforced
-			// inside HandleLogout by comparing the principal subject against the
-			// session's user_id. Baseline AuthMiddleware still requires a valid
-			// JWT; PasswordResetExempt keeps the route reachable while the caller
+			// Logout: session ownership is enforced inside HandleLogout
+			// (comparing principal subject against session user_id).
+			// Baseline AuthMiddleware still requires a valid JWT;
+			// PasswordResetExempt keeps the route reachable while the caller
 			// still owes a password reset (standard user-self-recovery flow).
-			auth.Declare(s, auth.RouteDecl{
-				Method:              "DELETE",
-				Path:                "/{id}",
+			auth.Mount(s, auth.Route{
+				Contract:            specAuthSessionDelete,
 				Handler:             http.HandlerFunc(c.logoutHandler.HandleLogout),
 				PasswordResetExempt: true,
 			})
@@ -128,16 +115,14 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
 	// config-receive: config.changed events from configcore.
-	// Contract-first registration (pilot for PR-A11-B) — the Router wraps
-	// the handler with wrapper.WrapConsumer so every consumed entry emits a
-	// CONSUME span annotated with gocell.contract.id / messaging.destination.
 	handler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEvent)
-	r.AddContractHandler(eventConfigChangedV1, handler, "accesscore")
+	r.AddContractHandler(specEventConfigChanged, handler, "accesscore")
 
 	// rbac-session-sync: invalidate sessions on role assignment or revocation.
-	// Both topics share the same handler and consumer group — HandleRoleChanged is topic-agnostic.
+	// Same handler + same consumer group across both topics — HandleRoleChanged
+	// is topic-agnostic.
 	roleHandler := outbox.WrapLegacyHandler(c.rbacSessionConsumer.HandleRoleChanged)
-	r.AddHandler(dto.TopicRoleAssigned, roleHandler, "accesscore-rbac-session-sync")
-	r.AddHandler(dto.TopicRoleRevoked, roleHandler, "accesscore-rbac-session-sync")
+	r.AddContractHandler(specEventRoleAssigned, roleHandler, "accesscore-rbac-session-sync")
+	r.AddContractHandler(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync")
 	return nil
 }

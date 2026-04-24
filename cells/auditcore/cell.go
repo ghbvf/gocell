@@ -16,9 +16,25 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
+
+// auditAppendSpecs maps each consumed topic to its wrapper.ContractSpec —
+// cross-checked against contracts/event/**/v1/contract.yaml by FMT-18.
+// The topic slice lives on auditappend.Topics; adding/removing entries
+// there MUST be mirrored here (FMT-18 would surface any drift).
+var auditAppendSpecs = map[string]wrapper.ContractSpec{
+	"event.user.created.v1":    {ID: "event.user.created.v1", Kind: "event", Transport: "amqp", Topic: "event.user.created.v1"},
+	"event.user.locked.v1":     {ID: "event.user.locked.v1", Kind: "event", Transport: "amqp", Topic: "event.user.locked.v1"},
+	"event.session.created.v1": {ID: "event.session.created.v1", Kind: "event", Transport: "amqp", Topic: "event.session.created.v1"},
+	"event.session.revoked.v1": {ID: "event.session.revoked.v1", Kind: "event", Transport: "amqp", Topic: "event.session.revoked.v1"},
+	"event.config.changed.v1":  {ID: "event.config.changed.v1", Kind: "event", Transport: "amqp", Topic: "event.config.changed.v1"},
+	"event.config.rollback.v1": {ID: "event.config.rollback.v1", Kind: "event", Transport: "amqp", Topic: "event.config.rollback.v1"},
+	"event.role.assigned.v1":   {ID: "event.role.assigned.v1", Kind: "event", Transport: "amqp", Topic: "event.role.assigned.v1"},
+	"event.role.revoked.v1":    {ID: "event.role.revoked.v1", Kind: "event", Transport: "amqp", Topic: "event.role.revoked.v1"},
+}
 
 // Compile-time interface checks.
 var (
@@ -285,11 +301,18 @@ func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
 }
 
 // RegisterSubscriptions declares event subscriptions for all audit topics.
-// The Router manages goroutine lifecycle and setup-error detection.
+// Each topic has a matching wrapper.ContractSpec so every consumed entry
+// emits a CONSUME span annotated with gocell.contract.id; the Router
+// manages goroutine lifecycle and setup-error detection.
 func (c *AuditCore) RegisterSubscriptions(r cell.EventRouter) error {
 	handler := outbox.WrapLegacyHandler(c.appendSvc.HandleEvent)
 	for _, topic := range auditappend.Topics {
-		r.AddHandler(topic, handler, "auditcore")
+		spec, ok := auditAppendSpecs[topic]
+		if !ok {
+			return fmt.Errorf("auditcore: missing ContractSpec for topic %q — "+
+				"auditAppendSpecs and auditappend.Topics must stay in sync", topic)
+		}
+		r.AddContractHandler(spec, handler, "auditcore")
 	}
 	return nil
 }

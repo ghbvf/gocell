@@ -10,6 +10,8 @@ import (
 //
 //   - FMT-16: slice / cell / assembly directory contains '-' (kebab-case disallowed)
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
+//   - FMT-18: wrapper.ContractSpec literals in cells/** disagree with contracts/**/contract.yaml
+//   - FMT-19: kernel/wrapper/*.go contains forbidden mutable package-level state
 //   - FMT-C1: cell.yaml id contains '-' (kebab-case cell id disallowed)
 //   - FMT-A1: assembly.yaml id contains '-' (kebab-case assembly id disallowed)
 //   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
@@ -21,6 +23,8 @@ func (v *Validator) ValidateStrict(strict bool) []ValidationResult {
 	results := v.Validate()
 	results = append(results, v.validateFMT16(strict)...)
 	results = append(results, v.validateFMT17(strict)...)
+	results = append(results, v.validateFMT18(strict)...)
+	results = append(results, v.validateFMT19(strict)...)
 	results = append(results, v.validateFMTC1(strict)...)
 	results = append(results, v.validateFMTA1(strict)...)
 	results = append(results, v.validateDOCNAME01(strict)...)
@@ -43,6 +47,14 @@ func (v *Validator) ValidateStrictFailFast() []ValidationResult {
 		return results
 	}
 	results = append(results, v.validateFMT17(true)...)
+	if HasErrors(results) {
+		return results
+	}
+	results = append(results, v.validateFMT18(true)...)
+	if HasErrors(results) {
+		return results
+	}
+	results = append(results, v.validateFMT19(true)...)
 	if HasErrors(results) {
 		return results
 	}

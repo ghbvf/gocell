@@ -9,9 +9,32 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Contract spec literals — cross-checked against
+// contracts/http/config/flags/{create,update,toggle,delete}/v1/contract.yaml
+// by FMT-18.
+var (
+	specFlagsCreate = wrapper.ContractSpec{
+		ID: "http.config.flags.create.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/flags/",
+	}
+	specFlagsUpdate = wrapper.ContractSpec{
+		ID: "http.config.flags.update.v1", Kind: "http", Transport: "http",
+		Method: "PUT", Path: "/api/v1/flags/{key}",
+	}
+	specFlagsToggle = wrapper.ContractSpec{
+		ID: "http.config.flags.toggle.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/flags/{key}/toggle",
+	}
+	specFlagsDelete = wrapper.ContractSpec{
+		ID: "http.config.flags.delete.v1", Kind: "http", Transport: "http",
+		Method: "DELETE", Path: "/api/v1/flags/{key}",
+	}
 )
 
 // FlagWriteResponse is the DTO for a feature flag write response.
@@ -194,35 +217,29 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// RegisterRoutes registers flagwrite routes on a mux with admin-only policies.
-// The mux argument is the narrow cell.RouteHandler interface so this single
-// declaration is used by production wiring (cells/configcore/cell.go via
-// cell.RouteMux), contract tests (*http.ServeMux), and cell-level integration
-// tests — all paths share the same auth.Declare declarations. Any regression
-// that omits the auth declaration would surface the same way in every path.
+// RegisterRoutes registers flagwrite routes with admin-only policies via
+// auth.Mount so every request emits a contract-tagged span. The mux
+// argument is cell.RouteHandler so production wiring (cell.RouteMux) and
+// contract tests (*http.ServeMux) share the same declarations.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/",
-		Handler: http.HandlerFunc(h.HandleCreate),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specFlagsCreate,
+		Handler:  http.HandlerFunc(h.HandleCreate),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "PUT",
-		Path:    "/{key}",
-		Handler: http.HandlerFunc(h.HandleUpdate),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specFlagsUpdate,
+		Handler:  http.HandlerFunc(h.HandleUpdate),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/{key}/toggle",
-		Handler: http.HandlerFunc(h.HandleToggle),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specFlagsToggle,
+		Handler:  http.HandlerFunc(h.HandleToggle),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "DELETE",
-		Path:    "/{key}",
-		Handler: http.HandlerFunc(h.HandleDelete),
-		Policy:  auth.AnyRole(dto.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specFlagsDelete,
+		Handler:  http.HandlerFunc(h.HandleDelete),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
 }
