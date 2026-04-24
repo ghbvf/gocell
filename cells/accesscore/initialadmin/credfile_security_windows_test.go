@@ -58,12 +58,10 @@ func TestVerifyOwnership_DetectsOpenedDACL(t *testing.T) {
 	}
 
 	// Strip ACL — set a NULL DACL (grants everyone access).
-	pathPtr, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		t.Fatalf("UTF16PtrFromString: %v", err)
-	}
+	// windows.SetNamedSecurityInfo accepts a string path directly; the wrapper
+	// handles UTF-16 conversion internally, so we pass path rather than *uint16.
 	if err := windows.SetNamedSecurityInfo(
-		pathPtr,
+		path,
 		windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION,
 		nil, nil, nil, nil,
@@ -100,12 +98,10 @@ func TestRemoveCredentialFile_DeletesEvenIfTampered(t *testing.T) {
 	}
 
 	// Strip the DACL to simulate tampering.
-	pathPtr, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		t.Fatalf("UTF16PtrFromString: %v", err)
-	}
+	// windows.SetNamedSecurityInfo accepts a string path directly; the wrapper
+	// handles UTF-16 conversion internally, so we pass path rather than *uint16.
 	if err := windows.SetNamedSecurityInfo(
-		pathPtr,
+		path,
 		windows.SE_FILE_OBJECT,
 		windows.DACL_SECURITY_INFORMATION,
 		nil, nil, nil, nil,
