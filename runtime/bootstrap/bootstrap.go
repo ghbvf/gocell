@@ -144,12 +144,16 @@ func WithRouterOptions(opts ...router.Option) Option {
 }
 
 // WithTracer enables distributed tracing for HTTP requests. The tracer is
-// forwarded to the router's middleware chain via router.WithTracer.
+// forwarded to the router's middleware chain via router.WithTracer and also
+// installed as the package-level kernel/wrapper tracer via wrapper.SetTracer.
+// Without this option, Bootstrap falls back to wrapper.NoopTracer{} with a
+// slog.Warn so spans are silently discarded rather than causing a panic.
 //
 // ref: go-zero — observability configuration at app level
 func WithTracer(t tracing.Tracer) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, router.WithTracer(t))
+		b.wrapperTracer = t
 	}
 }
 
@@ -649,6 +653,11 @@ type Bootstrap struct {
 	// passed. Checked in phase0 to fail-fast rather than silently skipping
 	// resource registration.
 	managedResourceNil bool
+
+	// wrapperTracer is the Tracer supplied via WithTracer. When non-nil it is
+	// installed as the kernel/wrapper package-level tracer during phase1.
+	// When nil, Bootstrap falls back to wrapper.NoopTracer{} with a slog.Warn.
+	wrapperTracer tracing.Tracer
 }
 
 // New creates a Bootstrap with the given options.

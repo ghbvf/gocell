@@ -25,6 +25,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -211,7 +212,25 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	for _, cl := range b.closers {
 		s.addCloser(cl)
 	}
+
+	// Wire the kernel/wrapper package-level tracer. wrapper.HTTPHandler and
+	// wrapper.WrapConsumer call tracer.Start on every request; the package-level
+	// global must be set before any HTTP request is served (phase7).
+	// ref: slog.SetDefault / otel.SetTracerProvider — package-level setter.
+	b.wireWrapperTracer()
 	return nil
+}
+
+// wireWrapperTracer installs b.wrapperTracer as the package-level kernel/wrapper
+// tracer. Falls back to wrapper.NoopTracer{} with a slog.Warn when no tracer
+// was configured via WithTracer — spans are discarded but no panic occurs.
+func (b *Bootstrap) wireWrapperTracer() {
+	if b.wrapperTracer != nil {
+		wrapper.SetTracer(b.wrapperTracer)
+		return
+	}
+	slog.Warn("bootstrap: no tracer provided, wrapper spans will be no-op; use WithTracer to enable distributed tracing")
+	wrapper.SetTracer(wrapper.NoopTracer{})
 }
 
 // phase2InitPubSub initialises the publisher and subscriber.
