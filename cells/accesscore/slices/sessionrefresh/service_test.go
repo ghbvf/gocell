@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -346,6 +347,33 @@ func TestService_Refresh_NewTokensContainSessionID(t *testing.T) {
 	assert.Equal(t, "sess-r1", accessClaims.SessionID, "new access token must carry the session ID")
 }
 
+func TestService_Refresh_UpdatesSessionExpiryForRefreshedAccessToken(t *testing.T) {
+	svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-exp")
+
+	expiredSession, err := domain.NewSession("usr-exp", "old-at", time.Now().Add(-time.Minute))
+	require.NoError(t, err)
+	expiredSession.ID = "sess-exp"
+	require.NoError(t, repo.Create(context.Background(), expiredSession))
+
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-exp", "usr-exp")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.NoError(t, err)
+	require.NotNil(t, pair)
+
+	persisted, err := repo.GetByID(context.Background(), "sess-exp")
+	require.NoError(t, err)
+	assert.Equal(t, pair.AccessToken, persisted.AccessToken)
+	assert.Equal(t, pair.ExpiresAt, persisted.ExpiresAt)
+
+	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+	validateSvc := sessionvalidate.NewService(verifier, repo, slog.Default())
+	_, err = validateSvc.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentAccess)
+	require.NoError(t, err, "refreshed access token must pass sessionvalidate after original session expiry")
+}
+
 // TestService_Refresh_SessionAwareVerifier proves that sessionrefresh catches
 // revoked sessions even when the session is revoked out-of-band after the
 // wire token is issued.
@@ -533,6 +561,15 @@ func (s *spyRefreshStore) RevokeSession(ctx context.Context, sessionID string) e
 	return s.Store.RevokeSession(ctx, sessionID)
 }
 
+type revokeFailingRefreshStore struct {
+	refresh.Store
+	err error
+}
+
+func (s revokeFailingRefreshStore) RevokeSession(context.Context, string) error {
+	return s.err
+}
+
 // TestService_Refresh_SessionNotFound_CascadeRevokes verifies that when
 // sessionRepo.GetByID returns a domain ErrSessionNotFound (not an infra error),
 // Refresh returns ErrAuthRefreshFailed AND calls RevokeSession on the rotated
@@ -559,6 +596,172 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 	n := spy.revokeSessionN
 	spy.mu.Unlock()
 	assert.Equal(t, 1, n, "RevokeSession must be called once on session-not-found")
+}
+
+func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testing.T) {
+	notFoundErr := errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	_, _, innerStore, wireToken := issueTestWireToken(t, "usr-revoke-fail", "sess-revoke-fail")
+
+	refreshStore := revokeFailingRefreshStore{
+		Store: innerStore,
+		err:   errcode.NewInfra(errcode.ErrInternal, "refresh store down"),
+	}
+	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
+	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Nil(t, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+}
+
+type updateFailingSessionRepo struct {
+	*mem.SessionRepository
+	err error
+}
+
+func (r *updateFailingSessionRepo) Update(context.Context, *domain.Session) error {
+	return r.err
+}
+
+func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
+	sessionRepo := &updateFailingSessionRepo{
+		SessionRepository: mem.NewSessionRepository(),
+		err:               errcode.NewInfra(errcode.ErrInternal, "session update unavailable"),
+	}
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	user, err := domain.NewUser("usr-update-infra", "usr-update-infra@test.local", "hash")
+	require.NoError(t, err)
+	user.ID = "usr-update-infra"
+	require.NoError(t, userRepo.Create(context.Background(), user))
+
+	refreshStore := newTestRefreshStore()
+	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	sess, err := domain.NewSession("usr-update-infra", "at", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-update-infra"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-update-infra", "usr-update-infra")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Nil(t, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+
+	_, _, err = refreshStore.Rotate(context.Background(), wireToken)
+	require.NoError(t, err, "session update failure must not advance the refresh lineage")
+}
+
+func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testing.T) {
+	sessionRepo := &updateFailingSessionRepo{
+		SessionRepository: mem.NewSessionRepository(),
+		err:               errcode.NewDomain(errcode.ErrSessionNotFound, "session not found"),
+	}
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	user, err := domain.NewUser("usr-update-missing", "usr-update-missing@test.local", "hash")
+	require.NoError(t, err)
+	user.ID = "usr-update-missing"
+	require.NoError(t, userRepo.Create(context.Background(), user))
+
+	innerStore := newTestRefreshStore()
+	spy := &spyRefreshStore{Store: innerStore}
+	svc := NewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
+	sess, err := domain.NewSession("usr-update-missing", "at", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-update-missing"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-update-missing", "usr-update-missing")
+	require.NoError(t, err)
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Nil(t, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
+	assert.Equal(t, "invalid refresh token", ec.Message)
+
+	spy.mu.Lock()
+	n := spy.revokeSessionN
+	spy.mu.Unlock()
+	assert.Equal(t, 1, n, "session update not-found must cascade revoke the refresh chain")
+}
+
+func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
+	tests := []struct {
+		name  string
+		build func(t *testing.T) (*Service, string)
+	}{
+		{
+			name: "session not found",
+			build: func(t *testing.T) (*Service, string) {
+				t.Helper()
+				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-uniform-notfound", "sess-uniform-notfound")
+				svc := NewService(
+					&sessionNotFoundRepo{notFoundErr: errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")},
+					mem.NewRoleRepository(),
+					mem.NewUserRepository(),
+					innerStore,
+					testIssuer,
+					slog.Default(),
+				)
+				return svc, wireToken
+			},
+		},
+		{
+			name: "revoked session",
+			build: func(t *testing.T) (*Service, string) {
+				t.Helper()
+				svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-uniform-revoked")
+				sess, err := domain.NewSession("usr-uniform-revoked", "at", time.Now().Add(time.Hour))
+				require.NoError(t, err)
+				sess.ID = "sess-uniform-revoked"
+				sess.Revoke()
+				require.NoError(t, repo.Create(context.Background(), sess))
+				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-revoked", "usr-uniform-revoked")
+				require.NoError(t, err)
+				return svc, wireToken
+			},
+		},
+		{
+			name: "user not found",
+			build: func(t *testing.T) (*Service, string) {
+				t.Helper()
+				sessionRepo := mem.NewSessionRepository()
+				refreshStore := newTestRefreshStore()
+				svc := NewService(sessionRepo, mem.NewRoleRepository(), mem.NewUserRepository(), refreshStore, testIssuer, slog.Default())
+				sess, err := domain.NewSession("usr-uniform-missing", "at", time.Now().Add(time.Hour))
+				require.NoError(t, err)
+				sess.ID = "sess-uniform-missing"
+				require.NoError(t, sessionRepo.Create(context.Background(), sess))
+				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-uniform-missing", "usr-uniform-missing")
+				require.NoError(t, err)
+				return svc, wireToken
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, wireToken := tc.build(t)
+			pair, err := svc.Refresh(context.Background(), wireToken)
+			require.Error(t, err)
+			assert.Nil(t, pair)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
+			assert.Equal(t, "invalid refresh token", ec.Message)
+		})
+	}
 }
 
 // sessionNotFoundRepo returns a domain not-found error from GetByID.

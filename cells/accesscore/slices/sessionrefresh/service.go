@@ -25,6 +25,8 @@ type TokenPair struct {
 	PasswordResetRequired bool
 }
 
+const errMsgInvalidRefreshToken = "invalid refresh token"
+
 // Option configures a session-refresh Service. No built-in options exist today;
 // the type is declared so future extensions are non-breaking (matches sessionlogin
 // pattern, F8).
@@ -122,8 +124,10 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, err
 	}
 	if session.UserID != presented.SubjectID {
-		s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch")
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "invalid refresh token")
+		if err := s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch"); err != nil {
+			return nil, err
+		}
+		return nil, authRefreshRejected()
 	}
 
 	passwordResetRequired, err := s.fetchPasswordResetRequired(ctx, session.ID, session.UserID)
@@ -147,13 +151,22 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 		return nil, err
 	}
 
+	// Persist the session validation horizon before the final Rotate. If Rotate
+	// fails afterwards, the refresh lineage is still unchanged and JWT exp still
+	// bounds any already-issued access token.
+	if err := s.persistRefreshedSession(ctx, session, minted.AccessToken, minted.ExpiresAt); err != nil {
+		return nil, err
+	}
+
 	newWire, rotated, err := s.refreshStore.Rotate(ctx, refreshToken)
 	if err != nil {
 		return nil, s.refreshStoreError("session-refresh: refresh store rotate failed", err)
 	}
 	if rotated.SessionID != session.ID || rotated.SubjectID != session.UserID {
-		s.cascadeRevoke(ctx, session.ID, "rotated-subject-mismatch")
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "invalid refresh token")
+		if err := s.cascadeRevoke(ctx, session.ID, "rotated-subject-mismatch"); err != nil {
+			return nil, err
+		}
+		return nil, authRefreshRejected()
 	}
 
 	s.logger.Info("token refreshed", slog.String("user_id", session.UserID))
@@ -168,10 +181,35 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 
 func (s *Service) refreshStoreError(logMessage string, err error) error {
 	if errors.Is(err, refresh.ErrRejected) {
-		return errcode.New(errcode.ErrAuthRefreshFailed, "invalid refresh token")
+		return authRefreshRejected()
 	}
 	s.logger.Error(logMessage, slog.Any("error", err))
 	return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+}
+
+func authRefreshRejected() *errcode.Error {
+	return errcode.NewAuth(errcode.ErrAuthRefreshFailed, errMsgInvalidRefreshToken)
+}
+
+func (s *Service) persistRefreshedSession(ctx context.Context, session *domain.Session, accessToken string, expiresAt time.Time) error {
+	refreshed := *session
+	refreshed.AccessToken = accessToken
+	refreshed.ExpiresAt = expiresAt
+	if err := s.sessionRepo.Update(ctx, &refreshed); err != nil {
+		if errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {
+			if revokeErr := s.cascadeRevoke(ctx, session.ID, "session-update-not-found"); revokeErr != nil {
+				return revokeErr
+			}
+			return authRefreshRejected()
+		}
+		s.logger.Error("session-refresh: failed to persist refreshed session",
+			slog.Any("error", err),
+			slog.String("session_id", session.ID),
+			slog.String("user_id", session.UserID))
+		return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session update unavailable", err)
+	}
+	*session = refreshed
+	return nil
 }
 
 // verifySession checks that the session backing a rotated token is live and
@@ -186,26 +224,32 @@ func (s *Service) verifySession(ctx context.Context, sessionID string) (*domain.
 			return nil, errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session lookup unavailable", err)
 		}
 		// F4: cascade-revoke on not-found; log the revoke error if it fails.
-		s.cascadeRevoke(ctx, sessionID, "session-not-found")
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session not found")
+		if err := s.cascadeRevoke(ctx, sessionID, "session-not-found"); err != nil {
+			return nil, err
+		}
+		return nil, authRefreshRejected()
 	}
 	if session.IsRevoked() {
 		// F4: cascade-revoke on already-revoked session.
-		s.cascadeRevoke(ctx, sessionID, "revoked-session")
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session has been revoked")
+		if err := s.cascadeRevoke(ctx, sessionID, "revoked-session"); err != nil {
+			return nil, err
+		}
+		return nil, authRefreshRejected()
 	}
 	return session, nil
 }
 
-// cascadeRevoke calls RevokeSession and logs any error. reason is only used
-// in the error log and is never exposed to callers (enumeration defence).
-func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) {
+// cascadeRevoke calls RevokeSession and returns infra errors distinctly from
+// auth rejection. reason is log-only and never exposed to callers.
+func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) error {
 	if err := s.refreshStore.RevokeSession(ctx, sessionID); err != nil {
 		s.logger.Error("session-refresh: cascade revoke failed",
 			slog.String("reason", reason),
 			slog.Any("error", err),
 			slog.String("session_id", sessionID))
+		return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 	}
+	return nil
 }
 
 // fetchPasswordResetRequired reads the current PasswordResetRequired flag
@@ -220,8 +264,10 @@ func (s *Service) fetchPasswordResetRequired(ctx context.Context, sessionID, use
 		if errcode.IsInfraError(err) {
 			return false, errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session user unavailable", err)
 		}
-		s.cascadeRevoke(ctx, sessionID, "user-not-found")
-		return false, errcode.New(errcode.ErrAuthRefreshFailed, "session user unavailable")
+		if err := s.cascadeRevoke(ctx, sessionID, "user-not-found"); err != nil {
+			return false, err
+		}
+		return false, authRefreshRejected()
 	}
 	return user.PasswordResetRequired, nil
 }
