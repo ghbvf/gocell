@@ -71,32 +71,18 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
-// resolveEmitter runs the Cell-boundary Emitter resolution. Two mutually
-// exclusive paths populate c.emitter: WithEmitter(e) (pre-populated) or
-// WithOutboxDeps(pub, writer) (raw deps composed via cell.ResolveEmitter).
-// Extracted from Init to keep cognitive complexity under the lint ceiling.
+// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
+// warn) and clears the pending outbox dep fields.
+//
+// configcore uses DirectPublishFailClosed: config changes must propagate or
+// the write surfaces an error so operators notice misconfig instead of
+// running with a stale subscriber view. Per-entry FailurePolicy
+// (outbox.Entry.FailurePolicy) lets individual topics opt into fail-open;
+// configwrite uses the default.
 func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
-	hasEmitter := c.emitter != nil
-	hasPending := c.pendingOutboxPub != nil || c.pendingOutboxWriter != nil
-	if hasEmitter && hasPending {
-		return errcode.New(errcode.ErrCellInvalidConfig,
-			"configcore: WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
-	}
-
-	var outcomeDurable bool
-	if hasEmitter {
-		outcomeDurable = outbox.ReportDurable(c.emitter)
-		if mode == cell.DurabilityDurable && !outcomeDurable {
-			return errcode.New(errcode.ErrCellMissingOutbox,
-				"configcore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
-		}
-	} else {
-		// DirectEmitter default fail-closed (k8s apiserver audit model): config
-		// changes must propagate or the write surfaces an error so operators
-		// notice misconfig instead of running with a stale subscriber view.
-		// Per-entry FailurePolicy (outbox.Entry.FailurePolicy) lets individual
-		// topics opt into fail-open; configwrite uses the default.
-		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
+	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
+		EmitterConfig: cell.EmitterConfig{
 			CellID:            "configcore",
 			Mode:              mode,
 			Publisher:         c.pendingOutboxPub,
@@ -104,24 +90,17 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 			TxRunner:          c.txRunner,
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
-		})
-		if err != nil {
-			return err
-		}
-		c.emitter = outcome.Emitter
-		outcomeDurable = outcome.Durable
+		},
+		PreResolved:      c.emitter,
+		ConsistencyLevel: c.ConsistencyLevel(),
+	})
+	if err != nil {
+		return err
 	}
+	c.emitter = outcome.Emitter
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-
-	// L2 warning: running without transactional outbox degrades atomicity guarantees.
-	if !outcomeDurable && c.ConsistencyLevel() >= cell.L2 {
-		c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())),
-			slog.String("durability_mode", mode.String()))
-	}
 	return nil
 }
 

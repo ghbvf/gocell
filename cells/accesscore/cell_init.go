@@ -2,7 +2,6 @@ package accesscore
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -25,35 +24,19 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// resolveEmitter runs the Cell-boundary Emitter resolution. Two mutually
-// exclusive paths populate c.emitter: WithEmitter(e) (pre-populated) or
-// WithOutboxDeps(pub, writer) (raw deps composed via cell.ResolveEmitter).
-// Extracted from initValidate to keep cognitive complexity under the lint
-// ceiling.
+// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
+// warn) and applies the per-cell rbacEmitterMode side-effect.
+//
+// accesscore uses DirectPublishFailClosed: security topics (session.*, user.*,
+// role.*) must not drop on publisher failure. Per-entry fail-open opt-in is
+// outbox.Entry.FailurePolicy — archtest OUTBOX-TOPIC-FAILOPEN-01 bans opt-in
+// for security topics.
 //
 // ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
 func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
-	hasEmitter := c.emitter != nil
-	hasPending := c.pendingOutboxPub != nil || c.pendingOutboxWriter != nil
-	if hasEmitter && hasPending {
-		return errcode.New(errcode.ErrCellInvalidConfig,
-			"accesscore: WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
-	}
-
-	var outcomeDurable bool
-	if hasEmitter {
-		outcomeDurable = outbox.ReportDurable(c.emitter)
-		if mode == cell.DurabilityDurable && !outcomeDurable {
-			return errcode.New(errcode.ErrCellMissingOutbox,
-				"accesscore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
-		}
-	} else {
-		// DirectEmitter default fail-closed (k8s apiserver audit model): any
-		// entry that needs fail-open opts in at construction time via
-		// outbox.Entry.FailurePolicy = FailurePolicyFailOpen. Security topics
-		// (session.*, user.*, role.*) must not opt in — enforced by
-		// tools/archtest OUTBOX-TOPIC-FAILOPEN-01.
-		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
+	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
+		EmitterConfig: cell.EmitterConfig{
 			CellID:            "accesscore",
 			Mode:              mode,
 			Publisher:         c.pendingOutboxPub,
@@ -61,24 +44,18 @@ func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 			TxRunner:          c.txRunner,
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
-		})
-		if err != nil {
-			return err
-		}
-		c.emitter = outcome.Emitter
-		outcomeDurable = outcome.Durable
+		},
+		PreResolved:      c.emitter,
+		ConsistencyLevel: c.ConsistencyLevel(),
+	})
+	if err != nil {
+		return err
 	}
+	c.emitter = outcome.Emitter
+	c.rbacEmitterMode = outcome.Durable
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	c.rbacEmitterMode = outcomeDurable
-
-	// L2 warning: running without transactional outbox degrades atomicity guarantees.
-	if !outcomeDurable && c.ConsistencyLevel() >= cell.L2 {
-		c.logger.Warn("accesscore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())))
-	}
 	return nil
 }
 

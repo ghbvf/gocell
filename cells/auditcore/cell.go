@@ -156,56 +156,9 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
-	// Cell-boundary Emitter resolution. Two mutually exclusive paths:
-	//   (a) WithEmitter(e) was used → c.emitter is pre-populated; skip ResolveEmitter.
-	//   (b) WithOutboxDeps(pub, writer) was used → compose via cell.ResolveEmitter.
-	hasEmitter := c.emitter != nil
-	hasPending := c.pendingOutboxPub != nil || c.pendingOutboxWriter != nil
-	if hasEmitter && hasPending {
-		return errcode.New(errcode.ErrCellInvalidConfig,
-			"auditcore: WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
+	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
+		return err
 	}
-	var outcomeDurable bool
-	if hasEmitter && deps.DurabilityMode == cell.DurabilityDurable && !outbox.ReportDurable(c.emitter) {
-		return errcode.New(errcode.ErrCellMissingOutbox,
-			"auditcore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
-	}
-	if hasEmitter {
-		outcomeDurable = outbox.ReportDurable(c.emitter)
-	}
-	if !hasEmitter {
-		// DirectEmitter default fail-closed (k8s apiserver audit model):
-		// audit-chain events (audit.appended, integrity-verified) are the
-		// source of truth for compliance; publisher failure must surface to
-		// caller so ops notices outages instead of silently losing events.
-		// Opt-in fail-open is per-entry via outbox.Entry.FailurePolicy, and
-		// archtest OUTBOX-TOPIC-FAILOPEN-01 bans it for audit.* topics.
-		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-			CellID:            "auditcore",
-			Mode:              deps.DurabilityMode,
-			Publisher:         c.pendingOutboxPub,
-			OutboxWriter:      c.pendingOutboxWriter,
-			TxRunner:          c.txRunner,
-			Logger:            c.logger,
-			DirectPublishMode: outbox.DirectPublishFailClosed,
-		})
-		if err != nil {
-			return err
-		}
-		c.emitter = outcome.Emitter
-		outcomeDurable = outcome.Durable
-	}
-	// L2 warning: running without transactional outbox degrades atomicity guarantees.
-	// Parity with accesscore/configcore — issues Warn in both WithEmitter and
-	// WithOutboxDeps paths when the resolved emitter is non-durable at L2+.
-	if !outcomeDurable && c.ConsistencyLevel() >= cell.L2 {
-		c.logger.Warn("auditcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())))
-	}
-	c.pendingOutboxPub = nil
-	c.pendingOutboxWriter = nil
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	c.initSlices()
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
@@ -216,6 +169,40 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 	return c.initQuerySlice(deps.DurabilityMode)
+}
+
+// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
+// warn) and clears the pending outbox dep fields.
+//
+// auditcore uses DirectPublishFailClosed: audit-chain events (audit.appended,
+// integrity-verified) are the source of truth for compliance; publisher
+// failure must surface to the caller so ops notices outages instead of
+// silently losing events. Opt-in fail-open is per-entry via
+// outbox.Entry.FailurePolicy, and archtest OUTBOX-TOPIC-FAILOPEN-01 bans it
+// for audit.* topics.
+func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
+	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
+		EmitterConfig: cell.EmitterConfig{
+			CellID:            "auditcore",
+			Mode:              mode,
+			Publisher:         c.pendingOutboxPub,
+			OutboxWriter:      c.pendingOutboxWriter,
+			TxRunner:          c.txRunner,
+			Logger:            c.logger,
+			DirectPublishMode: outbox.DirectPublishFailClosed,
+		},
+		PreResolved:      c.emitter,
+		ConsistencyLevel: c.ConsistencyLevel(),
+	})
+	if err != nil {
+		return err
+	}
+	c.emitter = outcome.Emitter
+	c.pendingOutboxPub = nil
+	c.pendingOutboxWriter = nil
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	return nil
 }
 
 // resolveHMACKey populates c.hmacKey from config if not set via option.

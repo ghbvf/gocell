@@ -123,3 +123,71 @@ func isNooperDep(dep any) bool {
 	n, ok := dep.(Nooper)
 	return ok && n.Noop()
 }
+
+// CellEmitterInputs bundles the Cell-side inputs for ResolveCellEmitter.
+// Embeds EmitterConfig and adds the two knobs shared by every Cell's
+// Init-time emitter resolution: the pre-resolved emitter (WithEmitter) and
+// the Cell's consistency level (for the L2 non-durable Warn).
+type CellEmitterInputs struct {
+	EmitterConfig
+	// PreResolved is the emitter set directly via Cell.WithEmitter(e).
+	// When non-nil, ResolveCellEmitter skips ResolveEmitter and validates that
+	// durable mode requires a durable PreResolved (ReportDurable==true).
+	PreResolved outbox.Emitter
+	// ConsistencyLevel is the owning Cell's consistency level; used to decide
+	// whether the L2 non-durable Warn log fires.
+	ConsistencyLevel Level
+}
+
+// ResolveCellEmitter is the Cell-side wrapper around ResolveEmitter that
+// enforces the contract shared by accesscore/auditcore/configcore:
+//
+//  1. PreResolved (WithEmitter) and raw deps (WithOutboxDeps) are mutually
+//     exclusive — both set returns ErrCellInvalidConfig.
+//  2. PreResolved + durable mode requires a durable emitter; otherwise returns
+//     ErrCellMissingOutbox.
+//  3. Otherwise delegate to ResolveEmitter.
+//  4. When the resolved emitter is non-durable and the Cell's consistency
+//     level is L2 or higher, emit a Warn explaining the degraded atomicity
+//     guarantee. The log carries cell, consistency_level, durability_mode.
+//
+// Per-cell side-effects (e.g. AccessCore.rbacEmitterMode) remain at the call
+// site and read outcome.Durable from the return value.
+//
+// ref: kernel/cell.ResolveEmitter — the primitive this wraps.
+func ResolveCellEmitter(in CellEmitterInputs) (EmitterOutcome, error) {
+	hasEmitter := in.PreResolved != nil
+	hasPending := in.Publisher != nil || in.OutboxWriter != nil
+	if hasEmitter && hasPending {
+		return EmitterOutcome{}, errcode.New(errcode.ErrCellInvalidConfig,
+			in.CellID+": WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
+	}
+
+	var outcome EmitterOutcome
+	if hasEmitter {
+		durable := outbox.ReportDurable(in.PreResolved)
+		if in.Mode == DurabilityDurable && !durable {
+			return EmitterOutcome{}, errcode.New(errcode.ErrCellMissingOutbox,
+				in.CellID+": WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
+		}
+		outcome = EmitterOutcome{Emitter: in.PreResolved, Durable: durable}
+	} else {
+		resolved, err := ResolveEmitter(in.EmitterConfig)
+		if err != nil {
+			return EmitterOutcome{}, err
+		}
+		outcome = resolved
+	}
+
+	if !outcome.Durable && in.ConsistencyLevel >= L2 {
+		logger := in.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		logger.Warn(in.CellID+": running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+			slog.String("cell", in.CellID),
+			slog.Int("consistency_level", int(in.ConsistencyLevel)),
+			slog.String("durability_mode", in.Mode.String()))
+	}
+	return outcome, nil
+}
