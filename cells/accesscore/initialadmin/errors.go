@@ -18,7 +18,8 @@ var (
 	errCredFileExists = errors.New("initialadmin: credential file already exists")
 
 	// errCredFileTampered is returned by removeCredentialFile when the file
-	// permission is not 0600, indicating the file may have been modified by an
-	// operator or malicious process.
-	errCredFileTampered = errors.New("initialadmin: credential file mode unexpectedly changed")
+	// security state deviates from the expected policy: on Unix this means the
+	// mode is no longer 0600; on Windows it means the DACL protection, ACE count,
+	// ACE type, or access mask has been altered.
+	errCredFileTampered = errors.New("initialadmin: credential file security state unexpectedly changed; policy violated")
 )

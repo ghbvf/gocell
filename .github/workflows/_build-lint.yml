@@ -176,6 +176,10 @@ jobs:
         with:
           go-version: "1.25"
           cache-dependency-path: go.sum
+      - name: Vet (cross-platform unit subset)
+        run: go vet ./runtime/shutdown/... ./cells/accesscore/initialadmin/... ./runtime/config/... ./kernel/governance/...
+        shell: bash
+
       - name: Cross-platform unit smoke
         # Note: -race requires CGO; available on macOS but not on bare windows-latest.
         # Enable -race on macOS to maximise race-detector coverage.
