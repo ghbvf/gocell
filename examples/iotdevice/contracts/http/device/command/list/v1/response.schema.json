@@ -10,12 +10,14 @@
         "properties": {
           "id": { "type": "string" },
           "deviceId": { "type": "string" },
+          "commandType": { "type": "string" },
           "payload": { "type": "string" },
           "status": { "type": "string" },
+          "attempt": { "type": "integer" },
           "createdAt": { "type": "string", "format": "date-time" },
-          "ackedAt": { "type": "string", "format": "date-time" }
+          "completedAt": { "type": "string", "format": "date-time" }
         },
-        "required": ["id", "deviceId", "payload", "status", "createdAt"],
+        "required": ["id", "deviceId", "commandType", "payload", "status", "attempt", "createdAt"],
         "additionalProperties": false
       }
     },
