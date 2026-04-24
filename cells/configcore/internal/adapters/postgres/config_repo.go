@@ -21,22 +21,47 @@ import (
 
 // ctxCanceledError returns an infra-category errcode for context.Canceled /
 // context.DeadlineExceeded errors surfaced during a scan. Emits a slog.Warn
-// at call origin so operators can distinguish client cancellation from real
-// DB outages (both map to HTTP 500) in log aggregators even when the response
-// write fails due to the same cancellation.
+// at the point of detection (inside this method, not at the callers) so
+// operators can distinguish client cancellation from real DB outages (both
+// map to HTTP 500) in log aggregators even when the response write fails due
+// to the same cancellation.
+// The receiver r is used only to access r.logger for the Warn side-effect.
+// Attrs intentionally omit `key`: config key names can leak sensitive-data
+// location (e.g. "db.password" implies encrypted secret exists). The key is
+// preserved in InternalMessage for internal triage only.
+// ref: FiloSottile/age — error paths do not expose identity of attempted keys.
 func (r *ConfigRepository) ctxCanceledError(ctx context.Context, op, key string, err error) *errcode.Error {
 	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
 		return nil
 	}
 	r.logger.WarnContext(ctx, "config repo: request context canceled during scan",
 		slog.String("op", op),
-		slog.String("key", key),
 		slog.String("cause", err.Error()))
 	return &errcode.Error{
 		Code:            errcode.ErrConfigRepoQuery,
 		Message:         "config repo query failed",
 		InternalMessage: fmt.Sprintf("config repo: %s ctx canceled key=%s", op, key),
 		Cause:           err,
+		Category:        errcode.CategoryInfra,
+	}
+}
+
+// cryptoOpError constructs a uniform *errcode.Error for encrypt/decrypt
+// operation failures. Message carries a generic descriptor for the public
+// error channel; InternalMessage embeds the identifier (config key or
+// configID) for internal triage. Both encryptValue/decryptValue and their
+// version-scoped variants funnel through this factory to eliminate
+// asymmetry and prevent key-name leakage into the public Message.
+//
+// ref: google/tink aead/subtle/aes_gcm.go — symmetric crypto errors do not
+// carry key identifiers in Error() strings.
+// ref: FiloSottile/age age.go — encrypt errors use recipient index, not key.
+func (r *ConfigRepository) cryptoOpError(code errcode.Code, op, identifier string, cause error) *errcode.Error {
+	return &errcode.Error{
+		Code:            code,
+		Message:         fmt.Sprintf("config repo: %s failed", op),
+		InternalMessage: fmt.Sprintf("config repo: %s failed (%s)", op, identifier),
+		Cause:           cause,
 		Category:        errcode.CategoryInfra,
 	}
 }
@@ -155,7 +180,7 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 	aad := configcrypto.AADForConfig(cellID, key)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("config repo: encrypt value for key %s: %w", key, err)
+		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigRepoQuery, "encrypt", "key="+key, err)
 	}
 	return ct, keyID, nonce, edk, nil
 }
@@ -170,13 +195,7 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 	aad := configcrypto.AADForConfig(cellID, key)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
-		return "", &errcode.Error{
-			Code:            errcode.ErrConfigDecryptFailed,
-			Message:         "config repo: decrypt failed",
-			InternalMessage: fmt.Sprintf("config repo: decrypt failed for key %s", key),
-			Cause:           err,
-			Category:        errcode.CategoryInfra,
-		}
+		return "", r.cryptoOpError(errcode.ErrConfigDecryptFailed, "decrypt", "key="+key, err)
 	}
 	return string(pt), nil
 }
@@ -193,7 +212,7 @@ func (r *ConfigRepository) encryptVersionValue(ctx context.Context, configID, va
 	aad := configcrypto.AADForVersion(cellID, configID)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
-		return nil, "", nil, nil, fmt.Errorf("config repo: encrypt version value for config_id %s: %w", configID, err)
+		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigRepoQuery, "encrypt version", "config_id="+configID, err)
 	}
 	return ct, keyID, nonce, edk, nil
 }
@@ -209,13 +228,7 @@ func (r *ConfigRepository) decryptVersionValue(ctx context.Context, configID str
 	aad := configcrypto.AADForVersion(cellID, configID)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
-		return "", &errcode.Error{
-			Code:            errcode.ErrConfigDecryptFailed,
-			Message:         "config repo: decrypt version failed",
-			InternalMessage: fmt.Sprintf("config repo: decrypt version failed for config_id %s", configID),
-			Cause:           err,
-			Category:        errcode.CategoryInfra,
-		}
+		return "", r.cryptoOpError(errcode.ErrConfigDecryptFailed, "decrypt version", "config_id="+configID, err)
 	}
 	return string(pt), nil
 }
@@ -308,6 +321,8 @@ func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKey
 //
 // op is the method name used only in InternalMessage for operator debugging;
 // key is the lookup key surfaced the same way.
+// Uses r.ctxCanceledError for the ctx-cancel branch (see that method for the
+// logger side-effect rationale).
 func (r *ConfigRepository) scanConfigOrMapError(ctx context.Context, row Row, op, key string) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
 	e, ct, keyID, edk, nonce, err := scanConfigRow(row)
 	if err == nil {

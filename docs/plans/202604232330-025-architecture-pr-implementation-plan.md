@@ -187,6 +187,8 @@
 
 **依赖**：PR-A5a 落地后再做，复用其 TxRunner helper + `ResolveEmitter`。
 
+**Round-2 review 遗留**（PR#238 登记 backlog）：PR238-FU1 decrypt-CategoryAuth-eval / PR238-FU2 infra-bucket-counter-audit（触发时 + 配套 governance 静态规则）/ PR238-FU3 ctx-cancel-integ-test / PR238-FU4 legacy-test-dedup / PR238-FU5 cell-split-layout-normalize / PR238-FU6 ctx-cancel op-细化。详见 `docs/backlog.md`。
+
 ---
 
 ### PR-A6 EventRouter 身份拆分 + typed event payload + marshal err 显式（预计 7h）

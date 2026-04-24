@@ -147,6 +147,8 @@ func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
 			assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
 		})
 		t.Run("Update_SelectForUpdate/"+tc.name, func(t *testing.T) {
 			seqDB := &sequencedMockDB{rows: []*mockRow{{scanErr: tc.scanErr}}}
@@ -156,6 +158,10 @@ func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, errcode.IsInfraError(err))
 			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
 		})
 		t.Run("GetVersion/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
@@ -165,6 +171,10 @@ func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, errcode.IsInfraError(err))
 			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
 		})
 		t.Run("Update_Returning/"+tc.name, func(t *testing.T) {
 			// SELECT FOR UPDATE succeeds (sensitive=false); UPDATE RETURNING ctx-cancels.
@@ -177,6 +187,10 @@ func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, errcode.IsInfraError(err))
 			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
 		})
 		t.Run("Delete/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
@@ -185,6 +199,10 @@ func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
 			require.Error(t, err)
 			require.True(t, errcode.IsInfraError(err))
 			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
 		})
 	}
 }

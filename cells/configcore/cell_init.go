@@ -64,7 +64,8 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if !outcome.Durable && c.ConsistencyLevel() >= cell.L2 {
 		c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
 			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())))
+			slog.Int("consistency_level", int(c.ConsistencyLevel())),
+			slog.String("durability_mode", deps.DurabilityMode.String()))
 	}
 
 	if err := c.ensureCursorCodec(deps); err != nil {
