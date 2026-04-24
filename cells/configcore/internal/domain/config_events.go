@@ -1,29 +1,21 @@
 package domain
 
+import "github.com/ghbvf/gocell/cells/configcore/events"
+
 // Event payload structs for configcore (L2 OutboxFact).
 //
 // JSON field names are camelCase per cell-patterns.md (HTTP DTO 和事件 payload
 // 统一 camelCase). The previous snake_case fields (config_id, target_version,
 // new_version) were retired as part of PR-A6's full-break sweep.
 //
-// Structs live in internal/domain alongside topics.go so a single import gives
-// producer slices both the wire shape and the routing key — the configcore
-// analogue of accesscore's internal/dto/session_events.go.
+// State-sync payload aliases point at cells/configcore/events so other cells
+// can decode public config events without importing configcore/internal.
 
 // ConfigEntryUpsertedEvent is the payload for event.config.entry-upserted.v1.
-// Produced by configwrite on Create / Update and by configpublish.Rollback
-// after restoring the live entry to the rollback snapshot.
-type ConfigEntryUpsertedEvent struct {
-	Key     string `json:"key"`
-	Value   string `json:"value"`
-	Version int    `json:"version"`
-}
+type ConfigEntryUpsertedEvent = events.EntryUpserted
 
 // ConfigEntryDeletedEvent is the payload for event.config.entry-deleted.v1.
-// Produced by configwrite on Delete.
-type ConfigEntryDeletedEvent struct {
-	Key string `json:"key"`
-}
+type ConfigEntryDeletedEvent = events.EntryDeleted
 
 // ConfigVersionPublishedEvent is the payload for
 // event.config.version-published.v1. Produced by configpublish.Publish.

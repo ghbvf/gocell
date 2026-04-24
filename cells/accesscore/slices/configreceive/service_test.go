@@ -6,14 +6,11 @@ import (
 	"log/slog"
 	"testing"
 
+	configevents "github.com/ghbvf/gocell/cells/configcore/events"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func stringPtr(v string) *string {
-	return &v
-}
 
 func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
 	tests := []struct {
@@ -27,9 +24,9 @@ func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-			payload, err := json.Marshal(ConfigEntryUpsertedEvent{
+			payload, err := json.Marshal(configevents.EntryUpserted{
 				Key:     "jwt.ttl",
-				Value:   stringPtr(tt.value),
+				Value:   tt.value,
 				Version: 1,
 			})
 			require.NoError(t, err)
@@ -80,7 +77,7 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 
 func TestHandleEntryDeleted_ValidPayload(t *testing.T) {
 	svc := NewService(slog.Default())
-	payload, err := json.Marshal(ConfigEntryDeletedEvent{Key: "jwt.ttl"})
+	payload, err := json.Marshal(configevents.EntryDeleted{Key: "jwt.ttl"})
 	require.NoError(t, err)
 
 	entry := outbox.Entry{
@@ -131,9 +128,9 @@ func TestWrapLegacyHandler_EntryUpserted_ValidPayload_Ack(t *testing.T) {
 	svc := NewService(slog.Default())
 	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
-	payload, err := json.Marshal(ConfigEntryUpsertedEvent{
+	payload, err := json.Marshal(configevents.EntryUpserted{
 		Key:     "jwt.ttl",
-		Value:   stringPtr(""),
+		Value:   "",
 		Version: 1,
 	})
 	require.NoError(t, err)
