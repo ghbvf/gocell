@@ -54,8 +54,9 @@ func WithEmitter(e outbox.Emitter) Option {
 // cell.ResolveEmitter.
 //
 // Accumulative: a nil argument leaves the previously-set value in place;
-// multiple calls combine their non-nil arguments. Mutually exclusive with
-// WithEmitter.
+// multiple calls combine their non-nil arguments. Does NOT clear previous
+// state — `WithOutboxDeps(nil, nil)` is a no-op, not a reset. Mutually
+// exclusive with WithEmitter; Init() fails fast if both are set.
 func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
 	return func(c *AuditCore) {
 		if pub != nil {
@@ -157,6 +158,10 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if hasEmitter && hasPending {
 		return errcode.New(errcode.ErrCellInvalidConfig,
 			"auditcore: WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
+	}
+	if hasEmitter && deps.DurabilityMode == cell.DurabilityDurable && !outbox.ReportDurable(c.emitter) {
+		return errcode.New(errcode.ErrCellMissingOutbox,
+			"auditcore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
 	}
 	if !hasEmitter {
 		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{

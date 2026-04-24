@@ -126,7 +126,11 @@ func isNooperDep(dep any) bool {
 
 // DirectPublishModeForDurability picks the DirectPublishFailureMode a Cell
 // should request from its DirectEmitter based on durability intent. Durable
-// mode returns durablePolicy; demo (and any unknown mode) returns demoPolicy.
+// mode returns durablePolicy; DurabilityDemo and any other (unknown) mode
+// value returns demoPolicy. The default-to-demo fallback is deliberate — any
+// future DurabilityMode value gets the safer non-failing policy by default,
+// and callers adding new modes must extend this function explicitly rather
+// than rely on silent fallthrough.
 //
 // Centralizes the translation that accesscore/auditcore previously hard-coded
 // inline and configcore expressed via a per-cell helper, so all three cells

@@ -57,8 +57,9 @@ func WithEmitter(e outbox.Emitter) Option {
 // cell.ResolveEmitter.
 //
 // Accumulative: a nil argument leaves the previously-set value in place;
-// multiple calls combine their non-nil arguments. Mutually exclusive with
-// WithEmitter.
+// multiple calls combine their non-nil arguments. Does NOT clear previous
+// state — `WithOutboxDeps(nil, nil)` is a no-op, not a reset. Mutually
+// exclusive with WithEmitter; Init() fails fast if both are set.
 func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
 	return func(c *ConfigCore) {
 		if pub != nil {

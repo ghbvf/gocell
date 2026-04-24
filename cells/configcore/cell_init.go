@@ -23,8 +23,8 @@ import (
 )
 
 // Init constructs all slices and registers them. If pgPool is set
-// (via WithPostgresDefaults), the PG repos are built here after all options
-// have been applied (so WithKeyProvider can precede or follow WithPostgresDefaults).
+// (via WithPostgresPool), the PG repos are built here after all options
+// have been applied (so WithKeyProvider can precede or follow WithPostgresPool).
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
@@ -86,6 +86,10 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 	var outcomeDurable bool
 	if hasEmitter {
 		outcomeDurable = outbox.ReportDurable(c.emitter)
+		if mode == cell.DurabilityDurable && !outcomeDurable {
+			return errcode.New(errcode.ErrCellMissingOutbox,
+				"configcore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
+		}
 	} else {
 		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
 			CellID:       "configcore",

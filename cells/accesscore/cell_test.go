@@ -250,6 +250,24 @@ func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
 	assert.Contains(t, err.Error(), "mutually exclusive")
 }
 
+// TestInit_WithEmitter_DurableRequiresDurableEmitter guards the production
+// safety invariant: in DurabilityDurable mode, direct-injected emitters must
+// be durable. Injecting a NoopEmitter (non-durable) in durable mode is a
+// wiring mistake that would silently downgrade L2 atomicity.
+func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithCursorCodec(testCursorCodec),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithEmitter(outbox.NewNoopEmitter()), // non-durable
+		WithTxManager(durableTxRunner{}),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "durable")
+}
+
 func TestAccessCore_Lifecycle(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()

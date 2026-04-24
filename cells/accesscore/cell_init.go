@@ -21,14 +21,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// initValidate performs fail-fast validation of required dependencies before
-// constructing slices. Extracted from Init to reduce cognitive complexity.
-func (c *AccessCore) initValidate(deps cell.Dependencies) error {
-	// Cell-boundary Emitter resolution. Two mutually exclusive paths:
-	//   (a) WithEmitter(e) was used → c.emitter is pre-populated; skip ResolveEmitter.
-	//   (b) WithOutboxDeps(pub, writer) was used → compose via cell.ResolveEmitter.
-	// Setting both simultaneously is a wiring mistake; fail fast.
-	// ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
+// resolveEmitter runs the Cell-boundary Emitter resolution. Two mutually
+// exclusive paths populate c.emitter: WithEmitter(e) (pre-populated) or
+// WithOutboxDeps(pub, writer) (raw deps composed via cell.ResolveEmitter).
+// Extracted from initValidate to keep cognitive complexity under the lint
+// ceiling.
+//
+// ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
+func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 	hasEmitter := c.emitter != nil
 	hasPending := c.pendingOutboxPub != nil || c.pendingOutboxWriter != nil
 	if hasEmitter && hasPending {
@@ -38,15 +38,15 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 
 	var outcomeDurable bool
 	if hasEmitter {
-		// Direct-injection path: emitter already wired; consult its
-		// DurabilityReporter (defaults to false when not implemented).
 		outcomeDurable = outbox.ReportDurable(c.emitter)
+		if mode == cell.DurabilityDurable && !outcomeDurable {
+			return errcode.New(errcode.ErrCellMissingOutbox,
+				"accesscore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
+		}
 	} else {
-		// Compose path: the kernel helper owns pairing/nil validation
-		// and durable-mode fail-fast.
 		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
 			CellID:       "accesscore",
-			Mode:         deps.DurabilityMode,
+			Mode:         mode,
 			Publisher:    c.pendingOutboxPub,
 			OutboxWriter: c.pendingOutboxWriter,
 			TxRunner:     c.txRunner,
@@ -56,7 +56,7 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 			// failure in durable mode matches demo semantics (non-critical sink).
 			// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
 			DirectPublishMode: cell.DirectPublishModeForDurability(
-				deps.DurabilityMode,
+				mode,
 				outbox.DirectPublishFailOpen,
 				outbox.DirectPublishFailOpen,
 			),
@@ -67,10 +67,8 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		c.emitter = outcome.Emitter
 		outcomeDurable = outcome.Durable
 	}
-	// Pending raw deps consumed; clear to prevent accidental later use.
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil
-
 	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	c.rbacEmitterMode = outcomeDurable
 
@@ -79,6 +77,15 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		c.logger.Warn("accesscore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
 			slog.String("cell", c.ID()),
 			slog.Int("consistency_level", int(c.ConsistencyLevel())))
+	}
+	return nil
+}
+
+// initValidate performs fail-fast validation of required dependencies before
+// constructing slices. Extracted from Init to reduce cognitive complexity.
+func (c *AccessCore) initValidate(deps cell.Dependencies) error {
+	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
+		return err
 	}
 
 	if c.jwtIssuer == nil || c.jwtVerifier == nil {

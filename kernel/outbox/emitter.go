@@ -11,6 +11,11 @@ import (
 
 // Emitter emits an outbox entry either by writing it to a durable outbox or by
 // directly publishing its canonical wire envelope.
+//
+// Implementations may optionally satisfy DurabilityReporter to expose whether
+// their sink is backed by durable (transactional outbox) storage. Callers that
+// need to decide L2/L0 slice upgrades should use ReportDurable, which returns
+// false for any Emitter that does not implement the optional interface.
 type Emitter interface {
 	Emit(ctx context.Context, entry Entry) error
 }

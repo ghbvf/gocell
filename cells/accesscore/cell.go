@@ -78,6 +78,10 @@ func WithEmitter(e outbox.Emitter) Option {
 // ResolveEmitter still apply (demo mode allows publisher-only; durable mode
 // requires real writer + txRunner).
 //
+// Does NOT clear previously-set deps: `WithOutboxDeps(nil, nil)` is a no-op,
+// not a reset. To switch between direct-injection (WithEmitter) and composed
+// (WithOutboxDeps) paths, construct a fresh Cell instead of trying to toggle.
+//
 // Mutually exclusive with WithEmitter — Init() fails fast if both are set.
 func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
 	return func(c *AccessCore) {
