@@ -143,3 +143,29 @@ func TestNewInMemoryNonceStore_NegativeMaxAge_Fails(t *testing.T) {
 	_, err := NewInMemoryNonceStore(-time.Second)
 	require.Error(t, err)
 }
+
+func TestInMemoryNonceStore_Kind_ReportsInMemory(t *testing.T) {
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, NonceStoreKindInMemory, store.Kind())
+}
+
+func TestNoopNonceStore_AlwaysPermits(t *testing.T) {
+	store := NewNoopNonceStore()
+	// First use.
+	require.NoError(t, store.CheckAndMark(context.Background(), "any-nonce"))
+	// Second use of the same nonce — must still succeed (disabled replay check).
+	require.NoError(t, store.CheckAndMark(context.Background(), "any-nonce"))
+}
+
+func TestNoopNonceStore_Kind_ReportsNoop(t *testing.T) {
+	assert.Equal(t, NonceStoreKindNoop, NewNoopNonceStore().Kind())
+}
+
+// TestNonceStoreKind_Values pins the public constant values so downstream
+// matchers (cmd/corebundle.SharedDeps.validateControlPlane) do not drift.
+func TestNonceStoreKind_Values(t *testing.T) {
+	assert.Equal(t, NonceStoreKind("noop"), NonceStoreKindNoop)
+	assert.Equal(t, NonceStoreKind("in_memory"), NonceStoreKindInMemory)
+	assert.Equal(t, NonceStoreKind("distributed"), NonceStoreKindDistributed)
+}

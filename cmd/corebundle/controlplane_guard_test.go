@@ -47,7 +47,7 @@ func TestInternalGuardFromEnv_WithSecret_GuardRejects401WhenNoHeader(t *testing.
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	guarded := guard(inner)
+	guarded := guard.Middleware()(inner)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/access/roles", nil)
@@ -115,7 +115,7 @@ func TestInternalGuardFromEnv_DefaultStoreRejectsReplay(t *testing.T) {
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	guarded := guard(inner)
+	guarded := guard.Middleware()(inner)
 
 	const path = "/internal/v1/access/roles"
 	token := auth.GenerateServiceToken(ring, http.MethodGet, path, "", time.Now())
@@ -146,4 +146,36 @@ func TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, guard,
 		"real mode with valid service secret must install a non-nil guard")
+	// Real mode also requires the guard's store to be replay-safe; the
+	// SharedDeps.Validate gate later rejects NonceStoreKindNoop, but a
+	// guard that was built without the in-memory default would have
+	// already bypassed the gate by returning the wrong Kind.
+	assert.Equal(t, auth.NonceStoreKindInMemory, guard.NonceStore().Kind(),
+		"real mode guard must default to the in-memory nonce store "+
+			"(multi-pod deployments replace it with a shared store)")
+}
+
+// TestInternalGuardFromEnv_NonceStoreTTLExtendsBeyondTokenWindow pins the
+// invariant that the default nonce store's retention window is at least as
+// long as the token validity window plus the edge buffer — shrinking the TTL
+// below ServiceTokenMaxAge would reintroduce the replay window the PR closes.
+//
+// We check the TTL indirectly: first register a nonce just after boot,
+// advance within the token window, and verify the replay is still rejected.
+func TestInternalGuardFromEnv_NonceStoreTTLExtendsBeyondTokenWindow(t *testing.T) {
+	secret := freshTestServiceSecret(t)
+	t.Setenv("GOCELL_SERVICE_SECRET", secret)
+	guard, err := internalGuardFromEnv("real")
+	require.NoError(t, err)
+	require.NotNil(t, guard)
+
+	// Feed the same nonce twice to the backing store — directly, not via
+	// ServiceTokenMiddleware, so the test does not depend on time of day
+	// or token signing specifics.
+	ctx := t.Context()
+	store := guard.NonceStore()
+	require.NoError(t, store.CheckAndMark(ctx, "nonce-ttl-probe"),
+		"first insert must succeed")
+	require.ErrorIs(t, store.CheckAndMark(ctx, "nonce-ttl-probe"),
+		auth.ErrNonceReused, "same nonce within TTL must be rejected")
 }

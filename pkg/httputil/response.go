@@ -357,6 +357,11 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrKeyProviderRotateFailed:  http.StatusInternalServerError,
 	errcode.ErrConfigDecryptFailed:      http.StatusInternalServerError,
 	errcode.ErrConfigKeyMissing:         http.StatusInternalServerError,
+	// Control-plane startup configuration errors — fail-fast at boot, never
+	// reach HTTP in practice. 500 is the conservative choice if one ever
+	// escapes: operator misconfiguration is a deployment bug, not a client bug.
+	errcode.ErrControlplaneServiceSecretMissing: http.StatusInternalServerError,
+	errcode.ErrControlplaneNonceStoreMissing:    http.StatusInternalServerError,
 	// Note: ErrKeyProviderTransient and ErrVaultAuthFailed are mapped to 503
 	// in the section above — infrastructure unavailability is retryable and
 	// should not be conflated with internal bugs.

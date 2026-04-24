@@ -89,7 +89,7 @@ func defaultRuntimeOptions(
 	if shared.InternalGuard != nil {
 		// PR-A14a: InternalGuard attaches to the internal listener's mux chain
 		// as the sole authentication layer for /internal/v1/*.
-		opts = append(opts, bootstrap.WithInternalMiddleware(shared.InternalGuard))
+		opts = append(opts, bootstrap.WithInternalMiddleware(shared.InternalGuard.Middleware()))
 	}
 	return opts
 }

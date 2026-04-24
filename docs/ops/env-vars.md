@@ -24,7 +24,7 @@ Missing required variables cause fail-fast before any assembly initialization.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
-| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **Real mode** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C6). Value is used as raw UTF-8 bytes (not base64-decoded). To generate: `openssl rand -base64 32`. Empty in dev mode disables the guard (Warn logged). |
+| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **Real mode** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C6). Value is used as raw UTF-8 bytes (not base64-decoded). To generate: `openssl rand -base64 32`. Empty in dev mode disables the guard (Warn logged). PR-A25: when the guard is installed, an in-memory replay-defense `NonceStore` is wired automatically so a captured token cannot be replayed within its 5 min validity window. Real-mode startup fails fast with `ERR_CONTROLPLANE_SERVICE_SECRET_MISSING` if the env var is empty, or `ERR_CONTROLPLANE_NONCE_STORE_MISSING` if the guard was somehow wired without a replay-safe store. Multi-pod deployments must inject a shared store (e.g. Redis) via `auth.WithServiceTokenNonceStore`; the in-memory default only protects against replay on a single pod. |
 | `GOCELL_SERVICE_SECRET_PREVIOUS` | Previous HMAC secret for zero-downtime rotation | — | No | Optional; tried after current secret fails verification. |
 
 ## Per-Cell Session and Cursor Keys

@@ -58,11 +58,23 @@ func WithServiceTokenClock(fn func() time.Time) ServiceTokenOption {
 	}
 }
 
-// WithNonceStore sets a NonceStore for replay prevention. When set, the
-// middleware rejects tokens whose nonce has already been consumed within
-// the NonceStore's TTL window.
-func WithNonceStore(ns NonceStore) ServiceTokenOption {
-	return func(c *serviceTokenConfig) { c.nonceStore = ns }
+// WithServiceTokenNonceStore sets a NonceStore for replay prevention.
+//
+// When the supplied store's Kind is not NonceStoreKindNoop, the middleware
+// rejects tokens whose nonce has already been consumed within the store's
+// TTL window. The zero default is NoopNonceStore (replay check disabled);
+// production deployments must supply a replay-safe store and
+// cmd/corebundle.SharedDeps.Validate enforces this in adapter mode "real".
+//
+// Passing nil is a no-op: the default NoopNonceStore is retained rather than
+// propagating a nil interface through the authenticator pipeline.
+func WithServiceTokenNonceStore(ns NonceStore) ServiceTokenOption {
+	return func(c *serviceTokenConfig) {
+		if ns == nil {
+			return
+		}
+		c.nonceStore = ns
+	}
 }
 
 // WithServiceTokenMetrics sets the AuthMetrics for ServiceTokenMiddleware.
@@ -165,7 +177,11 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 // Principal construction is fully delegated to NewServiceTokenAuthenticator
 // so that the service identity shape is defined in a single place.
 func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
-	cfg := serviceTokenConfig{now: time.Now, logger: slog.Default()}
+	cfg := serviceTokenConfig{
+		now:        time.Now,
+		logger:     slog.Default(),
+		nonceStore: NewNoopNonceStore(),
+	}
 	for _, o := range opts {
 		o(&cfg)
 	}
