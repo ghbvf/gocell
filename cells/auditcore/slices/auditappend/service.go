@@ -127,7 +127,9 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	persistErr := s.runPersist(ctx, persistFn)
 	if persistErr != nil {
 		s.logger.Error("audit-append: failed to persist entry",
-			slog.Any("error", persistErr), slog.String("event_id", entry.ID))
+			slog.Any("error", persistErr),
+			slog.String("event_id", entry.ID),
+			slog.String("event_type", entry.EventType))
 		return persistErr
 	}
 

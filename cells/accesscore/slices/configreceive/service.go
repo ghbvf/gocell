@@ -19,14 +19,28 @@ const (
 	TopicConfigVersionPublished = "event.config.version-published.v1"
 )
 
+// ConfigEntryWrittenAction enumerates the CRUD actions the entry-written event
+// can carry. Duplicated locally instead of imported from configcore's
+// internal/domain — cross-cell internal imports are forbidden by CLAUDE.md.
+// Kept in lockstep with the producer-side enum; the wire contract (see
+// contracts/event/config/entry-written/v1/payload.schema.json) is the actual
+// source of truth for both sides.
+type ConfigEntryWrittenAction string
+
+const (
+	configEntryActionCreated ConfigEntryWrittenAction = "created"
+	configEntryActionUpdated ConfigEntryWrittenAction = "updated"
+	configEntryActionDeleted ConfigEntryWrittenAction = "deleted"
+)
+
 // ConfigEntryWrittenEvent is the payload for event.config.entry-written.v1.
 // Mirrors configcore/internal/domain/config_events.go shape without importing
 // another cell's internal/ — cross-cell imports are forbidden by CLAUDE.md.
 type ConfigEntryWrittenEvent struct {
-	Action  string `json:"action"`
-	Key     string `json:"key"`
-	Value   string `json:"value,omitempty"`
-	Version int    `json:"version,omitempty"`
+	Action  ConfigEntryWrittenAction `json:"action"`
+	Key     string                   `json:"key"`
+	Value   string                   `json:"value,omitempty"`
+	Version int                      `json:"version,omitempty"`
 }
 
 // ConfigVersionPublishedEvent is the payload for event.config.version-published.v1.
@@ -63,10 +77,10 @@ func (s *Service) HandleEntryWritten(_ context.Context, entry outbox.Entry) erro
 	}
 
 	switch event.Action {
-	case "created", "updated":
+	case configEntryActionCreated, configEntryActionUpdated:
 		s.logger.Info("config-receive: config changed",
-			slog.String("key", event.Key), slog.String("action", event.Action))
-	case "deleted":
+			slog.String("key", event.Key), slog.String("action", string(event.Action)))
+	case configEntryActionDeleted:
 		s.logger.Info("config-receive: config deleted",
 			slog.String("key", event.Key))
 	default:
@@ -74,7 +88,7 @@ func (s *Service) HandleEntryWritten(_ context.Context, entry outbox.Entry) erro
 		//
 		// ref: K8s workqueue fail-closed semantics; Watermill Nack on unknown type
 		s.logger.Warn("config-receive: unknown action, routing to dead letter",
-			slog.String("action", event.Action), slog.String("key", event.Key))
+			slog.String("action", string(event.Action)), slog.String("key", event.Key))
 		return outbox.NewPermanentError(
 			fmt.Errorf("unknown action %q for key %q", event.Action, event.Key),
 		)

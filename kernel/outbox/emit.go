@@ -15,6 +15,12 @@ import (
 // transport-only — callers remain responsible for any surrounding transaction
 // or atomicity scope their persistence path requires.
 //
+// Error contract: Emit does not log on failure. Callers MUST either return the
+// error (so the surrounding HTTP handler / consumer / runPersist path logs it
+// at the correct correlation-ID scope) or log it themselves before swallowing.
+// Silently discarding the returned error defeats the S41 guard this helper
+// exists to enforce.
+//
 // ref: ThreeDotsLabs/watermill components/cqrs/marshaler.go — typed struct at
 // publisher, reflection-based marshal at call site. GoCell keeps the helper
 // minimal (no CQRS command/event taxonomy, no header shim); callers that need

@@ -14,11 +14,11 @@ import (
 func TestHandleEntryWritten_ValidPayload(t *testing.T) {
 	tests := []struct {
 		name   string
-		action string
+		action ConfigEntryWrittenAction
 	}{
-		{"created", "created"},
-		{"updated", "updated"},
-		{"deleted", "deleted"},
+		{"created", configEntryActionCreated},
+		{"updated", configEntryActionUpdated},
+		{"deleted", configEntryActionDeleted},
 	}
 
 	for _, tt := range tests {
