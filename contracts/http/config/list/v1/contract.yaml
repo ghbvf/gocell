@@ -1,4 +1,4 @@
-id: http.config.get.v1
+id: http.config.list.v1
 kind: http
 ownerCell: configcore
 consistencyLevel: L1
@@ -9,19 +9,22 @@ endpoints:
     - accesscore
   http:
     method: GET
-    path: /api/v1/config/{key}
-    pathParams:
-      key:
+    path: /api/v1/config/
+    queryParams:
+      cursor:
         type: string
+        required: false
+      limit:
+        type: integer
+        required: false
     successStatus: 200
     noContent: false
     responses:
+      400:
+        description: "Bad request — invalid cursor or limit parameter"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
-      404:
-        description: "Config key not found"
-        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
-  request: request.schema.json
   response: response.schema.json

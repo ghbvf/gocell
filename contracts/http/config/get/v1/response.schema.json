@@ -1,53 +1,23 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.config.get.v1.response",
-  "description": "Single entry: {data: ConfigEntry}. List: {data: [...], nextCursor, hasMore}.",
+  "description": "Single ConfigEntry wrapped in {data: {...}} envelope. Paginated list moved to http.config.list.v1.",
   "type": "object",
+  "required": ["data"],
+  "additionalProperties": false,
   "properties": {
     "data": {
-      "description": "Single ConfigEntry object or array of entries (list endpoint)."
-    },
-    "nextCursor": { "type": "string" },
-    "hasMore": { "type": "boolean" }
-  },
-  "required": ["data"],
-  "oneOf": [
-    {
-      "description": "Single entry response (GET /{key})",
+      "type": "object",
+      "required": ["id", "key", "value", "version", "createdAt", "updatedAt"],
+      "additionalProperties": false,
       "properties": {
-        "data": {
-          "type": "object",
-          "properties": {
-            "id": { "type": "string" },
-            "key": { "type": "string" },
-            "value": { "type": "string" },
-            "version": { "type": "integer" },
-            "createdAt": { "type": "string", "format": "date-time" },
-            "updatedAt": { "type": "string", "format": "date-time" }
-          },
-          "required": ["id", "key", "value", "version", "createdAt", "updatedAt"]
-        }
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "value": { "type": "string" },
+        "version": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
       }
-    },
-    {
-      "description": "Paginated list response (GET /)",
-      "properties": {
-        "data": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "properties": {
-              "id": { "type": "string" },
-              "key": { "type": "string" },
-              "value": { "type": "string" },
-              "version": { "type": "integer" }
-            }
-          }
-        },
-        "nextCursor": { "type": "string" },
-        "hasMore": { "type": "boolean" }
-      },
-      "required": ["data", "nextCursor", "hasMore"]
     }
-  ]
+  }
 }
