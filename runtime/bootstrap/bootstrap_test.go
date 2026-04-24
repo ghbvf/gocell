@@ -2497,7 +2497,10 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	b := New(WithPrimaryListener(ln))
+	b := New(
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
+	)
 	go func() { errCh <- b.Run(ctx) }()
 
 	// Wait for server to be ready.
