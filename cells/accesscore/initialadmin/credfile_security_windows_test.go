@@ -170,7 +170,7 @@ func TestRemoveCredentialFile_DeletesEvenIfTampered(t *testing.T) {
 		t.Fatalf("SetNamedSecurityInfo (strip ACL): %v", err)
 	}
 
-	err = removeCredentialFile(path)
+	err := removeCredentialFile(path)
 	if err == nil {
 		t.Fatal("expected errCredFileTampered, got nil")
 	}
