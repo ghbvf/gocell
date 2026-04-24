@@ -8,13 +8,43 @@
 package contracts
 
 // HTTPTransport holds transport-level details for HTTP contracts.
-// It is optional so legacy HTTP contracts can remain schema-only until migrated.
+// It elevates the wire-level contract (method, path, path/query parameters,
+// status codes, bodyless semantics) to first-class metadata so static tooling
+// (codegen, trace span labels, contract-health) can derive the full API shape
+// from contract.yaml alone — without inspecting JSON Schema files.
+//
+// ref: goadesign/goa v3 expr/http_endpoint.go — Params modeled as a typed
+// attribute map; path params derived from the path template at parse time.
+// ref: go-kratos/kratos cmd/protoc-gen-go-http — path params parsed via
+// regex on the path template string.
 type HTTPTransport struct {
-	Method        string               `yaml:"method"        json:"method"`
-	Path          string               `yaml:"path"          json:"path"`
-	SuccessStatus int                  `yaml:"successStatus" json:"successStatus"`
-	NoContent     bool                 `yaml:"noContent"     json:"noContent"`
-	Responses     map[int]HTTPResponse `yaml:"responses,omitempty" json:"responses,omitempty"`
+	Method        string                 `yaml:"method"        json:"method"`
+	Path          string                 `yaml:"path"          json:"path"`
+	PathParams    map[string]ParamSchema `yaml:"pathParams,omitempty"  json:"pathParams,omitempty"`
+	QueryParams   map[string]ParamSchema `yaml:"queryParams,omitempty" json:"queryParams,omitempty"`
+	SuccessStatus int                    `yaml:"successStatus" json:"successStatus"`
+	NoContent     bool                   `yaml:"noContent"     json:"noContent"`
+	Responses     map[int]HTTPResponse   `yaml:"responses,omitempty" json:"responses,omitempty"`
+}
+
+// ParamSchema describes a single HTTP path or query parameter.
+// Type must be one of the well-known primitive names in ParamTypes.
+// Required is omitted for path parameters (always required by definition);
+// for query parameters, nil is treated as required=false.
+type ParamSchema struct {
+	Type     string `yaml:"type"               json:"type"`
+	Required *bool  `yaml:"required,omitempty" json:"required,omitempty"`
+	Format   string `yaml:"format,omitempty"   json:"format,omitempty"`
+}
+
+// ParamTypes lists the accepted `type` values for ParamSchema.
+// Governance rule FMT-13 enforces membership.
+var ParamTypes = map[string]bool{
+	"string":  true,
+	"integer": true,
+	"number":  true,
+	"boolean": true,
+	"uuid":    true,
 }
 
 // HTTPResponse describes a declared error response for a specific HTTP status code.

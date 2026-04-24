@@ -6,11 +6,19 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contracts"
 )
+
+// pathPlaceholderRe extracts every `{name}` placeholder from an HTTP path
+// template. It matches goa's HTTPWildcardRegex and Kratos' buildPathVars
+// pattern so pathParams can be reconciled against the path string alone.
+var pathPlaceholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // Package-level lookup maps for validation rules, avoiding per-call allocation.
 var (
@@ -403,6 +411,136 @@ func (v *Validator) validateFMT13ForContract(c *metadata.ContractMeta) []Validat
 	results = append(results, v.validateFMT13Path(c, httpMeta, file)...)
 	results = append(results, v.validateFMT13Status(c, httpMeta, file)...)
 	results = append(results, v.validateFMT13NoContent(c, httpMeta, file)...)
+	results = append(results, v.validateFMT13PathParams(c, httpMeta, file)...)
+	results = append(results, v.validateFMT13QueryParams(c, httpMeta, file)...)
+	return results
+}
+
+// extractPathPlaceholders returns the ordered, unique set of `{name}` tokens
+// found in path. Order follows first appearance to keep error messages stable.
+func extractPathPlaceholders(path string) []string {
+	matches := pathPlaceholderRe.FindAllStringSubmatch(path, -1)
+	if len(matches) == 0 {
+		return nil
+	}
+	seen := make(map[string]bool, len(matches))
+	out := make([]string, 0, len(matches))
+	for _, m := range matches {
+		name := m[1]
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		out = append(out, name)
+	}
+	return out
+}
+
+// sortedParamKeys returns the map keys in stable order for deterministic diagnostics.
+func sortedParamKeys(m map[string]contracts.ParamSchema) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// validateFMT13PathParams enforces two-way consistency between the `{name}`
+// placeholders in `endpoints.http.path` and the keys of `endpoints.http.pathParams`:
+// each placeholder must have a typed declaration, and no declaration may name
+// a placeholder missing from the path. Also validates per-entry `type` / `format`.
+func (v *Validator) validateFMT13PathParams(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
+	placeholders := extractPathPlaceholders(h.Path)
+	declared := h.PathParams
+
+	var results []ValidationResult
+
+	// Placeholder without declaration → Error.
+	for _, name := range placeholders {
+		if _, ok := declared[name]; !ok {
+			results = append(results, v.newResult(
+				codeFMT13, SeverityError, IssueRequired,
+				file,
+				"endpoints.http.pathParams",
+				fmt.Sprintf("http contract %q path placeholder %q has no pathParams declaration", c.ID, name),
+			))
+		}
+	}
+
+	// Declaration without matching placeholder → Error.
+	if len(declared) > 0 {
+		placeholderSet := make(map[string]bool, len(placeholders))
+		for _, name := range placeholders {
+			placeholderSet[name] = true
+		}
+		for _, name := range sortedParamKeys(declared) {
+			if !placeholderSet[name] {
+				results = append(results, v.newResult(
+					codeFMT13, SeverityError, IssueInvalid,
+					file,
+					fmt.Sprintf("endpoints.http.pathParams.%s", name),
+					fmt.Sprintf("http contract %q declares pathParams.%s but path %q has no such placeholder", c.ID, name, h.Path),
+				))
+			}
+		}
+	}
+
+	// Per-entry schema (type whitelist, no Required on path params since they
+	// are required by definition).
+	for _, name := range sortedParamKeys(declared) {
+		p := declared[name]
+		results = append(results, v.validateFMT13ParamSchema(c, file, "pathParams", name, p, true)...)
+	}
+
+	return results
+}
+
+// validateFMT13QueryParams validates per-entry schema for every queryParams key.
+// Query parameters have no path counterpart, so there is no two-way check —
+// only type whitelisting and format sanity.
+func (v *Validator) validateFMT13QueryParams(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta, file string) []ValidationResult {
+	var results []ValidationResult
+	for _, name := range sortedParamKeys(h.QueryParams) {
+		p := h.QueryParams[name]
+		results = append(results, v.validateFMT13ParamSchema(c, file, "queryParams", name, p, false)...)
+	}
+	return results
+}
+
+// validateFMT13ParamSchema validates the `type` / `required` / `format` triplet
+// of a single ParamSchema. `isPath` toggles path-specific rules: `required: false`
+// on a path parameter is a contradiction (path placeholders are required by
+// definition) and is rejected.
+func (v *Validator) validateFMT13ParamSchema(c *metadata.ContractMeta, file, kind, name string, p contracts.ParamSchema, isPath bool) []ValidationResult {
+	var results []ValidationResult
+	fieldBase := fmt.Sprintf("endpoints.http.%s.%s", kind, name)
+
+	if p.Type == "" {
+		results = append(results, v.newResult(
+			codeFMT13, SeverityError, IssueRequired,
+			file,
+			fieldBase+".type",
+			fmt.Sprintf("http contract %q %s.%s must specify type", c.ID, kind, name),
+		))
+	} else if !contracts.ParamTypes[p.Type] {
+		results = append(results, v.newResult(
+			codeFMT13, SeverityError, IssueInvalid,
+			file,
+			fieldBase+".type",
+			fmt.Sprintf("http contract %q %s.%s type %q is not supported", c.ID, kind, name, p.Type),
+		))
+	}
+
+	if isPath && p.Required != nil && !*p.Required {
+		results = append(results, v.newResult(
+			codeFMT13, SeverityError, IssueMismatch,
+			file,
+			fieldBase+".required",
+			fmt.Sprintf("http contract %q pathParams.%s cannot be optional; path placeholders are required by definition", c.ID, name),
+		))
+	}
+
 	return results
 }
 
