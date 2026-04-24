@@ -115,6 +115,9 @@ var _ Emitter = (*DirectEmitter)(nil)
 // ref: kernel/cell.EmitterOutcome.Durable — the primary consumer; Cells
 // use the reported value to decide whether optional slices (e.g. rbacassign)
 // upgrade from L0 to L2.
+// ref: github.com/ThreeDotsLabs/watermill message/router.go —
+// `disabledPublisher` pattern; an explicit typed indicator lets callers
+// branch on capability without runtime type switches.
 type DurabilityReporter interface {
 	Durable() bool
 }

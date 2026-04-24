@@ -577,6 +577,12 @@ func releaseReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string
 // Callers must treat a non-nil error as a permanent failure and route to dead
 // letter without delivering to subscribers.
 //
+// The wire format contract is defined in kernel/outbox/envelope.go (WireMessage
+// struct + EnvelopeSchemaV1 constant). runtime/outbox previously delegated here
+// via a thin wrapper; PR-A5c removed the wrapper so callers reach the kernel
+// package directly.
+//
+// ref: kernel/outbox.UnmarshalEnvelope — the envelope contract authority.
 // ref: Watermill message/router.go handleMessage — handler error → Nack, no skip
 func unmarshalInboundEntry(topic string, payload []byte) (outbox.Entry, error) {
 	return outbox.UnmarshalEnvelope(topic, payload)

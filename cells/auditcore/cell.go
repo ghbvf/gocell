@@ -41,10 +41,16 @@ func WithArchiveStore(s ports.ArchiveStore) Option {
 }
 
 // WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
-// Preferred path for tests and composition roots. Mutually exclusive with
-// WithOutboxDeps.
+// Preferred path for tests and for composition roots that have already built
+// an Emitter.
 //
-// ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
+// Mutually exclusive with WithOutboxDeps — setting both causes Init() to
+// fail fast with ErrCellInvalidConfig. Durability for L2 slice decisions is
+// derived from outbox.ReportDurable(emitter); emitters that do not implement
+// DurabilityReporter are treated as non-durable.
+//
+// ref: kubernetes/client-go rest.RESTClientFor — factory composes the typed
+// client; resulting struct does not retain raw config fields.
 func WithEmitter(e outbox.Emitter) Option {
 	return func(c *AuditCore) { c.emitter = e }
 }

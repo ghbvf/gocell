@@ -4,9 +4,12 @@
 // subscription wiring live in cell_routes.go; constructor + options live
 // in cell.go; Init() + slice construction lives in cell_init.go.
 //
-// This split (A5a-R5 / PR-A5c F4) mirrors the cell.go physical split
-// introduced in PR-A5a: init / routes / providers each in its own file
-// so a reader can locate a concern by file name alone.
+// This split closes A5a-R5 CELL-ROUTES-PROVIDERS-SPLIT-01 as part of
+// PR-A5c OUTBOX-EMITTER-UNIFY (PR #245); it mirrors the cell.go physical
+// split introduced in PR-A5a (PR #234) so a reader can locate a concern
+// by file name alone. See:
+//   - docs/plans/202604232330-025-architecture-pr-implementation-plan.md
+//     (PR-A5c entry, retroactively marks A5a-R5 ✅ delivered via PR #245)
 package accesscore
 
 import (
