@@ -1,4 +1,4 @@
-//go:build unix
+//go:build unix || windows
 
 package initialadmin
 
@@ -21,9 +21,11 @@ import (
 // ---------------------------------------------------------------------------
 
 // makeLifecycleDeps constructs a BootstrapDeps suitable for lifecycle tests.
+// Uses capturingHandlerCross (defined in test_helpers_crossplatform_test.go)
+// so this helper compiles on both Unix and Windows.
 func makeLifecycleDeps(t *testing.T) BootstrapDeps {
 	t.Helper()
-	logger := slog.New(&capturingHandler{})
+	logger := slog.New(&capturingHandlerCross{})
 	return BootstrapDeps{
 		UserRepo: mem.NewUserRepository(),
 		RoleRepo: mem.NewRoleRepository(),
@@ -33,6 +35,7 @@ func makeLifecycleDeps(t *testing.T) BootstrapDeps {
 
 // makeLifecycleCfgOpts returns LifecycleOptions that point at a temp dir and
 // use a fast hasher so tests don't pay the bcrypt cost=12 penalty.
+// Uses cross-platform scheduler and password source helpers.
 func makeLifecycleCfgOpts(t *testing.T) []LifecycleOption {
 	t.Helper()
 	credPath := filepath.Join(t.TempDir(), "initial_admin_password")
@@ -40,8 +43,8 @@ func makeLifecycleCfgOpts(t *testing.T) []LifecycleOption {
 		WithCredentialPath(credPath),
 		WithTTL(time.Hour),
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		WithScheduler(newFakeScheduler()),
-		withPasswordSource(newFixedPasswordSource()),
+		WithScheduler(newFakeSchedulerCross()),
+		withPasswordSource(newFixedPasswordSourceCross()),
 	}
 }
 
@@ -50,7 +53,7 @@ func makeLifecycleCfgOpts(t *testing.T) []LifecycleOption {
 // ---------------------------------------------------------------------------
 
 func TestNewLifecycle_Options(t *testing.T) {
-	sched := newFakeScheduler()
+	sched := newFakeSchedulerCross()
 	clk := &fakeClock{t: time.Now()}
 	h := BcryptHasher{Cost: 4}
 
@@ -174,7 +177,7 @@ func TestLifecycle_StartWithBind_RepeatRun_AdminExists_NoCleaner(t *testing.T) {
 	}, bootstrapConfig{
 		CredentialPath: l.cfg.CredentialPath,
 		TTL:            l.cfg.TTL,
-		PasswordSource: newFixedPasswordSource(),
+		PasswordSource: newFixedPasswordSourceCross(),
 		Scheduler:      l.cfg.Scheduler,
 		Hasher:         l.cfg.Hasher,
 	})
@@ -254,7 +257,7 @@ func TestLifecycle_StartFail_CleanerRemainsNil(t *testing.T) {
 		WithCredentialPath(filepath.Join(t.TempDir(), "cred")),
 		WithTTL(-1*time.Second), // invalid TTL
 		WithPasswordHasher(BcryptHasher{Cost: 4}),
-		withPasswordSource(newFixedPasswordSource()),
+		withPasswordSource(newFixedPasswordSourceCross()),
 	)
 
 	deps := makeLifecycleDeps(t)

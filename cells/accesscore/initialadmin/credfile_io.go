@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -122,7 +123,7 @@ func readCredentialExpiresAt(path string) (time.Time, error) {
 	}
 	for _, line := range splitLines(string(data)) {
 		const prefix = "expires_at="
-		if len(line) > len(prefix) && line[:len(prefix)] == prefix {
+		if strings.HasPrefix(line, prefix) {
 			var ts int64
 			if _, scanErr := fmt.Sscanf(line[len(prefix):], "%d", &ts); scanErr != nil {
 				return time.Time{}, fmt.Errorf("initialadmin: parse expires_at: %w", scanErr)
