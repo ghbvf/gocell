@@ -44,6 +44,11 @@ func TestEncrypt_UsesDataKeyPath(t *testing.T) {
 	}
 }
 
+// TestEncryptDecrypt_DataKeyRoundTrip is the smoke-level happy-path round
+// trip for the datakey envelope. Decrypt-side wire-format assertions
+// (transit/decrypt path, ciphertext prefix, no AAD field on the wire) live
+// in TestVaultTransitHandle_DecryptRoundTrip (TC-2) in transit_provider_test.go;
+// keep them there so this file stays focused on the encrypt-path concern.
 func TestEncryptDecrypt_DataKeyRoundTrip(t *testing.T) {
 	fake := &fakeVaultClient{latestVersion: 5}
 	p := newTestProvider(t, fake)

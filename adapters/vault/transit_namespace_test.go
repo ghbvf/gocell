@@ -6,6 +6,10 @@ package vault
 // so that Login + datakey + decrypt + key reads + rotate all carry the
 // X-Vault-Namespace header. We exercise the helper directly with a real
 // vaultapi.Client (no Vault server needed) and assert via Client.Namespace().
+//
+// This file does not use fakeVaultClient — the namespace plumbing lives on
+// the real *vaultapi.Client, not behind the VaultClient interface, so the
+// tests touch the SDK type directly.
 
 import (
 	"testing"

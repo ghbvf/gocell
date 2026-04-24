@@ -31,8 +31,14 @@ func TestRotate_InvalidatesAndRefillsCache(t *testing.T) {
 	p := newTestProvider(t, fake)
 
 	// Cache is warmed by NewTransitKeyProvider's existence check; capture the
-	// baseline read count and assert no further reads on cache hits.
+	// baseline read count and assert no further reads on cache hits. A future
+	// constructor change that drops the existence check would silently weaken
+	// this test, so guard the implicit "construction issues at least one Read"
+	// invariant before relying on it.
 	baseline := fake.readCalls.Load()
+	if baseline == 0 {
+		t.Fatalf("expected NewTransitKeyProvider to issue at least one Read at construction; got 0")
+	}
 	for i := 0; i < 50; i++ {
 		if _, err := p.Current(context.Background()); err != nil {
 			t.Fatalf("Current loop[%d]: %v", i, err)

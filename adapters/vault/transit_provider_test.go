@@ -622,10 +622,11 @@ func TestVaultTransitHandle_KeyIDFromEdkPrefix(t *testing.T) {
 	override.writeFn = func(_ context.Context, path string, data map[string]any) (map[string]any, error) {
 		override.lastWritePath = path
 		override.lastWriteData = data
-		override.encryptCalls.Add(1)
-		// Production path is /datakey/plaintext/{key}. Generate a deterministic
-		// DEK and return v7 prefix regardless of latestVersion to simulate a rotate
-		// race between Current() and the Encrypt round-trip.
+		// Production Encrypt routes through /datakey/plaintext, so this override
+		// bumps datakeyCalls (not the legacy encryptCalls regression-guard
+		// counter). Returns v7 prefix regardless of latestVersion to simulate a
+		// rotate race between Current() and the Encrypt round-trip.
+		override.datakeyCalls.Add(1)
 		dek := make([]byte, 32)
 		for i := range dek {
 			dek[i] = byte(0x77 ^ i)

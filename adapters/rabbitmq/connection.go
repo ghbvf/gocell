@@ -674,6 +674,10 @@ var _ lifecycle.ManagedResource = (*Connection)(nil)
 // that would amplify load on every /readyz hit. Liveness vs readiness signals
 // come from the reconnect loop's NotifyClose feedback.
 //
+// The probe name carries the _ready suffix for parity with sibling adapter
+// probes (vault_transit_ready, etc.); operator dashboards and alert rules
+// consuming /readyz?verbose dependencies must reference the suffixed name.
+//
 // ref: kernel/lifecycle/managed_resource.go::Checkers — contract: nil = healthy.
 // ref: adapters/vault/transit_provider.go::Checkers — sibling adapter pattern.
 func (c *Connection) Checkers() map[string]func(context.Context) error {
