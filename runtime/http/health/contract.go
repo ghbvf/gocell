@@ -21,6 +21,14 @@ import (
 // If fn does not return within budget, the helper calls t.Errorf with a
 // descriptive message but does not call t.Fatal, so the surrounding test can
 // decide whether to continue exercising other checkers.
+//
+// Goroutine lifetime: if fn ignores ctx, the goroutine launched by this
+// helper will outlive the call. Callers whose test suites care about
+// goroutine hygiene (goleak, parallel tests) must arrange for fn to exit on
+// its own — typically by closing an external channel in t.Cleanup or
+// wrapping fn in a probe that responds to an alternate signal. The helper
+// intentionally does not spawn a secondary cancel goroutine because it
+// cannot force fn to return.
 func CheckCtxRespected(t testing.TB, fn Checker, budget time.Duration) {
 	t.Helper()
 	if fn == nil {

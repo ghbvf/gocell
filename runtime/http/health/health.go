@@ -257,17 +257,46 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		if verbose {
 			key = sfKeyVerbose
 		}
+		// computeReadyzSafe wraps aggregateCellHealth/runProbesParallel with
+		// a recover fence so a panic in any helper does not propagate to
+		// every sharer blocked on singleflight.Do (per-probe panics are
+		// already caught by runOneProbe — this layer covers the rarer
+		// "assembly helper panic" class).
 		shared, _, _ := h.sf.Do(key, func() (any, error) {
-			return h.computeReadyz(verbose), nil
+			return h.computeReadyzSafe(verbose), nil
 		})
-		result := shared.(readyzResult)
+		result, ok := shared.(readyzResult)
+		if !ok {
+			slog.Error("readyz: singleflight returned unexpected payload; failing closed",
+				slog.Any("value", shared))
+			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "unhealthy"})
+			return
+		}
 		writeReadyzResponse(w, h, result.allHealthy, verbose, result.cells, result.dependencies)
 	}
 }
 
+// computeReadyzSafe wraps computeReadyz with a recover fence so that a
+// panic in aggregateCellHealth, h.assembly.Health(), or any future helper
+// does not propagate out of singleflight.Do — which would otherwise surface
+// the panic to every concurrent sharer. On recover we fail closed with a
+// plain unhealthy result (no cells / dependencies) and log the event.
+// Per-probe panics are caught separately inside runOneProbe.
+func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("readyz: recovered panic during readiness computation",
+				slog.Any("panic", r))
+			result = readyzResult{allHealthy: false}
+		}
+	}()
+	return h.computeReadyz(verbose)
+}
+
 // computeReadyz runs the cell health snapshot + all readiness probes and
 // returns a readyzResult. Invoked inside singleflight.Do; constructs a fresh
-// result on each invocation.
+// result on each invocation. Callers must go through computeReadyzSafe so
+// that panics do not escape the singleflight boundary.
 func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	allHealthy, cells := h.aggregateCellHealth(verbose)
 
@@ -401,6 +430,8 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 
 // runOneProbe executes a single Checker inside a recover fence and returns a
 // ProbeResult. A panicking probe is caught and reported as unhealthy.
+// pr.Duration is written by the defer so it covers both the happy path and
+// the panic path in one place.
 func runOneProbe(ctx context.Context, fn Checker) (pr ProbeResult) {
 	start := time.Now()
 	defer func() {
@@ -412,7 +443,6 @@ func runOneProbe(ctx context.Context, fn Checker) (pr ProbeResult) {
 	}()
 
 	err := fn(ctx)
-	pr.Duration = time.Since(start) // updated again by defer, but set here for clarity
 	if err == nil {
 		pr.Status = "healthy"
 		return pr
@@ -427,14 +457,17 @@ func runOneProbe(ctx context.Context, fn Checker) (pr ProbeResult) {
 	return pr
 }
 
-// isDeadlineError reports whether the probe timed out due to the probe ctx
-// deadline. It checks both ctx.Err() (context was cancelled/timed-out) and
-// whether the returned error wraps context.DeadlineExceeded.
+// isDeadlineError reports whether the probe ended via context cancellation
+// rather than a domain-level failure. It returns true for both
+// DeadlineExceeded (aggregator timed the probe out) and Canceled (test
+// harnesses, shutdown paths) so operators see a uniform "timeout" status
+// instead of Canceled being reported as domain-level unhealthy. Distinct
+// semantics are still preserved in pr.Err for diagnostics.
 func isDeadlineError(ctx context.Context, err error) bool {
-	if ctx.Err() == context.DeadlineExceeded {
+	if ctx.Err() != nil {
 		return true
 	}
-	return errors.Is(err, context.DeadlineExceeded)
+	return errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled)
 }
 
 // verboseDecision inspects the request and returns:
@@ -454,6 +487,11 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	disabled := h.verboseDisabled
 	h.mu.RUnlock()
 	if disabled {
+		// Operators who set WithVerboseDisabled have explicitly waived the
+		// verbose endpoint; ?verbose gets the plain body. Debug-level log
+		// so the path is visible for diagnostics without spamming prod.
+		slog.Debug("readyz: verbose requested but endpoint is disabled; serving plain aggregate",
+			slog.String("remote_addr", r.RemoteAddr))
 		return false, false
 	}
 	if token == "" {
@@ -470,13 +508,16 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 }
 
 // sendVerboseDenied writes the 401 response for a rejected verbose request.
-// Body uses the project-standard errcode envelope so machine-side monitoring
-// can distinguish this from other 401s (e.g. JWT failures elsewhere).
+// Body uses the project-standard errcode envelope (code/message/details) so
+// machine-side monitoring can distinguish this from other 401s (e.g. JWT
+// failures elsewhere). The details map is empty today but the key is
+// present so consumers can rely on the shape.
 func (h *Handler) sendVerboseDenied(w http.ResponseWriter) {
 	writeJSON(w, http.StatusUnauthorized, map[string]any{
 		"error": map[string]any{
 			"code":    string(errcode.ErrReadyzVerboseDenied),
 			"message": "verbose output requires a matching X-Readyz-Token header",
+			"details": map[string]any{},
 		},
 	})
 }

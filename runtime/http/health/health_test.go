@@ -568,6 +568,9 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 				require.True(t, ok, "denied response must carry errcode envelope; got %v", body)
 				assert.Equal(t, "ERR_READYZ_VERBOSE_DENIED", errField["code"])
 				assert.Contains(t, errField["message"].(string), "X-Readyz-Token")
+				_, hasDetails := errField["details"].(map[string]any)
+				assert.True(t, hasDetails,
+					"denied envelope must include the standard details map (may be empty)")
 			}
 			if tt.wantVerboseBody {
 				_, hasCells := body["cells"]
@@ -837,8 +840,11 @@ func TestTruncateErrMsg(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := truncateErrMsg(tt.input, tt.max)
-			if tt.want != "" || (tt.want == "" && tt.wantLen == 0 && tt.input == "") {
-				// Exact match cases
+			// Exact-match cases are those that set `want` or use the
+			// empty-in / empty-out identity; length-based cases use
+			// `wantLen`. Either side may be set; they are mutually
+			// exclusive per fixture definition above.
+			if tt.want != "" || tt.input == "" {
 				assert.Equal(t, tt.want, got)
 			}
 			if tt.wantLen > 0 {

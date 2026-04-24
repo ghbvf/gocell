@@ -91,16 +91,23 @@ token-gated diagnostic channel.
 
 ### Strict 401 semantics
 
-`?verbose` requests are answered with the plain 200 body **only** when the
-supplied header matches the configured token. Every other combination —
-missing header, mismatched header, unset server-side token — returns
-`401 Unauthorized` with body:
+`?verbose` requests are routed like this:
+
+| Server state | Request | Response |
+|--------------|---------|----------|
+| `WithVerboseDisabled()` set (e.g. `GOCELL_READYZ_VERBOSE_DISABLED=1`) | any `?verbose` | **200 plain aggregate body** (verbose body inert) |
+| token configured + header matches | `?verbose` with matching `X-Readyz-Token` | **200 verbose body** |
+| token configured + header missing/mismatched | `?verbose` with wrong / no `X-Readyz-Token` | **401** `ERR_READYZ_VERBOSE_DENIED` |
+| token unset (and not disabled) — should never happen in prod (Validate refuses startup) | `?verbose` | **401** `ERR_READYZ_VERBOSE_DENIED` |
+
+The 401 body is:
 
 ```json
 {
   "error": {
     "code": "ERR_READYZ_VERBOSE_DENIED",
-    "message": "verbose output requires a matching X-Readyz-Token header"
+    "message": "verbose output requires a matching X-Readyz-Token header",
+    "details": {}
   }
 }
 ```
@@ -109,7 +116,9 @@ This is stricter than the pre-PR-A35 behaviour (which silently downgraded
 mismatched requests to 200) and intentionally so: the old behaviour hid
 misconfiguration (operator sets a wrong token → never sees verbose output
 but also never sees the failure). Strict 401 surfaces the problem on the
-first call.
+first call. `WithVerboseDisabled()` is the only path that returns 200 for
+`?verbose` without a token — it is an explicit operator opt-out, not a
+fallback.
 
 ## Probe contract
 
