@@ -17,6 +17,27 @@ import (
 // RegisterRoutes registers HTTP routes for accesscore.
 func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1/access", func(sub cell.RouteMux) {
+		// Interactive first-run admin provisioning, scoped under /access/ so
+		// the path prefix matches Cell ownership (Consul /acl/bootstrap
+		// convention, rather than Vault's top-level /sys/init). Both endpoints
+		// are Public: no admin exists yet to authenticate against; once an
+		// admin exists, the endpoint returns 410 Gone via a fast-path Status
+		// check before bcrypt runs.
+		sub.Route("/setup", func(s cell.RouteMux) {
+			auth.Declare(s, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/status",
+				Handler: http.HandlerFunc(c.setupHandler.HandleStatus),
+				Public:  true,
+			})
+			auth.Declare(s, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/admin",
+				Handler: http.HandlerFunc(c.setupHandler.HandleCreateAdmin),
+				Public:  true,
+			})
+		})
+
 		// Identity management: /api/v1/access/users
 		sub.Route("/users", c.identityHandler.RegisterRoutes)
 

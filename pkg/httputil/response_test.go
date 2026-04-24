@@ -98,6 +98,9 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		{errcode.ErrConfigRepoDuplicate, http.StatusConflict},
 		{errcode.ErrFlagDuplicate, http.StatusConflict},
 
+		// One-shot lifecycle retired -> 410
+		{errcode.ErrSetupAlreadyInitialized, http.StatusGone},
+
 		// Verify/kernel codes
 		{errcode.ErrCheckRefInvalid, http.StatusBadRequest},
 		{errcode.ErrZeroTestMatch, http.StatusNotFound},

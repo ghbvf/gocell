@@ -8,6 +8,7 @@ import (
 	"os"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 )
@@ -35,10 +36,15 @@ type SharedDeps struct {
 	// EventBus is the in-process event bus used for both publish and subscribe.
 	EventBus *eventbus.InMemoryEventBus
 
-	// InternalGuard is the service-token middleware protecting /internal/v1/*.
+	// InternalGuard is the service-token guard protecting /internal/v1/*.
 	// Required when Topology.RequireProductionControlPlane() is true; nil in
 	// dev mode (empty GOCELL_SERVICE_SECRET).
-	InternalGuard func(http.Handler) http.Handler
+	//
+	// Held as a typed value (rather than a bare middleware closure) so
+	// validateControlPlane can inspect the backing NonceStore and reject
+	// Noop implementations in production — a middleware func would make the
+	// replay-defense class invisible to SharedDeps.Validate.
+	InternalGuard *internalGuard
 
 	// PrimaryHTTPAddr is the bind address for the public HTTP listener
 	// (/api/v1/*, infra endpoints). Env GOCELL_HTTP_PRIMARY_ADDR; default ":8080".
@@ -125,9 +131,23 @@ func (d *SharedDeps) validateControlPlane() []error {
 				"to prevent anonymous /metrics exposure; scrapers must send X-Metrics-Token header"))
 	}
 	if d.InternalGuard == nil {
-		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
+		errs = append(errs, errcode.New(errcode.ErrControlplaneServiceSecretMissing,
 			"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" "+
 				"to protect /internal/v1/*"))
+	} else if ns := d.InternalGuard.NonceStore(); ns == nil {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
+			"internalGuard.nonceStore is nil; guard constructed without WithServiceTokenNonceStore"))
+	} else if kind := ns.Kind(); kind == auth.NonceStoreKindNoop {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
+			"control-plane NonceStore must be a replay-safe implementation in "+
+				"adapter mode \"real\"; NoopNonceStore detected — inject "+
+				"InMemoryNonceStore (single pod) or a shared store (multi-pod) "+
+				"via WithServiceTokenNonceStore"))
+	} else if kind == auth.NonceStoreKindInMemory && !d.Topology.SinglePodReplayProtection && d.Topology.RequireProductionControlPlane() {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
+			"in-memory nonce store requires GOCELL_SINGLE_POD=1 (single-pod deployments) "+
+				"or a distributed store via WithServiceTokenNonceStore (multi-pod); "+
+				"refuse fail-open"))
 	}
 	return errs
 }

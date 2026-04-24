@@ -254,7 +254,15 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	serviceSecret := freshTestServiceSecret(t)
 	ring, err := auth.NewHMACKeyRing([]byte(serviceSecret), nil)
 	require.NoError(t, err)
-	guard := auth.ServiceTokenMiddleware(ring)
+	// A replay-safe nonce store is mandatory on every prod-equivalent wiring
+	// of ServiceTokenMiddleware; matches the internalGuardFromEnv default.
+	//
+	// Shared across all subtests below — do NOT add t.Parallel() to the
+	// subtests without isolating the store per subtest, or the replay
+	// subtest's nonce can be consumed by a peer before it runs.
+	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenMaxAge + nonceStoreBuffer)
+	require.NoError(t, err)
+	guard := auth.ServiceTokenMiddleware(ring, auth.WithServiceTokenNonceStore(nonceStore))
 
 	eb := eventbus.New()
 	var nw outbox.Writer = outbox.NoopWriter{}
@@ -392,6 +400,40 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 			"expected guard+policy to pass and handler to return 200 (idempotent revoke); body=%s", bodyBytes)
 		assert.Contains(t, string(bodyBytes), `"revoked"`,
 			"response must contain revoke result; body=%s", bodyBytes)
+	})
+
+	// Internal listener + replay of the same service token → first 200 from
+	// handler, second 401 from guard (nonce store rejects the replay). Exercises
+	// the S-nonce P1 closure across the full HTTP stack: token signing, HMAC
+	// verification, nonce CheckAndMark, JSON error envelope formatting.
+	t.Run("internal_replay_same_nonce_401", func(t *testing.T) {
+		token := auth.GenerateServiceToken(ring,
+			http.MethodPost, "/internal/v1/access/roles/revoke", "", time.Now())
+		require.NotEmpty(t, token)
+
+		doReq := func() (int, string) {
+			body := strings.NewReader(`{"userId":"usr-2","roleId":"nonexistent"}`)
+			req, err := http.NewRequest(http.MethodPost,
+				fmt.Sprintf("http://%s/internal/v1/access/roles/revoke", internalAddr), body)
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "ServiceToken "+token)
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := testHTTPClient.Do(req)
+			require.NoError(t, err)
+			bodyBytes, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			return resp.StatusCode, string(bodyBytes)
+		}
+
+		status1, _ := doReq()
+		assert.Equal(t, http.StatusOK, status1,
+			"first use of valid token must pass through the guard")
+
+		status2, body2 := doReq()
+		assert.Equal(t, http.StatusUnauthorized, status2,
+			"replay of same nonce within TTL must be rejected by the guard")
+		assert.Contains(t, body2, "ERR_AUTH_REPLAY_DETECTED",
+			"replay response must carry the replay-specific error code; body=%s", body2)
 	})
 
 	// /api/v1/* on primary without token → 401 from JWT auth (guard not involved).

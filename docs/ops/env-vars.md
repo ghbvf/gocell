@@ -24,8 +24,9 @@ Missing required variables cause fail-fast before any assembly initialization.
 
 | Variable | Purpose | Default | Required | Notes |
 |---|---|---|---|---|
-| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **Real mode** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C6). Value is used as raw UTF-8 bytes (not base64-decoded). To generate: `openssl rand -base64 32`. Empty in dev mode disables the guard (Warn logged). |
+| `GOCELL_SERVICE_SECRET` | HMAC-SHA256 secret (≥ 32 bytes) for `ServiceTokenMiddleware` protecting `/internal/v1/*` | — | **Real mode** | Introduced in PR #AUTH-TRUST-BOUNDARY-160 (C6). Value is used as raw UTF-8 bytes (not base64-decoded); any UTF-8 string of ≥ 32 bytes is acceptable. Recommended generators: `openssl rand -base64 32` → 44 printable chars (base64 padded), used as raw bytes; `openssl rand -hex 32` → 64 hex chars, used as raw bytes. Both meet the 32-byte minimum. Empty in dev mode disables the guard (Warn logged). PR-A25: when the guard is installed, an in-memory replay-defense `NonceStore` is wired automatically so a captured token cannot be replayed within its 5 min validity window. Real-mode startup fails fast with `ERR_CONTROLPLANE_SERVICE_SECRET_MISSING` if the env var is empty, or `ERR_CONTROLPLANE_NONCE_STORE_MISSING` if the guard was somehow wired without a replay-safe store. Multi-pod deployments must inject a shared store (e.g. Redis) via `auth.WithServiceTokenNonceStore`; the in-memory default only protects against replay on a single pod. |
 | `GOCELL_SERVICE_SECRET_PREVIOUS` | Previous HMAC secret for zero-downtime rotation | — | No | Optional; tried after current secret fails verification. |
+| `GOCELL_SINGLE_POD` | Acknowledges that the deployment is single-pod and in-memory replay protection is sufficient | — | **Real mode** (when using default in-memory NonceStore) | Must be `1` in single-pod real-mode deployments to acknowledge in-memory replay defence scope; otherwise startup fails fast with `ERR_CONTROLPLANE_NONCE_STORE_MISSING`. Multi-pod deployments leave unset and inject a distributed NonceStore via `auth.WithServiceTokenNonceStore` (e.g. Redis). |
 
 ## Per-Cell Session and Cursor Keys
 
@@ -114,7 +115,7 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 | Variable | Purpose | Default | Accepted Values |
 |---|---|---|---|
 | `GOCELL_HTTP_PRIMARY_ADDR` | Primary listener bind address (public / API) | `:8080` | Any `host:port` accepted by `net.Listen("tcp", …)`. Use `0.0.0.0:8080` or a specific interface in production. |
-| `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `:9090` | Same format as primary. In production bind to an internal network segment (e.g. `10.0.0.10:9090`) so service-token / mTLS enforcement is the primary defence. |
+| `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `127.0.0.1:9090` | Same format as primary. **Default is loopback** so a dev deployment without a service-token guard is not trivially reachable across the network. Production deployments binding to an internal VPC interface (e.g. `10.0.0.10:9090`) must set this variable explicitly so service-token / mTLS enforcement is the primary defence. |
 
 Both addresses must be non-empty and distinct; startup fails fast otherwise. The primary listener also explicitly 404s `/internal/v1/*` paths so the internal prefix never leaks to the public network.
 

@@ -58,11 +58,23 @@ func WithServiceTokenClock(fn func() time.Time) ServiceTokenOption {
 	}
 }
 
-// WithNonceStore sets a NonceStore for replay prevention. When set, the
-// middleware rejects tokens whose nonce has already been consumed within
-// the NonceStore's TTL window.
-func WithNonceStore(ns NonceStore) ServiceTokenOption {
-	return func(c *serviceTokenConfig) { c.nonceStore = ns }
+// WithServiceTokenNonceStore sets a NonceStore for replay prevention.
+//
+// When the supplied store's Kind is not NonceStoreKindNoop, the middleware
+// rejects tokens whose nonce has already been consumed within the store's
+// TTL window. The zero default is NoopNonceStore (replay check disabled);
+// production deployments must supply a replay-safe store and
+// cmd/corebundle.SharedDeps.Validate enforces this in adapter mode "real".
+//
+// Passing nil is a no-op: the default NoopNonceStore is retained rather than
+// propagating a nil interface through the authenticator pipeline.
+func WithServiceTokenNonceStore(ns NonceStore) ServiceTokenOption {
+	return func(c *serviceTokenConfig) {
+		if ns == nil {
+			return
+		}
+		c.nonceStore = ns
+	}
 }
 
 // WithServiceTokenMetrics sets the AuthMetrics for ServiceTokenMiddleware.
@@ -165,7 +177,11 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 // Principal construction is fully delegated to NewServiceTokenAuthenticator
 // so that the service identity shape is defined in a single place.
 func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
-	cfg := serviceTokenConfig{now: time.Now, logger: slog.Default()}
+	cfg := serviceTokenConfig{
+		now:        time.Now,
+		logger:     slog.Default(),
+		nonceStore: NewNoopNonceStore(),
+	}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -206,14 +222,6 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 		return
 	}
 
-	// Log legacy 2-part format before validation so ops can observe the traffic.
-	if parts := strings.SplitN(token, ":", 3); len(parts) == 2 {
-		cfg.logger.WarnContext(r.Context(), "legacy service token format rejected",
-			slog.String("path", r.URL.Path),
-			slog.String("format", "2-part"),
-		)
-	}
-
 	p, ok, err := auth.Authenticate(r)
 	if err != nil {
 		writeServiceTokenError(cfg, err, w, r)
@@ -234,18 +242,37 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 
 // writeServiceTokenError maps a verifyServiceTokenPayload error to granular
 // metrics labels and the appropriate HTTP response. It preserves the
-// middleware's split between 401 (auth failures, replay) and 500 (nonce store
-// infrastructure failures) by inspecting the wrapped Cause.
+// middleware's split between 401 (auth failures, replay), 503 (nonce store
+// full), and 500 (nonce store infrastructure failures) by inspecting the
+// wrapped Cause.
+//
+// Branch order is load-bearing: the ErrNonceReused check MUST precede the
+// generic Cause check. Both replay and store-infra errors are wrapped via
+// WrapAuth and therefore carry a non-nil Cause; swapping the checks would
+// classify every replay as an infrastructure failure (500) instead of an
+// auth failure (401), downgrading a security signal to a server error.
 func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWriter, r *http.Request) {
 	// errors.Is traverses the full chain, so ErrNonceReused in the Cause matches.
 	if errors.Is(err, ErrNonceReused) {
 		cfg.metrics.recordServiceVerify("failure", "replay")
-		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "service token replay detected")
+		httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
+			string(errcode.ErrAuthReplayDetected), "service token replay detected")
+		return
+	}
+
+	// ErrNonceStoreFull: store is at capacity with no expired entries to reclaim.
+	// Return 503 (transient; not a replay signal, not a permanent auth failure).
+	if errors.Is(err, ErrNonceStoreFull) {
+		cfg.metrics.recordServiceVerify("failure", "nonce_store_full")
+		cfg.logger.Error("nonce store full; rejecting request",
+			slog.String("path", r.URL.Path))
+		httputil.WriteError(r.Context(), w, http.StatusServiceUnavailable, "ERR_INTERNAL", "service temporarily unavailable")
 		return
 	}
 
 	// If the error has a Cause (wrapped by WrapAuth for nonce check failures)
-	// that is NOT ErrNonceReused, it is a nonce store infrastructure failure.
+	// that is NOT ErrNonceReused or ErrNonceStoreFull, it is a nonce store
+	// infrastructure failure.
 	var ec *errcode.Error
 	if errors.As(err, &ec) && ec.Cause != nil {
 		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
@@ -255,7 +282,15 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 	}
 
 	// Classify remaining auth errors by their message for metric granularity.
+	// Legacy 2-part format produces a "legacy_format" reason — emit a warn log
+	// so ops can observe the traffic without a second split in the hot path.
 	reason := classifyServiceTokenVerifyError(err)
+	if reason == "legacy_format" {
+		cfg.logger.WarnContext(r.Context(), "legacy service token format rejected",
+			slog.String("path", r.URL.Path),
+			slog.String("format", "2-part"),
+		)
+	}
 	cfg.metrics.recordServiceVerify("failure", reason)
 	httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid service token")
 }

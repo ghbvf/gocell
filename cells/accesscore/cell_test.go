@@ -278,7 +278,7 @@ func TestAccessCore_Lifecycle(t *testing.T) {
 
 	// Init
 	require.NoError(t, c.Init(ctx, deps))
-	assert.Equal(t, 9, len(c.OwnedSlices()), "should have 9 slices")
+	assert.Equal(t, 10, len(c.OwnedSlices()), "should have 10 slices")
 
 	// Start
 	require.NoError(t, c.Start(ctx))

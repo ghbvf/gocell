@@ -9,7 +9,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -45,7 +47,7 @@ func TestInternalGuardFromEnv_WithSecret_GuardRejects401WhenNoHeader(t *testing.
 	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	guarded := guard(inner)
+	guarded := guard.Middleware()(inner)
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/access/roles", nil)
@@ -91,4 +93,86 @@ func TestInternalGuardFromEnv_RealMode_DemoPreviousServiceSecret_Rejected(t *tes
 		"error must name the offending env var")
 	assert.Contains(t, err.Error(), "well-known demo key",
 		"error must indicate the reason")
+}
+
+// TestInternalGuardFromEnv_DefaultStoreRejectsReplay verifies that the guard
+// produced by internalGuardFromEnv blocks same-nonce replay within the
+// ServiceToken validity window. Without a NonceStore, an attacker who
+// observes a valid ServiceToken (e.g. via a log leak or TLS-terminating
+// proxy) can replay it for up to 5 minutes; the guard MUST wire a default
+// store even in dev mode so the in-repo demo path is not silently vulnerable.
+func TestInternalGuardFromEnv_DefaultStoreRejectsReplay(t *testing.T) {
+	secret := freshTestServiceSecret(t)
+	t.Setenv("GOCELL_SERVICE_SECRET", secret)
+
+	guard, err := internalGuardFromEnv("") // dev mode still installs store
+	require.NoError(t, err)
+	require.NotNil(t, guard, "guard must be installed when secret is present")
+
+	ring, err := auth.NewHMACKeyRing([]byte(secret), nil)
+	require.NoError(t, err)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	guarded := guard.Middleware()(inner)
+
+	const path = "/internal/v1/access/roles"
+	token := auth.GenerateServiceToken(ring, http.MethodGet, path, "", time.Now())
+	require.NotEmpty(t, token, "token generation must succeed")
+
+	req1 := httptest.NewRequest(http.MethodGet, path, nil)
+	req1.Header.Set("Authorization", "ServiceToken "+token)
+	rec1 := httptest.NewRecorder()
+	guarded.ServeHTTP(rec1, req1)
+	require.Equal(t, http.StatusOK, rec1.Code, "first use of valid token must pass")
+
+	req2 := httptest.NewRequest(http.MethodGet, path, nil)
+	req2.Header.Set("Authorization", "ServiceToken "+token)
+	rec2 := httptest.NewRecorder()
+	guarded.ServeHTTP(rec2, req2)
+	assert.Equal(t, http.StatusUnauthorized, rec2.Code,
+		"replay of same nonce inside validity window must be rejected")
+}
+
+// TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret pins the S32
+// invariant: in real adapter mode, presence of GOCELL_SERVICE_SECRET MUST
+// produce a non-nil guard. service-token is currently the sole transport
+// authenticator for /internal/v1/* (no mTLS yet), so a nil guard here
+// silently exposes the control plane.
+func TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret(t *testing.T) {
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
+	guard, err := internalGuardFromEnv("real")
+	require.NoError(t, err)
+	require.NotNil(t, guard,
+		"real mode with valid service secret must install a non-nil guard")
+	// Real mode also requires the guard's store to be replay-safe; the
+	// SharedDeps.Validate gate later rejects NonceStoreKindNoop, but a
+	// guard that was built without the in-memory default would have
+	// already bypassed the gate by returning the wrong Kind.
+	assert.Equal(t, auth.NonceStoreKindInMemory, guard.NonceStore().Kind(),
+		"real mode guard must default to the in-memory nonce store "+
+			"(multi-pod deployments replace it with a shared store)")
+}
+
+// TestInternalGuardFromEnv_NonceStoreTTL_ExceedsTokenWindowByBuffer pins the
+// invariant that the nonce store TTL configured by internalGuardFromEnv exceeds
+// ServiceTokenMaxAge by at least nonceStoreBuffer. Shrinking the buffer to zero
+// would allow a nonce to expire at exactly the token validity boundary, creating
+// a race window. This test uses MaxAge() rather than driving real time so it
+// runs deterministically without sleeping.
+//
+// F6: also asserts nonceStoreBuffer > 0 to catch an accidental zero-constant edit.
+func TestInternalGuardFromEnv_NonceStoreTTL_ExceedsTokenWindowByBuffer(t *testing.T) {
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
+	t.Setenv("GOCELL_SINGLE_POD", "1") // required after F1: real mode + in_memory needs opt-in
+	guard, err := internalGuardFromEnv("real")
+	require.NoError(t, err)
+
+	store, ok := guard.NonceStore().(*auth.InMemoryNonceStore)
+	require.True(t, ok, "production guard must use *InMemoryNonceStore by default")
+	assert.GreaterOrEqual(t, store.MaxAge(), auth.ServiceTokenMaxAge+nonceStoreBuffer,
+		"nonce TTL must exceed token validity window by at least nonceStoreBuffer")
+	assert.Greater(t, nonceStoreBuffer, time.Duration(0),
+		"nonceStoreBuffer must be positive so exclusive age boundary has a safety margin")
 }

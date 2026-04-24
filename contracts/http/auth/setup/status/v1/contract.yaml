@@ -1,0 +1,16 @@
+id: http.auth.setup.status.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L0
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/access/setup/status
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json
