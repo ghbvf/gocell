@@ -141,7 +141,15 @@ func scanOutboxTopicFailOpen(root, path string) ([]outboxTopicViolation, error) 
 		return nil, err
 	}
 	rel = filepath.ToSlash(rel)
+	return scanOutboxTopicFailOpenAST(fset, file, rel), nil
+}
 
+// scanOutboxTopicFailOpenAST is the core AST-matching routine shared by the
+// production file scanner (scanOutboxTopicFailOpen) and the regression
+// fixture test. Given a parsed file + fileset, it returns every
+// outbox.Entry composite literal that opts into FailurePolicyFailOpen with
+// a Topic or EventType matching the security-sensitive prefix regex.
+func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string) []outboxTopicViolation {
 	var violations []outboxTopicViolation
 	ast.Inspect(file, func(n ast.Node) bool {
 		lit, ok := n.(*ast.CompositeLit)
@@ -163,19 +171,18 @@ func scanOutboxTopicFailOpen(root, path string) ([]outboxTopicViolation, error) 
 		default:
 			return true
 		}
-
 		if !entryHasFailOpenPolicy(lit) {
 			return true
 		}
 		violations = append(violations, outboxTopicViolation{
 			Rule:    outboxTopicRuleFailOpen,
-			File:    rel,
+			File:    fileLabel,
 			Line:    fset.Position(lit.Pos()).Line,
 			Message: fmt.Sprintf("outbox.Entry for topic %q opts into FailurePolicyFailOpen; security/audit events must remain FailClosed (leave FailurePolicy unset)", matched),
 		})
 		return true
 	})
-	return violations, nil
+	return violations
 }
 
 // isOutboxEntryLiteral matches `outbox.Entry{...}` and its variants
@@ -302,37 +309,7 @@ var _ = outbox.Entry{
 			fset := token.NewFileSet()
 			file, err := parser.ParseFile(fset, name+".go", tc.src, parser.SkipObjectResolution)
 			require.NoError(t, err)
-			var violations []outboxTopicViolation
-			ast.Inspect(file, func(n ast.Node) bool {
-				lit, ok := n.(*ast.CompositeLit)
-				if !ok {
-					return true
-				}
-				if !isOutboxEntryLiteral(lit) {
-					return true
-				}
-				topic, topicOK := extractStringField(lit, outboxTopicEntryField)
-				eventType, eventTypeOK := extractStringField(lit, outboxTopicEventTypeField)
-				var matched string
-				switch {
-				case topicOK && outboxSecurityTopicPattern.MatchString(topic):
-					matched = topic
-				case eventTypeOK && outboxSecurityTopicPattern.MatchString(eventType):
-					matched = eventType
-				default:
-					return true
-				}
-				if !entryHasFailOpenPolicy(lit) {
-					return true
-				}
-				violations = append(violations, outboxTopicViolation{
-					Rule:    outboxTopicRuleFailOpen,
-					File:    name + ".go",
-					Line:    fset.Position(lit.Pos()).Line,
-					Message: matched,
-				})
-				return true
-			})
+			violations := scanOutboxTopicFailOpenAST(fset, file, name+".go")
 			if tc.wantMatch {
 				assert.NotEmpty(t, violations, "fixture %q should have triggered the rule", name)
 			} else {
