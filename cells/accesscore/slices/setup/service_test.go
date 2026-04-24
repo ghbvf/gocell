@@ -6,8 +6,11 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,6 +18,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
@@ -102,7 +106,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Equal(t, "root", out.Username)
 	assert.Equal(t, "root@local", out.Email)
-	assert.True(t, len(out.ID) > 0 && out.ID[:4] == "usr-")
+	assert.True(t, strings.HasPrefix(out.ID, setup.UserIDPrefix))
 
 	// Verify admin role assigned
 	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
@@ -111,7 +115,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 
 	// Verify event emitted
 	require.Len(t, w.entries, 1, "one user.created event expected")
-	assert.Equal(t, setup.TopicUserCreated, w.entries[0].EventType)
+	assert.Equal(t, dto.TopicUserCreated, w.entries[0].EventType)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(w.entries[0].Payload, &payload))
 	assert.Equal(t, out.ID, payload["user_id"])
@@ -243,7 +247,8 @@ func TestService_CreateAdmin_EmitterFailure_Propagates(t *testing.T) {
 }
 
 func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
-	// RoleRepo.CountByRole error — bubbles through provisioner.Status.
+	// RoleRepo.CountByRole error — bubbles through the Status fast-path (before
+	// bcrypt runs). Wrapped as "setup: status: ..." per CreateAdmin's fast-path.
 	userRepo := mem.NewUserRepository()
 	roleRepo := &countErrRoleRepo{err: errors.New("pg down")}
 	svc := newService(t, userRepo, roleRepo, nil)
@@ -254,7 +259,154 @@ func TestService_CreateAdmin_ProvisionerInfraError_Propagates(t *testing.T) {
 		Password: "SecretPass!23",
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ensure admin")
+	assert.Contains(t, err.Error(), "setup: status")
+	assert.Contains(t, err.Error(), "pg down")
+}
+
+// --- New in S-5: concurrent, bcrypt-skip, rollback ------------------------
+
+// TestService_CreateAdmin_Concurrent_OnlyOneSucceeds exercises the Provisioner
+// mutex: 10 goroutines all POST distinct usernames into a fresh repo; exactly
+// one must return a CreateAdminOutput and the other nine must return
+// ErrSetupAlreadyInitialized. This is the primary verification of the
+// read-after-check atomicity fix (round-1 P0).
+func TestService_CreateAdmin_Concurrent_OnlyOneSucceeds(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	svc := newService(t, userRepo, roleRepo, &stubWriter{})
+
+	const workers = 10
+	type result struct {
+		out *setup.CreateAdminOutput
+		err error
+	}
+	results := make(chan result, workers)
+
+	var start sync.WaitGroup
+	start.Add(1)
+	var done sync.WaitGroup
+	done.Add(workers)
+	for i := 0; i < workers; i++ {
+		i := i
+		go func() {
+			defer done.Done()
+			start.Wait()
+			out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+				Username: "root" + strconv.Itoa(i),
+				Email:    "root" + strconv.Itoa(i) + "@local",
+				Password: "SecretPass!23",
+			})
+			results <- result{out: out, err: err}
+		}()
+	}
+	start.Done()
+	done.Wait()
+	close(results)
+
+	successes := 0
+	retireds := 0
+	for r := range results {
+		switch {
+		case r.err == nil && r.out != nil:
+			successes++
+		case r.err != nil:
+			var ec *errcode.Error
+			if errors.As(r.err, &ec) && ec.Code == errcode.ErrSetupAlreadyInitialized {
+				retireds++
+			} else {
+				t.Fatalf("unexpected error: %v", r.err)
+			}
+		}
+	}
+	assert.Equal(t, 1, successes, "exactly one caller must create the admin")
+	assert.Equal(t, workers-1, retireds, "all other callers must see retired")
+
+	// Final authoritative count is 1.
+	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 1, cnt)
+}
+
+// TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword verifies that the
+// 410 fast-path short-circuits bcrypt — previous versions hashed the password
+// before checking Status, burning ~1-2s CPU per anonymous POST after admin
+// already existed (round-1 M-01).
+func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	seedAdmin(t, userRepo, roleRepo)
+	svc := newService(t, userRepo, roleRepo, &stubWriter{})
+
+	start := time.Now()
+	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	elapsed := time.Since(start)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code)
+	// bcrypt at domain.BcryptCost (=12) takes ~200-2000ms on commodity hardware.
+	// 100ms is a generous ceiling — if bcrypt ran, we'd blow past this.
+	assert.Less(t, elapsed, 100*time.Millisecond,
+		"410 fast-path must not call bcrypt")
+}
+
+// TestService_CreateAdmin_OrphanRecovered_ClearsResetFlag_WhenInteractive
+// pins the RequireReset=false semantics on orphan recovery: a row seeded with
+// PasswordResetRequired=true (e.g., prior bootstrap-path run that crashed)
+// must have the flag cleared after setup-path Ensure reclaims it, otherwise
+// the operator who just chose a password would be force-reset on first login
+// (round-1 M-02).
+func TestService_CreateAdmin_OrphanRecovered_ClearsResetFlag_WhenInteractive(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
+	require.NoError(t, err)
+	orphan.ID = "usr-bootstrap-prior"
+	orphan.MarkPasswordResetRequired()
+	require.NoError(t, userRepo.Create(context.Background(), orphan))
+
+	roleRepo := mem.NewRoleRepository()
+	svc := newService(t, userRepo, roleRepo, &stubWriter{})
+
+	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, "usr-bootstrap-prior", out.ID)
+
+	refreshed, err := userRepo.GetByID(context.Background(), "usr-bootstrap-prior")
+	require.NoError(t, err)
+	assert.False(t, refreshed.PasswordResetRequired,
+		"interactive setup must clear the orphan's reset flag so operator-chosen password is immediately usable")
+}
+
+// TestService_CreateAdmin_ControlCharInField_Returns400 pins the email/username
+// control-character rejection (round-1 N-07).
+func TestService_CreateAdmin_ControlCharInField_Returns400(t *testing.T) {
+	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
+	tests := []struct {
+		name string
+		in   setup.CreateAdminInput
+	}{
+		{"newline in email", setup.CreateAdminInput{Username: "root", Email: "root@local\n", Password: "SecretPass!23"}},
+		{"tab in username", setup.CreateAdminInput{Username: "ro\tot", Email: "root@local", Password: "SecretPass!23"}},
+		{"cr in email", setup.CreateAdminInput{Username: "root", Email: "root\r@local", Password: "SecretPass!23"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CreateAdmin(context.Background(), tc.in)
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+		})
+	}
 }
 
 // --- helpers --------------------------------------------------------------

@@ -25,7 +25,7 @@ func newHandlerFresh(t *testing.T) *setup.Handler {
 func TestHandler_Status_FreshSystem_ReturnsFalse(t *testing.T) {
 	h := newHandlerFresh(t)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/setup/status", nil)
 
 	h.HandleStatus(w, req)
 
@@ -45,7 +45,7 @@ func TestHandler_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 	h := setup.NewHandler(svc)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/setup/status", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/setup/status", nil)
 	h.HandleStatus(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -62,7 +62,7 @@ func TestHandler_CreateAdmin_FreshSystem_Returns201(t *testing.T) {
 	h := newHandlerFresh(t)
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -79,7 +79,7 @@ func TestHandler_CreateAdmin_FreshSystem_Returns201(t *testing.T) {
 	assert.NotEmpty(t, resp.Data.CreatedAt)
 }
 
-func TestHandler_CreateAdmin_AlreadyExists_Returns409(t *testing.T) {
+func TestHandler_CreateAdmin_AlreadyExists_Returns410(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
@@ -87,20 +87,22 @@ func TestHandler_CreateAdmin_AlreadyExists_Returns409(t *testing.T) {
 	h := setup.NewHandler(svc)
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
 	h.HandleCreateAdmin(w, req)
 
-	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Equal(t, http.StatusGone, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_SETUP_ALREADY_INITIALIZED")
+	assert.Contains(t, w.Body.String(), `"nextAction":"login"`)
+	assert.Contains(t, w.Body.String(), `"loginEndpoint":"/api/v1/access/sessions/login"`)
 }
 
 func TestHandler_CreateAdmin_MalformedJSON_Returns400(t *testing.T) {
 	h := newHandlerFresh(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", strings.NewReader(`not-json`))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(`not-json`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -113,7 +115,7 @@ func TestHandler_CreateAdmin_UnknownField_Returns400(t *testing.T) {
 	h := newHandlerFresh(t)
 
 	body := `{"username":"u","email":"u@x","password":"p","extra":"field"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
@@ -126,7 +128,7 @@ func TestHandler_CreateAdmin_BlankPassword_Returns400(t *testing.T) {
 	h := newHandlerFresh(t)
 
 	body := `{"username":"root","email":"root@local","password":""}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 

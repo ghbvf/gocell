@@ -9,15 +9,15 @@ endpoints:
     - edge-bff
   http:
     method: POST
-    path: /api/v1/setup/admin
+    path: /api/v1/access/setup/admin
     successStatus: 201
     noContent: false
     responses:
       400:
         description: "Bad request — missing or blank required fields"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
-      409:
-        description: "Conflict — first-run admin already provisioned; use /api/v1/access/sessions/login"
+      410:
+        description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details include nextAction=login and loginEndpoint."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

@@ -9,7 +9,7 @@ endpoints:
     - edge-bff
   http:
     method: GET
-    path: /api/v1/setup/status
+    path: /api/v1/access/setup/status
     successStatus: 200
     noContent: false
 schemaRefs:

@@ -16,7 +16,7 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// HandleStatus handles GET /api/v1/setup/status.
+// HandleStatus handles GET /api/v1/access/setup/status.
 func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	out, err := h.svc.Status(r.Context())
 	if err != nil {
@@ -26,7 +26,7 @@ func (h *Handler) HandleStatus(w http.ResponseWriter, r *http.Request) {
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": out})
 }
 
-// HandleCreateAdmin handles POST /api/v1/setup/admin.
+// HandleCreateAdmin handles POST /api/v1/access/setup/admin.
 func (h *Handler) HandleCreateAdmin(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username string `json:"username"`

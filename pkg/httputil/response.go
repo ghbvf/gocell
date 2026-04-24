@@ -292,13 +292,20 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrAuthPasswordResetRequired: http.StatusForbidden,
 
 	// --- 409 Conflict ---
-	errcode.ErrAuthUserDuplicate:       http.StatusConflict,
-	errcode.ErrAuthSelfDelete:          http.StatusConflict,
-	errcode.ErrAuthRoleDuplicate:       http.StatusConflict,
-	errcode.ErrConfigDuplicate:         http.StatusConflict,
-	errcode.ErrConfigRepoDuplicate:     http.StatusConflict,
-	errcode.ErrFlagDuplicate:           http.StatusConflict,
-	errcode.ErrSetupAlreadyInitialized: http.StatusConflict,
+	errcode.ErrAuthUserDuplicate:   http.StatusConflict,
+	errcode.ErrAuthSelfDelete:      http.StatusConflict,
+	errcode.ErrAuthRoleDuplicate:   http.StatusConflict,
+	errcode.ErrConfigDuplicate:     http.StatusConflict,
+	errcode.ErrConfigRepoDuplicate: http.StatusConflict,
+	errcode.ErrFlagDuplicate:       http.StatusConflict,
+
+	// --- 410 Gone ---
+	// Setup is a one-shot lifecycle endpoint: once the first admin exists, the
+	// endpoint is permanently retired for the lifetime of this deployment.
+	// 410 signals "permanently unavailable" (vs. 409's "retry may succeed"),
+	// shrinks the anonymous attack surface, and lets installer UIs distinguish
+	// "not initialized yet" from "already past initialization window".
+	errcode.ErrSetupAlreadyInitialized: http.StatusGone,
 
 	// --- 429 Too Many Requests ---
 	errcode.ErrRateLimited: http.StatusTooManyRequests,

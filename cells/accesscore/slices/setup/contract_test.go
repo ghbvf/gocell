@@ -1,13 +1,16 @@
 package setup_test
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -60,4 +63,34 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	h.HandleCreateAdmin(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+// TestEventUserCreatedV1Publish_FromSetup closes the slice.yaml
+// contract.event.user.created.v1.publish verification gap: the setup slice
+// declares it publishes event.user.created.v1, so this test must drive the
+// real handler path and assert the emitted outbox entry's payload + headers
+// both satisfy the event contract.
+func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "event.user.created.v1")
+
+	w := &stubWriter{}
+	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), w)
+
+	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.NoError(t, err)
+
+	require.Len(t, w.entries, 1, "setup.CreateAdmin must emit exactly one event on fresh create")
+	entry := w.entries[0]
+	assert.Equal(t, dto.TopicUserCreated, entry.EventType)
+
+	// Payload + headers must satisfy the published contract schema.
+	c.ValidatePayload(t, entry.Payload)
+	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	// Negative: schema rejects an incomplete payload.
+	c.MustRejectPayload(t, []byte(`{"user_id":"x"}`))
 }

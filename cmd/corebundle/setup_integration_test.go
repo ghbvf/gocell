@@ -34,10 +34,10 @@ var setupHTTPClient = &http.Client{Timeout: 10 * time.Second}
 // TestSetupEndpoints_FirstRunFlow boots a real assembly (accesscore+configcore+auditcore)
 // and walks the interactive first-run admin flow end-to-end:
 //
-//  1. GET /api/v1/setup/status            → {hasAdmin:false}  (no JWT required)
-//  2. POST /api/v1/setup/admin            → 201 + user body
-//  3. POST /api/v1/setup/admin (again)    → 409 ERR_SETUP_ALREADY_INITIALIZED
-//  4. GET /api/v1/setup/status            → {hasAdmin:true}
+//  1. GET /api/v1/access/setup/status            → {hasAdmin:false}  (no JWT required)
+//  2. POST /api/v1/access/setup/admin            → 201 + user body
+//  3. POST /api/v1/access/setup/admin (again)    → 410 ERR_SETUP_ALREADY_INITIALIZED
+//  4. GET /api/v1/access/setup/status            → {hasAdmin:true}
 //  5. POST /api/v1/access/sessions/login  → 201 with access/refresh tokens
 //
 // Step 5 proves the setup-created admin can actually authenticate — i.e. the
@@ -128,7 +128,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 
 	// 1. Fresh system: hasAdmin=false (endpoint is Public — no Authorization header).
 	t.Run("status_before_returns_false", func(t *testing.T) {
-		resp, err := setupHTTPClient.Get(base + "/api/v1/setup/status")
+		resp, err := setupHTTPClient.Get(base + "/api/v1/access/setup/status")
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode, "setup/status must be Public (not 401)")
@@ -145,7 +145,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 	password := "SecretPass!23"
 	t.Run("create_admin_returns_201", func(t *testing.T) {
 		payload := `{"username":"root","email":"root@local","password":"` + password + `"}`
-		resp, err := setupHTTPClient.Post(base+"/api/v1/setup/admin", "application/json", strings.NewReader(payload))
+		resp, err := setupHTTPClient.Post(base+"/api/v1/access/setup/admin", "application/json", strings.NewReader(payload))
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusCreated, resp.StatusCode, "first setup/admin POST must return 201")
@@ -160,21 +160,22 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		assert.Contains(t, body.Data.ID, "usr-")
 	})
 
-	// 3. Second POST must 409.
-	t.Run("second_create_returns_409", func(t *testing.T) {
+	// 3. Second POST must 410 Gone (one-shot lifecycle).
+	t.Run("second_create_returns_410", func(t *testing.T) {
 		payload := `{"username":"root2","email":"other@local","password":"AnotherPass!99"}`
-		resp, err := setupHTTPClient.Post(base+"/api/v1/setup/admin", "application/json", strings.NewReader(payload))
+		resp, err := setupHTTPClient.Post(base+"/api/v1/access/setup/admin", "application/json", strings.NewReader(payload))
 		require.NoError(t, err)
 		defer resp.Body.Close()
-		assert.Equal(t, http.StatusConflict, resp.StatusCode)
+		assert.Equal(t, http.StatusGone, resp.StatusCode)
 		raw, err := io.ReadAll(resp.Body)
 		require.NoError(t, err)
 		assert.Contains(t, string(raw), "ERR_SETUP_ALREADY_INITIALIZED")
+		assert.Contains(t, string(raw), `"nextAction":"login"`)
 	})
 
 	// 4. Status now reports hasAdmin=true.
 	t.Run("status_after_returns_true", func(t *testing.T) {
-		resp, err := setupHTTPClient.Get(base + "/api/v1/setup/status")
+		resp, err := setupHTTPClient.Get(base + "/api/v1/access/setup/status")
 		require.NoError(t, err)
 		defer resp.Body.Close()
 		var body struct {

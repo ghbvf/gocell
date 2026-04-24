@@ -47,27 +47,28 @@ func (c *AccessCore) Authorizer() auth.Authorizer {
 
 // RegisterRoutes registers HTTP routes for accesscore.
 func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
-	// Interactive first-run admin provisioning (Public). Top-level path by
-	// design — setup is a system-level concern, not access-cell-internal from
-	// the caller's perspective. Both endpoints must remain Public: true
-	// because no admin exists yet to authenticate against; post-init they
-	// return 409 via CountByRole fast-path.
-	mux.Route("/api/v1/setup", func(sub cell.RouteMux) {
-		auth.Declare(sub, auth.RouteDecl{
-			Method:  "GET",
-			Path:    "/status",
-			Handler: http.HandlerFunc(c.setupHandler.HandleStatus),
-			Public:  true,
-		})
-		auth.Declare(sub, auth.RouteDecl{
-			Method:  "POST",
-			Path:    "/admin",
-			Handler: http.HandlerFunc(c.setupHandler.HandleCreateAdmin),
-			Public:  true,
-		})
-	})
-
 	mux.Route("/api/v1/access", func(sub cell.RouteMux) {
+		// Interactive first-run admin provisioning, scoped under /access/ so
+		// the path prefix matches Cell ownership (Consul /acl/bootstrap
+		// convention, rather than Vault's top-level /sys/init). Both endpoints
+		// are Public: no admin exists yet to authenticate against; once an
+		// admin exists, the endpoint returns 410 Gone via a fast-path Status
+		// check before bcrypt runs.
+		sub.Route("/setup", func(s cell.RouteMux) {
+			auth.Declare(s, auth.RouteDecl{
+				Method:  "GET",
+				Path:    "/status",
+				Handler: http.HandlerFunc(c.setupHandler.HandleStatus),
+				Public:  true,
+			})
+			auth.Declare(s, auth.RouteDecl{
+				Method:  "POST",
+				Path:    "/admin",
+				Handler: http.HandlerFunc(c.setupHandler.HandleCreateAdmin),
+				Public:  true,
+			})
+		})
+
 		// Identity management: /api/v1/access/users
 		sub.Route("/users", c.identityHandler.RegisterRoutes)
 

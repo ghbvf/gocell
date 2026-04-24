@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"sync"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
@@ -61,7 +62,19 @@ type UUIDGenerator func() string
 // It is caller-tx-neutral: Ensure does not open a transaction; callers wrap
 // it with their own TxRunner if atomicity across Ensure + adjacent writes is
 // required.
+//
+// Concurrency: Ensure is serialized through an internal mutex so the
+// CountByRole fast-path → Create → Assign sequence is atomic within a single
+// process. This closes the read-after-check window that would otherwise let
+// two concurrent callers with different usernames both pass the fast-path and
+// each persist an admin row (UserRepo's per-username uniqueness does not
+// protect against "admin role has two holders"). The mutex is sufficient for
+// single-process deployments (demo, single-instance PG). Multi-instance PG
+// deployments must layer a cross-process lock on top — the PG adapter is
+// expected to acquire pg_advisory_xact_lock at Ensure entry; see
+// ADMINPROVISION-DIST-LOCK-01 in docs/backlog.md.
 type Provisioner struct {
+	mu       sync.Mutex
 	userRepo ports.UserRepository
 	roleRepo ports.RoleRepository
 	logger   *slog.Logger
@@ -123,6 +136,12 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (*domain.Us
 	if len(in.PasswordHash) == 0 {
 		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: PasswordHash is required")
 	}
+
+	// Serialize the fast-path → Create → Assign sequence so two concurrent
+	// Ensure callers cannot both pass CountByRole==0 and each persist a
+	// distinct admin user. Single-process scope only; see Provisioner godoc.
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	// 1. Fast path.
 	exists, err := p.Status(ctx)
@@ -235,10 +254,13 @@ func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput
 	if err != nil {
 		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: lookup orphan user: %w", err)
 	}
+	// Orphan recovery must fully reassert the caller's RequireReset intent,
+	// not just "set when true". A setup-path orphan recovery (RequireReset=false)
+	// that inherited PasswordResetRequired=true from a crashed bootstrap-path
+	// run would otherwise force the operator to reset a password they just
+	// chose, contradicting the interactive setup semantics.
 	existing.PasswordHash = string(in.PasswordHash)
-	if in.RequireReset {
-		existing.MarkPasswordResetRequired()
-	}
+	existing.PasswordResetRequired = in.RequireReset
 	if err := p.userRepo.Update(ctx, existing); err != nil {
 		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: reset orphan credentials: %w", err)
 	}
