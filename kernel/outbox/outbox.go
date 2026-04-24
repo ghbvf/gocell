@@ -102,17 +102,25 @@ type Entry struct {
 	Topic         string // broker routing key; falls back to EventType if empty
 	Payload       []byte
 	CreatedAt     time.Time
-	// Metadata carries optional message metadata (ref: Watermill Message.Metadata).
-	//
-	// Reserved observability keys:
-	//   - trace_id
-	//   - request_id
-	//   - correlation_id
-	//
-	// Writer-side bridges may fill missing reserved keys from context before
-	// persistence. Consumer-side middleware may restore those keys back into
-	// handler context. Explicit non-empty metadata values win over bridge values.
+	// Metadata carries optional business metadata (ref: Watermill Message.Metadata).
+	// Producers may freely read and write this map for domain-specific key-value
+	// pairs. Observability IDs (trace_id, request_id, etc.) must NOT be written
+	// here — use the typed Observability field instead.
 	Metadata map[string]string
+
+	// Observability carries cross-async tracing context managed exclusively by
+	// the gocell observability bridge. Producers MUST NOT populate this field
+	// directly — (e *Entry).InjectObservabilityFromContext fills it from the
+	// originating request context at write time. Consumer middleware
+	// (ObservabilityContextMiddleware) restores it into the handler context.
+	//
+	// The typed field prevents producers from forging observability IDs via
+	// entry.Metadata["trace_id"] = "evil" — the two namespaces are now physically
+	// separate.
+	//
+	// ref: OpenTelemetry SpanContext — typed carrier of trace identity, distinct
+	// from application attributes (Baggage).
+	Observability ObservabilityMetadata
 
 	// FailurePolicy controls how an Emitter handles publisher-side failures
 	// for this specific entry. Zero value (FailurePolicyDefault) falls
@@ -591,7 +599,7 @@ type SubscriberInitializer interface {
 }
 
 // TopicHandlerMiddleware is kept for backward compatibility with existing code
-// that uses ObservabilityContextMiddleware and bootstrap wiring.
+// that uses bootstrap wiring.
 //
 // Deprecated: new code should use SubscriptionMiddleware (subscription.go)
 // which carries the full Subscription identity.

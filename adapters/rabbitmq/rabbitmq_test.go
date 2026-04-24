@@ -344,6 +344,7 @@ func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 		Topic:         entry.Topic,
 		Payload:       json.RawMessage(payload),
 		Metadata:      entry.Metadata,
+		Observability: entry.Observability,
 		CreatedAt:     entry.CreatedAt,
 	}
 	b, err := json.Marshal(wire)
@@ -2306,10 +2307,10 @@ func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing
 	entry := outbox.Entry{
 		ID:        "evt-context-001",
 		EventType: "events.test",
-		Metadata: map[string]string{
-			"request_id":     "req-rmq-1",
-			"correlation_id": "corr-rmq-1",
-			"trace_id":       "trace-rmq-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-rmq-1",
+			CorrelationID: "corr-rmq-1",
+			TraceID:       "trace-rmq-1",
 		},
 	}
 
@@ -2370,10 +2371,10 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 	res := capturedHandler(context.Background(), outbox.Entry{
 		ID:        "evt-log-001",
 		EventType: "events.test",
-		Metadata: map[string]string{
-			"request_id":     "req-log-1",
-			"correlation_id": "corr-log-1",
-			"trace_id":       "trace-log-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-log-1",
+			CorrelationID: "corr-log-1",
+			TraceID:       "trace-log-1",
 		},
 	})
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
@@ -3013,13 +3014,15 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
+	// Entry has Observability populated, but since ObservabilityContextMiddleware
+	// is NOT registered here (it's middleware's job), subscriber MUST NOT restore ctx.
 	entry := outbox.Entry{
 		ID:        "evt-ctx-restore",
 		EventType: "test.restore",
-		Metadata: map[string]string{
-			"request_id":     "req-sub-1",
-			"correlation_id": "corr-sub-1",
-			"trace_id":       "trace-sub-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-sub-1",
+			CorrelationID: "corr-sub-1",
+			TraceID:       "trace-sub-1",
 		},
 	}
 	entryBytes := makeDeliveryBody(t, entry)
@@ -3073,13 +3076,15 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
+	// Entry has Observability populated; processDelivery must not restore it
+	// (only ObservabilityContextMiddleware does that).
 	entry := outbox.Entry{
 		ID:        "evt-no-restore",
 		EventType: "test.restore",
-		Metadata: map[string]string{
-			"request_id":     "req-log-1",
-			"correlation_id": "corr-log-1",
-			"trace_id":       "trace-log-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-log-1",
+			CorrelationID: "corr-log-1",
+			TraceID:       "trace-log-1",
 		},
 	}
 	entryBytes := makeDeliveryBody(t, entry)

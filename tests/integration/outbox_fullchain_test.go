@@ -175,7 +175,7 @@ func waitForSubscriberReady(t *testing.T, conn *rabbitmq.Connection, queueName s
 // Infrastructure: PostgreSQL + RabbitMQ + Redis (3 testcontainers).
 func TestIntegration_OutboxFullChain(t *testing.T) {
 	// Publish-side context carries observability IDs that will be injected
-	// into outbox entry metadata by MergeObservabilityMetadata.
+	// into entry.Observability by InjectObservabilityFromContext at write time.
 	publishCtx := context.Background()
 	publishCtx = ctxkeys.WithRequestID(publishCtx, "req-full-chain-001")
 	publishCtx = ctxkeys.WithCorrelationID(publishCtx, "corr-full-chain-001")
@@ -245,7 +245,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	)`)
 	require.NoError(t, err, "create test_orders table")
 
-	// Use publishCtx so MergeObservabilityMetadata picks up the obs IDs.
+	// Use publishCtx so InjectObservabilityFromContext picks up the obs IDs.
 	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
 		// Business write.
 		tx, ok := postgres.TxFromContext(txCtx)
@@ -289,7 +289,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	received := make(chan observedDelivery, 1)
 	// Subscribe context is deliberately clean (no obs IDs). The only way
 	// obs values reach the handler is through ObservabilityContextMiddleware
-	// restoring them from entry.Metadata.
+	// restoring them from entry.Observability.
 	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer subCancel()
 
@@ -356,18 +356,23 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		string(got.entry.Payload),
 		"payload should match original business event")
 
-	// The relay serialises the full outbox.Entry as the AMQP body, so
-	// metadata round-trips through JSON. The outbox writer should inject
-	// observability metadata from context before persistence, and the
-	// subscriber should restore those values into the consumer handler context.
+	// The relay serialises the full outbox.Entry (including entry.Observability)
+	// as the AMQP body. The outbox writer injects observability from context into
+	// entry.Observability at write time; the consumer middleware restores it into
+	// the handler context. Business metadata and observability are now distinct columns.
 	assert.Equal(t, "integration-test", got.entry.Metadata["source"],
 		"business metadata should be preserved")
-	assert.Equal(t, "req-full-chain-001", got.entry.Metadata["request_id"],
-		"request_id should be injected from context")
-	assert.Equal(t, "corr-full-chain-001", got.entry.Metadata["correlation_id"],
-		"correlation_id should be injected from context")
-	assert.Equal(t, "trace-full-chain-001", got.entry.Metadata["trace_id"],
-		"trace_id should survive the full chain")
+	_, hasReqIDInMeta := got.entry.Metadata["request_id"]
+	assert.False(t, hasReqIDInMeta,
+		"request_id must not be in business metadata — it belongs in entry.Observability")
+
+	assert.Equal(t, "req-full-chain-001", got.entry.Observability.RequestID,
+		"request_id should be in entry.Observability, injected from context at write time")
+	assert.Equal(t, "corr-full-chain-001", got.entry.Observability.CorrelationID,
+		"correlation_id should be in entry.Observability")
+	assert.Equal(t, "trace-full-chain-001", got.entry.Observability.TraceID,
+		"trace_id should survive the full chain via entry.Observability")
+
 	assert.Equal(t, "req-full-chain-001", got.requestID,
 		"request_id should be restored into consumer handler context")
 	assert.Equal(t, "corr-full-chain-001", got.correlationID,
@@ -503,7 +508,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	)`)
 	require.NoError(t, err, "create test_orders table")
 
-	// Use publishCtx so MergeObservabilityMetadata picks up the obs IDs.
+	// Use publishCtx so InjectObservabilityFromContext picks up the obs IDs.
 	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
 		tx, ok := postgres.TxFromContext(txCtx)
 		if !ok {
@@ -593,17 +598,19 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	// Business metadata preserved.
 	assert.Equal(t, "no-trace-test", got.entry.Metadata["source"],
 		"business metadata should be preserved")
+	_, hasReqIDInMeta := got.entry.Metadata["request_id"]
+	assert.False(t, hasReqIDInMeta,
+		"request_id must not be in business metadata — it belongs in entry.Observability")
 
-	// request_id and correlation_id should round-trip in entry metadata.
-	assert.Equal(t, "req-no-trace-001", got.entry.Metadata["request_id"],
-		"request_id should be injected from context")
-	assert.Equal(t, "corr-no-trace-001", got.entry.Metadata["correlation_id"],
-		"correlation_id should be injected from context")
+	// request_id and correlation_id round-trip via entry.Observability.
+	assert.Equal(t, "req-no-trace-001", got.entry.Observability.RequestID,
+		"request_id should be in entry.Observability, injected from context at write time")
+	assert.Equal(t, "corr-no-trace-001", got.entry.Observability.CorrelationID,
+		"correlation_id should be in entry.Observability")
 
-	// trace_id should NOT be present in metadata (was never in context).
-	traceVal, tracePresent := got.entry.Metadata["trace_id"]
-	assert.True(t, !tracePresent || traceVal == "",
-		"trace_id should be absent or empty in metadata when not in originating context, got %q", traceVal)
+	// trace_id should NOT be present in Observability (was never in context).
+	assert.Empty(t, got.entry.Observability.TraceID,
+		"trace_id should be empty in entry.Observability when not in originating context")
 
 	// request_id and correlation_id should be restored into consumer context.
 	assert.Equal(t, "req-no-trace-001", got.requestID,

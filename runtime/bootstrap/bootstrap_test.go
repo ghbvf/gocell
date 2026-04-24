@@ -515,10 +515,10 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	sub := &invokeOnceSubscriber{entry: outbox.Entry{
 		ID:        "evt-context-1",
 		EventType: "test.context",
-		Metadata: map[string]string{
-			"request_id":     "req-ctx-1",
-			"correlation_id": "corr-ctx-1",
-			"trace_id":       "trace-ctx-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-ctx-1",
+			CorrelationID: "corr-ctx-1",
+			TraceID:       "trace-ctx-1",
 		},
 	}}
 
@@ -573,10 +573,10 @@ func TestBootstrap_EventSubscriptions_DisableObservabilityRestore(t *testing.T) 
 	sub := &invokeOnceSubscriber{entry: outbox.Entry{
 		ID:        "evt-no-restore-1",
 		EventType: "test.context",
-		Metadata: map[string]string{
-			"request_id":     "req-should-not-restore",
-			"correlation_id": "corr-should-not-restore",
-			"trace_id":       "trace-should-not-restore",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-should-not-restore",
+			CorrelationID: "corr-should-not-restore",
+			TraceID:       "trace-should-not-restore",
 		},
 	}}
 

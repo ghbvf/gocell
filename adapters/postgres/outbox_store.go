@@ -60,12 +60,12 @@ updated AS (
 	FROM picked
 	WHERE e.id = picked.id
 	RETURNING e.id, e.aggregate_id, e.aggregate_type, e.event_type,
-		e.topic, e.payload, e.metadata, e.created_at, e.attempts,
+		e.topic, e.payload, e.metadata, e.created_at, e.attempts, e.observability,
 		picked.next_retry_at AS picked_next_retry_at,
 		picked.created_at AS picked_created_at
 )
 SELECT id, aggregate_id, aggregate_type, event_type,
-	topic, payload, metadata, created_at, attempts
+	topic, payload, metadata, created_at, attempts, observability
 FROM updated
 ORDER BY picked_next_retry_at NULLS FIRST, picked_created_at, id`
 
@@ -129,23 +129,9 @@ func (s *PGOutboxStore) ClaimPending(ctx context.Context, batchSize int) ([]outb
 
 	var entries []outbox.ClaimedEntry
 	for rows.Next() {
-		var (
-			ce           outbox.ClaimedEntry
-			metadataJSON []byte
-		)
-		if scanErr := rows.Scan(
-			&ce.ID, &ce.AggregateID, &ce.AggregateType, &ce.EventType,
-			&ce.Topic, &ce.Payload, &metadataJSON, &ce.CreatedAt, &ce.Attempts,
-		); scanErr != nil {
+		ce, scanErr := scanClaimedEntry(rows)
+		if scanErr != nil {
 			return nil, errcode.Wrap(ErrAdapterPGQuery, "outbox store: ClaimPending scan failed", scanErr)
-		}
-		if len(metadataJSON) > 0 {
-			if jsonErr := json.Unmarshal(metadataJSON, &ce.Metadata); jsonErr != nil {
-				slog.Warn("outbox store: metadata unmarshal failed",
-					slog.String("entry_id", ce.ID),
-					slog.Any("error", jsonErr),
-				)
-			}
 		}
 		entries = append(entries, ce)
 	}
@@ -244,6 +230,55 @@ func (s *PGOutboxStore) CleanupDead(ctx context.Context, cutoff time.Time, batch
 		return 0, errcode.Wrap(ErrAdapterPGQuery, "outbox store: CleanupDead failed", err)
 	}
 	return int(ct.RowsAffected()), nil
+}
+
+// ---------------------------------------------------------------------------
+// Internal scan helpers
+// ---------------------------------------------------------------------------
+
+// rowScanner is the minimal interface needed to scan a single row.
+// pgx.Rows satisfies it; the mock in outbox_mock_test.go also satisfies it.
+type rowScanner interface {
+	Scan(dest ...any) error
+}
+
+// scanClaimedEntry scans one row from claimPendingQuery RETURNING into a
+// ClaimedEntry. Column order:
+//
+//	id, aggregate_id, aggregate_type, event_type, topic, payload,
+//	metadata, created_at, attempts, observability
+//
+// Both metadata and observability are JSONB; NULL is valid for both and is
+// treated as an empty map / zero struct respectively. A JSON parse failure
+// is logged as Warn (data integrity) and the entry is still returned.
+func scanClaimedEntry(rows rowScanner) (outbox.ClaimedEntry, error) {
+	var (
+		ce                outbox.ClaimedEntry
+		metadataJSON      []byte
+		observabilityJSON []byte
+	)
+	if err := rows.Scan(
+		&ce.ID, &ce.AggregateID, &ce.AggregateType, &ce.EventType,
+		&ce.Topic, &ce.Payload, &metadataJSON, &ce.CreatedAt, &ce.Attempts,
+		&observabilityJSON,
+	); err != nil {
+		return outbox.ClaimedEntry{}, err
+	}
+	if len(metadataJSON) > 0 {
+		if err := json.Unmarshal(metadataJSON, &ce.Metadata); err != nil {
+			slog.Warn("outbox store: failed to unmarshal metadata",
+				slog.String("entry_id", ce.ID),
+				slog.String("error", err.Error()))
+		}
+	}
+	if len(observabilityJSON) > 0 {
+		if err := json.Unmarshal(observabilityJSON, &ce.Observability); err != nil {
+			slog.Warn("outbox store: failed to unmarshal observability",
+				slog.String("entry_id", ce.ID),
+				slog.String("error", err.Error()))
+		}
+	}
+	return ce, nil
 }
 
 // OldestEligibleAt returns the oldest published_at (status="published") or

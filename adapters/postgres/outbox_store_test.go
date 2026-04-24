@@ -389,13 +389,14 @@ func TestPGOutboxStore_ClaimPending_SQLContainsSkipLocked(t *testing.T) {
 
 func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 	e := makeRelayEntry("e-meta", "order.created", 0)
-	// Simulate NULL metadata (JSON null bytes)
+	// Simulate NULL metadata (JSON null bytes) and NULL observability.
 	row := mockRowData{
 		values: []any{
 			e.ID, e.AggregateID, e.AggregateType, e.EventType,
 			e.Topic, e.Payload,
-			[]byte("null"), // JSON null
+			[]byte("null"), // JSON null metadata
 			e.CreatedAt, e.Attempts,
+			[]byte(nil), // NULL observability
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
@@ -406,6 +407,7 @@ func TestPGOutboxStore_ClaimPending_MetadataNull(t *testing.T) {
 	require.Len(t, entries, 1)
 	// null bytes → len > 0 but json.Unmarshal("null") sets metadata to nil
 	assert.Nil(t, entries[0].Metadata)
+	assert.True(t, entries[0].Observability.IsZero())
 }
 
 func TestPGOutboxStore_ClaimPending_BeginError(t *testing.T) {
@@ -451,6 +453,7 @@ func TestPGOutboxStore_ClaimPending_InvalidMetadataJSON(t *testing.T) {
 			e.Topic, e.Payload,
 			[]byte(`{invalid-json`),
 			e.CreatedAt, e.Attempts,
+			[]byte(nil), // NULL observability
 		},
 	}
 	db := &mockDBTX{queryRows: &mockRows{entries: []mockRowData{row}}}
