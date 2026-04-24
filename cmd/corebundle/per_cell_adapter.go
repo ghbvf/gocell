@@ -95,8 +95,14 @@ func LoadConfigCoreKeyProvider() (providerName, masterKey, prevMasterKey string)
 		os.Getenv("GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS")
 }
 
-// LoadAuditCoreHMACKey reads GOCELL_AUDITCORE_HMAC_KEY and returns its raw
-// string value. An empty value means the key is not configured.
-func LoadAuditCoreHMACKey() string {
-	return os.Getenv("GOCELL_AUDITCORE_HMAC_KEY")
+// LoadCellHMACKey reads the HMAC key env var for a specific cell using the
+// per-cell namespace convention (GOCELL_<CELLID>_HMAC_KEY). The returned value
+// is the raw env string — callers pass it to buildHMACKey for dev-fallback,
+// demo-key rejection, and real-mode fail-fast validation.
+//
+// cellEnvPrefix is the uppercase cell id (e.g. "AUDITCORE").
+//
+// ref: Kratos config/env prefix-strip convention.
+func LoadCellHMACKey(cellEnvPrefix string) string {
+	return os.Getenv("GOCELL_" + cellEnvPrefix + "_HMAC_KEY")
 }

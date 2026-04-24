@@ -35,10 +35,15 @@ func (AccessCoreModule) ID() string { return "accesscore" }
 func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
 	// Cursor codec for accesscore: read env via LoadCursorKeys then build.
 	accessPrimary, accessPrevious := LoadCursorKeys("ACCESSCORE")
-	cursorCodec, err := buildCursorCodec(shared.Topology.AdapterMode,
-		"GOCELL_ACCESSCORE_CURSOR_KEY", "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
-		accessPrimary, accessPrevious,
-		"corebundle-access-cursor-key32!!", "access")
+	cursorCodec, err := buildCursorCodec(cursorCodecConfig{
+		AdapterMode: shared.Topology.AdapterMode,
+		EnvName:     "GOCELL_ACCESSCORE_CURSOR_KEY",
+		PrevEnvName: "GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY",
+		Primary:     accessPrimary,
+		Previous:    accessPrevious,
+		DevDefault:  "corebundle-access-cursor-key32!!",
+		Label:       "access",
+	})
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("accesscore cursor codec: %w", err)
 	}

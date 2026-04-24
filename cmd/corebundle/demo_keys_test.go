@@ -51,7 +51,7 @@ func TestDevDefaults_AreAllInWellKnownDemoKeys(t *testing.T) {
 	// Note: GOCELL_SERVICE_SECRET has no dev-default (empty disables the guard
 	// in dev mode); rejectDemoKey is called directly in internalGuardFromEnv.
 	devDefaults := []string{
-		"dev-hmac-key-replace-in-prod!!!!", // loadSecret("GOCELL_AUDITCORE_HMAC_KEY", ...)
+		"dev-hmac-key-replace-in-prod!!!!", // buildHMACKey("GOCELL_AUDITCORE_HMAC_KEY", ...)
 		"corebundle-audit-cursor-key-32b!", // buildCursorCodec(... LoadCursorKeys("AUDITCORE") ...)
 		"corebundle-cfg-cursor-key--32bb!", // buildCursorCodec(... LoadCursorKeys("CONFIGCORE") ...)
 	}

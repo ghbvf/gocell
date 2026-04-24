@@ -80,35 +80,6 @@ func TestLoadKeySet_UnknownMode_StillGeneratesEphemeral(t *testing.T) {
 	assert.NotNil(t, ks)
 }
 
-func TestLoadSecret_WithEnv(t *testing.T) {
-	t.Setenv("TEST_KEY_FOR_ENVDEFAULT", "actual-value")
-	got, err := loadSecret("TEST_KEY_FOR_ENVDEFAULT", "fallback", "")
-	require.NoError(t, err)
-	assert.Equal(t, []byte("actual-value"), got)
-}
-
-func TestLoadSecret_DevMode_Fallback(t *testing.T) {
-	t.Setenv("TEST_KEY_FOR_ENVDEFAULT_MISS", "")
-	got, err := loadSecret("TEST_KEY_FOR_ENVDEFAULT_MISS", "fallback", "")
-	require.NoError(t, err)
-	assert.Equal(t, []byte("fallback"), got)
-}
-
-func TestLoadSecret_RealMode_MissingEnv(t *testing.T) {
-	t.Setenv("TEST_KEY_REAL_MISS", "")
-	_, err := loadSecret("TEST_KEY_REAL_MISS", "fallback", "real")
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "TEST_KEY_REAL_MISS")
-	assert.Contains(t, err.Error(), "real")
-}
-
-func TestLoadSecret_RealMode_WithEnv(t *testing.T) {
-	t.Setenv("TEST_KEY_REAL_OK", "prod-secret")
-	got, err := loadSecret("TEST_KEY_REAL_OK", "fallback", "real")
-	require.NoError(t, err)
-	assert.Equal(t, []byte("prod-secret"), got)
-}
-
 func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// run() with an immediately-cancelled context exercises the full assembly
 	// path (cells, bootstrap) without needing a real HTTP listener.
