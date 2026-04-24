@@ -43,6 +43,10 @@
 > - PR-A9 残余（六角色 review 轮 2 发现的 OUT_OF_SCOPE）：共 6 条转 backlog，详见 Wave 2 / 新 PR 段尾部
 > - 新 PR：**PR-A34 OUTBOX-DIRECT-SAFETY-GATING**（P1 安全, 🔴 多 pod/任何生产 in-memory 拓扑前必做，3h）/ **PR-A35 READYZ-POLISH**（P2, 3h）/ **PR-A36 HTTP-METRICS-LABEL-REALIGN**（P2, 🟠 多 cell assembly 前触发，4h）
 > - PR-A25 主线复核：S-nonce 验证确认（`runtime/auth/authenticator.go:213-218` CheckAndMark 逻辑存在但需 `WithNonceStore` 显式注入；`cmd/corebundle/controlplane.go:51` 未注入），重放窗口 5min；**维持 Wave 1 🟠**；开干前需评估是否同时落 InMemoryNonceStore 默认兜底（无 Redis 依赖的 P1 缓解）
+>
+> 2026-04-24 晚更新（第八轮 · PR-A5c 收尾合入 PR #245）:
+> - **PR-A5c OUTBOX-EMITTER-UNIFY ✅ 已交付**（分支 `refactor/520-pr-a5c-outbox-emitter-unify`，PR #245，6 commits，净编码 ~14h）。完成剩余 5 个子任务（F2~F6）+ 29 处调用点迁移（F7）：Cell 层 `publisher`/`outboxWriter` 公开字段全部退役，三 cell 统一 `WithEmitter` + `WithOutboxDeps` 边界；`kernel/cell.DirectPublishModeForDurability` helper + `outbox.DurabilityReporter` 接口 + `tools/archtest OUTBOX-CELL-01` 规则 + `runtime/outbox` envelope wrapper 删除。A5a-R4 / A5a-R5 一并收口。
+> - **对 Wave 2 / v1.0 路径的影响**：Cx3 双瓶颈中的 A5c 消化完毕，只剩 A9 Cx3（已合入 PR #239）；Wave 2 剩余 PR-A10/A11/A12/A29/A30/A31 均为 Cx1-Cx2，v1.0 路径净工期进一步缩减。
 
 ---
 
@@ -510,6 +514,20 @@
 
 ---
 
+### PR-A5c OUTBOX-EMITTER-UNIFY — ✅ **已交付 @ 2026-04-24 via PR #245**
+
+> 分支 `refactor/520-pr-a5c-outbox-emitter-unify`，6 commits，净编码 ~14h。实际交付范围对齐原计划的"全量方案"：
+> - ✅ **F2 DIRECTPUBLISHMODE-HELPER-01** — `kernel/cell.DirectPublishModeForDurability(mode, demoPolicy, durablePolicy)` helper + 4-case 表驱动测试；三 cell 统一调用。A5a-R4 收口。
+> - ✅ **F3+F7 CELL-OPTION-API-UNIFY** — 三 cell 删除 `WithPublisher`/`WithOutboxWriter` Option + `publisher`/`outboxWriter` 公开字段；新增 `WithEmitter(outbox.Emitter)` + `WithOutboxDeps(pub, writer)` 互斥 Option；29 处调用点迁移；`kernel/outbox.DurabilityReporter` 接口 + `WriterEmitter`/`DirectEmitter` 实现；`configcore.WithPostgresDefaults(pool, writer)` 拆成 `WithPostgresPool(pool)` + `WithOutboxDeps`。
+> - ✅ **F4 CELL-ROUTES-PROVIDERS-SPLIT** — `cells/accesscore/cell_providers.go` 从 `cell_routes.go` 抽出；configcore/auditcore 本就无 provider 方法，不强拆。A5a-R5 收口。
+> - ✅ **F5 ENVELOPE-WRAPPER-DELETE** — 删除 `runtime/outbox/envelope.go`+`envelope_test.go`；`runtime/outbox/relay.go` / `runtime/eventbus/eventbus.go` / `adapters/rabbitmq/subscriber.go` 切 `kernel/outbox`。
+> - ✅ **F6 ARCHTEST-CELL-01** — `tools/archtest/outbox_cell_test.go` 新增规则 OUTBOX-CELL-01，扫描 `cells/<name>/cell.go` 禁止 `WithPublisher`/`WithOutboxWriter` 导出 Option；regression-verified。
+>
+> 核心子项之前已由 **PR #224**（outbox emitter refactor）+ **PR-A5a PR#234**（`cell.ResolveEmitter` 抽取 + 10 case 测试）+ **PR-A5b PR#238** retroactively 落地（EMITTER-ABSTRACT / ENVELOPE-KERNEL-DOWN / SERVICE-EMITTER-MIGRATE / CELL-BOUNDARY-RESOLVE / ARCHTEST-NIL-MODE-BLOCK 共 5 子项），本 PR 完成剩余尾巴收口，让"Cell 层只依赖 `outbox.Emitter` 抽象"成为架构硬保证（archtest 守卫）。
+
+<details>
+<summary>原计划 Cx3 方案（保留存档，仅作历史对照）</summary>
+
 ### PR-A5c OUTBOX-EMITTER-UNIFY（Cx3，~12-15h，🟡 v1.0 建议）
 
 **主线**：
@@ -573,6 +591,8 @@
 - `ref: github.com/ThreeDotsLabs/watermill log.go` — `NopLogger` 边界注入
 - `ref: github.com/uber-go/fx app.go` — `NopLogger` 作为显式 option
 - `ref: github.com/zeromicro/go-zero core/logx/logs.go` — `getWriter()` 边界补齐
+
+</details>
 
 ---
 
