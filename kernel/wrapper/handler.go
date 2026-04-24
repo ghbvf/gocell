@@ -3,84 +3,43 @@ package wrapper
 import (
 	"fmt"
 	"net/http"
+	"sync"
 
 	"github.com/ghbvf/gocell/kernel/ctxkeys"
 )
 
-// Option configures an HTTPHandler or WrapConsumer invocation. Options are
-// applied in order; later options override earlier.
-type Option func(*config)
+// HandlerOption configures an HTTPHandler invocation. Only filter-related
+// options remain after the tracer was moved to the package-level global (A1).
+type HandlerOption func(*handlerConfig)
 
-type config struct {
-	tracer     Tracer
-	filter     func(*http.Request) bool
-	spanNamer  func(ContractSpec, *http.Request) string
-	eventNamer func(ContractSpec) string
-	extraAttrs func(*http.Request) []Attr
-}
-
-func defaults() config {
-	return config{
-		tracer:     NoopTracer{},
-		spanNamer:  defaultHTTPSpanName,
-		eventNamer: defaultEventSpanName,
-	}
-}
-
-// WithTracer injects a Tracer. Defaults to NoopTracer.
-func WithTracer(t Tracer) Option {
-	return func(c *config) {
-		if t != nil {
-			c.tracer = t
-		}
-	}
+type handlerConfig struct {
+	filter func(*http.Request) bool
 }
 
 // WithFilter installs a predicate that, when true, bypasses tracing entirely —
 // no span is started and the inner handler is invoked directly. Use for
 // health probes or high-rate internal paths where span volume is cost-prohibitive.
 //
+// Example (health probes):
+//
+//	wrapper.HTTPHandler(spec, h, wrapper.WithFilter(wrapper.DefaultProbeFilter))
+//
 // ref: open-telemetry/opentelemetry-go-contrib otelhttp/config.go — Filter type.
-func WithFilter(pred func(*http.Request) bool) Option {
-	return func(c *config) {
+func WithFilter(pred func(*http.Request) bool) HandlerOption {
+	return func(c *handlerConfig) {
 		if pred != nil {
 			c.filter = pred
 		}
 	}
 }
 
-// WithSpanNameFormatter overrides the default HTTP span name (which is
-// "{METHOD} {path_template}").
+// DefaultProbeFilter skips health/readiness/liveness probe paths. Compose via
+// WithFilter to avoid emitting spans for high-frequency infra traffic.
 //
-// ref: open-telemetry/opentelemetry-go-contrib otelhttp/config.go —
-// WithSpanNameFormatter option.
-func WithSpanNameFormatter(fn func(ContractSpec, *http.Request) string) Option {
-	return func(c *config) {
-		if fn != nil {
-			c.spanNamer = fn
-		}
-	}
-}
-
-// WithConsumerSpanNameFormatter overrides the default event consumer span
-// name (which is "CONSUME {topic}").
-func WithConsumerSpanNameFormatter(fn func(ContractSpec) string) Option {
-	return func(c *config) {
-		if fn != nil {
-			c.eventNamer = fn
-		}
-	}
-}
-
-// WithExtraAttrs supplies request-specific span attributes (e.g. resolved
-// user id, tenant id). The closure runs once per request; return nil to
-// skip attribute emission.
-func WithExtraAttrs(fn func(*http.Request) []Attr) Option {
-	return func(c *config) {
-		if fn != nil {
-			c.extraAttrs = fn
-		}
-	}
+// Matched paths (exact): /healthz, /readyz, /livez.
+func DefaultProbeFilter(r *http.Request) bool {
+	p := r.URL.Path
+	return p == "/healthz" || p == "/readyz" || p == "/livez"
 }
 
 func defaultHTTPSpanName(spec ContractSpec, _ *http.Request) string {
@@ -93,7 +52,7 @@ func defaultEventSpanName(spec ContractSpec) string {
 
 // HTTPHandler wraps next with a traced span + metric-friendly attributes
 // derived from spec. The returned handler:
-//   - starts a span named per the configured formatter
+//   - starts a span named "{METHOD} {path_template}" using the package-level tracer
 //   - sets gocell.contract.id / kind / transport, http.method / route attrs
 //   - captures the response status code and sets StatusError for 5xx
 //   - propagates contract id into the request context via ctxkeys.ContractID
@@ -102,18 +61,15 @@ func defaultEventSpanName(spec ContractSpec) string {
 // spec is validated at call time; invalid specs or nil handlers panic (fail-fast
 // at registration time beats a silent miss at request time).
 //
-// Span coexistence note: when this handler is composed below the global
-// runtime/http/middleware.Tracing middleware, a single HTTP request yields
-// two spans — an outer request span annotated with the chi route pattern,
-// and an inner contract span annotated with spec.Path. Dashboards aggregating
-// by http.route will see both; future work (PR-A11-M) will phase out the
-// outer middleware once every route carries a contract spec.
+// The package-level tracer must be set before the first request arrives (call
+// wrapper.SetTracer in runtime/bootstrap or equivalent). If SetTracer was never
+// called the first request panics with a descriptive message.
 //
 // ref: riandyrn/otelchi middleware.go — span name + status lifecycle.
-func HTTPHandler(spec ContractSpec, next http.Handler, opts ...Option) http.Handler {
+func HTTPHandler(spec ContractSpec, next http.Handler, opts ...HandlerOption) http.Handler {
 	validateHTTPHandlerArgs(spec, next)
 
-	cfg := defaults()
+	var cfg handlerConfig
 	for _, opt := range opts {
 		opt(&cfg)
 	}
@@ -124,7 +80,7 @@ func HTTPHandler(spec ContractSpec, next http.Handler, opts ...Option) http.Hand
 			next.ServeHTTP(w, r)
 			return
 		}
-		serveTraced(cfg, baseAttrs, spec, next, w, r)
+		serveTraced(baseAttrs, spec, next, w, r)
 	})
 }
 
@@ -150,20 +106,16 @@ func httpBaseAttrs(spec ContractSpec) []Attr {
 	}
 }
 
-func serveTraced(cfg config, baseAttrs []Attr, spec ContractSpec, next http.Handler, w http.ResponseWriter, r *http.Request) {
+func serveTraced(baseAttrs []Attr, spec ContractSpec, next http.Handler, w http.ResponseWriter, r *http.Request) {
 	ctx := ctxkeys.WithContractID(r.Context(), spec.ID)
-	ctx, span := cfg.tracer.Start(ctx, cfg.spanNamer(spec, r))
+	ctx, span := tracer.Start(ctx, defaultHTTPSpanName(spec, r))
 	span.SetAttributes(baseAttrs...)
-	if cfg.extraAttrs != nil {
-		if extra := cfg.extraAttrs(r); len(extra) > 0 {
-			span.SetAttributes(extra...)
-		}
-	}
 
 	sw := &statusRecorder{ResponseWriter: w, status: http.StatusOK}
 	defer func() {
 		// recover must be called directly inside the deferred function body.
-		finishSpan(span, sw, recover())
+		rec := recover()
+		finishSpan(span, sw, rec)
 	}()
 
 	next.ServeHTTP(sw, r.WithContext(ctx))
@@ -194,17 +146,21 @@ func finishSpan(span Span, sw *statusRecorder, rec any) {
 // ref: open-telemetry/opentelemetry-go-contrib otelhttp — ResponseWriter wrap.
 // We intentionally stop at status-code capture; body-size / hijack support
 // can be added behind opt-in flags if needed.
+//
+// WriteHeader and Write are guarded by sync.Once so concurrent calls
+// (e.g. handler + panic recovery path) cannot race on wroteHeader/status.
 type statusRecorder struct {
 	http.ResponseWriter
+	once        sync.Once
 	status      int
 	wroteHeader bool
 }
 
 func (r *statusRecorder) WriteHeader(code int) {
-	if !r.wroteHeader {
+	r.once.Do(func() {
 		r.status = code
 		r.wroteHeader = true
-	}
+	})
 	r.ResponseWriter.WriteHeader(code)
 }
 
@@ -214,9 +170,9 @@ func (r *statusRecorder) Write(b []byte) (int, error) {
 	// needs to mark the header as committed — the implicit 200 is
 	// already in place. We track this flag so a subsequent WriteHeader
 	// call cannot retroactively change the captured span attribute.
-	if !r.wroteHeader {
+	r.once.Do(func() {
 		r.wroteHeader = true
-	}
+	})
 	return r.ResponseWriter.Write(b)
 }
 

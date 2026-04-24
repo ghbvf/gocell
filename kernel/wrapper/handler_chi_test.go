@@ -14,13 +14,14 @@ import (
 // different actual URLs matching the same template must produce the same
 // span name (route-collapse semantics via the spec.Path template).
 func TestHTTPHandler_MultiplePathsWithSameTemplate_CollapseSpanName(t *testing.T) {
-	t.Parallel()
 	tr := &spyTracer{}
+	setSpyTracer(t, tr)
+
 	spec := wrapper.ContractSpec{
 		ID: "http.user.get.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/api/v1/users/{id}",
 	}
-	h := wrapper.HTTPHandler(spec, okHandler(200), wrapper.WithTracer(tr))
+	h := wrapper.HTTPHandler(spec, okHandler(200))
 
 	for _, url := range []string{"/api/v1/users/abc", "/api/v1/users/42"} {
 		req := httptest.NewRequest("GET", url, nil)
@@ -42,8 +43,9 @@ func TestHTTPHandler_MultiplePathsWithSameTemplate_CollapseSpanName(t *testing.T
 // exposes the inner ResponseWriter via Unwrap so stdlib capability
 // discovery (http.NewResponseController) still works.
 func TestHTTPHandler_Unwrap_PreservesFlusher(t *testing.T) {
-	t.Parallel()
 	tr := &spyTracer{}
+	setSpyTracer(t, tr)
+
 	var flushable bool
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		rc := http.NewResponseController(w)
@@ -52,7 +54,7 @@ func TestHTTPHandler_Unwrap_PreservesFlusher(t *testing.T) {
 		}
 		w.WriteHeader(200)
 	})
-	h := wrapper.HTTPHandler(loginSpec(), inner, wrapper.WithTracer(tr))
+	h := wrapper.HTTPHandler(loginSpec(), inner)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 
@@ -61,38 +63,18 @@ func TestHTTPHandler_Unwrap_PreservesFlusher(t *testing.T) {
 	}
 }
 
-// TestWithConsumerSpanNameFormatter_Override exercises the event-side span
-// name Option.
-func TestWithConsumerSpanNameFormatter_Override(t *testing.T) {
-	t.Parallel()
-	tr := &spyTracer{}
-	inner := func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}
-	w := wrapper.WrapConsumer(eventSpec(), inner,
-		wrapper.WithTracer(tr),
-		wrapper.WithConsumerSpanNameFormatter(func(s wrapper.ContractSpec) string {
-			return "custom:" + s.ID
-		}),
-	)
-	_ = w(context.Background(), outbox.Entry{})
-
-	if got := tr.only(t).name; got != "custom:event.session.revoked.v1" {
-		t.Errorf("want custom name, got %q", got)
-	}
-}
-
 // TestWrapConsumer_InvalidDisposition_MarksErrorWithoutModifyingResult —
 // consumer returns zero-value HandleResult (invalid), wrapper still passes
 // it through (ConsumerBase will later downgrade to Requeue); wrapper just
 // marks span status=Error so ops can see the misbehaviour.
 func TestWrapConsumer_InvalidDisposition_MarksErrorWithoutModifyingResult(t *testing.T) {
-	t.Parallel()
 	tr := &spyTracer{}
+	setSpyTracer(t, tr)
+
 	inner := func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{} // Disposition == 0 (invalid)
 	}
-	w := wrapper.WrapConsumer(eventSpec(), inner, wrapper.WithTracer(tr))
+	w := wrapper.WrapConsumer(eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	if res.Disposition != 0 {
@@ -103,44 +85,17 @@ func TestWrapConsumer_InvalidDisposition_MarksErrorWithoutModifyingResult(t *tes
 	}
 }
 
-// TestHTTPHandler_WithTracer_NilUsesDefault — passing nil tracer keeps the
-// default NoopTracer in place without panicking.
-func TestHTTPHandler_WithTracer_NilUsesDefault(t *testing.T) {
-	t.Parallel()
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(200), wrapper.WithTracer(nil))
-	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != 200 {
-		t.Errorf("inner handler didn't run; got %d", rec.Code)
-	}
-}
-
 // TestHTTPHandler_WithFilter_NilKeepsDefault — nil filter option is a no-op.
 func TestHTTPHandler_WithFilter_NilKeepsDefault(t *testing.T) {
-	t.Parallel()
 	tr := &spyTracer{}
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(200),
-		wrapper.WithTracer(tr), wrapper.WithFilter(nil))
+	setSpyTracer(t, tr)
+
+	h := wrapper.HTTPHandler(loginSpec(), okHandler(200), wrapper.WithFilter(nil))
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	if len(tr.spans) != 1 {
 		t.Errorf("want 1 span (default), got %d", len(tr.spans))
 	}
-}
-
-// TestHTTPHandler_ExtraAttrs_NilReturned_NoPanic — the extra-attrs callback
-// may return nil to skip emission; wrapper must tolerate it.
-func TestHTTPHandler_ExtraAttrs_NilReturned_NoPanic(t *testing.T) {
-	t.Parallel()
-	tr := &spyTracer{}
-	h := wrapper.HTTPHandler(loginSpec(), okHandler(200),
-		wrapper.WithTracer(tr),
-		wrapper.WithExtraAttrs(func(_ *http.Request) []wrapper.Attr { return nil }),
-	)
-	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
-	h.ServeHTTP(httptest.NewRecorder(), req)
-	_ = tr.only(t)
 }
 
 // TestContractSpec_CommandAndProjection_AreValid — command/projection kinds
@@ -162,5 +117,62 @@ func TestContractSpec_UnknownKind_Rejected(t *testing.T) {
 	spec := wrapper.ContractSpec{ID: "x", Kind: "grpc", Transport: "h2"}
 	if err := spec.Validate(); err == nil {
 		t.Error("unknown kind must be rejected")
+	}
+}
+
+// TestDefaultProbeFilter verifies that DefaultProbeFilter matches only the
+// canonical probe paths and ignores others (including query-string variants).
+func TestDefaultProbeFilter(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		path     string
+		wantSkip bool
+	}{
+		{"/healthz", true},
+		{"/readyz", true},
+		{"/livez", true},
+		{"/healthz?verbose=true", true}, // URL.Path strips query string; /healthz is still matched
+		{"/api/v1/users", false},
+		{"/healthz/extra", false},
+		{"/", false},
+		{"", false},
+	}
+	for _, tc := range cases {
+		req := httptest.NewRequest("GET", "http://example.com"+tc.path, nil)
+		got := wrapper.DefaultProbeFilter(req)
+		if got != tc.wantSkip {
+			t.Errorf("DefaultProbeFilter(%q): want %v, got %v", tc.path, tc.wantSkip, got)
+		}
+	}
+}
+
+// TestDefaultProbeFilter_WithHTTPHandler verifies that attaching
+// DefaultProbeFilter to HTTPHandler skips span creation for probe paths.
+func TestDefaultProbeFilter_WithHTTPHandler(t *testing.T) {
+	tr := &spyTracer{}
+	setSpyTracer(t, tr)
+
+	called := false
+	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(200)
+	})
+	spec := wrapper.ContractSpec{
+		ID:        "http.health.v1",
+		Kind:      "http",
+		Transport: "http",
+		Method:    "GET",
+		Path:      "/healthz",
+	}
+	h := wrapper.HTTPHandler(spec, inner, wrapper.WithFilter(wrapper.DefaultProbeFilter))
+
+	req := httptest.NewRequest("GET", "/healthz", nil)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+
+	if !called {
+		t.Fatal("inner handler not called")
+	}
+	if len(tr.spans) != 0 {
+		t.Errorf("expected 0 spans for probe path, got %d", len(tr.spans))
 	}
 }

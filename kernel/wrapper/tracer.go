@@ -54,10 +54,41 @@ type Tracer interface {
 	Start(ctx context.Context, spanName string, attrs ...Attr) (context.Context, Span)
 }
 
-// NoopTracer is a zero-allocation Tracer used when no runtime tracer is wired.
-// It is the default used by HTTPHandler / WrapConsumer when WithTracer is not
-// supplied. Tests can rely on NoopTracer to exercise the wrapper path without
-// an adapter dependency.
+// panicIfNotSetTracer is the zero-value sentinel. It panics immediately on
+// Start() so that a missing SetTracer call surfaces at the first request, not
+// silently emitting no-op spans.
+//
+// ref: slog.Default() / otel.GetTracerProvider() — package-level global with
+// explicit registration; unregistered state panics fast rather than silently
+// degrading.
+type panicIfNotSetTracer struct{}
+
+func (panicIfNotSetTracer) Start(_ context.Context, _ string, _ ...Attr) (context.Context, Span) {
+	panic("kernel/wrapper: tracer not set — runtime.bootstrap must call wrapper.SetTracer before serving")
+}
+
+// tracer is the package-level singleton. Zero value is panicIfNotSetTracer so
+// any request before SetTracer panics immediately, surfacing wiring errors
+// on day 0. runtime/bootstrap calls SetTracer(b.tracer) during startup.
+var tracer Tracer = panicIfNotSetTracer{} //nolint:gochecknoglobals
+
+// SetTracer installs the package-level tracer. t must not be nil. Call once
+// during process startup (e.g. from runtime/bootstrap.phase1LoadConfig or
+// equivalent). Subsequent calls replace the active tracer — valid for testing
+// but should not be needed in production.
+//
+// ref: slog.SetDefault / otel.SetTracerProvider — package-level setter pattern.
+func SetTracer(t Tracer) {
+	if t == nil {
+		panic("kernel/wrapper.SetTracer: t must not be nil")
+	}
+	tracer = t
+}
+
+// NoopTracer is a zero-allocation Tracer. Use it in tests that exercise the
+// wrapper path without an adapter dependency, or as the fallback when no
+// runtime tracer is wired (runtime/bootstrap falls back to NoopTracer{} with
+// a slog.Warn when WithTracer is not supplied).
 type NoopTracer struct{}
 
 // Compile-time: NoopTracer implements Tracer with a value receiver so zero
@@ -99,4 +130,11 @@ func SetSpanName(s Span, name string) {
 	if r, ok := s.(SpanRenamer); ok {
 		r.SetName(name)
 	}
+}
+
+// resetTracerForTest restores the package-level tracer to panicIfNotSetTracer.
+// Only callable from _test.go files in package wrapper or wrapper_test.
+// Use t.Cleanup(wrapper.resetTracerForTest) in tests that call SetTracer.
+func resetTracerForTest() {
+	tracer = panicIfNotSetTracer{}
 }

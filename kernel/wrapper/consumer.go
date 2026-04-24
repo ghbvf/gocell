@@ -9,6 +9,26 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
+// Re-export outbox types so wrapper callers do not need to import kernel/outbox
+// for these core types. This keeps the dependency graph shallow.
+type (
+	// Entry is an alias for outbox.Entry. Use wrapper.Entry in handler signatures.
+	Entry = outbox.Entry
+	// Disposition is an alias for outbox.Disposition.
+	Disposition = outbox.Disposition
+	// HandleResult is an alias for outbox.HandleResult.
+	HandleResult = outbox.HandleResult
+)
+
+const (
+	// DispositionAck re-exports outbox.DispositionAck.
+	DispositionAck = outbox.DispositionAck
+	// DispositionRequeue re-exports outbox.DispositionRequeue.
+	DispositionRequeue = outbox.DispositionRequeue
+	// DispositionReject re-exports outbox.DispositionReject.
+	DispositionReject = outbox.DispositionReject
+)
+
 // ConsumerFunc mirrors outbox.EntryHandler so Cells can wrap their existing
 // handlers without changing signatures. It is re-exported here so wrapper
 // callers do not need to import kernel/outbox for the type.
@@ -16,17 +36,20 @@ type ConsumerFunc = outbox.EntryHandler
 
 // WrapConsumer wraps fn with a traced span + contract-id context derivation.
 // The wrapper:
-//   - starts a span named "CONSUME {topic}" (customisable via
-//     WithConsumerSpanNameFormatter)
+//   - starts a span named "CONSUME {topic}" using the package-level tracer
 //   - sets gocell.contract.id / kind / transport, messaging.system /
 //     destination attrs
 //   - SetStatus(Error) + RecordError for any Requeue / Reject disposition
 //     (the disposition itself is the authoritative control-flow signal —
 //     wrapper does not modify it)
 //   - propagates contract id through the context passed to fn
+//   - defers recoverAndFinish so a panic in fn ends the span before re-panicking
 //
 // spec must have Kind == "event" and Topic set; fn must be non-nil.
-func WrapConsumer(spec ContractSpec, fn ConsumerFunc, opts ...Option) ConsumerFunc {
+//
+// The package-level tracer must be set before the first event is consumed
+// (call wrapper.SetTracer in runtime/bootstrap or equivalent).
+func WrapConsumer(spec ContractSpec, fn ConsumerFunc) ConsumerFunc {
 	if fn == nil {
 		panic("wrapper.WrapConsumer: fn must not be nil")
 	}
@@ -37,11 +60,6 @@ func WrapConsumer(spec ContractSpec, fn ConsumerFunc, opts ...Option) ConsumerFu
 		panic(err.Error())
 	}
 
-	cfg := defaults()
-	for _, opt := range opts {
-		opt(&cfg)
-	}
-
 	baseAttrs := []Attr{
 		{Key: "gocell.contract.id", Value: spec.ID},
 		{Key: "gocell.contract.kind", Value: spec.Kind},
@@ -50,12 +68,13 @@ func WrapConsumer(spec ContractSpec, fn ConsumerFunc, opts ...Option) ConsumerFu
 		{Key: "messaging.destination", Value: spec.Topic},
 	}
 
-	return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+	return func(ctx context.Context, entry outbox.Entry) (res outbox.HandleResult) {
 		ctx = ctxkeys.WithContractID(ctx, spec.ID)
-		ctx, span := cfg.tracer.Start(ctx, cfg.eventNamer(spec))
+		ctx, span := tracer.Start(ctx, defaultEventSpanName(spec))
 		span.SetAttributes(baseAttrs...)
+		defer func() { recoverAndFinish(span, recover()) }()
 
-		res := fn(ctx, entry)
+		res = fn(ctx, entry)
 
 		switch res.Disposition {
 		case outbox.DispositionAck:

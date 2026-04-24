@@ -3,6 +3,8 @@ package wrapper_test
 import (
 	"context"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -80,4 +82,49 @@ func TestNoopSpan_DirectMethods(t *testing.T) {
 	// Idempotency: calling End + SetAttributes afterwards still must not panic.
 	span.SetAttributes(wrapper.Attr{Key: "late", Value: "ok"})
 	span.End()
+}
+
+// TestWrapperHTTPHandler_PanicsBeforeSetTracer verifies that requesting a
+// handler serve without SetTracer panics with a descriptive message.
+// Uses ResetTracerForTest (exported via export_test.go) to restore state.
+func TestWrapperHTTPHandler_PanicsBeforeSetTracer(t *testing.T) {
+	// Reset to unset state before and after.
+	wrapper.ResetTracerForTest()
+	t.Cleanup(wrapper.ResetTracerForTest)
+
+	h := wrapper.HTTPHandler(wrapper.ContractSpec{
+		ID:        "http.auth.login.v1",
+		Kind:      "http",
+		Transport: "http",
+		Method:    "POST",
+		Path:      "/api/v1/auth/login",
+	}, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic when tracer is unset")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("expected string panic, got %T: %v", r, r)
+		}
+		if msg != "kernel/wrapper: tracer not set — runtime.bootstrap must call wrapper.SetTracer before serving" {
+			t.Errorf("unexpected panic message: %q", msg)
+		}
+	}()
+	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
+	h.ServeHTTP(httptest.NewRecorder(), req)
+}
+
+// TestSetTracer_NilPanics verifies SetTracer(nil) panics with a clear message.
+func TestSetTracer_NilPanics(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic on SetTracer(nil)")
+		}
+	}()
+	wrapper.SetTracer(nil) //nolint:staticcheck // intentional
 }
