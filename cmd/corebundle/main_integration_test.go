@@ -174,7 +174,10 @@ func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {
 	_, err := os.Stat(credPath)
 	require.NoError(t, err, "orphan credential file must exist before bootstrap")
 
-	// Configure env for run().
+	// Configure env for run(). Interactive mode is the default in S-2; this
+	// P1-16 test exercises the initialadmin Lifecycle's sweep path, so opt
+	// explicitly into bootstrap mode.
+	t.Setenv(AdminProvisionModeEnv, "bootstrap")
 	t.Setenv("GOCELL_STATE_DIR", stateDir)
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-sweep-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")

@@ -1,0 +1,19 @@
+id: setup
+belongsToCell: accesscore
+contractUsages:
+  - contract: http.auth.setup.status.v1
+    role: serve
+  - contract: http.auth.setup.admin.v1
+    role: serve
+  - contract: event.user.created.v1
+    role: publish
+verify:
+  unit:
+    - unit.setup.service
+  contract:
+    - contract.http.auth.setup.status.v1.serve
+    - contract.http.auth.setup.admin.v1.serve
+    - contract.event.user.created.v1.publish
+
+allowedFiles:
+  - cells/accesscore/slices/setup/**

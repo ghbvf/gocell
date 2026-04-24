@@ -94,7 +94,7 @@ func TestBuildApp_Postgres_UsesConfigCoreDatabaseURL(t *testing.T) {
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
-		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
+		AccessCoreModule{ForceBootstrap: true, InitialAdminOpts: fastAdminBootstrapOpts()},
 		AuditCoreModule{},
 	)
 	require.NoError(t, err, "BuildApp must succeed: env→pool wiring must complete without error")

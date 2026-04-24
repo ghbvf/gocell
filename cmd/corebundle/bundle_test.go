@@ -186,7 +186,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstr
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
-		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
+		AccessCoreModule{ForceBootstrap: true, InitialAdminOpts: fastAdminBootstrapOpts()},
 		AuditCoreModule{},
 	)
 	if err != nil {

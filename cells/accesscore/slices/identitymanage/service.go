@@ -31,9 +31,12 @@ type TokenIssuer interface {
 	IssueForUser(ctx context.Context, userID string) (dto.TokenPair, error)
 }
 
+// Topic constants are defined in cells/accesscore/internal/dto to allow sharing
+// with the setup slice without either slice importing the other. These locals
+// preserve the existing TestXxx(TopicUserCreated...) style in the test suite.
 const (
-	TopicUserCreated = "event.user.created.v1"
-	TopicUserLocked  = "event.user.locked.v1"
+	TopicUserCreated = dto.TopicUserCreated
+	TopicUserLocked  = dto.TopicUserLocked
 )
 
 // Option configures an identity-manage Service.
@@ -124,7 +127,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		user.MarkPasswordResetRequired()
 	}
 
-	eventPayload := map[string]any{"user_id": user.ID, "username": user.Username}
+	eventPayload := dto.UserCreatedEvent{UserID: user.ID, Username: user.Username}
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.Create(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: create: %w", err)
@@ -364,7 +367,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	return pair, nil
 }
 
-func (s *Service) publish(ctx context.Context, topic string, payload map[string]any) error {
+func (s *Service) publish(ctx context.Context, topic string, payload any) error {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("identity-manage: marshal event payload: %w", err)

@@ -4,7 +4,6 @@ package initialadmin
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -16,9 +15,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -60,12 +58,15 @@ type bootstrapConfig struct {
 	Hasher PasswordHasher
 }
 
-// bootstrapper orchestrates initial admin creation: CountByRole → generate
-// password → bcrypt → create user (PasswordResetRequired=true) → assign admin
-// role → writeCredentialFile → return cleaner worker.
+// bootstrapper orchestrates initial admin creation: delegate race-safe user+role
+// persistence to adminprovision → writeCredentialFile → return cleaner worker.
+//
+// Race / orphan / duplicate semantics live in adminprovision.Provisioner; this
+// layer owns only the credfile write + cleanup worker + probeWriteable.
 type bootstrapper struct {
-	deps BootstrapDeps
-	cfg  bootstrapConfig
+	deps        BootstrapDeps
+	cfg         bootstrapConfig
+	provisioner *adminprovision.Provisioner
 }
 
 // newBootstrapper validates deps and cfg, applies defaults, and returns a
@@ -106,7 +107,11 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 		cfg.Hasher = defaultPasswordHasher()
 	}
 
-	return &bootstrapper{deps: deps, cfg: cfg}, nil
+	prov, err := adminprovision.NewProvisioner(deps.UserRepo, deps.RoleRepo, deps.Logger, uuid.NewString)
+	if err != nil {
+		return nil, fmt.Errorf("initialadmin: build provisioner: %w", err)
+	}
+	return &bootstrapper{deps: deps, cfg: cfg, provisioner: prov}, nil
 }
 
 // ensureAdmin executes the bootstrap sequence. It is idempotent: if an admin
@@ -132,18 +137,18 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 // at the composition root via SweepHook so that orphan cred files are cleaned
 // even when adminExists==true causes ensureAdmin to return early.
 func (b *bootstrapper) ensureAdmin(ctx context.Context) (worker.Worker, error) {
-	// Check whether an admin already exists.
-	exists, err := b.adminExists(ctx)
+	// Pre-flight: fail fast if admin already exists (no credfile probe needed).
+	exists, err := b.provisioner.Status(ctx)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialadmin: check status: %w", err)
 	}
 	if exists {
 		return nil, nil
 	}
 
-	// Pre-flight check: verify the credential directory is writable before
-	// creating the admin user. This catches permission issues at startup time
-	// rather than after user creation (P1-6 fix).
+	// Pre-flight: verify the credential directory is writable before creating
+	// the admin user. This catches permission issues at startup time rather
+	// than after user creation (P1-6 fix).
 	if err := b.probeWriteable(); err != nil {
 		return nil, fmt.Errorf("initial admin bootstrap: credential dir not writable: %w", err)
 	}
@@ -154,48 +159,35 @@ func (b *bootstrapper) ensureAdmin(ctx context.Context) (worker.Worker, error) {
 		return nil, err
 	}
 
-	// Ensure admin role and create the bootstrap user.
-	user, err := b.ensureRoleAndCreateUser(ctx, hash)
+	// Delegate race-safe persistence to adminprovision.
+	user, outcome, err := b.provisioner.Ensure(ctx, adminprovision.ProvisionInput{
+		Username:     b.cfg.Username,
+		Email:        b.cfg.Username + "@gocell.local",
+		PasswordHash: hash,
+		RequireReset: true,
+		IDPrefix:     "usr-bootstrap-",
+	})
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("initialadmin: ensure: %w", err)
 	}
-	if user == nil {
-		// Concurrent bootstrap race: another replica already created admin.
+	switch outcome {
+	case adminprovision.OutcomeAlreadyExists, adminprovision.OutcomeRaceSkipped:
+		// Concurrent replica / prior bootstrap won the race. Silent skip.
 		return nil, nil
+	case adminprovision.OutcomeCreated, adminprovision.OutcomeOrphanRecovered:
+		// Fall through to credfile write.
+	default:
+		return nil, fmt.Errorf("initialadmin: unexpected provision outcome %d", outcome)
 	}
 
-	// Write credential file and return cleaner. On failure, compensate the
-	// user/role writes so the bootstrap can self-heal on next startup.
+	// Write credential file. On failure, compensate the user/role writes so
+	// the next startup can self-heal (adminExists==false again).
 	cleaner, werr := b.writeFileAndMakeCleaner(password)
 	if werr != nil {
-		b.compensateAfterCredFileFailure(ctx, user.ID)
+		b.provisioner.Compensate(ctx, user.ID)
 		return nil, werr
 	}
 	return cleaner, nil
-}
-
-// compensateAfterCredFileFailure best-effort removes the role assignment and
-// user row after writeCredentialFile fails. Errors are logged but not
-// surfaced — the operator's immediate concern is the credfile failure, and a
-// stale row at most forces a manual recount on next startup. We log rather
-// than silent-drop so ops can spot leaked rows and clean them up explicitly.
-func (b *bootstrapper) compensateAfterCredFileFailure(ctx context.Context, userID string) {
-	if err := b.deps.RoleRepo.RemoveFromUser(ctx, userID, domain.RoleAdmin); err != nil {
-		b.deps.Logger.Error("initial admin bootstrap: compensating role unassign failed",
-			slog.String("event", "initial_admin_bootstrap_compensate"),
-			slog.String("user_id", userID),
-			slog.Any("error", err))
-	}
-	if err := b.deps.UserRepo.Delete(ctx, userID); err != nil {
-		b.deps.Logger.Error("initial admin bootstrap: compensating user delete failed",
-			slog.String("event", "initial_admin_bootstrap_compensate"),
-			slog.String("user_id", userID),
-			slog.Any("error", err))
-		return
-	}
-	b.deps.Logger.Warn("initial admin bootstrap: compensated after credfile failure; retry on next startup",
-		slog.String("event", "initial_admin_bootstrap_compensate"),
-		slog.String("user_id", userID))
 }
 
 // probeWriteable verifies the credential file directory is writable by creating
@@ -230,22 +222,6 @@ func maybeMacOSHint(credPath string, err error) error {
 	return err
 }
 
-// adminExists checks if at least one user holds the admin role.
-func (b *bootstrapper) adminExists(ctx context.Context) (bool, error) {
-	count, err := b.deps.RoleRepo.CountByRole(ctx, domain.RoleAdmin)
-	if err != nil {
-		return false, fmt.Errorf("initialadmin: count admin users: %w", err)
-	}
-	if count > 0 {
-		b.deps.Logger.Debug("initial admin bootstrap skipped: admin already exists",
-			slog.String("event", "initial_admin_bootstrap"),
-			slog.Int("admin_count", count),
-		)
-		return true, nil
-	}
-	return false, nil
-}
-
 // generateAndHash creates a random password and returns (plaintext, bcrypt hash).
 // The intermediate byte slice is zeroed after hashing.
 func (b *bootstrapper) generateAndHash() (password string, hash []byte, err error) {
@@ -264,114 +240,6 @@ func (b *bootstrapper) generateAndHash() (password string, hash []byte, err erro
 		return "", nil, fmt.Errorf("initialadmin: hash password: %w", err)
 	}
 	return password, hash, nil
-}
-
-// ensureRoleAndCreateUser idempotently creates the admin role and user.
-// Returns nil user (no error) on a concurrent-bootstrap silent skip.
-func (b *bootstrapper) ensureRoleAndCreateUser(ctx context.Context, hash []byte) (*domain.User, error) {
-	adminRole := &domain.Role{
-		ID:   domain.RoleAdmin,
-		Name: domain.RoleAdmin,
-		Permissions: []domain.Permission{
-			{Resource: "*", Action: "*"},
-		},
-	}
-	if err := b.deps.RoleRepo.Create(ctx, adminRole); err != nil {
-		var ecErr *errcode.Error
-		if !errors.As(err, &ecErr) || ecErr.Code != errcode.ErrAuthRoleDuplicate {
-			return nil, fmt.Errorf("initialadmin: ensure admin role: %w", err)
-		}
-		// Role already exists — continue.
-	}
-
-	user, err := domain.NewUser(
-		b.cfg.Username,
-		b.cfg.Username+"@gocell.local",
-		string(hash),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("initialadmin: construct user: %w", err)
-	}
-	user.ID = "usr-bootstrap-" + uuid.NewString()
-	user.MarkPasswordResetRequired()
-
-	if err := b.deps.UserRepo.Create(ctx, user); err != nil {
-		existing, resolveErr := b.resolveDuplicateUser(ctx, err)
-		if resolveErr != nil {
-			return nil, resolveErr
-		}
-		if existing == nil {
-			// Silent skip: another replica finished the bootstrap concurrently.
-			return nil, nil
-		}
-		// Orphan-user recovery: UserRepo.Create returned duplicate but no admin
-		// role exists yet — a previous run crashed between Create and
-		// AssignToUser. Rewrite the existing row's password hash with the
-		// freshly generated one (the old hash is orphaned — we no longer know
-		// the plaintext) and re-assert PasswordResetRequired, so the credfile
-		// written below matches what's in the repo. Then fall through to
-		// AssignToUser on the existing ID.
-		existing.PasswordHash = string(hash)
-		existing.MarkPasswordResetRequired()
-		if err := b.deps.UserRepo.Update(ctx, existing); err != nil {
-			return nil, fmt.Errorf("initialadmin: reset orphan user credentials: %w", err)
-		}
-		user = existing
-	}
-
-	if _, err := b.deps.RoleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
-		return nil, fmt.Errorf("initialadmin: assign admin role: %w", err)
-	}
-	return user, nil
-}
-
-// resolveDuplicateUser interprets a UserRepo.Create duplicate error into one of
-// three outcomes:
-//
-//   - not a duplicate → return (nil, wrapped-error): caller surfaces the error
-//   - duplicate + recount > 0 (another pod already completed bootstrap) →
-//     return (nil, nil): caller silently skips
-//   - duplicate + recount == 0 (orphan user from a previous crashed run) →
-//     return (existingUser, nil): caller resumes with that user ID so
-//     AssignToUser finishes the half-done bootstrap
-//
-// The orphan-recovery branch is the idempotent alternative to saga-style
-// step-level compensation (which none of GitLab / Keycloak / Vault / Consul
-// implement in their bootstrap flows). In the current in-memory repo the
-// orphan state cannot persist across restarts, so this path only activates
-// once we switch to PG (X1 PG-DOMAIN-REPO); having the logic in place now
-// keeps the bootstrap contract consistent across the memory/PG transition.
-//
-// ref: GitLab db/fixtures/production/001_admin.rb (single-tx, no compensation),
-// Keycloak ApplianceBootstrap.createMasterRealmAdminUser (catch duplicate,
-// return false), Vault operator init (detect partial-init, resume).
-func (b *bootstrapper) resolveDuplicateUser(ctx context.Context, createErr error) (*domain.User, error) {
-	var ecErr *errcode.Error
-	if !errors.As(createErr, &ecErr) || ecErr.Code != errcode.ErrAuthUserDuplicate {
-		return nil, fmt.Errorf("initialadmin: create user: %w", createErr)
-	}
-	recount, err := b.deps.RoleRepo.CountByRole(ctx, domain.RoleAdmin)
-	if err != nil {
-		return nil, fmt.Errorf("initialadmin: recount after duplicate user: %w", err)
-	}
-	if recount > 0 {
-		b.deps.Logger.Debug("initial admin bootstrap: duplicate user creation race, admin already exists",
-			slog.String("event", "initial_admin_bootstrap"),
-		)
-		return nil, nil
-	}
-	// Orphan recovery: a prior run crashed after UserRepo.Create but before
-	// AssignToUser committed. Pull the existing row and let the caller retry
-	// AssignToUser on its ID.
-	existing, err := b.deps.UserRepo.GetByUsername(ctx, b.cfg.Username)
-	if err != nil {
-		return nil, fmt.Errorf("initialadmin: lookup orphan user for recovery: %w", err)
-	}
-	b.deps.Logger.Info("initial admin bootstrap: resuming orphan-user recovery",
-		slog.String("event", "initial_admin_bootstrap_orphan_recover"),
-		slog.String("user_id", existing.ID),
-	)
-	return existing, nil
 }
 
 // writeFileAndMakeCleaner writes the credential file and constructs the cleanup worker.

@@ -82,7 +82,7 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{KeyProviderOverride: kp},
-		AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()},
+		AccessCoreModule{ForceBootstrap: true, InitialAdminOpts: fastAdminBootstrapOpts()},
 		AuditCoreModule{},
 	)
 	if err != nil {

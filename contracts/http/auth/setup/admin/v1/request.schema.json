@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.auth.setup.admin.v1.request",
+  "type": "object",
+  "properties": {
+    "username": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "email": { "type": "string", "minLength": 1, "maxLength": 256 },
+    "password": { "type": "string", "minLength": 8, "maxLength": 128 }
+  },
+  "required": ["username", "email", "password"],
+  "additionalProperties": false
+}
