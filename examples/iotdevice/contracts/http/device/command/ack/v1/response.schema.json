@@ -6,9 +6,16 @@
     "data": {
       "type": "object",
       "properties": {
-        "status": { "type": "string" }
+        "id": { "type": "string" },
+        "deviceId": { "type": "string" },
+        "commandType": { "type": "string" },
+        "payload": { "type": "string" },
+        "status": { "type": "string" },
+        "attempt": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "completedAt": { "type": "string", "format": "date-time" }
       },
-      "required": ["status"],
+      "required": ["id", "deviceId", "commandType", "payload", "status", "attempt", "createdAt"],
       "additionalProperties": false
     }
   },

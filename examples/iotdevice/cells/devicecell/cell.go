@@ -16,6 +16,7 @@ import (
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -34,11 +35,6 @@ type Option func(*DeviceCell)
 // WithDeviceRepository sets the device repository.
 func WithDeviceRepository(r domain.DeviceRepository) Option {
 	return func(c *DeviceCell) { c.deviceRepo = r }
-}
-
-// WithCommandRepository sets the command repository.
-func WithCommandRepository(r domain.CommandRepository) Option {
-	return func(c *DeviceCell) { c.commandRepo = r }
 }
 
 // WithPublisher sets the outbox Publisher for event publishing.
@@ -60,7 +56,6 @@ func WithLogger(l *slog.Logger) Option {
 type DeviceCell struct {
 	*cell.BaseCell
 	deviceRepo  domain.DeviceRepository
-	commandRepo domain.CommandRepository
 	publisher   outbox.Publisher
 	cursorCodec *query.CursorCodec
 	logger      *slog.Logger
@@ -98,14 +93,10 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 
-	// Default to in-memory repositories if none injected.
+	// Default to in-memory device repository if none injected.
 	if c.deviceRepo == nil {
 		c.deviceRepo = mem.NewDeviceRepository()
 		c.logger.Info("devicecell: using in-memory device repository (demo mode)")
-	}
-	if c.commandRepo == nil {
-		c.commandRepo = mem.NewCommandRepository()
-		c.logger.Info("devicecell: using in-memory command repository (demo mode)")
 	}
 
 	// Publisher is required (NIL-PUB-P1). Use &DiscardPublisher{} for demo mode.
@@ -150,8 +141,18 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.logger.Warn("devicecell: using default cursor codec (demo mode)")
 	}
 
-	// device-command slice
-	commandSvc, err := devicecommand.NewService(c.commandRepo, c.deviceRepo, c.cursorCodec, c.logger,
+	// device-command slice: uses commandtest.InMemQueue as the command store in
+	// demo/example mode. commandtest is importable from production code (regular
+	// .go file, not _test.go). For a production deployment, replace with an
+	// adapter implementing command.Queue + command.Reader + command.StateAdvancer.
+	//
+	// TODO(PR-A12-SWEEPER-WIRE): wire command.Sweeper once InMemQueue supports
+	// multi-device scan (PendingAll). Tracked in backlog PR-A12-SWEEPER-WIRE.
+	if deps.DurabilityMode == cell.DurabilityDurable {
+		return fmt.Errorf("devicecell: commandtest.InMemQueue is not suitable for durable deployments; wire a durable command.Queue adapter instead")
+	}
+	cmdQueue := commandtest.NewInMemQueue()
+	commandSvc, err := devicecommand.NewService(cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)

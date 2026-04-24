@@ -16,22 +16,24 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-func TestToCommandResponse_NilInput(t *testing.T) {
-	var got CommandResponse
-	assert.NotPanics(t, func() { got = toCommandResponse(nil) })
+func TestToCommandResponse_ZeroEntry(t *testing.T) {
+	var got commandResponse
+	assert.NotPanics(t, func() { got = toCommandResponse(command.Entry{}) })
 	assert.Zero(t, got.ID)
 }
 
 // setupCommandHandler creates a Handler and seeds a device so that command operations succeed.
-func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandRepository) {
+func setupCommandHandler() (*Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
-	cmdRepo := mem.NewCommandRepository()
+	q := commandtest.NewInMemQueue()
 	codec, _ := query.NewCursorCodec(bytes.Repeat([]byte("k"), 32))
-	svc, err := NewService(cmdRepo, devRepo, codec, slog.Default(), query.RunModeProd)
+	svc, err := NewService(q, devRepo, codec, slog.Default(), query.RunModeProd)
 	if err != nil {
 		panic(err)
 	}
@@ -40,16 +42,16 @@ func setupCommandHandler() (*Handler, *mem.DeviceRepository, *mem.CommandReposit
 		ID: "dev-1", Name: "sensor-a", Status: "online",
 	})
 
-	return NewHandler(svc), devRepo, cmdRepo
+	return NewHandler(svc), devRepo, q
 }
 
 // setupCommandMux creates a full http.ServeMux with policies registered via
 // Secured, used by trust boundary tests so that policy checks run as in production.
-func setupCommandMux() (http.Handler, *mem.DeviceRepository, *mem.CommandRepository) {
-	h, devRepo, cmdRepo := setupCommandHandler()
+func setupCommandMux() (http.Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
+	h, devRepo, q := setupCommandHandler()
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
-	return mux, devRepo, cmdRepo
+	return mux, devRepo, q
 }
 
 func TestHandleEnqueue(t *testing.T) {
@@ -74,6 +76,23 @@ func TestHandleEnqueue(t *testing.T) {
 				assert.Equal(t, "dev-1", data["deviceId"])
 				assert.Equal(t, "reboot", data["payload"])
 				assert.Equal(t, "pending", data["status"])
+				assert.Equal(t, "default", data["commandType"])
+				assert.InDelta(t, float64(0), data["attempt"], 0)
+				assert.NotEmpty(t, data["createdAt"])
+				_, hasCompleted := data["completedAt"]
+				assert.False(t, hasCompleted, "completedAt should be omitted for pending command")
+			},
+		},
+		{
+			name:       "valid enqueue with commandType returns 201",
+			deviceID:   "dev-1",
+			body:       `{"payload":"v2.0","commandType":"firmware-update"}`,
+			wantStatus: http.StatusCreated,
+			checkBody: func(t *testing.T, body []byte) {
+				var envelope map[string]any
+				require.NoError(t, json.Unmarshal(body, &envelope))
+				data := envelope["data"].(map[string]any)
+				assert.Equal(t, "firmware-update", data["commandType"])
 			},
 		},
 		{
@@ -122,8 +141,7 @@ func TestHandleEnqueue(t *testing.T) {
 
 // TestHandleEnqueue_NoRoutePolicy verifies that enqueue works for any
 // authenticated caller — devicecell carries no route-level policy post-F3
-// revert (Policy:nil, pre-F3 state). Deployments that need authz wire
-// WithAuthDiscovery() and add a Policy or rely on AuthMiddleware JWT check.
+// revert (Policy:nil, pre-F3 state).
 func TestHandleEnqueue_NoRoutePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -227,13 +245,12 @@ func TestHandleListPending(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, cmdRepo := setupCommandHandler()
+			h, _, q := setupCommandHandler()
 			ctx := context.Background()
+			now := time.Now()
 			for i := range tc.seedCmds {
-				_ = cmdRepo.Create(ctx, &domain.Command{
-					ID: "cmd-" + string(rune('a'+i)), DeviceID: "dev-1",
-					Payload: "p", Status: "pending",
-				})
+				id := "cmd-" + string(rune('a'+i))
+				_ = q.Enqueue(ctx, command.NewEntry(id, "dev-1", "reboot", []byte("p"), command.Timeouts{}, now.Add(time.Duration(i)*time.Second)), command.EnqueueOptions{})
 			}
 
 			w := httptest.NewRecorder()
@@ -257,17 +274,12 @@ func TestHandleListPending(t *testing.T) {
 }
 
 func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
-	h, _, cmdRepo := setupCommandHandler()
+	h, _, q := setupCommandHandler()
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	for i := 0; i < 7; i++ {
-		require.NoError(t, cmdRepo.Create(ctx, &domain.Command{
-			ID:        "cmd-" + string(rune('a'+i)),
-			DeviceID:  "dev-1",
-			Payload:   "p",
-			Status:    "pending",
-			CreatedAt: base.Add(time.Duration(i) * time.Hour),
-		}))
+		id := "cmd-" + string(rune('a'+i))
+		require.NoError(t, q.Enqueue(ctx, command.NewEntry(id, "dev-1", "reboot", []byte("p"), command.Timeouts{}, base.Add(time.Duration(i)*time.Hour)), command.EnqueueOptions{}))
 	}
 
 	var allIDs []string
@@ -373,11 +385,9 @@ func TestHandleAck(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, cmdRepo := setupCommandHandler()
+			h, _, q := setupCommandHandler()
 			if tc.seedCmd {
-				_ = cmdRepo.Create(context.Background(), &domain.Command{
-					ID: tc.cmdID, DeviceID: tc.deviceID, Payload: "reboot", Status: "pending",
-				})
+				_ = q.Enqueue(context.Background(), command.NewEntry(tc.cmdID, tc.deviceID, "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
 			}
 
 			w := httptest.NewRecorder()
@@ -394,34 +404,47 @@ func TestHandleAck(t *testing.T) {
 				require.NoError(t, json.Unmarshal(w.Body.Bytes(), &envelope))
 				data, ok := envelope["data"].(map[string]any)
 				require.True(t, ok, "response should have data envelope")
-				assert.Equal(t, "acked", data["status"])
+				// Ack now returns the full command entry DTO with terminal status.
+				assert.Equal(t, "succeeded", data["status"])
+				assert.NotNil(t, data["completedAt"])
 			}
 		})
 	}
 }
 
-func TestCommandResponse_AckedAt_Serialization(t *testing.T) {
+func TestCommandResponse_CompletedAt_Serialization(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 
-	t.Run("pending command omits ackedAt", func(t *testing.T) {
-		resp := toCommandResponse(&domain.Command{
-			ID: "cmd-1", DeviceID: "dev-1", Payload: "reboot",
-			Status: "pending", CreatedAt: now, AckedAt: nil,
-		})
+	t.Run("pending command omits completedAt", func(t *testing.T) {
+		entry := command.Entry{
+			ID:        "cmd-1",
+			DeviceID:  "dev-1",
+			Payload:   []byte("reboot"),
+			Status:    command.StatusPending,
+			CreatedAt: now,
+		}
+		entry.CommandType = "default"
+		resp := toCommandResponse(entry)
 		b, err := json.Marshal(resp)
 		require.NoError(t, err)
-		assert.NotContains(t, string(b), `"ackedAt"`)
+		assert.NotContains(t, string(b), `"completedAt"`)
 	})
 
-	t.Run("acked command includes ackedAt", func(t *testing.T) {
-		ackedAt := now.Add(time.Minute)
-		resp := toCommandResponse(&domain.Command{
-			ID: "cmd-1", DeviceID: "dev-1", Payload: "reboot",
-			Status: "acked", CreatedAt: now, AckedAt: &ackedAt,
-		})
+	t.Run("succeeded command includes completedAt", func(t *testing.T) {
+		completedAt := now.Add(time.Minute)
+		entry := command.Entry{
+			ID:          "cmd-1",
+			DeviceID:    "dev-1",
+			CommandType: "default",
+			Payload:     []byte("reboot"),
+			Status:      command.StatusSucceeded,
+			CreatedAt:   now,
+			CompletedAt: &completedAt,
+		}
+		resp := toCommandResponse(entry)
 		b, err := json.Marshal(resp)
 		require.NoError(t, err)
-		assert.Contains(t, string(b), `"ackedAt"`)
+		assert.Contains(t, string(b), `"completedAt"`)
 	})
 }
 
@@ -500,10 +523,8 @@ func TestHandleAck_NoRoutePolicy(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			mux, _, cmdRepo := setupCommandMux()
-			_ = cmdRepo.Create(context.Background(), &domain.Command{
-				ID: "cmd-ack", DeviceID: "dev-1", Payload: "reboot", Status: "pending",
-			})
+			mux, _, q := setupCommandMux()
+			_ = q.Enqueue(context.Background(), command.NewEntry("cmd-ack", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
 
 			w := httptest.NewRecorder()
 			req := httptest.NewRequest(http.MethodPost, "/dev-1/commands/cmd-ack/ack", nil)

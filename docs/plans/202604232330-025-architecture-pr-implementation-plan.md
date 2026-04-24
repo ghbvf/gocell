@@ -424,17 +424,22 @@
 
 ---
 
-### PR-A12 KERNEL/COMMAND（P1，~1d）
+### PR-A12 KERNEL/COMMAND ✅ 已落地（2026-04-24，分支 `refactor/522-pr-a12-kernel-command`，实际 ~2.5d）
 
 **主线**：
-- **LATER-K2 KERNEL/COMMAND** 命令队列接口 + L4 操作底座
+- ✅ **LATER-K2 KERNEL/COMMAND** 新包 `kernel/command/` 提供完整 L4 命令队列底座：`Status`（7 态 iota+1，0 非法）/ `Entry` / `Timeouts` 三阶段（ScheduleToSend/SendToComplete/OverallDeadline）/ `Transition`+`AdvanceCommand`+`ResetForRetry` 纯函数 / `Queue` 门面（Enqueue/Dequeue/Ack/ExtendLease/Cancel/ListPending）/ `Sweeper` 过期驱动器 / `QueueRegistrar` 可选 Cell 接口 / `commandtest.InMemQueue` 测试后端。代码从 `kernel/outbox/l4.go`（已删）搬家，SRP 收敛——outbox 专注 L2/L3 事件 fanout，command 专注 L4 unicast + ack。
 
 **搭车**：
-- 可考虑 devicecell 的 HandleEnqueue 迁到新底座（**T3 DEVICE-ENQUEUE-RBAC** 触发器项 0/6 的预埋点）
+- ✅ `examples/iotdevice/cells/devicecell/slices/devicecommand/` 彻底迁移到 `kernel/command.Queue`（删除 `domain.Command` + `CommandRepository`；handler DTO 新增 `status`/`attempt`/`completedAt`；request 新增可选 `commandType`，默认 `"default"`）。contract schemas（HTTP + command kind 各 3 × 2）同步重塑。
+- ✅ **T3 DEVICE-ENQUEUE-RBAC** 预埋点 `command.EnqueueOptions.Authz command.AuthzFunc` 就绪；本 PR 不接线（demo 模式 Authz=nil），T3 真正落地只需在 handler 构造 AuthzFunc 传入，无需改 kernel。
 
-**文件面**：`kernel/command/`（新）+ `cells/devicecell/slices/devicecommand/`
+**对标**（commits 已记录）：`ThreeDotsLabs/watermill message/router.go` Ack/Nack / `kubernetes/kubernetes staging/src/k8s.io/client-go/util/workqueue` Add/Get/Done + ShutDownWithDrain / `nats-io/nats.go jetstream Msg` InProgress/NakWithDelay/Term / `rabbitmq/amqp091-go channel.go` Ack/Nack(requeue=false)→DLX / `temporal Nexus` 三阶段 timeout。
 
-**风险**：中；定义 L4 下发语义，影响未来设备管理类 cell 设计。
+**覆盖率**：`kernel/command` 98.7%（kernel 层 ≥90% 达标）；`kernel/command/commandtest` 68.6%（test-helper 子包不受 90% 门禁约束）；`examples/iotdevice/cells/devicecell` 86.2%、`devicecommand` 83.3%、`mem` 83.3%（≥80% 达标）。
+
+**残余 backlog**：`PR-A12-SWEEPER-WIRE`（InMemQueue 多设备扫描 + cell-level Sweeper 接线）——单设备 Sweeper 已就绪；多设备 sweep 需 Reader 扩 `PendingAll`，作为下一个 PR 处理，不阻塞发布。
+
+**风险落地**：中；定义 L4 下发语义首批采纳；`kernel/command` 作为未来设备管理类 cell 的设计范式。
 
 ---
 

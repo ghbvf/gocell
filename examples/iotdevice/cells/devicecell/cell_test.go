@@ -25,7 +25,6 @@ import (
 func newTestCell() *DeviceCell {
 	return NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 		WithPublisher(eventbus.New()),
 	)
 }
@@ -104,7 +103,6 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	// No publisher injected; Init should fail-fast (NIL-PUB-P1).
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
@@ -309,7 +307,6 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 		WithPublisher(eventbus.New()),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
@@ -324,16 +321,35 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	assert.Contains(t, err.Error(), "cursor codec")
 }
 
-func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
+// TestDeviceCell_DurableMode_RejectsInMemCommandQueue verifies that Init fails
+// fast when DurabilityDurable is requested, because commandtest.InMemQueue is
+// not suitable for durable deployments.
+func TestDeviceCell_DurableMode_RejectsInMemCommandQueue(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
+		WithPublisher(eventbus.New()),
+		WithCursorCodec(newTestCursorCodec(t)),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{
+		Config:         map[string]any{},
+		DurabilityMode: cell.DurabilityDurable,
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "commandtest.InMemQueue is not suitable for durable deployments")
+}
+
+func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
+	// Uses DurabilityDemo (not DurabilityDurable) because InMemQueue is not
+	// suitable for durable deployments and Init will reject durable mode.
+	// The publish-fail-open behavior under test applies in both modes.
+	c := NewDeviceCell(
+		WithDeviceRepository(mem.NewDeviceRepository()),
 		WithPublisher(failingPublisher{}),
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
 		Config:         map[string]any{},
-		DurabilityMode: cell.DurabilityDurable,
+		DurabilityMode: cell.DurabilityDemo,
 	}))
 
 	rec := httptest.NewRecorder()
@@ -348,7 +364,6 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 		WithPublisher(failingPublisher{}),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{

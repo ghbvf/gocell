@@ -3,6 +3,7 @@
   "title": "http.device.command.enqueue.v1.request",
   "type": "object",
   "properties": {
+    "commandType": { "type": "string" },
     "payload": { "type": "string" }
   },
   "required": ["payload"],

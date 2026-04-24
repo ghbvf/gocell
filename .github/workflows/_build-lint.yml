@@ -103,6 +103,7 @@ jobs:
             /coverage: \[no statements\]/ { next }
             /outboxtest/ { next }
             /celltest/ { next }
+            /commandtest/ { next }
             /coverage:/ {
               cov = $0
               sub(/^.*coverage: /, "", cov)
