@@ -7,6 +7,15 @@
 // listener intent only via the exported package-level variables
 // ([PrimaryListener], [InternalListener], [HealthListener]), eliminating the
 // entire class of listener-name typos that a bare string parameter would allow.
+//
+// Listener topology ownership: the ListenerRef set is intentionally kernel-owned
+// and closed. A new listener class (e.g. a future AdminListener) must be added
+// here in kernel/cell rather than manufactured by an individual cell. This is
+// deliberate: listener topology is a deployment concern (which physical ports
+// exist, what policies apply, how probes are routed) that belongs to the
+// assembly/bootstrap level, not to individual cells. Cells declare *which*
+// listener their routes target, but do not *define* listeners; that separation
+// keeps cells portable across assemblies that share the same listener vocabulary.
 package cell
 
 // ListenerRef is a type-safe reference to a physical HTTP listener.
