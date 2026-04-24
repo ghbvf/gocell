@@ -113,8 +113,34 @@ func (f *fakeVaultClient) Write(ctx context.Context, path string, data map[strin
 		}
 		return map[string]any{"plaintext": base64.StdEncoding.EncodeToString(dek)}, nil
 
+	case strings.Contains(path, "/datakey/plaintext/"):
+		// Vault Transit datakey/plaintext: server generates a fresh DEK, returns
+		// both the raw plaintext (for immediate use) and the wrapped ciphertext
+		// (for storage). Deterministic DEK keyed by the requested bit size so
+		// round-trip tests can decrypt without a separate channel.
+		f.encryptCalls.Add(1)
+		bits := 32 // default
+		if b, ok := data["bits"].(int); ok {
+			bits = b / 8
+		}
+		dek := make([]byte, bits)
+		for i := range dek {
+			dek[i] = byte(0x77 ^ i)
+		}
+		wrapped := xorBytes(dek, f.masterKey[:len(dek)])
+		vaultCipher := fmt.Sprintf("vault:v%d:%s",
+			f.latestVersion,
+			base64.StdEncoding.EncodeToString(wrapped),
+		)
+		return map[string]any{
+			"plaintext":  base64.StdEncoding.EncodeToString(dek),
+			"ciphertext": vaultCipher,
+		}, nil
+
 	default:
-		// Assume transit/encrypt/{key}
+		// Assume transit/encrypt/{key} — legacy path, no longer reachable from
+		// production code (PR-A18 routed Encrypt through datakey/plaintext) but
+		// kept so legacy ResponseError tests can still exercise the fake.
 		f.encryptCalls.Add(1)
 
 		rawB64, ok := data["plaintext"].(string)
@@ -280,25 +306,17 @@ func TestVaultTransitHandle_Encrypt_CallsLocalAESAndWrapsDEK(t *testing.T) {
 	ctx := context.Background()
 	ct, nonce, edk, keyID, err := callEncrypt(t, h, ctx, []byte("secret"), []byte("row:123"))
 
-	// (a) fake client received exactly one Write call
+	// (a) fake client received exactly one Write call (PR-A18: datakey/plaintext path)
 	if fake.encryptCalls.Load() != 1 {
-		t.Errorf("expected 1 Vault encrypt call, got %d", fake.encryptCalls.Load())
+		t.Errorf("expected 1 Vault datakey call, got %d", fake.encryptCalls.Load())
 	}
-	if fake.lastWritePath != "transit/encrypt/gocell-config" {
-		t.Errorf("wrong Write path: %q, want %q", fake.lastWritePath, "transit/encrypt/gocell-config")
+	if fake.lastWritePath != "transit/datakey/plaintext/gocell-config" {
+		t.Errorf("wrong Write path: %q, want %q", fake.lastWritePath, "transit/datakey/plaintext/gocell-config")
 	}
 
-	// (b) Write data "plaintext" is base64 of 32-byte DEK
-	ptField, ok := fake.lastWriteData["plaintext"].(string)
-	if !ok {
-		t.Fatal("Write data missing string 'plaintext' field")
-	}
-	decoded, decodeErr := base64.StdEncoding.DecodeString(ptField)
-	if decodeErr != nil {
-		t.Fatalf("'plaintext' field is not valid base64: %v", decodeErr)
-	}
-	if len(decoded) != 32 {
-		t.Errorf("DEK length = %d, want 32", len(decoded))
+	// (b) Write body has bits=256 (PR-A18: server-side DEK generation)
+	if bits := fake.lastWriteData["bits"]; bits != 256 {
+		t.Errorf("Write data 'bits' = %v, want 256", bits)
 	}
 
 	// (c) Write data has NO "context" or "associated_data" fields
@@ -591,11 +609,16 @@ func TestVaultTransitHandle_KeyIDFromEdkPrefix(t *testing.T) {
 		override.lastWritePath = path
 		override.lastWriteData = data
 		override.encryptCalls.Add(1)
-		// Return v7 prefix regardless of latestVersion.
-		rawB64, _ := data["plaintext"].(string)
-		dek, _ := base64.StdEncoding.DecodeString(rawB64)
+		// PR-A18: production path is /datakey/plaintext/{key}. Generate a deterministic
+		// DEK and return v7 prefix regardless of latestVersion to simulate a rotate
+		// race between Current() and the Encrypt round-trip.
+		dek := make([]byte, 32)
+		for i := range dek {
+			dek[i] = byte(0x77 ^ i)
+		}
 		wrapped := xorBytes(dek, override.masterKey[:len(dek)])
 		return map[string]any{
+			"plaintext":  base64.StdEncoding.EncodeToString(dek),
 			"ciphertext": "vault:v7:" + base64.StdEncoding.EncodeToString(wrapped),
 		}, nil
 	}

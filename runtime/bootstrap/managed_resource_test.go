@@ -284,8 +284,7 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 
 // TestWithManagedResource_NilFailFast verifies that WithManagedResource(nil)
 // sets the managedResourceNil flag and Run() rejects it at phase0 before any
-// side effects. Mirrors the WithCircuitBreaker / WithBrokerHealth fail-fast
-// pattern.
+// side effects. Mirrors the WithCircuitBreaker fail-fast pattern.
 //
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — hook registration
 // does no nil-substitution; bad inputs surface before any component starts.
@@ -303,7 +302,7 @@ func TestWithManagedResource_NilFailFast(t *testing.T) {
 
 // TestWithManagedResource_TypedNilFailFast verifies that a typed-nil
 // (non-nil interface wrapping a nil pointer) is detected at phase0 and
-// causes Run() to return an error — mirrors isNilBrokerHealthChecker /
+// causes Run() to return an error — mirrors
 // TestWithCircuitBreaker_TypedNilPointer_Error.
 //
 // Without reflect-based detection, WithManagedResource((*fakeResource)(nil))

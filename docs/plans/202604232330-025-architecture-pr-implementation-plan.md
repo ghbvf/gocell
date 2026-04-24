@@ -643,19 +643,25 @@
 
 ---
 
-### PR-A18 Vault 多租户 + 剩余优化（~5h）
+### PR-A18 Vault namespace + datakey 默认化 + 锁去除 + RMQ ManagedResource ✅ 已落地
 
-**主线**：
-- **A15 VAULT-NAMESPACE-MULTITENANT-01** HCP Vault namespace 支持（1h）
-- **A16 VAULT-DATAKEY-ENDPOINT-01** datakey/plaintext endpoint（2h，🟠 S14a 触发）
-- **A18 VAULT-ROTATE-OPTIMISTIC-LOCK-01** 无锁 rotate + 写锁仅 version cache（2h）
-- **LATER-AL-R RMQ-STATUS-01** RabbitMQ 结构化 ConnectionState（3h）
+**实际交付**（不向后兼容、修复彻底，基于用户指示）：
+- **A15 VAULT-NAMESPACE-MULTITENANT-01** ✅ `applyNamespaceFromEnv(raw)` 读 `VAULT_NAMESPACE` env → `client.SetNamespace(ns)`，复用 HashiCorp 官方 env 名（未引入 `GOCELL_VAULT_NAMESPACE` 别名）。
+- **A16 VAULT-DATAKEY-DEFAULT-01** ✅ envelope encrypt 主路径替换为 `transit/datakey/plaintext`：删 `wrapDEKWithVault`、删客户端 `crypto/rand` DEK 生成；DEK 由 Vault 服务端（HSM-backed in HCP）生成，单 RTT。Decrypt 路径不变（`transit/decrypt` 同时支持新老 EDK），**老密文继续可解**。
+- **A18 VAULT-ROTATE-LOCK-REMOVE-01** ✅ `TransitKeyProvider` 删 `sync.RWMutex` 字段；`atomic.Int64 cachedLatestVersion` lock-free version cache；`Current()` 命中缓存零 Vault 调用；`Rotate()` 无锁（Vault 服务端原子，本地仅缓存 invalidate+refresh）。`NewTransitKeyProvider` 构造期顺手 warm cache。多 pod 弱一致性对正确性无影响（keyID 从 Vault 响应解，不从缓存读；`/transit/encrypt`/`/datakey` 永远用 latest_version 服务端版本）。
+- **RMQ-STATUS-01** ✅ `Connection` 实现 `lifecycle.ManagedResource`（`Checkers() {"rabbitmq_ready": Health}` + `Worker() nil`）。**顺手清理**：`runtime/bootstrap` 删除 `BrokerHealthChecker` 接口 + `WithBrokerHealth` Option + `brokerHealthNil` 字段 + `isNilBrokerHealthChecker` helper（grep 整库 0 生产调用方，是 ManagedResource 之前的过渡 API）；统一通过 `WithManagedResource(conn)` 接入。
 
-**搭车理由**：前三项都在 `adapters/vault/transit_provider.go`；RMQ-STATUS-01 是 adapter 层可观测的类似改造，一起合并验证 adapter 层 health/status 一致性。
+**搭车理由**：前三项都在 `adapters/vault/transit_provider.go`；RMQ-STATUS-01 同 adapter 层健康一致性，三处共用 `lifecycle.ManagedResource` 契约。
 
-**文件面**：`adapters/vault/transit_provider.go` + `adapters/rabbitmq/connection.go`
+**文件面**：`adapters/vault/transit_provider.go` + `adapters/rabbitmq/connection.go` + `adapters/rabbitmq/doc.go` + `runtime/bootstrap/{bootstrap,bootstrap_phases,managed_resource}.go` + 对应 `*_test.go`
 
-**风险**：低-中。
+**风险评估**：
+- 老密文兼容性：Decrypt 路径未触；`TestTransitEnvelope_VaultNeverSeesBusinessPlaintext` integration test 升级为校验"datakey body 仅含 `bits:256`，无 `plaintext` 字段"，envelope 边界**比原方案更窄**。
+- 多 pod 缓存一致性：经分析无正确性影响（参见 transit_provider.go cachedLatestVersion 注释）。
+- 删 `WithBrokerHealth`：grep 整库 0 调用方，CLAUDE.md 明文"无外部消费者"。
+- AppRole policy 同步更新：integration test 中 transit 策略由 `transit/encrypt/...` 改为 `transit/datakey/plaintext/...`。
+
+**ref**：`hashicorp/vault@main api/client.go::SetNamespace` + `EnvVaultNamespace` / `api-docs/secret/transit POST /datakey/plaintext/:name + /:name/rotate` / `rabbitmq/amqp091-go@main connection.go::NotifyClose` / `kernel/lifecycle/managed_resource.go`
 
 ---
 
@@ -849,7 +855,7 @@ Wave 3：
   PR-A15 kernel/webhook（依赖 L3 Outbox 稳定）
   PR-A16 kernel/reconcile + LATER-F-1 L3 示例
   PR-A17 runtime/scheduler + WM-18
-  PR-A18 Vault + RMQ 剩余
+  ~~PR-A18 Vault + RMQ 剩余~~ ✅ 已落地（PR#240）
   PR-A35 READYZ-POLISH（verbose token deny + uncooperative checker guardrails）
   PR-A36 HTTP-METRICS-LABEL-REALIGN（🟠 多 cell assembly 前触发）
 
@@ -884,7 +890,7 @@ Wave 4 (v1.1+)：
 | PR-A15 webhook | WM-32 mTLS | 同出站安全 |
 | PR-A16 reconcile | LATER-F-1 L3 示例 | 新机制 + 官方样板同发 |
 | PR-A17 scheduler | WM-18 延迟消息 | WM-18 依赖 scheduler |
-| PR-A18 Vault 剩余 | RMQ-STATUS-01 | 同 adapter health/status 面 |
+| ~~PR-A18 Vault 剩余~~ ✅ | ~~RMQ-STATUS-01~~ ✅（ManagedResource wiring 已交付）；backlog_later_detail §3 RMQ-STATUS-01（结构化诊断字段）仍开放，属独立未来项 | 同 adapter health/status 面 |
 | PR-A25 auth-prod-harden | S-nonce + S32 | real 模式 fail-fast 同面 |
 | PR-A29 auth-refresh-main | X11 → X15（强依赖顺序） | HMAC-split 必须在 opaque integration 之前，否则需数据迁移 |
 | PR-A33 refresh-polish | X12 + X13 + X14 | 全在 refresh_store.go + migrations |

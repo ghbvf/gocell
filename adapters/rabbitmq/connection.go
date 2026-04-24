@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -585,9 +586,10 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 // connection state so operators can tell "never connected" from "reconnecting"
 // from "terminal".
 //
-// The ctx parameter is accepted for interface compatibility (e.g. bootstrap.BrokerHealthChecker)
-// and to honour caller cancellation; this implementation does not perform I/O
-// so ctx is only checked for early cancellation before the state read.
+// The ctx parameter is accepted to satisfy the lifecycle.Checker contract
+// (func(ctx context.Context) error) used by /readyz integration via
+// Connection.Checkers(); this implementation does not perform I/O so ctx is
+// only checked for early cancellation before the state read.
 //
 // Error codes returned:
 //   - nil: healthy (StateConnected, live connection)
@@ -658,6 +660,45 @@ func (c *Connection) ConnectionStatus() ConnectionState {
 	s := c.state
 	c.mu.RUnlock()
 	return s
+}
+
+// Compile-time assertion: Connection satisfies lifecycle.ManagedResource.
+//
+// PR-A18: this replaces the legacy bootstrap.WithBrokerHealth /
+// BrokerHealthChecker wiring (which has been removed). Composition roots now
+// register the connection via bootstrap.WithManagedResource(conn) — the
+// "rabbitmq_ready" probe is exposed automatically.
+var _ lifecycle.ManagedResource = (*Connection)(nil)
+
+// Checkers returns the rabbitmq_ready probe for /readyz integration.
+//
+// The probe wraps Health(ctx) which already honours ctx (early cancel) and
+// reads the in-memory state machine fed by NotifyClose. No broker round-trip
+// per probe — that would amplify load on every readyz hit. Liveness vs
+// readiness signals come from the reconnect loop's NotifyClose feedback.
+//
+// Probe name change vs legacy: the deleted bootstrap.WithBrokerHealth registered
+// the broker probe under "rabbitmq". The ManagedResource path uses
+// "rabbitmq_ready" for parity with sibling adapter probe names
+// ("vault_transit_ready", etc.). Operators consuming the /readyz?verbose
+// dependencies map should update dashboards / alert rules accordingly.
+//
+// ref: kernel/lifecycle/managed_resource.go::Checkers — contract: nil = healthy.
+// ref: adapters/vault/transit_provider.go::Checkers — sibling adapter pattern.
+func (c *Connection) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		"rabbitmq_ready": c.Health,
+	}
+}
+
+// Worker returns nil — the RabbitMQ reconnect goroutine is started inside
+// NewConnection and managed by closeCh / terminalCh, not via the
+// ManagedResource worker contract. Returning nil is the documented "no
+// background worker" signal in lifecycle.ManagedResource.
+//
+// ref: kernel/lifecycle/managed_resource.go::Worker — nil documents "no worker".
+func (c *Connection) Worker() worker.Worker {
+	return nil
 }
 
 // Close shuts down the connection, bounded by ctx.

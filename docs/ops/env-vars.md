@@ -74,6 +74,7 @@ Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 | `GOCELL_CONFIGCORE_MASTER_KEY` | 32-byte hex-encoded AES key for `local-aes` provider | — | When `GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes` | Generate: `openssl rand -hex 32`. Real mode rejects well-known demo keys (case-insensitive hex comparison). |
 | `GOCELL_CONFIGCORE_MASTER_KEY_PREVIOUS` | Previous master key for key rotation | — | No | Optional; enables decryption of values encrypted with the prior key during rotation window. |
 | `VAULT_ADDR` | Vault server address | — | When `GOCELL_CONFIGCORE_KEY_PROVIDER=vault-transit` | Standard Vault SDK env var. No default; missing value fails fast in **all modes** when the vault-transit provider is selected (not just real mode). |
+| `VAULT_NAMESPACE` | Vault namespace (HCP Vault / Vault Enterprise multi-tenancy) | — | No (default = root namespace) | Standard Vault SDK env var. Applied via `client.SetNamespace` before any Vault I/O so Login + datakey + decrypt + key reads + rotate all carry the `X-Vault-Namespace` header. |
 | `VAULT_AUTH_METHOD` | Vault auth method | — | When `GOCELL_CONFIGCORE_KEY_PROVIDER=vault-transit` | **Required, no default.** Accepted values: `token` (dev/CI only, rejected in real mode), `approle`, `kubernetes`. |
 | `VAULT_TOKEN` | Static Vault token for `VAULT_AUTH_METHOD=token` | — | When `VAULT_AUTH_METHOD=token` | Dev/CI only. Rejected when `GOCELL_ADAPTER_MODE=real`. |
 | `VAULT_ROLE_ID` | AppRole role ID | — | When `VAULT_AUTH_METHOD=approle` | |
@@ -87,6 +88,21 @@ Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 | `GOCELL_VAULT_TRANSIT_MOUNT` | Vault Transit secrets engine mount path | `transit` | No | |
 | `GOCELL_VAULT_TRANSIT_KEY` | Vault Transit key name | `gocell-config` | No | |
 | `GOCELL_VAULT_STARTUP_TIMEOUT` | Total startup I/O deadline (auth Login + optional unwrap + initial key metadata read) | `30s` | No | `time.ParseDuration` format (e.g. `45s`, `2m`). Must be positive; malformed or non-positive values fail fast. Increase for high-latency networks or wrapped-token paths that require multiple TLS round-trips. |
+
+### Required Vault transit policy
+
+The provider needs `read` on the key metadata, `update` on `datakey/plaintext` (the encrypt path), `update` on `decrypt`, and `update` on `rotate`. Apply this HCL at the role's policy:
+
+```hcl
+path "transit/keys/<keyname>"               { capabilities = ["read"] }
+path "transit/keys/<keyname>/rotate"        { capabilities = ["create","update"] }
+path "transit/datakey/plaintext/<keyname>"  { capabilities = ["create","update"] }
+path "transit/decrypt/<keyname>"            { capabilities = ["create","update"] }
+```
+
+Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `gocell-config`). The startup readiness check only exercises `transit/keys/<keyname>` (the `read` cap), so a missing `datakey/plaintext` capability slips past startup and surfaces as `ErrKeyProviderEncryptFailed` on the first encrypt — apply the policy before the first deploy.
+
+> Migration note: pre-PR-A18 deployments granted `transit/encrypt/<keyname>` instead of `transit/datakey/plaintext/<keyname>`. The legacy `encrypt` path is no longer used; the new policy above replaces it.
 
 ## HTTP Listener (PR-A14a dual-listener)
 

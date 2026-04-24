@@ -2,16 +2,15 @@ package vault
 
 import (
 	"context"
-	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	vaultapi "github.com/hashicorp/vault/api"
@@ -37,6 +36,22 @@ const defaultStartupTimeout = 30 * time.Second
 
 // startupTimeoutEnvVar is the env var used to override defaultStartupTimeout.
 const startupTimeoutEnvVar = "GOCELL_VAULT_STARTUP_TIMEOUT"
+
+// applyNamespaceFromEnv reads VAULT_NAMESPACE and applies it to the given Vault
+// client via SetNamespace so that all subsequent Auth Login + transit calls are
+// scoped to the namespace (HCP Vault / Vault Enterprise multi-tenancy).
+// Returns the applied namespace ("" when unset) for caller logging.
+//
+// ref: hashicorp/vault api/client.go SetNamespace + EnvVaultNamespace = "VAULT_NAMESPACE"
+func applyNamespaceFromEnv(raw *vaultapi.Client) string {
+	ns := os.Getenv("VAULT_NAMESPACE")
+	if ns == "" {
+		return ""
+	}
+	raw.SetNamespace(ns)
+	slog.Info("vault-transit: namespace configured", slog.String("namespace", ns))
+	return ns
+}
 
 // resolveStartupTimeout returns the startup deadline for Vault-facing I/O,
 // honouring GOCELL_VAULT_STARTUP_TIMEOUT when set. Accepts any time.ParseDuration
@@ -423,18 +438,22 @@ var _ kcrypto.KeyHandle = (*vaultTransitHandle)(nil)
 // encryption via HashiCorp Vault Transit.
 //
 // Envelope encryption layout (对标 k8s KMS v2):
-//   - Encrypt: generate local 32B DEK via crypto/rand → AES-GCM(DEK, plaintext, aad)
-//     → Vault Transit encrypt(DEK) wrap → return (ct, nonce, wrappedDEK, keyID).
-//   - keyID is extracted from the Vault encrypt response ciphertext prefix
-//     "vault:vN:" — mirrors k8s KMS v2 EncryptResponse.KeyID.
+//   - Encrypt: Vault Transit datakey/plaintext → server-generated 32B DEK
+//   - wrapped EDK (single round-trip; HSM-backed RNG in HCP).
+//     AES-GCM(DEK, plaintext, aad) → return (ct, nonce, EDK, keyID).
+//   - keyID is extracted from the Vault datakey response ciphertext prefix
+//     "vault:vN:" — mirrors k8s KMS v2 EncryptResponse.KeyID, eliminates the
+//     race between Current() and a concurrent rotation.
 //   - Decrypt: Vault Transit decrypt(edk) → unwrapped DEK → AES-GCM Open(ct, nonce, DEK, aad).
+//     The decrypt endpoint accepts EDKs minted by either /datakey/plaintext
+//     (current path) or the legacy /encrypt path; storage is forward-compatible.
 //   - AAD is bound entirely in the local AES-GCM layer; it is NOT sent to Vault.
 //     This fixes the S1 P0 bug where the pre-R1c path sent AAD as the Vault
 //     "context" field, which Vault ignores for non-derived aes256-gcm96 keys.
 //
 // ref: hashicorp/vault sdk/helper/keysutil/policy.go@main:L127 (version prefix)
 // ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/envelope.go@master
-// ref: hashicorp/vault builtin/logical/transit/path_encrypt.go@main (context ignored for non-derived keys)
+// ref: hashicorp/vault api-docs/secret/transit POST /datakey/plaintext/:name (server-side DEK)
 type vaultTransitHandle struct {
 	id        string
 	mountPath string
@@ -445,78 +464,58 @@ type vaultTransitHandle struct {
 // ID returns the key version identifier (e.g. "vault-transit:v3").
 func (h *vaultTransitHandle) ID() string { return h.id }
 
-// Encrypt encrypts plaintext using envelope encryption.
+// Encrypt encrypts plaintext using envelope encryption with a Vault-issued DEK.
 //
-// Envelope flow (对标 k8s KMS v2 kmsv2/envelope.go):
-//  1. Generate a fresh 32B DEK locally via crypto/rand. defer clear(dek).
+// Envelope flow:
+//  1. Vault Transit datakey/plaintext → fresh 32B DEK + wrapped EDK (single round-trip).
+//     The DEK is generated server-side (HSM-backed in HCP), eliminating client RNG.
 //  2. AES-GCM encrypt plaintext with DEK and aad → (ct, nonce).
 //     AAD is bound here at the local AEAD layer; it is NOT sent to Vault.
-//  3. Vault Transit encrypt(DEK) → wrappedDEK ciphertext string "vault:vN:...".
-//  4. Extract keyID from the Vault response prefix: "vault:vN:" → "vault-transit:vN".
-//  5. Return (ct, nonce, []byte(vaultCiphertext), keyID, nil).
+//  3. Extract keyID from the Vault response ciphertext prefix "vault:vN:" → "vault-transit:vN".
+//  4. Return (ct, nonce, []byte(vaultCiphertext), keyID, nil).
 //
+// Storage compatibility: the EDK format is the canonical "vault:vN:..." string;
+// Decrypt uses the same /transit/decrypt endpoint and accepts EDKs produced by
+// either /datakey/plaintext (current path) or the legacy /encrypt path.
+//
+// ref: hashicorp/vault api-docs/secret/transit POST /transit/datakey/plaintext/:name
 // ref: kubernetes/kubernetes kmsv2/envelope.go@master (EncryptResponse.KeyID)
-// ref: hashicorp/vault builtin/logical/transit/path_encrypt.go@main
 func (h *vaultTransitHandle) Encrypt(ctx context.Context, plaintext, aad []byte) (ciphertext, nonce, edk []byte, keyID string, err error) {
-	// 1. Generate a fresh 32-byte DEK.
-	dek := make([]byte, 32)
-	if _, err = io.ReadFull(rand.Reader, dek); err != nil {
+	dkPath := h.mountPath + "/datakey/plaintext/" + h.keyName
+	result, err := h.client.Write(ctx, dkPath, map[string]any{"bits": 256})
+	if err != nil {
+		return nil, nil, nil, "", classifyVaultEncryptError(err)
+	}
+
+	plaintextB64, ok := result["plaintext"].(string)
+	if !ok {
+		return nil, nil, nil, "", errcode.New(errcode.ErrKeyProviderEncryptFailed,
+			"vault-transit: datakey response missing string 'plaintext' field")
+	}
+	dek, err := base64.StdEncoding.DecodeString(plaintextB64)
+	if err != nil {
 		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
-			"vault-transit: generate DEK", err)
+			"vault-transit: base64 decode DEK from datakey response", err)
 	}
 	defer clear(dek)
 
-	// 2. Encrypt plaintext with DEK. AAD bound in local AES-GCM layer.
+	ciphertextStr, ok := result["ciphertext"].(string)
+	if !ok {
+		return nil, nil, nil, "", errcode.New(errcode.ErrKeyProviderEncryptFailed,
+			"vault-transit: datakey response missing string 'ciphertext' field")
+	}
+	keyID, err = parseVaultKeyID(ciphertextStr, errcode.ErrKeyProviderEncryptFailed)
+	if err != nil {
+		return nil, nil, nil, "", err
+	}
+
 	ciphertext, nonce, err = aeadutil.EncryptGCM(dek, plaintext, aad)
 	if err != nil {
 		return nil, nil, nil, "", errcode.Wrap(errcode.ErrKeyProviderEncryptFailed,
 			"vault-transit: local AES-GCM encrypt", err)
 	}
 
-	// 3 & 4. Vault Transit wrap DEK and extract keyID from response prefix.
-	edk, keyID, err = h.wrapDEKWithVault(ctx, dek)
-	if err != nil {
-		return nil, nil, nil, "", err
-	}
-
-	return ciphertext, nonce, edk, keyID, nil
-}
-
-// wrapDEKWithVault calls Vault Transit encrypt endpoint to wrap the DEK.
-// It sends ONLY the DEK as base64 — no AAD, no context field.
-// Returns (wrappedDEK bytes, keyID string, error).
-//
-// The Vault response ciphertext prefix "vault:vN:" is used to derive the keyID.
-//
-// ref: hashicorp/vault builtin/logical/transit/path_encrypt.go@main
-// ref: kubernetes/kubernetes kmsv2/envelope.go@master (EncryptResponse.KeyID)
-func (h *vaultTransitHandle) wrapDEKWithVault(ctx context.Context, dek []byte) (wrappedDEK []byte, keyID string, err error) {
-	encPath := h.mountPath + "/encrypt/" + h.keyName
-	data := map[string]any{
-		"plaintext": base64.StdEncoding.EncodeToString(dek),
-		// No "context" or "associated_data" fields — DEK is a random 32B value
-		// with no row identity. AAD binding lives in the local AES-GCM layer.
-		// ref: hashicorp/vault builtin/logical/transit/path_encrypt.go@main
-		// (context is only meaningful for derived keys — ignored for aes256-gcm96).
-	}
-
-	result, err := h.client.Write(ctx, encPath, data)
-	if err != nil {
-		return nil, "", classifyVaultEncryptError(err)
-	}
-
-	ciphertextStr, ok := result["ciphertext"].(string)
-	if !ok {
-		return nil, "", errcode.New(errcode.ErrKeyProviderEncryptFailed,
-			"vault-transit: encrypt response missing string 'ciphertext' field")
-	}
-
-	keyID, err = parseVaultKeyID(ciphertextStr, errcode.ErrKeyProviderEncryptFailed)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return []byte(ciphertextStr), keyID, nil
+	return ciphertext, nonce, []byte(ciphertextStr), keyID, nil
 }
 
 // Decrypt decrypts ciphertext using envelope decryption.
@@ -569,7 +568,8 @@ func (h *vaultTransitHandle) unwrapDEKWithVault(ctx context.Context, edk []byte)
 	decPath := h.mountPath + "/decrypt/" + h.keyName
 	data := map[string]any{
 		"ciphertext": string(edk),
-		// No "context" or "associated_data" — see wrapDEKWithVault comment.
+		// No "context" or "associated_data" — DEK is a random per-record value
+		// with no row identity. AAD binding lives in the local AES-GCM layer.
 	}
 
 	result, err := h.client.Write(ctx, decPath, data)
@@ -610,6 +610,7 @@ func (h *vaultTransitHandle) unwrapDEKWithVault(ctx context.Context, edk []byte)
 //
 // Environment variables (standard Vault SDK env vars):
 //   - VAULT_ADDR:                  Vault server address
+//   - VAULT_NAMESPACE:             (HCP / Vault Enterprise) namespace; applied via SetNamespace before all I/O. Empty = root namespace.
 //   - VAULT_AUTH_METHOD:           auth method (token|approle|kubernetes) — REQUIRED
 //   - VAULT_TOKEN:                 (token method) Vault token
 //   - VAULT_ROLE_ID:               (approle method)
@@ -620,10 +621,23 @@ func (h *vaultTransitHandle) unwrapDEKWithVault(ctx context.Context, edk []byte)
 // ref: hashicorp/vault builtin/logical/transit/path_rewrap.go@main
 // ref: kubernetes/kubernetes kmsv2/envelope.go@master
 type TransitKeyProvider struct {
-	mu        sync.RWMutex
 	client    VaultClient
 	mountPath string
 	keyName   string
+
+	// cachedLatestVersion is the cached transit/keys/{name} latest_version.
+	// Zero means uninitialised or invalidated; readers fall back to a Vault
+	// readLatestVersion call. Rotate() invalidates by storing 0, then refreshes.
+	//
+	// Multi-pod staleness is benign by design:
+	//   - Vault /transit/datakey/plaintext always uses latest_version server-side
+	//     and the keyID returned to callers is parsed from the response, not from
+	//     this cache. Stale cache only affects KeyHandle.ID() returned by Current()
+	//     between a remote rotate and this pod's next Vault round-trip — diagnostic
+	//     surface only.
+	//   - Decrypt validates against the EDK's own version prefix; cache is never
+	//     consulted on the decrypt path.
+	cachedLatestVersion atomic.Int64
 
 	// authMethod stored so renewal worker can re-authenticate.
 	authMethod AuthMethod
@@ -651,9 +665,11 @@ type TransitKeyProvider struct {
 // indefinitely. NewTransitKeyProviderFromEnv uses a 30-second timeout by default.
 //
 // Construction calls auth.Login to acquire the initial token, then performs a
-// fail-fast key existence check (readLatestVersion). If the token is renewable
-// and the client implements TokenRenewer, initTokenRenewal configures the
-// background renewal + re-auth worker (not started — call Worker().Start).
+// fail-fast key existence check (readLatestVersion). The check doubles as the
+// initial cachedLatestVersion seed, so the first Current() call after
+// construction is served lock-free without a Vault round-trip. If the token is
+// renewable and the client implements TokenRenewer, initTokenRenewal configures
+// the background renewal + re-auth worker (not started — call Worker().Start).
 //
 // Returns an error if auth is nil, Login fails, or the key existence check fails.
 func NewTransitKeyProvider(ctx context.Context, client VaultClient, mountPath, keyName string, auth AuthMethod) (*TransitKeyProvider, error) {
@@ -682,10 +698,13 @@ func NewTransitKeyProvider(ctx context.Context, client VaultClient, mountPath, k
 	}
 	p.authRenewable = result.Renewable
 
-	// Fail-fast: verify the key exists.
-	if _, err = p.readLatestVersion(ctx); err != nil {
+	// Fail-fast: verify the key exists. Warm the cache so the first Current()
+	// call after construction is lock-free and Vault-free.
+	version, err := p.readLatestVersion(ctx)
+	if err != nil {
 		return nil, err
 	}
+	p.cachedLatestVersion.Store(int64(version))
 
 	// Initialise background token renewal if applicable.
 	if err = p.initTokenRenewal(ctx, result); err != nil {
@@ -749,6 +768,14 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 			"vault-transit: create vault api client (check VAULT_ADDR)", err)
 	}
 
+	// A15 — apply VAULT_NAMESPACE before any I/O so Login + datakey + decrypt +
+	// key reads + rotate all inherit the namespace header. Return value is the
+	// applied namespace (empty when unset); discarded here because the helper
+	// already emits the configuration log via slog. Namespace validation is
+	// delegated to the vault SDK at first I/O — a malformed namespace surfaces
+	// as a Login error with full context (addr / method / namespace).
+	_ = applyNamespaceFromEnv(raw)
+
 	// F-3a: Create the startup context FIRST so all I/O (including the wrapping
 	// token unwrap in NewAuthMethodFromEnv) respects the startup deadline.
 	// The original code created the ctx AFTER NewAuthMethodFromEnv, allowing
@@ -800,36 +827,28 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 }
 
 // Current returns the active KeyHandle for encrypting new values.
-// Reads transit/keys/{keyName} to get latest_version and returns a
-// vaultTransitHandle with id "vault-transit:vN".
+// Lock-free: serves cached latest_version when available, falls back to a
+// Vault read on cache miss / invalidation.
 func (p *TransitKeyProvider) Current(ctx context.Context) (kcrypto.KeyHandle, error) {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
+	if v := p.cachedLatestVersion.Load(); v > 0 {
+		return p.handleForVersion(int(v)), nil
+	}
 	version, err := p.readLatestVersion(ctx)
 	if err != nil {
 		return nil, err
 	}
-
-	return &vaultTransitHandle{
-		id:        vaultKeyIDPrefix + fmt.Sprintf("v%d", version),
-		mountPath: p.mountPath,
-		keyName:   p.keyName,
-		client:    p.client,
-	}, nil
+	p.cachedLatestVersion.Store(int64(version))
+	return p.handleForVersion(version), nil
 }
 
 // ByID returns the KeyHandle identified by keyID.
 // Validates the "vault-transit:" prefix; wrong prefix → ErrKeyProviderKeyNotFound.
+// Lock-free: handle fields are immutable after construction.
 func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyHandle, error) {
 	if !strings.HasPrefix(keyID, vaultKeyIDPrefix) {
 		return nil, errcode.New(errcode.ErrKeyProviderKeyNotFound,
 			fmt.Sprintf("vault-transit: key ID %q does not have expected prefix %q", keyID, vaultKeyIDPrefix))
 	}
-
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-
 	return &vaultTransitHandle{
 		id:        keyID,
 		mountPath: p.mountPath,
@@ -838,21 +857,23 @@ func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyH
 	}, nil
 }
 
-// Rotate generates a new key version via Vault Transit rotate API.
-// Calls POST transit/keys/{keyName}/rotate, re-reads latest_version, and
-// returns the new "vault-transit:vN" ID.
+// Rotate generates a new key version via Vault Transit rotate API and refreshes
+// the local version cache. Lock-free: Vault rotate is server-side atomic, and
+// the version cache is an atomic.Int64.
 //
-// Note: Rotate holds the write lock for the duration of two Vault round-trips
-// (POST .../rotate + GET .../keys/{name}); call during low-traffic windows to
-// avoid blocking concurrent Current/ByID reads.
+// Failure semantics:
+//   - If the rotate POST fails the cache is untouched and ErrKeyProviderRotateFailed
+//     is returned; subsequent Current() continues to serve the prior version.
+//   - If the post-rotate readLatestVersion fails the cache is left at 0 (already
+//     invalidated); subsequent Current() will degrade to a Vault read on the next
+//     call and refill the cache automatically — no further intervention needed.
 //
 // ref: hashicorp/vault builtin/logical/transit/path_keys.go@main
+// ref: hashicorp/vault api-docs/secret/transit POST /transit/keys/:name/rotate
 func (p *TransitKeyProvider) Rotate(ctx context.Context) (string, error) {
 	slog.InfoContext(ctx, "vault-transit: rotating key",
 		slog.String("key_name", p.keyName),
 		slog.String("mount_path", p.mountPath))
-	p.mu.Lock()
-	defer p.mu.Unlock()
 
 	rotatePath := p.mountPath + "/keys/" + p.keyName + "/rotate"
 	if _, err := p.client.Write(ctx, rotatePath, nil); err != nil {
@@ -860,17 +881,29 @@ func (p *TransitKeyProvider) Rotate(ctx context.Context) (string, error) {
 			"vault-transit: rotate key", err)
 	}
 
+	p.cachedLatestVersion.Store(0) // invalidate so the refresh below repopulates
 	version, err := p.readLatestVersion(ctx)
 	if err != nil {
 		return "", errcode.Wrap(errcode.ErrKeyProviderRotateFailed,
 			"vault-transit: read key version after rotate", err)
 	}
+	p.cachedLatestVersion.Store(int64(version))
 
 	return vaultKeyIDPrefix + fmt.Sprintf("v%d", version), nil
 }
 
+// handleForVersion builds a *vaultTransitHandle for the given key version.
+// Reused by Current() to avoid duplicating the struct literal.
+func (p *TransitKeyProvider) handleForVersion(version int) *vaultTransitHandle {
+	return &vaultTransitHandle{
+		id:        vaultKeyIDPrefix + fmt.Sprintf("v%d", version),
+		mountPath: p.mountPath,
+		keyName:   p.keyName,
+		client:    p.client,
+	}
+}
+
 // readLatestVersion reads the Vault key metadata and returns the latest_version integer.
-// Caller must hold the appropriate lock.
 func (p *TransitKeyProvider) readLatestVersion(ctx context.Context) (int, error) {
 	keyPath := p.mountPath + "/keys/" + p.keyName
 	data, err := p.client.Read(ctx, keyPath)
