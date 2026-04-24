@@ -14,6 +14,8 @@ import (
 
 // TestSecureNewFile_AppliesRestrictedACL verifies that a file written via
 // writeCredentialFile has a DACL that passes VerifyOwnership (tampered=false).
+// Regression guard for CI failure where Windows emitted SDDL alias "LA" for
+// the Administrator account SID and our SID-form whitelist rejected it.
 func TestSecureNewFile_AppliesRestrictedACL(t *testing.T) {
 	t.Parallel()
 
@@ -58,8 +60,6 @@ func TestVerifyOwnership_DetectsOpenedDACL(t *testing.T) {
 	}
 
 	// Strip ACL — set a NULL DACL (grants everyone access).
-	// windows.SetNamedSecurityInfo accepts a string path directly; the wrapper
-	// handles UTF-16 conversion internally, so we pass path rather than *uint16.
 	if err := windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
@@ -81,67 +81,6 @@ func TestVerifyOwnership_DetectsOpenedDACL(t *testing.T) {
 	}
 }
 
-// TestVerifyOwnership_AcceptsSDDLAlias verifies that sddlHasAllowACEForSID accepts
-// the well-known SDDL short-form aliases that Windows may emit instead of full
-// S-1-* strings. This guards against false-positive tamper detection.
-func TestVerifyOwnership_AcceptsSDDLAlias(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		sddl   string
-		sidStr string
-		want   bool
-	}{
-		{
-			name:   "full SID form matches",
-			sddl:   "D:P(A;;FA;;;S-1-5-18)",
-			sidStr: "S-1-5-18",
-			want:   true,
-		},
-		{
-			name:   "SDDL alias SY matches S-1-5-18",
-			sddl:   "D:P(A;;FA;;;SY)",
-			sidStr: "S-1-5-18",
-			want:   true,
-		},
-		{
-			name:   "SDDL alias BA matches S-1-5-32-544",
-			sddl:   "D:P(A;;FA;;;BA)",
-			sidStr: "S-1-5-32-544",
-			want:   true,
-		},
-		{
-			name:   "full SID form S-1-5-32-544 matches",
-			sddl:   "D:P(A;;FA;;;S-1-5-32-544)",
-			sidStr: "S-1-5-32-544",
-			want:   true,
-		},
-		{
-			name:   "different SID does not match",
-			sddl:   "D:P(A;;FA;;;SY)",
-			sidStr: "S-1-5-32-544",
-			want:   false,
-		},
-		{
-			name:   "empty SDDL does not match",
-			sddl:   "",
-			sidStr: "S-1-5-18",
-			want:   false,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			got := sddlHasAllowACEForSID(tc.sddl, tc.sidStr)
-			if got != tc.want {
-				t.Errorf("sddlHasAllowACEForSID(%q, %q) = %v, want %v", tc.sddl, tc.sidStr, got, tc.want)
-			}
-		})
-	}
-}
-
 // TestRemoveCredentialFile_DeletesEvenIfTampered verifies that removeCredentialFile
 // removes the file even when the DACL has been tampered, and returns a wrapped
 // errCredFileTampered error.
@@ -159,8 +98,6 @@ func TestRemoveCredentialFile_DeletesEvenIfTampered(t *testing.T) {
 	}
 
 	// Strip the DACL to simulate tampering.
-	// windows.SetNamedSecurityInfo accepts a string path directly; the wrapper
-	// handles UTF-16 conversion internally, so we pass path rather than *uint16.
 	if err := windows.SetNamedSecurityInfo(
 		path,
 		windows.SE_FILE_OBJECT,
@@ -181,5 +118,48 @@ func TestRemoveCredentialFile_DeletesEvenIfTampered(t *testing.T) {
 	// File must be gone.
 	if _, statErr := os.Stat(path); !errors.Is(statErr, os.ErrNotExist) {
 		t.Error("expected file to be removed after tamper detection")
+	}
+}
+
+// TestDaclHasAllowACEForSID_ResolvesAliases is the Windows-runtime regression
+// guard for the alias-resolution path. It uses the actual Windows SAM database
+// (via stringToSID → ConvertStringSidToSid) so that aliases like SY/BA are
+// canonicalized to the same SIDs we build via AllocateAndInitializeSid.
+func TestDaclHasAllowACEForSID_ResolvesAliases(t *testing.T) {
+	t.Parallel()
+
+	sids, err := buildExpectedSIDs()
+	if err != nil {
+		t.Fatalf("buildExpectedSIDs: %v", err)
+	}
+	defer freeSIDs(sids)
+
+	tests := []struct {
+		name     string
+		sddl     string
+		expected *windows.SID
+		want     bool
+	}{
+		{"SY alias resolves to LocalSystem", "D:P(A;;FA;;;SY)", sids.localSystem, true},
+		{"BA alias resolves to Administrators", "D:P(A;;FA;;;BA)", sids.admins, true},
+		{"full S-1-5-18 matches LocalSystem", "D:P(A;;FA;;;S-1-5-18)", sids.localSystem, true},
+		{"full S-1-5-32-544 matches Administrators", "D:P(A;;FA;;;S-1-5-32-544)", sids.admins, true},
+		{"DENY same SID is rejected (B1)", "D:P(D;;FA;;;SY)", sids.localSystem, false},
+		{"unknown SID returns false", "D:P(A;;FA;;;S-1-5-99-1)", sids.localSystem, false},
+		{"different SID returns false", "D:P(A;;FA;;;BA)", sids.localSystem, false},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			aces, err := parseDACLAces(tc.sddl)
+			if err != nil {
+				t.Fatalf("parseDACLAces: %v", err)
+			}
+			if got := daclHasAllowACEForSID(aces, tc.expected); got != tc.want {
+				t.Errorf("daclHasAllowACEForSID(%q, %s) = %v, want %v",
+					tc.sddl, tc.expected.String(), got, tc.want)
+			}
+		})
 	}
 }

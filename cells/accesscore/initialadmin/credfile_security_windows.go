@@ -5,7 +5,7 @@ package initialadmin
 import (
 	"fmt"
 	"os"
-	"strings"
+	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
@@ -48,12 +48,14 @@ func (w *windowsCredfile) SecureNewFile(path string) (*os.File, error) {
 }
 
 // VerifyOwnership reads the DACL of path and confirms it is PROTECTED and
-// contains exactly three ALLOW ACEs (with GENERIC_ALL or FILE_ALL_ACCESS mask)
-// for the expected SIDs (current user, Administrators, LocalSystem).
-// Returns tampered=true on any deviation.
+// contains exactly three ALLOW ACEs for the expected SIDs (current user,
+// Administrators, LocalSystem). Returns tampered=true on any deviation.
 //
-// Verification uses the SDDL string representation of the security descriptor
-// to compare SID strings — this avoids any unsafe.Pointer use in ACE walking.
+// The DACL is verified by parsing the SDDL into ACE records (parseDACLAces in
+// credfile_security_sddl.go — pure Go), then resolving each ACE's SID string
+// to a *windows.SID via ConvertStringSidToSid and comparing with EqualSid.
+// This handles all SDDL aliases (LA, SY, BA, WD, ...) automatically because
+// the OS does the resolution; we never enumerate aliases manually.
 func (w *windowsCredfile) VerifyOwnership(path string, _ os.FileInfo) (tampered bool, err error) {
 	sd, dacl, err := getFileDACL(path)
 	if err != nil {
@@ -79,128 +81,89 @@ func (w *windowsCredfile) VerifyOwnership(path string, _ os.FileInfo) (tampered 
 		return true, fmt.Errorf("expected 3 ACEs, got %d", dacl.AceCount)
 	}
 
-	// Build expected SID strings for comparison.
-	expectedSIDStrings, err := buildExpectedSIDStrings()
+	sddl := sd.String()
+	aces, err := parseDACLAces(sddl)
 	if err != nil {
-		return true, fmt.Errorf("build expected SID strings: %w", err)
+		return true, fmt.Errorf("parse DACL SDDL: %w (raw: %s)", err, sddl)
 	}
 
-	// Use the SDDL string representation to verify all expected SIDs are present.
-	// SECURITY_DESCRIPTOR.String() returns the SDDL without any unsafe.Pointer use.
-	// B1: sddlHasAllowACEForSID enforces ALLOW ACE type; rights mask is accepted
-	// as-is (see sddlHasAllowACEForSID comment for the V-A12 defence-in-depth note).
-	sddl := sd.String()
-	for j, sidStr := range expectedSIDStrings {
-		if !sddlHasAllowACEForSID(sddl, sidStr) {
-			return true, fmt.Errorf("expected SID[%d] (%s) not found with ALLOW ACE in DACL SDDL: %s", j, sidStr, sddl)
+	sids, err := buildExpectedSIDs()
+	if err != nil {
+		return true, fmt.Errorf("build expected SIDs: %w", err)
+	}
+	defer freeSIDs(sids)
+
+	expected := []*windows.SID{sids.user, sids.admins, sids.localSystem}
+	for i, exp := range expected {
+		if !daclHasAllowACEForSID(aces, exp) {
+			return true, fmt.Errorf("expected SID[%d] (%s) has no ALLOW ACE in DACL SDDL: %s",
+				i, exp.String(), sddl)
 		}
 	}
 
 	return false, nil
 }
 
-// sddlWellKnownAliases maps canonical S-1-* SID strings to their SDDL
-// short-form aliases. Windows SECURITY_DESCRIPTOR.String() may emit either
-// the full S-1-* form or the short alias depending on OS version and locale.
-// We check both so that VerifyOwnership does not falsely report tampering on
-// a freshly written file whose SDDL happens to use the alias form.
+// daclHasAllowACEForSID reports whether parsed ACEs include at least one
+// ALLOW-type ACE whose SID equals expected. SDDL aliases in ace.sidStr are
+// resolved via stringToSID (Windows SAM lookup) so the comparison is
+// form-agnostic.
 //
-// Aliases are stable across all Windows versions (defined by MS-DTYP §2.5.1.1):
-//
-//	SY = S-1-5-18 (LocalSystem)
-//	BA = S-1-5-32-544 (Built-in Administrators)
-var sddlWellKnownAliases = map[string]string{
-	"S-1-5-18":    "SY",
-	"S-1-5-32-544": "BA",
-}
-
-// allowedACETypes is the SDDL ACE type code set considered ALLOW for our DACL.
-// Per MS-DTYP §2.5.1.1, our buildDACL emits "A" (ACCESS_ALLOWED_ACE_TYPE);
-// inheritable variants (AI/AO) are accepted defensively.
-// AU (SYSTEM_AUDIT) is intentionally excluded — it is not an access-allow type.
-var allowedACETypes = []string{"A", "AI", "AO"}
-
-// sddlHasAllowACEForSID returns true when sddl contains an ALLOW ACE of the
-// form (<type>;<flags>;<rights>;<obj>;<inherit>;<sid>) where:
-//   - <type> is in allowedACETypes (A / AI / AO)
-//   - <rights> is non-empty (any mask is accepted — see defence-in-depth note)
-//   - <sid> matches sidStr (full S-1-* form) or its well-known SDDL alias
-//
-// Defence-in-depth note (V-A12): the rights field is accepted as-is without
-// validating that it equals GA, FA, or a known hex equivalent. Windows emits
-// GENERIC_ALL as "GA" before the generic-to-specific mapping and as "FA"
-// (FILE_ALL_ACCESS, 0x001F01FF) or a raw hex value such as "0x1f01ff" after
-// mapping — the exact form depends on the Windows version, object type, and
-// SDDL emitter version. Strict mask validation was removed because it caused
-// false-positive tamper reports on valid ACLs (Failure 1 / V-A12).
-//
-// Trade-off: an attacker who narrows the ALLOW mask while keeping the SID
-// in the ACE would pass this check. However, that attack only reduces the
-// attacker's own access to the credential file — the credentials remain
-// protected. The narrowed-mask scenario is tracked as a deferred E3 gap in
-// the V-A12 backlog entry (see docs/reviews/ backlog).
-//
-// This replaces the former sddlContainsSID which matched any ACE type including
-// DENY (D) — a DENY ACE for a SID must not count as "access granted" (B1).
-func sddlHasAllowACEForSID(sddl, sidStr string) bool {
-	if len(sddl) == 0 {
-		return false
-	}
-
-	candidates := []string{sidStr}
-	if alias, ok := sddlWellKnownAliases[sidStr]; ok {
-		candidates = append(candidates, alias)
-	}
-
-	for _, sid := range candidates {
-		suffix := ";" + sid + ")"
-		for i := 0; i+len(suffix) <= len(sddl); i++ {
-			if sddl[i:i+len(suffix)] != suffix {
-				continue
-			}
-			// Find the opening '(' that starts this ACE.
-			open := -1
-			for j := i - 1; j >= 0; j-- {
-				if sddl[j] == '(' {
-					open = j
-					break
-				}
-				if sddl[j] == ')' {
-					// Hit a previous ACE close — this suffix is not inside an ACE.
-					break
-				}
-			}
-			if open < 0 {
-				continue
-			}
-			// ACE content between '(' and the suffix position has the form:
-			// <type>;<flags>;<rights>;<obj>;<inherit>
-			// Split on ';' to extract type (field 0) and rights (field 2).
-			aceBody := sddl[open+1 : i]
-			fields := strings.SplitN(aceBody, ";", 4)
-			if len(fields) < 3 {
-				continue
-			}
-			aceType := fields[0]
-			rights := fields[2]
-			// Confirm the ACE type is an ALLOW variant.
-			typeOK := false
-			for _, t := range allowedACETypes {
-				if aceType == t {
-					typeOK = true
-					break
-				}
-			}
-			if !typeOK {
-				continue
-			}
-			// Accept any non-empty rights field (see defence-in-depth note above).
-			if rights != "" {
-				return true
-			}
+// Defence-in-depth note (V-A12): the rights field on each ACE is not
+// validated here. An attacker who narrows the ALLOW mask while keeping the
+// SID would pass this check, but that attack only reduces the attacker's own
+// access to the credential file — credentials remain protected. Strict mask
+// validation was removed because it caused false-positive tamper reports on
+// valid ACLs (Windows emits FILE_ALL_ACCESS in multiple SDDL forms depending
+// on OS version and NTFS generic-to-specific mapping).
+func daclHasAllowACEForSID(aces []sddlAce, expected *windows.SID) bool {
+	for _, ace := range aces {
+		if !isAllowACEType(ace.aceType) {
+			continue
+		}
+		parsed, err := stringToSID(ace.sidStr)
+		if err != nil {
+			continue
+		}
+		match := windows.EqualSid(parsed, expected)
+		freeSID(parsed)
+		if match {
+			return true
 		}
 	}
 	return false
+}
+
+// stringToSID converts an SDDL SID string to a *windows.SID. The string may be
+// a full S-1-5-* form OR a well-known SDDL alias (LA, SY, BA, WD, CO, ...).
+// Aliases are resolved via the running machine's SAM database — we do not
+// enumerate them manually.
+//
+// MEMORY: the returned SID is allocated by the Windows API (LocalAlloc).
+// Callers MUST release it via freeSID once done — both stringToSID and freeSID
+// are paired.
+func stringToSID(sidStr string) (*windows.SID, error) {
+	ptr, err := windows.UTF16PtrFromString(sidStr)
+	if err != nil {
+		return nil, fmt.Errorf("UTF16PtrFromString(%q): %w", sidStr, err)
+	}
+	var sid *windows.SID
+	if err := windows.ConvertStringSidToSid(ptr, &sid); err != nil {
+		return nil, fmt.Errorf("ConvertStringSidToSid(%q): %w", sidStr, err)
+	}
+	return sid, nil
+}
+
+// freeSID releases a SID allocated by stringToSID (LocalAlloc'd inside
+// ConvertStringSidToSid). The unsafe.Pointer cast is the documented OS
+// contract for converting a *SID to the uintptr Handle that LocalFree
+// requires; this is the only use of unsafe.Pointer in the package and is
+// scoped to a single, well-defined memory-management API.
+func freeSID(sid *windows.SID) {
+	if sid == nil {
+		return
+	}
+	_, _ = windows.LocalFree(windows.Handle(unsafe.Pointer(sid)))
 }
 
 // applyRestrictedACL applies a PROTECTED DACL with three ALLOW ACEs to path:
@@ -317,22 +280,6 @@ func freeSIDs(s sidSet) {
 	if s.localSystem != nil {
 		_ = windows.FreeSid(s.localSystem)
 	}
-}
-
-// buildExpectedSIDStrings returns the string representations of the three
-// expected SIDs, used for safe ACE comparison without unsafe.Pointer.
-func buildExpectedSIDStrings() ([]string, error) {
-	sids, err := buildExpectedSIDs()
-	if err != nil {
-		return nil, err
-	}
-	defer freeSIDs(sids)
-
-	result := make([]string, 3)
-	for i, sid := range []*windows.SID{sids.user, sids.admins, sids.localSystem} {
-		result[i] = sid.String()
-	}
-	return result, nil
 }
 
 // buildDACL constructs an ACL with three ALLOW ACEs (full file access) for
