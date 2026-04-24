@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contracts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -2856,6 +2857,9 @@ func TestFMT13(t *testing.T) {
 					Path:          "/api/v1/auth/users/{userId}",
 					SuccessStatus: 204,
 					NoContent:     true,
+					PathParams: map[string]contracts.ParamSchema{
+						"userId": {Type: "string"},
+					},
 				}
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
 			},
@@ -2870,6 +2874,9 @@ func TestFMT13(t *testing.T) {
 					Path:          "/api/v1/auth/users/{userId}",
 					SuccessStatus: 200,
 					NoContent:     true,
+					PathParams: map[string]contracts.ParamSchema{
+						"userId": {Type: "string"},
+					},
 				}
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = ""
 			},
@@ -2884,6 +2891,9 @@ func TestFMT13(t *testing.T) {
 					Path:          "/api/v1/auth/users/{userId}",
 					SuccessStatus: 204,
 					NoContent:     false,
+					PathParams: map[string]contracts.ParamSchema{
+						"userId": {Type: "string"},
+					},
 				}
 				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = ""
 			},
@@ -2944,6 +2954,190 @@ func TestFMT13(t *testing.T) {
 			},
 			wantErrors: 1,
 			wantField:  "endpoints.http.successStatus",
+		},
+		{
+			name: "path placeholder without pathParams declaration is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/auth/users/{id}",
+					SuccessStatus: 200,
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.pathParams",
+		},
+		{
+			name: "pathParams key without matching placeholder is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/auth/users",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"ghost": {Type: "string"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.pathParams.ghost",
+		},
+		{
+			name: "pathParams with unknown type is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/auth/users/{id}",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"id": {Type: "bigint"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.pathParams.id.type",
+		},
+		{
+			name: "pathParams marked optional is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				optional := false
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/auth/users/{id}",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"id": {Type: "string", Required: &optional},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.pathParams.id.required",
+		},
+		{
+			name: "pathParams complete multi-placeholder accepted",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/access/roles/{userID}/{roleName}",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"userID":   {Type: "string", Format: "uuid"},
+						"roleName": {Type: "string"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors:   0,
+			wantWarnings: 0,
+		},
+		{
+			name: "queryParams with unknown type is rejected",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/auth/users",
+					SuccessStatus: 200,
+					QueryParams: map[string]contracts.ParamSchema{
+						"cursor": {Type: "blob"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.queryParams.cursor.type",
+		},
+		{
+			name: "queryParams optional typed entry accepted",
+			setup: func(pm *metadata.ProjectMeta) {
+				falsy := false
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/auth/users",
+					SuccessStatus: 200,
+					QueryParams: map[string]contracts.ParamSchema{
+						"cursor": {Type: "string", Required: &falsy},
+						"limit":  {Type: "integer"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors:   0,
+			wantWarnings: 0,
+		},
+		{
+			name: "duplicate path placeholder accepted with single declaration",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/things/{id}/children/{id}",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"id": {Type: "string"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors:   0,
+			wantWarnings: 0,
+		},
+		{
+			name: "combined pathParams and queryParams on one endpoint accepted",
+			setup: func(pm *metadata.ProjectMeta) {
+				falsy := false
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/users/{id}/roles",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"id": {Type: "string", Format: "uuid"},
+					},
+					QueryParams: map[string]contracts.ParamSchema{
+						"cursor": {Type: "string", Required: &falsy},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors:   0,
+			wantWarnings: 0,
+		},
+		{
+			name: "empty path with non-empty pathParams reports only the path-required error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"id": {Type: "string"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.path",
+		},
+		{
+			// queryParams has no path dependency, so empty path + invalid
+			// query type should surface both diagnostics independently
+			// (path-required + query type invalid).
+			name: "empty path with invalid queryParams reports both errors",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "",
+					SuccessStatus: 200,
+					QueryParams: map[string]contracts.ParamSchema{
+						"cursor": {Type: "blob"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 2,
+			wantField:  "endpoints.http.path",
 		},
 	}
 	for _, tt := range tests {

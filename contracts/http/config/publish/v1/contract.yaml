@@ -10,6 +10,9 @@ endpoints:
   http:
     method: POST
     path: /api/v1/config/{key}/publish
+    pathParams:
+      key:
+        type: string
     successStatus: 200
     noContent: false
     responses:

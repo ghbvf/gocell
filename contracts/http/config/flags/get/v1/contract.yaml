@@ -10,8 +10,15 @@ endpoints:
   http:
     method: GET
     path: /api/v1/flags/{key}
+    pathParams:
+      key:
+        type: string
     successStatus: 200
     noContent: false
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

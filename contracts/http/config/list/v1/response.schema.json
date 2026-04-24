@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.list.v1.response",
+  "description": "Paginated list of ConfigEntry.",
+  "type": "object",
+  "required": ["data", "nextCursor", "hasMore"],
+  "additionalProperties": false,
+  "properties": {
+    "data": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "key", "value", "version", "createdAt", "updatedAt"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string" },
+          "key": { "type": "string" },
+          "value": { "type": "string" },
+          "version": { "type": "integer" },
+          "createdAt": { "type": "string", "format": "date-time" },
+          "updatedAt": { "type": "string", "format": "date-time" }
+        }
+      }
+    },
+    "nextCursor": { "type": "string" },
+    "hasMore": { "type": "boolean" }
+  }
+}
