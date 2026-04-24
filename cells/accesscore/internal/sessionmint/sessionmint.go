@@ -25,13 +25,22 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// TokenIssuer is the minimal surface Mint needs from a JWT issuer. Exposing
+// the interface (not the concrete *auth.JWTIssuer) keeps sessionmint testable
+// with a stub issuer — which lets unit tests cover the access / refresh Issue
+// error paths without constructing a broken keyset. Production code passes in
+// *auth.JWTIssuer directly (it satisfies this interface by method set).
+type TokenIssuer interface {
+	Issue(intent auth.TokenIntent, subject string, opts auth.IssueOptions) (string, error)
+}
+
 // Deps injects the collaborators Mint needs. Logger is intentionally omitted:
 // callers already log success/failure at the business layer with richer
 // context (user_id, session_id), so duplicating them here would only produce
 // double-log noise.
 type Deps struct {
 	// Issuer signs the access and refresh JWTs. Required.
-	Issuer *auth.JWTIssuer
+	Issuer TokenIssuer
 	// RoleRepo resolves the user's current role names. Required.
 	RoleRepo ports.RoleRepository
 	// Now returns the current time; defaults to time.Now when nil. Injectable
@@ -48,6 +57,12 @@ type Request struct {
 
 // Result is the Mint output. Roles is returned so callers can log / audit
 // exactly which roles went into the access-token claim without re-querying.
+//
+// ExpiresAt is sampled from Deps.Now (or time.Now) at Mint entry; the JWT's
+// own exp claim is stamped independently inside the issuer a moment later.
+// Treat Result.ExpiresAt as the business-layer expiry (used for Session
+// persistence) — the authoritative wire value is the JWT exp claim. Under
+// any realistic clock jitter the two are within sub-millisecond agreement.
 type Result struct {
 	AccessToken  string
 	RefreshToken string

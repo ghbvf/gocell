@@ -21,8 +21,14 @@ import (
 // positional parameter in NewService (P1-3 fix).
 //
 // Deprecated: pass userRepo as a positional argument to NewService instead.
+// Nil is silently ignored so an accidental call does not downgrade the
+// fail-fast guarantee provided by the constructor.
 func WithUserRepository(repo ports.UserRepository) Option {
-	return func(s *Service) { s.userRepo = repo }
+	return func(s *Service) {
+		if repo != nil {
+			s.userRepo = repo
+		}
+	}
 }
 
 // TokenPair holds the issued access and refresh tokens.

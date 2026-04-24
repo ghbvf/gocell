@@ -16,6 +16,27 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// stubIssuer implements TokenIssuer for tests. Per-intent failure injection
+// lets us cover Mint's access-token and refresh-token error branches without
+// constructing a broken keyset.
+type stubIssuer struct {
+	accessToken  string
+	refreshToken string
+	accessErr    error
+	refreshErr   error
+}
+
+func (s *stubIssuer) Issue(intent auth.TokenIntent, _ string, _ auth.IssueOptions) (string, error) {
+	switch intent {
+	case auth.TokenIntentAccess:
+		return s.accessToken, s.accessErr
+	case auth.TokenIntentRefresh:
+		return s.refreshToken, s.refreshErr
+	default:
+		return "", errors.New("stubIssuer: unknown intent")
+	}
+}
+
 // stubRoleRepo is a ports.RoleRepository test stub. Only GetByUserID is
 // exercised; other methods panic to catch accidental reliance from Mint.
 type stubRoleRepo struct {
@@ -142,4 +163,42 @@ func TestMint_PasswordResetFlagPropagates(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, claims.PasswordResetRequired,
 		"access token must carry password_reset_required=true when requested")
+}
+
+// TestMint_AccessTokenIssueFailure asserts that when the Issuer's access-token
+// Issue call fails, Mint wraps it with a recognisable prefix and does not
+// attempt to sign the refresh token afterwards.
+func TestMint_AccessTokenIssueFailure(t *testing.T) {
+	accessErr := errors.New("access signing broken")
+	deps := Deps{
+		Issuer:   &stubIssuer{accessErr: accessErr, refreshToken: "should-not-appear"},
+		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
+	}
+	req := Request{UserID: "usr-1", SessionID: "sess-1"}
+
+	res, err := Mint(context.Background(), deps, req)
+	require.Error(t, err)
+	assert.Empty(t, res.AccessToken)
+	assert.Empty(t, res.RefreshToken, "refresh must not be signed after access fails")
+	assert.ErrorIs(t, err, accessErr, "original cause must propagate")
+	assert.Contains(t, err.Error(), "issue access token")
+}
+
+// TestMint_RefreshTokenIssueFailure asserts that when the Issuer's refresh-token
+// Issue call fails (after access succeeded), Mint wraps it with a
+// recognisable prefix and returns an empty Result.
+func TestMint_RefreshTokenIssueFailure(t *testing.T) {
+	refreshErr := errors.New("refresh signing broken")
+	deps := Deps{
+		Issuer:   &stubIssuer{accessToken: "a-token", refreshErr: refreshErr},
+		RoleRepo: &stubRoleRepo{roles: []*domain.Role{{ID: "r1", Name: "admin"}}},
+	}
+	req := Request{UserID: "usr-1", SessionID: "sess-1"}
+
+	res, err := Mint(context.Background(), deps, req)
+	require.Error(t, err)
+	assert.Empty(t, res.AccessToken, "Result must be zero-value on failure")
+	assert.Empty(t, res.RefreshToken)
+	assert.ErrorIs(t, err, refreshErr)
+	assert.Contains(t, err.Error(), "issue refresh token")
 }
