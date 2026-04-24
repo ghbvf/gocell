@@ -423,6 +423,11 @@ func (v *Validator) validateFMT13ForContract(c *metadata.ContractMeta) []Validat
 	// Skip pathParams reconciliation when path is empty/malformed — running it
 	// would flood the report with phantom "declaration without placeholder"
 	// errors that mislead the author away from the real (missing path) cause.
+	// `pathResults` is empty ⇔ `validateFMT13Path` accepted the path; the path
+	// validator today only emits Error-severity results, so zero length is a
+	// reliable accept signal. If ever a path advisory Warning is introduced,
+	// switch this to a hasErrors(pathResults) check to preserve intent.
+	// queryParams has no path dependency and is not short-circuited.
 	if len(pathResults) == 0 {
 		results = append(results, v.validateFMT13PathParams(c, httpMeta, file)...)
 	}

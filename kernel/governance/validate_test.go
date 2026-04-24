@@ -3120,6 +3120,25 @@ func TestFMT13(t *testing.T) {
 			wantErrors: 1,
 			wantField:  "endpoints.http.path",
 		},
+		{
+			// queryParams has no path dependency, so empty path + invalid
+			// query type should surface both diagnostics independently
+			// (path-required + query type invalid).
+			name: "empty path with invalid queryParams reports both errors",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "",
+					SuccessStatus: 200,
+					QueryParams: map[string]contracts.ParamSchema{
+						"cursor": {Type: "blob"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 2,
+			wantField:  "endpoints.http.path",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

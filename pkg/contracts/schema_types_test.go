@@ -123,6 +123,37 @@ func TestParamSchemaYAMLRoundTrip(t *testing.T) {
 	assert.Equal(t, orig, got)
 }
 
+// TestParamSchemaRequiredThreeStates locks in the three-state Required
+// semantics documented on the ParamSchema godoc: nil means "not declared",
+// false means "explicit optional", true means "explicit required". YAML
+// omitempty must emit the field for false and true, and omit it for nil.
+// FMT-13 depends on this distinction to reject `required: false` on path
+// parameters while accepting an omitted `required:` there.
+func TestParamSchemaRequiredThreeStates(t *testing.T) {
+	truthy := true
+	falsy := false
+
+	t.Run("nil required is omitted", func(t *testing.T) {
+		data, got := roundTrip(t, ParamSchema{Type: "string"})
+		assert.Nil(t, got.Required)
+		assert.NotContains(t, string(data), "required:")
+	})
+
+	t.Run("false required is emitted and preserved", func(t *testing.T) {
+		data, got := roundTrip(t, ParamSchema{Type: "string", Required: &falsy})
+		require.NotNil(t, got.Required)
+		assert.False(t, *got.Required)
+		assert.Contains(t, string(data), "required: false")
+	})
+
+	t.Run("true required is emitted and preserved", func(t *testing.T) {
+		data, got := roundTrip(t, ParamSchema{Type: "string", Required: &truthy})
+		require.NotNil(t, got.Required)
+		assert.True(t, *got.Required)
+		assert.Contains(t, string(data), "required: true")
+	})
+}
+
 func TestParamTypesWhitelist(t *testing.T) {
 	for _, name := range []string{"string", "integer", "number", "boolean", "uuid"} {
 		assert.True(t, ParamTypes[name], "%s should be accepted", name)
