@@ -97,6 +97,7 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		{errcode.ErrConfigDuplicate, http.StatusConflict},
 		{errcode.ErrConfigRepoDuplicate, http.StatusConflict},
 		{errcode.ErrFlagDuplicate, http.StatusConflict},
+		{errcode.ErrSetupAlreadyInitialized, http.StatusConflict},
 
 		// Verify/kernel codes
 		{errcode.ErrCheckRefInvalid, http.StatusBadRequest},

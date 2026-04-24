@@ -4,7 +4,10 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/google/uuid"
+
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/identitymanage"
@@ -14,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogout"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionrefresh"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
+	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -132,6 +136,22 @@ func (c *AccessCore) initSlices() error {
 	// config-receive: subscribes to config.changed events from configcore
 	c.configReceiveSvc = configreceive.NewService(c.logger)
 	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cell.L3))
+
+	// setup: interactive first-run admin provisioning (Public HTTP endpoints).
+	// Uses shared adminprovision.Provisioner so semantics match initialadmin.
+	setupProv, err := adminprovision.NewProvisioner(c.userRepo, c.roleRepo, c.logger, uuid.NewString)
+	if err != nil {
+		return err
+	}
+	setupSvc, err := setup.NewService(setupProv, c.logger,
+		setup.WithEmitter(c.emitter),
+		setup.WithTxManager(c.txRunner),
+	)
+	if err != nil {
+		return err
+	}
+	c.setupHandler = setup.NewHandler(setupSvc)
+	c.AddSlice(cell.NewBaseSlice("setup", "accesscore", cell.L2))
 	return nil
 }
 

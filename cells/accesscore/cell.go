@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogout"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionrefresh"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
+	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -141,6 +142,7 @@ type AccessCore struct {
 	loginHandler    *sessionlogin.Handler
 	refreshHandler  *sessionrefresh.Handler
 	logoutHandler   *sessionlogout.Handler
+	setupHandler    *setup.Handler
 
 	// Services exposed for composition (e.g. TokenVerifier, Authorizer).
 	validateSvc         *sessionvalidate.Service

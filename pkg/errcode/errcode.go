@@ -99,6 +99,11 @@ const (
 	// Only the exempt endpoints (POST /api/v1/access/users/{id}/password and
 	// DELETE /api/v1/access/sessions/{id}) bypass this check.
 	ErrAuthPasswordResetRequired Code = "ERR_AUTH_PASSWORD_RESET_REQUIRED"
+	// ErrSetupAlreadyInitialized signals that the interactive first-run admin
+	// endpoint (POST /api/v1/setup/admin) was invoked after the system already
+	// has at least one admin. The caller should authenticate via
+	// /api/v1/access/sessions/login instead. Maps to HTTP 409.
+	ErrSetupAlreadyInitialized Code = "ERR_SETUP_ALREADY_INITIALIZED"
 
 	// Config-core cell error codes.
 	ErrConfigNotFound            Code = "ERR_CONFIG_NOT_FOUND"

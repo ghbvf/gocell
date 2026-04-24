@@ -1,0 +1,24 @@
+id: http.auth.setup.admin.v1
+kind: http
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: accesscore
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/setup/admin
+    successStatus: 201
+    noContent: false
+    responses:
+      400:
+        description: "Bad request — missing or blank required fields"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — first-run admin already provisioned; use /api/v1/access/sessions/login"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
