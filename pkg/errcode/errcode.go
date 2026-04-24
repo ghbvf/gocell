@@ -78,11 +78,7 @@ const (
 	ErrAuthLogoutInvalidInput   Code = "ERR_AUTH_LOGOUT_INVALID_INPUT"
 	ErrAuthRefreshInvalidInput  Code = "ERR_AUTH_REFRESH_INVALID_INPUT"
 	ErrAuthRefreshFailed        Code = "ERR_AUTH_REFRESH_FAILED"
-	// Deprecated: use ErrRefreshTokenReused (CategoryAuth) via runtime/auth/refresh.ErrTokenReused.
-	// This code is retained only for sessionrefresh.service's current implementation;
-	// the F2 refresh store PR will migrate callers and remove this constant.
-	ErrAuthRefreshTokenReuse Code = "ERR_AUTH_REFRESH_TOKEN_REUSE"
-	ErrAuthInvalidToken      Code = "ERR_AUTH_INVALID_TOKEN"
+	ErrAuthInvalidToken         Code = "ERR_AUTH_INVALID_TOKEN"
 	ErrAuthRBACInvalidInput  Code = "ERR_AUTH_RBAC_INVALID_INPUT"
 	ErrAuthKeyMissing        Code = "ERR_AUTH_KEY_MISSING"
 	ErrAuthSelfDelete        Code = "ERR_AUTH_SELF_DELETE"
@@ -170,18 +166,16 @@ const (
 	// operators can route runtime lifecycle faults separately.
 	ErrBootstrapLifecycle Code = "ERR_BOOTSTRAP_LIFECYCLE"
 
-	// Refresh token store error codes (runtime/auth/refresh).
-	// These are returned by refresh.Store implementations; callers use
-	// errors.Is against the package-level sentinels in refresh/errors.go.
+	// Refresh token store error code (runtime/auth/refresh).
 	//
-	// ErrRefreshTokenNotFound / ErrRefreshTokenExpired / ErrRefreshTokenRevoked
-	// are CategoryDomain — expected client-observable conditions.
-	// ErrRefreshTokenReused is CategoryAuth — an OAuth2 RFC 6749 §10.4
-	// attack signal that triggers cascade revocation.
-	ErrRefreshTokenNotFound Code = "ERR_REFRESH_TOKEN_NOT_FOUND"
-	ErrRefreshTokenExpired  Code = "ERR_REFRESH_TOKEN_EXPIRED"
-	ErrRefreshTokenRevoked  Code = "ERR_REFRESH_TOKEN_REVOKED"
-	ErrRefreshTokenReused   Code = "ERR_REFRESH_TOKEN_REUSED"
+	// ErrRefreshTokenRejected is the single public sentinel emitted by
+	// refresh.Store implementations for every unhappy path (malformed token,
+	// unknown selector, verifier mismatch, expired, revoked, reused beyond
+	// grace). Internal reasons are observed through the structured slog field
+	// `reason` rather than the error shape, eliminating enumeration and timing
+	// side-channels. CategoryAuth — OAuth2 RFC 6749 §10.4 attack signal when
+	// reuse detected; handler maps to HTTP 401 regardless of internal reason.
+	ErrRefreshTokenRejected Code = "ERR_REFRESH_TOKEN_REJECTED"
 
 	// KeyProvider error codes.
 	// ErrKeyProviderKeyNotFound signals that the requested key ID is not

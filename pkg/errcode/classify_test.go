@@ -390,9 +390,9 @@ func TestNewAuth(t *testing.T) {
 			message: "msg",
 		},
 		{
-			name:    "reuse detection signal",
-			code:    ErrAuthRefreshTokenReuse,
-			message: "refresh token reuse detected",
+			name:    "refresh rejection signal",
+			code:    ErrRefreshTokenRejected,
+			message: "refresh token rejected",
 		},
 		{
 			name:    "unauthorized",
@@ -432,10 +432,10 @@ func TestWrapAuth(t *testing.T) {
 			cause:   baseErr,
 		},
 		{
-			name:    "reuse detection with cause",
-			code:    ErrAuthRefreshTokenReuse,
-			message: "token reuse: RFC 6749 §10.4",
-			cause:   errors.New("duplicate jti"),
+			name:    "refresh rejection with cause",
+			code:    ErrRefreshTokenRejected,
+			message: "rejected: RFC 6749 §10.4",
+			cause:   errors.New("reuse detected"),
 		},
 	}
 
