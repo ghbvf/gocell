@@ -1,10 +1,7 @@
 package auth
 
 import (
-	"fmt"
 	"net/http"
-	"path"
-	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -51,74 +48,24 @@ type RouteDecl struct {
 	Delegated           bool
 }
 
-// Declare is the single entry point a Cell uses to register an HTTP route.
-// It validates the declaration, composes the final handler (optionally
-// wrapping it in a Policy-enforcing middleware), and registers it on the
-// supplied mux. When the mux additionally implements cell.AuthRouteDeclarer,
-// the pure-data AuthRouteMeta is forwarded so Router/TestMux can build the
-// AuthMiddleware matchers at finalize time.
-//
-// Pattern used for mux.Handle follows Go 1.22 ServeMux syntax:
-// "METHOD /path". Path is normalised via path.Clean so "/a//b" and "/a/b"
-// compare equal.
+// Declare registers an HTTP route. It is the legacy entry point retained
+// so pre-Mount Cells keep compiling; internally it forwards to Mount with
+// Contract left zero (route is registered untraced by wrapper, as before).
+// Prefer Mount + a wrapper.ContractSpec in new code so trace spans carry
+// gocell.contract.id automatically.
 //
 // ref: go-zero rest/engine route metadata; Kratos transport/http server
 // Route — registration-time auth context is the single source of truth.
 func Declare(mux cell.RouteHandler, d RouteDecl) {
-	d.validateOrPanic()
-
-	pattern := d.Method + " " + d.normalisedPath()
-	handler := d.Handler
-	if d.Policy != nil {
-		handler = RequirePolicy(d.Policy)(handler)
-	}
-	mux.Handle(pattern, handler)
-
-	if declarer, ok := mux.(cell.AuthRouteDeclarer); ok {
-		declarer.DeclareAuthMeta(cell.AuthRouteMeta{
-			Method:              d.Method,
-			Path:                d.normalisedPath(),
-			Public:              d.Public,
-			PasswordResetExempt: d.PasswordResetExempt,
-			Delegated:           d.Delegated,
-		})
-	}
-}
-
-func (d RouteDecl) normalisedPath() string {
-	return path.Clean(d.Path)
-}
-
-func (d RouteDecl) validateOrPanic() {
-	method := strings.ToUpper(strings.TrimSpace(d.Method))
-	if method == "" {
-		panic("auth.Declare: Method must not be empty")
-	}
-	if !validRouteMethods[method] {
-		panic(fmt.Sprintf(
-			"auth.Declare: method %q not recognised (GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS/CONNECT/TRACE)",
-			d.Method))
-	}
-	if method != d.Method {
-		panic(fmt.Sprintf(
-			"auth.Declare: Method %q must be upper-case %q", d.Method, method))
-	}
-	if d.Path == "" || d.Path[0] != '/' {
-		panic(fmt.Sprintf("auth.Declare: Path %q must start with '/'", d.Path))
-	}
-	if d.Handler == nil {
-		panic("auth.Declare: Handler must not be nil")
-	}
-	if d.Public && d.Policy != nil {
-		panic(fmt.Sprintf(
-			"auth.Declare %s %s: Public=true conflicts with non-nil Policy (public routes have no server-side authorization)",
-			d.Method, d.Path))
-	}
-	if d.Public && d.PasswordResetExempt {
-		panic(fmt.Sprintf(
-			"auth.Declare %s %s: Public=true conflicts with PasswordResetExempt=true (gate runs only for authenticated tokens)",
-			d.Method, d.Path))
-	}
+	Mount(mux, Route{
+		Handler:             d.Handler,
+		Policy:              d.Policy,
+		Public:              d.Public,
+		PasswordResetExempt: d.PasswordResetExempt,
+		Delegated:           d.Delegated,
+		Method:              d.Method,
+		Path:                d.Path,
+	})
 }
 
 // RequirePolicy lifts a Policy into a middleware-shaped

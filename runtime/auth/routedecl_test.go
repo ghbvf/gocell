@@ -115,7 +115,7 @@ func TestRouteDecl_Validate_Panics(t *testing.T) {
 				require.NotNil(t, r, "expected panic")
 				assert.Contains(t, r.(string), tc.wantMsg)
 			}()
-			tc.decl.validateOrPanic()
+			Declare(newCaptureMux(), tc.decl)
 		})
 	}
 }
@@ -129,7 +129,7 @@ func TestRouteDecl_Validate_Accepts(t *testing.T) {
 	}
 	for _, d := range decls {
 		t.Run(d.Method+" "+d.Path, func(t *testing.T) {
-			assert.NotPanics(t, func() { d.validateOrPanic() })
+			assert.NotPanics(t, func() { Declare(newCaptureMux(), d) })
 		})
 	}
 }
