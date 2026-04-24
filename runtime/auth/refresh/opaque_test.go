@@ -20,6 +20,36 @@ func TestEncodeOpaque_DeterministicLength(t *testing.T) {
 	assert.NotContains(t, wire, "=", "base64url no-padding must emit no padding char")
 }
 
+func TestGeneratePair_ReadsSelectorAndVerifier(t *testing.T) {
+	source := bytes.NewReader(append(
+		bytes.Repeat([]byte{0x11}, SelectorLen),
+		bytes.Repeat([]byte{0x22}, VerifierLen)...,
+	))
+
+	selector, verifier, err := GeneratePair(source)
+	require.NoError(t, err)
+	assert.Equal(t, bytes.Repeat([]byte{0x11}, SelectorLen), selector)
+	assert.Equal(t, bytes.Repeat([]byte{0x22}, VerifierLen), verifier)
+}
+
+func TestGeneratePair_ReturnsReadError(t *testing.T) {
+	tests := []struct {
+		name string
+		rand io.Reader
+	}{
+		{name: "selector read fails", rand: bytes.NewReader(nil)},
+		{name: "verifier read fails", rand: bytes.NewReader(bytes.Repeat([]byte{0x11}, SelectorLen))},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			selector, verifier, err := GeneratePair(tc.rand)
+			require.Error(t, err)
+			assert.Nil(t, selector)
+			assert.Nil(t, verifier)
+		})
+	}
+}
+
 func TestEncodeParse_RoundTrip(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		sel := make([]byte, SelectorLen)

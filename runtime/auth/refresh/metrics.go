@@ -18,7 +18,9 @@ type GCCollector interface {
 // NoopGCCollector drops all GC observations.
 type NoopGCCollector struct{}
 
-func (NoopGCCollector) ObserveRefreshGC(context.Context, string, int, time.Duration) {}
+func (NoopGCCollector) ObserveRefreshGC(context.Context, string, int, time.Duration) {
+	// Intentionally empty: used when refresh GC metrics are disabled.
+}
 
 // ProviderGCCollector records refresh GC metrics through the kernel metrics API.
 type ProviderGCCollector struct {
