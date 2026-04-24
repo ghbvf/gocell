@@ -12,6 +12,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -39,9 +40,9 @@ func newContractMux(svc *Service) *http.ServeMux {
 func newContractService(t *testing.T) *Service {
 	t.Helper()
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{}
+	writer := &testutil.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,19 +185,19 @@ func TestEventFlagChangedV1Publish(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.flag.changed.v1")
 
 	repo := mem.NewFlagRepository()
-	writer := &recordingWriter{}
+	writer := &testutil.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&noopTxRunner{}))
+		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 
 	_, err = svc.Create(testAdminCtx(), CreateInput{Key: "event-flag", Enabled: true, Description: "ev"})
 	require.NoError(t, err)
 
-	require.Len(t, writer.entries, 1)
+	require.Len(t, writer.Entries, 1)
 	var payload FlagChangedPayload
-	require.NoError(t, json.Unmarshal(writer.entries[0].Payload, &payload))
+	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &payload))
 
-	c.ValidatePayload(t, writer.entries[0].Payload)
+	c.ValidatePayload(t, writer.Entries[0].Payload)
 	assert.Equal(t, "created", payload.Action)
 	assert.Equal(t, "event-flag", payload.Key)
 
@@ -205,7 +206,7 @@ func TestEventFlagChangedV1Publish(t *testing.T) {
 	// declared idempotencyKey in contract.yaml — is carried via Entry.ID.
 	// Two independent UUIDs here would let headers-based idempotency drift
 	// from payload-based inspection. See headers.schema.json description.
-	assert.Equal(t, writer.entries[0].ID, payload.EventID,
+	assert.Equal(t, writer.Entries[0].ID, payload.EventID,
 		"contract drift: payload.eventId must mirror outbox.Entry.ID so "+
 			"headers.event_id (idempotencyKey) is coherent across envelope and body")
 }

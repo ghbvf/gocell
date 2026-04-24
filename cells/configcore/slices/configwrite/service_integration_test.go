@@ -12,6 +12,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	cctestutil "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
@@ -179,6 +180,7 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 // returns a permanent error, the config_entries row is absent (transaction
 // rolled back atomically).
 func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
+	testutil.RequireDocker(t)
 	ctx := context.Background()
 
 	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
@@ -195,7 +197,11 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
 	require.NoError(t, err)
-	defer func() { _ = pool.Close(ctx) }()
+	defer func() {
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close: %v", err)
+		}
+	}()
 
 	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
 	require.NoError(t, err)
@@ -205,7 +211,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 	repo := cellpg.NewConfigRepository(session, crypto.NoopTransformer{}, nil)
 
 	// Inject a writer that always fails — simulates outbox unavailable.
-	failingWriter := &recordingWriter{err: errors.New("outbox broker down")}
+	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
 
 	txMgr := adapterpg.NewTxManager(pool)
 	svc := NewService(repo, slog.Default(),

@@ -54,7 +54,9 @@ func setupConfigPG(t *testing.T) (*ConfigRepository, *adapterpg.TxManager, func(
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
-		_ = pool.Close(ctx)
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close: %v", err)
+		}
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("WARN: failed to terminate postgres container: %v", err)
 		}
@@ -317,7 +319,9 @@ func setupConfigPGEncrypted(t *testing.T) (*ConfigRepository, *adapterpg.TxManag
 	txMgr := adapterpg.NewTxManager(pool)
 
 	cleanup := func() {
-		pool.Close()
+		if err := pool.Close(ctx); err != nil {
+			t.Logf("WARN: pool close: %v", err)
+		}
 		if err := container.Terminate(ctx); err != nil {
 			t.Logf("WARN: failed to terminate postgres container: %v", err)
 		}
