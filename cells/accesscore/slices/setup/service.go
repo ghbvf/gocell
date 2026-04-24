@@ -141,21 +141,8 @@ type CreateAdminOutput struct {
 // is only paid on the single winning request (plus same-process concurrent
 // race-losers before the internal mutex in adminprovision serializes them).
 func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*CreateAdminOutput, error) {
-	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
-		validation.F("username", in.Username),
-		validation.F("email", in.Email),
-		validation.F("password", in.Password),
-	); err != nil {
+	if err := validateCreateAdminInput(in); err != nil {
 		return nil, err
-	}
-	if len(in.Password) < MinPasswordLen || len(in.Password) > MaxPasswordLen {
-		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput,
-			fmt.Sprintf("password length must be between %d and %d characters",
-				MinPasswordLen, MaxPasswordLen))
-	}
-	if strings.ContainsAny(in.Email, "\r\n\t\x00") || strings.ContainsAny(in.Username, "\r\n\t\x00") {
-		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput,
-			"username and email must not contain control characters")
 	}
 
 	// Fast-path: if admin already exists, return 410 without touching bcrypt.
@@ -175,33 +162,9 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 
 	var out *CreateAdminOutput
 	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		user, outcome, perr := s.provisioner.Ensure(txCtx, adminprovision.ProvisionInput{
-			Username:     in.Username,
-			Email:        in.Email,
-			PasswordHash: hash,
-			RequireReset: false,
-			IDPrefix:     UserIDPrefix,
-		})
-		if perr != nil {
-			return fmt.Errorf("setup: ensure admin: %w", perr)
-		}
-		switch outcome {
-		case adminprovision.OutcomeAlreadyExists, adminprovision.OutcomeRaceSkipped:
-			return setupRetiredError()
-		case adminprovision.OutcomeCreated:
-			if err := s.publishUserCreated(txCtx, user); err != nil {
-				return err
-			}
-		case adminprovision.OutcomeOrphanRecovered:
-			// Deliberate: do NOT emit user.created on orphan recovery — the
-			// crashed prior run presumably emitted it before the credfile
-			// failure. Duplicating the event would confuse idempotent consumers
-			// that dedupe on (event_type, user_id).
-			s.logger.Warn("setup: orphan user recovered; event emission skipped",
-				slog.String("event", "setup_orphan_recover"),
-				slog.String("user_id", user.ID))
-		default:
-			return fmt.Errorf("setup: unexpected provision outcome %d", outcome)
+		user, err := s.provisionAndMaybeEmit(txCtx, in, hash)
+		if err != nil {
+			return err
 		}
 		out = &CreateAdminOutput{
 			ID:        user.ID,
@@ -215,6 +178,63 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 		return nil, err
 	}
 	return out, nil
+}
+
+// validateCreateAdminInput enforces blank/length/control-char rules before any
+// persistence or CPU-expensive work happens. Pulled out of CreateAdmin to keep
+// its cognitive complexity within 15 (gocognit CLAUDE.md limit).
+func validateCreateAdminInput(in CreateAdminInput) error {
+	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("username", in.Username),
+		validation.F("email", in.Email),
+		validation.F("password", in.Password),
+	); err != nil {
+		return err
+	}
+	if len(in.Password) < MinPasswordLen || len(in.Password) > MaxPasswordLen {
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+			fmt.Sprintf("password length must be between %d and %d characters",
+				MinPasswordLen, MaxPasswordLen))
+	}
+	if strings.ContainsAny(in.Email, "\r\n\t\x00") || strings.ContainsAny(in.Username, "\r\n\t\x00") {
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+			"username and email must not contain control characters")
+	}
+	return nil
+}
+
+// provisionAndMaybeEmit runs adminprovision.Ensure inside the caller-provided
+// tx and emits user.created only on OutcomeCreated. Orphan recovery
+// deliberately skips the event (the crashed prior run already emitted it; a
+// duplicate would confuse idempotent consumers that dedupe on event_type+user_id).
+// Extracted from CreateAdmin to keep CreateAdmin under the cognitive-complexity
+// ceiling after adding the pre-bcrypt Status fast-path.
+func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput, hash []byte) (*domain.User, error) {
+	user, outcome, err := s.provisioner.Ensure(ctx, adminprovision.ProvisionInput{
+		Username:     in.Username,
+		Email:        in.Email,
+		PasswordHash: hash,
+		RequireReset: false,
+		IDPrefix:     UserIDPrefix,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("setup: ensure admin: %w", err)
+	}
+	switch outcome {
+	case adminprovision.OutcomeAlreadyExists, adminprovision.OutcomeRaceSkipped:
+		return nil, setupRetiredError()
+	case adminprovision.OutcomeCreated:
+		if err := s.publishUserCreated(ctx, user); err != nil {
+			return nil, err
+		}
+	case adminprovision.OutcomeOrphanRecovered:
+		s.logger.Warn("setup: orphan user recovered; event emission skipped",
+			slog.String("event", "setup_orphan_recover"),
+			slog.String("user_id", user.ID))
+	default:
+		return nil, fmt.Errorf("setup: unexpected provision outcome %d", outcome)
+	}
+	return user, nil
 }
 
 // setupRetiredError is returned when the first-run admin already exists. It
