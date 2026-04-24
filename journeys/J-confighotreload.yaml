@@ -8,13 +8,13 @@ cells:
   - accesscore
   - auditcore
 contracts:
-  - event.config.entry-written.v1
-  - event.config.version-published.v1
+  - event.config.entry-upserted.v1
+  - event.config.entry-deleted.v1
 passCriteria:
-  - text: 配置变更写入并发布 config.entry-written / config.version-published 事件
+  - text: 配置写入后发布 config.entry-upserted / config.entry-deleted 状态同步事件
     mode: auto
     checkRef: journey.J-confighotreload.config-publish
-  - text: accesscore 接收并应用新配置
+  - text: accesscore 接收并应用配置 upsert/delete 状态
     mode: auto
     checkRef: journey.J-confighotreload.access-apply
   - text: 所有订阅 cell 健康检查通过

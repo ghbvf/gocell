@@ -6,9 +6,8 @@
   "properties": {
     "key": { "type": "string" },
     "configId": { "type": "string" },
-    "version": { "type": "integer" },
-    "sensitive": { "type": "boolean" }
+    "version": { "type": "integer" }
   },
-  "required": ["key", "configId", "version", "sensitive"],
+  "required": ["key", "configId", "version"],
   "additionalProperties": false
 }

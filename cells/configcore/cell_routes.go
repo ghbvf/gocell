@@ -40,8 +40,8 @@ var (
 	// participates in FMT-18's literal-vs-YAML cross-check — the previous
 	// `Topic: configsubscribe.TopicConfigChanged` form was invisible to
 	// the scanner because the regex only sees string literals.
-	specEventConfigEntryWritten     = wrapper.EventSpec("event.config.entry-written.v1", "amqp")
-	specEventConfigVersionPublished = wrapper.EventSpec("event.config.version-published.v1", "amqp")
+	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
+	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
 )
 
 // RegisterRoutes registers HTTP routes for configcore. All admin-guarded
@@ -101,10 +101,10 @@ func (c *ConfigCore) RegisterRoutes(mux cell.RouteMux) {
 // RegisterSubscriptions declares event subscriptions for configcore.
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *ConfigCore) RegisterSubscriptions(r cell.EventRouter) error {
-	entryHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryWritten)
-	r.AddContractHandler(specEventConfigEntryWritten, entryHandler, "configcore")
+	upsertedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryUpserted)
+	r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "configcore")
 
-	publishedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleVersionPublished)
-	r.AddContractHandler(specEventConfigVersionPublished, publishedHandler, "configcore")
+	deletedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryDeleted)
+	r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "configcore")
 	return nil
 }

@@ -86,7 +86,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		if err := s.repo.Create(txCtx, entry); err != nil {
 			return fmt.Errorf("config-write: create: %w", err)
 		}
-		return s.publishChange(txCtx, domain.ConfigEntryActionCreated, entry)
+		return s.publishUpserted(txCtx, entry)
 	}); err != nil {
 		return nil, err
 	}
@@ -119,7 +119,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}
-		return s.publishChange(txCtx, domain.ConfigEntryActionUpdated, updated)
+		return s.publishUpserted(txCtx, updated)
 	}); err != nil {
 		return nil, err
 	}
@@ -141,7 +141,7 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 		if err != nil {
 			return fmt.Errorf("config-write: delete: %w", err)
 		}
-		return s.publishChange(txCtx, domain.ConfigEntryActionDeleted, deleted)
+		return s.publishDeleted(txCtx, deleted)
 	}); err != nil {
 		return err
 	}
@@ -154,15 +154,20 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 	return s.txRunner.RunInTx(ctx, fn)
 }
 
-func (s *Service) publishChange(ctx context.Context, action domain.ConfigEntryWrittenAction, entry *domain.ConfigEntry) error {
+func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry) error {
 	eventValue := entry.Value
 	if entry.Sensitive {
 		eventValue = "******"
 	}
-	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryWritten, domain.ConfigEntryWrittenEvent{
-		Action:  action,
+	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryUpserted, domain.ConfigEntryUpsertedEvent{
 		Key:     entry.Key,
 		Value:   eventValue,
 		Version: entry.Version,
+	})
+}
+
+func (s *Service) publishDeleted(ctx context.Context, entry *domain.ConfigEntry) error {
+	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryDeleted, domain.ConfigEntryDeletedEvent{
+		Key: entry.Key,
 	})
 }

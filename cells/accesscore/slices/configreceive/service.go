@@ -1,61 +1,46 @@
 // Package configreceive implements the config-receive slice: consumes
-// config change events from configcore. Currently logs changes for
+// config state-sync events from configcore. Currently logs changes for
 // observability; future use: refresh JWT TTL, key rotation intervals, etc.
 package configreceive
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
 const (
-	// TopicConfigEntryWritten is the entry-write topic consumed by this slice.
-	TopicConfigEntryWritten = "event.config.entry-written.v1"
-	// TopicConfigVersionPublished is the version-snapshot topic consumed by this slice.
-	TopicConfigVersionPublished = "event.config.version-published.v1"
+	// TopicConfigEntryUpserted is the config state-sync topic consumed by this slice.
+	TopicConfigEntryUpserted = "event.config.entry-upserted.v1"
+	// TopicConfigEntryDeleted is the config delete state-sync topic consumed by this slice.
+	TopicConfigEntryDeleted = "event.config.entry-deleted.v1"
 )
 
-// ConfigEntryWrittenAction enumerates the CRUD actions the entry-written event
-// can carry. Duplicated locally instead of imported from configcore's
-// internal/domain — cross-cell internal imports are forbidden by CLAUDE.md.
-// Kept in lockstep with the producer-side enum; the wire contract (see
-// contracts/event/config/entry-written/v1/payload.schema.json) is the actual
-// source of truth for both sides.
-type ConfigEntryWrittenAction string
-
-const (
-	configEntryActionCreated ConfigEntryWrittenAction = "created"
-	configEntryActionUpdated ConfigEntryWrittenAction = "updated"
-	configEntryActionDeleted ConfigEntryWrittenAction = "deleted"
-)
-
-// ConfigEntryWrittenEvent is the payload for event.config.entry-written.v1.
+// ConfigEntryUpsertedEvent is the payload for event.config.entry-upserted.v1.
 // Mirrors configcore/internal/domain/config_events.go shape without importing
-// another cell's internal/ — cross-cell imports are forbidden by CLAUDE.md.
-type ConfigEntryWrittenEvent struct {
-	Action  ConfigEntryWrittenAction `json:"action"`
-	Key     string                   `json:"key"`
-	Value   string                   `json:"value,omitempty"`
-	Version int                      `json:"version,omitempty"`
+// another cell's internal/ — cross-cell internal imports are forbidden by CLAUDE.md.
+type ConfigEntryUpsertedEvent struct {
+	Key     string  `json:"key"`
+	Value   *string `json:"value"`
+	Version int     `json:"version"`
 }
 
-// ConfigVersionPublishedEvent is the payload for event.config.version-published.v1.
-type ConfigVersionPublishedEvent struct {
-	Key       string `json:"key"`
-	ConfigID  string `json:"configId"`
-	Version   int    `json:"version"`
-	Sensitive bool   `json:"sensitive"`
+// ConfigEntryDeletedEvent is the payload for event.config.entry-deleted.v1.
+type ConfigEntryDeletedEvent struct {
+	Key string `json:"key"`
 }
 
 // Service consumes config change events for accesscore.
 //
 // Consumer: cg-accesscore-config-events
 // Idempotency: log-only (no side effects), inherently idempotent
-// Disposition: Ack on success / Reject on permanent unmarshal error
+// Disposition: Ack on success / Reject on permanent unmarshal or semantic error
 // DLX: broker-native via DispositionReject → Nack(requeue=false)
 type Service struct {
 	logger *slog.Logger
@@ -66,49 +51,69 @@ func NewService(logger *slog.Logger) *Service {
 	return &Service{logger: logger}
 }
 
-// HandleEntryWritten processes an event.config.entry-written.v1 event.
-func (s *Service) HandleEntryWritten(_ context.Context, entry outbox.Entry) error {
-	var event ConfigEntryWrittenEvent
-
-	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		s.logger.Error("config-receive: failed to unmarshal entry-written event, routing to dead letter",
+// HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
+func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
+	var event ConfigEntryUpsertedEvent
+	if err := decodeStrict(entry.Payload, &event); err != nil {
+		s.logger.Error("config-receive: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-written payload: %w", err))
+		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err))
+	}
+	if err := validateUpserted(event.Key, event.Value, event.Version); err != nil {
+		s.logger.Warn("config-receive: invalid entry-upserted event, routing to dead letter",
+			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		return outbox.NewPermanentError(err)
 	}
 
-	switch event.Action {
-	case configEntryActionCreated, configEntryActionUpdated:
-		s.logger.Info("config-receive: config changed",
-			slog.String("key", event.Key), slog.String("action", string(event.Action)))
-	case configEntryActionDeleted:
-		s.logger.Info("config-receive: config deleted",
-			slog.String("key", event.Key))
-	default:
-		// Fail-closed: unknown actions are permanent errors routed to DLX.
-		//
-		// ref: K8s workqueue fail-closed semantics; Watermill Nack on unknown type
-		s.logger.Warn("config-receive: unknown action, routing to dead letter",
-			slog.String("action", string(event.Action)), slog.String("key", event.Key))
-		return outbox.NewPermanentError(
-			fmt.Errorf("unknown action %q for key %q", event.Action, event.Key),
-		)
-	}
-
+	s.logger.Info("config-receive: config upserted",
+		slog.String("key", event.Key),
+		slog.Int("version", event.Version))
 	return nil
 }
 
-// HandleVersionPublished processes an event.config.version-published.v1 event.
-func (s *Service) HandleVersionPublished(_ context.Context, entry outbox.Entry) error {
-	var event ConfigVersionPublishedEvent
-
-	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		s.logger.Error("config-receive: failed to unmarshal version-published event, routing to dead letter",
+// HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
+func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) error {
+	var event ConfigEntryDeletedEvent
+	if err := decodeStrict(entry.Payload, &event); err != nil {
+		s.logger.Error("config-receive: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal version-published payload: %w", err))
+		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err))
+	}
+	if strings.TrimSpace(event.Key) == "" {
+		err := fmt.Errorf("config-receive: entry-deleted missing key")
+		s.logger.Warn("config-receive: invalid entry-deleted event, routing to dead letter",
+			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		return outbox.NewPermanentError(err)
 	}
 
-	s.logger.Info("config-receive: config version published",
-		slog.String("key", event.Key),
-		slog.Int("version", event.Version))
+	s.logger.Info("config-receive: config deleted", slog.String("key", event.Key))
+	return nil
+}
+
+func decodeStrict(data []byte, dst any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values in payload")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateUpserted(key string, value *string, version int) error {
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("config-receive: entry-upserted missing key")
+	}
+	if value == nil {
+		return fmt.Errorf("config-receive: entry-upserted missing value for key %q", key)
+	}
+	if version < 1 {
+		return fmt.Errorf("config-receive: entry-upserted invalid version %d for key %q", version, key)
+	}
 	return nil
 }

@@ -47,11 +47,11 @@ func TestService_HandleEvent(t *testing.T) {
 			wantChain: 1,
 		},
 		{
-			name: "config entry-written event (no userId → system actor)",
+			name: "config entry-upserted event (no userId → system actor)",
 			entry: outbox.Entry{
 				ID:        "evt-3",
-				EventType: "event.config.entry-written.v1",
-				Payload:   mustJSON(map[string]any{"action": "created", "key": "app.name", "value": "v", "version": 1}),
+				EventType: "event.config.entry-upserted.v1",
+				Payload:   mustJSON(map[string]any{"key": "app.name", "value": "v", "version": 1}),
 			},
 			wantChain: 1,
 		},
@@ -172,9 +172,9 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			wantActorID: "usr-snk",
 		},
 		{
-			name:        "no actor field (config.entry-written) → system",
-			eventType:   "event.config.entry-written.v1",
-			payload:     map[string]any{"action": "created", "key": "k"},
+			name:        "no actor field (config.entry-upserted) → system",
+			eventType:   "event.config.entry-upserted.v1",
+			payload:     map[string]any{"key": "k", "value": "v", "version": 1},
 			wantActorID: "system",
 		},
 	}

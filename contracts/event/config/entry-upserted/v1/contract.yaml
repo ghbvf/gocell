@@ -1,4 +1,4 @@
-id: event.config.entry-written.v1
+id: event.config.entry-upserted.v1
 kind: event
 ownerCell: configcore
 consistencyLevel: L2

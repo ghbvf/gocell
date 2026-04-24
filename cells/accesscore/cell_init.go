@@ -145,7 +145,7 @@ func (c *AccessCore) initSlices() error {
 	// rbac-session-sync consumer: handles role-change events and invalidates sessions.
 	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.logger)
 
-	// config-receive: subscribes to config.changed events from configcore
+	// config-receive: subscribes to config state-sync events from configcore.
 	c.configReceiveSvc = configreceive.NewService(c.logger)
 	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cell.L3))
 

@@ -6,7 +6,6 @@ lifecycle: active
 endpoints:
   publisher: configcore
   subscribers:
-    - accesscore
     - auditcore
 schemaRefs:
   headers: headers.schema.json

@@ -43,10 +43,10 @@ var (
 	// validation because the literal scanner only sees string literals.
 	// EventSpec makes the id==topic identity explicit and FMT-18 sees the
 	// ID literal in the call.
-	specEventConfigEntryWritten     = wrapper.EventSpec("event.config.entry-written.v1", "amqp")
-	specEventConfigVersionPublished = wrapper.EventSpec("event.config.version-published.v1", "amqp")
-	specEventRoleAssigned           = wrapper.EventSpec("event.role.assigned.v1", "amqp")
-	specEventRoleRevoked            = wrapper.EventSpec("event.role.revoked.v1", "amqp")
+	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
+	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
+	specEventRoleAssigned        = wrapper.EventSpec("event.role.assigned.v1", "amqp")
+	specEventRoleRevoked         = wrapper.EventSpec("event.role.revoked.v1", "amqp")
 )
 
 // RegisterRoutes registers HTTP routes for accesscore.
@@ -111,12 +111,12 @@ func (c *AccessCore) RegisterRoutes(mux cell.RouteMux) {
 // RegisterSubscriptions declares event subscriptions for accesscore.
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
-	// config-receive: config entry-written + version-published from configcore.
-	entryHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryWritten)
-	r.AddContractHandler(specEventConfigEntryWritten, entryHandler, "accesscore")
+	// config-receive: config state-sync events from configcore.
+	upsertedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryUpserted)
+	r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "accesscore")
 
-	publishedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleVersionPublished)
-	r.AddContractHandler(specEventConfigVersionPublished, publishedHandler, "accesscore")
+	deletedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryDeleted)
+	r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "accesscore")
 
 	// rbac-session-sync: invalidate sessions on role assignment or revocation.
 	// Same handler + same consumer group across both topics — HandleRoleChanged

@@ -5,7 +5,6 @@ package configpublish
 import (
 	"context"
 	"errors"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 	"time"
@@ -13,7 +12,8 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
-	cctestutil "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
@@ -167,9 +167,12 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 1, ver.Version)
 
-	// Baseline: count outbox rows after Publish (exactly 1 from Publish above).
-	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback)
-	require.Equal(t, 0, before, "no rollback outbox rows should exist before Rollback call")
+	// Baseline: count outbox rows after Publish. Publish emits only
+	// version-published, so Rollback-owned topics should still be absent.
+	beforeState := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted)
+	beforeAudit := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback)
+	require.Equal(t, 0, beforeState, "no entry-upserted outbox rows should exist before Rollback call")
+	require.Equal(t, 0, beforeAudit, "no rollback outbox rows should exist before Rollback call")
 
 	// Rollback to version 1.
 	rolled, err := bundle.svc.Rollback(ctx, "integration.rollback.key", 1)
@@ -177,10 +180,14 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 	assert.Equal(t, 2, rolled.Version,
 		"Rollback must increment the config_entries version (UPDATE...RETURNING)")
 
-	// Outbox-side: Rollback's L2 co-commit must have added exactly one
-	// event.config.rollback row to outbox_entries in the same tx.
-	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback)
-	assert.Equal(t, 1, after-before,
+	// Outbox-side: Rollback's L2 co-commit must add state-sync and audit rows
+	// to outbox_entries in the same tx.
+	afterState := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted)
+	assert.Equal(t, 1, afterState-beforeState,
+		"Rollback must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigEntryUpserted)
+
+	afterAudit := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigRollback)
+	assert.Equal(t, 1, afterAudit-beforeAudit,
 		"Rollback must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigRollback)
 }
 
@@ -235,9 +242,17 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	entryBefore, err := repo.GetByKey(ctx, "rollback.failure.key")
 	require.NoError(t, err)
 	versionBefore := entryBefore.Version
+	beforeState := countOutboxRowsByEventType(t, pool.DB(), domain.TopicConfigEntryUpserted)
+	beforeAudit := countOutboxRowsByEventType(t, pool.DB(), domain.TopicConfigRollback)
 
-	// Now inject a failing writer — simulates outbox broker down during Rollback.
-	failingWriter := &cctestutil.RecordingWriter{Err: errors.New("outbox broker down")}
+	// Now inject a writer that succeeds on the state-sync row and fails on the
+	// rollback audit row. The transaction must roll both the config update and
+	// the first outbox row back.
+	failingWriter := &failOnWriteNumberWriter{
+		delegate: adapterpg.NewOutboxWriter(),
+		failOn:   2,
+		err:      errors.New("outbox broker down"),
+	}
 	svcFail := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failingWriter)),
 		WithTxManager(txMgr),
@@ -252,4 +267,23 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, versionBefore, entryAfter.Version,
 		"config_entries version must not change when outbox write fails (atomic rollback)")
+	assert.Equal(t, beforeState, countOutboxRowsByEventType(t, pool.DB(), domain.TopicConfigEntryUpserted),
+		"entry-upserted outbox row must roll back when the later rollback audit write fails")
+	assert.Equal(t, beforeAudit, countOutboxRowsByEventType(t, pool.DB(), domain.TopicConfigRollback),
+		"rollback audit outbox row must not be committed after writer failure")
+}
+
+type failOnWriteNumberWriter struct {
+	delegate outbox.Writer
+	failOn   int
+	calls    int
+	err      error
+}
+
+func (w *failOnWriteNumberWriter) Write(ctx context.Context, entry outbox.Entry) error {
+	w.calls++
+	if w.calls == w.failOn {
+		return w.err
+	}
+	return w.delegate.Write(ctx, entry)
 }

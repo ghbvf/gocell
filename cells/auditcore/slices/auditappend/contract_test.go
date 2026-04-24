@@ -48,19 +48,34 @@ func TestEventUserLockedV1Subscribe(t *testing.T) {
 	c.MustRejectPayload(t, []byte(`{}`))
 }
 
-func TestEventConfigEntryWrittenV1Subscribe(t *testing.T) {
+func TestEventConfigEntryUpsertedV1Subscribe(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.entry-written.v1")
+	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 
-	c.ValidatePayload(t, []byte(`{"action":"created","key":"k","value":"v","version":1}`))
-	c.MustRejectPayload(t, []byte(`{"action":"created"}`))
+	c.ValidatePayload(t, []byte(`{"key":"k","value":"v","version":1}`))
+	c.ValidatePayload(t, []byte(`{"key":"k","value":"","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"k","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"","value":"v","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"   ","value":"v","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"k","value":"v","version":0}`))
+}
+
+func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
+
+	c.ValidatePayload(t, []byte(`{"key":"k"}`))
+	c.MustRejectPayload(t, []byte(`{}`))
+	c.MustRejectPayload(t, []byte(`{"key":""}`))
+	c.MustRejectPayload(t, []byte(`{"key":"   "}`))
 }
 
 func TestEventConfigVersionPublishedV1Subscribe(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.version-published.v1")
 
-	c.ValidatePayload(t, []byte(`{"key":"k","configId":"cfg-1","version":1,"sensitive":false}`))
+	c.ValidatePayload(t, []byte(`{"key":"k","configId":"cfg-1","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"k","configId":"cfg-1","version":1,"sensitive":false}`))
 	c.MustRejectPayload(t, []byte(`{"key":"k"}`))
 }
 

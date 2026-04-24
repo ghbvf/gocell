@@ -55,15 +55,15 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-// configEntryWrittenBusinessPayload is the business event shape that
+// configEntryUpsertedBusinessPayload is the business event shape that
 // cells/configcore/slices/configsubscribe/service.go expects on
-// event.config.entry-written.v1. If the relay's wire envelope reaches
+// event.config.entry-upserted.v1. If the relay's wire envelope reaches
 // subscribers unwrapped (F1 bug), these fields will all be empty and the
 // regression guard fires.
-type configEntryWrittenBusinessPayload struct {
-	Action string `json:"action"`
-	Key    string `json:"key"`
-	Value  string `json:"value"`
+type configEntryUpsertedBusinessPayload struct {
+	Key     string `json:"key"`
+	Value   string `json:"value"`
+	Version int    `json:"version"`
 }
 
 // TestOutboxE2E_PGMode_WriteToSubscribe is the combined A11 + F1 regression
@@ -127,11 +127,11 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
 	// This is the F1 regression guard: if the bus forwards envelope-wrapped
 	// bytes as-is, the business payload parse below gets empty fields.
-	const topic = "event.config.entry-written.v1"
+	const topic = "event.config.entry-upserted.v1"
 
 	type received struct {
 		entry   outbox.Entry
-		payload configEntryWrittenBusinessPayload
+		payload configEntryUpsertedBusinessPayload
 		parsed  bool
 	}
 	var (
@@ -143,7 +143,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	defer subCancel()
 	go func() {
 		_ = eb.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "e2e-test"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			var p configEntryWrittenBusinessPayload
+			var p configEntryUpsertedBusinessPayload
 			err := json.Unmarshal(e.Payload, &p)
 			recvMu.Lock()
 			recvs = append(recvs, received{entry: e, payload: p, parsed: err == nil})
@@ -270,15 +270,14 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		defer recvMu.Unlock()
 		for _, r := range recvs {
 			if r.parsed && r.payload.Key == "e2e.test.key" &&
-				(r.payload.Action == "created" || r.payload.Action == "updated" ||
-					r.payload.Action == "published") {
+				r.payload.Value == "e2e-value" && r.payload.Version >= 1 {
 				return true
 			}
 		}
 		return false
 	}, 30*time.Second, 200*time.Millisecond,
-		"A11+F1 regression guard: business payload with action/key must reach subscriber; "+
-			"empty Action or missing Key indicates relay→eventbus envelope was not unwrapped")
+		"A11+F1 regression guard: entry-upserted business payload with key/value/version must reach subscriber; "+
+			"missing fields indicate relay→eventbus envelope was not unwrapped")
 
 	// Additional diagnostic: list what actually arrived in case the above fails.
 	recvMu.Lock()

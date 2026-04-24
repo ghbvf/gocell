@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.config.entry-deleted.v1.payload",
+  "type": "object",
+  "description": "Emitted after config Delete to tell subscribers to remove the key from local state.",
+  "properties": {
+    "key": { "type": "string", "pattern": "\\S" }
+  },
+  "required": ["key"],
+  "additionalProperties": false
+}

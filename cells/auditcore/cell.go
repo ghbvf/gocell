@@ -26,14 +26,16 @@ import (
 // reused as both map key and EventSpec argument without Sonar flagging
 // duplicate literals.
 const (
-	topicUserCreated    = "event.user.created.v1"
-	topicUserLocked     = "event.user.locked.v1"
-	topicSessionCreated = "event.session.created.v1"
-	topicSessionRevoked = "event.session.revoked.v1"
-	topicConfigChanged  = "event.config.changed.v1"
-	topicConfigRollback = "event.config.rollback.v1"
-	topicRoleAssigned   = "event.role.assigned.v1"
-	topicRoleRevoked    = "event.role.revoked.v1"
+	topicUserCreated     = "event.user.created.v1"
+	topicUserLocked      = "event.user.locked.v1"
+	topicSessionCreated  = "event.session.created.v1"
+	topicSessionRevoked  = "event.session.revoked.v1"
+	topicConfigUpserted  = "event.config.entry-upserted.v1"
+	topicConfigDeleted   = "event.config.entry-deleted.v1"
+	topicConfigPublished = "event.config.version-published.v1"
+	topicConfigRollback  = "event.config.rollback.v1"
+	topicRoleAssigned    = "event.role.assigned.v1"
+	topicRoleRevoked     = "event.role.revoked.v1"
 )
 
 // auditAppendSpecs maps each consumed topic to its wrapper.ContractSpec.
@@ -44,14 +46,16 @@ const (
 // Adding or removing a topic MUST be mirrored in auditappend.Topics;
 // RegisterSubscriptions fails at startup if the two drift.
 var auditAppendSpecs = map[string]wrapper.ContractSpec{
-	topicUserCreated:    wrapper.EventSpec(topicUserCreated, "amqp"),
-	topicUserLocked:     wrapper.EventSpec(topicUserLocked, "amqp"),
-	topicSessionCreated: wrapper.EventSpec(topicSessionCreated, "amqp"),
-	topicSessionRevoked: wrapper.EventSpec(topicSessionRevoked, "amqp"),
-	topicConfigChanged:  wrapper.EventSpec(topicConfigChanged, "amqp"),
-	topicConfigRollback: wrapper.EventSpec(topicConfigRollback, "amqp"),
-	topicRoleAssigned:   wrapper.EventSpec(topicRoleAssigned, "amqp"),
-	topicRoleRevoked:    wrapper.EventSpec(topicRoleRevoked, "amqp"),
+	topicUserCreated:     wrapper.EventSpec(topicUserCreated, "amqp"),
+	topicUserLocked:      wrapper.EventSpec(topicUserLocked, "amqp"),
+	topicSessionCreated:  wrapper.EventSpec(topicSessionCreated, "amqp"),
+	topicSessionRevoked:  wrapper.EventSpec(topicSessionRevoked, "amqp"),
+	topicConfigUpserted:  wrapper.EventSpec(topicConfigUpserted, "amqp"),
+	topicConfigDeleted:   wrapper.EventSpec(topicConfigDeleted, "amqp"),
+	topicConfigPublished: wrapper.EventSpec(topicConfigPublished, "amqp"),
+	topicConfigRollback:  wrapper.EventSpec(topicConfigRollback, "amqp"),
+	topicRoleAssigned:    wrapper.EventSpec(topicRoleAssigned, "amqp"),
+	topicRoleRevoked:     wrapper.EventSpec(topicRoleRevoked, "amqp"),
 }
 
 // Compile-time interface checks.

@@ -72,12 +72,12 @@ func (t *contractSpyTracer) only(tb testing.TB) *contractSpySpan {
 
 // --- Fixtures ---
 
-func configChangedSpec() wrapper.ContractSpec {
+func configEntryUpsertedSpec() wrapper.ContractSpec {
 	return wrapper.ContractSpec{
-		ID:        "event.config.changed.v1",
+		ID:        "event.config.entry-upserted.v1",
 		Kind:      "event",
 		Transport: "amqp",
-		Topic:     "event.config.changed.v1",
+		Topic:     "event.config.entry-upserted.v1",
 	}
 }
 
@@ -94,7 +94,7 @@ func TestAddContractHandler_NilHandler_Panics(t *testing.T) {
 	r := New(&blockingSubscriber{})
 	assert.PanicsWithValue(t,
 		"eventrouter: AddContractHandler called with nil handler",
-		func() { r.AddContractHandler(configChangedSpec(), nil, "accesscore") },
+		func() { r.AddContractHandler(configEntryUpsertedSpec(), nil, "accesscore") },
 	)
 }
 
@@ -103,7 +103,7 @@ func TestAddContractHandler_EmptyConsumerGroup_Panics(t *testing.T) {
 	r := New(&blockingSubscriber{})
 	assert.PanicsWithValue(t,
 		"eventrouter: AddContractHandler called with empty consumerGroup; cells must declare their identity",
-		func() { r.AddContractHandler(configChangedSpec(), okHandler(), "") },
+		func() { r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "") },
 	)
 }
 
@@ -126,7 +126,7 @@ func TestAddContractHandler_NonEventSpec_Panics(t *testing.T) {
 func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})
-	r.AddContractHandler(configChangedSpec(), okHandler(), "accesscore")
+	r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore")
 	assert.Equal(t, 1, r.HandlerCount())
 
 	// Router stores the business handler; bootstrap-owned middleware wraps it.
@@ -140,7 +140,7 @@ func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	r := New(&blockingSubscriber{})
 
 	var inner bool
-	r.AddContractHandler(configChangedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	r.AddContractHandler(configEntryUpsertedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		inner = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "accesscore")
@@ -150,18 +150,18 @@ func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	// contract tracing sits outside the stored business handler.
 	sub := r.handlers[0].subscription()
 	wrapped := ContractTracingMiddleware(tr, nil)(sub, r.handlers[0].handler)
-	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.changed.v1"})
+	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 	assert.True(t, inner, "inner handler must run")
 
 	span := tr.only(t)
 	attrs := span.attrMap()
-	assert.Equal(t, "event.config.changed.v1", attrs["gocell.contract.id"], "gocell.contract.id")
+	assert.Equal(t, "event.config.entry-upserted.v1", attrs["gocell.contract.id"], "gocell.contract.id")
 	assert.Equal(t, "event", attrs["gocell.contract.kind"], "gocell.contract.kind")
 	assert.Equal(t, "amqp", attrs["gocell.contract.transport"], "gocell.contract.transport")
 	assert.Equal(t, "amqp", attrs["messaging.system"], "messaging.system")
-	assert.Equal(t, "event.config.changed.v1", attrs["messaging.destination"], "messaging.destination")
-	assert.Equal(t, "CONSUME event.config.changed.v1", span.name, "span name")
+	assert.Equal(t, "event.config.entry-upserted.v1", attrs["messaging.destination"], "messaging.destination")
+	assert.Equal(t, "CONSUME event.config.entry-upserted.v1", span.name, "span name")
 	assert.Equal(t, wrapper.StatusOK, span.status, "Ack must mark span StatusOK")
 	assert.True(t, span.ended, "span.End() must have been called")
 }
@@ -170,9 +170,9 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 	t.Parallel()
 	tr := &contractSpyTracer{}
 	sub := outbox.Subscription{
-		Topic:             "event.config.changed.v1",
+		Topic:             "event.config.entry-upserted.v1",
 		ConsumerGroup:     "accesscore",
-		ContractID:        "event.config.changed.v1",
+		ContractID:        "event.config.entry-upserted.v1",
 		ContractKind:      "event",
 		ContractTransport: "amqp",
 	}
@@ -189,7 +189,7 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 	}
 
 	wrapped := ContractTracingMiddleware(tr, nil)(sub, shortCircuit(sub, business))
-	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.changed.v1"})
+	res := wrapped(context.Background(), outbox.Entry{EventType: "event.config.entry-upserted.v1"})
 
 	assert.Equal(t, outbox.DispositionRequeue, res.Disposition)
 	assert.False(t, businessCalled, "downstream middleware should be allowed to skip business handler")
@@ -197,7 +197,7 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 	span := tr.only(t)
 	assert.Equal(t, wrapper.StatusError, span.status, "short-circuit Requeue must still mark the contract span")
 	assert.True(t, span.ended, "span.End() must have been called")
-	assert.Equal(t, "event.config.changed.v1", span.attrMap()["gocell.contract.id"])
+	assert.Equal(t, "event.config.entry-upserted.v1", span.attrMap()["gocell.contract.id"])
 }
 
 // TestContractTracingMiddleware_PanicsOnEmptyContractID documents the F4
@@ -230,7 +230,7 @@ func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})
 	for i := 0; i < 3; i++ {
-		spec := configChangedSpec()
+		spec := configEntryUpsertedSpec()
 		spec.Topic = spec.Topic + "." + string(rune('a'+i))
 		r.AddContractHandler(spec, okHandler(), "accesscore")
 	}
@@ -243,10 +243,10 @@ func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 func TestAddContractHandler_HandlerConfigShape(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})
-	r.AddContractHandler(configChangedSpec(), okHandler(), "accesscore")
+	r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore")
 	require.Equal(t, 1, len(r.handlers))
 	cfg := r.handlers[0]
-	assert.Equal(t, "event.config.changed.v1", cfg.topic, "topic derived from spec.Topic")
+	assert.Equal(t, "event.config.entry-upserted.v1", cfg.topic, "topic derived from spec.Topic")
 	assert.Equal(t, "accesscore", cfg.consumerGroup, "consumerGroup preserved")
 	assert.NotNil(t, cfg.handler, "handler stored")
 }

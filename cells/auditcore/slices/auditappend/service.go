@@ -1,5 +1,5 @@
-// Package auditappend implements the audit-append slice: consumes events from
-// 6 topics and appends them to the hash chain.
+// Package auditappend implements the audit-append slice: consumes events and
+// appends them to the hash chain.
 package auditappend
 
 import (
@@ -25,7 +25,8 @@ var Topics = []string{
 	"event.user.locked.v1",
 	"event.session.created.v1",
 	"event.session.revoked.v1",
-	"event.config.entry-written.v1",
+	"event.config.entry-upserted.v1",
+	"event.config.entry-deleted.v1",
 	"event.config.version-published.v1",
 	"event.config.rollback.v1",
 	"event.role.assigned.v1",

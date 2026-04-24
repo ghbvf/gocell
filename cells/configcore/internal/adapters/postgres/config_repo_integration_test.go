@@ -238,8 +238,8 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 			ID:            outbox.NewEntryID(),
 			AggregateID:   entry.ID,
 			AggregateType: "config_entry",
-			EventType:     "config.changed.v1",
-			Payload:       []byte(`{"action":"created"}`),
+			EventType:     domain.TopicConfigEntryUpserted,
+			Payload:       []byte(`{"key":"integration.atomic.key","value":"atomic-value","version":1}`),
 		}
 
 		err := txMgr.RunInTx(ctx, func(txCtx context.Context) error {

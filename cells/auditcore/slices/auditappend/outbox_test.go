@@ -2,12 +2,12 @@ package auditappend
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -86,7 +86,7 @@ func TestService_HandleEvent_SystemActor(t *testing.T) {
 	svc, _ := newTestService()
 	entry := outbox.Entry{
 		ID:        "evt-sys",
-		EventType: "event.config.entry-written.v1",
+		EventType: "event.config.entry-upserted.v1",
 		Payload:   mustJSON(map[string]any{"key": "app.name"}), // no userId
 	}
 	require.NoError(t, svc.HandleEvent(context.Background(), entry))

@@ -422,8 +422,9 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 	_, err = svc.Rollback(context.Background(), "k3", 1)
 	require.NoError(t, err)
 
-	assert.Len(t, ow.entries, 2, "publish + rollback should each write to outbox")
-	assert.Equal(t, domain.TopicConfigRollback, ow.entries[1].EventType)
+	assert.Len(t, ow.entries, 3, "publish writes version-published; rollback writes state-sync then audit")
+	assert.Equal(t, domain.TopicConfigEntryUpserted, ow.entries[1].EventType)
+	assert.Equal(t, domain.TopicConfigRollback, ow.entries[2].EventType)
 }
 
 func seedForService(repo *mem.ConfigRepository, key, value string) {

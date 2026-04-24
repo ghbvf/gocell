@@ -160,7 +160,7 @@ verify:
 Slices（9 个）：identitymanage / sessionlogin / sessionrefresh / sessionlogout / sessionvalidate / authorizationdecide / rbaccheck / rbacassign / configreceive
 发布契约：event.session.created.v1 / event.session.revoked.v1 / event.user.created.v1 / event.user.locked.v1 / event.role.assigned.v1 / event.role.revoked.v1
 HTTP 契约：login / refresh / logout / user CRUD / RBAC list-check / internal role assign-revoke
-消费契约：event.config.entry-written.v1 / event.config.version-published.v1
+消费契约：event.config.entry-upserted.v1 / event.config.entry-deleted.v1
 （契约关系由各 slice.yaml 的 contractUsages 声明，不在 cell.yaml 中）
 
 能力：SSO/OIDC 登录 / 密码登录 / JWT RS256 / Session 管理 / 登录锁定 / RBAC / 服务间认证
@@ -184,7 +184,7 @@ verify:
 
 Slices（4 个）：auditappend / auditverify / auditquery / auditarchive
 发布契约：event.audit.integrity-verified.v1
-消费契约：event.session.created.v1 / event.session.revoked.v1 / event.user.created.v1 / event.user.locked.v1 / event.config.entry-written.v1 / event.config.version-published.v1 / event.config.rollback.v1
+消费契约：event.session.created.v1 / event.session.revoked.v1 / event.user.created.v1 / event.user.locked.v1 / event.config.entry-upserted.v1 / event.config.entry-deleted.v1 / event.config.version-published.v1 / event.config.rollback.v1
 （契约关系由各 slice.yaml 的 contractUsages 声明，不在 cell.yaml 中）
 
 能力：事件消费写审计 / HMAC-SHA256 hash chain / 完整性验证 / 按月归档
@@ -207,9 +207,9 @@ verify:
 ```
 
 Slices（6 个）：configread / configwrite / configpublish / configsubscribe / featureflag / flagwrite
-发布契约：event.config.entry-written.v1 / event.config.version-published.v1 / event.config.rollback.v1 / event.flag.changed.v1
+发布契约：event.config.entry-upserted.v1 / event.config.entry-deleted.v1 / event.config.version-published.v1 / event.config.rollback.v1 / event.flag.changed.v1
 HTTP 契约：config get/write/publish/rollback + flag list/get/evaluate/create/update/toggle/delete
-消费契约：无
+消费契约：event.config.entry-upserted.v1 / event.config.entry-deleted.v1
 （契约关系由各 slice.yaml 的 contractUsages 声明，不在 cell.yaml 中）
 
 能力：配置 CRUD / 版本管理 / 热更新事件推送 / Feature flags（功能开关/灰度/rollout）/ 版本回滚
@@ -217,9 +217,9 @@ HTTP 契约：config get/write/publish/rollback + flag list/get/evaluate/create/
 ### 4.4 三 Cell 交互关系
 
 ```
-configcore ──event.config.*──→ accesscore（热更新配置）
+configcore ──event.config.entry-upserted/deleted──→ accesscore（热更新配置状态）
 configcore ──event.config.*──→ auditcore（审计配置变更）
-configcore ──event.config.*──→ 任何订阅 cell
+configcore ──event.config.entry-upserted/deleted──→ 任何状态同步订阅 cell
 accesscore ──event.session.*──→ auditcore
 accesscore ──event.user.*────→ auditcore
 ```

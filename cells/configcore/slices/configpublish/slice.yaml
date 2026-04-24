@@ -5,6 +5,8 @@ contractUsages:
     role: serve
   - contract: http.config.rollback.v1
     role: serve
+  - contract: event.config.entry-upserted.v1
+    role: publish
   - contract: event.config.version-published.v1
     role: publish
   - contract: event.config.rollback.v1
@@ -15,6 +17,7 @@ verify:
   contract:
     - contract.http.config.publish.v1.serve
     - contract.http.config.rollback.v1.serve
+    - contract.event.config.entry-upserted.v1.publish
     - contract.event.config.version-published.v1.publish
     - contract.event.config.rollback.v1.publish
   waivers: []

@@ -10,32 +10,28 @@ package domain
 // producer slices both the wire shape and the routing key — the configcore
 // analogue of accesscore's internal/dto/session_events.go.
 
-// ConfigEntryWrittenAction enumerates the CRUD actions on a config entry.
-type ConfigEntryWrittenAction string
+// ConfigEntryUpsertedEvent is the payload for event.config.entry-upserted.v1.
+// Produced by configwrite on Create / Update and by configpublish.Rollback
+// after restoring the live entry to the rollback snapshot.
+type ConfigEntryUpsertedEvent struct {
+	Key     string `json:"key"`
+	Value   string `json:"value"`
+	Version int    `json:"version"`
+}
 
-const (
-	ConfigEntryActionCreated ConfigEntryWrittenAction = "created"
-	ConfigEntryActionUpdated ConfigEntryWrittenAction = "updated"
-	ConfigEntryActionDeleted ConfigEntryWrittenAction = "deleted"
-)
-
-// ConfigEntryWrittenEvent is the payload for event.config.entry-written.v1.
-// Produced by configwrite on Create / Update / Delete.
-type ConfigEntryWrittenEvent struct {
-	Action  ConfigEntryWrittenAction `json:"action"`
-	Key     string                   `json:"key"`
-	Value   string                   `json:"value,omitempty"`
-	Version int                      `json:"version,omitempty"`
+// ConfigEntryDeletedEvent is the payload for event.config.entry-deleted.v1.
+// Produced by configwrite on Delete.
+type ConfigEntryDeletedEvent struct {
+	Key string `json:"key"`
 }
 
 // ConfigVersionPublishedEvent is the payload for
 // event.config.version-published.v1. Produced by configpublish.Publish.
 // No `action` field — topic name carries the semantic.
 type ConfigVersionPublishedEvent struct {
-	Key       string `json:"key"`
-	ConfigID  string `json:"configId"`
-	Version   int    `json:"version"`
-	Sensitive bool   `json:"sensitive"`
+	Key      string `json:"key"`
+	ConfigID string `json:"configId"`
+	Version  int    `json:"version"`
 }
 
 // ConfigRollbackEvent is the payload for event.config.rollback.v1.

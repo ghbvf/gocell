@@ -91,10 +91,9 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 			return fmt.Errorf("config-publish: publish version: %w", err)
 		}
 		return outbox.Emit(txCtx, s.emitter, domain.TopicConfigVersionPublished, domain.ConfigVersionPublishedEvent{
-			Key:       key,
-			ConfigID:  entry.ID,
-			Version:   version.Version,
-			Sensitive: entry.Sensitive,
+			Key:      key,
+			ConfigID: entry.ID,
+			Version:  version.Version,
 		})
 	}); err != nil {
 		return nil, err
@@ -137,6 +136,18 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 		updated, err = s.repo.UpdateForRollback(txCtx, key, ver.Value, ver.Sensitive)
 		if err != nil {
 			return fmt.Errorf("config-publish: rollback update: %w", err)
+		}
+
+		eventValue := updated.Value
+		if updated.Sensitive {
+			eventValue = "******"
+		}
+		if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigEntryUpserted, domain.ConfigEntryUpsertedEvent{
+			Key:     key,
+			Value:   eventValue,
+			Version: updated.Version,
+		}); err != nil {
+			return err
 		}
 
 		return outbox.Emit(txCtx, s.emitter, domain.TopicConfigRollback, domain.ConfigRollbackEvent{

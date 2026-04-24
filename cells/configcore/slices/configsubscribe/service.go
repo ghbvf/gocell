@@ -1,12 +1,15 @@
 // Package configsubscribe implements the config-subscribe slice: consumes
-// config change events to update a local cache.
+// config state-sync events to update a local cache.
 package configsubscribe
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"strings"
 	"sync"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -16,9 +19,19 @@ import (
 // Re-exported from domain so external callers / tests can refer to the topic
 // without importing internal/domain directly.
 const (
-	TopicConfigEntryWritten     = domain.TopicConfigEntryWritten
-	TopicConfigVersionPublished = domain.TopicConfigVersionPublished
+	TopicConfigEntryUpserted = domain.TopicConfigEntryUpserted
+	TopicConfigEntryDeleted  = domain.TopicConfigEntryDeleted
 )
+
+type configEntryUpsertedPayload struct {
+	Key     string  `json:"key"`
+	Value   *string `json:"value"`
+	Version int     `json:"version"`
+}
+
+type configEntryDeletedPayload struct {
+	Key string `json:"key"`
+}
 
 // Cache holds the latest config values observed from events.
 type Cache struct {
@@ -60,66 +73,81 @@ func (s *Service) Cache() *Cache {
 	return s.cache
 }
 
-// HandleEntryWritten processes an event.config.entry-written.v1 event.
+// HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
 //
-// Consumer: cg-configcore-entry-written
+// Consumer: cg-configcore-entry-upserted
 // Idempotency key: N/A (in-memory cache, idempotent by nature)
 // ACK timing: after cache update
 // Retry: transient errors -> NACK+backoff / permanent errors -> dead letter
-func (s *Service) HandleEntryWritten(_ context.Context, entry outbox.Entry) error {
-	var event domain.ConfigEntryWrittenEvent
-	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		s.logger.Error("config-subscribe: failed to unmarshal entry-written event, routing to dead letter",
+func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
+	var event configEntryUpsertedPayload
+	if err := decodeStrict(entry.Payload, &event); err != nil {
+		s.logger.Error("config-subscribe: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-written payload: %w", err))
+		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err))
+	}
+	if err := validateUpserted(event.Key, event.Value, event.Version); err != nil {
+		s.logger.Warn("config-subscribe: invalid entry-upserted event, routing to dead letter",
+			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		return outbox.NewPermanentError(err)
 	}
 
-	switch event.Action {
-	case domain.ConfigEntryActionDeleted:
-		s.cache.mu.Lock()
-		delete(s.cache.values, event.Key)
-		s.cache.mu.Unlock()
-		s.logger.Info("config-subscribe: key deleted from cache",
-			slog.String("key", event.Key))
-	case domain.ConfigEntryActionCreated, domain.ConfigEntryActionUpdated:
-		s.cache.mu.Lock()
-		s.cache.values[event.Key] = event.Value
-		s.cache.mu.Unlock()
-		s.logger.Info("config-subscribe: cache updated",
-			slog.String("key", event.Key), slog.String("action", string(event.Action)))
-	default:
-		// Fail-closed: unknown actions are permanent errors routed to DLX.
-		//
-		// ref: K8s workqueue fail-closed semantics; Watermill Nack on unknown type
-		s.logger.Warn("config-subscribe: unknown action on entry-written, routing to dead letter",
-			slog.String("action", string(event.Action)), slog.String("key", event.Key))
-		return outbox.NewPermanentError(
-			fmt.Errorf("unknown action %q for key %q", event.Action, event.Key),
-		)
-	}
-
+	s.cache.mu.Lock()
+	s.cache.values[event.Key] = *event.Value
+	s.cache.mu.Unlock()
+	s.logger.Info("config-subscribe: cache updated",
+		slog.String("key", event.Key),
+		slog.Int("version", event.Version))
 	return nil
 }
 
-// HandleVersionPublished processes an event.config.version-published.v1 event.
-// Versioned snapshots carry key + configId + version + sensitive but no value
-// — the cache is not updated (the latest value is already there from the
-// preceding entry-written event).
-//
-// Consumer: cg-configcore-version-published
-// Idempotency key: N/A (no side effects, inherently idempotent)
-// ACK timing: after log emission
-// Retry: transient errors -> N/A (no retries needed) / permanent errors -> dead letter
-func (s *Service) HandleVersionPublished(_ context.Context, entry outbox.Entry) error {
-	var event domain.ConfigVersionPublishedEvent
-	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		s.logger.Error("config-subscribe: failed to unmarshal version-published event, routing to dead letter",
+// HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
+func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) error {
+	var event configEntryDeletedPayload
+	if err := decodeStrict(entry.Payload, &event); err != nil {
+		s.logger.Error("config-subscribe: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal version-published payload: %w", err))
+		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err))
+	}
+	if strings.TrimSpace(event.Key) == "" {
+		err := fmt.Errorf("config-subscribe: entry-deleted missing key")
+		s.logger.Warn("config-subscribe: invalid entry-deleted event, routing to dead letter",
+			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		return outbox.NewPermanentError(err)
 	}
 
-	s.logger.Info("config-subscribe: version published (no cache update)",
-		slog.String("key", event.Key),
-		slog.Int("version", event.Version))
+	s.cache.mu.Lock()
+	delete(s.cache.values, event.Key)
+	s.cache.mu.Unlock()
+	s.logger.Info("config-subscribe: key deleted from cache",
+		slog.String("key", event.Key))
+	return nil
+}
+
+func decodeStrict(data []byte, dst any) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(dst); err != nil {
+		return err
+	}
+	if err := dec.Decode(&struct{}{}); err != io.EOF {
+		if err == nil {
+			return fmt.Errorf("multiple JSON values in payload")
+		}
+		return err
+	}
+	return nil
+}
+
+func validateUpserted(key string, value *string, version int) error {
+	if strings.TrimSpace(key) == "" {
+		return fmt.Errorf("config-subscribe: entry-upserted missing key")
+	}
+	if value == nil {
+		return fmt.Errorf("config-subscribe: entry-upserted missing value for key %q", key)
+	}
+	if version < 1 {
+		return fmt.Errorf("config-subscribe: entry-upserted invalid version %d for key %q", version, key)
+	}
 	return nil
 }
