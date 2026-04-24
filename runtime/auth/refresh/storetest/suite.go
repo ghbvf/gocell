@@ -60,6 +60,14 @@ var defaultPolicy = refresh.Policy{
 	MaxAge:        7 * 24 * time.Hour,
 }
 
+const (
+	t15TargetSubject = "user-A"
+	t15OtherSubject  = "user-B"
+	t18TargetSubject = "user-18A"
+	t18OtherSubject  = "user-18B"
+	t20Subject       = "user-20"
+)
+
 // mustIssue asserts Issue succeeds and returns (wire, tok).
 func mustIssue(t *testing.T, store refresh.Store, sessionID, subjectID string) (string, *refresh.Token) {
 	t.Helper()
@@ -369,11 +377,11 @@ func runT15AfterRevokeUser(t *testing.T, factory Factory) {
 	store, _ := factory(t, defaultPolicy)
 	ctx := context.Background()
 
-	userAWire1, _ := mustIssue(t, store, "sess-a1", "user-A")
-	userAWire2, _ := mustIssue(t, store, "sess-a2", "user-A")
-	userBWire, _ := mustIssue(t, store, "sess-b1", "user-B")
+	userAWire1, _ := mustIssue(t, store, "sess-a1", t15TargetSubject)
+	userAWire2, _ := mustIssue(t, store, "sess-a2", t15TargetSubject)
+	userBWire, _ := mustIssue(t, store, "sess-b1", t15OtherSubject)
 
-	require.NoError(t, store.RevokeUser(ctx, "user-A"))
+	require.NoError(t, store.RevokeUser(ctx, t15TargetSubject))
 
 	_, _, err := store.Rotate(ctx, userAWire1)
 	assert.ErrorIs(t, err, refresh.ErrRejected)
@@ -436,11 +444,11 @@ func runT18RevokeUser(t *testing.T, factory Factory) {
 	store, _ := factory(t, defaultPolicy)
 	ctx := context.Background()
 
-	aWire, _ := mustIssue(t, store, "sess-18a", "user-18A")
-	bWire, _ := mustIssue(t, store, "sess-18b", "user-18B")
+	aWire, _ := mustIssue(t, store, "sess-18a", t18TargetSubject)
+	bWire, _ := mustIssue(t, store, "sess-18b", t18OtherSubject)
 
-	require.NoError(t, store.RevokeUser(ctx, "user-18A"))
-	require.NoError(t, store.RevokeUser(ctx, "user-18A")) // idempotent
+	require.NoError(t, store.RevokeUser(ctx, t18TargetSubject))
+	require.NoError(t, store.RevokeUser(ctx, t18TargetSubject)) // idempotent
 
 	_, _, err := store.Rotate(ctx, aWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected)
@@ -477,18 +485,18 @@ func runT20PeekRejectionParityAndReuseCascade(t *testing.T, factory Factory) {
 	_, err := store.Peek(ctx, "malformed")
 	assert.ErrorIs(t, err, refresh.ErrRejected, "malformed Peek must reject like Rotate")
 
-	revokedWire, _ := mustIssue(t, store, "sess-20-revoked", "user-20")
+	revokedWire, _ := mustIssue(t, store, "sess-20-revoked", t20Subject)
 	require.NoError(t, store.RevokeSession(ctx, "sess-20-revoked"))
 	_, err = store.Peek(ctx, revokedWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "revoked Peek must reject like Rotate")
 
-	expiredWire, _ := mustIssue(t, store, "sess-20-expired", "user-20")
+	expiredWire, _ := mustIssue(t, store, "sess-20-expired", t20Subject)
 	clock.Advance(2 * time.Hour)
 	_, err = store.Peek(ctx, expiredWire)
 	assert.ErrorIs(t, err, refresh.ErrRejected, "expired Peek must reject like Rotate")
 
 	store, clock = factory(t, refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour})
-	parentWire, _ := mustIssue(t, store, "sess-20-reuse", "user-20")
+	parentWire, _ := mustIssue(t, store, "sess-20-reuse", t20Subject)
 	childWire, _ := mustRotate(t, store, parentWire)
 	clock.Advance(3 * time.Second)
 

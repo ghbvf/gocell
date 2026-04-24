@@ -1,6 +1,7 @@
 package sessionrefresh
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
@@ -14,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -760,6 +762,66 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			require.ErrorAs(t, err, &ec)
 			assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
 			assert.Equal(t, "invalid refresh token", ec.Message)
+		})
+	}
+}
+
+func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
+	tests := []struct {
+		name       string
+		wantReason string
+		build      func(t *testing.T, logger *slog.Logger) (*Service, string)
+	}{
+		{
+			name:       "session not found",
+			wantReason: "session-not-found",
+			build: func(t *testing.T, logger *slog.Logger) (*Service, string) {
+				t.Helper()
+				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-log-notfound", "sess-log-notfound")
+				svc := NewService(
+					&sessionNotFoundRepo{notFoundErr: errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")},
+					mem.NewRoleRepository(),
+					mem.NewUserRepository(),
+					innerStore,
+					testIssuer,
+					logger,
+				)
+				return svc, wireToken
+			},
+		},
+		{
+			name:       "revoked session",
+			wantReason: "revoked-session",
+			build: func(t *testing.T, logger *slog.Logger) (*Service, string) {
+				t.Helper()
+				svc, repo, refreshStore := newTestServiceWithRefreshStore("usr-log-revoked")
+				svc.logger = logger
+				sess, err := domain.NewSession("usr-log-revoked", "at", time.Now().Add(time.Hour))
+				require.NoError(t, err)
+				sess.ID = "sess-log-revoked"
+				sess.Revoke()
+				require.NoError(t, repo.Create(context.Background(), sess))
+				wireToken, _, err := refreshStore.Issue(context.Background(), "sess-log-revoked", "usr-log-revoked")
+				require.NoError(t, err)
+				return svc, wireToken
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&logs, nil))
+			svc, wireToken := tc.build(t, logger)
+
+			pair, err := svc.Refresh(context.Background(), wireToken)
+			require.Error(t, err)
+			assert.Nil(t, pair)
+
+			entry := sloghelper.FindLogEntry(logs.String(), "cascade revoked refresh chain")
+			require.NotNil(t, entry)
+			assert.Equal(t, "WARN", entry["level"])
+			assert.Equal(t, tc.wantReason, entry["reason"])
 		})
 	}
 }

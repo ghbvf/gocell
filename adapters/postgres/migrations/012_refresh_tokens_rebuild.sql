@@ -102,8 +102,7 @@ CREATE INDEX idx_refresh_tokens_subject
 CREATE INDEX idx_refresh_tokens_expires
     ON refresh_tokens (expires_at);
 
--- Lineage walk (optional — GC uses ON DELETE SET NULL; future audit tools may
--- traverse by parent_id).
+-- Parent-chain lookup for future audit tooling; cleanup does not rely on it.
 CREATE INDEX idx_refresh_tokens_parent
     ON refresh_tokens (parent_id);
 

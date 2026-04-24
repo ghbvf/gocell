@@ -394,18 +394,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// the tx because it creates a NEW session that must not be caught by the
 	// revoke sweep, and because signing failure should not roll back a
 	// legitimate password change.
-	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Update(txCtx, user); err != nil {
-			return fmt.Errorf("identity-manage: change-password update: %w", err)
-		}
-		if err := s.sessionRepo.RevokeByUserID(txCtx, user.ID); err != nil {
-			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
-		}
-		if err := s.refreshStore.RevokeUser(txCtx, user.ID); err != nil {
-			return fmt.Errorf("identity-manage: change-password revoke refresh chains: %w", err)
-		}
-		return nil
-	}); err != nil {
+	if err := s.updatePasswordAndRevokeSessions(ctx, user); err != nil {
 		return dto.TokenPair{}, err
 	}
 
@@ -417,6 +406,21 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password issue token: %w", err)
 	}
 	return pair, nil
+}
+
+func (s *Service) updatePasswordAndRevokeSessions(ctx context.Context, user *domain.User) error {
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Update(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: change-password update: %w", err)
+		}
+		if err := s.sessionRepo.RevokeByUserID(txCtx, user.ID); err != nil {
+			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
+		}
+		if err := s.refreshStore.RevokeUser(txCtx, user.ID); err != nil {
+			return fmt.Errorf("identity-manage: change-password revoke refresh chains: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Service) publish(ctx context.Context, topic string, payload any) error {

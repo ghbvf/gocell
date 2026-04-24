@@ -249,6 +249,9 @@ func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) e
 			slog.String("session_id", sessionID))
 		return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 	}
+	s.logger.Warn("session-refresh: cascade revoked refresh chain",
+		slog.String("reason", reason),
+		slog.String("session_id", sessionID))
 	return nil
 }
 
