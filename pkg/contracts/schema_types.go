@@ -28,9 +28,21 @@ type HTTPTransport struct {
 }
 
 // ParamSchema describes a single HTTP path or query parameter.
+//
 // Type must be one of the well-known primitive names in ParamTypes.
-// Required is omitted for path parameters (always required by definition);
-// for query parameters, nil is treated as required=false.
+//
+// Required encodes three distinct states, chosen via pointer so YAML
+// `required: false` can be distinguished from an omitted field:
+//   - nil   — not declared; for path parameters this is the only legal
+//     value (path placeholders are required by definition, see FMT-13);
+//     for query parameters it defaults to optional.
+//   - false — explicit opt-out, legal only on query parameters; FMT-13
+//     rejects `required: false` on path parameters.
+//   - true  — explicit required declaration, legal on query parameters.
+//
+// Format is a free-form hint (e.g. "uuid", "date-time", "int64") — it does
+// not influence FMT-13 enforcement today, but static tooling (codegen,
+// OpenAPI export) consumes it.
 type ParamSchema struct {
 	Type     string `yaml:"type"               json:"type"`
 	Required *bool  `yaml:"required,omitempty" json:"required,omitempty"`

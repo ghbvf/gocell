@@ -34,7 +34,7 @@
 | ~~L2~~ | ~~**ROUTE-POLICY-REGISTRY-01**~~ ✅ `runtime/http/router/policy_coverage.go` 实现路由-策略覆盖校验；`router.go:FinalizeAuth()` 调用 `verifyPolicyCoverage()`；bootstrap phase 注册时即强制覆盖（2026-04-23 核实） | — | — | — |
 | ~~L4~~ | ~~**ID-VALIDATION-SINGLE-SOURCE-01**~~ ✅ `pkg/idutil/id.go` 已建（`MaxHTTPIDLen`、`IsSafeID`），统一事实源（2026-04-23 核实） | — | — | — |
 | ~~L6~~ | ~~**CONTRACTTEST-MODEL-ALIGN-01**~~ ✅ `pkg/contracts/schema_types.go` 已建（`SchemaRef`/`SchemaRefs` 共享结构体），一致性测试已覆盖（2026-04-23 核实） | — | — | — |
-| L7-FMT15b | **CONFIG-GET-DUAL-MODE-SPLIT-01** (Cx2): `contracts/http/config/get/v1/response.schema.json` 用 `oneOf` 同时描述单条和列表两种响应，而合约路径 `GET /api/v1/config/{key}` 只应返回单条。FMT-15 unsupported-combinator 检查（PR#214）对此发 Warning。**修复**：(1) 将 response.schema.json 简化为纯单条响应（去掉 list 分支）；(2) 若列表端点存在，补建 `http.config.list.v1` 合约 + schema；(3) 同步更新 configread/slice.yaml contractUsages + contract_test。 | 2h | `contracts/http/config/get/v1/` + `cells/configcore/slices/configread/` | PR#214 review |
+| ~~L7-FMT15b~~ | ~~**CONFIG-GET-DUAL-MODE-SPLIT-01**~~ ✅ PR#239 合入（config/get response.schema.json 去 oneOf 简化为单条；新建 `http.config.list.v1` 合约 + response.schema.json 分页形态；configread/slice.yaml serve 双 contract；contract_test 双向 reject 验证） | — | — | — |
 | ~~L7-FMT15~~ | ~~**FMT15-NEXTCURSOR-ENFORCE-01**~~ ✅ PR#214 合入（`hasNextCursorProperty` + `parseListSchemaInfo` + `checkFMT15Contract`；tests: missingBoth/missingNextCursor/null-property；contracts/http/auth/role/list/v1 补 nextCursor 声明）| — | — | — |
 | L7 | **EXAMPLES-STARTUP-SMOKE-01** (Cx1, 🟡 可延后): 2026-04-22 复查确认所有 `NewCursorCodec` 字面量均 ≥ 32 字节（审计文档的"30/31 字节"系误数）。**唯一剩余 TODO**：CI 没有独立的 examples startup smoke job；`examples/ssobff` 当前仅在 integration tag 下跑 walkthrough test，`main()` 真实启动路径无单独验证（若启动依赖顺序或 option wiring 回归，CI 无法检测）。**修复**：`.github/workflows/ci.yml` 新增 `examples-smoke` job：`timeout 5s go run ./examples/ssobff 2>&1` 期望进入 ready 状态后 ctx cancel 退出（或等价 testable entrypoint）。 | 0.5h | `.github/workflows/ci.yml` | 2026-04-20 发现；2026-04-22 cursor key 误报核销，缩减范围 |
 | P1-A | **PRINCIPAL-UNIFIED-CONTRACT-01** (Cx2): `auth-federated-whistle` F7 基石件——Principal 契约在各 cell middleware / runtime/auth 分散定义，session/service token 路径产出的 Principal 结构不一致，导致鉴权语义扩展困难。**修复**：统一 Principal 契约（definition + accessor + ctx 挂载），各 cell 收口到单一入口。 | 4h | `runtime/auth/` + 各 cell middleware | `docs/plans/202604191515-auth-federated-whistle.md` F7（未登记） |
@@ -107,7 +107,7 @@
 
 | # | 任务 | 工时 | 文件 | 来源 |
 |---|------|------|------|------|
-| S2-follow | **CONTRACT-ERROR-SCHEMA-EXTEND-01** (P2, Cx1, 🟡 可延后): 其余 HTTP contract (config/write、config/get、auth/login 等) 补充 401/403 responses 声明，使错误响应 schema 覆盖全库所有受保护端点 | 2h | `contracts/http/**/{publish,get,write,flags}/v*/contract.yaml` | PR-CONFIG-POLISH 后续 |
+| ~~S2-follow~~ | ~~**CONTRACT-ERROR-SCHEMA-EXTEND-01**~~ ✅ PR#239 合入（27 个平台 HTTP contract + 5 个 example contract 补 `responses[401]`，admin-guarded 再补 `responses[403]`；Public 端点 auth/login/refresh 保持无 401/403） | — | — | — |
 | S4 | **EVENT-PAYLOAD-TYPED-01** (Cx2): sessionlogin/sessionlogout/configwrite/configpublish/auditappend/auditverify 事件 payload `map[string]any` → typed event struct | 3h | 6 个 `service.go` + event contract schemas | PR#133 re-review |
 | ~~S5~~ | ~~**RBAC-REVOKE-POST-01**~~ ✅ `handler.go:62` revoke 路由已声明为 `POST`（2026-04-23 核实） | — | — | — |
 | ~~S6~~ | ~~**RBAC-LAST-ADMIN-GUARD**~~ ✅ `ports/role_repo.go:21-28` `RemoveFromUserIfNotLast` 原子计数保证；`service.go:200` 使用该方法（2026-04-23 核实） | — | — | — |
@@ -218,7 +218,7 @@
 > metadata 校验规则 (G-1~G-6) / Kernel 子模块 (wrapper/command/webhook/reconcile/scheduler/replay/rollback)
 > adapters 分层重整 (AL-03~AL-04, RMQ-STATUS-01) / 架构风险 (Cell 接口拆分, adapter t.Skip, ER-ARCH-01)
 > 契约增强: CONTRACT-BREAKING-01 / CONTRACT-CODEGEN-01 / CONTRACT-STUB-01
-> spec tech-debt (C-AC7 jti / C-L6 contract ID / C-DC9 auditarchive stub / DURABLE-TYPE-01 / CONTRACT-META-01)
+> spec tech-debt (C-AC7 jti / C-L6 contract ID / C-DC9 auditarchive stub / DURABLE-TYPE-01) — ~~CONTRACT-META-01~~ ✅ PR#239 合入
 > winmdm defer (WM-18/32/4/5/22/23/16) / winmdm reject (WM-3/14/21/24/25/26/30/31/34b)
 > v2+ (WM-28/29, GAP-1/2/5/6/8/11/12/13/14)
 

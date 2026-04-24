@@ -16,8 +16,16 @@ import (
 )
 
 // pathPlaceholderRe extracts every `{name}` placeholder from an HTTP path
-// template. It matches goa's HTTPWildcardRegex and Kratos' buildPathVars
-// pattern so pathParams can be reconciled against the path string alone.
+// template. Names follow Go identifier rules — ASCII letters, digits, and
+// underscore. GoCell paths follow no-dash camelCase by convention; exotic
+// chi/gorilla syntaxes (`{name-with-dash}`, `{name:regex}`, `{*wildcard}`)
+// are out of scope. If such a template ever ships, FMT-13 will silently
+// ignore the placeholder, and the downstream declaration-vs-template check
+// will surface the drift as a "pathParams declared but not in template"
+// error, so misuse fails loudly one way or another.
+//
+// ref: goadesign/goa v3 expr/http_endpoint.go HTTPWildcardRegex (similar
+// ASCII-identifier scope).
 var pathPlaceholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
 // Package-level lookup maps for validation rules, avoiding per-call allocation.
@@ -408,10 +416,16 @@ func (v *Validator) validateFMT13ForContract(c *metadata.ContractMeta) []Validat
 
 	var results []ValidationResult
 	results = append(results, v.validateFMT13Method(c, httpMeta, file)...)
-	results = append(results, v.validateFMT13Path(c, httpMeta, file)...)
+	pathResults := v.validateFMT13Path(c, httpMeta, file)
+	results = append(results, pathResults...)
 	results = append(results, v.validateFMT13Status(c, httpMeta, file)...)
 	results = append(results, v.validateFMT13NoContent(c, httpMeta, file)...)
-	results = append(results, v.validateFMT13PathParams(c, httpMeta, file)...)
+	// Skip pathParams reconciliation when path is empty/malformed — running it
+	// would flood the report with phantom "declaration without placeholder"
+	// errors that mislead the author away from the real (missing path) cause.
+	if len(pathResults) == 0 {
+		results = append(results, v.validateFMT13PathParams(c, httpMeta, file)...)
+	}
 	results = append(results, v.validateFMT13QueryParams(c, httpMeta, file)...)
 	return results
 }

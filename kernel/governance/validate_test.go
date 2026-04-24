@@ -3068,6 +3068,58 @@ func TestFMT13(t *testing.T) {
 			wantErrors:   0,
 			wantWarnings: 0,
 		},
+		{
+			name: "duplicate path placeholder accepted with single declaration",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/things/{id}/children/{id}",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"id": {Type: "string"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors:   0,
+			wantWarnings: 0,
+		},
+		{
+			name: "combined pathParams and queryParams on one endpoint accepted",
+			setup: func(pm *metadata.ProjectMeta) {
+				falsy := false
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "/api/v1/users/{id}/roles",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"id": {Type: "string", Format: "uuid"},
+					},
+					QueryParams: map[string]contracts.ParamSchema{
+						"cursor": {Type: "string", Required: &falsy},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors:   0,
+			wantWarnings: 0,
+		},
+		{
+			name: "empty path with non-empty pathParams reports only the path-required error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+					Method:        "GET",
+					Path:          "",
+					SuccessStatus: 200,
+					PathParams: map[string]contracts.ParamSchema{
+						"id": {Type: "string"},
+					},
+				}
+				pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+			},
+			wantErrors: 1,
+			wantField:  "endpoints.http.path",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

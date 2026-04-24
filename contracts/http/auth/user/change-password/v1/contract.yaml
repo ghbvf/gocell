@@ -20,6 +20,9 @@ endpoints:
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated subject is neither self nor admin"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

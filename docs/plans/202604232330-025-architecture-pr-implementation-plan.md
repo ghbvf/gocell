@@ -327,20 +327,20 @@
 
 ## Wave 2 — 中等架构收口（~12 工作日）
 
-### PR-A9 CONTRACT-META-01 传输层一等公民（Cx3，~3d）
+### PR-A9 CONTRACT-META-01 传输层一等公民 ✅ 已落地 PR #239（2026-04-24）
 
 **主线**：
-- **LATER-SD-1 CONTRACT-META-01**（P1）`contract.yaml` 补 `Method / Path / PathParams / QueryParams / SuccessStatus / NoContent` 静态界定
+- **LATER-SD-1 CONTRACT-META-01** ✅ `pkg/contracts.HTTPTransport` 增加 `PathParams` / `QueryParams` typed map（`ParamSchema{Type, Required, Format}`），类型白名单 `string|integer|number|boolean|uuid`；`kernel/governance` FMT-13 新增路径模板 ↔ pathParams 双向一致性 + 类型白名单校验（path 占位符缺声明、声明多余、未知 type 均为 Error）。
 
-**搭车**：
-- **L7-FMT15b CONFIG-GET-DUAL-MODE-SPLIT-01** 拆 `contracts/http/config/get/v1` oneOf 合并（2h）
-- **S2-follow CONTRACT-ERROR-SCHEMA-EXTEND-01** 其余 HTTP contract 补 401/403（2h）
+**搭车**（同 PR 落地）：
+- **L7-FMT15b CONFIG-GET-DUAL-MODE-SPLIT-01** ✅ 拆 `contracts/http/config/get/v1` 的 oneOf 响应合并；新建 `contracts/http/config/list/v1`，`cells/configcore/slices/configread` serve 双 contract，contract_test 双向 reject 错误形状。
+- **S2-follow CONTRACT-ERROR-SCHEMA-EXTEND-01** ✅ 27 个平台 HTTP contract + 5 个 example contract 迁移 pathParams/queryParams；auth-protected 端点补 `responses[401]`，admin-guarded 再补 `responses[403]`；Public 端点（auth/login、auth/refresh）保持无 401/403 声明。
 
-**搭车理由**：都在 `contract.yaml` 结构面；CONTRACT-META-01 改 metadata parser 时顺便把 config/get 合约 + 错误响应格式一起处理。
+**落地验证**：`gocell validate --strict` → 0 errors（1 个 pre-existing REF-16 boundary.yaml warning，与本 PR 无关）；`gocell check contract-health` → PASS；integration-tag build 0 errors；lint 0 issues；新增 FMT-13 table-driven case 覆盖：缺声明、多声明、未知 type、path-optional、multi-placeholder happy、query-param optional/unknown、duplicate placeholder dedup、combined path+query、empty path 短路。
 
-**文件面**：`kernel/metadata/` + `kernel/governance/` + 所有 `contracts/http/**/contract.yaml`
+**文件面**：`pkg/contracts/` + `kernel/metadata/schemas/contract.schema.json` + `kernel/governance/rules_fmt.go` + `kernel/scaffold/templates/contract-http.yaml.tpl`（scaffold 同步更新） + `docs/architecture/metadata-model-v3.md` + 32 个 contract.yaml + 1 个新 contract 目录 `contracts/http/config/list/v1/`。
 
-**风险**：高；全仓 contract.yaml 都要升级；需 codegen 同步。建议独立 PR，Cx3 人工决策先输出方案再干。
+**解锁**：PR-A11 kernel/wrapper 现可拿到完整 Method/Path/PathParams 做 trace span 标注。
 
 ---
 
