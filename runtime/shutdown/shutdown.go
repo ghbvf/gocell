@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 )
 
@@ -55,7 +54,7 @@ func (m *Manager) Register(h Hook) {
 // nil. If the timeout expires, it returns context.DeadlineExceeded.
 func (m *Manager) Wait() error {
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, signalsToWatch()...)
 	received := <-sig
 	signal.Stop(sig)
 
@@ -65,6 +64,18 @@ func (m *Manager) Wait() error {
 	defer cancel()
 
 	return m.runHooks(ctx)
+}
+
+// NotifyContext returns a context that is cancelled when an OS shutdown signal
+// is received (per-OS set: SIGINT+SIGTERM on Unix, os.Interrupt elsewhere).
+// Callers must call the returned cancel func to release resources.
+//
+// This is the cross-platform equivalent of signal.NotifyContext(parent,
+// syscall.SIGINT, syscall.SIGTERM) — the latter is incorrect on Windows
+// because Windows cannot deliver SIGTERM, leaving the registration silently
+// half-broken.
+func NotifyContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, signalsToWatch()...)
 }
 
 // Shutdown runs all hooks immediately with a timeout-bounded context.
