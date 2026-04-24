@@ -21,6 +21,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newTestInternalGuard constructs an internalGuard backed by an
+// InMemoryNonceStore so prod-topology SharedDeps.Validate paths see a
+// replay-safe store (NonceStoreKindInMemory) rather than a Noop.
+func newTestInternalGuard(t *testing.T) *internalGuard {
+	t.Helper()
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenMaxAge + nonceStoreBuffer)
+	require.NoError(t, err)
+	return &internalGuard{
+		ring:       ring,
+		nonceStore: store,
+		mw:         func(h http.Handler) http.Handler { return h },
+	}
+}
+
 // fastAdminBootstrapOpts returns accesscore LifecycleOptions that
 // replace the production bcrypt cost=12 hasher with bcrypt.MinCost=4 so
 // the synchronous bcrypt call in accesscore.Init does not block phase3
@@ -122,7 +138,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	if topo.RequireProductionControlPlane() {
 		deps.MetricsToken = "test-metrics"
 		deps.VerboseToken = "test-verbose"
-		deps.InternalGuard = func(h http.Handler) http.Handler { return h }
+		deps.InternalGuard = newTestInternalGuard(t)
 	}
 	if topo.StorageBackend == "postgres" {
 		t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
@@ -203,7 +219,9 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstr
 // Each case takes a baseline that passes Validate and mutates one field to
 // verify Validate surfaces that specific failure with errcode.ErrValidationFailed.
 func TestSharedDeps_Validate(t *testing.T) {
-	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
+	// SinglePodReplayProtection=true acknowledges in-memory replay defense scope
+	// for single-pod deployments (mirrors GOCELL_SINGLE_POD=1).
+	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
 	devTopo := bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
 
 	cases := []struct {
@@ -226,6 +244,40 @@ func TestSharedDeps_Validate(t *testing.T) {
 		{name: "prod missing verbose token", topo: prodTopo, mutate: func(d *SharedDeps) { d.VerboseToken = "" }, wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN"},
 		{name: "prod missing metrics token", topo: prodTopo, mutate: func(d *SharedDeps) { d.MetricsToken = "" }, wantErr: true, wantSubstr: "GOCELL_METRICS_TOKEN"},
 		{name: "prod missing internal guard", topo: prodTopo, mutate: func(d *SharedDeps) { d.InternalGuard = nil }, wantErr: true, wantSubstr: "GOCELL_SERVICE_SECRET"},
+		{
+			name: "prod guard with noop nonce store rejected",
+			topo: prodTopo,
+			mutate: func(d *SharedDeps) {
+				// Simulate a guard constructed without replay defense — the
+				// exact condition SharedDeps.Validate must reject in prod.
+				noopRing, _ := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+				d.InternalGuard = &internalGuard{
+					ring:       noopRing,
+					nonceStore: auth.NewNoopNonceStore(),
+					mw:         func(h http.Handler) http.Handler { return h },
+				}
+			},
+			wantErr:    true,
+			wantSubstr: "NoopNonceStore detected",
+		},
+		{
+			// F1: in-memory store in real mode without GOCELL_SINGLE_POD=1 must be rejected.
+			name: "real mode + in_memory + single_pod=false → error",
+			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
+			mutate: func(d *SharedDeps) {
+				// guard already has InMemoryNonceStore from newTestInternalGuard;
+				// topology lacks SinglePodReplayProtection so Validate rejects.
+			},
+			wantErr:    true,
+			wantSubstr: "GOCELL_SINGLE_POD=1",
+		},
+		{
+			// F1: in-memory store in real mode with GOCELL_SINGLE_POD=1 is accepted.
+			name:    "real mode + in_memory + single_pod=true → ok",
+			topo:    bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true},
+			mutate:  func(*SharedDeps) {},
+			wantErr: false,
+		},
 	}
 
 	for _, tc := range cases {
@@ -240,12 +292,22 @@ func TestSharedDeps_Validate(t *testing.T) {
 			}
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), tc.wantSubstr, "error must mention the offending field")
-			// Every joined error must still carry the validation code so callers
-			// classify startup failures uniformly.
+			// Every joined error must be an *errcode.Error so callers can
+			// classify startup failures uniformly. The specific code varies:
+			// core-field and token checks use ErrValidationFailed; the
+			// control-plane guard gate uses dedicated codes so operators
+			// can grep service-secret and nonce-store misconfigurations
+			// independently.
+			allowedCodes := map[errcode.Code]struct{}{
+				errcode.ErrValidationFailed:                 {},
+				errcode.ErrControlplaneServiceSecretMissing: {},
+				errcode.ErrControlplaneNonceStoreMissing:    {},
+			}
 			for _, sub := range allJoinedErrors(err) {
 				var ec *errcode.Error
 				require.ErrorAs(t, sub, &ec, "joined error %v must be *errcode.Error", sub)
-				assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+				_, ok := allowedCodes[ec.Code]
+				assert.True(t, ok, "unexpected error code %q from Validate", ec.Code)
 			}
 		})
 	}

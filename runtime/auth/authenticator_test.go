@@ -399,7 +399,7 @@ func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 	}
 	a := NewServiceTokenAuthenticator(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
-		WithNonceStore(store),
+		WithServiceTokenNonceStore(store),
 	)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
 

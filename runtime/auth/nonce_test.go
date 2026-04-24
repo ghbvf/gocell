@@ -75,14 +75,15 @@ func TestInMemoryNonceStore_ConcurrentAccess(t *testing.T) {
 
 func TestInMemoryNonceStore_LazyPrune(t *testing.T) {
 	now := time.Unix(1700000000, 0)
-	// Use a low maxEntries cap so the prune triggers after 10 entries.
-	store, err := NewInMemoryNonceStore(1*time.Second,
+	// Use ServiceTokenMaxAge so the F3 guard is satisfied, plus a low
+	// maxEntries cap so the prune triggers after 10 entries.
+	store, err := NewInMemoryNonceStore(ServiceTokenMaxAge,
 		WithNonceClock(func() time.Time { return now }),
 		WithMaxNonceEntries(10),
 	)
 	require.NoError(t, err)
 
-	// Insert 10 entries; all will expire quickly.
+	// Insert 10 entries; all will expire after ServiceTokenMaxAge.
 	for i := 0; i < 10; i++ {
 		err := store.CheckAndMark(context.Background(), fmt.Sprintf("prune-nonce-%d", i))
 		require.NoError(t, err)
@@ -91,7 +92,7 @@ func TestInMemoryNonceStore_LazyPrune(t *testing.T) {
 	assert.GreaterOrEqual(t, initialLen, 10)
 
 	// Advance clock past TTL so all existing entries are expired.
-	now = now.Add(2 * time.Second)
+	now = now.Add(ServiceTokenMaxAge + time.Second)
 
 	// Insert one more entry; this triggers the lazy prune because len >= maxEntries.
 	err = store.CheckAndMark(context.Background(), "trigger-prune")
@@ -142,4 +143,97 @@ func TestNewInMemoryNonceStore_ZeroMaxAge_Fails(t *testing.T) {
 func TestNewInMemoryNonceStore_NegativeMaxAge_Fails(t *testing.T) {
 	_, err := NewInMemoryNonceStore(-time.Second)
 	require.Error(t, err)
+}
+
+func TestInMemoryNonceStore_Kind_ReportsInMemory(t *testing.T) {
+	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	require.NoError(t, err)
+	assert.Equal(t, NonceStoreKindInMemory, store.Kind())
+}
+
+func TestNoopNonceStore_AlwaysPermits(t *testing.T) {
+	store := NewNoopNonceStore()
+	// First use.
+	require.NoError(t, store.CheckAndMark(context.Background(), "any-nonce"))
+	// Second use of the same nonce — must still succeed (disabled replay check).
+	require.NoError(t, store.CheckAndMark(context.Background(), "any-nonce"))
+}
+
+func TestNoopNonceStore_Kind_ReportsNoop(t *testing.T) {
+	assert.Equal(t, NonceStoreKindNoop, NewNoopNonceStore().Kind())
+}
+
+// TestNonceStoreKind_Values pins the public constant values so downstream
+// matchers (cmd/corebundle.SharedDeps.validateControlPlane) do not drift.
+func TestNonceStoreKind_Values(t *testing.T) {
+	assert.Equal(t, NonceStoreKind("noop"), NonceStoreKindNoop)
+	assert.Equal(t, NonceStoreKind("in_memory"), NonceStoreKindInMemory)
+	assert.Equal(t, NonceStoreKind("distributed"), NonceStoreKindDistributed)
+}
+
+// F5: maxAge boundary guard tests (companion to F3 NewInMemoryNonceStore guard).
+
+func TestNewInMemoryNonceStore_MaxAgeShorterThanTokenWindow_Fails(t *testing.T) {
+	_, err := NewInMemoryNonceStore(ServiceTokenMaxAge - time.Second)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ServiceTokenMaxAge")
+}
+
+func TestNewInMemoryNonceStore_ExactlyServiceTokenMaxAge_Succeeds(t *testing.T) {
+	_, err := NewInMemoryNonceStore(ServiceTokenMaxAge)
+	require.NoError(t, err, "maxAge == ServiceTokenMaxAge must be allowed (boundary)")
+}
+
+// F4: TTL boundary test with controllable clock — verifies that a nonce is still
+// protected at ServiceTokenMaxAge-1s and reusable only after the full TTL elapses.
+func TestInMemoryNonceStore_RetentionCoversServiceTokenMaxAge(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	store, err := NewInMemoryNonceStore(
+		ServiceTokenMaxAge+30*time.Second,
+		WithNonceClock(func() time.Time { return now }),
+	)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	require.NoError(t, store.CheckAndMark(ctx, "nonce-a"))
+
+	// Critical boundary: a token at age=ServiceTokenMaxAge-1s is still valid,
+	// so its nonce must still be protected in the store.
+	now = now.Add(ServiceTokenMaxAge - time.Second)
+	require.ErrorIs(t, store.CheckAndMark(ctx, "nonce-a"), ErrNonceReused,
+		"nonce must still be protected at ServiceTokenMaxAge-1s")
+
+	// After full TTL (ServiceTokenMaxAge + buffer), nonce may be reused.
+	now = now.Add(32 * time.Second)
+	require.NoError(t, store.CheckAndMark(ctx, "nonce-a"),
+		"nonce must be reusable after TTL window")
+}
+
+// F8: Hard-cap enforcement — when the store is full and no entries are expired,
+// CheckAndMark must return ErrNonceStoreFull instead of growing without bound.
+func TestInMemoryNonceStore_MaxEntries_RejectsWhenFull(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	store, err := NewInMemoryNonceStore(ServiceTokenMaxAge,
+		WithNonceClock(func() time.Time { return now }),
+		WithMaxNonceEntries(3))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	// Fill to cap with live (unexpired) nonces.
+	require.NoError(t, store.CheckAndMark(ctx, "n1"))
+	require.NoError(t, store.CheckAndMark(ctx, "n2"))
+	require.NoError(t, store.CheckAndMark(ctx, "n3"))
+
+	// Next insert must fail — prune finds nothing expired, cap reached.
+	err = store.CheckAndMark(ctx, "n4")
+	require.ErrorIs(t, err, ErrNonceStoreFull,
+		"store at cap with no expired entries must return ErrNonceStoreFull")
+}
+
+// F6: MaxAge accessor test — confirms the configured retention window is readable.
+func TestInMemoryNonceStore_MaxAge_ReportsConfiguredDuration(t *testing.T) {
+	want := ServiceTokenMaxAge + 30*time.Second
+	store, err := NewInMemoryNonceStore(want)
+	require.NoError(t, err)
+	assert.Equal(t, want, store.MaxAge(), "MaxAge() must report the configured retention window")
 }

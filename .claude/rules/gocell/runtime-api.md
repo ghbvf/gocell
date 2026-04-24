@@ -63,6 +63,10 @@ bootstrap.New(
 
 `Router.Route/Handle/Mount` 根据 pattern 前缀自动分流（支持 chi 原生和 Go 1.22 `"METHOD /path"` 两种形式）。primary listener 显式 404 所有 `/internal/v1/*` 请求，实现端口级物理隔离。
 
+### `/internal/v1/*` 服务令牌防重放（PR-A25）
+
+internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth.NonceStore`。`cmd/corebundle.internalGuardFromEnv` 默认构造 `auth.InMemoryNonceStore(ttl = ServiceTokenMaxAge + 30s)`。real 模式启动时 `SharedDeps.Validate` 会拒绝 `NonceStoreKindNoop`（返回 `ERR_CONTROLPLANE_NONCE_STORE_MISSING`）。多 pod 部署须通过 `auth.WithServiceTokenNonceStore(sharedStore)` 注入分布式实现（例如 Redis）；in-memory 仅保证单 pod 防重放。
+
 ### FinalizeAuth 生命周期
 
 `Bootstrap.Run` 在 `Cell.RegisterRoutes` 完成后自动调用 `rtr.FinalizeAuth()`：

@@ -127,10 +127,14 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 // Options reuse ServiceTokenOption so callers share the same clock/nonce/metrics
 // injection points as ServiceTokenMiddleware.
 //
-// NonceStore is nil by default; omitting it disables replay detection.
-// Production deployments MUST supply WithNonceStore.
+// The default NonceStore is NoopNonceStore (replay check disabled); production
+// deployments must supply a replay-safe store via WithServiceTokenNonceStore.
+// cmd/corebundle.SharedDeps.Validate enforces this in adapter mode "real".
 func NewServiceTokenAuthenticator(ring *HMACKeyRing, opts ...ServiceTokenOption) Authenticator {
-	cfg := serviceTokenConfig{now: time.Now}
+	cfg := serviceTokenConfig{
+		now:        time.Now,
+		nonceStore: NewNoopNonceStore(),
+	}
 	for _, o := range opts {
 		o(&cfg)
 	}
@@ -163,7 +167,8 @@ func NewServiceTokenAuthenticator(ring *HMACKeyRing, opts ...ServiceTokenOption)
 //   - 3-part format: {timestamp}:{nonce}:{hex_hmac}
 //   - timestamp within ServiceTokenMaxAge
 //   - HMAC valid for any key in ring
-//   - nonce not replayed (if cfg.nonceStore is set)
+//   - nonce not replayed (NoopNonceStore disables the check; production uses
+//     an in-memory or distributed store via WithServiceTokenNonceStore)
 //
 // Nonce replay errors preserve the original NonceStore error as the Cause so
 // callers can inspect it with errors.Is (e.g. to distinguish ErrNonceReused
@@ -210,12 +215,12 @@ func verifyServiceTokenPayload(ring *HMACKeyRing, payload string, cfg serviceTok
 		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token MAC")
 	}
 
-	if cfg.nonceStore != nil {
-		if err := cfg.nonceStore.CheckAndMark(r.Context(), nonce); err != nil {
-			// Preserve the original NonceStore error as Cause so callers can
-			// distinguish ErrNonceReused (replay → 401) from store failures (→ 500).
-			return errcode.WrapAuth(errcode.ErrAuthUnauthorized, "service token nonce check failed", err)
-		}
+	// NoopNonceStore returns nil unconditionally, so dev-mode opt-out takes
+	// the same path as a first-use pass without a branch here. Preserve the
+	// original NonceStore error as Cause so callers can distinguish
+	// ErrNonceReused (replay → 401) from store failures (→ 500).
+	if err := cfg.nonceStore.CheckAndMark(r.Context(), nonce); err != nil {
+		return errcode.WrapAuth(errcode.ErrAuthUnauthorized, "service token nonce check failed", err)
 	}
 	return nil
 }

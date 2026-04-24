@@ -257,6 +257,51 @@ const (
 	//
 	// Category: default CategoryInfra (consistent with ErrVault* / ErrKeyProvider* siblings).
 	ErrVaultAuthFailed Code = "ERR_VAULT_AUTH_FAILED"
+
+	// Control-plane startup configuration errors (cmd/corebundle).
+	//
+	// ErrControlplaneServiceSecretMissing signals that GOCELL_SERVICE_SECRET is
+	// unset in adapter mode "real", so the /internal/v1/* service-token guard
+	// cannot be constructed. Produced by cmd/corebundle.internalGuardFromEnv
+	// and cmd/corebundle.SharedDeps.validateControlPlane; fails the binary at
+	// startup before any listener binds. Never reaches the HTTP layer in
+	// practice.
+	//
+	// Distinct from ErrValidationFailed (user-input validation) so operators
+	// can grep startup logs specifically for control-plane misconfigurations.
+	ErrControlplaneServiceSecretMissing Code = "ERR_CONTROLPLANE_SERVICE_SECRET_MISSING"
+
+	// ErrControlplaneNonceStoreMissing signals that the control-plane
+	// service-token guard was constructed without a replay-safe NonceStore
+	// (either nil or a NoopNonceStore sentinel) while adapter mode is "real".
+	// Produced by cmd/corebundle.SharedDeps.validateControlPlane; fails the
+	// binary at startup. Operators must inject an InMemoryNonceStore (single
+	// pod) or a shared store (multi-pod) before restart.
+	//
+	// This is the closure of the P1 replay window identified in six-role
+	// review (backlog S-nonce, 2026-04-24): a captured valid service token
+	// must not be replayable within its 5-minute validity window.
+	ErrControlplaneNonceStoreMissing Code = "ERR_CONTROLPLANE_NONCE_STORE_MISSING"
+
+	// ErrAuthReplayDetected distinguishes a service-token replay signal from
+	// generic authentication failures (invalid MAC, expired token, missing
+	// header). Machine-side consumers (monitoring, alerting, SDKs) can match
+	// this code exclusively to trigger replay-specific escalation without
+	// parsing the human-readable message.
+	//
+	// Maps to HTTP 401 Unauthorized — the client must not retry with the same
+	// token; a new token with a fresh nonce is required.
+	ErrAuthReplayDetected Code = "ERR_AUTH_REPLAY_DETECTED"
+
+	// ErrNonceStoreFull signals that the in-memory nonce store has reached its
+	// maximum entry capacity and could not reclaim any expired entries. The
+	// request is rejected to prevent unbounded memory growth; the condition is
+	// transient (existing nonces will expire at the next TTL boundary).
+	//
+	// Maps to HTTP 503 Service Unavailable — callers should retry after a brief
+	// back-off. Distinct from ErrAuthReplayDetected (security signal) so
+	// operators can route capacity alerts separately from security alerts.
+	ErrNonceStoreFull Code = "ERR_AUTH_NONCE_STORE_FULL"
 )
 
 // Error is a structured error that carries a machine-readable Code, a
