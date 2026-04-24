@@ -213,4 +213,3 @@ func TestResolveEmitter(t *testing.T) {
 		})
 	}
 }
-

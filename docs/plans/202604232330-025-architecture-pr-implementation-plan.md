@@ -516,14 +516,15 @@
 
 ### PR-A5c OUTBOX-EMITTER-UNIFY — ✅ **已交付 @ 2026-04-24 via PR #245**
 
-> 分支 `refactor/520-pr-a5c-outbox-emitter-unify`，6 commits，净编码 ~14h。实际交付范围对齐原计划的"全量方案"：
-> - ✅ **F2 DIRECTPUBLISHMODE-HELPER-01** — `kernel/cell.DirectPublishModeForDurability(mode, demoPolicy, durablePolicy)` helper + 4-case 表驱动测试；三 cell 统一调用。A5a-R4 收口。
+> 分支 `refactor/520-pr-a5c-outbox-emitter-unify`。净编码 ~18h（round-1 review 后扩容 4h：CI fix + F2 推翻 + F9 per-entry FailurePolicy + 新 archtest）。实际交付范围：
+> - ❌ **~~F2 DIRECTPUBLISHMODE-HELPER-01~~** — 初版引入 `DirectPublishModeForDurability(mode, demoPolicy, durablePolicy)` helper 作为 A5a-R4 合规化，但 round-1 review 指出该 helper 只是合规化错误决策：per-Cell 构造期 failure mode 不能表达"安全 topic 必须 fail-closed，观测 topic 可 fail-open"。**删除 helper 及其 4-case 表驱动测试**，改走 F9。A5a-R4 改以 F9 per-topic policy 形态收口。
 > - ✅ **F3+F7 CELL-OPTION-API-UNIFY** — 三 cell 删除 `WithPublisher`/`WithOutboxWriter` Option + `publisher`/`outboxWriter` 公开字段；新增 `WithEmitter(outbox.Emitter)` + `WithOutboxDeps(pub, writer)` 互斥 Option；29 处调用点迁移；`kernel/outbox.DurabilityReporter` 接口 + `WriterEmitter`/`DirectEmitter` 实现；`configcore.WithPostgresDefaults(pool, writer)` 拆成 `WithPostgresPool(pool)` + `WithOutboxDeps`。
 > - ✅ **F4 CELL-ROUTES-PROVIDERS-SPLIT** — `cells/accesscore/cell_providers.go` 从 `cell_routes.go` 抽出；configcore/auditcore 本就无 provider 方法，不强拆。A5a-R5 收口。
-> - ✅ **F5 ENVELOPE-WRAPPER-DELETE** — 删除 `runtime/outbox/envelope.go`+`envelope_test.go`；`runtime/outbox/relay.go` / `runtime/eventbus/eventbus.go` / `adapters/rabbitmq/subscriber.go` 切 `kernel/outbox`。
+> - ✅ **F5 ENVELOPE-WRAPPER-DELETE** — 删除 `runtime/outbox/envelope.go`+`envelope_test.go`；`runtime/outbox/relay.go` / `runtime/eventbus/eventbus.go` / `adapters/rabbitmq/subscriber.go` 切 `kernel/outbox`。integration-tag 面迁移尾巴由 round-1 CI fail 发现，补齐 `adapters/rabbitmq/integration_test.go` (6 处) + `tests/integration/shutdown_e2e_test.go` (1 处)，完工后本地 `go build -tags=integration ./...` 绿。
 > - ✅ **F6 ARCHTEST-CELL-01** — `tools/archtest/outbox_cell_test.go` 新增规则 OUTBOX-CELL-01，扫描 `cells/<name>/cell.go` 禁止 `WithPublisher`/`WithOutboxWriter` 导出 Option；regression-verified。
+> - ✅ **F9 OUTBOX-EMITTER-PER-ENTRY-FAILURE-POLICY**（round-1 review 追加）— `kernel/outbox.Entry` 增 `FailurePolicy` 字段（`Default`/`FailOpen`/`FailClosed`，`json:"-"` 不 marshal 到 wire）；`FailurePolicy.Resolve(ctorDefault)` 零值回退到 Emitter 构造期默认；`DirectEmitter.Emit` 读 entry 策略。三 cell 默认 `DirectPublishFailClosed`（k8s apiserver audit 模型），安全/审计事件发布失败默认上抛；非关键事件 per-entry opt-in FailOpen。新 archtest `OUTBOX-TOPIC-FAILOPEN-01`（`tools/archtest/outbox_topic_test.go`）扫 `cells/**/*.go` 禁止 `session.*`/`user.*`/`role.*`/`audit.*` topic 在 `outbox.Entry` 字面量上设 `FailurePolicyFailOpen`；regression fixture 5 case。
 >
-> 核心子项之前已由 **PR #224**（outbox emitter refactor）+ **PR-A5a PR#234**（`cell.ResolveEmitter` 抽取 + 10 case 测试）+ **PR-A5b PR#238** retroactively 落地（EMITTER-ABSTRACT / ENVELOPE-KERNEL-DOWN / SERVICE-EMITTER-MIGRATE / CELL-BOUNDARY-RESOLVE / ARCHTEST-NIL-MODE-BLOCK 共 5 子项），本 PR 完成剩余尾巴收口，让"Cell 层只依赖 `outbox.Emitter` 抽象"成为架构硬保证（archtest 守卫）。
+> 核心子项之前已由 **PR #224**（outbox emitter refactor）+ **PR-A5a PR#234**（`cell.ResolveEmitter` 抽取 + 10 case 测试）+ **PR-A5b PR#238** retroactively 落地（EMITTER-ABSTRACT / ENVELOPE-KERNEL-DOWN / SERVICE-EMITTER-MIGRATE / CELL-BOUNDARY-RESOLVE / ARCHTEST-NIL-MODE-BLOCK 共 5 子项），本 PR 完成剩余尾巴收口 + F9 per-entry FailurePolicy 对抽象层的补强，让"Cell 层只依赖 `outbox.Emitter` 抽象、失败语义由 entry 自带"成为架构硬保证（双 archtest 守卫）。
 
 <details>
 <summary>原计划 Cx3 方案（保留存档，仅作历史对照）</summary>

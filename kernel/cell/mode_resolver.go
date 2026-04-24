@@ -123,4 +123,3 @@ func isNooperDep(dep any) bool {
 	n, ok := dep.(Nooper)
 	return ok && n.Noop()
 }
-
