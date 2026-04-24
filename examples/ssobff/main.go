@@ -12,8 +12,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
@@ -27,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/shutdown"
 )
 
 // noopTxRunner executes fn directly without a real transaction (demo mode).
@@ -136,13 +135,9 @@ func main() {
 
 	// Bootstrap handles: assembly.Start -> route registration -> event subscriptions
 	// -> HTTP server -> graceful shutdown.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := shutdown.NotifyContext(context.Background())
 	defer stop()
 
-	stateDir := os.Getenv("GOCELL_STATE_DIR")
-	if stateDir == "" {
-		stateDir = "/run/gocell"
-	}
 	// Public routes and password-reset-exempt routes are declared by the
 	// accesscore Cell itself via auth.Declare. Bootstrap only needs the
 	// opt-in signal that the assembly expects an auth provider cell.
@@ -154,11 +149,13 @@ func main() {
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
 	)
 
-	credPath, err := accesscore.ResolveBootstrapCredentialPath(stateDir)
+	// Pass "" so per-OS platform defaults in ResolveBootstrapCredentialPath kick in.
+	// Override with GOCELL_STATE_DIR to redirect to a custom directory.
+	credPath, err := accesscore.ResolveBootstrapCredentialPath(os.Getenv("GOCELL_STATE_DIR"))
 	if err != nil {
-		logger.Warn("ssobff: invalid GOCELL_STATE_DIR for credential path resolution",
+		logger.Warn("ssobff: failed to resolve bootstrap credential path",
 			slog.String("error", err.Error()))
-		credPath = stateDir + "/initial_admin_password"
+		credPath = "<unresolved>"
 	}
 	logger.Info("ssobff: starting on :8081; if first run, initial admin credentials are written to the path below",
 		slog.String("mode", "in-memory"),
