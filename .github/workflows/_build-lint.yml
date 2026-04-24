@@ -177,7 +177,15 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: go.sum
       - name: Cross-platform unit smoke
-        run: go test -count=1 -timeout 5m ./runtime/shutdown/... ./cells/accesscore/initialadmin/... ./runtime/config/... ./kernel/governance/...
+        # Note: -race requires CGO; available on macOS but not on bare windows-latest.
+        # Enable -race on macOS to maximise race-detector coverage.
+        run: |
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+            go test -race -count=1 -timeout 5m ./runtime/shutdown/... ./cells/accesscore/initialadmin/... ./runtime/config/... ./kernel/governance/...
+          else
+            go test -count=1 -timeout 5m ./runtime/shutdown/... ./cells/accesscore/initialadmin/... ./runtime/config/... ./kernel/governance/...
+          fi
+        shell: bash
 
   # Fork-PR guard: fork PRs cannot access org secrets (secrets.SONAR_TOKEN is
   # empty for forks), which would cause this job to fail with an opaque auth

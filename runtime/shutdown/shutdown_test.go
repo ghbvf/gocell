@@ -103,4 +103,3 @@ func TestManager_NoHooks(t *testing.T) {
 	// With no hooks and a fresh context, there should be no error.
 	assert.NoError(t, err)
 }
-

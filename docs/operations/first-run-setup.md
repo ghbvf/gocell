@@ -32,7 +32,7 @@ GOCELL_STATE_DIR=/var/lib/gocell
 
 目录权限：`0700`，文件权限：`0600`（Windows 使用 DACL 限制为进程所有者独占访问）
 
-文件格式（由 `cells/accesscore/internal/initialadmin/credfile.go::WriteCredentialFile` 生成）：
+文件格式（由 `cells/accesscore/initialadmin/credfile_io.go::writeCredentialFile` 生成）：
 
 ```
 # GoCell initial admin credential
