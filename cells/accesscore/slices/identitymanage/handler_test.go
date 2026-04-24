@@ -33,7 +33,7 @@ func setup() http.Handler {
 		panic("setup: " + err.Error())
 	}
 	mux := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(mux)
+	mux.Route("/api/v1/access/users", NewHandler(svc).RegisterRoutes)
 	return mux
 }
 
@@ -50,9 +50,13 @@ func setupWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 		panic("setupWithIssuer: " + err.Error())
 	}
 	mux := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(mux)
+	mux.Route("/api/v1/access/users", NewHandler(svc).RegisterRoutes)
 	return mux, repo
 }
+
+// prefixPath helpers prepend the canonical API prefix so legacy relative
+// request paths continue to read clearly in test tables.
+const identityPrefix = "/api/v1/access/users"
 
 // adminCtx returns a context carrying admin credentials for test requests.
 func adminCtx() func(*http.Request) *http.Request {
@@ -243,11 +247,15 @@ func TestHandler(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := setup()
+			reqPath := identityPrefix
+			if tc.path != "/" {
+				reqPath += tc.path
+			}
 			var req *http.Request
 			if tc.body != "" {
-				req = httptest.NewRequest(tc.method, tc.path, strings.NewReader(tc.body))
+				req = httptest.NewRequest(tc.method, reqPath, strings.NewReader(tc.body))
 			} else {
-				req = httptest.NewRequest(tc.method, tc.path, nil)
+				req = httptest.NewRequest(tc.method, reqPath, nil)
 			}
 			req.Header.Set("Content-Type", "application/json")
 			if tc.subject != "" {
@@ -268,7 +276,7 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 
 	// Create a user first (as admin).
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
@@ -283,7 +291,7 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 
 	// PUT with unknown field should return 400 (self-access).
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPut, "/"+created.Data.ID,
+	req = httptest.NewRequest(http.MethodPut, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@b.com","extra":"y"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(created.Data.ID, nil)) // self-access
@@ -296,7 +304,7 @@ func TestHandler_PatchAcceptsUnknownFields(t *testing.T) {
 
 	// Create a user first (as admin).
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"eve","email":"e@f.com","password":"pass1234"}`))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(`{"username":"eve","email":"e@f.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
@@ -311,7 +319,7 @@ func TestHandler_PatchAcceptsUnknownFields(t *testing.T) {
 
 	// PATCH with unknown field should succeed (merge patch accepts any key, self-access).
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPatch, "/"+created.Data.ID,
+	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@f.com","extra":"ignored"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(created.Data.ID, nil)) // self-access
@@ -324,7 +332,7 @@ func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 
 	// Create (admin).
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix, strings.NewReader(`{"username":"bob","email":"b@c.com","password":"pass1234"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = adminCtx()(req)
 	r.ServeHTTP(w, req)
@@ -341,14 +349,14 @@ func TestHandler_CreateThenGetThenDelete(t *testing.T) {
 
 	// Get (self-access).
 	w = httptest.NewRecorder()
-	getReq := httptest.NewRequest(http.MethodGet, "/"+id, nil)
+	getReq := httptest.NewRequest(http.MethodGet, identityPrefix+"/"+id, nil)
 	getReq = getReq.WithContext(auth.TestContext(id, nil))
 	r.ServeHTTP(w, getReq)
 	assert.Equal(t, http.StatusOK, w.Code)
 
 	// Delete (admin).
 	w = httptest.NewRecorder()
-	delReq := httptest.NewRequest(http.MethodDelete, "/"+id, nil)
+	delReq := httptest.NewRequest(http.MethodDelete, identityPrefix+"/"+id, nil)
 	delReq = adminCtx()(delReq)
 	r.ServeHTTP(w, delReq)
 	assert.Equal(t, http.StatusNoContent, w.Code)
@@ -359,7 +367,7 @@ func TestHandlePatch_TypeValidation(t *testing.T) {
 
 	// Create a user first (admin).
 	w := httptest.NewRecorder()
-	createReq := httptest.NewRequest(http.MethodPost, "/",
+	createReq := httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"patchuser","email":"p@b.com","password":"Secret123!"}`))
 	createReq.Header.Set("Content-Type", "application/json")
 	createReq = adminCtx()(createReq)
@@ -407,7 +415,7 @@ func TestHandlePatch_TypeValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPatch, "/"+id, strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+id, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			req = req.WithContext(auth.TestContext(id, nil)) // self-access
 			r.ServeHTTP(w, req)
@@ -444,7 +452,7 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 	seedUserInRepo(t, repo, "usr-self", "self-user", "oldpass")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
-	req := httptest.NewRequest(http.MethodPost, "/usr-self/password", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/usr-self/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("usr-self", nil)) // self-access
 	w := httptest.NewRecorder()
@@ -464,7 +472,7 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 	seedUserInRepo(t, repo, "usr-target", "target-user", "oldpass")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass2"}`
-	req := httptest.NewRequest(http.MethodPost, "/usr-target/password", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/usr-target/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	w := httptest.NewRecorder()
@@ -479,7 +487,7 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 	seedUserInRepo(t, repo, "usr-victim", "victim-user", "oldpass")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
-	req := httptest.NewRequest(http.MethodPost, "/usr-victim/password", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/usr-victim/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("usr-stranger", []string{"viewer"})) // not self, not admin
 	w := httptest.NewRecorder()
@@ -492,7 +500,7 @@ func TestHandler_ChangePassword_BadJSON(t *testing.T) {
 	r, repo := setupWithIssuer(nil)
 	seedUserInRepo(t, repo, "usr-badjson", "badjson-user", "oldpass")
 
-	req := httptest.NewRequest(http.MethodPost, "/usr-badjson/password", strings.NewReader(`{bad json`))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/usr-badjson/password", strings.NewReader(`{bad json`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("usr-badjson", nil)) // self
 	w := httptest.NewRecorder()
@@ -506,7 +514,7 @@ func TestHandler_Create_RequirePasswordResetField(t *testing.T) {
 
 	// Create with requirePasswordReset=true.
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/",
+	req := httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"flagged","email":"f@g.com","password":"pass","requirePasswordReset":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
@@ -522,7 +530,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 
 	// Create a user first.
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/",
+	req := httptest.NewRequest(http.MethodPost, identityPrefix,
 		strings.NewReader(`{"username":"patchy","email":"p@y.com","password":"pass"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
@@ -538,7 +546,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 
 	// PATCH with requirePasswordReset=true (admin sets flag).
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPatch, "/"+created.Data.ID,
+	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"requirePasswordReset":true}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
@@ -547,7 +555,7 @@ func TestHandler_Patch_RequirePasswordResetField(t *testing.T) {
 
 	// PATCH with invalid type for requirePasswordReset.
 	w = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPatch, "/"+created.Data.ID,
+	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"requirePasswordReset":"yes"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))

@@ -35,6 +35,28 @@ func TestContractSpec_HTTPSpec_Validate(t *testing.T) {
 	}
 }
 
+// TestEventSpec_Helper verifies the id==topic convenience constructor sets
+// every field expected by Validate() and the consumer/handler pipelines.
+func TestEventSpec_Helper(t *testing.T) {
+	t.Parallel()
+	spec := wrapper.EventSpec("event.session.revoked.v1", "amqp")
+	if spec.ID != "event.session.revoked.v1" {
+		t.Errorf("ID: %q", spec.ID)
+	}
+	if spec.Kind != "event" {
+		t.Errorf("Kind: %q", spec.Kind)
+	}
+	if spec.Transport != "amqp" {
+		t.Errorf("Transport: %q", spec.Transport)
+	}
+	if spec.Topic != "event.session.revoked.v1" {
+		t.Errorf("Topic: %q", spec.Topic)
+	}
+	if err := spec.Validate(); err != nil {
+		t.Fatalf("EventSpec should produce a valid spec, got %v", err)
+	}
+}
+
 func TestContractSpec_EventSpec_Validate(t *testing.T) {
 	t.Parallel()
 	cases := []struct {

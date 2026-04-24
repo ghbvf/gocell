@@ -96,3 +96,22 @@ func (s ContractSpec) validateEvent() error {
 	}
 	return nil
 }
+
+// EventSpec returns a ContractSpec for a broker-backed event contract whose
+// Topic equals its ID — the common case across accesscore / auditcore /
+// configcore event subscriptions. Callers that need a Topic different from
+// the contract id (e.g. subscribing to a wildcard routing key) should keep
+// constructing the literal explicitly.
+//
+// Note for governance: FMT-18 scans wrapper.ContractSpec{...} literals, so
+// specs built via EventSpec(...) are exempt from the literal-vs-YAML cross-
+// check. Prefer EventSpec only when the id==topic identity is genuine and
+// stable; otherwise stick with the literal form so FMT-18 keeps eyes on it.
+func EventSpec(id, transport string) ContractSpec {
+	return ContractSpec{
+		ID:        id,
+		Kind:      "event",
+		Transport: transport,
+		Topic:     id,
+	}
+}

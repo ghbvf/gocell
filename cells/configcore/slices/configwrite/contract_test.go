@@ -3,7 +3,6 @@ package configwrite
 import (
 	"context"
 	"encoding/json"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,9 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -28,17 +30,19 @@ func newContractService(t testing.TB) (*Service, *mem.ConfigRepository, *testuti
 	return svc, repo, writer
 }
 
-// newContractMux registers configwrite routes on a mux at the canonical API
-// prefix via RegisterRoutes + http.StripPrefix. RegisterRoutes calls
-// auth.Mount to install the admin policy, so the contract test exercises
-// the same guard the production mux uses — not just the happy-path handler.
-func newContractMux(svc *Service) *http.ServeMux {
+// newContractMux registers configwrite routes under the canonical API
+// prefix. TestMux.Route mirrors production chi so auth.Mount strips the
+// prefix off Contract.Path directly; no alias magic. RegisterRoutes
+// calls auth.Mount to install the admin policy, so the contract test
+// exercises the same guard the production mux uses — not just the
+// happy-path handler.
+func newContractMux(svc *Service) http.Handler {
 	h := NewHandler(svc)
-	sub := http.NewServeMux()
-	h.RegisterRoutes(sub)
-	outer := http.NewServeMux()
-	outer.Handle("/api/v1/config/", http.StripPrefix("/api/v1/config", sub))
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/config", func(sub cell.RouteMux) {
+		h.RegisterRoutes(sub)
+	})
+	return mux
 }
 
 // --- HTTP contract test ---

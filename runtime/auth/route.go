@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"path"
-	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -19,7 +18,7 @@ import (
 // the same literal).
 //
 // Mount derives the chi sub-route-relative registration path by stripping
-// the receiving mux's Prefix() (when the mux implements cell.PrefixedMux;
+// the receiving mux's Prefix() (when the mux implements cell.Prefixer;
 // runtime/http/router.Router's nested chiRouterAdapter does). Stdlib
 // *http.ServeMux and test stubs without a prefix use Contract.Path
 // unchanged.
@@ -55,7 +54,7 @@ type Route struct {
 //  1. Validates the Route shape (Contract required, Contract.Kind=="http",
 //     bypass-flag mutual exclusivity).
 //  2. Derives the chi-relative registration path by stripping mux.Prefix()
-//     from Contract.Path (when the mux implements cell.PrefixedMux) so
+//     from Contract.Path (when the mux implements cell.Prefixer) so
 //     chi's own prefix composition produces the correct external URL.
 //  3. Wraps Handler with RequirePolicy(Policy) (inner) and
 //     wrapper.HTTPHandler(Contract) (outer) — the wrapper writes
@@ -74,7 +73,7 @@ func Mount(mux cell.RouteHandler, r Route) {
 	r.validateOrPanic()
 
 	prefix := ""
-	if p, ok := mux.(cell.PrefixedMux); ok {
+	if p, ok := mux.(cell.Prefixer); ok {
 		prefix = p.Prefix()
 	}
 	relPath := stripMountPrefix(r.Contract.Path, prefix)
@@ -90,15 +89,6 @@ func Mount(mux cell.RouteHandler, r Route) {
 
 	cleanedRel := path.Clean(relPath)
 	mux.Handle(r.Contract.Method+" "+cleanedRel, handler)
-	if prefix == "" && shouldRegisterRelativeAliases(mux) {
-		for _, alias := range relativeContractAliases(r.Contract.Path) {
-			cleanedAlias := path.Clean(alias)
-			if cleanedAlias == cleanedRel {
-				continue
-			}
-			mux.Handle(r.Contract.Method+" "+cleanedAlias, handler)
-		}
-	}
 
 	if declarer, ok := mux.(cell.AuthRouteDeclarer); ok {
 		// declarer.DeclareAuthMeta's Path is the sub-route-relative path;
@@ -133,75 +123,6 @@ func stripMountPrefix(fullPath, prefix string) string {
 		return "/" + stripped
 	}
 	return stripped
-}
-
-type relativeAliasMux interface {
-	UseRelativeContractAliases() bool
-}
-
-func shouldRegisterRelativeAliases(mux cell.RouteHandler) bool {
-	if _, ok := mux.(*http.ServeMux); ok {
-		return true
-	}
-	if m, ok := mux.(relativeAliasMux); ok {
-		return m.UseRelativeContractAliases()
-	}
-	return false
-}
-
-func relativeContractAliases(fullPath string) []string {
-	cleaned := path.Clean(fullPath)
-	seen := map[string]struct{}{}
-	add := func(p string) {
-		p = path.Clean(p)
-		if p == "." || p == "" {
-			p = "/"
-		}
-		if p[0] != '/' {
-			p = "/" + p
-		}
-		seen[p] = struct{}{}
-	}
-
-	segments := strings.Split(strings.Trim(cleaned, "/"), "/")
-	firstParam := -1
-	for i, segment := range segments {
-		if strings.Contains(segment, "{") {
-			firstParam = i
-			break
-		}
-	}
-	if firstParam >= 0 {
-		add("/" + strings.Join(segments[firstParam:], "/"))
-	} else {
-		add("/" + segments[len(segments)-1])
-		if strings.HasSuffix(fullPath, "/") || isCollectionRootContract(fullPath) {
-			add("/")
-		}
-	}
-
-	out := make([]string, 0, len(seen))
-	for p := range seen {
-		out = append(out, p)
-	}
-	sort.Strings(out)
-	return out
-}
-
-func isCollectionRootContract(fullPath string) bool {
-	cleaned := path.Clean(fullPath)
-	for _, suffix := range []string{
-		"/users",
-		"/config",
-		"/flags",
-		"/devices",
-		"/orders",
-	} {
-		if strings.HasSuffix(cleaned, suffix) {
-			return true
-		}
-	}
-	return false
 }
 
 func (r Route) validateOrPanic() {

@@ -6,7 +6,6 @@ package configcore
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/cells/configcore/slices/configsubscribe"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -37,10 +36,11 @@ var (
 		Method: "POST", Path: "/api/v1/flags/{key}/evaluate",
 	}
 
-	specEventConfigChanged = wrapper.ContractSpec{
-		ID: "event.config.changed.v1", Kind: "event", Transport: "amqp",
-		Topic: configsubscribe.TopicConfigChanged,
-	}
+	// Event spec uses wrapper.EventSpec (id==topic) so the ID literal
+	// participates in FMT-18's literal-vs-YAML cross-check — the previous
+	// `Topic: configsubscribe.TopicConfigChanged` form was invisible to
+	// the scanner because the regex only sees string literals.
+	specEventConfigChanged = wrapper.EventSpec("event.config.changed.v1", "amqp")
 )
 
 // RegisterRoutes registers HTTP routes for configcore. All admin-guarded

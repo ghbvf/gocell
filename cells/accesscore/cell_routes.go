@@ -7,7 +7,6 @@ package accesscore
 import (
 	"net/http"
 
-	"github.com/ghbvf/gocell/cells/accesscore/slices/configreceive"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -38,18 +37,15 @@ var (
 		Method: "DELETE", Path: "/api/v1/access/sessions/{id}",
 	}
 
-	specEventConfigChanged = wrapper.ContractSpec{
-		ID: "event.config.changed.v1", Kind: "event", Transport: "amqp",
-		Topic: configreceive.TopicConfigChanged,
-	}
-	specEventRoleAssigned = wrapper.ContractSpec{
-		ID: "event.role.assigned.v1", Kind: "event", Transport: "amqp",
-		Topic: "event.role.assigned.v1",
-	}
-	specEventRoleRevoked = wrapper.ContractSpec{
-		ID: "event.role.revoked.v1", Kind: "event", Transport: "amqp",
-		Topic: "event.role.revoked.v1",
-	}
+	// Event specs use wrapper.EventSpec (id==topic). Previously the
+	// configreceive consumer's topic constant was aliased into the spec
+	// Topic field; that double-declaration meant FMT-18 silently skipped
+	// validation because the literal scanner only sees string literals.
+	// EventSpec makes the id==topic identity explicit and FMT-18 sees the
+	// ID literal in the call.
+	specEventConfigChanged = wrapper.EventSpec("event.config.changed.v1", "amqp")
+	specEventRoleAssigned  = wrapper.EventSpec("event.role.assigned.v1", "amqp")
+	specEventRoleRevoked   = wrapper.EventSpec("event.role.revoked.v1", "amqp")
 )
 
 // RegisterRoutes registers HTTP routes for accesscore.

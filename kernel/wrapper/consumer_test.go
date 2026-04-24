@@ -228,6 +228,53 @@ func TestWrapConsumer_PanicNonError(t *testing.T) {
 	_ = w(context.Background(), outbox.Entry{})
 }
 
+// TestWrapConsumer_InvalidDispositionRecordsError verifies that a result
+// with an unrecognised Disposition (e.g. the zero value of
+// outbox.HandleResult) produces SetStatus(Error, "invalid disposition")
+// AND a RecordError event on the span — symmetric with the Requeue/Reject
+// branches so ops can recognise the misbehaving handler from the span
+// alone instead of cross-referencing logs.
+func TestWrapConsumer_InvalidDispositionRecordsError(t *testing.T) {
+	tr := &spyTracer{}
+	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{} // zero value: Disposition is invalid
+	}
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	res := w(context.Background(), outbox.Entry{})
+
+	// Result is passed through untouched — downstream decides downgrade.
+	if res.Disposition != outbox.Disposition(0) {
+		t.Errorf("want zero-value disposition pass-through, got %v", res.Disposition)
+	}
+	span := tr.only(t)
+	if span.status != wrapper.StatusError {
+		t.Errorf("want StatusError on invalid disposition, got %v", span.status)
+	}
+	if span.stDesc != "invalid disposition" {
+		t.Errorf("want status desc 'invalid disposition', got %q", span.stDesc)
+	}
+	if len(span.errs) == 0 {
+		t.Fatal("RecordError must be called on invalid disposition (F3)")
+	}
+}
+
+// TestWrapConsumer_InvalidDispositionWithExplicitError ensures the
+// recorded error prefers the handler-supplied res.Err over the synthetic
+// fallback when both are present — the redactor path is exercised too.
+func TestWrapConsumer_InvalidDispositionWithExplicitError(t *testing.T) {
+	tr := &spyTracer{}
+	explicit := errors.New("handler chose nonsense")
+	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.Disposition(99), Err: explicit}
+	}
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	_ = w(context.Background(), outbox.Entry{})
+	span := tr.only(t)
+	if len(span.errs) != 1 || !errors.Is(span.errs[0], explicit) {
+		t.Errorf("want explicit err recorded, got %v", span.errs)
+	}
+}
+
 // TestWrapConsumer_ReExportedConstants verifies wrapper re-exports match outbox.
 func TestWrapConsumer_ReExportedConstants(t *testing.T) {
 	t.Parallel()

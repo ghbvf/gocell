@@ -21,19 +21,37 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// auditAppendSpecs maps each consumed topic to its wrapper.ContractSpec —
-// cross-checked against contracts/event/**/v1/contract.yaml by FMT-18.
-// The topic slice lives on auditappend.Topics; adding/removing entries
-// there MUST be mirrored here (FMT-18 would surface any drift).
+// Topic constants — one per consumed event. FMT-18 resolves const string
+// references at scan time so contract IDs can be written once here and
+// reused as both map key and EventSpec argument without Sonar flagging
+// duplicate literals.
+const (
+	topicUserCreated    = "event.user.created.v1"
+	topicUserLocked     = "event.user.locked.v1"
+	topicSessionCreated = "event.session.created.v1"
+	topicSessionRevoked = "event.session.revoked.v1"
+	topicConfigChanged  = "event.config.changed.v1"
+	topicConfigRollback = "event.config.rollback.v1"
+	topicRoleAssigned   = "event.role.assigned.v1"
+	topicRoleRevoked    = "event.role.revoked.v1"
+)
+
+// auditAppendSpecs maps each consumed topic to its wrapper.ContractSpec.
+// Each value is a wrapper.EventSpec call so FMT-18's governance scan can
+// resolve the contract id (via const reference) and cross-check it against
+// contracts/event/**/contract.yaml.
+//
+// Adding or removing a topic MUST be mirrored in auditappend.Topics;
+// RegisterSubscriptions fails at startup if the two drift.
 var auditAppendSpecs = map[string]wrapper.ContractSpec{
-	"event.user.created.v1":    {ID: "event.user.created.v1", Kind: "event", Transport: "amqp", Topic: "event.user.created.v1"},
-	"event.user.locked.v1":     {ID: "event.user.locked.v1", Kind: "event", Transport: "amqp", Topic: "event.user.locked.v1"},
-	"event.session.created.v1": {ID: "event.session.created.v1", Kind: "event", Transport: "amqp", Topic: "event.session.created.v1"},
-	"event.session.revoked.v1": {ID: "event.session.revoked.v1", Kind: "event", Transport: "amqp", Topic: "event.session.revoked.v1"},
-	"event.config.changed.v1":  {ID: "event.config.changed.v1", Kind: "event", Transport: "amqp", Topic: "event.config.changed.v1"},
-	"event.config.rollback.v1": {ID: "event.config.rollback.v1", Kind: "event", Transport: "amqp", Topic: "event.config.rollback.v1"},
-	"event.role.assigned.v1":   {ID: "event.role.assigned.v1", Kind: "event", Transport: "amqp", Topic: "event.role.assigned.v1"},
-	"event.role.revoked.v1":    {ID: "event.role.revoked.v1", Kind: "event", Transport: "amqp", Topic: "event.role.revoked.v1"},
+	topicUserCreated:    wrapper.EventSpec(topicUserCreated, "amqp"),
+	topicUserLocked:     wrapper.EventSpec(topicUserLocked, "amqp"),
+	topicSessionCreated: wrapper.EventSpec(topicSessionCreated, "amqp"),
+	topicSessionRevoked: wrapper.EventSpec(topicSessionRevoked, "amqp"),
+	topicConfigChanged:  wrapper.EventSpec(topicConfigChanged, "amqp"),
+	topicConfigRollback: wrapper.EventSpec(topicConfigRollback, "amqp"),
+	topicRoleAssigned:   wrapper.EventSpec(topicRoleAssigned, "amqp"),
+	topicRoleRevoked:    wrapper.EventSpec(topicRoleRevoked, "amqp"),
 }
 
 // Compile-time interface checks.

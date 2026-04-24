@@ -93,6 +93,11 @@ var noopSpanInstance Span = noopSpan{}
 // that want to stay compatible with Span implementations lacking rename
 // support should use SetSpanName instead of a direct type assertion.
 //
+// NoopTracer's span implements SetName as a silent no-op, so callers can
+// invoke SetSpanName unconditionally regardless of whether a real tracer
+// is wired — there is no "rename unsupported" branch to worry about when
+// tracing is disabled.
+//
 // ref: riandyrn/otelchi middleware.go — chi routes are known after ServeHTTP
 // so span.name is adjusted in two phases.
 type SpanRenamer interface {

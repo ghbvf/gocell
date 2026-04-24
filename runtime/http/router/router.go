@@ -1043,7 +1043,7 @@ type chiRouterAdapter struct {
 // its mount prefix so auth.Mount can derive chi-relative registration paths
 // from fully-qualified Contract.Path literals.
 var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
-var _ kcell.PrefixedMux = (*chiRouterAdapter)(nil)
+var _ kcell.Prefixer = (*chiRouterAdapter)(nil)
 var _ kcell.HTTPContractDeclarer = (*chiRouterAdapter)(nil)
 
 // Prefix returns the sub-route mount prefix this adapter inherited from

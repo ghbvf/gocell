@@ -82,6 +82,73 @@ func TestValidateContractSpecLiteral(t *testing.T) {
 	require.Len(t, mismatch, 3)
 }
 
+// TestScanContractSpecLiterals_EventSpecCall verifies FMT-18 picks up the
+// wrapper.EventSpec("id", "transport") helper-constructor form so ID literals
+// passed via the helper participate in the YAML cross-check.
+func TestScanContractSpecLiterals_EventSpecCall(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "accesscore")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package accesscore
+var spec = wrapper.EventSpec("event.role.assigned.v1", "amqp")
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	require.Len(t, literals, 1)
+	assert.Equal(t, "event.role.assigned.v1", literals[0].id)
+	assert.Equal(t, "event", literals[0].kind)
+	assert.Equal(t, "event.role.assigned.v1", literals[0].topic)
+}
+
+// TestScanContractSpecLiterals_ResolvesStringConst verifies that
+// wrapper.ContractSpec{...} literals whose field values reference
+// package-level string constants are resolved at scan time — so both
+// `Path: "/api/v1/..."` and `Path: pathUserByID` flow through the same
+// validation, preventing the pre-F1 escape hatch where constant
+// references silently bypassed the YAML cross-check.
+func TestScanContractSpecLiterals_ResolvesStringConst(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "accesscore")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package accesscore
+
+const (
+	pathUserByID = "/api/v1/access/users/{id}"
+	TopicUserCreated = "event.user.created.v1"
+)
+
+var (
+	specGet = wrapper.ContractSpec{
+		ID: "http.auth.user.get.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: pathUserByID,
+	}
+	specEvent = wrapper.ContractSpec{
+		ID: TopicUserCreated, Kind: "event", Transport: "amqp",
+		Topic: TopicUserCreated,
+	}
+	specCall = wrapper.EventSpec(TopicUserCreated, "amqp")
+)
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	require.Len(t, literals, 3)
+
+	// Struct literal with path resolved via const.
+	assert.Equal(t, "http.auth.user.get.v1", literals[0].id)
+	assert.Equal(t, "/api/v1/access/users/{id}", literals[0].path)
+
+	// Struct literal with both ID and Topic via const.
+	assert.Equal(t, "event.user.created.v1", literals[1].id)
+	assert.Equal(t, "event.user.created.v1", literals[1].topic)
+
+	// EventSpec call with const identifier.
+	assert.Equal(t, "event.user.created.v1", literals[2].id)
+	assert.Equal(t, "event", literals[2].kind)
+	assert.Equal(t, "event.user.created.v1", literals[2].topic)
+}
+
 func TestValidateFMT19WrapperPackageState(t *testing.T) {
 	root := t.TempDir()
 	wrapperDir := filepath.Join(root, "kernel", "wrapper")

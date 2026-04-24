@@ -2,6 +2,9 @@ package governance
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,11 +13,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// FMT-18 SPEC-CONTRACT-SYNC — cross-check wrapper.ContractSpec literals in
-// cells/** against contracts/**/contract.yaml. Ensures ID, Kind, Method,
-// Path (for http kind) match the authoritative YAML. examples/** is
-// exempted because its demo routes often do not have backing YAML by
-// design (PR-A11 round-4 ADR §2).
+// FMT-18 SPEC-CONTRACT-SYNC — cross-check wrapper.ContractSpec literals and
+// wrapper.EventSpec(...) calls in cells/** against contracts/**/contract.yaml.
+// Ensures ID, Kind, Method, Path (for http kind), Topic (for event kind)
+// match the authoritative YAML. examples/** is exempted because its demo
+// routes often do not have backing YAML by design (PR-A11 round-4 ADR §2).
+//
+// Implementation is go/ast based so field values provided via package-level
+// string constants (e.g. `Path: pathUserByID` where pathUserByID is a
+// `const = "..."`) are resolved at scan time, matching how reviewers actually
+// read the code. A regex-only scanner would silently skip any non-literal
+// field value — the gap that motivated re-implementing the rule on AST.
 //
 // FMT-19 WRAPPER-NO-PACKAGE-STATE — enforces that kernel/wrapper/*.go
 // contains no mutable package-level variables of interface or pointer
@@ -32,7 +41,7 @@ const (
 )
 
 // contractSpecLiteral captures a parsed wrapper.ContractSpec{...} literal
-// from a source file scan.
+// or wrapper.EventSpec(...) call from a source file scan.
 type contractSpecLiteral struct {
 	file   string
 	line   int
@@ -43,30 +52,23 @@ type contractSpecLiteral struct {
 	topic  string
 }
 
-// contractSpecRe extracts the inner { ... } body of a
-// `wrapper.ContractSpec{ ... }` struct literal. Tolerant of whitespace,
-// field reordering, trailing commas.
-var contractSpecRe = regexp.MustCompile(`wrapper\.ContractSpec\s*\{([^{}]*)\}`)
-
-var (
-	fieldIDRe          = regexp.MustCompile(`ID:\s*"([^"]+)"`)
-	fieldKindRe        = regexp.MustCompile(`Kind:\s*"([^"]+)"`)
-	fieldMethodRe      = regexp.MustCompile(`Method:\s*"([^"]+)"`)
-	fieldPathRe        = regexp.MustCompile(`Path:\s*"([^"]+)"`)
-	fieldTopicStringRe = regexp.MustCompile(`Topic:\s*"([^"]+)"`)
-	wrapperVarDeclRe   = regexp.MustCompile(`^var\s+(\w+)\s+(.+?)\s*=\s*(.+)$`)
-)
+// wrapperVarDeclRe is used by FMT-19 only (line-based scan is sufficient
+// because the rule targets simple `var x Type = ...` forms).
+var wrapperVarDeclRe = regexp.MustCompile(`^var\s+(\w+)\s+(.+?)\s*=\s*(.+)$`)
 
 // validateFMT18 scans `cells/**/*.go` for wrapper.ContractSpec{} literals
-// and cross-checks each against `contracts/**/contract.yaml`. Strict-only.
+// AND wrapper.EventSpec(...) calls, then cross-checks each against
+// `contracts/**/contract.yaml`. Both struct fields and call arguments are
+// resolved through package-level constants so `Path: pathUserByID` is
+// equivalent to `Path: "/api/v1/access/users/{id}"`. Strict-only.
 // examples/** is not scanned — demo surface contracts intentionally lack
 // YAML backing.
 func (v *Validator) validateFMT18(strict bool) []ValidationResult {
 	if !strict {
 		return nil
 	}
-	dir := filepath.Join(v.root, "cells")
-	literals, err := scanContractSpecLiterals(dir)
+	cellsDir := filepath.Join(v.root, "cells")
+	literals, err := scanContractSpecLiterals(cellsDir)
 	if err != nil {
 		return []ValidationResult{
 			v.newResult(codeFMT18, SeverityError, IssueInvalid,
@@ -129,10 +131,14 @@ func (v *Validator) validateHTTPContractSpecLiteral(
 	return out
 }
 
-// scanContractSpecLiterals walks dir recursively, parses .go files, and
-// extracts every wrapper.ContractSpec{...} literal.
+// scanContractSpecLiterals walks dir recursively and parses each non-test .go
+// file via go/parser. Within each file, wrapper.ContractSpec composite
+// literals and wrapper.EventSpec call expressions are extracted; field
+// values referencing package-level string constants are resolved so the
+// extracted contractSpecLiteral carries the effective string value.
 func scanContractSpecLiterals(dir string) ([]contractSpecLiteral, error) {
 	var out []contractSpecLiteral
+	fset := token.NewFileSet()
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
@@ -140,11 +146,11 @@ func scanContractSpecLiterals(dir string) ([]contractSpecLiteral, error) {
 		if !shouldScanContractSpecFile(path, info) {
 			return nil
 		}
-		literals, err := scanContractSpecFile(path)
+		lits, err := scanContractSpecFile(fset, path)
 		if err != nil {
-			return err
+			return fmt.Errorf("scan %s: %w", path, err)
 		}
-		out = append(out, literals...)
+		out = append(out, lits...)
 		return nil
 	})
 	if err != nil && !os.IsNotExist(err) {
@@ -159,42 +165,235 @@ func shouldScanContractSpecFile(path string, info os.FileInfo) bool {
 		!strings.HasSuffix(path, "_test.go")
 }
 
-func scanContractSpecFile(path string) ([]contractSpecLiteral, error) {
-	data, err := os.ReadFile(path)
+// scanContractSpecFile parses a single file and returns every
+// wrapper.ContractSpec literal and wrapper.EventSpec call it finds, with
+// string constants resolved.
+func scanContractSpecFile(fset *token.FileSet, path string) ([]contractSpecLiteral, error) {
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
 		return nil, err
 	}
+	consts := collectPackageStringConsts(file)
 
-	fullText := string(data)
-	matches := contractSpecRe.FindAllStringSubmatchIndex(fullText, -1)
-	literals := make([]contractSpecLiteral, 0, len(matches))
-	for _, match := range matches {
-		literals = append(literals, parseContractSpecLiteral(path, fullText, match))
-	}
-	return literals, nil
+	var out []contractSpecLiteral
+	ast.Inspect(file, func(n ast.Node) bool {
+		switch expr := n.(type) {
+		case *ast.CompositeLit:
+			if lit, ok := parseContractSpecCompositeLit(fset, path, expr, consts); ok {
+				out = append(out, lit)
+			}
+		case *ast.CallExpr:
+			if lit, ok := parseEventSpecCallExpr(fset, path, expr, consts); ok {
+				out = append(out, lit)
+			}
+		}
+		return true
+	})
+	return out, nil
 }
 
-func parseContractSpecLiteral(file, fullText string, match []int) contractSpecLiteral {
-	body := fullText[match[2]:match[3]]
-	startByte := match[0]
+// collectPackageStringConsts returns package-level `const name = "..."`
+// declarations whose rhs is a string literal. Both single-decl and grouped
+// `const (...)` forms are collected.
+func collectPackageStringConsts(file *ast.File) map[string]string {
+	consts := make(map[string]string)
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.CONST {
+			continue
+		}
+		collectConstSpecs(gen.Specs, consts)
+	}
+	return consts
+}
+
+// collectConstSpecs folds one const block's Specs into the consts map.
+func collectConstSpecs(specs []ast.Spec, consts map[string]string) {
+	for _, spec := range specs {
+		vs, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		collectValueSpec(vs, consts)
+	}
+}
+
+// collectValueSpec extracts name=literal pairs from a single ValueSpec.
+func collectValueSpec(vs *ast.ValueSpec, consts map[string]string) {
+	for i, name := range vs.Names {
+		if i >= len(vs.Values) {
+			continue
+		}
+		if s, ok := stringLiteralValue(vs.Values[i]); ok {
+			consts[name.Name] = s
+		}
+	}
+}
+
+// stringLiteralValue returns the unescaped string value if expr is a STRING
+// BasicLit, otherwise ok=false.
+func stringLiteralValue(expr ast.Expr) (string, bool) {
+	lit, ok := expr.(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return "", false
+	}
+	s, err := strconvUnquote(lit.Value)
+	if err != nil {
+		return "", false
+	}
+	return s, true
+}
+
+// strconvUnquote mirrors strconv.Unquote for string literals but lives here
+// to keep the kernel import list minimal (go/parser already pulls strconv
+// transitively, so this is about code locality, not dep size).
+func strconvUnquote(raw string) (string, error) {
+	if len(raw) < 2 {
+		return "", fmt.Errorf("not a quoted string: %q", raw)
+	}
+	q := raw[0]
+	if q != raw[len(raw)-1] {
+		return "", fmt.Errorf("mismatched quote: %q", raw)
+	}
+	inner := raw[1 : len(raw)-1]
+	// For our purposes Go source is restricted to simple ASCII in contract
+	// IDs / paths — unescape the three common cases, fall back to raw for
+	// anything else.
+	inner = strings.ReplaceAll(inner, `\"`, `"`)
+	inner = strings.ReplaceAll(inner, `\\`, `\`)
+	inner = strings.ReplaceAll(inner, `\n`, "\n")
+	return inner, nil
+}
+
+// parseContractSpecCompositeLit extracts a contractSpecLiteral from a
+// `wrapper.ContractSpec{...}` composite literal, returning ok=false for any
+// other composite literal. Field values are resolved through the supplied
+// consts map so `Path: pathUserByID` is equivalent to a string literal.
+func parseContractSpecCompositeLit(
+	fset *token.FileSet,
+	filePath string,
+	expr *ast.CompositeLit,
+	consts map[string]string,
+) (contractSpecLiteral, bool) {
+	if !isWrapperSelector(expr.Type, "ContractSpec") {
+		return contractSpecLiteral{}, false
+	}
 	lit := contractSpecLiteral{
-		file: file,
-		line: 1 + strings.Count(fullText[:startByte], "\n"),
+		file: filePath,
+		line: fset.Position(expr.Pos()).Line,
 	}
-	lit.id = firstRegexSubmatch(fieldIDRe, body)
-	lit.kind = firstRegexSubmatch(fieldKindRe, body)
-	lit.method = firstRegexSubmatch(fieldMethodRe, body)
-	lit.path = firstRegexSubmatch(fieldPathRe, body)
-	lit.topic = firstRegexSubmatch(fieldTopicStringRe, body)
-	return lit
+	for _, elt := range expr.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			continue
+		}
+		keyIdent, ok := kv.Key.(*ast.Ident)
+		if !ok {
+			continue
+		}
+		value, ok := resolveStringValue(kv.Value, consts)
+		if !ok {
+			continue
+		}
+		switch keyIdent.Name {
+		case "ID":
+			lit.id = value
+		case "Kind":
+			lit.kind = value
+		case "Method":
+			lit.method = value
+		case "Path":
+			lit.path = value
+		case "Topic":
+			lit.topic = value
+		case "Transport":
+			// Transport has no YAML cross-check yet — recorded for future use.
+		}
+	}
+	return lit, true
 }
 
-func firstRegexSubmatch(re *regexp.Regexp, value string) string {
-	sm := re.FindStringSubmatch(value)
-	if len(sm) < 2 {
-		return ""
+// parseEventSpecCallExpr extracts a contractSpecLiteral from a
+// `wrapper.EventSpec(id, transport)` call. Kind is synthesised as "event"
+// and Topic == id by construction (the helper enforces id==topic).
+func parseEventSpecCallExpr(
+	fset *token.FileSet,
+	filePath string,
+	expr *ast.CallExpr,
+	consts map[string]string,
+) (contractSpecLiteral, bool) {
+	if !isWrapperSelector(expr.Fun, "EventSpec") {
+		return contractSpecLiteral{}, false
 	}
-	return sm[1]
+	if len(expr.Args) < 1 {
+		return contractSpecLiteral{}, false
+	}
+	id, ok := resolveStringValue(expr.Args[0], consts)
+	if !ok {
+		return contractSpecLiteral{}, false
+	}
+	return contractSpecLiteral{
+		file:  filePath,
+		line:  fset.Position(expr.Pos()).Line,
+		id:    id,
+		kind:  "event",
+		topic: id,
+	}, true
+}
+
+// isWrapperSelector reports whether expr is a `wrapper.<name>` selector
+// expression. Accepts both the import alias "wrapper" and the full package
+// name `wrapper` (Go's default import alias), which is all our cells use.
+func isWrapperSelector(expr ast.Expr, name string) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return pkg.Name == "wrapper" && sel.Sel.Name == name
+}
+
+// resolveStringValue unwraps an expression to a string value. Supports:
+//   - string literals (BasicLit STRING)
+//   - package-level const identifiers declared in the same file
+//   - parenthesised and simple binary concatenations of the above
+//
+// Returns ok=false for any form the scanner cannot prove is string-valued
+// (function calls, cross-file constants, runtime-computed strings).
+func resolveStringValue(expr ast.Expr, consts map[string]string) (string, bool) {
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		return stringLiteralValue(e)
+	case *ast.Ident:
+		s, ok := consts[e.Name]
+		return s, ok
+	case *ast.ParenExpr:
+		return resolveStringValue(e.X, consts)
+	case *ast.BinaryExpr:
+		return resolveBinaryConcat(e, consts)
+	}
+	return "", false
+}
+
+// resolveBinaryConcat handles `a + b` expressions where both sides must
+// resolve to strings. Non-ADD operators and any non-string operand cause
+// ok=false.
+func resolveBinaryConcat(e *ast.BinaryExpr, consts map[string]string) (string, bool) {
+	if e.Op != token.ADD {
+		return "", false
+	}
+	left, ok := resolveStringValue(e.X, consts)
+	if !ok {
+		return "", false
+	}
+	right, ok := resolveStringValue(e.Y, consts)
+	if !ok {
+		return "", false
+	}
+	return left + right, true
 }
 
 // validateFMT19 scans kernel/wrapper/*.go for package-level var declarations

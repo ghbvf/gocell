@@ -136,9 +136,13 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...Consume
 			recordErrRedacted(span, cfg.redactor, res.Err, "consumer returned Reject without error")
 		default:
 			// Invalid disposition — tested in kernel/outbox; we mark the
-			// span as error so ops see the misbehaviour but leave the
-			// result untouched for downstream downgrade logic.
+			// span as error AND record an error event so ops see both the
+			// status and a recognisable cause in the span, matching the
+			// Requeue/Reject branches. Result is left untouched for
+			// downstream downgrade logic.
 			span.SetStatus(StatusError, "invalid disposition")
+			recordErrRedacted(span, cfg.redactor, res.Err,
+				fmt.Sprintf("consumer returned invalid disposition %d", res.Disposition))
 		}
 		span.End()
 		return res

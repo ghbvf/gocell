@@ -295,7 +295,7 @@ func TestHandler_RegisterRoutes_AuthzNegative(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			url := "/entries"
+			url := "/api/v1/audit/entries"
 			if tc.actorID != "" {
 				url += "?actorId=" + tc.actorID
 			}
@@ -391,7 +391,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/entries"+tc.query, nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries"+tc.query, nil)
 			switch {
 			case tc.injectEmptyAuth:
 				req = req.WithContext(auth.TestContext("", tc.roles))

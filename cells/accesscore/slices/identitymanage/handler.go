@@ -16,40 +16,51 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// Path constants — extracted so each user-resource path appears once in
+// source. FMT-18 resolves const string references at scan time so the YAML
+// cross-check still sees the effective path literal.
+const (
+	pathUsers        = "/api/v1/access/users"
+	pathUserByID     = "/api/v1/access/users/{id}"
+	pathUserLock     = "/api/v1/access/users/{id}/lock"
+	pathUserUnlock   = "/api/v1/access/users/{id}/unlock"
+	pathUserPassword = "/api/v1/access/users/{id}/password"
+)
+
 // Contract spec literals — one per route; cross-checked against
 // contracts/http/auth/user/**/contract.yaml by FMT-18 governance.
 var (
 	specUserCreate = wrapper.ContractSpec{
 		ID: "http.auth.user.create.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/access/users",
+		Method: "POST", Path: pathUsers,
 	}
 	specUserGet = wrapper.ContractSpec{
 		ID: "http.auth.user.get.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/access/users/{id}",
+		Method: "GET", Path: pathUserByID,
 	}
 	specUserUpdate = wrapper.ContractSpec{
 		ID: "http.auth.user.update.v1", Kind: "http", Transport: "http",
-		Method: "PUT", Path: "/api/v1/access/users/{id}",
+		Method: "PUT", Path: pathUserByID,
 	}
 	specUserPatch = wrapper.ContractSpec{
 		ID: "http.auth.user.patch.v1", Kind: "http", Transport: "http",
-		Method: "PATCH", Path: "/api/v1/access/users/{id}",
+		Method: "PATCH", Path: pathUserByID,
 	}
 	specUserDelete = wrapper.ContractSpec{
 		ID: "http.auth.user.delete.v1", Kind: "http", Transport: "http",
-		Method: "DELETE", Path: "/api/v1/access/users/{id}",
+		Method: "DELETE", Path: pathUserByID,
 	}
 	specUserLock = wrapper.ContractSpec{
 		ID: "http.auth.user.lock.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/access/users/{id}/lock",
+		Method: "POST", Path: pathUserLock,
 	}
 	specUserUnlock = wrapper.ContractSpec{
 		ID: "http.auth.user.unlock.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/access/users/{id}/unlock",
+		Method: "POST", Path: pathUserUnlock,
 	}
 	specUserChangePassword = wrapper.ContractSpec{
 		ID: "http.auth.user.change-password.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/access/users/{id}/password",
+		Method: "POST", Path: pathUserPassword,
 	}
 )
 

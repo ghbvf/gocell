@@ -116,7 +116,7 @@ type RouteHandler interface {
 	Handle(pattern string, handler http.Handler)
 }
 
-// PrefixedMux is optionally implemented by RouteHandler values whose chi
+// Prefixer is optionally implemented by RouteHandler values whose chi
 // sub-router owns a mount prefix (i.e. `mux.Route("/api/v1/access", fn)`).
 // auth.Mount type-asserts to this interface to compute the chi-relative
 // registration path from a fully-qualified Contract.Path — the mount
@@ -127,7 +127,7 @@ type RouteHandler interface {
 // interface; plain *http.ServeMux / test stubs do not, in which case
 // auth.Mount uses Contract.Path as-is (fine because those paths are
 // typically fully-qualified already and the mux has no prefix to strip).
-type PrefixedMux interface {
+type Prefixer interface {
 	Prefix() string
 }
 
