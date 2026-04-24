@@ -417,6 +417,176 @@ func TestInMemQueue_ExtendLease_LeaseExpiredVsCommandNotFound(t *testing.T) {
 		"extending an expired lease must return ErrValidationFailed, not ErrCommandNotFound")
 }
 
+func TestInMemQueue_DefaultClock(t *testing.T) {
+	t.Parallel()
+	q := commandtest.NewInMemQueue()
+	q.Now = nil // force fallback to time.Now
+	ctx := context.Background()
+
+	entry := makeEntry("cmd-1", "dev-1", time.Now())
+	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
+
+	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	require.NotNil(t, entries[0].SentAt)
+}
+
+func TestInMemQueue_Ack_CommandNotFound(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+
+	err := q.Ack(ctx, "cmd-nonexistent", command.AckSuccess, now)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCommandNotFound, ecErr.Code)
+}
+
+func TestInMemQueue_Cancel_CommandNotFound(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+
+	err := q.Cancel(ctx, "cmd-nonexistent", now)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCommandNotFound, ecErr.Code)
+}
+
+func TestInMemQueue_AdvanceStatus_CommandNotFound(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+
+	err := q.AdvanceStatus(ctx, "cmd-nonexistent", command.StatusPending, command.StatusSent, now)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCommandNotFound, ecErr.Code)
+}
+
+func TestInMemQueue_GetCommand_NotFound(t *testing.T) {
+	t.Parallel()
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+
+	got, err := q.GetCommand(ctx, "cmd-nonexistent")
+	require.NoError(t, err)
+	assert.Nil(t, got, "GetCommand on missing id must return (nil, nil)")
+}
+
+func TestInMemQueue_PendingCommands_EmptyAndFilter(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	// Unknown device → empty.
+	got, err := q.PendingCommands(ctx, "dev-unknown")
+	require.NoError(t, err)
+	assert.Empty(t, got)
+
+	// Seed entries for two devices.
+	require.NoError(t, q.Enqueue(ctx, makeEntry("cmd-a", "dev-1", now), command.EnqueueOptions{}))
+	require.NoError(t, q.Enqueue(ctx, makeEntry("cmd-b", "dev-2", now), command.EnqueueOptions{}))
+
+	got1, err := q.PendingCommands(ctx, "dev-1")
+	require.NoError(t, err)
+	assert.Len(t, got1, 1)
+	assert.Equal(t, "cmd-a", got1[0].ID)
+
+	got2, err := q.PendingCommands(ctx, "dev-2")
+	require.NoError(t, err)
+	assert.Len(t, got2, 1)
+	assert.Equal(t, "cmd-b", got2[0].ID)
+}
+
+func TestInMemQueue_Dequeue_DefaultLeaseDuration(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	require.NoError(t, q.Enqueue(ctx, makeEntry("cmd-1", "dev-1", now), command.EnqueueOptions{}))
+
+	// leaseDuration <= 0 triggers DefaultLeaseDuration fallback.
+	entries, err := q.Dequeue(ctx, "dev-1", 1, 0)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+
+	// After DefaultLeaseDuration the lease must be considered expired.
+	err = q.ExtendLease(ctx, entries[0].ID, time.Minute, now.Add(command.DefaultLeaseDuration+time.Second))
+	require.Error(t, err, "lease must be expired past DefaultLeaseDuration")
+}
+
+func TestInMemQueue_ListPending_NoLimit(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	for i := 0; i < 3; i++ {
+		id := "cmd-" + string(rune('A'+i))
+		require.NoError(t, q.Enqueue(ctx, makeEntry(id, "dev-1", now.Add(time.Duration(i)*time.Second)),
+			command.EnqueueOptions{}))
+	}
+
+	// limit <= 0 means "all".
+	got, err := q.ListPending(ctx, "dev-1", 0)
+	require.NoError(t, err)
+	assert.Len(t, got, 3)
+}
+
+func TestInMemQueue_Ack_AfterTerminal_Fails(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	entry := makeEntry("cmd-1", "dev-1", now)
+	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
+
+	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	require.NoError(t, err)
+	cmdID := entries[0].ID
+
+	// First Ack → Succeeded
+	require.NoError(t, q.Ack(ctx, cmdID, command.AckSuccess, now.Add(time.Second)))
+
+	// Second Ack with AckFailed on terminal → transition error wrapped
+	err = q.Ack(ctx, cmdID, command.AckFailed, now.Add(2*time.Second))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "advance to Failed")
+}
+
+func TestInMemQueue_AckTimeout_OnPending_Fails(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	entry := makeEntry("cmd-1", "dev-1", now)
+	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
+
+	// AckTimeout on Pending (never Dequeued) must fail.
+	err := q.Ack(ctx, "cmd-1", command.AckTimeout, now.Add(time.Second))
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
+}
+
 func TestInMemQueue_ClockInjection(t *testing.T) {
 	t.Parallel()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
