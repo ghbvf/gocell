@@ -23,7 +23,16 @@ On first startup, when no admin user exists, the bootstrap process creates
 an initial admin account and writes the credentials to a file. Read the file:
 
 ```bash
-cat $TMPDIR/gocell/initial_admin_password
+# Linux
+cat /run/gocell/initial_admin_password
+
+# macOS
+cat "$HOME/Library/Application Support/gocell/run/initial_admin_password"
+```
+
+```powershell
+# Windows
+Get-Content "$env:LOCALAPPDATA\gocell\run\initial_admin_password"
 ```
 
 The file contains:
@@ -38,11 +47,16 @@ password=<random base64 password>
 expires_at=<unix timestamp>
 ```
 
-Export `GOCELL_STATE_DIR` before starting so the file is written to a
-macOS-accessible path:
+You can override the default path on every platform by setting an absolute
+`GOCELL_STATE_DIR` before starting:
 
 ```bash
 export GOCELL_STATE_DIR=$TMPDIR/gocell
+go run ./examples/ssobff
+```
+
+```powershell
+$env:GOCELL_STATE_DIR = "$env:TEMP\gocell"
 go run ./examples/ssobff
 ```
 
@@ -57,8 +71,15 @@ password is changed. Follow these steps:
 
 ```bash
 # 1. Read the initial password
-INIT_PASS=$(grep '^password=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
-ADMIN_USER=$(grep '^username=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
+if [ -n "${GOCELL_STATE_DIR:-}" ]; then
+  CRED_FILE="$GOCELL_STATE_DIR/initial_admin_password"
+elif [ "$(uname -s)" = "Darwin" ]; then
+  CRED_FILE="$HOME/Library/Application Support/gocell/run/initial_admin_password"
+else
+  CRED_FILE="/run/gocell/initial_admin_password"
+fi
+INIT_PASS=$(grep '^password=' "$CRED_FILE" | cut -d= -f2)
+ADMIN_USER=$(grep '^username=' "$CRED_FILE" | cut -d= -f2)
 
 # 2. Login (passwordResetRequired=true in response)
 TOKEN_RESP=$(curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
@@ -70,15 +91,13 @@ echo "$TOKEN_RESP" | jq .
 BOOTSTRAP_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
 
 # 3. Extract user ID from the JWT sub claim.
-# JWT uses base64url (RFC 4648 §5) WITHOUT padding, but `base64 -d` on
-# Linux/macOS expects padded input — restore padding before decoding,
-# otherwise base64 -d errors silently and USER_ID ends up empty.
-USER_ID=$(echo "$BOOTSTRAP_TOKEN" \
-  | cut -d. -f2 \
-  | tr '_-' '/+' \
-  | awk '{ pad = (4 - length($0) % 4) % 4; while (pad-- > 0) $0 = $0 "="; print }' \
-  | base64 -d \
-  | jq -r '.sub')
+USER_ID=$(BOOTSTRAP_TOKEN="$BOOTSTRAP_TOKEN" python3 - <<'PY'
+import base64, json, os
+payload = os.environ["BOOTSTRAP_TOKEN"].split(".")[1]
+payload += "=" * (-len(payload) % 4)
+print(json.loads(base64.urlsafe_b64decode(payload))["sub"])
+PY
+)
 
 # 4. Change password (returns new token with passwordResetRequired=false)
 NEW_TOKEN_RESP=$(curl -s -X POST "http://localhost:8081/api/v1/access/users/${USER_ID}/password" \
@@ -89,6 +108,32 @@ echo "$NEW_TOKEN_RESP" | jq .
 # {"data":{"accessToken":"...","passwordResetRequired":false,...}}
 
 export ADMIN_TOKEN=$(echo "$NEW_TOKEN_RESP" | jq -r '.data.accessToken')
+```
+
+PowerShell equivalent for Windows:
+
+```powershell
+$CredFile = if ($env:GOCELL_STATE_DIR) {
+  Join-Path $env:GOCELL_STATE_DIR "initial_admin_password"
+} else {
+  Join-Path $env:LOCALAPPDATA "gocell\run\initial_admin_password"
+}
+$Cred = Get-Content $CredFile | Where-Object { $_ -match "=" } | ConvertFrom-StringData
+
+$TokenResp = Invoke-RestMethod -Method Post http://localhost:8081/api/v1/access/sessions/login `
+  -ContentType "application/json" `
+  -Body (@{ username = $Cred.username; password = $Cred.password } | ConvertTo-Json)
+$BootstrapToken = $TokenResp.data.accessToken
+
+$Payload = $BootstrapToken.Split(".")[1].Replace("-", "+").Replace("_", "/")
+$Payload = $Payload.PadRight($Payload.Length + (4 - $Payload.Length % 4) % 4, "=")
+$UserID = ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Payload)) | ConvertFrom-Json).sub
+
+$NewTokenResp = Invoke-RestMethod -Method Post "http://localhost:8081/api/v1/access/users/$UserID/password" `
+  -Headers @{ Authorization = "Bearer $BootstrapToken" } `
+  -ContentType "application/json" `
+  -Body (@{ oldPassword = $Cred.password; newPassword = "MyStr0ngP@ss!" } | ConvertTo-Json)
+$env:ADMIN_TOKEN = $NewTokenResp.data.accessToken
 ```
 
 After this the `ADMIN_TOKEN` works for all business endpoints.

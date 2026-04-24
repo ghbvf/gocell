@@ -11,8 +11,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
@@ -23,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/shutdown"
 )
 
 const demoAdminToken = "iotdevice-admin-demo-token"
@@ -76,7 +75,7 @@ func main() {
 	}
 
 	// Bootstrap the application on :8083.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := shutdown.NotifyContext(context.Background())
 	defer stop()
 
 	app := bootstrap.New(

@@ -164,16 +164,15 @@ package main
 
 import (
     "context"
-    "os/signal"
-    "syscall"
 
     mycell "github.com/ghbvf/gocell/cells/my-cell"
     "github.com/ghbvf/gocell/kernel/assembly"
     "github.com/ghbvf/gocell/runtime/bootstrap"
+    "github.com/ghbvf/gocell/runtime/shutdown"
 )
 
 func main() {
-    ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+    ctx, cancel := shutdown.NotifyContext(context.Background())
     defer cancel()
 
     asm := assembly.New(assembly.Config{ID: "my-app", DurabilityMode: cell.DurabilityDemo})

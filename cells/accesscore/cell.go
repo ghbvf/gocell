@@ -97,7 +97,7 @@ func WithTxManager(tx persistence.TxRunner) Option {
 
 // ResolveBootstrapCredentialPath returns the credential file path using the
 // same resolution logic as the internal Bootstrapper: stateDir overrides
-// GOCELL_STATE_DIR, which overrides the default /run/gocell path.
+// GOCELL_STATE_DIR, which overrides the platform default state directory.
 //
 // This is the canonical path helper for cmd/corebundle startup logging so
 // that the logged path always matches the file the bootstrapper writes (P2-6).
@@ -138,8 +138,8 @@ func WithBootstrapUsername(u string) InitialAdminOption {
 }
 
 // WithBootstrapCredentialPath overrides the credential file path.
-// Default resolution: GOCELL_STATE_DIR/initial_admin_password →
-// /run/gocell/initial_admin_password.
+// Default resolution: GOCELL_STATE_DIR/initial_admin_password → platform
+// default state directory.
 func WithBootstrapCredentialPath(p string) InitialAdminOption {
 	return func(c *initialAdminConfig) { c.credentialPath = p }
 }

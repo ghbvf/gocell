@@ -12,6 +12,10 @@ import "errors"
 // convention ("no bare errors.New for external-facing errors") does not apply
 // here.
 var (
+	// ErrUnsupportedPlatform is returned by platform-specific credential file
+	// operations on targets that do not provide a secure implementation.
+	ErrUnsupportedPlatform = errors.New("initialadmin: bootstrap not supported on this platform")
+
 	// ErrCredFileExists is returned by WriteCredentialFile when the target path
 	// already exists. This prevents a second bootstrap run from silently
 	// overwriting an existing credential.

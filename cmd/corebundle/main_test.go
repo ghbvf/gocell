@@ -113,7 +113,7 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// run() with an immediately-cancelled context exercises the full assembly
 	// path (cells, bootstrap) without needing a real HTTP listener.
 	// Set GOCELL_STATE_DIR to a writable temp dir so WithInitialAdminBootstrap
-	// can write the credential file (default /run/gocell is not writable in CI).
+	// can write the credential file without relying on platform defaults in CI.
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
@@ -379,7 +379,7 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	// GOCELL_CONFIGCORE_DATABASE_URL is not read in memory mode — no DSN required.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "")
 	// Set GOCELL_STATE_DIR to a writable temp dir so WithInitialAdminBootstrap
-	// can write the credential file (default /run/gocell is not writable in CI).
+	// can write the credential file without relying on platform defaults in CI.
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")

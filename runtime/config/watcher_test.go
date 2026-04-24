@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -31,6 +32,13 @@ func waitReady(t *testing.T, w *Watcher) {
 func touchFile(t *testing.T, path, content string) {
 	t.Helper()
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+}
+
+func skipWindowsSymlinkTest(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink pivot tests require Windows symlink privileges")
+	}
 }
 
 // spyCollector records watcher metrics calls for test assertions.
@@ -321,6 +329,8 @@ func TestWatcher_Debounce_ZeroMeansImmediate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
+	skipWindowsSymlinkTest(t)
+
 	dir := t.TempDir()
 
 	// Create two config versions as regular files.
@@ -360,6 +370,8 @@ func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
 }
 
 func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {
+	skipWindowsSymlinkTest(t)
+
 	dir := t.TempDir()
 
 	// Simulate K8s ConfigMap layout:

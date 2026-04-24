@@ -12,8 +12,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
@@ -27,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -142,13 +141,9 @@ func main() {
 
 	// Bootstrap handles: assembly.Start -> route registration -> event subscriptions
 	// -> HTTP server -> graceful shutdown.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := shutdown.NotifyContext(context.Background())
 	defer stop()
 
-	stateDir := os.Getenv("GOCELL_STATE_DIR")
-	if stateDir == "" {
-		stateDir = "/run/gocell"
-	}
 	// Public routes and password-reset-exempt routes are declared by the
 	// accesscore Cell itself via auth.Declare. Bootstrap only needs the
 	// opt-in signal that the assembly expects an auth provider cell.
@@ -161,11 +156,11 @@ func main() {
 		// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin — no extra hook needed.
 	)
 
-	credPath, err := accesscore.ResolveBootstrapCredentialPath(stateDir)
+	credPath, err := accesscore.ResolveBootstrapCredentialPath("")
 	if err != nil {
 		logger.Warn("ssobff: invalid GOCELL_STATE_DIR for credential path resolution",
 			slog.String("error", err.Error()))
-		credPath = stateDir + "/initial_admin_password"
+		credPath = "<unresolved>"
 	}
 	logger.Info("ssobff: starting on :8081; if first run, initial admin credentials are written to the path below",
 		slog.String("mode", "in-memory"),

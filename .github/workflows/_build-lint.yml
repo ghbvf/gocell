@@ -122,6 +122,26 @@ jobs:
           path: coverage.out
           retention-days: 1
 
+  os-smoke:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Cross-platform smoke tests
+        run: go test ./cells/accesscore/internal/initialadmin ./cells/accesscore ./runtime/shutdown ./runtime/config ./kernel/governance ./pkg/contracttest ./cmd/corebundle/... ./examples/ssobff/... -count=1 -timeout 5m
+
   integration-test:
     if: ${{ inputs.run-integration }}
     runs-on: ubuntu-latest

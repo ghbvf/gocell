@@ -1,5 +1,3 @@
-//go:build unix
-
 package initialadmin
 
 import (
@@ -18,7 +16,7 @@ import (
 type SweepConfig struct {
 	// StateDir is the directory to scan (typically $GOCELL_STATE_DIR).
 	// An empty string falls back to ResolveCredentialPath("") semantics
-	// (GOCELL_STATE_DIR env var → /run/gocell/initial_admin_password).
+	// (GOCELL_STATE_DIR env var → platform default credential path).
 	StateDir string
 	// Clock supplies "now" for expiry comparison. nil → RealClock{}.
 	Clock Clock

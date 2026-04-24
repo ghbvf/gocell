@@ -13,6 +13,12 @@ docker compose up -d          # boots all infra services
 docker compose ps             # verify all services are healthy
 ```
 
+Windows PowerShell:
+
+```powershell
+.\scripts\healthcheck-verify.ps1
+```
+
 The `docker-compose.yml` at the repository root defines the required services.
 
 ## Running Integration Tests
@@ -81,4 +87,4 @@ Integration tests run in a separate CI stage after unit tests pass. The pipeline
 2. Runs `go test -tags integration ./... -count=1`.
 3. Tears down services via `docker compose down`.
 
-See `scripts/healthcheck-verify.sh` for the health-check gate that precedes integration tests.
+See `scripts/healthcheck-verify.sh` and `scripts/healthcheck-verify.ps1` for the health-check gate that precedes integration tests.

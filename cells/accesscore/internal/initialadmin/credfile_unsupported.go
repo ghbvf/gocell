@@ -1,4 +1,4 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package initialadmin
 
@@ -23,10 +23,4 @@ func RemoveCredentialFile(_ string) error {
 // Returns ErrUnsupportedPlatform on all calls.
 func ReadCredentialExpiresAt(_ string) (time.Time, error) {
 	return time.Time{}, fmt.Errorf("%w: ReadCredentialExpiresAt", ErrUnsupportedPlatform)
-}
-
-// ResolveCredentialPath is not supported on non-unix platforms.
-// Returns ErrUnsupportedPlatform on all calls.
-func ResolveCredentialPath(_ string) (string, error) {
-	return "", fmt.Errorf("%w: ResolveCredentialPath", ErrUnsupportedPlatform)
 }

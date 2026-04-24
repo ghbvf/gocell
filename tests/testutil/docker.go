@@ -5,6 +5,8 @@ import (
 	"context"
 	"net"
 	"os"
+	"os/exec"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -15,7 +17,8 @@ import (
 //
 // Detection strategy:
 //  1. DOCKER_HOST env var — if set and non-empty, assume Docker is available.
-//  2. Default Unix socket /var/run/docker.sock — try a 1-second TCP dial.
+//  2. Default Unix socket /var/run/docker.sock on Unix targets.
+//  3. `docker info` fallback for Docker Desktop / named-pipe setups.
 //
 // This avoids importing the Docker client SDK while remaining correct for the
 // common CI cases (socket present or DOCKER_HOST set).
@@ -32,13 +35,18 @@ func dockerAvailable() bool {
 	if host := os.Getenv("DOCKER_HOST"); host != "" {
 		return true
 	}
-	// Try the default Unix socket via a short-lived TCP dial.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
-	if err != nil {
-		return false
+	if runtime.GOOS != "windows" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		conn, err := (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
+		if err == nil {
+			_ = conn.Close()
+			return true
+		}
 	}
-	_ = conn.Close()
-	return true
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "docker", "info", "--format", "{{.ServerVersion}}")
+	return cmd.Run() == nil
 }

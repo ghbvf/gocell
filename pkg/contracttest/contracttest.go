@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -271,12 +272,12 @@ func compileSchemaFile(t testing.TB, dir, filename string) *jsonschema.Schema {
 	}
 
 	compiler := jsonschema.NewCompiler()
-	url := "file:///" + filepath.Clean(fullPath)
-	if err := compiler.AddResource(url, doc); err != nil {
+	schemaURL := schemaFileURL(fullPath)
+	if err := compiler.AddResource(schemaURL, doc); err != nil {
 		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
 	}
 
-	schema, err := compiler.Compile(url)
+	schema, err := compiler.Compile(schemaURL)
 	if err != nil {
 		t.Fatalf("contracttest: compile schema %q: %v", fullPath, err)
 	}
@@ -391,15 +392,23 @@ func compileSchemaFileAbsolute(t testing.TB, dir, filename string) *jsonschema.S
 	}
 
 	compiler := jsonschema.NewCompiler()
-	url := "file:///" + filepath.Clean(fullPath)
-	if err := compiler.AddResource(url, doc); err != nil {
+	schemaURL := schemaFileURL(fullPath)
+	if err := compiler.AddResource(schemaURL, doc); err != nil {
 		t.Fatalf("contracttest: add schema resource %q: %v", fullPath, err)
 	}
 
-	schema, err := compiler.Compile(url)
+	schema, err := compiler.Compile(schemaURL)
 	if err != nil {
 		t.Fatalf("contracttest: compile schema %q: %v", fullPath, err)
 	}
 
 	return schema
+}
+
+func schemaFileURL(path string) string {
+	cleaned := filepath.ToSlash(filepath.Clean(path))
+	if runtime.GOOS == "windows" && len(cleaned) >= 2 && cleaned[1] == ':' {
+		cleaned = "/" + cleaned
+	}
+	return (&url.URL{Scheme: "file", Path: cleaned}).String()
 }

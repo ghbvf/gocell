@@ -33,7 +33,7 @@ func loadSharedErrorSchema(t *testing.T) *jsonschema.Schema {
 	require.NoError(t, json.Unmarshal(data, &doc), "parse schema JSON")
 
 	compiler := jsonschema.NewCompiler()
-	url := "file:///error-response-v1.schema.json"
+	url := schemaFileURL(schemaPath)
 	require.NoError(t, compiler.AddResource(url, doc))
 
 	schema, err := compiler.Compile(url)

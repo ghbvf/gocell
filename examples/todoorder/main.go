@@ -15,8 +15,6 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"os/signal"
-	"syscall"
 
 	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -25,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/shutdown"
 )
 
 func main() {
@@ -60,7 +59,7 @@ func main() {
 	}
 
 	// Bootstrap the application on :8082.
-	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	ctx, stop := shutdown.NotifyContext(context.Background())
 	defer stop()
 
 	app := bootstrap.New(

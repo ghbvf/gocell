@@ -1,5 +1,3 @@
-//go:build unix
-
 package initialadmin
 
 import (
@@ -26,10 +24,6 @@ const (
 	// defaultAdminUsername is the username created when no explicit username is provided.
 	defaultAdminUsername = "admin"
 
-	// defaultCredentialPath is used when neither BootstrapConfig.CredentialPath nor
-	// GOCELL_STATE_DIR are set.
-	defaultCredentialPath = "/run/gocell/initial_admin_password"
-
 	// defaultTTL is the credential file lifetime before the cleanup worker removes it.
 	defaultTTL = 24 * time.Hour
 )
@@ -47,7 +41,7 @@ type BootstrapConfig struct {
 	// Username is the admin username to create. Defaults to "admin".
 	Username string
 	// CredentialPath is the absolute path for the credential file.
-	// Defaults: GOCELL_STATE_DIR/initial_admin_password → /run/gocell/initial_admin_password.
+	// Defaults: GOCELL_STATE_DIR/initial_admin_password → platform state dir.
 	CredentialPath string
 	// TTL is the credential file lifetime. Defaults to 24h.
 	TTL time.Duration
@@ -115,7 +109,7 @@ func NewBootstrapper(deps BootstrapDeps, cfg BootstrapConfig) (*Bootstrapper, er
 
 // ResolveCredentialPath returns the credential file path for the given stateDir.
 // When stateDir is empty, the GOCELL_STATE_DIR environment variable is consulted;
-// if that is also empty, the default path is used.
+// if that is also empty, the platform default state directory is used.
 //
 // stateDir (or GOCELL_STATE_DIR) must be an absolute path; a non-absolute value
 // causes a fail-fast startup error (P2-1 fix: prevents path-traversal / ambiguous
@@ -128,12 +122,16 @@ func ResolveCredentialPath(stateDir string) (string, error) {
 		dir = os.Getenv("GOCELL_STATE_DIR")
 	}
 	if dir == "" {
-		return defaultCredentialPath, nil
+		resolved, err := defaultCredentialDir()
+		if err != nil {
+			return "", err
+		}
+		dir = resolved
 	}
 	if !filepath.IsAbs(dir) {
 		return "", fmt.Errorf("initialadmin: GOCELL_STATE_DIR must be an absolute path, got %q", dir)
 	}
-	return filepath.Clean(dir + "/initial_admin_password"), nil
+	return filepath.Clean(filepath.Join(dir, "initial_admin_password")), nil
 }
 
 // resolveCredentialPath is the internal convenience wrapper used by NewBootstrapper.

@@ -1,5 +1,5 @@
 // Package shutdown provides graceful shutdown support by listening for
-// SIGINT/SIGTERM signals with a configurable timeout.
+// platform shutdown signals with a configurable timeout.
 package shutdown
 
 import (
@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
-	"syscall"
 	"time"
 )
 
@@ -50,12 +49,12 @@ func (m *Manager) Register(h Hook) {
 	m.hooks = append(m.hooks, h)
 }
 
-// Wait blocks until SIGINT or SIGTERM is received, then runs all hooks with a
-// timeout-bounded context. If all hooks complete before the timeout, it returns
-// nil. If the timeout expires, it returns context.DeadlineExceeded.
+// Wait blocks until a platform shutdown signal is received, then runs all hooks
+// with a timeout-bounded context. If all hooks complete before the timeout, it
+// returns nil. If the timeout expires, it returns context.DeadlineExceeded.
 func (m *Manager) Wait() error {
 	sig := make(chan os.Signal, 1)
-	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
+	signal.Notify(sig, shutdownSignals()...)
 	received := <-sig
 	signal.Stop(sig)
 
@@ -65,6 +64,13 @@ func (m *Manager) Wait() error {
 	defer cancel()
 
 	return m.runHooks(ctx)
+}
+
+// NotifyContext returns a context cancelled by the platform's graceful-shutdown
+// signals. Unix targets listen for SIGINT and SIGTERM; Windows listens for
+// os.Interrupt.
+func NotifyContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(parent, shutdownSignals()...)
 }
 
 // Shutdown runs all hooks immediately with a timeout-bounded context.
