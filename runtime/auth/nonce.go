@@ -103,11 +103,15 @@ func WithMaxNonceEntries(n int) InMemoryNonceOption {
 }
 
 // NewInMemoryNonceStore creates an InMemoryNonceStore with the given maxAge.
-// maxAge must be positive; a zero or negative value makes replay protection
-// ineffective and is rejected with an error.
+// maxAge must be at least ServiceTokenMaxAge; a shorter value reintroduces the
+// replay window the store is designed to close, and is rejected with an error.
 func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) (*InMemoryNonceStore, error) {
 	if maxAge <= 0 {
 		return nil, fmt.Errorf("auth: nonce store maxAge must be positive, got %v", maxAge)
+	}
+	if maxAge < ServiceTokenMaxAge {
+		return nil, fmt.Errorf("auth: nonce store maxAge %v is shorter than ServiceTokenMaxAge %v; a shorter TTL reintroduces the replay window",
+			maxAge, ServiceTokenMaxAge)
 	}
 	s := &InMemoryNonceStore{
 		seen:       make(map[string]time.Time),
@@ -124,9 +128,21 @@ func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) (*
 // Kind reports NonceStoreKindInMemory.
 func (*InMemoryNonceStore) Kind() NonceStoreKind { return NonceStoreKindInMemory }
 
+// MaxAge reports the configured nonce retention window.
+// Exposed for startup validation (assert store outlives ServiceTokenMaxAge)
+// and integration tests.
+func (s *InMemoryNonceStore) MaxAge() time.Duration { return s.maxAge }
+
+// ErrNonceStoreFull is returned by InMemoryNonceStore.CheckAndMark when the
+// nonce map has reached maxEntries and a forced prune found no expired entries
+// to reclaim. Callers should treat this as a transient infrastructure failure
+// (503 / Requeue) rather than a replay signal.
+var ErrNonceStoreFull = errors.New("auth: nonce store is full; no expired entries to reclaim")
+
 // CheckAndMark checks whether nonce has been seen within its TTL window. If
 // not, it records the nonce and returns nil. If the nonce is still live,
-// ErrNonceReused is returned.
+// ErrNonceReused is returned. If the store is at capacity and no entries can
+// be reclaimed, ErrNonceStoreFull is returned.
 func (s *InMemoryNonceStore) CheckAndMark(_ context.Context, nonce string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -139,6 +155,10 @@ func (s *InMemoryNonceStore) CheckAndMark(_ context.Context, nonce string) error
 			if now.After(exp) {
 				delete(s.seen, k)
 			}
+		}
+		// If still at or above cap after pruning, reject to prevent unbounded growth.
+		if len(s.seen) >= s.maxEntries {
+			return ErrNonceStoreFull
 		}
 	}
 

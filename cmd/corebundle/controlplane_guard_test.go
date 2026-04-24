@@ -155,27 +155,24 @@ func TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret(t *testing.T) {
 			"(multi-pod deployments replace it with a shared store)")
 }
 
-// TestInternalGuardFromEnv_NonceStoreTTLExtendsBeyondTokenWindow pins the
-// invariant that the default nonce store's retention window is at least as
-// long as the token validity window plus the edge buffer — shrinking the TTL
-// below ServiceTokenMaxAge would reintroduce the replay window the PR closes.
+// TestInternalGuardFromEnv_NonceStoreTTL_ExceedsTokenWindowByBuffer pins the
+// invariant that the nonce store TTL configured by internalGuardFromEnv exceeds
+// ServiceTokenMaxAge by at least nonceStoreBuffer. Shrinking the buffer to zero
+// would allow a nonce to expire at exactly the token validity boundary, creating
+// a race window. This test uses MaxAge() rather than driving real time so it
+// runs deterministically without sleeping.
 //
-// We check the TTL indirectly: first register a nonce just after boot,
-// advance within the token window, and verify the replay is still rejected.
-func TestInternalGuardFromEnv_NonceStoreTTLExtendsBeyondTokenWindow(t *testing.T) {
-	secret := freshTestServiceSecret(t)
-	t.Setenv("GOCELL_SERVICE_SECRET", secret)
+// F6: also asserts nonceStoreBuffer > 0 to catch an accidental zero-constant edit.
+func TestInternalGuardFromEnv_NonceStoreTTL_ExceedsTokenWindowByBuffer(t *testing.T) {
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
+	t.Setenv("GOCELL_SINGLE_POD", "1") // required after F1: real mode + in_memory needs opt-in
 	guard, err := internalGuardFromEnv("real")
 	require.NoError(t, err)
-	require.NotNil(t, guard)
 
-	// Feed the same nonce twice to the backing store — directly, not via
-	// ServiceTokenMiddleware, so the test does not depend on time of day
-	// or token signing specifics.
-	ctx := t.Context()
-	store := guard.NonceStore()
-	require.NoError(t, store.CheckAndMark(ctx, "nonce-ttl-probe"),
-		"first insert must succeed")
-	require.ErrorIs(t, store.CheckAndMark(ctx, "nonce-ttl-probe"),
-		auth.ErrNonceReused, "same nonce within TTL must be rejected")
+	store, ok := guard.NonceStore().(*auth.InMemoryNonceStore)
+	require.True(t, ok, "production guard must use *InMemoryNonceStore by default")
+	assert.GreaterOrEqual(t, store.MaxAge(), auth.ServiceTokenMaxAge+nonceStoreBuffer,
+		"nonce TTL must exceed token validity window by at least nonceStoreBuffer")
+	assert.Greater(t, nonceStoreBuffer, time.Duration(0),
+		"nonceStoreBuffer must be positive so exclusive age boundary has a safety margin")
 }

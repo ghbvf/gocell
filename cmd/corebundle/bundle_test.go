@@ -219,7 +219,9 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstr
 // Each case takes a baseline that passes Validate and mutates one field to
 // verify Validate surfaces that specific failure with errcode.ErrValidationFailed.
 func TestSharedDeps_Validate(t *testing.T) {
-	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
+	// SinglePodReplayProtection=true acknowledges in-memory replay defense scope
+	// for single-pod deployments (mirrors GOCELL_SINGLE_POD=1).
+	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
 	devTopo := bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
 
 	cases := []struct {
@@ -257,6 +259,24 @@ func TestSharedDeps_Validate(t *testing.T) {
 			},
 			wantErr:    true,
 			wantSubstr: "NoopNonceStore detected",
+		},
+		{
+			// F1: in-memory store in real mode without GOCELL_SINGLE_POD=1 must be rejected.
+			name: "real mode + in_memory + single_pod=false → error",
+			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
+			mutate: func(d *SharedDeps) {
+				// guard already has InMemoryNonceStore from newTestInternalGuard;
+				// topology lacks SinglePodReplayProtection so Validate rejects.
+			},
+			wantErr:    true,
+			wantSubstr: "GOCELL_SINGLE_POD=1",
+		},
+		{
+			// F1: in-memory store in real mode with GOCELL_SINGLE_POD=1 is accepted.
+			name:    "real mode + in_memory + single_pod=true → ok",
+			topo:    bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true},
+			mutate:  func(*SharedDeps) {},
+			wantErr: false,
 		},
 	}
 

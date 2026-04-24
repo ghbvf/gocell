@@ -282,6 +282,26 @@ const (
 	// review (backlog S-nonce, 2026-04-24): a captured valid service token
 	// must not be replayable within its 5-minute validity window.
 	ErrControlplaneNonceStoreMissing Code = "ERR_CONTROLPLANE_NONCE_STORE_MISSING"
+
+	// ErrAuthReplayDetected distinguishes a service-token replay signal from
+	// generic authentication failures (invalid MAC, expired token, missing
+	// header). Machine-side consumers (monitoring, alerting, SDKs) can match
+	// this code exclusively to trigger replay-specific escalation without
+	// parsing the human-readable message.
+	//
+	// Maps to HTTP 401 Unauthorized — the client must not retry with the same
+	// token; a new token with a fresh nonce is required.
+	ErrAuthReplayDetected Code = "ERR_AUTH_REPLAY_DETECTED"
+
+	// ErrNonceStoreFull signals that the in-memory nonce store has reached its
+	// maximum entry capacity and could not reclaim any expired entries. The
+	// request is rejected to prevent unbounded memory growth; the condition is
+	// transient (existing nonces will expire at the next TTL boundary).
+	//
+	// Maps to HTTP 503 Service Unavailable — callers should retry after a brief
+	// back-off. Distinct from ErrAuthReplayDetected (security signal) so
+	// operators can route capacity alerts separately from security alerts.
+	ErrNonceStoreFull Code = "ERR_AUTH_NONCE_STORE_FULL"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

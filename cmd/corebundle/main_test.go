@@ -172,6 +172,7 @@ func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
+	t.Setenv("GOCELL_SINGLE_POD", "1") // F1: acknowledge in-memory nonce store in single-pod real mode
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -203,6 +204,7 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_CONFIGCORE_CURSOR_KEY", "config-cursor-key-32b-padded-xx!")
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
+	t.Setenv("GOCELL_SINGLE_POD", "1") // F1: acknowledge in-memory nonce store in single-pod real mode
 	// The trip-wire: verbose token is empty.
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "")
 
@@ -234,6 +236,7 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
+	t.Setenv("GOCELL_SINGLE_POD", "1") // F1: acknowledge in-memory nonce store in single-pod real mode
 	// The trip-wire: metrics token is empty.
 	t.Setenv("GOCELL_METRICS_TOKEN", "")
 
@@ -464,6 +467,8 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 			t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 			t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
+			// F1: single-pod acknowledgement required for in-memory NonceStore in real mode.
+			t.Setenv("GOCELL_SINGLE_POD", "1")
 			// Trip-wire: replace just one env with a well-known demo value.
 			t.Setenv(tc.patch.name, tc.patch.value)
 

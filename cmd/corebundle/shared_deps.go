@@ -134,12 +134,20 @@ func (d *SharedDeps) validateControlPlane() []error {
 		errs = append(errs, errcode.New(errcode.ErrControlplaneServiceSecretMissing,
 			"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" "+
 				"to protect /internal/v1/*"))
-	} else if kind := d.InternalGuard.NonceStore().Kind(); kind == auth.NonceStoreKindNoop {
+	} else if ns := d.InternalGuard.NonceStore(); ns == nil {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
+			"internalGuard.nonceStore is nil; guard constructed without WithServiceTokenNonceStore"))
+	} else if kind := ns.Kind(); kind == auth.NonceStoreKindNoop {
 		errs = append(errs, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
 			"control-plane NonceStore must be a replay-safe implementation in "+
 				"adapter mode \"real\"; NoopNonceStore detected — inject "+
 				"InMemoryNonceStore (single pod) or a shared store (multi-pod) "+
 				"via WithServiceTokenNonceStore"))
+	} else if kind == auth.NonceStoreKindInMemory && !d.Topology.SinglePodReplayProtection && d.Topology.RequireProductionControlPlane() {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
+			"in-memory nonce store requires GOCELL_SINGLE_POD=1 (single-pod deployments) "+
+				"or a distributed store via WithServiceTokenNonceStore (multi-pod); "+
+				"refuse fail-open"))
 	}
 	return errs
 }

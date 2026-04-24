@@ -27,6 +27,14 @@ type Topology struct {
 
 	// StorageBackend mirrors GOCELL_CELL_ADAPTER_MODE: "memory" or "postgres".
 	StorageBackend string
+
+	// SinglePodReplayProtection is set when GOCELL_SINGLE_POD=1, acknowledging
+	// that the deployment is single-pod and in-memory replay protection is
+	// sufficient. In real adapter mode, an in-memory NonceStore is rejected at
+	// startup unless this field is true or a distributed store is injected.
+	// Multi-pod deployments must leave this unset and inject a distributed
+	// NonceStore via auth.WithServiceTokenNonceStore.
+	SinglePodReplayProtection bool
 }
 
 // TopologyFromEnv reads GOCELL_CELL_ADAPTER_MODE and GOCELL_ADAPTER_MODE,
@@ -46,9 +54,13 @@ func TopologyFromEnv() (Topology, error) {
 
 	adapterMode := os.Getenv("GOCELL_ADAPTER_MODE")
 
+	singlePod := os.Getenv("GOCELL_SINGLE_POD")
+	singlePodReplayProtection := singlePod == "1" || singlePod == "true"
+
 	topo := Topology{
-		AdapterMode:    adapterMode,
-		StorageBackend: storageBackend,
+		AdapterMode:               adapterMode,
+		StorageBackend:            storageBackend,
+		SinglePodReplayProtection: singlePodReplayProtection,
 	}
 
 	if err := topo.validate(); err != nil {

@@ -366,6 +366,14 @@ var codeToStatus = map[errcode.Code]int{
 	// in the section above — infrastructure unavailability is retryable and
 	// should not be conflated with internal bugs.
 
+	// --- Auth replay / nonce-store codes ---
+	// ErrAuthReplayDetected is a security signal: the nonce has already been
+	// consumed. Client must not retry with the same token (401).
+	errcode.ErrAuthReplayDetected: http.StatusUnauthorized,
+	// ErrNonceStoreFull is a transient capacity condition: the in-memory store
+	// is at cap with no expired entries to reclaim. Client should back off (503).
+	errcode.ErrNonceStoreFull: http.StatusServiceUnavailable,
+
 	// --- 501 Not Implemented ---
 	errcode.ErrNotImplemented: http.StatusNotImplemented,
 }
