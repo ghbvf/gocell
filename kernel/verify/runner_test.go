@@ -135,25 +135,48 @@ func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
 	r := NewRunner(nil, dir)
-	pkg, extra := r.resolveJourneyPkg(resolvedRef{Kind: PrefixJourney})
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
 	assert.Equal(t, "./tests/integration/...", pkg)
 	assert.Contains(t, extra, "-tags=integration")
+}
+
+func TestResolveJourneyPkg_ExampleJourneyPrefersExamplePackage(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "examples", "todoorder"), 0o755))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
+
+	r := NewRunner(nil, dir)
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{
+		File: "examples/todoorder/journeys/J-ordercreate.yaml",
+	}, resolvedRef{Kind: PrefixJourney})
+
+	assert.Equal(t, "./examples/todoorder/...", pkg)
+	assert.Nil(t, extra)
 }
 
 func TestResolveJourneyPkg_JourneysDir(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
 	r := NewRunner(nil, dir)
-	pkg, extra := r.resolveJourneyPkg(resolvedRef{Kind: PrefixJourney})
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
 	assert.Equal(t, "./journeys/...", pkg)
 	assert.Nil(t, extra)
 }
 
 func TestResolveJourneyPkg_Fallback(t *testing.T) {
 	r := NewRunner(nil, t.TempDir())
-	pkg, extra := r.resolveJourneyPkg(resolvedRef{Kind: PrefixJourney})
+	pkg, extra := r.resolveJourneyPkg(&metadata.JourneyMeta{}, resolvedRef{Kind: PrefixJourney})
 	assert.Equal(t, "./...", pkg)
 	assert.Nil(t, extra)
+}
+
+func TestExampleNameFromJourneyFile(t *testing.T) {
+	name, ok := exampleNameFromJourneyFile("examples/todoorder/journeys/J-ordercreate.yaml")
+	require.True(t, ok)
+	assert.Equal(t, "todoorder", name)
+
+	_, ok = exampleNameFromJourneyFile("journeys/J-ordercreate.yaml")
+	assert.False(t, ok)
 }
 
 func TestResolveSlicePkg_PrefersGoFiles(t *testing.T) {

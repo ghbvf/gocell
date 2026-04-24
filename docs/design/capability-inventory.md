@@ -1,6 +1,6 @@
 # GoCell 完整能力清单
 
-> 更新日期: 2026-04-05 | Phase 0-3 完成后
+> 更新日期: 2026-04-24 | A13 文档事实源收口后
 
 ---
 
@@ -11,10 +11,10 @@
 | **kernel/** | 11 包 | 全部 IMPL | cell/assembly/metadata/governance/outbox/idempotency/journey/registry/scaffold/slice + schemas |
 | **runtime/** | 11 子包 | 全部 IMPL | auth/bootstrap/config/eventbus/http×3/observability×3/shutdown/worker |
 | **adapters/** | 6 包 | 全部 IMPL | postgres/redis/rabbitmq/oidc/s3/websocket |
-| **cells/** | 3 Cell, 16 slices | 全部 IMPL | accesscore(7s) / auditcore(4s) / configcore(5s) |
+| **cells/** | 3 platform Cell, 19 platform slices | 全部 IMPL | accesscore(9s) / auditcore(4s) / configcore(6s) |
 | **cmd/** | 2 CLI | 全部 IMPL | gocell (validate/scaffold/generate/check/verify) + corebundle |
 | **pkg/** | 5 包 | 全部 IMPL | errcode/ctxkeys/httputil/id/uid |
-| **contracts/** | 13 YAML | 声明完成 | 5 HTTP + 8 Event |
+| **contracts/** | 52 active YAML | 声明完成 | 38 platform + 14 examples |
 | **journeys/** | 8 YAML | 声明完成 | SSO/onboarding/lockout/refresh/logout/audit-trail/hot-reload/rollback |
 | **infra** | 4 服务 | 配置完成 | Docker Compose (PG/Redis/RabbitMQ/MinIO) + Makefile |
 | **docs** | 28 文件 | 完成 | 架构/指南/评审/参考 |
@@ -200,18 +200,20 @@
 
 ---
 
-## 5. Cells 层（3 Cell, 16 Slices）
+## 5. Cells 层（3 platform Cells, 19 platform Slices）
 
 ### 5.1 accesscore (L2, core)
 | Slice | 功能 | 端点 |
 |-------|------|------|
-| session-login | 密码登录 + JWT 签发 | POST /api/v1/access/sessions/login |
-| session-logout | 会话注销 + 事件发布 | POST /api/v1/access/sessions/logout |
-| session-refresh | Token 刷新 + rotation + reuse detection | POST /api/v1/access/sessions/refresh |
-| session-validate | 会话验证 | GET /api/v1/access/sessions/validate |
-| identity-manage | 用户 CRUD + 锁定/解锁 + PATCH | CRUD /api/v1/users |
-| rbac-check | RBAC 权限检查 | POST /api/v1/access/rbac/check |
-| authorization-decide | 权限决策 | POST /api/v1/access/authorize |
+| sessionlogin | 密码登录 + JWT 签发 | POST /api/v1/access/sessions/login |
+| sessionrefresh | Token 刷新 + rotation + reuse detection | POST /api/v1/access/sessions/refresh |
+| sessionlogout | 会话注销 + 事件发布 | DELETE /api/v1/access/sessions/{id} |
+| sessionvalidate | 会话验证 | internal service capability; no public HTTP route |
+| identitymanage | 用户 CRUD + 锁定/解锁 + PATCH + 改密 | /api/v1/access/users* |
+| rbaccheck | RBAC 角色查询与检查 | GET /api/v1/access/roles/{userID}, GET /api/v1/access/roles/{userID}/{roleName} |
+| rbacassign | RBAC 角色授予/撤销 | POST /internal/v1/access/roles/assign, POST /internal/v1/access/roles/revoke |
+| authorizationdecide | 权限决策 | internal service capability; no public HTTP route |
+| configreceive | 配置变更接收 | event.config.changed.v1 subscriber |
 
 Domain: User (PasswordHash/Status/CreatedAt) + Session (TokenPair/ExpiresAt/PreviousRefreshToken) + Role
 Ports: UserRepository + SessionRepository + RoleRepository
@@ -220,10 +222,10 @@ Adapters: internal/mem (in-memory)
 ### 5.2 auditcore (L3, core)
 | Slice | 功能 |
 |-------|------|
-| audit-append | 事件追加 + HMAC-SHA256 hash chain |
-| audit-verify | 完整性验证 |
-| audit-query | 审计日志查询 + time.Parse 400 校验 |
-| audit-archive | S3 归档（stub） |
+| auditappend | 事件追加 + HMAC-SHA256 hash chain |
+| auditverify | 完整性验证 |
+| auditquery | GET /api/v1/audit/entries + time.Parse 400 校验 |
+| auditarchive | S3 归档（stub） |
 
 Domain: AuditEntry (PrevHash/Hash/Payload)
 Ports: AuditRepository + ArchiveStore
@@ -232,11 +234,12 @@ Adapters: internal/mem + internal/adapters/postgres (AuditRepository PG) + inter
 ### 5.3 configcore (L2, core)
 | Slice | 功能 |
 |-------|------|
-| config-read | 配置读取 |
-| config-write | 配置 CRUD + outbox 事件 |
-| config-publish | 版本发布 + 回滚 |
-| config-subscribe | 变更订阅（event consumer） |
-| feature-flag | 特性开关评估 |
+| configread | GET /api/v1/config/{key} |
+| configwrite | POST /api/v1/config/ + outbox 事件 |
+| configpublish | POST /api/v1/config/{key}/publish + POST /api/v1/config/{key}/rollback |
+| configsubscribe | 变更订阅（event consumer） |
+| featureflag | GET/list/evaluate feature flags |
+| flagwrite | create/update/toggle/delete feature flags |
 
 Domain: ConfigEntry (Key/Value/Version) + FeatureFlag (Key/Enabled/Rollout)
 Ports: ConfigRepository + FlagRepository
@@ -264,28 +267,23 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 
 ---
 
-## 7. Contracts（13 个）
+## 7. Contracts（52 active, including examples）
 
-### HTTP Contracts
-| ID | Owner | Level |
-|----|-------|-------|
-| http.auth.login.v1 | accesscore | L1 |
-| http.auth.me.v1 | accesscore | L1 |
-| http.auth.refresh.v1 | accesscore | L1 |
-| http.config.get.v1 | configcore | L1 |
-| http.config.flags.v1 | configcore | L1 |
+| Scope | HTTP | Event | Command | Total |
+|-------|------|-------|---------|-------|
+| Platform (`contracts/`) | 27 | 11 | 0 | 38 |
+| Examples (`examples/*/contracts/`) | 9 | 2 | 3 | 14 |
+| Total | 36 | 13 | 3 | 52 |
 
-### Event Contracts
-| ID | Owner | Level | 特性 |
-|----|-------|-------|------|
-| event.session.created.v1 | accesscore | L2 | replayable, at-least-once |
-| event.session.revoked.v1 | accesscore | L2 | replayable, at-least-once |
-| event.user.created.v1 | accesscore | L2 | replayable |
-| event.user.locked.v1 | accesscore | L2 | replayable |
-| event.audit.appended.v1 | auditcore | L3 | replayable, at-least-once |
-| event.audit.integrity-verified.v1 | auditcore | L3 | — |
-| event.config.changed.v1 | configcore | L2 | replayable |
-| event.config.rollback.v1 | configcore | L2 | replayable |
+当前公开 HTTP route 只来自 `contract.yaml` 的 `kind: http` + `method/path`。`sessionvalidate` 与 `authorizationdecide` 是 accesscore 内部 service 能力，不再作为公开 HTTP route 记录。
+
+代表性平台 route：
+
+- accesscore: login/refresh/logout, user CRUD/lock/unlock/change-password, RBAC list/check, internal role assign/revoke
+- auditcore: audit entry list
+- configcore: config get/write/publish/rollback, flag list/get/evaluate/create/update/toggle/delete
+
+示例 contracts 覆盖 todoorder 的 order HTTP/event，以及 iotdevice 的 device HTTP/event/command 流程。
 
 ---
 

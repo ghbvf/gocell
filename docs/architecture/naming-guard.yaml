@@ -1,0 +1,92 @@
+include:
+  - README.md
+  - docs/**
+  - docs/backlog.md
+  - templates/**
+  - examples/*/README.md
+exclude:
+  - docs/archive/**
+  - docs/reviews/**
+  - docs/plans/**
+  - docs/architecture/naming-guard.yaml
+replacements:
+  - literal: access-core
+    replacement: accesscore
+  - literal: audit-core
+    replacement: auditcore
+  - literal: config-core
+    replacement: configcore
+  - literal: core-bundle
+    replacement: corebundle
+  - literal: sso-bff
+    replacement: ssobff
+  - literal: todo-order
+    replacement: todoorder
+  - literal: iot-device
+    replacement: iotdevice
+  - literal: my-app
+    replacement: myapp
+  - literal: my-cell
+    replacement: mycell
+  - literal: my-slice
+    replacement: myslice
+  - literal: session-login
+    replacement: sessionlogin
+  - literal: session-refresh
+    replacement: sessionrefresh
+  - literal: session-logout
+    replacement: sessionlogout
+  - literal: session-validate
+    replacement: sessionvalidate
+  - literal: identity-manage
+    replacement: identitymanage
+  - literal: authorization-decide
+    replacement: authorizationdecide
+  - literal: rbac-check
+    replacement: rbaccheck
+  - literal: rbac-assign
+    replacement: rbacassign
+  - literal: config-read
+    replacement: configread
+  - literal: config-write
+    replacement: configwrite
+  - literal: config-publish
+    replacement: configpublish
+  - literal: config-subscribe
+    replacement: configsubscribe
+  - literal: feature-flag
+    replacement: featureflag
+  - literal: flag-write
+    replacement: flagwrite
+  - literal: audit-write
+    replacement: auditappend
+  - literal: audit-append
+    replacement: auditappend
+  - literal: audit-verify
+    replacement: auditverify
+  - literal: audit-archive
+    replacement: auditarchive
+  - literal: audit-query
+    replacement: auditquery
+  - literal: order-create
+    replacement: ordercreate
+  - literal: order-query
+    replacement: orderquery
+  - literal: device-register
+    replacement: deviceregister
+  - literal: device-command
+    replacement: devicecommand
+  - literal: device-status
+    replacement: devicestatus
+  - literal: device-list
+    replacement: devicelist
+  - literal: config-manage
+    replacement: configread/configwrite
+  - literal: config-receive
+    replacement: configreceive
+  - literal: shared-crypto
+    replacement: sharedcrypto
+  - literal: session-manager
+    replacement: sessionmanager
+  - literal: audit-writer
+    replacement: auditwriter

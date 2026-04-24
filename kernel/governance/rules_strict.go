@@ -12,6 +12,7 @@ import (
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
 //   - FMT-C1: cell.yaml id contains '-' (kebab-case cell id disallowed)
 //   - FMT-A1: assembly.yaml id contains '-' (kebab-case assembly id disallowed)
+//   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
 //
 // When strict is false the method is equivalent to Validate() — strict-only
 // rules emit nothing (they are strict-only by design, there is no warning
@@ -22,6 +23,7 @@ func (v *Validator) ValidateStrict(strict bool) []ValidationResult {
 	results = append(results, v.validateFMT17(strict)...)
 	results = append(results, v.validateFMTC1(strict)...)
 	results = append(results, v.validateFMTA1(strict)...)
+	results = append(results, v.validateDOCNAME01(strict)...)
 	return results
 }
 
@@ -49,6 +51,10 @@ func (v *Validator) ValidateStrictFailFast() []ValidationResult {
 		return results
 	}
 	results = append(results, v.validateFMTA1(true)...)
+	if HasErrors(results) {
+		return results
+	}
+	results = append(results, v.validateDOCNAME01(true)...)
 	return results
 }
 

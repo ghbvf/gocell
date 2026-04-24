@@ -1,8 +1,6 @@
 # GoCell 统一命名基线
 
-这份文档只定义当前仓库需要长期遵守的最小命名规范。
-
-历史评审、阶段性 spec、归档材料中的旧叫法不自动视为现行规则。`archive/`、`reviews/`、`evidence/` 下的内容仅作历史记录。
+这份文档只定义当前仓库需要长期遵守的最小命名规范。历史评审、阶段性 spec、归档材料中的旧叫法不自动视为现行规则；`docs/archive/`、`docs/reviews/`、`docs/plans/`、`evidence/` 下的内容仅作历史记录。
 
 ## 规范来源
 
@@ -15,41 +13,45 @@
 
 ## 1. 硬规则
 
-### 1.1 实体 ID
+### 1.1 Cell / Slice / Assembly ID
 
-以下 ID 统一使用 `kebab-case`：
+Cell ID、Slice ID、Assembly ID 统一使用 no-dash 小写格式：只允许小写字母和数字，不使用连字符、下划线、驼峰或大小写混合。
 
-- Cell ID：`accesscore`
+现行示例：
+
+- Cell ID：`accesscore`、`auditcore`、`configcore`
+- Slice ID：`sessionlogin`、`auditappend`、`configwrite`
 - Assembly ID：`corebundle`
-- Actor ID：`platform-team`
 
-Slice ID 统一使用无连字符的 `nodash` 小写格式（与 slice 目录名一致）：
+对应目录名必须等于 ID：
 
-- `sessionlogin`
-- `configwrite`
-- `devicecommand`
+- `cells/{cell-id}/cell.yaml`
+- `cells/{cell-id}/slices/{slice-id}/slice.yaml`
+- `assemblies/{assembly-id}/assembly.yaml`
 
-Slice ID 由 `gocell validate --strict` 的 FMT-16 拦截 kebab-case；`gocell scaffold slice` 在生成时直接拒绝含 `-` 的 ID。历史上写作 `session-login`、`audit-query` 的 kebab 形式在 R1e-β 统一迁移为 no-dash，迁移后不再允许回退。
+`gocell validate --strict` 负责阻断回流：
 
-Journey ID 统一使用 `J-{kebab-case}`：
+- `FMT-16`：目录名不得含连字符
+- `FMT-17`：`allowedFiles[0]` 必须指向规范 slice 目录
+- `FMT-C1`：`cell.yaml` 的 `id` 不得含连字符
+- `FMT-A1`：`assembly.yaml` 的 `id` 不得含连字符
+- `DOC-NAME-01`：活动文档不得出现 `docs/architecture/naming-guard.yaml` 中声明的旧 literal
 
-- `J-sessionrefresh`
-- `J-configrollback`
+### 1.2 Actor / Journey / Contract ID
 
-Contract ID 统一使用小写点分格式：
+Actor ID 是外部身份键，不纳入 no-dash 实体 ID 规则；例如 `platform-team` 是合法 Actor。
+
+Journey ID 使用 `J-` 前缀加小写业务 token，例如 `J-ssologin`、`J-configrollback`、`J-ordercreate`。
+
+Contract ID 使用小写点分格式，例如：
 
 - `http.auth.login.v1`
 - `event.config.changed.v1`
+- `http.device.command.enqueue.v1`
 
-不使用：
+Contract ID 是协议边界名，不得被当作 Cell/Slice/Assembly ID 的命名先例。
 
-- `access_core`
-- `session-login` 作为 Slice ID（kebab-case 由 FMT-16 拦截）
-- `sessionLogin` / `SessionLogin` 作为 Slice ID（必须全小写无连字符）
-- `http/auth/login/v1`
-- `J_session_refresh`
-
-### 1.2 Metadata YAML 字段
+### 1.3 Metadata YAML 字段
 
 现行 metadata YAML 多词字段统一使用 `camelCase`：
 
@@ -59,15 +61,7 @@ Contract ID 统一使用小写点分格式：
 - `journeyId`
 - `updatedAt`
 
-不使用：
-
-- `belongs_to_cell`
-- `contract_usages`
-- `journey_id`
-
-### 1.3 禁用旧字段名
-
-以下字段名在现行元数据、模板、生成物、架构文档中禁用：
+旧字段名在现行元数据、模板、生成物、架构文档中禁用：
 
 - `cellId`
 - `sliceId`
@@ -81,26 +75,9 @@ Contract ID 统一使用小写点分格式：
 - `publishes`
 - `consumes`
 
-这些名称只允许出现在：
+这些名称只允许出现在历史归档、评审记录、或显式测试旧兼容行为的测试夹具中。
 
-- 历史归档文档
-- 评审记录中对旧设计的引用
-- 显式测试旧兼容行为的测试夹具
-
-### 1.4 Slice 目录
-
-一个 Slice 只能有一个规范目录：
-
-- `cells/{cell-id}/slices/{slice-id}/`
-
-规则：
-
-- 目录名必须等于 `slice.id`
-- 目录名使用 `kebab-case`
-- `slice.yaml` 与该 Slice 的 Go 实现应收敛到同一规范目录
-- 不允许继续新增并行兄弟目录，例如 `session-login/` 与 `sessionlogin/` 并存
-
-### 1.5 生成物
+### 1.4 生成物
 
 `generated/boundary.yaml` 只能包含文档定义的派生字段：
 
@@ -110,18 +87,15 @@ Contract ID 统一使用小写点分格式：
 - `importedContracts`
 - `smokeTargets`
 
-不再生成旧字段 `assemblyId`。
+不再生成旧 assembly 字段名。
 
-### 1.6 Go 标识符
+### 1.5 Go 标识符
 
 Go 代码遵循 Go idiom：
 
 - 导出标识符用 `PascalCase`
 - 非导出标识符用 `camelCase`
 - 常见缩略词保持大写
-
-本节只适用于 Go 代码中的类型名、变量名、函数名、字段名。
-不适用于 metadata YAML 字段名；metadata 字段仍遵循本文 1.2 和 1.3。
 
 统一缩略词：
 
@@ -142,49 +116,30 @@ Go 代码遵循 Go idiom：
 
 示例：
 
-- `RequestID`，不是 `RequestId`
-- `userID`，不是 `userId`
-- `JWTIssuer`，不是 `JwtIssuer`
-- `JWKSURI`，不是 `JwksUri`
+- `RequestID`
+- `userID`
+- `JWTIssuer`
+- `JWKSURI`
 
-## 2. 建议
+## 2. 文档命名治理
 
-以下是推荐约定，不作为 blocking 规则；若外部协议或现有兼容性要求不同，可按外部约束处理。
+`DOC-NAME-01` 由 `gocell validate --strict` 执行，扫描活动文档、模板、示例 README 和 backlog。命中旧 literal 时输出文件、行号、旧值和替换值，并以 error 阻断。
 
-### 2.1 外部字段
+旧 literal 的唯一清单在 `docs/architecture/naming-guard.yaml`。正文不重复列出旧名，避免让历史拼写继续扩散。
 
-- JSON / Query / Path 字段优先使用 `camelCase`
-- DB 字段、表列名、轻量 key-value key 优先使用 `snake_case`
-- 环境变量使用 `SCREAMING_SNAKE_CASE`，项目自有变量优先 `GOCELL_*`
-- 错误码值使用 `ERR_*` + `SCREAMING_SNAKE_CASE`
+不纳入阻断范围：
 
-### 2.2 Go 包与文件
+- `docs/archive/**`
+- `docs/reviews/**`
+- `docs/plans/**`
+- `evidence/**`
 
-- Go package 名使用小写连续词，例如 `sessionlogin`
-- Go 文件名优先 `lower_snake_case.go` / `*_test.go`
-
-注意：
-
-- `session-login` 是 Slice 名和目录名
-- `sessionlogin` 只适用于 Go package 名，不能反过来替代 Slice 名
-
-## 3. 当前仓库迁移项
-
-以下内容是当前仓库的收敛任务，不是永久规则本身：
-
-- 合并双目录 Slice 结构，消除 `session-login/` 与 `sessionlogin/` 并存
-- 将现行文档中的 `sessionlogin` / `sessionrefresh` / `sessionvalidate` 收敛为规范 Slice 名
-- 将现行文档中的 `audit-write` 收敛为 `audit-append`
-- 将现行文档中的 `config-manage` 收敛为 `config-read` + `config-write`
-- 更新 `boundary.yaml` 生成模板与测试，移除 `assemblyId`
-- 给治理工具补一条检查，阻止双目录和旧字段名回流
-
-## 4. PR 检查点
+## 3. PR 检查点
 
 每个涉及命名的 PR 至少确认以下几点：
 
-- 新增或修改的现行文档没有引入旧字段名
+- 新增或修改的现行文档没有引入旧 literal
 - 新增或修改的模板和生成物没有产出禁用字段名
-- 新增 Slice 没有创建并行命名目录
+- 新增 Cell、Slice、Assembly 没有创建并行命名目录
 - 新增 Go 标识符符合 Go 缩略词规则
-- 文档里讨论 Slice 时使用规范 Slice ID，而不是 package 名
+- 文档讨论 Slice 时使用规范 Slice ID，而不是 Go package 或旧拼写

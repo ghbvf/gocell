@@ -120,7 +120,7 @@ verify:
   smoke:
     - smoke.accesscore.startup
 l0Dependencies:              # 仅在导入 L0 Cell 时声明
-  - cell: shared-crypto
+  - cell: sharedcrypto
     reason: 确定性哈希工具
 ```
 
@@ -131,7 +131,7 @@ l0Dependencies:              # 仅在导入 L0 Cell 时声明
 施工映射声明。依赖真相的唯一写入方。
 
 ```yaml
-id: session-login            # 必填，== 目录名
+id: sessionlogin            # 必填，== 目录名
 belongsToCell: accesscore   # derived-anchor，可省略
 contractUsages:
   - contract: http.auth.login.v1
@@ -140,7 +140,7 @@ contractUsages:
     role: publish
 verify:
   unit:
-    - unit.session-login.service
+    - unit.sessionlogin.service
   contract:
     - contract.http.auth.login.v1.serve
   waivers:

@@ -1,13 +1,14 @@
-# iot-device Example
+# iotdevice Example
 
 An IoT device management application demonstrating the GoCell **L4 DeviceLatent** consistency model.
 
 ## Architecture
 
 - **devicecell** (L4 DeviceLatent): manages device lifecycle and command dispatch
-  - **device-register** slice: POST registers a device and publishes `event.device-registered.v1`
-  - **device-command** slice: enqueue commands, device polls pending commands, device acks execution
-  - **device-status** slice: GET queries current device status
+  - **deviceregister** slice: POST registers a device and publishes the device registration event
+  - **devicelist** slice: GET lists registered devices with cursor pagination
+  - **devicecommand** slice: enqueue commands, device polls pending commands, device acks execution
+  - **devicestatus** slice: GET queries current device status
 
 ## L4 DeviceLatent Model
 
@@ -63,7 +64,7 @@ curl -X POST http://localhost:8083/api/v1/devices \
 Response (201):
 
 ```json
-{"id":"dev-...","name":"sensor-001","status":"online"}
+{"data":{"id":"dev-...","name":"sensor-001","status":"online"}}
 ```
 
 ### List devices
@@ -91,7 +92,7 @@ curl -X POST http://localhost:8083/api/v1/devices/{id}/commands \
 Response (201):
 
 ```json
-{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"pending"}
+{"data":{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"pending","createdAt":"..."}}
 ```
 
 ### Device polls pending commands
@@ -117,7 +118,7 @@ curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/ack \
 Response (200):
 
 ```json
-{"status":"acked"}
+{"data":{"status":"acked"}}
 ```
 
 ### Query device status
