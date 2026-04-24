@@ -677,6 +677,12 @@ var _ lifecycle.ManagedResource = (*Connection)(nil)
 // per probe — that would amplify load on every readyz hit. Liveness vs
 // readiness signals come from the reconnect loop's NotifyClose feedback.
 //
+// Probe name change vs legacy: the deleted bootstrap.WithBrokerHealth registered
+// the broker probe under "rabbitmq". The ManagedResource path uses
+// "rabbitmq_ready" for parity with sibling adapter probe names
+// ("vault_transit_ready", etc.). Operators consuming the /readyz?verbose
+// dependencies map should update dashboards / alert rules accordingly.
+//
 // ref: kernel/lifecycle/managed_resource.go::Checkers — contract: nil = healthy.
 // ref: adapters/vault/transit_provider.go::Checkers — sibling adapter pattern.
 func (c *Connection) Checkers() map[string]func(context.Context) error {

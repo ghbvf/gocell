@@ -438,18 +438,22 @@ var _ kcrypto.KeyHandle = (*vaultTransitHandle)(nil)
 // encryption via HashiCorp Vault Transit.
 //
 // Envelope encryption layout (对标 k8s KMS v2):
-//   - Encrypt: generate local 32B DEK via crypto/rand → AES-GCM(DEK, plaintext, aad)
-//     → Vault Transit encrypt(DEK) wrap → return (ct, nonce, wrappedDEK, keyID).
-//   - keyID is extracted from the Vault encrypt response ciphertext prefix
-//     "vault:vN:" — mirrors k8s KMS v2 EncryptResponse.KeyID.
+//   - Encrypt: Vault Transit datakey/plaintext → server-generated 32B DEK
+//   - wrapped EDK (single round-trip; HSM-backed RNG in HCP).
+//     AES-GCM(DEK, plaintext, aad) → return (ct, nonce, EDK, keyID).
+//   - keyID is extracted from the Vault datakey response ciphertext prefix
+//     "vault:vN:" — mirrors k8s KMS v2 EncryptResponse.KeyID, eliminates the
+//     race between Current() and a concurrent rotation.
 //   - Decrypt: Vault Transit decrypt(edk) → unwrapped DEK → AES-GCM Open(ct, nonce, DEK, aad).
+//     The decrypt endpoint accepts EDKs minted by either /datakey/plaintext
+//     (current path) or the legacy /encrypt path; storage is forward-compatible.
 //   - AAD is bound entirely in the local AES-GCM layer; it is NOT sent to Vault.
 //     This fixes the S1 P0 bug where the pre-R1c path sent AAD as the Vault
 //     "context" field, which Vault ignores for non-derived aes256-gcm96 keys.
 //
 // ref: hashicorp/vault sdk/helper/keysutil/policy.go@main:L127 (version prefix)
 // ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/envelope.go@master
-// ref: hashicorp/vault builtin/logical/transit/path_encrypt.go@main (context ignored for non-derived keys)
+// ref: hashicorp/vault api-docs/secret/transit POST /datakey/plaintext/:name (server-side DEK)
 type vaultTransitHandle struct {
 	id        string
 	mountPath string
@@ -761,8 +765,13 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 			"vault-transit: create vault api client (check VAULT_ADDR)", err)
 	}
 
-	// A15 — apply VAULT_NAMESPACE before any I/O so Login + key reads inherit it.
-	applyNamespaceFromEnv(raw)
+	// A15 — apply VAULT_NAMESPACE before any I/O so Login + datakey + decrypt +
+	// key reads + rotate all inherit the namespace header. Return value is the
+	// applied namespace (empty when unset); discarded here because the helper
+	// already emits the configuration log via slog. Namespace validation is
+	// delegated to the vault SDK at first I/O — a malformed namespace surfaces
+	// as a Login error with full context (addr / method / namespace).
+	_ = applyNamespaceFromEnv(raw)
 
 	// F-3a: Create the startup context FIRST so all I/O (including the wrapping
 	// token unwrap in NewAuthMethodFromEnv) respects the startup deadline.
@@ -848,6 +857,13 @@ func (p *TransitKeyProvider) ByID(_ context.Context, keyID string) (kcrypto.KeyH
 // Rotate generates a new key version via Vault Transit rotate API and refreshes
 // the local version cache. Lock-free: Vault rotate is server-side atomic, and
 // the version cache is an atomic.Int64.
+//
+// Failure semantics:
+//   - If the rotate POST fails the cache is untouched and ErrKeyProviderRotateFailed
+//     is returned; subsequent Current() continues to serve the prior version.
+//   - If the post-rotate readLatestVersion fails the cache is left at 0 (already
+//     invalidated); subsequent Current() will degrade to a Vault read on the next
+//     call and refill the cache automatically — no further intervention needed.
 //
 // ref: hashicorp/vault builtin/logical/transit/path_keys.go@main
 // ref: hashicorp/vault api-docs/secret/transit POST /transit/keys/:name/rotate

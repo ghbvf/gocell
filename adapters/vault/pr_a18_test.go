@@ -11,6 +11,7 @@ import (
 	"context"
 	"encoding/base64"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -57,9 +58,13 @@ func TestApplyNamespaceFromEnv_Unset(t *testing.T) {
 // A16 — Encrypt uses transit/datakey/plaintext (server-side DEK)
 // ---------------------------------------------------------------------------
 
-// datakeyFake routes /datakey/plaintext/<key> with a deterministic 32B DEK
-// and the canonical "vault:vN:..." ciphertext envelope. /decrypt/ unwraps via
-// the same XOR key so encrypt/decrypt round-trips verify end to end.
+// datakeyFake is a focused VaultClient stand-in scoped to PR-A18 path
+// assertions: it exercises only the new /datakey/plaintext/ Encrypt path plus
+// the unchanged /decrypt/ unwrap. The richer fakeVaultClient in
+// transit_provider_test.go covers the legacy contract suite (TC-1..TC-8 +
+// ResponseError classification) — kept separate so this file's invariants
+// (e.g. encryptCalls must remain 0) cannot be loosened by edits to the
+// shared fake.
 type datakeyFake struct {
 	mu            sync.Mutex
 	masterKey     [32]byte
@@ -93,7 +98,7 @@ func (f *datakeyFake) Write(_ context.Context, path string, data map[string]any)
 		wrapped := xorBytes(dek, f.masterKey[:])
 		return map[string]any{
 			"plaintext":  base64.StdEncoding.EncodeToString(dek),
-			"ciphertext": "vault:v" + itoa(f.latestVersion) + ":" + base64.StdEncoding.EncodeToString(wrapped),
+			"ciphertext": "vault:v" + strconv.Itoa(f.latestVersion) + ":" + base64.StdEncoding.EncodeToString(wrapped),
 		}, nil
 	case strings.Contains(path, "/decrypt/"):
 		f.decryptCalls.Add(1)
@@ -122,6 +127,8 @@ func (f *datakeyFake) Write(_ context.Context, path string, data map[string]any)
 
 func (f *datakeyFake) Read(_ context.Context, _ string) (map[string]any, error) {
 	f.readCalls.Add(1)
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	return map[string]any{"latest_version": f.latestVersion}, nil
 }
 
@@ -135,17 +142,6 @@ func (ErrLegacyEncryptCalled) Error() string { return "legacy /encrypt/ path cal
 type ErrInvalidCipher struct{}
 
 func (ErrInvalidCipher) Error() string { return "invalid vault cipher" }
-
-func itoa(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	s := ""
-	for n := i; n > 0; n /= 10 {
-		s = string(rune('0'+n%10)) + s
-	}
-	return s
-}
 
 func TestEncryptUsesDataKeyEndpoint(t *testing.T) {
 	fake := &datakeyFake{latestVersion: 3}
@@ -289,13 +285,64 @@ func TestCurrentConcurrentReaders(t *testing.T) {
 }
 
 func TestTransitKeyProviderHasNoRWMutex(t *testing.T) {
+	rwMutexType := reflect.TypeOf(sync.RWMutex{})
 	rt := reflect.TypeOf(TransitKeyProvider{})
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
-		// Allow renewalWorker etc. to embed sync state — only the provider's own
-		// top-level mu must be gone (PR-A18 lock removal).
-		if f.Name == "mu" {
-			t.Fatalf("TransitKeyProvider.mu still present (type=%s); PR-A18 removed the RWMutex", f.Type)
+		// PR-A18 removed the top-level mu sync.RWMutex. We assert specifically
+		// on the type so a future legitimate sync.Mutex / sync.Once field with
+		// a different name does not get flagged as a regression.
+		if f.Type == rwMutexType {
+			t.Fatalf("TransitKeyProvider.%s is sync.RWMutex; PR-A18 removed the lock — Current/Rotate are now lock-free atomic.Int64 cache", f.Name)
 		}
 	}
+}
+
+// TestRotateAndCurrent_ConcurrentRace exercises the documented benign race
+// window between Rotate (Store(0) → readLatestVersion → Store(N+1)) and a
+// flood of concurrent Current() callers. It does not assert a particular
+// version — only that no goroutine errors out, no panic occurs, and -race
+// stays clean.
+//
+// ref: A18 cachedLatestVersion docstring on TransitKeyProvider.
+func TestRotateAndCurrent_ConcurrentRace(t *testing.T) {
+	fake := &datakeyFake{latestVersion: 1}
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	if err != nil {
+		t.Fatalf("NewTransitKeyProvider: %v", err)
+	}
+
+	const readerN = 32
+	stop := make(chan struct{})
+	var wg sync.WaitGroup
+	wg.Add(readerN)
+	for i := 0; i < readerN; i++ {
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				h, err := p.Current(context.Background())
+				if err != nil {
+					t.Errorf("Current: %v", err)
+					return
+				}
+				if !strings.HasPrefix(h.ID(), "vault-transit:v") {
+					t.Errorf("unexpected ID format: %q", h.ID())
+					return
+				}
+			}
+		}()
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := p.Rotate(context.Background()); err != nil {
+			t.Errorf("Rotate iteration %d: %v", i, err)
+			break
+		}
+	}
+	close(stop)
+	wg.Wait()
 }

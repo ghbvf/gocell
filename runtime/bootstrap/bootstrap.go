@@ -377,7 +377,6 @@ func WithRelayHealth(r *runtimeoutbox.Relay) Option {
 	}
 }
 
-
 // validateHTTPListenerAddrs fail-fasts on mis-configured HTTP listeners. Each
 // side (primary / internal) must have either a non-empty bind address OR a
 // caller-injected listener — a listener renders its addr irrelevant because
