@@ -4,8 +4,22 @@ import (
 	"net/http"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Contract spec literals — cross-checked against contracts/http/auth/role/
+// {assign,revoke}/v1/contract.yaml by FMT-18.
+var (
+	specRoleAssign = wrapper.ContractSpec{
+		ID: "http.auth.role.assign.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/internal/v1/access/roles/assign",
+	}
+	specRoleRevoke = wrapper.ContractSpec{
+		ID: "http.auth.role.revoke.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/internal/v1/access/roles/revoke",
+	}
 )
 
 // AssignRequest is the request DTO for role assignment.
@@ -47,23 +61,21 @@ type RevokeRequest struct {
 }
 
 // RegisterRoutes registers rbac-assign routes on the given mux.
-// Policy is declared at registration time via auth.Declare so that handler
-// bodies contain only business logic (no inline guard calls).
+// Policy is declared at registration time; handler bodies contain only
+// business logic (no inline guard calls).
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	internalAdminPolicy := auth.AnyRole(auth.RoleInternalAdmin)
-	auth.Declare(mux, auth.RouteDecl{
-		Method:    "POST",
-		Path:      "/assign",
+	auth.Mount(mux, auth.Route{
+		Contract:  specRoleAssign,
 		Handler:   http.HandlerFunc(h.handleAssign),
 		Policy:    internalAdminPolicy,
 		Delegated: true, // PR-A14a: route lives on internalMux (service-token via bootstrap.WithInternalMiddleware); Policy still enforces role.
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:    "POST",
-		Path:      "/revoke",
+	auth.Mount(mux, auth.Route{
+		Contract:  specRoleRevoke,
 		Handler:   http.HandlerFunc(h.handleRevoke),
 		Policy:    internalAdminPolicy,
-		Delegated: true, // PR-A14a: route lives on internalMux (service-token via bootstrap.WithInternalMiddleware); Policy still enforces role.
+		Delegated: true,
 	})
 }
 

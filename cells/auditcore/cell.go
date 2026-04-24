@@ -16,9 +16,43 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 )
+
+// Topic constants — one per consumed event. FMT-18 resolves const string
+// references at scan time so contract IDs can be written once here and
+// reused as both map key and EventSpec argument without Sonar flagging
+// duplicate literals.
+const (
+	topicUserCreated    = "event.user.created.v1"
+	topicUserLocked     = "event.user.locked.v1"
+	topicSessionCreated = "event.session.created.v1"
+	topicSessionRevoked = "event.session.revoked.v1"
+	topicConfigChanged  = "event.config.changed.v1"
+	topicConfigRollback = "event.config.rollback.v1"
+	topicRoleAssigned   = "event.role.assigned.v1"
+	topicRoleRevoked    = "event.role.revoked.v1"
+)
+
+// auditAppendSpecs maps each consumed topic to its wrapper.ContractSpec.
+// Each value is a wrapper.EventSpec call so FMT-18's governance scan can
+// resolve the contract id (via const reference) and cross-check it against
+// contracts/event/**/contract.yaml.
+//
+// Adding or removing a topic MUST be mirrored in auditappend.Topics;
+// RegisterSubscriptions fails at startup if the two drift.
+var auditAppendSpecs = map[string]wrapper.ContractSpec{
+	topicUserCreated:    wrapper.EventSpec(topicUserCreated, "amqp"),
+	topicUserLocked:     wrapper.EventSpec(topicUserLocked, "amqp"),
+	topicSessionCreated: wrapper.EventSpec(topicSessionCreated, "amqp"),
+	topicSessionRevoked: wrapper.EventSpec(topicSessionRevoked, "amqp"),
+	topicConfigChanged:  wrapper.EventSpec(topicConfigChanged, "amqp"),
+	topicConfigRollback: wrapper.EventSpec(topicConfigRollback, "amqp"),
+	topicRoleAssigned:   wrapper.EventSpec(topicRoleAssigned, "amqp"),
+	topicRoleRevoked:    wrapper.EventSpec(topicRoleRevoked, "amqp"),
+}
 
 // Compile-time interface checks.
 var (
@@ -285,11 +319,18 @@ func (c *AuditCore) RegisterRoutes(mux cell.RouteMux) {
 }
 
 // RegisterSubscriptions declares event subscriptions for all audit topics.
-// The Router manages goroutine lifecycle and setup-error detection.
+// Each topic has a matching wrapper.ContractSpec so every consumed entry
+// emits a CONSUME span annotated with gocell.contract.id; the Router
+// manages goroutine lifecycle and setup-error detection.
 func (c *AuditCore) RegisterSubscriptions(r cell.EventRouter) error {
 	handler := outbox.WrapLegacyHandler(c.appendSvc.HandleEvent)
 	for _, topic := range auditappend.Topics {
-		r.AddHandler(topic, handler, "auditcore")
+		spec, ok := auditAppendSpecs[topic]
+		if !ok {
+			return fmt.Errorf("auditcore: missing ContractSpec for topic %q — "+
+				"auditAppendSpecs and auditappend.Topics must stay in sync", topic)
+		}
+		r.AddContractHandler(spec, handler, "auditcore")
 	}
 	return nil
 }

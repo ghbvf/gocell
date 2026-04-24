@@ -93,7 +93,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	// F3: public routes (login, refresh) are declared via auth.Declare(Public:true)
+	// F3: public routes (login, refresh) are declared via auth.Mount(Public:true)
 	// inside accesscore's RegisterRoutes. WithAuthDiscovery discovers the verifier.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
@@ -302,7 +302,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// listener. JWT AuthMiddleware is never installed on the internal mux —
 	// WithInternalMiddleware(guard) is the sole authentication layer for the
 	// control plane. F3: public routes (login, refresh) are declared by
-	// accesscore via auth.Declare(Public:true); WithAuthDiscovery discovers
+	// accesscore via auth.Mount(Public:true); WithAuthDiscovery discovers
 	// the verifier and wires it onto the primary mux only.
 	internalLn := newCorebundleLocalListener(t)
 	app := bootstrap.New(

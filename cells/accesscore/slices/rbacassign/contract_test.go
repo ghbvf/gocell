@@ -29,12 +29,9 @@ func newContractHandler() http.Handler {
 	_, _ = roleRepo.AssignToUser(context.Background(), "usr-other-admin", "admin") // second admin for last-admin guard
 
 	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
-	inner := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(inner)
-
-	outer := http.NewServeMux()
-	outer.Handle("/internal/v1/access/roles/", http.StripPrefix("/internal/v1/access/roles", inner))
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/internal/v1/access/roles", NewHandler(svc).RegisterRoutes)
+	return mux
 }
 
 func TestHttpAuthRoleAssignV1Serve(t *testing.T) {

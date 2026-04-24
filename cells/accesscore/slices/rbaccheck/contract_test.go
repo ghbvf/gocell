@@ -53,12 +53,9 @@ func newContractRBACHandler() http.Handler {
 		panic(err)
 	}
 
-	inner := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(inner)
-
-	outer := http.NewServeMux()
-	outer.Handle("/api/v1/access/roles/", http.StripPrefix("/api/v1/access/roles", inner))
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/access/roles", NewHandler(svc).RegisterRoutes)
+	return mux
 }
 
 type roleListPage struct {

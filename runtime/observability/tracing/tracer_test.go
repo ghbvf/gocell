@@ -2,8 +2,11 @@ package tracing
 
 import (
 	"errors"
+	"fmt"
+	"sync"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/stretchr/testify/assert"
 )
@@ -13,19 +16,21 @@ func TestNewTracer_Start(t *testing.T) {
 	ctx, span := tracer.Start(t.Context(), "test-operation")
 	defer span.End()
 
-	assert.NotEmpty(t, span.TraceID())
-	assert.NotEmpty(t, span.SpanID())
-	assert.Len(t, span.TraceID(), 32) // 16 bytes hex-encoded
-	assert.Len(t, span.SpanID(), 16)  // 8 bytes hex-encoded
+	simple, ok := span.(*simpleSpan)
+	assert.True(t, ok, "simpleTracer must return *simpleSpan")
+	assert.NotEmpty(t, simple.TraceID())
+	assert.NotEmpty(t, simple.SpanID())
+	assert.Len(t, simple.TraceID(), 32) // 16 bytes hex-encoded
+	assert.Len(t, simple.SpanID(), 16)  // 8 bytes hex-encoded
 
 	// Context should carry trace/span IDs.
 	traceID, ok := ctxkeys.TraceIDFrom(ctx)
 	assert.True(t, ok)
-	assert.Equal(t, span.TraceID(), traceID)
+	assert.Equal(t, simple.TraceID(), traceID)
 
 	spanID, ok := ctxkeys.SpanIDFrom(ctx)
 	assert.True(t, ok)
-	assert.Equal(t, span.SpanID(), spanID)
+	assert.Equal(t, simple.SpanID(), spanID)
 }
 
 func TestNewTracer_InheritsParentTraceID(t *testing.T) {
@@ -35,18 +40,21 @@ func TestNewTracer_InheritsParentTraceID(t *testing.T) {
 	_, span := tracer.Start(ctx, "child-operation")
 	defer span.End()
 
-	assert.Equal(t, "parent-trace-id", span.TraceID())
-	assert.NotEmpty(t, span.SpanID())
+	simple := span.(*simpleSpan)
+	assert.Equal(t, "parent-trace-id", simple.TraceID())
+	assert.NotEmpty(t, simple.SpanID())
 }
 
-func TestSpan_SetAttribute(t *testing.T) {
+func TestSpan_SetAttributes_DoesNotPanic(t *testing.T) {
 	tracer := NewTracer("test")
 	_, span := tracer.Start(t.Context(), "op")
 	defer span.End()
 
-	// Should not panic.
-	span.SetAttribute("http.method", "GET")
-	span.SetAttribute("http.status_code", 200)
+	// kernel/wrapper.Span API: variadic Attr, not per-key SetAttribute.
+	span.SetAttributes(
+		Attr{Key: "http.method", Value: "GET"},
+		Attr{Key: "http.status_code", Value: 200},
+	)
 }
 
 func TestSimpleSpan_End(t *testing.T) {
@@ -55,56 +63,69 @@ func TestSimpleSpan_End(t *testing.T) {
 	assert.NotPanics(t, func() { span.End() })
 }
 
-func TestSpanRecordError_SimpleSpan(t *testing.T) {
+func TestSpanRecordError_RecordsOnSimpleSpan(t *testing.T) {
 	tracer := NewTracer("test")
 	_, span := tracer.Start(t.Context(), "op")
 	defer span.End()
 
-	// simpleSpan does not implement SpanRecorder — should be a no-op, not panic.
-	assert.NotPanics(t, func() {
-		SpanRecordError(span, errors.New("test error"))
-	})
-}
-
-func TestSpanSetStatus_SimpleSpan(t *testing.T) {
-	tracer := NewTracer("test")
-	_, span := tracer.Start(t.Context(), "op")
-	defer span.End()
-
-	assert.NotPanics(t, func() {
-		SpanSetStatus(span, true, "failed")
-	})
-	assert.NotPanics(t, func() {
-		SpanSetStatus(span, false, "")
-	})
-}
-
-// mockRecorderSpan implements both Span and SpanRecorder for testing helpers.
-type mockRecorderSpan struct {
-	simpleSpan
-	recordedErr error
-	statusSet   bool
-	statusDesc  string
-}
-
-func (m *mockRecorderSpan) RecordError(err error) { m.recordedErr = err }
-func (m *mockRecorderSpan) SetStatus(isError bool, desc string) {
-	m.statusSet = isError
-	m.statusDesc = desc
-}
-
-func TestSpanRecordError_WithRecorder(t *testing.T) {
-	span := &mockRecorderSpan{}
 	testErr := errors.New("connection refused")
-
 	SpanRecordError(span, testErr)
-	assert.Equal(t, testErr, span.recordedErr)
+	assert.ErrorIs(t, span.(*simpleSpan).err, testErr)
 }
 
-func TestSpanSetStatus_WithRecorder(t *testing.T) {
-	span := &mockRecorderSpan{}
+func TestSpanSetStatus_MapsLegacyBool(t *testing.T) {
+	tracer := NewTracer("test")
+	_, span := tracer.Start(t.Context(), "op")
+	defer span.End()
 
 	SpanSetStatus(span, true, "db timeout")
-	assert.True(t, span.statusSet)
-	assert.Equal(t, "db timeout", span.statusDesc)
+	assert.Equal(t, wrapper.StatusError, span.(*simpleSpan).status)
+	assert.Equal(t, "db timeout", span.(*simpleSpan).stDesc)
+
+	SpanSetStatus(span, false, "")
+	assert.Equal(t, wrapper.StatusOK, span.(*simpleSpan).status)
+}
+
+func TestSpanSetName_SimpleSpanSupportsRename(t *testing.T) {
+	tracer := NewTracer("test")
+	_, span := tracer.Start(t.Context(), "initial")
+	defer span.End()
+
+	// simpleSpan implements wrapper.SpanRenamer, so SpanSetName MUST take effect.
+	SpanSetName(span, "POST /api/v1/auth/login")
+	assert.Equal(t, "POST /api/v1/auth/login", span.(*simpleSpan).name)
+}
+
+// staticSpan is a minimal Span that does NOT implement wrapper.SpanRenamer —
+// SetSpanName should silently skip it without panicking.
+type staticSpan struct{ name string }
+
+func (s *staticSpan) SetAttributes(_ ...Attr)                  {}
+func (s *staticSpan) RecordError(_ error)                      {}
+func (s *staticSpan) SetStatus(_ wrapper.StatusCode, _ string) {}
+func (s *staticSpan) End()                                     {}
+
+func TestSpanSetName_GracefullyIgnoresNonRenamerSpans(t *testing.T) {
+	span := &staticSpan{name: "original"}
+	assert.NotPanics(t, func() { SpanSetName(span, "other") })
+	assert.Equal(t, "original", span.name, "static span must not be renamed")
+}
+
+func TestSimpleSpan_ConcurrentMutationSafe(t *testing.T) {
+	tracer := NewTracer("test")
+	_, span := tracer.Start(t.Context(), "op")
+	defer span.End()
+
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			span.SetAttributes(Attr{Key: "attempt", Value: int64(i)})
+			span.RecordError(fmt.Errorf("err-%d", i))
+			span.SetStatus(wrapper.StatusError, fmt.Sprintf("status-%d", i))
+			SpanSetName(span, fmt.Sprintf("op-%d", i))
+		}(i)
+	}
+	wg.Wait()
 }

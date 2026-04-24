@@ -37,18 +37,8 @@ func newDualListenerCell(onPublic, onInternal func(http.ResponseWriter, *http.Re
 }
 
 func (c *dualListenerCell) RegisterRoutes(mux cell.RouteMux) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  http.MethodGet,
-		Path:    "/api/v1/test/ping",
-		Handler: http.HandlerFunc(c.onPublic),
-		Public:  true,
-	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:    http.MethodGet,
-		Path:      "/internal/v1/admin/ping",
-		Handler:   http.HandlerFunc(c.onInternal),
-		Delegated: true,
-	})
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/test/ping"), Handler: http.HandlerFunc(c.onPublic), Public: true})
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/internal/v1/admin/ping"), Handler: http.HandlerFunc(c.onInternal), Delegated: true})
 }
 
 // TestDualListener_PrimaryReturns404ForInternalPrefix is the core acceptance

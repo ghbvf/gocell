@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -64,8 +65,8 @@ type mockEventRouter struct {
 	topics []string
 }
 
-func (m *mockEventRouter) AddHandler(topic string, _ outbox.EntryHandler, _ string) {
-	m.topics = append(m.topics, topic)
+func (m *mockEventRouter) AddContractHandler(spec wrapper.ContractSpec, _ outbox.EntryHandler, _ string) {
+	m.topics = append(m.topics, spec.Topic)
 }
 
 // Compile-time check.
@@ -79,7 +80,7 @@ type eventCell struct {
 
 func (e *eventCell) RegisterSubscriptions(r EventRouter) error {
 	e.registered = true
-	r.AddHandler("session.created", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	r.AddContractHandler(testEventSpec("session.created"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test")
 	return nil
@@ -102,7 +103,7 @@ func (d *dualCell) RegisterRoutes(mux RouteMux) {
 
 func (d *dualCell) RegisterSubscriptions(r EventRouter) error {
 	d.eventRegistered = true
-	r.AddHandler("device.enrolled", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	r.AddContractHandler(testEventSpec("device.enrolled"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test")
 	return nil
@@ -463,7 +464,7 @@ func TestLifecycleContributor_NegativeTypeAssertion(t *testing.T) {
 }
 
 func TestAuthRouteDeclarer_InterfaceAssertion(t *testing.T) {
-	// *http.ServeMux does NOT satisfy AuthRouteDeclarer — auth.Declare falls
+	// *http.ServeMux does NOT satisfy AuthRouteDeclarer — auth.Mount falls
 	// back to route-only registration in that case.
 	var mux RouteHandler = http.NewServeMux()
 	_, ok := mux.(AuthRouteDeclarer)

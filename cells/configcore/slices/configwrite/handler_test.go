@@ -14,6 +14,8 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -47,12 +49,15 @@ func withAdmin(req *http.Request) *http.Request {
 
 // --- handler tests ---
 
+// configPrefix matches cell-level Route("/api/v1/config", ...).
+const configPrefix = "/api/v1/config"
+
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	svc := NewService(repo, slog.Default())
 	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := celltest.NewTestMux()
+	mux.Route(configPrefix, func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
 	return mux, repo
 }
 
@@ -61,7 +66,7 @@ func TestHandler_HandleCreate_OK(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"key":"app.name","value":"gocell"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -74,7 +79,7 @@ func TestHandler_HandleCreate_BadJSON(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader("{bad"))
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -87,7 +92,7 @@ func TestHandler_HandleCreate_EmptyKey(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"key":"","value":"v"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -103,7 +108,7 @@ func TestHandler_Create_BlankKey(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"key":"","value":"v"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -126,7 +131,7 @@ func TestHandler_HandleCreate_UnknownField(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"key":"app.name","value":"gocell","extra":"y"}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -139,7 +144,7 @@ func TestHandler_HandleUpdate_UnknownField(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"value":"new","extra":"y"}`
-	req := httptest.NewRequest(http.MethodPut, "/k", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, configPrefix+"/k", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -157,7 +162,7 @@ func TestHandler_HandleUpdate_OK(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"value":"new"}`
-	req := httptest.NewRequest(http.MethodPut, "/app.name", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, configPrefix+"/app.name", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -171,7 +176,7 @@ func TestHandler_HandleUpdate_NotFound(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"value":"v"}`
-	req := httptest.NewRequest(http.MethodPut, "/missing", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, configPrefix+"/missing", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -183,7 +188,7 @@ func TestHandler_HandleUpdate_BadJSON(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPut, "/k", strings.NewReader("{bad"))
+	req := httptest.NewRequest(http.MethodPut, configPrefix+"/k", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -200,7 +205,7 @@ func TestHandler_HandleDelete_OK(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/app.name", nil)
+	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/app.name", nil)
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
@@ -211,7 +216,7 @@ func TestHandler_HandleDelete_NotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/missing", nil)
+	req := httptest.NewRequest(http.MethodDelete, configPrefix+"/missing", nil)
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
 
@@ -225,7 +230,7 @@ func TestHandler_HandleCreate_SensitiveRedacted(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"key":"db.password","value":"s3cret!","sensitive":true}`
-	req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -250,7 +255,7 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"value":"new-secret"}`
-	req := httptest.NewRequest(http.MethodPut, "/api.key", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPut, configPrefix+"/api.key", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = withAdmin(req)
 	handler.ServeHTTP(w, req)
@@ -348,7 +353,7 @@ func TestHandler_Authz_Create(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mux, _ := setupHandler()
 			body := `{"key":"test.key","value":"v"}`
-			req := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+			req := httptest.NewRequest(http.MethodPost, configPrefix, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.injectAuth {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
@@ -397,7 +402,7 @@ func TestHandler_Authz_Update(t *testing.T) {
 				tc.setup(repo)
 			}
 			body := `{"value":"new"}`
-			req := httptest.NewRequest(http.MethodPut, tc.path, strings.NewReader(body))
+			req := httptest.NewRequest(http.MethodPut, configPrefix+tc.path, strings.NewReader(body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.injectAuth {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
@@ -445,7 +450,7 @@ func TestHandler_Authz_Delete(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(repo)
 			}
-			req := httptest.NewRequest(http.MethodDelete, tc.path, nil)
+			req := httptest.NewRequest(http.MethodDelete, configPrefix+tc.path, nil)
 			if tc.injectAuth {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			}

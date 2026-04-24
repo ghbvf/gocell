@@ -92,7 +92,7 @@ func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
 
 ### 4. 注册 HTTP 路由（可选）
 
-实现 `cell.HTTPRegistrar` 接口，使用 `auth.Declare` 在注册点声明鉴权语义
+实现 `cell.HTTPRegistrar` 接口，使用 `auth.Mount` 在注册点声明鉴权语义
 （F3 模式，参见 [runtime-api.md](../../.claude/rules/gocell/runtime-api.md)）：
 
 ```go
@@ -100,9 +100,14 @@ var _ cell.HTTPRegistrar = (*MyCell)(nil)
 
 func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
     mux.Route("/api/v1/my-resource", func(sub cell.RouteMux) {
-        auth.Declare(sub, auth.RouteDecl{
-            Method:  "GET",
-            Path:    "/{id}",
+        auth.Mount(sub, auth.Route{
+            Contract: wrapper.ContractSpec{
+                ID:        "http.mycell.my-resource.get.v1",
+                Kind:      "http",
+                Transport: "http",
+                Method:    "GET",
+                Path:      "/api/v1/my-resource/{id}",
+            },
             Handler: http.HandlerFunc(c.handler.Get),
             Policy:  auth.Authenticated(),
         })
@@ -123,16 +128,28 @@ Cell 在 `RegisterRoutes` 里按路径前缀声明，`Router` 自动把 `/intern
 func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
     // public → publicMux
     mux.Route("/api/v1/my-resource", func(sub cell.RouteMux) {
-        auth.Declare(sub, auth.RouteDecl{
-            Method: "GET", Path: "/{id}",
+        auth.Mount(sub, auth.Route{
+            Contract: wrapper.ContractSpec{
+                ID:        "http.mycell.my-resource.get.v1",
+                Kind:      "http",
+                Transport: "http",
+                Method:    "GET",
+                Path:      "/api/v1/my-resource/{id}",
+            },
             Handler: http.HandlerFunc(c.handler.Get),
             Policy:  auth.Authenticated(),
         })
     })
     // internal → internalMux（service-token/mTLS 是唯一鉴权层；JWT 不触达）
     mux.Route("/internal/v1/my-resource", func(sub cell.RouteMux) {
-        auth.Declare(sub, auth.RouteDecl{
-            Method: "POST", Path: "/admin-op",
+        auth.Mount(sub, auth.Route{
+            Contract: wrapper.ContractSpec{
+                ID:        "http.mycell.my-resource.admin-op.v1",
+                Kind:      "http",
+                Transport: "http",
+                Method:    "POST",
+                Path:      "/internal/v1/my-resource/admin-op",
+            },
             Handler: http.HandlerFunc(c.handler.AdminOp),
             Policy:    internalAdminPolicy,
             Delegated: true, // 必须：FinalizeAuth 在启动期断言 Delegated ⇔ /internal/v1/*
@@ -156,9 +173,9 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 ```go
 var _ cell.EventRegistrar = (*MyCell)(nil)
 
-// RegisterSubscriptions 在启动阶段被框架调用一次。每次 AddHandler 注册
-// 一个 (topic, handler, consumerGroup) 三元组：
-//   - topic         : broker 路由键
+// RegisterSubscriptions 在启动阶段被框架调用一次。每次 AddContractHandler 注册
+// 一个 (contract, handler, consumerGroup) 三元组：
+//   - contract      : contract id、broker 路由键、observability metadata
 //   - handler       : outbox.EntryHandler 业务处理函数
 //   - consumerGroup : 通常等于 cell.ID()，作为幂等键命名空间；同 group 竞争消费，
 //                     不同 group 各自一份（fanout）
@@ -167,7 +184,12 @@ var _ cell.EventRegistrar = (*MyCell)(nil)
 // 业务 handler 只需返回 outbox.HandleResult{Disposition: Ack/Requeue/Reject}。
 func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
     handler := outbox.WrapLegacyHandler(c.svc.HandleEvent) // 旧签名 → EntryHandler
-    r.AddHandler("my.topic.v1", handler, c.ID())
+    r.AddContractHandler(wrapper.ContractSpec{
+        ID:        "event.my.topic.v1",
+        Kind:      "event",
+        Transport: "amqp",
+        Topic:     "my.topic.v1",
+    }, handler, c.ID())
     return nil
 }
 ```

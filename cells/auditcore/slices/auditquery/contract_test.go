@@ -10,16 +10,19 @@ import (
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // newContractQueryHandler builds an http.Handler that registers auditquery
-// routes at the canonical API prefix via RegisterRoutes + http.StripPrefix.
-// RegisterRoutes calls auth.Declare to install the auditQueryPolicy, so the
-// contract test exercises the same guard the production mux uses — not just
-// the happy-path handler.
+// routes under the canonical API prefix. Mux structure mirrors production
+// (RouteMux.Route(prefix, handler.RegisterRoutes)) so auth.Mount strips the
+// prefix off Contract.Path exactly as chi does — no alias magic required.
+// RegisterRoutes calls auth.Mount to install the auditQueryPolicy, so the
+// contract test exercises the same guard the production mux uses.
 func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
 	repo := mem.NewAuditRepository()
 	for _, e := range entries {
@@ -30,11 +33,11 @@ func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
 		panic(err)
 	}
 	h := NewHandler(svc)
-	inner := http.NewServeMux()
-	h.RegisterRoutes(inner)
-	outer := http.NewServeMux()
-	outer.Handle("/api/v1/audit/", http.StripPrefix("/api/v1/audit", inner))
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/audit", func(sub cell.RouteMux) {
+		h.RegisterRoutes(sub)
+	})
+	return mux
 }
 
 func TestHttpAuditListV1Serve(t *testing.T) {

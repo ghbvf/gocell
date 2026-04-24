@@ -3,6 +3,10 @@ belongsToCell: configcore
 contractUsages:
   - contract: http.config.write.v1
     role: serve
+  - contract: http.config.update.v1
+    role: serve
+  - contract: http.config.delete.v1
+    role: serve
   - contract: event.config.changed.v1
     role: publish
 verify:
@@ -10,6 +14,8 @@ verify:
     - unit.configwrite.service
   contract:
     - contract.http.config.write.v1.serve
+    - contract.http.config.update.v1.serve
+    - contract.http.config.delete.v1.serve
     - contract.event.config.changed.v1.publish
   waivers: []
 

@@ -136,7 +136,7 @@ func main() {
 	defer stop()
 
 	// Public routes and password-reset-exempt routes are declared by the
-	// accesscore Cell itself via auth.Declare. Bootstrap only needs the
+	// accesscore Cell itself via auth.Mount. Bootstrap only needs the
 	// opt-in signal that the assembly expects an auth provider cell.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),

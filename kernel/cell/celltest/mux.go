@@ -3,7 +3,7 @@
 //
 // # Auth metadata recording
 //
-// TestMux implements [cell.AuthRouteDeclarer]: every auth.Declare call on a
+// TestMux implements [cell.AuthRouteDeclarer]: every auth.Mount call on a
 // TestMux (or on a sub-mux produced by Route) records an [cell.AuthRouteMeta]
 // in the root TestMux's authMetas slice. Tests that care about auth metadata
 // inspect [TestMux.DeclaredAuthMetas] directly.
@@ -17,6 +17,7 @@ package celltest
 import (
 	"net/http"
 	"path"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 )
@@ -24,14 +25,23 @@ import (
 // Compile-time checks.
 var _ cell.RouteMux = (*TestMux)(nil)
 var _ cell.AuthRouteDeclarer = (*TestMux)(nil)
+var _ cell.Prefixer = (*TestMux)(nil)
 
 // TestMux adapts http.ServeMux to cell.RouteMux for testing.
 // It uses Go 1.22+ ServeMux pattern matching ("GET /path/{param}").
 //
-// Auth metadata: every auth.Declare call forwards the declared
+// Route-composition model: sub-muxes created by Route share the root's
+// underlying *http.ServeMux and register every pattern as a fully-qualified
+// path (prefix + sub-relative pattern). This mirrors chi's Route semantics
+// and avoids the stdlib StripPrefix + 307-redirect pitfall where a POST to
+// "/api/v1/access/users" would redirect to "/api/v1/access/users/" and drop
+// its body. All Handle calls on any sub ultimately register an absolute
+// pattern on the root ServeMux.
+//
+// Auth metadata: every auth.Mount call forwards the declared
 // [cell.AuthRouteMeta] to the root TestMux via DeclareAuthMeta. Sub-muxes
-// created by Route compose the mount prefix before forwarding so the root
-// always sees the full path (e.g. "/api/v1/access/sessions/{id}").
+// compose the mount prefix before forwarding so the root always sees the
+// full path (e.g. "/api/v1/access/sessions/{id}").
 type TestMux struct {
 	*http.ServeMux
 	// root is the top-level TestMux that owns the authMetas slice.
@@ -48,6 +58,14 @@ func NewTestMux() *TestMux {
 	m := &TestMux{ServeMux: http.NewServeMux()}
 	m.root = m // root points to itself
 	return m
+}
+
+// Prefix returns the composed mount prefix for this test mux. Root muxes
+// return ""; sub-muxes created by Route return the same prefix production
+// chiRouterAdapter exposes, allowing auth.Mount to derive chi-relative
+// registration paths from fully-qualified Contract.Path literals.
+func (m *TestMux) Prefix() string {
+	return m.prefix
 }
 
 // DeclareAuthMeta records an auth route declaration.
@@ -70,28 +88,74 @@ func (m *TestMux) DeclaredAuthMetas() []cell.AuthRouteMeta {
 	return out
 }
 
-// Handle registers a handler for the given pattern.
+// Handle registers a handler for the given pattern. For sub-muxes, the
+// configured prefix is composed into the pattern before registration so the
+// root ServeMux sees an absolute path — matching chi's Route + Handle
+// semantics and avoiding stdlib StripPrefix trailing-slash redirects.
+//
+// For the collection-root case (relative pattern "/"), Handle registers
+// both `prefix` and `prefix+"/"` so the root mux matches the resource
+// regardless of whether the Contract author spelled the path with or
+// without a trailing slash (/api/v1/config vs /api/v1/config/). This
+// mirrors chi's redirect-free behaviour.
 func (m *TestMux) Handle(pattern string, handler http.Handler) {
-	m.ServeMux.Handle(pattern, handler)
+	for _, p := range m.composePatterns(pattern) {
+		m.root.ServeMux.Handle(p, handler)
+	}
 }
 
-// Route creates a sub-mux with prefix stripping.
-// The sub-mux's DeclareAuthMeta forwards metadata to the root with the
-// composed prefix so declared paths reflect the full mount path.
+// composePatterns returns the absolute pattern(s) to register on the root
+// mux for the given sub-relative pattern. The returned slice has one entry
+// for non-root patterns and two entries (with/without trailing slash) for
+// the collection-root case.
+func (m *TestMux) composePatterns(pattern string) []string {
+	if m.prefix == "" {
+		return []string{pattern}
+	}
+	if idx := strings.IndexByte(pattern, ' '); idx >= 0 {
+		method := pattern[:idx]
+		p := pattern[idx+1:]
+		return prependMethod(method, composePaths(m.prefix, p))
+	}
+	return composePaths(m.prefix, pattern)
+}
+
+func prependMethod(method string, paths []string) []string {
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		out[i] = method + " " + p
+	}
+	return out
+}
+
+func composePaths(prefix, relative string) []string {
+	if relative == "/" || relative == "" {
+		// Root of the sub-tree: match both prefix and prefix+"/" so the
+		// Contract.Path author can spell it either way.
+		return []string{prefix, prefix + "/"}
+	}
+	return []string{path.Clean(prefix + relative)}
+}
+
+// Route creates a sub-mux that shares the root ServeMux. Patterns registered
+// on the sub are composed into absolute paths via the sub's prefix — no
+// StripPrefix, no trailing-slash redirects.
 func (m *TestMux) Route(pattern string, fn func(cell.RouteMux)) {
 	composedPrefix := path.Clean(m.prefix + pattern)
+	if composedPrefix == "." {
+		composedPrefix = ""
+	}
 	sub := &TestMux{
-		ServeMux: http.NewServeMux(),
+		ServeMux: m.root.ServeMux,
 		root:     m.root,
 		prefix:   composedPrefix,
 	}
 	fn(sub)
-	m.ServeMux.Handle(pattern+"/", http.StripPrefix(pattern, sub.ServeMux))
 }
 
 // Mount attaches an http.Handler under the given prefix with stripping.
 func (m *TestMux) Mount(pattern string, handler http.Handler) {
-	m.ServeMux.Handle(pattern+"/", http.StripPrefix(pattern, handler))
+	m.root.ServeMux.Handle(path.Clean(m.prefix+pattern)+"/", http.StripPrefix(path.Clean(m.prefix+pattern), handler))
 }
 
 // Group calls fn with the same mux (no prefix change).

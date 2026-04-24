@@ -34,7 +34,7 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - `bootstrap.WithInternalEndpointGuard(prefix, guard)` → `WithInternalMiddleware(mw)` (no prefix parameter; routes dispatch by pattern).
   - `router.WithInternalPathPrefixGuard` + `auth.WithDelegatedMatcher` — deleted; physical mux split makes in-band JWT bypass unnecessary.
   - `router.Router.Handler()` — deleted; use `PublicHandler()` or `InternalHandler()`.
-  - `auth.RouteDecl.Delegated` field semantic change (NOT a rename): still a `bool` with the same field name, but the runtime JWT-bypass behaviour is gone. `FinalizeAuth` now asserts `Delegated=true ⇔ path begins with /internal/v1/` at startup; callers must set the flag consistently with the path prefix or startup fails.
+  - `auth.Route.Delegated` field semantic change: still a `bool` with the same field name, but the runtime JWT-bypass behaviour is gone. `FinalizeAuth` now asserts `Delegated=true ⇔ path begins with /internal/v1/` at startup; callers must set the flag consistently with the path prefix or startup fails. The old `auth.RouteDecl` shim has been removed; use `auth.Mount(mux, auth.Route{Contract: ..., ...})`.
   - PR-A32 F3-CLOSURE SELECTOR-GUARD-REMOVE-01 absorbed: `cmd/corebundle/bundle.go` no longer wires a `WithInternalEndpointGuard` transitional guard.
 - `runtime/bootstrap.BrokerHealthChecker` interface + `WithBrokerHealth` Option + `isNilBrokerHealthChecker` helper. Compose RabbitMQ readiness via `bootstrap.WithManagedResource(conn)` instead. (PR-A18 / RMQ-STATUS-01)
 - `accesscore.WithBootstrapWorkerSink` — Bootstrap phase3b auto-discovery replaces sink plumbing. Remove both the `WithBootstrapWorkerSink(...)` call and the paired `bootstrap.WithWorkers(worker.Lazy())` wiring.

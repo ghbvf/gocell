@@ -2,11 +2,14 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 
+	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/go-chi/chi/v5"
@@ -140,16 +143,20 @@ func (s *spySpan) End()                {}
 func (s *spySpan) TraceID() string     { return "spy-trace" }
 func (s *spySpan) SpanID() string      { return "spy-span" }
 func (s *spySpan) SetName(name string) { s.mu.Lock(); s.name = name; s.mu.Unlock() }
-func (s *spySpan) SetAttribute(key string, val any) {
+
+func (s *spySpan) SetAttributes(attrs ...wrapper.Attr) {
 	s.mu.Lock()
-	s.attrs[key] = val
+	for _, a := range attrs {
+		s.attrs[a.Key] = a.Value
+	}
 	s.mu.Unlock()
 }
 
-// SpanRecorder methods — capture SetStatus/RecordError calls.
-func (s *spySpan) SetStatus(isError bool, description string) {
+// SetStatus captures the kernel/wrapper-shaped status signal.
+func (s *spySpan) SetStatus(code wrapper.StatusCode, description string) {
 	s.mu.Lock()
-	s.attrs["_status_error"] = isError
+	s.attrs["_status_code"] = code
+	s.attrs["_status_error"] = code == wrapper.StatusError
 	s.attrs["_status_desc"] = description
 	s.mu.Unlock()
 }
@@ -178,8 +185,11 @@ type spyTracer struct {
 	spans []*spySpan
 }
 
-func (st *spyTracer) Start(ctx context.Context, name string) (context.Context, tracing.Span) {
+func (st *spyTracer) Start(ctx context.Context, name string, attrs ...wrapper.Attr) (context.Context, tracing.Span) {
 	span := &spySpan{name: name, attrs: make(map[string]any)}
+	if len(attrs) > 0 {
+		span.SetAttributes(attrs...)
+	}
 	st.mu.Lock()
 	st.spans = append(st.spans, span)
 	st.mu.Unlock()
@@ -259,7 +269,7 @@ func TestTracing_HttpRouteAttribute(t *testing.T) {
 	spans := spy.Spans()
 	require.Len(t, spans, 1)
 	assert.Equal(t, "/api/v1/orders/{orderID}", spans[0].Attr("http.route"))
-	assert.Equal(t, 201, spans[0].Attr("http.status_code"))
+	assert.Equal(t, int64(201), spans[0].Attr("http.status_code"))
 }
 
 // --- Span status tests (otelhttp alignment) ---
@@ -280,6 +290,46 @@ func TestTracing_5xxSetsErrorSpanStatus(t *testing.T) {
 	assert.Equal(t, true, spans[0].Attr("_status_error"),
 		"5xx must set span status to error")
 	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))
+}
+
+func TestTracing_RecoveryRecordsRedactedPanicError(t *testing.T) {
+	spy := &spyTracer{}
+	handler := Tracing(spy, WithErrorRedactor(func(error) error {
+		return errors.New("redacted panic")
+	}))(Recovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("raw secret token")
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "redacted panic", spans[0].Attr("_recorded_error"))
+	assert.Equal(t, true, spans[0].Attr("_status_error"))
+	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))
+}
+
+func TestTracing_RecoveryMarksCommittedPanicSpanError(t *testing.T) {
+	spy := &spyTracer{}
+	handler := Tracing(spy)(Recovery(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		panic("panic after commit")
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic-after-commit", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "panic after commit", spans[0].Attr("_recorded_error"))
+	assert.Equal(t, true, spans[0].Attr("_status_error"))
+	assert.Equal(t, "panic", spans[0].Attr("_status_desc"))
+	assert.Equal(t, int64(http.StatusOK), spans[0].Attr("http.status_code"))
 }
 
 func TestTracing_4xxDoesNotSetErrorSpanStatus(t *testing.T) {
@@ -423,4 +473,46 @@ func TestTracing_NilPublicEndpointFn_AllTrusted(t *testing.T) {
 
 	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", gotTraceID,
 		"nil publicEndpointFn must default to trusted upstream (backward compat)")
+}
+
+// TestTracing_SingleSpanOwnership verifies round-4 F1: the outer
+// middleware is the sole HTTP server span owner. kernel/wrapper.HTTPHandler
+// no longer creates an inner span — it only writes ctxkeys.ContractID +
+// pushes contract attrs into the shared AttrCarrier that this middleware
+// late-binds onto its one span. Exactly one span per request, always.
+func TestTracing_SingleSpanOwnership(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Simulate what kernel/wrapper.HTTPHandler does: append contract
+		// attrs to the AttrCarrier installed by the middleware. The
+		// middleware must late-bind these to its span after next returns.
+		if carrier, ok := wrapper.AttrCarrierFrom(r.Context()); ok {
+			carrier.Attrs = append(carrier.Attrs, wrapper.Attr{
+				Key: "gocell.contract.id", Value: "http.orders.get.v1",
+			})
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	ctx := context.Background()
+	ctx = kernelctxkeys.WithContractID(ctx, "http.orders.get.v1")
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/1", nil).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+
+	// Exactly one span regardless of whether ContractID was already in ctx
+	// before this middleware (the skip logic that caused double-counting
+	// was removed in round-4).
+	spans := spy.Spans()
+	require.Len(t, spans, 1, "Tracing must be the single HTTP span owner")
+
+	// The carrier-contributed attr must land on the span post-routing.
+	spans[0].mu.Lock()
+	gotContractID := spans[0].attrs["gocell.contract.id"]
+	spans[0].mu.Unlock()
+	assert.Equal(t, "http.orders.get.v1", gotContractID,
+		"contract attrs must late-bind onto the single span")
 }

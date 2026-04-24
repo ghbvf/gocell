@@ -346,6 +346,30 @@ func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
 	assert.NotEmpty(t, gotTraceID, "trace_id must be set in context when WithTracer is provided")
 }
 
+func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
+	tracer := &routerSpyTracer{}
+	r := New(WithTracer(tracer))
+
+	auth.Mount(r, auth.Route{
+		Contract: testHTTPContract(http.MethodGet, "/internal/v1/rbac/check"),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		Delegated: true,
+	})
+	require.NoError(t, r.FinalizeAuth())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/rbac/check", nil)
+	r.InternalHandler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusNoContent, rec.Code)
+	span := tracer.only(t)
+	assert.Equal(t, "test:GET:/internal/v1/rbac/check", span.Attr("gocell.contract.id"))
+	assert.Equal(t, "/internal/v1/rbac/check", span.Attr("http.route"))
+	assert.Equal(t, int64(http.StatusNoContent), span.Attr("http.status_code"))
+}
+
 func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
 	tracer := tracing.NewTracer("test-router-tracer")
 	r := New(WithTracer(tracer))
@@ -554,6 +578,30 @@ func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_RATE_LIMITED", errObj["code"])
+}
+
+func TestWithTracer_RateLimitedContractRouteTagged(t *testing.T) {
+	limiter := &routerTestLimiter{allow: false}
+	tracer := &routerSpyTracer{}
+	r := New(WithRateLimiter(limiter), WithTracer(tracer))
+	auth.Mount(r, auth.Route{
+		Contract: testHTTPContract(http.MethodGet, "/api/v1/rl-contract/{id}"),
+		Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("handler should not be called when rate limited")
+		}),
+		Public: true,
+	})
+	require.NoError(t, r.FinalizeAuth())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/rl-contract/123", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	span := tracer.only(t)
+	assert.Equal(t, "test:GET:/api/v1/rl-contract/{id}", span.Attr("gocell.contract.id"))
+	assert.Equal(t, "/api/v1/rl-contract/{id}", span.Attr("http.route"))
+	assert.Equal(t, int64(http.StatusTooManyRequests), span.Attr("http.status_code"))
 }
 
 // --- Circuit breaker wiring ---
@@ -766,7 +814,7 @@ func TestWithAuthMiddleware_ProtectedRoute_ValidToken_Returns200(t *testing.T) {
 }
 
 func TestWithAuthMiddleware_PublicEndpoint_SkipsAuth(t *testing.T) {
-	// F3: public endpoints are declared via auth.Declare(Public:true) + FinalizeAuth.
+	// F3: public endpoints are declared via auth.Mount(Public:true) + FinalizeAuth.
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("should not be called"),
 	}
@@ -775,12 +823,7 @@ func TestWithAuthMiddleware_PublicEndpoint_SkipsAuth(t *testing.T) {
 	loginHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	})
-	auth.Declare(r, auth.RouteDecl{
-		Method:  http.MethodPost,
-		Path:    "/api/v1/access/sessions/login",
-		Handler: loginHandler,
-		Public:  true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: loginHandler, Public: true})
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -898,21 +941,16 @@ func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F3 auth.Declare + FinalizeAuth trust-boundary tests
+// F3 auth.Mount + FinalizeAuth trust-boundary tests
 // ---------------------------------------------------------------------------
 
 func TestDeclareAuth_AuthBypass(t *testing.T) {
-	// F3: public routes declared via auth.Declare(Public:true) bypass JWT check.
+	// F3: public routes declared via auth.Mount(Public:true) bypass JWT check.
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
 	r := New(WithAuthMiddleware(verifier))
 
 	var reached bool
-	auth.Declare(r, auth.RouteDecl{
-		Method:  http.MethodGet,
-		Path:    "/api/v1/auth/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { reached = true; w.WriteHeader(http.StatusOK) }),
-		Public:  true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { reached = true; w.WriteHeader(http.StatusOK) }), Public: true})
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -928,22 +966,12 @@ func TestDeclareAuth_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
 	verifier := &routerTestVerifier{err: fmt.Errorf("should not be called")}
 	r := New(WithAuthMiddleware(verifier))
 
-	auth.Declare(r, auth.RouteDecl{
-		Method:  http.MethodPost,
-		Path:    "/api/v1/auth/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		Public:  true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 	// Register GET with a policy so it is covered by policy enforcement;
 	// the verifier always fails so a GET without a token still returns 401.
-	auth.Declare(r, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/api/v1/auth/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			t.Fatal("GET must not bypass auth when only POST is declared public")
-		}),
-		Policy: auth.Authenticated(),
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("GET must not bypass auth when only POST is declared public")
+	}), Policy: auth.Authenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -955,7 +983,7 @@ func TestDeclareAuth_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
 }
 
 func TestDeclareAuth_TracingNewRoot(t *testing.T) {
-	// F3: public routes declared via auth.Declare create new trace roots.
+	// F3: public routes declared via auth.Mount create new trace roots.
 	// PR-A14a: /internal is whitelisted from policy coverage (raw r.Handle)
 	// so the non-public route runs without an auth gate.
 	tracer := tracing.NewTracer("test-combined")
@@ -965,15 +993,10 @@ func TestDeclareAuth_TracingNewRoot(t *testing.T) {
 	)
 
 	var publicTraceID, internalTraceID string
-	auth.Declare(r, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/public",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
-			w.WriteHeader(http.StatusOK)
-		}),
-		Public: true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/public"), Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}), Public: true})
 	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		internalTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
 		w.WriteHeader(http.StatusOK)
@@ -1005,15 +1028,10 @@ func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 	r := New(WithPolicyCoverageWhitelist([]string{"/internal/*"}))
 
 	var publicID, internalID string
-	auth.Declare(r, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/public",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			publicID, _ = ctxkeys.RequestIDFrom(req.Context())
-			w.WriteHeader(http.StatusOK)
-		}),
-		Public: true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/public"), Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		publicID, _ = ctxkeys.RequestIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}), Public: true})
 	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		internalID, _ = ctxkeys.RequestIDFrom(req.Context())
 		w.WriteHeader(http.StatusOK)
@@ -1040,19 +1058,9 @@ func TestDeclareAuth_ProtectedStillRequiresAuth(t *testing.T) {
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
 	r := New(WithAuthMiddleware(verifier))
 
-	auth.Declare(r, auth.RouteDecl{
-		Method:  http.MethodGet,
-		Path:    "/api/v1/auth/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		Public:  true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 	// /api/v1/data is protected — declared with a policy to satisfy coverage enforcement.
-	auth.Declare(r, auth.RouteDecl{
-		Method:  http.MethodGet,
-		Path:    "/api/v1/data",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		Policy:  auth.Authenticated(),
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Policy: auth.Authenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Protected endpoint without token → 401.
@@ -1066,7 +1074,7 @@ func TestDeclareAuth_ProtectedStillRequiresAuth(t *testing.T) {
 func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 	// F3 lazy-binding: WithTracingOptions (user-supplied, appended after prepend)
 	// wins for tracing (last-write-wins in tracingConfig). The lazy closure from
-	// auth.Declare / FinalizeAuth is consulted for auth + RequestID; the explicit
+	// auth.Mount / FinalizeAuth is consulted for auth + RequestID; the explicit
 	// WithTracingOptions fn controls trace root creation.
 	tracer := tracing.NewTracer("test-combined-fine")
 	r := New(
@@ -1077,14 +1085,9 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 		WithPolicyCoverageWhitelist([]string{"/fine-grained-public/*"}),
 	)
 
-	auth.Declare(r, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/public",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}),
-		Public: true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/public"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), Public: true})
 	// PR-A14a: /fine-grained-public is whitelisted + registered raw (non-public).
 	r.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	require.NoError(t, r.FinalizeAuth())
@@ -1099,15 +1102,10 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 		})),
 		WithPolicyCoverageWhitelist([]string{"/fine-grained-public/*"}),
 	)
-	auth.Declare(r2, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/public",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
-			w.WriteHeader(http.StatusOK)
-		}),
-		Public: true,
-	})
+	auth.Mount(r2, auth.Route{Contract: testHTTPContract(http.MethodGet, "/public"), Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		publicTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}), Public: true})
 	// PR-A14a: /fine-grained-public is whitelisted + registered raw (non-public).
 	r2.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		fineTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
@@ -1181,13 +1179,13 @@ func TestWithSecurityHeadersOptions_DefaultHSTS(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// F3 auth.Declare edge cases (F3-TEST-01, F3-TEST-02)
+// F3 auth.Mount edge cases (F3-TEST-01, F3-TEST-02)
 // ---------------------------------------------------------------------------
 
 func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 	// When no routes are declared public, tracing inherits upstream trace as normal.
 	// PR-A14a: /test is whitelisted from policy coverage (raw r.Handle without
-	// auth.Declare) so the route runs without any auth gate and the tracing
+	// auth.Mount) so the route runs without any auth gate and the tracing
 	// context is captured unconditionally.
 	tracer := tracing.NewTracer("test-empty")
 	r := New(
@@ -1213,19 +1211,14 @@ func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 }
 
 func TestDeclareAuth_PathNormalization(t *testing.T) {
-	// auth.Declare normalises paths via path.Clean: "/api/v1//login" → "/api/v1/login".
+	// auth.Mount normalises paths via path.Clean: "/api/v1//login" → "/api/v1/login".
 	r := New()
 
 	var gotID string
-	auth.Declare(r, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/api/v1//login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			gotID, _ = ctxkeys.RequestIDFrom(req.Context())
-			w.WriteHeader(http.StatusOK)
-		}),
-		Public: true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1//login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		gotID, _ = ctxkeys.RequestIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}), Public: true})
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -1245,20 +1238,10 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 	}
 	r := New(WithAuthMiddleware(verifier))
 
-	auth.Declare(r, auth.RouteDecl{
-		Method:  http.MethodPost,
-		Path:    "/api/v1/auth/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		Public:  true,
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 	// Register the GET handler with a policy so it is covered by policy enforcement;
 	// auth middleware will require a valid token for GET.
-	auth.Declare(r, auth.RouteDecl{
-		Method:  http.MethodGet,
-		Path:    "/api/v1/auth/login",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		Policy:  auth.Authenticated(),
-	})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Policy: auth.Authenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	// POST without token → public, 200.

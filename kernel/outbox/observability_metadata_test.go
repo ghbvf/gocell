@@ -31,15 +31,18 @@ func TestMergeObservabilityMetadata_PreservesExplicitValues(t *testing.T) {
 	ctx = ctxkeys.WithRequestID(ctx, "req-from-ctx")
 	ctx = ctxkeys.WithCorrelationID(ctx, "corr-from-ctx")
 	ctx = ctxkeys.WithTraceID(ctx, "trace-from-ctx")
+	ctx = ctxkeys.WithTraceParent(ctx, "00-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-bbbbbbbbbbbbbbbb-01")
 
 	got := MergeObservabilityMetadata(ctx, map[string]string{
-		"request_id": "req-explicit",
-		"trace_id":   "trace-explicit",
+		"request_id":  "req-explicit",
+		"trace_id":    "trace-explicit",
+		"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 	})
 
 	require.NotNil(t, got)
 	assert.Equal(t, "req-explicit", got["request_id"])
 	assert.Equal(t, "trace-explicit", got["trace_id"])
+	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", got["traceparent"])
 	assert.Equal(t, "corr-from-ctx", got["correlation_id"])
 }
 
@@ -62,6 +65,32 @@ func TestMergeObservabilityMetadata_FillsMissingOrEmptyReservedKeys(t *testing.T
 	assert.Equal(t, "worker", got["source"])
 }
 
+func TestMergeObservabilityMetadata_BuildsTraceParentFromTraceAndSpan(t *testing.T) {
+	ctx := context.Background()
+	ctx = ctxkeys.WithTraceID(ctx, "4bf92f3577b34da6a3ce929d0e0e4736")
+	ctx = ctxkeys.WithSpanID(ctx, "00f067aa0ba902b7")
+
+	got := MergeObservabilityMetadata(ctx, nil)
+
+	require.NotNil(t, got)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", got["trace_id"])
+	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", got["traceparent"])
+	_, hasSpanID := got["span_id"]
+	assert.False(t, hasSpanID, "span_id is not propagated as standalone metadata")
+}
+
+func TestMergeObservabilityMetadata_UsesContextTraceParentWhenPresent(t *testing.T) {
+	ctx := context.Background()
+	ctx = ctxkeys.WithTraceID(ctx, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	ctx = ctxkeys.WithSpanID(ctx, "bbbbbbbbbbbbbbbb")
+	ctx = ctxkeys.WithTraceParent(ctx, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+
+	got := MergeObservabilityMetadata(ctx, nil)
+
+	require.NotNil(t, got)
+	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", got["traceparent"])
+}
+
 func TestMergeObservabilityMetadata_NoObservabilityValuesReturnsOriginalMetadata(t *testing.T) {
 	assert.Nil(t, MergeObservabilityMetadata(context.Background(), nil))
 
@@ -77,6 +106,7 @@ func TestContextWithObservabilityMetadata_RestoresWhitelistedValues(t *testing.T
 		"request_id":     "req-456",
 		"correlation_id": "corr-456",
 		"trace_id":       "trace-456",
+		"traceparent":    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 		"span_id":        "span-ignored",
 	})
 
@@ -92,8 +122,26 @@ func TestContextWithObservabilityMetadata_RestoresWhitelistedValues(t *testing.T
 	require.True(t, ok)
 	assert.Equal(t, "trace-456", traceID)
 
+	traceParent, ok := ctxkeys.TraceParentFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
+
 	_, ok = ctxkeys.SpanIDFrom(ctx)
 	assert.False(t, ok, "span_id must not be restored across the async boundary")
+}
+
+func TestContextWithObservabilityMetadata_TraceParentSeedsTraceIDWhenMissing(t *testing.T) {
+	ctx := ContextWithObservabilityMetadata(context.Background(), map[string]string{
+		"traceparent": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+	})
+
+	traceParent, ok := ctxkeys.TraceParentFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
+
+	traceID, ok := ctxkeys.TraceIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", traceID)
 }
 
 func TestContextWithObservabilityMetadata_PreservesExistingContextValues(t *testing.T) {
@@ -137,6 +185,7 @@ func TestContextWithObservabilityMetadata_RejectsUnsafeValues(t *testing.T) {
 		"request_id":     "req-safe-1",
 		"correlation_id": "has spaces",
 		"trace_id":       "has\nnewline",
+		"traceparent":    "00-not-a-valid-trace-id-00f067aa0ba902b7-01",
 	})
 
 	requestID, ok := ctxkeys.RequestIDFrom(ctx)
@@ -148,6 +197,9 @@ func TestContextWithObservabilityMetadata_RejectsUnsafeValues(t *testing.T) {
 
 	_, ok = ctxkeys.TraceIDFrom(ctx)
 	assert.False(t, ok, "unsafe value with newlines should be rejected")
+
+	_, ok = ctxkeys.TraceParentFrom(ctx)
+	assert.False(t, ok, "invalid traceparent should be rejected")
 }
 
 func TestContextWithObservabilityMetadata_RejectsEmptyValues(t *testing.T) {
@@ -178,6 +230,7 @@ func TestIsReservedMetadataKey(t *testing.T) {
 	assert.True(t, IsReservedMetadataKey("request_id"))
 	assert.True(t, IsReservedMetadataKey("correlation_id"))
 	assert.True(t, IsReservedMetadataKey("trace_id"))
+	assert.True(t, IsReservedMetadataKey("traceparent"))
 	assert.False(t, IsReservedMetadataKey("source"))
 	assert.False(t, IsReservedMetadataKey("topic"))
 	assert.False(t, IsReservedMetadataKey(""))
@@ -199,6 +252,10 @@ func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {
 		require.True(t, ok)
 		assert.Equal(t, "trace-789", traceID)
 
+		traceParent, ok := ctxkeys.TraceParentFrom(ctx)
+		require.True(t, ok)
+		assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
+
 		return HandleResult{Disposition: DispositionAck}
 	})
 
@@ -208,6 +265,7 @@ func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {
 			"request_id":     "req-789",
 			"correlation_id": "corr-789",
 			"trace_id":       "trace-789",
+			"traceparent":    "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 		},
 	})
 
@@ -269,12 +327,13 @@ func TestEntryID_RoundTrip_MetadataContextExtraction(t *testing.T) {
 // broker publish, so callers should use IsReservedMetadataKey as a guard
 // or pick a business-specific prefix.
 func ExampleIsReservedMetadataKey() {
-	keys := []string{"trace_id", "request_id", "correlation_id", "tenant_id", "actor"}
+	keys := []string{"trace_id", "traceparent", "request_id", "correlation_id", "tenant_id", "actor"}
 	for _, k := range keys {
 		fmt.Printf("%s reserved=%v\n", k, IsReservedMetadataKey(k))
 	}
 	// Output:
 	// trace_id reserved=true
+	// traceparent reserved=true
 	// request_id reserved=true
 	// correlation_id reserved=true
 	// tenant_id reserved=false

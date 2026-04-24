@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -42,21 +42,9 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 
-	inner := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(inner)
-
-	outer := http.NewServeMux()
-	prefix := "/api/v1/devices/"
-	stripped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = "/" + strings.TrimPrefix(r.URL.Path, prefix)
-		if r2.URL.Path == "/" || r2.URL.Path == "" {
-			r2.URL.Path = "/"
-		}
-		inner.ServeHTTP(w, r2)
-	})
-	outer.Handle("/api/v1/devices/", stripped)
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { NewHandler(svc).RegisterRoutes(sub) })
+	return mux
 }
 
 type deviceListPage struct {

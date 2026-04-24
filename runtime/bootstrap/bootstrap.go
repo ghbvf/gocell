@@ -25,6 +25,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -143,13 +144,18 @@ func WithRouterOptions(opts ...router.Option) Option {
 	}
 }
 
-// WithTracer enables distributed tracing for HTTP requests. The tracer is
-// forwarded to the router's middleware chain via router.WithTracer.
+// WithTracer enables distributed tracing. The tracer is forwarded to
+// router.WithTracer (the single HTTP request span owner) and stored on
+// Bootstrap.wrapperTracer so eventrouter.ContractTracingMiddleware can create
+// consumer-side wrapper.WrapConsumer spans. Without this option, HTTP tracing
+// is disabled and WrapConsumer falls back to wrapper.NoopTracer{}; a slog.Warn
+// is emitted at bootstrap time so ops notice the silent degrade.
 //
 // ref: go-zero — observability configuration at app level
 func WithTracer(t tracing.Tracer) Option {
 	return func(b *Bootstrap) {
 		b.routerOpts = append(b.routerOpts, router.WithTracer(t))
+		b.wrapperTracer = t
 	}
 }
 
@@ -240,7 +246,7 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 // automatic discovery.
 //
 // The verifier is applied to the router's middleware chain at Run() time via
-// router.WithAuthMiddleware. Public endpoints are declared via auth.Declare
+// router.WithAuthMiddleware. Public endpoints are declared via auth.Mount
 // with Public:true inside each Cell's RegisterRoutes; Bootstrap's FinalizeAuth
 // compiles them into the router's auth predicates.
 //
@@ -263,7 +269,7 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 // error — fail-closed.
 //
 // This is the F3 successor to the dual-purpose WithPublicEndpoints opt-in:
-// public routes are now declared via auth.Declare in each Cell, so bootstrap
+// public routes are now declared via auth.Mount in each Cell, so bootstrap
 // only needs an explicit signal that "this assembly expects JWT-backed auth
 // and a provider cell will expose it".
 //
@@ -439,6 +445,22 @@ func WithEventRouterReadyTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
 		b.eventRouterReadyTimeoutSet = true
 		b.eventRouterReadyTimeout = d
+	}
+}
+
+// WithErrorRedactor installs a wrapper.ErrorRedactor that scrubs error text
+// before it reaches span.RecordError on HTTP request spans and consumer-side
+// CONSUME spans. A nil fn disables redaction (identity semantics).
+//
+// Use when strict source-side sanitisation is required (regulated
+// environments); otherwise leave unset and let the OTel span processor /
+// exporter filter handle scrubbing at export time.
+func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
+	return func(b *Bootstrap) {
+		if fn != nil {
+			b.errorRedactor = fn
+			b.routerOpts = append(b.routerOpts, router.WithTracingOptions(middleware.WithErrorRedactor(fn)))
+		}
 	}
 }
 
@@ -649,6 +671,17 @@ type Bootstrap struct {
 	// passed. Checked in phase0 to fail-fast rather than silently skipping
 	// resource registration.
 	managedResourceNil bool
+
+	// wrapperTracer is the Tracer supplied via WithTracer. It is threaded into
+	// router.WithTracer (HTTP) and ContractTracingMiddleware (consumer) at
+	// phase6/phase7 construction. When nil, wrapper.HTTPHandler and
+	// wrapper.WrapConsumer each fall back to wrapper.NoopTracer{} at call
+	// time, and phase1 logs a slog.Warn so missing tracer wiring surfaces.
+	wrapperTracer tracing.Tracer
+
+	// errorRedactor (set via WithErrorRedactor) sanitises error text before
+	// it reaches span.RecordError on consumer spans. nil → identity.
+	errorRedactor wrapper.ErrorRedactor
 }
 
 // New creates a Bootstrap with the given options.

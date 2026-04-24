@@ -7,12 +7,61 @@ import (
 	"time"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Path constants — extracted so each user-resource path appears once in
+// source. FMT-18 resolves const string references at scan time so the YAML
+// cross-check still sees the effective path literal.
+const (
+	pathUsers        = "/api/v1/access/users"
+	pathUserByID     = "/api/v1/access/users/{id}"
+	pathUserLock     = "/api/v1/access/users/{id}/lock"
+	pathUserUnlock   = "/api/v1/access/users/{id}/unlock"
+	pathUserPassword = "/api/v1/access/users/{id}/password"
+)
+
+// Contract spec literals — one per route; cross-checked against
+// contracts/http/auth/user/**/contract.yaml by FMT-18 governance.
+var (
+	specUserCreate = wrapper.ContractSpec{
+		ID: "http.auth.user.create.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: pathUsers,
+	}
+	specUserGet = wrapper.ContractSpec{
+		ID: "http.auth.user.get.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: pathUserByID,
+	}
+	specUserUpdate = wrapper.ContractSpec{
+		ID: "http.auth.user.update.v1", Kind: "http", Transport: "http",
+		Method: "PUT", Path: pathUserByID,
+	}
+	specUserPatch = wrapper.ContractSpec{
+		ID: "http.auth.user.patch.v1", Kind: "http", Transport: "http",
+		Method: "PATCH", Path: pathUserByID,
+	}
+	specUserDelete = wrapper.ContractSpec{
+		ID: "http.auth.user.delete.v1", Kind: "http", Transport: "http",
+		Method: "DELETE", Path: pathUserByID,
+	}
+	specUserLock = wrapper.ContractSpec{
+		ID: "http.auth.user.lock.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: pathUserLock,
+	}
+	specUserUnlock = wrapper.ContractSpec{
+		ID: "http.auth.user.unlock.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: pathUserUnlock,
+	}
+	specUserChangePassword = wrapper.ContractSpec{
+		ID: "http.auth.user.change-password.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: pathUserPassword,
+	}
 )
 
 // StatusResponse is a single-field DTO for lock/unlock responses.
@@ -56,59 +105,51 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// RegisterRoutes registers identity-manage routes on the given mux.
-// Policy is declared at registration time via auth.Declare so that handler
-// bodies contain only business logic (no inline guard calls).
+// RegisterRoutes registers identity-manage routes on the given mux via
+// auth.Mount so every request emits a contract-tagged span. Policy is
+// declared at registration time; handler bodies contain only business logic.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/",
-		Handler: http.HandlerFunc(h.handleCreate),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specUserCreate,
+		Handler:  http.HandlerFunc(h.handleCreate),
+		Policy:   auth.AnyRole(domain.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/{id}",
-		Handler: http.HandlerFunc(h.handleGet),
-		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specUserGet,
+		Handler:  http.HandlerFunc(h.handleGet),
+		Policy:   auth.SelfOr("id", domain.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "PUT",
-		Path:    "/{id}",
-		Handler: http.HandlerFunc(h.handleUpdate),
-		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specUserUpdate,
+		Handler:  http.HandlerFunc(h.handleUpdate),
+		Policy:   auth.SelfOr("id", domain.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "PATCH",
-		Path:    "/{id}",
-		Handler: http.HandlerFunc(h.handlePatch),
-		Policy:  auth.SelfOr("id", domain.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specUserPatch,
+		Handler:  http.HandlerFunc(h.handlePatch),
+		Policy:   auth.SelfOr("id", domain.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "DELETE",
-		Path:    "/{id}",
-		Handler: http.HandlerFunc(h.handleDelete),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specUserDelete,
+		Handler:  http.HandlerFunc(h.handleDelete),
+		Policy:   auth.AnyRole(domain.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/{id}/lock",
-		Handler: http.HandlerFunc(h.handleLock),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specUserLock,
+		Handler:  http.HandlerFunc(h.handleLock),
+		Policy:   auth.AnyRole(domain.RoleAdmin),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/{id}/unlock",
-		Handler: http.HandlerFunc(h.handleUnlock),
-		Policy:  auth.AnyRole(domain.RoleAdmin),
+	auth.Mount(mux, auth.Route{
+		Contract: specUserUnlock,
+		Handler:  http.HandlerFunc(h.handleUnlock),
+		Policy:   auth.AnyRole(domain.RoleAdmin),
 	})
-	// POST /{id}/password: SelfOr policy + PasswordResetExempt so that a user
-	// whose token carries password_reset_required=true can still reach this
-	// endpoint to satisfy the reset requirement. Router.FinalizeAuth aggregates
-	// this declaration alongside all other Cell declarations at Bootstrap phase 5.
-	auth.Declare(mux, auth.RouteDecl{
-		Method:              "POST",
-		Path:                "/{id}/password",
+	// POST /{id}/password: SelfOr policy + PasswordResetExempt so a user whose
+	// token carries password_reset_required=true can still reach this endpoint
+	// to satisfy the reset requirement. Router.FinalizeAuth aggregates this
+	// declaration alongside all other Cell declarations at Bootstrap phase 5.
+	auth.Mount(mux, auth.Route{
+		Contract:            specUserChangePassword,
 		Handler:             http.HandlerFunc(h.handleChangePassword),
 		Policy:              auth.SelfOr("id", domain.RoleAdmin),
 		PasswordResetExempt: true,

@@ -45,7 +45,7 @@ func matchKey(method, cleanPath string) string {
 // pair is in the public set.
 //
 // Intended for Router.FinalizeAuth internals. Cells should not call this
-// directly — declare public routes via auth.Declare with Public: true, and
+// directly — declare public routes via auth.Mount with Public: true, and
 // Router.FinalizeAuth compiles the aggregated entries at bootstrap time.
 //
 // Returns a non-nil error aggregating all malformed or duplicate entries via

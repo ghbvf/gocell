@@ -12,6 +12,8 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -20,9 +22,9 @@ import (
 )
 
 // newContractCommandHandler wires h.RegisterRoutes as the single source of
-// truth for route+policy metadata. The outer mux strips "/api/v1/devices"
-// so registered relative paths (e.g. "POST /{id}/commands") match the
-// absolute contract paths (e.g. "POST /api/v1/devices/{id}/commands").
+// truth for route+policy metadata. TestMux.Route mirrors production chi so
+// auth.Mount strips "/api/v1/devices" off Contract.Path directly — no
+// StripPrefix or relative-alias magic.
 func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
 	devRepo := mem.NewDeviceRepository()
 	q := commandtest.NewInMemQueue()
@@ -32,11 +34,9 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandt
 		panic(err)
 	}
 	h := NewHandler(svc)
-	sub := http.NewServeMux()
-	h.RegisterRoutes(sub)
-	outer := http.NewServeMux()
-	outer.Handle("/api/v1/devices/", http.StripPrefix("/api/v1/devices", sub))
-	return outer, devRepo, q
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
+	return mux, devRepo, q
 }
 
 // --- HTTP contract tests (real handler) ---

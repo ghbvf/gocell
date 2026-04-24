@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -177,51 +178,74 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
+// Contract spec literals for devicecell. Examples are not backed by a
+// contracts/**/contract.yaml (FMT-18 exempts examples/**), but the Mount
+// registration still enforces Method/Path shape at startup.
+var (
+	specDeviceRegister = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.register.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/devices/",
+	}
+	specDeviceList = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.list.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/devices/",
+	}
+	specDeviceStatus = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.status.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/devices/{id}/status",
+	}
+	specDeviceCommandEnqueue = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.commands.enqueue.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/devices/{id}/commands",
+	}
+	specDeviceCommandList = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.commands.list.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/devices/{id}/commands",
+	}
+	specDeviceCommandAck = wrapper.ContractSpec{
+		ID: "http.iotdevice.devices.commands.ack.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/devices/{id}/commands/{cmdId}/ack",
+	}
+)
+
 // RegisterRoutes registers HTTP routes for devicecell.
 func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 	mux.Route("/api/v1", func(v1 cell.RouteMux) {
 		v1.Route("/devices", func(devices cell.RouteMux) {
 			// Device self-registration is a public endpoint: devices bootstrap
 			// without a user JWT; the caller identifies itself in the request body.
-			auth.Declare(devices, auth.RouteDecl{
-				Method:  "POST",
-				Path:    "/",
-				Handler: http.HandlerFunc(c.registerHandler.HandleRegister),
-				Public:  true,
+			auth.Mount(devices, auth.Route{
+				Contract: specDeviceRegister,
+				Handler:  http.HandlerFunc(c.registerHandler.HandleRegister),
+				Public:   true,
 			})
-			// Device list: paginated listing of all devices at /api/v1/devices/.
-			auth.Declare(devices, auth.RouteDecl{
-				Method:  "GET",
-				Path:    "/",
-				Handler: http.HandlerFunc(c.listHandler.HandleList),
-				Policy:  auth.AnyRole("admin"),
+			// Device list: paginated listing at /api/v1/devices/.
+			auth.Mount(devices, auth.Route{
+				Contract: specDeviceList,
+				Handler:  http.HandlerFunc(c.listHandler.HandleList),
+				Policy:   auth.AnyRole("admin"),
 			})
 			// Device status is queried by authenticated operators/devices.
-			auth.Declare(devices, auth.RouteDecl{
-				Method:  "GET",
-				Path:    "/{id}/status",
-				Handler: http.HandlerFunc(c.statusHandler.HandleGetStatus),
-				Policy:  auth.Authenticated(),
+			auth.Mount(devices, auth.Route{
+				Contract: specDeviceStatus,
+				Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
+				Policy:   auth.Authenticated(),
 			})
-			// device-command routes: no route-level policy. Pre-F3 devicecell
-			// had no policy wrapping; restoring Policy:nil matches that state.
-			// When a deployment wants authz, wire WithAuthDiscovery() and add a
-			// Policy or rely on AuthMiddleware's baseline JWT check.
-			// Hardening devicecell authz is out of scope for the F3 migration.
-			auth.Declare(devices, auth.RouteDecl{
-				Method:  "POST",
-				Path:    "/{id}/commands",
-				Handler: http.HandlerFunc(c.commandHandler.HandleEnqueue),
+			// device-command routes: no route-level policy (pre-F3 devicecell
+			// had no policy wrapping). Deployments wanting authz wire
+			// WithAuthDiscovery and add a Policy or rely on AuthMiddleware's
+			// baseline JWT check.
+			auth.Mount(devices, auth.Route{
+				Contract: specDeviceCommandEnqueue,
+				Handler:  http.HandlerFunc(c.commandHandler.HandleEnqueue),
 			})
-			auth.Declare(devices, auth.RouteDecl{
-				Method:  "GET",
-				Path:    "/{id}/commands",
-				Handler: http.HandlerFunc(c.commandHandler.HandleListPending),
+			auth.Mount(devices, auth.Route{
+				Contract: specDeviceCommandList,
+				Handler:  http.HandlerFunc(c.commandHandler.HandleListPending),
 			})
-			auth.Declare(devices, auth.RouteDecl{
-				Method:  "POST",
-				Path:    "/{id}/commands/{cmdId}/ack",
-				Handler: http.HandlerFunc(c.commandHandler.HandleAck),
+			auth.Mount(devices, auth.Route{
+				Contract: specDeviceCommandAck,
+				Handler:  http.HandlerFunc(c.commandHandler.HandleAck),
 			})
 		})
 	})

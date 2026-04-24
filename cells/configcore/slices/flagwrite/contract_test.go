@@ -3,7 +3,6 @@ package flagwrite
 import (
 	"context"
 	"encoding/json"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,6 +12,9 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -21,20 +23,20 @@ import (
 
 const testAdminSubject = "admin-test"
 
-// newContractMux registers flagwrite routes at the canonical API prefix by
-// delegating to Handler.RegisterRoutes — the same single source of truth
+// newContractMux registers flagwrite routes under the canonical API prefix
+// by delegating to Handler.RegisterRoutes — the same single source of truth
 // production wiring uses (cells/configcore/cell.go). Inlining policy
 // wrappers here would re-open the policy-drift surface the P0 fix closed:
 // any change to the required role would land in RegisterRoutes and silently
-// desync from contract tests. Mirrors configwrite/contract_test.go
-// newContractMux.
-func newContractMux(svc *Service) *http.ServeMux {
+// desync from contract tests. TestMux.Route mirrors production chi so
+// auth.Mount strips the prefix off Contract.Path exactly as production does.
+func newContractMux(svc *Service) http.Handler {
 	h := NewHandler(svc)
-	sub := http.NewServeMux()
-	h.RegisterRoutes(sub)
-	outer := http.NewServeMux()
-	outer.Handle("/api/v1/flags/", http.StripPrefix("/api/v1/flags", sub))
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/flags", func(sub cell.RouteMux) {
+		h.RegisterRoutes(sub)
+	})
+	return mux
 }
 
 func newContractService(t *testing.T) *Service {

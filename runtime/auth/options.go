@@ -67,7 +67,7 @@ func WithPasswordResetChangeEndpointHintFn(fn func() string) AuthOption {
 //
 // Router.FinalizeAuth uses this option to install a lazy closure that reads
 // the compiled public-route matcher — aggregated from every Cell's
-// auth.Declare(mux, RouteDecl{Public: true}) call — at request time.
+// auth.Mount(mux, Route{Public: true}) call — at request time.
 //
 // ref: otelhttp WithPublicEndpointFn per-request predicate shape
 func WithPublicEndpointMatcher(fn func(*http.Request) bool) AuthOption {

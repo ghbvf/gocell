@@ -141,7 +141,7 @@ func TestRouterClose_CallsStopIntakeBeforeCancel(t *testing.T) {
 	composite := newCompositeStopIntakeSubscriber()
 
 	r := New(composite)
-	r.AddHandler("topic.drain", noopHandler, "test")
+	r.AddContractHandler(testEventSpec("topic.drain"), noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -208,7 +208,7 @@ func TestRouterClose_NoStopIntakeFallback(t *testing.T) {
 func TestRouterClose_NoStopIntakeFallback_WithHandlers(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub)
-	r.AddHandler("topic.a", noopHandler, "test")
+	r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -302,7 +302,7 @@ func TestRouterClose_WaitsForInflightAfterStopIntake(t *testing.T) {
 	sub := newInflightSubscriber(handlerDuration)
 
 	r := New(sub)
-	r.AddHandler("topic.inflight", noopHandler, "test")
+	r.AddContractHandler(testEventSpec("topic.inflight"), noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -354,7 +354,7 @@ func TestRouterClose_StopIntakeError_ContinuesShutdown(t *testing.T) {
 		stopIntakeErr: context.DeadlineExceeded, // simulate StopIntake timeout
 	}
 	r := New(sr)
-	r.AddHandler("topic.a", noopHandler, "test")
+	r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -414,7 +414,7 @@ func TestRouterClose_StopIntakeBlocksNeverCalled_CtxTimeoutContinues(t *testing.
 	}
 
 	r := New(h)
-	r.AddHandler("t", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test-cg")
 
@@ -481,7 +481,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		}
 
 		r := New(h)
-		r.AddHandler("t", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "test-cg")
 
@@ -528,7 +528,7 @@ func TestRouterClose_WrapsErrorsByPhase(t *testing.T) {
 		sub := newInflightSubscriber(veryLongDrain)
 
 		r := New(sub)
-		r.AddHandler("t", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		}, "test-cg")
 
@@ -585,7 +585,7 @@ func TestRouterClose_StopIntakeErr_ProceedsToCancel(t *testing.T) {
 	close(h.release) // allow StopIntake to return immediately
 
 	r := New(h)
-	r.AddHandler("t", func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	r.AddContractHandler(testEventSpec("t"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test-cg")
 

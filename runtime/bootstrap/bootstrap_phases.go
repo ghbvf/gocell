@@ -211,6 +211,15 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	for _, cl := range b.closers {
 		s.addCloser(cl)
 	}
+
+	// Tracer wiring: b.wrapperTracer is threaded into router.WithTracer
+	// (phase7, HTTP side) and ContractTracingMiddleware (phase6, consumer side)
+	// at the construction call sites. When WithTracer was not supplied,
+	// HTTP tracing is disabled and wrapper.WrapConsumer falls back to
+	// NoopTracer so spans degrade silently — no package-level setup needed.
+	if b.wrapperTracer == nil {
+		slog.Warn("bootstrap: no tracer provided, HTTP tracing is disabled and consumer spans will be no-op; use WithTracer to enable distributed tracing")
+	}
 	return nil
 }
 
@@ -529,7 +538,7 @@ func (b *Bootstrap) phase5BuildHTTPRouter(s *phaseState) error {
 	}
 
 	// After RegisterRoutes has accumulated every Cell's auth declarations via
-	// auth.Declare, finalize the router so AuthMiddleware predicates (public,
+	// auth.Mount, finalize the router so AuthMiddleware predicates (public,
 	// password-reset-exempt, delegated) reflect the aggregated metadata. Must
 	// run before phase7 starts the HTTP listener.
 	if err := rtr.FinalizeAuth(); err != nil {
@@ -795,6 +804,7 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	if !b.disableObservabilityRestore {
 		mws = append(mws, outbox.ObservabilityContextMiddleware())
 	}
+	mws = append(mws, eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor))
 	mws = append(mws, b.consumerMiddleware...)
 
 	var evtRouterOpts []eventrouter.Option

@@ -10,6 +10,7 @@ const (
 	CorrelationID ctxKey = "correlation_id"
 	TraceID       ctxKey = "trace_id"
 	SpanID        ctxKey = "span_id"
+	TraceParent   ctxKey = "traceparent"
 	RequestID     ctxKey = "request_id"
 	RealIP        ctxKey = "real_ip"
 )
@@ -37,6 +38,20 @@ func WithTraceID(ctx context.Context, id string) context.Context {
 // TraceIDFrom extracts the trace ID from ctx. The boolean indicates presence.
 func TraceIDFrom(ctx context.Context) (string, bool) {
 	v, ok := ctx.Value(TraceID).(string)
+	return v, ok
+}
+
+// --- TraceParent ---
+
+// WithTraceParent returns a new context carrying the W3C traceparent value.
+func WithTraceParent(ctx context.Context, traceparent string) context.Context {
+	return context.WithValue(ctx, TraceParent, traceparent)
+}
+
+// TraceParentFrom extracts the W3C traceparent value from ctx.
+// The boolean indicates presence.
+func TraceParentFrom(ctx context.Context) (string, bool) {
+	v, ok := ctx.Value(TraceParent).(string)
 	return v, ok
 }
 

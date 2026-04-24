@@ -1,10 +1,10 @@
 // Package eventrouter provides a Router that separates event subscription
-// declaration from execution. Cells declare handlers via AddHandler; the
+// declaration from execution. Cells declare handlers via AddContractHandler; the
 // Router owns goroutine lifecycle, setup-error detection, and graceful shutdown.
 //
-// ref: ThreeDotsLabs/watermill message/router.go — AddHandler/Run/Close pattern.
+// ref: ThreeDotsLabs/watermill message/router.go — AddContractHandler/Run/Close pattern.
 // Adopted: declaration-then-run split, Running() readiness signal, WaitGroup goroutine tracking.
-// Deviated: no publish-side in AddHandler (GoCell publishes via outbox.Writer, not Router);
+// Deviated: no publish-side in AddContractHandler (GoCell publishes via outbox.Writer, not Router);
 // startup readiness uses an explicit Ready signal from the Subscriber interface rather
 // than a timeout heuristic — aligned with Uber fx OnStart synchronous return semantics.
 //
@@ -25,6 +25,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 )
 
 // DefaultReadyTimeout bounds Phase 3 of Run() so a subscriber that never
@@ -62,10 +63,11 @@ type handlerConfig struct {
 	topic         string
 	handler       outbox.EntryHandler
 	consumerGroup string
+	contract      wrapper.ContractSpec
 }
 
 // Router manages event subscription lifecycle. It implements cell.EventRouter
-// for the declaration phase (AddHandler) and provides Run/Close for the
+// for the declaration phase (AddContractHandler) and provides Run/Close for the
 // execution phase.
 //
 // Run MUST be called at most once. Calling Run a second time returns an error.
@@ -101,28 +103,36 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 	return r
 }
 
-// AddHandler registers a subscription intent. It MUST be called before Run.
-// Panics if topic is empty, handler is nil, or consumerGroup is empty.
+// AddContractHandler registers a contract-first subscription intent. The
+// Router stores the contract metadata on the Subscription; the runtime
+// subscription middleware pipeline owns wrapper.WrapConsumer so the span sits
+// outside ConsumerBase (and after observability metadata restore).
 //
-// consumerGroup identifies the logical consumer group for this handler.
-// Handlers in the same group compete for messages on the same topic;
-// different groups each receive a full copy (fanout). Cell implementations
-// MUST pass their cell ID (e.g. "auditcore") to ensure per-cell isolation
-// and portable semantics across all backends. Empty consumerGroup is
-// rejected to prevent silent backend-specific behavior divergence.
-func (r *Router) AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string) {
-	if topic == "" {
-		panic("eventrouter: AddHandler called with empty topic")
-	}
+// spec.Kind MUST be "event" and spec.Topic MUST be set (WrapConsumer
+// panics otherwise). topic used for the Subscriber.Setup /Subscribe
+// lifecycle is derived from spec.Topic — callers do not pass a separate
+// topic string.
+func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) {
 	if handler == nil {
-		panic("eventrouter: AddHandler called with nil handler")
+		panic("eventrouter: AddContractHandler called with nil handler")
 	}
 	if consumerGroup == "" {
-		panic("eventrouter: AddHandler called with empty consumerGroup; cells must declare their identity")
+		panic("eventrouter: AddContractHandler called with empty consumerGroup; cells must declare their identity")
+	}
+	if spec.Kind != "event" {
+		panic(fmt.Sprintf("eventrouter: Contract.Kind %q must be \"event\"", spec.Kind))
+	}
+	if err := spec.Validate(); err != nil {
+		panic(err.Error())
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.handlers = append(r.handlers, handlerConfig{topic: topic, handler: handler, consumerGroup: consumerGroup})
+	r.handlers = append(r.handlers, handlerConfig{
+		topic:         spec.Topic,
+		handler:       handler,
+		consumerGroup: consumerGroup,
+		contract:      spec,
+	})
 }
 
 // errAlreadyRunning is returned if Run is called more than once.
@@ -212,11 +222,7 @@ func (r *Router) Run(ctx context.Context) error {
 // On error, it cancels the context and returns the wrapped error.
 func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handlers []handlerConfig) error {
 	for _, h := range handlers {
-		sub := outbox.Subscription{
-			Topic:         h.topic,
-			ConsumerGroup: h.consumerGroup,
-			CellID:        h.consumerGroup,
-		}
+		sub := h.subscription()
 		if err := r.subscriber.Setup(ctx, sub); err != nil {
 			wrapped := fmt.Errorf("eventrouter: setup %s: %w", sub.Topic, err)
 			r.markHealthError(wrapped)
@@ -235,11 +241,7 @@ func (r *Router) runSetup(ctx context.Context, cancel context.CancelFunc, handle
 func (r *Router) runSubscribe(ctx context.Context, handlers []handlerConfig, setupErr chan<- error) {
 	for _, h := range handlers {
 		h := h
-		sub := outbox.Subscription{
-			Topic:         h.topic,
-			ConsumerGroup: h.consumerGroup,
-			CellID:        h.consumerGroup,
-		}
+		sub := h.subscription()
 		r.wg.Add(1)
 		go func() {
 			defer r.wg.Done()
@@ -315,11 +317,7 @@ func (r *Router) runAwaitReady(ctx context.Context, cancel context.CancelFunc, h
 func (r *Router) diagnoseNotReady(handlers []handlerConfig) []string {
 	var notReady []string
 	for _, h := range handlers {
-		sub := outbox.Subscription{
-			Topic:         h.topic,
-			ConsumerGroup: h.consumerGroup,
-			CellID:        h.consumerGroup,
-		}
+		sub := h.subscription()
 		select {
 		case <-r.subscriber.Ready(sub):
 			// ready
@@ -337,11 +335,7 @@ func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-
 	var wg sync.WaitGroup
 	for _, h := range handlers {
 		h := h
-		sub := outbox.Subscription{
-			Topic:         h.topic,
-			ConsumerGroup: h.consumerGroup,
-			CellID:        h.consumerGroup,
-		}
+		sub := h.subscription()
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -356,6 +350,20 @@ func (r *Router) awaitAllReady(ctx context.Context, handlers []handlerConfig) <-
 		close(doneCh)
 	}()
 	return doneCh
+}
+
+func (h handlerConfig) subscription() outbox.Subscription {
+	sub := outbox.Subscription{
+		Topic:         h.topic,
+		ConsumerGroup: h.consumerGroup,
+		CellID:        h.consumerGroup,
+	}
+	if h.contract.ID != "" {
+		sub.ContractID = h.contract.ID
+		sub.ContractKind = h.contract.Kind
+		sub.ContractTransport = h.contract.Transport
+	}
+	return sub
 }
 
 // closeRunning safely closes the running channel exactly once.

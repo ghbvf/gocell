@@ -229,7 +229,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	}
 
 	// F3: public routes (login, refresh) and PasswordResetExempt routes
-	// (change-password, logout) are declared via auth.Declare inside accesscore's
+	// (change-password, logout) are declared via auth.Mount inside accesscore's
 	// RegisterRoutes. FinalizeAuth compiles them into the router's auth predicates.
 	r := router.New(
 		router.WithAuthMiddleware(ac.TokenVerifier()),
