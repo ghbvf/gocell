@@ -4,7 +4,17 @@
 // accesscore: when no user carries the admin role at service start, a random
 // password is generated, written to a credential file (mode 0600), assigned
 // to a new admin user with password_reset_required=true, and a TTL-bounded
-// Cleaner worker removes the file after the configured TTL.
+// cleaner worker removes the file after the configured TTL.
+//
+// # Consistency level
+//
+// L1 LocalTx — bootstrap writes (a) the admin user and role binding via the
+// accesscore repositories and (b) the credential file side-by-side on the
+// host filesystem. Both succeed or neither takes effect for the caller: the
+// credential-file write happens inside EnsureAdmin after the user insert and
+// is followed by a best-effort rollback if the password hash assignment
+// fails. No outbox emission or cross-cell event is involved; see
+// cells/accesscore/cell.yaml for cell-level declaration.
 //
 // # Usage
 //

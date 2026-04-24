@@ -287,6 +287,15 @@ type ConfigKeyFilterer interface {
 // Use OnStop for teardown. Long-running background work must be launched in a
 // goroutine whose cancellation is triggered by OnStop.
 //
+// # Ordering semantics
+//
+// Within a single Cell, hooks returned by LifecycleHooks() are Appended in
+// slice order (FIFO). Across Cells, phase3b iterates assembly.CellIDs() in
+// registration order, so the first registered Cell's hooks run before the
+// second Cell's. On shutdown, bootstrap.Lifecycle.Stop invokes OnStop in
+// reverse-Append order (LIFO rollback), so the last Cell registered stops
+// first. See runtime/bootstrap/lifecycle.go rollback().
+//
 // EXPERIMENTAL: contract is stable across the PR-A5a release but the blocking
 // semantics (above) may be further formalized once a second Cell adopts the
 // interface.
