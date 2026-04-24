@@ -1,0 +1,13 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "command.device-command.extend-lease.v1.request",
+  "type": "object",
+  "properties": {
+    "extensionSeconds": {
+      "type": "integer",
+      "minimum": 1
+    }
+  },
+  "required": ["extensionSeconds"],
+  "additionalProperties": false
+}

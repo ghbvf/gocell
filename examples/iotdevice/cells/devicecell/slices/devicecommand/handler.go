@@ -284,8 +284,6 @@ func parseAckReason(raw string) (command.AckReason, error) {
 		return command.AckSuccess, nil
 	case "failure", "failed":
 		return command.AckFailed, nil
-	case "timeout":
-		return command.AckTimeout, nil
 	case "rejected":
 		return command.AckRejected, nil
 	default:

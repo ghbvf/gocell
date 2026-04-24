@@ -5,7 +5,7 @@
   "properties": {
     "reason": {
       "type": "string",
-      "enum": ["success", "failure", "timeout", "rejected"]
+      "enum": ["success", "failure", "rejected"]
     }
   },
   "required": ["reason"],

@@ -9,6 +9,8 @@ contractUsages:
     role: serve
   - contract: http.device.command.ack.v1
     role: serve
+  - contract: http.device.command.extend-lease.v1
+    role: serve
   - contract: command.device-command.enqueue.v1
     role: handle
   - contract: command.device-command.dequeue.v1
@@ -16,6 +18,8 @@ contractUsages:
   - contract: command.device-command.report.v1
     role: handle
   - contract: command.device-command.ack.v1
+    role: handle
+  - contract: command.device-command.extend-lease.v1
     role: handle
 verify:
   unit:
@@ -25,10 +29,12 @@ verify:
     - contract.http.device.command.dequeue.v1.serve
     - contract.http.device.command.report.v1.serve
     - contract.http.device.command.ack.v1.serve
+    - contract.http.device.command.extend-lease.v1.serve
     - contract.command.device-command.enqueue.v1.handle
     - contract.command.device-command.dequeue.v1.handle
     - contract.command.device-command.report.v1.handle
     - contract.command.device-command.ack.v1.handle
+    - contract.command.device-command.extend-lease.v1.handle
 
 allowedFiles:
   - examples/iotdevice/cells/devicecell/slices/devicecommand/**

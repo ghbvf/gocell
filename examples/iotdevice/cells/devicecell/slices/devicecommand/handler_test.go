@@ -412,6 +412,30 @@ func TestHandleAck(t *testing.T) {
 	}
 }
 
+func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
+	h, _, q := setupCommandHandler()
+	ctx := context.Background()
+	require.NoError(t, q.Enqueue(ctx,
+		command.NewEntry("cmd-timeout", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),
+		command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands/cmd-timeout/ack", strings.NewReader(`{"reason":"timeout"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "dev-1")
+	req.SetPathValue("cmdId", "cmd-timeout")
+	req = req.WithContext(auth.TestContext("dev-1", nil))
+	h.HandleAck(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	got, err := q.GetCommand(ctx, "cmd-timeout")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, command.StatusSent, got.Status)
+}
+
 func TestCommandResponse_CompletedAt_Serialization(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 
