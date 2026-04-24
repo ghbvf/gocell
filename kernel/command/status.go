@@ -74,9 +74,20 @@ func (s Status) IsTerminal() bool {
 // ---------------------------------------------------------------------------
 
 // statusTransitions maps each non-terminal state to its valid target states.
+//
+// Design note: StatusSent → StatusSucceeded is allowed without passing through
+// StatusDelivered. This covers the "Ack(Success) without prior Report" flow —
+// devices that execute synchronously within the Dequeue lease can ack directly,
+// leaving DeliveredAt nil as a signal that no intermediate Report was observed.
+// This intentionally loosens strict Temporal-style staging (where
+// ScheduledTime/StartedTime/CompletedTime are always distinct events) in favour
+// of simpler device integration where Report is optional.
+//
+// ref: Temporal activity lifecycle — StartedTime is optional when using
+// synchronous activities; CompletedTime can follow ScheduledTime directly.
 var statusTransitions = map[Status][]Status{
-	StatusPending:   {StatusSent, StatusExpired, StatusCanceled},
-	StatusSent:      {StatusDelivered, StatusFailed, StatusExpired, StatusCanceled},
+	StatusPending:   {StatusSent, StatusFailed, StatusExpired, StatusCanceled},
+	StatusSent:      {StatusDelivered, StatusSucceeded, StatusFailed, StatusExpired, StatusCanceled},
 	StatusDelivered: {StatusSucceeded, StatusFailed, StatusExpired, StatusCanceled},
 	// Terminal states have no outgoing transitions.
 }

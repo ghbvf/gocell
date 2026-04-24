@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "command.device-command.list.v1.response",
+  "title": "http.device.command.dequeue.v1.response",
   "type": "object",
   "properties": {
     "data": {
@@ -15,6 +15,8 @@
           "status": { "type": "string" },
           "attempt": { "type": "integer" },
           "createdAt": { "type": "string", "format": "date-time" },
+          "sentAt": { "type": "string", "format": "date-time" },
+          "deliveredAt": { "type": "string", "format": "date-time" },
           "completedAt": { "type": "string", "format": "date-time" }
         },
         "required": ["id", "deviceId", "commandType", "payload", "status", "attempt", "createdAt"],
@@ -24,5 +26,6 @@
     "nextCursor": { "type": "string" },
     "hasMore": { "type": "boolean" }
   },
-  "required": ["data", "nextCursor", "hasMore"]
+  "required": ["data", "nextCursor", "hasMore"],
+  "additionalProperties": false
 }

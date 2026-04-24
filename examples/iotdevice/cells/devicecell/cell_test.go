@@ -245,7 +245,7 @@ func TestDeviceCell_RouteEnqueueCommand(t *testing.T) {
 	assert.Equal(t, http.StatusCreated, rec.Code)
 }
 
-func TestDeviceCell_RouteListPendingCommands(t *testing.T) {
+func TestDeviceCell_RouteDequeueCommands(t *testing.T) {
 	r := initCellWithRouter(t)
 
 	// Register device.
@@ -258,7 +258,7 @@ func TestDeviceCell_RouteListPendingCommands(t *testing.T) {
 	data := extractData(t, rec.Body.Bytes())
 	deviceID := data["id"].(string)
 
-	// List pending (should be empty). Inject auth context: device authenticates as itself.
+	// Dequeue (should be empty). Inject auth context: device authenticates as itself.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/commands", nil)
 	req = req.WithContext(auth.TestContext(deviceID, nil))
@@ -291,9 +291,17 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	cmdData := extractData(t, rec.Body.Bytes())
 	cmdID := cmdData["id"].(string)
 
+	// Dequeue first so AckSuccess is allowed from Sent.
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/commands", nil)
+	req = req.WithContext(auth.TestContext(deviceID, nil))
+	r.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
 	// Ack. Inject auth context: device authenticates as itself.
 	rec = httptest.NewRecorder()
-	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands/"+cmdID+"/ack", nil)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands/"+cmdID+"/ack", strings.NewReader(`{"reason":"success"}`))
+	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(deviceID, nil))
 	r.ServeHTTP(rec, req)
 

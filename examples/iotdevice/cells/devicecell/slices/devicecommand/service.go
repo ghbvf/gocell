@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
@@ -18,34 +19,28 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// pendingSort defines the default sort for pending command listings (FIFO).
+// pendingSort defines the default sort for command listings (FIFO).
 var pendingSort = []query.SortColumn{
 	{Name: "created_at", Direction: query.SortASC},
 	{Name: "id", Direction: query.SortASC},
 }
 
-// commandQueueReader combines the Queue facade with the GetCommand lookup
-// needed for ownership checks and idempotent Ack. commandtest.InMemQueue
-// satisfies this interface; a postgres adapter would implement it too.
-type commandQueueReader interface {
+// commandQueueStore combines the Queue facade with the ActiveScanner lookup
+// needed for ownership checks, sweeper scans, and internal ops views.
+// commandtest.InMemQueue satisfies this interface; a postgres adapter would
+// implement it too.
+type commandQueueStore interface {
 	command.Queue
-	GetCommand(ctx context.Context, id string) (*command.Entry, error)
-}
-
-// commandQueueAdvancer extends commandQueueReader with StateAdvancer for
-// the Pending→Sent→Delivered chaining required by the HTTP-poll Ack flow.
-type commandQueueAdvancer interface {
-	commandQueueReader
-	command.StateAdvancer
+	command.ActiveScanner
 }
 
 // Service handles device command business logic.
 //
-// NewService accepts any commandQueueAdvancer; in demo/example mode this is
-// commandtest.InMemQueue. A production postgres adapter would provide the
-// same combined interface.
+// NewService accepts any commandQueueStore; in demo/example mode this is
+// commandtest.InMemQueue. A production postgres adapter would provide the same
+// combined interface.
 type Service struct {
-	queue      commandQueueAdvancer
+	queue      commandQueueStore
 	deviceRepo domain.DeviceRepository
 	codec      *query.CursorCodec
 	logger     *slog.Logger
@@ -61,11 +56,11 @@ type Service struct {
 // fail-open vs fail-closed semantics; pass query.RunModeProd unless the
 // assembly declares DurabilityDemo.
 //
-// codec must be non-nil — pagination (list pending commands) cannot be served
-// without a cursor codec. Passing nil is a caller programming error;
+// codec must be non-nil — internal ops pagination cannot be served without a
+// cursor codec. Passing nil is a caller programming error;
 // NewService returns errcode.ErrCellMissingCodec so the cell Init() can
 // propagate a structured error instead of a runtime panic.
-func NewService(q commandQueueAdvancer, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
+func NewService(q commandQueueStore, deviceRepo domain.DeviceRepository, codec *query.CursorCodec, logger *slog.Logger, runMode query.RunMode) (*Service, error) {
 	if codec == nil {
 		return nil, errcode.New(errcode.ErrCellMissingCodec,
 			"device-command: cursor codec is required")
@@ -138,29 +133,54 @@ func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload st
 	return entry, nil
 }
 
-// ListPending returns a paginated page of pending commands for the given device.
-// Sort: created_at ASC, id ASC (FIFO -- oldest non-terminal commands first).
+// Dequeue claims pending commands for the given device and advances them to Sent.
 // This is the poll endpoint used by devices in the L4 latent model.
-func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq query.PageParams) (query.PageResult[command.Entry], error) {
+func (s *Service) Dequeue(ctx context.Context, deviceID string, limit int, lease time.Duration) ([]command.Entry, error) {
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
-		return query.PageResult[command.Entry]{}, fmt.Errorf("device-command: lookup device: %w", err)
+		return nil, fmt.Errorf("device-command: lookup device: %w", err)
 	}
-	qctx := query.QueryContext("endpoint", "device-command", "deviceId", deviceID)
+	if limit <= 0 {
+		limit = query.DefaultPageSize
+	}
+	if lease <= 0 {
+		lease = command.DefaultLeaseDuration
+	}
+	entries, err := s.queue.Dequeue(ctx, deviceID, limit, lease)
+	if err != nil {
+		return nil, fmt.Errorf("device-command: dequeue: %w", err)
+	}
+	s.logger.Info("device-command: commands dequeued",
+		slog.String("device_id", deviceID),
+		slog.Int("count", len(entries)),
+	)
+	return entries, nil
+}
+
+// ScanActive returns a paginated read-only view of non-terminal commands for
+// ops/internal endpoints. It never claims commands or mutates state.
+func (s *Service) ScanActive(ctx context.Context, filter command.ScanFilter, pageReq query.PageParams) (query.PageResult[command.Entry], error) {
+	if filter.DeviceID != "" {
+		if _, err := s.deviceRepo.GetByID(ctx, filter.DeviceID); err != nil {
+			return query.PageResult[command.Entry]{}, fmt.Errorf("device-command: lookup device: %w", err)
+		}
+	}
+	qctx := query.QueryContext(
+		"endpoint", "device-command-active",
+		"deviceId", filter.DeviceID,
+		"statuses", formatStatuses(filter.Statuses),
+	)
 	return query.ExecutePagedQuery(ctx, query.PagedQueryConfig[command.Entry]{
 		Codec:      s.codec,
 		PageParams: pageReq,
 		Sort:       pendingSort,
 		QueryCtx:   qctx,
 		Fetch: func(ctx context.Context, params query.ListParams) ([]command.Entry, error) {
-			// Load all non-terminal entries for this device, then apply in-memory
-			// cursor pagination. Queue.ListPending sorts by CreatedAt ASC.
-			// For large-scale backends, a native SQL cursor is preferred.
-			all, err := s.queue.ListPending(ctx, deviceID, 0) // 0 = no limit
+			// Load matching non-terminal entries, then apply in-memory cursor
+			// pagination. For large-scale backends, a native SQL cursor is preferred.
+			all, err := s.queue.ScanActive(ctx, filter)
 			if err != nil {
-				return nil, fmt.Errorf("device-command: list pending: %w", err)
+				return nil, fmt.Errorf("device-command: scan active: %w", err)
 			}
-			// Sort and apply cursor filter so ExecutePagedQuery receives the
-			// correctly-windowed slice (including the N+1 for hasMore detection).
 			query.Sort(all, params.Sort, entryFieldCompare)
 			return query.ApplyCursor(all, params, entryFieldValue)
 		},
@@ -170,6 +190,17 @@ func (s *Service) ListPending(ctx context.Context, deviceID string, pageReq quer
 		OnCursorErr: query.LogCursorError(s.logger, "device-command"),
 		RunMode:     s.runMode,
 	})
+}
+
+func formatStatuses(statuses []command.Status) string {
+	if len(statuses) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(statuses))
+	for _, status := range statuses {
+		parts = append(parts, status.String())
+	}
+	return strings.Join(parts, ",")
 }
 
 // entryFieldCompare compares a single named field of two command.Entry values.
@@ -201,39 +232,32 @@ func entryFieldValue(e command.Entry, field string) any {
 	}
 }
 
-// Ack acknowledges that a device has executed a command.
-//
-// The HTTP-poll flow Acks directly from Pending status. The kernel Queue
-// requires Delivered state before AckSuccess, so this method chains:
-//
-//	Pending → Sent → Delivered  (via StateAdvancer)
-//	Delivered → Succeeded       (via Queue.Ack)
-//
-// Already-terminal commands are a no-op (idempotent).
-// L4 consistency: Ack advances state; no outbox publish at this layer.
-//
-// NOTE: non-atomic. The chained Pending→Sent→Delivered→Succeeded advance in
-// this method is composed of three independent StateAdvancer calls; between
-// steps another goroutine (e.g., Sweeper) could observe an intermediate state.
-// This is acceptable for demo/in-memory mode where InMemQueue's mutex makes
-// conflicts impossible. Production command adapters (e.g., postgres) SHOULD
-// implement this as a single transaction — see backlog PR-A12-ACK-ATOMIC.
-func (s *Service) Ack(ctx context.Context, deviceID, cmdID string) error {
+// Report records that the device has received the command and started work.
+func (s *Service) Report(ctx context.Context, deviceID, cmdID string) error {
 	now := time.Now()
+	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
+		return err
+	}
+	if err := s.queue.Report(ctx, cmdID, now); err != nil {
+		return fmt.Errorf("device-command: report: %w", err)
+	}
+	s.logger.Info("device-command: command reported delivered",
+		slog.String("command_id", cmdID),
+		slog.String("device_id", deviceID),
+	)
+	return nil
+}
 
-	e, err := s.queue.GetCommand(ctx, cmdID)
+// Ack finalises a command with the supplied terminal reason. Ack is a single
+// Queue transition; it does not synthesize Sent/Delivered timestamps.
+func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason command.AckReason) error {
+	if !reason.Valid() {
+		return errcode.New(errcode.ErrValidationFailed, "device-command: invalid ack reason")
+	}
+	now := time.Now()
+	e, err := s.getOwnedCommand(ctx, deviceID, cmdID)
 	if err != nil {
-		return fmt.Errorf("device-command: get command: %w", err)
-	}
-	if e == nil {
-		return errcode.New(errcode.ErrCommandNotFound,
-			fmt.Sprintf("device-command: command %q not found", cmdID))
-	}
-
-	// Ownership check.
-	if e.DeviceID != deviceID {
-		return errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("device-command: command %q does not belong to device %q", cmdID, deviceID))
+		return err
 	}
 
 	// Idempotent: already terminal → no-op.
@@ -241,29 +265,46 @@ func (s *Service) Ack(ctx context.Context, deviceID, cmdID string) error {
 		return nil
 	}
 
-	// Chain Pending→Sent→Delivered so Queue.Ack can finalize to Succeeded.
-	// StatusDelivered is the valid state for Queue.Ack(AckSuccess).
-	switch e.Status {
-	case command.StatusPending:
-		if err := s.queue.AdvanceStatus(ctx, cmdID, command.StatusPending, command.StatusSent, now); err != nil {
-			return fmt.Errorf("device-command: ack advance pending→sent: %w", err)
-		}
-		if err := s.queue.AdvanceStatus(ctx, cmdID, command.StatusSent, command.StatusDelivered, now); err != nil {
-			return fmt.Errorf("device-command: ack advance sent→delivered: %w", err)
-		}
-	case command.StatusSent:
-		if err := s.queue.AdvanceStatus(ctx, cmdID, command.StatusSent, command.StatusDelivered, now); err != nil {
-			return fmt.Errorf("device-command: ack advance sent→delivered: %w", err)
-		}
-	}
-
-	if err := s.queue.Ack(ctx, cmdID, command.AckSuccess, now); err != nil {
+	if err := s.queue.Ack(ctx, cmdID, reason, now); err != nil {
 		return fmt.Errorf("device-command: ack: %w", err)
 	}
 
 	s.logger.Info("device-command: command acknowledged",
 		slog.String("command_id", cmdID),
 		slog.String("device_id", deviceID),
+		slog.String("reason", reason.String()),
 	)
 	return nil
+}
+
+// ExtendLease extends an existing command lease for a device that is still
+// processing a command.
+func (s *Service) ExtendLease(ctx context.Context, deviceID, cmdID string, extension time.Duration) error {
+	if extension <= 0 {
+		return errcode.New(errcode.ErrValidationFailed, "device-command: extension must be positive")
+	}
+	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
+		return err
+	}
+	if err := s.queue.ExtendLease(ctx, cmdID, extension, time.Now()); err != nil {
+		return fmt.Errorf("device-command: extend lease: %w", err)
+	}
+	return nil
+}
+
+func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) (*command.Entry, error) {
+	e, err := s.queue.GetCommand(ctx, cmdID)
+	if err != nil {
+		return nil, fmt.Errorf("device-command: get command: %w", err)
+	}
+	if e == nil {
+		return nil, errcode.New(errcode.ErrCommandNotFound,
+			fmt.Sprintf("device-command: command %q not found", cmdID))
+	}
+
+	if e.DeviceID != deviceID {
+		return nil, errcode.New(errcode.ErrAuthForbidden,
+			fmt.Sprintf("device-command: command %q does not belong to device %q", cmdID, deviceID))
+	}
+	return e, nil
 }

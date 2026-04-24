@@ -80,7 +80,7 @@ func TestParseRealProject(t *testing.T) {
 		"http.order.get.v1",
 		"http.order.list.v1",
 		"command.device-command.enqueue.v1",
-		"command.device-command.list.v1",
+		"command.device-command.dequeue.v1",
 		"command.device-command.ack.v1",
 		"event.session.created.v1",
 		"event.audit.appended.v1",

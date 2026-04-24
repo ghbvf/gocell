@@ -67,44 +67,41 @@ func checkExpiry(e *Entry, now time.Time) (ExpiryTransition, bool) {
 	return ExpiryTransition{}, false
 }
 
-// Sweeper is a kernel-level background worker that periodically calls
-// Reader.PendingCommands (per-device or globally via an adapter-specific
-// query) and applies SweepOnce via StateAdvancer.
+// Sweeper is a kernel-level background worker that periodically scans
+// non-terminal commands (via ActiveScanner) and terminates expired entries
+// (via Queue.Ack(AckTimeout)).
 //
 // Implements kernel/worker.Worker (Start blocks until ctx cancelled; Stop idempotent).
 //
-// NOTE: Sweeper does NOT call the idempotency Claimer; sweep semantics are
-// pure read-and-advance. Adapters MUST use optimistic locking in AdvanceStatus
-// to prevent double-expire across replicas.
+// By default Sweeper scans all devices (Filter.DeviceID=""). Scoping to a
+// single device is a filter option, not a structural field — adapters decide
+// whether the ScanFilter is honoured efficiently (e.g., indexed by device_id)
+// or scanned in memory.
+//
+// ref: Temporal HistoryService timer scan loop — role-based periodic scan
+// over active timers; disposition (expire vs retry) is a separate decision.
 type Sweeper struct {
-	// Reader is required. PendingCommands is called on each tick.
-	Reader Reader
-	// Advancer is required. AdvanceStatus is called for each expired entry.
-	Advancer StateAdvancer
+	// Scanner is required. ScanActive is called on each tick with Filter.
+	Scanner ActiveScanner
+	// Queue is required. Ack(AckTimeout) finalises expired entries to StatusExpired.
+	Queue Queue
+	// Filter narrows the scan; zero value means "all devices, all non-terminal statuses".
+	Filter ScanFilter
 	// Interval is how often to scan; defaults to 30s if zero.
 	Interval time.Duration
 	// Now supplies the clock; defaults to time.Now if nil.
 	Now func() time.Time
-	// DeviceID, if non-empty, restricts the sweep to one device (for adapters
-	// without a global scan API). Must be non-empty — Sweeper.Start returns
-	// an error if DeviceID is empty to prevent inadvertent scope creep into
-	// global-sweep adapter concerns.
-	//
-	// Future extension for global sweep (all devices): introduce a
-	// Reader.PendingAll method and accept DeviceID="" as the global-sweep
-	// sentinel, OR provide a separate GlobalSweeper type. Current per-device
-	// restriction keeps adapter concerns decoupled — the postgres adapter
-	// (Wave 3) will likely add PendingAll and relax this check.
-	DeviceID string
 	// OnError is invoked on non-fatal errors during a sweep tick. nil = no-op.
 	OnError func(error)
 }
 
 // Start begins the sweep loop, blocking until ctx is cancelled.
-// Returns an error if DeviceID is empty (required for scoped sweeps).
 func (s *Sweeper) Start(ctx context.Context) error {
-	if s.DeviceID == "" {
-		return errDeviceIDRequired
+	if s.Scanner == nil {
+		return errcode.New(errcode.ErrValidationFailed, "command: Sweeper.Scanner must be non-nil")
+	}
+	if s.Queue == nil {
+		return errcode.New(errcode.ErrValidationFailed, "command: Sweeper.Queue must be non-nil")
 	}
 
 	interval := s.Interval
@@ -136,10 +133,11 @@ func (s *Sweeper) Stop(_ context.Context) error {
 	return nil
 }
 
-// runTick executes a single sweep: read pending entries, compute transitions,
-// apply them. Non-fatal errors are forwarded to OnError.
+// runTick executes a single sweep: read non-terminal entries, compute
+// expirations, terminate each via Queue.Ack(AckTimeout). Non-fatal errors
+// are forwarded to OnError.
 func (s *Sweeper) runTick(ctx context.Context, now time.Time) {
-	entries, err := s.Reader.PendingCommands(ctx, s.DeviceID)
+	entries, err := s.Scanner.ScanActive(ctx, s.Filter)
 	if err != nil {
 		if s.OnError != nil {
 			s.OnError(err)
@@ -149,14 +147,10 @@ func (s *Sweeper) runTick(ctx context.Context, now time.Time) {
 
 	transitions := SweepOnce(entries, now)
 	for _, t := range transitions {
-		if err := s.Advancer.AdvanceStatus(ctx, t.CommandID, t.From, t.To, now); err != nil {
+		if err := s.Queue.Ack(ctx, t.CommandID, AckTimeout, now); err != nil {
 			if s.OnError != nil {
 				s.OnError(err)
 			}
 		}
 	}
 }
-
-// errDeviceIDRequired is returned by Sweeper.Start when DeviceID is empty.
-// Callers can match with errors.Is against errcode.ErrValidationFailed.
-var errDeviceIDRequired = errcode.New(errcode.ErrValidationFailed, "command: Sweeper.DeviceID must be non-empty")

@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "command.device-command.ack.v1.request",
+  "title": "http.device.command.ack.v1.request",
   "type": "object",
   "properties": {
     "reason": {

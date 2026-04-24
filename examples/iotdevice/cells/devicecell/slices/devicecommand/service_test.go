@@ -161,7 +161,7 @@ func TestService_Enqueue_AuthzCheckedBeforeDeviceLookup(t *testing.T) {
 		"authz must be checked before device lookup — must return Forbidden, not NotFound")
 }
 
-func TestService_ListPending(t *testing.T) {
+func TestService_Dequeue(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	now := time.Now()
@@ -186,12 +186,16 @@ func TestService_ListPending(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			result, err := svc.ListPending(ctx, tc.deviceID, query.PageParams{})
+			entries, err := svc.Dequeue(ctx, tc.deviceID, 10, command.DefaultLeaseDuration)
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
 				require.NoError(t, err)
-				assert.Len(t, result.Items, tc.wantLen)
+				assert.Len(t, entries, tc.wantLen)
+				for _, entry := range entries {
+					assert.Equal(t, command.StatusSent, entry.Status)
+					assert.NotNil(t, entry.SentAt)
+				}
 			}
 		})
 	}
@@ -206,10 +210,12 @@ func TestService_Ack(t *testing.T) {
 		wantErr  bool
 	}{
 		{
-			name: "ack pending command succeeds",
+			name: "ack sent command succeeds",
 			setup: func(dr *mem.DeviceRepository, q *commandtest.InMemQueue) {
 				seedDevice(dr, "dev-1", "sensor-a")
-				_ = q.Enqueue(context.Background(), command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+				ctx := context.Background()
+				_ = q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+				_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 			},
 			deviceID: "dev-1",
 			cmdID:    "cmd-1",
@@ -229,7 +235,9 @@ func TestService_Ack(t *testing.T) {
 			setup: func(dr *mem.DeviceRepository, q *commandtest.InMemQueue) {
 				seedDevice(dr, "dev-1", "sensor-a")
 				seedDevice(dr, "dev-2", "sensor-b")
-				_ = q.Enqueue(context.Background(), command.NewEntry("cmd-2", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+				ctx := context.Background()
+				_ = q.Enqueue(ctx, command.NewEntry("cmd-2", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+				_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 			},
 			deviceID: "dev-2",
 			cmdID:    "cmd-2",
@@ -242,7 +250,7 @@ func TestService_Ack(t *testing.T) {
 			svc, devRepo, q := newTestService()
 			tc.setup(devRepo, q)
 
-			err := svc.Ack(context.Background(), tc.deviceID, tc.cmdID)
+			err := svc.Ack(context.Background(), tc.deviceID, tc.cmdID, command.AckSuccess)
 			if tc.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -257,32 +265,38 @@ func TestService_Ack_Idempotent(t *testing.T) {
 	ctx := context.Background()
 	seedDevice(devRepo, "dev-1", "sensor-a")
 	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, err)
 
 	// Ack once
-	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1"))
+	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
 
 	// Ack again — should be idempotent (no error)
-	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1"))
+	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
 }
 
-func TestService_Ack_LifecyclePendingToSucceeded(t *testing.T) {
+func TestService_Ack_LifecycleSentToSucceeded(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	seedDevice(devRepo, "dev-1", "sensor-a")
 	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, err)
 
-	// Ack from Pending → chains through Sent→Delivered→Succeeded.
-	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1"))
+	// Ack from Sent → Succeeded without synthesizing Delivered.
+	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
 
 	// Entry should now be Succeeded (terminal).
 	got, err := q.GetCommand(ctx, "cmd-1")
 	require.NoError(t, err)
 	require.NotNil(t, got)
 	assert.Equal(t, command.StatusSucceeded, got.Status)
+	assert.NotNil(t, got.SentAt)
+	assert.Nil(t, got.DeliveredAt)
 	assert.NotNil(t, got.CompletedAt)
 }
 
-func TestService_ListPending_CursorDeviceMismatch(t *testing.T) {
+func TestService_ScanActive_CursorDeviceMismatch(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	now := time.Now()
@@ -299,13 +313,13 @@ func TestService_ListPending_CursorDeviceMismatch(t *testing.T) {
 	}
 
 	// Get first page for dev-A.
-	page1, err := svc.ListPending(ctx, "dev-A", query.PageParams{Limit: 3})
+	page1, err := svc.ScanActive(ctx, command.ScanFilter{DeviceID: "dev-A"}, query.PageParams{Limit: 3})
 	require.NoError(t, err)
 	require.True(t, page1.HasMore)
 	require.NotEmpty(t, page1.NextCursor)
 
 	// Replay the cursor against dev-B — must fail with context mismatch.
-	_, err = svc.ListPending(ctx, "dev-B", query.PageParams{Limit: 3, Cursor: page1.NextCursor})
+	_, err = svc.ScanActive(ctx, command.ScanFilter{DeviceID: "dev-B"}, query.PageParams{Limit: 3, Cursor: page1.NextCursor})
 	require.Error(t, err)
 	var ecErr *errcode.Error
 	require.ErrorAs(t, err, &ecErr)
@@ -313,7 +327,7 @@ func TestService_ListPending_CursorDeviceMismatch(t *testing.T) {
 	assert.Equal(t, "query context mismatch", ecErr.Details["reason"])
 }
 
-func TestService_Enqueue_ThenListPending_ThenAck(t *testing.T) {
+func TestService_Enqueue_ThenDequeue_Report_ThenAck(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
 	seedDevice(devRepo, "dev-1", "sensor-a")
@@ -322,17 +336,18 @@ func TestService_Enqueue_ThenListPending_ThenAck(t *testing.T) {
 	entry, err := svc.Enqueue(ctx, "dev-1", "", "upgrade-fw")
 	require.NoError(t, err)
 
-	// List pending should include the command.
-	result, err := svc.ListPending(ctx, "dev-1", query.PageParams{})
+	// Dequeue claims the command and marks it Sent.
+	entries, err := svc.Dequeue(ctx, "dev-1", 10, command.DefaultLeaseDuration)
 	require.NoError(t, err)
-	assert.Len(t, result.Items, 1)
-	assert.Equal(t, entry.ID, result.Items[0].ID)
+	require.Len(t, entries, 1)
+	assert.Equal(t, entry.ID, entries[0].ID)
+	assert.Equal(t, command.StatusSent, entries[0].Status)
 
-	// Ack
-	require.NoError(t, svc.Ack(ctx, "dev-1", entry.ID))
+	require.NoError(t, svc.Report(ctx, "dev-1", entry.ID))
+	require.NoError(t, svc.Ack(ctx, "dev-1", entry.ID, command.AckSuccess))
 
-	// List pending should be empty after ack (command is now terminal).
-	result, err = svc.ListPending(ctx, "dev-1", query.PageParams{})
+	// Scan active should be empty after ack (command is now terminal).
+	result, err := svc.ScanActive(ctx, command.ScanFilter{DeviceID: "dev-1"}, query.PageParams{})
 	require.NoError(t, err)
 	assert.Empty(t, result.Items)
 

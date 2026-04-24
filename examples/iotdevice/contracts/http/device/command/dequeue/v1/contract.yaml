@@ -1,4 +1,4 @@
-id: http.device.command.list.v1
+id: http.device.command.dequeue.v1
 kind: http
 ownerCell: devicecell
 consistencyLevel: L4

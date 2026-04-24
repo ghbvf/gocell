@@ -16,14 +16,17 @@ const DefaultLeaseDuration = 5 * time.Minute
 // Pass nil to skip (demo/test mode). See docs for T3 DEVICE-ENQUEUE-RBAC.
 type AuthzFunc func(ctx context.Context) error
 
-// AckReason classifies how a command ended.
+// AckReason classifies how a command ended. Every reason maps to a terminal
+// status.
+//
+// ref: JetStream Ack/Nak/Term disposition — only terminal outcomes.
 type AckReason uint8
 
 const (
-	AckSuccess  AckReason = iota + 1 // device executed successfully; → StatusSucceeded
-	AckFailed                        // device reported permanent failure; → StatusFailed
-	AckTimeout                       // caller timed out waiting; releases lease for retry
-	AckRejected                      // operator/system cancel; → StatusCanceled
+	AckSuccess  AckReason = iota + 1 // device executed successfully → StatusSucceeded
+	AckFailed                        // permanent failure → StatusFailed
+	AckTimeout                       // deadline elapsed → StatusExpired (used by Sweeper)
+	AckRejected                      // device/system rejected the command → StatusCanceled
 )
 
 // Valid reports whether r is a recognised AckReason value.
@@ -49,6 +52,23 @@ func (r AckReason) String() string {
 	}
 }
 
+// TargetStatus returns the terminal Status produced by this AckReason.
+// Panics on invalid reason — callers must guard with Valid() at boundaries.
+func (r AckReason) TargetStatus() Status {
+	switch r {
+	case AckSuccess:
+		return StatusSucceeded
+	case AckFailed:
+		return StatusFailed
+	case AckTimeout:
+		return StatusExpired
+	case AckRejected:
+		return StatusCanceled
+	default:
+		return 0 // invalid; caller must guard
+	}
+}
+
 // EnqueueOptions configures a single Enqueue call.
 // Lease duration is not set at enqueue time — it is determined by the
 // leaseDuration parameter of Queue.Dequeue. DefaultLeaseDuration is the
@@ -63,14 +83,31 @@ type EnqueueOptions struct {
 // Queue is the kernel-level L4 command queue facade. Implementations live in
 // adapters/postgres or in-memory (commandtest package).
 //
-// Enqueue stores an Entry atomically. Dequeue returns up to n Pending entries
-// for targetID with their lease set. Ack finalises; ExtendLease renews; Cancel
-// aborts a non-terminal command.
+// Event-driven state machine: each state transition is triggered by a
+// distinct Queue method call, not chained inside Ack:
+//
+//	Enqueue   → StatusPending (created)
+//	Dequeue   → StatusPending → StatusSent        (claim + lease, single atomic step)
+//	Report    → StatusSent    → StatusDelivered   (device acknowledged receipt)
+//	Ack       → any non-terminal → terminal       (single atomic step)
+//	ExtendLease → renew existing lease
+//	Cancel    → any non-terminal → StatusCanceled  (operator action)
+//
+// Ack is single-step atomic: it does NOT chain Pending→Sent→Delivered→terminal.
+// Callers skipping Report (e.g., acking directly from StatusSent) produce a
+// StatusSent → StatusSucceeded transition with DeliveredAt left nil, indicating
+// the device never reported intermediate delivery.
+//
+// ref: Temporal RecordActivityTaskHeartbeat + RespondActivityTaskCompleted —
+// distinct RPCs for in-progress signal vs terminal; state transitions are
+// recorded at the event, not batched at ack time.
+// ref: JetStream InProgress vs Ack/Nak/Term — distinct client methods for
+// in-flight continuation vs disposition.
 type Queue interface {
 	Enqueue(ctx context.Context, entry Entry, opts EnqueueOptions) error
 	Dequeue(ctx context.Context, targetID string, n int, leaseDuration time.Duration) ([]Entry, error)
+	Report(ctx context.Context, commandID string, now time.Time) error
 	Ack(ctx context.Context, commandID string, reason AckReason, now time.Time) error
 	ExtendLease(ctx context.Context, commandID string, extension time.Duration, now time.Time) error
 	Cancel(ctx context.Context, commandID string, now time.Time) error
-	ListPending(ctx context.Context, targetID string, limit int) ([]Entry, error)
 }

@@ -26,8 +26,7 @@ const (
 // pure deadline calculation (via Entry.DeadlineFor). The adapter
 // MUST run a periodic sweeper (e.g., every 30s–60s) that queries
 // non-terminal commands, computes DeadlineFor for each active phase,
-// and calls AdvanceStatus(..., StatusExpired, now) when now exceeds
-// the deadline.
+// and calls Queue.Ack(..., AckTimeout, now) when now exceeds the deadline.
 //
 // ref: Temporal Nexus operations — ScheduleToCloseTimeout, ScheduleToStartTimeout,
 // StartToCloseTimeout. GoCell simplifies to three tiers.
@@ -43,7 +42,7 @@ type Timeouts struct {
 // Entry represents a single L4 command enqueued for device execution.
 //
 // The lifecycle: Pending → Sent → Delivered → Succeeded/Failed/Expired/Canceled.
-// Adapters persist and advance the status via StateAdvancer.
+// Queue implementations persist and advance the status through Queue methods.
 type Entry struct {
 	ID          string
 	DeviceID    string

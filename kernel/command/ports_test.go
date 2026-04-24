@@ -3,7 +3,6 @@ package command
 import (
 	"context"
 	"testing"
-	"time"
 )
 
 // ---------------------------------------------------------------------------
@@ -16,29 +15,20 @@ func (m *mockWriter) WriteCommand(_ context.Context, _ Entry) error { return nil
 
 var _ Writer = (*mockWriter)(nil)
 
-type mockReader struct{}
+type mockActiveScanner struct{}
 
-func (m *mockReader) PendingCommands(_ context.Context, _ string) ([]Entry, error) {
+func (m *mockActiveScanner) ScanActive(_ context.Context, _ ScanFilter) ([]Entry, error) {
 	return nil, nil
 }
-func (m *mockReader) GetCommand(_ context.Context, _ string) (*Entry, error) {
+func (m *mockActiveScanner) GetCommand(_ context.Context, _ string) (*Entry, error) {
 	return nil, nil
 }
 
-var _ Reader = (*mockReader)(nil)
-
-type mockStateAdvancer struct{}
-
-func (m *mockStateAdvancer) AdvanceStatus(_ context.Context, _ string, _, _ Status, _ time.Time) error {
-	return nil
-}
-
-var _ StateAdvancer = (*mockStateAdvancer)(nil)
+var _ ActiveScanner = (*mockActiveScanner)(nil)
 
 func TestPorts_InterfaceCompile(t *testing.T) {
 	t.Parallel()
 	// If this compiles, the interface checks above passed.
 	_ = &mockWriter{}
-	_ = &mockReader{}
-	_ = &mockStateAdvancer{}
+	_ = &mockActiveScanner{}
 }

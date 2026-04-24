@@ -1,4 +1,4 @@
-id: http.device.command.ack.v1
+id: http.device.command.report.v1
 kind: http
 ownerCell: devicecell
 consistencyLevel: L4
@@ -9,7 +9,7 @@ endpoints:
     - edge-bff
   http:
     method: POST
-    path: /api/v1/devices/{id}/commands/{cmdId}/ack
+    path: /api/v1/devices/{id}/commands/{cmdId}/report
     pathParams:
       id:
         type: string
@@ -18,5 +18,4 @@ endpoints:
     successStatus: 200
     noContent: false
 schemaRefs:
-  request: request.schema.json
   response: response.schema.json

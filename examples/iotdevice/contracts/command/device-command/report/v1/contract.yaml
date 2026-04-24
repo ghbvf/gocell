@@ -1,0 +1,11 @@
+id: command.device-command.report.v1
+kind: command
+ownerCell: devicecell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  handler: devicecell
+  invokers: []
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json

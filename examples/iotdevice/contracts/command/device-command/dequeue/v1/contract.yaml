@@ -1,4 +1,4 @@
-id: command.device-command.list.v1
+id: command.device-command.dequeue.v1
 kind: command
 ownerCell: devicecell
 consistencyLevel: L4

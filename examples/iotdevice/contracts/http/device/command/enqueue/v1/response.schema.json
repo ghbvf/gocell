@@ -13,6 +13,8 @@
         "status": { "type": "string" },
         "attempt": { "type": "integer" },
         "createdAt": { "type": "string", "format": "date-time" },
+        "sentAt": { "type": "string", "format": "date-time" },
+        "deliveredAt": { "type": "string", "format": "date-time" },
         "completedAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "deviceId", "commandType", "payload", "status", "attempt", "createdAt"],

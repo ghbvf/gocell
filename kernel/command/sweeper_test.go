@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/command"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
@@ -157,85 +156,119 @@ func TestSweepOnce_SendToCompleteIgnoredForPending(t *testing.T) {
 	assert.Nil(t, result, "SendToComplete cannot trigger for Pending entry (SentAt is nil)")
 }
 
-// ---------------------------------------------------------------------------
-// Sweeper integration tests
-// ---------------------------------------------------------------------------
+func TestSweepOnce_CoversSentAndDelivered(t *testing.T) {
+	t.Parallel()
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	// Build a Sent entry and a Delivered entry, both past OverallDeadline.
+	sentEntry := command.NewEntry("cmd-sent", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: 1 * time.Minute,
+	}, created)
+	sentAt := created.Add(10 * time.Second)
+	require.NoError(t, command.AdvanceCommand(&sentEntry, command.StatusSent, sentAt))
 
-// mockSweeperReader is an in-test Reader that returns a fixed set of entries.
-type mockSweeperReader struct {
-	mu      sync.Mutex
-	entries []command.Entry
-	err     error
-	calls   int
+	delivEntry := command.NewEntry("cmd-deliv", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: 1 * time.Minute,
+	}, created)
+	require.NoError(t, command.AdvanceCommand(&delivEntry, command.StatusSent, sentAt))
+	require.NoError(t, command.AdvanceCommand(&delivEntry, command.StatusDelivered, sentAt.Add(time.Second)))
+
+	now := created.Add(5 * time.Minute) // past OverallDeadline for both
+	result := command.SweepOnce([]command.Entry{sentEntry, delivEntry}, now)
+	require.Len(t, result, 2, "Sweeper must expire both Sent and Delivered entries past deadline")
+	byID := map[string]command.ExpiryTransition{
+		result[0].CommandID: result[0],
+		result[1].CommandID: result[1],
+	}
+	assert.Equal(t, command.StatusSent, byID["cmd-sent"].From)
+	assert.Equal(t, command.StatusDelivered, byID["cmd-deliv"].From)
+	assert.Equal(t, command.StatusExpired, byID["cmd-sent"].To)
+	assert.Equal(t, command.StatusExpired, byID["cmd-deliv"].To)
+	assert.Equal(t, "phase_overall_deadline", byID["cmd-sent"].Reason)
+	assert.Equal(t, "phase_overall_deadline", byID["cmd-deliv"].Reason)
 }
 
-func (r *mockSweeperReader) PendingCommands(_ context.Context, _ string) ([]command.Entry, error) {
+// ---------------------------------------------------------------------------
+// Sweeper integration tests (new: uses ActiveScanner + Queue)
+// ---------------------------------------------------------------------------
+
+// mockScanner is an in-test ActiveScanner that returns a fixed set of entries.
+type mockScanner struct {
+	mu         sync.Mutex
+	entries    []command.Entry
+	err        error
+	calls      int
+	lastFilter command.ScanFilter
+}
+
+func (r *mockScanner) ScanActive(_ context.Context, filter command.ScanFilter) ([]command.Entry, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.calls++
+	r.lastFilter = filter
 	return append([]command.Entry(nil), r.entries...), r.err
 }
 
-func (r *mockSweeperReader) GetCommand(_ context.Context, _ string) (*command.Entry, error) {
+func (r *mockScanner) GetCommand(_ context.Context, _ string) (*command.Entry, error) {
 	return nil, nil
 }
 
-// mockSweeperAdvancer records AdvanceStatus calls.
-type mockSweeperAdvancer struct {
+// mockAckQueue records Queue.Ack calls; other Queue methods are unused in
+// sweeper tests and return errors to catch accidental use.
+type mockAckQueue struct {
 	mu    sync.Mutex
-	calls []advanceCall
+	calls []ackCall
+	err   error
 }
 
-type advanceCall struct {
-	id   string
-	from command.Status
-	to   command.Status
+type ackCall struct {
+	id     string
+	reason command.AckReason
 }
 
-func (a *mockSweeperAdvancer) AdvanceStatus(_ context.Context, id string, from, to command.Status, _ time.Time) error {
+func (a *mockAckQueue) Ack(_ context.Context, id string, reason command.AckReason, _ time.Time) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	a.calls = append(a.calls, advanceCall{id: id, from: from, to: to})
-	return nil
+	a.calls = append(a.calls, ackCall{id: id, reason: reason})
+	return a.err
 }
 
-func (a *mockSweeperAdvancer) CallCount() int {
+// unused methods
+func (a *mockAckQueue) Enqueue(context.Context, command.Entry, command.EnqueueOptions) error {
+	return errors.New("unused")
+}
+func (a *mockAckQueue) Dequeue(context.Context, string, int, time.Duration) ([]command.Entry, error) {
+	return nil, errors.New("unused")
+}
+func (a *mockAckQueue) Report(context.Context, string, time.Time) error { return errors.New("unused") }
+func (a *mockAckQueue) ExtendLease(context.Context, string, time.Duration, time.Time) error {
+	return errors.New("unused")
+}
+func (a *mockAckQueue) Cancel(context.Context, string, time.Time) error {
+	return errors.New("unused")
+}
+
+func (a *mockAckQueue) CallCount() int {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	return len(a.calls)
 }
 
-func (a *mockSweeperAdvancer) Calls() []advanceCall {
+func (a *mockAckQueue) Calls() []ackCall {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-	return append([]advanceCall(nil), a.calls...)
+	return append([]ackCall(nil), a.calls...)
 }
 
-func TestSweeper_Start_RequiresDeviceID(t *testing.T) {
-	t.Parallel()
-	s := &command.Sweeper{
-		Reader:   &mockSweeperReader{},
-		Advancer: &mockSweeperAdvancer{},
-		Interval: 10 * time.Millisecond,
-		DeviceID: "", // empty — should return error
-	}
-	err := s.Start(context.Background())
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "DeviceID")
-	var ecErr *errcode.Error
-	require.ErrorAs(t, err, &ecErr)
-	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
-}
+var _ command.Queue = (*mockAckQueue)(nil)
 
 func TestSweeper_Start_CtxCancelExits(t *testing.T) {
 	defer goleak.VerifyNone(t)
-	reader := &mockSweeperReader{}
-	advancer := &mockSweeperAdvancer{}
+	scanner := &mockScanner{}
+	q := &mockAckQueue{}
 	s := &command.Sweeper{
-		Reader:   reader,
-		Advancer: advancer,
+		Scanner:  scanner,
+		Queue:    q,
 		Interval: 10 * time.Millisecond,
-		DeviceID: "dev-1",
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -252,16 +285,15 @@ func TestSweeper_Start_CtxCancelExits(t *testing.T) {
 func TestSweeper_Stop_Idempotent(t *testing.T) {
 	t.Parallel()
 	s := &command.Sweeper{
-		Reader:   &mockSweeperReader{},
-		Advancer: &mockSweeperAdvancer{},
-		DeviceID: "dev-1",
+		Scanner: &mockScanner{},
+		Queue:   &mockAckQueue{},
 	}
 	// Stop is a no-op regardless of state.
 	assert.NoError(t, s.Stop(context.Background()))
 	assert.NoError(t, s.Stop(context.Background()))
 }
 
-func TestSweeper_Start_InvokesAdvancer(t *testing.T) {
+func TestSweeper_Start_InvokesQueueAckOnExpired(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -272,16 +304,14 @@ func TestSweeper_Start_InvokesAdvancer(t *testing.T) {
 	// Fix the clock so the entry appears expired immediately.
 	fixedNow := created.Add(2 * time.Hour)
 
-	reader := &mockSweeperReader{
-		entries: []command.Entry{expiredEntry},
-	}
-	advancer := &mockSweeperAdvancer{}
+	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
+	q := &mockAckQueue{}
 
 	s := &command.Sweeper{
-		Reader:   reader,
-		Advancer: advancer,
+		Scanner:  scanner,
+		Queue:    q,
+		Filter:   command.ScanFilter{DeviceID: "dev-1"},
 		Interval: 10 * time.Millisecond,
-		DeviceID: "dev-1",
 		Now:      func() time.Time { return fixedNow },
 	}
 
@@ -292,7 +322,7 @@ func TestSweeper_Start_InvokesAdvancer(t *testing.T) {
 	// Wait for at least one tick to be processed.
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
-		if advancer.CallCount() >= 1 {
+		if q.CallCount() >= 1 {
 			break
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -300,29 +330,62 @@ func TestSweeper_Start_InvokesAdvancer(t *testing.T) {
 	cancel()
 	<-done
 
-	calls := advancer.Calls()
-	require.NotEmpty(t, calls, "Advancer must have been called at least once")
+	calls := q.Calls()
+	require.NotEmpty(t, calls, "Queue.Ack must have been called at least once")
 	assert.Equal(t, "cmd-expired", calls[0].id)
-	assert.Equal(t, command.StatusPending, calls[0].from)
-	assert.Equal(t, command.StatusExpired, calls[0].to)
+	assert.Equal(t, command.AckTimeout, calls[0].reason)
+}
+
+func TestSweeper_Start_PropagatesScanFilter(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	scanner := &mockScanner{}
+	q := &mockAckQueue{}
+	filter := command.ScanFilter{DeviceID: "dev-42", Statuses: []command.Status{command.StatusPending}}
+	s := &command.Sweeper{
+		Scanner:  scanner,
+		Queue:    q,
+		Filter:   filter,
+		Interval: 10 * time.Millisecond,
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		scanner.mu.Lock()
+		n := scanner.calls
+		scanner.mu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	scanner.mu.Lock()
+	defer scanner.mu.Unlock()
+	assert.Equal(t, filter, scanner.lastFilter, "Sweeper must pass Filter to Scanner.ScanActive")
 }
 
 func TestSweeper_Start_OnError_Callback(t *testing.T) {
 	defer goleak.VerifyNone(t)
 
-	readerErr := errors.New("db unavailable")
-	reader := &mockSweeperReader{err: readerErr}
-	advancer := &mockSweeperAdvancer{}
+	scannerErr := errors.New("db unavailable")
+	scanner := &mockScanner{err: scannerErr}
+	q := &mockAckQueue{}
 
 	var (
 		errMu     sync.Mutex
 		errCalled int
 	)
 	s := &command.Sweeper{
-		Reader:   reader,
-		Advancer: advancer,
+		Scanner:  scanner,
+		Queue:    q,
 		Interval: 10 * time.Millisecond,
-		DeviceID: "dev-1",
 		OnError: func(err error) {
 			errMu.Lock()
 			defer errMu.Unlock()
@@ -351,22 +414,73 @@ func TestSweeper_Start_OnError_Callback(t *testing.T) {
 	errMu.Lock()
 	n := errCalled
 	errMu.Unlock()
-	assert.GreaterOrEqual(t, n, 1, "OnError must be called when Reader returns error")
+	assert.GreaterOrEqual(t, n, 1, "OnError must be called when Scanner returns error")
+}
+
+func TestSweeper_Start_AckErrorForwardedToOnError(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	expiredEntry := command.NewEntry("cmd-expired", "dev-1", "reboot", []byte(`{}`), command.Timeouts{
+		OverallDeadline: 1 * time.Minute,
+	}, created)
+
+	fixedNow := created.Add(2 * time.Hour)
+
+	scanner := &mockScanner{entries: []command.Entry{expiredEntry}}
+	q := &mockAckQueue{err: errors.New("ack rejected")}
+
+	var (
+		errMu     sync.Mutex
+		errCalled int
+	)
+	s := &command.Sweeper{
+		Scanner:  scanner,
+		Queue:    q,
+		Interval: 10 * time.Millisecond,
+		Now:      func() time.Time { return fixedNow },
+		OnError: func(err error) {
+			errMu.Lock()
+			defer errMu.Unlock()
+			errCalled++
+		},
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- s.Start(ctx) }()
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		errMu.Lock()
+		n := errCalled
+		errMu.Unlock()
+		if n >= 1 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	cancel()
+	<-done
+
+	errMu.Lock()
+	n := errCalled
+	errMu.Unlock()
+	assert.GreaterOrEqual(t, n, 1, "OnError must be called when Queue.Ack returns error")
 }
 
 func TestSweeper_DefaultIntervalAndNow(t *testing.T) {
 	t.Parallel()
 	// Verify that zero Interval and nil Now don't panic during Start
 	// by cancelling immediately before any tick fires.
-	reader := &mockSweeperReader{}
-	advancer := &mockSweeperAdvancer{}
+	scanner := &mockScanner{}
+	q := &mockAckQueue{}
 
 	s := &command.Sweeper{
-		Reader:   reader,
-		Advancer: advancer,
+		Scanner: scanner,
+		Queue:   q,
 		// Interval: zero → should default to 30s
 		// Now: nil → should default to time.Now
-		DeviceID: "dev-1",
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
