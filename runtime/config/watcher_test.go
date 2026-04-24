@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -321,6 +322,9 @@ func TestWatcher_Debounce_ZeroMeansImmediate(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
+	}
 	dir := t.TempDir()
 
 	// Create two config versions as regular files.
@@ -360,6 +364,9 @@ func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
 }
 
 func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
+	}
 	dir := t.TempDir()
 
 	// Simulate K8s ConfigMap layout:
@@ -399,6 +406,9 @@ func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {
 }
 
 func TestWatcher_SymlinkPivot_RegularFileUnaffected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")
+	}
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	touchFile(t, file, "key: v1")
