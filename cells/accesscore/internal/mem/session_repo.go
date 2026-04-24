@@ -14,25 +14,18 @@ var _ ports.SessionRepository = (*SessionRepository)(nil)
 
 // SessionRepository is an in-memory implementation of ports.SessionRepository.
 type SessionRepository struct {
-	mu            sync.RWMutex
-	byID          map[string]*domain.Session
-	byRefresh     map[string]*domain.Session
-	byPrevRefresh map[string]*domain.Session
+	mu   sync.RWMutex
+	byID map[string]*domain.Session
 }
 
 // NewSessionRepository creates an empty in-memory SessionRepository.
 func NewSessionRepository() *SessionRepository {
 	return &SessionRepository{
-		byID:          make(map[string]*domain.Session),
-		byRefresh:     make(map[string]*domain.Session),
-		byPrevRefresh: make(map[string]*domain.Session),
+		byID: make(map[string]*domain.Session),
 	}
 }
 
 // Health returns nil for in-memory repositories (always available).
-// The ctx parameter is accepted for interface compatibility; in-memory stores
-// have no network I/O to cancel. Future DB-backed implementations should
-// honour ctx for connection liveness checks.
 func (r *SessionRepository) Health(_ context.Context) error {
 	return nil
 }
@@ -46,10 +39,6 @@ func (r *SessionRepository) Create(_ context.Context, session *domain.Session) e
 		clone.Version = 1
 	}
 	r.byID[session.ID] = &clone
-	r.byRefresh[session.RefreshToken] = &clone
-	if session.PreviousRefreshToken != "" {
-		r.byPrevRefresh[session.PreviousRefreshToken] = &clone
-	}
 	return nil
 }
 
@@ -60,30 +49,6 @@ func (r *SessionRepository) GetByID(_ context.Context, id string) (*domain.Sessi
 	s, ok := r.byID[id]
 	if !ok {
 		return nil, errcode.NewDomain(errcode.ErrSessionNotFound, "session not found: "+id)
-	}
-	clone := *s
-	return &clone, nil
-}
-
-func (r *SessionRepository) GetByRefreshToken(_ context.Context, token string) (*domain.Session, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	s, ok := r.byRefresh[token]
-	if !ok {
-		return nil, errcode.NewDomain(errcode.ErrSessionNotFound, "session not found by refresh token")
-	}
-	clone := *s
-	return &clone, nil
-}
-
-func (r *SessionRepository) GetByPreviousRefreshToken(_ context.Context, token string) (*domain.Session, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	s, ok := r.byPrevRefresh[token]
-	if !ok {
-		return nil, errcode.NewDomain(errcode.ErrSessionNotFound, "session not found by previous refresh token")
 	}
 	clone := *s
 	return &clone, nil
@@ -105,20 +70,9 @@ func (r *SessionRepository) Update(_ context.Context, session *domain.Session) e
 			fmt.Sprintf("version conflict: expected %d, got %d", old.Version, session.Version))
 	}
 
-	// Remove old refresh-token index entry.
-	delete(r.byRefresh, old.RefreshToken)
-	// Remove old previous-refresh-token index entry.
-	if old.PreviousRefreshToken != "" {
-		delete(r.byPrevRefresh, old.PreviousRefreshToken)
-	}
-
 	session.Version++
 	clone := *session
 	r.byID[session.ID] = &clone
-	r.byRefresh[session.RefreshToken] = &clone
-	if session.PreviousRefreshToken != "" {
-		r.byPrevRefresh[session.PreviousRefreshToken] = &clone
-	}
 	return nil
 }
 
@@ -150,13 +104,9 @@ func (r *SessionRepository) Delete(_ context.Context, id string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	s, ok := r.byID[id]
+	_, ok := r.byID[id]
 	if !ok {
 		return errcode.NewDomain(errcode.ErrSessionNotFound, "session not found: "+id)
-	}
-	delete(r.byRefresh, s.RefreshToken)
-	if s.PreviousRefreshToken != "" {
-		delete(r.byPrevRefresh, s.PreviousRefreshToken)
 	}
 	delete(r.byID, id)
 	return nil

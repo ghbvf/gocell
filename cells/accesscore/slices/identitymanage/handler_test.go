@@ -20,14 +20,22 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
+
+func newHandlerIdentityRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
 
 // handlerStubIssuer is a minimal TokenIssuer stub used by handler tests that
 // do not exercise the ChangePassword token-issuing path.
 var handlerStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setup() http.Handler {
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newHandlerIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(handlerStubIssuer))
 	if err != nil {
 		panic("setup: " + err.Error())
@@ -44,7 +52,7 @@ func setupWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	if effectiveIssuer == nil {
 		effectiveIssuer = handlerStubIssuer
 	}
-	svc, err := NewService(repo, mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(), newHandlerIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(effectiveIssuer))
 	if err != nil {
 		panic("setupWithIssuer: " + err.Error())

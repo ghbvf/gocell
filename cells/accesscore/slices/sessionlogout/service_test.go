@@ -11,17 +11,25 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+func newLogoutRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
+
 func newTestService() (*Service, *mem.SessionRepository) {
 	repo := mem.NewSessionRepository()
-	return NewService(repo, slog.Default()), repo
+	return NewService(repo, newLogoutRefreshStore(), slog.Default()), repo
 }
 
 func seedSession(repo *mem.SessionRepository, id, userID string) {
-	sess, _ := domain.NewSession(userID, "at-"+id, "rt-"+id, time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession(userID, "at-"+id, time.Now().Add(time.Hour))
 	sess.ID = id
 	_ = repo.Create(context.Background(), sess)
 }
@@ -126,7 +134,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
 	require.NoError(t, err)
-	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
+	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter))
 
 	err = svc.Logout(context.Background(), "sess-pub", "usr-1")
 	require.NoError(t, err, "publish failure in demo mode should not fail logout")

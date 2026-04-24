@@ -18,6 +18,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -84,6 +87,11 @@ func mustCursorCodec() *query.CursorCodec {
 	return codec
 }
 
+func newTestRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
+
 func newTestCell() *AccessCore {
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
@@ -92,6 +100,7 @@ func newTestCell() *AccessCore {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
@@ -105,6 +114,7 @@ func newDurableTestCell() *AccessCore {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithCursorCodec(testCursorCodec),
 		WithOutboxDeps(nil, durableOutboxWriter{}),
 		WithTxManager(durableTxRunner{}),
@@ -605,6 +615,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
@@ -676,6 +687,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
@@ -791,6 +803,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)

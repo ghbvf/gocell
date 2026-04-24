@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
 // Option configures a session-logout Service.
@@ -34,23 +35,28 @@ func WithTxManager(tx persistence.TxRunner) Option {
 
 // Service implements session revocation.
 type Service struct {
-	sessionRepo ports.SessionRepository
-	txRunner    persistence.TxRunner
-	emitter     outbox.Emitter
-	logger      *slog.Logger
+	sessionRepo  ports.SessionRepository
+	refreshStore refresh.Store
+	txRunner     persistence.TxRunner
+	emitter      outbox.Emitter
+	logger       *slog.Logger
 }
 
-// NewService creates a session-logout Service.
+// NewService creates a session-logout Service. refreshStore is required so
+// that logout also revokes the refresh-token chain for the session — without
+// this, a stolen refresh token would survive logout.
 func NewService(
 	sessionRepo ports.SessionRepository,
+	refreshStore refresh.Store,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
 	s := &Service{
-		sessionRepo: sessionRepo,
-		txRunner:    persistence.NoopTxRunner{},
-		emitter:     outbox.NewNoopEmitter(),
-		logger:      logger,
+		sessionRepo:  sessionRepo,
+		refreshStore: refreshStore,
+		txRunner:     persistence.NoopTxRunner{},
+		emitter:      outbox.NewNoopEmitter(),
+		logger:       logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -63,17 +69,14 @@ func (s *Service) persistRevoke(ctx context.Context, fn func(context.Context) er
 	return s.txRunner.RunInTx(ctx, fn)
 }
 
-// Logout revokes the caller's own session identified by sessionID.
+// Logout revokes the caller's own session identified by sessionID. Cascades
+// the revocation to the refresh-token chain so a stolen refresh token cannot
+// survive logout.
 //
 // Ownership is enforced inside the repository query (RevokeByIDAndOwner)
-// rather than a handler-side compare, eliminating the TOCTOU window that a
-// load-then-check pattern leaves and preventing cross-user session enumeration
-// (IDOR). A session that does not exist OR does not belong to the caller
-// yields the same ErrSessionNotFound — the two cases are intentionally
-// conflated per the Ory Kratos and Keycloak account/SessionResource pattern.
-//
-// Admin-side force logout belongs to a separate endpoint (not yet implemented);
-// it must NOT reuse this method with a bypass flag.
+// rather than a handler-side compare, eliminating the TOCTOU window and
+// preventing cross-user session enumeration (IDOR). A session that does not
+// exist OR does not belong to the caller yields the same ErrSessionNotFound.
 func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthLogoutInvalidInput,
 		validation.F("id", sessionID),
@@ -87,10 +90,13 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires authenticated caller")
 	}
 
-	// Wrap the owner-scoped revoke + outbox write in a transaction for L2 atomicity.
+	// Wrap the owner-scoped revoke + refresh cascade + outbox write in a transaction for L2 atomicity.
 	revokeAndPublish := func(txCtx context.Context) error {
 		if err := s.sessionRepo.RevokeByIDAndOwner(txCtx, sessionID, callerUserID); err != nil {
 			return err
+		}
+		if err := s.refreshStore.RevokeSession(txCtx, sessionID); err != nil {
+			return fmt.Errorf("session-logout: revoke refresh chain: %w", err)
 		}
 		return outbox.Emit(txCtx, s.emitter, dto.TopicSessionRevoked, dto.SessionRevokedEvent{
 			SessionID: sessionID,
@@ -107,16 +113,17 @@ func (s *Service) Logout(ctx context.Context, sessionID, callerUserID string) er
 	return nil
 }
 
-// LogoutUser revokes all sessions for a user.
+// LogoutUser revokes all sessions AND the refresh-token chains for the user.
 func (s *Service) LogoutUser(ctx context.Context, userID string) error {
 	if userID == "" {
-		// userID is a server-derived value (event payload / JWT claim), not a
-		// client-submitted field. Exposing the internal name would leak internals.
 		return errcode.New(errcode.ErrAuthLogoutInvalidInput, "logout requires a valid user identifier")
 	}
 
 	if err := s.sessionRepo.RevokeByUserID(ctx, userID); err != nil {
 		return fmt.Errorf("session-logout: revoke all: %w", err)
+	}
+	if err := s.refreshStore.RevokeUser(ctx, userID); err != nil {
+		return fmt.Errorf("session-logout: revoke refresh chains: %w", err)
 	}
 
 	s.logger.Info("all sessions revoked for user", slog.String("user_id", userID))

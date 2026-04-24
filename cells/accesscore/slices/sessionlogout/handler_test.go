@@ -16,19 +16,27 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
+
+func newHandlerLogoutRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
 
 func setup() *Handler {
 	sessionRepo := mem.NewSessionRepository()
-	sess, _ := domain.NewSession("usr-1", "access-tok", "refresh-tok", time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession("usr-1", "access-tok", time.Now().Add(time.Hour))
 	sess.ID = "sess-1"
 	_ = sessionRepo.Create(context.Background(), sess)
 	// Victim session owned by a different user — used to prove IDOR guard.
-	other, _ := domain.NewSession("usr-victim", "at-v", "rt-v", time.Now().Add(time.Hour))
+	other, _ := domain.NewSession("usr-victim", "at-v", time.Now().Add(time.Hour))
 	other.ID = "sess-victim"
 	_ = sessionRepo.Create(context.Background(), other)
 
-	svc := NewService(sessionRepo, slog.Default())
+	svc := NewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default())
 	return NewHandler(svc)
 }
 

@@ -5,6 +5,7 @@ package accesscore
 
 import (
 	"log/slog"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
@@ -24,7 +25,21 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 )
+
+// defaultRefreshPolicy is used when no WithRefreshStore option is supplied.
+// Matches Hydra's grace_period and a 7-day max age.
+var defaultRefreshPolicy = refresh.Policy{
+	ReuseInterval: 2 * time.Second,
+	MaxAge:        7 * 24 * time.Hour,
+}
+
+// realClock is a minimal refresh.Clock implementation backed by time.Now.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
 
 // Compile-time interface checks.
 var (
@@ -120,6 +135,13 @@ func WithTxManager(tx persistence.TxRunner) Option {
 	return func(c *AccessCore) { c.txRunner = tx }
 }
 
+// WithRefreshStore injects the refresh.Store used for opaque refresh token
+// Issue/Rotate/Revoke. Required in production (durable) mode — demo mode
+// falls back to an in-memory store via WithInMemoryDefaults.
+func WithRefreshStore(store refresh.Store) Option {
+	return func(c *AccessCore) { c.refreshStore = store }
+}
+
 // ResolveBootstrapCredentialPath returns the credential file path using the
 // same resolution logic as the internal Bootstrapper: stateDir overrides
 // GOCELL_STATE_DIR, which overrides the platform default state directory.
@@ -137,6 +159,7 @@ func WithInMemoryDefaults() Option {
 		c.userRepo = mem.NewUserRepository()
 		c.sessionRepo = mem.NewSessionRepository()
 		c.roleRepo = mem.NewRoleRepository()
+		c.refreshStore = refreshmem.New(defaultRefreshPolicy, realClock{}, nil)
 	}
 }
 
@@ -153,9 +176,10 @@ func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
 // AccessCore is the accesscore Cell implementation.
 type AccessCore struct {
 	*cell.BaseCell
-	userRepo    ports.UserRepository
-	sessionRepo ports.SessionRepository
-	roleRepo    ports.RoleRepository
+	userRepo     ports.UserRepository
+	sessionRepo  ports.SessionRepository
+	roleRepo     ports.RoleRepository
+	refreshStore refresh.Store
 
 	// Outbox wiring. Two mutually exclusive paths populate `emitter`:
 	//   (a) WithEmitter(e)          — `emitter` is set pre-Init.

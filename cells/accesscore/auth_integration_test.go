@@ -19,6 +19,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
@@ -31,6 +32,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,6 +66,8 @@ func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.
 	_, err = roleRepo.AssignToUser(ctx, alice.ID, domain.RoleAdmin)
 	require.NoError(t, err)
 
+	intClock := storetest.NewFakeClock(time.Now())
+	intRefreshStore := refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, intClock, nil)
 	c = NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
@@ -69,6 +75,7 @@ func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(intRefreshStore),
 		// Demo mode: no tx+outbox required.
 	)
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{
@@ -131,10 +138,11 @@ func TestAuthIntent_RefreshTokenBlockedAtBusinessPath(t *testing.T) {
 func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	accessToken, _, _, c := loginAndGetPair(t)
 
-	// Build a refresh-service that mirrors production wiring (jwtVerifier,
-	// not validateSvc) so intent enforcement flows through.
+	// Build a refresh-service that mirrors production wiring.
+	// After the opaque-store rewrite, ParseOpaque rejects the JWT (wrong
+	// selector/verifier format) → refresh.ErrRejected → ErrAuthRefreshFailed.
 	refreshSvc := sessionrefresh.NewService(
-		c.sessionRepo, c.roleRepo, c.userRepo, c.jwtIssuer, c.jwtVerifier, slog.Default(),
+		c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore, c.jwtIssuer, slog.Default(),
 	)
 
 	_, err := refreshSvc.Refresh(context.Background(), accessToken)
@@ -152,17 +160,13 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	require.NotNil(t, c.sessionRepo, "session repo must be wired")
 
 	refreshSvc := sessionrefresh.NewService(
-		c.sessionRepo, c.roleRepo, c.userRepo, c.jwtIssuer, c.jwtVerifier, slog.Default(),
+		c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore, c.jwtIssuer, slog.Default(),
 	)
 
 	newPair, err := refreshSvc.Refresh(context.Background(), refreshToken)
 	require.NoError(t, err, "legitimate refresh token must rotate successfully")
 	assert.NotEmpty(t, newPair.AccessToken)
 	assert.NotEmpty(t, newPair.RefreshToken)
-	// NB: can't strictly require newPair.RefreshToken != refreshToken because
-	// iat/exp are second-granular; a same-second rotation hashes to the same
-	// signed JWT. Domain-level uniqueness is tracked by the sessionRepo
-	// rotation test in sessionrefresh, not here.
 	accessClaims, err := testVerifier.VerifyIntent(context.Background(), newPair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "rotated access token must carry intent=access")
 	assert.NotEmpty(t, accessClaims.Subject)

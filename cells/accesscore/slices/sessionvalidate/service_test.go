@@ -35,35 +35,32 @@ func TestService_VerifyIntent(t *testing.T) {
 
 	// Seed an active session for revocation tests.
 	activeSession := &domain.Session{
-		ID:           "sess-active",
-		UserID:       "usr-1",
-		AccessToken:  "dummy",
-		RefreshToken: "dummy-refresh",
-		ExpiresAt:    time.Now().Add(time.Hour),
-		CreatedAt:    time.Now(),
+		ID:          "sess-active",
+		UserID:      "usr-1",
+		AccessToken: "dummy",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		CreatedAt:   time.Now(),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), activeSession))
 
 	// Seed a revoked session.
 	revokedSession := &domain.Session{
-		ID:           "sess-revoked",
-		UserID:       "usr-2",
-		AccessToken:  "dummy2",
-		RefreshToken: "dummy-refresh2",
-		ExpiresAt:    time.Now().Add(time.Hour),
-		CreatedAt:    time.Now(),
+		ID:          "sess-revoked",
+		UserID:      "usr-2",
+		AccessToken: "dummy2",
+		ExpiresAt:   time.Now().Add(time.Hour),
+		CreatedAt:   time.Now(),
 	}
 	revokedSession.Revoke()
 	require.NoError(t, sessionRepo.Create(context.Background(), revokedSession))
 
 	// Seed an expired session.
 	expiredSession := &domain.Session{
-		ID:           "sess-expired",
-		UserID:       "usr-3",
-		AccessToken:  "dummy3",
-		RefreshToken: "dummy-refresh3",
-		ExpiresAt:    time.Now().Add(-time.Hour), // already expired
-		CreatedAt:    time.Now().Add(-2 * time.Hour),
+		ID:          "sess-expired",
+		UserID:      "usr-3",
+		AccessToken: "dummy3",
+		ExpiresAt:   time.Now().Add(-time.Hour), // already expired
+		CreatedAt:   time.Now().Add(-2 * time.Hour),
 	}
 	require.NoError(t, sessionRepo.Create(context.Background(), expiredSession))
 
@@ -182,12 +179,6 @@ func (errorSessionRepo) Create(_ context.Context, _ *domain.Session) error { ret
 func (errorSessionRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
 	return nil, fmt.Errorf("db connection timeout")
 }
-func (errorSessionRepo) GetByRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
-	return nil, nil
-}
-func (errorSessionRepo) GetByPreviousRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
-	return nil, nil
-}
 func (errorSessionRepo) Update(_ context.Context, _ *domain.Session) error { return nil }
 func (errorSessionRepo) Delete(_ context.Context, _ string) error          { return nil }
 func (errorSessionRepo) RevokeByUserID(_ context.Context, _ string) error  { return nil }
@@ -228,12 +219,6 @@ type capturingRepo struct {
 func (r capturingRepo) Create(_ context.Context, _ *domain.Session) error { return nil }
 func (r capturingRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
 	return nil, r.getByIDErr
-}
-func (r capturingRepo) GetByRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
-	return nil, nil
-}
-func (r capturingRepo) GetByPreviousRefreshToken(_ context.Context, _ string) (*domain.Session, error) {
-	return nil, nil
 }
 func (r capturingRepo) Update(_ context.Context, _ *domain.Session) error       { return nil }
 func (r capturingRepo) Delete(_ context.Context, _ string) error                { return nil }

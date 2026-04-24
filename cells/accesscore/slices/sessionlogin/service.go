@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/google/uuid"
 )
 
@@ -55,36 +56,37 @@ func WithTxManager(tx persistence.TxRunner) Option {
 
 // Service implements password login with JWT issuance.
 type Service struct {
-	userRepo    ports.UserRepository
-	sessionRepo ports.SessionRepository
-	roleRepo    ports.RoleRepository
-	txRunner    persistence.TxRunner
-	emitter     outbox.Emitter
-	issuer      *auth.JWTIssuer
-	logger      *slog.Logger
+	userRepo     ports.UserRepository
+	sessionRepo  ports.SessionRepository
+	roleRepo     ports.RoleRepository
+	refreshStore refresh.Store
+	txRunner     persistence.TxRunner
+	emitter      outbox.Emitter
+	issuer       *auth.JWTIssuer
+	logger       *slog.Logger
 }
 
-// NewService creates a session-login Service.
-// The audience for issued tokens is carried inside issuer (set from Registry at
-// construction time via config.NewJWTIssuerFromRegistry). This slice does not
-// cache or re-read the audience — issuer.Issue with nil Audience falls back to
-// the issuer's configured default (S31 audience deduplication).
+// NewService creates a session-login Service. refreshStore issues the opaque
+// refresh token returned to the client; the access JWT is minted by
+// sessionmint.MintAccess.
 func NewService(
 	userRepo ports.UserRepository,
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
+	refreshStore refresh.Store,
 	issuer *auth.JWTIssuer,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
 	s := &Service{
-		userRepo:    userRepo,
-		sessionRepo: sessionRepo,
-		roleRepo:    roleRepo,
-		txRunner:    persistence.NoopTxRunner{},
-		emitter:     outbox.NewNoopEmitter(),
-		issuer:      issuer,
-		logger:      logger,
+		userRepo:     userRepo,
+		sessionRepo:  sessionRepo,
+		roleRepo:     roleRepo,
+		refreshStore: refreshStore,
+		txRunner:     persistence.NoopTxRunner{},
+		emitter:      outbox.NewNoopEmitter(),
+		issuer:       issuer,
+		logger:       logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -121,7 +123,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	}
 
 	sessionID := sessionIDPrefix + uuid.NewString()
-	minted, err := sessionmint.Mint(ctx, sessionmint.Deps{
+	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
 	}, sessionmint.Request{
@@ -135,7 +137,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 		return nil, err
 	}
 
-	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.RefreshToken, minted.ExpiresAt)
+	refreshWire, _, err := s.refreshStore.Issue(ctx, sessionID, user.ID)
+	if err != nil {
+		s.logger.Error("session-login: refresh store issue failed",
+			slog.Any("error", err), slog.String("user_id", user.ID))
+		return nil, errcode.New(errcode.ErrAuthLoginFailed, "refresh store unavailable")
+	}
+
+	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt)
 	if err != nil {
 		return nil, fmt.Errorf("session-login: create session: %w", err)
 	}
@@ -149,7 +158,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 		slog.String("user_id", user.ID), slog.String("session_id", session.ID))
 	return &TokenPair{
 		AccessToken:           minted.AccessToken,
-		RefreshToken:          minted.RefreshToken,
+		RefreshToken:          refreshWire,
 		ExpiresAt:             minted.ExpiresAt,
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired,
@@ -190,7 +199,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 	}
 
 	sessionID := sessionIDPrefix + uuid.NewString()
-	minted, err := sessionmint.Mint(ctx, sessionmint.Deps{
+	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
 	}, sessionmint.Request{
@@ -204,10 +213,15 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		return dto.TokenPair{}, err
 	}
 
+	refreshWire, _, err := s.refreshStore.Issue(ctx, sessionID, userID)
+	if err != nil {
+		s.logger.Error("session-login: IssueForUser refresh store issue failed",
+			slog.Any("error", err), slog.String("user_id", userID))
+		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginFailed, "refresh store unavailable")
+	}
+
 	// Persist the session so sessionvalidate can look it up by sid claim.
-	// Without this, the token carries a sessionID that has no backing row, and
-	// every subsequent request fails with 401 (session not found).
-	session, err := domain.NewSession(userID, minted.AccessToken, minted.RefreshToken, minted.ExpiresAt)
+	session, err := domain.NewSession(userID, minted.AccessToken, minted.ExpiresAt)
 	if err != nil {
 		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser create session: %w", err)
 	}
@@ -221,7 +235,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 
 	return dto.TokenPair{
 		AccessToken:           minted.AccessToken,
-		RefreshToken:          minted.RefreshToken,
+		RefreshToken:          refreshWire,
 		ExpiresAt:             minted.ExpiresAt,
 		SessionID:             sessionID,
 		PasswordResetRequired: user.PasswordResetRequired,

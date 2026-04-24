@@ -79,11 +79,10 @@ func TestSessionRepository_ConcurrentCreateAndGet(t *testing.T) {
 			defer wg.Done()
 			for i := range iterations {
 				_ = repo.Create(ctx, &domain.Session{
-					ID:           fmt.Sprintf("sid-w%d-i%d", id, i),
-					UserID:       fmt.Sprintf("uid-%d", id),
-					RefreshToken: fmt.Sprintf("rt-w%d-i%d", id, i),
-					ExpiresAt:    time.Now().Add(time.Hour),
-					CreatedAt:    time.Now(),
+					ID:        fmt.Sprintf("sid-w%d-i%d", id, i),
+					UserID:    fmt.Sprintf("uid-%d", id),
+					ExpiresAt: time.Now().Add(time.Hour),
+					CreatedAt: time.Now(),
 				})
 			}
 		}(w)
@@ -95,7 +94,6 @@ func TestSessionRepository_ConcurrentCreateAndGet(t *testing.T) {
 			defer wg.Done()
 			for range iterations {
 				_, _ = repo.GetByID(ctx, "sid-w0-i0")
-				_, _ = repo.GetByRefreshToken(ctx, "rt-w0-i0")
 			}
 			_ = r
 		}()
@@ -275,30 +273,24 @@ func TestSessionRepository_Update_VersionConflict(t *testing.T) {
 	ctx := context.Background()
 
 	sess := &domain.Session{
-		ID:           "sess-vc",
-		UserID:       "usr-1",
-		AccessToken:  "at-1",
-		RefreshToken: "rt-1",
-		ExpiresAt:    time.Now().Add(time.Hour),
-		CreatedAt:    time.Now(),
-		Version:      1,
+		ID:        "sess-vc",
+		UserID:    "usr-1",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+		Version:   1,
 	}
 	require.NoError(t, repo.Create(ctx, sess))
 
 	// Read twice — simulating two concurrent goroutines.
-	clone1, err := repo.GetByRefreshToken(ctx, "rt-1")
+	clone1, err := repo.GetByID(ctx, "sess-vc")
 	require.NoError(t, err)
-	clone2, err := repo.GetByRefreshToken(ctx, "rt-1")
+	clone2, err := repo.GetByID(ctx, "sess-vc")
 	require.NoError(t, err)
 
 	// First update succeeds.
-	clone1.RefreshToken = "rt-2"
-	clone1.PreviousRefreshToken = "rt-1"
 	require.NoError(t, repo.Update(ctx, clone1))
 
 	// Second update with stale version should fail.
-	clone2.RefreshToken = "rt-3"
-	clone2.PreviousRefreshToken = "rt-1"
 	err = repo.Update(ctx, clone2)
 	require.Error(t, err)
 
@@ -314,13 +306,11 @@ func TestSessionRepository_Update_VersionIncrement(t *testing.T) {
 	ctx := context.Background()
 
 	sess := &domain.Session{
-		ID:           "sess-vi",
-		UserID:       "usr-1",
-		AccessToken:  "at-1",
-		RefreshToken: "rt-1",
-		ExpiresAt:    time.Now().Add(time.Hour),
-		CreatedAt:    time.Now(),
-		Version:      1,
+		ID:        "sess-vi",
+		UserID:    "usr-1",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+		Version:   1,
 	}
 	require.NoError(t, repo.Create(ctx, sess))
 
@@ -328,9 +318,6 @@ func TestSessionRepository_Update_VersionIncrement(t *testing.T) {
 		s, err := repo.GetByID(ctx, "sess-vi")
 		require.NoError(t, err)
 		assert.Equal(t, int64(i), s.Version)
-
-		s.RefreshToken = fmt.Sprintf("rt-%d", i+1)
-		s.PreviousRefreshToken = fmt.Sprintf("rt-%d", i)
 		require.NoError(t, repo.Update(ctx, s))
 	}
 
@@ -339,21 +326,19 @@ func TestSessionRepository_Update_VersionIncrement(t *testing.T) {
 	assert.Equal(t, int64(4), final.Version)
 }
 
-// TestSessionRepository_ConcurrentRefreshUpdate verifies that concurrent
+// TestSessionRepository_ConcurrentUpdate verifies that concurrent
 // updates to the same session result in exactly one success and the rest
 // returning ErrSessionConflict. Run with -race.
-func TestSessionRepository_ConcurrentRefreshUpdate(t *testing.T) {
+func TestSessionRepository_ConcurrentUpdate(t *testing.T) {
 	repo := NewSessionRepository()
 	ctx := context.Background()
 
 	sess := &domain.Session{
-		ID:           "sess-cru",
-		UserID:       "usr-1",
-		AccessToken:  "at-1",
-		RefreshToken: "rt-1",
-		ExpiresAt:    time.Now().Add(time.Hour),
-		CreatedAt:    time.Now(),
-		Version:      1,
+		ID:        "sess-cru",
+		UserID:    "usr-1",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
+		Version:   1,
 	}
 	require.NoError(t, repo.Create(ctx, sess))
 
@@ -368,10 +353,8 @@ func TestSessionRepository_ConcurrentRefreshUpdate(t *testing.T) {
 	// All goroutines read the same version, then try to update.
 	clones := make([]*domain.Session, goroutines)
 	for i := range goroutines {
-		clone, err := repo.GetByRefreshToken(ctx, "rt-1")
+		clone, err := repo.GetByID(ctx, "sess-cru")
 		require.NoError(t, err)
-		clone.RefreshToken = fmt.Sprintf("rt-new-%d", i)
-		clone.PreviousRefreshToken = "rt-1"
 		clones[i] = clone
 	}
 
@@ -406,11 +389,10 @@ func TestSessionRepository_Create_SetsVersion(t *testing.T) {
 	ctx := context.Background()
 
 	sess := &domain.Session{
-		ID:           "sess-cv",
-		UserID:       "usr-1",
-		RefreshToken: "rt-1",
-		ExpiresAt:    time.Now().Add(time.Hour),
-		CreatedAt:    time.Now(),
+		ID:        "sess-cv",
+		UserID:    "usr-1",
+		ExpiresAt: time.Now().Add(time.Hour),
+		CreatedAt: time.Now(),
 		// Version intentionally omitted (zero value)
 	}
 	require.NoError(t, repo.Create(ctx, sess))

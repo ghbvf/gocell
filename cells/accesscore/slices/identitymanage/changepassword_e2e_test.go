@@ -36,9 +36,16 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// realClock is a time.Now-backed refresh.Clock for e2e tests.
+type realClock struct{}
+
+func (realClock) Now() time.Time { return time.Now() }
 
 // e2eTestKeySet holds a key pair shared across the e2e test.
 var e2eTestKeySet, _, _ = auth.MustNewTestKeySet()
@@ -90,12 +97,16 @@ func newE2EFixture() *e2eFixture {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-
-	loginSvc := sessionlogin.NewService(
-		userRepo, sessionRepo, roleRepo, e2eIssuer, slog.Default(),
+	refreshStore := refreshmem.New(
+		refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour},
+		realClock{}, nil,
 	)
 
-	idmSvc, err := NewService(userRepo, sessionRepo, slog.Default(),
+	loginSvc := sessionlogin.NewService(
+		userRepo, sessionRepo, roleRepo, refreshStore, e2eIssuer, slog.Default(),
+	)
+
+	idmSvc, err := NewService(userRepo, sessionRepo, refreshStore, slog.Default(),
 		WithTokenIssuer(&e2eTokenIssuer{svc: loginSvc}),
 	)
 	if err != nil {

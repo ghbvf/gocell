@@ -70,6 +70,10 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 		return errcode.New(errcode.ErrAuthKeyInvalid,
 			"RS256 key pair required: use WithJWTIssuer and WithJWTVerifier")
 	}
+	if c.refreshStore == nil {
+		return errcode.New(errcode.ErrCellMissingTokenIssuer,
+			"refresh.Store required: use WithRefreshStore (durable) or WithInMemoryDefaults (demo)")
+	}
 	if c.cursorCodec == nil {
 		if deps.DurabilityMode == cell.DurabilityDurable {
 			return errcode.New(errcode.ErrCellMissingCodec,
@@ -92,14 +96,14 @@ func (c *AccessCore) initSlices() error {
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.
 	loginOpts := []sessionlogin.Option{sessionlogin.WithEmitter(c.emitter), sessionlogin.WithTxManager(c.txRunner)}
-	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.jwtIssuer, c.logger, loginOpts...)
+	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionlogin", "accesscore", cell.L2))
 
 	// identity-manage: inject loginSvc as TokenIssuer for ChangePassword.
 	identityOpts := []identitymanage.Option{identitymanage.WithEmitter(c.emitter), identitymanage.WithTxManager(c.txRunner)}
 	identityOpts = append(identityOpts, identitymanage.WithTokenIssuer(loginSvc))
-	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionRepo, c.logger, identityOpts...)
+	identitySvc, err := identitymanage.NewService(c.userRepo, c.sessionRepo, c.refreshStore, c.logger, identityOpts...)
 	if err != nil {
 		return err
 	}
@@ -110,19 +114,18 @@ func (c *AccessCore) initSlices() error {
 	c.validateSvc = sessionvalidate.NewService(c.jwtVerifier, c.sessionRepo, c.logger)
 	c.AddSlice(cell.NewBaseSlice("sessionvalidate", "accesscore", cell.L0))
 
-	// session-refresh uses jwtVerifier directly (not validateSvc) because
-	// validateSvc hard-requires token_use=access and would reject every
-	// refresh token. sessionrefresh still enforces session revocation via
-	// sessionRepo + Session.IsRevoked checks after JWT verification.
-	// WithUserRepository is injected so Refresh can read PasswordResetRequired
-	// from the current user state (e.g. after ChangePassword clears the flag).
-	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.userRepo, c.jwtIssuer, c.jwtVerifier, c.logger)
+	// session-refresh uses refresh.Store for token state validation and
+	// rotation. No JWT verifier is needed — the opaque wire format is
+	// validated by the store itself; any malformed input (including an
+	// access JWT replay attempt) returns ErrRejected.
+	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore, c.jwtIssuer, c.logger)
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionrefresh", "accesscore", cell.L1))
 
-	// session-logout
+	// session-logout — cascades revocation to refresh.Store so logout
+	// invalidates the full refresh chain, not just the access session.
 	logoutOpts := []sessionlogout.Option{sessionlogout.WithEmitter(c.emitter), sessionlogout.WithTxManager(c.txRunner)}
-	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.logger, logoutOpts...)
+	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.refreshStore, c.logger, logoutOpts...)
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionlogout", "accesscore", cell.L2))
 
