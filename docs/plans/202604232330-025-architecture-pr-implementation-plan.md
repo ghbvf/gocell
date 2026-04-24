@@ -21,6 +21,16 @@
 >     2. 新增 `kernel/cell.ResolveEmitter` 抽取三 cell（accesscore/configcore/auditcore）重复的 durability-mode emitter 解析逻辑（-145 行）
 >     3. `cells/accesscore/internal/initialadmin/` 搬出 `internal/` 到 `cells/accesscore/initialadmin/`，成为一等公开 subpackage（类比 slices/），新增 `Lifecycle` 编排类型
 > - **对下游 PR 的影响**：PR-A5b（configcore 拆分）现已复用 `cell.ResolveEmitter`（无需再重复抽），只剩 cell.go 物理拆分；PR-A5c OUTBOX-EMITTER-UNIFY 的 Emitter 抽象已大部分由 PR #224 落地，剩余工作被本 PR 的 `ResolveEmitter` + PR-A5a 的模式间接推进
+>
+> 2026-04-24 更新（第六轮 · PR-A5a review 尾巴清零）:
+> - **6 角色 review 合计 ~30+ findings**（doc-engineer / kernel-guardian / architect / product-manager / devops / reviewer），PR 交付批已通过 commits `45777dd` / `83c3c62` / `8a5352a` 修掉 P0/P1。
+> - 本轮追加 **4 个 fold-in commit 关闭 5 条 P2/P3 尾巴**（`3ae8645..c4133f5`）：
+>   1. `3ae8645` docs(initialadmin,kernel): 一致性级别 L1 godoc + LifecycleHook 顺序语义（architect P2 #7+#8，R6+R7）
+>   2. `2d2bf31` obs(bootstrap): `Hook.CellID` + phase3b stamp + `slog.String("cell", …)` + drift guard 放宽（devops #3，R8）。对标 fx `callerFrame` + k8s kubelet `containerName/pod` 两独立字段模式，kernel 侧 `LifecycleHook` 故意不镜像 `CellID`（注册方身份不由 cell 自声明）
+>   3. `433e2ad` refactor(accesscore/initialadmin): 导出面从 ~25 缩到 ~20，`Bootstrapper/Cleaner/Sweep/WriteCredentialFile/...` 全 lowercase；4 个 external-test 文件（`package initialadmin_test`）迁内部白盒（kernel-guardian G3，R1）
+>   4. `c4133f5` test(archtest): LAYER-06 + `cellOwnedSubpackages` 表，守 cell-owned public subpkg 的跨 cell 导入（kernel-guardian G4，R2）
+> - **移交 PR-A5b 的 follow-up（R4/R5）**：architect P2 #4 DirectPublishMode helper 下沉（`cell.DirectPublishModeForDurability`）+ P2 #5 `cell_routes.go` providers 子拆。两项都落在 configcore 拆分的自然范围内，移下去更省评审成本；R4 实施后三 cell 统一语义、A5a 的硬编码 FailOpen/FailClosed 也顺手收口
+> - **登记 backlog（R3）**：`A5a-R3 ACCESSCORE-INITIALADMIN-THIN-WRAPPER-01` 🟡 **评估后可能 won't-do**（PM + architect review 一致倾向保持现状）
 
 ---
 
@@ -161,19 +171,21 @@
 
 ---
 
-### PR-A5b configcore cell.go 拆分 + config_repo 错误归类（预计 3h）
+### PR-A5b configcore cell.go 拆分 + config_repo 错误归类（预计 3h → 5-6h 随 A5a review 尾巴并入）
 
 **主线**：
 - **V-A15 CELL-GO-SPLIT-01**（P2-7）configcore/cell.go 431 行拆 `cell_routes.go` + `cell_events.go` + `cell_lifecycle.go`（2h）
 
 **搭车**：
 - **S15 ERROR-CTX-CANCELLED-CLASSIFY-01** `cells/configcore/internal/adapters/postgres/config_repo.go` `ctx.Canceled` 归类用 `errcode.IsInfraError`，消除 domain-notfound 误判（1h）
+- **A5a-R4 DIRECTPUBLISHMODE-HELPER-DOWNSTREAM-01** (Cx3, 从 PR-A5a review architect P2 #4 移交)：三 cell 共享 "demo=FailOpen / durable=FailClosed" 语义但 configcore 用 `configDirectPublishMode(...)` 翻译、accesscore/auditcore 在本 PR-A5a 硬编码 FailOpen/FailClosed（见 `cells/accesscore/cell_init.go:30-38` + `cells/auditcore/cell.go:131-139`）。**修复**：下沉 `cell.DirectPublishModeForDurability(mode, demoPolicy, durablePolicy)` helper，三 cell 统一调用。PR-A5b 拆 configcore 时自然 touch 同一块翻译逻辑，合并处理比独立 PR 省 ~2h 评审成本（1-2h）
+- **A5a-R5 CELL-ROUTES-PROVIDERS-SPLIT-01** (Cx3, 从 PR-A5a review architect P2 #5 移交)：PR-A5a 的 `cells/accesscore/cell_routes.go` 仍混放 providers 构造与路由注册；PR-A5b configcore 拆分时对称处理两 cell 的 providers 独立文件，保证风格一致（2h）
 
-**搭车理由**：同 configcore 包；S15 改的是 repo 层错误分支，会 touch `cell_events.go` 或 `cell_lifecycle.go` 里的事件订阅/日志路径。F5 Errcode Classifier 已完工（`pkg/errcode/classify.go`），应用零阻塞。
+**搭车理由**：同 configcore 包；S15 改的是 repo 层错误分支，会 touch `cell_events.go` 或 `cell_lifecycle.go` 里的事件订阅/日志路径。F5 Errcode Classifier 已完工（`pkg/errcode/classify.go`），应用零阻塞。A5a-R4/R5 属于 accesscore+configcore+auditcore 三 cell 对称收口，在 configcore 拆分的自然范围内做最省评审。
 
-**文件面**：`cells/configcore/cell*.go` + `cells/configcore/internal/adapters/postgres/config_repo.go`
+**文件面**：`cells/configcore/cell*.go` + `cells/configcore/internal/adapters/postgres/config_repo.go` + `cells/accesscore/cell_{init,routes}.go` + `cells/auditcore/cell.go` + `kernel/cell/mode_resolver.go`
 
-**依赖**：PR-A5a 落地后再做，复用其 TxRunner helper。
+**依赖**：PR-A5a 落地后再做，复用其 TxRunner helper + `ResolveEmitter`。
 
 ---
 

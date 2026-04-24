@@ -1,7 +1,7 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/202604180035-backlog-pre-cleanup.md`。
-> 更新日期: 2026-04-23（二轮扫描：plans/ + reviews/ + PR#220 遗留核销；新登记 P1-A / P1-19 / T6 / PR220-* / verification A2-A11/A14-A17/A19）
+> 更新日期: 2026-04-24（追加：PR-A5a (PR#234) review 遗留 A5a-R3；R1/R2/R6/R7/R8 已 fold-in 至本 PR，R4/R5 移交 PR-A5b 见 plan）
 > 基线: develop@f32d54d（PR#222 合并后）
 > 最近合入概览: PR#175-222 分层重构 + auth F系列 + configcore PG pilot 全系 + L0 安全修复 + naming 归一化(#220) + device-list(#221) + ctxkeys 迁移(#222)；详见 git log
 > 核销追加: L10 已由 PR#218 关闭（`RoleInternalAdmin` 替换 `AnyRole("admin")`）
@@ -73,6 +73,7 @@
 | PR220-2 | **DOC-NAMING-GUARD-01** (Cx2): 没有独立 doc naming guard；CI 不会拦截活动文档里的旧 example 名（my-app / sso-bff / core-bundle）、旧 slice 名、错误接口说明。**修复**：新建 `cmd/gocell/app/naming_docs_test.go` + `naming-guard.yaml` 扫 README / docs/architecture/ / docs/design/ / docs/guides/ / docs/ops/ / docs/product/ / `examples/*/README.md`；CI 接入。**前置**：PR220-1 / PR220-e1 先落地，否则 guard 立即打红现状。 | 3h | `cmd/gocell/app/` + CI | PR#220 遗留报告 P2 |
 | PR220-4 | **CI-LINT-EVENT-SEMANTIC-SPLIT-01** (Cx1): `.github/workflows/ci.yml` `push` + `pull_request` 都用 `--new-from-merge-base=origin/develop`；push 到 develop 时 merge-base 退化导致 post-merge lint 门禁失效。**修复**：`pull_request` 保留 diff 降噪，`push` 改全量 lint 或 `before..after` diff。 | 1h | `.github/workflows/ci.yml` | PR#220 遗留报告 P2 |
 | PR220-5 | 见 P1 段 **EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01**（本版块内架构动作，登记在 P1） | — | — | — |
+| A5a-R3 | **ACCESSCORE-INITIALADMIN-THIN-WRAPPER-01** (Cx3, 🟡 **评估后可能 won't-do**): 消费者需同时 import `cells/accesscore` + `cells/accesscore/initialadmin` 才能设 TTL 等配置（见 `cmd/corebundle/access_module.go` `InitialAdminOpts []initialadmin.LifecycleOption`）。**候选方案**：在 `cells/accesscore` 加 re-export thin wrapper（`WithInitialAdminTTL(d time.Duration) Option` 等），composition root 仅 import accesscore 即可配置。**反方观点**：product-manager + architect review 均倾向保持现状——thin wrapper 会在 accesscore 增加 facade 维护成本，且 `LifecycleOption` 切片语义天然暴露了底层结构；省一次 import 的 DX 收益有限。**决策门**：待 v1.0 后有第二个类似模式（如 configcore/watcher 公开 Option）时再复查；单点不动手。 | 1-2h | `cells/accesscore/` | PR#234 review PM F3 / architect P2 |
 
 ### adapter
 
