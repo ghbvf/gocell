@@ -1,8 +1,20 @@
--- +migrate Up
--- Add typed observability column to outbox_entries.
--- Rows written before this migration read back as NULL → zero ObservabilityMetadata.
--- Consumer side falls back to context values; no behavior regression.
+-- Migration 012: add typed observability column to outbox_entries.
+--
+-- Pre-FU1, reserved observability keys (trace_id / traceparent / request_id /
+-- correlation_id) lived in the same metadata JSONB column as producer
+-- business metadata. PR246-FU1 splits them into a separate observability
+-- JSONB column owned exclusively by the kernel observability bridge
+-- (kernel/outbox.ObservabilityMetadata struct). The producer-facing
+-- metadata column keeps its original producer-owned namespace.
+--
+-- Rows written before this migration read back as NULL → zero
+-- ObservabilityMetadata; consumer side falls back to context values, so
+-- no behaviour regression on pre-migration rows.
+--
+-- ref: PR246-FU1 finding ② — typed observability field on Entry.
+
+-- +goose Up
 ALTER TABLE outbox_entries ADD COLUMN observability JSONB;
 
--- +migrate Down
+-- +goose Down
 ALTER TABLE outbox_entries DROP COLUMN IF EXISTS observability;
