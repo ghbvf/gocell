@@ -16,10 +16,10 @@ import (
 )
 
 const (
-	outboxCellRuleRawOption           = "OUTBOX-CELL-01_no_raw_publisher_writer_option"
-	outboxCellGlobReadablePattern     = "cells/**/cell.go"
+	outboxCellRuleRawOption            = "OUTBOX-CELL-01_no_raw_publisher_writer_option"
+	outboxCellGlobReadablePattern      = "cells/**/cell.go"
 	outboxCellForbiddenOptionPublisher = "WithPublisher"
-	outboxCellForbiddenOptionWriter   = "WithOutboxWriter"
+	outboxCellForbiddenOptionWriter    = "WithOutboxWriter"
 )
 
 // outboxCellViolation records a rule breach on a Cell file.
@@ -49,6 +49,7 @@ func (v outboxCellViolation) String() string {
 // rules OUTBOX-SERVICE-01..05.
 //
 // ref: kubernetes/client-go rest.RESTClientFor — raw config consumed
+//
 //	by factory; typed client never re-exposes raw fields.
 //
 // Scope: scans every cells/**/cell.go declared in the repo (production

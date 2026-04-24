@@ -48,10 +48,34 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	// the Cell-boundary DirectEmitter fail mode is now owned by the kernel helper.
 	runMode, _ := c.deriveModes(deps.DurabilityMode)
 
-	// Cell-boundary Emitter resolution. Two mutually exclusive paths:
-	//   (a) WithEmitter(e) was used → c.emitter is pre-populated; skip ResolveEmitter.
-	//   (b) WithOutboxDeps(pub, writer) was used → compose via cell.ResolveEmitter.
-	// Setting both simultaneously is a wiring mistake; fail fast.
+	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
+		return err
+	}
+
+	if err := c.ensureCursorCodec(deps); err != nil {
+		return err
+	}
+
+	c.initWriteSlice()
+	if err := c.initReadSlice(runMode); err != nil {
+		return err
+	}
+	c.initPublishSlice()
+	c.initSubscribeSlice()
+	if err := c.initFlagSlice(runMode); err != nil {
+		return err
+	}
+	if err := c.initFlagWriteSlice(); err != nil {
+		return err
+	}
+	return nil
+}
+
+// resolveEmitter runs the Cell-boundary Emitter resolution. Two mutually
+// exclusive paths populate c.emitter: WithEmitter(e) (pre-populated) or
+// WithOutboxDeps(pub, writer) (raw deps composed via cell.ResolveEmitter).
+// Extracted from Init to keep cognitive complexity under the lint ceiling.
+func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 	hasEmitter := c.emitter != nil
 	hasPending := c.pendingOutboxPub != nil || c.pendingOutboxWriter != nil
 	if hasEmitter && hasPending {
@@ -65,7 +89,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	} else {
 		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
 			CellID:       "configcore",
-			Mode:         deps.DurabilityMode,
+			Mode:         mode,
 			Publisher:    c.pendingOutboxPub,
 			OutboxWriter: c.pendingOutboxWriter,
 			TxRunner:     c.txRunner,
@@ -75,7 +99,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			// propagate or the write fails, so operators notice misconfig).
 			// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
 			DirectPublishMode: cell.DirectPublishModeForDurability(
-				deps.DurabilityMode,
+				mode,
 				outbox.DirectPublishFailOpen,
 				outbox.DirectPublishFailClosed,
 			),
@@ -95,24 +119,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
 			slog.String("cell", c.ID()),
 			slog.Int("consistency_level", int(c.ConsistencyLevel())),
-			slog.String("durability_mode", deps.DurabilityMode.String()))
-	}
-
-	if err := c.ensureCursorCodec(deps); err != nil {
-		return err
-	}
-
-	c.initWriteSlice()
-	if err := c.initReadSlice(runMode); err != nil {
-		return err
-	}
-	c.initPublishSlice()
-	c.initSubscribeSlice()
-	if err := c.initFlagSlice(runMode); err != nil {
-		return err
-	}
-	if err := c.initFlagWriteSlice(); err != nil {
-		return err
+			slog.String("durability_mode", mode.String()))
 	}
 	return nil
 }

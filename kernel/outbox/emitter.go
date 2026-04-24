@@ -122,7 +122,10 @@ func (e *WriterEmitter) Durable() bool {
 		return false
 	}
 	n, ok := e.writer.(interface{ Noop() bool })
-	return !(ok && n.Noop())
+	if !ok {
+		return true
+	}
+	return !n.Noop()
 }
 
 // Durable always returns false for DirectEmitter: direct publishing bypasses

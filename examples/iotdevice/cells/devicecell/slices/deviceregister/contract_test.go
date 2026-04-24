@@ -11,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/contracttest"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/stretchr/testify/require"
 )
 
@@ -78,7 +77,7 @@ func TestEventDeviceRegisteredV1Publish(t *testing.T) {
 	// The cell wraps the business payload in a v1 wire envelope before publishing
 	// so the eventbus fail-closed schema check (P1-14) accepts the message.
 	// Unwrap here to validate against the business-payload contract schema.
-	entry, err := outboxrt.UnmarshalEnvelope(pub.calls[0].topic, pub.calls[0].payload)
+	entry, err := outbox.UnmarshalEnvelope(pub.calls[0].topic, pub.calls[0].payload)
 	require.NoError(t, err, "published payload must be a valid v1 envelope")
 	c.ValidatePayload(t, entry.Payload)
 	c.MustRejectPayload(t, []byte(`{"id":"d-1"}`))
