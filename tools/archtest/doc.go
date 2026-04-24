@@ -12,4 +12,6 @@
 //	LAYER-03: runtime/ must not import cells/ or adapters/
 //	LAYER-04: adapters/ must not import cells/, cmd/, or examples/
 //	LAYER-05: cells/A must not import cells/B/internal/ (cross-cell isolation)
+//	LAYER-06: cell-owned public subpackages (see cellOwnedSubpackages) may
+//	          only be imported by their owning cell, cmd/, or examples/
 package archtest
