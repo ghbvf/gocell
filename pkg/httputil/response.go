@@ -375,6 +375,12 @@ var codeToStatus = map[errcode.Code]int{
 	// an X-Readyz-Token bearer check (PR-A35); a mismatched or missing
 	// header is treated exactly like any other bearer-token failure.
 	errcode.ErrReadyzVerboseDenied: http.StatusUnauthorized,
+	// ErrReadyzUnhealthy / ErrReadyzShuttingDown are 503 so load balancers
+	// and kubelet readinessProbes mark the pod unavailable. The codes let
+	// operators distinguish probe failure from graceful shutdown in
+	// dashboards without reading the JSON body.
+	errcode.ErrReadyzUnhealthy:    http.StatusServiceUnavailable,
+	errcode.ErrReadyzShuttingDown: http.StatusServiceUnavailable,
 	// Note: ErrKeyProviderTransient and ErrVaultAuthFailed are mapped to 503
 	// in the section above — infrastructure unavailability is retryable and
 	// should not be conflated with internal bugs.

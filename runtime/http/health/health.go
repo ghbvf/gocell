@@ -206,12 +206,14 @@ func (h *Handler) SetShuttingDown() {
 
 // LivezHandler returns an http.HandlerFunc for the /healthz liveness endpoint.
 // Liveness is process-level: if the handler can serve a response, the process
-// is alive. Readiness details belong to /readyz.
+// is alive. Readiness details belong to /readyz. The body uses the
+// project-standard {"data": {...}} envelope so machine consumers treat
+// infrastructure and business responses uniformly (PR-A35 alignment).
 func (h *Handler) LivezHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
+		writeJSON(w, http.StatusOK, envelopeData(map[string]any{
 			"status": "healthy",
-		})
+		}))
 	}
 }
 
@@ -242,9 +244,11 @@ type readyzResult struct {
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.shuttingDown.Load() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"status": "shutting_down",
-			})
+			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
+				errcode.ErrReadyzShuttingDown,
+				"HTTP server is draining for graceful shutdown",
+				nil,
+			))
 			return
 		}
 		verbose, denied := h.verboseDecision(r)
@@ -269,7 +273,11 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		if !ok {
 			slog.Error("readyz: singleflight returned unexpected payload; failing closed",
 				slog.Any("value", shared))
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"status": "unhealthy"})
+			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
+				errcode.ErrReadyzUnhealthy,
+				"readiness computation failed",
+				nil,
+			))
 			return
 		}
 		writeReadyzResponse(w, h, result.allHealthy, verbose, result.cells, result.dependencies)
@@ -361,7 +369,18 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 	return allHealthy, dependencies
 }
 
-// writeReadyzResponse serialises and sends the /readyz HTTP response.
+// writeReadyzResponse serialises and sends the /readyz HTTP response using
+// the project-standard envelope:
+//
+//	200 → {"data": {"status":"healthy", ...verbose fields when verbose}}
+//	503 → {"error": {"code":"ERR_READYZ_UNHEALTHY",
+//	                  "message":"...",
+//	                  "details": {...verbose fields when verbose}}}
+//
+// Verbose fields (cells, dependencies, adapters) are placed inside data or
+// details so callers can walk the envelope with one consistent path
+// regardless of status. The adapters map is omitted when no adapter info
+// has been registered.
 func writeReadyzResponse(
 	w http.ResponseWriter,
 	h *Handler,
@@ -369,27 +388,41 @@ func writeReadyzResponse(
 	cells map[string]string,
 	dependencies map[string]map[string]any,
 ) {
-	status := "healthy"
-	httpStatus := http.StatusOK
-	if !allHealthy {
-		status = "unhealthy"
-		httpStatus = http.StatusServiceUnavailable
+	if allHealthy {
+		data := map[string]any{"status": "healthy"}
+		populateVerbose(data, h, verbose, cells, dependencies)
+		writeJSON(w, http.StatusOK, envelopeData(data))
+		return
 	}
+	details := map[string]any{}
+	populateVerbose(details, h, verbose, cells, dependencies)
+	writeJSON(w, http.StatusServiceUnavailable, envelopeError(
+		errcode.ErrReadyzUnhealthy,
+		"readiness checks failed",
+		details,
+	))
+}
 
-	response := map[string]any{
-		"status": status,
+// populateVerbose adds cells / dependencies / adapters to dst when verbose
+// is true. Called for both the data and error details branches of the
+// envelope so the verbose payload lives in a single, consistent location.
+func populateVerbose(
+	dst map[string]any,
+	h *Handler,
+	verbose bool,
+	cells map[string]string,
+	dependencies map[string]map[string]any,
+) {
+	if !verbose {
+		return
 	}
-	if verbose {
-		response["cells"] = cells
-		response["dependencies"] = dependencies
-		h.mu.RLock()
-		if h.adapterInfo != nil {
-			response["adapters"] = h.adapterInfo
-		}
-		h.mu.RUnlock()
+	dst["cells"] = cells
+	dst["dependencies"] = dependencies
+	h.mu.RLock()
+	if h.adapterInfo != nil {
+		dst["adapters"] = h.adapterInfo
 	}
-
-	writeJSON(w, httpStatus, response)
+	h.mu.RUnlock()
 }
 
 // runProbesParallel executes all checkers in parallel bounded by h.deadline.
@@ -513,13 +546,11 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 // failures elsewhere). The details map is empty today but the key is
 // present so consumers can rely on the shape.
 func (h *Handler) sendVerboseDenied(w http.ResponseWriter) {
-	writeJSON(w, http.StatusUnauthorized, map[string]any{
-		"error": map[string]any{
-			"code":    string(errcode.ErrReadyzVerboseDenied),
-			"message": "verbose output requires a matching X-Readyz-Token header",
-			"details": map[string]any{},
-		},
-	})
+	writeJSON(w, http.StatusUnauthorized, envelopeError(
+		errcode.ErrReadyzVerboseDenied,
+		"verbose output requires a matching X-Readyz-Token header",
+		nil,
+	))
 }
 
 // readyzVerbose returns true when the request opts in to detailed output.
@@ -550,6 +581,31 @@ func truncateErrMsg(msg string, max int) string {
 		return msg
 	}
 	return msg[:max] + "..."
+}
+
+// envelopeData wraps a success payload in the project-standard
+// `{"data": ...}` envelope (see .claude/rules/gocell/api-versioning.md).
+// Infrastructure endpoints (/healthz, /readyz) align with the same shape as
+// business /api/v1/* responses so consumers can parse both uniformly.
+func envelopeData(payload map[string]any) map[string]any {
+	return map[string]any{"data": payload}
+}
+
+// envelopeError wraps an error in the project-standard
+// `{"error": {"code":..., "message":..., "details":...}}` envelope (see
+// .claude/rules/gocell/error-handling.md). details is normalised to an
+// empty map when nil so consumers can always walk the nested path.
+func envelopeError(code errcode.Code, message string, details map[string]any) map[string]any {
+	if details == nil {
+		details = map[string]any{}
+	}
+	return map[string]any{
+		"error": map[string]any{
+			"code":    string(code),
+			"message": message,
+			"details": details,
+		},
+	}
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, v any) {

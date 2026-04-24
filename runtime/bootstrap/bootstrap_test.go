@@ -84,6 +84,38 @@ func newTestBootstrap(opts ...Option) *Bootstrap {
 	return New(append([]Option{WithVerboseToken(testVerboseToken)}, opts...)...)
 }
 
+// decodeSuccessBody reads a `{"data": {...}}` envelope from an http.Response
+// and returns the inner map. PR-A35 aligned /readyz to the same envelope
+// used by business endpoints so every 200 response in this test file goes
+// through one helper instead of hand-rolling `body["data"].(map)` at every
+// call site.
+func decodeSuccessBody(t *testing.T, resp *http.Response) map[string]any {
+	t.Helper()
+	var envelope map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	data, ok := envelope["data"].(map[string]any)
+	require.True(t, ok, "response must carry data envelope; got %v", envelope)
+	return data
+}
+
+// decodeErrorDetails reads an `{"error": {"code":..., "details":{...}}}`
+// envelope and returns the details map alongside the code. Used by tests
+// that assert a 503 /readyz response surfaces the expected probe-level
+// breakdown inside details.
+func decodeErrorDetails(t *testing.T, resp *http.Response) (code string, details map[string]any) {
+	t.Helper()
+	var envelope map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	errObj, ok := envelope["error"].(map[string]any)
+	require.True(t, ok, "response must carry error envelope; got %v", envelope)
+	codeStr, _ := errObj["code"].(string)
+	det, _ := errObj["details"].(map[string]any)
+	if det == nil {
+		det = map[string]any{}
+	}
+	return codeStr, det
+}
+
 // newLocalListener creates a TCP listener on a random port, suitable for tests.
 func newLocalListener(t *testing.T) net.Listener {
 	t.Helper()
@@ -640,8 +672,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
@@ -696,10 +727,10 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	code, details := decodeErrorDetails(t, resp)
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", code)
+	deps, ok := details["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map in error details")
 	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
 	require.True(t, ok, "rabbitmq entry must be a map")
 	assert.Equal(t, "unhealthy", rabbitmq["status"])
@@ -749,8 +780,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	adapters, ok := body["adapters"].(map[string]any)
 	require.True(t, ok, "verbose readyz must contain adapters map")
 	assert.Equal(t, "in-memory", adapters["mode"])
@@ -823,8 +853,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	sessionStore, ok := deps["session-store"].(map[string]any)
@@ -974,17 +1003,17 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"any unhealthy dependency must cause 503")
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	code, details := decodeErrorDetails(t, resp)
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", code,
+		"overall status must surface the unhealthy errcode")
+	deps, ok := details["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map in error details")
 	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
 	require.True(t, ok, "rabbitmq entry must be a map")
 	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
 	postgresEntry, ok := deps["postgres"].(map[string]any)
 	require.True(t, ok, "postgres entry must be a map")
 	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
-	assert.Equal(t, "unhealthy", body["status"], "overall status must be unhealthy")
 
 	cancel()
 	select {
@@ -1106,11 +1135,15 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			return false
 		}
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		var envelope map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		data, ok := envelope["data"].(map[string]any)
+		if !ok {
+			return false
+		}
+		deps, ok := data["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1163,11 +1196,15 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			return false
 		}
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		var envelope map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		data, ok := envelope["data"].(map[string]any)
+		if !ok {
+			return false
+		}
+		deps, ok := data["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1309,11 +1346,19 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			return false
 		}
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		var envelope map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		errObj, ok := envelope["error"].(map[string]any)
+		if !ok {
+			return false
+		}
+		details, ok := errObj["details"].(map[string]any)
+		if !ok {
+			return false
+		}
+		deps, ok := details["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1417,8 +1462,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
 	erProbe, ok := deps["eventrouter"].(map[string]any)
@@ -3650,8 +3694,7 @@ func TestWithRelayHealth_RegistersCheckers(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 
@@ -3788,10 +3831,10 @@ func TestWithRelayHealth_TrippedBudget_Returns503(t *testing.T) {
 	require.NoError(t, err)
 	defer verboseResp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	code, details := decodeErrorDetails(t, verboseResp)
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", code)
+	deps, ok := details["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map in error details")
 	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
 	pollProbe, ok := deps["outbox-relay-poll"].(map[string]any)
 	require.True(t, ok, "outbox-relay-poll must be a structured ProbeResult")
@@ -3851,8 +3894,7 @@ func TestWithRelayHealth_DisabledBudget_SkipsChecker(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, _ := body["dependencies"].(map[string]any)
 
 	assert.NotContains(t, deps, "outbox-relay-poll",

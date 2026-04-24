@@ -13,9 +13,23 @@ have changed.
 | `GET /readyz` | 200 / 503 | Aggregate readiness across every registered Cell and dependency probe. Use for Kubernetes `readinessProbe` and external LB health checks. |
 | `GET /readyz?verbose=true` | 200 / 401 / 503 | Detailed breakdown: cell statuses + per-dependency probe results. Always gated by `X-Readyz-Token` (see below). |
 
-During graceful shutdown `/readyz` returns 503 `{"status":"shutting_down"}`
-regardless of probe results so load balancers can drain traffic before the
-HTTP server closes connections.
+During graceful shutdown `/readyz` returns `503` with
+`{"error":{"code":"ERR_READYZ_SHUTTING_DOWN","message":"...","details":{}}}`
+so load balancers can drain traffic before the HTTP server closes
+connections.
+
+## Response envelope
+
+All PR-A35 health responses use the project-wide JSON envelope
+(`.claude/rules/gocell/api-versioning.md`):
+
+- **Success** — `{"data": {...}}` with `status` inside.
+- **Error** — `{"error": {"code":"ERR_...", "message":"...", "details":{...}}}`.
+
+The verbose breakdown (cells + dependencies + optional adapters) lives
+under `data.*` on 200 and under `error.details.*` on 503, so consumers
+walk one consistent path regardless of probe outcome. There is no special
+"infrastructure-endpoint" shape to special-case.
 
 ## Kubernetes probes — MUST NOT use `?verbose`
 
@@ -58,16 +72,38 @@ the `X-Readyz-Token` header.
 
 ### Response shape
 
+200 (all probes healthy):
+
 ```json
 {
-  "status": "unhealthy",
-  "cells": { "accesscore": "healthy", "auditcore": "degraded" },
-  "dependencies": {
-    "postgres-ping": { "status": "healthy", "duration_ms": 3 },
-    "rabbitmq": { "status": "unhealthy", "duration_ms": 12,
-                  "error": "connection refused" }
-  },
-  "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
+  "data": {
+    "status": "healthy",
+    "cells":   { "accesscore": "healthy", "auditcore": "healthy" },
+    "dependencies": {
+      "postgres-ping": { "status": "healthy", "duration_ms": 3 }
+    },
+    "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
+  }
+}
+```
+
+503 (one or more probes unhealthy):
+
+```json
+{
+  "error": {
+    "code": "ERR_READYZ_UNHEALTHY",
+    "message": "readiness checks failed",
+    "details": {
+      "cells": { "accesscore": "healthy", "auditcore": "degraded" },
+      "dependencies": {
+        "postgres-ping": { "status": "healthy", "duration_ms": 3 },
+        "rabbitmq": { "status": "unhealthy", "duration_ms": 12,
+                       "error": "connection refused" }
+      },
+      "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
+    }
+  }
 }
 ```
 
@@ -91,12 +127,14 @@ token-gated diagnostic channel.
 
 ### Strict 401 semantics
 
-`?verbose` requests are routed like this:
+`?verbose` requests are routed like this (the response status here is
+independent of the probe outcome — a verbose-authorised 503 still uses the
+same error envelope described under "Response shape"):
 
 | Server state | Request | Response |
 |--------------|---------|----------|
-| `WithVerboseDisabled()` set (e.g. `GOCELL_READYZ_VERBOSE_DISABLED=1`) | any `?verbose` | **200 plain aggregate body** (verbose body inert) |
-| token configured + header matches | `?verbose` with matching `X-Readyz-Token` | **200 verbose body** |
+| `WithVerboseDisabled()` set (e.g. `GOCELL_READYZ_VERBOSE_DISABLED=1`) | any `?verbose` | **200 / 503 plain aggregate body** (no verbose fields) |
+| token configured + header matches | `?verbose` with matching `X-Readyz-Token` | **200 / 503 verbose body** |
 | token configured + header missing/mismatched | `?verbose` with wrong / no `X-Readyz-Token` | **401** `ERR_READYZ_VERBOSE_DENIED` |
 | token unset (and not disabled) — should never happen in prod (Validate refuses startup) | `?verbose` | **401** `ERR_READYZ_VERBOSE_DENIED` |
 

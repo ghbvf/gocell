@@ -220,6 +220,10 @@ curl -s -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
   'http://localhost:8081/readyz?verbose' | jq
 ```
 
+Responses use the project-wide envelope (PR-A35): success bodies are
+`{"data": {"status": "healthy", ...}}`; 503 / 401 bodies are
+`{"error": {"code": "ERR_READYZ_...", "message": "...", "details": {...}}}`.
+
 `/healthz` is liveness-only. Use `/readyz?verbose` when you need the detailed cell and dependency breakdown — PR-A35 requires `GOCELL_READYZ_VERBOSE_TOKEN` to be set and the request to carry the matching `X-Readyz-Token` header (or set `GOCELL_READYZ_VERBOSE_DISABLED=1` to waive the endpoint).
 
 ## BFF Cookie Session Mode (Planned)

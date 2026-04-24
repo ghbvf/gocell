@@ -172,16 +172,20 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	require.NoError(t, err)
 	defer verboseResp.Body.Close()
 
-	// /readyz?verbose returns structured dependency probe results
-	// (ProbeResult schema: status + duration_ms + optional error).
-	var body struct {
-		Status       string                    `json:"status"`
-		Dependencies map[string]map[string]any `json:"dependencies"`
+	// PR-A35 envelope: 503 /readyz responses carry the dependency breakdown
+	// inside {"error": {"code":"ERR_READYZ_UNHEALTHY", "details": {...}}}.
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Details struct {
+				Dependencies map[string]map[string]any `json:"dependencies"`
+			} `json:"details"`
+		} `json:"error"`
 	}
-	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
-	assert.Equal(t, "unhealthy", body.Status)
-	probe, ok := body.Dependencies["fake_key_provider_ready"]
-	require.True(t, ok, "fake_key_provider_ready must appear in /readyz?verbose")
+	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&envelope))
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", envelope.Error.Code)
+	probe, ok := envelope.Error.Details.Dependencies["fake_key_provider_ready"]
+	require.True(t, ok, "fake_key_provider_ready must appear in /readyz?verbose error details")
 	assert.Equal(t, "unhealthy", probe["status"],
 		"fake_key_provider_ready must appear in /readyz?verbose as unhealthy")
 

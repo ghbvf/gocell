@@ -66,12 +66,15 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 
 	// Every response must parse and carry a status field — exact value not
 	// asserted because singleflight guarantees all sharers see the same
-	// result per execution.
+	// result per execution. PR-A35 wraps success responses in the
+	// {"data": {...}} envelope, so dig one layer in.
 	for i, body := range bodies {
 		var parsed map[string]any
 		require.NoErrorf(t, json.Unmarshal(body, &parsed), "body[%d] = %s", i, string(body))
-		_, ok := parsed["status"]
-		assert.Truef(t, ok, "response %d missing status field: %s", i, string(body))
+		data, ok := parsed["data"].(map[string]any)
+		require.Truef(t, ok, "response %d missing data envelope: %s", i, string(body))
+		_, ok = data["status"]
+		assert.Truef(t, ok, "response %d missing status field under data: %s", i, string(body))
 	}
 }
 
@@ -93,14 +96,18 @@ func TestReadyz_Singleflight_SeparateKeysForVerboseVsAggregate(t *testing.T) {
 	require.Equal(t, http.StatusOK, plainRec.Code)
 	var plain map[string]any
 	require.NoError(t, json.Unmarshal(plainRec.Body.Bytes(), &plain))
-	_, plainHasCells := plain["cells"]
-	assert.False(t, plainHasCells, "plain response must not leak verbose cells")
+	plainData, ok := plain["data"].(map[string]any)
+	require.True(t, ok, "plain response must carry data envelope")
+	_, plainHasCells := plainData["cells"]
+	assert.False(t, plainHasCells, "plain response must not leak verbose cells under data")
 
 	verboseRec := httptest.NewRecorder()
 	h.ReadyzHandler().ServeHTTP(verboseRec, newVerboseRequest("/readyz?verbose=true"))
 	require.Equal(t, http.StatusOK, verboseRec.Code)
 	var verbose map[string]any
 	require.NoError(t, json.Unmarshal(verboseRec.Body.Bytes(), &verbose))
-	_, verboseHasCells := verbose["cells"]
-	assert.True(t, verboseHasCells, "verbose response must include cells")
+	verboseData, ok := verbose["data"].(map[string]any)
+	require.True(t, ok, "verbose response must carry data envelope")
+	_, verboseHasCells := verboseData["cells"]
+	assert.True(t, verboseHasCells, "verbose response must include cells under data")
 }

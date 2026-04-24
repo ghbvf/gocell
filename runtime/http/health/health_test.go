@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -41,6 +42,29 @@ func newVerboseRequest(url string) *http.Request {
 	req := httptest.NewRequest(http.MethodGet, url, nil)
 	req.Header.Set(VerboseTokenHeader, testVerboseToken)
 	return req
+}
+
+// dataBody unwraps a success envelope `{"data": {...}}` and returns the
+// inner payload. Asserts on t rather than returning an error so call sites
+// stay short.
+func dataBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "response body must be valid JSON")
+	data, ok := body["data"].(map[string]any)
+	require.True(t, ok, "success response must carry {\"data\":...} envelope; got %s", rec.Body.String())
+	return data
+}
+
+// errorBody unwraps an error envelope `{"error": {"code":..., ...}}` and
+// returns the inner object.
+func errorBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "response body must be valid JSON")
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok, "error response must carry {\"error\":...} envelope; got %s", rec.Body.String())
+	return errObj
 }
 
 func TestLivezHandler(t *testing.T) {
@@ -82,10 +106,9 @@ func TestLivezHandler(t *testing.T) {
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-			assert.Equal(t, tt.wantBody, body["status"])
-			_, hasChecks := body["checks"]
+			data := dataBody(t, rec)
+			assert.Equal(t, tt.wantBody, data["status"])
+			_, hasChecks := data["checks"]
 			assert.False(t, hasChecks, "/healthz must not expose readiness details")
 		})
 	}
@@ -143,17 +166,27 @@ func TestReadyzHandler(t *testing.T) {
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-			assert.Equal(t, tt.wantBodyStat, body["status"])
+			// PR-A35 envelope: success lives under data.*, failure under
+			// error.details.* so both branches share a consistent shape.
+			var payload map[string]any
+			if tt.wantBodyStat == "healthy" {
+				payload = dataBody(t, rec)
+				assert.Equal(t, tt.wantBodyStat, payload["status"])
+			} else {
+				errObj := errorBody(t, rec)
+				assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+				var ok bool
+				payload, ok = errObj["details"].(map[string]any)
+				require.True(t, ok, "unhealthy response must carry details map")
+			}
 
 			// Verify namespace separation: cells and dependencies are in distinct maps.
-			cells, ok := body["cells"].(map[string]any)
+			cells, ok := payload["cells"].(map[string]any)
 			require.True(t, ok, "response must contain cells map")
 			_, hasCellCheck := cells["cell-1"]
 			assert.True(t, hasCellCheck, "should include cell-1 in cells")
 
-			deps, ok := body["dependencies"].(map[string]any)
+			deps, ok := payload["dependencies"].(map[string]any)
 			require.True(t, ok, "response must contain dependencies map")
 			_, hasDBCheck := deps["db"]
 			assert.True(t, hasDBCheck, "should include db in dependencies")
@@ -179,11 +212,12 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body["status"])
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map")
 
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	// Dependencies are now map[string]map[string]any
 	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
@@ -207,14 +241,13 @@ func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
-	_, hasChecks := body["checks"]
+	data := dataBody(t, rec)
+	assert.Equal(t, "healthy", data["status"])
+	_, hasChecks := data["checks"]
 	assert.False(t, hasChecks, "/healthz must not expose readiness details")
-	_, hasCells := body["cells"]
+	_, hasCells := data["cells"]
 	assert.False(t, hasCells, "/healthz must not expose cell readiness details")
-	_, hasDependencies := body["dependencies"]
+	_, hasDependencies := data["dependencies"]
 	assert.False(t, hasDependencies, "/healthz must not expose dependency readiness details")
 }
 
@@ -234,12 +267,11 @@ func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
-	_, hasCells := body["cells"]
+	data := dataBody(t, rec)
+	assert.Equal(t, "healthy", data["status"])
+	_, hasCells := data["cells"]
 	assert.False(t, hasCells, "default /readyz output must not expose cells")
-	_, hasDependencies := body["dependencies"]
+	_, hasDependencies := data["dependencies"]
 	assert.False(t, hasDependencies, "default /readyz output must not expose dependencies")
 }
 
@@ -260,13 +292,12 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
-	cells, ok := body["cells"].(map[string]any)
+	data := dataBody(t, rec)
+	assert.Equal(t, "healthy", data["status"])
+	cells, ok := data["cells"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain cells")
 	assert.Equal(t, "healthy", cells["cell-1"])
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := data["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
 	dbEntry, ok := deps["db"].(map[string]any)
 	require.True(t, ok, "db dependency must be a map")
@@ -293,9 +324,8 @@ func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	adapters, ok := body["adapters"].(map[string]any)
+	data := dataBody(t, rec)
+	adapters, ok := data["adapters"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain adapters")
 	assert.Equal(t, "in-memory", adapters["mode"])
 	assert.Equal(t, "in-memory", adapters["storage"])
@@ -316,9 +346,8 @@ func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
 	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	_, hasAdapters := body["adapters"]
+	data := dataBody(t, rec)
+	_, hasAdapters := data["adapters"]
 	assert.False(t, hasAdapters, "verbose readyz output should not contain adapters when not set")
 }
 
@@ -338,13 +367,14 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body["status"])
-	_, hasCells := body["cells"]
-	assert.False(t, hasCells, "non-verbose unhealthy /readyz must not expose cells")
-	_, hasDependencies := body["dependencies"]
-	assert.False(t, hasDependencies, "non-verbose unhealthy /readyz must not expose dependencies")
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map (may be empty)")
+	_, hasCells := details["cells"]
+	assert.False(t, hasCells, "non-verbose unhealthy /readyz must not expose cells in details")
+	_, hasDependencies := details["dependencies"]
+	assert.False(t, hasDependencies, "non-verbose unhealthy /readyz must not expose dependencies in details")
 }
 
 func TestReadyzVerboseQueryParsing(t *testing.T) {
@@ -400,12 +430,14 @@ func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 	// Mark shutting down.
 	h.SetShuttingDown()
 
-	// After shutdown: should be 503.
+	// After shutdown: should be 503 with the dedicated errcode.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	h.ReadyzHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "shutting_down")
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzShuttingDown), errObj["code"],
+		"shutdown path must carry the ERR_READYZ_SHUTTING_DOWN code so operators distinguish drain from probe failure")
 }
 
 func TestSetShuttingDown_Idempotent(t *testing.T) {
@@ -450,9 +482,8 @@ func TestReadyz_VerboseToken_CorrectHeader(t *testing.T) {
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	_, hasCells := body["cells"]
+	data := dataBody(t, rec)
+	_, hasCells := data["cells"]
 	assert.True(t, hasCells, "correct token should expose verbose details")
 }
 
@@ -560,24 +591,25 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 			h.ReadyzHandler().ServeHTTP(rec, req)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 
 			if tt.wantDeniedBody {
-				errField, ok := body["error"].(map[string]any)
-				require.True(t, ok, "denied response must carry errcode envelope; got %v", body)
-				assert.Equal(t, "ERR_READYZ_VERBOSE_DENIED", errField["code"])
+				errField := errorBody(t, rec)
+				assert.Equal(t, string(errcode.ErrReadyzVerboseDenied), errField["code"])
 				assert.Contains(t, errField["message"].(string), "X-Readyz-Token")
 				_, hasDetails := errField["details"].(map[string]any)
 				assert.True(t, hasDetails,
 					"denied envelope must include the standard details map (may be empty)")
+				return
 			}
+
+			// Non-denied paths always come back as 200 under the data envelope.
+			data := dataBody(t, rec)
 			if tt.wantVerboseBody {
-				_, hasCells := body["cells"]
-				assert.True(t, hasCells, "verbose response must include cells")
-			} else if tt.wantStatus == http.StatusOK {
-				_, hasCells := body["cells"]
-				assert.False(t, hasCells, "non-verbose response must not include cells")
+				_, hasCells := data["cells"]
+				assert.True(t, hasCells, "verbose response must include cells under data")
+			} else {
+				_, hasCells := data["cells"]
+				assert.False(t, hasCells, "non-verbose response must not include cells under data")
 			}
 		})
 	}
@@ -592,9 +624,8 @@ func TestEmptyAssembly(t *testing.T) {
 	h.LivezHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
+	data := dataBody(t, rec)
+	assert.Equal(t, "healthy", data["status"])
 }
 
 // --- New parallel / deadline / panic tests (PR-A4 phase 5a) ---
@@ -675,11 +706,12 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body["status"])
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map")
 
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
 	slowEntry, ok := deps["slow"].(map[string]any)
 	require.True(t, ok, "slow entry must be a map")
@@ -756,11 +788,12 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body["status"])
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map")
 
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
 	panicEntry, ok := deps["panicking"].(map[string]any)
 	require.True(t, ok, "panicking entry must be present")
@@ -888,10 +921,12 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map")
 
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
 	noisyEntry, ok := deps["noisy"].(map[string]any)
 	require.True(t, ok, "noisy entry must be present")
@@ -942,11 +977,8 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 
 	// WithVerboseDisabled answers verbose requests with the plain aggregate
 	// body (no dependencies map); we only assert the aggregate status here.
-	var body struct {
-		Status string `json:"status"`
-	}
-	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body.Status)
+	errObj := errorBody(t, rr)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
 }
 
 // TestReadyz_VerboseDependencies_StructuredOutput verifies the new structured
@@ -966,10 +998,13 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	deps, ok := body["dependencies"].(map[string]any)
+	// One probe is unhealthy → 503 envelope places verbose breakdown under
+	// error.details.dependencies.
+	errObj := errorBody(t, rec)
+	require.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok)
 
 	okEntry, ok := deps["ok-probe"].(map[string]any)

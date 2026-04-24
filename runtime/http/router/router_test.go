@@ -71,9 +71,11 @@ func TestHealthEndpoints(t *testing.T) {
 	r.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
+	var envelope map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &envelope))
+	data, ok := envelope["data"].(map[string]any)
+	require.True(t, ok, "healthz response must carry {\"data\":...} envelope")
+	assert.Equal(t, "healthy", data["status"])
 
 	// Test /readyz
 	rec = httptest.NewRecorder()
