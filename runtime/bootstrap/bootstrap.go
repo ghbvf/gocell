@@ -649,6 +649,13 @@ type Bootstrap struct {
 	// passed. Checked in phase0 to fail-fast rather than silently skipping
 	// resource registration.
 	managedResourceNil bool
+
+	// listenerConfigs holds the PR-A14b declarative listener registrations.
+	// Keyed by ListenerRef to deduplicate declarations; duplicate ref is a
+	// phase0 error detected by WithListener at option-application time (last
+	// writer wins within a single New() call — phase0 validates completeness).
+	// Initialized lazily by the first WithListener option.
+	listenerConfigs map[cell.ListenerRef]listenerConfig
 }
 
 // New creates a Bootstrap with the given options.
