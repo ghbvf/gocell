@@ -46,14 +46,6 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 	assert.Contains(t, err.Error(), "circuit breaker must not be nil")
 }
 
-func TestPhase0_RejectsNilBrokerHealth(t *testing.T) {
-	b := New()
-	b.brokerHealthNil = true
-	err := b.phase0ValidateOptions()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "broker health checker must not be nil")
-}
-
 func TestPhase0_RejectsNilRelayHealth(t *testing.T) {
 	b := New()
 	b.relayHealthNil = true

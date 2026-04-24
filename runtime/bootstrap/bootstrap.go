@@ -15,7 +15,6 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
-	"reflect"
 	"sort"
 	"strings"
 	"sync"
@@ -343,51 +342,6 @@ func WithReadyzDeadline(d time.Duration) Option {
 	}
 }
 
-// BrokerHealthChecker is the narrow interface GoCell's bootstrap consumes
-// to aggregate message-broker connectivity into the /readyz endpoint.
-// Implementations must return nil when the broker is reachable and able to
-// publish/consume; any non-nil error flips /readyz to 503.
-//
-// ref: github.com/ghbvf/gocell/adapters/rabbitmq.Connection — the canonical
-// implementer (its Health method exposes ConnectionState four-state model:
-// Connecting, Connected, Disconnected, Terminal).
-//
-// ref: docs/references/202604181900-outbox-wire-framework-comparison.md —
-// design analysis concluded three surveyed frameworks (Watermill, fx,
-// Kratos) lack a directly reusable broker-health contract; GoCell's
-// four-state model surpasses watermill-amqp's binary IsConnected() by
-// preserving sub-state for debugging.
-type BrokerHealthChecker interface {
-	Health(ctx context.Context) error
-}
-
-// WithBrokerHealth registers the given broker's Health method as a /readyz
-// aggregator under the name "rabbitmq". It is a thin convenience over
-// WithHealthChecker that picks a canonical name and adapts the interface
-// to func() error, calling Health with a 5-second timeout per K8s readiness
-// probe convention.
-//
-// A nil (or typed-nil) bc is rejected at Run() time with a fatal error so
-// operators are not silently left with a checker that nil-derefs on the
-// first probe. Mirrors WithCircuitBreaker's fail-fast contract.
-//
-// ref: github.com/ghbvf/gocell/runtime/bootstrap.WithCircuitBreaker — sibling
-// fail-fast pattern for nil option arguments.
-func WithBrokerHealth(bc BrokerHealthChecker) Option {
-	return func(b *Bootstrap) {
-		if isNilBrokerHealthChecker(bc) {
-			b.brokerHealthNil = true
-			return
-		}
-		b.healthCheckers = append(b.healthCheckers, namedChecker{
-			name: "rabbitmq",
-			fn: func(ctx context.Context) error {
-				return bc.Health(ctx)
-			},
-		})
-	}
-}
-
 // WithRelayHealth registers the relay's named health checkers (one per enabled
 // FailureBudget) into the /readyz endpoint. Checkers are named:
 //
@@ -397,10 +351,10 @@ func WithBrokerHealth(bc BrokerHealthChecker) Option {
 //
 // Only budgets with a positive threshold are registered; threshold=0 (disabled)
 // budgets are silently skipped. A nil relay is rejected at Run() time with a
-// fatal error, mirroring the WithBrokerHealth fail-fast contract.
+// fatal error, mirroring the WithCircuitBreaker fail-fast contract.
 //
 // ref: controller-runtime AddReadyzCheck — named-checker aggregation pattern.
-// ref: runtime/bootstrap.WithBrokerHealth — sibling fail-fast pattern.
+// ref: runtime/bootstrap.WithCircuitBreaker — sibling fail-fast pattern.
 func WithRelayHealth(r *runtimeoutbox.Relay) Option {
 	return func(b *Bootstrap) {
 		if r == nil {
@@ -423,25 +377,6 @@ func WithRelayHealth(r *runtimeoutbox.Relay) Option {
 	}
 }
 
-// isNilBrokerHealthChecker detects both plain-nil interface values and the
-// "typed nil" gotcha (non-nil interface wrapping a nil pointer/slice/etc.).
-// The typed-nil case would satisfy `bc != nil` but panic on method dispatch.
-//
-// ref: github.com/ghbvf/gocell/runtime/http/middleware.IsTypedNilAllower —
-// mirrors the allower helper so the bootstrap-layer fail-fast pattern is
-// symmetric across Option variants.
-func isNilBrokerHealthChecker(bc BrokerHealthChecker) bool {
-	if bc == nil {
-		return true
-	}
-	v := reflect.ValueOf(bc)
-	switch v.Kind() {
-	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
-		return v.IsNil()
-	default:
-		return false
-	}
-}
 
 // validateHTTPListenerAddrs fail-fasts on mis-configured HTTP listeners. Each
 // side (primary / internal) must have either a non-empty bind address OR a
@@ -675,12 +610,6 @@ type Bootstrap struct {
 	// circuitBreakerNil is set by WithCircuitBreaker when a nil Allower is
 	// passed. Checked at Run() to fail-fast instead of silently skipping CB.
 	circuitBreakerNil bool
-
-	// brokerHealthNil is set by WithBrokerHealth when a nil (or typed-nil)
-	// BrokerHealthChecker is passed. Checked at Run() to fail-fast instead
-	// of registering a closure that would nil-deref on the first /readyz
-	// probe. Mirrors the circuitBreakerNil contract.
-	brokerHealthNil bool
 
 	// internalMiddlewares hold the ordered middleware stack applied to the
 	// internal mux by WithInternalMiddleware. Forwarded to the router at

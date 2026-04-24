@@ -126,9 +126,6 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
 	}
-	if b.brokerHealthNil {
-		return fmt.Errorf("bootstrap: broker health checker must not be nil")
-	}
 	// PR-A14a: validate dual HTTP listener addresses + nil internal middleware.
 	if err := b.validateHTTPListenerAddrs(); err != nil {
 		return err
