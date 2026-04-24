@@ -18,6 +18,19 @@ type RouteGroup struct {
 	// chosen mux. Required; a nil Register is a programmer error detected
 	// at phase5 validation time.
 	Register func(mux RouteMux)
+	// CellID is the identifier of the cell that contributed this group.
+	// Set automatically by bootstrap during phase5CollectRouteGroups for
+	// error-context enrichment (OPS-02). Cells do not need to populate this.
+	CellID string
+}
+
+// SingleGroup is a convenience constructor for the common single-listener,
+// single-prefix case. It returns a RouteGroup with the given listener, prefix,
+// and register function. Equivalent to declaring the struct literal inline.
+//
+// DX-05: reduces boilerplate in cells that declare a single route group.
+func SingleGroup(l ListenerRef, prefix string, fn func(RouteMux)) RouteGroup {
+	return RouteGroup{Listener: l, Prefix: prefix, Register: fn}
 }
 
 // RouteGroupContributor is implemented by cells (or other components)

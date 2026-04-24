@@ -53,12 +53,13 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
     }
 }
 
-// composition root
+// composition root — WithListener(ref, addr, defaultPolicy, ...ListenerOption)
+// defaultPolicy nil → no listener-level auth; routes declare policy via auth.Declare.
 bootstrap.New(
     bootstrap.WithAssembly(asm),
-    bootstrap.WithListener(cell.PrimaryListener, primaryCfg),
-    bootstrap.WithListener(cell.InternalListener, internalCfg),
-    bootstrap.WithListener(cell.HealthListener, healthCfg),
+    bootstrap.WithListener(cell.PrimaryListener, ":8080", nil),
+    bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090", bootstrap.PolicyServiceToken(ring)),
+    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", nil),
     bootstrap.WithAuthDiscovery(),  // 从 Cell 发现 IntentTokenVerifier
 )
 ```
@@ -120,6 +121,20 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 4. 编译 public / password-reset-exempt 匹配器
 5. 从首个 `POST + PasswordResetExempt=true` 路由派生 password-reset change-endpoint hint
 6. AuthMiddleware 在请求时通过 Router 字段 lazy 读取匹配器
+
+### Auth 三路径优先级
+
+每个进入 listener 的请求经历三层鉴权策略，优先级从高到低：
+
+1. **路由级 Policy**（`auth.Declare` 中的 `Policy` 字段）— 仅对该路由生效，覆盖一切
+2. **Public / PasswordResetExempt**（`auth.Declare` 中的 `Public: true` 或 `PasswordResetExempt: true`）— 豁免 JWT 验证
+3. **Listener 默认 Policy**（`WithListener(ref, addr, defaultPolicy)` 的 `defaultPolicy`）— 对未被 auth.Declare 覆盖的路由生效
+
+优先级规则：
+- 路由级 Policy 存在时，Listener 默认 Policy 被完全旁路
+- `Public: true` 不能与路由级 `Policy` 同时设置（FinalizeAuth fail-fast）
+- `WithAuthDiscovery()` 发现的 JWT 验证器作用于 PrimaryListener；WithAuthMiddleware 显式安装时同理
+- `WithAuthMiddleware` 与 `WithAuthDiscovery` 互斥；两者同时设置会在 phase0 被拒绝
 
 ### 规则
 

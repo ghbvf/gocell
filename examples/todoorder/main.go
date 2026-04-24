@@ -64,7 +64,8 @@ func main() {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithHTTPPrimaryAddr(":8082"), bootstrap.WithHTTPInternalAddr(":9082"),
+		bootstrap.WithListener(cell.PrimaryListener, ":8082", nil),
+		bootstrap.WithListener(cell.InternalListener, ":9082", nil),
 	)
 
 	logger.Info("todoorder: starting on :8082")

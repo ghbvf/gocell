@@ -141,7 +141,8 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithHTTPPrimaryAddr(":8081"), bootstrap.WithHTTPInternalAddr(":9081"),
+		bootstrap.WithListener(cell.PrimaryListener, ":8081", nil),
+		bootstrap.WithListener(cell.InternalListener, ":9081", nil),
 		bootstrap.WithAuthDiscovery(),
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
 	)
