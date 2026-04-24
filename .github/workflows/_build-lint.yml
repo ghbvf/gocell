@@ -33,13 +33,47 @@ permissions:
   contents: read
 
 jobs:
+  # build-test is a matrix of 4 package shards run in parallel. Previous
+  # empirical data (PR246) showed `go test -race ./...` dominated at 4m34s of
+  # a 5m28s job; sharding lets non-race shards run without the 2-10x race
+  # detector overhead while isolating race coverage to the concurrency-sensitive
+  # kernel/runtime code paths (Prometheus applies the same pattern to tsdb/
+  # textparse — see raw.githubusercontent.com/prometheus/prometheus/main/
+  # .github/workflows/ci.yml). The shard list is intentionally static rather
+  # than the dynamic `go list | shuf | split` approach used by hashicorp/consul:
+  # GoCell's package layout is architectural (kernel/runtime/cells/adapters),
+  # and shard boundaries that mirror those layers produce stable coverage
+  # profiles and make per-shard timing easy to interpret. Swap to dynamic
+  # sharding if shard timings diverge > 2x.
   build-test:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: kernel
+            pkgs: ./kernel/...
+            race: true
+            static_checks: true
+          - shard: runtime
+            pkgs: ./runtime/... ./pkg/...
+            race: true
+            static_checks: false
+          - shard: cells
+            pkgs: ./cells/...
+            race: false
+            static_checks: false
+          - shard: others
+            pkgs: ./adapters/... ./cmd/... ./examples/... ./tests/... ./contracts/...
+            race: false
+            static_checks: false
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           # Need full history so `golangci-lint --new-from-merge-base=origin/<base-ref>`
-          # can run `git merge-base` successfully.
+          # can run `git merge-base` successfully. Only the kernel shard actually
+          # runs golangci-lint, but fetch-depth: 0 is cheap at this repo size and
+          # keeping it uniform avoids conditional checkout complexity.
           fetch-depth: 0
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -47,13 +81,23 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: go.sum
 
+      # Static checks (Build, Vet, golangci-lint, validate/check commands, layering
+      # guard, kernel coverage gate) run only on the kernel shard. Running them on
+      # every shard would cost 4x runner minutes for no signal — each step is
+      # repo-global (no package scoping) and its verdict does not depend on which
+      # shard is executing. Hosting them on the kernel shard (the smallest test
+      # load at ~22k lines / 17.9%) also gives the fastest fail-fast path when a
+      # lint regression is introduced.
       - name: Build
+        if: matrix.static_checks
         run: go build ./...
 
       - name: Vet
+        if: matrix.static_checks
         run: go vet ./...
 
       - name: golangci-lint
+        if: matrix.static_checks
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
           version: v2.11
@@ -67,19 +111,31 @@ jobs:
           # or release/* lint against their actual merge-base, not develop.
           args: ${{ inputs.lint-mode == 'pr' && format('--new-from-merge-base=origin/{0}', inputs.base-ref) || '' }}
 
+      # Test step: per-shard coverage profile with covermode=atomic (required by
+      # -race on race shards; harmless and consistent with non-race shards, which
+      # avoids mode-header conflicts when cat-merging profiles in sonarcloud).
+      # -coverpkg=./... was previously used here but dropped: every major Go OSS
+      # project (grpc-go, prometheus, consul, etcd, tidb, cockroachdb) tests
+      # without it, and with per-shard package lists it would actively harm Sonar
+      # (each shard would instrument every package but only test its own subset,
+      # producing per-shard profiles with 0% on out-of-shard packages that
+      # would dilute the merged view). Each shard now reports only what it tested.
       - name: Test
-        run: go test -race -coverprofile=coverage.out -coverpkg=./... ./... -count=1 -timeout 5m
+        run: go test ${{ matrix.race && '-race' || '' }} -covermode=atomic -coverprofile=coverage-shard-${{ matrix.shard }}.out ${{ matrix.pkgs }} -count=1 -timeout 5m
 
       - name: Validate metadata
+        if: matrix.static_checks
         run: go run ./cmd/gocell validate
 
       - name: Check contract health
+        if: matrix.static_checks
         run: go run ./cmd/gocell check contract-health
 
       # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
       # The main `gocell validate` step above already covers it.
 
       - name: Check layering — examples no internal imports
+        if: matrix.static_checks
         run: |
           if grep -rn --include='*.go' "github.com/ghbvf/gocell/cells/.*/internal" examples/ 2>/dev/null; then
             echo "FAIL: examples/ imports root cells/*/internal/"
@@ -92,11 +148,12 @@ jobs:
           echo "PASS: no internal import violations"
 
       # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
-      # deliberately — it is not a duplicate of the Test step. The Test step
-      # uses `-coverpkg=./...` whose merged profile loses per-package fidelity
-      # (cells/adapters test binaries dilute kernel counts). The gate needs
-      # in-package kernel coverage, which requires a standalone run.
+      # deliberately — it is not a duplicate of the Test step. The gate requires
+      # in-package kernel coverage (each package's tests of itself), while the
+      # kernel-shard Test step produces a merged profile that does not split
+      # per-package. Running standalone avoids having to slice the profile.
       - name: Kernel coverage gate
+        if: matrix.static_checks
         run: |
           go test -cover ./kernel/... 2>&1 | tee /tmp/kernel-cov.txt
           awk '
@@ -123,8 +180,8 @@ jobs:
       - name: Upload coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: coverage-profile
-          path: coverage.out
+          name: coverage-shard-${{ matrix.shard }}
+          path: coverage-shard-${{ matrix.shard }}.out
           retention-days: 1
 
   integration-test:
@@ -157,10 +214,11 @@ jobs:
         # (changepassword_e2e_test.go) that exercises the real AuthMiddleware.
         # runtime/bootstrap carries lifecycle_integration_test.go (HookStartStop
         # ordering + LIFO rollback precision probes); without this path the
-        # //go:build integration file silently never compiles in CI, masking
-        # regressions (exactly how the package-declaration break this PR fixes
-        # stayed invisible — the test was never built).
-        run: go test -tags=integration -coverprofile=coverage-integration.out -coverpkg=./... ./adapters/... ./tests/integration/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+        # //go:build integration file silently never compiles in CI.
+        # -coverpkg removed to match per-shard unit test profile semantics —
+        # each run only reports coverage for the packages it tested, avoiding
+        # per-file dilution in the merged Sonar view.
+        run: go test -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -226,10 +284,15 @@ jobs:
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
 
-      - name: Download unit coverage profile
+      # Downloads all per-shard unit coverage artifacts into the workspace
+      # root (merge-multiple: true flattens shard-keyed directories). Each
+      # artifact contains exactly one file `coverage-shard-<shard>.out`; names
+      # do not collide because each shard's output path is unique.
+      - name: Download unit coverage profiles (all shards)
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: coverage-profile
+          pattern: coverage-shard-*
+          merge-multiple: true
 
       - name: Download integration coverage profile
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -237,11 +300,23 @@ jobs:
           name: coverage-integration-profile
 
       - name: Merge coverage profiles
+        # All profiles use `-covermode=atomic` so the single header emitted
+        # here is compatible with every shard + integration data block. We
+        # strip every input file's first line (`mode: ...`) and prepend one
+        # header. The list is deterministic (globbed at `set -u` time with
+        # a known shard set) so partial glob expansion cannot silently drop
+        # a shard.
         run: |
-          # Concatenate: keep header from unit profile, append data lines from
-          # integration profile (skip the "mode:" header line to avoid duplicate).
-          cat coverage.out > coverage-merged.out
-          tail -n +2 coverage-integration.out >> coverage-merged.out
+          set -euo pipefail
+          echo "mode: atomic" > coverage-merged.out
+          for f in coverage-shard-kernel.out coverage-shard-runtime.out coverage-shard-cells.out coverage-shard-others.out coverage-integration.out; do
+            if [ ! -f "$f" ]; then
+              echo "FAIL: expected profile $f is missing" >&2
+              exit 1
+            fi
+            tail -n +2 "$f" >> coverage-merged.out
+          done
+          echo "merged profile has $(wc -l < coverage-merged.out) lines from $(ls coverage-shard-*.out coverage-integration.out | wc -l) source profiles"
 
       - name: Cache SonarQube packages
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
