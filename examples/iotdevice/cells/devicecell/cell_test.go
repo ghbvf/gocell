@@ -25,7 +25,6 @@ import (
 func newTestCell() *DeviceCell {
 	return NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 		WithPublisher(eventbus.New()),
 	)
 }
@@ -104,7 +103,6 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	// No publisher injected; Init should fail-fast (NIL-PUB-P1).
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
@@ -309,7 +307,6 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 		WithPublisher(eventbus.New()),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
@@ -327,7 +324,6 @@ func TestDeviceCell_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 		WithPublisher(failingPublisher{}),
 		WithCursorCodec(newTestCursorCodec(t)),
 	)
@@ -348,7 +344,6 @@ func TestDeviceCell_DurableMode_RegisterPublishFailureReturnsCreated(t *testing.
 func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) {
 	c := NewDeviceCell(
 		WithDeviceRepository(mem.NewDeviceRepository()),
-		WithCommandRepository(mem.NewCommandRepository()),
 		WithPublisher(failingPublisher{}),
 	)
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{

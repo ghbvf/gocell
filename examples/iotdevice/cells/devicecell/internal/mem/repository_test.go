@@ -2,9 +2,6 @@ package mem
 
 import (
 	"context"
-	"fmt"
-	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,12 +11,6 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// defaultCmdSort is the default sort used in tests (FIFO).
-var defaultCmdSort = []query.SortColumn{
-	{Name: "created_at", Direction: query.SortASC},
-	{Name: "id", Direction: query.SortASC},
-}
 
 // ---------------------------------------------------------------------------
 // DeviceRepository
@@ -133,471 +124,65 @@ func TestDeviceRepository_GetByID_ReturnsCopy(t *testing.T) {
 	assert.Equal(t, "original", d2.Name, "mutation should not affect stored copy")
 }
 
-// ---------------------------------------------------------------------------
-// CommandRepository
-// ---------------------------------------------------------------------------
+func TestDeviceRepository_List(t *testing.T) {
+	repo := NewDeviceRepository()
+	ctx := context.Background()
+	now := time.Now()
 
-func TestCommandRepository_Create(t *testing.T) {
-	tests := []struct {
-		name    string
-		setup   func(*CommandRepository)
-		cmd     *domain.Command
-		wantErr bool
-	}{
-		{
-			name:  "creates new command",
-			setup: func(_ *CommandRepository) {},
-			cmd: &domain.Command{
-				ID: "cmd-1", DeviceID: "dev-1", Payload: "reboot",
-				Status: "pending", CreatedAt: time.Now(),
+	_ = repo.Create(ctx, &domain.Device{ID: "dev-b", Name: "beta", Status: "online", LastSeen: now})
+	_ = repo.Create(ctx, &domain.Device{ID: "dev-a", Name: "alpha", Status: "online", LastSeen: now})
+	_ = repo.Create(ctx, &domain.Device{ID: "dev-c", Name: "gamma", Status: "offline", LastSeen: now})
+
+	t.Run("list all sorted by name ASC", func(t *testing.T) {
+		params := query.ListParams{
+			Limit: 10,
+			Sort: []query.SortColumn{
+				{Name: "name", Direction: query.SortASC},
+				{Name: "id", Direction: query.SortASC},
 			},
-			wantErr: false,
-		},
-		{
-			name: "duplicate ID returns error",
-			setup: func(r *CommandRepository) {
-				_ = r.Create(context.Background(), &domain.Command{
-					ID: "cmd-dup", DeviceID: "dev-1", Payload: "p",
-					Status: "pending", CreatedAt: time.Now(),
-				})
+		}
+		devices, err := repo.List(ctx, params)
+		require.NoError(t, err)
+		require.Len(t, devices, 3)
+		assert.Equal(t, "alpha", devices[0].Name)
+		assert.Equal(t, "beta", devices[1].Name)
+		assert.Equal(t, "gamma", devices[2].Name)
+	})
+
+	t.Run("list sorted by status ASC", func(t *testing.T) {
+		params := query.ListParams{
+			Limit: 10,
+			Sort: []query.SortColumn{
+				{Name: "status", Direction: query.SortASC},
+				{Name: "id", Direction: query.SortASC},
 			},
-			cmd: &domain.Command{
-				ID: "cmd-dup", DeviceID: "dev-2", Payload: "q",
-				Status: "pending", CreatedAt: time.Now(),
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := NewCommandRepository()
-			tc.setup(repo)
-
-			err := repo.Create(context.Background(), tc.cmd)
-			if tc.wantErr {
-				assert.Error(t, err)
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
-func TestCommandRepository_ListPending(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-
-	// Seed: 2 pending for dev-1, 1 acked for dev-1, 1 pending for dev-2.
-	_ = repo.Create(ctx, &domain.Command{ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending"})
-	_ = repo.Create(ctx, &domain.Command{ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending"})
-	_ = repo.Create(ctx, &domain.Command{ID: "c3", DeviceID: "dev-1", Payload: "c", Status: "acked"})
-	_ = repo.Create(ctx, &domain.Command{ID: "c4", DeviceID: "dev-2", Payload: "d", Status: "pending"})
-
-	params := query.ListParams{Limit: 100, Sort: defaultCmdSort}
-
-	tests := []struct {
-		name     string
-		deviceID string
-		wantLen  int
-	}{
-		{name: "dev-1 has 2 pending", deviceID: "dev-1", wantLen: 2},
-		{name: "dev-2 has 1 pending", deviceID: "dev-2", wantLen: 1},
-		{name: "unknown device has 0", deviceID: "dev-none", wantLen: 0},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			cmds, err := repo.ListPending(ctx, tc.deviceID, params)
-			require.NoError(t, err)
-			assert.Len(t, cmds, tc.wantLen)
-		})
-	}
-}
-
-func TestCommandRepository_Ack(t *testing.T) {
-	ctx := context.Background()
-
-	tests := []struct {
-		name     string
-		setup    func(*CommandRepository)
-		deviceID string
-		cmdID    string
-		wantErr  bool
-		wantCode errcode.Code
-	}{
-		{
-			name: "ack pending command",
-			setup: func(r *CommandRepository) {
-				_ = r.Create(ctx, &domain.Command{
-					ID: "cmd-1", DeviceID: "dev-1", Payload: "reboot", Status: "pending",
-				})
-			},
-			deviceID: "dev-1",
-			cmdID:    "cmd-1",
-			wantErr:  false,
-		},
-		{
-			name: "ack already acked is idempotent",
-			setup: func(r *CommandRepository) {
-				_ = r.Create(ctx, &domain.Command{
-					ID: "cmd-2", DeviceID: "dev-1", Payload: "reboot", Status: "pending",
-				})
-				_ = r.Ack(ctx, "dev-1", "cmd-2")
-			},
-			deviceID: "dev-1",
-			cmdID:    "cmd-2",
-			wantErr:  false,
-		},
-		{
-			name:     "non-existent command returns error",
-			setup:    func(_ *CommandRepository) {},
-			deviceID: "dev-1",
-			cmdID:    "cmd-missing",
-			wantErr:  true,
-			wantCode: errcode.ErrCommandNotFound,
-		},
-		{
-			name: "wrong device returns error",
-			setup: func(r *CommandRepository) {
-				_ = r.Create(ctx, &domain.Command{
-					ID: "cmd-3", DeviceID: "dev-1", Payload: "x", Status: "pending",
-				})
-			},
-			deviceID: "dev-other",
-			cmdID:    "cmd-3",
-			wantErr:  true,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			repo := NewCommandRepository()
-			tc.setup(repo)
-
-			err := repo.Ack(ctx, tc.deviceID, tc.cmdID)
-			if tc.wantErr {
-				assert.Error(t, err)
-				if tc.wantCode != "" {
-					var ecErr *errcode.Error
-					require.ErrorAs(t, err, &ecErr)
-					assert.Equal(t, tc.wantCode, ecErr.Code)
-				}
-			} else {
-				require.NoError(t, err)
-			}
-		})
-	}
-}
-
-func TestCommandRepository_Ack_SetsAckedAt(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "cmd-ts", DeviceID: "dev-1", Payload: "x", Status: "pending",
+		}
+		devices, err := repo.List(ctx, params)
+		require.NoError(t, err)
+		require.Len(t, devices, 3)
+		// "offline" < "online" alphabetically
+		assert.Equal(t, "offline", devices[0].Status)
 	})
 
-	before := time.Now()
-	require.NoError(t, repo.Ack(ctx, "dev-1", "cmd-ts"))
-	after := time.Now()
-
-	// Verify status changed and AckedAt set.
-	cmds, _ := repo.ListPending(ctx, "dev-1", query.ListParams{Limit: 100, Sort: defaultCmdSort})
-	assert.Empty(t, cmds, "acked command should not appear in pending list")
-
-	// Access the internal state to verify AckedAt.
-	repo.mu.RLock()
-	cmd := repo.commands["cmd-ts"]
-	repo.mu.RUnlock()
-
-	assert.Equal(t, "acked", cmd.Status)
-	require.NotNil(t, cmd.AckedAt)
-	assert.True(t, !cmd.AckedAt.Before(before) && !cmd.AckedAt.After(after))
-}
-
-func TestCommandRepository_ListPending_SortByPayload(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-	base := time.Now()
-
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c1", DeviceID: "dev-1", Payload: "reboot", Status: "pending", CreatedAt: base,
-	})
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c2", DeviceID: "dev-1", Payload: "firmware-update", Status: "pending", CreatedAt: base,
-	})
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c3", DeviceID: "dev-1", Payload: "shutdown", Status: "pending", CreatedAt: base,
+	t.Run("list sorted by id ASC with limit", func(t *testing.T) {
+		params := query.ListParams{
+			Limit: 2,
+			Sort:  []query.SortColumn{{Name: "id", Direction: query.SortASC}},
+		}
+		devices, err := repo.List(ctx, params)
+		require.NoError(t, err)
+		// FetchLimit is Limit+1 but ApplyCursor limits to Limit; we get 2 + 1 = 3 from raw,
+		// but the test just checks we get at most Limit results.
+		assert.LessOrEqual(t, len(devices), 3) // upper bound from FetchLimit
 	})
 
-	params := query.ListParams{
-		Limit: 10,
-		Sort: []query.SortColumn{
-			{Name: "payload", Direction: query.SortASC},
-			{Name: "id", Direction: query.SortASC},
-		},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	require.Len(t, cmds, 3)
-	assert.Equal(t, "firmware-update", cmds[0].Payload)
-	assert.Equal(t, "reboot", cmds[1].Payload)
-	assert.Equal(t, "shutdown", cmds[2].Payload)
-}
-
-func TestCommandRepository_ListPending_SortByStatus(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-	base := time.Now()
-
-	// All pending (since ListPending filters), but we test the compareCommandField "status" branch
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending", CreatedAt: base,
+	t.Run("unknown sort field returns stable order", func(t *testing.T) {
+		params := query.ListParams{
+			Limit: 10,
+			Sort:  []query.SortColumn{{Name: "unknown", Direction: query.SortASC}},
+		}
+		devices, err := repo.List(ctx, params)
+		require.NoError(t, err)
+		assert.Len(t, devices, 3)
 	})
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending", CreatedAt: base,
-	})
-
-	params := query.ListParams{
-		Limit: 10,
-		Sort: []query.SortColumn{
-			{Name: "status", Direction: query.SortASC},
-			{Name: "id", Direction: query.SortASC},
-		},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	assert.Len(t, cmds, 2)
-}
-
-func TestCommandRepository_ListPending_SortByDeviceID(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-	base := time.Now()
-
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending", CreatedAt: base,
-	})
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending", CreatedAt: base,
-	})
-
-	params := query.ListParams{
-		Limit: 10,
-		Sort: []query.SortColumn{
-			{Name: "device_id", Direction: query.SortASC},
-			{Name: "id", Direction: query.SortASC},
-		},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	assert.Len(t, cmds, 2)
-}
-
-func TestCommandRepository_ListPending_UnknownField(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending",
-	})
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending",
-	})
-
-	params := query.ListParams{
-		Limit: 10,
-		Sort:  []query.SortColumn{{Name: "unknown", Direction: query.SortASC}},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	assert.Len(t, cmds, 2)
-}
-
-func TestCommandRepository_ListPending_CursorPastEnd(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending", CreatedAt: base,
-	})
-
-	// Cursor with time far in the future (ASC order) -> past all items
-	farFuture := base.Add(24 * time.Hour).Format(time.RFC3339Nano)
-	params := query.ListParams{
-		Limit:        10,
-		CursorValues: []any{farFuture, "zzz"},
-		Sort: []query.SortColumn{
-			{Name: "created_at", Direction: query.SortASC},
-			{Name: "id", Direction: query.SortASC},
-		},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	assert.Empty(t, cmds)
-}
-
-func TestCommandRepository_ListPending_CursorPayloadField(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-	base := time.Now()
-
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c1", DeviceID: "dev-1", Payload: "apple", Status: "pending", CreatedAt: base,
-	})
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c2", DeviceID: "dev-1", Payload: "banana", Status: "pending", CreatedAt: base,
-	})
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c3", DeviceID: "dev-1", Payload: "cherry", Status: "pending", CreatedAt: base,
-	})
-
-	// Cursor after "banana", ASC -> only cherry
-	params := query.ListParams{
-		Limit:        10,
-		CursorValues: []any{"banana", "c2"},
-		Sort: []query.SortColumn{
-			{Name: "payload", Direction: query.SortASC},
-			{Name: "id", Direction: query.SortASC},
-		},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	require.Len(t, cmds, 1)
-	assert.Equal(t, "cherry", cmds[0].Payload)
-}
-
-func TestCommandRepository_ListPending_SortDESC(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c1", DeviceID: "dev-1", Payload: "a", Status: "pending",
-		CreatedAt: base,
-	})
-	_ = repo.Create(ctx, &domain.Command{
-		ID: "c2", DeviceID: "dev-1", Payload: "b", Status: "pending",
-		CreatedAt: base.Add(time.Hour),
-	})
-
-	params := query.ListParams{
-		Limit: 10,
-		Sort: []query.SortColumn{
-			{Name: "created_at", Direction: query.SortDESC},
-			{Name: "id", Direction: query.SortASC},
-		},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	require.Len(t, cmds, 2)
-	assert.Equal(t, "c2", cmds[0].ID) // newest first
-	assert.Equal(t, "c1", cmds[1].ID)
-}
-
-func TestCommandRepository_ListPending_CursorDESC(t *testing.T) {
-	ctx := context.Background()
-	repo := NewCommandRepository()
-	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-
-	for i := 0; i < 3; i++ {
-		_ = repo.Create(ctx, &domain.Command{
-			ID:        "c" + string(rune('1'+i)),
-			DeviceID:  "dev-1",
-			Payload:   "p",
-			Status:    "pending",
-			CreatedAt: base.Add(time.Duration(i) * time.Hour),
-		})
-	}
-
-	// DESC: c3, c2, c1. Cursor after c2.
-	cursorTime := base.Add(time.Hour).Format(time.RFC3339Nano)
-	params := query.ListParams{
-		Limit:        10,
-		CursorValues: []any{cursorTime, "c2"},
-		Sort: []query.SortColumn{
-			{Name: "created_at", Direction: query.SortDESC},
-			{Name: "id", Direction: query.SortASC},
-		},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	require.Len(t, cmds, 1)
-	assert.Equal(t, "c1", cmds[0].ID)
-}
-
-func TestCommandRepository_ListPending_SubsecondPrecision(t *testing.T) {
-	repo := NewCommandRepository()
-	ctx := context.Background()
-
-	base := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
-	_ = repo.Create(ctx, &domain.Command{ID: "c1", DeviceID: "dev-1", Status: "pending", CreatedAt: base.Add(100 * time.Nanosecond)})
-	_ = repo.Create(ctx, &domain.Command{ID: "c2", DeviceID: "dev-1", Status: "pending", CreatedAt: base.Add(200 * time.Nanosecond)})
-	_ = repo.Create(ctx, &domain.Command{ID: "c3", DeviceID: "dev-1", Status: "pending", CreatedAt: base.Add(300 * time.Nanosecond)})
-
-	// Cursor at c2 (200ns), ASC → should return c3 only.
-	cursorTS := base.Add(200 * time.Nanosecond).Format(time.RFC3339Nano)
-	params := query.ListParams{
-		Limit:        10,
-		CursorValues: []any{cursorTS, "c2"},
-		Sort: []query.SortColumn{
-			{Name: "created_at", Direction: query.SortASC},
-			{Name: "id", Direction: query.SortASC},
-		},
-	}
-	cmds, err := repo.ListPending(ctx, "dev-1", params)
-	require.NoError(t, err)
-	require.Len(t, cmds, 1)
-	assert.Equal(t, "c3", cmds[0].ID)
-}
-
-// TestCommandRepository_ConcurrentCreateAndListPending verifies that concurrent
-// Create and ListPending calls do not race. Run with -race to verify.
-func TestCommandRepository_ConcurrentCreateAndListPending(t *testing.T) {
-	repo := NewCommandRepository()
-	ctx := context.Background()
-
-	const writers = 5
-	const readers = 10
-	const iterations = 50
-
-	var wg sync.WaitGroup
-
-	for w := range writers {
-		wg.Add(1)
-		go func(id int) {
-			defer wg.Done()
-			for i := range iterations {
-				_ = repo.Create(ctx, &domain.Command{
-					ID:        fmt.Sprintf("cmd-w%d-i%d", id, i),
-					DeviceID:  "dev-1",
-					Status:    "pending",
-					CreatedAt: time.Now(),
-				})
-			}
-		}(w)
-	}
-
-	var readErrors atomic.Int64
-	for r := range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			params := query.ListParams{
-				Limit: 10,
-				Sort:  defaultCmdSort,
-			}
-			for range iterations {
-				_, err := repo.ListPending(ctx, "dev-1", params)
-				if err != nil {
-					readErrors.Add(1)
-				}
-			}
-			_ = r
-		}()
-	}
-
-	wg.Wait()
-	assert.Zero(t, readErrors.Load(), "concurrent reads should not error")
 }

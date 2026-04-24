@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"sync"
-	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -14,10 +13,7 @@ import (
 )
 
 // Compile-time interface checks.
-var (
-	_ domain.DeviceRepository  = (*DeviceRepository)(nil)
-	_ domain.CommandRepository = (*CommandRepository)(nil)
-)
+var _ domain.DeviceRepository = (*DeviceRepository)(nil)
 
 // DeviceRepository is a thread-safe in-memory device store.
 type DeviceRepository struct {
@@ -101,112 +97,4 @@ func deviceFieldValue(d *domain.Device, field string) any {
 	default:
 		return ""
 	}
-}
-
-// CommandRepository is a thread-safe in-memory command store.
-type CommandRepository struct {
-	mu       sync.RWMutex
-	commands map[string]*domain.Command // keyed by command ID
-}
-
-// NewCommandRepository creates an empty in-memory CommandRepository.
-func NewCommandRepository() *CommandRepository {
-	return &CommandRepository{commands: make(map[string]*domain.Command)}
-}
-
-// Create stores a new command.
-func (r *CommandRepository) Create(_ context.Context, cmd *domain.Command) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	if _, exists := r.commands[cmd.ID]; exists {
-		return errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("command %q already exists", cmd.ID))
-	}
-	stored := *cmd
-	r.commands[cmd.ID] = &stored
-	return nil
-}
-
-// ListPending returns pending commands for the given device, sorted and
-// paginated according to params. It returns up to FetchLimit() rows for
-// N+1 hasMore detection.
-func (r *CommandRepository) ListPending(_ context.Context, deviceID string, params query.ListParams) ([]*domain.Command, error) {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	// Filter by deviceID and pending status.
-	var filtered []*domain.Command
-	for _, cmd := range r.commands {
-		if cmd.DeviceID == deviceID && cmd.Status == "pending" {
-			cp := *cmd
-			filtered = append(filtered, &cp)
-		}
-	}
-
-	query.Sort(filtered, params.Sort, compareCommandField)
-	result, err := query.ApplyCursor(filtered, params, commandFieldValue)
-	if err != nil {
-		return nil, fmt.Errorf("command-repo: list-pending: %w", err)
-	}
-	return result, nil
-}
-
-// compareCommandField compares a single field of two commands.
-func compareCommandField(a, b *domain.Command, field string) int {
-	switch field {
-	case "created_at":
-		return a.CreatedAt.Compare(b.CreatedAt)
-	case "id":
-		return cmp.Compare(a.ID, b.ID)
-	case "device_id":
-		return cmp.Compare(a.DeviceID, b.DeviceID)
-	case "payload":
-		return cmp.Compare(a.Payload, b.Payload)
-	case "status":
-		return cmp.Compare(a.Status, b.Status)
-	default:
-		return 0
-	}
-}
-
-// commandFieldValue extracts a cursor-comparable value from a command.
-func commandFieldValue(cmd *domain.Command, field string) any {
-	switch field {
-	case "created_at":
-		return cmd.CreatedAt
-	case "id":
-		return cmd.ID
-	case "device_id":
-		return cmd.DeviceID
-	case "payload":
-		return cmd.Payload
-	case "status":
-		return cmd.Status
-	default:
-		return ""
-	}
-}
-
-// Ack marks a command as acknowledged.
-func (r *CommandRepository) Ack(_ context.Context, deviceID, cmdID string) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	cmd, ok := r.commands[cmdID]
-	if !ok {
-		return errcode.New(errcode.ErrCommandNotFound,
-			fmt.Sprintf("command %q not found", cmdID))
-	}
-	if cmd.DeviceID != deviceID {
-		return errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("command %q does not belong to device %q", cmdID, deviceID))
-	}
-	if cmd.Status == "acked" {
-		return nil // idempotent
-	}
-	now := time.Now()
-	cmd.Status = "acked"
-	cmd.AckedAt = &now
-	return nil
 }

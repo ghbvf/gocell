@@ -4,37 +4,37 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// CommandResponse is the public DTO for Command, isolating the API contract
-// from the domain model.
-type CommandResponse struct {
-	ID        string     `json:"id"`
-	DeviceID  string     `json:"deviceId"`
-	Payload   string     `json:"payload"`
-	Status    string     `json:"status"`
-	CreatedAt time.Time  `json:"createdAt"`
-	AckedAt   *time.Time `json:"ackedAt,omitempty"`
+// commandResponse is the public DTO for a kernel command.Entry, isolating
+// the API contract from the kernel model.
+type commandResponse struct {
+	ID          string     `json:"id"`
+	DeviceID    string     `json:"deviceId"`
+	CommandType string     `json:"commandType"`
+	Payload     string     `json:"payload"`
+	Status      string     `json:"status"`
+	Attempt     int        `json:"attempt"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	CompletedAt *time.Time `json:"completedAt,omitempty"`
 }
 
-func toCommandResponse(c *domain.Command) CommandResponse {
-	if c == nil {
-		return CommandResponse{}
+func toCommandResponse(e command.Entry) commandResponse {
+	return commandResponse{
+		ID:          e.ID,
+		DeviceID:    e.DeviceID,
+		CommandType: e.CommandType,
+		Payload:     string(e.Payload),
+		Status:      e.Status.String(),
+		Attempt:     e.Attempt,
+		CreatedAt:   e.CreatedAt,
+		CompletedAt: e.CompletedAt,
 	}
-	return CommandResponse{
-		ID: c.ID, DeviceID: c.DeviceID, Payload: c.Payload,
-		Status: c.Status, CreatedAt: c.CreatedAt, AckedAt: c.AckedAt,
-	}
-}
-
-// AckResponse is the public DTO for command acknowledgement.
-type AckResponse struct {
-	Status string `json:"status"`
 }
 
 // Handler provides HTTP endpoints for device commands.
@@ -72,7 +72,8 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 
 // enqueueRequest is the JSON body for POST /api/v1/devices/{id}/commands.
 type enqueueRequest struct {
-	Payload string `json:"payload"`
+	CommandType string `json:"commandType,omitempty"` // optional; defaults to "default"
+	Payload     string `json:"payload"`
 }
 
 // HandleEnqueue handles POST /api/v1/devices/{id}/commands.
@@ -88,13 +89,13 @@ func (h *Handler) HandleEnqueue(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cmd, err := h.svc.Enqueue(r.Context(), deviceID, req.Payload)
+	entry, err := h.svc.Enqueue(r.Context(), deviceID, req.CommandType, req.Payload)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toCommandResponse(cmd)})
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toCommandResponse(entry)})
 }
 
 // HandleListPending handles GET /api/v1/devices/{id}/commands?limit=N&cursor=TOKEN.
@@ -121,9 +122,7 @@ func (h *Handler) HandleListPending(w http.ResponseWriter, r *http.Request) {
 }
 
 // HandleAck handles POST /api/v1/devices/{id}/commands/{cmdId}/ack.
-// Returns a status-only response (not a full CommandResponse) because
-// Ack is a fire-and-forget action — the service does not return the
-// updated entity.
+// Returns the full command DTO with the terminal status after acknowledgement.
 //
 // Trust boundary: subject must match deviceID or hold admin role.
 // Deferred (S43, tracked by PERMISSION-BASED-AUTHZ-01): role-name literals are migrated to permission-based authz when that backlog item lands.
@@ -136,5 +135,13 @@ func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": AckResponse{Status: "acked"}})
+	// Fetch the updated entry to return the terminal state.
+	entry, err := h.svc.queue.GetCommand(r.Context(), cmdID)
+	if err != nil || entry == nil {
+		// Fallback: this should not happen after a successful Ack.
+		httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"status": "succeeded"}})
+		return
+	}
+
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toCommandResponse(*entry)})
 }
