@@ -28,13 +28,21 @@ func (c *AccessCore) initValidate(deps cell.Dependencies) error {
 	// Pass raw c.txRunner so ResolveEmitter can detect nil/noop pairing; wrap
 	// with RunnerOrNoop only after outcome is determined.
 	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:            "accesscore",
-		Mode:              deps.DurabilityMode,
-		Publisher:         c.publisher,
-		OutboxWriter:      c.outboxWriter,
-		TxRunner:          c.txRunner,
-		Logger:            c.logger,
-		DirectPublishMode: outbox.DirectPublishFailOpen,
+		CellID:       "accesscore",
+		Mode:         deps.DurabilityMode,
+		Publisher:    c.publisher,
+		OutboxWriter: c.outboxWriter,
+		TxRunner:     c.txRunner,
+		Logger:       c.logger,
+		// accesscore runs DirectEmitter fail-open under both modes —
+		// session revocation events are rare and dropping a publisher
+		// failure in durable mode matches demo semantics (non-critical sink).
+		// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
+		DirectPublishMode: cell.DirectPublishModeForDurability(
+			deps.DurabilityMode,
+			outbox.DirectPublishFailOpen,
+			outbox.DirectPublishFailOpen,
+		),
 	})
 	if err != nil {
 		return err

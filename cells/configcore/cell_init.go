@@ -43,16 +43,27 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.flagRepo = cellpg.NewFlagRepository(session)
 	}
 
-	runMode, publishFailureMode := c.deriveModes(deps.DurabilityMode)
+	// deriveModes' PublishFailureMode return is retained for TestConfigCore_DeriveModes
+	// (documents the demo→FailOpen / durable→FailClosed derivation at slice level);
+	// the Cell-boundary DirectEmitter fail mode is now owned by the kernel helper.
+	runMode, _ := c.deriveModes(deps.DurabilityMode)
 
 	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:            "configcore",
-		Mode:              deps.DurabilityMode,
-		Publisher:         c.publisher,
-		OutboxWriter:      c.outboxWriter,
-		TxRunner:          c.txRunner,
-		Logger:            c.logger,
-		DirectPublishMode: configDirectPublishMode(publishFailureMode),
+		CellID:       "configcore",
+		Mode:         deps.DurabilityMode,
+		Publisher:    c.publisher,
+		OutboxWriter: c.outboxWriter,
+		TxRunner:     c.txRunner,
+		Logger:       c.logger,
+		// configcore: demo → fail-open (tolerate missing subscribers during
+		// local development); durable → fail-closed (config changes must
+		// propagate or the write fails, so operators notice misconfig).
+		// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
+		DirectPublishMode: cell.DirectPublishModeForDurability(
+			deps.DurabilityMode,
+			outbox.DirectPublishFailOpen,
+			outbox.DirectPublishFailClosed,
+		),
 	})
 	if err != nil {
 		return err
@@ -99,13 +110,6 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunMode, configpublish.PublishFailureMode) {
 	demo := durabilityMode == cell.DurabilityDemo
 	return query.RunModeForDemo(demo), configpublish.PublishFailureModeForDemo(demo)
-}
-
-func configDirectPublishMode(mode configpublish.PublishFailureMode) outbox.DirectPublishFailureMode {
-	if mode.IsFailOpen() {
-		return outbox.DirectPublishFailOpen
-	}
-	return outbox.DirectPublishFailClosed
 }
 
 // ensureCursorCodec sets a default cursor codec in demo mode or returns an

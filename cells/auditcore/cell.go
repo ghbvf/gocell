@@ -129,13 +129,21 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:            "auditcore",
-		Mode:              deps.DurabilityMode,
-		Publisher:         c.publisher,
-		OutboxWriter:      c.outboxWriter,
-		TxRunner:          c.txRunner,
-		Logger:            c.logger,
-		DirectPublishMode: outbox.DirectPublishFailOpen,
+		CellID:       "auditcore",
+		Mode:         deps.DurabilityMode,
+		Publisher:    c.publisher,
+		OutboxWriter: c.outboxWriter,
+		TxRunner:     c.txRunner,
+		Logger:       c.logger,
+		// auditcore runs DirectEmitter fail-open under both modes — audit
+		// events are reconcile-replayable (append-only log is the source of
+		// truth), so dropping a publisher failure is acceptable.
+		// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
+		DirectPublishMode: cell.DirectPublishModeForDurability(
+			deps.DurabilityMode,
+			outbox.DirectPublishFailOpen,
+			outbox.DirectPublishFailOpen,
+		),
 	})
 	if err != nil {
 		return err

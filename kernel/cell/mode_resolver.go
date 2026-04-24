@@ -123,3 +123,24 @@ func isNooperDep(dep any) bool {
 	n, ok := dep.(Nooper)
 	return ok && n.Noop()
 }
+
+// DirectPublishModeForDurability picks the DirectPublishFailureMode a Cell
+// should request from its DirectEmitter based on durability intent. Durable
+// mode returns durablePolicy; demo (and any unknown mode) returns demoPolicy.
+//
+// Centralizes the translation that accesscore/auditcore previously hard-coded
+// inline and configcore expressed via a per-cell helper, so all three cells
+// share one semantic: "demo uses demoPolicy; durable uses durablePolicy"
+// comes from a single implementation.
+//
+// ref: kernel/cell.ResolveEmitter — consumes the resulting fail mode.
+func DirectPublishModeForDurability(
+	mode DurabilityMode,
+	demoPolicy outbox.DirectPublishFailureMode,
+	durablePolicy outbox.DirectPublishFailureMode,
+) outbox.DirectPublishFailureMode {
+	if mode == DurabilityDurable {
+		return durablePolicy
+	}
+	return demoPolicy
+}

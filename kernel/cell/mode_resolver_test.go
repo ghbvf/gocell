@@ -213,3 +213,61 @@ func TestResolveEmitter(t *testing.T) {
 		})
 	}
 }
+
+// TestDirectPublishModeForDurability covers the 4-case policy selection table
+// for the DirectPublishMode helper. The helper centralizes the demo-vs-durable
+// branching that accesscore/auditcore/configcore previously encoded inline.
+//
+// ref: PR-A5c F2 / A5a-R4 DIRECTPUBLISHMODE-HELPER-DOWNSTREAM-01.
+func TestDirectPublishModeForDurability(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		mode          cell.DurabilityMode
+		demoPolicy    outbox.DirectPublishFailureMode
+		durablePolicy outbox.DirectPublishFailureMode
+		want          outbox.DirectPublishFailureMode
+	}{
+		{
+			name:          "demo_picks_demo_policy_failopen",
+			mode:          cell.DurabilityDemo,
+			demoPolicy:    outbox.DirectPublishFailOpen,
+			durablePolicy: outbox.DirectPublishFailClosed,
+			want:          outbox.DirectPublishFailOpen,
+		},
+		{
+			name:          "demo_picks_demo_policy_failclosed",
+			mode:          cell.DurabilityDemo,
+			demoPolicy:    outbox.DirectPublishFailClosed,
+			durablePolicy: outbox.DirectPublishFailOpen,
+			want:          outbox.DirectPublishFailClosed,
+		},
+		{
+			name:          "durable_picks_durable_policy_failclosed",
+			mode:          cell.DurabilityDurable,
+			demoPolicy:    outbox.DirectPublishFailOpen,
+			durablePolicy: outbox.DirectPublishFailClosed,
+			want:          outbox.DirectPublishFailClosed,
+		},
+		{
+			name:          "durable_picks_durable_policy_failopen",
+			mode:          cell.DurabilityDurable,
+			demoPolicy:    outbox.DirectPublishFailClosed,
+			durablePolicy: outbox.DirectPublishFailOpen,
+			want:          outbox.DirectPublishFailOpen,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := cell.DirectPublishModeForDurability(tc.mode, tc.demoPolicy, tc.durablePolicy)
+			if got != tc.want {
+				t.Fatalf("DirectPublishModeForDurability(%v,%v,%v): got %v, want %v",
+					tc.mode, tc.demoPolicy, tc.durablePolicy, got, tc.want)
+			}
+		})
+	}
+}
