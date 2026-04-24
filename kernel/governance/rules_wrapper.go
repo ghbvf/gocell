@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -42,14 +43,20 @@ const (
 
 // contractSpecLiteral captures a parsed wrapper.ContractSpec{...} literal
 // or wrapper.EventSpec(...) call from a source file scan.
+//
+// When the scanner finds an invocation whose key fields cannot be resolved
+// to string literals (e.g. `wrapper.EventSpec(computeID(), ...)`), it
+// records a literal with unresolved=true. The validation path surfaces
+// such entries as visible warnings so the coverage gap is never silent.
 type contractSpecLiteral struct {
-	file   string
-	line   int
-	id     string
-	kind   string
-	method string
-	path   string
-	topic  string
+	file       string
+	line       int
+	id         string
+	kind       string
+	method     string
+	path       string
+	topic      string
+	unresolved bool
 }
 
 // wrapperVarDeclRe is used by FMT-19 only (line-based scan is sufficient
@@ -85,6 +92,15 @@ func (v *Validator) validateFMT18(strict bool) []ValidationResult {
 }
 
 func (v *Validator) validateContractSpecLiteral(lit contractSpecLiteral) []ValidationResult {
+	if lit.unresolved {
+		return []ValidationResult{v.newResult(codeFMT18, SeverityError, IssueInvalid,
+			lit.file, "",
+			fmt.Sprintf("FMT-18: %s:%d wrapper.EventSpec/ContractSpec argument could not be "+
+				"resolved to a string literal — FMT-18 cannot cross-check against "+
+				"contracts/**/contract.yaml. Use a string literal or a package-level "+
+				"const in the same file.",
+				lit.file, lit.line))}
+	}
 	if lit.id == "" {
 		return nil
 	}
@@ -173,23 +189,48 @@ func scanContractSpecFile(fset *token.FileSet, path string) ([]contractSpecLiter
 	if err != nil {
 		return nil, err
 	}
+	wrapperAlias, ok := wrapperImportAlias(file)
+	if !ok {
+		// File does not import kernel/wrapper, so it cannot contain any
+		// ContractSpec literal or EventSpec call worth scanning.
+		return nil, nil
+	}
 	consts := collectPackageStringConsts(file)
 
 	var out []contractSpecLiteral
 	ast.Inspect(file, func(n ast.Node) bool {
 		switch expr := n.(type) {
 		case *ast.CompositeLit:
-			if lit, ok := parseContractSpecCompositeLit(fset, path, expr, consts); ok {
+			if lit, ok := parseContractSpecCompositeLit(fset, path, expr, consts, wrapperAlias); ok {
 				out = append(out, lit)
 			}
 		case *ast.CallExpr:
-			if lit, ok := parseEventSpecCallExpr(fset, path, expr, consts); ok {
+			if lit, ok := parseEventSpecCallExpr(fset, path, expr, consts, wrapperAlias); ok {
 				out = append(out, lit)
 			}
 		}
 		return true
 	})
 	return out, nil
+}
+
+// wrapperImportAlias resolves the local name a file uses to reference
+// github.com/ghbvf/gocell/kernel/wrapper. Returns ok=false when the file
+// does not import the package. Honours explicit aliases
+// (`import kw "..../kernel/wrapper"` → "kw"), the default short name
+// ("wrapper"), and dot-imports (".").
+func wrapperImportAlias(file *ast.File) (string, bool) {
+	const wrapperPkgPath = `"github.com/ghbvf/gocell/kernel/wrapper"`
+	for _, imp := range file.Imports {
+		if imp.Path == nil || imp.Path.Value != wrapperPkgPath {
+			continue
+		}
+		if imp.Name != nil {
+			return imp.Name.Name, true
+		}
+		return "wrapper", true
+	}
+	return "", false
 }
 
 // collectPackageStringConsts returns package-level `const name = "..."`
@@ -231,51 +272,35 @@ func collectValueSpec(vs *ast.ValueSpec, consts map[string]string) {
 }
 
 // stringLiteralValue returns the unescaped string value if expr is a STRING
-// BasicLit, otherwise ok=false.
+// BasicLit, otherwise ok=false. Delegates to strconv.Unquote so both
+// double-quoted ("…") and backtick raw (`…`) forms with full Go escape
+// semantics are handled consistently.
 func stringLiteralValue(expr ast.Expr) (string, bool) {
 	lit, ok := expr.(*ast.BasicLit)
 	if !ok || lit.Kind != token.STRING {
 		return "", false
 	}
-	s, err := strconvUnquote(lit.Value)
+	s, err := strconv.Unquote(lit.Value)
 	if err != nil {
 		return "", false
 	}
 	return s, true
 }
 
-// strconvUnquote mirrors strconv.Unquote for string literals but lives here
-// to keep the kernel import list minimal (go/parser already pulls strconv
-// transitively, so this is about code locality, not dep size).
-func strconvUnquote(raw string) (string, error) {
-	if len(raw) < 2 {
-		return "", fmt.Errorf("not a quoted string: %q", raw)
-	}
-	q := raw[0]
-	if q != raw[len(raw)-1] {
-		return "", fmt.Errorf("mismatched quote: %q", raw)
-	}
-	inner := raw[1 : len(raw)-1]
-	// For our purposes Go source is restricted to simple ASCII in contract
-	// IDs / paths — unescape the three common cases, fall back to raw for
-	// anything else.
-	inner = strings.ReplaceAll(inner, `\"`, `"`)
-	inner = strings.ReplaceAll(inner, `\\`, `\`)
-	inner = strings.ReplaceAll(inner, `\n`, "\n")
-	return inner, nil
-}
-
 // parseContractSpecCompositeLit extracts a contractSpecLiteral from a
 // `wrapper.ContractSpec{...}` composite literal, returning ok=false for any
 // other composite literal. Field values are resolved through the supplied
 // consts map so `Path: pathUserByID` is equivalent to a string literal.
+// wrapperAlias is the local name the file uses to reference kernel/wrapper
+// (resolved via wrapperImportAlias).
 func parseContractSpecCompositeLit(
 	fset *token.FileSet,
 	filePath string,
 	expr *ast.CompositeLit,
 	consts map[string]string,
+	wrapperAlias string,
 ) (contractSpecLiteral, bool) {
-	if !isWrapperSelector(expr.Type, "ContractSpec") {
+	if !isWrapperSelector(expr.Type, "ContractSpec", wrapperAlias) {
 		return contractSpecLiteral{}, false
 	}
 	lit := contractSpecLiteral{
@@ -316,35 +341,53 @@ func parseContractSpecCompositeLit(
 // parseEventSpecCallExpr extracts a contractSpecLiteral from a
 // `wrapper.EventSpec(id, transport)` call. Kind is synthesised as "event"
 // and Topic == id by construction (the helper enforces id==topic).
+//
+// When the ID argument is not a string literal or resolvable local const
+// (e.g. a cross-package const, a function call, or an unknown identifier),
+// the scanner records a literal with id="" AND unresolved=true so the
+// validation path can surface a visible warning instead of silently
+// dropping the call from FMT-18's coverage.
 func parseEventSpecCallExpr(
 	fset *token.FileSet,
 	filePath string,
 	expr *ast.CallExpr,
 	consts map[string]string,
+	wrapperAlias string,
 ) (contractSpecLiteral, bool) {
-	if !isWrapperSelector(expr.Fun, "EventSpec") {
+	if !isWrapperSelector(expr.Fun, "EventSpec", wrapperAlias) {
 		return contractSpecLiteral{}, false
 	}
 	if len(expr.Args) < 1 {
 		return contractSpecLiteral{}, false
 	}
-	id, ok := resolveStringValue(expr.Args[0], consts)
-	if !ok {
-		return contractSpecLiteral{}, false
+	pos := fset.Position(expr.Pos()).Line
+	id, resolved := resolveStringValue(expr.Args[0], consts)
+	if !resolved {
+		return contractSpecLiteral{
+			file:       filePath,
+			line:       pos,
+			kind:       "event",
+			unresolved: true,
+		}, true
 	}
 	return contractSpecLiteral{
 		file:  filePath,
-		line:  fset.Position(expr.Pos()).Line,
+		line:  pos,
 		id:    id,
 		kind:  "event",
 		topic: id,
 	}, true
 }
 
-// isWrapperSelector reports whether expr is a `wrapper.<name>` selector
-// expression. Accepts both the import alias "wrapper" and the full package
-// name `wrapper` (Go's default import alias), which is all our cells use.
-func isWrapperSelector(expr ast.Expr, name string) bool {
+// isWrapperSelector reports whether expr is a `<wrapperAlias>.<name>`
+// selector expression. wrapperAlias is the local name the enclosing file
+// binds to the kernel/wrapper import (resolved via wrapperImportAlias).
+// Dot-imports bypass the selector form entirely; they are unsupported by
+// this scanner and will produce neither false positives nor coverage.
+func isWrapperSelector(expr ast.Expr, name, wrapperAlias string) bool {
+	if wrapperAlias == "" || wrapperAlias == "." {
+		return false
+	}
 	sel, ok := expr.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -353,7 +396,7 @@ func isWrapperSelector(expr ast.Expr, name string) bool {
 	if !ok {
 		return false
 	}
-	return pkg.Name == "wrapper" && sel.Sel.Name == name
+	return pkg.Name == wrapperAlias && sel.Sel.Name == name
 }
 
 // resolveStringValue unwraps an expression to a string value. Supports:
@@ -475,6 +518,23 @@ func isCompileTimeInterfaceCheck(line string) bool {
 	return strings.HasPrefix(line, "var _ ") || strings.HasPrefix(line, "var _\t")
 }
 
+// fmt19KnownValueTypes lists kernel/wrapper types whose package-level
+// declarations FMT-19 considers harmless (struct values + named scalars
+// that are safe to expose as immutable sentinels). Shared as a
+// package-level var so the FMT-19 hot path does not re-allocate the map
+// on every line it inspects.
+var fmt19KnownValueTypes = map[string]bool{
+	"Attr":          true,
+	"ContractSpec":  true,
+	"Disposition":   true,
+	"Entry":         true,
+	"HandleResult":  true,
+	"NoopTracer":    true,
+	"StatusCode":    true,
+	"ConsumerFunc":  true,
+	"ErrorRedactor": true,
+}
+
 // isInterfaceOrPointerType is a shallow classifier — pointers by leading
 // '*', interfaces by capitalised identifier not in the known-struct
 // allowlist. Used only by FMT-19 to decide whether a package-level var
@@ -487,16 +547,5 @@ func isInterfaceOrPointerType(typ string) bool {
 	if strings.HasPrefix(typ, "*") {
 		return true
 	}
-	known := map[string]bool{
-		"Attr":          true,
-		"ContractSpec":  true,
-		"Disposition":   true,
-		"Entry":         true,
-		"HandleResult":  true,
-		"NoopTracer":    true,
-		"StatusCode":    true,
-		"ConsumerFunc":  true,
-		"ErrorRedactor": true,
-	}
-	return !known[typ]
+	return !fmt19KnownValueTypes[typ]
 }

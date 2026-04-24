@@ -112,6 +112,54 @@ func TestTestMux_DeclareAuthMeta_RecordsOnRoot(t *testing.T) {
 // forward DeclareAuthMeta to the root with the full composed path.
 // Mirrors the nested-prefix regression pattern in
 // runtime/http/router/router_authmeta_test.go.
+// TestTestMux_Route_CollectionRootDualRegistration ensures that two routes
+// on the same sub-mux whose Contract.Paths differ only in trailing slash
+// (both collapse to the "/" relative pattern after strip) do not panic
+// when registered with distinct HTTP methods. Go 1.22 ServeMux disambiguates
+// by method, so "POST /api/v1/config" + "GET /api/v1/config" is legal and
+// both entries must be matchable by a request.
+func TestTestMux_Route_CollectionRootDualRegistration(t *testing.T) {
+	root := NewTestMux()
+	root.Route("/api/v1/config", func(sub cell.RouteMux) {
+		// Both routes map to the collection-root relative path "/", hit by
+		// auth.Mount as "POST /" and "GET /" after stripMountPrefix.
+		auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true})
+		auth.Mount(sub, auth.Route{Contract: testHTTPContract("GET", "/api/v1/config"), Handler: okHandler, Public: true})
+	})
+
+	for _, tc := range []struct {
+		method, path string
+	}{
+		{"POST", "/api/v1/config"},
+		{"POST", "/api/v1/config/"}, // trailing slash alias
+		{"GET", "/api/v1/config"},
+		{"GET", "/api/v1/config/"},
+	} {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(tc.method, tc.path, nil)
+		root.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code, "%s %s must match", tc.method, tc.path)
+	}
+}
+
+// TestTestMux_Route_DuplicateMethodPatternPanics documents that
+// registering the same (method, pattern) pair twice on a shared root mux
+// surfaces via the stdlib ServeMux panic. This is the intentional
+// fail-fast when a test accidentally mounts a contract twice under the
+// same Route.
+func TestTestMux_Route_DuplicateMethodPatternPanics(t *testing.T) {
+	root := NewTestMux()
+	root.Route("/api/v1/config", func(sub cell.RouteMux) {
+		auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true})
+		defer func() {
+			if recover() == nil {
+				t.Fatal("expected panic on duplicate POST /api/v1/config registration")
+			}
+		}()
+		auth.Mount(sub, auth.Route{Contract: testHTTPContract("POST", "/api/v1/config"), Handler: okHandler, Public: true})
+	})
+}
+
 func TestTestMux_Route_ComposesPrefix(t *testing.T) {
 	root := NewTestMux()
 

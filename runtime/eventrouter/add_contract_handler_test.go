@@ -200,6 +200,32 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 	assert.Equal(t, "event.config.changed.v1", span.attrMap()["gocell.contract.id"])
 }
 
+// TestContractTracingMiddleware_PanicsOnEmptyContractID documents the F4
+// fail-fast: once the ContractID==""  early-return was removed, a
+// subscription that somehow reaches the middleware without a ContractID
+// must panic via wrapper.WrapConsumer's spec.Validate() rather than
+// silently skip tracing. Router.AddContractHandler prevents this today;
+// this test is the backstop that catches any future regression.
+func TestContractTracingMiddleware_PanicsOnEmptyContractID(t *testing.T) {
+	t.Parallel()
+	sub := outbox.Subscription{
+		Topic:         "event.legacy.v1",
+		ConsumerGroup: "legacy",
+		// ContractID intentionally empty — simulates a legacy registration
+		// path sneaking back in. wrapper.WrapConsumer.spec.Validate() must
+		// panic at construction time so the regression is loud.
+	}
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "empty ContractID must panic at middleware construction")
+	}()
+
+	_ = ContractTracingMiddleware(wrapper.NoopTracer{}, nil)(sub,
+		func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+}
+
 func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})

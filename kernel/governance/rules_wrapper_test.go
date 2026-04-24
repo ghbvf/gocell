@@ -16,6 +16,8 @@ func TestScanContractSpecLiterals(t *testing.T) {
 	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package accesscore
 
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
 var spec = wrapper.ContractSpec{
 	ID:        "http.auth.login.v1",
 	Kind:      "http",
@@ -25,6 +27,9 @@ var spec = wrapper.ContractSpec{
 }
 `), 0o644))
 	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes_test.go"), []byte(`package accesscore
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
 var ignored = wrapper.ContractSpec{ID: "test.only", Kind: "http"}
 `), 0o644))
 
@@ -90,6 +95,9 @@ func TestScanContractSpecLiterals_EventSpecCall(t *testing.T) {
 	cellsDir := filepath.Join(root, "cells", "accesscore")
 	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package accesscore
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
+
 var spec = wrapper.EventSpec("event.role.assigned.v1", "amqp")
 `), 0o644))
 
@@ -112,6 +120,8 @@ func TestScanContractSpecLiterals_ResolvesStringConst(t *testing.T) {
 	cellsDir := filepath.Join(root, "cells", "accesscore")
 	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
 	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package accesscore
+
+import "github.com/ghbvf/gocell/kernel/wrapper"
 
 const (
 	pathUserByID = "/api/v1/access/users/{id}"
@@ -147,6 +157,72 @@ var (
 	assert.Equal(t, "event.user.created.v1", literals[2].id)
 	assert.Equal(t, "event", literals[2].kind)
 	assert.Equal(t, "event.user.created.v1", literals[2].topic)
+}
+
+// TestScanContractSpecLiterals_HonoursImportAlias verifies that FMT-18
+// discovers wrapper.ContractSpec / wrapper.EventSpec even when the file
+// imports kernel/wrapper under a non-default local name, e.g.
+//
+//	import kw "github.com/ghbvf/gocell/kernel/wrapper"
+//
+// Pre-F-2 the scanner hard-coded `pkg.Name == "wrapper"` and silently
+// skipped alias forms, a governance escape hatch.
+func TestScanContractSpecLiterals_HonoursImportAlias(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "accesscore")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package accesscore
+
+import kw "github.com/ghbvf/gocell/kernel/wrapper"
+
+var (
+	specHTTP  = kw.ContractSpec{ID: "http.auth.login.v1", Kind: "http", Transport: "http", Method: "POST", Path: "/x"}
+	specEvent = kw.EventSpec("event.aliased.v1", "amqp")
+)
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	require.Len(t, literals, 2)
+	assert.Equal(t, "http.auth.login.v1", literals[0].id)
+	assert.Equal(t, "event.aliased.v1", literals[1].id)
+}
+
+// TestScanContractSpecLiterals_SkipsFilesWithoutWrapperImport ensures the
+// scanner short-circuits non-wrapper files so an accidentally-matching
+// `somepkg.ContractSpec{...}` literal in an unrelated file never produces
+// a false positive.
+func TestScanContractSpecLiterals_SkipsFilesWithoutWrapperImport(t *testing.T) {
+	root := t.TempDir()
+	cellsDir := filepath.Join(root, "cells", "accesscore")
+	require.NoError(t, os.MkdirAll(cellsDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellsDir, "routes.go"), []byte(`package accesscore
+
+import "example.com/other/wrapper"
+
+var spec = wrapper.ContractSpec{ID: "imposter.v1", Kind: "http", Transport: "http", Method: "GET", Path: "/x"}
+`), 0o644))
+
+	literals, err := scanContractSpecLiterals(filepath.Join(root, "cells"))
+	require.NoError(t, err)
+	assert.Empty(t, literals, "non-kernel/wrapper import must not produce FMT-18 literals")
+}
+
+// TestValidateContractSpecLiteral_UnresolvedWarns verifies the F-3 fix:
+// EventSpec/ContractSpec invocations whose ID cannot be resolved to a
+// string literal produce a visible FMT-18 error instead of being silently
+// dropped.
+func TestValidateContractSpecLiteral_UnresolvedWarns(t *testing.T) {
+	v := NewValidator(&metadata.ProjectMeta{}, t.TempDir())
+	results := v.validateContractSpecLiteral(contractSpecLiteral{
+		file:       "cells/mystery/mystery.go",
+		line:       42,
+		kind:       "event",
+		unresolved: true,
+	})
+	require.Len(t, results, 1)
+	assert.Equal(t, codeFMT18, results[0].Code)
+	assert.Contains(t, results[0].Message, "could not be resolved")
 }
 
 func TestValidateFMT19WrapperPackageState(t *testing.T) {
