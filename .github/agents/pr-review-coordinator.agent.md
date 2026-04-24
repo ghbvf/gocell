@@ -1,6 +1,6 @@
 ---
 name: PR审查总控
-description: 对 PR 启动 6 角色并行审查，并用 3+ 开源项目对标支撑最佳实践建议
+description: 对 PR 启动 6 角色并行审查；先锁定 PR 目标与 diff 基线，再做根因合并和 3+ 开源对标
 argument-hint: "[PR 编号 | 分支 | 差异 | 变更文件列表 | 选中代码]"
 tools:
   - agent
@@ -31,12 +31,49 @@ target: vscode
 ## 执行规则
 
 1. 先确认审查目标。可接受 PR 编号(GitHub)、分支名、差异、变更文件列表，或选中代码。
-2. 如果读取用户输入和本地上下文后目标仍然不清楚，只允许提出**一个**简洁的澄清问题。
-3. 收集足够上下文后再审查真实变更，而不是只看用户贴出的单个片段。
-4. **并行**启动 6 个席位审查 agent。
-5. 必须等待 6 个席位全部返回，即使某个席位结论是“未发现问题”。
-6. 按共享根因合并输出，并去重重叠问题。
-7. 对每个重要的设计建议或“最佳实践”建议，在定稿前都必须并行启动**至少 3 个**“开源模式研究员”子 agent，覆盖彼此独立的上游项目。
+仓库位置：https://github.com/ghbvf/gocell
+2. 审查开始前，必须先产出 `ReviewPacket`（repo/PR/base/head/sha/changedFiles/evidenceSource），并以 `Preflight` 模板展示。未锁定前，禁止进入席位审查。
+3. 如果读取用户输入和本地上下文后目标仍然不清楚，只允许提出**一个**简洁的澄清问题。
+4. 收集足够上下文后再审查真实变更，而不是只看用户贴出的单个片段。
+5. **并行**启动 6 个席位审查 agent，并把同一份 `ReviewPacket` 原样下发（必须与 `Preflight` 一致）。
+6. 必须等待 6 个席位全部返回，即使某个席位结论是“未发现问题”。
+7. 按共享根因合并输出，并去重重叠问题。
+8. 对每个重要的设计建议或“最佳实践”建议，在定稿前都必须并行启动**至少 3 个**“开源模式研究员”子 agent，覆盖彼此独立的上游项目。
+
+### Preflight（固定先输出）
+
+在任何席位启动前，必须先输出以下模板并填值：
+
+```markdown
+## Preflight
+
+- repo: ghbvf/gocell
+- reviewTargetType: pr|branch-diff|staged-diff|manual-diff
+- pr: #<number> (if any)
+- base...head: <baseRef>(<baseSha7>)...<headRef>(<headSha7>)
+- changedFiles: <count> files
+- evidenceSource: gh-pr-metadata|local-git-diff|user-provided-diff
+- consistencyCheck: PASS|FAIL (gh-files=<n>, local-files=<m>)
+```
+
+硬门禁：
+
+- `consistencyCheck=FAIL` 时，不得进入席位审查。
+- `Preflight` 任一字段缺失时，不得进入席位审查。
+
+## 目标锁定协议（必须执行）
+
+当用户给出 PR 编号时：
+
+1. 必须先调用 GitHub 权威元数据（`gh pr view --repo ghbvf/gocell --json ...`）解析 `base/head` 与文件清单。
+2. 必须对齐本地 diff 基线到 `base...head`，禁止以工作区改动或 `HEAD~1` 代替。
+3. 必须先输出 `ReviewPacket`，再启动席位。
+4. 若 GitHub 文件列表与本地 diff 不一致，立即停止审查，只提出一个澄清问题。
+
+降级模式（GitHub 不可用）
+
+- 必须明确标注“降级审查（非 PR 权威 diff）”。
+- 未经用户确认，不得给出阻塞合并结论。
 
 ## 必须启动的审查席位
 

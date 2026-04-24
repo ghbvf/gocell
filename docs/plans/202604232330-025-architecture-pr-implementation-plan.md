@@ -1,10 +1,10 @@
 # 架构项 PR 实施计划
 
-> 日期: 2026-04-23（2026-04-24 下午回灌合并状态 + 新增 PR-A34/A35/A36）
+> 日期: 2026-04-23（2026-04-25 回灌 PR-A12b/#252 command 生命周期收口）
 > 来源: `docs/plans/docs-backlog-md-docs-reviews-2026042219-graceful-backus.md` 架构层（P1/P2/P3）+ `202604191515-auth-federated-whistle.md`（F1-F7 基石）+ `202604211245-024-auth-rebaseline-implementation-plan.md`（A/B/C）+ `202604200313-v1.0-pre-release-plan.md` 残余 + 2026-04-24 六席位复核新发现
 > 基线: `develop @ ce33f6a`（PR#233 合入后 — PR-A2/A3/A4/A8/#231/#233 已落地）
-> 目标: 把架构层约 40 条任务 + auth/config 域剩余任务拆成 39 个内聚 PR，明确 wave 顺序、搭车关系、依赖、风险
-> **工期**: 净编码 ~39 工作日（~312h）；双人并行 + buffer **~33 工作日（~6.6 周）**；v1.0 路径（Wave 1+2）双人 **~15-17 工作日（~3-3.5 周）**
+> 目标: 把架构层约 40 条任务 + auth/config 域剩余任务拆成 40 个内聚 PR，明确 wave 顺序、搭车关系、依赖、风险
+> **工期**: 净编码 ~40 工作日（~320h）；双人并行 + buffer **~34 工作日（~6.8 周）**；v1.0 路径（Wave 1+2）双人 **~16-17 工作日（~3-4 周）**
 > 2026-04-23 更新:
 > - 第一轮融入：3 条搭车（PR-A5a/A5b/A6）+ 6 条新 PR（A25-A30 auth/config）
 > - 第二轮修正（基于现状复核）：F3/F6 非"已完工"而是"基础设施完工+应用层仍有过渡态"；PR-A5a A5 lifecycle 迁移从 0.5h 修正为 2-3h；PR-A14 拆分为 A14a MIN（Wave 1 必做）+ A14b FULL（Wave 3）；新增 PR-A27 CONFIGWRITE-RETURNING / PR-A28 CONFIG-DOCS / PR-A29 AUTH-REFRESH-MAIN（X11+X15 上提 Wave 2 必做）/ PR-A32 SELECTOR-CLOSURE / PR-A33 REFRESH-OPAQUE-POLISH
@@ -44,9 +44,15 @@
 > - 新 PR：**PR-A34 OUTBOX-DIRECT-SAFETY-GATING**（P1 安全, 🔴 多 pod/任何生产 in-memory 拓扑前必做，3h）/ **PR-A35 READYZ-POLISH**（P2, 3h）/ **PR-A36 HTTP-METRICS-LABEL-REALIGN**（P2, 🟠 多 cell assembly 前触发，4h）
 > - PR-A25 主线复核：S-nonce 验证确认（`runtime/auth/authenticator.go:213-218` CheckAndMark 逻辑存在但需 `WithNonceStore` 显式注入；`cmd/corebundle/controlplane.go:51` 未注入），重放窗口 5min；**维持 Wave 1 🟠**；开干前需评估是否同时落 InMemoryNonceStore 默认兜底（无 Redis 依赖的 P1 缓解）
 >
-> 2026-04-24 晚更新（第八轮 · PR-A5c 收尾合入 PR #245）:
-> - **PR-A5c OUTBOX-EMITTER-UNIFY ✅ 已交付**（分支 `refactor/520-pr-a5c-outbox-emitter-unify`，PR #245，6 commits，净编码 ~14h）。完成剩余 5 个子任务（F2~F6）+ 29 处调用点迁移（F7）：Cell 层 `publisher`/`outboxWriter` 公开字段全部退役，三 cell 统一 `WithEmitter` + `WithOutboxDeps` 边界；`kernel/cell.DirectPublishModeForDurability` helper + `outbox.DurabilityReporter` 接口 + `tools/archtest OUTBOX-CELL-01` 规则 + `runtime/outbox` envelope wrapper 删除。A5a-R4 / A5a-R5 一并收口。
-> - **对 Wave 2 / v1.0 路径的影响**：Cx3 双瓶颈中的 A5c 消化完毕，只剩 A9 Cx3（已合入 PR #239）；Wave 2 剩余 PR-A10/A11/A12/A29/A30/A31 均为 Cx1-Cx2，v1.0 路径净工期进一步缩减。
+> 2026-04-24 晚间更新（第八轮 · Wave 1 发布硬约束彻底清零 + Wave 2 启动）:
+> - 合并回灌：**PR-A25 ✅ PR#244**（AUTH-PROD-HARDENING — S-nonce 默认 InMemoryNonceStore + real-mode fail-fast + S32）/ **PR-A26 ✅ PR#247**（setup slice + `adminprovision` 共享服务 + orphan recovery；round-2 review 登记 A26-R1~R4 共 4 条 backlog）/ **PR-A5c 全量收口 ✅ PR#245**（`WithEmitter` / `WithOutboxDeps` Cell Option 六批迁移 + envelope kernel 迁移，PR#224 主线外的所有 cell publisher/writer 原生字段全清零）/ **PR-A12 ✅ PR#249**（KERNEL/COMMAND L4 queue + devicecell 迁移）/ **PR#248** DACL alias 测试修复 + os-smoke advisory（V-A17/V-A18 衍生 fix）
+> - **v1.0 Wave 1 发布硬约束（🔴 区块）全部落地**：PR-A14a / A25 / A26 / A27 / A28 / A34 清零；PR-A5c 全量收口先于 v1.0 路径完成，Wave 2 Emitter 抽象门槛归零
+> - **仍 open**：PR #246（PR-A11 kernel/wrapper — Wave 2） / PR #242（PR-A18 test split + PR-id comment 清理 — adapters/vault 后续整理）
+> - 下一批优先：PR-A29 AUTH-REFRESH-MAIN（X11 → X15 串行主链，🔴 发布前必做）→ PR-A30/A31 → PR-A13 docs clean 若未走 PR #235 补口 → Wave 3 PR-A14b / A35 / A36 按排期推进
+>
+> 2026-04-25 更新（第九轮 · PR-A12b kernel/command 生命周期收口）:
+> - 新增 **PR-A12b 🔨 PR#252**：在 PR-A12 `kernel/command` L4 底座之上继续收口 Dequeue / Report / Ack / ExtendLease + ActiveScanner，关闭 device command 的领取、回报、确认、续租和 active 扫描生命周期。
+> - PR-A12b review 残余 Cx3/Cx4 已登记 backlog：`PR252-F1 COMMAND-QUEUE-REGISTRAR-BOOTSTRAP-FAILFAST-01` / `PR252-F2 COMMAND-SWEEPER-PRODUCTION-GOVERNANCE-01`。
 
 ---
 
@@ -62,21 +68,21 @@
 
 ## PR 切分总览
 
-39 个 PR 分 4 Wave，**净编码合计 ~39 工作日**（312h），含 P3 长期架构。
+40 个 PR 分 4 Wave，**净编码合计 ~40 工作日**（320h），含 P3 长期架构。
 
 | Wave | 目标 | PR 数 | 净编码 | 含 buffer（单人/双人） |
 |---|---|---|---|---|
 | **Wave 1** — 低风险抽取 + 治理 + auth v1.0 必做 + config 样板收敛 + INTERNAL-LISTENER-MIN | 为后续业务改造铺平基础 + 发布硬约束 | 15 | 9.7d | 14d / 7d（三路 worktree 并行） |
-| **Wave 2** — 中等架构收口 + auth refresh 主链 + auth 测试 + DX + outbox 模式收口 | Contract 模型 / kernel 新模块 + refresh opaque 主链（X11+X15）+ auth 收尾 + Emitter 抽象 | 9 | 10d | 14d / 8-9d（A9 + A5c 双 Cx3 瓶颈） |
+| **Wave 2** — 中等架构收口 + auth refresh 主链 + auth 测试 + DX + outbox 模式收口 | Contract 模型 / kernel 新模块 + refresh opaque 主链（X11+X15）+ auth 收尾 + Emitter 抽象 | 10 | 11d | 15d / 9-10d（A9 + A5c 双 Cx3 瓶颈；A12b 为 command 生命周期收口） |
 | **Wave 3** — P2 架构延展 + INTERNAL-LISTENER-FULL + F3 Selector 收尾 | v1.1 kernel 子模块 + listener 完整版 | 8 | 9.75d | 14d / 8d |
 | **Wave 4** — P3 长期架构演进 + refresh opaque 收尾 | 分层重整 / 接口拆分 / 类型保护 / refresh polish | 7 | 9.5d | 13d / 8d |
-| **合计** | | 39 | **~39d** | **~55d / ~33d** |
+| **合计** | | 40 | **~40d** | **~56d / ~34d** |
 
-> **v1.0 路径（Wave 1 + Wave 2）**：净编码 ~18d；含 buffer **单人 ~25d（~5 周）/ 双人并行 ~13-15d（~3 周）**。
+> **v1.0 路径（Wave 1 + Wave 2）**：净编码 ~21d；含 buffer **单人 ~29d（~6 周）/ 双人并行 ~16-17d（~3-4 周）**。
 >
 > Buffer 1.4x 乘数含 review 往返、integration 调试、Cx3/Cx4 ADR 讨论。实际 PR 编码时间通常只占项目时间 60-70%。
 
-> **⚠️ 发布前必做（🔴 硬约束）**：PR-A25 / PR-A26 / PR-A14a / PR-A27 / PR-A28（Wave 1 auth+config v1.0 必做）+ PR-A29（Wave 2 refresh 主链）+ PR-A5a 修正（initialadmin Lifecycle 迁移，~2-3h 不是 0.5h）。
+> **⚠️ 发布前必做（🔴 硬约束）**：PR-A25 ✅（#244） / PR-A26 ✅（#247） / PR-A14a ✅（#237） / PR-A27 ✅（#216） / PR-A28 ✅（并入 #227）+ PR-A5a ✅（#234）+ PR-A34 OUTBOX-SAFETY-GATING ✅（已随 #245 收口） — 仅剩 **PR-A29 AUTH-REFRESH-MAIN（Wave 2 refresh 主链）** 未落地。
 > **🟡 已完工基石（不占 Wave 计划）**：F1 JWT Registry / F3 Selector 基础设施 / F5 Errcode Classifier / F6 Lifecycle 基础设施 / L10 RoleInternalAdmin / S42 ROLELIST-CURSOR。详见末尾"已完工基石声明"章节。
 
 ---
@@ -84,6 +90,8 @@
 ## Wave 1 — 低风险抽取 + 治理（~5 工作日）
 
 > 先落这批：纯 helper 抽取 + governance 规则扩展 + 入口缩减，review 快、冲突小、可并行 worktree。
+>
+> **状态（2026-04-24 晚间）**：Wave 1 15 条 PR **全部 ✅**（PR-A1/#226 · PR-A2/#225 · PR-A3/#227 · PR-A4/#228 · PR-A5a/#234 · PR-A5b/#238 · PR-A6 🟡主线入 #224 S4/S41 残余 · PR-A7/#241 · PR-A8/#230 · PR-A14a/#237 · PR-A25/#244 · PR-A26/#247 · PR-A27/#216 · PR-A28 并入 #227 · PR-A34 由 #245 F9 收口）。
 
 ### PR-A1 治理规则 + CI 门禁打底 — ✅ 已完工
 
@@ -108,7 +116,7 @@
 
 ---
 
-### PR-A2 pkg 共享 helper 三连 ✅ 已落地 PR #508（实际净编码 5-6h）
+### PR-A2 pkg 共享 helper 三连 ✅ 已落地 PR #225（实际净编码 5-6h）
 
 > **实际范围修正**：探索发现 L8 / A7 已在仓库内完工，本 PR 实际只做 V-A5 + V-A14 + backlog 状态回灌。
 
@@ -126,7 +134,7 @@
 
 ---
 
-### PR-A3 入口收口 + per-cell adapter（实际 ~10h，PR #227，2026-04-24 合并）
+### PR-A3 入口收口 + per-cell adapter ✅ 已落地 PR #227（2026-04-24，实际 ~10h）
 
 **主线**：
 - **V-A8 CMD-THICK-ENTRY-REDUCE-01**（P1-13 PARTIALLY）`cmd/corebundle/main.go` 继续缩减（2h → 实际 main.go 423→95 行，5 个 helper 文件）
@@ -184,7 +192,7 @@
 
 ---
 
-### PR-A5b configcore cell.go 拆分 + config_repo 错误归类（预计 3h → 5-6h 随 A5a review 尾巴并入）
+### PR-A5b configcore cell.go 拆分 + config_repo 错误归类 ✅ 已落地 PR #238（2026-04-24，预计 3h → 实际 5-6h 随 A5a review 尾巴并入）
 
 **主线**：
 - **V-A15 CELL-GO-SPLIT-01**（P2-7）configcore/cell.go 431 行拆 `cell_routes.go` + `cell_events.go` + `cell_lifecycle.go`（2h）
@@ -204,7 +212,9 @@
 
 ---
 
-### PR-A6 EventRouter 身份拆分 + typed event payload + marshal err 显式（预计 7h）
+### PR-A6 EventRouter 身份拆分 + typed event payload + marshal err 显式（预计 7h，🟡 部分完成）
+
+> **状态**：主线 **EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01 ✅ 已由 PR #224 顺带落地**（`kernel/outbox/subscription.go` `ConsumerGroup` + `CellID` 双字段 + `TraceIdentity()` helper）。搭车项 **S4 EVENT-PAYLOAD-TYPED-01 + S41 MARSHAL-ERR-EXPLICIT-01 仍未做**（sessionlogin:149 / sessionlogout:94 仍 `payload, _ := json.Marshal(map[string]any{...})`）；剩余范围收敛为"S4 + S41 + 任何需要让 CellID 与 ConsumerGroup 分叉的应用层"。
 
 **主线**：
 - **PR220-5 EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01** `ConsumerGroup`（broker）与 `CellID`（observability）拆两字段（3h）
@@ -221,7 +231,7 @@
 
 ---
 
-### PR-A7 sessionmint 统一入口 + P1-A 收尾（实际 ~4h，PR #TBD）
+### PR-A7 sessionmint 统一入口 + P1-A 收尾 ✅ 已落地 PR #241（2026-04-24，实际 ~4h）
 
 **主线落地**：
 - **V-A17（升级版）FETCH-ROLE-NAMES-DEDUP-01** ✅ 抽 `cells/accesscore/internal/sessionmint`，单一 `Mint(ctx, deps, req)` 封装 "fetch roles (fail-closed) + issue access + issue refresh"；3 个调用点（`sessionlogin.Login` / `sessionlogin.IssueForUser` / `sessionrefresh.rotateAndIssue`）各收敛到一行；两个 slice 的 `fetchRoleNames` / `issueAccessToken` / `issueRefreshToken` 六个重复私有方法全部删除
@@ -256,7 +266,7 @@
 
 ---
 
-### PR-A14a INTERNAL-LISTENER-MIN（🔴 发布前必做，~7h；**彻底重构版，吸收 PR-A32**）
+### PR-A14a INTERNAL-LISTENER-MIN ✅ 已落地 PR #237（2026-04-24，🔴 发布前必做，~7h；**彻底重构版，吸收 PR-A32**）
 
 **实际主线**（物理双 mux + 吸收 PR-A32 F3-CLOSURE）：
 - **R4-MIN DUAL-PHYSICAL-MUX** `runtime/http/router/router.go` 从「单 mux + prefix-guard 中间件」重构为 `publicMux + internalMux` 物理双 mux；`Route/Handle/Mount` 按 pattern 前缀自动分流；新增 `Router.PublicHandler()` / `InternalHandler()`；新增 `WithInternalMiddleware(mw ...)`；outerMux 显式 404 `/internal/v1/*`（primary listener 边缘隔离）
@@ -278,48 +288,44 @@
 
 ---
 
-### PR-A25 AUTH-PROD-HARDENING（🟠 real 模式前触发，~5h，2026-04-24 六席位复核确认 P1 阻塞性）
+### PR-A25 AUTH-PROD-HARDENING ✅ 已落地 PR #244（2026-04-24，实际 ~5h，2026-04-24 六席位复核确认 P1 阻塞性）
 
-**本轮验证证据（2026-04-24）**：
-- `runtime/auth/authenticator.go:213-218`：`CheckAndMark` 分支已存在但 `cfg.nonceStore != nil` 才生效
-- `runtime/auth/authenticator.go:130-131` 注释明写 "NonceStore is nil by default; omitting it disables replay detection. Production deployments MUST supply WithNonceStore"
-- `cmd/corebundle/controlplane.go:51` `ServiceTokenMiddleware(ring)` 无 `WithNonceStore` 注入 → 5 min 签名窗内重放任意次
-
-**主线**：
-- **S-nonce SERVICE-TOKEN-NONCE-STORE-ENFORCE-01**（4h）：
-  - (a) `controlplane.internalGuardFromEnv` 默认构造 `auth.NewInMemoryNonceStore(ttl=ServiceTokenMaxAge+30s buffer)` 作为 P1 缓解（无 Redis 依赖即可落地 anti-replay）
-  - (b) 新增 `auth.WithServiceTokenNonceStore(store)` option 允许注入 Redis/持久化实现覆盖 in-memory
+**实际主线**：
+- **S-nonce SERVICE-TOKEN-NONCE-STORE-ENFORCE-01** ✅
+  - (a) `controlplane.internalGuardFromEnv` 默认构造 `auth.NewInMemoryNonceStore(ttl=ServiceTokenMaxAge+30s buffer)` — 无 Redis 依赖即可落地 anti-replay
+  - (b) 新增 `auth.WithServiceTokenNonceStore(store)` option，允许 Redis/持久化实现覆盖 in-memory
   - (c) `SharedDeps.Validate()` real 模式：NonceStore 未注入或为 Noop → fail-fast `ErrControlplaneNonceStoreMissing`（对齐 Vault real-mode guard 风格）
-  - (d) 集成测试：replay 用例（同 token 第二次应返回 401 with `ERR_AUTH_UNAUTHORIZED`）；两 pod 场景单测可 skip（Redis store 交 X1 后独立 PR）
-- **S32 CONTROLPLANE-TOKEN-PROD-GATE-01**（1h）real 模式断言 service-token ring 已配置（非空 secrets）；如未来接入 mTLS 则改为至少一项
+  - (d) 集成测试：replay 用例覆盖（同 token 第二次 401 `ERR_AUTH_UNAUTHORIZED`）；两 pod 场景交 X1 后 Redis store 独立 PR
+- **S32 CONTROLPLANE-TOKEN-PROD-GATE-01** ✅ real 模式断言 service-token ring 已配置（非空 secrets），未来 mTLS 接入后改为至少一项
 
-**搭车理由**：两项都是 real 模式 fail-fast，在 `cmd/corebundle/controlplane.go` + `runtime/auth/authenticator.go` 同一面；S32 的 CI real-mode smoke 也顺便加
+**review 追加修复（round 1 + round 2 共 ~3h，合并 `docs/reviews/202604241700-pr244-reviewer.md` / `202604241915-pr244-reviewer-round2.md` / `202604242030-pr244-fix-diagnosis.md`）**：
+- `runtime/auth/nonce.go` + `runtime/auth/nonce_test.go` InMemoryNonceStore 扩展 + 修复；`runtime/auth/servicetoken.go` + `_test.go` ring 构造面补齐；`cmd/corebundle/controlplane_guard_test.go` real-mode negative 路径
 
-**文件面**：`runtime/auth/authenticator.go` + `runtime/auth/nonce.go` + `cmd/corebundle/controlplane.go` + `cmd/corebundle/shared_deps.go` + `cmd/corebundle/controlplane_guard_test.go`
-
-**风险**：低-中；CI smoke 要新建 real 模式 job；默认注入 InMemoryNonceStore 在 demo 模式也生效（但 TTL 小，对 demo 无感）
+**文件面**（交付已实）：`runtime/auth/{authenticator,nonce,servicetoken}.go` + `runtime/auth/*_test.go` + `cmd/corebundle/{controlplane,shared_deps,bundle}.go` + `cmd/corebundle/{controlplane_guard,auth_integration,main}_test.go` + `runtime/bootstrap/topology.go` + `docs/ops/env-vars.md` + `.claude/rules/gocell/runtime-api.md`
 
 ---
 
-### PR-A26 AUTH-SETUP-ENDPOINT（🔴 v1.0 必做 P0，~4h）
+### PR-A26 AUTH-SETUP-ENDPOINT ✅ 已落地 PR #247（2026-04-24，🔴 v1.0 必做 P0，实际 ~4h 主线 + 扩展到 adminprovision 共享服务）
 
-**主线**：
-- **P1-19 AUTH-SETUP-ENDPOINT-01**：
-  - ① 新 slice `cells/accesscore/slices/setup/`
+**实际主线**：
+- **P1-19 AUTH-SETUP-ENDPOINT-01** ✅
+  - ① 新 slice `cells/accesscore/slices/setup/`（handler / service / contract_test / service_test）
   - ② 新 contract `contracts/http/auth/setup/status/v1/` + `contracts/http/auth/setup/admin/v1/`
-  - ③ `GET /api/v1/setup/status`（Public）返回 `{hasAdmin: bool}`
-  - ④ `POST /api/v1/setup/admin`（Public）无 admin 时创建，已有则 409
-  - ⑤ 两端点 `auth.Declare Public: true`
+  - ③ 端点路径按 Consul per-cell 模式挂在 `/api/v1/access/setup/*`（**非** 顶级 `/api/v1/setup/*`，避免与未来 system-level 初始化端点命名冲突）
+  - ④ 两端点 `auth.Declare Public: true`；409/410 快速短路，bcrypt 仅在成功路径触发
+- **超出原范围的彻底方案**：抽出 `cells/accesscore/internal/adminprovision/`（`provisioner.go` + `provisioner_test.go` + `doc.go`）共享给 `initialadmin.Bootstrap` 和 `setup.Service`；sync.Mutex 覆盖单进程原子性，orphan recovery 语义（reset password 清除 `require_reset` flag 且不重复发 `user.created` 事件）
 
-**搭车**：无（纯新建 slice，独立 blast radius）
+**round-2 review 登记 backlog**（4 条 A26-R1~R4）：
+- **A26-R1** ADMINPROVISION-DIST-LOCK-01（Cx3, 🟠 PG adapter 接入时触发）— 多实例需 `pg_advisory_xact_lock`
+- **A26-R2** SETUP-ADMIN-RATE-LIMIT-01（Cx2, 🟡, 取决于是否面向公网）— per-IP rate-limit / 一次性 bootstrap token
+- **A26-R3** SETUP-PATH-NAMESPACE-POLICY-01（Cx1, 🟡）— 在 `api-versioning.md` 明确"顶级 `/api/v1/setup/` 保留给 system-level；per-cell 挂 `/api/v1/{cell}/setup/*`"
+- **A26-R4** SETUP-ORPHAN-E2E-01（Cx2, 🟠 PG adapter 接入时触发）— orphan recovery E2E
 
-**文件面**：新 `cells/accesscore/slices/setup/` + 新 `contracts/http/auth/setup/`
-
-**风险**：低；新功能，现有测试不动
+**文件面**（已实交付）：新 `cells/accesscore/slices/setup/`（6 文件） + 新 `cells/accesscore/internal/adminprovision/` + 新 `contracts/http/auth/setup/{status,admin}/v1/`（6 文件） + `cells/accesscore/initialadmin/bootstrap.go`（重构使用 adminprovision） + `cells/accesscore/cell_{init,routes}.go` + `cells/accesscore/slices/identitymanage/service.go` + `cmd/corebundle/setup_integration_test.go`（新） + `pkg/errcode/errcode.go` + `pkg/httputil/response.go`
 
 ---
 
-### PR-A27 CONFIGWRITE-RETURNING-CONSOLIDATE（🔴 发布前必做，~5h）
+### PR-A27 CONFIGWRITE-RETURNING-CONSOLIDATE ✅ 已落地 PR #216（2026-04-21，先于本 plan 创建日；plan 原文把 PR#216 描述为"flagwrite 模式"有误——PR#216 本身就是 configwrite 自己的 TOCTOU 修复）
 
 **主线**：
 - **CONFIGWRITE-RETURNING-01** `cells/configcore/slices/configwrite/service.go` Create/Update/Delete 三方法按 `flagwrite` PR#216 模式重写，改原子 `RETURNING` 消除 TOCTOU：
@@ -352,32 +358,27 @@
 
 ---
 
-### PR-A34 OUTBOX-DIRECT-SAFETY-GATING（🔴 多 pod / 任何生产 in-memory 拓扑前必做，~3h）
+### PR-A34 OUTBOX-DIRECT-SAFETY-GATING ✅ 由 PR #245 F9 per-entry FailurePolicy 收口（2026-04-24）
 
-**来源**：2026-04-24 六席位复核 P1 安全（backlog `S-outbox-safety`）。
+**原设计方案**：`DirectEmitter.SafetyCriticalTopics` 白名单字段 + per-cell 注入式声明。
 
-**本轮验证证据**：
-- `kernel/outbox/emitter.go:90-95`：`DirectPublishFailOpen` 发布失败 `return nil` 无差别隐藏错误
-- `cells/auditcore/cell.go:218-221` + `cells/accesscore/cell.go` 同模式：在 in-memory（`publisher != nil && outboxWriter == nil`）下自动注入 fail-open emitter
-- 受影响 topic：`event.session.revoked.v1`、`event.audit.appended.v1`、`event.user.{created,locked}.v1`、`event.session.created.v1`——审计/会话撤销链路会被静默切断
+**实际落地（更优方案）**：PR #245 Round-1 review 追加的 **F9 OUTBOX-EMITTER-PER-ENTRY-FAILURE-POLICY** 以 k8s apiserver audit `Backend.FailurePolicy(Ignore/Fail)` 模型彻底替代了"构造期 topic 白名单"设计：
+- `kernel/outbox.Entry.FailurePolicy` 字段（`Default` / `FailOpen` / `FailClosed`）把失败语义从构造期下沉到 entry 层
+- `DirectEmitter.Emit` 读 entry 策略；fail-open 路径 log 扩展 `entry_id` + `event_type`
+- **accesscore + configcore + auditcore 三 cell 默认改 `DirectPublishFailClosed`**（安全事件发布失败不再被静默吞掉）
+- 非关键事件 per-entry opt-in `FailurePolicyFailOpen`
+- **新 archtest `OUTBOX-TOPIC-FAILOPEN-01`** 扫 `cells/**/*.go` 禁止 `session.*`/`user.*`/`role.*`/`audit.*` topic 字面量设 `FailurePolicyFailOpen`；5-case regression fixture 验证守卫有效
+- 删除原 accesscore / auditcore "session revocation rare / dropping acceptable" 辩护注释
 
-**主线**：
-- **S-outbox-safety OUTBOX-DIRECT-SAFETY-GATING-01**（2h）
-  - (a) `DirectEmitter` 增加 `SafetyCriticalTopics []string` 字段（或接收 `TopicClassifier func(topic string) Severity` 由 kernel topic registry 提供）
-  - (b) 发布 safety-critical topic 失败时：即使 mode 是 FailOpen 也必须返回 error；非关键 topic 保留 FailOpen
-  - (c) `cells/auditcore` + `cells/accesscore` 注入时声明各自的 safety-critical topic 白名单
-  - (d) 追加 counter `gocell_outbox_direct_publish_failed_total{mode,topic}` — demo 模式下也能被监控
-- **测试**：emitter_test 补 FailOpen + safety-critical 组合用例；auditcore/accesscore 集成测试验证 session.revoked 发布失败时上游收到 error（不再被静默吞掉）
+**ref**：`kubernetes apiserver/pkg/audit Backend.FailurePolicy` + `ThreeDotsLabs/watermill retry middleware per-message disposition`
 
-**搭车**：无（独立主题；PR-A6 typed event payload 属于不同面，不搭）
-
-**文件面**：`kernel/outbox/emitter.go` + `kernel/outbox/emitter_test.go` + `cells/auditcore/cell.go` + `cells/accesscore/cell.go` + `cells/accesscore/cell_test.go` + `cells/auditcore/cell_test.go`
-
-**风险**：低-中；改的是 fail-open 策略分档；不涉及协议签名
+**原 PR-A34 独立 PR 无需再开**；backlog `S-outbox-safety` 可关单。
 
 ---
 
-## Wave 2 — 中等架构收口（~12 工作日）
+## Wave 2 — 中等架构收口（~13 工作日）
+
+> **状态（2026-04-25）**：已落 **PR-A9/#239 · PR-A12/#249 · PR-A13/#235 · PR-A5c/#224+#245**。🔨 在飞 **PR-A11/#246**（kernel/wrapper）/ **PR-A12b/#252**（kernel/command lifecycle closure）。待开 **PR-A10 JSON-SARIF · PR-A29 🔴 AUTH-REFRESH-MAIN · PR-A30 AUTH-TEST-COVERAGE · PR-A31 AUTH-FIRSTRUN-DX**。
 
 ### PR-A9 CONTRACT-META-01 传输层一等公民 ✅ 已落地 PR #239（2026-04-24）
 
@@ -424,7 +425,7 @@
 
 ---
 
-### PR-A12 KERNEL/COMMAND ✅ 已落地（2026-04-24，分支 `refactor/522-pr-a12-kernel-command`，实际 ~2.5d）
+### PR-A12 KERNEL/COMMAND ✅ 已落地 PR #249（2026-04-24，P1，~2.5d）
 
 **主线**：
 - ✅ **LATER-K2 KERNEL/COMMAND** 新包 `kernel/command/` 提供完整 L4 命令队列底座：`Status`（7 态 iota+1，0 非法）/ `Entry` / `Timeouts` 三阶段（ScheduleToSend/SendToComplete/OverallDeadline）/ `Transition`+`AdvanceCommand`+`ResetForRetry` 纯函数 / `Queue` 门面（Enqueue/Dequeue/Report/Ack/ExtendLease/Cancel）/ `ActiveScanner` 运维扫描口 / `Sweeper` 过期驱动器 / `QueueRegistrar` 可选 Cell 接口 / `commandtest.InMemQueue` 测试后端。代码从 `kernel/outbox/l4.go`（已删）搬家，SRP 收敛——outbox 专注 L2/L3 事件 fanout，command 专注 L4 unicast + ack。
@@ -444,7 +445,29 @@
 
 ---
 
-### PR-A13 PR#220 遗留：文档事实源重写 + DOC-NAMING-GUARD 启用（~6h）
+### PR-A12b KERNEL/COMMAND 生命周期收口 🔨 PR #252（2026-04-25，P1，~1d）
+
+**主线**：
+- 在 PR-A12 的 queue 底座上补完整命令生命周期：**Dequeue / Report / Ack / ExtendLease**。
+- 引入 **ActiveScanner**，支持 active command 查询与 timeout/sweeper 路径的数据源。
+- devicecell command slice 迁移到领取、回报、确认、续租的闭环语义，并补 HTTP + command contract/test。
+
+**已处理 review 收口**：
+- Ack 并发幂等：同 reason 并发成功幂等，不同终态 reason 只允许一个赢家。
+- ExtendLease 增加最大续租上限，schema 与 service 双层校验。
+- `ack.reason` contract 与 handler 接受值对齐；internal active list contract 补齐。
+
+**backlog 残余**（不混入本 PR）：
+- **PR252-F1 COMMAND-QUEUE-REGISTRAR-BOOTSTRAP-FAILFAST-01**：QueueRegistrar 发现、注入与 capability 校验纳入唯一 bootstrap phase，缺 queue/scanner fail-fast。
+- **PR252-F2 COMMAND-SWEEPER-PRODUCTION-GOVERNANCE-01**：sweeper 增加 leader/分片 ownership、连续失败 readiness 降级、scan/Ack 指标。
+
+**文件面**（已实交付）：`kernel/command/` + `runtime/command/` + `examples/iotdevice/cells/devicecell/slices/devicecommand/` + `examples/iotdevice/contracts/{http,command}/device-command/` + `examples/iotdevice/contracts/http/internal/devicecommands/list/v1/`。
+
+---
+
+### PR-A13 PR#220 遗留：文档事实源重写 + DOC-NAMING-GUARD 启用 ✅ 已落地 PR #235（2026-04-24，~6h）
+
+> 合并范围：PR220-1 文档事实源重写 + PR220-1b iotdevice envelope + PR220-e1 naming baseline + PR220-e3 J-ordercreate checkRef + PR220-2 DOC-NAMING-GUARD-01 全部一批落地。
 
 **主线**（问题层，但从 PR220 拆分报告推荐放此顺序）：
 - **PR220-1 DOC-CAPABILITY-INVENTORY-REWRITE-01** 按真实 route 重写 `capability-inventory.md` + 其他活动文档
@@ -520,7 +543,7 @@
 
 ---
 
-### PR-A5c OUTBOX-EMITTER-UNIFY — ✅ **已交付 @ 2026-04-24 via PR #245**
+### PR-A5c OUTBOX-EMITTER-UNIFY — ✅ **主线 PR #224（2026-04-23）+ 全量收口 PR #245（2026-04-24）**
 
 > 分支 `refactor/520-pr-a5c-outbox-emitter-unify`。净编码 ~18h（round-1 review 后扩容 4h：CI fix + F2 推翻 + F9 per-entry FailurePolicy + 新 archtest）。实际交付范围：
 > - ❌ **~~F2 DIRECTPUBLISHMODE-HELPER-01~~** — 初版引入 `DirectPublishModeForDurability(mode, demoPolicy, durablePolicy)` helper 作为 A5a-R4 合规化，但 round-1 review 指出该 helper 只是合规化错误决策：per-Cell 构造期 failure mode 不能表达"安全 topic 必须 fail-closed，观测 topic 可 fail-open"。**删除 helper 及其 4-case 表驱动测试**，改走 F9。A5a-R4 改以 F9 per-topic policy 形态收口。
@@ -529,6 +552,10 @@
 > - ✅ **F5 ENVELOPE-WRAPPER-DELETE** — 删除 `runtime/outbox/envelope.go`+`envelope_test.go`；`runtime/outbox/relay.go` / `runtime/eventbus/eventbus.go` / `adapters/rabbitmq/subscriber.go` 切 `kernel/outbox`。integration-tag 面迁移尾巴由 round-1 CI fail 发现，补齐 `adapters/rabbitmq/integration_test.go` (6 处) + `tests/integration/shutdown_e2e_test.go` (1 处)，完工后本地 `go build -tags=integration ./...` 绿。
 > - ✅ **F6 ARCHTEST-CELL-01** — `tools/archtest/outbox_cell_test.go` 新增规则 OUTBOX-CELL-01，扫描 `cells/<name>/cell.go` 禁止 `WithPublisher`/`WithOutboxWriter` 导出 Option；regression-verified。
 > - ✅ **F9 OUTBOX-EMITTER-PER-ENTRY-FAILURE-POLICY**（round-1 review 追加）— `kernel/outbox.Entry` 增 `FailurePolicy` 字段（`Default`/`FailOpen`/`FailClosed`，`json:"-"` 不 marshal 到 wire）；`FailurePolicy.Resolve(ctorDefault)` 零值回退到 Emitter 构造期默认；`DirectEmitter.Emit` 读 entry 策略。三 cell 默认 `DirectPublishFailClosed`（k8s apiserver audit 模型），安全/审计事件发布失败默认上抛；非关键事件 per-entry opt-in FailOpen。新 archtest `OUTBOX-TOPIC-FAILOPEN-01`（`tools/archtest/outbox_topic_test.go`）扫 `cells/**/*.go` 禁止 `session.*`/`user.*`/`role.*`/`audit.*` topic 在 `outbox.Entry` 字面量上设 `FailurePolicyFailOpen`；regression fixture 5 case。
+>
+> **5 条主线由 PR #224 + PR #245 合力完成**：
+> - PR #224 主线（2026-04-23）：(1) Emitter 接口 + DirectEmitter/WriterEmitter；(2) wire envelope 从 `runtime/outbox` 下沉到 `kernel/outbox`；(3) accesscore + configcore + auditcore 三 cell L2 slice service 全部迁到 `persistence.TxRunner` + `outbox.Emitter`；(4) Cell 边界 `RunnerOrNoop` + demo/durable 四象限解析；(5) archtest 4 规则（`tools/archtest/` 已建）。
+> - PR #245 全量收口（2026-04-24）：F2/F3+F7/F4/F5/F6 六批 Cell Option 统一 `WithEmitter` / `WithOutboxDeps`，去除主线外所有 cell 原生 publisher/writer 字段；envelope kernel 迁移补齐。v1.0 前该抽象门槛归零，不再作为 Wave 2 建议项。
 >
 > 核心子项之前已由 **PR #224**（outbox emitter refactor）+ **PR-A5a PR#234**（`cell.ResolveEmitter` 抽取 + 10 case 测试）+ **PR-A5b PR#238** retroactively 落地（EMITTER-ABSTRACT / ENVELOPE-KERNEL-DOWN / SERVICE-EMITTER-MIGRATE / CELL-BOUNDARY-RESOLVE / ARCHTEST-NIL-MODE-BLOCK 共 5 子项），本 PR 完成剩余尾巴收口 + F9 per-entry FailurePolicy 对抽象层的补强，让"Cell 层只依赖 `outbox.Emitter` 抽象、失败语义由 entry 自带"成为架构硬保证（双 archtest 守卫）。
 
@@ -869,7 +896,7 @@ Wave 1 (可并行，无相互依赖)：
 Wave 2：
   PR-A9 CONTRACT-META-01 ──→ PR-A11 kernel/wrapper
   PR-A10 JSON-SARIF（独立）
-  PR-A12 kernel/command（独立）
+  PR-A12 kernel/command ──→ PR-A12b command lifecycle closure
   PR-A13 docs clean ─────→ 激活 PR-A1 里的 DOC-NAMING-GUARD
   PR-A29 AUTH-REFRESH-MAIN 🔴 （X11 HMAC-split → X15 opaque 主链切换，强依赖 X11 先）
   PR-A30 AUTH-TEST-COVERAGE（S19+S21+S22+S24，依赖 PR-A29）
@@ -937,11 +964,11 @@ Wave 4 (v1.1+)：
 
 **Week 4**（Wave 2 重磅 ~5d 净）：PR-A9 CONTRACT-META-01（3d Cx3 瓶颈）+ PR-A29 AUTH-REFRESH-MAIN（X11→X15 串行 10h 🔴）并行
 
-**Week 5**（Wave 2 收尾 ~3.5d 净）：PR-A10 JSON-SARIF（6h）+ PR-A11 wrapper（1d）+ PR-A12 command（1d）+ PR-A30 AUTH-TEST-COVERAGE（6h）+ PR-A31 AUTH-FIRSTRUN-DX（2h）；**ADR A5c Emitter 抽象评审启动**
+**Week 5**（Wave 2 收尾 ~4.5d 净）：PR-A10 JSON-SARIF（6h）+ PR-A11 wrapper（1d）+ PR-A12 command（1d）+ PR-A12b command lifecycle closure（1d）+ PR-A30 AUTH-TEST-COVERAGE（6h）+ PR-A31 AUTH-FIRSTRUN-DX（2h）；**ADR A5c Emitter 抽象评审启动**
 
 **Week 5.5**（PR-A5c 专攻 ~1.5-2d）：PR-A5c OUTBOX-EMITTER-UNIFY（12-15h，Cx3，ADR 通过后落地，三 cell service 同批迁移 + archtest 规则）
 
-**🎯 v1.0 发布节点 @ Week 5 末**（双人）/ **Week 8-9 末**（单人）：Wave 1 + Wave 2 全部落地（PR-A5c 标 🟡 建议但非硬约束，若 ADR 或实现延期可滑入 v1.1）
+**🎯 v1.0 发布节点 @ Week 5.5 末**（双人）/ **Week 9 末**（单人）：Wave 1 + Wave 2 全部落地（PR-A12b 追加 1d command lifecycle 收口；PR-A5c 标 🟡 建议但非硬约束，若 ADR 或实现延期可滑入 v1.1）
 
 **Week 6-8**（Wave 3，可与问题/功能层并行，~8-9d 净）：PR-A14b INTERNAL-LISTENER-FULL → PR-A32 SELECTOR-CLOSURE → PR-A15 webhook → PR-A16 reconcile → PR-A17 scheduler → PR-A18
 
@@ -982,58 +1009,40 @@ Wave 4 (v1.1+)：
 
 ## 2026-04-24 补充：当前分支态势下的最大并行排期（不死守 Wave）
 
-> 以当前真实在实施的分支为基线：PR-A1 / PR-A2 / PR-A3 / PR-A4 / PR-A8 已开工，另有 GitHub PR #224（`codex/outbox-emitter-nil-mode`）正在进行。以下排期按“热区 lane”而非 PR 编号排序，目标是最大化吞吐并最小化冲突。
+> **2026-04-24 晚间更新**：原"当前 6 条主线（立即执行）/ 当前阶段禁止 / 合并顺序 / 滚动补位"四块已历史化——PR-A1/A2/A3/A4/A8 + #224/#237/#238/#239/#241/#244/#245/#247/#249 均已 merge。真实推进状态请看下方"长期 6 条 lane"与各 PR 正文的 ✅/🔨 标记。本节保留做决策过程 provenance。
 
-### 当前 6 条主线（立即执行）
+### ~~当前 6 条主线（立即执行）~~（2026-04-24 已历史化）
 
-| Seat | 当前任务 | 分支 / 约束 |
+~~| Seat | 当前任务 | 分支 / 约束 |~~
+~~|---|---|---|~~
+~~| 1 | PR-A1 治理规则 + CI | `refactor/508-pr-a1-governance` |~~ ✅ PR #226
+~~| 2 | PR-A2 pkg helper | `refactor-508-pkg-helper-trio` |~~ ✅ PR #225
+~~| 3 | PR #224 outbox/emitter 基线 |~~ ✅ PR #224 + #245
+~~| 4 | PR-A3 入口收口 + per-cell adapter |~~ ✅ PR #227
+~~| 5 | PR-A4 运行时可观测收口 |~~ ✅ PR #228
+~~| 6 | PR-A8 Vault auth 批量 |~~ ✅ PR #230
+
+### 现阶段（2026-04-24 晚间后）在飞 / 待启动主线
+
+| Lane | 在飞 PR | 下一个待启动 |
 |---|---|---|
-| 1 | PR-A1 治理规则 + CI | `refactor/508-pr-a1-governance` |
-| 2 | PR-A2 pkg helper | `refactor-508-pkg-helper-trio`；虽有少量 service 替换，但仍视为 helper lane |
-| 3 | PR #224 outbox/emitter 基线 | `pr-224` / `codex/outbox-emitter-nil-mode` |
-| 4 | PR-A3 入口收口 + per-cell adapter | `refactor/509-pr-a3-percell-adapter`；**必须 stack / rebase 到 PR #224 上** |
-| 5 | PR-A4 运行时可观测收口 | `508-pr-a4-obs-runtime`；当前视为 health/bootstrap 接口基线 |
-| 6 | PR-A8 Vault auth 批量 | `refactor/510-pr-a8-vault-auth-batch`；若未形成实际 diff，可临时替换为 PR-A13 |
-
-### 当前阶段禁止新开的热点 PR
-
-- **先不要开 PR-A5a / A5b / A6 / A7 / A14a / A18 / A25 / A27 / A29**
-- 原因：
-  - PR-A5a / A5b / A6 / A7 / A27 / A29 会撞 PR-A2 或 PR #224 所在的 access/config/outbox 热区
-  - PR-A14a / A25 会撞 PR-A3 + PR-A4 的 `cmd/corebundle` / `runtime/bootstrap` 热区
-  - PR-A18 会撞 PR-A8 的 `adapters/vault/transit_provider.go`
-
-### 当前阶段合并顺序
-
-1. PR-A13（若提前插入）→ PR-A1
-2. PR-A2
-3. PR-A4 与 PR #224 谁先 ready 谁先合
-4. PR-A3 固定最后合（在 PR #224 之后 rebase 收口）
-5. PR-A8 → PR-A28
-
-### 滚动补位规则（谁先合谁腾 Seat）
-
-| 完成的 lane | 下一条补位 |
-|---|---|
-| PR-A1 | PR-A13 → PR-A9 → PR-A10 → PR-A24 |
-| PR-A2（但 PR #224 / A4 未完成） | PR-A12（不要急着开 PR-A5a / A5b） |
-| PR-A8 | PR-A18 |
-| PR #224（但 PR-A3 还未完成） | Seat 让给 PR-A12 / PR-A16，PR-A3 继续做 rebase 收口 |
-| PR-A3 + PR-A4 + PR #224 全部完成 | 同时解锁 PR-A5a 与 PR-A14a/PR-A25（二选一先做） |
-| PR-A5a | PR-A5b（stack 在 PR-A5a 上）→ PR-A26 |
-| PR-A5b | PR-A27（重起新分支，不复用旧分支） |
-| PR-A29 | PR-A31 + PR-A30 → PR-A33 |
+| Governance / Contract | 🔨 PR #246 PR-A11 kernel/wrapper | PR-A10 JSON-SARIF |
+| Access / Auth | — | 🔴 **PR-A29 AUTH-REFRESH-MAIN**（X11 → X15 串行，发布前必做） |
+| Outbox / Event | — | PR-A6 残余（S4 typed + S41 marshal err） |
+| Entry / Bootstrap | — | PR-A14b INTERNAL-LISTENER-FULL（v1.1） |
+| Config / Vault / New Modules | 🔨 PR #242 PR-A18 test split / 🔨 PR #252 PR-A12b command lifecycle closure | PR-A16 reconcile / PR-A17 scheduler |
+| Health / Base Runtime | — | PR-A35 READYZ-POLISH / PR-A36 metrics realign |
 
 ### 长期 6 条 lane（后续持续滚动）
 
 | Lane | 任务链 |
 |---|---|
-| Governance / Contract | PR-A1 → PR-A13 → PR-A9 → PR-A11 → PR-A10 → PR-A24 |
-| Outbox / Event | PR #224 → **重算 PR-A5c 范围** → PR-A6 → PR-A19 → PR-A23 |
-| Entry / Bootstrap | PR-A3 → PR-A14a → PR-A25 → PR-A14b → PR-A32 |
-| Health / Base Runtime | PR-A4（完成后并入 Entry / Bootstrap lane） |
-| Access / Auth | PR-A5a → PR-A7 → PR-A26 → PR-A29 → PR-A31 → PR-A30 → PR-A33 |
-| Config / Vault / New Modules | PR-A5b → PR-A27；并行填充 PR-A8 → PR-A18 → PR-A12 → PR-A16 → PR-A17 → PR-A20 → PR-A21 → PR-A22 |
+| Governance / Contract | PR-A1 ✅ → PR-A13 ✅ → PR-A9 ✅ → PR-A11 🔨（PR #246 open） → PR-A10 → PR-A24 |
+| Outbox / Event | PR #224 ✅ → PR-A5c ✅（主线 PR #224 + 全量收口 PR #245：F2/F3+F7/F4/F5/F6 六批 Cell Option 去原生 publisher/writer） → PR-A6 🟡（主线已入 PR#224；S4/S41 残余） → PR-A19 → PR-A23 |
+| Entry / Bootstrap | PR-A3 ✅ → PR-A14a ✅ → PR-A25 ✅（PR #244：S-nonce + S32） → PR-A14b → ~~PR-A32~~（已吸收进 PR-A14a） |
+| Health / Base Runtime | PR-A4 ✅（并入 Entry / Bootstrap lane） |
+| Access / Auth | PR-A5a ✅ → PR-A7 ✅ → PR-A26 ✅（PR #247：setup slice + adminprovision） → PR-A29 🔴 下一批 → PR-A31 → PR-A30 → PR-A33 |
+| Config / Vault / New Modules | PR-A5b ✅ → PR-A27 ✅；并行填充 PR-A8 ✅ → PR-A18 ✅（PR #242 open：test split 整理） → PR-A12 ✅（PR #249） → PR-A12b 🔨（PR #252） → PR-A16 → PR-A17 → PR-A20 → PR-A21 → PR-A22 |
 
 ### 当前排期的硬规则
 
@@ -1045,117 +1054,6 @@ Wave 4 (v1.1+)：
 6. **PR-A29 开始后，auth lane 的其它改动必须围着 PR-A29 排。**
 
 ---
-
-## 2026-04-24 补充：六角色 review 的 pre-merge / post-merge 分级策略
-
-> 目标不是取消六角色 review，而是把它从“所有 PR 的同步阻塞门禁”改成“按风险分级的门禁 + post-merge 滚动修复”。仓库已有先例：`PR #7 ~ #12` 合并后形成 `#18 ~ #27` 的 post-merge review follow-up backlog；也有计划明确写过“单一集成 PR 完成后再跑 six-seat review”。
-
-### 结论
-
-- **可以先合并，再把六角色 review 的问题聚合成滚动修复 backlog。**
-- **但不是所有 PR 都适合这么做。**
-- 建议改成：**低/中风险 PR 允许先合；高风险 PR 仍保留 pre-merge 六角色 / ultrareview 门禁。**
-
-### 必须 pre-merge 六角色 / ultrareview 的 PR 类型
-
-- auth/security 主链：PR-A25 / PR-A29 / PR-A33
-- internal/public listener 边界：PR-A14a / PR-A14b / PR-A32
-- migration / schema / contract 变更：PR-A9 / PR-A27 / PR-A29 / PR-A33
-- kernel / cell 接口破坏性重构：PR-A22 / PR-A23 / PR-A24 / PR-A5c
-- outbox/event 语义主链重构：PR-A6 / PR-A5c / PR #224（若其语义继续扩大）
-- 任何 Cx3 / Cx4 且带生产行为变化的 PR
-
-### 可以先合并、后做六角色滚动修复的 PR 类型
-
-- docs / workflow / backlog / naming / governance 非破坏性规则：PR-A1 / PR-A13 / PR-A28
-- helper 抽取、adapterutil、纯测试、DX、SARIF 输出：PR-A2 / PR-A10 / PR-A12 / PR-A21
-- `cmd/corebundle` 内部收口但不改变外部协议语义的重构：PR-A3
-- vault / scheduler / reconcile / distlock 等相对隔离的新模块或低 blast radius 改动：PR-A8 / PR-A16 / PR-A17 / PR-A20
-
-### 低/中风险 PR 的最小 pre-merge 门禁
-
-1. `golangci-lint run ./修改的包/...` = 0 issues
-2. `go build ./...`
-3. 目标包测试 + 至少一轮 integration / e2e 冒烟
-4. 至少 1 个直接 owner / 实施人之外的 reviewer 看过
-5. 明确 rollback 方式（revert PR 或 follow-up PR）
-
-### post-merge 六角色的执行方式
-
-1. **不要每个 PR 合并后立即同步等待 6 份报告。**
-2. 改成按 lane 或按 24h 批次聚合审查：
-   - `cmd/bootstrap lane`
-   - `outbox/event lane`
-   - `access/auth lane`
-   - `config lane`
-   - `governance/docs lane`
-3. 每批输出 1 份聚合报告，findings 按 root cause cluster 去重，不按 PR 零碎评论。
-4. findings 处置：
-   - P0：当天 hotfix / revert
-   - P1：进入最近滚动修复 PR
-   - P2：进入周批次 backlog
-
-### 对当前计划的建议执行口径
-
-- **PR-A1 / A2 / A3 / A8**：可以先合并，再进入按 lane 聚合的六角色 review。
-- **PR-A4**：如果只停留在 health/checker / metrics collector 语义，可采用“轻量 pre-merge + 合后聚合 review”；若继续扩大到 bootstrap 生命周期基线，则提升为高风险，要求 pre-merge 六角色。
-- **PR #224**：当前已接近 outbox/emitter 语义基线，建议至少做一次 pre-merge focused review（架构 + 测试 + 安全），不建议完全跳过 pre-merge 审查。
-
-### 最终推荐
-
-- **不要把六角色 review 作为所有 PR 的同步阻塞门禁。**
-- **把它改成：高风险 PR pre-merge，低/中风险 PR post-merge 聚合审查。**
-- **按 lane 聚合，而不是按单 PR 聚合。**
-- **始终保留 P0 当天 hotfix / revert 的纪律。**
-
----
-
-## 2026-04-24 补充：PR 风险分级矩阵（用于决定 pre-merge 门禁）
-
-> 口径说明：
-> - **高**：默认要求 pre-merge 六角色 review 或 `/ultrareview`
-> - **中**：focused review 后可合，full six-seat 可放到合后 lane 聚合
-> - **低**：轻门禁（lint/build/目标包测试/1 位非作者 reviewer）后可先合
-
-| PR | 级别 | 建议门禁 |
-|---|---|---|
-| PR #224 | 高 | pre-merge focused review（架构 + 测试 + 安全） |
-| PR-A1 | 中 | focused review 后可合 |
-| PR-A2 | 低 | 轻门禁后可合 |
-| PR-A3 | 中 | focused review 后可合 |
-| PR-A4 | 中→高 | 若继续扩大到 bootstrap 生命周期基线，则升为高风险 |
-| PR-A5a | 中 | focused review 后可合 |
-| PR-A5b | 中 | focused review 后可合 |
-| PR-A6 | 高 | pre-merge 六角色 |
-| PR-A7 | 中 | focused review 后可合 |
-| PR-A8 | 中 | focused review 后可合 |
-| PR-A14a | 高 | pre-merge 六角色 |
-| PR-A25 | 高 | pre-merge focused review |
-| PR-A26 | 中 | focused review 后可合 |
-| PR-A27 | 高 | pre-merge focused review |
-| PR-A28 | 低 | 轻门禁后可合 |
-| PR-A9 | 高 | pre-merge 六角色 |
-| PR-A10 | 中 | focused review 后可合 |
-| PR-A11 | 中 | focused review 后可合 |
-| PR-A12 | 中 | focused review 后可合 |
-| PR-A13 | 低 | 轻门禁后可合 |
-| PR-A29 | 高 | pre-merge 六角色 |
-| PR-A30 | 低 | 轻门禁后可合 |
-| PR-A31 | 低 | 轻门禁后可合 |
-| PR-A5c | 高 | pre-merge 六角色 |
-| PR-A14b | 高 | pre-merge 六角色 |
-| PR-A15 | 高 | pre-merge 六角色 |
-| PR-A16 | 中 | focused review 后可合 |
-| PR-A17 | 中 | focused review 后可合 |
-| PR-A18 | 中 | focused review 后可合 |
-| PR-A32 | 中 | focused review 后可合 |
-| PR-A19 | 高 | pre-merge focused review |
-| PR-A20 | 中 | focused review 后可合 |
-| PR-A21 | 低 | 轻门禁后可合 |
-| PR-A22 | 高 | pre-merge 六角色 |
-| PR-A23 | 高 | pre-merge 六角色 |
-| PR-A24 | 高 | pre-merge focused review |
-| PR-A33 | 高 | pre-merge focused review |
 
 ### 高风险 PR 清单（便于快速筛选）
 
