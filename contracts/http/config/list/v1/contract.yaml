@@ -1,4 +1,4 @@
-id: http.config.flags.list.v1
+id: http.config.list.v1
 kind: http
 ownerCell: configcore
 consistencyLevel: L1
@@ -6,10 +6,10 @@ lifecycle: active
 endpoints:
   server: configcore
   clients:
-    - edge-bff
+    - accesscore
   http:
     method: GET
-    path: /api/v1/flags/
+    path: /api/v1/config/
     queryParams:
       cursor:
         type: string
@@ -20,9 +20,11 @@ endpoints:
     successStatus: 200
     noContent: false
     responses:
+      400:
+        description: "Bad request — invalid cursor or limit parameter"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token"
-        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
-  request: request.schema.json
   response: response.schema.json

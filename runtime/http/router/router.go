@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -206,46 +207,25 @@ func WithTrustedProxies(proxies []string) Option {
 	}
 }
 
-// WithInternalPathPrefixGuard registers a guard middleware that is applied to
-// every request whose URL path has the given prefix. The canonical use-case is
-// protecting all /internal/v1/* endpoints with a service-token or HMAC check.
+// WithInternalMiddleware appends one or more middleware factories to the
+// internal mux chain. The internal mux handles /internal/v1/* routes and is
+// exposed via Router.InternalHandler() for the bootstrap's internal HTTP
+// listener. Because internal routes live on a physically separate mux, no
+// JWT AuthMiddleware runs there — callers must install service-token / mTLS
+// middleware here as the sole authentication layer.
 //
-// prefix must be non-empty, start with '/', and end with '/' (e.g.
-// "/internal/v1/"). guard must be non-nil. NewE returns an error immediately
-// (fail-fast) when either constraint is violated.
+// Each middleware must be non-nil; NewE returns an error immediately if any
+// entry is nil.
 //
-// The guard is injected into the business mux (r.mux) as a selective
-// middleware: requests that match the prefix are wrapped; all others pass
-// through unchanged. Infrastructure endpoints (/healthz, /readyz, /metrics)
-// are registered on outerMux and are never reached by this guard.
+// Chain order for internal requests:
 //
-// Actual token-validation logic lives in the guard function supplied by the
-// caller — this option is purely a wiring point (injection, not policy).
+//	[RateLimit] → [CircuitBreaker] → [InternalMiddleware...] → BodyLimit → handler
 //
-// Chain order for business requests:
-//
-//	RateLimit → CircuitBreaker → Auth (JWT/delegated) → BodyLimit → InternalGuard → handler
-//
-// Installing this option automatically marks the prefix as "JWT-delegated" in
-// AuthMiddleware: requests whose path starts with prefix bypass JWT verification
-// entirely and proceed directly to InternalGuard, which becomes the sole
-// authentication layer for that prefix. This makes machine-to-machine callers
-// (service tokens, HMAC) work without a user JWT.
-//
-// ref: go-kratos/kratos middleware/selector — default-deny + Option injection
-// for per-route middleware application.
-func WithInternalPathPrefixGuard(prefix string, guard func(http.Handler) http.Handler) Option {
+// ref: go-kratos/kratos middleware — per-transport middleware chains; this
+// option is the dual of AuthMiddleware for the control-plane listener.
+func WithInternalMiddleware(mws ...func(http.Handler) http.Handler) Option {
 	return func(r *Router) {
-		r.internalGuardPrefix = prefix
-		r.internalGuard = guard
-		// Auto-delegate JWT for the guard prefix: the guard is the sole auth layer
-		// for requests under this prefix. AuthMiddleware will call next directly
-		// without verifying any Bearer token, passing the request to InternalGuard.
-		// This is set unconditionally here; validateInternalGuard() enforces that
-		// prefix is valid before NewE returns.
-		r.authDelegatedMatcher = func(req *http.Request) bool {
-			return strings.HasPrefix(req.URL.Path, prefix)
-		}
+		r.internalMiddlewares = append(r.internalMiddlewares, mws...)
 	}
 }
 
@@ -264,16 +244,26 @@ func WithPolicyCoverageWhitelist(patterns []string) Option {
 
 // Router wraps chi.Mux and implements kernel/cell.RouteMux.
 //
-// Internally it uses two chi.Mux instances:
-//   - outerMux: shared observability + Recovery + SecurityHeaders + infra endpoints
-//   - mux: business routes with optional RL/CB + BodyLimit
+// Internally it uses three chi.Mux instances for physical public / internal
+// listener isolation (PR-A14a):
 //
-// outerMux delegates unmatched paths to mux via Mount("/", mux). This ensures
-// infra endpoints (/healthz, /readyz, /metrics) bypass RL/CB while business
-// routes get the full protection chain.
+//   - outerMux:    shared observability + Recovery + SecurityHeaders + infra
+//     endpoints (/healthz, /readyz, /metrics); mounts publicMux at "/" for
+//     /api/v1/* and other public business routes. Exposed via PublicHandler().
+//   - publicMux:   public business routes with the full protection chain
+//     (RL/CB/JWT/BodyLimit). JWT AuthMiddleware lives only here.
+//   - internalMux: /internal/v1/* business routes. NO infra endpoints, NO
+//     JWT middleware — callers inject service-token/mTLS via
+//     WithInternalMiddleware. Exposed via InternalHandler().
+//
+// The physical split replaces the pre-PR-A14a "single mux + /internal/v1/*
+// prefix guard + JWT delegated-matcher" design; the guard and delegated
+// matcher are no longer needed because internal routes never reach the
+// public-mux middleware chain.
 type Router struct {
-	outerMux                   *chi.Mux
-	mux                        *chi.Mux
+	outerMux                   *chi.Mux // wraps publicMux + infra routes; served on primary listener
+	publicMux                  *chi.Mux // /api/v1/* + non-internal business routes
+	internalMux                *chi.Mux // /internal/v1/* routes; served on internal listener
 	healthHandler              *health.Handler
 	metricsCollector           metrics.Collector
 	metricsHandler             http.Handler
@@ -291,18 +281,10 @@ type Router struct {
 	bodyLimit                  int64
 	trustedProxies             []string
 
-	// internalGuardPrefix and internalGuard implement the /internal/v1/* path-prefix
-	// guard: any request whose URL path starts with internalGuardPrefix is wrapped
-	// by internalGuard before reaching the business handler.
-	// Both fields must be set together (validated in NewE).
-	internalGuardPrefix string
-	internalGuard       func(http.Handler) http.Handler
-
-	// authDelegatedMatcher is a per-request predicate that marks paths where JWT
-	// authentication is delegated to a downstream middleware (e.g. the internal
-	// guard). When set, AuthMiddleware forwards these requests to next without any
-	// JWT check. Auto-populated by WithInternalPathPrefixGuard.
-	authDelegatedMatcher func(*http.Request) bool
+	// internalMiddlewares are applied to the internal mux chain in declaration
+	// order. Populated by WithInternalMiddleware. Each entry must be non-nil
+	// (validated in NewE).
+	internalMiddlewares []func(http.Handler) http.Handler
 
 	// F3 two-stage auth construction fields.
 	// declaredAuthMetas accumulates cell.AuthRouteMeta entries forwarded by
@@ -321,6 +303,12 @@ type Router struct {
 	// verification. Populated by WithPolicyCoverageWhitelist.
 	policyCoverageWhitelist []string
 }
+
+// internalPathPrefix marks URL paths mounted on internalMux. Route/Handle/Mount
+// on the top-level Router auto-dispatch to internalMux when the pattern starts
+// with this prefix; FinalizeAuth cross-checks that paths on this prefix carry
+// Delegated=true and vice versa.
+const internalPathPrefix = "/internal/v1/"
 
 // New creates a Router with default middleware and optional configuration.
 // It panics if the configuration is invalid (e.g. bad trusted proxy entries).
@@ -358,9 +346,10 @@ func New(opts ...Option) *Router {
 // ref: uber-go/fx — startup failures return error, trigger rollback
 func NewE(opts ...Option) (*Router, error) {
 	r := &Router{
-		outerMux:  chi.NewRouter(),
-		mux:       chi.NewRouter(),
-		bodyLimit: middleware.DefaultBodyLimit,
+		outerMux:    chi.NewRouter(),
+		publicMux:   chi.NewRouter(),
+		internalMux: chi.NewRouter(),
+		bodyLimit:   middleware.DefaultBodyLimit,
 	}
 	for _, o := range opts {
 		o(r)
@@ -372,9 +361,12 @@ func NewE(opts ...Option) (*Router, error) {
 		return nil, fmt.Errorf("router: circuit breaker must not be nil")
 	}
 
-	// Fail-fast: validate internal guard configuration when the option was used.
-	if err := r.validateInternalGuard(); err != nil {
-		return nil, err
+	// Fail-fast: nil entries in WithInternalMiddleware would silently skip
+	// the authoritative auth layer for /internal/v1/*.
+	for i, mw := range r.internalMiddlewares {
+		if mw == nil {
+			return nil, fmt.Errorf("router: WithInternalMiddleware entry %d must not be nil", i)
+		}
 	}
 
 	realIPMW, err := r.buildRealIPMiddleware()
@@ -383,13 +375,48 @@ func NewE(opts ...Option) (*Router, error) {
 	}
 
 	r.buildOuterMux(realIPMW)
-	r.buildBusinessMux()
+	r.buildPublicMux()
+	r.buildInternalMux()
 
-	// Mount business mux on outerMux. Paths not matched by infra routes
-	// (/healthz, /readyz, /metrics) fall through to business routes.
-	r.outerMux.Mount("/", r.mux)
+	// Physical-isolation edge guard: outerMux explicitly 404s any
+	// /internal/v1/* request before it reaches publicMux's JWT middleware.
+	// Without this, auth middleware would 401 unauthenticated requests to
+	// /internal/v1/* on the primary listener — indistinguishable from a
+	// valid-but-missing-token response on a real internal route, leaking
+	// the internal prefix. The explicit 404 enforces PR-A14a's contract
+	// "the primary listener does not know about /internal/v1/*".
+	//
+	// Two entries cover both chi wildcard match forms: `/internal/v1/*`
+	// matches `/internal/v1/` (trailing slash) and `/internal/v1/foo`;
+	// `/internal/v1` (no trailing slash) is NOT matched by the wildcard in
+	// chi, so a dedicated exact match plugs that gap (otherwise the request
+	// falls through to publicMux and receives 401 from AuthMiddleware,
+	// leaking that the prefix exists).
+	r.outerMux.Handle(internalPathPrefix+"*", http.HandlerFunc(primaryInternalPrefix404))
+	r.outerMux.Handle(strings.TrimSuffix(internalPathPrefix, "/"), http.HandlerFunc(primaryInternalPrefix404))
+
+	// Mount public mux on outerMux. Paths not matched by infra routes
+	// (/healthz, /readyz, /metrics) or the internal-prefix 404 fall through
+	// to public business routes. internalMux is NOT mounted on outerMux —
+	// it is served on a separate HTTP listener via Router.InternalHandler().
+	r.outerMux.Mount("/", r.publicMux)
 
 	return r, nil
+}
+
+// primaryInternalPrefix404 writes a 404 JSON body for /internal/v1/* requests
+// that reach the primary listener. The response shape matches other router
+// not-found paths so clients and gateway logs see a uniform error code. The
+// X-Request-ID header is mirrored so operators correlating gateway logs by
+// request ID can locate these 404s in application observability without
+// scraping access logs.
+func primaryInternalPrefix404(w http.ResponseWriter, r *http.Request) {
+	if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok && reqID != "" {
+		w.Header().Set("X-Request-ID", reqID)
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusNotFound)
+	_, _ = w.Write([]byte(`{"error":{"code":"ERR_NOT_FOUND","message":"not found"}}`))
 }
 
 // buildRealIPMiddleware constructs the RealIP middleware, validating trusted
@@ -462,51 +489,65 @@ func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
 	}
 }
 
-// buildBusinessMux wires rate limiter, circuit breaker, auth, body-limit, and
-// optional internal-path-prefix guard middleware onto r.mux. Cells register
-// their routes on this mux.
+// buildPublicMux wires the public-listener middleware chain onto r.publicMux.
+// Cells' /api/v1/* routes land here via Router.Route/Handle/Mount.
 //
-// Chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → [InternalGuard] → handler.
+// Chain: [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handler.
 // Recovery + SecurityHeaders are already applied by outerMux.
-//
-// The internal guard is applied as a selective inline middleware: only requests
-// whose path starts with internalGuardPrefix are forwarded through the guard
-// function; all others are handled directly. This keeps the guard out of the
-// global Use() chain to avoid wrapping infrastructure or public endpoints.
-func (r *Router) buildBusinessMux() {
+func (r *Router) buildPublicMux() {
 	if r.rateLimiter != nil {
-		r.mux.Use(middleware.RateLimit(r.rateLimiter))
+		r.publicMux.Use(middleware.RateLimit(r.rateLimiter))
 	}
 	if r.circuitBreaker != nil {
-		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
+		r.publicMux.Use(middleware.CircuitBreaker(r.circuitBreaker))
 	}
 	if r.authVerifier != nil {
-		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
+		r.publicMux.Use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
 	}
-	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
-	if r.internalGuard != nil {
-		prefix := r.internalGuardPrefix
-		guard := r.internalGuard
-		r.mux.Use(func(next http.Handler) http.Handler {
-			guarded := guard(next)
-			return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-				if strings.HasPrefix(req.URL.Path, prefix) {
-					guarded.ServeHTTP(w, req)
-					return
-				}
-				next.ServeHTTP(w, req)
-			})
-		})
-	}
+	r.publicMux.Use(middleware.BodyLimit(r.bodyLimit))
 }
 
-// buildAuthOpts constructs the AuthOption slice for the auth middleware.
-// All matcher options use lazy closures that read Router fields at request
-// time so that matchers finalized by FinalizeAuth (after AuthMiddleware is
-// installed in buildBusinessMux) are honoured without reinstalling middleware.
+// buildInternalMux wires the internal-listener middleware chain onto
+// r.internalMux. Cells' /internal/v1/* routes land here via Router.Route/
+// Handle/Mount dispatch.
 //
-// Public endpoints, password-reset exemptions, and delegated paths are all
-// populated by FinalizeAuth after each Cell's RegisterRoutes completes.
+// Chain: Recovery → [InternalMiddleware...] → BodyLimit → handler.
+//
+// Deliberate omissions (PR-A14a design):
+//   - JWT AuthMiddleware — the internal mux lives on a separate listener
+//     with service-token / mTLS via WithInternalMiddleware as the sole
+//     authentication layer.
+//   - RateLimit and CircuitBreaker — these are public-edge DoS defences.
+//     Sharing the same instances across both muxes would couple internal
+//     traffic to the public circuit state (attacker poking the internal
+//     port could open the public breaker). Internal traffic is from
+//     authenticated service callers and is expected to be low-volume;
+//     operators who need internal throttling can install their own
+//     middleware via WithInternalMiddleware.
+//   - SecurityHeaders — outerMux only wraps publicMux; internal relies on
+//     caller-supplied middleware for any headers it needs.
+//
+// Kept:
+//   - Recovery — a panic in an internal handler must not crash the process.
+//     Recovery is a safety net, not an edge defence, so including it here
+//     does not couple internal traffic to public rate-limit / circuit state.
+func (r *Router) buildInternalMux() {
+	r.internalMux.Use(middleware.Recovery)
+	for _, mw := range r.internalMiddlewares {
+		r.internalMux.Use(mw)
+	}
+	r.internalMux.Use(middleware.BodyLimit(r.bodyLimit))
+}
+
+// buildAuthOpts constructs the AuthOption slice for the public-mux auth
+// middleware. All matcher options use lazy closures that read Router fields
+// at request time so that matchers finalized by FinalizeAuth (after
+// AuthMiddleware is installed in buildPublicMux) are honoured without
+// reinstalling middleware.
+//
+// Public endpoints and password-reset exemptions are populated by FinalizeAuth
+// after each Cell's RegisterRoutes completes. The internal mux has no JWT
+// middleware, so no delegated-matcher option is needed (PR-A14a).
 func (r *Router) buildAuthOpts() []auth.AuthOption {
 	opts := []auth.AuthOption{
 		auth.WithPublicEndpointMatcher(func(req *http.Request) bool {
@@ -514,12 +555,6 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 				return false
 			}
 			return r.authPublicMatcher(req)
-		}),
-		auth.WithDelegatedMatcher(func(req *http.Request) bool {
-			if r.authDelegatedMatcher == nil {
-				return false
-			}
-			return r.authDelegatedMatcher(req)
 		}),
 		auth.WithPasswordResetExemptMatcher(func(method, urlPath string) bool {
 			if r.passwordResetExemptMatcher == nil {
@@ -537,36 +572,47 @@ func (r *Router) buildAuthOpts() []auth.AuthOption {
 	return opts
 }
 
-// validateInternalGuard checks that the internal path-prefix guard is either
-// absent (both fields zero) or fully specified (valid prefix + non-nil guard).
-// Returns an error on any misconfiguration so NewE can fail-fast at startup.
-func (r *Router) validateInternalGuard() error {
-	if r.internalGuardPrefix == "" && r.internalGuard == nil {
-		return nil // option not used — nothing to validate
+// pickMux routes a registration call to the public or internal mux based on
+// the pattern's path prefix. Patterns beginning with "/internal/v1/" (or the
+// Go 1.22 ServeMux form "METHOD /internal/v1/...") land on the internal mux;
+// everything else lands on the public mux. This is the single source of
+// truth for the PR-A14a physical-isolation contract.
+func (r *Router) pickMux(pattern string) *chi.Mux {
+	if pathPartStartsWithInternalPrefix(pattern) {
+		return r.internalMux
 	}
-	if r.internalGuardPrefix == "" {
-		return fmt.Errorf("router: internal guard prefix must not be empty")
+	return r.publicMux
+}
+
+// pathPartStartsWithInternalPrefix reports whether the path component of
+// pattern (i.e. the leading '/...' after any optional "METHOD " prefix)
+// begins with internalPathPrefix. Handles both forms:
+//
+//   - chi-style pattern:   "/internal/v1/foo"
+//   - Go 1.22 ServeMux:    "GET /internal/v1/foo"
+//
+// Uses `idx > 0` so a leading space (malformed pattern) does not strip a
+// valid '/...' prefix into the "internal" bucket.
+func pathPartStartsWithInternalPrefix(pattern string) bool {
+	pathPart := pattern
+	if idx := strings.Index(pattern, " "); idx > 0 {
+		pathPart = pattern[idx+1:]
 	}
-	if !strings.HasPrefix(r.internalGuardPrefix, "/") {
-		return fmt.Errorf("router: internal guard prefix %q must start with '/'", r.internalGuardPrefix)
-	}
-	if !strings.HasSuffix(r.internalGuardPrefix, "/") {
-		return fmt.Errorf("router: internal guard prefix %q must end with '/'", r.internalGuardPrefix)
-	}
-	if r.internalGuard == nil {
-		return fmt.Errorf("router: internal guard must not be nil when prefix %q is set", r.internalGuardPrefix)
-	}
-	return nil
+	return strings.HasPrefix(pathPart, internalPathPrefix)
 }
 
 // Handle registers a handler for the given pattern, implementing cell.RouteMux.
+// The underlying mux is chosen by pickMux: /internal/v1/* patterns route to
+// internalMux; everything else routes to publicMux.
 func (r *Router) Handle(pattern string, handler http.Handler) {
-	r.mux.Handle(pattern, handler)
+	r.pickMux(pattern).Handle(pattern, handler)
 }
 
 // Group creates a sub-scope with a shared prefix, implementing cell.RouteMux.
+// Because Group has no pattern, the sub-scope inherits the public mux; use
+// Route("/internal/v1/...") to scope onto the internal mux.
 func (r *Router) Group(fn func(kcell.RouteMux)) {
-	r.mux.Group(func(cr chi.Router) {
+	r.publicMux.Group(func(cr chi.Router) {
 		sub := &chiRouterAdapter{cr: cr, declarer: r}
 		fn(sub)
 	})
@@ -576,27 +622,34 @@ func (r *Router) Group(fn func(kcell.RouteMux)) {
 // both the chi sub-router and a reference to the Router-rooted declarer so
 // that auth.Declare called on a nested sub-mux composes the mount prefix
 // with the declared path and forwards AuthRouteMeta to the top-level Router.
+// The underlying mux is chosen by pickMux; nested Route calls stay on the
+// mux chosen at the top level.
 func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
-	r.mux.Route(pattern, func(cr chi.Router) {
+	r.pickMux(pattern).Route(pattern, func(cr chi.Router) {
 		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r}
 		fn(sub)
 	})
 }
 
-// Mount attaches an http.Handler under the given prefix.
+// Mount attaches an http.Handler under the given prefix. Prefix-based
+// dispatch matches Route/Handle semantics.
 func (r *Router) Mount(prefix string, handler http.Handler) {
-	r.mux.Mount(prefix, handler)
+	r.pickMux(prefix).Mount(prefix, handler)
 }
 
 // With returns a new RouteMux that applies the given middleware to routes
 // registered through it, without modifying the receiver. Safe to call
-// after routes are registered (unlike chi.Mux.Use which panics).
+// after routes are registered (unlike chi.Mux.Use which panics). The
+// returned adapter inherits the public mux; use Route("/internal/v1/...").With
+// if middleware should scope onto the internal mux.
 func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
-	return &chiRouterAdapter{cr: r.mux.With(mw...), declarer: r}
+	return &chiRouterAdapter{cr: r.publicMux.With(mw...), declarer: r}
 }
 
-// ServeHTTP delegates to the outer mux (shared observability + infra routes +
-// business routes via mount).
+// ServeHTTP delegates to PublicHandler so the Router stays drop-in for code
+// paths that historically used the single-mux entry point (tests, etc.). For
+// production deployment, Bootstrap calls PublicHandler() and InternalHandler()
+// separately to drive two http.Server listeners.
 //
 // Panics if auth route metadata has been declared but FinalizeAuth has not yet
 // been called. This provides a loud, early failure rather than silently
@@ -609,9 +662,29 @@ func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	r.outerMux.ServeHTTP(w, req)
 }
 
-// Handler returns the outer http.Handler (entry point for the full chain).
-func (r *Router) Handler() http.Handler {
+// PublicHandler returns the http.Handler for the public listener: shared
+// observability + Recovery + SecurityHeaders + infra endpoints (/healthz,
+// /readyz, /metrics) + /api/v1/* + non-internal business routes. The
+// returned handler 404s any /internal/v1/* request because those routes are
+// not mounted here.
+//
+// Bootstrap binds this handler to the primary HTTP listener; k8s probes and
+// Prometheus scrapes hit this listener.
+func (r *Router) PublicHandler() http.Handler {
 	return r.outerMux
+}
+
+// InternalHandler returns the http.Handler for the internal listener: a
+// dedicated chi.Mux that ONLY carries /internal/v1/* routes with caller-
+// supplied WithInternalMiddleware as the sole auth layer. Non-internal
+// paths (including /healthz, /metrics, /api/v1/*) 404 because they are not
+// registered here — this is the physical-isolation contract PR-A14a
+// guarantees.
+//
+// Bootstrap binds this handler to the internal HTTP listener, typically on
+// a separate port bound to an internal network segment (9090 by default).
+func (r *Router) InternalHandler() http.Handler {
+	return r.internalMux
 }
 
 // DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
@@ -632,9 +705,13 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 }
 
 // FinalizeAuth compiles all accumulated AuthRouteMeta declarations into
-// matchers and OR-merges them with any matchers already set by
-// WithInternalPathPrefixGuard. Bootstrap calls this after all cells have
-// completed RegisterRoutes but before Listen.
+// matchers used by the public-mux AuthMiddleware. Bootstrap calls this after
+// all cells have completed RegisterRoutes but before Listen.
+//
+// PR-A14a: also verifies Delegated=true ⇔ path starts with "/internal/v1/"
+// (the internal-mux consistency invariant) before compiling matchers, so
+// misdeclared routes fail at startup rather than silently landing on the
+// wrong mux.
 //
 // Returns an error (not a panic) so Bootstrap can perform a clean rollback:
 //   - "router: FinalizeAuth called twice"
@@ -650,6 +727,15 @@ func (r *Router) FinalizeAuth() error {
 	r.authFinalized = true
 
 	if len(r.declaredAuthMetas) > 0 {
+		// PR-A14a: enforce Delegated ↔ /internal/v1/* consistency. A route
+		// declared with Delegated=true must live on /internal/v1/*, and any
+		// route on /internal/v1/* must carry Delegated=true. This replaces
+		// the pre-PR-A14a selective-guard behavior with a startup-time
+		// assertion that catches mis-declared routes before traffic flows.
+		if err := verifyInternalPrefixConsistency(r.declaredAuthMetas); err != nil {
+			return err
+		}
+
 		partitioned, err := partitionAuthMetas(r.declaredAuthMetas)
 		if err != nil {
 			return err
@@ -661,7 +747,6 @@ func (r *Router) FinalizeAuth() error {
 		if err := r.mergeExemptMatcher(partitioned.exemptEntries); err != nil {
 			return err
 		}
-		r.mergeDelegatedMatcher(partitioned.delegatedMatcher)
 		r.deriveHint()
 
 		// Warn when auth declarations exist but no verifier is installed: the
@@ -674,9 +759,11 @@ func (r *Router) FinalizeAuth() error {
 		}
 	}
 
-	// Policy coverage verification: every business route registered on r.mux
-	// must have a corresponding auth.Declare call (Public, Delegated, or with
-	// Policy). Routes on outerMux (healthz, readyz, metrics) are excluded.
+	// Policy coverage verification: every business route registered on the
+	// public + internal muxes must have a corresponding auth.Declare call
+	// (Public, Delegated, or with Policy). Infrastructure routes on outerMux
+	// (healthz, readyz, metrics) are excluded because they are not registered
+	// through Cell RegisterRoutes.
 	routes := r.enumerateBusinessRoutes()
 	if err := verifyPolicyCoverage(routes, r.declaredAuthMetas, r.policyCoverageWhitelist); err != nil {
 		return fmt.Errorf("router: policy coverage: %w", err)
@@ -685,33 +772,64 @@ func (r *Router) FinalizeAuth() error {
 	return nil
 }
 
-// enumerateBusinessRoutes walks the chi business mux and returns all registered
-// (method, path) pairs. Infrastructure routes on outerMux (healthz, readyz,
-// metrics) are excluded because they are not registered through Cell
-// RegisterRoutes.
+// verifyInternalPrefixConsistency enforces the PR-A14a invariant that
+// Delegated=true and /internal/v1/* path co-occur on every auth meta:
+//
+//   - Delegated=true + non-/internal/v1/* path → fail
+//   - Delegated=false + /internal/v1/* path   → fail
+//
+// Caught at FinalizeAuth time so Cells that mis-declare routes fail at
+// startup instead of at first request (which would dispatch to the wrong
+// mux and bypass the authoritative auth layer).
+func verifyInternalPrefixConsistency(metas []kcell.AuthRouteMeta) error {
+	for _, m := range metas {
+		isInternal := strings.HasPrefix(m.Path, internalPathPrefix)
+		switch {
+		case m.Delegated && !isInternal:
+			return fmt.Errorf(
+				"router: Delegated=true route %s %s must live under %s",
+				m.Method, m.Path, internalPathPrefix)
+		case !m.Delegated && isInternal:
+			return fmt.Errorf(
+				"router: route %s %s on %s prefix must declare Delegated=true",
+				m.Method, m.Path, internalPathPrefix)
+		}
+	}
+	return nil
+}
+
+// enumerateBusinessRoutes walks both business muxes (publicMux + internalMux)
+// and returns all registered (method, path) pairs. Infrastructure routes on
+// outerMux (healthz, readyz, metrics) are excluded because they are not
+// registered through Cell RegisterRoutes.
 func (r *Router) enumerateBusinessRoutes() []routeKey {
 	var routes []routeKey
 	// chi.Walk never returns a non-nil error when the walker callback always
 	// returns nil; the error return is part of the interface but unused here.
-	_ = chi.Walk(r.mux, func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+	collect := func(method, route string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
 		routes = append(routes, routeKey{Method: method, Path: route})
 		return nil
-	})
+	}
+	_ = chi.Walk(r.publicMux, collect)
+	_ = chi.Walk(r.internalMux, collect)
 	return routes
 }
 
 // authMetaPartition holds the categorised results of partitionAuthMetas.
+//
+// PR-A14a: the previous delegatedMatcher field was removed because internal
+// routes are now physically mounted on internalMux and never reach the
+// public-mux JWT middleware. The Delegated flag remains on AuthRouteMeta as
+// a declarative annotation cross-checked against path prefix by
+// verifyInternalPrefixConsistency.
 type authMetaPartition struct {
-	publicEntries    []string
-	exemptEntries    []string
-	delegatedMatcher func(*http.Request) bool
+	publicEntries []string
+	exemptEntries []string
 }
 
-// partitionAuthMetas deduplicates the metas and splits them into the three
-// "METHOD /path" entry slices consumed by the compile helpers, plus a
-// delegated per-request predicate (constructed inline because the exempt
-// compiler already handles {xxx} wildcards; delegated paths are matched
-// exactly for now).
+// partitionAuthMetas deduplicates the metas and splits them into the
+// "METHOD /path" entry slices consumed by the compile helpers (public and
+// password-reset-exempt). Duplicates (method, path) pairs are rejected.
 func partitionAuthMetas(metas []kcell.AuthRouteMeta) (authMetaPartition, error) {
 	seen := make(map[string]bool, len(metas))
 	var p authMetaPartition
@@ -730,22 +848,8 @@ func partitionAuthMetas(metas []kcell.AuthRouteMeta) (authMetaPartition, error) 
 		if m.PasswordResetExempt {
 			p.exemptEntries = append(p.exemptEntries, entry)
 		}
-		if m.Delegated {
-			p.delegatedMatcher = buildDelegatedMatcher(p.delegatedMatcher, m.Method, m.Path)
-		}
 	}
 	return p, nil
-}
-
-// buildDelegatedMatcher returns a new predicate that returns true when the
-// request matches (method, path) OR the previous predicate matches.
-func buildDelegatedMatcher(prev func(*http.Request) bool, method, path string) func(*http.Request) bool {
-	return func(req *http.Request) bool {
-		if prev != nil && prev(req) {
-			return true
-		}
-		return strings.EqualFold(req.Method, method) && req.URL.Path == path
-	}
 }
 
 // mergePublicMatcher OR-merges the compiled public entries with r.authPublicMatcher.
@@ -772,14 +876,6 @@ func (r *Router) mergeExemptMatcher(entries []string) error {
 	}
 	r.passwordResetExemptMatcher = orMergeMethodPath(r.passwordResetExemptMatcher, compiled)
 	return nil
-}
-
-// mergeDelegatedMatcher OR-merges the declared delegated matcher with r.authDelegatedMatcher.
-func (r *Router) mergeDelegatedMatcher(declared func(*http.Request) bool) {
-	if declared == nil {
-		return
-	}
-	r.authDelegatedMatcher = orMergeRequest(r.authDelegatedMatcher, declared)
 }
 
 // deriveHint sets r.derivedHint to the first declared POST+PasswordResetExempt
@@ -846,10 +942,12 @@ type chiRouterAdapter struct {
 var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
 
 func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
+	a.guardNestedInternalRegistration("Handle", pattern)
 	a.cr.Handle(pattern, handler)
 }
 
 func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
+	a.guardNestedInternalRegistration("Route", pattern)
 	a.cr.Route(pattern, func(cr chi.Router) {
 		sub := &chiRouterAdapter{
 			cr:       cr,
@@ -861,7 +959,33 @@ func (a *chiRouterAdapter) Route(pattern string, fn func(kcell.RouteMux)) {
 }
 
 func (a *chiRouterAdapter) Mount(pattern string, handler http.Handler) {
+	a.guardNestedInternalRegistration("Mount", pattern)
 	a.cr.Mount(pattern, handler)
+}
+
+// guardNestedInternalRegistration panics when a Cell tries to enter the
+// /internal/v1/* namespace from a sub-scope that was NOT already rooted on
+// /internal/v1/* at the top-level Router. The top-level Router.pickMux is
+// the only dispatch point that routes to internalMux; a nested adapter is
+// pinned to whichever chi.Router it was created from, so crossing into
+// /internal/v1/* from a publicMux-rooted sub-scope (Group, With, or
+// Route("/api/...")) would silently land the route on publicMux and bypass
+// PR-A14a physical isolation. When the adapter's prefix already starts with
+// /internal/v1/, nested registrations are fine — they remain in the internal
+// scope chosen at top-level dispatch.
+func (a *chiRouterAdapter) guardNestedInternalRegistration(op, pattern string) {
+	composed := joinPrefix(a.prefix, pattern)
+	if !pathPartStartsWithInternalPrefix(composed) {
+		return
+	}
+	if pathPartStartsWithInternalPrefix(a.prefix) {
+		return
+	}
+	panic(fmt.Sprintf(
+		"router: nested adapter %s(%q) crosses into /internal/v1/* from a "+
+			"non-internal sub-scope (prefix=%q); register internal routes "+
+			"directly on the top-level Router, not inside a Route/Group/With sub-scope",
+		op, pattern, a.prefix))
 }
 
 func (a *chiRouterAdapter) Group(fn func(kcell.RouteMux)) {

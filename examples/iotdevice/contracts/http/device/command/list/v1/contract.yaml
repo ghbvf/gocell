@@ -10,6 +10,9 @@ endpoints:
   http:
     method: GET
     path: /api/v1/devices/{id}/commands
+    pathParams:
+      id:
+        type: string
     successStatus: 200
     noContent: false
 schemaRefs:

@@ -37,7 +37,7 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithListener(ln))
+	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 

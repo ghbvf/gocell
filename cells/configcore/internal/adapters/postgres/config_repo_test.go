@@ -103,6 +103,108 @@ func TestGetByKey_OtherScanError_ReturnsErrConfigRepoQuery(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
+	require.True(t, errcode.IsInfraError(err),
+		"generic scan error must be CategoryInfra (not Domain)")
+}
+
+// TestGetByKey_NotFound_HasDomainCategory locks ErrConfigRepoNotFound's Category
+// to CategoryDomain so that errcode.IsDomainNotFound dual-channel check works
+// (S15 Category fix).
+func TestGetByKey_NotFound_HasDomainCategory(t *testing.T) {
+	db := &mockDB{queryRowResult: &mockRow{scanErr: pgx.ErrNoRows}}
+	repo := newConfigRepositoryFromDBTX(db)
+
+	_, err := repo.GetByKey(context.Background(), "missing")
+	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
+		"ErrConfigRepoNotFound must have Category=CategoryDomain for IsDomainNotFound to work")
+	require.False(t, errcode.IsInfraError(err),
+		"domain not-found must not be treated as infra")
+}
+
+// TestConfigRepo_CtxCanceled_ClassifiedAsInfra verifies that context.Canceled
+// and context.DeadlineExceeded are always classified as infra (never domain
+// not-found), across GetByKey, Update SELECT-FOR-UPDATE, and GetVersion
+// (S15 ctx-cancel classification fix).
+func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
+	tests := []struct {
+		name    string
+		scanErr error
+	}{
+		{"ctx canceled", context.Canceled},
+		{"ctx deadline exceeded", context.DeadlineExceeded},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run("GetByKey/"+tc.name, func(t *testing.T) {
+			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
+			repo := newConfigRepositoryFromDBTX(db)
+
+			_, err := repo.GetByKey(context.Background(), "any")
+			require.Error(t, err)
+			require.True(t, errcode.IsInfraError(err))
+			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
+				"ctx cancel must not leak into domain not-found branch")
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+		})
+		t.Run("Update_SelectForUpdate/"+tc.name, func(t *testing.T) {
+			seqDB := &sequencedMockDB{rows: []*mockRow{{scanErr: tc.scanErr}}}
+			repo := newConfigRepositoryFromDBTX(seqDB)
+
+			_, err := repo.Update(context.Background(), "k", "v")
+			require.Error(t, err)
+			require.True(t, errcode.IsInfraError(err))
+			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+		})
+		t.Run("GetVersion/"+tc.name, func(t *testing.T) {
+			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
+			repo := newConfigRepositoryFromDBTX(db)
+
+			_, err := repo.GetVersion(context.Background(), "cfg-1", 1)
+			require.Error(t, err)
+			require.True(t, errcode.IsInfraError(err))
+			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+		})
+		t.Run("Update_Returning/"+tc.name, func(t *testing.T) {
+			// SELECT FOR UPDATE succeeds (sensitive=false); UPDATE RETURNING ctx-cancels.
+			seqDB := &sequencedMockDB{rows: []*mockRow{
+				{values: []any{false}}, // SELECT FOR UPDATE → ok
+				{scanErr: tc.scanErr},  // UPDATE RETURNING → ctx cancel
+			}}
+			repo := newConfigRepositoryFromDBTX(seqDB)
+			_, err := repo.Update(context.Background(), "k", "v")
+			require.Error(t, err)
+			require.True(t, errcode.IsInfraError(err))
+			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+		})
+		t.Run("Delete/"+tc.name, func(t *testing.T) {
+			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
+			repo := newConfigRepositoryFromDBTX(db)
+			_, err := repo.Delete(context.Background(), "k")
+			require.Error(t, err)
+			require.True(t, errcode.IsInfraError(err))
+			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			require.Contains(t, ec.InternalMessage, "ctx canceled",
+				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+		})
+	}
 }
 
 // TestConfigRepository_GetByKey_NotFound is a legacy name kept for backward
@@ -160,6 +262,8 @@ func TestConfigRepository_Update_NotFound(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
+		"Update not-found must have Category=CategoryDomain")
 }
 
 // TestConfigRepository_UpdateForRollback tests the 4-arg UpdateForRollback method.
@@ -196,6 +300,10 @@ func TestConfigRepository_UpdateForRollback_NotFound(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
+		"UpdateForRollback not-found must have Category=CategoryDomain")
+	require.False(t, errcode.IsInfraError(err),
+		"domain not-found must not be treated as infra")
 }
 
 func TestConfigRepository_Delete(t *testing.T) {
@@ -229,6 +337,10 @@ func TestConfigRepository_Delete_NotFound(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
+		"Delete not-found must have Category=CategoryDomain")
+	require.False(t, errcode.IsInfraError(err),
+		"domain not-found must not be treated as infra")
 }
 
 func TestConfigRepository_List(t *testing.T) {
@@ -416,6 +528,8 @@ func TestGetVersion_NotFound_ReturnsErrConfigRepoNotFound(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoNotFound, ec.Code)
+	require.True(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
+		"GetVersion not-found must have Category=CategoryDomain")
 }
 
 // TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery verifies that scan
@@ -433,6 +547,8 @@ func TestGetVersion_OtherScanError_ReturnsErrConfigRepoQuery(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
+	require.True(t, errcode.IsInfraError(err),
+		"generic scan error must be CategoryInfra (not Domain)")
 }
 
 // TestConfigRepository_GetVersion_NotFound is a legacy name kept for backward

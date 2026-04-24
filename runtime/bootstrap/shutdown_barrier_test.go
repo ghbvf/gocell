@@ -44,7 +44,8 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-pre-delay", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithPreShutdownDelay(preDelay),
 	)
@@ -153,7 +154,8 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	const assertionDelay = 150 * time.Millisecond
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithPreShutdownDelay(assertionDelay),
 		WithWorkers(trackWorker),
@@ -213,7 +215,8 @@ func TestShutdown_WorkerErrorTriggersOrchestration(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-worker-err", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithWorkers(errorWorker),
 	)
@@ -238,7 +241,8 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	eb := eventbus.New()
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithPublisher(eb),
 		WithSubscriber(eb),
 		WithShutdownTimeout(shutdownTimeout),

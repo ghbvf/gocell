@@ -94,10 +94,53 @@ endpoints:
   server: accesscore
   clients:
     - edge-bff
+  http:                           # 传输层一等公民字段（PR-A9 起为 http kind 必需）
+    method: POST                  # GET | POST | PUT | PATCH | DELETE
+    path: /api/v1/access/sessions/login
+    pathParams: {}                # 显式空，若 path 含 {name} 则对应 key 必填
+    successStatus: 201
+    noContent: false
+    # queryParams 与 responses 按需声明，见下方完整示例
 schemaRefs:
   request: request.schema.json
   response: response.schema.json
 ```
+
+完整 HTTP 传输层示例（`GET /api/v1/access/users/{id}` 带 cursor 分页 + 401/403）：
+
+```yaml
+endpoints:
+  server: accesscore
+  clients: [edge-bff]
+  http:
+    method: GET
+    path: /api/v1/access/users/{id}
+    pathParams:                   # path 模板的 {name} 必须在这里有同名 key
+      id:
+        type: string              # string | integer | number | boolean | uuid
+        format: uuid              # 可选 hint；codegen/OpenAPI 消费
+    queryParams:                  # query 参数显式 typed map
+      cursor:
+        type: string
+        required: false
+      limit:
+        type: integer
+        required: false
+    successStatus: 200
+    noContent: false
+    responses:                    # 错误响应声明；FMT-13 不强制，但 auth-
+      401:                        # protected 端点按约定必须声明 401
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks admin role"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+```
+
+FMT-13 治理规则（PR-A9）：
+- path 中每个 `{name}` 占位符必须在 `pathParams` 下有同名 key（双向一致性，Error）
+- `pathParams` / `queryParams` 的 `type` 必须在白名单 `string | integer | number | boolean | uuid`
+- `pathParams.<name>.required: false` 非法（路径占位符天然必填）
 
 目录约定：`contracts/{kind}/{domain...}/{version}/contract.yaml`。`schemaRefs` 相对 `contract.yaml` 所在目录解析。
 

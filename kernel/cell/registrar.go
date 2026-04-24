@@ -134,9 +134,15 @@ type AuthRouteMeta struct {
 	// password-reset gate when an authenticated token carries
 	// password_reset_required=true. Only meaningful when Public is false.
 	PasswordResetExempt bool
-	// Delegated marks the route as handing JWT verification to a downstream
-	// guard (service-token, mTLS, etc.). AuthMiddleware forwards the request
-	// without inspecting the Bearer token.
+	// Delegated marks the route as living on the internal listener's mux
+	// (service-token / mTLS is the sole auth layer; JWT is never invoked).
+	//
+	// PR-A14a: after the physical dual-mux split, this field acts as a
+	// declarative marker only. Router.FinalizeAuth asserts at startup that
+	// Delegated=true iff the path starts with "/internal/v1/" — so the
+	// flag stays a single source of truth for internal-route affinity but
+	// no longer drives any runtime predicate. Prior to PR-A14a, Delegated
+	// flipped an in-band JWT bypass inside AuthMiddleware.
 	Delegated bool
 }
 

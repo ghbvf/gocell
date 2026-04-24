@@ -60,6 +60,28 @@
       "description": "Human-readable description of the contract's purpose."
     }
   },
+  "$defs": {
+    "paramSchema": {
+      "type": "object",
+      "required": ["type"],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["string", "integer", "number", "boolean", "uuid"],
+          "description": "Primitive type of the parameter."
+        },
+        "required": {
+          "type": "boolean",
+          "description": "Whether the parameter is required. Omitted for path params (always required); default false for query params."
+        },
+        "format": {
+          "type": "string",
+          "description": "Optional format hint (e.g. uuid, date-time, int64)."
+        }
+      }
+    }
+  },
   "allOf": [
     {
       "if": {
@@ -84,7 +106,7 @@
               },
               "http": {
                 "type": "object",
-                "description": "Optional transport metadata for migrated HTTP contracts.",
+                "description": "Transport metadata elevating method, path, parameters, and status semantics to first-class contract fields.",
                 "required": ["method", "path", "successStatus", "noContent"],
                 "additionalProperties": false,
                 "properties": {
@@ -97,6 +119,16 @@
                     "type": "string",
                     "pattern": "^/",
                     "description": "HTTP path template served by this contract."
+                  },
+                  "pathParams": {
+                    "type": "object",
+                    "description": "Typed declarations for placeholders in the path template. Keys must match every {name} in path (FMT-13).",
+                    "additionalProperties": {"$ref": "#/$defs/paramSchema"}
+                  },
+                  "queryParams": {
+                    "type": "object",
+                    "description": "Typed declarations for query string parameters accepted by this endpoint.",
+                    "additionalProperties": {"$ref": "#/$defs/paramSchema"}
                   },
                   "successStatus": {
                     "type": "integer",

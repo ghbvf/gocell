@@ -50,6 +50,119 @@ func TestHTTPTransportYAMLRoundTrip_NoContent(t *testing.T) {
 	assert.NotContains(t, string(data), "responses")
 }
 
+func TestHTTPTransportYAMLRoundTrip_PathParams(t *testing.T) {
+	orig := HTTPTransport{
+		Method:        "GET",
+		Path:          "/api/v1/config/{key}",
+		PathParams:    map[string]ParamSchema{"key": {Type: "string"}},
+		SuccessStatus: 200,
+	}
+	data, got := roundTrip(t, orig)
+	assert.Equal(t, orig, got)
+	assert.Contains(t, string(data), "pathParams:")
+	assert.Contains(t, string(data), "    type: string")
+	assert.NotContains(t, string(data), "queryParams")
+}
+
+func TestHTTPTransportYAMLRoundTrip_QueryParams(t *testing.T) {
+	truthy := true
+	falsy := false
+	orig := HTTPTransport{
+		Method: "GET",
+		Path:   "/api/v1/config/",
+		QueryParams: map[string]ParamSchema{
+			"cursor": {Type: "string", Required: &falsy},
+			"limit":  {Type: "integer", Required: &truthy},
+			"id":     {Type: "string", Format: "uuid"},
+		},
+		SuccessStatus: 200,
+	}
+	_, got := roundTrip(t, orig)
+	assert.Equal(t, orig, got)
+	assert.Equal(t, "integer", got.QueryParams["limit"].Type)
+	require.NotNil(t, got.QueryParams["limit"].Required)
+	assert.True(t, *got.QueryParams["limit"].Required)
+	require.NotNil(t, got.QueryParams["cursor"].Required)
+	assert.False(t, *got.QueryParams["cursor"].Required)
+	assert.Equal(t, "uuid", got.QueryParams["id"].Format)
+}
+
+func TestHTTPTransportYAMLRoundTrip_PathAndQueryCoexist(t *testing.T) {
+	falsy := false
+	orig := HTTPTransport{
+		Method: "GET",
+		Path:   "/api/v1/access/roles/{userID}",
+		PathParams: map[string]ParamSchema{
+			"userID": {Type: "string", Format: "uuid"},
+		},
+		QueryParams: map[string]ParamSchema{
+			"cursor": {Type: "string", Required: &falsy},
+		},
+		SuccessStatus: 200,
+	}
+	_, got := roundTrip(t, orig)
+	assert.Equal(t, orig, got)
+}
+
+func TestHTTPTransportYAMLOmitEmptyPathQuery(t *testing.T) {
+	orig := HTTPTransport{
+		Method:        "POST",
+		Path:          "/api/v1/access/sessions/login",
+		SuccessStatus: 201,
+	}
+	data, _ := roundTrip(t, orig)
+	// Both maps are omitempty — they must not serialize when absent.
+	assert.NotContains(t, string(data), "pathParams")
+	assert.NotContains(t, string(data), "queryParams")
+}
+
+func TestParamSchemaYAMLRoundTrip(t *testing.T) {
+	truthy := true
+	orig := ParamSchema{Type: "integer", Required: &truthy, Format: "int64"}
+	_, got := roundTrip(t, orig)
+	assert.Equal(t, orig, got)
+}
+
+// TestParamSchemaRequiredThreeStates locks in the three-state Required
+// semantics documented on the ParamSchema godoc: nil means "not declared",
+// false means "explicit optional", true means "explicit required". YAML
+// omitempty must emit the field for false and true, and omit it for nil.
+// FMT-13 depends on this distinction to reject `required: false` on path
+// parameters while accepting an omitted `required:` there.
+func TestParamSchemaRequiredThreeStates(t *testing.T) {
+	truthy := true
+	falsy := false
+
+	t.Run("nil required is omitted", func(t *testing.T) {
+		data, got := roundTrip(t, ParamSchema{Type: "string"})
+		assert.Nil(t, got.Required)
+		assert.NotContains(t, string(data), "required:")
+	})
+
+	t.Run("false required is emitted and preserved", func(t *testing.T) {
+		data, got := roundTrip(t, ParamSchema{Type: "string", Required: &falsy})
+		require.NotNil(t, got.Required)
+		assert.False(t, *got.Required)
+		assert.Contains(t, string(data), "required: false")
+	})
+
+	t.Run("true required is emitted and preserved", func(t *testing.T) {
+		data, got := roundTrip(t, ParamSchema{Type: "string", Required: &truthy})
+		require.NotNil(t, got.Required)
+		assert.True(t, *got.Required)
+		assert.Contains(t, string(data), "required: true")
+	})
+}
+
+func TestParamTypesWhitelist(t *testing.T) {
+	for _, name := range []string{"string", "integer", "number", "boolean", "uuid"} {
+		assert.True(t, ParamTypes[name], "%s should be accepted", name)
+	}
+	for _, name := range []string{"int", "float", "array", "", "object"} {
+		assert.False(t, ParamTypes[name], "%s should be rejected", name)
+	}
+}
+
 func TestHTTPResponseYAMLRoundTrip(t *testing.T) {
 	orig := HTTPResponse{
 		Description: "Not Found",

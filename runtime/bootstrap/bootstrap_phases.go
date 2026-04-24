@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -119,21 +120,8 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.shutdownMetricsErr != nil {
 		return fmt.Errorf("bootstrap: shutdown metrics registration failed: %w", b.shutdownMetricsErr)
 	}
-	seen := make(map[string]struct{}, len(b.healthCheckers))
-	for _, hc := range b.healthCheckers {
-		if hc.name == "" {
-			return fmt.Errorf("bootstrap: health checker name must not be empty")
-		}
-		if hc.fn == nil {
-			return fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name)
-		}
-		// Fail-fast on duplicate checker names: duplicates silently shadow each
-		// other in the health handler, making one probe invisible. Surface
-		// before any side effects so rollback cost is zero.
-		if _, dup := seen[hc.name]; dup {
-			return fmt.Errorf("bootstrap: duplicate health checker name %q; each checker must have a unique name", hc.name)
-		}
-		seen[hc.name] = struct{}{}
+	if err := b.validateHealthCheckers(); err != nil {
+		return err
 	}
 	if b.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
@@ -141,7 +129,11 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.brokerHealthNil {
 		return fmt.Errorf("bootstrap: broker health checker must not be nil")
 	}
-	if err := b.validateInternalGuard(); err != nil {
+	// PR-A14a: validate dual HTTP listener addresses + nil internal middleware.
+	if err := b.validateHTTPListenerAddrs(); err != nil {
+		return err
+	}
+	if err := b.validateInternalMiddlewares(); err != nil {
 		return err
 	}
 	if b.relayHealthNil {
@@ -153,6 +145,38 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.authVerifier != nil && b.authDiscovery {
 		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithAuthDiscovery " +
 			"are mutually exclusive; use WithAuthDiscovery (recommended)")
+	}
+	return nil
+}
+
+// validateHealthCheckers ensures every caller-registered checker has a non-
+// empty unique name and a non-nil callback. Duplicates silently shadow each
+// other in the health handler, making one probe invisible — surface the
+// error at phase 0 before any side effects.
+func (b *Bootstrap) validateHealthCheckers() error {
+	seen := make(map[string]struct{}, len(b.healthCheckers))
+	for _, hc := range b.healthCheckers {
+		if hc.name == "" {
+			return fmt.Errorf("bootstrap: health checker name must not be empty")
+		}
+		if hc.fn == nil {
+			return fmt.Errorf("bootstrap: health checker %q must not be nil", hc.name)
+		}
+		if _, dup := seen[hc.name]; dup {
+			return fmt.Errorf("bootstrap: duplicate health checker name %q; each checker must have a unique name", hc.name)
+		}
+		seen[hc.name] = struct{}{}
+	}
+	return nil
+}
+
+// validateInternalMiddlewares rejects nil entries in the internal-mux chain.
+// A silent nil would disable the authoritative auth layer for /internal/v1/*.
+func (b *Bootstrap) validateInternalMiddlewares() error {
+	for i, mw := range b.internalMiddlewares {
+		if mw == nil {
+			return fmt.Errorf("bootstrap: WithInternalMiddleware entry %d must not be nil", i)
+		}
 	}
 	return nil
 }
@@ -686,8 +710,8 @@ func (b *Bootstrap) buildRouter(s *phaseState, hh *health.Handler) (*router.Rout
 		}
 		opts = append(opts, authOpts...)
 	}
-	if b.internalGuard != nil {
-		opts = append(opts, router.WithInternalPathPrefixGuard(b.internalGuardPrefix, b.internalGuard))
+	if len(b.internalMiddlewares) > 0 {
+		opts = append(opts, router.WithInternalMiddleware(b.internalMiddlewares...))
 	}
 	opts = append(opts, router.WithHealthHandler(hh))
 	rtr, err := router.NewE(opts...)
@@ -842,39 +866,128 @@ func (b *Bootstrap) checkNoEventRegistrars(asm *assembly.CoreAssembly) error {
 	return nil
 }
 
-// phase7StartHTTPServer creates and starts the HTTP server, wiring httpErrCh
-// and a teardown that calls srv.Shutdown.
+// phase7StartHTTPServer creates and starts the TWO HTTP servers (primary +
+// internal), pre-binding both listeners so port conflicts surface
+// synchronously before any goroutine is started (if the second listener fails
+// to bind, the first listener is closed). Each server runs in its own
+// goroutine; errors fan into a single buffered channel read by phase 9. The
+// LIFO teardown calls both Shutdown() calls in parallel under the shared
+// shutCtx budget.
+//
+// ref: go-kratos/kratos app.go@main L95-122 — per-server goroutine pair.
+// ref: ory/kratos cmd/daemon/serve.go — named public / admin server split.
+// ref: kubernetes/apiserver pkg/server/secure_serving.go — pre-bind listener
+// to surface bind errors synchronously.
 func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
-	srv := &http.Server{
-		Addr:              b.httpAddr,
-		Handler:           s.rtr,
+	primaryLn, primaryOwned, err := b.resolvePrimaryListener()
+	if err != nil {
+		slog.Error("bootstrap: failed to bind HTTP listener",
+			slog.String("listener", "primary"),
+			slog.String("addr", b.primaryAddr),
+			slog.Any("error", err))
+		return fmt.Errorf("bootstrap: listen primary %s: %w", b.primaryAddr, err)
+	}
+	internalLn, _, err := b.resolveInternalListener()
+	if err != nil {
+		slog.Error("bootstrap: failed to bind HTTP listener",
+			slog.String("listener", "internal"),
+			slog.String("addr", b.internalAddr),
+			slog.Any("error", err))
+		// Close the primary listener only when Bootstrap owns it (i.e. bound
+		// it here). When the caller injected a listener via WithPrimaryListener
+		// we must NOT close it — the caller retains ownership and may want to
+		// reuse the socket on retry.
+		if primaryOwned {
+			_ = primaryLn.Close()
+		}
+		return fmt.Errorf("bootstrap: listen internal %s: %w", b.internalAddr, err)
+	}
+
+	primarySrv := &http.Server{
+		Handler:           s.rtr.PublicHandler(),
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	internalSrv := &http.Server{
+		Handler:           s.rtr.InternalHandler(),
 		ReadHeaderTimeout: 10 * time.Second,
 	}
 
-	ln := b.listener
-	if ln == nil {
-		var err error
-		ln, err = net.Listen("tcp", b.httpAddr)
-		if err != nil {
-			return fmt.Errorf("bootstrap: listen %s: %w", b.httpAddr, err)
+	// Two slots: one per server. Producers always write and then close, so the
+	// channel is safe to fan-in to a single reader in phase9.
+	httpErrCh := make(chan error, 2)
+	pending := int32(2)
+	serveAndReport := func(name string, srv *http.Server, ln net.Listener) {
+		slog.Info("bootstrap: HTTP server starting",
+			slog.String("listener", name),
+			slog.String("addr", ln.Addr().String()))
+		err := srv.Serve(ln)
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			httpErrCh <- fmt.Errorf("%s listener: %w", name, err)
+		}
+		if atomic.AddInt32(&pending, -1) == 0 {
+			close(httpErrCh)
 		}
 	}
-
-	httpErrCh := make(chan error, 1)
-	go func() {
-		slog.Info("bootstrap: HTTP server starting", slog.String("addr", ln.Addr().String()))
-		if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			httpErrCh <- err
-		}
-		close(httpErrCh)
-	}()
+	go serveAndReport("primary", primarySrv, primaryLn)
+	go serveAndReport("internal", internalSrv, internalLn)
 
 	s.httpErrCh = httpErrCh
 	s.addTeardown(func(c context.Context) error {
-		slog.Info("bootstrap: draining HTTP server")
-		return srv.Shutdown(c)
+		return shutdownBothServers(c, primarySrv, internalSrv)
 	})
 	return nil
+}
+
+// resolvePrimaryListener returns the caller-injected primary listener when
+// WithPrimaryListener was used; otherwise it binds b.primaryAddr. The owned
+// bool reports whether Bootstrap owns the returned listener — callers must
+// Close the listener on error only when owned=true (caller-injected listeners
+// remain the caller's responsibility).
+func (b *Bootstrap) resolvePrimaryListener() (ln net.Listener, owned bool, err error) {
+	if b.primaryListener != nil {
+		return b.primaryListener, false, nil
+	}
+	ln, err = net.Listen("tcp", b.primaryAddr)
+	return ln, err == nil, err
+}
+
+// resolveInternalListener mirrors resolvePrimaryListener for the internal
+// listener.
+func (b *Bootstrap) resolveInternalListener() (ln net.Listener, owned bool, err error) {
+	if b.internalListener != nil {
+		return b.internalListener, false, nil
+	}
+	ln, err = net.Listen("tcp", b.internalAddr)
+	return ln, err == nil, err
+}
+
+// shutdownBothServers drains the primary and internal servers in parallel
+// under the shared shutCtx budget. Both Shutdown calls receive the same
+// deadline; the aggregated error (if any) is joined via errors.Join so
+// operators see every failure. Per-listener completion is logged so
+// operators can pinpoint a stuck listener when one finishes and the other
+// hangs past the deadline.
+func shutdownBothServers(ctx context.Context, primary, internal *http.Server) error {
+	slog.Info("bootstrap: draining HTTP servers")
+	type drainResult struct {
+		name string
+		err  error
+	}
+	resultCh := make(chan drainResult, 2)
+	go func() { resultCh <- drainResult{name: "primary", err: primary.Shutdown(ctx)} }()
+	go func() { resultCh <- drainResult{name: "internal", err: internal.Shutdown(ctx)} }()
+	var errs []error
+	for i := 0; i < 2; i++ {
+		r := <-resultCh
+		if r.err != nil {
+			slog.Error("bootstrap: HTTP listener drain failed",
+				slog.String("listener", r.name), slog.Any("error", r.err))
+			errs = append(errs, fmt.Errorf("%s listener: %w", r.name, r.err))
+			continue
+		}
+		slog.Info("bootstrap: HTTP listener drained", slog.String("listener", r.name))
+	}
+	return errors.Join(errs...)
 }
 
 // phase8StartWorkers starts the WorkerGroup using the caller-supplied runCtx

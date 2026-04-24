@@ -92,15 +92,60 @@ func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
 
 ### 4. 注册 HTTP 路由（可选）
 
-实现 `cell.HTTPRegistrar` 接口：
+实现 `cell.HTTPRegistrar` 接口，使用 `auth.Declare` 在注册点声明鉴权语义
+（F3 模式，参见 [runtime-api.md](../../.claude/rules/gocell/runtime-api.md)）：
 
 ```go
 var _ cell.HTTPRegistrar = (*MyCell)(nil)
 
 func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
-    mux.Handle("/api/v1/my-resource/*", c.handler.Routes())
+    mux.Route("/api/v1/my-resource", func(sub cell.RouteMux) {
+        auth.Declare(sub, auth.RouteDecl{
+            Method:  "GET",
+            Path:    "/{id}",
+            Handler: http.HandlerFunc(c.handler.Get),
+            Policy:  auth.Authenticated(),
+        })
+    })
 }
 ```
+
+#### PR-A14a 双 listener 分流
+
+`runtime` 层运行两个独立 `http.Server`：
+
+- **primary** (`:8080` 默认) — `/api/v1/*`、`/healthz`、`/readyz`、`/metrics`、所有 public 业务路由；JWT AuthMiddleware 工作在此 listener 上。
+- **internal** (`127.0.0.1:9090` 默认) — 仅 `/internal/v1/*` 控制面路由；service-token / mTLS 中间件由 composition root 通过 `bootstrap.WithInternalMiddleware(mw)` 注入作为唯一鉴权层。
+
+Cell 在 `RegisterRoutes` 里按路径前缀声明，`Router` 自动把 `/internal/v1/*` pattern 物理挂到 internalMux：
+
+```go
+func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
+    // public → publicMux
+    mux.Route("/api/v1/my-resource", func(sub cell.RouteMux) {
+        auth.Declare(sub, auth.RouteDecl{
+            Method: "GET", Path: "/{id}",
+            Handler: http.HandlerFunc(c.handler.Get),
+            Policy:  auth.Authenticated(),
+        })
+    })
+    // internal → internalMux（service-token/mTLS 是唯一鉴权层；JWT 不触达）
+    mux.Route("/internal/v1/my-resource", func(sub cell.RouteMux) {
+        auth.Declare(sub, auth.RouteDecl{
+            Method: "POST", Path: "/admin-op",
+            Handler: http.HandlerFunc(c.handler.AdminOp),
+            Policy:    internalAdminPolicy,
+            Delegated: true, // 必须：FinalizeAuth 在启动期断言 Delegated ⇔ /internal/v1/*
+        })
+    })
+}
+```
+
+**约束**：
+
+- 所有 `/internal/v1/*` 路由必须 `Delegated: true`，否则 `FinalizeAuth()` 启动期失败；反之 `Delegated: true` 只能用于 `/internal/v1/*`。
+- 禁止在 `Route` / `Group` / `With` 嵌套子作用域里再次进入 `/internal/v1/*`——会触发 `chiRouterAdapter.guardNestedInternalRegistration` panic（顶层 Router 是内外 mux 分流的唯一入口）。
+- `/healthz` / `/readyz` / `/metrics` 只在 primary listener，internal listener 对这些路径返回 404。
 
 ### 5. 注册事件订阅（可选）
 
