@@ -1,5 +1,10 @@
 // Package commandtest provides in-memory implementations of the command
 // package interfaces for use in unit tests and examples.
+//
+// NOTE: Not suitable for production deployments. Replace with a persistent
+// adapter (e.g., adapters/postgres command store) for durable mode. This
+// package is importable from non-test code intentionally — the guard against
+// production misuse lives at the Cell wiring layer.
 package commandtest
 
 import (
@@ -25,9 +30,10 @@ import (
 //   - command.Writer (WriteCommand)
 //   - command.StateAdvancer (AdvanceStatus)
 type InMemQueue struct {
-	mu      sync.RWMutex
-	entries map[string]*command.Entry
-	leases  map[string]time.Time // commandID → lease expiry
+	mu              sync.RWMutex
+	entries         map[string]*command.Entry
+	leases          map[string]time.Time // commandID → lease expiry
+	idempotencyKeys map[string]struct{}  // idempotencyKey → present (O(1) dedup)
 
 	// Now supplies the clock. Defaults to time.Now if nil.
 	Now func() time.Time
@@ -44,9 +50,10 @@ var (
 // NewInMemQueue creates a new InMemQueue with the default wall clock.
 func NewInMemQueue() *InMemQueue {
 	return &InMemQueue{
-		entries: make(map[string]*command.Entry),
-		leases:  make(map[string]time.Time),
-		Now:     time.Now,
+		entries:         make(map[string]*command.Entry),
+		leases:          make(map[string]time.Time),
+		idempotencyKeys: make(map[string]struct{}),
+		Now:             time.Now,
 	}
 }
 
@@ -108,18 +115,18 @@ func (q *InMemQueue) Enqueue(ctx context.Context, entry command.Entry, opts comm
 	return q.storeIfNotDup(entry, opts.IdempotencyKey)
 }
 
-// storeIfNotDup acquires the write lock, checks for idempotency key dedup,
-// and stores the entry. Separated from Enqueue to reduce cognitive complexity.
+// storeIfNotDup acquires the write lock, checks for idempotency key dedup
+// in O(1) via the idempotencyKeys map, and stores the entry.
+// Separated from Enqueue to reduce cognitive complexity.
 func (q *InMemQueue) storeIfNotDup(entry command.Entry, idempotencyKey string) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
 	if idempotencyKey != "" {
-		for _, e := range q.entries {
-			if e.Metadata != nil && e.Metadata["_idempotency_key"] == idempotencyKey {
-				return nil // idempotent no-op
-			}
+		if _, exists := q.idempotencyKeys[idempotencyKey]; exists {
+			return nil // idempotent no-op
 		}
+		q.idempotencyKeys[idempotencyKey] = struct{}{}
 	}
 
 	cp := entry
@@ -235,16 +242,22 @@ func (q *InMemQueue) ackTimeout(e *command.Entry) error {
 	return nil
 }
 
-// ExtendLease renews the lease for a command. Returns an error if the lease
-// has already expired.
+// ExtendLease renews the lease for a command.
+// Returns ErrNotFound if the command does not exist in the queue.
+// Returns ErrValidationFailed (lease expired) if the command exists but its
+// lease has expired or was never acquired (e.g. Pending, not yet Dequeued).
 func (q *InMemQueue) ExtendLease(_ context.Context, commandID string, extension time.Duration, now time.Time) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 
-	expiry, ok := q.leases[commandID]
-	if !ok || now.After(expiry) {
+	if _, ok := q.entries[commandID]; !ok {
+		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
+	}
+
+	expiry, hasLease := q.leases[commandID]
+	if !hasLease || now.After(expiry) {
 		return errcode.New(errcode.ErrValidationFailed,
-			"commandtest: lease expired or not found for command: "+commandID)
+			"commandtest: lease expired or not acquired for command: "+commandID)
 	}
 	q.leases[commandID] = now.Add(extension)
 	return nil
@@ -263,6 +276,12 @@ func (q *InMemQueue) Cancel(_ context.Context, commandID string, now time.Time) 
 		return fmt.Errorf("commandtest: cancel: %w", err)
 	}
 	delete(q.leases, commandID)
+	// Remove idempotency key so a re-enqueue is allowed after cancel.
+	if e.Metadata != nil {
+		if ikey, ok := e.Metadata["_idempotency_key"]; ok {
+			delete(q.idempotencyKeys, ikey)
+		}
+	}
 	return nil
 }
 

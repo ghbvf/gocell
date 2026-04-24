@@ -148,6 +148,9 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	//
 	// TODO(PR-A12-SWEEPER-WIRE): wire command.Sweeper once InMemQueue supports
 	// multi-device scan (PendingAll). Tracked in backlog PR-A12-SWEEPER-WIRE.
+	if deps.DurabilityMode == cell.DurabilityDurable {
+		return fmt.Errorf("devicecell: commandtest.InMemQueue is not suitable for durable deployments; wire a durable command.Queue adapter instead")
+	}
 	cmdQueue := commandtest.NewInMemQueue()
 	commandSvc, err := devicecommand.NewService(cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))

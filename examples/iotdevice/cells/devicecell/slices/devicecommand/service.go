@@ -93,8 +93,18 @@ func generateID() (string, error) {
 // commandType defaults to "default" when empty — callers that don't specify
 // a type (e.g. early demo scripts) get a sensible fallback without error.
 // T3 DEVICE-ENQUEUE-RBAC: s.authz is called when non-nil to enforce RBAC.
+// Authz is checked before device lookup to prevent timing-based information
+// leakage (403 must precede 404 so callers cannot probe device existence).
 // L4 consistency: Enqueue is a Pending write (no outbox required at this stage).
 func (s *Service) Enqueue(ctx context.Context, deviceID, commandType, payload string) (command.Entry, error) {
+	// Authz check before any data access — prevents 404 vs 403 timing probing.
+	if s.authz != nil {
+		if err := s.authz(ctx); err != nil {
+			return command.Entry{}, errcode.Wrap(errcode.ErrAuthForbidden,
+				"device-command: enqueue authorization failed", err)
+		}
+	}
+
 	// Verify device exists.
 	if _, err := s.deviceRepo.GetByID(ctx, deviceID); err != nil {
 		return command.Entry{}, fmt.Errorf("device-command: lookup device: %w", err)
@@ -201,6 +211,13 @@ func entryFieldValue(e command.Entry, field string) any {
 //
 // Already-terminal commands are a no-op (idempotent).
 // L4 consistency: Ack advances state; no outbox publish at this layer.
+//
+// NOTE: non-atomic. The chained Pending→Sent→Delivered→Succeeded advance in
+// this method is composed of three independent StateAdvancer calls; between
+// steps another goroutine (e.g., Sweeper) could observe an intermediate state.
+// This is acceptable for demo/in-memory mode where InMemQueue's mutex makes
+// conflicts impossible. Production command adapters (e.g., postgres) SHOULD
+// implement this as a single transaction — see backlog PR-A12-ACK-ATOMIC.
 func (s *Service) Ack(ctx context.Context, deviceID, cmdID string) error {
 	now := time.Now()
 

@@ -28,6 +28,12 @@ type Reader interface {
 // Implementations SHOULD use optimistic locking (e.g., WHERE status = $from)
 // to prevent concurrent transitions.
 //
+// Callers that need to chain multiple AdvanceStatus calls atomically (e.g.,
+// Pending→Sent→Delivered→Succeeded in a single HTTP request) SHOULD wrap them
+// in a transaction at the adapter level. The kernel interface does not expose
+// transactional scope; this is intentional to keep it pluggable (in-memory
+// adapters can satisfy it trivially).
+//
 // Typical adapter implementation:
 //
 //	func (a *PGAdapter) AdvanceStatus(ctx context.Context, id string, from, to Status, now time.Time) error {

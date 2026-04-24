@@ -58,8 +58,9 @@ func TestAckReason_String(t *testing.T) {
 func TestEnqueueOptions_ZeroValueIsValid(t *testing.T) {
 	t.Parallel()
 	// Zero-value EnqueueOptions should be usable without panics.
+	// LeaseDuration is intentionally absent from EnqueueOptions — lease is
+	// determined by Queue.Dequeue's leaseDuration parameter.
 	opts := command.EnqueueOptions{}
 	assert.Empty(t, opts.IdempotencyKey)
 	assert.Nil(t, opts.Authz)
-	assert.Zero(t, opts.LeaseDuration)
 }

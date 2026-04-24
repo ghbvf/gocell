@@ -141,6 +141,26 @@ func TestService_Enqueue_AuthzHook(t *testing.T) {
 	assert.Contains(t, err.Error(), "permission denied")
 }
 
+func TestService_Enqueue_AuthzCheckedBeforeDeviceLookup(t *testing.T) {
+	// Authz must fire before device lookup to prevent 404 vs 403 timing probing.
+	// With a non-existent device AND a rejecting authz, the result must be Forbidden
+	// (authz error), not NotFound (device lookup error).
+	svc, _, _ := newTestService()
+
+	rejectAll := func(_ context.Context) error {
+		return errors.New("permission denied")
+	}
+	svc.authz = rejectAll
+
+	// deviceID does not exist — but authz fires first and returns Forbidden.
+	_, err := svc.Enqueue(context.Background(), "dev-nonexistent", "", "reboot")
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrAuthForbidden, ecErr.Code,
+		"authz must be checked before device lookup — must return Forbidden, not NotFound")
+}
+
 func TestService_ListPending(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()

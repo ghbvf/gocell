@@ -3,6 +3,8 @@ package command
 import (
 	"context"
 	"time"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // ExpiryTransition describes a single status change recommended by SweepOnce.
@@ -87,6 +89,12 @@ type Sweeper struct {
 	// without a global scan API). Must be non-empty — Sweeper.Start returns
 	// an error if DeviceID is empty to prevent inadvertent scope creep into
 	// global-sweep adapter concerns.
+	//
+	// Future extension for global sweep (all devices): introduce a
+	// Reader.PendingAll method and accept DeviceID="" as the global-sweep
+	// sentinel, OR provide a separate GlobalSweeper type. Current per-device
+	// restriction keeps adapter concerns decoupled — the postgres adapter
+	// (Wave 3) will likely add PendingAll and relax this check.
 	DeviceID string
 	// OnError is invoked on non-fatal errors during a sweep tick. nil = no-op.
 	OnError func(error)
@@ -150,10 +158,5 @@ func (s *Sweeper) runTick(ctx context.Context, now time.Time) {
 }
 
 // errDeviceIDRequired is returned by Sweeper.Start when DeviceID is empty.
-// Defined as a package-level var so tests can use errors.Is comparisons.
-var errDeviceIDRequired = errInvalidConfig("command: Sweeper.DeviceID must be non-empty")
-
-// errInvalidConfig is a simple string-based error type for configuration errors.
-type errInvalidConfig string
-
-func (e errInvalidConfig) Error() string { return string(e) }
+// Callers can match with errors.Is against errcode.ErrValidationFailed.
+var errDeviceIDRequired = errcode.New(errcode.ErrValidationFailed, "command: Sweeper.DeviceID must be non-empty")

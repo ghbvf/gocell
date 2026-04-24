@@ -6,8 +6,10 @@ import (
 	"time"
 )
 
-// DefaultLeaseDuration is the default lease duration for Dequeued commands.
-// If EnqueueOptions.LeaseDuration is zero, Queue implementations use this value.
+// DefaultLeaseDuration is the suggested default lease when callers don't specify
+// one in Queue.Dequeue. Intentionally mirrors kernel/idempotency.DefaultLeaseTTL
+// (5 minutes) so L4 command leases and L2 consumer leases default to the same
+// timeout. Update both if this default changes.
 const DefaultLeaseDuration = 5 * time.Minute
 
 // AuthzFunc is a caller-supplied permission hook invoked at the Enqueue boundary.
@@ -48,14 +50,14 @@ func (r AckReason) String() string {
 }
 
 // EnqueueOptions configures a single Enqueue call.
+// Lease duration is not set at enqueue time — it is determined by the
+// leaseDuration parameter of Queue.Dequeue. DefaultLeaseDuration is the
+// recommended default for Dequeue callers.
 type EnqueueOptions struct {
 	// IdempotencyKey dedups retried Enqueue calls; empty = no dedup guarantee.
 	IdempotencyKey string
 	// Authz is invoked before any write; return non-nil to reject. Use nil to skip.
 	Authz AuthzFunc
-	// LeaseDuration is how long a Dequeued command is leased before auto re-queue.
-	// Zero means use queue default (DefaultLeaseDuration = 5 * time.Minute).
-	LeaseDuration time.Duration
 }
 
 // Queue is the kernel-level L4 command queue facade. Implementations live in

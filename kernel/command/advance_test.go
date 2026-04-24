@@ -293,6 +293,26 @@ func TestResetForRetry_FromDelivered_Rejected(t *testing.T) {
 	assert.Equal(t, StatusDelivered, entry.Status, "status must not change")
 }
 
+func TestAdvanceCommand_ClockRegression_Rejected(t *testing.T) {
+	t.Parallel()
+	// Defensive test: if SentAt is already set (meaning it was never cleared by
+	// ResetForRetry — a programming error in an adapter) and now precedes SentAt,
+	// AdvanceCommand must return an error to prevent backwards timestamps.
+	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	entry := NewEntry("cmd-1", "dev-1", "reboot", []byte(`{}`), Timeouts{}, created)
+	now := created.Add(10 * time.Second)
+
+	// Manually set SentAt to simulate a corrupt/un-reset entry while keeping
+	// status as Pending (as if a buggy adapter skipped ResetForRetry).
+	entry.SentAt = &now // SentAt is set but entry is still Pending
+
+	earlier := created.Add(5 * time.Second) // earlier than SentAt
+	err := AdvanceCommand(&entry, StatusSent, earlier)
+	assert.Error(t, err, "advancing with now < previous SentAt must be rejected (clock skew guard)")
+	assert.Contains(t, err.Error(), "clock skew")
+	assert.Contains(t, err.Error(), "ERR_VALIDATION_FAILED")
+}
+
 func TestResetForRetry_PreservesFields(t *testing.T) {
 	t.Parallel()
 	created := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)

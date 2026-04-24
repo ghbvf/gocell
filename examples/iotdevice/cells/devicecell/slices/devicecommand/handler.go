@@ -6,6 +6,7 @@ import (
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -38,6 +39,10 @@ func toCommandResponse(e command.Entry) commandResponse {
 }
 
 // Handler provides HTTP endpoints for device commands.
+//
+// WARNING: command endpoints run in demo mode — no route-level auth policy.
+// For production, wire WithAuthDiscovery() on the assembly and attach
+// Policy: auth.AnyRole("operator") to RouteDecl.
 type Handler struct {
 	svc *Service
 }
@@ -53,16 +58,19 @@ func NewHandler(svc *Service) *Handler {
 // and add a Policy field or rely on AuthMiddleware's baseline JWT check.
 // Hardening devicecell authz is out of scope for the F3 migration.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
+	// DEMO MODE: no auth policy; see Handler godoc.
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "POST",
 		Path:    "/{id}/commands",
 		Handler: http.HandlerFunc(h.HandleEnqueue),
 	})
+	// DEMO MODE: no auth policy; see Handler godoc.
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "GET",
 		Path:    "/{id}/commands",
 		Handler: http.HandlerFunc(h.HandleListPending),
 	})
+	// DEMO MODE: no auth policy; see Handler godoc.
 	auth.Declare(mux, auth.RouteDecl{
 		Method:  "POST",
 		Path:    "/{id}/commands/{cmdId}/ack",
@@ -137,9 +145,14 @@ func (h *Handler) HandleAck(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch the updated entry to return the terminal state.
 	entry, err := h.svc.queue.GetCommand(r.Context(), cmdID)
-	if err != nil || entry == nil {
-		// Fallback: this should not happen after a successful Ack.
-		httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": map[string]any{"status": "succeeded"}})
+	if err != nil {
+		httputil.WriteDomainError(r.Context(), w, err)
+		return
+	}
+	if entry == nil {
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError,
+			string(errcode.ErrInternal),
+			"devicecommand: ack succeeded but entry not found")
 		return
 	}
 

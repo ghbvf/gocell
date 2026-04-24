@@ -28,6 +28,13 @@ func AdvanceCommand(entry *Entry, to Status, now time.Time) error {
 
 	switch to {
 	case StatusSent:
+		// Defensive clock-skew check: SentAt should be nil before first Sent
+		// transition (ResetForRetry clears it). If SentAt is somehow set already,
+		// ensure now does not precede it to prevent backwards timestamps.
+		if entry.SentAt != nil && now.Before(*entry.SentAt) {
+			return errcode.New(errcode.ErrValidationFailed,
+				"command: advance now precedes previous SentAt (clock skew?)")
+		}
 		entry.SentAt = &now
 		entry.Attempt++
 	case StatusDelivered:

@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -19,6 +20,97 @@ func TestInMemQueue_ImplementsQueueInterface(t *testing.T) {
 	var _ command.Reader = (*commandtest.InMemQueue)(nil)
 	var _ command.Writer = (*commandtest.InMemQueue)(nil)
 	var _ command.StateAdvancer = (*commandtest.InMemQueue)(nil)
+}
+
+func TestInMemQueue_WriteCommand(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+
+	// WriteCommand seeds an entry bypassing Enqueue validation.
+	entry := command.NewEntry("cmd-seeded", "dev-1", "reboot", []byte(`{}`), command.Timeouts{}, now)
+	require.NoError(t, q.WriteCommand(ctx, entry))
+
+	got, err := q.GetCommand(ctx, "cmd-seeded")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, "cmd-seeded", got.ID)
+}
+
+func TestInMemQueue_AdvanceStatus(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	entry := makeEntry("cmd-1", "dev-1", now)
+	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
+
+	// Advance Pending → Sent
+	require.NoError(t, q.AdvanceStatus(ctx, "cmd-1", command.StatusPending, command.StatusSent, now))
+
+	got, err := q.GetCommand(ctx, "cmd-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, command.StatusSent, got.Status)
+}
+
+func TestInMemQueue_AdvanceStatus_WrongFrom(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+
+	entry := makeEntry("cmd-1", "dev-1", now)
+	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
+
+	// Advance with wrong 'from' status — should fail (optimistic lock).
+	err := q.AdvanceStatus(ctx, "cmd-1", command.StatusSent, command.StatusDelivered, now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "optimistic lock")
+}
+
+func TestInMemQueue_Ack_InvalidReason(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+
+	err := q.Ack(ctx, "cmd-1", command.AckReason(99), now)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AckReason")
+}
+
+func TestInMemQueue_AckFailed_AckRejected(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	for _, reason := range []command.AckReason{command.AckFailed, command.AckRejected} {
+		reason := reason
+		t.Run(reason.String(), func(t *testing.T) {
+			t.Parallel()
+			q2 := commandtest.NewInMemQueue()
+			q2.Now = func() time.Time { return now }
+			entry := makeEntry("cmd-1", "dev-1", now)
+			require.NoError(t, q2.Enqueue(ctx, entry, command.EnqueueOptions{}))
+
+			entries, err := q2.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+
+			require.NoError(t, q2.Ack(ctx, entries[0].ID, reason, now.Add(time.Second)))
+
+			got, err := q2.GetCommand(ctx, entries[0].ID)
+			require.NoError(t, err)
+			require.NotNil(t, got)
+			assert.True(t, got.Status.IsTerminal())
+		})
+	}
 }
 
 func makeEntry(id, deviceID string, now time.Time) command.Entry {
@@ -201,6 +293,7 @@ func TestInMemQueue_Cancel_Terminal(t *testing.T) {
 }
 
 func TestInMemQueue_ConcurrentDequeue_NoDup(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	q := commandtest.NewInMemQueue()
 	q.Now = func() time.Time { return now }
@@ -245,6 +338,83 @@ func TestInMemQueue_ConcurrentDequeue_NoDup(t *testing.T) {
 		seen[e.ID] = true
 	}
 	assert.LessOrEqual(t, len(all), 5, "total dequeued must not exceed 5")
+}
+
+func TestInMemQueue_EnqueueIdempotent_Scalability(t *testing.T) {
+	t.Parallel()
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
+	start := time.Now()
+
+	// Insert 1000 entries with distinct idempotency keys.
+	for i := 0; i < 1000; i++ {
+		id := "cmd-" + string(rune(i+0x4E00)) // use unique runes to avoid collisions
+		key := "idem-" + id
+		entry := command.NewEntry(id, "dev-1", "reboot", []byte(`{}`), command.Timeouts{},
+			now.Add(time.Duration(i)*time.Second))
+		err := q.Enqueue(ctx, entry, command.EnqueueOptions{IdempotencyKey: key})
+		require.NoError(t, err)
+	}
+
+	// Re-insert 500 duplicate idempotency keys — should all be no-ops.
+	for i := 0; i < 500; i++ {
+		id := "cmd-" + string(rune(i+0x4E00))
+		key := "idem-" + id
+		entry := command.NewEntry(id+"-dup", "dev-1", "reboot", []byte(`{}`), command.Timeouts{},
+			now.Add(time.Duration(i)*time.Second))
+		err := q.Enqueue(ctx, entry, command.EnqueueOptions{IdempotencyKey: key})
+		require.NoError(t, err)
+	}
+
+	elapsed := time.Since(start)
+
+	// Total entries must still be 1000 (no duplicates).
+	pending, err := q.ListPending(ctx, "dev-1", 0)
+	require.NoError(t, err)
+	assert.Len(t, pending, 1000, "idempotent re-enqueue must not create duplicates")
+	assert.Less(t, elapsed, time.Second, "1500 operations must complete in under 1 second")
+}
+
+func TestInMemQueue_ExtendLease_CommandNotFound(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	ctx := context.Background()
+
+	// Extend lease for a command that does not exist at all.
+	err := q.ExtendLease(ctx, "cmd-nonexistent", 5*time.Minute, now)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCommandNotFound, ecErr.Code,
+		"extending a non-existent command must return ErrCommandNotFound")
+}
+
+func TestInMemQueue_ExtendLease_LeaseExpiredVsCommandNotFound(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	entry := makeEntry("cmd-1", "dev-1", now)
+	require.NoError(t, q.Enqueue(ctx, entry, command.EnqueueOptions{}))
+
+	// Dequeue to acquire a lease.
+	entries, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	cmdID := entries[0].ID
+
+	// Attempt to extend past expiry — must return ErrValidationFailed (lease expired).
+	err = q.ExtendLease(ctx, cmdID, 5*time.Minute, now.Add(10*time.Minute))
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code,
+		"extending an expired lease must return ErrValidationFailed, not ErrCommandNotFound")
 }
 
 func TestInMemQueue_ClockInjection(t *testing.T) {

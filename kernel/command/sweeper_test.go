@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/command"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.uber.org/goleak"
@@ -219,8 +220,11 @@ func TestSweeper_Start_RequiresDeviceID(t *testing.T) {
 		DeviceID: "", // empty — should return error
 	}
 	err := s.Start(context.Background())
-	assert.Error(t, err)
+	require.Error(t, err)
 	assert.Contains(t, err.Error(), "DeviceID")
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
 }
 
 func TestSweeper_Start_CtxCancelExits(t *testing.T) {
@@ -236,11 +240,13 @@ func TestSweeper_Start_CtxCancelExits(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- s.Start(ctx) }()
-	// Let it run one tick then cancel.
-	time.Sleep(50 * time.Millisecond)
 	cancel()
-	err := <-done
-	assert.NoError(t, err)
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("Start did not exit after ctx cancel")
+	}
 }
 
 func TestSweeper_Stop_Idempotent(t *testing.T) {
