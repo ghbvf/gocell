@@ -41,9 +41,48 @@ import (
 // Value: 2× the fsnotify eventSeparator pattern (50ms) + CI margin.
 const fsnotifySettleDelay = 200 * time.Millisecond
 
+// testVerboseToken is the canonical token wired by test bootstraps via
+// WithVerboseToken so that /readyz?verbose responses are served to
+// assertions. PR-A35 removed the prior "no token = open verbose" path:
+// every verbose request must now carry a matching X-Readyz-Token header.
+const testVerboseToken = "bootstrap-test-verbose"
+
+// autoVerboseTokenTransport injects X-Readyz-Token on every outbound
+// request so tests do not have to thread the header through each GET call.
+// Tests that specifically want to exercise token failure paths must
+// construct their own http.Client (or use http.DefaultClient) and send
+// requests without this transport.
+type autoVerboseTokenTransport struct{ base http.RoundTripper }
+
+func (t *autoVerboseTokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get(health.VerboseTokenHeader) == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set(health.VerboseTokenHeader, testVerboseToken)
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}
+
 // testHTTPClient is used in place of http.DefaultClient to prevent test
-// hangs on stalled connections (e.g., during shutdown races).
-var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
+// hangs on stalled connections (e.g., during shutdown races). The
+// autoVerboseTokenTransport transparently attaches the PR-A35 verbose
+// token header so existing /readyz?verbose calls keep working.
+var testHTTPClient = &http.Client{
+	Timeout:   2 * time.Second,
+	Transport: &autoVerboseTokenTransport{},
+}
+
+// newTestBootstrap is the canonical constructor for tests in this file.
+// It wires WithVerboseToken(testVerboseToken) so that /readyz?verbose
+// requests accompanied by testHTTPClient (which auto-attaches the header)
+// are served the verbose body. Tests covering the token gate itself must
+// still call New() directly to exercise the missing/mismatched paths.
+func newTestBootstrap(opts ...Option) *Bootstrap {
+	return New(append([]Option{WithVerboseToken(testVerboseToken)}, opts...)...)
+}
 
 // newLocalListener creates a TCP listener on a random port, suitable for tests.
 func newLocalListener(t *testing.T) net.Listener {
@@ -92,7 +131,7 @@ func TestNew_WithOptions(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	eb := eventbus.New()
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
 		WithHTTPPrimaryAddr(":9090"),
@@ -112,10 +151,22 @@ func TestNew_WithVerboseToken(t *testing.T) {
 		"WithVerboseToken must populate Bootstrap.verboseToken for health handler wiring")
 }
 
-func TestNew_WithVerboseToken_Empty_DefaultBackwardCompat(t *testing.T) {
-	b := New() // no WithVerboseToken
+func TestNew_WithVerboseToken_Empty_DeniesVerbose(t *testing.T) {
+	// After PR-A35 a missing token no longer means "verbose is open": the
+	// handler denies verbose requests with 401 regardless of configuration.
+	// This test documents the expected default: verboseToken empty and
+	// verboseDisabled false, so any ?verbose request will receive 401.
+	b := New() // no WithVerboseToken, no WithVerboseDisabled
 	assert.Empty(t, b.verboseToken,
-		"default verboseToken must be empty (backward-compatible: verbose stays open)")
+		"default verboseToken must be empty")
+	assert.False(t, b.verboseDisabled,
+		"default must leave verboseDisabled false; operators opt in explicitly when they waive the endpoint")
+}
+
+func TestNew_WithVerboseDisabled(t *testing.T) {
+	b := New(WithVerboseDisabled())
+	assert.True(t, b.verboseDisabled,
+		"WithVerboseDisabled must flip the verboseDisabled flag so phase5 passes it to the health handler")
 }
 
 func TestNew_WithTracer(t *testing.T) {
@@ -131,7 +182,7 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-proxy-err", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
 	)
@@ -320,7 +371,7 @@ func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPublisher(eb),
 		// WithSubscriber intentionally omitted.
@@ -341,7 +392,7 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
 		WithHTTPPrimaryAddr("127.0.0.1:0"),
@@ -368,7 +419,7 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithSubscriber(eb),
 		WithPublisher(eb),
@@ -419,7 +470,7 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		},
 	}}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithSubscriber(sub),
 		WithPrimaryListener(ln),
@@ -477,7 +528,7 @@ func TestBootstrap_EventSubscriptions_DisableObservabilityRestore(t *testing.T) 
 		},
 	}}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithSubscriber(sub),
 		WithPrimaryListener(ln),
@@ -559,7 +610,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-hc-healthy", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -613,7 +664,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-hc-unhealthy", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -669,7 +720,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-adapter-info", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -745,7 +796,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	})
 	require.NoError(t, asm.Register(hcc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -803,7 +854,7 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 		"session-store": func(_ context.Context) error { return nil },
 	})))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -892,7 +943,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-multi-hc", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -954,7 +1005,7 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	// Atomic flag to simulate connection health transitions at runtime.
 	var unhealthy atomic.Bool
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -1024,7 +1075,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-watcher-readyz", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1090,7 +1141,7 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-drift-no-drift", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1221,7 +1272,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-drift-http-503", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(failCell))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1290,7 +1341,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-watcher-fail-fast", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithShutdownTimeout(time.Second),
@@ -1314,7 +1365,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 	asm := assembly.New(assembly.Config{ID: "test-reserved-health-checker", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithHealthChecker("config-watcher", func(_ context.Context) error { return nil }),
@@ -1337,7 +1388,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	require.NoError(t, asm.Register(newEventCell("ok-cell", nil)))
 
 	eb := eventbus.New()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPublisher(eb),
 		WithSubscriber(eb),
@@ -1548,7 +1599,7 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	slow := newSlowReloaderCell("slow-cell", 300*time.Millisecond)
 	require.NoError(t, asm.Register(slow))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1606,7 +1657,7 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	rc := newReloaderCell("auth-core")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1666,7 +1717,7 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	rc.err = errors.New("reload callback failed")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1720,7 +1771,7 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	rc.doPanic = true
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1778,7 +1829,7 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 		require.NoError(t, asm.Register(cells[i]))
 	}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1835,7 +1886,7 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	require.NoError(t, asm.Register(plain))
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1891,7 +1942,7 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	rc := newReloaderCell("noop-cell")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -1987,7 +2038,7 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	require.NoError(t, asm.Register(mutator))
 	require.NoError(t, asm.Register(observer))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -2048,7 +2099,7 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	rc := newReloaderCell("shutdown-race-cell")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -2109,7 +2160,7 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	require.NoError(t, asm.Register(rc))
 
 	blocker := newBlockingStopWorker()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -2173,7 +2224,7 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	rc := newReloaderCell("gen-cell")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -2315,7 +2366,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2395,7 +2446,7 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		err: fmt.Errorf("should not verify for public route"),
 	}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2455,7 +2506,7 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 	require.NoError(t, customAsm.Register(newTestCell("custom-cell")))
 	customHandler := health.New(customAsm) // un-started → always unhealthy
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2580,7 +2631,7 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2622,7 +2673,7 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2666,7 +2717,7 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2776,7 +2827,7 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2824,7 +2875,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2888,7 +2939,7 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 		claims: auth.Claims{Subject: "explicit-user", Roles: []string{"admin"}},
 	}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2937,7 +2988,7 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	hc := newHTTPCell("plain-cell")
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -2970,7 +3021,7 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 	require.NoError(t, asm.Register(newAuthProviderCell("accesscore", verifier1)))
 	require.NoError(t, asm.Register(newAuthProviderCell("identity-core", verifier2)))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3004,7 +3055,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3072,7 +3123,7 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 	tc := newTestCell("hsts-cell")
 	require.NoError(t, asm.Register(tc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3153,7 +3204,7 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
 	require.NoError(t, asm.Register(kfc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -3202,7 +3253,7 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
 	require.NoError(t, asm.Register(kfc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -3258,7 +3309,7 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 	rc := newReloaderCell("plain-reloader")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
 		WithPrimaryListener(ln),
@@ -3346,7 +3397,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	asm := assembly.New(assembly.Config{ID: "test-traceparent-boundary", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(tc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3465,7 +3516,7 @@ func TestBootstrap_WithCircuitBreaker_Nil_ReturnsError(t *testing.T) {
 	tc := newTestCell("cb-nil-cell")
 	require.NoError(t, asm.Register(tc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithCircuitBreaker(nil),
 	)
@@ -3509,7 +3560,7 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	hc := newPublicPingAuthCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3578,7 +3629,7 @@ func TestWithRelayHealth_RegistersCheckers(t *testing.T) {
 
 	relay := newTestRelay()
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3621,7 +3672,7 @@ func TestWithRelayHealth_NilRelay_FailsFast(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-relay-nil", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
@@ -3687,7 +3738,7 @@ func TestWithRelayHealth_TrippedBudget_Returns503(t *testing.T) {
 	}
 	relay := runtimeoutbox.NewRelay(store, &outbox.DiscardPublisher{}, cfg)
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3781,7 +3832,7 @@ func TestWithRelayHealth_DisabledBudget_SkipsChecker(t *testing.T) {
 	}
 	relay := runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, cfg)
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3827,7 +3878,7 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 	ln := newLocalListener(t)
 	addr := ln.Addr().String()
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3868,7 +3919,7 @@ func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 
 	ln := newLocalListener(t)
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3917,7 +3968,7 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
@@ -3993,7 +4044,7 @@ func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-protected-auth", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newProtectedAuthCell("protected-auth-cell")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithShutdownTimeout(time.Second),
 	)
@@ -4016,7 +4067,7 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-dup-auth", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-cell")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		// No WithListener: if phase5 errors correctly the listener is never reached.
 		// Use a short timeout so the test exits fast if something hangs.

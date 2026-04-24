@@ -181,6 +181,9 @@ func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {
 	t.Setenv("GOCELL_STATE_DIR", stateDir)
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-sweep-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	// PR-A35: verbose endpoint is gated in every mode; this integration test
+	// doesn't exercise /readyz?verbose so waive the endpoint explicitly.
+	t.Setenv("GOCELL_READYZ_VERBOSE_DISABLED", "1")
 
 	// Use a short-lived context: long enough for assembly init + lifecycle start
 	// (Steps 3-4.6), but we accept context.Canceled, sandbox-bind, or

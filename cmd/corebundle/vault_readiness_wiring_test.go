@@ -125,6 +125,10 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 // ref: readiness review 2026-04-20 P1 finding (missing bootstrap wiring)
 func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	shared := buildTestSharedDeps(t)
+	// Override the canonical test fixture: this test hits /readyz?verbose to
+	// inspect dependency probe names, so we need verbose output + a token.
+	shared.VerboseDisabled = false
+	shared.VerboseToken = "test-verbose-token"
 	kp := &fakeKeyProvider{probeErr: errors.New("vault unreachable (test)")}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -158,7 +162,13 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 
 	// /readyz?verbose must list the fake probe by name as unhealthy (proves the
 	// aggregation step preserved the named checker, not just a boolean signal).
-	verboseResp, err := http.Get("http://" + addr + "/readyz?verbose") //nolint:noctx
+	// PR-A35: verbose now requires the X-Readyz-Token header to match the
+	// configured token set via shared.VerboseToken above.
+	verboseReq, err := http.NewRequestWithContext(context.Background(),
+		http.MethodGet, "http://"+addr+"/readyz?verbose", nil)
+	require.NoError(t, err)
+	verboseReq.Header.Set("X-Readyz-Token", shared.VerboseToken)
+	verboseResp, err := http.DefaultClient.Do(verboseReq)
 	require.NoError(t, err)
 	defer verboseResp.Body.Close()
 

@@ -309,6 +309,27 @@ const (
 	// back-off. Distinct from ErrAuthReplayDetected (security signal) so
 	// operators can route capacity alerts separately from security alerts.
 	ErrNonceStoreFull Code = "ERR_AUTH_NONCE_STORE_FULL"
+
+	// ErrReadyzVerboseDenied signals that /readyz?verbose was requested but
+	// the supplied X-Readyz-Token header did not match the configured verbose
+	// token (or no token was configured while verbose is still being
+	// requested). Maps to HTTP 401 Unauthorized.
+	//
+	// Introduced by PR-A35: prior behaviour silently downgraded mismatched
+	// requests to a plain 200 (without the verbose body), masking
+	// misconfiguration. The strict 401 makes configuration errors observable
+	// to operators without affecting the bare /readyz endpoint used by
+	// Kubernetes readinessProbes (which must not pass ?verbose).
+	ErrReadyzVerboseDenied Code = "ERR_READYZ_VERBOSE_DENIED"
+
+	// ErrControlplaneVerboseTokenMissing signals that
+	// GOCELL_READYZ_VERBOSE_TOKEN was not set at startup in a mode that
+	// requires the token to be explicitly configured. Starting with PR-A35
+	// this invariant holds in all adapter modes (not just "real"). Operators
+	// who genuinely do not want the verbose endpoint exposed at all should
+	// explicitly acknowledge that via the WithReadyzVerboseDisabled option
+	// instead of relying on an absent token to silently disable gating.
+	ErrControlplaneVerboseTokenMissing Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_MISSING"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

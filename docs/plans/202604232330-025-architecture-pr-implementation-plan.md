@@ -698,7 +698,15 @@
 
 ---
 
-### PR-A35 READYZ-POLISH（P2，~4h）
+### PR-A35 READYZ-POLISH ✅ 2026-04-25（B' 方案，替换原三件套）
+
+**实际交付**：`health.wrapCtxSafe` 给 `RegisterChecker` 自动加结构性 race-pattern 包装（outer Checker 在 ctx.Done 结构性返回）+ `golang.org/x/sync/singleflight` 对 `/readyz` 做天然并发 dedup + verbose token 在所有模式强制必配（或 `GOCELL_READYZ_VERBOSE_DISABLED=1` 显式放弃端点；real 模式下仍拒绝放弃）。verbose token 不匹配一律 401 `ERR_READYZ_VERBOSE_DENIED`（删除原静默 200 降级路径）。新增 `docs/ops/readyz.md` 运维文档；扩展 `docs/ops/env-vars.md` + `pkg/httputil/response.go` errcode→HTTP 映射。
+
+**偏离 Plan 文原三件套（maxConcurrentProbes semaphore / leak counter / 中心化合约测试 + 100ms 启动期门禁）的原因**：
+- 原方案均为运行时 band-aid + 硬编码 magic number；B' 在源头结构化消灭问题：坏 probe 的 goroutine runaway 不再影响 aggregator 语义，无需观测泄漏也无需合约门禁；singleflight 替代 semaphore 无需挑选并发上限；verbose 401 严格化暴露配置错误而非静默降级。
+- 与用户对齐后确认"不考虑向后兼容"，顺势删除 `token == ""` = unrestricted 分支 + dev 模式 `slog.Warn` 降级路径。
+
+**原 Plan 文描述（保留参考）**：
 
 **来源**：2026-04-24 六席位复核（backlog `READYZ-VERBOSE` + `READYZ-LEAK-GUARDRAILS`，PR-A4 A21 延伸）。
 

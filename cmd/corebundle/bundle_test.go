@@ -98,6 +98,9 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack: ps,
 		EventBus:  eb,
+		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
+		// just waive it — nothing here exercises the verbose body.
+		VerboseDisabled: true,
 		// PR-A14a: PrimaryHTTPAddr/InternalHTTPAddr left empty. Tests that
 		// drive the full BuildApp path must inject listeners via
 		// WithPrimaryListener + WithInternalListener so bind addrs are
@@ -133,11 +136,14 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
 		PromStack: ps,
 		EventBus:  eventbus.New(),
+		// PR-A35: verbose endpoint is now gated in every mode. A test-time
+		// token keeps the dev baseline valid; prod tests override via the
+		// mutate callback when they want to exercise the missing-token path.
+		VerboseToken: "test-verbose",
 		// PR-A14a: addrs intentionally empty; tests drive via listener injection.
 	}
 	if topo.RequireProductionControlPlane() {
 		deps.MetricsToken = "test-metrics"
-		deps.VerboseToken = "test-verbose"
 		deps.InternalGuard = newTestInternalGuard(t)
 	}
 	if topo.StorageBackend == "postgres" {
@@ -242,6 +248,20 @@ func TestSharedDeps_Validate(t *testing.T) {
 		{name: "missing event bus", topo: devTopo, mutate: func(d *SharedDeps) { d.EventBus = nil }, wantErr: true, wantSubstr: "EventBus"},
 
 		{name: "prod missing verbose token", topo: prodTopo, mutate: func(d *SharedDeps) { d.VerboseToken = "" }, wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN"},
+		{name: "dev missing verbose token", topo: devTopo, mutate: func(d *SharedDeps) { d.VerboseToken = "" }, wantErr: true, wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN"},
+		{
+			name:    "dev with verbose disabled flag is valid",
+			topo:    devTopo,
+			mutate:  func(d *SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = true },
+			wantErr: false,
+		},
+		{
+			name:       "prod with verbose disabled flag is rejected",
+			topo:       prodTopo,
+			mutate:     func(d *SharedDeps) { d.VerboseDisabled = true },
+			wantErr:    true,
+			wantSubstr: "GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed",
+		},
 		{name: "prod missing metrics token", topo: prodTopo, mutate: func(d *SharedDeps) { d.MetricsToken = "" }, wantErr: true, wantSubstr: "GOCELL_METRICS_TOKEN"},
 		{name: "prod missing internal guard", topo: prodTopo, mutate: func(d *SharedDeps) { d.InternalGuard = nil }, wantErr: true, wantSubstr: "GOCELL_SERVICE_SECRET"},
 		{
@@ -302,6 +322,7 @@ func TestSharedDeps_Validate(t *testing.T) {
 				errcode.ErrValidationFailed:                 {},
 				errcode.ErrControlplaneServiceSecretMissing: {},
 				errcode.ErrControlplaneNonceStoreMissing:    {},
+				errcode.ErrControlplaneVerboseTokenMissing:  {},
 			}
 			for _, sub := range allJoinedErrors(err) {
 				var ec *errcode.Error

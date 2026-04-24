@@ -86,6 +86,9 @@ func defaultRuntimeOptions(
 	if shared.VerboseToken != "" {
 		opts = append(opts, bootstrap.WithVerboseToken(shared.VerboseToken))
 	}
+	if shared.VerboseDisabled {
+		opts = append(opts, bootstrap.WithVerboseDisabled())
+	}
 	if shared.InternalGuard != nil {
 		// PR-A14a: InternalGuard attaches to the internal listener's mux chain
 		// as the sole authentication layer for /internal/v1/*.

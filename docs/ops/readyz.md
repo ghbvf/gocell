@@ -1,0 +1,159 @@
+# /readyz Operations Guide
+
+This page is the operator reference for the `/readyz` readiness endpoint
+served by every GoCell binary. PR-A35 reshaped how the endpoint behaves; if
+you are carrying a runbook from before that PR some of the commands here
+have changed.
+
+## What each endpoint returns
+
+| Path | Default status | Purpose |
+|------|----------------|---------|
+| `GET /healthz` | 200 | Process-level liveness. Use for Kubernetes `livenessProbe`. Never exposes readiness detail. |
+| `GET /readyz` | 200 / 503 | Aggregate readiness across every registered Cell and dependency probe. Use for Kubernetes `readinessProbe` and external LB health checks. |
+| `GET /readyz?verbose=true` | 200 / 401 / 503 | Detailed breakdown: cell statuses + per-dependency probe results. Always gated by `X-Readyz-Token` (see below). |
+
+During graceful shutdown `/readyz` returns 503 `{"status":"shutting_down"}`
+regardless of probe results so load balancers can drain traffic before the
+HTTP server closes connections.
+
+## Kubernetes probes — MUST NOT use `?verbose`
+
+Kubernetes only inspects the HTTP status code, so pointing `readinessProbe`
+at `/readyz?verbose=true` would pick up the PR-A35 401 denial (when the
+token header is missing) and mark healthy pods as NotReady. Always use the
+bare path:
+
+```yaml
+readinessProbe:
+  httpGet:
+    path: /readyz          # not /readyz?verbose
+    port: 8080
+  periodSeconds: 10
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: 8080
+  periodSeconds: 10
+```
+
+## Verbose output (debug / on-call)
+
+The verbose body exposes internal topology (cell names, dependency probe
+names, optional adapter metadata) and is gated by a bearer-style token in
+the `X-Readyz-Token` header.
+
+### Enabling verbose
+
+1. Set the environment variable `GOCELL_READYZ_VERBOSE_TOKEN` to a random
+   high-entropy string (treated as a bearer secret — rotate on compromise).
+2. Confirm the process logged `controlplane guard` without a verbose-token
+   warning.
+3. Call the endpoint with the header:
+
+   ```bash
+   curl -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
+     "http://$HOST:$PORT/readyz?verbose=true"
+   ```
+
+### Response shape
+
+```json
+{
+  "status": "unhealthy",
+  "cells": { "accesscore": "healthy", "auditcore": "degraded" },
+  "dependencies": {
+    "postgres-ping": { "status": "healthy", "duration_ms": 3 },
+    "rabbitmq": { "status": "unhealthy", "duration_ms": 12,
+                  "error": "connection refused" }
+  },
+  "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
+}
+```
+
+Probe `error` strings are truncated to 512 bytes. Probe implementations
+must avoid putting secrets (connection strings, tokens) in their error
+messages — this output is intended for operators, not clients.
+
+### Waiving the verbose endpoint
+
+For test harnesses or single-node demos that genuinely do not want the
+verbose debug channel at all, set:
+
+```
+GOCELL_READYZ_VERBOSE_DISABLED=1
+```
+
+When `VerboseDisabled` is in effect, every `?verbose` request is answered
+with the plain aggregate body instead of 401. `VerboseDisabled=1` is
+rejected in `GOCELL_ADAPTER_MODE=real`: production must retain the
+token-gated diagnostic channel.
+
+### Strict 401 semantics
+
+`?verbose` requests are answered with the plain 200 body **only** when the
+supplied header matches the configured token. Every other combination —
+missing header, mismatched header, unset server-side token — returns
+`401 Unauthorized` with body:
+
+```json
+{
+  "error": {
+    "code": "ERR_READYZ_VERBOSE_DENIED",
+    "message": "verbose output requires a matching X-Readyz-Token header"
+  }
+}
+```
+
+This is stricter than the pre-PR-A35 behaviour (which silently downgraded
+mismatched requests to 200) and intentionally so: the old behaviour hid
+misconfiguration (operator sets a wrong token → never sees verbose output
+but also never sees the failure). Strict 401 surfaces the problem on the
+first call.
+
+## Probe contract
+
+Every checker registered through `health.Handler.RegisterChecker` is
+wrapped internally with a race-pattern guard (`wrapCtxSafe`). The outer
+Checker is structurally guaranteed to return when the aggregate readyz
+deadline fires, regardless of whether the inner probe cooperates with
+ctx.Done. This means:
+
+- A well-behaved probe (honours `<-ctx.Done()`) still runs in the
+  background after the handler has responded — no change to existing
+  correctness.
+- A buggy probe that completely ignores ctx will have its inner goroutine
+  keep running until its own I/O terminates (usually at TCP/protocol
+  timeout). The aggregator is not affected.
+- Pathological probes that never terminate (`select{}`, `for{}` with no
+  exit) still leak their inner goroutine. These are unit-test bugs, not
+  operational problems; run the `health.CheckCtxRespected` helper in your
+  probe's own tests to catch them:
+
+  ```go
+  func TestMyProbe_RespectsCtx(t *testing.T) {
+      health.CheckCtxRespected(t, myProbe, 100*time.Millisecond)
+  }
+  ```
+
+The runtime no longer imposes a hard-coded time budget on probes —
+`CheckCtxRespected`'s budget is caller-supplied and only affects the
+developer test, not production behaviour.
+
+## Concurrent probe storms
+
+Concurrent `/readyz` requests (kubelet + LB + manual curl) are
+deduplicated via `singleflight`: a burst of N requests is serviced by one
+probe execution and N responses share the same aggregate result. There is
+no configurable concurrency ceiling; the guarantee is structural, not
+throttled.
+
+## Related environment variables
+
+| Variable | Purpose | Required |
+|----------|---------|----------|
+| `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `?verbose` | Required in every mode unless `GOCELL_READYZ_VERBOSE_DISABLED=1` |
+| `GOCELL_READYZ_VERBOSE_DISABLED` | Set to `1` to waive the verbose endpoint | Optional; rejected in adapter mode `real` |
+| `GOCELL_METRICS_TOKEN` | Bearer token for `/metrics` | Required in adapter mode `real` |
+
+Refer to `docs/ops/env-vars.md` for the full environment-variable index.
