@@ -95,7 +95,7 @@ Response (201):
 {"data":{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"pending","createdAt":"..."}}
 ```
 
-### Device polls pending commands
+### Device dequeues commands
 
 ```bash
 curl http://localhost:8083/api/v1/devices/{id}/commands \
@@ -105,20 +105,35 @@ curl http://localhost:8083/api/v1/devices/{id}/commands \
 Response (200):
 
 ```json
-{"data":[{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"pending","createdAt":"..."}],"nextCursor":"","hasMore":false}
+{"data":[{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"sent","attempt":1,"createdAt":"...","sentAt":"..."}],"nextCursor":"","hasMore":false}
 ```
 
-### Device acknowledges command execution
+### Device reports command receipt
 
 ```bash
-curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/ack \
+curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/report \
   -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
 ```
 
 Response (200):
 
 ```json
-{"data":{"status":"acked"}}
+{"data":{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"delivered","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"..."}}
+```
+
+### Device acknowledges command execution
+
+```bash
+curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/ack \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"success"}'
+```
+
+Response (200):
+
+```json
+{"data":{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"succeeded","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"...","completedAt":"..."}}
 ```
 
 ### Query device status

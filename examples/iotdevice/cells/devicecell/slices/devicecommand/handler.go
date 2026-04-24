@@ -38,7 +38,7 @@ var (
 		Method: "POST", Path: "/api/v1/devices/{id}/commands/{cmdId}/extend-lease",
 	}
 	specInternalCommandScanActive = wrapper.ContractSpec{
-		ID: "http.internal.devicecommands.scan-active.v1", Kind: "http", Transport: "http",
+		ID: "http.internal.devicecommands.list.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/internal/v1/devicecommands",
 	}
 )
@@ -282,7 +282,7 @@ func parseAckReason(raw string) (command.AckReason, error) {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "success":
 		return command.AckSuccess, nil
-	case "failure", "failed":
+	case "failure":
 		return command.AckFailed, nil
 	case "rejected":
 		return command.AckRejected, nil

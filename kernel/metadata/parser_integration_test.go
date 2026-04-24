@@ -64,7 +64,7 @@ func TestParseRealProject(t *testing.T) {
 
 	// --- Contracts: at least the 26 contracts after per-operation split (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Contracts), 26, "expected at least 26 contracts after per-operation split")
-	assert.LessOrEqual(t, len(pm.Contracts), 60, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
+	assert.LessOrEqual(t, len(pm.Contracts), 64, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
 	expectedContracts := []string{
 		"http.auth.login.v1",
 		"http.auth.refresh.v1",

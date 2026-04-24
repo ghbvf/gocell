@@ -25,6 +25,10 @@ var pendingSort = []query.SortColumn{
 	{Name: "id", Direction: query.SortASC},
 }
 
+// MaxLeaseExtension caps one public lease extension request. Devices can renew
+// repeatedly while still making abuse and accidental long leases bounded.
+const MaxLeaseExtension = time.Hour
+
 // commandQueueStore combines the Queue facade with the ActiveScanner lookup
 // needed for ownership checks, sweeper scans, and internal ops views.
 // commandtest.InMemQueue satisfies this interface; a postgres adapter would
@@ -255,14 +259,8 @@ func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason comman
 		return errcode.New(errcode.ErrValidationFailed, "device-command: invalid ack reason")
 	}
 	now := time.Now()
-	e, err := s.getOwnedCommand(ctx, deviceID, cmdID)
-	if err != nil {
+	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err
-	}
-
-	// Idempotent: already terminal → no-op.
-	if e.Status.IsTerminal() {
-		return nil
 	}
 
 	if err := s.queue.Ack(ctx, cmdID, reason, now); err != nil {
@@ -282,6 +280,9 @@ func (s *Service) Ack(ctx context.Context, deviceID, cmdID string, reason comman
 func (s *Service) ExtendLease(ctx context.Context, deviceID, cmdID string, extension time.Duration) error {
 	if extension <= 0 {
 		return errcode.New(errcode.ErrValidationFailed, "device-command: extension must be positive")
+	}
+	if extension > MaxLeaseExtension {
+		return errcode.New(errcode.ErrValidationFailed, "device-command: extension exceeds maximum")
 	}
 	if _, err := s.getOwnedCommand(ctx, deviceID, cmdID); err != nil {
 		return err

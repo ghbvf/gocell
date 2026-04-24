@@ -204,7 +204,8 @@ func (q *InMemQueue) Report(_ context.Context, commandID string, now time.Time) 
 // No chaining: Ack does NOT advance through intermediate states. Acking from
 // StatusSent directly to StatusSucceeded leaves DeliveredAt nil, which is the
 // signal that the device skipped the optional Report step.
-// Already-terminal entries produce ErrValidationFailed (caller should treat as idempotent).
+// Already-terminal entries are idempotent only when the requested reason maps
+// to the existing terminal status. A different terminal target is rejected.
 func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.AckReason, now time.Time) error {
 	if !reason.Valid() {
 		return errcode.New(errcode.ErrValidationFailed, "commandtest: invalid AckReason")
@@ -218,9 +219,18 @@ func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.Ack
 		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
 	}
 
+	target := reason.TargetStatus()
+	if e.Status.IsTerminal() {
+		if e.Status == target {
+			return nil
+		}
+		return errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("commandtest: command already terminal with status %s; cannot ack as %s", e.Status, target))
+	}
+
 	delete(q.leases, commandID)
-	if err := command.AdvanceCommand(e, reason.TargetStatus(), now); err != nil {
-		return fmt.Errorf("commandtest: advance to %s: %w", reason.TargetStatus(), err)
+	if err := command.AdvanceCommand(e, target, now); err != nil {
+		return fmt.Errorf("commandtest: advance to %s: %w", target, err)
 	}
 	return nil
 }

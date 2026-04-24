@@ -36,6 +36,7 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandt
 	h := NewHandler(svc)
 	mux := celltest.NewTestMux()
 	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
+	h.RegisterInternalRoutes(mux)
 	return mux, devRepo, q
 }
 
@@ -107,6 +108,7 @@ func TestHttpDeviceCommandAckV1Serve(t *testing.T) {
 	c.ValidateHTTPResponseRecorder(t, rec)
 
 	c.MustRejectRequest(t, []byte(`{"reason":"timeout"}`))
+	c.MustRejectRequest(t, []byte(`{"reason":"failed"}`))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
 
@@ -147,6 +149,7 @@ func TestHttpDeviceCommandExtendLeaseV1Serve(t *testing.T) {
 
 	c.ValidateRequest(t, []byte(`{"extensionSeconds":60}`))
 	c.MustRejectRequest(t, []byte(`{"extensionSeconds":0}`))
+	c.MustRejectRequest(t, []byte(`{"extensionSeconds":3601}`))
 	c.MustRejectRequest(t, []byte(`{"extensionSeconds":60,"extra":"bad"}`))
 
 	rec := httptest.NewRecorder()
@@ -155,6 +158,25 @@ func TestHttpDeviceCommandExtendLeaseV1Serve(t *testing.T) {
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"extensionSeconds":60}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("dev-1", nil))
+	handler.ServeHTTP(rec, req)
+	c.ValidateHTTPResponseRecorder(t, rec)
+}
+
+func TestHttpInternalDeviceCommandsListV1Serve(t *testing.T) {
+	root := contracttest.ExampleContractsRoot("iotdevice")
+	c := contracttest.LoadByID(t, root, "http.internal.devicecommands.list.v1")
+
+	handler, devRepo, q := newContractCommandHandler()
+	_ = devRepo.Create(context.Background(), &domain.Device{
+		ID: "dev-1", Name: "sensor-a", Status: "online",
+	})
+	_ = q.Enqueue(context.Background(),
+		command.NewEntry("cmd-1", "dev-1", "reboot", []byte("reboot"), command.Timeouts{}, time.Now()),
+		command.EnqueueOptions{})
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path+"?deviceId=dev-1&statuses=pending", nil)
+	req = req.WithContext(auth.TestContext(auth.ServiceNameInternal, []string{auth.RoleInternalAdmin}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
@@ -187,6 +209,7 @@ func TestCommandDeviceCommandAckV1Handle(t *testing.T) {
 	c.ValidateRequest(t, []byte(`{"reason":"success"}`))
 	c.ValidateRequest(t, []byte(`{"reason":"failure"}`))
 	c.MustRejectRequest(t, []byte(`{"reason":"timeout"}`))
+	c.MustRejectRequest(t, []byte(`{"reason":"failed"}`))
 	c.MustRejectRequest(t, []byte(`{"reason":"retry"}`))
 	c.ValidateResponse(t, []byte(`{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot","payload":"reboot","status":"succeeded","attempt":0,"createdAt":"2026-01-01T00:00:00Z","completedAt":"2026-01-01T00:01:00Z"}}`))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
@@ -208,6 +231,7 @@ func TestCommandDeviceCommandExtendLeaseV1Handle(t *testing.T) {
 
 	c.ValidateRequest(t, []byte(`{"extensionSeconds":60}`))
 	c.MustRejectRequest(t, []byte(`{"extensionSeconds":0}`))
+	c.MustRejectRequest(t, []byte(`{"extensionSeconds":3601}`))
 	c.MustRejectRequest(t, []byte(`{"extensionSeconds":60,"extra":"bad"}`))
 	c.ValidateResponse(t, []byte(`{"data":{"id":"cmd-1","deviceId":"d-1","commandType":"reboot","payload":"reboot","status":"sent","attempt":1,"createdAt":"2026-01-01T00:00:00Z","sentAt":"2026-01-01T00:00:01Z"}}`))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))

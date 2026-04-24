@@ -618,7 +618,75 @@ func TestInMemQueue_Ack_AfterTerminal_Fails(t *testing.T) {
 	// Second Ack on terminal → transition error wrapped.
 	err = q.Ack(ctx, cmdID, command.AckFailed, now.Add(2*time.Second))
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "advance to failed")
+	assert.Contains(t, err.Error(), "already terminal")
+}
+
+func TestInMemQueue_Ack_ConcurrentSameReason_Idempotent(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	require.NoError(t, q.Enqueue(ctx, makeEntry("cmd-1", "dev-1", now), command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	require.NoError(t, err)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- q.Ack(ctx, "cmd-1", command.AckSuccess, now.Add(time.Second))
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	got, err := q.GetCommand(ctx, "cmd-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, command.StatusSucceeded, got.Status)
+}
+
+func TestInMemQueue_Ack_ConcurrentDifferentReason_RejectsLoser(t *testing.T) {
+	t.Parallel()
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	q := commandtest.NewInMemQueue()
+	q.Now = func() time.Time { return now }
+	ctx := context.Background()
+
+	require.NoError(t, q.Enqueue(ctx, makeEntry("cmd-1", "dev-1", now), command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, 5*time.Minute)
+	require.NoError(t, err)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for _, reason := range []command.AckReason{command.AckSuccess, command.AckFailed} {
+		wg.Add(1)
+		go func(reason command.AckReason) {
+			defer wg.Done()
+			errs <- q.Ack(ctx, "cmd-1", reason, now.Add(time.Second))
+		}(reason)
+	}
+	wg.Wait()
+	close(errs)
+
+	var successCount, errorCount int
+	for err := range errs {
+		if err == nil {
+			successCount++
+			continue
+		}
+		errorCount++
+	}
+	assert.Equal(t, 1, successCount)
+	assert.Equal(t, 1, errorCount)
 }
 
 func TestInMemQueue_ClockInjection(t *testing.T) {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"sync"
 	"testing"
 	"time"
 
@@ -275,6 +276,68 @@ func TestService_Ack_Idempotent(t *testing.T) {
 	require.NoError(t, svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess))
 }
 
+func TestService_Ack_ConcurrentSameReason_Idempotent(t *testing.T) {
+	svc, devRepo, q := newTestService()
+	ctx := context.Background()
+	seedDevice(devRepo, "dev-1", "sensor-a")
+	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, err)
+
+	const workers = 16
+	var wg sync.WaitGroup
+	errs := make(chan error, workers)
+	for i := 0; i < workers; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			errs <- svc.Ack(ctx, "dev-1", "cmd-1", command.AckSuccess)
+		}()
+	}
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		require.NoError(t, err)
+	}
+	got, err := q.GetCommand(ctx, "cmd-1")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, command.StatusSucceeded, got.Status)
+}
+
+func TestService_Ack_ConcurrentDifferentReason_RejectsLoser(t *testing.T) {
+	svc, devRepo, q := newTestService()
+	ctx := context.Background()
+	seedDevice(devRepo, "dev-1", "sensor-a")
+	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, err)
+
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, reason := range []command.AckReason{command.AckSuccess, command.AckFailed} {
+		wg.Add(1)
+		go func(reason command.AckReason) {
+			defer wg.Done()
+			errs <- svc.Ack(ctx, "dev-1", "cmd-1", reason)
+		}(reason)
+	}
+	wg.Wait()
+	close(errs)
+
+	var successCount, errorCount int
+	for err := range errs {
+		if err == nil {
+			successCount++
+			continue
+		}
+		errorCount++
+	}
+	assert.Equal(t, 1, successCount)
+	assert.Equal(t, 1, errorCount)
+}
+
 func TestService_Ack_LifecycleSentToSucceeded(t *testing.T) {
 	svc, devRepo, q := newTestService()
 	ctx := context.Background()
@@ -294,6 +357,18 @@ func TestService_Ack_LifecycleSentToSucceeded(t *testing.T) {
 	assert.NotNil(t, got.SentAt)
 	assert.Nil(t, got.DeliveredAt)
 	assert.NotNil(t, got.CompletedAt)
+}
+
+func TestService_ExtendLease_RejectsTooLargeExtension(t *testing.T) {
+	svc, devRepo, q := newTestService()
+	ctx := context.Background()
+	seedDevice(devRepo, "dev-1", "sensor-a")
+	require.NoError(t, q.Enqueue(ctx, command.NewEntry("cmd-1", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, err)
+
+	err = svc.ExtendLease(ctx, "dev-1", "cmd-1", time.Hour+time.Second)
+	require.Error(t, err)
 }
 
 func TestService_ScanActive_CursorDeviceMismatch(t *testing.T) {
