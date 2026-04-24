@@ -269,6 +269,10 @@ func TestOrderCell_RouteCreateOrder(t *testing.T) {
 		"POST /api/v1/orders/ should return 201")
 }
 
+func TestJourney_JOrdercreateHttpCreate(t *testing.T) {
+	TestOrderCell_RouteCreateOrder(t)
+}
+
 func TestOrderCell_RouteListOrders(t *testing.T) {
 	r := initCellWithRouter(t)
 

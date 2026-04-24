@@ -83,6 +83,25 @@ func isInternal(importPath string) bool {
 	return strings.Contains(importPath, "/internal/") || strings.HasSuffix(importPath, "/internal")
 }
 
+// cellOwnedSubpackages lists public cell subpackages that are semantically
+// owned by a single cell and must not be imported by sibling cells. Each
+// entry's key is the relative import path of the owned subpackage (without
+// module prefix); the value is the relative prefix of the owning cell tree
+// that is exempt from the rule.
+//
+// This is LAYER-06's data table: unlike LAYER-05 (which catches any
+// cells/X/Y/internal import), LAYER-06 targets public subpackages whose
+// coupling to the owning cell is as strong as internal/ but cannot use the
+// internal/ compiler guard — e.g. cells/accesscore/initialadmin, which
+// must stay public so cmd/corebundle can wire it into composition, but
+// must not be imported by other cells.
+//
+// cmd/ and examples/ are always exempt (composition roots and unrestricted
+// consumers respectively; see the layering conventions in archtest's doc.go).
+var cellOwnedSubpackages = map[string]string{
+	"cells/accesscore/initialadmin": "cells/accesscore/",
+}
+
 // checkLayering runs all 5 layering rules against the given packages and returns violations.
 // modPrefix must include trailing slash (e.g. "github.com/ghbvf/gocell/").
 func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
@@ -143,9 +162,50 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 					})
 				}
 			}
+
+			// LAYER-06: cell-owned public subpackages must stay within the
+			// owning cell's tree (plus cmd/ and examples/ as universally
+			// unrestricted). Flags cases like cells/auditcore importing
+			// cells/accesscore/initialadmin, which would bypass the cell
+			// boundary without triggering LAYER-05 (no /internal/ segment).
+			if v := checkCellOwnedSubpackage(modPrefix, pkg.ImportPath, imp, srcLayer); v != nil {
+				out = append(out, *v)
+			}
 		}
 	}
 	return out
+}
+
+// checkCellOwnedSubpackage returns a LAYER-06 violation if imp is a cell-owned
+// public subpackage that src is not permitted to import. Returns nil when the
+// import is allowed or unrelated.
+func checkCellOwnedSubpackage(modPrefix, srcPath, imp, srcLayer string) *violation {
+	impRel := strings.TrimPrefix(imp, modPrefix)
+	for ownedRel, ownerPrefix := range cellOwnedSubpackages {
+		if impRel != ownedRel && !strings.HasPrefix(impRel, ownedRel+"/") {
+			continue
+		}
+		// cmd/ and examples/ are universally unrestricted consumers.
+		if srcLayer == "cmd" || srcLayer == "examples" {
+			return nil
+		}
+		srcRel := strings.TrimPrefix(srcPath, modPrefix)
+		// The owning cell's tree may import its own subpackage freely.
+		// ownerRoot covers the case where srcRel is the cell root itself
+		// (e.g. "cells/accesscore") which HasPrefix("cells/accesscore/")
+		// would reject due to the missing trailing slash.
+		ownerRoot := strings.TrimSuffix(ownerPrefix, "/")
+		if srcRel == ownerRoot || strings.HasPrefix(srcRel, ownerPrefix) {
+			return nil
+		}
+		return &violation{
+			Rule:    "LAYER-06",
+			Pkg:     srcPath,
+			Import:  imp,
+			Message: fmt.Sprintf("LAYER-06: %s imports %s (cell-owned subpackage; only %s* / cmd/* / examples/* may import it)", srcPath, imp, ownerPrefix),
+		}
+	}
+	return nil
 }
 
 // --- go list integration ---
@@ -226,6 +286,10 @@ func TestLayeringRules(t *testing.T) {
 	})
 	t.Run("LAYER-05_no_cross_cell_internal_imports", func(t *testing.T) {
 		assert.Empty(t, byRule["LAYER-05"], "cells must not import another cell's internal/ packages")
+	})
+	t.Run("LAYER-06_cell_owned_subpackages_stay_within_owner", func(t *testing.T) {
+		assert.Empty(t, byRule["LAYER-06"],
+			"cell-owned public subpackages (see cellOwnedSubpackages) must only be imported by the owning cell, cmd/, or examples/")
 	})
 }
 
@@ -469,6 +533,74 @@ func TestCheckLayering(t *testing.T) {
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore/slices/auditappend", Imports: []string{
 					"github.com/ghbvf/gocell/cells/auditcore/internal/domain", // same cell, OK
+				}},
+			},
+			wantRules: nil,
+		},
+		{
+			name: "LAYER-06 violation: sibling cell imports accesscore/initialadmin",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // forbidden — cell-owned subpkg
+				}},
+			},
+			wantRules: []string{"LAYER-06"},
+		},
+		{
+			name: "LAYER-06 violation: sibling cell slice imports nested path of initialadmin",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/cells/configcore/slices/configpublish", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/initialadmin/somesubpkg", // forbidden — nested match
+				}},
+			},
+			wantRules: []string{"LAYER-06"},
+		},
+		{
+			// Runtime→cell imports are already caught by LAYER-03 before
+			// LAYER-06 has a chance to fire; LAYER-06 is scoped to cell→cell
+			// cases that LAYER-03 does not cover. We keep the case to lock
+			// the precedence: LAYER-03 fires first (stronger signal) and
+			// LAYER-06 is not needed here.
+			name: "LAYER-03 covers runtime importing cell-owned subpkg",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/runtime/bootstrap", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/initialadmin",
+				}},
+			},
+			wantRules: []string{"LAYER-03"},
+		},
+		{
+			name: "LAYER-06 clean: accesscore itself imports initialadmin (owner)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // owner, OK
+				}},
+			},
+			wantRules: nil,
+		},
+		{
+			name: "LAYER-06 clean: accesscore slice imports initialadmin (owner tree)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // owner tree, OK
+				}},
+			},
+			wantRules: nil,
+		},
+		{
+			name: "LAYER-06 clean: cmd imports initialadmin (composition root)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/cmd/corebundle", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // cmd unrestricted
+				}},
+			},
+			wantRules: nil,
+		},
+		{
+			name: "LAYER-06 clean: examples imports initialadmin (unrestricted)",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/examples/ssobff", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // examples unrestricted
 				}},
 			},
 			wantRules: nil,

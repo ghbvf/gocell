@@ -10,12 +10,12 @@ Cell 是 GoCell 的核心业务单元，封装了一组相关的 Slice（功能�
 
 ```
 cells/
-└── my-cell/
+└── mycell/
     ├── cell.go              # Cell 入口（实现 cell.Cell 接口）
     ├── cell.yaml            # 元数据声明（必填）
     ├── cell_test.go
     └── slices/
-        └── my-slice/
+        └── myslice/
             ├── slice.yaml   # Slice 元数据
             ├── service.go   # 业务逻辑
             ├── handler.go   # HTTP handler
@@ -29,17 +29,17 @@ cells/
 ### 2. 声明 cell.yaml
 
 ```yaml
-id: my-cell
+id: mycell
 type: core
 consistencyLevel: L1
 owner:
   team: my-team
-  role: my-cell-owner
+  role: mycell-owner
 schema:
   primary: my_table
 verify:
   smoke:
-    - my-cell/smoke
+    - mycell/smoke
 ```
 
 ### 3. 实现 Cell 接口
@@ -65,12 +65,12 @@ type MyCell struct {
 func NewMyCell(opts ...Option) *MyCell {
     c := &MyCell{
         BaseCell: cell.NewBaseCell(cell.CellMetadata{
-            ID:               "my-cell",
+            ID:               "mycell",
             Type:             cell.CellTypeCore,
             ConsistencyLevel: cell.L1,
-            Owner:            cell.Owner{Team: "my-team", Role: "my-cell-owner"},
+            Owner:            cell.Owner{Team: "my-team", Role: "mycell-owner"},
             Schema:           cell.SchemaConfig{Primary: "my_table"},
-            Verify:           cell.CellVerify{Smoke: []string{"my-cell/smoke"}},
+            Verify:           cell.CellVerify{Smoke: []string{"mycell/smoke"}},
         }),
         logger: slog.Default(),
     }
@@ -85,7 +85,7 @@ func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
         return err
     }
     // 构造 Slice 并注册
-    c.AddSlice(cell.NewBaseSlice("my-slice", "my-cell", cell.L1))
+    c.AddSlice(cell.NewBaseSlice("myslice", "mycell", cell.L1))
     return nil
 }
 ```
@@ -137,7 +137,7 @@ EventRouter 在所有 cell 注册完成后按四阶段生命周期启动：
 ### 6. 注册到 Assembly
 
 ```go
-asm := assembly.New(assembly.Config{ID: "my-app", DurabilityMode: cell.DurabilityDemo})
+asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: cell.DurabilityDemo})
 asm.Register(mycell.NewMyCell(...))
 ```
 
@@ -157,7 +157,7 @@ func WithMyRepo(r ports.MyRepository) Option {
 func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
     svc := myslice.NewService(c.repo, c.logger)
     c.handler = myslice.NewHandler(svc)
-    c.AddSlice(cell.NewBaseSlice("my-slice", "my-cell", cell.L1))
+    c.AddSlice(cell.NewBaseSlice("myslice", "mycell", cell.L1))
     return nil
 }
 ```

@@ -27,6 +27,7 @@ package cell
 import (
 	"context"
 	"net/http"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
@@ -267,4 +268,57 @@ type ConfigReloader interface {
 // ref: go-micro config/default.go — Watch(path...) key-scoped observation
 type ConfigKeyFilterer interface {
 	ConfigKeyPrefixes() []string
+}
+
+// LifecycleHook mirrors bootstrap.Hook shape but lives in kernel/ so Cell
+// interfaces never depend on runtime/. Bootstrap copies these fields into
+// its own bootstrap.Hook at phase3b discovery time.
+//
+// Field semantics:
+//   - Name: diagnostic identifier used in slog fields (hook.start/hook.stop).
+//     Empty string is accepted; bootstrap will still run the hook.
+//   - OnStart / OnStop: nil is treated as no-op. A hook with both nil is
+//     silently skipped by phase3b (it would never do anything).
+//   - StartTimeout / StopTimeout: 0 → use bootstrap default (30s / 10s via
+//     LifecycleConfig). Negative → no deadline applied. See
+//     runtime/bootstrap/lifecycle.go applyTimeout().
+//
+// OnStart is expected to return promptly — do not block waiting on ctx.Done.
+// Use OnStop for teardown. Long-running background work must be launched in a
+// goroutine whose cancellation is triggered by OnStop.
+//
+// # Ordering semantics
+//
+// Within a single Cell, hooks returned by LifecycleHooks() are Appended in
+// slice order (FIFO). Across Cells, phase3b iterates assembly.CellIDs() in
+// registration order, so the first registered Cell's hooks run before the
+// second Cell's. On shutdown, bootstrap.Lifecycle.Stop invokes OnStop in
+// reverse-Append order (LIFO rollback), so the last Cell registered stops
+// first. See runtime/bootstrap/lifecycle.go rollback().
+//
+// EXPERIMENTAL: contract is stable across the PR-A5a release but the blocking
+// semantics (above) may be further formalized once a second Cell adopts the
+// interface.
+//
+// ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go Hook — adopted.
+// ref: kernel/cell.HealthContributor — symmetric discovery pattern.
+type LifecycleHook struct {
+	Name         string
+	OnStart      func(ctx context.Context) error
+	OnStop       func(ctx context.Context) error
+	StartTimeout time.Duration
+	StopTimeout  time.Duration
+}
+
+// LifecycleContributor is auto-discovered by bootstrap at phase3b and its
+// hooks appended to the bootstrap Lifecycle in Cell registration order
+// (via assembly.CellIDs). Returning nil or an empty slice opts out — no
+// hook is registered. Hooks with both OnStart and OnStop nil are silently
+// skipped.
+//
+// Bootstrap calls LifecycleHooks once per cell, after Cell.Init completes
+// and before bootstrap.Lifecycle.Start runs. OnStart closures may reference
+// per-cell state populated during Init (e.g., injected repositories).
+type LifecycleContributor interface {
+	LifecycleHooks() []LifecycleHook
 }

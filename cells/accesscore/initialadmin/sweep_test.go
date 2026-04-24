@@ -29,7 +29,7 @@ func (c fixedClock) Now() time.Time { return c.now }
 // ---------------------------------------------------------------------------
 
 // manualScheduler implements Scheduler but never fires the registered timer.
-// Used in sweep tests that only need to verify the Cleaner is returned, not
+// Used in sweep tests that only need to verify the cleaner is returned, not
 // that it fires.
 type manualScheduler struct{}
 
@@ -50,12 +50,12 @@ func writeExpiredCredFile(t *testing.T, dir string, now time.Time) string {
 	t.Helper()
 	path := filepath.Join(dir, "initial_admin_password")
 	expiresAt := now.Add(-time.Hour)
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "secret",
 		ExpiresAt: expiresAt,
 	}
-	require.NoError(t, WriteCredentialFile(path, payload))
+	require.NoError(t, writeCredentialFile(path, payload))
 	return path
 }
 
@@ -64,12 +64,12 @@ func writeFreshCredFile(t *testing.T, dir string, now time.Time) string {
 	t.Helper()
 	path := filepath.Join(dir, "initial_admin_password")
 	expiresAt := now.Add(time.Hour)
-	payload := CredentialPayload{
+	payload := credentialPayload{
 		Username:  "admin",
 		Password:  "secret",
 		ExpiresAt: expiresAt,
 	}
-	require.NoError(t, WriteCredentialFile(path, payload))
+	require.NoError(t, writeCredentialFile(path, payload))
 	return path
 }
 
@@ -85,14 +85,14 @@ func writeMalformedCredFile(t *testing.T, dir string) string {
 // Tests
 // ---------------------------------------------------------------------------
 
-// TestSweep_NoFile_NoOp verifies that Sweep returns (nil, nil) with no log
+// TestSweep_NoFile_NoOp verifies that sweep returns (nil, nil) with no log
 // output when the credential file does not exist.
 func TestSweep_NoFile_NoOp(t *testing.T) {
 	dir := t.TempDir()
 	logger, cap := newBootstrapCapturingLogger()
 	now := time.Now()
 
-	w, err := Sweep(context.Background(), SweepConfig{
+	w, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
@@ -115,7 +115,7 @@ func TestSweep_ExpiredFile_Removed(t *testing.T) {
 
 	credPath := writeExpiredCredFile(t, dir, now)
 
-	w, err := Sweep(context.Background(), SweepConfig{
+	w, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
@@ -136,7 +136,7 @@ func TestSweep_ExpiredFile_Removed(t *testing.T) {
 }
 
 // TestSweep_FreshFile_Retained verifies that a non-expired credential file is
-// left untouched and a non-nil Cleaner worker is returned for runtime cleanup
+// left untouched and a non-nil cleaner worker is returned for runtime cleanup
 // (P1-16 full fix: fresh orphan files must not persist until next restart).
 func TestSweep_FreshFile_Retained(t *testing.T) {
 	dir := t.TempDir()
@@ -145,7 +145,7 @@ func TestSweep_FreshFile_Retained(t *testing.T) {
 
 	credPath := writeFreshCredFile(t, dir, now)
 
-	w, err := Sweep(context.Background(), SweepConfig{
+	w, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
@@ -157,18 +157,18 @@ func TestSweep_FreshFile_Retained(t *testing.T) {
 	_, statErr := os.Stat(credPath)
 	assert.NoError(t, statErr, "fresh credential file must be retained")
 
-	// A Cleaner worker must be returned so the caller can register it.
-	assert.NotNil(t, w, "Sweep must return a non-nil worker for fresh orphan file (P1-16)")
-	_, isCleaner := w.(*Cleaner)
-	assert.True(t, isCleaner, "returned worker must be a *Cleaner")
+	// A cleaner worker must be returned so the caller can register it.
+	assert.NotNil(t, w, "sweep must return a non-nil worker for fresh orphan file (P1-16)")
+	_, isCleaner := w.(*cleaner)
+	assert.True(t, isCleaner, "returned worker must be a *cleaner")
 
-	// Cleaner re-registration log must be emitted.
+	// cleaner re-registration log must be emitted.
 	_, found := cap.findByEvent("initial_admin_credential_sweep_cleaner")
 	assert.True(t, found, "expected Info log with event=initial_admin_credential_sweep_cleaner")
 }
 
-// TestSweep_FreshFile_ReturnsCleanerWorker verifies that the returned Cleaner
-// worker from Sweep is functional: Start/Stop lifecycle works and Stop is idempotent.
+// TestSweep_FreshFile_ReturnsCleanerWorker verifies that the returned cleaner
+// worker from sweep is functional: Start/Stop lifecycle works and Stop is idempotent.
 func TestSweep_FreshFile_ReturnsCleanerWorker(t *testing.T) {
 	dir := t.TempDir()
 	logger, _ := newBootstrapCapturingLogger()
@@ -178,7 +178,7 @@ func TestSweep_FreshFile_ReturnsCleanerWorker(t *testing.T) {
 
 	// Use a manual scheduler so the timer never fires during the test.
 	sched := &manualScheduler{}
-	w, err := Sweep(context.Background(), SweepConfig{
+	w, err := sweep(context.Background(), sweepConfig{
 		StateDir:  dir,
 		Clock:     fixedClock{now: now},
 		Scheduler: sched,
@@ -187,7 +187,7 @@ func TestSweep_FreshFile_ReturnsCleanerWorker(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, w, "worker must be non-nil for fresh file")
 
-	// Stop before Start is idempotent (Cleaner.state transitions to Stopped).
+	// Stop before Start is idempotent (cleaner.state transitions to Stopped).
 	stopCtx := context.Background()
 	require.NoError(t, w.Stop(stopCtx), "Stop must not error")
 	// Second Stop is idempotent.
@@ -195,7 +195,7 @@ func TestSweep_FreshFile_ReturnsCleanerWorker(t *testing.T) {
 }
 
 // TestSweep_UnreadableFile_LogErrorContinue verifies that a cred file with
-// mode 0o000 causes an Error log but Sweep still returns (nil, nil) (startup not blocked).
+// mode 0o000 causes an Error log but sweep still returns (nil, nil) (startup not blocked).
 func TestSweep_UnreadableFile_LogErrorContinue(t *testing.T) {
 	dir := t.TempDir()
 	logger, cap := newBootstrapCapturingLogger()
@@ -210,13 +210,13 @@ func TestSweep_UnreadableFile_LogErrorContinue(t *testing.T) {
 		_ = os.Chmod(credPath, 0o600)
 	})
 
-	w, err := Sweep(context.Background(), SweepConfig{
+	w, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
 	})
 
-	require.NoError(t, err, "Sweep must not return error even when file is unreadable")
+	require.NoError(t, err, "sweep must not return error even when file is unreadable")
 	assert.Nil(t, w, "no worker expected when file is unreadable")
 
 	// Must have at least one Error-level log.
@@ -239,7 +239,7 @@ func TestSweep_StateDirNotExist_NoError(t *testing.T) {
 	logger, cap := newBootstrapCapturingLogger()
 	now := time.Now()
 
-	w, err := Sweep(context.Background(), SweepConfig{
+	w, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
@@ -266,7 +266,7 @@ func TestSweep_MalformedExpiresAt_LogErrorContinue(t *testing.T) {
 
 	credPath := writeMalformedCredFile(t, dir)
 
-	w, err := Sweep(context.Background(), SweepConfig{
+	w, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
@@ -294,7 +294,7 @@ func TestSweep_MalformedExpiresAt_LogErrorContinue(t *testing.T) {
 
 // TestSweep_AdminExistsDoesNotSkip verifies the architectural invariant:
 // sweep.go must not import ports.UserRepository. This is a static guarantee
-// that Sweep is fully decoupled from the admin existence check.
+// that sweep is fully decoupled from the admin existence check.
 //
 // Implementation note: we only check for the UserRepository import — the
 // "adminExists" function name is intentionally NOT grepped here because the
@@ -308,7 +308,7 @@ func TestSweep_AdminExistsDoesNotSkip(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.NotContains(t, string(src), "UserRepository",
-		"sweep.go must not import ports.UserRepository — Sweep is admin-existence-agnostic")
+		"sweep.go must not import ports.UserRepository — sweep is admin-existence-agnostic")
 }
 
 // ---------------------------------------------------------------------------

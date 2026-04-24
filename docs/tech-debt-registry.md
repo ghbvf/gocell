@@ -139,7 +139,7 @@
 
 | # | 标签 | 状态 | 问题 | 影响 | 建议修复时机 |
 |---|------|------|------|------|-------------|
-| P4-TD-04 | [TECH] | OPEN | ordercell 声明 L2 但使用 publisher.Publish 而非事务性 outbox write；Init 不强制 outboxWriter 注入 | todo-order 示例 L2 一致性为"声明型"而非"事务型"；semantic gap | v1.1 |
+| P4-TD-04 | [TECH] | OPEN | ordercell 声明 L2 但使用 publisher.Publish 而非事务性 outbox write；Init 不强制 outboxWriter 注入 | todoorder 示例 L2 一致性为"声明型"而非"事务型"；semantic gap | v1.1 |
 
 ### 测试/回归
 

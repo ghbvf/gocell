@@ -11,7 +11,7 @@
 
 **现状**：L0 Cell 暂时放在 `cells/` 下，与 L1+ 同级。
 **待定**：是否迁到 `modules/` 或 `libraries/` 独立目录？改名为 `module` / `library-partition`？
-**触发时机**：首次实际创建 L0 Cell（如 shared-crypto）时决定。
+**触发时机**：首次实际创建 L0 Cell（如 sharedcrypto）时决定。
 **影响范围**：`cells/` 目录结构、`cell.yaml` 的 `type` 枚举、`l0Dependencies` 引用路径。
 
 ### TODO-M2: Journey 文件拆分
@@ -236,7 +236,7 @@
 
 ### TODO-E1: examples/ 示范项目
 
-**现状**：README 列出 `sso-bff / todo-order / iot-device` 三个示例。目录为空。
+**现状**：README 列出 `ssobff / todoorder / iotdevice` 三个示例。目录为空。
 **待定**：是否每个示例独立 go.mod？还是共享根 module？是否包含完整 cell/contract/journey 元数据？
 **触发时机**：核心 kernel 跑通后。
 

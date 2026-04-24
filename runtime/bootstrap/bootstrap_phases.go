@@ -624,6 +624,56 @@ func (b *Bootstrap) registerOneCellHealthCheckers(s *phaseState, id string, hcc 
 	return nil
 }
 
+// phase3bDiscoverLifecycleContributor auto-registers lifecycle hooks from all
+// cells implementing cell.LifecycleContributor. Mirrors registerCellHealthCheckers
+// (above) to keep the discovery pattern symmetric.
+//
+// Must run after phase3InitAssembly (cells need Init to have populated any
+// state the hooks close over) and before b.lifecycle.Start(ctx).
+//
+// Cross-path uniqueness: Lifecycle.Append is the single source of truth for
+// duplicate-Name detection (returns ErrDuplicateHookName). That guard covers
+// every entry path into the shared Lifecycle — phase3b auto-discovery,
+// WithLifecycle explicit registration, and any future callers — without
+// needing a phase-local "seen" map that could drift from reality.
+//
+// ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go — Hook, Append ordering.
+// ref: kernel/cell.HealthContributor — mirrored auto-discovery pattern.
+func (b *Bootstrap) phase3bDiscoverLifecycleContributor(s *phaseState) error {
+	for _, id := range s.asm.CellIDs() {
+		lc, ok := s.asm.Cell(id).(cell.LifecycleContributor)
+		if !ok {
+			continue
+		}
+		if err := b.registerOneCellLifecycleHooks(id, lc); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// registerOneCellLifecycleHooks appends the hooks from a single cell. Duplicate
+// Name detection is delegated to Lifecycle.Append. Extracted from phase3b to
+// keep cognitive complexity under the project ceiling.
+func (b *Bootstrap) registerOneCellLifecycleHooks(id string, lc cell.LifecycleContributor) error {
+	for _, h := range lc.LifecycleHooks() {
+		if h.OnStart == nil && h.OnStop == nil {
+			continue
+		}
+		if err := b.lifecycle.Append(Hook{
+			CellID:       id,
+			Name:         h.Name,
+			OnStart:      h.OnStart,
+			OnStop:       h.OnStop,
+			StartTimeout: h.StartTimeout,
+			StopTimeout:  h.StopTimeout,
+		}); err != nil {
+			return fmt.Errorf("bootstrap: cell %q lifecycle hook %q: %w", id, h.Name, err)
+		}
+	}
+	return nil
+}
+
 // registerConfigDriftChecker registers the config-drift health probe when the
 // config supports generation tracking.
 func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {

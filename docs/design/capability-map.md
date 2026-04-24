@@ -77,9 +77,9 @@ external_refs:
 
 | 编号 | Cell | Slices | 核心 Journeys |
 |------|------|--------|--------------|
-| C01 | accesscore | identity-manage / session-login / session-refresh / session-logout / authorization-decide | J-ssologin / J-sessionrefresh / J-sessionlogout / J-useronboarding / J-accountlockout |
-| C02 | auditcore | audit-write / audit-verify / audit-archive | J-auditlogintrail |
-| C03 | configcore | config-manage / config-publish / config-subscribe / feature-flag | J-confighotreload / J-configrollback |
+| C01 | accesscore | identitymanage / sessionlogin / sessionrefresh / sessionlogout / sessionvalidate / authorizationdecide / rbaccheck / rbacassign / configreceive | J-ssologin / J-sessionrefresh / J-sessionlogout / J-useronboarding / J-accountlockout |
+| C02 | auditcore | auditappend / auditverify / auditquery / auditarchive | J-auditlogintrail |
+| C03 | configcore | configread / configwrite / configpublish / configsubscribe / featureflag / flagwrite | J-confighotreload / J-configrollback |
 
 #### First-class Adapters — 一等适配器
 
@@ -190,7 +190,7 @@ external_refs:
 ```
 能力：SSO/OIDC 登录 + 密码登录 + JWT 签发/验证 + Session 管理 + 登录锁定 + 角色权限
 一致性：L1/L2
-Slices: identity-manage / session-login / session-refresh / session-logout / authorization-decide
+Slices: identitymanage / sessionlogin / sessionrefresh / sessionlogout / sessionvalidate / authorizationdecide / rbaccheck / rbacassign / configreceive
 Journeys: J-ssologin / J-sessionrefresh / J-sessionlogout / J-useronboarding / J-accountlockout
 Produces: event.session.created.v1 / event.session.revoked.v1 / event.user.created.v1 / event.user.locked.v1
 ```
@@ -200,7 +200,7 @@ Produces: event.session.created.v1 / event.session.revoked.v1 / event.user.creat
 ```
 能力：事件消费 → 审计写入 + HMAC-SHA256 hash chain + 验证 + 归档
 一致性：L2
-Slices: audit-write / audit-verify / audit-archive
+Slices: auditappend / auditverify / auditquery / auditarchive
 Journeys: J-auditlogintrail
 Consumes: event.session.* / event.user.* / event.config.*
 Produces: event.audit.integrity-verified.v1
@@ -211,7 +211,7 @@ Produces: event.audit.integrity-verified.v1
 ```
 能力：配置 CRUD + 版本管理 + 热更新推送 + Feature flags + 灰度 + 回滚
 一致性：L2
-Slices: config-manage / config-publish / config-subscribe / feature-flag
+Slices: configread / configwrite / configpublish / configsubscribe / featureflag / flagwrite
 Journeys: J-confighotreload / J-configrollback
 Produces: event.config.changed.v1 / event.config.rollback.v1 / http.config.get.v1
 ```

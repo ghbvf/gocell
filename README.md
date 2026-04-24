@@ -47,7 +47,7 @@ Check the application logs — you should see `event.order.created consumed`.
 | Concept | Description |
 |---------|-------------|
 | **Cell** | Independent domain unit with lifecycle (Init/Start/Stop/Health). Types: core, edge, support. |
-| **Slice** | A single responsibility within a Cell (e.g., `session-login`, `order-create`). |
+| **Slice** | A single responsibility within a Cell (e.g., `sessionlogin`, `ordercreate`). |
 | **Contract** | Cross-Cell communication boundary (HTTP, event, command). Cells never import each other directly. |
 | **Assembly** | Physical deployment — groups Cells into a runnable binary. |
 | **Journey** | End-to-end acceptance specification spanning multiple Cells and Contracts. |
@@ -69,12 +69,12 @@ Follow these steps to create a custom Cell from scratch.
 ### Step 1: Create Cell directory and metadata
 
 ```bash
-mkdir -p cells/my-cell/slices/myaction
+mkdir -p cells/mycell/slices/myaction
 ```
 
-Create `cells/my-cell/cell.yaml`:
+Create `cells/mycell/cell.yaml`:
 ```yaml
-id: my-cell
+id: mycell
 type: core
 consistencyLevel: L1
 owner:
@@ -84,13 +84,13 @@ schema:
   primary: my_table
 verify:
   smoke:
-    - my-cell/smoke
+    - mycell/smoke
 ```
 
-Create `cells/my-cell/slices/myaction/slice.yaml`:
+Create `cells/mycell/slices/myaction/slice.yaml`:
 ```yaml
 id: myaction
-belongsToCell: my-cell
+belongsToCell: mycell
 contractUsages:
   - contract: http.my-api.v1
     role: serve
@@ -101,7 +101,7 @@ verify:
 
 ### Step 2: Define the domain
 
-Create `cells/my-cell/internal/domain/model.go`:
+Create `cells/mycell/internal/domain/model.go`:
 ```go
 package domain
 
@@ -118,7 +118,7 @@ type ItemRepository interface {
 
 ### Step 3: Implement the Cell
 
-Create `cells/my-cell/cell.go`:
+Create `cells/mycell/cell.go`:
 ```go
 package mycell
 
@@ -136,11 +136,11 @@ type MyCell struct {
 func New() *MyCell {
     return &MyCell{
         BaseCell: cell.NewBaseCell(cell.CellMetadata{
-            ID: "my-cell", Type: cell.CellTypeCore,
+            ID: "mycell", Type: cell.CellTypeCore,
             ConsistencyLevel: cell.L1,
             Owner: cell.Owner{Team: "my-team", Role: "my-owner"},
             Schema: cell.SchemaConfig{Primary: "my_table"},
-            Verify: cell.CellVerify{Smoke: []string{"my-cell/smoke"}},
+            Verify: cell.CellVerify{Smoke: []string{"mycell/smoke"}},
         }),
         logger: slog.Default(),
     }
@@ -152,7 +152,7 @@ func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
 
 func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
     mux.Handle("GET /api/v1/hello", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Write([]byte(`{"message":"hello from my-cell"}`))
+        w.Write([]byte(`{"message":"hello from mycell"}`))
     }))
 }
 ```
@@ -167,7 +167,7 @@ import (
     "os/signal"
     "syscall"
 
-    mycell "github.com/ghbvf/gocell/cells/my-cell"
+    mycell "github.com/ghbvf/gocell/cells/mycell"
     "github.com/ghbvf/gocell/kernel/assembly"
     "github.com/ghbvf/gocell/runtime/bootstrap"
 )
@@ -176,7 +176,7 @@ func main() {
     ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
     defer cancel()
 
-    asm := assembly.New(assembly.Config{ID: "my-app", DurabilityMode: cell.DurabilityDemo})
+    asm := assembly.New(assembly.Config{ID: "myapp", DurabilityMode: cell.DurabilityDemo})
     asm.Register(mycell.New())
 
     app := bootstrap.New(
@@ -190,19 +190,19 @@ func main() {
 ### Step 5: Build and run
 
 ```bash
-go build ./cmd/my-app && ./my-app
+go build ./cmd/myapp && ./myapp
 # In another terminal:
 curl http://localhost:8080/api/v1/hello
-# {"message":"hello from my-cell"}
+# {"message":"hello from mycell"}
 ```
 
 ## Example Projects
 
 | Example | Complexity | What it demonstrates |
 |---------|-----------|---------------------|
-| [todo-order](examples/todoorder/) | Medium | Custom Cell, CRUD, outbox event publish, RabbitMQ consume |
-| [sso-bff](examples/ssobff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
-| [iot-device](examples/iotdevice/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
+| [todoorder](examples/todoorder/) | Medium | Custom Cell, CRUD, outbox event publish, RabbitMQ consume |
+| [ssobff](examples/ssobff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
+| [iotdevice](examples/iotdevice/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
 
 ## Runtime Modes
 
@@ -256,9 +256,9 @@ examples/  ← all layers
 
 ## Built-in Cells
 
-- **accesscore** — Identity management, JWT session lifecycle (RS256), RBAC authorization (7 Slices)
+- **accesscore** — Identity management, JWT session lifecycle (RS256), RBAC authorization (9 Slices)
 - **auditcore** — Tamper-proof audit trail with HMAC-SHA256 hash chain (4 Slices)
-- **configcore** — Configuration management with versioning, publishing, and feature flags (5 Slices)
+- **configcore** — Configuration management with versioning, publishing, and feature flags (6 Slices)
 
 ## Adapters
 

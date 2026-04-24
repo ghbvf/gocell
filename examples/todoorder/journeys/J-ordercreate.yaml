@@ -11,5 +11,6 @@ contracts:
 passCriteria:
   - text: "POST /api/v1/orders/ returns 201 with order ID"
     mode: auto
+    checkRef: journey.J-ordercreate.http-create
   - text: "Demo mode emits order-created best-effort in-process; durable outbox delivery requires outboxWriter + txManager + relay wiring"
     mode: manual

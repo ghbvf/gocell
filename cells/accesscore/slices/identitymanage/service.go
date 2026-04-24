@@ -125,7 +125,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 	}
 
 	eventPayload := map[string]any{"user_id": user.ID, "username": user.Username}
-	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.Create(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: create: %w", err)
 		}
@@ -232,7 +232,7 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 	}
 
 	user.Lock()
-	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
@@ -342,7 +342,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// the tx because it creates a NEW session that must not be caught by the
 	// revoke sweep, and because signing failure should not roll back a
 	// legitimate password change.
-	if err := s.runInTx(ctx, func(txCtx context.Context) error {
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: change-password update: %w", err)
 		}
@@ -378,8 +378,4 @@ func (s *Service) publish(ctx context.Context, topic string, payload map[string]
 		return fmt.Errorf("identity-manage: emit event: %w", err)
 	}
 	return nil
-}
-
-func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
-	return s.txRunner.RunInTx(ctx, fn)
 }

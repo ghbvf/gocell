@@ -9,6 +9,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -23,6 +24,16 @@ import (
 // checks; the pointer identity is stable for the lifetime of the process.
 var ErrLifecycleAlreadyStarted = errcode.New(errcode.ErrBootstrapLifecycle, "lifecycle already started")
 
+// ErrDuplicateHookName is returned by Append when a non-empty Hook.Name has
+// already been registered. The single source of truth for duplicate-name
+// detection lives here so that phase3b (LifecycleContributor auto-discovery)
+// and WithLifecycle (explicit composition-root Append) share the same guard
+// without having to re-synchronise per-path "seen" maps.
+//
+// Empty Name bypasses the check — callers that deliberately register nameless
+// hooks accept the risk of duplicates (diagnostic cost, not correctness).
+var ErrDuplicateHookName = errcode.New(errcode.ErrBootstrapLifecycle, "duplicate lifecycle hook name")
+
 const (
 	// DefaultStartTimeout is the default per-hook start deadline.
 	DefaultStartTimeout = 30 * time.Second
@@ -32,7 +43,20 @@ const (
 
 // Hook is a pair of lifecycle callbacks invoked in Append order on Start and
 // reverse order on Stop. A zero-value OnStart/OnStop means no-op.
+//
+// The CellID field is stamped by phase3b when a hook is discovered from a
+// cell.LifecycleContributor; hooks appended via bootstrap.WithLifecycle
+// leave it empty. It is a runtime-only observability dimension (not mirrored
+// on cell.LifecycleHook) — cells never self-declare their identity here, by
+// analogy with uber-go/fx's unexported Hook.callerFrame which the framework
+// fills in at Append time rather than trusting the caller to pass it.
+//
+// ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go (callerFrame)
+// ref: kubernetes/kubernetes pkg/kubelet/lifecycle/handlers.go
+//
+//	(containerName + pod structured slog fields, not name-encoded)
 type Hook struct {
+	CellID       string                          // runtime-stamped by phase3b; "" for WithLifecycle-appended hooks
 	Name         string                          // diagnostic name (log dimension)
 	OnStart      func(ctx context.Context) error // nil = no-op
 	OnStop       func(ctx context.Context) error // nil = no-op
@@ -72,7 +96,8 @@ type lifecycle struct {
 	mu           sync.Mutex
 	state        lifecycleState
 	hooks        []Hook
-	numStarted   int // number of hooks whose OnStart succeeded
+	names        map[string]struct{} // tracks non-empty Hook.Name for dup detection
+	numStarted   int                 // number of hooks whose OnStart succeeded
 	defaultStart time.Duration
 	defaultStop  time.Duration
 	logger       *slog.Logger
@@ -94,6 +119,7 @@ func NewLifecycle(cfg LifecycleConfig) Lifecycle {
 	}
 	return &lifecycle{
 		state:        stateStopped,
+		names:        make(map[string]struct{}),
 		defaultStart: defaultStart,
 		defaultStop:  defaultStop,
 		logger:       logger,
@@ -101,13 +127,22 @@ func NewLifecycle(cfg LifecycleConfig) Lifecycle {
 }
 
 // Append registers a Hook. Returns ErrLifecycleAlreadyStarted if the
-// lifecycle is not in stopped state.
+// lifecycle is not in stopped state, or ErrDuplicateHookName when h.Name
+// is non-empty and already registered. Empty Name is allowed through so
+// callers who deliberately register nameless hooks accept the diagnostic
+// cost of duplicates.
 func (lc *lifecycle) Append(h Hook) error {
 	lc.mu.Lock()
 	defer lc.mu.Unlock()
 	switch lc.state {
 	case stateStarting, stateStarted, stateStopping, stateIncompleteStart:
 		return ErrLifecycleAlreadyStarted
+	}
+	if h.Name != "" {
+		if _, dup := lc.names[h.Name]; dup {
+			return fmt.Errorf("%w: %q", ErrDuplicateHookName, h.Name)
+		}
+		lc.names[h.Name] = struct{}{}
 	}
 	lc.hooks = append(lc.hooks, h)
 	return nil
@@ -226,7 +261,7 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 		return nil
 	}
 
-	lc.logger.InfoContext(ctx, startMsg, slog.String("name", h.Name))
+	lc.logger.LogAttrs(ctx, slog.LevelInfo, startMsg, hookIdentityAttrs(h)...)
 
 	hookCtx, cancel := lc.applyTimeout(ctx, hookTimeout)
 	defer cancel()
@@ -237,24 +272,34 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			lc.logger.ErrorContext(ctx, "hook.timeout",
-				slog.String("name", h.Name),
+			attrs := append(hookIdentityAttrs(h),
 				slog.String("phase", startMsg),
 				slog.Duration("elapsed", elapsed),
 				slog.Any("error", err))
+			lc.logger.LogAttrs(ctx, slog.LevelError, "hook.timeout", attrs...)
 		} else {
-			lc.logger.ErrorContext(ctx, errMsg,
-				slog.String("name", h.Name),
+			attrs := append(hookIdentityAttrs(h),
 				slog.Duration("elapsed", elapsed),
 				slog.Any("error", err))
+			lc.logger.LogAttrs(ctx, slog.LevelError, errMsg, attrs...)
 		}
 		return err
 	}
 
-	lc.logger.InfoContext(ctx, okMsg,
-		slog.String("name", h.Name),
-		slog.Duration("elapsed", elapsed))
+	okAttrs := append(hookIdentityAttrs(h), slog.Duration("elapsed", elapsed))
+	lc.logger.LogAttrs(ctx, slog.LevelInfo, okMsg, okAttrs...)
 	return nil
+}
+
+// hookIdentityAttrs returns the identity slog.Attrs for h: always "name",
+// and "cell" when CellID is non-empty. Empty CellID indicates a hook
+// registered via bootstrap.WithLifecycle rather than phase3b auto-discovery;
+// omitting the field keeps log lines clean rather than emitting cell="".
+func hookIdentityAttrs(h Hook) []slog.Attr {
+	if h.CellID == "" {
+		return []slog.Attr{slog.String("name", h.Name)}
+	}
+	return []slog.Attr{slog.String("name", h.Name), slog.String("cell", h.CellID)}
 }
 
 // applyTimeout derives a child context with deadline from parentCtx.
