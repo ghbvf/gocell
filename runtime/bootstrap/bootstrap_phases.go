@@ -9,6 +9,7 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -147,6 +148,21 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.authVerifier != nil && b.authDiscovery {
 		return fmt.Errorf("bootstrap: WithAuthMiddleware and WithAuthDiscovery " +
 			"are mutually exclusive; use WithAuthDiscovery (recommended)")
+	}
+	// ARCH-05: PolicyJWT on a listener AND WithAuthMiddleware/WithAuthDiscovery
+	// would install JWT middleware twice (once at the listener policy layer, once
+	// at the router AuthMiddleware layer), causing duplicate JWT validation.
+	// Detect this at phase0 before any side effects.
+	if b.authVerifier != nil || b.authDiscovery {
+		for ref, cfg := range b.listenerConfigs {
+			if _, ok := cfg.policy.(*policyJWT); ok {
+				return fmt.Errorf(
+					"bootstrap: listener %q uses PolicyJWT AND WithAuthMiddleware/WithAuthDiscovery are also set; "+
+						"use only one JWT auth path: either PolicyJWT on the listener (no WithAuth*) "+
+						"or WithAuthDiscovery/WithAuthMiddleware (nil listener policy)",
+					ref.String())
+			}
+		}
 	}
 	// PR-A14b: validate declarative listener configs last — other option
 	// errors (nil checkers, nil resources, mutual exclusion) are option-level
@@ -511,7 +527,7 @@ func (b *Bootstrap) phase5BuildRouters(s *phaseState) error {
 	if err := b.phase5MountRouteGroups(routers, groups); err != nil {
 		return err
 	}
-	if err := b.phase5FinalizePrimaryRouter(routers); err != nil {
+	if err := b.phase5FinalizeAllRouters(routers); err != nil {
 		return err
 	}
 	s.routers = routers
@@ -558,13 +574,18 @@ func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.Liste
 
 // phase5CollectRouteGroups resolves the health listener fallback and collects
 // RouteGroups from health and RouteGroupContributor cells.
+// Each RouteGroup is annotated with the contributing cell ID (OPS-02).
 func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.ListenerRef]*router.Router) []cell.RouteGroup {
 	healthRef := b.resolveHealthListenerRef(routers)
 	groups := b.remapHealthGroups(s.hh, s.healthMetricsHandler, healthRef)
 	for _, id := range s.asm.CellIDs() {
 		c := s.asm.Cell(id)
 		if rgc, ok := c.(cell.RouteGroupContributor); ok {
-			groups = append(groups, rgc.RouteGroups()...)
+			cellGroups := rgc.RouteGroups()
+			for i := range cellGroups {
+				cellGroups[i].CellID = id
+			}
+			groups = append(groups, cellGroups...)
 		}
 	}
 	return groups
@@ -572,11 +593,19 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.Lis
 
 // resolveHealthListenerRef returns the listener that should serve health endpoints.
 // Falls back to PrimaryListener when no explicit HealthListener is declared.
+//
+// SEC-04: when falling back to primary AND a metrics handler is configured, emit
+// a slog.Warn so operators know /metrics will be served without auth on the primary
+// listener (which may be exposed to the internet).
 func (b *Bootstrap) resolveHealthListenerRef(routers map[cell.ListenerRef]*router.Router) cell.ListenerRef {
 	if _, ok := routers[cell.HealthListener]; ok {
 		return cell.HealthListener
 	}
 	if _, ok := routers[cell.PrimaryListener]; ok {
+		if b.healthMetricsHandler != nil {
+			slog.Warn("bootstrap: metrics endpoint falling back to primary listener without auth; " +
+				"declare a HealthListener via WithListener(cell.HealthListener, ...) to isolate /metrics")
+		}
 		return cell.PrimaryListener
 	}
 	return cell.HealthListener
@@ -598,8 +627,9 @@ func (b *Bootstrap) remapHealthGroups(hh *health.Handler, metricsHandler http.Ha
 }
 
 // phase5MountRouteGroups mounts each RouteGroup on its listener's router.
+// OPS-02: wraps registration errors with cell ID, group index, listener, and prefix context.
 func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.Router, groups []cell.RouteGroup) error {
-	for _, rg := range groups {
+	for i, rg := range groups {
 		rtr, ok := routers[rg.Listener]
 		if !ok {
 			return fmt.Errorf("bootstrap: RouteGroup references undeclared listener %q; add WithListener(%s,...) to bootstrap options",
@@ -608,27 +638,60 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 		if rg.Register == nil {
 			return fmt.Errorf("bootstrap: RouteGroup for listener %q has nil Register function", rg.Listener.String())
 		}
-		if rg.Prefix != "" {
-			rtr.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
-		} else {
-			rg.Register(rtr)
+		if err := b.mountOneRouteGroup(rtr, rg, i); err != nil {
+			cellID := rg.CellID
+			if cellID == "" {
+				cellID = "<framework>"
+			}
+			return fmt.Errorf("cell %s RouteGroup %d (listener=%s, prefix=%q): %w",
+				cellID, i, rg.Listener.String(), rg.Prefix, err)
 		}
 	}
 	return nil
 }
 
-// phase5FinalizePrimaryRouter installs /internal/v1/* isolation and finalizes auth.
-func (b *Bootstrap) phase5FinalizePrimaryRouter(routers map[cell.ListenerRef]*router.Router) error {
-	primaryRtr, ok := routers[cell.PrimaryListener]
-	if !ok {
-		return nil
+// mountOneRouteGroup mounts a single RouteGroup on its router.
+// Extracted to keep phase5MountRouteGroups's cognitive complexity under 15.
+func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _ int) error {
+	if rg.Prefix != "" {
+		rtr.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+	} else {
+		rg.Register(rtr)
 	}
-	router.InstallInternalPrefixIsolation(primaryRtr)
-	if err := b.validateAuthVerifierForDeclaredRoutes(primaryRtr); err != nil {
-		return err
+	return nil
+}
+
+// phase5FinalizeAllRouters installs /internal/v1/* isolation on the primary
+// router and calls FinalizeAuth on every declared listener's router.
+//
+// CORR-01: previously only the primary router was finalized, silently skipping
+// verifyDelegatedConsistency + verifyPolicyCoverage for Internal and Health routers.
+func (b *Bootstrap) phase5FinalizeAllRouters(routers map[cell.ListenerRef]*router.Router) error {
+	// Primary: install port-isolation 404 + auth verifier check + FinalizeAuth.
+	if primaryRtr, ok := routers[cell.PrimaryListener]; ok {
+		router.InstallInternalPrefixIsolation(primaryRtr)
+		if err := b.validateAuthVerifierForDeclaredRoutes(primaryRtr); err != nil {
+			return err
+		}
+		if err := primaryRtr.FinalizeAuth(); err != nil {
+			return fmt.Errorf("bootstrap: primary router finalize auth: %w", err)
+		}
 	}
-	if err := primaryRtr.FinalizeAuth(); err != nil {
-		return fmt.Errorf("bootstrap: router finalize auth: %w", err)
+	// Internal + Health (and any future listeners): FinalizeAuth only.
+	// No auth verifier check (these listeners use service-token / mTLS / none policy).
+	refs := make([]cell.ListenerRef, 0, len(routers))
+	for ref := range routers {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
+	for _, ref := range refs {
+		if ref == cell.PrimaryListener {
+			continue // already handled above
+		}
+		rtr := routers[ref]
+		if err := rtr.FinalizeAuth(); err != nil {
+			return fmt.Errorf("bootstrap: %s router finalize auth: %w", ref.String(), err)
+		}
 	}
 	return nil
 }
@@ -1005,21 +1068,34 @@ func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
 	}
 	httpErrCh := b.phase7ServeAll(servers)
 	s.httpErrCh = httpErrCh
-	srvList := make([]*http.Server, 0, len(servers))
-	for _, bs := range servers {
-		srvList = append(srvList, bs.srv)
-	}
+	// Capture servers slice for teardown (OPS-01: pass boundServers for named logging).
+	capturedServers := servers
 	s.addTeardown(func(c context.Context) error {
-		return shutdownAllServers(c, srvList)
+		return shutdownAllServers(c, capturedServers)
 	})
 	return nil
 }
 
 // phase7BindListeners pre-binds all declared listeners synchronously. If any
 // bind fails, already-owned sockets are closed before returning the error.
+//
+// CORR-06: sort by ref.String() so bind order is deterministic across runs
+// and log lines appear in a consistent order for operators.
+// SEC-11: http.Server is constructed with ReadTimeout, WriteTimeout, and
+// IdleTimeout to prevent Slowloris / slow-write DoS attacks.
+// OPS-06: emit slog.Info after each successful bind (listener + addr + policy).
+// OPS-07: emit slog.Warn when a non-loopback listener binds with PolicyNone.
 func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
+	// Collect and sort refs for deterministic iteration order.
+	refs := make([]cell.ListenerRef, 0, len(b.listenerConfigs))
+	for ref := range b.listenerConfigs {
+		refs = append(refs, ref)
+	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
+
 	var servers []boundServer
-	for ref, cfg := range b.listenerConfigs {
+	for _, ref := range refs {
+		cfg := b.listenerConfigs[ref]
 		rtr, ok := s.routers[ref]
 		if !ok {
 			return nil, fmt.Errorf("bootstrap: no router for listener %q", ref.String())
@@ -1033,9 +1109,34 @@ func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 				slog.Any("error", err))
 			return nil, fmt.Errorf("bootstrap: listen %s %s: %w", ref.String(), cfg.addr, err)
 		}
+
+		policyDesc := "none"
+		if cfg.policy != nil {
+			policyDesc = cfg.policy.Describe()
+		}
+		slog.Info("bootstrap: HTTP listener bound",
+			slog.String("listener", ref.String()),
+			slog.String("addr", ln.Addr().String()),
+			slog.String("policy", policyDesc))
+
+		// OPS-07: warn when a non-loopback address is served with PolicyNone.
+		if policyDesc == "none" {
+			if tcpAddr, ok2 := ln.Addr().(*net.TCPAddr); ok2 && !tcpAddr.IP.IsLoopback() && !tcpAddr.IP.IsUnspecified() {
+				slog.Warn("bootstrap: listener bound to non-loopback with PolicyNone; ensure network-level isolation",
+					slog.String("listener", ref.String()),
+					slog.String("addr", ln.Addr().String()))
+			}
+		}
+
 		servers = append(servers, boundServer{
-			name:  ref.String(),
-			srv:   &http.Server{Handler: rtr.Handler(), ReadHeaderTimeout: 10 * time.Second},
+			name: ref.String(),
+			srv: &http.Server{
+				Handler:           rtr.Handler(),
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       30 * time.Second,
+				WriteTimeout:      30 * time.Second,
+				IdleTimeout:       60 * time.Second,
+			},
 			ln:    ln,
 			owned: owned,
 		})
@@ -1079,32 +1180,45 @@ func (b *Bootstrap) phase7ServeAll(servers []boundServer) chan error {
 // resolveListener returns the net.Listener for a listenerConfig. When
 // cfg.net is set (caller-injected), it is returned directly (owned=false).
 // Otherwise a new TCP socket is bound to cfg.addr (owned=true).
+//
+// CORR-03: when cfg.tls is non-nil, the TCP listener is wrapped with
+// tls.NewListener so that TLS termination happens at the listener level.
+// The pre-bound caller-injected net listener (cfg.net) is returned as-is
+// since callers are expected to handle TLS on their own pre-bound socket.
 func resolveListener(cfg listenerConfig) (ln net.Listener, owned bool, err error) {
 	if cfg.net != nil {
 		return cfg.net, false, nil
 	}
-	ln, err = net.Listen("tcp", cfg.addr)
-	return ln, err == nil, err
+	tcpLn, listenErr := net.Listen("tcp", cfg.addr)
+	if listenErr != nil {
+		return nil, false, listenErr
+	}
+	if cfg.tls != nil {
+		return tls.NewListener(tcpLn, cfg.tls), true, nil
+	}
+	return tcpLn, true, nil
 }
 
 // shutdownAllServers drains all servers in parallel under the shared shutCtx
 // budget. Errors are aggregated via errors.Join so operators see every failure.
-func shutdownAllServers(ctx context.Context, servers []*http.Server) error {
+//
+// OPS-01: accepts []boundServer so each shutdown log line carries the listener
+// name instead of an opaque numeric index.
+func shutdownAllServers(ctx context.Context, servers []boundServer) error {
 	slog.Info("bootstrap: draining HTTP servers")
 	type drainResult struct {
 		err error
 	}
 	resultCh := make(chan drainResult, len(servers))
-	for i, srv := range servers {
-		srv := srv
-		idx := i
+	for _, bs := range servers {
+		bs := bs // capture
 		go func() {
-			err := srv.Shutdown(ctx)
+			err := bs.srv.Shutdown(ctx)
 			if err != nil {
 				slog.Error("bootstrap: HTTP server drain failed",
-					slog.Int("server_index", idx), slog.Any("error", err))
+					slog.String("listener", bs.name), slog.Any("error", err))
 			} else {
-				slog.Info("bootstrap: HTTP server drained", slog.Int("server_index", idx))
+				slog.Info("bootstrap: HTTP server drained", slog.String("listener", bs.name))
 			}
 			resultCh <- drainResult{err: err}
 		}()
@@ -1169,17 +1283,40 @@ func (b *Bootstrap) phase8StartWorkers(runCtx context.Context, s *phaseState) {
 	})
 }
 
+// drainHTTPErrors collects the first error and any additional errors already
+// buffered in ch, then joins them. Called only after receiving the first error
+// from httpErrCh so the channel is guaranteed non-empty at entry.
+func drainHTTPErrors(ch <-chan error, first error) error {
+	allErrs := []error{first}
+	for {
+		select {
+		case e, ok := <-ch:
+			if !ok {
+				return errors.Join(allErrs...)
+			}
+			if e != nil {
+				allErrs = append(allErrs, e)
+			}
+		default:
+			return errors.Join(allErrs...)
+		}
+	}
+}
+
 // phase9AwaitShutdownSignal blocks until one of: external ctx cancel, HTTP error,
 // worker error, or router error. It returns a shutdownSignal describing what fired.
 // It does NOT cancel workerCtx or runCtx — that happens in phase10.
+//
+// CORR-04: after receiving the first HTTP error from httpErrCh, drain any remaining
+// errors and join them so no error is silently discarded.
 func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState) shutdownSignal {
 	slog.Info("bootstrap: application started successfully")
 	select {
 	case <-ctx.Done():
 		slog.Info("bootstrap: context cancelled, shutting down")
 		return shutdownSignal{reason: reasonCtxCancel}
-	case err := <-s.httpErrCh:
-		return shutdownSignal{reason: reasonHTTPError, err: err}
+	case firstErr := <-s.httpErrCh:
+		return shutdownSignal{reason: reasonHTTPError, err: drainHTTPErrors(s.httpErrCh, firstErr)}
 	case err := <-s.workerErrCh:
 		if err != nil {
 			slog.Error("bootstrap: worker failed, initiating shutdown", slog.Any("error", err))

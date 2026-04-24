@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"net/http"
 	"sort"
 	"strings"
@@ -328,9 +327,24 @@ func WithRelayHealth(r *runtimeoutbox.Relay) Option {
 //
 // PR-A14b: replaces validateHTTPListenerAddrs. Listener configuration is now
 // declarative via WithListener; the old primaryAddr/internalAddr fields are gone.
+// CORR-02: also rejects duplicate listener refs recorded by WithListener.
 func (b *Bootstrap) validateHTTPListenerConfigs() error {
 	if len(b.listenerConfigs) == 0 {
 		return fmt.Errorf("bootstrap: no HTTP listeners declared; use WithListener to declare at least one listener")
+	}
+	if len(b.duplicateListenerRefs) > 0 {
+		dups := make([]string, 0, len(b.duplicateListenerRefs))
+		seen := make(map[string]bool)
+		for _, ref := range b.duplicateListenerRefs {
+			name := ref.String()
+			if !seen[name] {
+				dups = append(dups, name)
+				seen[name] = true
+			}
+		}
+		sort.Strings(dups)
+		return fmt.Errorf("bootstrap: duplicate WithListener call(s) for ref(s): [%s]; each listener ref may only be declared once",
+			strings.Join(dups, ", "))
 	}
 	for ref, cfg := range b.listenerConfigs {
 		if cfg.net == nil && cfg.addr == "" {
@@ -338,40 +352,6 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 		}
 	}
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// Backward-compat shims (PR-A14b migration helpers)
-//
-// These shims map the old two-listener API (WithPrimaryListener / WithInternalListener /
-// WithHTTPPrimaryAddr / WithHTTPInternalAddr) to the new declarative WithListener API.
-// They are intentionally kept simple: each shim calls WithListener internally.
-// When only a PrimaryListener (no HealthListener) is declared, phase5BuildRouters
-// falls back to mounting health endpoints on the PrimaryListener.
-// ---------------------------------------------------------------------------
-
-// WithPrimaryListener injects a pre-bound net.Listener as the PrimaryListener.
-// Deprecated: use WithListener(cell.PrimaryListener, addr, nil, WithListenerNet(ln)).
-func WithPrimaryListener(ln net.Listener) Option {
-	return WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln))
-}
-
-// WithInternalListener injects a pre-bound net.Listener as the InternalListener.
-// Deprecated: use WithListener(cell.InternalListener, addr, nil, WithListenerNet(ln)).
-func WithInternalListener(ln net.Listener) Option {
-	return WithListener(cell.InternalListener, ln.Addr().String(), nil, WithListenerNet(ln))
-}
-
-// WithHTTPPrimaryAddr sets the primary listener address.
-// Deprecated: use WithListener(cell.PrimaryListener, addr, nil).
-func WithHTTPPrimaryAddr(addr string) Option {
-	return WithListener(cell.PrimaryListener, addr, nil)
-}
-
-// WithHTTPInternalAddr sets the internal listener address.
-// Deprecated: use WithListener(cell.InternalListener, addr, nil).
-func WithHTTPInternalAddr(addr string) Option {
-	return WithListener(cell.InternalListener, addr, nil)
 }
 
 // WithAdapterInfo sets static adapter configuration metadata that is exposed
@@ -614,6 +594,11 @@ type Bootstrap struct {
 	// Initialized lazily by the first WithListener option.
 	listenerConfigs map[cell.ListenerRef]listenerConfig
 
+	// duplicateListenerRefs records refs that were passed to WithListener more
+	// than once. validateHTTPListenerConfigs surfaces these as a phase0 error.
+	// CORR-02: doc says "duplicate ref is a phase0 error" — now enforced.
+	duplicateListenerRefs []cell.ListenerRef
+
 	// healthMetricsHandler is an optional http.Handler to mount at /metrics
 	// on the HealthListener. Set via WithHealthMetricsHandler.
 	healthMetricsHandler http.Handler
@@ -684,6 +669,13 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 
 // Run executes the full startup sequence. It blocks until ctx is cancelled
 // (or a signal is received), then performs orderly shutdown.
+//
+// Health-listener fallback: when no HealthListener is declared, /healthz,
+// /readyz, and /metrics are mounted on the PrimaryListener instead. This is
+// the expected behaviour for tests that inject only primary + internal
+// listeners. Production deployments should declare a dedicated HealthListener
+// (typically "127.0.0.1:9091") to physically separate health traffic from
+// business traffic.
 //
 // The ten phases and their responsibilities:
 //
