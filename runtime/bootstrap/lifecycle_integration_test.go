@@ -1,13 +1,14 @@
 //go:build integration
 
-// File lives in internal `package bootstrap` to match every other *_test.go in
-// this directory. The earlier `package bootstrap_test` caused a build failure
-// under `go test -tags=integration ./runtime/bootstrap/...` because the file
-// referenced the unexported helper `newLocalListener` and the option constructor
-// `WithInternalListener` without a package qualifier. Current integration CI
-// scope does not include runtime/bootstrap so the break stayed invisible in CI;
-// local full-repo integration runs would hit it.
 package bootstrap
+
+// Note: file lives in internal `package bootstrap` to match every other
+// *_test.go in this directory. The earlier `package bootstrap_test` caused a
+// build failure under `go test -tags=integration ./runtime/bootstrap/...`
+// because the file referenced the unexported helper `newLocalListener` and the
+// option constructor `WithInternalListener` without a package qualifier.
+// Current integration CI scope does not include runtime/bootstrap so the break
+// stayed invisible in CI; local full-repo integration runs would hit it.
 
 import (
 	"context"
