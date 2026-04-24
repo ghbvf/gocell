@@ -76,6 +76,14 @@ func Mount(mux cell.RouteHandler, r Route) {
 	if p, ok := mux.(cell.Prefixer); ok {
 		prefix = p.Prefix()
 	}
+	if prefix != "" && !isPathSegmentPrefix(r.Contract.Path, prefix) {
+		panic(fmt.Sprintf(
+			"auth.Mount %s %s: Contract.Path does not extend mux mount prefix %q — "+
+				"sub-routers must declare a Contract.Path that begins with the prefix "+
+				"on a path-segment boundary. Fix the Contract.Path or the Route()/Mount() "+
+				"the caller used to scope the sub-router.",
+			r.Contract.Method, r.Contract.Path, prefix))
+	}
 	relPath := stripMountPrefix(r.Contract.Path, prefix)
 
 	handler := r.Handler
@@ -107,12 +115,38 @@ func Mount(mux cell.RouteHandler, r Route) {
 	}
 }
 
+// isPathSegmentPrefix reports whether prefix is a path-segment prefix of
+// fullPath. Returns true only when fullPath == prefix, or when fullPath
+// starts with prefix AND the character immediately after prefix is '/'.
+// Empty prefix returns false (use the fast-path in the caller for empty
+// prefix).
+//
+// Examples:
+//
+//	isPathSegmentPrefix("/api/v1/access/x", "/api/v1/access") → true
+//	isPathSegmentPrefix("/api/v1/auth/x",   "/api/v1/a")      → false
+func isPathSegmentPrefix(fullPath, prefix string) bool {
+	if prefix == "" {
+		return false
+	}
+	if fullPath == prefix {
+		return true
+	}
+	if len(fullPath) <= len(prefix) {
+		return false
+	}
+	if !strings.HasPrefix(fullPath, prefix) {
+		return false
+	}
+	return fullPath[len(prefix)] == '/'
+}
+
 // stripMountPrefix returns fullPath with prefix removed. When prefix is
-// empty (or fullPath does not start with it), fullPath is returned
-// unchanged — the caller will still receive a valid chi pattern because
-// the mux has no prefix to compose.
+// empty (or fullPath is not a path-segment extension of prefix), fullPath
+// is returned unchanged — the caller will still receive a valid chi pattern
+// because the mux has no prefix to compose.
 func stripMountPrefix(fullPath, prefix string) string {
-	if prefix == "" || !strings.HasPrefix(fullPath, prefix) {
+	if prefix == "" || !isPathSegmentPrefix(fullPath, prefix) {
 		return fullPath
 	}
 	stripped := strings.TrimPrefix(fullPath, prefix)
