@@ -175,14 +175,39 @@ func TestObservabilityMetadata_RestoreToContext_RejectsOverlongValues(t *testing
 }
 
 func TestObservabilityMetadata_RestoreToContext_RejectsInvalidTraceParent(t *testing.T) {
-	o := ObservabilityMetadata{
-		TraceParent: "00-not-a-valid-trace-id-00f067aa0ba902b7-01",
+	cases := []struct {
+		name        string
+		traceParent string
+	}{
+		{
+			name:        "malformed trace_id segment",
+			traceParent: "00-not-a-valid-trace-id-00f067aa0ba902b7-01",
+		},
+		{
+			name:        "all-zero trace_id rejected per W3C spec",
+			traceParent: "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+		},
+		{
+			name:        "all-zero span_id rejected per W3C spec",
+			traceParent: "00-4bf92f3577b34da6a3ce929d0e0e4736-0000000000000000-01",
+		},
+		{
+			name:        "version ff is forbidden per W3C spec",
+			traceParent: "ff-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		},
+		{
+			name:        "uppercase hex rejected per W3C Level 2 lowercase requirement",
+			traceParent: "00-4BF92F3577B34DA6A3CE929D0E0E4736-00f067aa0ba902b7-01",
+		},
 	}
-
-	ctx := o.RestoreToContext(context.Background())
-
-	_, ok := ctxkeys.TraceParentFrom(ctx)
-	assert.False(t, ok, "invalid traceparent should be rejected")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o := ObservabilityMetadata{TraceParent: tc.traceParent}
+			ctx := o.RestoreToContext(context.Background())
+			_, ok := ctxkeys.TraceParentFrom(ctx)
+			assert.False(t, ok, "invalid traceparent should be rejected: %s", tc.traceParent)
+		})
+	}
 }
 
 func TestObservabilityMetadata_RestoreToContext_TraceParentSeedsTraceIDWhenMissing(t *testing.T) {
@@ -212,6 +237,23 @@ func TestObservabilityMetadata_RestoreToContext_ZeroStructIsNoOp(t *testing.T) {
 	assert.Equal(t, "req-existing", requestID)
 	_, ok = ctxkeys.TraceIDFrom(ctx)
 	assert.False(t, ok)
+}
+
+func TestObservabilityMetadata_RestoreToContext_EmptyStringContextValueIsOverwritten(t *testing.T) {
+	// Verify the contract: when ctx already holds a key with an empty-string
+	// value ("", ok=true), RestoreToContext must overwrite it with the non-empty
+	// value from ObservabilityMetadata. An empty existing value does NOT count
+	// as "already set" — withContextMetadata guards on existing != "".
+	base := context.Background()
+	base = ctxkeys.WithRequestID(base, "") // explicit empty — not the same as missing
+
+	o := ObservabilityMetadata{RequestID: "req-nonempty"}
+	ctx := o.RestoreToContext(base)
+
+	requestID, ok := ctxkeys.RequestIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "req-nonempty", requestID,
+		"empty-string ctx value must be overwritten by non-empty ObservabilityMetadata value")
 }
 
 // ---------------------------------------------------------------------------
@@ -325,47 +367,6 @@ func TestObservabilityContextMiddleware_ZeroObservabilityIsNoOp(t *testing.T) {
 	res := wrapped(context.Background(), Entry{ID: "e1", Observability: ObservabilityMetadata{}})
 	assert.True(t, called)
 	assert.Equal(t, DispositionAck, res.Disposition)
-}
-
-// ---------------------------------------------------------------------------
-// CloneMetadata
-// ---------------------------------------------------------------------------
-
-func TestCloneMetadata_NilReturnsEmptyMap(t *testing.T) {
-	got := CloneMetadata(nil)
-	require.NotNil(t, got, "nil input must return a fresh non-nil map so callers can write unconditionally")
-	assert.Empty(t, got)
-}
-
-func TestCloneMetadata_EmptyMap(t *testing.T) {
-	got := CloneMetadata(map[string]string{})
-	require.NotNil(t, got)
-	assert.Empty(t, got)
-}
-
-func TestCloneMetadata_DeepCopy(t *testing.T) {
-	src := map[string]string{
-		"business-key": "val-abc",
-		"custom":       "value",
-	}
-	got := CloneMetadata(src)
-	assert.Equal(t, src, got)
-
-	got["business-key"] = "mutated"
-	got["new-key"] = "new-value"
-	assert.Equal(t, "val-abc", src["business-key"], "source must be isolated from clone mutations")
-	_, ok := src["new-key"]
-	assert.False(t, ok, "source must not gain keys added to clone")
-}
-
-func TestCloneMetadata_MutatingSourceDoesNotAffectClone(t *testing.T) {
-	src := map[string]string{"k": "v"}
-	got := CloneMetadata(src)
-	src["k"] = "mutated"
-	src["added"] = "v2"
-	assert.Equal(t, "v", got["k"], "clone must be isolated from source mutations")
-	_, ok := got["added"]
-	assert.False(t, ok)
 }
 
 // ---------------------------------------------------------------------------

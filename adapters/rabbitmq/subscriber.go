@@ -105,6 +105,16 @@ func (sc *SubscriberConfig) setDefaults() {
 
 // Subscriber implements outbox.Subscriber using RabbitMQ.
 //
+// ObservabilityContextMiddleware injection requirement:
+// Subscribe itself does NOT restore entry.Observability into the handler
+// context. The canonical injection point is runtime/bootstrap.Bootstrap's
+// phase6, which wraps the subscriber with ObservabilityContextMiddleware
+// before registering topic handlers. Callers constructing a Subscriber
+// directly (bypassing Bootstrap) MUST install the middleware themselves
+// via outbox.NewSubscriberWithMiddleware(sub, ObservabilityContextMiddleware())
+// or the consumer-side trace_id / traceparent / request_id / correlation_id
+// restore will silently be a no-op.
+//
 // ref: Watermill watermill-amqp subscriber.go — reconnect loop + ACK/NACK pattern
 // Adopted: per-subscription channel, QoS prefetch, graceful shutdown with WaitGroup.
 // Deviated: callback-based handler (not channel-based) to align with GoCell ConsumerBase.

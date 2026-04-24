@@ -14,7 +14,7 @@
 -- ref: PR246-FU1 finding ② — typed observability field on Entry.
 
 -- +goose Up
-ALTER TABLE outbox_entries ADD COLUMN observability JSONB;
+ALTER TABLE outbox_entries ADD COLUMN IF NOT EXISTS observability JSONB;
 
 -- +goose Down
 ALTER TABLE outbox_entries DROP COLUMN IF EXISTS observability;

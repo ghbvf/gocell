@@ -560,13 +560,12 @@ func allBlank(names []*ast.Ident) bool {
 	return true
 }
 
-// isPlainStructCompositeType reports whether expr is acceptable as the type
-// of a zero-value composite literal sentinel. Plain identifiers (e.g.
-// `NoopTracer{}` → *ast.Ident) and selectors (e.g. `pkg.Type{}` →
-// *ast.SelectorExpr) pass; slices/maps/arrays/pointers/channels fail.
-// A nil type occurs when the CompositeLit has an inferred type and the
-// ValueSpec carries the type annotation separately — accept it, since
-// isPlainStructCompositeType is only invoked after confirming zero Elts.
+// isPlainStructCompositeType reports whether expr is an ast type that, when
+// used as a CompositeLit's Type, names a plain struct (ident or pkg.ident)
+// rather than a reference/container type (map, slice, chan, pointer,
+// array). A nil Type is accepted defensively — at package scope the
+// ValueSpec.Type carries the annotation anyway, and the scanner has
+// already verified the composite literal is empty before calling this.
 func isPlainStructCompositeType(expr ast.Expr) bool {
 	if expr == nil {
 		// Implicit-typed composite literal: `var x = Type{}` records the

@@ -258,6 +258,15 @@ func TestValidateFMT19WrapperPackageState(t *testing.T) {
 var noopSpanInstance Span = noopSpan{}`,
 			wantErrors: 0,
 		},
+		// Rule ②: selector-expr zero-value composite literal — accepted.
+		// Covers `var x pkg.Type = pkg.Type{}` where the type is *ast.SelectorExpr.
+		// The test framework prepends "package wrapper\n\n" to the source; the
+		// import is syntactically parsed without resolution (SkipObjectResolution).
+		{
+			name:       "selector-expr zero-value composite literal",
+			source:     `import "example.com/pkg"` + "\n\n" + `var x pkg.Type = pkg.Type{}`,
+			wantErrors: 0,
+		},
 		// Violations — nil RHS.
 		{
 			name:       "interface var with nil",

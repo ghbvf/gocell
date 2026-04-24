@@ -1,11 +1,5 @@
 package outbox
 
-// ref: OpenTelemetry SpanContext -- typed carrier of trace identity across
-// transport boundaries, kept distinct from application attributes.
-// Adopted: separate struct for system-owned fields vs. producer-owned Metadata map.
-// Deviated: only 4 fields (no sampled flag, no traceFlags struct) to keep the
-// async boundary narrow; TraceParent is the W3C canonical form.
-
 import (
 	"context"
 	"strings"
@@ -26,6 +20,12 @@ import (
 // layer got a chance to overwrite them. With a typed field the forgery
 // surface is removed by construction — the observability system and
 // the business metadata map no longer share a key namespace.
+//
+// ref: OpenTelemetry SpanContext -- typed carrier of trace identity across
+// transport boundaries, kept distinct from application attributes.
+// Adopted: separate struct for system-owned fields vs. producer-owned Metadata map.
+// Deviated: only 4 fields (no sampled flag, no traceFlags struct) to keep the
+// async boundary narrow; TraceParent is the W3C canonical form.
 type ObservabilityMetadata struct {
 	TraceID       string `json:"traceId,omitempty"`
 	TraceParent   string `json:"traceParent,omitempty"`
@@ -94,28 +94,6 @@ func ObservabilityContextMiddleware() SubscriptionMiddleware {
 			return next(entry.Observability.RestoreToContext(ctx), entry)
 		}
 	}
-}
-
-// CloneMetadata returns an independent copy of metadata so callers can
-// mutate the result without affecting the source. Nil input returns a
-// freshly allocated empty map, which lets callers write unconditionally
-// (no nil guard at every write site).
-//
-// The result has capacity for three extra keys so the common pattern of
-// merging extra keys on top does not reallocate.
-//
-// Concurrency: CloneMetadata is safe for concurrent use. The returned map
-// is not — callers own it fully and are responsible for any further
-// synchronization.
-func CloneMetadata(metadata map[string]string) map[string]string {
-	if metadata == nil {
-		return make(map[string]string, 3)
-	}
-	cloned := make(map[string]string, len(metadata)+3)
-	for k, v := range metadata {
-		cloned[k] = v
-	}
-	return cloned
 }
 
 // ---------------------------------------------------------------------------
@@ -197,13 +175,15 @@ func validW3CSpanID(value string) bool {
 	return len(value) == 16 && isHex(value) && !allZero(value)
 }
 
+// isHex reports whether value consists solely of lowercase hexadecimal
+// digits (0-9, a-f). Uppercase A-F are rejected per W3C Trace Context
+// Level 2 §2.2.3, which requires traceparent fields to be lowercase hex.
 func isHex(value string) bool {
 	for i := 0; i < len(value); i++ {
 		c := value[i]
 		switch {
 		case c >= '0' && c <= '9':
 		case c >= 'a' && c <= 'f':
-		case c >= 'A' && c <= 'F':
 		default:
 			return false
 		}
