@@ -18,6 +18,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
@@ -29,6 +30,7 @@ import (
 // Compile-time checks.
 var _ kcell.RouteMux = (*Router)(nil)
 var _ kcell.AuthRouteDeclarer = (*Router)(nil)
+var _ kcell.HTTPContractDeclarer = (*Router)(nil)
 
 // Option configures a Router.
 type Option func(*Router)
@@ -297,6 +299,10 @@ type Router struct {
 	// authFinalized is set to true by FinalizeAuth. Any subsequent
 	// DeclareAuthMeta call panics; a second FinalizeAuth call returns an error.
 	authFinalized bool
+	// declaredHTTPContracts accumulates HTTP ContractSpec entries forwarded
+	// by auth.Mount. Tracing uses these as a fallback when upstream middleware
+	// short-circuits before wrapper.HTTPHandler can contribute attrs.
+	declaredHTTPContracts []wrapper.ContractSpec
 	// derivedHint is populated by FinalizeAuth from the first declared
 	// POST + PasswordResetExempt meta. Served at request time via
 	// WithPasswordResetChangeEndpointHintFn.
@@ -465,6 +471,7 @@ func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
 		[]middleware.TracingOption{
 			middleware.WithProbeFilter(middleware.DefaultProbeFilter),
 			middleware.WithPublicEndpointFn(lazyPublic),
+			middleware.WithContractAttrsResolver(r.resolveHTTPContractAttrs),
 		},
 		r.tracingOpts...,
 	)
@@ -734,6 +741,18 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 	r.declaredAuthMetas = append(r.declaredAuthMetas, m)
 }
 
+// DeclareHTTPContract implements cell.HTTPContractDeclarer. It stores the
+// route contract metadata separately from auth metadata so Tracing can tag
+// spans for requests rejected before reaching wrapper.HTTPHandler.
+func (r *Router) DeclareHTTPContract(spec wrapper.ContractSpec) {
+	if r.authFinalized {
+		panic(fmt.Sprintf(
+			"router: DeclareHTTPContract called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
+			spec.Method, spec.Path))
+	}
+	r.declaredHTTPContracts = append(r.declaredHTTPContracts, spec)
+}
+
 // FinalizeAuth compiles all accumulated AuthRouteMeta declarations into
 // matchers used by the public-mux AuthMiddleware. Bootstrap calls this after
 // all cells have completed RegisterRoutes but before Listen.
@@ -935,6 +954,54 @@ func (r *Router) DeclaredAuthMetas() []kcell.AuthRouteMeta {
 	return out
 }
 
+func (r *Router) resolveHTTPContractAttrs(method, urlPath string) ([]wrapper.Attr, bool) {
+	for _, spec := range r.declaredHTTPContracts {
+		if !contractMethodMatches(spec.Method, method) {
+			continue
+		}
+		if !contractPathMatches(spec.Path, urlPath) {
+			continue
+		}
+		return httpContractAttrs(spec), true
+	}
+	return nil, false
+}
+
+func contractMethodMatches(contractMethod, requestMethod string) bool {
+	return contractMethod == requestMethod || (contractMethod == http.MethodGet && requestMethod == http.MethodHead)
+}
+
+func contractPathMatches(template, concrete string) bool {
+	tParts := strings.Split(strings.Trim(template, "/"), "/")
+	cParts := strings.Split(strings.Trim(concrete, "/"), "/")
+	if len(tParts) != len(cParts) {
+		return false
+	}
+	for i, t := range tParts {
+		c := cParts[i]
+		if strings.HasPrefix(t, "{") && strings.HasSuffix(t, "}") {
+			if c == "" {
+				return false
+			}
+			continue
+		}
+		if t != c {
+			return false
+		}
+	}
+	return true
+}
+
+func httpContractAttrs(spec wrapper.ContractSpec) []wrapper.Attr {
+	return []wrapper.Attr{
+		{Key: "gocell.contract.id", Value: spec.ID},
+		{Key: "gocell.contract.kind", Value: spec.Kind},
+		{Key: "gocell.contract.transport", Value: spec.Transport},
+		{Key: "http.method", Value: spec.Method},
+		{Key: "http.route", Value: spec.Path},
+	}
+}
+
 // orMergeRequest returns a predicate that returns true when either a or b matches.
 // When a is nil it returns b; when b is nil it returns a.
 func orMergeRequest(a, b func(*http.Request) bool) func(*http.Request) bool {
@@ -977,6 +1044,7 @@ type chiRouterAdapter struct {
 // from fully-qualified Contract.Path literals.
 var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
 var _ kcell.PrefixedMux = (*chiRouterAdapter)(nil)
+var _ kcell.HTTPContractDeclarer = (*chiRouterAdapter)(nil)
 
 // Prefix returns the sub-route mount prefix this adapter inherited from
 // its parent Route. An empty prefix means the adapter sits directly under
@@ -1053,6 +1121,18 @@ func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 		m.Path = joinPrefix(a.prefix, m.Path)
 	}
 	a.declarer.DeclareAuthMeta(m)
+}
+
+// DeclareHTTPContract forwards the route's full ContractSpec to the
+// Router-rooted declarer. ContractSpec.Path is already the canonical full
+// path, so unlike AuthRouteMeta it is not composed with the chi prefix.
+func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) {
+	if a.declarer == nil {
+		return
+	}
+	if declarer, ok := a.declarer.(kcell.HTTPContractDeclarer); ok {
+		declarer.DeclareHTTPContract(spec)
+	}
 }
 
 // joinPrefix composes a parent mount prefix with a child pattern/path,

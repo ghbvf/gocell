@@ -14,10 +14,17 @@ import (
 // TracingOption configures the Tracing middleware.
 type TracingOption func(*tracingConfig)
 
+// ContractAttrsResolver resolves contract-derived span attributes from a
+// concrete request method/path. Routers use this to annotate spans when
+// pre-handler middleware short-circuits before wrapper.HTTPHandler can append
+// to the AttrCarrier.
+type ContractAttrsResolver func(method, path string) ([]wrapper.Attr, bool)
+
 type tracingConfig struct {
 	publicEndpointFn func(*http.Request) bool
 	skipFn           func(*http.Request) bool
 	errorRedactor    wrapper.ErrorRedactor
+	contractAttrs    ContractAttrsResolver
 }
 
 // WithPublicEndpointFn sets a per-request function that determines whether an
@@ -55,6 +62,18 @@ func WithErrorRedactor(fn wrapper.ErrorRedactor) TracingOption {
 	return func(c *tracingConfig) {
 		if fn != nil {
 			c.errorRedactor = fn
+		}
+	}
+}
+
+// WithContractAttrsResolver installs a resolver that can provide contract
+// attrs without waiting for the leaf wrapper.HTTPHandler. This keeps
+// rate-limit/auth/body-limit short-circuits tagged with the same
+// gocell.contract.* metadata as successful handler executions.
+func WithContractAttrsResolver(fn ContractAttrsResolver) TracingOption {
+	return func(c *tracingConfig) {
+		if fn != nil {
+			c.contractAttrs = fn
 		}
 	}
 }
@@ -174,11 +193,10 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 
 	next.ServeHTTP(w, r.WithContext(ctx))
 
-	// After routing, use low-cardinality route pattern.
-	route := RoutePatternFromCtx(r.Context())
+	status := state.Status()
+	route, contractAttrs := finalRouteAndContractAttrs(r, carrier, cfg)
 	tracing.SpanSetName(span, r.Method+" "+route)
 
-	status := state.Status()
 	// Emit http.status_code as int64 for cross-span type consistency with
 	// OTel collector pipelines that switch on attribute type.
 	span.SetAttributes(
@@ -187,16 +205,49 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	)
 
 	// Late-bind contract attributes collected by wrapper.HTTPHandler on
-	// contract-bound routes. Empty only for framework-owned non-contract
-	// endpoints or direct standalone middleware usage.
-	if len(carrier.Attrs) > 0 {
-		span.SetAttributes(carrier.Attrs...)
+	// contract-bound routes. If the request short-circuited before the leaf
+	// handler, fall back to the router-supplied contract resolver.
+	if len(contractAttrs) > 0 {
+		span.SetAttributes(contractAttrs...)
 	}
 
 	// 5xx → error span; 4xx and below → unset (otelhttp convention).
 	if status >= 500 {
 		tracing.SpanSetStatus(span, true, http.StatusText(status))
 	}
+}
+
+func finalRouteAndContractAttrs(
+	r *http.Request,
+	carrier *wrapper.AttrCarrier,
+	cfg tracingConfig,
+) (string, []wrapper.Attr) {
+	route := RoutePatternFromCtx(r.Context())
+	if len(carrier.Attrs) > 0 {
+		return route, carrier.Attrs
+	}
+	if cfg.contractAttrs == nil {
+		return route, nil
+	}
+	attrs, ok := cfg.contractAttrs(r.Method, r.URL.Path)
+	if !ok {
+		return route, nil
+	}
+	if contractRoute := attrString(attrs, "http.route"); contractRoute != "" {
+		route = contractRoute
+	}
+	return route, attrs
+}
+
+func attrString(attrs []wrapper.Attr, key string) string {
+	for _, a := range attrs {
+		if a.Key == key {
+			if v, ok := a.Value.(string); ok {
+				return v
+			}
+		}
+	}
+	return ""
 }
 
 type spanErrorRecorder struct {
@@ -222,6 +273,7 @@ func recordPanicOnActiveSpan(ctx context.Context, rec any) {
 	if err != nil {
 		r.span.RecordError(err)
 	}
+	tracing.SpanSetStatus(r.span, true, "panic")
 }
 
 func panicAsError(rec any) error {

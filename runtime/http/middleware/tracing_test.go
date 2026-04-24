@@ -312,6 +312,26 @@ func TestTracing_RecoveryRecordsRedactedPanicError(t *testing.T) {
 	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))
 }
 
+func TestTracing_RecoveryMarksCommittedPanicSpanError(t *testing.T) {
+	spy := &spyTracer{}
+	handler := Tracing(spy)(Recovery(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		panic("panic after commit")
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic-after-commit", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "panic after commit", spans[0].Attr("_recorded_error"))
+	assert.Equal(t, true, spans[0].Attr("_status_error"))
+	assert.Equal(t, "panic", spans[0].Attr("_status_desc"))
+	assert.Equal(t, int64(http.StatusOK), spans[0].Attr("http.status_code"))
+}
+
 func TestTracing_4xxDoesNotSetErrorSpanStatus(t *testing.T) {
 	spy := &spyTracer{}
 

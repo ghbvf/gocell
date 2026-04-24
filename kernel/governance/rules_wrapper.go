@@ -70,8 +70,8 @@ func (v *Validator) validateFMT18(strict bool) []ValidationResult {
 	if err != nil {
 		return []ValidationResult{
 			v.newResult(codeFMT18, SeverityError, IssueInvalid,
-				fmt.Sprintf("FMT-18: failed to scan cells/ for wrapper.ContractSpec literals: %v", err),
-				"cells/", ""),
+				"cells/", "",
+				fmt.Sprintf("FMT-18: failed to scan cells/ for wrapper.ContractSpec literals: %v", err)),
 		}
 	}
 
@@ -89,17 +89,17 @@ func (v *Validator) validateContractSpecLiteral(lit contractSpecLiteral) []Valid
 	contract, ok := v.project.Contracts[lit.id]
 	if !ok {
 		return []ValidationResult{v.newResult(codeFMT18, SeverityError, IssueInvalid,
+			lit.file, "",
 			fmt.Sprintf("FMT-18: %s:%d references ContractSpec ID %q with no matching contracts/**/contract.yaml entry",
-				lit.file, lit.line, lit.id),
-			lit.file, "")}
+				lit.file, lit.line, lit.id))}
 	}
 
 	var out []ValidationResult
 	if lit.kind != "" && lit.kind != contract.Kind {
 		out = append(out, v.newResult(codeFMT18, SeverityError, IssueInvalid,
+			lit.file, "",
 			fmt.Sprintf("FMT-18: %s:%d ContractSpec Kind=%q disagrees with YAML Kind=%q for %q",
-				lit.file, lit.line, lit.kind, contract.Kind, lit.id),
-			lit.file, ""))
+				lit.file, lit.line, lit.kind, contract.Kind, lit.id)))
 	}
 	out = append(out, v.validateHTTPContractSpecLiteral(lit, contract)...)
 	return out
@@ -116,15 +116,15 @@ func (v *Validator) validateHTTPContractSpecLiteral(
 	var out []ValidationResult
 	if lit.method != "" && lit.method != h.Method {
 		out = append(out, v.newResult(codeFMT18, SeverityError, IssueInvalid,
+			lit.file, "",
 			fmt.Sprintf("FMT-18: %s:%d ContractSpec Method=%q disagrees with YAML %q for %q",
-				lit.file, lit.line, lit.method, h.Method, lit.id),
-			lit.file, ""))
+				lit.file, lit.line, lit.method, h.Method, lit.id)))
 	}
 	if lit.path != "" && lit.path != h.Path {
 		out = append(out, v.newResult(codeFMT18, SeverityError, IssueInvalid,
+			lit.file, "",
 			fmt.Sprintf("FMT-18: %s:%d ContractSpec Path=%q disagrees with YAML %q for %q",
-				lit.file, lit.line, lit.path, h.Path, lit.id),
-			lit.file, ""))
+				lit.file, lit.line, lit.path, h.Path, lit.id)))
 	}
 	return out
 }
@@ -212,8 +212,8 @@ func (v *Validator) validateFMT19(strict bool) []ValidationResult {
 		}
 		return []ValidationResult{
 			v.newResult(codeFMT19, SeverityError, IssueInvalid,
-				fmt.Sprintf("FMT-19: failed to read kernel/wrapper/: %v", err),
-				"kernel/wrapper/", ""),
+				"kernel/wrapper/", "",
+				fmt.Sprintf("FMT-19: failed to read kernel/wrapper/: %v", err)),
 		}
 	}
 
@@ -239,8 +239,8 @@ func (v *Validator) validateWrapperPackageStateFile(path string) []ValidationRes
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return []ValidationResult{v.newResult(codeFMT19, SeverityError, IssueInvalid,
-			fmt.Sprintf("FMT-19: failed to read %s: %v", path, err),
-			path, "")}
+			path, "",
+			fmt.Sprintf("FMT-19: failed to read %s: %v", path, err))}
 	}
 
 	var out []ValidationResult
@@ -250,10 +250,10 @@ func (v *Validator) validateWrapperPackageStateFile(path string) []ValidationRes
 			continue
 		}
 		out = append(out, v.newResult(codeFMT19, SeverityError, IssueInvalid,
+			path, "",
 			fmt.Sprintf("FMT-19: %s:%d forbids mutable package-level variable %q of type %q — "+
 				"kernel/wrapper must stay stateless (round-4 constructor-injection invariant)",
-				path, i+1, name, typ),
-			path, ""))
+				path, i+1, name, typ)))
 	}
 	return out
 }

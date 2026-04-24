@@ -112,6 +112,9 @@ func Mount(mux cell.RouteHandler, r Route) {
 			Delegated:           r.Delegated,
 		})
 	}
+	if declarer, ok := mux.(cell.HTTPContractDeclarer); ok {
+		declarer.DeclareHTTPContract(r.Contract)
+	}
 }
 
 // stripMountPrefix returns fullPath with prefix removed. When prefix is

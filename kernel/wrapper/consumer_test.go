@@ -70,6 +70,41 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 	}
 }
 
+func TestWrapConsumer_RedactsDispositionErrors(t *testing.T) {
+	tr := &spyTracer{}
+	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("raw token")}
+	}
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner, wrapper.WithConsumerErrorRedactor(func(error) error {
+		return errors.New("redacted")
+	}))
+	res := w(context.Background(), outbox.Entry{})
+
+	if res.Disposition != outbox.DispositionRequeue {
+		t.Errorf("want Requeue, got %v", res.Disposition)
+	}
+	span := tr.only(t)
+	if len(span.errs) != 1 || span.errs[0].Error() != "redacted" {
+		t.Errorf("redacted error not recorded, got %v", span.errs)
+	}
+}
+
+func TestWrapConsumer_RedactsMissingDispositionErrorFallback(t *testing.T) {
+	tr := &spyTracer{}
+	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{Disposition: outbox.DispositionReject}
+	}
+	w := wrapper.WrapConsumer(tr, eventSpec(), inner, wrapper.WithConsumerErrorRedactor(func(err error) error {
+		return errors.New("safe: " + err.Error())
+	}))
+	_ = w(context.Background(), outbox.Entry{})
+
+	span := tr.only(t)
+	if len(span.errs) != 1 || span.errs[0].Error() != "safe: consumer returned Reject without error" {
+		t.Errorf("redacted fallback error not recorded, got %v", span.errs)
+	}
+}
+
 func TestWrapConsumer_MarksErrorOnReject(t *testing.T) {
 	tr := &spyTracer{}
 	permanent := outbox.NewPermanentError(errors.New("schema mismatch"))

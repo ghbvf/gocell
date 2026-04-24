@@ -580,6 +580,30 @@ func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
 	assert.Equal(t, "ERR_RATE_LIMITED", errObj["code"])
 }
 
+func TestWithTracer_RateLimitedContractRouteTagged(t *testing.T) {
+	limiter := &routerTestLimiter{allow: false}
+	tracer := &routerSpyTracer{}
+	r := New(WithRateLimiter(limiter), WithTracer(tracer))
+	auth.Mount(r, auth.Route{
+		Contract: testHTTPContract(http.MethodGet, "/api/v1/rl-contract/{id}"),
+		Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+			t.Fatal("handler should not be called when rate limited")
+		}),
+		Public: true,
+	})
+	require.NoError(t, r.FinalizeAuth())
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/rl-contract/123", nil)
+	r.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
+	span := tracer.only(t)
+	assert.Equal(t, "test:GET:/api/v1/rl-contract/{id}", span.Attr("gocell.contract.id"))
+	assert.Equal(t, "/api/v1/rl-contract/{id}", span.Attr("http.route"))
+	assert.Equal(t, int64(http.StatusTooManyRequests), span.Attr("http.status_code"))
+}
+
 // --- Circuit breaker wiring ---
 
 // routerTestBreaker is a minimal Allower for router integration tests.

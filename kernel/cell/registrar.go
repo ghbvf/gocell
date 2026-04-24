@@ -173,6 +173,14 @@ type AuthRouteDeclarer interface {
 	DeclareAuthMeta(meta AuthRouteMeta)
 }
 
+// HTTPContractDeclarer is implemented by aggregators that want to receive the
+// ContractSpec a slice declares alongside an HTTP route. auth.Mount forwards
+// this metadata when available so outer runtime middleware can annotate spans
+// even when pre-handler middleware short-circuits before wrapper.HTTPHandler.
+type HTTPContractDeclarer interface {
+	DeclareHTTPContract(spec wrapper.ContractSpec)
+}
+
 // EventRouter declares event subscriptions. Cells call AddContractHandler
 // during RegisterSubscriptions to declare intent; the caller
 // (bootstrap/Router) is responsible for starting consumption.
