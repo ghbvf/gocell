@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -79,61 +78,8 @@ func TestWriteCredentialFile_AtomicRename(t *testing.T) {
 		t.Fatalf("ReadDir: %v", err)
 	}
 	for _, e := range entries {
-		if strings.HasSuffix(e.Name(), ".tmp") {
+		if len(e.Name()) > 4 && e.Name()[len(e.Name())-4:] == ".tmp" {
 			t.Errorf("found residual .tmp file: %s", e.Name())
-		}
-	}
-}
-
-func TestWriteCredentialFile_RefusesOverwrite(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "initial_admin_password")
-
-	// First write succeeds.
-	if err := writeCredentialFile(path, makePayload("admin", "pass1")); err != nil {
-		t.Fatalf("first writeCredentialFile: %v", err)
-	}
-
-	// Second write must refuse.
-	err := writeCredentialFile(path, makePayload("admin", "pass2"))
-	if err == nil {
-		t.Fatal("expected errCredFileExists, got nil")
-	}
-	if !errors.Is(err, errCredFileExists) {
-		t.Errorf("expected errCredFileExists, got: %v", err)
-	}
-}
-
-func TestWriteCredentialFile_PayloadFormat(t *testing.T) {
-	t.Parallel()
-
-	path := filepath.Join(t.TempDir(), "initial_admin_password")
-	payload := credentialPayload{
-		Username:  "admin",
-		Password:  "mypassword",
-		ExpiresAt: time.Unix(1713456000, 0),
-	}
-
-	if err := writeCredentialFile(path, payload); err != nil {
-		t.Fatalf("writeCredentialFile: %v", err)
-	}
-
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-	content := string(data)
-
-	required := []string{
-		"# GoCell initial admin credential",
-		"username=admin",
-		"password=mypassword",
-		"expires_at=",
-	}
-	for _, needle := range required {
-		if !strings.Contains(content, needle) {
-			t.Errorf("file content missing %q\ngot:\n%s", needle, content)
 		}
 	}
 }

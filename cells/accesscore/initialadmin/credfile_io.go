@@ -1,4 +1,4 @@
-//go:build unix
+//go:build unix || windows
 
 package initialadmin
 
@@ -11,11 +11,25 @@ import (
 	"time"
 )
 
+// platformCredfile is the per-OS security primitive set. The credfile_io.go
+// orchestration calls these to ensure that all the fiddly OS-specific bits
+// (file modes on Unix, DACLs on Windows) are isolated from the
+// write/rename/parse logic.
+type platformCredfile interface {
+	EnsureSecureDir(dir string) error
+	SecureNewFile(path string) (*os.File, error)
+	VerifyOwnership(path string, info os.FileInfo) (tampered bool, err error)
+}
+
+// platformImpl is the compile-time-selected implementation: unixCredfile{}
+// on unix builds, windowsCredfile{} on windows builds.
+// Initialised by init() in credfile_security_unix.go or credfile_security_windows.go.
+var platformImpl platformCredfile
+
 // writeCredentialFile atomically writes a credential file at path:
-//  1. MkdirAll(dir, 0o700) — creates the directory with strict permissions.
-//  2. Creates a sibling .tmp file with O_EXCL|O_CREATE + mode 0o600.
-//  3. On success, os.Rename atomically replaces the target; on failure the .tmp
-//     is removed.
+//  1. platformImpl.EnsureSecureDir(dir) — creates the directory with OS-appropriate permissions.
+//  2. Creates a sibling .tmp file via platformImpl.SecureNewFile with O_EXCL|O_CREATE.
+//  3. On success, os.Rename atomically replaces the target; on failure the .tmp is removed.
 //
 // If path already exists, errCredFileExists is returned to prevent a second
 // bootstrap run from silently overwriting an existing credential.
@@ -24,13 +38,14 @@ func writeCredentialFile(path string, payload credentialPayload, opts ...writeCr
 	for _, o := range opts {
 		o(cfg)
 	}
+
 	// Refuse to overwrite.
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%w: %s", errCredFileExists, path)
 	}
 
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
+	if err := platformImpl.EnsureSecureDir(dir); err != nil {
 		return fmt.Errorf("initialadmin: create directory %s: %w", dir, err)
 	}
 
@@ -39,8 +54,7 @@ func writeCredentialFile(path string, payload credentialPayload, opts ...writeCr
 	// Remove any stale .tmp from a previous crash before creating.
 	_ = os.Remove(tmpPath)
 
-	// O_EXCL ensures we don't race with another process.
-	f, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL|os.O_TRUNC, 0o600)
+	f, err := platformImpl.SecureNewFile(tmpPath)
 	if err != nil {
 		return fmt.Errorf("initialadmin: create temp file %s: %w", tmpPath, err)
 	}
@@ -66,9 +80,10 @@ func writeCredentialFile(path string, payload credentialPayload, opts ...writeCr
 
 // removeCredentialFile safely removes the credential file at path:
 //   - If the file does not exist, returns nil (idempotent).
-//   - If the file's permission is not 0o600, removes the file unconditionally
-//     (security intent: destroy the credential regardless of tampering) and
-//     returns a wrapped errCredFileTampered so the caller can log the anomaly.
+//   - If ownership/security verification fails (tampered), removes the file
+//     unconditionally (security intent: destroy the credential regardless of
+//     tampering) and returns a wrapped errCredFileTampered so the caller can
+//     log the anomaly.
 //   - Otherwise removes the file.
 func removeCredentialFile(path string) error {
 	info, err := os.Stat(path)
@@ -79,14 +94,17 @@ func removeCredentialFile(path string) error {
 		return fmt.Errorf("initialadmin: stat credential file: %w", err)
 	}
 
-	tampered := info.Mode().Perm() != 0o600
+	tampered, tamperErr := platformImpl.VerifyOwnership(path, info)
 
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("initialadmin: remove credential file: %w", err)
 	}
 
 	if tampered {
-		return fmt.Errorf("%w: got mode %o, want 0600", errCredFileTampered, info.Mode().Perm())
+		if tamperErr != nil {
+			return fmt.Errorf("%w: %w", errCredFileTampered, tamperErr)
+		}
+		return fmt.Errorf("%w", errCredFileTampered)
 	}
 
 	return nil
