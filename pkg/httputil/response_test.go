@@ -83,7 +83,7 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		// Cell-local auth failure codes -> 401
 		{errcode.ErrAuthLoginFailed, http.StatusUnauthorized},
 		{errcode.ErrAuthRefreshFailed, http.StatusUnauthorized},
-		{errcode.ErrAuthRefreshTokenReuse, http.StatusUnauthorized}, //nolint:staticcheck // retained for sessionrefresh.service; removed in F2 migration PR
+		{errcode.ErrRefreshTokenRejected, http.StatusUnauthorized},
 		{errcode.ErrAuthInvalidToken, http.StatusUnauthorized},
 
 		// Cell-local locked -> 403
@@ -119,6 +119,7 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		{errcode.ErrWSHubStopping, http.StatusServiceUnavailable},
 		{errcode.ErrWSHubNotRunning, http.StatusServiceUnavailable},
 		{errcode.ErrWSMaxConns, http.StatusServiceUnavailable},
+		{errcode.ErrAuthRefreshUnavailable, http.StatusServiceUnavailable},
 
 		// 501 Not Implemented
 		{errcode.ErrNotImplemented, http.StatusNotImplemented},

@@ -277,13 +277,9 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrAuthTokenExpired:       http.StatusUnauthorized,
 	errcode.ErrAuthLoginFailed:        http.StatusUnauthorized,
 	errcode.ErrAuthRefreshFailed:      http.StatusUnauthorized,
-	errcode.ErrAuthRefreshTokenReuse:  http.StatusUnauthorized, //nolint:staticcheck // retained for sessionrefresh.service; removed in F2 migration PR
 	errcode.ErrAuthInvalidToken:       http.StatusUnauthorized,
 	errcode.ErrAuthInvalidTokenIntent: http.StatusUnauthorized,
-	errcode.ErrRefreshTokenNotFound:   http.StatusUnauthorized,
-	errcode.ErrRefreshTokenExpired:    http.StatusUnauthorized,
-	errcode.ErrRefreshTokenRevoked:    http.StatusUnauthorized,
-	errcode.ErrRefreshTokenReused:     http.StatusUnauthorized,
+	errcode.ErrRefreshTokenRejected:   http.StatusUnauthorized,
 
 	// --- 403 Forbidden ---
 	errcode.ErrAuthForbidden:             http.StatusForbidden,
@@ -314,11 +310,12 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
 
 	// --- 503 Service Unavailable ---
-	errcode.ErrCircuitOpen:          http.StatusServiceUnavailable,
-	errcode.ErrWSHubStopping:        http.StatusServiceUnavailable,
-	errcode.ErrWSHubNotRunning:      http.StatusServiceUnavailable,
-	errcode.ErrWSMaxConns:           http.StatusServiceUnavailable,
-	errcode.ErrRelayBudgetExhausted: http.StatusServiceUnavailable,
+	errcode.ErrCircuitOpen:            http.StatusServiceUnavailable,
+	errcode.ErrWSHubStopping:          http.StatusServiceUnavailable,
+	errcode.ErrWSHubNotRunning:        http.StatusServiceUnavailable,
+	errcode.ErrWSMaxConns:             http.StatusServiceUnavailable,
+	errcode.ErrRelayBudgetExhausted:   http.StatusServiceUnavailable,
+	errcode.ErrAuthRefreshUnavailable: http.StatusServiceUnavailable,
 	// Vault / key-provider unavailability: infra down rather than internal bug.
 	// 503 lets upstream load balancers and clients apply retry semantics
 	// (Retry-After, circuit breakers) — matching ErrCircuitOpen's model.

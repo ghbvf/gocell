@@ -1,43 +1,50 @@
 // Package refresh provides the server-side opaque refresh token store interface
 // and in-memory implementation used by the accesscore session slices.
 //
-// Design origin: F2 Refresh Token Opaque + Server-side Store from
-// docs/plans/202604191515-auth-federated-whistle.md §F2.
+// Design: append-only lineage with selector/verifier split. Every Issue and
+// every Rotate inserts a new row; nothing is ever updated in place except the
+// one-way flips rotated_at and revoked_at. The wire token returned to clients
+// is base64url(selector_16B) + "." + base64url(verifier_32B) — 66 chars
+// deterministic. Only the selector is indexed; only SHA-256(verifier) is
+// persisted. A DB snapshot therefore contains no credential-equivalent data.
 //
-// ref: dexidp/dex storage/storage.go RefreshToken (ObsoleteToken + LastUsed)
-// ref: dexidp/dex server/refreshhandlers.go (reuseInterval + AllowedToReuse)
+// ref: ory/fosite token/hmac/hmacsha.go (base64url nopad, 32 B entropy, hmac.Equal)
+// ref: ory/hydra persistence/sql/persister_oauth2.go (CAS chain + reuse detection)
+// ref: zitadel/zitadel internal/api/oidc/token_refresh.go (revoke-on-use baseline)
 package refresh
 
-import "time"
+import (
+	"time"
 
-// Token is the persisted refresh token state.
+	"github.com/google/uuid"
+)
+
+// Token is the persisted refresh token metadata returned by Issue and Rotate.
 //
-// ID is the opaque string presented to clients (base64url(rand32), 43 chars).
-// ObsoleteToken holds the previous generation after a Rotate; non-empty values
-// may be presented within Policy.ReuseInterval for idempotent client retries.
-//
-// ref: dexidp/dex storage/storage.go RefreshToken.Token + ObsoleteToken
+// The wire token (the opaque string clients present) is returned separately
+// from Issue/Rotate as a string; Token itself carries only server-side identity
+// and lifetime, never the verifier or any credential-equivalent value.
 type Token struct {
-	ID            string
-	ObsoleteToken string
-	SessionID     string
-	SubjectID     string
-	CreatedAt     time.Time
-	LastUsed      time.Time
-	ExpiresAt     time.Time
+	ID        uuid.UUID
+	SessionID string
+	SubjectID string
+	CreatedAt time.Time
+	ExpiresAt time.Time
 }
 
 // Policy controls Rotate semantics and token lifetime.
 //
-// ReuseInterval is the grace window during which the obsolete token of the
-// previous generation remains a valid client retry (not a reuse attack).
+// ReuseInterval is the grace window: if a parent token is presented a second
+// time within this duration after it was rotated, the store issues another
+// child rather than flagging a reuse attack. This absorbs legitimate
+// double-submissions from SPAs and at-least-once client retries.
+//
 // MaxAge bounds Token.ExpiresAt - Token.CreatedAt.
 //
-// Defaults: ReuseInterval = 2 * time.Second (Hydra Fosite GracePeriod default),
-// MaxAge = 7 * 24 * time.Hour. The zero value is invalid.
+// Defaults (not enforced; zero values panic in constructors):
 //
-// ref: dexidp/dex server/refreshhandlers.go AllowedToReuse reuseInterval
-// ref: Hydra Fosite GracePeriod (default 2s)
+//	ReuseInterval = 2 * time.Second  (matches Ory Hydra grace_period)
+//	MaxAge        = 7 * 24 * time.Hour
 type Policy struct {
 	ReuseInterval time.Duration
 	MaxAge        time.Duration

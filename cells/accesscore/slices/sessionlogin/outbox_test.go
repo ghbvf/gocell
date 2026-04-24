@@ -2,19 +2,28 @@ package sessionlogin
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newOutboxRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
 
 // --- stubs ---
 
@@ -48,7 +57,7 @@ func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	ow := &stubOutboxWriter{}
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
-		testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+		newOutboxRefreshStore(), testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "alice", string(hash))
@@ -64,7 +73,7 @@ func TestService_WithTxManager(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	tx := &stubTxRunner{}
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
-		testIssuer, slog.Default(), WithTxManager(tx))
+		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(tx))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
 	seedUserDirect(userRepo, "bob", string(hash))

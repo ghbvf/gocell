@@ -18,6 +18,9 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -84,6 +87,11 @@ func mustCursorCodec() *query.CursorCodec {
 	return codec
 }
 
+func newTestRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
+
 func newTestCell() *AccessCore {
 	return NewAccessCore(
 		WithUserRepository(mem.NewUserRepository()),
@@ -92,6 +100,7 @@ func newTestCell() *AccessCore {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
@@ -105,6 +114,7 @@ func newDurableTestCell() *AccessCore {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithCursorCodec(testCursorCodec),
 		WithOutboxDeps(nil, durableOutboxWriter{}),
 		WithTxManager(durableTxRunner{}),
@@ -139,6 +149,22 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
+}
+
+func TestAccessCore_Init_RequiresRepositoriesBeforeSliceConstruction(t *testing.T) {
+	c := NewAccessCore(
+		WithOutboxDeps(eventbus.New(), nil),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
+	)
+
+	var err error
+	require.NotPanics(t, func() {
+		err = c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "user repository")
 }
 
 func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
@@ -215,6 +241,67 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
+}
+
+func TestInitRefreshGC_DisabledAndConfigValidation(t *testing.T) {
+	c := NewAccessCore()
+	require.NoError(t, c.initRefreshGC())
+	assert.Nil(t, c.refreshGCCollector)
+
+	tests := []struct {
+		name      string
+		interval  time.Duration
+		retention time.Duration
+		want      string
+	}{
+		{name: "interval must be positive", interval: 0, retention: time.Hour, want: "interval must be positive"},
+		{name: "retention must be positive", interval: time.Hour, retention: 0, want: "retention must be positive"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			c := NewAccessCore(WithRefreshGC(tc.interval, tc.retention))
+			err := c.initRefreshGC()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+		})
+	}
+}
+
+func TestAccessCore_InitWithRefreshGCRegistersLifecycleHook(t *testing.T) {
+	c := newTestCell()
+	WithRefreshGC(time.Hour, time.Hour)(c)
+
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	require.NotNil(t, c.refreshGCCollector)
+
+	hooks := c.LifecycleHooks()
+	require.Len(t, hooks, 1)
+	hook := hooks[0]
+	assert.Equal(t, "accesscore.refresh-gc", hook.Name)
+
+	require.NoError(t, hook.OnStart(context.Background()))
+	assert.NotNil(t, c.refreshGC)
+	require.NoError(t, hook.OnStop(context.Background()))
+	assert.Nil(t, c.refreshGC)
+}
+
+func TestAccessCore_RefreshGCHookStopWithoutStartNoops(t *testing.T) {
+	c := NewAccessCore()
+	hook := c.refreshGCHook()
+
+	require.NoError(t, hook.OnStop(context.Background()))
+	assert.Nil(t, c.refreshGC)
+}
+
+func TestAccessCore_RefreshGCHookStartPropagatesWorkerConfigError(t *testing.T) {
+	c := NewAccessCore(WithRefreshGC(time.Hour, time.Hour))
+	c.refreshGCCollector = refresh.NoopGCCollector{}
+	hook := c.refreshGCHook()
+
+	err := hook.OnStart(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "store is required")
+	assert.Nil(t, c.refreshGC)
 }
 
 // TestInit_WithEmitter_DirectInjection exercises the F3 WithEmitter path:
@@ -605,6 +692,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
@@ -676,6 +764,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
@@ -791,6 +880,7 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)

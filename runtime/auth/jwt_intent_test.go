@@ -46,6 +46,26 @@ func decodeJWTPayload(t *testing.T, tokenStr string) map[string]any {
 	return p
 }
 
+func signRawIntentJWT(t *testing.T, ks *KeySet, tokenUse, typ string, aud []string) string {
+	t.Helper()
+	claims := jwt.MapClaims{
+		"sub":       "user-1",
+		"iss":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": tokenUse,
+	}
+	if aud != nil {
+		claims["aud"] = aud
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = typ
+	tokenStr, err := tok.SignedString(ks.SigningKey())
+	require.NoError(t, err)
+	return tokenStr
+}
+
 func TestJWTIssuer_IssueWithIntent_Access_EmbedsTokenUseClaimAndAtJWTHeader(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
@@ -65,22 +85,17 @@ func TestJWTIssuer_IssueWithIntent_Access_EmbedsTokenUseClaimAndAtJWTHeader(t *t
 	assert.Equal(t, "access", payload["token_use"], "access token must have token_use=access claim")
 }
 
-func TestJWTIssuer_IssueWithIntent_Refresh_EmbedsTokenUseClaimAndRefreshHeader(t *testing.T) {
+func TestJWTIssuer_IssueWithIntent_RefreshRejected(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
 
-	tokenStr, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{
+	_, err = issuer.Issue(TokenIntent("refresh"), "user-1", IssueOptions{
 		Audience:  []string{"gocell"},
 		SessionID: "sess-1",
 	})
-	require.NoError(t, err)
-
-	header := decodeJWTHeader(t, tokenStr)
-	assert.Equal(t, "refresh+jwt", header["typ"], "refresh token must have typ=refresh+jwt header")
-
-	payload := decodeJWTPayload(t, tokenStr)
-	assert.Equal(t, "refresh", payload["token_use"], "refresh token must have token_use=refresh claim")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
 func TestJWTIssuer_IssueWithIntent_InvalidIntent_Rejected(t *testing.T) {
@@ -128,32 +143,21 @@ func TestJWTVerifier_VerifyIntent_AcceptsMatchingIntent(t *testing.T) {
 	assert.Equal(t, "user-1", claims.Subject)
 	assert.Equal(t, TokenIntentAccess, claims.TokenUse)
 
-	refresh, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{
-		Audience:  []string{"gocell"},
-		SessionID: "sid-1",
-	})
-	require.NoError(t, err)
-	rc, err := verifier.VerifyIntent(context.Background(), refresh, TokenIntentRefresh)
-	require.NoError(t, err)
-	assert.Equal(t, TokenIntentRefresh, rc.TokenUse)
 }
 
-func TestJWTVerifier_VerifyIntent_RejectsWrongIntent_Access(t *testing.T) {
+func TestJWTVerifier_VerifyIntent_RejectsLegacyRefreshJWTAtAccessPath(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
-	require.NoError(t, err)
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	refresh, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{})
-	require.NoError(t, err)
+	refresh := signRawIntentJWT(t, ks, "refresh", "refresh+jwt", []string{"gocell"})
 
 	_, err = verifier.VerifyIntent(context.Background(), refresh, TokenIntentAccess)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
-func TestJWTVerifier_VerifyIntent_RejectsWrongIntent_Refresh(t *testing.T) {
+func TestJWTVerifier_VerifyIntent_RejectsUnknownRefreshExpectedIntent(t *testing.T) {
 	ks := mustTestKeySet(t)
 	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
 	require.NoError(t, err)
@@ -163,7 +167,7 @@ func TestJWTVerifier_VerifyIntent_RejectsWrongIntent_Refresh(t *testing.T) {
 	access, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
 	require.NoError(t, err)
 
-	_, err = verifier.VerifyIntent(context.Background(), access, TokenIntentRefresh)
+	_, err = verifier.VerifyIntent(context.Background(), access, TokenIntent("refresh"))
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
@@ -217,8 +221,6 @@ func TestJWTVerifier_VerifyIntent_RejectsHeaderClaimMismatch(t *testing.T) {
 
 	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
 	require.Error(t, err)
-	_, err2 := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentRefresh)
-	require.Error(t, err2)
 }
 
 func TestJWTVerifier_VerifyIntent_RejectsUnknownIntentArg(t *testing.T) {
@@ -236,10 +238,7 @@ func TestJWTVerifier_VerifyIntent_RejectsUnknownIntentArg(t *testing.T) {
 	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
 }
 
-// TestJWTIssuer_IssueWithIntent_RefreshUsesRefreshTTL verifies that Issue()
-// uses DefaultRefreshTokenTTL for refresh tokens and the access ttl for access
-// tokens. Uses a fixed clock to compare exp precisely.
-func TestJWTIssuer_IssueWithIntent_RefreshUsesRefreshTTL(t *testing.T) {
+func TestJWTIssuer_IssueWithIntent_AccessUsesConfiguredTTL(t *testing.T) {
 	ks := mustTestKeySet(t)
 	fixedNow := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	issuer, err := NewJWTIssuer(ks, "gocell", DefaultAccessTokenTTL, WithIssuerClock(func() time.Time { return fixedNow }))
@@ -251,16 +250,6 @@ func TestJWTIssuer_IssueWithIntent_RefreshUsesRefreshTTL(t *testing.T) {
 	accessExp := int64(accessPayload["exp"].(float64))
 	assert.Equal(t, fixedNow.Add(DefaultAccessTokenTTL).Unix(), accessExp,
 		"access token exp must be now+DefaultAccessTokenTTL (15min)")
-
-	refreshStr, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{})
-	require.NoError(t, err)
-	refreshPayload := decodeJWTPayload(t, refreshStr)
-	refreshExp := int64(refreshPayload["exp"].(float64))
-	assert.Equal(t, fixedNow.Add(DefaultRefreshTokenTTL).Unix(), refreshExp,
-		"refresh token exp must be now+DefaultRefreshTokenTTL (7 days)")
-
-	assert.Greater(t, refreshExp, accessExp,
-		"refresh token must live longer than access token")
 }
 
 // TestJWTVerifier_VerifyIntent_RejectsLegacyTypHeader verifies that a token

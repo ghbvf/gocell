@@ -1,10 +1,10 @@
-// Package sessionrefresh implements the session-refresh slice: validates a
-// refresh token and issues a new JWT token pair.
+// Package sessionrefresh implements the session-refresh slice: validates an
+// opaque refresh token via refresh.Store and issues a fresh access JWT.
 package sessionrefresh
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -14,22 +14,8 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
-
-// WithUserRepository is retained for backward compatibility with tests that
-// build the service incrementally. In production, userRepo is a required
-// positional parameter in NewService (P1-3 fix).
-//
-// Deprecated: pass userRepo as a positional argument to NewService instead.
-// Nil is silently ignored so an accidental call does not downgrade the
-// fail-fast guarantee provided by the constructor.
-func WithUserRepository(repo ports.UserRepository) Option {
-	return func(s *Service) {
-		if repo != nil {
-			s.userRepo = repo
-		}
-	}
-}
 
 // TokenPair holds the issued access and refresh tokens.
 type TokenPair struct {
@@ -39,45 +25,67 @@ type TokenPair struct {
 	PasswordResetRequired bool
 }
 
-// Option configures a session-refresh Service.
+const errMsgInvalidRefreshToken = "invalid refresh token"
+
+// Option configures a session-refresh Service. No built-in options exist today;
+// the type is declared so future extensions are non-breaking (matches sessionlogin
+// pattern, F8).
 type Option func(*Service)
 
 // Service implements token refresh logic.
 type Service struct {
-	sessionRepo ports.SessionRepository
-	userRepo    ports.UserRepository
-	roleRepo    ports.RoleRepository
-	issuer      *auth.JWTIssuer
-	verifier    auth.IntentTokenVerifier
-	logger      *slog.Logger
+	sessionRepo  ports.SessionRepository
+	userRepo     ports.UserRepository
+	roleRepo     ports.RoleRepository
+	refreshStore refresh.Store
+	issuer       *auth.JWTIssuer
+	logger       *slog.Logger
 }
 
 // NewService creates a session-refresh Service.
 //
-// userRepo is required (P1-3 fix): fetchPasswordResetRequired silently returns
-// false when userRepo is nil, which bypasses the password-reset security gate.
-// Passing nil will panic early in the call chain when the gate is exercised in
-// production. Pass mem.NewUserRepository() in tests that do not exercise the
-// flag.
+// userRepo is required (P1-3 fix): fetchPasswordResetRequired silently
+// returns false when userRepo is nil, which bypasses the password-reset
+// security gate.
 //
-// The audience for issued tokens is carried inside issuer (set from Registry at
-// construction time). This slice does not cache audience separately (S31).
+// refreshStore owns both token-state validation and rotation — the slice
+// no longer parses JWTs or performs application-layer reuse detection.
+//
+// opts allows future functional extensions without breaking callers (F8).
 func NewService(
 	sessionRepo ports.SessionRepository,
 	roleRepo ports.RoleRepository,
 	userRepo ports.UserRepository,
+	refreshStore refresh.Store,
 	issuer *auth.JWTIssuer,
-	verifier auth.IntentTokenVerifier,
 	logger *slog.Logger,
 	opts ...Option,
 ) *Service {
+	if sessionRepo == nil {
+		panic("sessionrefresh.NewService: sessionRepo must not be nil")
+	}
+	if roleRepo == nil {
+		panic("sessionrefresh.NewService: roleRepo must not be nil")
+	}
+	if userRepo == nil {
+		panic("sessionrefresh.NewService: userRepo must not be nil")
+	}
+	if refreshStore == nil {
+		panic("sessionrefresh.NewService: refreshStore must not be nil")
+	}
+	if issuer == nil {
+		panic("sessionrefresh.NewService: issuer must not be nil")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{
-		sessionRepo: sessionRepo,
-		roleRepo:    roleRepo,
-		userRepo:    userRepo,
-		issuer:      issuer,
-		verifier:    verifier,
-		logger:      logger,
+		sessionRepo:  sessionRepo,
+		roleRepo:     roleRepo,
+		userRepo:     userRepo,
+		refreshStore: refreshStore,
+		issuer:       issuer,
+		logger:       logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -85,94 +93,49 @@ func NewService(
 	return s
 }
 
-// Refresh validates the refresh token and issues a new token pair.
-// Implements refresh token rotation: the old refresh token is invalidated
-// after a successful refresh. If a previously rotated-out token is reused,
-// the entire session is revoked (reuse detection).
+// Refresh validates the presented opaque refresh token, checks the backing
+// session and subject, mints a new access JWT, and only then commits refresh
+// token rotation. Token rejection surfaces ErrAuthRefreshFailed; dependency
+// failures surface ErrAuthRefreshUnavailable so clients do not confuse an
+// outage with invalid credentials.
+//
+// Presenting an access JWT (or any string that does not parse as the opaque
+// selector.verifier wire format) fails ParseOpaque inside refresh.Store and
+// returns refresh.ErrRejected — the same fail-closed behaviour as
+// before (TestAuthIntent_AccessTokenBlockedAtRefreshPath).
 func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthRefreshInvalidInput,
 		validation.F("refreshToken", refreshToken),
 	); err != nil {
 		return nil, err
 	}
-	if err := s.verifyRefreshToken(ctx, refreshToken); err != nil {
-		return nil, err
+
+	presented, err := s.refreshStore.Peek(ctx, refreshToken)
+	if err != nil {
+		return nil, s.refreshStoreError("session-refresh: refresh store peek failed", err)
 	}
-	session, err := s.lookupSession(ctx, refreshToken)
+
+	// Belt-and-braces: double-check the backing session has not been revoked
+	// out-of-band (e.g. a logout that bypassed the refresh store). Session
+	// verification is extracted to verifySession to keep cognitive complexity
+	// within the ≤15 limit (F4/F5/gocognit).
+	session, err := s.verifySession(ctx, presented.SessionID)
 	if err != nil {
 		return nil, err
 	}
-	if session.IsRevoked() {
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session has been revoked")
-	}
-	return s.rotateAndIssue(ctx, session)
-}
-
-// lookupSession retrieves the active session for the given refresh token.
-//
-// Error routing (P1-18 REFRESH-INFRA-ERROR-CLASSIFY-01):
-//   - infra error (plain / CategoryInfra / CategoryUnspecified) → logged at
-//     slog.Error, returned as ErrAuthRefreshFailed; does NOT enter reuse branch.
-//   - domain ErrSessionNotFound (CategoryDomain + whitelist) → enters reuse
-//     detection branch to check for stolen-token replay.
-//   - other domain / auth errors → returned as ErrAuthRefreshFailed + Warn.
-func (s *Service) lookupSession(ctx context.Context, refreshToken string) (*domain.Session, error) {
-	session, err := s.sessionRepo.GetByRefreshToken(ctx, refreshToken)
-	if err == nil {
-		return session, nil
-	}
-
-	// Infra errors must not enter the reuse branch — they indicate a storage
-	// outage, not a missing token. Fail-closed and log at Error.
-	if errcode.IsInfraError(err) {
-		s.logger.Error("session-refresh: infra error on session lookup",
-			slog.Any("error", err))
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session lookup unavailable")
-	}
-
-	// Only domain ErrSessionNotFound enters reuse detection. Any other domain /
-	// auth errcode is mapped to ErrAuthRefreshFailed.
-	if !errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {
-		s.logger.Warn("session-refresh: unexpected error on session lookup",
-			slog.Any("error", err))
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session not found")
-	}
-
-	// Check for refresh token reuse: if the token was previously valid
-	// but has been rotated out, revoke the entire session to prevent
-	// stolen token replay attacks.
-	reuseSession, reuseErr := s.sessionRepo.GetByPreviousRefreshToken(ctx, refreshToken)
-	if reuseErr != nil {
-		// Infra errors on the reuse lookup must be surfaced — they signal a
-		// storage outage, not a missing token. Log at Error and return so the
-		// caller sees an infra fault rather than silently discarding it.
-		if errcode.IsInfraError(reuseErr) {
-			s.logger.Error("session-refresh: infra error on previous-token lookup",
-				slog.Any("error", reuseErr))
+	if session.UserID != presented.SubjectID {
+		if err := s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch"); err != nil {
+			return nil, err
 		}
-		return nil, errcode.New(errcode.ErrAuthRefreshFailed, "session not found")
+		return nil, authRefreshRejected()
 	}
-	reuseSession.Revoke()
-	if updateErr := s.sessionRepo.Update(ctx, reuseSession); updateErr != nil {
-		s.logger.Error("session-refresh: failed to revoke session on token reuse",
-			slog.Any("error", updateErr),
-			slog.String("session_id", reuseSession.ID))
-	}
-	s.logger.Error("session-refresh: refresh token reuse detected, session revoked",
-		slog.String("session_id", reuseSession.ID),
-		slog.String("user_id", reuseSession.UserID))
-	return nil, errcode.New(errcode.ErrRefreshTokenReused, "refresh token reuse detected, session revoked")
-}
 
-// rotateAndIssue mints new access + refresh tokens, persists the rotated
-// session, and returns the resulting TokenPair.
-func (s *Service) rotateAndIssue(ctx context.Context, session *domain.Session) (*TokenPair, error) {
-	passwordResetRequired, err := s.fetchPasswordResetRequired(ctx, session.UserID)
+	passwordResetRequired, err := s.fetchPasswordResetRequired(ctx, session.ID, session.UserID)
 	if err != nil {
 		return nil, err
 	}
 
-	minted, err := sessionmint.Mint(ctx, sessionmint.Deps{
+	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
 		Issuer:   s.issuer,
 		RoleRepo: s.roleRepo,
 	}, sessionmint.Request{
@@ -188,57 +151,126 @@ func (s *Service) rotateAndIssue(ctx context.Context, session *domain.Session) (
 		return nil, err
 	}
 
-	session.PreviousRefreshToken = session.RefreshToken
-	session.AccessToken = minted.AccessToken
-	session.RefreshToken = minted.RefreshToken
-	session.ExpiresAt = minted.ExpiresAt
+	// Persist the session validation horizon before the final Rotate. If Rotate
+	// fails afterwards, the refresh lineage is still unchanged and JWT exp still
+	// bounds any already-issued access token.
+	if err := s.persistRefreshedSession(ctx, session, minted.AccessToken, minted.ExpiresAt); err != nil {
+		return nil, err
+	}
 
-	if err := s.sessionRepo.Update(ctx, session); err != nil {
-		return nil, fmt.Errorf("session-refresh: persist: %w", err)
+	newWire, rotated, err := s.refreshStore.Rotate(ctx, refreshToken)
+	if err != nil {
+		return nil, s.refreshStoreError("session-refresh: refresh store rotate failed", err)
+	}
+	if rotated.SessionID != session.ID || rotated.SubjectID != session.UserID {
+		if err := s.cascadeRevoke(ctx, session.ID, "rotated-subject-mismatch"); err != nil {
+			return nil, err
+		}
+		return nil, authRefreshRejected()
 	}
 
 	s.logger.Info("token refreshed", slog.String("user_id", session.UserID))
 
 	return &TokenPair{
 		AccessToken:           minted.AccessToken,
-		RefreshToken:          minted.RefreshToken,
+		RefreshToken:          newWire,
 		ExpiresAt:             minted.ExpiresAt,
 		PasswordResetRequired: passwordResetRequired,
 	}, nil
 }
 
-// fetchPasswordResetRequired reads the current PasswordResetRequired flag from
-// the user repo. Fail-closed: any error (user not found, transient DB failure)
-// returns ErrAuthRefreshFailed so the caller aborts refresh rather than
-// signing a token that omits the password_reset_required claim. Returning a
-// default value on read failure would let an attacker bypass the reset gate
-// during a DB blip. userRepo must not be nil (enforced by NewService).
-func (s *Service) fetchPasswordResetRequired(ctx context.Context, userID string) (bool, error) {
+func (s *Service) refreshStoreError(logMessage string, err error) error {
+	if errors.Is(err, refresh.ErrRejected) {
+		return authRefreshRejected()
+	}
+	s.logger.Error(logMessage, slog.Any("error", err))
+	return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+}
+
+func authRefreshRejected() *errcode.Error {
+	return errcode.NewAuth(errcode.ErrAuthRefreshFailed, errMsgInvalidRefreshToken)
+}
+
+func (s *Service) persistRefreshedSession(ctx context.Context, session *domain.Session, accessToken string, expiresAt time.Time) error {
+	refreshed := *session
+	refreshed.AccessToken = accessToken
+	refreshed.ExpiresAt = expiresAt
+	if err := s.sessionRepo.Update(ctx, &refreshed); err != nil {
+		if errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {
+			if revokeErr := s.cascadeRevoke(ctx, session.ID, "session-update-not-found"); revokeErr != nil {
+				return revokeErr
+			}
+			return authRefreshRejected()
+		}
+		s.logger.Error("session-refresh: failed to persist refreshed session",
+			slog.Any("error", err),
+			slog.String("session_id", session.ID),
+			slog.String("user_id", session.UserID))
+		return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session update unavailable", err)
+	}
+	*session = refreshed
+	return nil
+}
+
+// verifySession checks that the session backing a rotated token is live and
+// cascade-revokes the refresh chain if it is not. Extracted from Refresh to
+// stay within the cognitive-complexity budget (F4/F5).
+func (s *Service) verifySession(ctx context.Context, sessionID string) (*domain.Session, error) {
+	session, err := s.sessionRepo.GetByID(ctx, sessionID)
+	if err != nil {
+		if errcode.IsInfraError(err) {
+			s.logger.Error("session-refresh: infra error on session lookup",
+				slog.Any("error", err), slog.String("session_id", sessionID))
+			return nil, errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session lookup unavailable", err)
+		}
+		// F4: cascade-revoke on not-found; log the revoke error if it fails.
+		if err := s.cascadeRevoke(ctx, sessionID, "session-not-found"); err != nil {
+			return nil, err
+		}
+		return nil, authRefreshRejected()
+	}
+	if session.IsRevoked() {
+		// F4: cascade-revoke on already-revoked session.
+		if err := s.cascadeRevoke(ctx, sessionID, "revoked-session"); err != nil {
+			return nil, err
+		}
+		return nil, authRefreshRejected()
+	}
+	return session, nil
+}
+
+// cascadeRevoke calls RevokeSession and returns infra errors distinctly from
+// auth rejection. reason is log-only and never exposed to callers.
+func (s *Service) cascadeRevoke(ctx context.Context, sessionID, reason string) error {
+	if err := s.refreshStore.RevokeSession(ctx, sessionID); err != nil {
+		s.logger.Error("session-refresh: cascade revoke failed",
+			slog.String("reason", reason),
+			slog.Any("error", err),
+			slog.String("session_id", sessionID))
+		return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
+	}
+	s.logger.Warn("session-refresh: cascade revoked refresh chain",
+		slog.String("reason", reason),
+		slog.String("session_id", sessionID))
+	return nil
+}
+
+// fetchPasswordResetRequired reads the current PasswordResetRequired flag
+// from the user repo. Fail-closed: any error returns ErrAuthRefreshFailed so
+// the caller aborts refresh rather than signing a token that omits the
+// password_reset_required claim.
+func (s *Service) fetchPasswordResetRequired(ctx context.Context, sessionID, userID string) (bool, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		s.logger.Error("session-refresh: failed to fetch user for reset flag (fail-closed)",
 			slog.Any("error", err), slog.String("user_id", userID))
-		return false, errcode.New(errcode.ErrAuthRefreshFailed, "session user unavailable")
+		if errcode.IsInfraError(err) {
+			return false, errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "session user unavailable", err)
+		}
+		if err := s.cascadeRevoke(ctx, sessionID, "user-not-found"); err != nil {
+			return false, err
+		}
+		return false, authRefreshRejected()
 	}
 	return user.PasswordResetRequired, nil
-}
-
-// verifyRefreshToken checks the JWT signature AND requires token_use=refresh.
-//
-// Enumeration defense: ErrAuthRefreshFailed is intentionally broader than
-// ErrAuthInvalidTokenIntent and is used for ALL intent / signature / expiry
-// failures to maintain enumeration defense parity between legitimate
-// refresh-token-not-found and attacker-submitted access-token cases.
-// The specific failure reason is recorded only in the structured log (Warn
-// level) for ops visibility; the HTTP response always surfaces the generic
-// ErrAuthRefreshFailed code so callers cannot distinguish token type from
-// signature validity.
-func (s *Service) verifyRefreshToken(ctx context.Context, refreshToken string) error {
-	_, verifyErr := s.verifier.VerifyIntent(ctx, refreshToken, auth.TokenIntentRefresh)
-	if verifyErr != nil {
-		s.logger.Warn("session-refresh: refresh token verification failed",
-			slog.Any("error", verifyErr))
-		return errcode.New(errcode.ErrAuthRefreshFailed, "invalid refresh token")
-	}
-	return nil
 }

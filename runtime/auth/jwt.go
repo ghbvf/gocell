@@ -28,20 +28,13 @@ func isNilInterfaceValue(v any) bool {
 }
 
 // DefaultAccessTokenTTL is the default time-to-live for access tokens issued
-// by JWTIssuer. Can be overridden by cmd/* via NewJWTIssuer or WithRefreshTTL.
+// by JWTIssuer.
 const DefaultAccessTokenTTL = 15 * time.Minute
 
-// DefaultRefreshTokenTTL is the default time-to-live for refresh tokens issued
-// by JWTIssuer. 7 days follows common OAuth 2.0 server defaults (e.g., Auth0,
-// Okta, Keycloak). Can be overridden by cmd/* via WithRefreshTTL.
-const DefaultRefreshTokenTTL = 7 * 24 * time.Hour
-
 // JOSE typ header values written per TokenIntent. RFC 9068 §2.1 mandates
-// "at+jwt" for access tokens; "refresh+jwt" is a GoCell convention (RFC 8725
-// §3.11 permits issuer-chosen values as long as they are validated on read).
+// "at+jwt" for access tokens.
 const (
-	jwtTypAccess  = "at+jwt"
-	jwtTypRefresh = "refresh+jwt"
+	jwtTypAccess = "at+jwt"
 	// tokenUseClaim is the JWT payload key carrying the TokenIntent value.
 	// Named after AWS Cognito's convention, which is the most widely-adopted
 	// community precedent.
@@ -62,8 +55,6 @@ func TypHeaderForIntent(intent TokenIntent) string {
 	switch intent {
 	case TokenIntentAccess:
 		return jwtTypAccess
-	case TokenIntentRefresh:
-		return jwtTypRefresh
 	default:
 		return ""
 	}
@@ -75,8 +66,6 @@ func intentForJWTTyp(typ string) (TokenIntent, bool) {
 	switch typ {
 	case jwtTypAccess:
 		return TokenIntentAccess, true
-	case jwtTypRefresh:
-		return TokenIntentRefresh, true
 	default:
 		return "", false
 	}
@@ -176,7 +165,8 @@ func NewJWTVerifier(keys VerificationKeyStore, opts ...JWTVerifierOption) (*JWTV
 //   - the token's intent does not match expected
 //
 // This is the primary API for HTTP middleware (expected=access) and the
-// /auth/refresh endpoint (expected=refresh).
+// HTTP middleware (expected=access). Refresh endpoints do not verify JWT
+// refresh tokens; they pass opaque wire tokens to refresh.Store.
 func (v *JWTVerifier) VerifyIntent(ctx context.Context, tokenStr string, expected TokenIntent) (Claims, error) {
 	if !expected.IsValid() {
 		return Claims{}, errcode.Safe(errcode.ErrAuthInvalidTokenIntent,
@@ -320,7 +310,6 @@ type JWTIssuer struct {
 	keys            SigningKeyProvider
 	issuer          string
 	ttl             time.Duration
-	refreshTTL      time.Duration
 	now             func() time.Time
 	defaultAudience []string
 }
@@ -334,16 +323,6 @@ func WithIssuerClock(fn func() time.Time) JWTIssuerOption {
 	return func(i *JWTIssuer) {
 		if fn != nil {
 			i.now = fn
-		}
-	}
-}
-
-// WithRefreshTTL overrides the default refresh token TTL (DefaultRefreshTokenTTL).
-// A zero or negative duration is ignored.
-func WithRefreshTTL(d time.Duration) JWTIssuerOption {
-	return func(i *JWTIssuer) {
-		if d > 0 {
-			i.refreshTTL = d
 		}
 	}
 }
@@ -374,11 +353,10 @@ func NewJWTIssuer(keys SigningKeyProvider, issuer string, ttl time.Duration, opt
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "signing key provider must not be nil")
 	}
 	i := &JWTIssuer{
-		keys:       keys,
-		issuer:     issuer,
-		ttl:        ttl,
-		refreshTTL: DefaultRefreshTokenTTL,
-		now:        time.Now,
+		keys:   keys,
+		issuer: issuer,
+		ttl:    ttl,
+		now:    time.Now,
 	}
 	for _, o := range opts {
 		o(i)
@@ -403,8 +381,8 @@ type IssueOptions struct {
 
 // Issue creates a signed JWT token for the given subject and options.
 //
-// intent declares how the token is meant to be used (access vs. refresh).
-// The resulting JWT carries both a JOSE "typ" header (at+jwt / refresh+jwt)
+// intent declares how the token is meant to be used. GoCell only issues access
+// JWTs. The resulting JWT carries both a JOSE "typ" header (at+jwt)
 // and a "token_use" payload claim so verifiers can reject token-confusion
 // attempts on two independent channels (RFC 9068 §2.1, RFC 8725 §3.11).
 //
@@ -426,9 +404,6 @@ func (i *JWTIssuer) Issue(intent TokenIntent, subject string, opts IssueOptions)
 	}
 	now := i.now()
 	expiry := i.ttl
-	if intent == TokenIntentRefresh {
-		expiry = i.refreshTTL
-	}
 	claims := jwt.MapClaims{
 		"sub":         subject,
 		"iss":         i.issuer,

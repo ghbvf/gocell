@@ -108,6 +108,7 @@ func newTestCellWithBootstrap(
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 	}
 	if len(bootstrapOpts) > 0 {
 		opts = append(opts, WithInitialAdminBootstrap(bootstrapOpts...))
@@ -171,6 +172,7 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 	)
 	require.NoError(t, ac.Init(context.Background(), testDeps()))
 
@@ -214,6 +216,7 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
 	)
 	require.NoError(t, ac.Init(context.Background(), testDeps()))
@@ -267,6 +270,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
 	)
 	require.NoError(t, ac.Init(context.Background(), testDeps()))
@@ -320,6 +324,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 		WithOutboxDeps(noopPublisher{}, nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
+		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
 	)
 	require.NoError(t, ac.Init(context.Background(), testDeps()))

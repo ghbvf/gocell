@@ -7,14 +7,13 @@ import (
 )
 
 // SessionRepository persists and retrieves Session entities.
+//
+// Refresh-token lookup and reuse detection live in runtime/auth/refresh.Store
+// (append-only lineage). SessionRepository is concerned only with
+// access-token sessions and their revocation lifecycle.
 type SessionRepository interface {
 	Create(ctx context.Context, session *domain.Session) error
 	GetByID(ctx context.Context, id string) (*domain.Session, error)
-	GetByRefreshToken(ctx context.Context, token string) (*domain.Session, error)
-	// GetByPreviousRefreshToken looks up a session by its rotated-out refresh token.
-	// Used for refresh token reuse detection: if a previously valid token is presented
-	// again after rotation, the associated session should be revoked.
-	GetByPreviousRefreshToken(ctx context.Context, token string) (*domain.Session, error)
 	Update(ctx context.Context, session *domain.Session) error
 	// RevokeByIDAndOwner atomically revokes a session only if both id and
 	// ownerUserID match. Returns ErrSessionNotFound when the session does not

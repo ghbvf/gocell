@@ -244,8 +244,8 @@ func NewJWTIssuerFromRegistry(reg *Registry, ttl time.Duration, opts ...auth.JWT
 		return nil, errcode.New(errcode.ErrAuthKeyInvalid, "JWT registry: SigningKeyProvider is nil")
 	}
 
-	// Merge registry-derived settings first, then apply caller opts so opts
-	// can override (e.g. WithRefreshTTL in tests).
+	// Merge registry-derived settings first, then apply caller opts so tests
+	// can override issuer-clock or default-audience behaviour.
 	baseOpts := []auth.JWTIssuerOption{
 		auth.WithIssuerAudiencesFromSlice(reg.Audiences()),
 		auth.WithIssuerClock(reg.Clock()),

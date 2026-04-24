@@ -3,7 +3,6 @@ package sessionlogout
 import (
 	"context"
 	"errors"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -13,13 +12,22 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newContractRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
 
 // --- contract test doubles ---
 
@@ -45,7 +53,7 @@ func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 var _ persistence.TxRunner = noopTxRunner{}
 
 func seedContractSession(repo *mem.SessionRepository) string {
-	sess, _ := domain.NewSession("usr-1", "at-1", "rt-1", time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession("usr-1", "at-1", time.Now().Add(time.Hour))
 	sess.ID = "sess-1"
 	_ = repo.Create(context.Background(), sess)
 	return sess.ID
@@ -59,7 +67,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 
 	sessionRepo := mem.NewSessionRepository()
 	sessID := seedContractSession(sessionRepo)
-	svc := NewService(sessionRepo, slog.Default(),
+	svc := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(noopTxRunner{}))
 
 	mux := http.NewServeMux()
@@ -85,7 +93,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 
 	sessionRepo := mem.NewSessionRepository()
 	writer := &recordingWriter{}
-	svc := NewService(sessionRepo, slog.Default(),
+	svc := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(noopTxRunner{}))
 
 	sessID := seedContractSession(sessionRepo)
@@ -163,7 +171,7 @@ func TestService_Logout_OutboxWriteError(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 	seedContractSession(sessionRepo)
 	failWriter := &recordingWriter{err: errors.New("outbox unavailable")}
-	svc := NewService(sessionRepo, slog.Default(),
+	svc := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(noopTxRunner{}))
 
 	err := svc.Logout(context.Background(), "sess-1", "usr-1")

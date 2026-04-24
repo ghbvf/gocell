@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -163,7 +163,7 @@ func TestHandler_Unlock_NotFound(t *testing.T) {
 
 func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
@@ -178,7 +178,7 @@ func TestService_WithEmitter(t *testing.T) {
 
 func TestService_WithTxManager(t *testing.T) {
 	tx := &stubTxRunner{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithTxManager(tx), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
@@ -191,7 +191,7 @@ func TestService_WithTxManager(t *testing.T) {
 
 func TestService_Lock_WithOutbox(t *testing.T) {
 	ow := &stubOutboxWriter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
@@ -236,7 +236,7 @@ func TestService_Update_EmptyID(t *testing.T) {
 
 func TestService_Create_OutboxWriteError(t *testing.T) {
 	ow := &stubOutboxWriter{err: errors.New("outbox unavailable")}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
@@ -250,7 +250,7 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 func TestService_Lock_OutboxWriteError(t *testing.T) {
 	repo := mem.NewUserRepository()
 	// Create user with working outbox
-	svcCreate, err := NewService(repo, mem.NewSessionRepository(), slog.Default(),
+	svcCreate, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, &stubOutboxWriter{})), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 	user, err := svcCreate.Create(context.Background(), CreateInput{
@@ -260,7 +260,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 
 	// Lock with failing outbox
 	failWriter := &stubOutboxWriter{err: errors.New("outbox unavailable")}
-	svcLock, err := NewService(repo, mem.NewSessionRepository(), slog.Default(),
+	svcLock, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 

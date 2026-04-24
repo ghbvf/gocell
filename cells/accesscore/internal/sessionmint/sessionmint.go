@@ -1,13 +1,14 @@
-// Package sessionmint centralises session-token issuance so that login,
+// Package sessionmint centralises access-JWT issuance so that login,
 // IssueForUser (change-password flow), and refresh share a single fail-closed
-// "fetch roles → sign access → sign refresh" pipeline.
+// "fetch roles → sign access" pipeline. Opaque refresh tokens are issued by
+// runtime/auth/refresh.Store directly from the slice layer, so sessionmint
+// no longer deals with refresh tokens at all.
 //
 // Fail-closed contract: if the RoleRepository cannot resolve a user's roles
-// (infrastructure fault), Mint returns ErrAuthRoleFetchFailed so the caller
-// aborts the in-flight authn action instead of silently issuing a token with
-// empty roles — an outcome that looks like a successful authentication but
-// strips every RBAC capability and is indistinguishable from a deliberate
-// privilege escalation bypass.
+// (infrastructure fault), MintAccess returns ErrAuthRoleFetchFailed so the
+// caller aborts the in-flight authn action instead of silently issuing a
+// token with empty roles — an outcome that looks like a successful
+// authentication but strips every RBAC capability.
 //
 // ref: kubernetes/apiserver pkg/authentication/request/union/union.go
 // (FailOnError: credential error short-circuits the chain, never fallthrough)
@@ -25,57 +26,47 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// TokenIssuer is the minimal surface Mint needs from a JWT issuer. Exposing
-// the interface (not the concrete *auth.JWTIssuer) keeps sessionmint testable
-// with a stub issuer — which lets unit tests cover the access / refresh Issue
-// error paths without constructing a broken keyset. Production code passes in
-// *auth.JWTIssuer directly (it satisfies this interface by method set).
+// TokenIssuer is the minimal surface MintAccess needs from a JWT issuer.
+// Exposing the interface keeps sessionmint unit-testable with a stub issuer.
+// Production code passes in *auth.JWTIssuer directly (it satisfies this
+// interface by method set).
 type TokenIssuer interface {
 	Issue(intent auth.TokenIntent, subject string, opts auth.IssueOptions) (string, error)
 }
 
-// Deps injects the collaborators Mint needs. Logger is intentionally omitted:
-// callers already log success/failure at the business layer with richer
-// context (user_id, session_id), so duplicating them here would only produce
-// double-log noise.
+// Deps injects the collaborators MintAccess needs.
 type Deps struct {
-	// Issuer signs the access and refresh JWTs. Required.
+	// Issuer signs the access JWT. Required.
 	Issuer TokenIssuer
 	// RoleRepo resolves the user's current role names. Required.
 	RoleRepo ports.RoleRepository
-	// Now returns the current time; defaults to time.Now when nil. Injectable
-	// so tests can assert deterministic ExpiresAt without clock jitter.
+	// Now returns the current time; defaults to time.Now when nil.
 	Now func() time.Time
 }
 
-// Request is the per-call input for a session-token mint.
+// Request is the per-call input for a MintAccess.
 type Request struct {
 	UserID                string
 	SessionID             string
 	PasswordResetRequired bool
 }
 
-// Result is the Mint output. Roles is returned so callers can log / audit
-// exactly which roles went into the access-token claim without re-querying.
+// Result is the MintAccess output.
 //
-// ExpiresAt is sampled from Deps.Now (or time.Now) at Mint entry; the JWT's
-// own exp claim is stamped independently inside the issuer a moment later.
-// Treat Result.ExpiresAt as the business-layer expiry (used for Session
-// persistence) — the authoritative wire value is the JWT exp claim. Under
-// any realistic clock jitter the two are within sub-millisecond agreement.
+// ExpiresAt is sampled from Deps.Now (or time.Now) at MintAccess entry; the
+// JWT's own exp claim is stamped independently inside the issuer a moment
+// later. Treat Result.ExpiresAt as the business-layer expiry (used for Session
+// persistence) — the authoritative wire value is the JWT exp claim.
 type Result struct {
-	AccessToken  string
-	RefreshToken string
-	Roles        []string
-	ExpiresAt    time.Time
+	AccessToken string
+	Roles       []string
+	ExpiresAt   time.Time
 }
 
-// Mint fetches the user's role names, then signs access and refresh JWTs.
-// Role-fetch failure propagates as ErrAuthRoleFetchFailed (HTTP 500) so the
-// caller aborts login/refresh/IssueForUser rather than issue an empty-role
-// token. Access-token issuer errors wrap with "issue access token"; refresh
-// token errors wrap with "issue refresh token".
-func Mint(ctx context.Context, deps Deps, req Request) (Result, error) {
+// MintAccess fetches the user's role names and signs the access JWT. Role-
+// fetch failure propagates as ErrAuthRoleFetchFailed (HTTP 500) so the caller
+// aborts login / refresh / IssueForUser rather than issue an empty-role token.
+func MintAccess(ctx context.Context, deps Deps, req Request) (Result, error) {
 	roles, err := fetchRoleNames(ctx, deps.RoleRepo, req.UserID)
 	if err != nil {
 		return Result{}, errcode.WrapInfra(errcode.ErrAuthRoleFetchFailed,
@@ -97,25 +88,16 @@ func Mint(ctx context.Context, deps Deps, req Request) (Result, error) {
 		return Result{}, fmt.Errorf("sessionmint: issue access token: %w", err)
 	}
 
-	refresh, err := deps.Issuer.Issue(auth.TokenIntentRefresh, req.UserID, auth.IssueOptions{
-		SessionID: req.SessionID,
-	})
-	if err != nil {
-		return Result{}, fmt.Errorf("sessionmint: issue refresh token: %w", err)
-	}
-
 	return Result{
-		AccessToken:  access,
-		RefreshToken: refresh,
-		Roles:        roles,
-		ExpiresAt:    expiresAt,
+		AccessToken: access,
+		Roles:       roles,
+		ExpiresAt:   expiresAt,
 	}, nil
 }
 
-// fetchRoleNames resolves role names for userID. The repo may return a nil
-// slice (user has no roles) — that is a valid state, not an error, and Mint
-// will sign a token with empty roles in that case. Only a repo error triggers
-// fail-closed.
+// fetchRoleNames resolves role names for userID. A nil slice (user has no
+// roles) is a valid state; MintAccess signs a token with empty roles. Only a
+// repo error triggers fail-closed.
 func fetchRoleNames(ctx context.Context, repo ports.RoleRepository, userID string) ([]string, error) {
 	roles, err := repo.GetByUserID(ctx, userID)
 	if err != nil {

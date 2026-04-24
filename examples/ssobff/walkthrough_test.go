@@ -553,6 +553,26 @@ func TestWalkthrough(t *testing.T) {
 			"logout response body must be empty (piping to jq would fail otherwise)")
 	})
 
+	t.Run("refresh token is rejected after logout (cascade revoke end-to-end)", func(t *testing.T) {
+		// F15: prove that the logout-revokes-refresh cascade works through the
+		// full HTTP stack. After logout the held refreshToken must be rejected
+		// with 401 (or 410 Gone if the store distinguishes revoked from expired).
+		payload := fmt.Sprintf(`{"refreshToken":%q}`, refreshToken)
+		req, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPost,
+			base+"/api/v1/access/sessions/refresh",
+			strings.NewReader(payload))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.True(t, resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusGone,
+			"post-logout refresh must return 401 or 410, got %d", resp.StatusCode)
+	})
+
 	t.Run("audit entries require auth and contain timestamp field not createdAt", func(t *testing.T) {
 		// In demo mode, audit events are delivered async via the in-memory
 		// eventbus; poll until at least one entry is visible.

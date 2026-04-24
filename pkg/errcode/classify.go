@@ -213,10 +213,7 @@ var expected4xxCodes = map[Code]bool{
 	ErrAuthLoginFailed:        true,
 	ErrAuthRefreshFailed:      true,
 	ErrAuthKeyInvalid:         true,
-	ErrRefreshTokenNotFound:   true,
-	ErrRefreshTokenExpired:    true,
-	ErrRefreshTokenRevoked:    true,
-	ErrRefreshTokenReused:     true,
+	ErrRefreshTokenRejected:   true,
 	// ErrAuthKeyMissing intentionally omitted: codeToStatus maps it to HTTP 500
 	// (infrastructure misconfiguration). Including it here would cause
 	// AuthMiddleware to downgrade an infra fault to Warn, masking the outage.
@@ -249,13 +246,12 @@ var expected4xxCodes = map[Code]bool{
 	ErrWSConnNotFound:     true,
 
 	// 409 — conflict
-	ErrSessionConflict:       true,
-	ErrAuthUserDuplicate:     true,
-	ErrAuthRoleDuplicate:     true,
-	ErrConfigDuplicate:       true,
-	ErrConfigRepoDuplicate:   true,
-	ErrFlagDuplicate:         true,
-	ErrAuthRefreshTokenReuse: true,
+	ErrSessionConflict:     true,
+	ErrAuthUserDuplicate:   true,
+	ErrAuthRoleDuplicate:   true,
+	ErrConfigDuplicate:     true,
+	ErrConfigRepoDuplicate: true,
+	ErrFlagDuplicate:       true,
 
 	// 413 — payload too large
 	ErrBodyTooLarge: true,

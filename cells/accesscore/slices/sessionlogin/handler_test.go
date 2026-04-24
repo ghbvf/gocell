@@ -17,9 +17,17 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
 
 // testIssuer is declared in service_test.go
+
+func newHandlerRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
 
 func setup() *Handler {
 	userRepo := mem.NewUserRepository()
@@ -30,7 +38,7 @@ func setup() *Handler {
 	}
 	_ = userRepo.Create(context.Background(), user)
 
-	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), testIssuer, slog.Default())
+	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), newHandlerRefreshStore(), testIssuer, slog.Default())
 	return NewHandler(svc)
 }
 

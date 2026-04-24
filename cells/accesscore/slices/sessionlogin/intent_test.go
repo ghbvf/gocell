@@ -27,14 +27,10 @@ func TestService_Login_IssuesDistinctIntents(t *testing.T) {
 	require.NoError(t, err, "access token must verify as intent=access")
 	assert.Equal(t, auth.TokenIntentAccess, accessClaims.TokenUse)
 
-	refreshClaims, err := testVerifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
-	require.NoError(t, err, "refresh token must verify as intent=refresh")
-	assert.Equal(t, auth.TokenIntentRefresh, refreshClaims.TokenUse)
-
-	// Cross-intent verification must fail for each slot — defense in depth.
+	// Refresh token is now an opaque wire token (not a JWT) — it must not verify as any JWT intent.
 	_, err = testVerifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentAccess)
-	require.Error(t, err, "refresh token must NOT verify as access intent")
+	require.Error(t, err, "opaque refresh token must NOT verify as access JWT intent")
 
-	_, err = testVerifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntentRefresh)
+	_, err = testVerifier.VerifyIntent(context.Background(), pair.AccessToken, auth.TokenIntent("refresh"))
 	require.Error(t, err, "access token must NOT verify as refresh intent")
 }

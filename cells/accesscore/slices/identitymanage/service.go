@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/google/uuid"
 )
 
@@ -65,25 +66,45 @@ func WithTokenIssuer(ti TokenIssuer) Option {
 
 // Service implements identity management business logic.
 type Service struct {
-	repo        ports.UserRepository
-	sessionRepo ports.SessionRepository
-	txRunner    persistence.TxRunner
-	emitter     outbox.Emitter
-	logger      *slog.Logger
-	tokenIssuer TokenIssuer
+	repo         ports.UserRepository
+	sessionRepo  ports.SessionRepository
+	refreshStore refresh.Store
+	txRunner     persistence.TxRunner
+	emitter      outbox.Emitter
+	logger       *slog.Logger
+	tokenIssuer  TokenIssuer
 }
 
 // NewService creates an identity-manage Service. tokenIssuer is required;
-// callers must supply it via WithTokenIssuer. Omitting it or passing nil
-// returns errcode.ErrCellMissingTokenIssuer so mis-wired assemblies fail at
-// startup rather than at the first ChangePassword call.
-func NewService(repo ports.UserRepository, sessionRepo ports.SessionRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
+// callers must supply it via WithTokenIssuer. refreshStore is required so
+// Lock / ChangePassword cascade-revoke the user's refresh-token chains in
+// the same transaction as the session revoke.
+func NewService(
+	repo ports.UserRepository,
+	sessionRepo ports.SessionRepository,
+	refreshStore refresh.Store,
+	logger *slog.Logger,
+	opts ...Option,
+) (*Service, error) {
+	if repo == nil {
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: user repository is required")
+	}
+	if sessionRepo == nil {
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: session repository is required")
+	}
+	if refreshStore == nil {
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "identity-manage: refresh store is required")
+	}
+	if logger == nil {
+		logger = slog.Default()
+	}
 	s := &Service{
-		repo:        repo,
-		sessionRepo: sessionRepo,
-		txRunner:    persistence.NoopTxRunner{},
-		emitter:     outbox.NewNoopEmitter(),
-		logger:      logger,
+		repo:         repo,
+		sessionRepo:  sessionRepo,
+		refreshStore: refreshStore,
+		txRunner:     persistence.NoopTxRunner{},
+		emitter:      outbox.NewNoopEmitter(),
+		logger:       logger,
 	}
 	for _, o := range opts {
 		o(s)
@@ -207,16 +228,31 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 	return user, nil
 }
 
-// Delete removes a user.
+// Delete removes a user. Before the user row is deleted, all sessions and
+// refresh-token chains owned by the user are revoked atomically so any
+// in-flight access/refresh tokens cannot survive the delete.
 func (s *Service) Delete(ctx context.Context, id string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
 	}
-	if err := s.repo.Delete(ctx, id); err != nil {
-		return fmt.Errorf("identity-manage: delete: %w", err)
+
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
+			return fmt.Errorf("identity-manage: delete revoke sessions: %w", err)
+		}
+		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
+			return fmt.Errorf("identity-manage: delete revoke refresh chains: %w", err)
+		}
+		if err := s.repo.Delete(txCtx, id); err != nil {
+			return fmt.Errorf("identity-manage: delete: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
+
 	s.logger.Info("user deleted", slog.String("user_id", id))
 	return nil
 }
@@ -246,6 +282,9 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 		// vector "Lock" exists to prevent.
 		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: lock revoke sessions: %w", err)
+		}
+		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
+			return fmt.Errorf("identity-manage: lock revoke refresh chains: %w", err)
 		}
 		if err := s.publish(txCtx, TopicUserLocked, map[string]any{"user_id": id}); err != nil {
 			return err
@@ -303,6 +342,16 @@ type ChangePasswordInput struct {
 // The token pair is issued synchronously so the client can replace stale tokens
 // without a forced re-login — this is critical when the old token carried
 // password_reset_required=true and would be rejected by the middleware.
+//
+// IssueForUser tx trade-off (F18): IssueForUser is intentionally called
+// OUTSIDE the write transaction. It creates a brand-new session that must not
+// be swept by the RevokeByUserID call inside the tx; including it in the tx
+// would roll back a legitimate new session if token signing fails. The
+// observable trade-off is: if IssueForUser fails after the tx commits, the
+// password change is durable but the caller must re-login to obtain a token.
+// This is preferable to the inverse (rolling back a committed password change
+// because signing failed), and consistent with the principle that credential
+// rotation should not be undone by a transient signing-key unavailability.
 func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput) (dto.TokenPair, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", input.UserID),
@@ -345,15 +394,7 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 	// the tx because it creates a NEW session that must not be caught by the
 	// revoke sweep, and because signing failure should not roll back a
 	// legitimate password change.
-	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
-		if err := s.repo.Update(txCtx, user); err != nil {
-			return fmt.Errorf("identity-manage: change-password update: %w", err)
-		}
-		if err := s.sessionRepo.RevokeByUserID(txCtx, user.ID); err != nil {
-			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
-		}
-		return nil
-	}); err != nil {
+	if err := s.updatePasswordAndRevokeSessions(ctx, user); err != nil {
 		return dto.TokenPair{}, err
 	}
 
@@ -365,6 +406,21 @@ func (s *Service) ChangePassword(ctx context.Context, input ChangePasswordInput)
 		return dto.TokenPair{}, fmt.Errorf("identity-manage: change-password issue token: %w", err)
 	}
 	return pair, nil
+}
+
+func (s *Service) updatePasswordAndRevokeSessions(ctx context.Context, user *domain.User) error {
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		if err := s.repo.Update(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: change-password update: %w", err)
+		}
+		if err := s.sessionRepo.RevokeByUserID(txCtx, user.ID); err != nil {
+			return fmt.Errorf("identity-manage: change-password revoke sessions: %w", err)
+		}
+		if err := s.refreshStore.RevokeUser(txCtx, user.ID); err != nil {
+			return fmt.Errorf("identity-manage: change-password revoke refresh chains: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Service) publish(ctx context.Context, topic string, payload any) error {
