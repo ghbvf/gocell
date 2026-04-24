@@ -3,6 +3,7 @@ package governance
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -226,23 +227,143 @@ func TestValidateContractSpecLiteral_UnresolvedWarns(t *testing.T) {
 }
 
 func TestValidateFMT19WrapperPackageState(t *testing.T) {
-	root := t.TempDir()
-	wrapperDir := filepath.Join(root, "kernel", "wrapper")
-	require.NoError(t, os.MkdirAll(wrapperDir, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state.go"), []byte(`package wrapper
+	cases := []struct {
+		name       string
+		source     string
+		wantErrors int
+		wantText   string // substring that must appear in any error (empty = no assertion)
+	}{
+		// Rule ①: blank-identifier compile-time interface check — always accepted.
+		{
+			name:       "blank-ident interface check",
+			source:     `var _ Tracer = NoopTracer{}`,
+			wantErrors: 0,
+		},
+		// Rule ②: single-name, zero-element struct composite literal — accepted.
+		{
+			name:       "zero-value composite literal explicit type",
+			source:     `var zero NoopTracer = NoopTracer{}`,
+			wantErrors: 0,
+		},
+		// Rule ②: implicit-type form `var z = Type{}` — accepted.
+		{
+			name:       "zero-value composite literal implicit type",
+			source:     `var z = NoopTracer{}`,
+			wantErrors: 0,
+		},
+		// The two actual production vars in kernel/wrapper/tracer.go.
+		{
+			name: "tracer production vars",
+			source: `var _ Tracer = NoopTracer{}
+var noopSpanInstance Span = noopSpan{}`,
+			wantErrors: 0,
+		},
+		// Violations — nil RHS.
+		{
+			name:       "interface var with nil",
+			source:     `var globalTracer Tracer = nil`,
+			wantErrors: 1,
+			wantText:   "globalTracer",
+		},
+		{
+			name:       "pointer var with nil",
+			source:     `var globalSpan *span = nil`,
+			wantErrors: 1,
+			wantText:   "globalSpan",
+		},
+		// Violation — no initializer.
+		{
+			name:       "no initializer",
+			source:     `var naked Tracer`,
+			wantErrors: 1,
+			wantText:   "naked",
+		},
+		// Violation — grouped block with two nil violations.
+		{
+			name: "grouped block with violations",
+			source: `var (
+	a Tracer = nil
+	b *span = nil
+)`,
+			wantErrors: 2,
+		},
+		// Violation — multi-name declaration (even with nil RHS).
+		{
+			name:       "multi-name declaration",
+			source:     `var a, b Tracer = nil, nil`,
+			wantErrors: 1,
+		},
+		// Violation — chan type.
+		{
+			name:       "chan type mutable container",
+			source:     `var q chan Tracer = make(chan Tracer)`,
+			wantErrors: 1,
+			wantText:   "q",
+		},
+		// Violation — map empty literal (reference type even when empty).
+		{
+			name:       "map type empty literal",
+			source:     `var m map[string]Tracer = map[string]Tracer{}`,
+			wantErrors: 1,
+			wantText:   "m",
+		},
+		// Violation — slice empty literal (reference type).
+		{
+			name:       "slice type empty literal",
+			source:     `var s []Tracer = []Tracer{}`,
+			wantErrors: 1,
+			wantText:   "s",
+		},
+		// Violation — function call RHS.
+		{
+			name:       "function call RHS",
+			source:     `var t = buildTracer()`,
+			wantErrors: 1,
+			wantText:   "t",
+		},
+		// Violation — identifier reference RHS (base has no initializer, derived refs it).
+		{
+			name: "ident reference RHS and no-initializer",
+			source: `var base NoopTracer
+var derived = base`,
+			wantErrors: 2,
+		},
+		// Non-empty composite literal — rejected.
+		{
+			name:       "non-empty composite literal",
+			source:     `var t = NoopTracer{field: 1}`,
+			wantErrors: 1,
+			wantText:   "t",
+		},
+	}
 
-var _ Tracer = NoopTracer{}
-var zero NoopTracer = NoopTracer{}
-var globalTracer Tracer = nil
-var globalSpan *span = nil
-`), 0o644))
-	require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state_test.go"), []byte(`package wrapper
-var ignored Tracer = nil
-`), 0o644))
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			wrapperDir := filepath.Join(root, "kernel", "wrapper")
+			require.NoError(t, os.MkdirAll(wrapperDir, 0o755))
+			// Production file under test.
+			require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state.go"),
+				[]byte("package wrapper\n\n"+tc.source+"\n"), 0o644))
+			// Test file — violations inside _test.go must be ignored.
+			require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state_test.go"),
+				[]byte("package wrapper\nvar ignored Tracer = nil\n"), 0o644))
 
-	results := NewValidator(&metadata.ProjectMeta{}, root).validateFMT19(true)
-	require.Len(t, results, 2)
-	assert.Equal(t, codeFMT19, results[0].Code)
-	assert.Contains(t, results[0].Message, "globalTracer")
-	assert.Contains(t, results[1].Message, "globalSpan")
+			results := NewValidator(&metadata.ProjectMeta{}, root).validateFMT19(true)
+			assert.Len(t, results, tc.wantErrors, "case %q: got results: %v", tc.name, results)
+			for _, r := range results {
+				assert.Equal(t, codeFMT19, r.Code)
+			}
+			if tc.wantText != "" && len(results) > 0 {
+				found := false
+				for _, r := range results {
+					if strings.Contains(r.Message, tc.wantText) {
+						found = true
+						break
+					}
+				}
+				assert.True(t, found, "expected %q in any result message, got: %v", tc.wantText, results)
+			}
+		})
+	}
 }
