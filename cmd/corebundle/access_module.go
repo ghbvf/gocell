@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -20,7 +21,7 @@ type AccessCoreModule struct {
 	// InitialAdminOpts are additional options for the initial-admin bootstrap
 	// path. Production leaves this nil so default bcrypt cost=12 is used.
 	// Tests inject a low-cost hasher to avoid blocking CI.
-	InitialAdminOpts []accesscore.InitialAdminOption
+	InitialAdminOpts []initialadmin.LifecycleOption
 }
 
 // ID returns the stable identifier used in error messages.
@@ -48,20 +49,17 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		return nil, nil, nil, fmt.Errorf("accesscore cursor codec: %w", err)
 	}
 
-	accessOpts, adminWorkerOpt := adminBootstrapWorkerOpts([]accesscore.Option{
+	accessOpts := []accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(shared.EventBus),
 		accesscore.WithJWTIssuer(shared.JWTDeps.issuer),
 		accesscore.WithJWTVerifier(shared.JWTDeps.verifier),
 		accesscore.WithCursorCodec(cursorCodec),
-	}, m.InitialAdminOpts...)
-	c := accesscore.NewAccessCore(accessOpts...)
-
-	var opts []bootstrap.Option
-	if adminWorkerOpt != nil {
-		opts = append(opts, adminWorkerOpt)
+		accesscore.WithInitialAdminBootstrap(m.InitialAdminOpts...),
 	}
-	return c, opts, nil, nil
+	c := accesscore.NewAccessCore(accessOpts...)
+	// Bootstrap phase3b auto-discovers c.LifecycleHooks() — no WithWorkers needed.
+	return c, nil, nil, nil
 }
 
 var _ CellModule = AccessCoreModule{}

@@ -79,11 +79,6 @@ func NewService(
 	return s
 }
 
-// runInTx wraps fn in a transaction runner.
-func (s *Service) runInTx(ctx context.Context, fn func(context.Context) error) error {
-	return s.txRunner.RunInTx(ctx, fn)
-}
-
 // writeOutboxEntry writes a role-change outbox entry. Called inside a transaction.
 func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dto.RoleChangedEvent) error {
 	payload, err := json.Marshal(evt)
@@ -112,7 +107,7 @@ func (s *Service) persistChange(
 	evt dto.RoleChangedEvent,
 	topic string,
 ) (changed bool, err error) {
-	err = s.runInTx(ctx, func(txCtx context.Context) error {
+	err = s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		var innerErr error
 		changed, innerErr = writeFn(txCtx)
 		if innerErr != nil {

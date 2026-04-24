@@ -11,22 +11,22 @@ import (
 	"time"
 )
 
-// WriteCredentialFile atomically writes a credential file at path:
+// writeCredentialFile atomically writes a credential file at path:
 //  1. MkdirAll(dir, 0o700) — creates the directory with strict permissions.
 //  2. Creates a sibling .tmp file with O_EXCL|O_CREATE + mode 0o600.
 //  3. On success, os.Rename atomically replaces the target; on failure the .tmp
 //     is removed.
 //
-// If path already exists, ErrCredFileExists is returned to prevent a second
+// If path already exists, errCredFileExists is returned to prevent a second
 // bootstrap run from silently overwriting an existing credential.
-func WriteCredentialFile(path string, payload CredentialPayload, opts ...WriteCredentialFileOption) error {
+func writeCredentialFile(path string, payload credentialPayload, opts ...writeCredentialFileOption) error {
 	cfg := &writeCredentialFileConfig{writer: formatPayload}
 	for _, o := range opts {
 		o(cfg)
 	}
 	// Refuse to overwrite.
 	if _, err := os.Stat(path); err == nil {
-		return fmt.Errorf("%w: %s", ErrCredFileExists, path)
+		return fmt.Errorf("%w: %s", errCredFileExists, path)
 	}
 
 	dir := filepath.Dir(path)
@@ -64,13 +64,13 @@ func WriteCredentialFile(path string, payload CredentialPayload, opts ...WriteCr
 	return nil
 }
 
-// RemoveCredentialFile safely removes the credential file at path:
+// removeCredentialFile safely removes the credential file at path:
 //   - If the file does not exist, returns nil (idempotent).
 //   - If the file's permission is not 0o600, removes the file unconditionally
 //     (security intent: destroy the credential regardless of tampering) and
-//     returns a wrapped ErrCredFileTampered so the caller can log the anomaly.
+//     returns a wrapped errCredFileTampered so the caller can log the anomaly.
 //   - Otherwise removes the file.
-func RemoveCredentialFile(path string) error {
+func removeCredentialFile(path string) error {
 	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -86,17 +86,17 @@ func RemoveCredentialFile(path string) error {
 	}
 
 	if tampered {
-		return fmt.Errorf("%w: got mode %o, want 0600", ErrCredFileTampered, info.Mode().Perm())
+		return fmt.Errorf("%w: got mode %o, want 0600", errCredFileTampered, info.Mode().Perm())
 	}
 
 	return nil
 }
 
-// ReadCredentialExpiresAt reads the expires_at unix timestamp from the
+// readCredentialExpiresAt reads the expires_at unix timestamp from the
 // credential file at path and returns the corresponding time.Time (UTC).
 // Returns an error when the file cannot be read, the expires_at line is
 // missing, or the value cannot be parsed.
-func ReadCredentialExpiresAt(path string) (time.Time, error) {
+func readCredentialExpiresAt(path string) (time.Time, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return time.Time{}, fmt.Errorf("initialadmin: read credential file: %w", err)
@@ -145,7 +145,7 @@ func splitLines(s string) []string {
 //	username=<username>
 //	password=<password>
 //	expires_at=<unix timestamp>
-func formatPayload(w io.Writer, p CredentialPayload) error {
+func formatPayload(w io.Writer, p credentialPayload) error {
 	now := time.Now().UTC()
 	content := fmt.Sprintf(
 		"# GoCell initial admin credential\n"+

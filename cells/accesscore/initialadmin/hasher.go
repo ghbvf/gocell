@@ -10,7 +10,7 @@ import (
 
 // PasswordHasher abstracts the password-hashing step so tests can inject a
 // fast (low-cost bcrypt) hasher without paying the production-strength cost
-// on every BuildBootstrap startup. Production code uses DefaultPasswordHasher
+// on every BuildBootstrap startup. Production code uses defaultPasswordHasher
 // which wraps bcrypt at domain.BcryptCost (12).
 //
 // The interface is deliberately narrow: only Hash is needed during the
@@ -39,8 +39,8 @@ func (b BcryptHasher) Hash(password []byte) ([]byte, error) {
 	return bcrypt.GenerateFromPassword(password, b.Cost)
 }
 
-// DefaultPasswordHasher returns the production hasher: bcrypt at
+// defaultPasswordHasher returns the production hasher: bcrypt at
 // domain.BcryptCost (OWASP 2023 minimum 12).
-func DefaultPasswordHasher() PasswordHasher {
+func defaultPasswordHasher() PasswordHasher {
 	return BcryptHasher{Cost: domain.BcryptCost}
 }

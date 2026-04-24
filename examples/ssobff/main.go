@@ -27,7 +27,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // noopTxRunner executes fn directly without a real transaction (demo mode).
@@ -75,17 +74,12 @@ func main() {
 	// Shared noop outbox writer for all L2+ Cells.
 	var nw outbox.Writer = outbox.NoopWriter{}
 
-	// adminLazy resolves the cleanup worker at WorkerGroup.Start() time
-	// (bootstrap Step 8), after asm.StartWithConfig has fired the sink (Step 3-4).
-	// No-op when admin already existed and sink was never called.
-	adminLazy := worker.Lazy()
-	bootstrapSink := func(w worker.Worker) { _ = adminLazy.Set(w) }
-
 	// --- accesscore (L2): identity, session, RBAC ---
+	// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore — no
+	// worker.Lazy or sink plumbing needed.
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithInitialAdminBootstrap(),
-		accesscore.WithBootstrapWorkerSink(bootstrapSink),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
@@ -157,8 +151,7 @@ func main() {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPAddr(":8081"),
 		bootstrap.WithAuthDiscovery(),
-		bootstrap.WithWorkers(adminLazy),
-		// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin — no extra hook needed.
+		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
 	)
 
 	credPath, err := accesscore.ResolveBootstrapCredentialPath(stateDir)

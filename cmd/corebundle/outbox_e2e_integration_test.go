@@ -49,7 +49,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/worker"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -181,21 +180,14 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
 
-	// lazyE2EAdminWorker resolves the cleaner at Start() time, after
-	// asm.StartWithConfig has fired the sink (bootstrap Step 3-4 inside Run).
-	// Constructed before accesscore so the sink closure can capture it.
-	lazyE2EAdminWorker := worker.Lazy()
-
-	// Wire accesscore with WithInitialAdminBootstrap (replaces WithSeedAdmin).
-	// The sink calls lazyE2EAdminWorker.Set so the lazy wrapper resolves before
-	// the WorkerGroup starts (Step 8). No-op when admin already existed.
+	// Wire accesscore with WithInitialAdminBootstrap.
+	// Bootstrap phase3b auto-discovers LifecycleHooks() — no worker.Lazy sink needed.
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
 		accesscore.WithPublisher(eb),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
-		accesscore.WithBootstrapWorkerSink(func(w worker.Worker) { _ = lazyE2EAdminWorker.Set(w) }),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -226,8 +218,6 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		// not from a manual adapterpg.NewOutboxRelay call. If the production
 		// wiring stops producing a relay worker, require.NotNil above fires.
 		bootstrap.WithWorkers(relayWorker),
-		// Wire initial-admin cleanup worker lazily (fires after asm.Init).
-		bootstrap.WithWorkers(lazyE2EAdminWorker),
 	)
 
 	appErrCh := make(chan error, 1)
