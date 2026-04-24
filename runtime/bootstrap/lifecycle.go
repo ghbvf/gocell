@@ -32,7 +32,20 @@ const (
 
 // Hook is a pair of lifecycle callbacks invoked in Append order on Start and
 // reverse order on Stop. A zero-value OnStart/OnStop means no-op.
+//
+// The CellID field is stamped by phase3b when a hook is discovered from a
+// cell.LifecycleContributor; hooks appended via bootstrap.WithLifecycle
+// leave it empty. It is a runtime-only observability dimension (not mirrored
+// on cell.LifecycleHook) — cells never self-declare their identity here, by
+// analogy with uber-go/fx's unexported Hook.callerFrame which the framework
+// fills in at Append time rather than trusting the caller to pass it.
+//
+// ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go (callerFrame)
+// ref: kubernetes/kubernetes pkg/kubelet/lifecycle/handlers.go
+//
+//	(containerName + pod structured slog fields, not name-encoded)
 type Hook struct {
+	CellID       string                          // runtime-stamped by phase3b; "" for WithLifecycle-appended hooks
 	Name         string                          // diagnostic name (log dimension)
 	OnStart      func(ctx context.Context) error // nil = no-op
 	OnStop       func(ctx context.Context) error // nil = no-op
@@ -226,7 +239,7 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 		return nil
 	}
 
-	lc.logger.InfoContext(ctx, startMsg, slog.String("name", h.Name))
+	lc.logger.LogAttrs(ctx, slog.LevelInfo, startMsg, hookIdentityAttrs(h)...)
 
 	hookCtx, cancel := lc.applyTimeout(ctx, hookTimeout)
 	defer cancel()
@@ -237,24 +250,34 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
-			lc.logger.ErrorContext(ctx, "hook.timeout",
-				slog.String("name", h.Name),
+			attrs := append(hookIdentityAttrs(h),
 				slog.String("phase", startMsg),
 				slog.Duration("elapsed", elapsed),
 				slog.Any("error", err))
+			lc.logger.LogAttrs(ctx, slog.LevelError, "hook.timeout", attrs...)
 		} else {
-			lc.logger.ErrorContext(ctx, errMsg,
-				slog.String("name", h.Name),
+			attrs := append(hookIdentityAttrs(h),
 				slog.Duration("elapsed", elapsed),
 				slog.Any("error", err))
+			lc.logger.LogAttrs(ctx, slog.LevelError, errMsg, attrs...)
 		}
 		return err
 	}
 
-	lc.logger.InfoContext(ctx, okMsg,
-		slog.String("name", h.Name),
-		slog.Duration("elapsed", elapsed))
+	okAttrs := append(hookIdentityAttrs(h), slog.Duration("elapsed", elapsed))
+	lc.logger.LogAttrs(ctx, slog.LevelInfo, okMsg, okAttrs...)
 	return nil
+}
+
+// hookIdentityAttrs returns the identity slog.Attrs for h: always "name",
+// and "cell" when CellID is non-empty. Empty CellID indicates a hook
+// registered via bootstrap.WithLifecycle rather than phase3b auto-discovery;
+// omitting the field keeps log lines clean rather than emitting cell="".
+func hookIdentityAttrs(h Hook) []slog.Attr {
+	if h.CellID == "" {
+		return []slog.Attr{slog.String("name", h.Name)}
+	}
+	return []slog.Attr{slog.String("name", h.Name), slog.String("cell", h.CellID)}
 }
 
 // applyTimeout derives a child context with deadline from parentCtx.

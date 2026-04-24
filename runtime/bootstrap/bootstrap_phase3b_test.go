@@ -12,13 +12,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// runtimeOnlyHookFields are fields present on bootstrap.Hook that are
+// intentionally NOT mirrored on kernel/cell.LifecycleHook. These are runtime-
+// only observability dimensions stamped by phase3b (or other framework code);
+// cells never self-declare them, so exposing them on the kernel interface
+// would invite drift between cell-supplied values and registry-stamped truth.
+//
+// Add a field name here only together with a comment explaining why it is
+// runtime-only; the drift guard below treats this as a documented divergence.
+var runtimeOnlyHookFields = map[string]string{
+	// CellID is stamped by phase3b from assembly.CellIDs(); empty for hooks
+	// appended via bootstrap.WithLifecycle. See Hook.CellID godoc + fx's
+	// unexported callerFrame for the design precedent.
+	"CellID": "runtime-stamped by phase3b, not cell-supplied",
+}
+
 // TestLifecycleHookShapeMatchesBootstrapHook is a drift guard: the field-copy
 // bridge in phase3bDiscoverLifecycleContributor silently loses any fields
 // added to bootstrap.Hook that are missing from kernel/cell.LifecycleHook
 // (or vice-versa). The reflect-based check keeps the two struct shapes in
 // lock-step: if bootstrap.Hook gains a Priority field tomorrow, this test
 // fails until cell.LifecycleHook mirrors it (or a conscious divergence is
-// documented by updating the skip-list below).
+// documented by adding the field to runtimeOnlyHookFields above).
 func TestLifecycleHookShapeMatchesBootstrapHook(t *testing.T) {
 	hookT := reflect.TypeOf(Hook{})
 	cellHookT := reflect.TypeOf(cell.LifecycleHook{})
@@ -35,10 +50,8 @@ func TestLifecycleHookShapeMatchesBootstrapHook(t *testing.T) {
 	got := fieldSet(hookT)
 	want := fieldSet(cellHookT)
 
-	assert.Equal(t, len(want), len(got),
-		"field count drift: bootstrap.Hook has %d fields, cell.LifecycleHook has %d — update whichever is missing",
-		len(got), len(want))
-
+	// Every kernel-side field MUST be present on bootstrap.Hook with matching
+	// type — phase3b must never drop caller-supplied fields.
 	for name, cellType := range want {
 		bootType, ok := got[name]
 		require.Truef(t, ok,
@@ -48,10 +61,18 @@ func TestLifecycleHookShapeMatchesBootstrapHook(t *testing.T) {
 			"field %q type drift: cell.LifecycleHook has %s, bootstrap.Hook has %s",
 			name, cellType, bootType)
 	}
+
+	// bootstrap.Hook may carry extra runtime-only fields, but every such
+	// field MUST be explicitly whitelisted in runtimeOnlyHookFields so the
+	// divergence is intentional + self-documenting.
 	for name := range got {
-		_, ok := want[name]
-		assert.Truef(t, ok,
-			"bootstrap.Hook has field %q missing from cell.LifecycleHook — add to cell.LifecycleHook and field-copy in phase3b, or document divergence here",
+		if _, mirrored := want[name]; mirrored {
+			continue
+		}
+		_, whitelisted := runtimeOnlyHookFields[name]
+		assert.Truef(t, whitelisted,
+			"bootstrap.Hook has undocumented field %q missing from cell.LifecycleHook — "+
+				"either mirror it on cell.LifecycleHook or add it to runtimeOnlyHookFields with a reason",
 			name)
 	}
 }
@@ -248,6 +269,43 @@ func TestPhase3b_TwoCellsOrderPreserved(t *testing.T) {
 	require.Len(t, ml.appended, 2)
 	assert.Equal(t, "alpha-hook", ml.appended[0].Name)
 	assert.Equal(t, "beta-hook", ml.appended[1].Name)
+}
+
+// TestPhase3b_StampsCellIDOnAppendedHook verifies phase3b writes the owning
+// cell's ID onto every appended bootstrap.Hook. CellID is the runtime-only
+// dimension runHook() emits as "cell" slog attribute; missing this stamp
+// would silently degrade observability for any cell-owned hook.
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go — callerFrame captured at
+// Append time by the framework, not trusted from the hook author.
+func TestPhase3b_StampsCellIDOnAppendedHook(t *testing.T) {
+	lcA := &lcCell{
+		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "alpha"}),
+		hooks: []cell.LifecycleHook{
+			{Name: "alpha-hook-1", OnStart: func(_ context.Context) error { return nil }},
+			{Name: "alpha-hook-2", OnStop: func(_ context.Context) error { return nil }},
+		},
+	}
+	lcB := &lcCell{
+		BaseCell: *cell.NewBaseCell(cell.CellMetadata{ID: "beta"}),
+		hooks: []cell.LifecycleHook{
+			{Name: "beta-hook", OnStart: func(_ context.Context) error { return nil }},
+		},
+	}
+	asm := buildAsmRegistered(t, lcA, lcB)
+
+	ml := &mockLifecycle{}
+	b := New()
+	b.lifecycle = ml
+
+	_, s := newPhaseState()
+	s.asm = asm
+
+	require.NoError(t, b.phase3bDiscoverLifecycleContributor(s))
+	require.Len(t, ml.appended, 3)
+	assert.Equal(t, "alpha", ml.appended[0].CellID, "hook from alpha must carry CellID=alpha")
+	assert.Equal(t, "alpha", ml.appended[1].CellID, "second alpha hook must also carry CellID=alpha")
+	assert.Equal(t, "beta", ml.appended[2].CellID, "beta hook must carry CellID=beta")
 }
 
 // TestPhase3b_BothNilSkipped verifies a hook with nil OnStart and nil OnStop

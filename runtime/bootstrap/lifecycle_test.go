@@ -1,8 +1,11 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -422,4 +425,101 @@ func equalStrSlice(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// TestLifecycle_LogsCellLabel_WhenCellIDSet pins the observability contract:
+// a Hook stamped with CellID (by phase3b) emits a structured "cell" slog
+// attribute on every hook lifecycle event, so SRE dashboards can filter by
+// owning Cell without parsing Name conventions.
+//
+// ref: kubernetes/kubernetes pkg/kubelet/lifecycle/handlers.go — containerName
+// and pod are separate slog fields, not name-encoded.
+func TestLifecycle_LogsCellLabel_WhenCellIDSet(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	lc := NewLifecycle(LifecycleConfig{Logger: logger})
+	require := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	require(lc.Append(Hook{
+		CellID:  "accesscore",
+		Name:    "accesscore.initial-admin-bootstrap",
+		OnStart: func(_ context.Context) error { return errors.New("boom") },
+	}))
+
+	if err := lc.Start(context.Background()); err == nil {
+		t.Fatalf("Start must surface OnStart error")
+	}
+
+	// Every emitted log line (hook.start, hook.start_err) must carry cell=accesscore.
+	sawStart := false
+	sawErr := false
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("bad log line %q: %v", line, err)
+		}
+		msg, _ := rec["msg"].(string)
+		cellAttr, hasCell := rec["cell"].(string)
+		nameAttr, _ := rec["name"].(string)
+		switch msg {
+		case "hook.start":
+			sawStart = true
+			if !hasCell || cellAttr != "accesscore" {
+				t.Errorf("hook.start missing cell label; got %v", rec)
+			}
+			if nameAttr != "accesscore.initial-admin-bootstrap" {
+				t.Errorf("hook.start name mismatch: %v", rec)
+			}
+		case "hook.start_err":
+			sawErr = true
+			if !hasCell || cellAttr != "accesscore" {
+				t.Errorf("hook.start_err missing cell label; got %v", rec)
+			}
+		}
+	}
+	if !sawStart || !sawErr {
+		t.Errorf("expected both hook.start and hook.start_err in log, got buf=%s", buf.String())
+	}
+}
+
+// TestLifecycle_OmitsCellLabel_WhenCellIDEmpty pins the inverse contract:
+// hooks appended via bootstrap.WithLifecycle (not phase3b) leave CellID
+// empty, and logs must NOT emit cell="" noise. Empty-string observability
+// labels make dashboards misleading; omission is the clean signal.
+func TestLifecycle_OmitsCellLabel_WhenCellIDEmpty(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	lc := NewLifecycle(LifecycleConfig{Logger: logger})
+	if err := lc.Append(Hook{
+		Name:    "external.hook", // CellID intentionally omitted
+		OnStart: func(_ context.Context) error { return nil },
+		OnStop:  func(_ context.Context) error { return nil },
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := lc.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if err := lc.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("bad log line %q: %v", line, err)
+		}
+		if _, has := rec["cell"]; has {
+			t.Errorf("log line must NOT carry cell label when CellID is empty: %v", rec)
+		}
+	}
 }

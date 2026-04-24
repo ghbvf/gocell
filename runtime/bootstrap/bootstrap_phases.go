@@ -644,6 +644,7 @@ func (b *Bootstrap) registerOneCellLifecycleHooks(id string, lc cell.LifecycleCo
 			seen[h.Name] = id
 		}
 		if err := b.lifecycle.Append(Hook{
+			CellID:       id,
 			Name:         h.Name,
 			OnStart:      h.OnStart,
 			OnStop:       h.OnStop,
