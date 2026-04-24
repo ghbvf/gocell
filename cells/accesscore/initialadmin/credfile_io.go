@@ -163,8 +163,17 @@ func splitLines(s string) []string {
 //	username=<username>
 //	password=<password>
 //	expires_at=<unix timestamp>
+//
+// The "Generated at" timestamp is taken from p.GeneratedAt when non-zero,
+// otherwise from time.Now().UTC(). Production callers set p.GeneratedAt via
+// the injected Clock so that the comment is consistent with p.ExpiresAt.
 func formatPayload(w io.Writer, p credentialPayload) error {
-	now := time.Now().UTC()
+	now := p.GeneratedAt
+	if now.IsZero() {
+		now = time.Now().UTC()
+	} else {
+		now = now.UTC()
+	}
 	content := fmt.Sprintf(
 		"# GoCell initial admin credential\n"+
 			"# Generated at: %s\n"+

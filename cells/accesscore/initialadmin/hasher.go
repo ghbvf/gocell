@@ -1,5 +1,3 @@
-//go:build unix || windows
-
 package initialadmin
 
 import (

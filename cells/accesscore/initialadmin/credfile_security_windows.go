@@ -85,12 +85,42 @@ func (w *windowsCredfile) VerifyOwnership(path string, _ os.FileInfo) (tampered 
 	return false, nil
 }
 
+// sddlWellKnownAliases maps canonical S-1-* SID strings to their SDDL
+// short-form aliases. Windows SECURITY_DESCRIPTOR.String() may emit either
+// the full S-1-* form or the short alias depending on OS version and locale.
+// We check both so that VerifyOwnership does not falsely report tampering on
+// a freshly written file whose SDDL happens to use the alias form.
+//
+// Aliases are stable across all Windows versions (defined by MS-DTYP §2.5.1.1):
+//
+//	SY = S-1-5-18 (LocalSystem)
+//	BA = S-1-5-32-544 (Built-in Administrators)
+var sddlWellKnownAliases = map[string]string{
+	"S-1-5-18":    "SY",
+	"S-1-5-32-544": "BA",
+}
+
 // sddlContainsSID returns true when the SDDL string contains an ALLOW ACE
 // referencing the given SID string (e.g. "S-1-5-18").
 // SDDL ALLOW ACE format: (A;...;...;...;...;<SID>)
+//
+// Both the full S-1-* form and well-known SDDL aliases (SY, BA …) are
+// checked, because Windows may emit either form in SECURITY_DESCRIPTOR.String().
 func sddlContainsSID(sddl, sidStr string) bool {
-	search := ";" + sidStr + ")"
-	return len(sddl) > 0 && containsSubstring(sddl, search)
+	if len(sddl) == 0 {
+		return false
+	}
+	// Check full SID string form first.
+	if containsSubstring(sddl, ";"+sidStr+")") {
+		return true
+	}
+	// Check SDDL alias form for well-known SIDs.
+	if alias, ok := sddlWellKnownAliases[sidStr]; ok {
+		if containsSubstring(sddl, ";"+alias+")") {
+			return true
+		}
+	}
+	return false
 }
 
 // containsSubstring is a pure-Go substring search to avoid importing strings

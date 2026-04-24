@@ -32,6 +32,9 @@ type bootstrapConfig struct {
 	TTL            time.Duration
 	PasswordSource io.Reader
 	Scheduler      Scheduler
+	// Hasher is present for struct-shape parity with the unix/windows build.
+	// It is unused on unsupported platforms.
+	Hasher PasswordHasher
 }
 
 // bootstrapper is a stub on unsupported platforms.

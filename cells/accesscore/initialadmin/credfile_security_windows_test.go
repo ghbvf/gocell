@@ -81,6 +81,67 @@ func TestVerifyOwnership_DetectsOpenedDACL(t *testing.T) {
 	}
 }
 
+// TestVerifyOwnership_AcceptsSDDLAlias verifies that sddlContainsSID accepts the
+// well-known SDDL short-form aliases that Windows may emit instead of full S-1-*
+// strings. This guards against false-positive tamper detection.
+func TestVerifyOwnership_AcceptsSDDLAlias(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		sddl   string
+		sidStr string
+		want   bool
+	}{
+		{
+			name:   "full SID form matches",
+			sddl:   "D:P(A;;FA;;;S-1-5-18)",
+			sidStr: "S-1-5-18",
+			want:   true,
+		},
+		{
+			name:   "SDDL alias SY matches S-1-5-18",
+			sddl:   "D:P(A;;FA;;;SY)",
+			sidStr: "S-1-5-18",
+			want:   true,
+		},
+		{
+			name:   "SDDL alias BA matches S-1-5-32-544",
+			sddl:   "D:P(A;;FA;;;BA)",
+			sidStr: "S-1-5-32-544",
+			want:   true,
+		},
+		{
+			name:   "full SID form S-1-5-32-544 matches",
+			sddl:   "D:P(A;;FA;;;S-1-5-32-544)",
+			sidStr: "S-1-5-32-544",
+			want:   true,
+		},
+		{
+			name:   "different SID does not match",
+			sddl:   "D:P(A;;FA;;;SY)",
+			sidStr: "S-1-5-32-544",
+			want:   false,
+		},
+		{
+			name:   "empty SDDL does not match",
+			sddl:   "",
+			sidStr: "S-1-5-18",
+			want:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := sddlContainsSID(tc.sddl, tc.sidStr)
+			if got != tc.want {
+				t.Errorf("sddlContainsSID(%q, %q) = %v, want %v", tc.sddl, tc.sidStr, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestRemoveCredentialFile_DeletesEvenIfTampered verifies that removeCredentialFile
 // removes the file even when the DACL has been tampered, and returns a wrapped
 // errCredFileTampered error.

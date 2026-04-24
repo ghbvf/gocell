@@ -378,11 +378,13 @@ func (b *bootstrapper) resolveDuplicateUser(ctx context.Context, createErr error
 // IMPORTANT: password is only referenced here and inside credentialPayload — it is not
 // stored in any struct field and is not accessible after this function returns.
 func (b *bootstrapper) writeFileAndMakeCleaner(password string) (worker.Worker, error) {
-	expiresAt := b.deps.Clock.Now().Add(b.cfg.TTL)
+	now := b.deps.Clock.Now()
+	expiresAt := now.Add(b.cfg.TTL)
 	payload := credentialPayload{
-		Username:  b.cfg.Username,
-		Password:  password,
-		ExpiresAt: expiresAt,
+		Username:    b.cfg.Username,
+		Password:    password,
+		ExpiresAt:   expiresAt,
+		GeneratedAt: now,
 	}
 	if err := writeCredentialFile(b.cfg.CredentialPath, payload); err != nil {
 		// IMPORTANT: do NOT include `password` in any log attribute below.

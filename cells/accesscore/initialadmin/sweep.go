@@ -14,6 +14,10 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
+// sweep intentionally does not depend on ports.UserRepository — credential
+// file cleanup is a filesystem-only operation, fully decoupled from admin
+// existence. This invariant is documented in TestSweep_AdminExistsDoesNotSkip.
+
 // sweepConfig parameterises startup-time credential sweep.
 type sweepConfig struct {
 	// StateDir is the directory to scan (typically $GOCELL_STATE_DIR).

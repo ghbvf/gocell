@@ -10,6 +10,12 @@ type credentialPayload struct {
 	Username  string
 	Password  string
 	ExpiresAt time.Time
+	// GeneratedAt is the wall-clock time at which the credential file was
+	// created. When zero, formatPayload falls back to time.Now().UTC() for
+	// backward compatibility with tests that do not inject a clock.
+	// Production callers (writeFileAndMakeCleaner) set this via the injected
+	// Clock so that the "Generated at" comment is consistent with ExpiresAt.
+	GeneratedAt time.Time
 }
 
 // writeCredentialFileOption is a functional option for writeCredentialFile.
