@@ -318,7 +318,7 @@ func TestHandleQuery_ActorBinding(t *testing.T) {
 	h := NewHandler(svc)
 
 	// securedMux registers HandleQuery via RegisterRoutes, mirroring production
-	// wiring so trust boundary tests exercise the same auth.Declare guard.
+	// wiring so trust boundary tests exercise the same auth.Mount guard.
 	securedMux := http.NewServeMux()
 	h.RegisterRoutes(securedMux)
 

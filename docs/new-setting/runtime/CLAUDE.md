@@ -9,21 +9,32 @@ runtime/ 提供通用运行时能力：`http` / `auth` / `bootstrap` / `eventrou
 
 ## Auth 路由声明（F3）
 
-每个 Cell 通过 `auth.Declare(mux, auth.RouteDecl{...})` 注册路由，在注册点声明鉴权语义。
+每个 Cell 通过 `auth.Mount(mux, auth.Route{...})` 注册路由，在注册点声明鉴权语义。
+`auth.Route.Contract` 必填，HTTP method/path 从 `wrapper.ContractSpec` 读取。
 
 ```go
 func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
     mux.Route("/api/v1/access", func(sub cell.RouteMux) {
         sub.Route("/sessions", func(s cell.RouteMux) {
-            auth.Declare(s, auth.RouteDecl{
-                Method:  "POST",
-                Path:    "/login",
+            auth.Mount(s, auth.Route{
+                Contract: wrapper.ContractSpec{
+                    ID:        "http.access.sessions.login.v1",
+                    Kind:      "http",
+                    Transport: "http",
+                    Method:    "POST",
+                    Path:      "/api/v1/access/sessions/login",
+                },
                 Handler: http.HandlerFunc(c.loginHandler.HandleLogin),
                 Public:  true, // JWT 豁免
             })
-            auth.Declare(s, auth.RouteDecl{
-                Method:              "DELETE",
-                Path:                "/{id}",
+            auth.Mount(s, auth.Route{
+                Contract: wrapper.ContractSpec{
+                    ID:        "http.access.sessions.logout.v1",
+                    Kind:      "http",
+                    Transport: "http",
+                    Method:    "DELETE",
+                    Path:      "/api/v1/access/sessions/{id}",
+                },
                 Handler:             http.HandlerFunc(c.logoutHandler.HandleLogout),
                 PasswordResetExempt: true, // 允许 reset-required token 穿过
             })
@@ -32,12 +43,11 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 }
 ```
 
-### RouteDecl 字段
+### Route 字段
 
 | 字段 | 说明 | 约束 |
 |------|------|------|
-| `Method` | HTTP 动词（GET/POST/...） | 必填，大写 |
-| `Path` | 路径（相对当前 mux.Route 作用域） | 必填，以 `/` 开头 |
+| `Contract` | `wrapper.ContractSpec`——contract id、HTTP method/path、transport metadata | 必填；`Kind="http"`，`Method` 大写，`Path` 为全路径 |
 | `Handler` | `http.Handler` | 必填，非 nil |
 | `Policy` | `auth.Policy`——路由级策略 | 可选；`Public=true` 时必须为 nil |
 | `Public` | JWT 豁免 | 与 `Policy` / `PasswordResetExempt` 互斥 |
@@ -48,7 +58,7 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 
 `Bootstrap.Run` 在 `Cell.RegisterRoutes` 完成后自动调用 `rtr.FinalizeAuth()`：
 
-1. 收集所有 `auth.Declare` 推送的 `AuthRouteMeta`
+1. 收集所有 `auth.Mount` 推送的 `AuthRouteMeta`
 2. 去重 `(method, path)`——重复 fail-fast
 3. 编译 public / password-reset-exempt / delegated 匹配器
 4. 从首个 `POST + PasswordResetExempt=true` 路由派生 password-reset change-endpoint hint
@@ -60,7 +70,7 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 - `(method, path)` 重复出现 → FinalizeAuth 返回 error，保护配置清洁度
 - `Path` 经过 `path.Clean` 规范化
 - **禁止**在 `cmd/*/main.go` 或 `examples/*/main.go` 硬编码业务路径字面量（`grep '"POST /api/v1/"'` 必须为空）
-- CORS OPTIONS：当前无 CORS middleware；如需公开 OPTIONS，显式 `auth.Declare` + `Public: true`
+- CORS OPTIONS：当前无 CORS middleware；如需公开 OPTIONS，显式 `auth.Mount` + `Public: true`
 
 ## Composition Root（Bootstrap）
 
@@ -78,13 +88,18 @@ bootstrap.New(
 
 ## EventRouter 订阅注册
 
-Cell 在 `RegisterSubscriptions` 中通过 `r.AddHandler(topic, handler)` 声明订阅意图。
+Cell 在 `RegisterSubscriptions` 中通过 `r.AddContractHandler(spec, handler, consumerGroup)` 声明订阅意图。
 **禁止**手动启动 goroutine 或调用 `sub.Subscribe`——Router 管理所有 goroutine 生命周期。
 
 ```go
 func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
     handler := outbox.WrapLegacyHandler(c.svc.HandleEvent)
-    r.AddHandler("my.topic.v1", handler)
+    r.AddContractHandler(wrapper.ContractSpec{
+        ID:        "event.my.topic.v1",
+        Kind:      "event",
+        Transport: "amqp",
+        Topic:     "my.topic.v1",
+    }, handler, c.ID())
     return nil
 }
 ```

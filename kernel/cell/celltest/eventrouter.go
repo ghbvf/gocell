@@ -28,18 +28,6 @@ func (r *StubEventRouter) AddContractHandler(spec wrapper.ContractSpec, handler 
 	r.Contracts = append(r.Contracts, spec)
 }
 
-// AddHandler is the round-4 legacy-test compat shim — see comment on
-// cell.EventRouter interface. Records the topic as-is and appends a
-// zero-value ContractSpec so the parallel-slice invariant holds.
-//
-// Deprecated-for-new-code: use AddContractHandler.
-func (r *StubEventRouter) AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string) {
-	r.Topics = append(r.Topics, topic)
-	r.Handlers = append(r.Handlers, handler)
-	r.ConsumerGroups = append(r.ConsumerGroups, consumerGroup)
-	r.Contracts = append(r.Contracts, wrapper.ContractSpec{})
-}
-
 // HandlerCount returns the number of registered handlers.
 func (r *StubEventRouter) HandlerCount() int {
 	return len(r.Topics)

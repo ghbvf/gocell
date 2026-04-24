@@ -115,7 +115,7 @@ func extractContextAttrs(ctx context.Context) []slog.Attr {
 	}
 	// contract_id: written by wrapper.HTTPHandler / WrapConsumer when the
 	// request/event enters a contract-bound path; absent on non-migrated
-	// (legacy AddHandler-pre-round-4) routes. Skipping empty aligns with
+	// (non-contract) routes. Skipping empty aligns with
 	// every other field above.
 	if v, ok := kctxkeys.ContractIDFrom(ctx); ok && v != "" {
 		attrs = append(attrs, slog.String("contract_id", v))

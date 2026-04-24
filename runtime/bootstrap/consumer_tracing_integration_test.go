@@ -17,7 +17,7 @@ import (
 )
 
 // F3 round-4 integration test: verifies the end-to-end path
-// bootstrap.WithTracer -> eventrouter.WithTracer -> wrapper.WrapConsumer ->
+// bootstrap.WithTracer -> ContractTracingMiddleware -> wrapper.WrapConsumer ->
 // span.Start on a real subscribed event. A regression at any layer would
 // silently degrade consumer-side observability; this test is the only
 // cross-layer check that proves the wire stays connected.
@@ -98,7 +98,7 @@ func (c *consumerSpyCell) RegisterSubscriptions(r cell.EventRouter) error {
 }
 
 // TestBootstrap_ConsumerTracingIntegration wires bootstrap ->
-// eventrouter.WithTracer -> AddContractHandler -> WrapConsumer in the most
+// AddContractHandler -> ContractTracingMiddleware -> WrapConsumer in the most
 // production-like way available without a real broker, then asserts that
 // delivering one event produces exactly one CONSUME span tagged with the
 // contract metadata.

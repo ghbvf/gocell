@@ -28,7 +28,7 @@ var businessMethods = map[string]bool{
 }
 
 // verifyPolicyCoverage checks that every registered business route has an
-// auth declaration (via auth.Declare). Routes that are Public, Delegated,
+// auth declaration (via auth.Mount). Routes that are Public, Delegated,
 // or whitelisted are auto-exempted.
 //
 // Returns an error listing all uncovered routes. Intended to be called by
@@ -40,21 +40,21 @@ var businessMethods = map[string]bool{
 //
 // HEAD is auto-covered when the same path has a GET declaration (RFC 7231 §4.3.2):
 // chi and stdlib ServeMux both route HEAD to the GET handler automatically, so
-// requiring a separate HEAD auth.Declare would be redundant boilerplate.
+// requiring a separate HEAD auth.Mount would be redundant boilerplate.
 //
-// OPTIONS routes must be explicitly declared via auth.Declare (typically with
+// OPTIONS routes must be explicitly declared via auth.Mount (typically with
 // Public: true for CORS preflight). Unlike HEAD, there is no auto-coverage
 // from GET declarations.
 //
 // ref: kubernetes/apiserver — structural injection guarantees every handler
 // has an authorizer; GoCell achieves the same guarantee at startup time
-// by enumerating chi routes and comparing against auth.Declare metadata.
+// by enumerating chi routes and comparing against auth.Mount metadata.
 func verifyPolicyCoverage(
 	registeredRoutes []routeKey,
 	declaredMetas []kcell.AuthRouteMeta,
 	whitelist []string,
 ) error {
-	// Build declared set: any auth.Declare call (Public/Delegated/Policy) counts
+	// Build declared set: any auth.Mount call (Public/Delegated/Policy) counts
 	// as coverage. Keyed on "METHOD\x00/clean/path".
 	declared := make(map[string]bool, len(declaredMetas))
 	// Track GET declarations for HEAD auto-coverage (RFC 7231 §4.3.2).
@@ -84,8 +84,8 @@ func verifyPolicyCoverage(
 	}
 
 	return fmt.Errorf(
-		"router: %d route(s) registered without auth.Declare: [%s]; "+
-			"use auth.Declare to register routes, or add to WithPolicyCoverageWhitelist if exempt",
+		"router: %d route(s) registered without auth.Mount: [%s]; "+
+			"use auth.Mount to register routes, or add to WithPolicyCoverageWhitelist if exempt",
 		len(uncovered), strings.Join(uncovered, ", "),
 	)
 }
@@ -105,7 +105,7 @@ func classifyRoute(
 	cleanedPath := path.Clean(r.Path)
 
 	// Flag routes with empty or unrecognized methods — these cannot be
-	// covered by auth.Declare which requires an explicit HTTP method.
+	// covered by auth.Mount which requires an explicit HTTP method.
 	// chi.Walk should not produce empty methods, but defense-in-depth
 	// catches malformed route registrations.
 	if method == "" {
@@ -117,7 +117,7 @@ func classifyRoute(
 		return "", true
 	}
 
-	// Already declared via auth.Declare.
+	// Already declared via auth.Mount.
 	if declared[method+"\x00"+cleanedPath] {
 		return "", true
 	}

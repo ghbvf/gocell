@@ -76,25 +76,24 @@ runtime cost.
 Reference: `k8s.io/apimachinery` — shared lightweight types exposed to
 higher layers without pulling in a parser.
 
-### 3. `auth.Mount` + `auth.Route` replace `auth.Declare` + `auth.RouteDecl`
+### 3. `auth.Mount` + `auth.Route` replace the legacy declaration API
 
 `runtime/auth.Mount(mux, Route{Contract, Handler, Policy, ...})` is the
-new route-registration entry point. `Route.Contract` is optional: when
-set, `wrapper.HTTPHandler` wraps the Handler so the outer HTTP tracing
+route-registration entry point. `Route.Contract` is required and is the
+single source for method, path, and observability metadata.
+`wrapper.HTTPHandler` wraps the Handler so the outer HTTP tracing
 middleware's single request span is tagged with `gocell.contract.id` /
 `kind` / `transport` plus the standard `http.method` / `http.route` /
-`http.status_code`. Nil Contract preserves the legacy path (no contract
-attribute).
+`http.status_code`.
 
-`auth.Declare` + `auth.RouteDecl` become a thin legacy shim forwarding
-to `Mount` with `Contract` left zero. All existing call sites keep
-compiling; a follow-up migration (see PR-A11-M backlog entry) sweeps
-the remaining ~33 HTTP routes + examples onto `Mount`.
+The legacy declaration API and its test shim are gone: production and
+test call sites now use `auth.Mount(Route{Contract: ...})`, and
+`runtime/auth/routedecl.go` has been deleted.
 
-Rationale: A hard cut would force every cell_routes.go in the repo to
-change in the same commit, inflating the PR review surface past
-architectural intent. Shim + migration batch keeps each commit small
-and verifiable.
+Rationale: route auth semantics and contract observability now share one
+declaration. That removes the old method/path duplication and makes
+missing contract metadata fail during registration instead of silently
+producing untagged spans.
 
 ### 4. `wrapper.WrapConsumer` for outbox event consumers
 
@@ -132,9 +131,9 @@ consumed entry has one contract span that covers idempotency/retry and
 final disposition while still receiving trace/request metadata restored
 from the entry before the span starts.
 
-The legacy `AddHandler(topic, handler, cg)` stays as an untraced shim for
-remaining tests until PR-A11-TESTMIGRATE deletes it. Production cell
-subscriptions migrated to `AddContractHandler` in round 4.
+The legacy topic-only event registration API has been removed. Production
+and test subscriptions now call `AddContractHandler(spec, handler,
+consumerGroup)`.
 
 ### 5. Tracer Injection: Constructor-owned at runtime infrastructure layer
 
@@ -156,14 +155,14 @@ types that observe traffic:
   request span. `auth.Mount` does not read the tracer; it calls
   `wrapper.HTTPHandler(spec, handler)` so the handler can contribute
   contract attributes to the span via `wrapper.AttrCarrier`.
-- `runtime/eventrouter.Router` carries a `tracer wrapper.Tracer` field
-  set via `eventrouter.WithTracer(...)`. `AddContractHandler` stores
-  the contract identity on `outbox.Subscription`; the bootstrap-owned
-  `ContractTracingMiddleware` consumes that identity and wraps the
+- `runtime/eventrouter.Router` stores contract identity on
+  `outbox.Subscription`; it does not carry the live tracer. The
+  bootstrap-owned `ContractTracingMiddleware` receives the tracer and
+  error redactor explicitly, consumes that identity, and wraps the
   subscription with `WrapConsumer` outside ConsumerBase.
 - `runtime/bootstrap` threads the `Bootstrap.wrapperTracer` (captured
   by `WithTracer`) into both `router.WithTracer` (phase7) and
-  `eventrouter.WithTracer` (phase6). No process-wide `SetTracer` is
+  `ContractTracingMiddleware` (phase6). No process-wide `SetTracer` is
   needed — the construction calls that receive the tracer are both
   compile-checked, so a new bootstrap entry point cannot accidentally
   drop the wiring and panic at first request.
@@ -190,7 +189,7 @@ rejecting a similar "explicit option + noop default" approach:
    `WithTracer` as a functional option on HTTPHandler, where Cells —
    not bootstrap — would have had to pass it through. Under §5,
    bootstrap is the only caller of `router.WithTracer` /
-   `eventrouter.WithTracer`, and both APIs are pre-existing.
+   `ContractTracingMiddleware`, and both APIs are pre-existing.
 3. **Test ergonomics**: spy tracers inject through `router.WithTracer`
    (integration harness) or directly into `WrapConsumer(tr, …)` (unit
    tests). HTTP handler tests assert `AttrCarrier` contribution rather
@@ -344,22 +343,21 @@ The same review round tightened adapter safety:
 ## Consequences
 
 ### Positive
-- Trace spans + slog fields + metrics carry `contract_id` uniformly
-  once cells migrate to `Mount`. Jaeger filter-by-contract becomes a
-  first-class operation.
+- Trace spans + slog fields + metrics carry `contract_id` uniformly for
+  contract-bound HTTP routes and event consumers. Jaeger
+  filter-by-contract becomes a first-class operation.
 - kernel/wrapper keeps LAYER-01 invariants; no new third-party
   imports leak into kernel.
 - The zero-dependency `ContractSpec` value type keeps the refactor
   surgical — no catalogue bootstrap, no codegen, no runtime parse.
-- `auth.Mount` is a strict superset of `auth.Declare`; migrations are
-  mechanical diff-expansions, reviewable per-cell.
+- `auth.Mount(Route{Contract: ...})` and
+  `AddContractHandler(spec, handler, consumerGroup)` are the only
+  supported registration APIs, so future Cells cannot accidentally bypass
+  contract tagging.
 
 ### Negative
-- `auth.Declare` + `EventRouter.AddHandler(topic, ...)` stay in-tree as
-  legacy-test shims during the migration window. Production call sites
-  migrated to `auth.Mount` / `AddContractHandler`; future cleanup
-  PR-A11-TESTMIGRATE rewrites the remaining test surface and deletes the
-  shims.
+- Removing the compatibility shims made the test migration larger than a
+  pure runtime change, but it keeps the public surface unambiguous.
 - Unauthorized traffic now produces spans (cost of §6's policy-inside
   model). Apply `http.status_code` samplers downstream if volume
   becomes a backend cost issue.
@@ -392,7 +390,7 @@ Rejected for this PR — same reason as B, plus would require a new
 `go generate` step in the build. Potential future evolution when the
 `generated/` directory has more consumers.
 
-### D. `RouteDecl.ContractID` (keep old shape, add optional field)
+### D. `Route.ContractID` (keep old shape, add optional field)
 Rejected. Adds ambiguity: "when should a caller populate ContractID?"
 and cannot enforce the Method/Kind invariants that `wrapper.ContractSpec`
 carries as a value type. The `Route` + `ContractSpec` split makes the
@@ -441,26 +439,17 @@ through `AttrCarrier`, not by creating a second span.
 
 ## Follow-ups (registered in docs/backlog.md)
 
-Round 4 closed the bulk of the previously deferred items. Remaining
-follow-ups:
+Round 4 closed the bulk of the previously deferred items. The final
+cleanup also closed:
 
-- `PR-A11-TESTMIGRATE TEST-ROUTEDECL-SUNSET-01` — production call sites
-  of `auth.Declare` / `RouteDecl` / `EventRouter.AddHandler` have been
-  fully migrated to `auth.Mount` / `AddContractHandler`. To keep the
-  enormous test-surface compiling, round 4 left `auth.Declare` /
-  `RouteDecl` and `eventrouter.Router.AddHandler` /
-  `cell.EventRouter.AddHandler` as legacy-test compat shims (each
-  marked `Deprecated-for-new-code` in godoc). This PR-A11-TESTMIGRATE
-  sweep rewrites the remaining ~60 test files to use the new APIs,
-  then deletes the shims for good. Tracked separately so review
-  fatigue does not block the substantive round-4 changes.
-- `PR-A11-SEC HTTP-SPAN-ERROR-REDACT-01` — the HTTP-side span does not
-  currently call `span.RecordError`; it classifies via status_code
-  only. Once request-level error attribution lands (planned: attach
-  handler errors to the span), wire `middleware.Tracing` with a
-  matching `WithErrorRedactor` hook so the F5 scrub rule also covers
-  the HTTP side. Default redactor is identity, deferred to the OTel
-  exporter / span processor pipeline.
+- `PR-A11-TESTMIGRATE TEST-ROUTEDECL-SUNSET-01` — remaining tests were
+  migrated to `auth.Mount(Route{Contract: ...})` and
+  `AddContractHandler(spec, handler, consumerGroup)`; legacy shim APIs
+  were deleted.
+- `PR-A11-SEC HTTP-SPAN-ERROR-REDACT-01` — `middleware.Tracing` now
+  accepts `WithErrorRedactor`; `Recovery` records redacted panic errors
+  on the active HTTP span, and `bootstrap.WithErrorRedactor` threads the
+  same hook to HTTP and consumer tracing.
 
 `PR-A11-B` (consumer WrapConsumer wiring) landed in round 3.
 `PR-A11-V` (FMT-17 cross-check) landed as FMT-18 in round 4.

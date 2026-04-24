@@ -45,7 +45,7 @@ type ConsumerFunc = outbox.EntryHandler
 // matches OTel's default semantic. Operators who need scrub rules either
 // (a) inject a redactor via the relevant Option or bootstrap wiring, or
 // (b) rely on the OTel collector / adapter pipeline to scrub at export
-// time (see backlog PR-A11-SEC for the adapter-side default redactor).
+// time.
 type ErrorRedactor func(error) error
 
 // ConsumerOption configures WrapConsumer at registration time.

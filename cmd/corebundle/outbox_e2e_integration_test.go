@@ -212,7 +212,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
-		// (change-password, logout) are declared via auth.Declare inside accesscore's
+		// (change-password, logout) are declared via auth.Mount inside accesscore's
 		// RegisterRoutes. WithAuthDiscovery discovers the verifier from accesscore.
 		bootstrap.WithAuthDiscovery(),
 		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —

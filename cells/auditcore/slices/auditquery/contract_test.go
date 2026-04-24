@@ -17,7 +17,7 @@ import (
 
 // newContractQueryHandler builds an http.Handler that registers auditquery
 // routes at the canonical API prefix via RegisterRoutes + http.StripPrefix.
-// RegisterRoutes calls auth.Declare to install the auditQueryPolicy, so the
+// RegisterRoutes calls auth.Mount to install the auditQueryPolicy, so the
 // contract test exercises the same guard the production mux uses — not just
 // the happy-path handler.
 func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {

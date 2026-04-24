@@ -17,7 +17,7 @@ import (
 // roots (cmd/*/bundle.go, cmd/*/main.go, examples/*/main.go) must not
 // hard-code cell-owned business paths like "POST /api/v1/access/sessions/login".
 // Each route's Public / PasswordResetExempt / Delegated attributes are owned
-// by the declaring Cell via auth.Declare; the composition root only supplies
+// by the declaring Cell via auth.Mount; the composition root only supplies
 // the auth-provider opt-in (bootstrap.WithAuthDiscovery).
 //
 // Using filepath.Glob to discover files means new cmd/ or examples/ composition
@@ -61,7 +61,7 @@ func TestBundle_NoBusinessPathLiterals(t *testing.T) {
 		t.Run(rel, func(t *testing.T) {
 			offences := findOffendingLines(t, filePath, methodLit, rawLit)
 			assert.Empty(t, offences,
-				"%s contains path literals that must be owned by Cells via auth.Declare:\n%s",
+				"%s contains path literals that must be owned by Cells via auth.Mount:\n%s",
 				rel, strings.Join(offences, "\n"))
 		})
 	}

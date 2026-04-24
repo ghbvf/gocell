@@ -94,23 +94,13 @@ var okHandler = http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
 })
 
-// TestTestMux_DeclareAuthMeta_RecordsOnRoot verifies that auth.Declare on a
+// TestTestMux_DeclareAuthMeta_RecordsOnRoot verifies that auth.Mount on a
 // root TestMux records the declared AuthRouteMeta accessible via DeclaredAuthMetas.
 func TestTestMux_DeclareAuthMeta_RecordsOnRoot(t *testing.T) {
 	m := NewTestMux()
 
-	auth.Declare(m, auth.RouteDecl{
-		Method:  "POST",
-		Path:    "/api/v1/foo",
-		Handler: okHandler,
-		Policy:  auth.AnyRole("admin"),
-	})
-	auth.Declare(m, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/api/v1/bar",
-		Handler: okHandler,
-		Public:  true,
-	})
+	auth.Mount(m, auth.Route{Contract: testHTTPContract("POST", "/api/v1/foo"), Handler: okHandler, Policy: auth.AnyRole("admin")})
+	auth.Mount(m, auth.Route{Contract: testHTTPContract("GET", "/api/v1/bar"), Handler: okHandler, Public: true})
 
 	metas := m.DeclaredAuthMetas()
 	require.Len(t, metas, 2)
@@ -128,19 +118,8 @@ func TestTestMux_Route_ComposesPrefix(t *testing.T) {
 	root.Route("/api/v1", func(v1 cell.RouteMux) {
 		v1.Route("/access", func(acc cell.RouteMux) {
 			acc.Route("/sessions", func(sess cell.RouteMux) {
-				auth.Declare(sess, auth.RouteDecl{
-					Method:  "POST",
-					Path:    "/login",
-					Handler: okHandler,
-					Public:  true,
-				})
-				auth.Declare(sess, auth.RouteDecl{
-					Method:              "DELETE",
-					Path:                "/{id}",
-					Handler:             okHandler,
-					Policy:              auth.Authenticated(),
-					PasswordResetExempt: true,
-				})
+				auth.Mount(sess, auth.Route{Contract: testHTTPContract("POST", "/login"), Handler: okHandler, Public: true})
+				auth.Mount(sess, auth.Route{Contract: testHTTPContract("DELETE", "/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
 			})
 		})
 	})

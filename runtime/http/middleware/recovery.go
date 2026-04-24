@@ -37,6 +37,7 @@ func Recovery(next http.Handler) http.Handler {
 
 		defer func() {
 			if v := recover(); v != nil {
+				recordPanicOnActiveSpan(r.Context(), v)
 				stack := string(debug.Stack())
 				attrs := []any{
 					slog.Any("panic", v),

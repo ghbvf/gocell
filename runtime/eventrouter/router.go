@@ -1,10 +1,10 @@
 // Package eventrouter provides a Router that separates event subscription
-// declaration from execution. Cells declare handlers via AddHandler; the
+// declaration from execution. Cells declare handlers via AddContractHandler; the
 // Router owns goroutine lifecycle, setup-error detection, and graceful shutdown.
 //
-// ref: ThreeDotsLabs/watermill message/router.go — AddHandler/Run/Close pattern.
+// ref: ThreeDotsLabs/watermill message/router.go — AddContractHandler/Run/Close pattern.
 // Adopted: declaration-then-run split, Running() readiness signal, WaitGroup goroutine tracking.
-// Deviated: no publish-side in AddHandler (GoCell publishes via outbox.Writer, not Router);
+// Deviated: no publish-side in AddContractHandler (GoCell publishes via outbox.Writer, not Router);
 // startup readiness uses an explicit Ready signal from the Subscriber interface rather
 // than a timeout heuristic — aligned with Uber fx OnStart synchronous return semantics.
 //
@@ -59,32 +59,6 @@ func WithReadyTimeout(d time.Duration) Option {
 	return func(r *Router) { r.readyTimeout = d }
 }
 
-// WithTracer stores the Tracer used by ContractTracingMiddleware. The Router
-// records contract metadata on each Subscription; bootstrap inserts
-// ContractTracingMiddleware after ObservabilityContextMiddleware and before
-// ConsumerBase so the span covers idempotency/retry/final disposition.
-func WithTracer(t wrapper.Tracer) Option {
-	return func(r *Router) { r.tracer = t }
-}
-
-// WithErrorRedactor installs an ErrorRedactor that WrapConsumer applies to
-// errors recorded on spans (Requeue/Reject dispositions + handler panics)
-// before they reach span.RecordError. A nil fn disables redaction
-// (identity semantics). Callers that want adapter-side scrubbing (OTel
-// span processor or exporter filter) typically leave this unset; this
-// option exists for bootstraps that must apply strict sanitisation at the
-// source (e.g. regulated environments).
-//
-// Must be called before any Cell.RegisterSubscriptions invocation — same
-// happens-before invariant as WithTracer (Options run inside New).
-func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
-	return func(r *Router) {
-		if fn != nil {
-			r.errorRedactor = fn
-		}
-	}
-}
-
 type handlerConfig struct {
 	topic         string
 	handler       outbox.EntryHandler
@@ -93,26 +67,24 @@ type handlerConfig struct {
 }
 
 // Router manages event subscription lifecycle. It implements cell.EventRouter
-// for the declaration phase (AddHandler) and provides Run/Close for the
+// for the declaration phase (AddContractHandler) and provides Run/Close for the
 // execution phase.
 //
 // Run MUST be called at most once. Calling Run a second time returns an error.
 type Router struct {
-	subscriber    outbox.Subscriber
-	handlers      []handlerConfig
-	mu            sync.Mutex
-	readyTimeout  time.Duration
-	tracer        wrapper.Tracer
-	errorRedactor wrapper.ErrorRedactor // nil → identity (WrapConsumer handles nil)
-	running       chan struct{}
-	runGuard      sync.Once // ensures Run is called at most once
-	runningOnce   sync.Once // ensures close(r.running) is called at most once
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	statusMu      sync.RWMutex
-	started       bool
-	shutdown      bool
-	healthErr     error
+	subscriber   outbox.Subscriber
+	handlers     []handlerConfig
+	mu           sync.Mutex
+	readyTimeout time.Duration
+	running      chan struct{}
+	runGuard     sync.Once // ensures Run is called at most once
+	runningOnce  sync.Once // ensures close(r.running) is called at most once
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	statusMu     sync.RWMutex
+	started      bool
+	shutdown     bool
+	healthErr    error
 }
 
 // Compile-time interface check.
@@ -129,33 +101,6 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 		o(r)
 	}
 	return r
-}
-
-// AddHandler is the PR-A11 round-4 legacy-test compat shim. Production
-// callers use AddContractHandler with an event wrapper.ContractSpec from
-// contracts/**/contract.yaml; this method synthesises a minimal spec with
-// Transport="amqp" so legacy test fixtures continue to compile.
-//
-// Deprecated-for-new-code: use AddContractHandler. Tracked for removal
-// once every _test.go file in the tree is migrated (backlog
-// PR-A11-TESTMIGRATE).
-func (r *Router) AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string) {
-	if topic == "" {
-		panic("eventrouter: AddHandler called with empty topic")
-	}
-	if handler == nil {
-		panic("eventrouter: AddHandler called with nil handler")
-	}
-	if consumerGroup == "" {
-		panic("eventrouter: AddHandler called with empty consumerGroup; cells must declare their identity")
-	}
-	spec := wrapper.ContractSpec{
-		ID:        "legacy:" + topic,
-		Kind:      "event",
-		Transport: "amqp",
-		Topic:     topic,
-	}
-	r.AddContractHandler(spec, handler, consumerGroup)
 }
 
 // AddContractHandler registers a contract-first subscription intent. The

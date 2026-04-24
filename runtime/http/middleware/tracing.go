@@ -1,6 +1,9 @@
 package middleware
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -14,6 +17,7 @@ type TracingOption func(*tracingConfig)
 type tracingConfig struct {
 	publicEndpointFn func(*http.Request) bool
 	skipFn           func(*http.Request) bool
+	errorRedactor    wrapper.ErrorRedactor
 }
 
 // WithPublicEndpointFn sets a per-request function that determines whether an
@@ -40,6 +44,17 @@ func WithProbeFilter(pred func(*http.Request) bool) TracingOption {
 	return func(c *tracingConfig) {
 		if pred != nil {
 			c.skipFn = pred
+		}
+	}
+}
+
+// WithErrorRedactor installs a redactor for errors recorded on the active
+// HTTP span. Recovery uses the recorder installed by Tracing to attach panic
+// errors to the span without leaking raw panic text into the tracing backend.
+func WithErrorRedactor(fn wrapper.ErrorRedactor) TracingOption {
+	return func(c *tracingConfig) {
+		if fn != nil {
+			c.errorRedactor = fn
 		}
 	}
 }
@@ -138,6 +153,7 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	// Start span with tentative name using raw path.
 	// After routing, the span is renamed to use the route pattern.
 	ctx, span := tracer.Start(ctx, r.Method+" "+r.URL.Path)
+	ctx = withSpanErrorRecorder(ctx, span, cfg.errorRedactor)
 	defer span.End()
 
 	// Record linked remote context for public endpoints.
@@ -171,9 +187,8 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	)
 
 	// Late-bind contract attributes collected by wrapper.HTTPHandler on
-	// contract-bound routes. Empty on routes without a Contract — this is
-	// the migration fallback; once PR-A11-M retires auth.Declare, every
-	// route contributes contract attrs.
+	// contract-bound routes. Empty only for framework-owned non-contract
+	// endpoints or direct standalone middleware usage.
 	if len(carrier.Attrs) > 0 {
 		span.SetAttributes(carrier.Attrs...)
 	}
@@ -181,5 +196,43 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	// 5xx → error span; 4xx and below → unset (otelhttp convention).
 	if status >= 500 {
 		tracing.SpanSetStatus(span, true, http.StatusText(status))
+	}
+}
+
+type spanErrorRecorder struct {
+	span     tracing.Span
+	redactor wrapper.ErrorRedactor
+}
+
+type spanErrorRecorderKey struct{}
+
+func withSpanErrorRecorder(ctx context.Context, span tracing.Span, redactor wrapper.ErrorRedactor) context.Context {
+	return context.WithValue(ctx, spanErrorRecorderKey{}, spanErrorRecorder{span: span, redactor: redactor})
+}
+
+func recordPanicOnActiveSpan(ctx context.Context, rec any) {
+	r, ok := ctx.Value(spanErrorRecorderKey{}).(spanErrorRecorder)
+	if !ok || r.span == nil || rec == nil {
+		return
+	}
+	err := panicAsError(rec)
+	if r.redactor != nil {
+		err = r.redactor(err)
+	}
+	if err != nil {
+		r.span.RecordError(err)
+	}
+}
+
+func panicAsError(rec any) error {
+	switch v := rec.(type) {
+	case nil:
+		return nil
+	case error:
+		return v
+	case string:
+		return errors.New(v)
+	default:
+		return fmt.Errorf("panic: %v", v)
 	}
 }

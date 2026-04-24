@@ -75,7 +75,7 @@ func defaultRuntimeOptions(
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
 		// Public routes and password-reset-exempt routes are declared by the
-		// owning Cells via auth.Declare (see cells/accesscore/cell.go and
+		// owning Cells via auth.Mount (see cells/accesscore/cell.go and
 		// cells/accesscore/slices/identitymanage/handler.go). Bootstrap only
 		// needs the opt-in signal that an auth provider cell will be wired.
 		bootstrap.WithAuthDiscovery(),

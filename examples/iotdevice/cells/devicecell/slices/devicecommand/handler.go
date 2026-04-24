@@ -60,7 +60,7 @@ func toCommandResponse(e command.Entry) commandResponse {
 //
 // WARNING: command endpoints run in demo mode — no route-level auth policy.
 // For production, wire WithAuthDiscovery() on the assembly and attach
-// Policy: auth.AnyRole("operator") to RouteDecl.
+// Policy: auth.AnyRole("operator") to auth.Route.
 type Handler struct {
 	svc *Service
 }

@@ -159,7 +159,7 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // Infra endpoints (/healthz, /readyz, /metrics) registered on outerMux are not
 // affected — they bypass business-route middleware entirely.
 //
-// Public endpoints are declared via auth.Declare with Public:true inside Cell
+// Public endpoints are declared via auth.Mount with Public:true inside Cell
 // RegisterRoutes; FinalizeAuth compiles them into the router's auth predicates.
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
@@ -277,9 +277,9 @@ type Router struct {
 	circuitBreaker             middleware.Allower
 	circuitBreakerNil          bool // set by WithCircuitBreaker(nil) to enable fail-fast in NewE
 	authVerifier               auth.IntentTokenVerifier
-	authPublicMatcher          func(*http.Request) bool // compiled by FinalizeAuth from auth.Declare Public metas
+	authPublicMatcher          func(*http.Request) bool // compiled by FinalizeAuth from auth.Mount Public metas
 	authMetrics                *auth.AuthMetrics
-	passwordResetExemptMatcher func(method, urlPath string) bool // compiled by FinalizeAuth from auth.Declare PasswordResetExempt metas
+	passwordResetExemptMatcher func(method, urlPath string) bool // compiled by FinalizeAuth from auth.Mount PasswordResetExempt metas
 	securityHeadersOpts        []middleware.SecurityHeadersOption
 	bodyLimit                  int64
 	trustedProxies             []string
@@ -291,7 +291,7 @@ type Router struct {
 
 	// F3 two-stage auth construction fields.
 	// declaredAuthMetas accumulates cell.AuthRouteMeta entries forwarded by
-	// auth.Declare during Cell RegisterRoutes. FinalizeAuth compiles them into
+	// auth.Mount during Cell RegisterRoutes. FinalizeAuth compiles them into
 	// matchers and OR-merges with any legacy option-supplied matchers.
 	declaredAuthMetas []kcell.AuthRouteMeta
 	// authFinalized is set to true by FinalizeAuth. Any subsequent
@@ -379,7 +379,7 @@ func NewE(opts ...Option) (*Router, error) {
 
 	r.buildOuterMux(realIPMW)
 	r.buildPublicMux()
-	r.buildInternalMux()
+	r.buildInternalMux(realIPMW)
 
 	// Physical-isolation edge guard: outerMux explicitly 404s any
 	// /internal/v1/* request before it reaches publicMux's JWT middleware.
@@ -448,7 +448,7 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 func (r *Router) buildOuterMux(realIPMW func(http.Handler) http.Handler) {
 	// Always pre-append lazy public predicates so Tracing and RequestID
 	// honour both the legacy WithPublicEndpoints path and any routes
-	// declared later via auth.Declare / FinalizeAuth.
+	// declared later via auth.Mount / FinalizeAuth.
 	lazyPublic := func(req *http.Request) bool {
 		if r.authPublicMatcher == nil {
 			return false
@@ -524,7 +524,9 @@ func (r *Router) buildPublicMux() {
 // r.internalMux. Cells' /internal/v1/* routes land here via Router.Route/
 // Handle/Mount dispatch.
 //
-// Chain: Recovery → [InternalMiddleware...] → BodyLimit → handler.
+// Chain: RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//
+//	→ Recovery → [InternalMiddleware...] → BodyLimit → handler.
 //
 // Deliberate omissions (PR-A14a design):
 //   - JWT AuthMiddleware — the internal mux lives on a separate listener
@@ -537,14 +539,29 @@ func (r *Router) buildPublicMux() {
 //     authenticated service callers and is expected to be low-volume;
 //     operators who need internal throttling can install their own
 //     middleware via WithInternalMiddleware.
-//   - SecurityHeaders — outerMux only wraps publicMux; internal relies on
-//     caller-supplied middleware for any headers it needs.
+//   - SecurityHeaders — internal relies on caller-supplied middleware for
+//     any headers it needs.
 //
 // Kept:
+//   - RequestID / Recorder / Tracing / AccessLog / Metrics — internal
+//     contract routes are first-class runtime traffic and must emit trace
+//     IDs, status, and gocell.contract.* attrs.
 //   - Recovery — a panic in an internal handler must not crash the process.
 //     Recovery is a safety net, not an edge defence, so including it here
 //     does not couple internal traffic to public rate-limit / circuit state.
-func (r *Router) buildInternalMux() {
+func (r *Router) buildInternalMux(realIPMW func(http.Handler) http.Handler) {
+	r.internalMux.Use(
+		middleware.RequestIDWithOptions(r.requestIDOpts...),
+		realIPMW,
+		middleware.Recorder,
+	)
+	if r.tracer != nil {
+		r.internalMux.Use(middleware.Tracing(r.tracer, r.tracingOpts...))
+	}
+	r.internalMux.Use(middleware.AccessLog)
+	if r.metricsCollector != nil {
+		r.internalMux.Use(middleware.Metrics(r.metricsCollector))
+	}
 	r.internalMux.Use(middleware.Recovery)
 	for _, mw := range r.internalMiddlewares {
 		r.internalMux.Use(mw)
@@ -633,7 +650,7 @@ func (r *Router) Group(fn func(kcell.RouteMux)) {
 
 // Route mounts a sub-router under the given pattern. The adapter carries
 // both the chi sub-router and a reference to the Router-rooted declarer so
-// that auth.Declare called on a nested sub-mux composes the mount prefix
+// that auth.Mount called on a nested sub-mux composes the mount prefix
 // with the declared path and forwards AuthRouteMeta to the top-level Router.
 // The underlying mux is chosen by pickMux; nested Route calls stay on the
 // mux chosen at the top level.
@@ -701,7 +718,7 @@ func (r *Router) InternalHandler() http.Handler {
 }
 
 // DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
-// metadata forwarded by auth.Declare during Cell RegisterRoutes. FinalizeAuth
+// metadata forwarded by auth.Mount during Cell RegisterRoutes. FinalizeAuth
 // compiles the accumulated metas into matchers that the AuthMiddleware reads
 // via lazy closures installed in buildAuthOpts.
 //
@@ -732,7 +749,7 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 //
 // It is safe to call FinalizeAuth with an empty declaredAuthMetas slice; the
 // policy coverage check still runs to catch routes registered without any
-// auth.Declare call.
+// auth.Mount call.
 func (r *Router) FinalizeAuth() error {
 	if r.authFinalized {
 		return fmt.Errorf("router: FinalizeAuth called twice")
@@ -773,7 +790,7 @@ func (r *Router) FinalizeAuth() error {
 	}
 
 	// Policy coverage verification: every business route registered on the
-	// public + internal muxes must have a corresponding auth.Declare call
+	// public + internal muxes must have a corresponding auth.Mount call
 	// (Public, Delegated, or with Policy). Infrastructure routes on outerMux
 	// (healthz, readyz, metrics) are excluded because they are not registered
 	// through Cell RegisterRoutes.

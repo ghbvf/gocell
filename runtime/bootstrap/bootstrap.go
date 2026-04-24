@@ -246,7 +246,7 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 // automatic discovery.
 //
 // The verifier is applied to the router's middleware chain at Run() time via
-// router.WithAuthMiddleware. Public endpoints are declared via auth.Declare
+// router.WithAuthMiddleware. Public endpoints are declared via auth.Mount
 // with Public:true inside each Cell's RegisterRoutes; Bootstrap's FinalizeAuth
 // compiles them into the router's auth predicates.
 //
@@ -269,7 +269,7 @@ func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
 // error — fail-closed.
 //
 // This is the F3 successor to the dual-purpose WithPublicEndpoints opt-in:
-// public routes are now declared via auth.Declare in each Cell, so bootstrap
+// public routes are now declared via auth.Mount in each Cell, so bootstrap
 // only needs an explicit signal that "this assembly expects JWT-backed auth
 // and a provider cell will expose it".
 //
@@ -449,19 +449,17 @@ func WithEventRouterReadyTimeout(d time.Duration) Option {
 }
 
 // WithErrorRedactor installs a wrapper.ErrorRedactor that scrubs error text
-// before it reaches span.RecordError on consumer-side CONSUME spans. A nil
-// fn disables redaction (identity semantics). The redactor is forwarded to
-// eventrouter.WithErrorRedactor and is propagated to every
-// wrapper.WrapConsumer invocation via AddContractHandler.
+// before it reaches span.RecordError on HTTP request spans and consumer-side
+// CONSUME spans. A nil fn disables redaction (identity semantics).
 //
 // Use when strict source-side sanitisation is required (regulated
 // environments); otherwise leave unset and let the OTel span processor /
-// exporter filter handle scrubbing at export time (see backlog
-// PR-A11-SEC).
+// exporter filter handle scrubbing at export time.
 func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
 	return func(b *Bootstrap) {
 		if fn != nil {
 			b.errorRedactor = fn
+			b.routerOpts = append(b.routerOpts, router.WithTracingOptions(middleware.WithErrorRedactor(fn)))
 		}
 	}
 }
@@ -675,7 +673,7 @@ type Bootstrap struct {
 	managedResourceNil bool
 
 	// wrapperTracer is the Tracer supplied via WithTracer. It is threaded into
-	// router.WithTracer (HTTP) and eventrouter.WithTracer (consumer) at
+	// router.WithTracer (HTTP) and ContractTracingMiddleware (consumer) at
 	// phase6/phase7 construction. When nil, wrapper.HTTPHandler and
 	// wrapper.WrapConsumer each fall back to wrapper.NoopTracer{} at call
 	// time, and phase1 logs a slog.Warn so missing tracer wiring surfaces.

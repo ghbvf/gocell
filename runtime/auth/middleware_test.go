@@ -103,7 +103,7 @@ func TestAuthMiddleware_NonBearerScheme(t *testing.T) {
 
 func TestAuthMiddleware_NoMatcher_AllPathsRequireAuth(t *testing.T) {
 	// When no WithPublicEndpointMatcher is supplied, every path requires auth —
-	// the fail-closed default. Public routes are now declared via auth.Declare
+	// the fail-closed default. Public routes are now declared via auth.Mount
 	// with Public:true, which compiles into a WithPublicEndpointMatcher at
 	// FinalizeAuth time.
 	verifier := &mockVerifier{err: errors.New("should not be called")}
@@ -427,7 +427,7 @@ func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecord
 
 // testExemptMatcher returns the canonical (method, path) matcher used by the
 // test suite when exercising the password-reset gate. Mirrors the matcher that
-// Router.FinalizeAuth compiles from auth.Declare(RouteDecl{PasswordResetExempt: true})
+// Router.FinalizeAuth compiles from auth.Mount(Route{PasswordResetExempt: true})
 // metadata declared by accesscore's identity and session cells.
 func testExemptMatcher(t *testing.T) func(method, urlPath string) bool {
 	t.Helper()

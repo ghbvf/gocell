@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- Spy tracer for AddContractHandler verification ---
+// --- Spy tracer for ContractTracingMiddleware verification ---
 
 type contractSpySpan struct {
 	mu     sync.Mutex
@@ -107,10 +107,9 @@ func TestAddContractHandler_EmptyConsumerGroup_Panics(t *testing.T) {
 	)
 }
 
-func TestAddContractHandler_NonEventSpec_PanicsViaWrapConsumer(t *testing.T) {
+func TestAddContractHandler_NonEventSpec_Panics(t *testing.T) {
 	t.Parallel()
-	// Spec with Kind != "event" must be rejected by the wrapper.WrapConsumer
-	// call inside AddContractHandler — registration-time fail-fast.
+	// Spec with Kind != "event" must be rejected at registration time.
 	httpSpec := wrapper.ContractSpec{
 		ID: "http.x.v1", Kind: "http", Transport: "http",
 		Method: "POST", Path: "/x",
@@ -122,22 +121,20 @@ func TestAddContractHandler_NonEventSpec_PanicsViaWrapConsumer(t *testing.T) {
 	r.AddContractHandler(httpSpec, okHandler(), "mycell")
 }
 
-// --- Happy-path + nil tracer fallback ---
+// --- Happy-path registration + tracing middleware ---
 
-func TestAddContractHandler_NilTracer_RegistersWithNoopWrapping(t *testing.T) {
+func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 	t.Parallel()
-	// No WithTracer → r.tracer is nil; AddContractHandler must not panic —
-	// WrapConsumer substitutes NoopTracer internally.
 	r := New(&blockingSubscriber{})
 	r.AddContractHandler(configChangedSpec(), okHandler(), "accesscore")
-	assert.Equal(t, 1, r.HandlerCount(), "nil tracer path must still register handler")
+	assert.Equal(t, 1, r.HandlerCount())
 
-	// The wrapped handler should still pass through Ack disposition unchanged.
+	// Router stores the business handler; bootstrap-owned middleware wraps it.
 	res := r.handlers[0].handler(context.Background(), outbox.Entry{})
 	assert.Equal(t, outbox.DispositionAck, res.Disposition)
 }
 
-func TestAddContractHandler_TracerInjected_WrapsWithContractSpan(t *testing.T) {
+func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	t.Parallel()
 	tr := &contractSpyTracer{}
 	r := New(&blockingSubscriber{})
@@ -205,8 +202,7 @@ func TestContractTracingMiddleware_CoversDownstreamShortCircuit(t *testing.T) {
 
 func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 	t.Parallel()
-	tr := &contractSpyTracer{}
-	r := New(&blockingSubscriber{}, WithTracer(tr))
+	r := New(&blockingSubscriber{})
 	for i := 0; i < 3; i++ {
 		spec := configChangedSpec()
 		spec.Topic = spec.Topic + "." + string(rune('a'+i))

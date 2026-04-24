@@ -38,7 +38,7 @@ func seedContractEntry(repo *mem.ConfigRepository, key, value string) {
 
 // newContractMux registers configpublish routes on a mux at the canonical API
 // prefix via RegisterRoutes + http.StripPrefix. RegisterRoutes calls
-// auth.Declare so contract tests exercise the same admin policy production uses.
+// auth.Mount so contract tests exercise the same admin policy production uses.
 func newContractMux(svc *Service) *http.ServeMux {
 	h := NewHandler(svc)
 	sub := http.NewServeMux()

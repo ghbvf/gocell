@@ -95,7 +95,7 @@ type HTTPRegistrar interface {
 // RouteHandler is the minimum route-registration surface shared by both the
 // production RouteMux and stdlib *http.ServeMux. Slices expose
 // RegisterRoutes(RouteHandler) so a single declaration — routed through
-// auth.Declare — is the source of truth for production wiring (called from
+// auth.Mount — is the source of truth for production wiring (called from
 // Cell.RegisterRoutes), contract tests, and cell-level integration tests.
 //
 // Both cell.RouteMux and *http.ServeMux satisfy this interface structurally
@@ -106,7 +106,7 @@ type HTTPRegistrar interface {
 // helpers; cell.RegisterRoutes wiring raw HandlerFuncs on RouteMux allowed
 // production to silently skip the wrapper, producing a policy-drift surface
 // that passed contract tests but exposed unguarded routes in production.
-// auth.Declare collapses the two paths into one.
+// auth.Mount collapses the two paths into one.
 //
 // ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer type
 // for all write handlers; authz chain is declared at registration time.
@@ -163,7 +163,7 @@ type AuthRouteMeta struct {
 }
 
 // AuthRouteDeclarer is implemented by aggregators that want to receive the
-// auth metadata a slice declares alongside a route. auth.Declare performs a
+// auth metadata a slice declares alongside a route. auth.Mount performs a
 // type-assertion on the receiving mux — when implemented, it forwards the
 // metadata via DeclareAuthMeta; otherwise only the route is registered.
 //
@@ -173,8 +173,7 @@ type AuthRouteDeclarer interface {
 	DeclareAuthMeta(meta AuthRouteMeta)
 }
 
-// EventRouter declares event subscriptions. Cells call AddHandler (legacy,
-// untraced) or AddContractHandler (contract-first, emits WrapConsumer spans)
+// EventRouter declares event subscriptions. Cells call AddContractHandler
 // during RegisterSubscriptions to declare intent; the caller
 // (bootstrap/Router) is responsible for starting consumption.
 //
@@ -182,7 +181,7 @@ type AuthRouteDeclarer interface {
 // without importing runtime/. The concrete implementation is in
 // runtime/eventrouter.
 //
-// ref: ThreeDotsLabs/watermill message/router.go — AddHandler registers
+// ref: ThreeDotsLabs/watermill message/router.go — AddContractHandler registers
 // intent; Router.Run starts consumption. GoCell simplifies to topic+handler
 // (no publish side in the same call).
 //
@@ -193,29 +192,20 @@ type AuthRouteDeclarer interface {
 //
 // AddContractHandler mirrors the HTTP-side auth.Mount(Route{Contract, ...})
 // shape for the consumer side: the ContractSpec is the source of truth for
-// the topic + observability metadata, so the Router wraps the handler with
-// wrapper.WrapConsumer at registration time using the Router-owned Tracer.
-// Legacy AddHandler remains as a shim for subscriptions not yet migrated to
-// a ContractSpec (tracked by PR-A11-M).
+// the topic + observability metadata.
 type EventRouter interface {
 	// AddContractHandler registers a contract-first subscription. The
-	// concrete Router wraps handler with wrapper.WrapConsumer at
-	// registration time, so every consumed entry emits a CONSUME span
-	// annotated with gocell.contract.id / messaging.destination.
+	// concrete Router stores the contract metadata on outbox.Subscription;
+	// bootstrap's ContractTracingMiddleware wraps the subscription so every
+	// consumed entry emits a CONSUME span annotated with gocell.contract.id
+	// / messaging.destination.
 	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string)
-
-	// AddHandler is the round-4 legacy-test compat shim. Production
-	// Cells use AddContractHandler exclusively (see PR-A11-M + backlog
-	// PR-A11-TESTMIGRATE).
-	//
-	// Deprecated-for-new-code: use AddContractHandler.
-	AddHandler(topic string, handler outbox.EntryHandler, consumerGroup string)
 }
 
 // EventRegistrar is optionally implemented by Cells that subscribe to events.
-// RegisterSubscriptions declares subscriptions by calling r.AddHandler for
-// each topic. It MUST NOT start goroutines or block — the Router manages
-// the subscription lifecycle.
+// RegisterSubscriptions declares subscriptions by calling r.AddContractHandler
+// for each contract. It MUST NOT start goroutines or block — the Router
+// manages the subscription lifecycle.
 type EventRegistrar interface {
 	RegisterSubscriptions(r EventRouter) error
 }

@@ -72,7 +72,7 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 }
 
 // prefixMux wraps a celltest.TestMux and prepends a path prefix to every
-// Handle call. auth.Declare on a Handler.RegisterRoutes call uses Handle
+// Handle call. auth.Mount on a Handler.RegisterRoutes call uses Handle
 // with relative paths (e.g. "POST /", "GET /{id}"); prefixMux translates
 // those to fully-qualified paths so contract tests can drive requests at
 // the canonical API path without duplicating the route table.

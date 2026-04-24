@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -288,6 +289,26 @@ func TestTracing_5xxSetsErrorSpanStatus(t *testing.T) {
 	require.Len(t, spans, 1)
 	assert.Equal(t, true, spans[0].Attr("_status_error"),
 		"5xx must set span status to error")
+	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))
+}
+
+func TestTracing_RecoveryRecordsRedactedPanicError(t *testing.T) {
+	spy := &spyTracer{}
+	handler := Tracing(spy, WithErrorRedactor(func(error) error {
+		return errors.New("redacted panic")
+	}))(Recovery(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
+		panic("raw secret token")
+	})))
+
+	req := httptest.NewRequest(http.MethodGet, "/panic", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "redacted panic", spans[0].Attr("_recorded_error"))
+	assert.Equal(t, true, spans[0].Attr("_status_error"))
 	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))
 }
 

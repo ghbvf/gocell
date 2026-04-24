@@ -3,7 +3,7 @@
 //
 // # Auth metadata recording
 //
-// TestMux implements [cell.AuthRouteDeclarer]: every auth.Declare call on a
+// TestMux implements [cell.AuthRouteDeclarer]: every auth.Mount call on a
 // TestMux (or on a sub-mux produced by Route) records an [cell.AuthRouteMeta]
 // in the root TestMux's authMetas slice. Tests that care about auth metadata
 // inspect [TestMux.DeclaredAuthMetas] directly.
@@ -29,7 +29,7 @@ var _ cell.PrefixedMux = (*TestMux)(nil)
 // TestMux adapts http.ServeMux to cell.RouteMux for testing.
 // It uses Go 1.22+ ServeMux pattern matching ("GET /path/{param}").
 //
-// Auth metadata: every auth.Declare call forwards the declared
+// Auth metadata: every auth.Mount call forwards the declared
 // [cell.AuthRouteMeta] to the root TestMux via DeclareAuthMeta. Sub-muxes
 // created by Route compose the mount prefix before forwarding so the root
 // always sees the full path (e.g. "/api/v1/access/sessions/{id}").
