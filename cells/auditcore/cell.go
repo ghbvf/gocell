@@ -165,9 +165,13 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return errcode.New(errcode.ErrCellInvalidConfig,
 			"auditcore: WithEmitter and WithOutboxDeps are mutually exclusive; pick exactly one")
 	}
+	var outcomeDurable bool
 	if hasEmitter && deps.DurabilityMode == cell.DurabilityDurable && !outbox.ReportDurable(c.emitter) {
 		return errcode.New(errcode.ErrCellMissingOutbox,
 			"auditcore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
+	}
+	if hasEmitter {
+		outcomeDurable = outbox.ReportDurable(c.emitter)
 	}
 	if !hasEmitter {
 		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
@@ -191,6 +195,15 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			return err
 		}
 		c.emitter = outcome.Emitter
+		outcomeDurable = outcome.Durable
+	}
+	// L2 warning: running without transactional outbox degrades atomicity guarantees.
+	// Parity with accesscore/configcore — issues Warn in both WithEmitter and
+	// WithOutboxDeps paths when the resolved emitter is non-durable at L2+.
+	if !outcomeDurable && c.ConsistencyLevel() >= cell.L2 {
+		c.logger.Warn("auditcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
+			slog.String("cell", c.ID()),
+			slog.Int("consistency_level", int(c.ConsistencyLevel())))
 	}
 	c.pendingOutboxPub = nil
 	c.pendingOutboxWriter = nil

@@ -167,6 +167,50 @@ func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 	require.NoError(t, err)
 }
 
+// TestConfigCoreInit_WithEmitter_DirectInjection mirrors the accesscore
+// WithEmitter test: a pre-composed emitter skips cell.ResolveEmitter.
+// ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
+func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithEmitter(outbox.NewNoopEmitter()),
+	)
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	assert.NotNil(t, c.emitter)
+	assert.Nil(t, c.pendingOutboxPub)
+	assert.Nil(t, c.pendingOutboxWriter)
+}
+
+// TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive guards
+// against setting both paths at once.
+func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithEmitter(outbox.NewNoopEmitter()),
+		WithOutboxDeps(eventbus.New(), nil),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter guards the
+// durable-mode safety invariant: directly-injected non-durable emitter must
+// be rejected in DurabilityDurable mode.
+func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
+	cursorCodec, err := query.NewCursorCodec([]byte("cfg-wrapper-durable-test-key!!!!"))
+	require.NoError(t, err)
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithCursorCodec(cursorCodec),
+		WithEmitter(outbox.NewNoopEmitter()), // non-durable
+		WithTxManager(noopTxRunner{}),
+	)
+	err = c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "durable")
+}
+
 func TestConfigCore_RegisterRoutes(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
