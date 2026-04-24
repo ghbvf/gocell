@@ -38,8 +38,8 @@ func newTestCell() *ConfigCore {
 	return NewConfigCore(
 		WithConfigRepository(mem.NewConfigRepository()),
 		WithFlagRepository(mem.NewFlagRepository()),
-		WithPublisher(eventbus.New()),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 }
@@ -98,15 +98,15 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 			name: "writer without tx manager",
 			opts: []Option{
 				WithInMemoryDefaults(),
-				WithPublisher(eventbus.New()),
-				WithOutboxWriter(outbox.NoopWriter{}),
+				WithOutboxDeps(eventbus.New(), nil),
+				WithOutboxDeps(nil, outbox.NoopWriter{}),
 			},
 		},
 		{
 			name: "tx manager without writer",
 			opts: []Option{
 				WithInMemoryDefaults(),
-				WithPublisher(eventbus.New()),
+				WithOutboxDeps(eventbus.New(), nil),
 				WithTxManager(noopTxRunner{}),
 			},
 		},
@@ -125,8 +125,8 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 func TestConfigCore_InitDurableMode_RejectsNoopWriter(t *testing.T) {
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
-		WithPublisher(eventbus.New()),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	deps := cell.Dependencies{
@@ -151,7 +151,7 @@ func TestConfigCore_InitDemoMode_NoPublisherNoOutbox_Fails(t *testing.T) {
 func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
@@ -160,11 +160,55 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 func TestConfigCore_InitDemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
+}
+
+// TestConfigCoreInit_WithEmitter_DirectInjection mirrors the accesscore
+// WithEmitter test: a pre-composed emitter skips cell.ResolveEmitter.
+// ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
+func TestConfigCoreInit_WithEmitter_DirectInjection(t *testing.T) {
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithEmitter(outbox.NewNoopEmitter()),
+	)
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	assert.NotNil(t, c.emitter)
+	assert.Nil(t, c.pendingOutboxPub)
+	assert.Nil(t, c.pendingOutboxWriter)
+}
+
+// TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive guards
+// against setting both paths at once.
+func TestConfigCoreInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithEmitter(outbox.NewNoopEmitter()),
+		WithOutboxDeps(eventbus.New(), nil),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter guards the
+// durable-mode safety invariant: directly-injected non-durable emitter must
+// be rejected in DurabilityDurable mode.
+func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
+	cursorCodec, err := query.NewCursorCodec([]byte("cfg-wrapper-durable-test-key!!!!"))
+	require.NoError(t, err)
+	c := NewConfigCore(
+		WithInMemoryDefaults(),
+		WithCursorCodec(cursorCodec),
+		WithEmitter(outbox.NewNoopEmitter()), // non-durable
+		WithTxManager(noopTxRunner{}),
+	)
+	err = c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "durable")
 }
 
 func TestConfigCore_RegisterRoutes(t *testing.T) {
@@ -447,8 +491,8 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewConfigCore(
 		WithConfigRepository(mem.NewConfigRepository()),
 		WithFlagRepository(mem.NewFlagRepository()),
-		WithPublisher(eventbus.New()),
-		WithOutboxWriter(&recordingConfigWriter{}),
+		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(nil, &recordingConfigWriter{}),
 		WithTxManager(noopTxRunner{}),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
@@ -479,28 +523,25 @@ func mustNewCfgCodec(t *testing.T, key []byte) *query.CursorCodec {
 	return codec
 }
 
-// TestWithPostgresDefaults_NilPool_SetsConfigRepoAndOutboxWriter verifies the
-// deferred construction contract: WithPostgresDefaults stores the pool and
-// outboxWriter for use in Init(). With a nil pool, Init() skips deferred repo
-// construction (pool is nil → no real PG). The test verifies that:
-//  1. outboxWriter is set immediately by the option.
-//  2. pgPool is stored (non-nil check skipped here; nil pool is sentinel for
-//     "no PG path in this test").
-//  3. Init() still succeeds when configRepo is injected via WithConfigRepository
-//     (simulating a test that supplies a fake repo alongside WithPostgresDefaults
-//     for outboxWriter wiring only).
-func TestWithPostgresDefaults_NilPool_SetsConfigRepoAndOutboxWriter(t *testing.T) {
+// TestWithPostgresPool_NilPool_SetsPoolAndDeferred verifies the
+// deferred construction contract: WithPostgresPool stores the pool for use
+// in Init(). With a nil pool, Init() skips deferred repo construction.
+// Outbox wiring is now a separate concern via WithOutboxDeps. The test verifies:
+//  1. pendingOutboxWriter is set by WithOutboxDeps before Init.
+//  2. pgPool is stored (nil here as sentinel for "no PG path in this test").
+//  3. Init() succeeds when configRepo is injected via WithConfigRepository.
+func TestWithPostgresPool_NilPool_SetsPoolAndDeferred(t *testing.T) {
 	writer := &recordingConfigWriter{}
 	c := NewConfigCore(
-		WithPostgresDefaults(nil, writer),               // nil pool: deferred construction skipped in Init
+		WithPostgresPool(nil),                           // nil pool: deferred construction skipped in Init
 		WithConfigRepository(mem.NewConfigRepository()), // inject repo directly to satisfy Init
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithTxManager(noopTxRunner{}),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), writer),
 		WithCursorCodec(mustNewCfgCodec(t, []byte("wiring-test-cfg-cursor-key-32b!!"))),
 	)
-	// outboxWriter is set immediately by the option.
-	assert.NotNil(t, c.outboxWriter, "WithPostgresDefaults must set outboxWriter")
+	// Writer is accumulated into pendingOutboxWriter pre-Init.
+	assert.NotNil(t, c.pendingOutboxWriter, "WithOutboxDeps must populate pendingOutboxWriter")
 	// Init must succeed with explicitly injected repos.
 	require.NoError(t, c.Init(t.Context(), cell.Dependencies{DurabilityMode: cell.DurabilityDurable}))
 	assert.NotNil(t, c.configRepo, "configRepo must be non-nil after Init")
@@ -536,7 +577,7 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 		},
 	}
 
-	c := NewConfigCore(WithInMemoryDefaults(), WithPublisher(eventbus.New()))
+	c := NewConfigCore(WithInMemoryDefaults(), WithOutboxDeps(eventbus.New(), nil))
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			runMode, publishMode := c.deriveModes(tt.durability)

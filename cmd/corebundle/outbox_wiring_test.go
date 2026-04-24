@@ -13,7 +13,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -210,15 +209,13 @@ func TestOutboxE2E_CrossCellFanout(t *testing.T) {
 
 	// Publish exactly 1 event wrapped in a v1 envelope so the bus envelope
 	// schema check (fail-closed, P1-14 A1/A2) accepts it.
-	entry := outboxrt.ClaimedEntry{
-		Entry: outbox.Entry{
-			ID:        "e2e-fanout-1",
-			EventType: topic,
-			Topic:     topic,
-			Payload:   []byte(`{"action":"fanout_test","key":"cross-cg","value":"ok"}`),
-		},
+	entry := outbox.Entry{
+		ID:        "e2e-fanout-1",
+		EventType: topic,
+		Topic:     topic,
+		Payload:   []byte(`{"action":"fanout_test","key":"cross-cg","value":"ok"}`),
 	}
-	envelope, err := outboxrt.MarshalEnvelope(entry)
+	envelope, err := outbox.MarshalEnvelope(entry)
 	require.NoError(t, err, "MarshalEnvelope must not fail")
 	require.NoError(t, eb.Publish(ctx, topic, envelope))
 

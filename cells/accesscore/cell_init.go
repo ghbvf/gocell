@@ -2,7 +2,6 @@ package accesscore
 
 import (
 	"context"
-	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -25,33 +24,46 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// initValidate performs fail-fast validation of required dependencies before
-// constructing slices. Extracted from Init to reduce cognitive complexity.
-func (c *AccessCore) initValidate(deps cell.Dependencies) error {
-	// Resolve outbox emitter via shared kernel helper (mirrors configcore/auditcore).
-	// Pass raw c.txRunner so ResolveEmitter can detect nil/noop pairing; wrap
-	// with RunnerOrNoop only after outcome is determined.
-	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:            "accesscore",
-		Mode:              deps.DurabilityMode,
-		Publisher:         c.publisher,
-		OutboxWriter:      c.outboxWriter,
-		TxRunner:          c.txRunner,
-		Logger:            c.logger,
-		DirectPublishMode: outbox.DirectPublishFailOpen,
+// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
+// warn) and applies the per-cell rbacEmitterMode side-effect.
+//
+// accesscore uses DirectPublishFailClosed: security topics (session.*, user.*,
+// role.*) must not drop on publisher failure. Per-entry fail-open opt-in is
+// outbox.Entry.FailurePolicy — archtest OUTBOX-TOPIC-FAILOPEN-01 bans opt-in
+// for security topics.
+//
+// ref: kubernetes/client-go rest.RESTClientFor — factory-composed typed client.
+func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
+	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
+		EmitterConfig: cell.EmitterConfig{
+			CellID:            "accesscore",
+			Mode:              mode,
+			Publisher:         c.pendingOutboxPub,
+			OutboxWriter:      c.pendingOutboxWriter,
+			TxRunner:          c.txRunner,
+			Logger:            c.logger,
+			DirectPublishMode: outbox.DirectPublishFailClosed,
+		},
+		PreResolved:      c.emitter,
+		ConsistencyLevel: c.ConsistencyLevel(),
 	})
 	if err != nil {
 		return err
 	}
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
 	c.emitter = outcome.Emitter
 	c.rbacEmitterMode = outcome.Durable
+	c.pendingOutboxPub = nil
+	c.pendingOutboxWriter = nil
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	return nil
+}
 
-	// L2 warning: running without transactional outbox degrades atomicity guarantees.
-	if !outcome.Durable && c.ConsistencyLevel() >= cell.L2 {
-		c.logger.Warn("accesscore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())))
+// initValidate performs fail-fast validation of required dependencies before
+// constructing slices. Extracted from Init to reduce cognitive complexity.
+func (c *AccessCore) initValidate(deps cell.Dependencies) error {
+	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
+		return err
 	}
 
 	if c.jwtIssuer == nil || c.jwtVerifier == nil {

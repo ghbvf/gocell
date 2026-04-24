@@ -53,9 +53,46 @@ func WithRoleRepository(r ports.RoleRepository) Option {
 	return func(c *AccessCore) { c.roleRepo = r }
 }
 
-// WithPublisher sets the outbox Publisher.
-func WithPublisher(p outbox.Publisher) Option {
-	return func(c *AccessCore) { c.publisher = p }
+// WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
+// Preferred path for tests and for composition roots that have already built
+// an Emitter (e.g. outbox.NewNoopEmitter(), a custom wrapper, or a fake that
+// records outbox entries for assertions).
+//
+// Mutually exclusive with WithOutboxDeps — setting both causes Init() to
+// fail fast with ErrCellInvalidConfig. Durability for L2 slice upgrades is
+// derived from outbox.ReportDurable(emitter); Emitter implementations that
+// do not expose DurabilityReporter are treated as non-durable.
+//
+// ref: kubernetes/client-go rest.RESTClientFor — factory composes the typed
+// client; resulting struct does not retain raw config fields.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(c *AccessCore) { c.emitter = e }
+}
+
+// WithOutboxDeps wires raw outbox dependencies (Publisher + Writer) into the
+// Cell. The framework composes them into an outbox.Emitter at Init() time via
+// cell.ResolveEmitter, applying the cell's durability-mode policy.
+//
+// Accumulative: a nil argument leaves the previously-set value in place, so
+// `WithOutboxDeps(pub, nil)` and `WithOutboxDeps(nil, writer)` may be called
+// separately to wire publisher and writer independently. The pairing rules in
+// ResolveEmitter still apply (demo mode allows publisher-only; durable mode
+// requires real writer + txRunner).
+//
+// Does NOT clear previously-set deps: `WithOutboxDeps(nil, nil)` is a no-op,
+// not a reset. To switch between direct-injection (WithEmitter) and composed
+// (WithOutboxDeps) paths, construct a fresh Cell instead of trying to toggle.
+//
+// Mutually exclusive with WithEmitter — Init() fails fast if both are set.
+func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+	return func(c *AccessCore) {
+		if pub != nil {
+			c.pendingOutboxPub = pub
+		}
+		if writer != nil {
+			c.pendingOutboxWriter = writer
+		}
+	}
 }
 
 // WithLogger sets the structured logger.
@@ -71,11 +108,6 @@ func WithJWTIssuer(issuer *auth.JWTIssuer) Option {
 // WithJWTVerifier sets the RS256 JWT verifier for token validation.
 func WithJWTVerifier(verifier *auth.JWTVerifier) Option {
 	return func(c *AccessCore) { c.jwtVerifier = verifier }
-}
-
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(c *AccessCore) { c.outboxWriter = w }
 }
 
 // WithCursorCodec sets the cursor codec for pagination. Required in durable mode.
@@ -121,17 +153,26 @@ func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
 // AccessCore is the accesscore Cell implementation.
 type AccessCore struct {
 	*cell.BaseCell
-	userRepo     ports.UserRepository
-	sessionRepo  ports.SessionRepository
-	roleRepo     ports.RoleRepository
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	emitter      outbox.Emitter
-	logger       *slog.Logger
-	jwtIssuer    *auth.JWTIssuer
-	jwtVerifier  *auth.JWTVerifier
-	cursorCodec  *query.CursorCodec
+	userRepo    ports.UserRepository
+	sessionRepo ports.SessionRepository
+	roleRepo    ports.RoleRepository
+
+	// Outbox wiring. Two mutually exclusive paths populate `emitter`:
+	//   (a) WithEmitter(e)          — `emitter` is set pre-Init.
+	//   (b) WithOutboxDeps(pub, w)  — pendingOutboxPub/Writer are set and
+	//       Init() composes an Emitter via cell.ResolveEmitter.
+	// After Init, pendingOutboxPub/Writer are cleared; only `emitter` is live.
+	// These fields are private — no exported Option is allowed to take raw
+	// outbox.Publisher/Writer arguments (enforced by archtest OUTBOX-CELL-01).
+	emitter             outbox.Emitter
+	pendingOutboxPub    outbox.Publisher
+	pendingOutboxWriter outbox.Writer
+
+	txRunner    persistence.TxRunner
+	logger      *slog.Logger
+	jwtIssuer   *auth.JWTIssuer
+	jwtVerifier *auth.JWTVerifier
+	cursorCodec *query.CursorCodec
 
 	// initialAdmin wires first-run admin bootstrap via LifecycleContributor;
 	// nil means the feature is disabled.

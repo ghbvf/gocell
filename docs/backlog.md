@@ -1,10 +1,10 @@
 # GoCell Backlog
 
 > 只含待办事项。已完成项归档至 `docs/reviews/archive/202604180035-backlog-pre-cleanup.md`。
-> 更新日期: 2026-04-24（追加：PR-A5a (PR#234) review 遗留 A5a-R3 / A5a-R9..R12；R1/R2/R6/R7/R8 + C1/C2a/C2b/F-1 已 fold-in，R4/R5 移交 PR-A5b 见 plan；A13 文档事实源与 DOC-NAME-01 收口；PR-A9 (PR#239) CONTRACT-META-01 + FMT-15b + S2-follow 一批落地；OUTBOX-DIRECT-SAFETY-GATING / READYZ-VERBOSE-TOKEN-DENY / READYZ-UNCOOPERATIVE-CHECKER-GUARDRAILS 三条新 finding；PR#243 cross-platform bootstrap redo：V-A2/V-A3/V-A4 核销 + V-A12..V-A18 Group 4 deferred finding 登记）
-> 基线: develop@d4244020（PR#239 合并后）；PR#243 in review
-> 最近合入概览: PR#175-222 分层重构 + auth F系列 + configcore PG pilot；PR#224 outbox emitter refactor；PR#225 pkg/validation + adapterutil (PR-A2)；PR#227 per-cell adapter (PR-A3)；PR#228 HTTP metrics autowire + readyz ctx (PR-A4)；PR#230 Vault pluggable auth + self-healing renewal (PR-A8)；PR#231 watcher debounce deflake；PR#233 configcore integration vet；PR#234 PR-A5a lifecycle 自动发现；PR#237 PR-A14a dual-listener；PR#238 PR-A5b configcore 拆分；PR#239 PR-A9 CONTRACT-META-01；详见 git log
-> 核销追加: L10 ✅ PR#218；A14/S4b ✅ PR#230；R2 ✅ PR#228；LATER-SD-1 CONTRACT-META-01 ✅ PR#239；L7-FMT15b ✅ PR#239；S2-follow ✅ PR#239；PR220-2 DOC-NAMING-GUARD-01 ✅ PR#235 (A13)；V-A2/V-A3/V-A4 ✅ PR#243
+> 更新日期: 2026-04-24（追加：PR-A5a (PR#234) review 遗留 A5a-R3 / A5a-R9..R12；R1/R2/R6/R7/R8 + C1/C2a/C2b/F-1 已 fold-in，**A5a-R4/R5 随 PR-A5c PR#245 合入**；A13 文档事实源与 DOC-NAME-01 收口；PR-A9 (PR#239) CONTRACT-META-01 + FMT-15b + S2-follow 一批落地；OUTBOX-DIRECT-SAFETY-GATING / READYZ-VERBOSE-TOKEN-DENY / READYZ-UNCOOPERATIVE-CHECKER-GUARDRAILS 三条新 finding；PR#243 cross-platform bootstrap redo：V-A2/V-A3/V-A4 核销 + V-A12..V-A18 Group 4 deferred finding 登记；**PR#245 PR-A5c OUTBOX-EMITTER-UNIFY 完工**：WithEmitter/WithOutboxDeps + DurabilityReporter + archtest OUTBOX-CELL-01 + envelope wrapper 删除 + accesscore cell_providers 拆分 + round-1 review 追加 F9 per-entry FailurePolicy + OUTBOX-TOPIC-FAILOPEN-01 archtest（F2 helper 推翻））
+> 基线: develop@d4244020（PR#239 合并后）；PR#243 merged; PR#245 in review
+> 最近合入概览: PR#175-222 分层重构 + auth F系列 + configcore PG pilot；PR#224 outbox emitter refactor；PR#225 pkg/validation + adapterutil (PR-A2)；PR#227 per-cell adapter (PR-A3)；PR#228 HTTP metrics autowire + readyz ctx (PR-A4)；PR#230 Vault pluggable auth + self-healing renewal (PR-A8)；PR#231 watcher debounce deflake；PR#233 configcore integration vet；PR#234 PR-A5a lifecycle 自动发现；PR#237 PR-A14a dual-listener；PR#238 PR-A5b configcore 拆分；PR#239 PR-A9 CONTRACT-META-01；PR#243 cross-platform bootstrap redo；PR#245 PR-A5c outbox emitter unify；详见 git log
+> 核销追加: L10 ✅ PR#218；A14/S4b ✅ PR#230；R2 ✅ PR#228；LATER-SD-1 CONTRACT-META-01 ✅ PR#239；L7-FMT15b ✅ PR#239；S2-follow ✅ PR#239；PR220-2 DOC-NAMING-GUARD-01 ✅ PR#235 (A13)；V-A2/V-A3/V-A4 ✅ PR#243；A5a-R4/R5 ✅ PR#245 (PR-A5c)
 > 未��入外部 PR: PR#129 Sentinel DSN redaction / PR#130 Bolt journey catalog
 > 标记说明:
 > 🟡 可延后 = 不卡正确性或安全；latent risk / DX / 测试覆盖 / 纯 tech debt / 供应链加固 / 架构打磨 — 可机会性纳入或 v1.0 后做

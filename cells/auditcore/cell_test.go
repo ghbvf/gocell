@@ -43,9 +43,9 @@ func newTestCell() *AuditCore {
 	return NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 }
@@ -97,7 +97,7 @@ func TestAuditCore_MissingHMACKey(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		// No HMAC key.
 	)
 	ctx := context.Background()
@@ -114,8 +114,8 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithPublisher(eventbus.New()),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(eventbus.New(), nil),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 	ctx := context.Background()
@@ -133,9 +133,9 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		// txRunner intentionally omitted
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
@@ -147,7 +147,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
 		WithTxManager(noopTxRunner{}),
 		// outboxWriter intentionally omitted
@@ -173,7 +173,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	deps := cell.Dependencies{
@@ -192,7 +192,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
@@ -205,11 +205,62 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithHMACKey(testHMACKey),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
+}
+
+// TestAuditInit_WithEmitter_DirectInjection mirrors the accesscore WithEmitter
+// test: a pre-composed emitter skips cell.ResolveEmitter and the cell accepts
+// the injection in demo mode.
+// ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
+func TestAuditInit_WithEmitter_DirectInjection(t *testing.T) {
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithHMACKey(testHMACKey),
+		WithEmitter(outbox.NewNoopEmitter()),
+	)
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo}))
+	assert.NotNil(t, c.emitter)
+	assert.Nil(t, c.pendingOutboxPub)
+	assert.Nil(t, c.pendingOutboxWriter)
+}
+
+// TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive guards against
+// setting both provisioning paths at once.
+func TestAuditInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithHMACKey(testHMACKey),
+		WithEmitter(outbox.NewNoopEmitter()),
+		WithOutboxDeps(eventbus.New(), nil),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// TestAuditInit_WithEmitter_DurableRequiresDurableEmitter guards the
+// durable-mode safety invariant: directly-injected non-durable emitter must
+// be rejected in DurabilityDurable mode.
+func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
+	cursorCodec, err := query.NewCursorCodec([]byte("audit-wrapper-durable-test-key!!"))
+	require.NoError(t, err)
+	c := NewAuditCore(
+		WithAuditRepository(mem.NewAuditRepository()),
+		WithArchiveStore(mem.NewArchiveStore()),
+		WithHMACKey(testHMACKey),
+		WithCursorCodec(cursorCodec),
+		WithEmitter(outbox.NewNoopEmitter()), // non-durable
+		WithTxManager(noopTxRunner{}),
+	)
+	err = c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDurable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "durable")
 }
 
 func TestAuditCore_RegisterRoutes(t *testing.T) {
@@ -287,9 +338,9 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 	c := NewAuditCore(
 		WithAuditRepository(mem.NewAuditRepository()),
 		WithArchiveStore(mem.NewArchiveStore()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
-		WithOutboxWriter(&recordingWriter{}), // non-Nooper; durable-gated CheckNotNoop passes
+		WithOutboxDeps(nil, &recordingWriter{}), // non-Nooper; durable-gated CheckNotNoop passes
 		WithTxManager(noopTxRunner{}),
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
@@ -344,9 +395,9 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			c := NewAuditCore(
 				WithAuditRepository(mem.NewAuditRepository()),
 				WithArchiveStore(mem.NewArchiveStore()),
-				WithPublisher(eventbus.New()),
+				WithOutboxDeps(eventbus.New(), nil),
 				WithHMACKey(testHMACKey),
-				WithOutboxWriter(tc.outbox),
+				WithOutboxDeps(nil, tc.outbox),
 				WithTxManager(tc.tx),
 				WithCursorCodec(mustNewCodec(t, productionKey)),
 			)

@@ -233,7 +233,10 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg ada
 		}
 		slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", topo.StorageBackend))
 		opts := []configcore.Option{
-			configcore.WithPostgresDefaults(pool.DB(), outboxWriter),
+			configcore.WithPostgresPool(pool.DB()),
+			// PG adapter path: publisher + real outbox.Writer compose a
+			// WriterEmitter at Cell boundary; L2 transactional atomicity applies.
+			configcore.WithOutboxDeps(pub, outboxWriter),
 			configcore.WithTxManager(txMgr),
 			configcore.WithValueTransformer(vt),
 		}
@@ -241,7 +244,11 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg ada
 
 	case "memory":
 		slog.Info("configcore: using in-memory storage", slog.String("cell_adapter_mode", topo.StorageBackend))
-		return nil, []configcore.Option{configcore.WithInMemoryDefaults()}, nil
+		return nil, []configcore.Option{
+			configcore.WithInMemoryDefaults(),
+			// Memory adapter path: publisher only, writer=nil → DirectEmitter.
+			configcore.WithOutboxDeps(pub, nil),
+		}, nil
 
 	default:
 		// Unreachable: TopologyFromEnv validation already rejects unknown

@@ -23,7 +23,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	logctx "github.com/ghbvf/gocell/runtime/observability/logging"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 type testContextKey string
@@ -336,8 +335,8 @@ func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 	if payload == nil {
 		payload = []byte(`{}`)
 	}
-	wire := outboxrt.WireMessage{
-		SchemaVersion: outboxrt.EnvelopeSchemaV1, // required since P1-14 A1 (fail-closed envelope schema)
+	wire := outbox.WireMessage{
+		SchemaVersion: outbox.EnvelopeSchemaV1, // required since P1-14 A1 (fail-closed envelope schema)
 		ID:            entry.ID,
 		AggregateID:   entry.AggregateID,
 		AggregateType: entry.AggregateType,
@@ -1480,14 +1479,14 @@ func TestUnmarshalDelivery(t *testing.T) {
 
 		_, legacyErr := unmarshalDelivery(body)
 		require.Error(t, legacyErr, "legacy entry JSON must be rejected (no schemaVersion)")
-		assert.ErrorIs(t, legacyErr, outboxrt.ErrUnknownEnvelopeVersion)
+		assert.ErrorIs(t, legacyErr, outbox.ErrUnknownEnvelopeVersion)
 	})
 
 	t.Run("broken_json_returns_error", func(t *testing.T) {
 		_, err := unmarshalDelivery([]byte("not valid json{{{"))
 		require.Error(t, err)
 		// Must NOT be ErrUnknownEnvelopeVersion — it's a parse error.
-		assert.NotErrorIs(t, err, outboxrt.ErrUnknownEnvelopeVersion)
+		assert.NotErrorIs(t, err, outbox.ErrUnknownEnvelopeVersion)
 	})
 
 	t.Run("empty_body_returns_error", func(t *testing.T) {

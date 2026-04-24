@@ -89,10 +89,10 @@ func newTestCell() *AccessCore {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 }
@@ -102,11 +102,11 @@ func newDurableTestCell() *AccessCore {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithCursorCodec(testCursorCodec),
-		WithOutboxWriter(durableOutboxWriter{}),
+		WithOutboxDeps(nil, durableOutboxWriter{}),
 		WithTxManager(durableTxRunner{}),
 	)
 }
@@ -116,9 +116,9 @@ func TestAccessCore_Init_RequiresJWTIssuer(t *testing.T) {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTVerifier(testVerifier), // issuer missing
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
@@ -131,9 +131,9 @@ func TestAccessCore_Init_RequiresJWTVerifier(t *testing.T) {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer), // verifier missing
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
@@ -146,10 +146,10 @@ func TestInit_DemoMode_OutboxWithoutTx_Fails(t *testing.T) {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		// txRunner intentionally omitted
 	)
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
@@ -163,7 +163,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 		WithUserRepository(mem.NewUserRepository()),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(mem.NewRoleRepository()),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithTxManager(noopTxRunner{}),
@@ -197,7 +197,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 	// L2 cell, both nil, but publisher present → OK (demo mode with warning)
 	c := NewAccessCore(
 		WithInMemoryDefaults(),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 	)
@@ -210,11 +210,62 @@ func TestInit_DemoMode_ExplicitNoopOutboxPair_Succeeds(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
+}
+
+// TestInit_WithEmitter_DirectInjection exercises the F3 WithEmitter path:
+// a pre-composed outbox.Emitter skips cell.ResolveEmitter entirely.
+// ref: kubernetes/client-go rest.RESTClientFor — factory-composed client.
+func TestInit_WithEmitter_DirectInjection(t *testing.T) {
+	emitter := outbox.NewNoopEmitter()
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithEmitter(emitter),
+	)
+	require.NoError(t, c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}))
+	// After Init the cell holds the injected emitter; pending raw deps stay nil.
+	assert.NotNil(t, c.emitter)
+	assert.Nil(t, c.pendingOutboxPub)
+	assert.Nil(t, c.pendingOutboxWriter)
+}
+
+// TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive guards against wiring
+// mistakes where a composition root accidentally sets both paths.
+func TestInit_WithEmitterAndOutboxDeps_MutuallyExclusive(t *testing.T) {
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithEmitter(outbox.NewNoopEmitter()),
+		WithOutboxDeps(eventbus.New(), nil),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "mutually exclusive")
+}
+
+// TestInit_WithEmitter_DurableRequiresDurableEmitter guards the production
+// safety invariant: in DurabilityDurable mode, direct-injected emitters must
+// be durable. Injecting a NoopEmitter (non-durable) in durable mode is a
+// wiring mistake that would silently downgrade L2 atomicity.
+func TestInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithCursorCodec(testCursorCodec),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithEmitter(outbox.NewNoopEmitter()), // non-durable
+		WithTxManager(durableTxRunner{}),
+	)
+	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "durable")
 }
 
 func TestAccessCore_Lifecycle(t *testing.T) {
@@ -551,10 +602,10 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 		WithUserRepository(userRepo),
 		WithSessionRepository(sessionRepo),
 		WithRoleRepository(roleRepo),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 	ctx := context.Background()
@@ -622,10 +673,10 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 		WithUserRepository(userRepo),
 		WithSessionRepository(sessionRepo),
 		WithRoleRepository(roleRepo),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 	ctx := context.Background()
@@ -737,10 +788,10 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(roleRepo),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 	require.NoError(t, c.Init(ctx, deps))
@@ -780,10 +831,10 @@ func TestAccessCore_DirectPrefill_AdminRoleAndUser(t *testing.T) {
 func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 	c := NewAccessCore(
 		WithInMemoryDefaults(),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 	ctx := context.Background()

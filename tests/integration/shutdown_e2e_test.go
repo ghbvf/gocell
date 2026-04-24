@@ -33,7 +33,6 @@ import (
 
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -144,7 +143,7 @@ func publishMessages(ctx context.Context, pub *rabbitmq.Publisher, topic string,
 			Payload:       []byte(fmt.Sprintf(`{"seq":%d}`, i)),
 			CreatedAt:     time.Now().UTC(),
 		}
-		payload, err := outboxrt.MarshalEnvelope(outboxrt.ClaimedEntry{Entry: entry})
+		payload, err := outbox.MarshalEnvelope(entry)
 		if err != nil {
 			return fmt.Errorf("marshal envelope %d: %w", i, err)
 		}

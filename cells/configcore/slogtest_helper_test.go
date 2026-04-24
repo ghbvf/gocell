@@ -56,7 +56,7 @@ func TestConfigCore_InitDemoMode_EmitsL2DegradationWarn(t *testing.T) {
 
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
-		WithPublisher(eventbus.New()),
+		WithOutboxDeps(eventbus.New(), nil),
 		WithLogger(logger),
 	)
 	require.NoError(t, c.Init(context.Background(),

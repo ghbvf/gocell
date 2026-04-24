@@ -15,7 +15,6 @@ import (
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 )
 
 // errSubscriptionLost is a sentinel error returned by subscribeOnce when the
@@ -1027,10 +1026,10 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 // (permanent error, routes to DLX).
 //
 // Fail-closed semantics: legacy fallback has been removed. All relay producers
-// MUST emit v1 envelopes via MarshalEnvelope.
+// MUST emit v1 envelopes via kernel/outbox.MarshalEnvelope.
 //
 // ref: Watermill message/router.go handleMessage (unknown type → Nack, no retry)
-// ref: runtime/outbox/envelope.go UnmarshalEnvelope
+// ref: kernel/outbox/envelope.go UnmarshalEnvelope
 func unmarshalDelivery(body []byte) (outbox.Entry, error) {
-	return outboxrt.UnmarshalEnvelope("", body)
+	return outbox.UnmarshalEnvelope("", body)
 }

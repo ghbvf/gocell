@@ -174,8 +174,9 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	e2eStateDir := t.TempDir()
 	t.Setenv("GOCELL_STATE_DIR", e2eStateDir)
 
+	// cellAdapterOpts already includes WithOutboxDeps(eb, pgWriter) from
+	// buildConfigCoreOpts — no separate publisher wiring needed.
 	configOpts := append([]configcore.Option{
-		configcore.WithPublisher(eb),
 		configcore.WithCursorCodec(cursorCodec),
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
@@ -184,14 +185,14 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// Bootstrap phase3b auto-discovers LifecycleHooks() — no worker.Lazy sink needed.
 	accessCell := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithPublisher(eb),
+		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithPublisher(eb),
+		auditcore.WithOutboxDeps(eb, nil),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 	)

@@ -23,8 +23,8 @@ import (
 )
 
 // Init constructs all slices and registers them. If pgPool is set
-// (via WithPostgresDefaults), the PG repos are built here after all options
-// have been applied (so WithKeyProvider can precede or follow WithPostgresDefaults).
+// (via WithPostgresPool), the PG repos are built here after all options
+// have been applied (so WithKeyProvider can precede or follow WithPostgresPool).
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
@@ -43,29 +43,13 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		c.flagRepo = cellpg.NewFlagRepository(session)
 	}
 
-	runMode, publishFailureMode := c.deriveModes(deps.DurabilityMode)
+	// deriveModes' PublishFailureMode return is retained for TestConfigCore_DeriveModes
+	// (documents the demo→FailOpen / durable→FailClosed derivation at slice level);
+	// the Cell-boundary DirectEmitter fail mode is now owned by the kernel helper.
+	runMode, _ := c.deriveModes(deps.DurabilityMode)
 
-	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:            "configcore",
-		Mode:              deps.DurabilityMode,
-		Publisher:         c.publisher,
-		OutboxWriter:      c.outboxWriter,
-		TxRunner:          c.txRunner,
-		Logger:            c.logger,
-		DirectPublishMode: configDirectPublishMode(publishFailureMode),
-	})
-	if err != nil {
+	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
 		return err
-	}
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	c.emitter = outcome.Emitter
-
-	// L2 warning: running without transactional outbox degrades atomicity guarantees.
-	if !outcome.Durable && c.ConsistencyLevel() >= cell.L2 {
-		c.logger.Warn("configcore: running without outboxWriter+txRunner, L2 transactional atomicity not guaranteed (demo mode)",
-			slog.String("cell", c.ID()),
-			slog.Int("consistency_level", int(c.ConsistencyLevel())),
-			slog.String("durability_mode", deps.DurabilityMode.String()))
 	}
 
 	if err := c.ensureCursorCodec(deps); err != nil {
@@ -87,6 +71,39 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
+// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
+// warn) and clears the pending outbox dep fields.
+//
+// configcore uses DirectPublishFailClosed: config changes must propagate or
+// the write surfaces an error so operators notice misconfig instead of
+// running with a stale subscriber view. Per-entry FailurePolicy
+// (outbox.Entry.FailurePolicy) lets individual topics opt into fail-open;
+// configwrite uses the default.
+func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
+	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
+		EmitterConfig: cell.EmitterConfig{
+			CellID:            "configcore",
+			Mode:              mode,
+			Publisher:         c.pendingOutboxPub,
+			OutboxWriter:      c.pendingOutboxWriter,
+			TxRunner:          c.txRunner,
+			Logger:            c.logger,
+			DirectPublishMode: outbox.DirectPublishFailClosed,
+		},
+		PreResolved:      c.emitter,
+		ConsistencyLevel: c.ConsistencyLevel(),
+	})
+	if err != nil {
+		return err
+	}
+	c.emitter = outcome.Emitter
+	c.pendingOutboxPub = nil
+	c.pendingOutboxWriter = nil
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	return nil
+}
+
 // deriveModes is the single translation point from kernel/cell.DurabilityMode
 // to run modes used by slices. Called only once at Init() time; propagated via
 // constructor parameters (do not call in handler/repository).
@@ -99,13 +116,6 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 func (c *ConfigCore) deriveModes(durabilityMode cell.DurabilityMode) (query.RunMode, configpublish.PublishFailureMode) {
 	demo := durabilityMode == cell.DurabilityDemo
 	return query.RunModeForDemo(demo), configpublish.PublishFailureModeForDemo(demo)
-}
-
-func configDirectPublishMode(mode configpublish.PublishFailureMode) outbox.DirectPublishFailureMode {
-	if mode.IsFailOpen() {
-		return outbox.DirectPublishFailOpen
-	}
-	return outbox.DirectPublishFailClosed
 }
 
 // ensureCursorCodec sets a default cursor codec in demo mode or returns an

@@ -40,19 +40,43 @@ func WithArchiveStore(s ports.ArchiveStore) Option {
 	return func(c *AuditCore) { c.archiveStore = s }
 }
 
-// WithPublisher sets the outbox Publisher.
-func WithPublisher(p outbox.Publisher) Option {
-	return func(c *AuditCore) { c.publisher = p }
+// WithEmitter injects a pre-composed outbox.Emitter directly into the Cell.
+// Preferred path for tests and for composition roots that have already built
+// an Emitter.
+//
+// Mutually exclusive with WithOutboxDeps — setting both causes Init() to
+// fail fast with ErrCellInvalidConfig. Durability for L2 slice decisions is
+// derived from outbox.ReportDurable(emitter); emitters that do not implement
+// DurabilityReporter are treated as non-durable.
+//
+// ref: kubernetes/client-go rest.RESTClientFor — factory composes the typed
+// client; resulting struct does not retain raw config fields.
+func WithEmitter(e outbox.Emitter) Option {
+	return func(c *AuditCore) { c.emitter = e }
+}
+
+// WithOutboxDeps wires raw outbox dependencies (Publisher + Writer). The
+// framework composes them into an outbox.Emitter at Init() time via
+// cell.ResolveEmitter.
+//
+// Accumulative: a nil argument leaves the previously-set value in place;
+// multiple calls combine their non-nil arguments. Does NOT clear previous
+// state — `WithOutboxDeps(nil, nil)` is a no-op, not a reset. Mutually
+// exclusive with WithEmitter; Init() fails fast if both are set.
+func WithOutboxDeps(pub outbox.Publisher, writer outbox.Writer) Option {
+	return func(c *AuditCore) {
+		if pub != nil {
+			c.pendingOutboxPub = pub
+		}
+		if writer != nil {
+			c.pendingOutboxWriter = writer
+		}
+	}
 }
 
 // WithLogger sets the structured logger.
 func WithLogger(l *slog.Logger) Option {
 	return func(c *AuditCore) { c.logger = l }
-}
-
-// WithOutboxWriter sets the outbox.Writer for transactional event publishing.
-func WithOutboxWriter(w outbox.Writer) Option {
-	return func(c *AuditCore) { c.outboxWriter = w }
 }
 
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
@@ -84,13 +108,17 @@ type AuditCore struct {
 	*cell.BaseCell
 	auditRepo    ports.AuditRepository
 	archiveStore ports.ArchiveStore
-	publisher    outbox.Publisher
-	outboxWriter outbox.Writer
-	txRunner     persistence.TxRunner
-	emitter      outbox.Emitter
-	cursorCodec  *query.CursorCodec
-	logger       *slog.Logger
-	hmacKey      []byte
+
+	// Outbox wiring (see WithEmitter / WithOutboxDeps godoc). Private;
+	// archtest OUTBOX-CELL-01 forbids exported raw outbox options.
+	emitter             outbox.Emitter
+	pendingOutboxPub    outbox.Publisher
+	pendingOutboxWriter outbox.Writer
+
+	txRunner    persistence.TxRunner
+	cursorCodec *query.CursorCodec
+	logger      *slog.Logger
+	hmacKey     []byte
 
 	// Slice services.
 	appendSvc    *auditappend.Service
@@ -128,20 +156,9 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
 	}
-	outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-		CellID:            "auditcore",
-		Mode:              deps.DurabilityMode,
-		Publisher:         c.publisher,
-		OutboxWriter:      c.outboxWriter,
-		TxRunner:          c.txRunner,
-		Logger:            c.logger,
-		DirectPublishMode: outbox.DirectPublishFailOpen,
-	})
-	if err != nil {
+	if err := c.resolveEmitter(deps.DurabilityMode); err != nil {
 		return err
 	}
-	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
-	c.emitter = outcome.Emitter
 	c.initSlices()
 	// Default cursor codec for pagination if not injected. Durable mode
 	// refuses the public demo-key fallback — an assembly that forgets to
@@ -152,6 +169,40 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 	return c.initQuerySlice(deps.DurabilityMode)
+}
+
+// resolveEmitter delegates to cell.ResolveCellEmitter (mutual exclusion +
+// WithEmitter durable guard + ResolveEmitter delegation + L2 non-durable
+// warn) and clears the pending outbox dep fields.
+//
+// auditcore uses DirectPublishFailClosed: audit-chain events (audit.appended,
+// integrity-verified) are the source of truth for compliance; publisher
+// failure must surface to the caller so ops notices outages instead of
+// silently losing events. Opt-in fail-open is per-entry via
+// outbox.Entry.FailurePolicy, and archtest OUTBOX-TOPIC-FAILOPEN-01 bans it
+// for audit.* topics.
+func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
+	outcome, err := cell.ResolveCellEmitter(cell.CellEmitterInputs{
+		EmitterConfig: cell.EmitterConfig{
+			CellID:            "auditcore",
+			Mode:              mode,
+			Publisher:         c.pendingOutboxPub,
+			OutboxWriter:      c.pendingOutboxWriter,
+			TxRunner:          c.txRunner,
+			Logger:            c.logger,
+			DirectPublishMode: outbox.DirectPublishFailClosed,
+		},
+		PreResolved:      c.emitter,
+		ConsistencyLevel: c.ConsistencyLevel(),
+	})
+	if err != nil {
+		return err
+	}
+	c.emitter = outcome.Emitter
+	c.pendingOutboxPub = nil
+	c.pendingOutboxWriter = nil
+	c.txRunner = persistence.RunnerOrNoop(c.txRunner)
+	return nil
 }
 
 // resolveHMACKey populates c.hmacKey from config if not set via option.

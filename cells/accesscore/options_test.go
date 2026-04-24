@@ -78,7 +78,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	deps := cell.Dependencies{
@@ -95,7 +95,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
-		WithOutboxWriter(outbox.NoopWriter{}),
+		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
