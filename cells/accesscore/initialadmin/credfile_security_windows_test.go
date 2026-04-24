@@ -132,7 +132,14 @@ func TestDaclHasAllowACEForSID_ResolvesAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildExpectedSIDs: %v", err)
 	}
-	defer freeSIDs(sids)
+	// Use t.Cleanup instead of defer: parallel subtests below reference
+	// sids.admins / sids.localSystem via tc.expected and only run AFTER this
+	// function returns. A defer fires at return time, freeing SIDs while
+	// subtests are still executing — a use-after-free whose fallout (BA and
+	// S-1-5-32-544 cases comparing against reused memory that now reads as
+	// S-1-5-18) surfaced as CI flake on windows-latest. t.Cleanup fires only
+	// after all subtests (parallel included) complete.
+	t.Cleanup(func() { freeSIDs(sids) })
 
 	tests := []struct {
 		name     string
