@@ -86,6 +86,77 @@ Update your scrape job to point at the health listener port:
 The `/metrics` endpoint on the health listener uses the same `GOCELL_METRICS_TOKEN`
 bearer-token guard as before (when `GOCELL_ADAPTER_MODE=real`).
 
+## Helm Migration (PR-A14b)
+
+Update `values.yaml` to expose and probe the new health port:
+
+```yaml
+# values.yaml — container port declarations
+containerPorts:
+  - name: http
+    containerPort: 8080       # primary
+    protocol: TCP
+  - name: internal
+    containerPort: 9090       # internal (loopback in production, only exposed on cluster network)
+    protocol: TCP
+  - name: health
+    containerPort: 9091       # health — probes target this port
+    protocol: TCP
+
+# Liveness probe
+livenessProbe:
+  httpGet:
+    path: /healthz
+    port: health              # references containerPorts[name=health]
+  initialDelaySeconds: 5
+  periodSeconds: 10
+
+# Readiness probe
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: health
+  initialDelaySeconds: 5
+  periodSeconds: 5
+```
+
+### Prometheus ServiceMonitor
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: gocell
+  labels:
+    app: gocell
+spec:
+  selector:
+    matchLabels:
+      app: gocell
+  endpoints:
+    - port: health            # health port — /metrics lives here
+      path: /metrics
+      interval: 30s
+      scheme: http
+```
+
+### Prometheus PodMonitor
+
+```yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: gocell
+spec:
+  selector:
+    matchLabels:
+      app: gocell
+  podMetricsEndpoints:
+    - port: health            # match containerPorts[name=health]
+      path: /metrics
+      interval: 30s
+```
+
 ## Cell Route Declaration
 
 Cells declare routes via `RouteGroups()` and specify which listener each group

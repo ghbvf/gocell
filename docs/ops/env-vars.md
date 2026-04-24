@@ -107,6 +107,8 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 
 ## HTTP Listeners (PR-A14b three-listener topology)
 
+> **Breaking change (PR-A14b):** `/healthz`、`/readyz`、`/metrics` 从 primary 端口迁到 health listener，更新 k8s probe + Prometheus 配置。详见 [listener-topology](listener-topology.md)。
+
 `cmd/corebundle` binds three HTTP servers. See `docs/ops/listener-topology.md` for the full topology diagram and k8s probe migration notes.
 
 - **primary** — `/api/v1/*` public business routes. Exposed to the public / edge network. JWT authentication middleware runs here. Explicitly 404s `/internal/v1/*` so the internal prefix never leaks to the public network.

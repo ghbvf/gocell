@@ -80,8 +80,6 @@ func defaultRuntimeOptions(
 
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr, nil),
-		bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalPolicy),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
@@ -93,6 +91,16 @@ func defaultRuntimeOptions(
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthMetricsHandler(metricsHandler),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
+	}
+	// Primary and internal listeners are only registered when an address is
+	// configured. Tests that pre-bind their own listener inject it via extra
+	// bootstrap.WithListener options; registering an empty-addr placeholder
+	// here would cause a duplicate-ref phase0 error (CORR-02).
+	if shared.PrimaryHTTPAddr != "" {
+		opts = append(opts, bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr, nil))
+	}
+	if shared.InternalHTTPAddr != "" {
+		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalPolicy))
 	}
 	// Health listener is optional: when HealthHTTPAddr is empty (e.g. tests that
 	// inject PrimaryListener + InternalListener but not HealthListener), bootstrap
