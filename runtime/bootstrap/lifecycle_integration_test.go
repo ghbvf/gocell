@@ -54,7 +54,8 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 	var onStartCalled bool
 
 	b := bootstrap.New(
-		bootstrap.WithListener(ln),
+		bootstrap.WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
 			_ = lc.Append(bootstrap.Hook{

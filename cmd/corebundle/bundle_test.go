@@ -78,10 +78,12 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	require.NoError(t, err)
 
 	return &SharedDeps{
-		Topology:  bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
-		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack: ps,
-		EventBus:  eb,
+		Topology:         bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
+		JWTDeps:          jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:        ps,
+		EventBus:         eb,
+		PrimaryHTTPAddr:  ":0",
+		InternalHTTPAddr: ":0",
 	}
 }
 
@@ -109,10 +111,12 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	require.NoError(t, err)
 
 	deps := &SharedDeps{
-		Topology:  topo,
-		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack: ps,
-		EventBus:  eventbus.New(),
+		Topology:         topo,
+		JWTDeps:          jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:        ps,
+		EventBus:         eventbus.New(),
+		PrimaryHTTPAddr:  ":0",
+		InternalHTTPAddr: ":0",
 	}
 	if topo.RequireProductionControlPlane() {
 		deps.MetricsToken = "test-metrics"
@@ -292,7 +296,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithListener(ln))
+	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -349,7 +353,7 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	require.NoError(t, err)
 
 	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(ln),
+		bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)),
 		bootstrap.WithManagedResource(fakePG),
 	)
 	require.NoError(t, err)
@@ -389,7 +393,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithListener(ln))
+	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

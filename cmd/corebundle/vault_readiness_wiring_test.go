@@ -130,7 +130,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithListener(ln))
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -195,7 +195,7 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithListener(ln))
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

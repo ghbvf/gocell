@@ -155,7 +155,7 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithHTTPAddr(":8081"),
+		bootstrap.WithHTTPPrimaryAddr(":8081"), bootstrap.WithHTTPInternalAddr(":9081"),
 		bootstrap.WithAuthDiscovery(),
 		bootstrap.WithWorkers(adminLazy),
 		// Sweep (P1-16) runs inside Cell.Init before EnsureAdmin — no extra hook needed.

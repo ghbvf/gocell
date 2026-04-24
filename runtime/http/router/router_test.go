@@ -956,8 +956,13 @@ func TestDeclareAuth_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
 
 func TestDeclareAuth_TracingNewRoot(t *testing.T) {
 	// F3: public routes declared via auth.Declare create new trace roots.
+	// PR-A14a: /internal is whitelisted from policy coverage (raw r.Handle)
+	// so the non-public route runs without an auth gate.
 	tracer := tracing.NewTracer("test-combined")
-	r := New(WithTracer(tracer))
+	r := New(
+		WithTracer(tracer),
+		WithPolicyCoverageWhitelist([]string{"/internal/*"}),
+	)
 
 	var publicTraceID, internalTraceID string
 	auth.Declare(r, auth.RouteDecl{
@@ -969,17 +974,10 @@ func TestDeclareAuth_TracingNewRoot(t *testing.T) {
 		}),
 		Public: true,
 	})
-	// /internal uses Delegated so it is covered by policy enforcement; no auth
-	// verifier is installed so Delegated is the right semantic.
-	auth.Declare(r, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/internal",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			internalTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
-			w.WriteHeader(http.StatusOK)
-		}),
-		Delegated: true,
-	})
+	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		internalTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
 	require.NoError(t, r.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -1002,7 +1000,9 @@ func TestDeclareAuth_TracingNewRoot(t *testing.T) {
 
 func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 	// F3: public routes reject client-supplied X-Request-Id.
-	r := New()
+	// PR-A14a: /internal is whitelisted from policy coverage (raw r.Handle)
+	// so the non-public route runs without an auth gate.
+	r := New(WithPolicyCoverageWhitelist([]string{"/internal/*"}))
 
 	var publicID, internalID string
 	auth.Declare(r, auth.RouteDecl{
@@ -1014,17 +1014,10 @@ func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 		}),
 		Public: true,
 	})
-	// /internal uses Delegated so it is covered by policy enforcement; no auth
-	// verifier is installed so Delegated is the right semantic.
-	auth.Declare(r, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/internal",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			internalID, _ = ctxkeys.RequestIDFrom(req.Context())
-			w.WriteHeader(http.StatusOK)
-		}),
-		Delegated: true,
-	})
+	r.Handle("/internal", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		internalID, _ = ctxkeys.RequestIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -1081,6 +1074,7 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/fine-grained-public"
 		})),
+		WithPolicyCoverageWhitelist([]string{"/fine-grained-public/*"}),
 	)
 
 	auth.Declare(r, auth.RouteDecl{
@@ -1091,13 +1085,8 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 		}),
 		Public: true,
 	})
-	// /fine-grained-public uses Delegated so it is covered by policy enforcement.
-	auth.Declare(r, auth.RouteDecl{
-		Method:    http.MethodGet,
-		Path:      "/fine-grained-public",
-		Handler:   http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-		Delegated: true,
-	})
+	// PR-A14a: /fine-grained-public is whitelisted + registered raw (non-public).
+	r.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }))
 	require.NoError(t, r.FinalizeAuth())
 
 	var publicTraceID, fineTraceID string
@@ -1108,6 +1097,7 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/fine-grained-public"
 		})),
+		WithPolicyCoverageWhitelist([]string{"/fine-grained-public/*"}),
 	)
 	auth.Declare(r2, auth.RouteDecl{
 		Method: http.MethodGet,
@@ -1118,16 +1108,11 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 		}),
 		Public: true,
 	})
-	// /fine-grained-public uses Delegated so it is covered by policy enforcement.
-	auth.Declare(r2, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/fine-grained-public",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			fineTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
-			w.WriteHeader(http.StatusOK)
-		}),
-		Delegated: true,
-	})
+	// PR-A14a: /fine-grained-public is whitelisted + registered raw (non-public).
+	r2.Handle("/fine-grained-public", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		fineTraceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
 	require.NoError(t, r2.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"
@@ -1201,20 +1186,20 @@ func TestWithSecurityHeadersOptions_DefaultHSTS(t *testing.T) {
 
 func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 	// When no routes are declared public, tracing inherits upstream trace as normal.
+	// PR-A14a: /test is whitelisted from policy coverage (raw r.Handle without
+	// auth.Declare) so the route runs without any auth gate and the tracing
+	// context is captured unconditionally.
 	tracer := tracing.NewTracer("test-empty")
-	r := New(WithTracer(tracer))
+	r := New(
+		WithTracer(tracer),
+		WithPolicyCoverageWhitelist([]string{"/test/*"}),
+	)
 
 	var traceID string
-	// /test uses Delegated so it is covered by policy enforcement; no auth verifier is installed.
-	auth.Declare(r, auth.RouteDecl{
-		Method: http.MethodGet,
-		Path:   "/test",
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
-			traceID, _ = ctxkeys.TraceIDFrom(req.Context())
-			w.WriteHeader(http.StatusOK)
-		}),
-		Delegated: true,
-	})
+	r.Handle("/test", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		traceID, _ = ctxkeys.TraceIDFrom(req.Context())
+		w.WriteHeader(http.StatusOK)
+	}))
 	require.NoError(t, r.FinalizeAuth())
 
 	upstreamTraceID := "4bf92f3577b34da6a3ce929d0e0e4736"

@@ -215,7 +215,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(ln),
+		bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes

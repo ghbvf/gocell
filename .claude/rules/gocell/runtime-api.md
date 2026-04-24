@@ -52,7 +52,16 @@ bootstrap.New(
 | `Policy` | `auth.Policy` — 路由级策略 | 可选；`Public=true` 时必须为 nil |
 | `Public` | JWT 豁免 | 与 `Policy` / `PasswordResetExempt` 互斥 |
 | `PasswordResetExempt` | 允许 password-reset token | 与 `Public` 互斥；handler 内做细粒度校验 |
-| `Delegated` | JWT 验证下放（service-token / mTLS） | 通常配合 `WithInternalPathPrefixGuard` |
+| `Delegated` | `/internal/v1/*` 路由一致性标记（PR-A14a） | `Delegated: true` ⇔ 路径必须以 `/internal/v1/` 开头。内部路由物理挂在 `internalMux` 上（由独立 internal HTTP listener 承载），JWT 中间件只运行在 publicMux；service-token / mTLS 通过 `bootstrap.WithInternalMiddleware(mw)` 注入。 |
+
+### 双 listener 分流（PR-A14a）
+
+`Router` 内部维护两个 chi.Mux：
+
+- `publicMux`：挂 `/api/v1/*` + 其他业务路由；有 JWT AuthMiddleware。通过 `Router.PublicHandler()` 暴露给 primary `http.Server`（含 `/healthz` `/readyz` `/metrics` infra 端点）。
+- `internalMux`：仅挂 `/internal/v1/*` 路由；没有 JWT 中间件。通过 `Router.InternalHandler()` 暴露给 internal `http.Server`。
+
+`Router.Route/Handle/Mount` 根据 pattern 前缀自动分流（支持 chi 原生和 Go 1.22 `"METHOD /path"` 两种形式）。primary listener 显式 404 所有 `/internal/v1/*` 请求，实现端口级物理隔离。
 
 ### FinalizeAuth 生命周期
 
@@ -60,9 +69,10 @@ bootstrap.New(
 
 1. 收集所有 `auth.Declare` 推送的 `AuthRouteMeta`
 2. 去重 `(method, path)` — 重复 fail-fast
-3. 编译 public / password-reset-exempt / delegated 匹配器
-4. 从首个 `POST + PasswordResetExempt=true` 路由派生 password-reset change-endpoint hint
-5. AuthMiddleware 在请求时通过 Router 字段 lazy 读取匹配器
+3. 校验 `Delegated` ↔ `/internal/v1/*` 一致性（PR-A14a）
+4. 编译 public / password-reset-exempt 匹配器
+5. 从首个 `POST + PasswordResetExempt=true` 路由派生 password-reset change-endpoint hint
+6. AuthMiddleware 在请求时通过 Router 字段 lazy 读取匹配器
 
 ### 规则
 

@@ -88,6 +88,20 @@ Each Cell that uses PostgreSQL reads its own DB and encryption env variables.
 | `GOCELL_VAULT_TRANSIT_KEY` | Vault Transit key name | `gocell-config` | No | |
 | `GOCELL_VAULT_STARTUP_TIMEOUT` | Total startup I/O deadline (auth Login + optional unwrap + initial key metadata read) | `30s` | No | `time.ParseDuration` format (e.g. `45s`, `2m`). Must be positive; malformed or non-positive values fail fast. Increase for high-latency networks or wrapped-token paths that require multiple TLS round-trips. |
 
+## HTTP Listener (PR-A14a dual-listener)
+
+`cmd/corebundle` binds two HTTP servers:
+
+- **primary** — `/api/v1/*`, public business routes, and infra endpoints (`/healthz`, `/readyz`, `/metrics`). Exposed to the public / edge network.
+- **internal** — `/internal/v1/*` control-plane routes only. Must be bound to an internal network segment; service-token / mTLS middleware is the sole authentication layer. Requests to non-`/internal/v1/*` paths return 404.
+
+| Variable | Purpose | Default | Accepted Values |
+|---|---|---|---|
+| `GOCELL_HTTP_PRIMARY_ADDR` | Primary listener bind address (public / API) | `:8080` | Any `host:port` accepted by `net.Listen("tcp", …)`. Use `0.0.0.0:8080` or a specific interface in production. |
+| `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `:9090` | Same format as primary. In production bind to an internal network segment (e.g. `10.0.0.10:9090`) so service-token / mTLS enforcement is the primary defence. |
+
+Both addresses must be non-empty and distinct; startup fails fast otherwise. The primary listener also explicitly 404s `/internal/v1/*` paths so the internal prefix never leaks to the public network.
+
 ## Observability / Monitoring
 
 | Variable | Purpose | Default | Required |

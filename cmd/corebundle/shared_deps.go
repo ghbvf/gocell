@@ -40,6 +40,16 @@ type SharedDeps struct {
 	// dev mode (empty GOCELL_SERVICE_SECRET).
 	InternalGuard func(http.Handler) http.Handler
 
+	// PrimaryHTTPAddr is the bind address for the public HTTP listener
+	// (/api/v1/*, infra endpoints). Env GOCELL_HTTP_PRIMARY_ADDR; default ":8080".
+	PrimaryHTTPAddr string
+
+	// InternalHTTPAddr is the bind address for the internal HTTP listener
+	// (/internal/v1/* control-plane). Env GOCELL_HTTP_INTERNAL_ADDR;
+	// default ":9090". Must be bound to an internal network segment in
+	// production so service-token / mTLS enforcement is the primary defence.
+	InternalHTTPAddr string
+
 	// MetricsToken is the token guarding /metrics. Required in production
 	// topology; may be empty in dev mode.
 	MetricsToken string
@@ -167,15 +177,26 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		slog.String("requested", adapterMode),
 		slog.String("effective", topo.AdapterInfo()["mode"]))
 
+	primaryAddr := os.Getenv("GOCELL_HTTP_PRIMARY_ADDR")
+	if primaryAddr == "" {
+		primaryAddr = ":8080"
+	}
+	internalAddr := os.Getenv("GOCELL_HTTP_INTERNAL_ADDR")
+	if internalAddr == "" {
+		internalAddr = ":9090"
+	}
+
 	deps := &SharedDeps{
-		Topology:       topo,
-		JWTDeps:        jwt,
-		PromStack:      ps,
-		EventBus:       eb,
-		InternalGuard:  internalGuard,
-		MetricsToken:   metricsToken,
-		VerboseToken:   verboseToken,
-		metricsHandler: metricsHandler,
+		Topology:         topo,
+		JWTDeps:          jwt,
+		PromStack:        ps,
+		EventBus:         eb,
+		InternalGuard:    internalGuard,
+		PrimaryHTTPAddr:  primaryAddr,
+		InternalHTTPAddr: internalAddr,
+		MetricsToken:     metricsToken,
+		VerboseToken:     verboseToken,
+		metricsHandler:   metricsHandler,
 	}
 
 	if err := deps.Validate(); err != nil {

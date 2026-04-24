@@ -452,7 +452,7 @@ func TestAccessCore_RouteRoleAssign(t *testing.T) {
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{auth.RoleInternalAdmin}))
-	r.ServeHTTP(rec, req)
+	r.InternalHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
@@ -468,7 +468,7 @@ func TestAccessCore_RouteRoleAssign_NoAuth_Returns401(t *testing.T) {
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	// No auth context.
-	r.ServeHTTP(rec, req)
+	r.InternalHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
 }
@@ -481,7 +481,7 @@ func TestAccessCore_RouteRoleAssign_NonAdmin_Returns403(t *testing.T) {
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
-	r.ServeHTTP(rec, req)
+	r.InternalHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
 }
@@ -495,7 +495,7 @@ func TestAccessCore_RouteRoleRevoke(t *testing.T) {
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{auth.RoleInternalAdmin}))
-	r.ServeHTTP(rec, req)
+	r.InternalHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, "application/json", rec.Header().Get("Content-Type"),
@@ -509,7 +509,7 @@ func TestAccessCore_RouteRoleRevoke_NoAuth_Returns401(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke",
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
-	r.ServeHTTP(rec, req)
+	r.InternalHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_UNAUTHORIZED")
 }
@@ -522,7 +522,7 @@ func TestAccessCore_RouteRoleRevoke_NonAdmin_Returns403(t *testing.T) {
 		strings.NewReader(`{"userId":"usr-1","roleId":"admin"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("user-1", []string{"viewer"}))
-	r.ServeHTTP(rec, req)
+	r.InternalHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusForbidden, rec.Code)
 	assert.Contains(t, rec.Body.String(), "ERR_AUTH_FORBIDDEN")
 }

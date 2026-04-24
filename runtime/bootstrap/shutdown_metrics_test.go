@@ -194,7 +194,8 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "sm-phase", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(3*time.Second),
 		WithMetricsProvider(p),
 	)
@@ -228,7 +229,8 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "sm-dur", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(3*time.Second),
 		WithMetricsProvider(p),
 	)
@@ -262,7 +264,8 @@ func TestShutdownMetrics_TimeoutOutcome_Success(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "sm-ok", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(3*time.Second),
 		WithMetricsProvider(p),
 	)
@@ -328,7 +331,8 @@ func TestShutdownMetrics_TimeoutOutcome_Timeout(t *testing.T) {
 	const shutdownTimeout = 100 * time.Millisecond
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(shutdownTimeout),
 		WithMetricsProvider(p),
 		WithWorkers(sw),
@@ -400,7 +404,8 @@ func TestShutdownMetrics_Outcome_TeardownError(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(3*time.Second),
 		WithMetricsProvider(p),
 		WithWorkers(failWorker),
@@ -435,7 +440,8 @@ func TestShutdownMetrics_Outcome_SignalError(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(3*time.Second),
 		WithMetricsProvider(p),
 		WithWorkers(errWorker),
@@ -485,7 +491,8 @@ func TestShutdownMetrics_DisabledWithoutProvider(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "nop-sm", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithListener(ln),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(3*time.Second),
 		// No WithMetricsProvider — defaults to NopProvider.
 	)

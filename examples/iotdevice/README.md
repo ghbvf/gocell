@@ -31,7 +31,7 @@ No external dependencies required. Uses in-memory repositories and event bus.
 go run ./examples/iotdevice
 ```
 
-The server starts on `:8083`.
+The server starts with primary listener on `:8083` (API + infra) and internal listener on `:9083` (control-plane).
 
 Protected routes use a fixed demo bearer token:
 
