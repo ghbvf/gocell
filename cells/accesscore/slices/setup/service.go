@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -33,6 +34,17 @@ const TopicUserCreated = "event.user.created.v1"
 // UserIDPrefix distinguishes setup-path admins from bootstrap-path admins in
 // audit logs ("usr-" vs. "usr-bootstrap-").
 const UserIDPrefix = "usr-"
+
+// Password length bounds for the setup endpoint:
+//   - MinPasswordLen mirrors the schema's minLength:8 and is low enough to not
+//     surprise first-run operators on low-entropy test setups.
+//   - MaxPasswordLen caps bcrypt input. bcrypt itself truncates at 72 bytes,
+//     so the cap prevents unbounded CPU / memory on adversarial inputs
+//     without changing effective security (anything beyond 72 is discarded).
+const (
+	MinPasswordLen = 8
+	MaxPasswordLen = 128
+)
 
 // Option configures a Service.
 type Option func(*Service)
@@ -115,8 +127,17 @@ type CreateAdminOutput struct {
 // (either at the fast-path Status check or after a race detected inside
 // adminprovision.Ensure).
 //
-// Consistency: L2 (OutboxFact). The user write + event emit share a single
-// TxRunner scope so event publication is atomic with row persistence.
+// Consistency: L2 (OutboxFact) in durable mode. The user write + event emit
+// share a single TxRunner scope so event publication is atomic with row
+// persistence — if the emit fails, the tx rolls back and the user row is
+// removed.
+//
+// Demo-mode caveat: When wired with persistence.NoopTxRunner (in-memory
+// repositories), RunInTx has no rollback, so a publishUserCreated failure
+// after a successful adminprovision.Ensure leaves the user + role persisted
+// without the event emitted. The next POST hits the fast-path 409 via
+// CountByRole. Production must wire a real TxRunner; demo mode accepts this
+// gap as it matches the identitymanage.Create pattern (service.go:128-139).
 func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*CreateAdminOutput, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("username", in.Username),
@@ -124,6 +145,11 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 		validation.F("password", in.Password),
 	); err != nil {
 		return nil, err
+	}
+	if len(in.Password) < MinPasswordLen || len(in.Password) > MaxPasswordLen {
+		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput,
+			fmt.Sprintf("password length must be between %d and %d characters",
+				MinPasswordLen, MaxPasswordLen))
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(in.Password), domain.BcryptCost)
@@ -156,7 +182,7 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 			// crashed prior run presumably emitted it before the credfile
 			// failure. Duplicating the event would confuse idempotent consumers
 			// that dedupe on (event_type, user_id).
-			s.logger.Info("setup: orphan user recovered; event emission skipped",
+			s.logger.Warn("setup: orphan user recovered; event emission skipped",
 				slog.String("event", "setup_orphan_recover"),
 				slog.String("user_id", user.ID))
 		default:
@@ -166,7 +192,7 @@ func (s *Service) CreateAdmin(ctx context.Context, in CreateAdminInput) (*Create
 			ID:        user.ID,
 			Username:  user.Username,
 			Email:     user.Email,
-			CreatedAt: user.CreatedAt.UTC().Format("2006-01-02T15:04:05.000000000Z07:00"),
+			CreatedAt: user.CreatedAt.UTC().Format(time.RFC3339Nano),
 		}
 		return nil
 	})

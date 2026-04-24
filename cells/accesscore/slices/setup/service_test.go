@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -124,6 +125,41 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("SecretPass!23")))
 }
 
+func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_NoEmit(t *testing.T) {
+	// Pre-seed a user row with the target username but no admin role assigned
+	// (simulates a prior run that crashed between UserRepo.Create and
+	// RoleRepo.AssignToUser). CreateAdmin must recover the orphan row, rewrite
+	// the password hash, assign the admin role, and deliberately NOT emit
+	// event.user.created.v1 — the event was presumably emitted by the crashed
+	// run.
+	userRepo := mem.NewUserRepository()
+	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
+	require.NoError(t, err)
+	orphan.ID = "usr-orphan-prior"
+	require.NoError(t, userRepo.Create(context.Background(), orphan))
+
+	roleRepo := mem.NewRoleRepository()
+	w := &stubWriter{}
+	svc := newService(t, userRepo, roleRepo, w)
+
+	out, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.NoError(t, err)
+	require.NotNil(t, out)
+	assert.Equal(t, "usr-orphan-prior", out.ID, "orphan row reused")
+
+	// Crucially: no event.user.created.v1 emitted on OrphanRecovered.
+	assert.Empty(t, w.entries, "orphan recovery must not emit duplicate event")
+
+	// Admin role now assigned to the orphan user.
+	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 1, cnt)
+}
+
 func TestService_CreateAdmin_AlreadyExists_Returns409_NoEmit(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
@@ -160,6 +196,30 @@ func TestService_CreateAdmin_BlankField_Returns400(t *testing.T) {
 			out, err := svc.CreateAdmin(context.Background(), tc.in)
 			require.Error(t, err)
 			assert.Nil(t, out)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+		})
+	}
+}
+
+func TestService_CreateAdmin_PasswordLengthOutOfRange_Returns400(t *testing.T) {
+	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), nil)
+	tests := []struct {
+		name     string
+		password string
+	}{
+		{"too short (7 chars)", "abc1234"},
+		{"too long (129 chars)", strings.Repeat("x", 129)},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+				Username: "root",
+				Email:    "root@local",
+				Password: tc.password,
+			})
+			require.Error(t, err)
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
 			assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
