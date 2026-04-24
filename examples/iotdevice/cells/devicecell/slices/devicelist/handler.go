@@ -13,7 +13,7 @@ import (
 )
 
 var specDeviceListSlice = wrapper.ContractSpec{
-	ID: "http.iotdevice.devices.list.v1", Kind: "http", Transport: "http",
+	ID: "http.device.list.v1", Kind: "http", Transport: "http",
 	Method: "GET", Path: "/api/v1/devices/",
 }
 

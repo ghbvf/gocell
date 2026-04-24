@@ -121,3 +121,20 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 	}
 	c.ValidateErrorResponse(t, http.StatusBadRequest, recBadCursor.Body.Bytes())
 }
+
+func TestDeviceListContractSpecMatchesContract(t *testing.T) {
+	root := contracttest.ExampleContractsRoot("iotdevice")
+	c := contracttest.LoadByID(t, root, "http.device.list.v1")
+	if c.HTTP == nil {
+		t.Fatal("http.device.list.v1 must declare HTTP transport metadata")
+	}
+	if specDeviceListSlice.ID != c.ID {
+		t.Fatalf("ContractSpec ID = %q, want %q", specDeviceListSlice.ID, c.ID)
+	}
+	if specDeviceListSlice.Method != c.HTTP.Method {
+		t.Fatalf("ContractSpec Method = %q, want %q", specDeviceListSlice.Method, c.HTTP.Method)
+	}
+	if specDeviceListSlice.Path != c.HTTP.Path {
+		t.Fatalf("ContractSpec Path = %q, want %q", specDeviceListSlice.Path, c.HTTP.Path)
+	}
+}

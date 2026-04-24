@@ -2,51 +2,44 @@ package command
 
 import (
 	"context"
-	"time"
 )
 
-// Writer persists L4 command entries within a transaction.
+// Writer persists L4 command entries within a transaction. Primarily used by
+// adapter internals and test fixtures to seed entries bypassing Enqueue
+// validation; service/application code MUST use Queue.Enqueue instead.
 type Writer interface {
 	// WriteCommand persists a command entry atomically with business state.
 	// Consistency: L4 (DeviceLatent).
 	WriteCommand(ctx context.Context, entry Entry) error
 }
 
-// Reader queries L4 command entries.
-type Reader interface {
-	// PendingCommands returns commands in Pending status for the given device,
-	// ordered by creation time (FIFO).
-	PendingCommands(ctx context.Context, deviceID string) ([]Entry, error)
-
-	// GetCommand returns a single command by ID.
-	GetCommand(ctx context.Context, id string) (*Entry, error)
+// ScanFilter narrows an ActiveScanner.ScanActive call. Empty fields mean
+// "no filter" (all non-terminal entries across all devices).
+type ScanFilter struct {
+	// DeviceID, if non-empty, restricts results to one device. Empty = all devices.
+	DeviceID string
+	// Statuses, if non-empty, restricts results to the listed statuses.
+	// Empty slice = all non-terminal statuses (Pending / Sent / Delivered).
+	// Terminal statuses in Statuses are silently ignored — scanners return
+	// only non-terminal entries.
+	Statuses []Status
 }
 
-// StateAdvancer atomically advances a command's status.
-// The adapter MUST call AdvanceCommand with the provided now to compute
-// kernel-owned side effects (timestamps, attempt counter) before persisting.
-// Implementations SHOULD use optimistic locking (e.g., WHERE status = $from)
-// to prevent concurrent transitions.
+// ActiveScanner queries all non-terminal command entries matching a filter.
+// This is the role-based scan port used by Sweeper (timeout detection) and
+// operational views (list pending/in-flight commands). It is deliberately
+// distinct from Queue.Dequeue (the claim-with-lease primary consumer path):
+// scanners do not advance state or issue leases, and scanners are allowed to
+// see Sent/Delivered entries that Dequeue must hide.
 //
-// Callers that need to chain multiple AdvanceStatus calls atomically (e.g.,
-// Pending→Sent→Delivered→Succeeded in a single HTTP request) SHOULD wrap them
-// in a transaction at the adapter level. The kernel interface does not expose
-// transactional scope; this is intentional to keep it pluggable (in-memory
-// adapters can satisfy it trivially).
-//
-// Typical adapter implementation:
-//
-//	func (a *PGAdapter) AdvanceStatus(ctx context.Context, id string, from, to Status, now time.Time) error {
-//	    cmd, err := a.GetCommand(ctx, id)
-//	    if err != nil { return err }
-//	    if err := AdvanceCommand(cmd, to, now); err != nil { return err }
-//	    // Optimistic lock: WHERE status = from prevents concurrent transitions.
-//	    return a.updateStatus(ctx, cmd) // persist cmd with updated timestamps
-//	}
-type StateAdvancer interface {
-	// AdvanceStatus atomically transitions a command from one status to another.
-	// The now parameter is passed through to AdvanceCommand for timestamp
-	// side effects — adapters must not independently decide timestamps.
-	// Consistency: L4 (DeviceLatent).
-	AdvanceStatus(ctx context.Context, id string, from, to Status, now time.Time) error
+// ref: Temporal HistoryService active-timer scan + JetStream ConsumerInfo —
+// separate from the primary Fetch/dispatch path; read-only lens over
+// non-terminal entries.
+type ActiveScanner interface {
+	// ScanActive returns non-terminal entries matching filter, ordered by
+	// CreatedAt ascending (FIFO). Implementations MAY impose an adapter-level
+	// result cap but MUST document it.
+	ScanActive(ctx context.Context, filter ScanFilter) ([]Entry, error)
+	// GetCommand returns a single command by ID. Returns (nil, nil) when not found.
+	GetCommand(ctx context.Context, id string) (*Entry, error)
 }

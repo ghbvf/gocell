@@ -93,10 +93,12 @@ func TestCanTransitionTo_AllValid(t *testing.T) {
 	}{
 		// From Pending
 		{StatusPending, StatusSent},
+		{StatusPending, StatusFailed},
 		{StatusPending, StatusExpired},
 		{StatusPending, StatusCanceled},
 		// From Sent
 		{StatusSent, StatusDelivered},
+		{StatusSent, StatusSucceeded},
 		{StatusSent, StatusFailed},
 		{StatusSent, StatusExpired},
 		{StatusSent, StatusCanceled},
@@ -161,8 +163,6 @@ func TestCanTransitionTo_InvalidSkip(t *testing.T) {
 	}{
 		{StatusPending, StatusSucceeded},
 		{StatusPending, StatusDelivered},
-		{StatusPending, StatusFailed},
-		{StatusSent, StatusSucceeded},
 	}
 	for _, tt := range invalidSkips {
 		tt := tt
@@ -179,7 +179,6 @@ func TestCanTransitionTo_InvalidReverse(t *testing.T) {
 	reverses := []struct {
 		from, to Status
 	}{
-		{StatusSent, StatusPending},
 		{StatusDelivered, StatusPending},
 		{StatusDelivered, StatusSent},
 	}
@@ -221,8 +220,8 @@ func TestValidTransitions(t *testing.T) {
 		from Status
 		want []Status
 	}{
-		{StatusPending, []Status{StatusSent, StatusExpired, StatusCanceled}},
-		{StatusSent, []Status{StatusDelivered, StatusFailed, StatusExpired, StatusCanceled}},
+		{StatusPending, []Status{StatusSent, StatusFailed, StatusExpired, StatusCanceled}},
+		{StatusSent, []Status{StatusDelivered, StatusSucceeded, StatusFailed, StatusExpired, StatusCanceled}},
 		{StatusDelivered, []Status{StatusSucceeded, StatusFailed, StatusExpired, StatusCanceled}},
 		{StatusSucceeded, nil},
 		{StatusFailed, nil},

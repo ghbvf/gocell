@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
@@ -16,19 +17,28 @@ import (
 	deviceregister "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/deviceregister"
 	devicestatus "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicestatus"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	commandruntime "github.com/ghbvf/gocell/runtime/command"
 )
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell          = (*DeviceCell)(nil)
-	_ cell.HTTPRegistrar = (*DeviceCell)(nil)
+	_ cell.Cell                 = (*DeviceCell)(nil)
+	_ cell.HTTPRegistrar        = (*DeviceCell)(nil)
+	_ cell.LifecycleContributor = (*DeviceCell)(nil)
+	_ kcommand.QueueRegistrar   = (*DeviceCell)(nil)
 )
+
+type commandQueueStore interface {
+	kcommand.Queue
+	kcommand.ActiveScanner
+}
 
 // Option configures a DeviceCell.
 type Option func(*DeviceCell)
@@ -56,15 +66,37 @@ func WithLogger(l *slog.Logger) Option {
 // DeviceCell is the devicecell Cell implementation.
 type DeviceCell struct {
 	*cell.BaseCell
-	deviceRepo  domain.DeviceRepository
-	publisher   outbox.Publisher
-	cursorCodec *query.CursorCodec
-	logger      *slog.Logger
+	deviceRepo     domain.DeviceRepository
+	publisher      outbox.Publisher
+	cursorCodec    *query.CursorCodec
+	logger         *slog.Logger
+	commandQueue   commandQueueStore
+	commandSweeper *commandruntime.SweeperLifecycle
 
 	registerHandler *deviceregister.Handler
 	commandHandler  *devicecommand.Handler
 	statusHandler   *devicestatus.Handler
 	listHandler     *devicelist.Handler
+}
+
+// RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
+// queue must also implement ActiveScanner so the same runtime component can
+// serve the device dequeue path, sweeper, and internal ops view.
+func (c *DeviceCell) RegisterCommandQueue(q kcommand.Queue) {
+	store, ok := q.(commandQueueStore)
+	if !ok {
+		c.logger.Warn("devicecell: command queue does not implement ActiveScanner; ignoring registrar injection")
+		return
+	}
+	c.commandQueue = store
+}
+
+// LifecycleHooks contributes the device-command sweeper hook after Init wires it.
+func (c *DeviceCell) LifecycleHooks() []cell.LifecycleHook {
+	if c.commandSweeper == nil {
+		return nil
+	}
+	return c.commandSweeper.LifecycleHooks()
 }
 
 // NewDeviceCell creates a new DeviceCell with the given options.
@@ -143,22 +175,30 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	}
 
 	// device-command slice: uses commandtest.InMemQueue as the command store in
-	// demo/example mode. commandtest is importable from production code (regular
-	// .go file, not _test.go). For a production deployment, replace with an
-	// adapter implementing command.Queue + command.Reader + command.StateAdvancer.
-	//
-	// TODO(PR-A12-SWEEPER-WIRE): wire command.Sweeper once InMemQueue supports
-	// multi-device scan (PendingAll). Tracked in backlog PR-A12-SWEEPER-WIRE.
-	if deps.DurabilityMode == cell.DurabilityDurable {
+	// demo/example mode. For a production deployment, inject a durable adapter
+	// implementing command.Queue + command.ActiveScanner via RegisterCommandQueue.
+	if c.commandQueue == nil && deps.DurabilityMode == cell.DurabilityDurable {
 		return fmt.Errorf("devicecell: commandtest.InMemQueue is not suitable for durable deployments; wire a durable command.Queue adapter instead")
 	}
-	cmdQueue := commandtest.NewInMemQueue()
+	if c.commandQueue == nil {
+		c.commandQueue = commandtest.NewInMemQueue()
+	}
+	cmdQueue := c.commandQueue
 	commandSvc, err := devicecommand.NewService(cmdQueue, c.deviceRepo, c.cursorCodec, c.logger,
 		query.RunModeForDemo(deps.DurabilityMode == cell.DurabilityDemo))
 	if err != nil {
 		return fmt.Errorf("device-command: %w", err)
 	}
 	c.commandHandler = devicecommand.NewHandler(commandSvc)
+	c.commandSweeper = commandruntime.NewSweeperLifecycle("devicecommand.sweeper", &kcommand.Sweeper{
+		Scanner:  cmdQueue,
+		Queue:    cmdQueue,
+		Filter:   kcommand.ScanFilter{},
+		Interval: 30 * time.Second,
+		OnError: func(err error) {
+			c.logger.Error("device-command sweeper error", slog.Any("error", err))
+		},
+	})
 	c.AddSlice(cell.NewBaseSlice("devicecommand", "devicecell", cell.L4))
 
 	// device-status slice
@@ -178,33 +218,20 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
-// Contract spec literals for devicecell. Examples are not backed by a
-// contracts/**/contract.yaml (FMT-18 exempts examples/**), but the Mount
-// registration still enforces Method/Path shape at startup.
+// Contract spec literals for devicecell. FMT-18 exempts examples/**, so keep
+// these aligned with examples/iotdevice/contracts/** by convention.
 var (
 	specDeviceRegister = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.register.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/devices/",
+		ID: "http.device.register.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/devices",
 	}
 	specDeviceList = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.list.v1", Kind: "http", Transport: "http",
+		ID: "http.device.list.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/api/v1/devices/",
 	}
 	specDeviceStatus = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.status.v1", Kind: "http", Transport: "http",
+		ID: "http.device.status.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/api/v1/devices/{id}/status",
-	}
-	specDeviceCommandEnqueue = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.commands.enqueue.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/devices/{id}/commands",
-	}
-	specDeviceCommandList = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.commands.list.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/devices/{id}/commands",
-	}
-	specDeviceCommandAck = wrapper.ContractSpec{
-		ID: "http.iotdevice.devices.commands.ack.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/devices/{id}/commands/{cmdId}/ack",
 	}
 )
 
@@ -231,22 +258,8 @@ func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
 				Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
 				Policy:   auth.Authenticated(),
 			})
-			// device-command routes: no route-level policy (pre-F3 devicecell
-			// had no policy wrapping). Deployments wanting authz wire
-			// WithAuthDiscovery and add a Policy or rely on AuthMiddleware's
-			// baseline JWT check.
-			auth.Mount(devices, auth.Route{
-				Contract: specDeviceCommandEnqueue,
-				Handler:  http.HandlerFunc(c.commandHandler.HandleEnqueue),
-			})
-			auth.Mount(devices, auth.Route{
-				Contract: specDeviceCommandList,
-				Handler:  http.HandlerFunc(c.commandHandler.HandleListPending),
-			})
-			auth.Mount(devices, auth.Route{
-				Contract: specDeviceCommandAck,
-				Handler:  http.HandlerFunc(c.commandHandler.HandleAck),
-			})
+			c.commandHandler.RegisterRoutes(devices)
 		})
 	})
+	c.commandHandler.RegisterInternalRoutes(mux)
 }
