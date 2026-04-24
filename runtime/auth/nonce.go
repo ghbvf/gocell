@@ -11,8 +11,14 @@ import (
 // ErrNonceReused is returned by NonceStore.CheckAndMark when a nonce has
 // already been consumed within its TTL window.
 //
-// This uses errors.New (not errcode) because it is an internal sentinel
-// for errors.Is matching. The HTTP error code is set at the middleware layer.
+// Approved exception to the CLAUDE.md "no bare errors.New across package
+// boundaries" rule: cross-package errors.Is matching requires a stable
+// pointer identity, and wrapping in *errcode.Error would force every
+// caller to Unwrap before running errors.Is. Callers distinguish replay
+// (ErrNonceReused in the chain → 401) from store infrastructure failure
+// (any other Cause → 500) via errors.Is on this exact sentinel; see
+// writeServiceTokenError in servicetoken.go. The HTTP error envelope is
+// constructed at the middleware layer.
 var ErrNonceReused = errors.New("auth: nonce already used")
 
 // defaultMaxNonceEntries is the maximum number of live nonce entries before a

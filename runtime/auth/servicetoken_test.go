@@ -479,10 +479,17 @@ func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T
 	assert.Equal(t, http.StatusOK, rec2.Code, "second unique token must be accepted")
 }
 
-func TestServiceTokenMiddleware_WithoutNonceStore_ReplayAllowed(t *testing.T) {
+// TestServiceTokenMiddleware_WithNoopNonceStore_ReplayAllowed documents that
+// when no replay-safe store is injected the middleware falls back to the
+// default NoopNonceStore (Kind() == NonceStoreKindNoop). Replay is intentionally
+// allowed in that state — the production gate lives in
+// cmd/corebundle.SharedDeps.validateControlPlane, which rejects Noop in
+// adapter mode "real". This test pins the dev-mode behaviour so any future
+// change to the default store shows up as a test failure.
+func TestServiceTokenMiddleware_WithNoopNonceStore_ReplayAllowed(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	// No nonce store — replay protection disabled by config.
+	// Default NoopNonceStore — replay detection disabled by null-object default.
 	handler := mustTestServiceHandler(t, ring, func() time.Time { return now })
 
 	token := GenerateServiceToken(ring, http.MethodGet, "/api/v1/resource", "", now)
@@ -493,7 +500,8 @@ func TestServiceTokenMiddleware_WithoutNonceStore_ReplayAllowed(t *testing.T) {
 	handler.ServeHTTP(rec1, req1)
 	assert.Equal(t, http.StatusOK, rec1.Code)
 
-	// Same token again — still accepted because no nonce store.
+	// Same token again — still accepted because the default NoopNonceStore
+	// permits every nonce.
 	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/resource", nil)
 	req2.Header.Set("Authorization", "ServiceToken "+token)
 	rec2 := httptest.NewRecorder()

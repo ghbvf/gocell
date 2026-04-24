@@ -259,6 +259,10 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	require.NoError(t, err)
 	// A replay-safe nonce store is mandatory on every prod-equivalent wiring
 	// of ServiceTokenMiddleware; matches the internalGuardFromEnv default.
+	//
+	// Shared across all subtests below — do NOT add t.Parallel() to the
+	// subtests without isolating the store per subtest, or the replay
+	// subtest's nonce can be consumed by a peer before it runs.
 	nonceStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenMaxAge + nonceStoreBuffer)
 	require.NoError(t, err)
 	guard := auth.ServiceTokenMiddleware(ring, auth.WithServiceTokenNonceStore(nonceStore))

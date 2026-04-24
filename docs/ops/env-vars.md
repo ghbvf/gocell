@@ -114,7 +114,7 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 | Variable | Purpose | Default | Accepted Values |
 |---|---|---|---|
 | `GOCELL_HTTP_PRIMARY_ADDR` | Primary listener bind address (public / API) | `:8080` | Any `host:port` accepted by `net.Listen("tcp", …)`. Use `0.0.0.0:8080` or a specific interface in production. |
-| `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `:9090` | Same format as primary. In production bind to an internal network segment (e.g. `10.0.0.10:9090`) so service-token / mTLS enforcement is the primary defence. |
+| `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `127.0.0.1:9090` | Same format as primary. **Default is loopback** so a dev deployment without a service-token guard is not trivially reachable across the network. Production deployments binding to an internal VPC interface (e.g. `10.0.0.10:9090`) must set this variable explicitly so service-token / mTLS enforcement is the primary defence. |
 
 Both addresses must be non-empty and distinct; startup fails fast otherwise. The primary listener also explicitly 404s `/internal/v1/*` paths so the internal prefix never leaks to the public network.
 

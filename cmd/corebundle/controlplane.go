@@ -88,5 +88,7 @@ func internalGuardFromEnv(adapterMode string) (*internalGuard, error) {
 		return nil, fmt.Errorf("build service token nonce store: %w", err)
 	}
 	mw := auth.ServiceTokenMiddleware(ring, auth.WithServiceTokenNonceStore(store))
+	slog.Info("controlplane guard installed",
+		slog.String("nonce_store_kind", string(store.Kind())))
 	return &internalGuard{ring: ring, nonceStore: store, mw: mw}, nil
 }

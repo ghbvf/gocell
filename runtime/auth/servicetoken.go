@@ -252,6 +252,12 @@ func handleServiceToken(cfg serviceTokenConfig, auth Authenticator, next http.Ha
 // metrics labels and the appropriate HTTP response. It preserves the
 // middleware's split between 401 (auth failures, replay) and 500 (nonce store
 // infrastructure failures) by inspecting the wrapped Cause.
+//
+// Branch order is load-bearing: the ErrNonceReused check MUST precede the
+// generic Cause check. Both replay and store-infra errors are wrapped via
+// WrapAuth and therefore carry a non-nil Cause; swapping the checks would
+// classify every replay as an infrastructure failure (500) instead of an
+// auth failure (401), downgrading a security signal to a server error.
 func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWriter, r *http.Request) {
 	// errors.Is traverses the full chain, so ErrNonceReused in the Cause matches.
 	if errors.Is(err, ErrNonceReused) {
