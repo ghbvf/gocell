@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -130,7 +131,9 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp,
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -195,7 +198,9 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp,
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

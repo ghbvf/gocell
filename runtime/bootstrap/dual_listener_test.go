@@ -89,8 +89,8 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(primaryLn),
-		WithInternalListener(internalLn),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -100,7 +100,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 
 	primaryAddr := primaryLn.Addr().String()
 	internalAddr := internalLn.Addr().String()
-	// Wait for primary to accept.
+	// Wait for primary to accept. Health endpoints fall back to primary when no HealthListener.
 	require.Eventually(t, func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
@@ -193,8 +193,8 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(primaryLn),
-		WithInternalListener(internalLn),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -252,8 +252,8 @@ func TestDualListener_EqualAddrsBindFails(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(primaryLn),
-		WithHTTPInternalAddr(collidingAddr), // collides with primary
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, collidingAddr, nil), // collides with primary
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -270,8 +270,8 @@ func TestDualListener_Phase0RejectsEmptyAddr(t *testing.T) {
 		name string
 		opts []Option
 	}{
-		{"empty_primary", []Option{WithHTTPPrimaryAddr("")}},
-		{"empty_internal", []Option{WithHTTPInternalAddr("")}},
+		{"empty_primary", []Option{WithListener(cell.PrimaryListener, "", nil)}},
+		{"empty_internal", []Option{WithListener(cell.InternalListener, "", nil)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -309,8 +309,8 @@ func TestDualListener_InternalBindFailure_ClosesOwnedPrimary(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(callerLn),
-		WithHTTPInternalAddr(collidingAddr), // guaranteed to collide
+		WithListener(cell.PrimaryListener, callerLn.Addr().String(), nil, WithListenerNet(callerLn)),
+		WithListener(cell.InternalListener, collidingAddr, nil), // guaranteed to collide
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -355,8 +355,8 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(primaryLn),
-		WithInternalListener(internalLn),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -397,4 +397,90 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 	// accepting.
 	_, err := net.Dial("tcp", primaryAddr)
 	assert.Error(t, err, "primary listener should be closed; Dial must fail")
+}
+
+// TestTripleListener_ShutdownNoGoroutineLeak extends the dual-listener goroutine
+// leak test to three listeners (primary + internal + health), verifying that
+// Bootstrap's shutdown drains all three servers without leaking goroutines (TEST-02).
+func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
+	primaryLn := newLocalListener(t)
+	internalLn := newLocalListener(t)
+	healthLn := newLocalListener(t)
+
+	c := newDualListenerCell(
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+	)
+	asm := assembly.New(assembly.Config{ID: "triple-shutdown-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(c))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), nil, WithListenerNet(healthLn)),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	healthAddr := healthLn.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "health listener did not become ready")
+
+	before := runtime.NumGoroutine()
+
+	cancel()
+	select {
+	case err := <-done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+
+	// Allow short settle window for goroutine cleanup.
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= before
+	}, 2*time.Second, 50*time.Millisecond, "goroutine count did not return to baseline after triple listener shutdown")
+}
+
+// TestDualListener_BootstrapOwnedPrimary_InternalBindFails verifies that when
+// bootstrap owns (binds) the primary socket itself and the internal bind fails,
+// bootstrap releases the primary socket it created (TEST-11).
+// This differs from TestDualListener_InternalBindFailure_ClosesOwnedPrimary,
+// which uses a caller-injected primary socket (bootstrap must NOT close it).
+func TestDualListener_BootstrapOwnedPrimary_InternalBindFails(t *testing.T) {
+	// Pre-bind a listener to get a known port, then pass it as internal
+	// to force a collision. Primary uses bootstrap-owned :0.
+	collideLn := newLocalListener(t)
+	collidingAddr := collideLn.Addr().String()
+	// Keep collideLn open so the port stays reserved; bootstrap's internal
+	// bind will fail with EADDRINUSE on this port.
+
+	asm := assembly.New(assembly.Config{ID: "bootstrap-owned-fail", DurabilityMode: cell.DurabilityDemo})
+
+	b := New(
+		WithAssembly(asm),
+		// Primary: bootstrap-owned socket (no WithListenerNet); will bind :0 → success.
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		// Internal: same colliding address → EADDRINUSE.
+		WithListener(cell.InternalListener, collidingAddr, nil),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := b.Run(ctx)
+	// collideLn is still open, so the internal bind should fail.
+	require.Error(t, err, "internal bind failure must cause Run to return an error")
+	assert.Contains(t, err.Error(), "listen internal",
+		"error must identify the failing listener as 'internal'")
 }

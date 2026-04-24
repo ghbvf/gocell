@@ -97,7 +97,8 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	// inside accesscore's RegisterRoutes. WithAuthDiscovery discovers the verifier.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
 		bootstrap.WithAuthDiscovery(),
@@ -309,7 +310,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	internalPolicy := bootstrap.PolicyServiceToken(nonceStore, ring)
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithPrimaryListener(ln),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalPolicy,
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -448,6 +449,138 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusUnauthorized, resp.StatusCode,
 			"/api/v1/* without JWT must return 401 from auth middleware")
+	})
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz verifies that when
+// a dedicated HealthListener is declared, the primary listener no longer serves
+// /healthz and /readyz (TEST-10). Those endpoints physically move to the health
+// listener port. With JWT auth on primary, unregistered routes return 401 (not
+// 404), which proves they are absent from the primary mux regardless of auth.
+func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
+	primaryLn, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	internalLn := newCorebundleLocalListener(t)
+	healthLn := newCorebundleLocalListener(t)
+
+	// JWT key pair.
+	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	keySet, err := auth.NewKeySet(privKey, pubKey)
+	require.NoError(t, err)
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "health-test", 15*time.Minute,
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
+	require.NoError(t, err)
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	eb := eventbus.New()
+	var nw outbox.Writer = outbox.NoopWriter{}
+
+	auditCursorCodec, err := query.NewCursorCodec([]byte("health-test-audit-key-32-bytes!!"))
+	require.NoError(t, err)
+	configCursorCodec, err := query.NewCursorCodec([]byte("health-test-config-key-32bytes!!"))
+	require.NoError(t, err)
+
+	ac := accesscore.NewAccessCore(
+		accesscore.WithInMemoryDefaults(),
+		accesscore.WithOutboxDeps(eb, nw),
+		accesscore.WithJWTIssuer(jwtIssuer),
+		accesscore.WithJWTVerifier(jwtVerifier),
+		accesscore.WithTxManager(noopTxRunner{}),
+	)
+	cc := configcore.NewConfigCore(
+		configcore.WithInMemoryDefaults(),
+		configcore.WithOutboxDeps(eb, nw),
+		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithCursorCodec(configCursorCodec),
+	)
+	auc := auditcore.NewAuditCore(
+		auditcore.WithInMemoryDefaults(),
+		auditcore.WithOutboxDeps(eb, nw),
+		auditcore.WithHMACKey([]byte("health-test-hmac-key-32-bytes!!")),
+		auditcore.WithTxManager(noopTxRunner{}),
+		auditcore.WithCursorCodec(auditCursorCodec),
+	)
+
+	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(ac))
+	require.NoError(t, asm.Register(cc))
+	require.NoError(t, asm.Register(auc))
+
+	app := bootstrap.New(
+		bootstrap.WithAssembly(asm),
+		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil,
+			bootstrap.WithListenerNet(primaryLn)),
+		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), nil,
+			bootstrap.WithListenerNet(internalLn)),
+		// HealthListener declared explicitly — /healthz, /readyz move here.
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), nil,
+			bootstrap.WithListenerNet(healthLn)),
+		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		bootstrap.WithShutdownTimeout(2*time.Second),
+		bootstrap.WithAuthDiscovery(),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- app.Run(ctx) }()
+
+	healthAddr := healthLn.Addr().String()
+	primaryAddr := primaryLn.Addr().String()
+
+	// Wait for health listener to become ready (health endpoints live there now).
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "health listener did not become ready")
+
+	// Health listener: /healthz and /readyz must return 200.
+	t.Run("health_listener_serves_healthz_200", func(t *testing.T) {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", healthAddr))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"health listener must serve /healthz with 200")
+	})
+
+	t.Run("health_listener_serves_readyz_200", func(t *testing.T) {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", healthAddr))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.Equal(t, http.StatusOK, resp.StatusCode,
+			"health listener must serve /readyz with 200")
+	})
+
+	// Primary listener: /healthz must NOT return 200 when a dedicated HealthListener is
+	// active. With JWT auth on primary, unregistered paths return 401 (auth challenge).
+	// Either 401 or 404 proves the route is absent from primary's mux.
+	t.Run("primary_does_not_serve_healthz", func(t *testing.T) {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.NotEqual(t, http.StatusOK, resp.StatusCode,
+			"primary listener must not return 200 for /healthz when a dedicated HealthListener is declared; "+
+				"got %d (401=auth challenge on unregistered route, 404=no route registered)", resp.StatusCode)
+	})
+
+	t.Run("primary_does_not_serve_readyz", func(t *testing.T) {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", primaryAddr))
+		require.NoError(t, err)
+		defer resp.Body.Close()
+		assert.NotEqual(t, http.StatusOK, resp.StatusCode,
+			"primary listener must not return 200 for /readyz when a dedicated HealthListener is declared")
 	})
 
 	cancel()

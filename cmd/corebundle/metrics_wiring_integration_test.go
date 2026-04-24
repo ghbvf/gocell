@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,7 +38,9 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
+	app, err := buildBootstrapFromShared(t, shared,
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 

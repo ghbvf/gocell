@@ -7,18 +7,25 @@ package bootstrap_test
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"io"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/go-chi/chi/v5"
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
@@ -247,6 +254,64 @@ func TestPolicyMTLS(t *testing.T) {
 	})
 }
 
+// TestPolicyMTLS_HappyPath_ValidCert verifies that a request with a valid peer
+// certificate chaining to the CA pool returns 200 OK (TEST-04).
+func TestPolicyMTLS_HappyPath_ValidCert(t *testing.T) {
+	t.Parallel()
+
+	// Generate self-signed CA + leaf cert entirely in memory.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "test-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	require.NoError(t, err)
+	caCert, err := x509.ParseCertificate(caDER)
+	require.NoError(t, err)
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	require.NoError(t, err)
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "test-client"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	require.NoError(t, err)
+	leafCert, err := x509.ParseCertificate(leafDER)
+	require.NoError(t, err)
+
+	// Build CA pool containing only our CA.
+	pool := x509.NewCertPool()
+	pool.AddCert(caCert)
+
+	p := bootstrap.PolicyMTLS(pool)
+	mux := chi.NewMux()
+	bootstrap.ApplyPolicyForTest(p, mux)
+	mux.MethodFunc(http.MethodGet, "/", okHandler.ServeHTTP)
+
+	// Inject peer certificate into the request's TLS state (bypasses actual TLS).
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	req.TLS = &tls.ConnectionState{
+		PeerCertificates: []*x509.Certificate{leafCert},
+	}
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200 (valid peer cert chaining to CA pool)", rr.Code)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // PolicyVerboseToken
 // ---------------------------------------------------------------------------
@@ -364,9 +429,27 @@ func TestPolicyStack(t *testing.T) {
 	t.Run("describe", func(t *testing.T) {
 		t.Parallel()
 		p := bootstrap.PolicyStack(bootstrap.PolicyNone(), bootstrap.PolicyNone())
-		if got := p.Describe(); got != "stack" {
-			t.Errorf("Describe() = %q, want %q", got, "stack")
+		if got := p.Describe(); got != "stack[none, none]" {
+			t.Errorf("Describe() = %q, want %q", got, "stack[none, none]")
 		}
+	})
+
+	// Verify PolicyStack with zero elements produces a valid no-op policy:
+	// requests pass through without restriction.
+	t.Run("empty_stack", func(t *testing.T) {
+		t.Parallel()
+		p := bootstrap.PolicyStack()
+		require.NotNil(t, p, "PolicyStack() must return a non-nil policy")
+		require.Equal(t, "stack[]", p.Describe(), "empty stack Describe must be stack[]")
+
+		mux := chi.NewMux()
+		bootstrap.ApplyPolicyForTest(p, mux)
+		mux.MethodFunc(http.MethodGet, "/", okHandler.ServeHTTP)
+
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+		require.Equal(t, http.StatusOK, rr.Code, "empty stack must pass requests through")
 	})
 
 	// Verify PolicyStack(A, B, C) passes requests through all three policies
