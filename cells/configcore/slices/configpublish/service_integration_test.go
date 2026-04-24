@@ -130,7 +130,7 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 	// Baseline: seed did NOT emit an outbox row (only Publish does). The
 	// count before is 0 and must become 1 after Publish to prove the L2
 	// co-commit on the same tx as the config_versions row.
-	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
+	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigVersionPublished)
 	require.Equal(t, 0, before, "seed must not write to outbox_entries")
 
 	ver, err := bundle.svc.Publish(ctx, "integration.publish.key")
@@ -146,9 +146,9 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 
 	// Outbox-side: Publish's L2 co-commit must have added exactly one
 	// event.config.version-published.v1 row to outbox_entries in the same tx.
-	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigChanged)
+	after := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigVersionPublished)
 	assert.Equal(t, 1, after-before,
-		"Publish must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigChanged)
+		"Publish must co-commit exactly one %s outbox row (L2 atomicity)", domain.TopicConfigVersionPublished)
 }
 
 // TestRollback_AtomicWithOutbox verifies that config_entries (version bump) and

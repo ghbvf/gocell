@@ -47,11 +47,20 @@ func TestService_HandleEvent(t *testing.T) {
 			wantChain: 1,
 		},
 		{
-			name: "empty payload",
+			name: "config entry-written event (no userId → system actor)",
 			entry: outbox.Entry{
 				ID:        "evt-3",
 				EventType: "event.config.entry-written.v1",
-				Payload:   []byte("{}"),
+				Payload:   mustJSON(map[string]any{"action": "created", "key": "app.name", "value": "v", "version": 1}),
+			},
+			wantChain: 1,
+		},
+		{
+			name: "user created event with snake_case user_id (transitional)",
+			entry: outbox.Entry{
+				ID:        "evt-4",
+				EventType: "event.user.created.v1",
+				Payload:   mustJSON(map[string]any{"user_id": "usr-2", "username": "bob"}),
 			},
 			wantChain: 1,
 		},
@@ -136,6 +145,55 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 	err = svc.HandleEvent(context.Background(), entry)
 	require.NoError(t, err, "publish failure in demo mode should not fail append")
 	assert.Equal(t, 1, svc.ChainLen(), "entry should still be appended to chain")
+}
+
+// TestService_HandleEvent_ActorExtraction covers the snake_case + camelCase
+// fallback in the actor-id extractor. Regression guard from PR-A6 review:
+// event.user.created.v1 still publishes user_id (snake), while session/config
+// events publish userId (camel). auditappend must attribute both correctly
+// instead of silently falling back to "system".
+func TestService_HandleEvent_ActorExtraction(t *testing.T) {
+	tests := []struct {
+		name        string
+		eventType   string
+		payload     map[string]any
+		wantActorID string
+	}{
+		{
+			name:        "camelCase userId (session.created)",
+			eventType:   "event.session.created.v1",
+			payload:     map[string]any{"sessionId": "sess-1", "userId": "usr-cam"},
+			wantActorID: "usr-cam",
+		},
+		{
+			name:        "snake_case user_id (user.created, transitional)",
+			eventType:   "event.user.created.v1",
+			payload:     map[string]any{"user_id": "usr-snk", "username": "alice"},
+			wantActorID: "usr-snk",
+		},
+		{
+			name:        "no actor field (config.entry-written) → system",
+			eventType:   "event.config.entry-written.v1",
+			payload:     map[string]any{"action": "created", "key": "k"},
+			wantActorID: "system",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc, repo := newTestService()
+			entry := outbox.Entry{
+				ID:        "evt-" + tt.name,
+				EventType: tt.eventType,
+				Payload:   mustJSON(tt.payload),
+			}
+			require.NoError(t, svc.HandleEvent(context.Background(), entry))
+
+			entries, err := repo.GetRange(context.Background(), 0, 1)
+			require.NoError(t, err)
+			require.Len(t, entries, 1)
+			assert.Equal(t, tt.wantActorID, entries[0].ActorID)
+		})
+	}
 }
 
 func mustJSON(v any) []byte {

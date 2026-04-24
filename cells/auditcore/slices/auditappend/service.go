@@ -89,11 +89,14 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Extract userId from payload when present. Upstream events carry userId
-	// uniformly (camelCase) after PR-A6; topics that don't identify an actor
-	// (e.g. config events) simply yield empty → actorID falls back to "system".
+	// Extract userId from payload when present. PR-A6 migrated session/config
+	// events to camelCase `userId`; event.user.created.v1 / event.user.locked.v1
+	// still publish snake_case `user_id` (out of PR-A6 scope — trailing sweep).
+	// Accept either key so actor attribution stays correct across the mix; once
+	// user events also migrate, the snake_case alias can be dropped.
 	var payload struct {
-		UserID string `json:"userId"`
+		UserIDCamel string `json:"userId"`
+		UserIDSnake string `json:"user_id"`
 	}
 	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
 		s.logger.Warn("audit-append: failed to extract actor from payload",
@@ -102,7 +105,10 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 			slog.String("event_type", entry.EventType))
 	}
 
-	actorID := payload.UserID
+	actorID := payload.UserIDCamel
+	if actorID == "" {
+		actorID = payload.UserIDSnake
+	}
 	if actorID == "" {
 		actorID = "system"
 	}
