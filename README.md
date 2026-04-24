@@ -206,6 +206,11 @@ curl http://localhost:8080/api/v1/hello
 | [ssobff](examples/ssobff/) | Medium-High | 3 built-in Cells composition (access + audit + config) |
 | [iotdevice](examples/iotdevice/) | High | L4 DeviceLatent: command queue, ack, high-latency loop |
 
+The `ssobff` example uses the initial admin bootstrap feature. On first run it writes a
+temporary credential file whose location depends on the OS (Linux: `/run/gocell/`, macOS:
+`~/Library/Application Support/gocell/run/`, Windows: `%LOCALAPPDATA%\gocell\run\`). Override
+with `GOCELL_STATE_DIR`. See `docs/operations/first-run-setup.md` for details.
+
 ## Runtime Modes
 
 GoCell assemblies must declare a `DurabilityMode` explicitly (zero value is rejected):

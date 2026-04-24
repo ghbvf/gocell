@@ -82,3 +82,33 @@ Integration tests run in a separate CI stage after unit tests pass. The pipeline
 3. Tears down services via `docker compose down`.
 
 See `scripts/healthcheck-verify.sh` for the health-check gate that precedes integration tests.
+
+## Cross-Platform OS Smoke Matrix
+
+The `os-smoke` CI job runs a targeted subset of unit tests on macOS and Windows runners to
+verify cross-platform behaviour that cannot be exercised on Linux alone:
+
+```
+go test -count=1 -timeout 5m \
+  ./runtime/shutdown/... \
+  ./cells/accesscore/initialadmin/... \
+  ./runtime/config/... \
+  ./kernel/governance/...
+```
+
+**When it runs:** on every PR (`pr-check.yml`) and every push to `develop` (`ci.yml`), in
+parallel with the Linux `build-test` job.
+
+**What it tests:**
+- `runtime/shutdown` — platform-specific signal set (`SIGINT`/`SIGTERM` on Unix, `os.Interrupt`
+  on Windows).
+- `cells/accesscore/initialadmin` — per-OS credential file path resolution and DACL security
+  descriptor (Windows).
+- `runtime/config` — symlink pivot detection; symlink tests are skipped on Windows via
+  `t.Skip("symlink requires SeCreateSymbolicLinkPrivilege on Windows")` so the Windows runner
+  passes cleanly while macOS validates the full symlink path.
+- `kernel/governance` — `IsWithinRoot` symlink escape test; same Windows skip applies.
+
+**Coverage:** the `os-smoke` job does NOT upload a coverage profile and does NOT contribute to
+SonarCloud coverage. Coverage is collected exclusively from the Linux `build-test` and
+`integration-test` jobs.
