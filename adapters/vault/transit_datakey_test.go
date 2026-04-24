@@ -74,17 +74,27 @@ func TestEncryptDecrypt_DataKeyRoundTrip(t *testing.T) {
 }
 
 func TestEncrypt_MalformedDatakeyResponse(t *testing.T) {
-	validDEK := make([]byte, 32)
-	for i := range validDEK {
-		validDEK[i] = byte(i + 1)
+	for _, tc := range malformedDatakeyResponseCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			fake, h := newMalformedDatakeyHandle(t, tc.response)
+			_, _, _, _, err := h.Encrypt(context.Background(), []byte("payload"), []byte("aad"))
+			assertMalformedDatakeyError(t, err)
+			assertDatakeyRequestOnly(t, fake)
+		})
 	}
+}
+
+type malformedDatakeyResponseCase struct {
+	name     string
+	response map[string]any
+}
+
+func malformedDatakeyResponseCases() []malformedDatakeyResponseCase {
+	validDEK := []byte("0123456789abcdef0123456789abcdef")
 	validPlaintext := base64.StdEncoding.EncodeToString(validDEK)
 	validCiphertext := "vault:v3:" + base64.StdEncoding.EncodeToString(validDEK)
 
-	cases := []struct {
-		name     string
-		response map[string]any
-	}{
+	return []malformedDatakeyResponseCase{
 		{
 			name:     "missing plaintext",
 			response: map[string]any{"ciphertext": validCiphertext},
@@ -106,47 +116,51 @@ func TestEncrypt_MalformedDatakeyResponse(t *testing.T) {
 			response: map[string]any{"plaintext": validPlaintext, "ciphertext": 42},
 		},
 	}
+}
 
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			fake := &fakeVaultClientWithWriteOverride{
-				fakeVaultClient: fakeVaultClient{latestVersion: 3},
-			}
-			fake.writeFn = func(_ context.Context, path string, data map[string]any) (map[string]any, error) {
-				fake.datakeyCalls.Add(1)
-				fake.lastWritePath = path
-				fake.lastWriteData = data
-				return tc.response, nil
-			}
-			p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
-			if err != nil {
-				t.Fatalf("NewTransitKeyProvider: %v", err)
-			}
-			h := mustCurrent(t, p)
+func newMalformedDatakeyHandle(t *testing.T, response map[string]any) (*fakeVaultClientWithWriteOverride, *vaultTransitHandle) {
+	t.Helper()
+	fake := &fakeVaultClientWithWriteOverride{
+		fakeVaultClient: fakeVaultClient{latestVersion: 3},
+	}
+	fake.writeFn = func(_ context.Context, path string, data map[string]any) (map[string]any, error) {
+		fake.datakeyCalls.Add(1)
+		fake.lastWritePath = path
+		fake.lastWriteData = data
+		return response, nil
+	}
+	p, err := NewTransitKeyProvider(context.Background(), fake, "transit", "gocell-config", NewStaticTokenAuth(nil, "test-token"))
+	if err != nil {
+		t.Fatalf("NewTransitKeyProvider: %v", err)
+	}
+	return fake, mustCurrent(t, p)
+}
 
-			_, _, _, _, err = h.Encrypt(context.Background(), []byte("payload"), []byte("aad"))
-			if err == nil {
-				t.Fatal("Encrypt expected malformed datakey response error, got nil")
-			}
-			if !errChainHasCode(err, errcode.ErrKeyProviderEncryptFailed) {
-				t.Errorf("error chain must contain ErrKeyProviderEncryptFailed; err=%v", err)
-			}
-			if errcode.IsTransient(err) {
-				t.Errorf("malformed datakey response must be permanent, got transient err=%v", err)
-			}
-			if got := fake.datakeyCalls.Load(); got != 1 {
-				t.Errorf("datakey call count = %d, want 1", got)
-			}
-			if fake.lastWritePath != "transit/datakey/plaintext/gocell-config" {
-				t.Errorf("lastWritePath = %q, want transit/datakey/plaintext/gocell-config", fake.lastWritePath)
-			}
-			if bits := fake.lastWriteData["bits"]; bits != 256 {
-				t.Errorf("datakey body bits = %v, want 256", bits)
-			}
-			if got := fake.encryptCalls.Load(); got != 0 {
-				t.Errorf("legacy /encrypt path must not be called, got %d hits", got)
-			}
-		})
+func assertMalformedDatakeyError(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("Encrypt expected malformed datakey response error, got nil")
+	}
+	if !errChainHasCode(err, errcode.ErrKeyProviderEncryptFailed) {
+		t.Errorf("error chain must contain ErrKeyProviderEncryptFailed; err=%v", err)
+	}
+	if errcode.IsTransient(err) {
+		t.Errorf("malformed datakey response must be permanent, got transient err=%v", err)
+	}
+}
+
+func assertDatakeyRequestOnly(t *testing.T, fake *fakeVaultClientWithWriteOverride) {
+	t.Helper()
+	if got := fake.datakeyCalls.Load(); got != 1 {
+		t.Errorf("datakey call count = %d, want 1", got)
+	}
+	if fake.lastWritePath != "transit/datakey/plaintext/gocell-config" {
+		t.Errorf("lastWritePath = %q, want transit/datakey/plaintext/gocell-config", fake.lastWritePath)
+	}
+	if bits := fake.lastWriteData["bits"]; bits != 256 {
+		t.Errorf("datakey body bits = %v, want 256", bits)
+	}
+	if got := fake.encryptCalls.Load(); got != 0 {
+		t.Errorf("legacy /encrypt path must not be called, got %d hits", got)
 	}
 }
