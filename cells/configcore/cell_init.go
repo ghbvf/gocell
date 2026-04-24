@@ -91,22 +91,19 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 				"configcore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
 		}
 	} else {
+		// DirectEmitter default fail-closed (k8s apiserver audit model): config
+		// changes must propagate or the write surfaces an error so operators
+		// notice misconfig instead of running with a stale subscriber view.
+		// Per-entry FailurePolicy (outbox.Entry.FailurePolicy) lets individual
+		// topics opt into fail-open; configwrite uses the default.
 		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-			CellID:       "configcore",
-			Mode:         mode,
-			Publisher:    c.pendingOutboxPub,
-			OutboxWriter: c.pendingOutboxWriter,
-			TxRunner:     c.txRunner,
-			Logger:       c.logger,
-			// configcore: demo → fail-open (tolerate missing subscribers during
-			// local development); durable → fail-closed (config changes must
-			// propagate or the write fails, so operators notice misconfig).
-			// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
-			DirectPublishMode: cell.DirectPublishModeForDurability(
-				mode,
-				outbox.DirectPublishFailOpen,
-				outbox.DirectPublishFailClosed,
-			),
+			CellID:            "configcore",
+			Mode:              mode,
+			Publisher:         c.pendingOutboxPub,
+			OutboxWriter:      c.pendingOutboxWriter,
+			TxRunner:          c.txRunner,
+			Logger:            c.logger,
+			DirectPublishMode: outbox.DirectPublishFailClosed,
 		})
 		if err != nil {
 			return err

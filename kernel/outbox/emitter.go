@@ -93,9 +93,17 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 	}
 	topic := entry.RoutingTopic()
 	if err := e.publisher.Publish(ctx, topic, envelope); err != nil {
-		if e.mode == DirectPublishFailOpen {
-			e.logger.Warn("outbox: direct publish failed (fail-open)",
+		// Per-entry FailurePolicy wins over construction-time default.
+		// Security / audit-chain events set FailurePolicyFailClosed at
+		// entry-construction time; observability events may opt into
+		// FailurePolicyFailOpen. Zero value falls through to e.mode.
+		// ref: k8s apiserver/pkg/audit Backend.FailurePolicy model.
+		mode := entry.FailurePolicy.Resolve(e.mode)
+		if mode == DirectPublishFailOpen {
+			e.logger.Warn("outbox: direct publish failed (fail-open) — event dropped",
 				slog.String("topic", topic),
+				slog.String("entry_id", entry.ID),
+				slog.String("event_type", entry.EventType),
 				slog.String("error", err.Error()))
 			return nil
 		}

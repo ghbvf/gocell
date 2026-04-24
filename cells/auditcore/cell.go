@@ -174,22 +174,20 @@ func (c *AuditCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		outcomeDurable = outbox.ReportDurable(c.emitter)
 	}
 	if !hasEmitter {
+		// DirectEmitter default fail-closed (k8s apiserver audit model):
+		// audit-chain events (audit.appended, integrity-verified) are the
+		// source of truth for compliance; publisher failure must surface to
+		// caller so ops notices outages instead of silently losing events.
+		// Opt-in fail-open is per-entry via outbox.Entry.FailurePolicy, and
+		// archtest OUTBOX-TOPIC-FAILOPEN-01 bans it for audit.* topics.
 		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-			CellID:       "auditcore",
-			Mode:         deps.DurabilityMode,
-			Publisher:    c.pendingOutboxPub,
-			OutboxWriter: c.pendingOutboxWriter,
-			TxRunner:     c.txRunner,
-			Logger:       c.logger,
-			// auditcore runs DirectEmitter fail-open under both modes — audit
-			// events are reconcile-replayable (append-only log is the source of
-			// truth), so dropping a publisher failure is acceptable.
-			// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
-			DirectPublishMode: cell.DirectPublishModeForDurability(
-				deps.DurabilityMode,
-				outbox.DirectPublishFailOpen,
-				outbox.DirectPublishFailOpen,
-			),
+			CellID:            "auditcore",
+			Mode:              deps.DurabilityMode,
+			Publisher:         c.pendingOutboxPub,
+			OutboxWriter:      c.pendingOutboxWriter,
+			TxRunner:          c.txRunner,
+			Logger:            c.logger,
+			DirectPublishMode: outbox.DirectPublishFailClosed,
 		})
 		if err != nil {
 			return err

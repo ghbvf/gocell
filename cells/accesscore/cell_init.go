@@ -44,22 +44,19 @@ func (c *AccessCore) resolveEmitter(mode cell.DurabilityMode) error {
 				"accesscore: WithEmitter in durable mode requires a durable outbox.Emitter (WriterEmitter over real writer); got non-durable emitter")
 		}
 	} else {
+		// DirectEmitter default fail-closed (k8s apiserver audit model): any
+		// entry that needs fail-open opts in at construction time via
+		// outbox.Entry.FailurePolicy = FailurePolicyFailOpen. Security topics
+		// (session.*, user.*, role.*) must not opt in — enforced by
+		// tools/archtest OUTBOX-TOPIC-FAILOPEN-01.
 		outcome, err := cell.ResolveEmitter(cell.EmitterConfig{
-			CellID:       "accesscore",
-			Mode:         mode,
-			Publisher:    c.pendingOutboxPub,
-			OutboxWriter: c.pendingOutboxWriter,
-			TxRunner:     c.txRunner,
-			Logger:       c.logger,
-			// accesscore runs DirectEmitter fail-open under both modes —
-			// session revocation events are rare and dropping a publisher
-			// failure in durable mode matches demo semantics (non-critical sink).
-			// ref: kernel/cell.DirectPublishModeForDurability (PR-A5c / A5a-R4).
-			DirectPublishMode: cell.DirectPublishModeForDurability(
-				mode,
-				outbox.DirectPublishFailOpen,
-				outbox.DirectPublishFailOpen,
-			),
+			CellID:            "accesscore",
+			Mode:              mode,
+			Publisher:         c.pendingOutboxPub,
+			OutboxWriter:      c.pendingOutboxWriter,
+			TxRunner:          c.txRunner,
+			Logger:            c.logger,
+			DirectPublishMode: outbox.DirectPublishFailClosed,
 		})
 		if err != nil {
 			return err

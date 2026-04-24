@@ -162,3 +162,64 @@ func TestReportDurable_FallbackForUnknownEmitter(t *testing.T) {
 type unknownEmitter struct{}
 
 func (unknownEmitter) Emit(_ context.Context, _ Entry) error { return nil }
+
+// TestDirectEmitter_EntryFailurePolicyOverridesCtorDefault covers the F9
+// per-entry failure policy matrix: zero value falls through to ctor default;
+// non-zero entry policy wins over ctor. Ensures security topics that set
+// FailurePolicyFailClosed at entry-construction time surface publisher
+// failures even when Emitter was constructed with FailOpen for other entries.
+//
+// ref: k8s apiserver/pkg/audit Backend.FailurePolicy (per-event, not per-sink).
+func TestDirectEmitter_EntryFailurePolicyOverridesCtorDefault(t *testing.T) {
+	tests := []struct {
+		name        string
+		ctorMode    DirectPublishFailureMode
+		entryPolicy FailurePolicy
+		wantErr     bool
+	}{
+		{"default_policy_falls_through_to_ctor_failopen", DirectPublishFailOpen, FailurePolicyDefault, false},
+		{"default_policy_falls_through_to_ctor_failclosed", DirectPublishFailClosed, FailurePolicyDefault, true},
+		{"entry_failclosed_overrides_ctor_failopen", DirectPublishFailOpen, FailurePolicyFailClosed, true},
+		{"entry_failopen_overrides_ctor_failclosed", DirectPublishFailClosed, FailurePolicyFailOpen, false},
+		{"entry_failopen_matches_ctor_failopen", DirectPublishFailOpen, FailurePolicyFailOpen, false},
+		{"entry_failclosed_matches_ctor_failclosed", DirectPublishFailClosed, FailurePolicyFailClosed, true},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
+			emitter, err := NewDirectEmitter(publisher, tc.ctorMode)
+			require.NoError(t, err)
+
+			entry := validEntry("policy-test-" + tc.name)
+			entry.FailurePolicy = tc.entryPolicy
+
+			got := emitter.Emit(context.Background(), entry)
+			if tc.wantErr {
+				assert.Error(t, got, "expected publisher error to surface")
+			} else {
+				assert.NoError(t, got, "expected publisher error to be dropped")
+			}
+			require.Len(t, publisher.calls, 1, "publish must be attempted regardless of policy")
+		})
+	}
+}
+
+// TestFailurePolicy_Resolve covers the standalone resolution table (ctor
+// default fallback semantics for the zero value).
+func TestFailurePolicy_Resolve(t *testing.T) {
+	tests := []struct {
+		policy      FailurePolicy
+		ctorDefault DirectPublishFailureMode
+		want        DirectPublishFailureMode
+	}{
+		{FailurePolicyDefault, DirectPublishFailOpen, DirectPublishFailOpen},
+		{FailurePolicyDefault, DirectPublishFailClosed, DirectPublishFailClosed},
+		{FailurePolicyFailOpen, DirectPublishFailClosed, DirectPublishFailOpen},
+		{FailurePolicyFailClosed, DirectPublishFailOpen, DirectPublishFailClosed},
+	}
+	for _, tc := range tests {
+		assert.Equal(t, tc.want, tc.policy.Resolve(tc.ctorDefault),
+			"policy=%v default=%v", tc.policy, tc.ctorDefault)
+	}
+}

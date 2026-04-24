@@ -113,6 +113,52 @@ type Entry struct {
 	// persistence. Consumer-side middleware may restore those keys back into
 	// handler context. Explicit non-empty metadata values win over bridge values.
 	Metadata map[string]string
+
+	// FailurePolicy controls how an Emitter handles publisher-side failures
+	// for this specific entry. Zero value (FailurePolicyDefault) falls
+	// through to the Emitter's construction-time default.
+	//
+	// In-process control plane only — not marshalled to the wire envelope
+	// (see MarshalEnvelope). Callers that need per-topic/per-event semantics
+	// (e.g., security topics that must surface publisher errors; observability
+	// topics that may drop on failure) set this at entry-construction time.
+	//
+	// ref: kubernetes apiserver/pkg/audit Backend.FailurePolicy (Ignore/Fail)
+	// — policy lives with the event, not hardcoded per sink.
+	FailurePolicy FailurePolicy `json:"-"`
+}
+
+// FailurePolicy expresses how an Emitter handles publisher-side failures
+// for a particular Entry. Cells default their DirectEmitter to
+// DirectPublishFailClosed (k8s apiserver audit model); individual entries
+// opt into FailOpen for observational / non-critical sinks.
+//
+// Reserved for direct-publish paths: WriterEmitter (transactional outbox)
+// surfaces errors through the surrounding transaction and does not consult
+// FailurePolicy — the field is ignored there by design.
+type FailurePolicy int
+
+const (
+	// FailurePolicyDefault falls through to Emitter ctor default. Zero value.
+	FailurePolicyDefault FailurePolicy = iota
+	// FailurePolicyFailOpen drops on publisher failure (log + counter), returns nil.
+	FailurePolicyFailOpen
+	// FailurePolicyFailClosed surfaces publisher failure to caller.
+	FailurePolicyFailClosed
+)
+
+// Resolve returns the effective DirectPublishFailureMode, preferring the
+// per-entry policy when set and falling through to the Emitter construction-
+// time default when FailurePolicyDefault.
+func (p FailurePolicy) Resolve(ctorDefault DirectPublishFailureMode) DirectPublishFailureMode {
+	switch p {
+	case FailurePolicyFailOpen:
+		return DirectPublishFailOpen
+	case FailurePolicyFailClosed:
+		return DirectPublishFailClosed
+	default:
+		return ctorDefault
+	}
 }
 
 // RoutingTopic returns the broker routing key for the entry.
