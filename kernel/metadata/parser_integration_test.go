@@ -62,8 +62,8 @@ func TestParseRealProject(t *testing.T) {
 		assert.Contains(t, pm.Slices, key, "missing slice %s", key)
 	}
 
-	// --- Contracts: at least the 26 contracts after per-operation split (upper bound catches over-parse) ---
-	assert.GreaterOrEqual(t, len(pm.Contracts), 26, "expected at least 26 contracts after per-operation split")
+	// --- Contracts: at least the 27 contracts after config state-sync split (upper bound catches over-parse) ---
+	assert.GreaterOrEqual(t, len(pm.Contracts), 27, "expected at least 27 contracts after config state-sync split")
 	assert.LessOrEqual(t, len(pm.Contracts), 64, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
 	expectedContracts := []string{
 		"http.auth.login.v1",
@@ -84,7 +84,9 @@ func TestParseRealProject(t *testing.T) {
 		"command.device-command.ack.v1",
 		"event.session.created.v1",
 		"event.audit.appended.v1",
-		"event.config.changed.v1",
+		"event.config.entry-upserted.v1",
+		"event.config.entry-deleted.v1",
+		"event.config.version-published.v1",
 		"event.session.revoked.v1",
 		"event.user.created.v1",
 		"event.user.locked.v1",
@@ -146,4 +148,38 @@ func TestParseRealProject(t *testing.T) {
 	require.NotNil(t, evt.Replayable)
 	assert.True(t, *evt.Replayable)
 	assert.Equal(t, "event_id", evt.IdempotencyKey)
+}
+
+func TestConfigEventSubscribersMatchSliceUsages(t *testing.T) {
+	root := testProjectRoot(t)
+	p := NewParser(root)
+	pm, err := p.Parse()
+	require.NoError(t, err, "Parse should succeed on real project files")
+
+	subscribingCells := func(contractID string) []string {
+		var cells []string
+		for _, s := range pm.Slices {
+			for _, usage := range s.ContractUsages {
+				if usage.Contract == contractID && usage.Role == "subscribe" {
+					cells = append(cells, s.BelongsToCell)
+				}
+			}
+		}
+		return cells
+	}
+
+	expected := map[string][]string{
+		"event.config.entry-upserted.v1":    {"accesscore", "auditcore", "configcore"},
+		"event.config.entry-deleted.v1":     {"accesscore", "auditcore", "configcore"},
+		"event.config.version-published.v1": {"auditcore"},
+		"event.config.rollback.v1":          {"auditcore"},
+	}
+	for contractID, wantSubscribers := range expected {
+		c := pm.Contracts[contractID]
+		require.NotNil(t, c, "missing contract %s", contractID)
+		assert.ElementsMatch(t, wantSubscribers, c.Endpoints.Subscribers,
+			"contract %s subscribers drifted", contractID)
+		assert.ElementsMatch(t, wantSubscribers, subscribingCells(contractID),
+			"slice contractUsages for %s drifted from contract subscribers", contractID)
+	}
 }

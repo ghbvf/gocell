@@ -213,7 +213,7 @@ Produces: event.audit.integrity-verified.v1
 一致性：L2
 Slices: configread / configwrite / configpublish / configsubscribe / featureflag / flagwrite
 Journeys: J-confighotreload / J-configrollback
-Produces: event.config.changed.v1 / event.config.rollback.v1 / http.config.get.v1
+Produces: event.config.entry-upserted.v1 / event.config.entry-deleted.v1 / event.config.version-published.v1 / event.config.rollback.v1 / http.config.get.v1
 ```
 
 **三个 Cell 之间的交互：**
@@ -222,8 +222,8 @@ Produces: event.config.changed.v1 / event.config.rollback.v1 / http.config.get.v
 accesscore ──event.session.*──→ auditcore
 accesscore ──event.user.*────→ auditcore
 configcore ──event.config.*──→ auditcore
-configcore ──event.config.*──→ accesscore（配置热更新）
-configcore ──event.config.*──→ 任何订阅 cell
+configcore ──event.config.entry-upserted/deleted──→ accesscore（配置热更新）
+configcore ──event.config.entry-upserted/deleted──→ 任何状态同步订阅 cell
 ```
 
 **内置 Journey 完整清单（8 条）：**

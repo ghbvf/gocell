@@ -1,20 +1,24 @@
 // Package configsubscribe implements the config-subscribe slice: consumes
-// config change events to update a local cache.
+// config state-sync events to update a local cache.
 package configsubscribe
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"sync"
 
+	configevents "github.com/ghbvf/gocell/cells/configcore/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// TopicConfigChanged is re-exported from domain for this package's callers.
-const TopicConfigChanged = domain.TopicConfigChanged
+// Re-exported from domain so external callers / tests can refer to the topic
+// without importing internal/domain directly.
+const (
+	TopicConfigEntryUpserted = domain.TopicConfigEntryUpserted
+	TopicConfigEntryDeleted  = domain.TopicConfigEntryDeleted
+)
 
 // Cache holds the latest config values observed from events.
 type Cache struct {
@@ -56,60 +60,42 @@ func (s *Service) Cache() *Cache {
 	return s.cache
 }
 
-// HandleEvent processes a config change event. This is the callback registered
-// with the event bus subscriber.
+// HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
 //
-// Consumer: cg-configcore-config-changed
+// Consumer: cg-configcore-entry-upserted
 // Idempotency key: N/A (in-memory cache, idempotent by nature)
 // ACK timing: after cache update
 // Retry: transient errors -> NACK+backoff / permanent errors -> dead letter
-func (s *Service) HandleEvent(_ context.Context, entry outbox.Entry) error {
-	var event struct {
-		Action string `json:"action"`
-		Key    string `json:"key"`
-		Value  string `json:"value"`
-	}
-
-	if err := json.Unmarshal(entry.Payload, &event); err != nil {
-		s.logger.Error("config-subscribe: failed to unmarshal event, routing to dead letter",
+func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
+	event, err := configevents.DecodeEntryUpserted(entry.Payload)
+	if err != nil {
+		s.logger.Error("config-subscribe: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		// Permanent error: malformed payload must not be retried.
-		// WrapLegacyHandler detects PermanentError and returns DispositionReject.
-		//
-		// ref: configreceive/service.go:53 — same pattern
-		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal payload: %w", err))
+		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err))
 	}
 
-	switch event.Action {
-	case "deleted":
-		s.cache.mu.Lock()
-		delete(s.cache.values, event.Key)
-		s.cache.mu.Unlock()
-		s.logger.Info("config-subscribe: key deleted from cache",
-			slog.String("key", event.Key))
-	case "created", "updated":
-		s.cache.mu.Lock()
-		s.cache.values[event.Key] = event.Value
-		s.cache.mu.Unlock()
-		s.logger.Info("config-subscribe: cache updated",
-			slog.String("key", event.Key), slog.String("action", event.Action))
-	case "published":
-		// Published events carry config_id+version but no value — skip cache
-		// update to avoid overwriting with empty string. The actual value is
-		// already in cache from the preceding created/updated event.
-		s.logger.Info("config-subscribe: published event (no cache update)",
-			slog.String("key", event.Key))
-	default:
-		// Fail-closed: unknown actions are permanent errors routed to DLX.
-		// The cache is NOT modified.
-		//
-		// ref: K8s workqueue fail-closed semantics; Watermill Nack on unknown type
-		s.logger.Warn("config-subscribe: unknown action, routing to dead letter",
-			slog.String("action", event.Action), slog.String("key", event.Key))
-		return outbox.NewPermanentError(
-			fmt.Errorf("unknown action %q for key %q", event.Action, event.Key),
-		)
+	s.cache.mu.Lock()
+	s.cache.values[event.Key] = event.Value
+	s.cache.mu.Unlock()
+	s.logger.Info("config-subscribe: cache updated",
+		slog.String("key", event.Key),
+		slog.Int("version", event.Version))
+	return nil
+}
+
+// HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
+func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) error {
+	event, err := configevents.DecodeEntryDeleted(entry.Payload)
+	if err != nil {
+		s.logger.Error("config-subscribe: failed to unmarshal entry-deleted event, routing to dead letter",
+			slog.Any("error", err), slog.String("entry_id", entry.ID))
+		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err))
 	}
 
+	s.cache.mu.Lock()
+	delete(s.cache.values, event.Key)
+	s.cache.mu.Unlock()
+	s.logger.Info("config-subscribe: key deleted from cache",
+		slog.String("key", event.Key))
 	return nil
 }

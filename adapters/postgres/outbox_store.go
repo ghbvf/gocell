@@ -38,21 +38,36 @@ func NewOutboxStore(db relayDB) *PGOutboxStore {
 // the cognitive-complexity ceiling.
 // ---------------------------------------------------------------------------
 
-// claimPendingQuery is identical to the inner SQL of OutboxRelay.claim.
+// claimPendingQuery first materializes the rows selected for this claim, then
+// updates them, then returns the updated entries ordered by the materialized
+// selection keys. UPDATE ... RETURNING does not guarantee row order by itself,
+// so the final ORDER BY is required for durable delivery order.
+//
 // ORDER BY matches idx_outbox_pending_v2 (next_retry_at NULLS FIRST, created_at)
-// so PostgreSQL can use the partial index without an extra Sort step.
-const claimPendingQuery = `UPDATE outbox_entries
+// with id as a stable tie-breaker for rows with identical timestamps.
+const claimPendingQuery = `WITH picked AS MATERIALIZED (
+	SELECT id, next_retry_at, created_at
+	FROM outbox_entries
+	WHERE status = $2
+		AND (next_retry_at IS NULL OR next_retry_at <= now())
+	ORDER BY next_retry_at NULLS FIRST, created_at, id
+	LIMIT $3
+	FOR UPDATE SKIP LOCKED
+),
+updated AS (
+	UPDATE outbox_entries AS e
 	SET status = $1, claimed_at = now()
-	WHERE id IN (
-		SELECT id FROM outbox_entries
-		WHERE status = $2
-			AND (next_retry_at IS NULL OR next_retry_at <= now())
-		ORDER BY next_retry_at NULLS FIRST, created_at
-		LIMIT $3
-		FOR UPDATE SKIP LOCKED
-	)
-	RETURNING id, aggregate_id, aggregate_type, event_type,
-		topic, payload, metadata, created_at, attempts`
+	FROM picked
+	WHERE e.id = picked.id
+	RETURNING e.id, e.aggregate_id, e.aggregate_type, e.event_type,
+		e.topic, e.payload, e.metadata, e.created_at, e.attempts,
+		picked.next_retry_at AS picked_next_retry_at,
+		picked.created_at AS picked_created_at
+)
+SELECT id, aggregate_id, aggregate_type, event_type,
+	topic, payload, metadata, created_at, attempts
+FROM updated
+ORDER BY picked_next_retry_at NULLS FIRST, picked_created_at, id`
 
 // markPublishedQuery is identical to writeBackMarkPublished in outbox_relay.go.
 const markPublishedQuery = `UPDATE outbox_entries SET status = $1, published_at = now()

@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -222,7 +223,7 @@ func TestService_Create_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "k", entry.Key)
 	require.Len(t, writer.Entries, 1)
-	assert.Equal(t, TopicConfigChanged, writer.Entries[0].EventType)
+	assert.Equal(t, domain.TopicConfigEntryUpserted, writer.Entries[0].EventType)
 }
 
 // TestCreate_CallsTxRunnerRunInTxOnce asserts that Create wraps both the repo

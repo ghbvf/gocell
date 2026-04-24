@@ -5,11 +5,14 @@ package postgres
 import (
 	"context"
 	"encoding/json"
+	"sync"
 	"testing"
 	"time"
 
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 	rout "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,6 +44,93 @@ func TestPGOutboxStore_ConformanceSuite(t *testing.T) {
 	}
 
 	outboxtest.RunStoreConformanceSuite(t, factory)
+}
+
+func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
+	pool, cleanup := setupPostgres(t)
+	t.Cleanup(cleanup)
+
+	ctx := context.Background()
+	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_store_order")
+	require.NoError(t, err, "NewMigrator should succeed")
+	require.NoError(t, migrator.Up(ctx), "migrations must apply")
+
+	base := time.Now().UTC()
+	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
+		ID:            "evt-state-sync",
+		AggregateID:   "cfg-app-name",
+		AggregateType: "config_entry",
+		EventType:     "event.config.entry-upserted.v1",
+		Payload:       []byte(`{"key":"app.name","value":"v1","version":2}`),
+		CreatedAt:     base,
+	}})
+	insertSeedRow(t, pool, rout.ClaimedEntry{Entry: kout.Entry{
+		ID:            "evt-rollback-audit",
+		AggregateID:   "cfg-app-name",
+		AggregateType: "config_entry",
+		EventType:     "event.config.rollback.v1",
+		Payload:       []byte(`{"key":"app.name","targetVersion":1,"newVersion":2}`),
+		CreatedAt:     base.Add(time.Microsecond),
+	}})
+
+	store := NewOutboxStore(pool.DB())
+	pub := &recordingPublisher{}
+	relay := rout.NewRelay(store, pub, rout.RelayConfig{
+		PollInterval:        5 * time.Millisecond,
+		ReclaimInterval:     50 * time.Millisecond,
+		BatchSize:           10,
+		MaxAttempts:         3,
+		BaseRetryDelay:      time.Millisecond,
+		MaxRetryDelay:       10 * time.Millisecond,
+		ClaimTTL:            100 * time.Millisecond,
+		RetentionPeriod:     time.Hour,
+		DeadRetentionPeriod: time.Hour,
+		CleanupWaitFloor:    50 * time.Millisecond,
+	})
+
+	runCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	errCh := make(chan error, 1)
+	go func() { errCh <- relay.Start(runCtx) }()
+	t.Cleanup(func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		require.NoError(t, relay.Stop(stopCtx))
+		cancel()
+		require.NoError(t, <-errCh)
+	})
+
+	require.Eventually(t, func() bool {
+		return len(pub.Topics()) >= 2
+	}, 2*time.Second, 10*time.Millisecond)
+	topics := pub.Topics()
+	require.GreaterOrEqual(t, len(topics), 2)
+	assert.Equal(t, []string{
+		"event.config.entry-upserted.v1",
+		"event.config.rollback.v1",
+	}, topics[:2])
+}
+
+type recordingPublisher struct {
+	mu     sync.Mutex
+	topics []string
+}
+
+func (p *recordingPublisher) Publish(_ context.Context, topic string, _ []byte) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.topics = append(p.topics, topic)
+	return nil
+}
+
+func (p *recordingPublisher) Close(_ context.Context) error { return nil }
+
+func (p *recordingPublisher) Topics() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := make([]string, len(p.topics))
+	copy(out, p.topics)
+	return out
 }
 
 // insertSeedRow inserts a ClaimedEntry directly into outbox_entries with

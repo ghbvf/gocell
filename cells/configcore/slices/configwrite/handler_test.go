@@ -284,6 +284,7 @@ func TestService_Create_SensitiveEventPayloadRedacted(t *testing.T) {
 	require.NoError(t, json.Unmarshal(ow.entries[0].Payload, &payload))
 	assert.Equal(t, "******", payload["value"], "sensitive value must be redacted in event payload")
 	assert.NotEqual(t, "s3cret!", payload["value"])
+	assert.NotContains(t, payload, "sensitive", "state-sync events must not expose sensitive classification")
 }
 
 // --- outbox/tx service tests ---
@@ -297,7 +298,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1, "outbox writer should receive one entry")
-	assert.Equal(t, TopicConfigChanged, ow.entries[0].EventType)
+	assert.Equal(t, domain.TopicConfigEntryUpserted, ow.entries[0].EventType)
 }
 
 func TestService_WithTxManager(t *testing.T) {

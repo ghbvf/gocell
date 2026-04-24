@@ -9,6 +9,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
@@ -56,7 +57,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, TopicSessionCreated, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicSessionCreated, ow.entries[0].EventType)
 }
 
 func TestService_WithTxManager(t *testing.T) {

@@ -6,134 +6,164 @@ import (
 	"log/slog"
 	"testing"
 
+	configevents "github.com/ghbvf/gocell/cells/configcore/events"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func TestHandleEvent_ValidPayload(t *testing.T) {
+func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
 	tests := []struct {
-		name   string
-		action string
+		name  string
+		value string
 	}{
-		{"created", "created"},
-		{"updated", "updated"},
-		{"deleted", "deleted"},
-		{"published", "published"},
+		{"non-empty value", "30m"},
+		{"empty value is present", ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-
-			payload, err := json.Marshal(map[string]string{
-				"action": tt.action,
-				"key":    "jwt.ttl",
-				"value":  "30m",
+			payload, err := json.Marshal(configevents.EntryUpserted{
+				Key:     "jwt.ttl",
+				Value:   tt.value,
+				Version: 1,
 			})
 			require.NoError(t, err)
 
 			entry := outbox.Entry{
 				ID:      "evt-1",
-				Topic:   TopicConfigChanged,
+				Topic:   TopicConfigEntryUpserted,
 				Payload: payload,
 			}
 
-			err = svc.HandleEvent(context.Background(), entry)
-			assert.NoError(t, err)
+			assert.NoError(t, svc.HandleEntryUpserted(context.Background(), entry))
 		})
 	}
 }
 
-// TestHandleEvent_UnknownAction_PermanentError verifies that an unknown action
-// returns a PermanentError (fail-closed, P1-14 A3).
-func TestHandleEvent_UnknownAction_PermanentError(t *testing.T) {
-	svc := NewService(slog.Default())
+func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload []byte
+		wantErr string
+	}{
+		{"invalid json", []byte("not-json{"), "unmarshal"},
+		{"missing key", []byte(`{"value":"30m","version":1}`), "missing key"},
+		{"missing value field", []byte(`{"key":"jwt.ttl","version":1}`), "missing value"},
+		{"invalid version", []byte(`{"key":"jwt.ttl","value":"30m","version":0}`), "invalid version"},
+		{"extra sensitive field", []byte(`{"key":"jwt.ttl","value":"30m","version":1,"sensitive":false}`), "unknown field"},
+		{"old action field", []byte(`{"action":"updated","key":"jwt.ttl","value":"30m","version":1}`), "unknown field"},
+	}
 
-	payload, _ := json.Marshal(map[string]string{
-		"action": "bogus",
-		"key":    "some.key",
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := NewService(slog.Default())
+			entry := outbox.Entry{
+				ID:      "evt-bad",
+				Topic:   TopicConfigEntryUpserted,
+				Payload: tt.payload,
+			}
+
+			err := svc.HandleEntryUpserted(context.Background(), entry)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+
+			var permErr *outbox.PermanentError
+			assert.ErrorAs(t, err, &permErr)
+		})
+	}
+}
+
+func TestHandleEntryDeleted_ValidPayload(t *testing.T) {
+	svc := NewService(slog.Default())
+	payload, err := json.Marshal(configevents.EntryDeleted{Key: "jwt.ttl"})
+	require.NoError(t, err)
 
 	entry := outbox.Entry{
-		ID:      "evt-2",
-		Topic:   TopicConfigChanged,
+		ID:      "evt-del-1",
+		Topic:   TopicConfigEntryDeleted,
 		Payload: payload,
 	}
 
-	err := svc.HandleEvent(context.Background(), entry)
-	require.Error(t, err, "unknown action must return error")
-
-	// Must be PermanentError so WrapLegacyHandler routes to DLX, not retry.
-	var permErr *outbox.PermanentError
-	require.ErrorAs(t, err, &permErr, "unknown action must be PermanentError")
-	assert.Contains(t, err.Error(), "bogus", "error message should include the unknown action name")
+	assert.NoError(t, svc.HandleEntryDeleted(context.Background(), entry))
 }
 
-func TestHandleEvent_InvalidJSON(t *testing.T) {
-	svc := NewService(slog.Default())
-
-	entry := outbox.Entry{
-		ID:      "evt-3",
-		Topic:   TopicConfigChanged,
-		Payload: []byte("not-json{"),
+func TestHandleEntryDeleted_InvalidPayload_PermanentError(t *testing.T) {
+	tests := []struct {
+		name    string
+		payload []byte
+		wantErr string
+	}{
+		{"invalid json", []byte("not-json{"), "unmarshal"},
+		{"missing key", []byte(`{}`), "missing key"},
+		{"extra value field", []byte(`{"key":"jwt.ttl","value":"old"}`), "unknown field"},
 	}
 
-	// Invalid JSON is a permanent error — should be rejected (not retried).
-	err := svc.HandleEvent(context.Background(), entry)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "unmarshal")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			svc := NewService(slog.Default())
+			entry := outbox.Entry{
+				ID:      "evt-del-bad",
+				Topic:   TopicConfigEntryDeleted,
+				Payload: tt.payload,
+			}
 
-	// Must be PermanentError so WrapLegacyHandler routes to DLX, not retry.
-	var permErr *outbox.PermanentError
-	assert.ErrorAs(t, err, &permErr)
+			err := svc.HandleEntryDeleted(context.Background(), entry)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tt.wantErr)
+
+			var permErr *outbox.PermanentError
+			assert.ErrorAs(t, err, &permErr)
+		})
+	}
 }
 
-func TestTopicConstant(t *testing.T) {
-	assert.Equal(t, "event.config.changed.v1", TopicConfigChanged)
+func TestTopicConstants(t *testing.T) {
+	assert.Equal(t, "event.config.entry-upserted.v1", TopicConfigEntryUpserted)
+	assert.Equal(t, "event.config.entry-deleted.v1", TopicConfigEntryDeleted)
 }
 
-// --- Behavior-level tests via WrapLegacyHandler ---
-// These verify the full disposition chain: handler error → WrapLegacyHandler → HandleResult.
-
-func TestWrapLegacyHandler_ValidPayload_Ack(t *testing.T) {
+func TestWrapLegacyHandler_EntryUpserted_ValidPayload_Ack(t *testing.T) {
 	svc := NewService(slog.Default())
-	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
-	payload, err := json.Marshal(ConfigChangedEvent{Action: "updated", Key: "jwt.ttl"})
+	payload, err := json.Marshal(configevents.EntryUpserted{
+		Key:     "jwt.ttl",
+		Value:   "",
+		Version: 1,
+	})
 	require.NoError(t, err)
 
-	entry := outbox.Entry{ID: "evt-wrap-1", Topic: TopicConfigChanged, Payload: payload}
+	entry := outbox.Entry{ID: "evt-wrap-1", Topic: TopicConfigEntryUpserted, Payload: payload}
 	result := handler(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
 	assert.NoError(t, result.Err)
 }
 
-func TestWrapLegacyHandler_InvalidJSON_Reject(t *testing.T) {
+func TestWrapLegacyHandler_EntryUpserted_InvalidJSON_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
-	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
-	entry := outbox.Entry{ID: "evt-wrap-2", Topic: TopicConfigChanged, Payload: []byte("bad{")}
+	entry := outbox.Entry{ID: "evt-wrap-2", Topic: TopicConfigEntryUpserted, Payload: []byte("bad{")}
 	result := handler(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
 	assert.Error(t, result.Err)
 }
 
-// TestWrapLegacyHandler_UnknownAction_Reject verifies that unknown actions
-// produce DispositionReject via WrapLegacyHandler (P1-14 A3).
-func TestWrapLegacyHandler_UnknownAction_Reject(t *testing.T) {
+func TestWrapLegacyHandler_EntryUpserted_MissingValue_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
-	handler := outbox.WrapLegacyHandler(svc.HandleEvent)
+	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
-	payload, err := json.Marshal(ConfigChangedEvent{Action: "bogus-action", Key: "x"})
-	require.NoError(t, err)
-
-	entry := outbox.Entry{ID: "evt-wrap-3", Topic: TopicConfigChanged, Payload: payload}
+	entry := outbox.Entry{
+		ID:      "evt-wrap-3",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":1}`),
+	}
 	result := handler(context.Background(), entry)
 
-	assert.Equal(t, outbox.DispositionReject, result.Disposition,
-		"unknown action via WrapLegacyHandler must produce DispositionReject → DLX")
+	assert.Equal(t, outbox.DispositionReject, result.Disposition)
 	assert.Error(t, result.Err)
 }

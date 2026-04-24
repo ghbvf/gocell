@@ -2,12 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "event.config.rollback.v1.payload",
   "type": "object",
+  "description": "Emitted by configpublish.Rollback when a config entry is reverted to a prior version. Topic name is the discriminator — no action field.",
   "properties": {
-    "action": { "type": "string", "const": "rollback" },
     "key": { "type": "string" },
-    "target_version": { "type": "integer" },
-    "new_version": { "type": "integer" }
+    "targetVersion": { "type": "integer" },
+    "newVersion": { "type": "integer" }
   },
-  "required": ["action", "key", "target_version", "new_version"],
+  "required": ["key", "targetVersion", "newVersion"],
   "additionalProperties": false
 }

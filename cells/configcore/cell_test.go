@@ -236,7 +236,13 @@ func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 
 	r := &celltest.StubEventRouter{}
 	require.NoError(t, c.RegisterSubscriptions(r))
-	assert.Equal(t, 1, r.HandlerCount(), "configcore should register 1 topic handler")
+	assert.Equal(t, 2, r.HandlerCount(),
+		"configcore registers entry-upserted + entry-deleted state-sync handlers")
+	assert.Equal(t, []string{
+		"event.config.entry-upserted.v1",
+		"event.config.entry-deleted.v1",
+	}, r.Topics)
+	assert.Equal(t, []string{"configcore", "configcore"}, r.ConsumerGroups)
 }
 
 // stubMux implements cell.RouteMux for testing.

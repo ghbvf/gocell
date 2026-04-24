@@ -48,7 +48,7 @@
 | 消费方 | 必须幂等，必须有 Consumed Marker |
 | 测试 | Outbox 原子性 + 消费者幂等测试 |
 
-**示例**：`session.created`、`config.changed`、`user.locked`。
+**示例**：`session.created`、`config.entry-upserted`、`user.locked`。
 
 **关键规则**：永远不要在 DB 提交后直接 `eventbus.Publish()`。必须通过 Outbox。
 

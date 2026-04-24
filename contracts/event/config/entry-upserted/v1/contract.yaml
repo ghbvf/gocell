@@ -1,0 +1,17 @@
+id: event.config.entry-upserted.v1
+kind: event
+ownerCell: configcore
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  publisher: configcore
+  subscribers:
+    - accesscore
+    - auditcore
+    - configcore
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: false
+idempotencyKey: event_id
+deliverySemantics: at-least-once
