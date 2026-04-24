@@ -177,7 +177,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore — no sink needed.
 	ac := accesscore.NewAccessCore(
 		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nw),
+		accesscore.WithOutboxDeps(eb, nil),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithLogger(testLogger),
@@ -190,7 +190,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nw),
+		auditcore.WithOutboxDeps(eb, nil),
 		auditcore.WithHMACKey(auditHMACKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(testLogger),
@@ -202,7 +202,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	// configcore: demo mode — publisher only, no outboxWriter/txRunner.
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(eb, nw),
+		configcore.WithOutboxDeps(eb, nil),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(testLogger),
 	)

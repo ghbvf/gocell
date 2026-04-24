@@ -15,7 +15,6 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	outboxrt "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
 )
 
