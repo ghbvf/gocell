@@ -126,8 +126,14 @@ type CreateInput struct {
 
 // Create creates a new user and publishes an event.
 // The plain-text password is bcrypt-hashed before storage.
+//
+// Validation order matches setup.CreateAdmin (username → email → password) so
+// both code paths reject the same blank input with the same field message,
+// avoiding domain-layer error-class drift (audit S-4).
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("username", input.Username),
+		validation.F("email", input.Email),
 		validation.F("password", input.Password),
 	); err != nil {
 		return nil, err
@@ -258,6 +264,11 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 }
 
 // Lock locks a user account and publishes an event.
+//
+// Read-modify-write atomicity: GetByID, user.Lock(), Update, session/refresh
+// revoke and the outbox publish all run inside the same RunInTx closure. A
+// concurrent transaction that mutates the user between the read and the write
+// would otherwise be silently lost (audit S-3).
 func (s *Service) Lock(ctx context.Context, id string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
@@ -265,13 +276,12 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 		return err
 	}
 
-	user, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("identity-manage: lock: %w", err)
-	}
-
-	user.Lock()
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		user, err := s.repo.GetByID(txCtx, id)
+		if err != nil {
+			return fmt.Errorf("identity-manage: lock: %w", err)
+		}
+		user.Lock()
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
@@ -299,6 +309,10 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 }
 
 // Unlock unlocks a user account.
+//
+// Read-modify-write atomicity: GetByID + user.Unlock() + Update share one
+// RunInTx closure so a concurrent mutation between the read and the write
+// cannot be silently lost (audit S-3, mirrors Lock).
 func (s *Service) Unlock(ctx context.Context, id string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
@@ -306,14 +320,18 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		return err
 	}
 
-	user, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("identity-manage: unlock: %w", err)
-	}
-
-	user.Unlock()
-	if err := s.repo.Update(ctx, user); err != nil {
-		return fmt.Errorf("identity-manage: unlock: %w", err)
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		user, err := s.repo.GetByID(txCtx, id)
+		if err != nil {
+			return fmt.Errorf("identity-manage: unlock: %w", err)
+		}
+		user.Unlock()
+		if err := s.repo.Update(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: unlock: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	s.logger.Info("user unlocked", slog.String("user_id", id))
