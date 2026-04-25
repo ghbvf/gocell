@@ -14,10 +14,12 @@ package accesscore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -41,21 +44,73 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// seedAdminPasswordHash caches the bcrypt hash for the seed admin password
+// across every loginAndGetPair invocation. bcrypt at production cost is the
+// dominant per-call cost in the integration suite (~hundreds of ms); a cached
+// hash collapses N-case parallel runs to one hash computation.
+var seedAdminPasswordHash = sync.OnceValue(func() string {
+	hash, err := bcrypt.GenerateFromPassword([]byte(testPassword), domain.BcryptCost)
+	if err != nil {
+		panic(err)
+	}
+	return string(hash)
+})
+
+// loginConfig holds per-test audience configuration for loginAndGetPair.
+type loginConfig struct {
+	issuerAudsSet bool     // true = caller explicitly set; false = use default ["gocell"]
+	issuerAuds    []string // empty = no WithIssuerAudiencesFromSlice option (issuer mints aud-less tokens)
+	verifierAuds  []string // default ["gocell"]; empty intentionally panics in Verifier construction
+}
+
+type loginOption func(*loginConfig)
+
+// withIssuerAuds sets the audiences the issuer embeds in tokens.
+// Calling withIssuerAuds() with no arguments sets issuerAudsSet=true with an empty
+// slice (no aud option — issuer mints aud-less tokens).
+func withIssuerAuds(auds ...string) loginOption {
+	return func(c *loginConfig) {
+		c.issuerAudsSet = true
+		c.issuerAuds = append([]string(nil), auds...)
+	}
+}
+
+// withVerifierAuds sets the expected audiences the verifier will enforce.
+func withVerifierAuds(auds ...string) loginOption {
+	return func(c *loginConfig) {
+		c.verifierAuds = append([]string(nil), auds...)
+	}
+}
+
+// loginResult holds the output of a successful loginAndGetPair call.
+type loginResult struct {
+	AccessToken  string
+	RefreshToken string
+	Router       *router.Router
+	Cell         *AccessCore
+	Issuer       *auth.JWTIssuer
+	Verifier     *auth.JWTVerifier
+	Clock        *storetest.FakeClock
+}
+
 // loginAndGetPair pre-fills a user directly into repos, calls the real
 // login HTTP handler through the initialized router, and returns the issued
 // token pair on a precise 201 response. Failing this helper means the public
 // login handler's status code or envelope drifted from the contract.
-func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.Router, c *AccessCore) {
+func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	t.Helper()
+
+	cfg := loginConfig{verifierAuds: []string{"gocell"}}
+	for _, o := range opts {
+		o(&cfg)
+	}
 
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	ctx := context.Background()
 
 	// Pre-fill alice as admin via direct repo seeding (no bootstrap flow).
-	hash, err := bcrypt.GenerateFromPassword([]byte(testPassword), domain.BcryptCost)
-	require.NoError(t, err)
-	alice, err := domain.NewUser("alice", "alice@gocell.local", string(hash))
+	alice, err := domain.NewUser("alice", "alice@gocell.local", seedAdminPasswordHash())
 	require.NoError(t, err)
 	alice.ID = "usr-alice-integration"
 	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
@@ -68,13 +123,32 @@ func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.
 
 	intClock := storetest.NewFakeClock(time.Now())
 	intRefreshStore := refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, intClock, nil)
-	c = NewAccessCore(
+
+	ks, _, _ := auth.MustNewTestKeySet()
+
+	require.NotEmpty(t, cfg.verifierAuds, "loginAndGetPair: verifierAuds must not be empty; use withVerifierAuds(\"gocell\") or similar")
+
+	var issuerOpts []auth.JWTIssuerOption
+	switch {
+	case !cfg.issuerAudsSet:
+		issuerOpts = append(issuerOpts, auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
+	case len(cfg.issuerAuds) > 0:
+		issuerOpts = append(issuerOpts, auth.WithIssuerAudiencesFromSlice(cfg.issuerAuds))
+		// else: explicitly empty → no audience option, issuer mints aud-less tokens.
+	}
+	issuer, err := auth.NewJWTIssuer(ks, "gocell", time.Hour, issuerOpts...)
+	require.NoError(t, err)
+
+	verifier, err := auth.NewJWTVerifier(ks, auth.WithExpectedAudiences(cfg.verifierAuds[0], cfg.verifierAuds[1:]...))
+	require.NoError(t, err)
+
+	c := NewAccessCore(
 		WithUserRepository(userRepo),
 		WithSessionRepository(mem.NewSessionRepository()),
 		WithRoleRepository(roleRepo),
 		WithOutboxDeps(noopPublisher{}, nil),
-		WithJWTIssuer(testIssuer),
-		WithJWTVerifier(testVerifier),
+		WithJWTIssuer(issuer),
+		WithJWTVerifier(verifier),
 		WithRefreshStore(intRefreshStore),
 		// Demo mode: no tx+outbox required.
 	)
@@ -83,7 +157,7 @@ func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.
 		DurabilityMode: cell.DurabilityDemo,
 	}))
 
-	r = router.New()
+	r := router.New()
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
@@ -116,66 +190,77 @@ func loginAndGetPair(t *testing.T) (accessToken, refreshToken string, r *router.
 	require.NotEmpty(t, envelope.Data.AccessToken, "login response must include accessToken")
 	require.NotEmpty(t, envelope.Data.RefreshToken, "login response must include refreshToken")
 	require.NotEmpty(t, envelope.Data.ExpiresAt, "login response must include expiresAt")
-	return envelope.Data.AccessToken, envelope.Data.RefreshToken, r, c
+
+	return loginResult{
+		AccessToken:  envelope.Data.AccessToken,
+		RefreshToken: envelope.Data.RefreshToken,
+		Router:       r,
+		Cell:         c,
+		Issuer:       issuer,
+		Verifier:     verifier,
+		Clock:        intClock,
+	}
 }
 
 func TestAuthIntent_AccessTokenReachesBusinessPath(t *testing.T) {
-	accessToken, _, _, c := loginAndGetPair(t)
+	fx := loginAndGetPair(t)
 
 	// session-validate is wired with the JWT verifier inside cell.go. We call
 	// it directly to mirror how AuthMiddleware would consult it.
-	validateSvc, ok := c.TokenVerifier().(*sessionvalidate.Service)
+	validateSvc, ok := fx.Cell.TokenVerifier().(*sessionvalidate.Service)
 	require.True(t, ok, "TokenVerifier must be *sessionvalidate.Service in production wiring")
 
-	claims, err := validateSvc.VerifyIntent(context.Background(), accessToken, auth.TokenIntentAccess)
+	claims, err := validateSvc.VerifyIntent(context.Background(), fx.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "legitimate access token must pass session-validate")
 	assert.NotEmpty(t, claims.Subject)
 }
 
 func TestAuthIntent_RefreshTokenBlockedAtBusinessPath(t *testing.T) {
-	_, refreshToken, _, c := loginAndGetPair(t)
+	fx := loginAndGetPair(t)
 
-	validateSvc, ok := c.TokenVerifier().(*sessionvalidate.Service)
+	validateSvc, ok := fx.Cell.TokenVerifier().(*sessionvalidate.Service)
 	require.True(t, ok)
 
-	_, err := validateSvc.VerifyIntent(context.Background(), refreshToken, auth.TokenIntentAccess)
+	_, err := validateSvc.VerifyIntent(context.Background(), fx.RefreshToken, auth.TokenIntentAccess)
 	require.Error(t, err,
 		"refresh token must NOT be accepted by session-validate (token confusion defense)")
 }
 
 func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
-	accessToken, _, _, c := loginAndGetPair(t)
+	fx := loginAndGetPair(t)
 
 	// Build a refresh-service that mirrors production wiring.
 	// After the opaque-store rewrite, ParseOpaque rejects the JWT (wrong
 	// selector/verifier format) → refresh.ErrRejected → ErrAuthRefreshFailed.
 	refreshSvc := sessionrefresh.NewService(
-		c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore, c.jwtIssuer, slog.Default(),
+		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 	)
 
-	_, err := refreshSvc.Refresh(context.Background(), accessToken)
+	_, err := refreshSvc.Refresh(context.Background(), fx.AccessToken)
 	require.Error(t, err,
 		"access token must NOT be accepted by session-refresh (token confusion defense)")
-	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED",
-		"intent mismatch collapses into ERR_AUTH_REFRESH_FAILED (enumeration defense)")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "refresh error must wrap *errcode.Error")
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"intent mismatch collapses into ErrAuthRefreshFailed (enumeration defense)")
 }
 
 func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
-	_, refreshToken, _, c := loginAndGetPair(t)
+	fx := loginAndGetPair(t)
 
 	// Need sessionlogin's persisted session (loginAndGetPair went through the
-	// real login flow, so c.sessionRepo already has one).
-	require.NotNil(t, c.sessionRepo, "session repo must be wired")
+	// real login flow, so fx.Cell.sessionRepo already has one).
+	require.NotNil(t, fx.Cell.sessionRepo, "session repo must be wired")
 
 	refreshSvc := sessionrefresh.NewService(
-		c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore, c.jwtIssuer, slog.Default(),
+		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 	)
 
-	newPair, err := refreshSvc.Refresh(context.Background(), refreshToken)
+	newPair, err := refreshSvc.Refresh(context.Background(), fx.RefreshToken)
 	require.NoError(t, err, "legitimate refresh token must rotate successfully")
 	assert.NotEmpty(t, newPair.AccessToken)
 	assert.NotEmpty(t, newPair.RefreshToken)
-	accessClaims, err := testVerifier.VerifyIntent(context.Background(), newPair.AccessToken, auth.TokenIntentAccess)
+	accessClaims, err := fx.Verifier.VerifyIntent(context.Background(), newPair.AccessToken, auth.TokenIntentAccess)
 	require.NoError(t, err, "rotated access token must carry intent=access")
 	assert.NotEmpty(t, accessClaims.Subject)
 }
@@ -239,6 +324,40 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 	require.NoError(t, err)
 	assert.True(t, sess.IsRevoked(),
 		"session must be revoked after role-revoke outbox entry is consumed")
+}
+
+// TestAuthIntegration_LoginAccessTokenAudienceDrift verifies that audience
+// mismatches between issuer and verifier are correctly detected and rejected.
+func TestAuthIntegration_LoginAccessTokenAudienceDrift(t *testing.T) {
+	cases := []struct {
+		name         string
+		issuerAuds   []string
+		verifierAuds []string
+		wantErrCode  errcode.Code // empty = expect verify success
+	}{
+		{"aligned_audiences_pass", []string{"gocell"}, []string{"gocell"}, ""},
+		{"issuer_drift_rejected", []string{"gocell-other"}, []string{"gocell"}, errcode.ErrAuthInvalidTokenIntent},
+		{"token_rejected_when_verifier_expects_other_aud", []string{"gocell"}, []string{"gocell-other"}, errcode.ErrAuthInvalidTokenIntent},
+		{"multi_aud_one_match_pass", []string{"a", "gocell"}, []string{"gocell"}, ""},
+	}
+	for _, tc := range cases {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			fx := loginAndGetPair(t,
+				withIssuerAuds(tc.issuerAuds...),
+				withVerifierAuds(tc.verifierAuds...),
+			)
+			_, err := fx.Verifier.VerifyIntent(t.Context(), fx.AccessToken, auth.TokenIntentAccess)
+			if tc.wantErrCode == "" {
+				require.NoError(t, err, "case %s: aligned audiences must pass verifier", tc.name)
+				return
+			}
+			require.Error(t, err, "case %s: drift must be rejected", tc.name)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "case %s: error must wrap *errcode.Error", tc.name)
+			assert.Equal(t, tc.wantErrCode, ec.Code, "case %s: error code", tc.name)
+		})
+	}
 }
 
 // rbacStubOutboxWriter captures entries for slice-layer integration tests.
