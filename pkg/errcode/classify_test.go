@@ -292,6 +292,16 @@ func TestIsExpected4xx(t *testing.T) {
 			err:  New(ErrBodyTooLarge, "body too large"),
 			want: true,
 		},
+		// PR271-FU1 review #1: ErrClientCanceled (499) must be in the
+		// expected4xx whitelist so the HTTP boundary routes client
+		// cancellation to slog.Warn instead of slog.Error. expected4xxCodes
+		// already registers it (classify.go); this case prevents silent
+		// regression if the map entry is removed.
+		{
+			name: "ErrClientCanceled (499) is expected 4xx",
+			err:  New(ErrClientCanceled, "request canceled"),
+			want: true,
+		},
 	}
 
 	for _, tt := range tests {

@@ -201,6 +201,18 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 		details = map[string]any{}
 	}
 
+	// 499 reason transit: surface the reason recorded by ctxcancel.Wrap
+	// (Details["reason"] = "canceled" | "deadline_exceeded") onto the
+	// request-scoped cancel-reason slot so tracing middleware can stamp
+	// span attribute "client.cancel.reason" with the actual cause. Stays
+	// a no-op when no slot was installed (e.g. unit tests writing a 499
+	// directly), preserving the legacy "context_canceled" fallback.
+	if status == StatusClientClosedRequest {
+		if reason, ok := details["reason"].(string); ok {
+			setCancelReason(ctx, reason)
+		}
+	}
+
 	msg := ecErr.Message
 	switch {
 	case status >= 400 && status < 500:

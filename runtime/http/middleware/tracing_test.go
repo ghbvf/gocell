@@ -11,6 +11,8 @@ import (
 	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/persistence/ctxcancel"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -322,6 +324,64 @@ func TestTracing_499_AttrAndUnsetStatus(t *testing.T) {
 		"499 (4xx) MUST NOT set span.Status=Error per OTel conventions")
 	assert.Nil(t, spans[0].Attr("_status_desc"),
 		"499 must not record a status description (status remains Unset)")
+}
+
+// TestTracing_499_ReasonFromCanceled and TestTracing_499_ReasonFromDeadline
+// lock the PR271-FU1 contract: when an IO boundary returns ctxcancel.Wrap(err),
+// the resulting 499 span attribute must reflect the originating ctx error so
+// dashboards can split client-disconnect from server-timeout buckets without
+// a second log query.
+//
+// Wiring path under test:
+//
+//	ctxcancel.Wrap → *errcode.Error.Details["reason"]
+//	    ↓
+//	httputil.writeErrcodeError (ErrClientCanceled branch) → setCancelReason(ctx, reason)
+//	    ↓
+//	tracing.serveSpanned reads the slot at end-of-request and stamps
+//	span attribute "client.cancel.reason" = reason.
+func TestTracing_499_ReasonFromCanceled(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ecErr := ctxcancel.Wrap(context.Canceled, "Insert", "id=x")
+		require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.Canceled")
+		httputil.WriteDomainError(r.Context(), w, ecErr)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/canceled-flow", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, httputil.StatusClientClosedRequest, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "canceled", spans[0].Attr("client.cancel.reason"),
+		"context.Canceled must surface as reason=canceled")
+	assert.Nil(t, spans[0].Attr("_status_error"),
+		"499 must not set span.Status=Error")
+}
+
+func TestTracing_499_ReasonFromDeadline(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ecErr := ctxcancel.Wrap(context.DeadlineExceeded, "Query", "id=x")
+		require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.DeadlineExceeded")
+		httputil.WriteDomainError(r.Context(), w, ecErr)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/deadline-flow", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, httputil.StatusClientClosedRequest, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "deadline_exceeded", spans[0].Attr("client.cancel.reason"),
+		"context.DeadlineExceeded must surface as reason=deadline_exceeded")
+	assert.Nil(t, spans[0].Attr("_status_error"),
+		"499 must not set span.Status=Error")
 }
 
 // TestTracing_4xxNoErrorSpanStatus_NoCancelAttr ensures plain 4xx (e.g.

@@ -40,6 +40,12 @@ func Detect(err error) bool {
 // preserved as Cause so errors.Is(returned, context.Canceled) still works
 // for callers that need to detect cancellation up the stack.
 //
+// Details["reason"] disambiguates the originating ctx error so the HTTP
+// boundary can route a distinct tracing attribute and dashboards can split
+// "client disconnect" (canceled) from "server-side / inherited timeout"
+// (deadline_exceeded) without a second log query. Both still map to 499 —
+// the split is in observability, not in the public response status.
+//
 // Privacy contract: pkg/httputil.writeErrcodeError consumes the public
 // Message for the HTTP response body and routes InternalMessage to the
 // log4xx slog.Warn record only. InternalMessage MUST NOT be written to
@@ -55,5 +61,16 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 		InternalMessage: fmt.Sprintf("%s ctx canceled %s", op, identifier),
 		Cause:           err,
 		Category:        errcode.CategoryInfra,
+		Details:         map[string]any{"reason": reasonOf(err)},
 	}
+}
+
+// reasonOf maps a context cancellation error to a stable low-cardinality
+// label safe to attach to a tracing span attribute. Defaults to "canceled"
+// for the context.Canceled branch (covers both raw and wrapped sentinels).
+func reasonOf(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "deadline_exceeded"
+	}
+	return "canceled"
 }

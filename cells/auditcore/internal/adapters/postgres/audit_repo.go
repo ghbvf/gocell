@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/persistence/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
@@ -74,6 +75,9 @@ func (r *AuditRepository) Append(ctx context.Context, entry *domain.AuditEntry) 
 		entry.Hash,
 	)
 	if err != nil {
+		if cancelErr := ctxcancel.Wrap(err, "Append", "id="+entry.ID); cancelErr != nil {
+			return cancelErr
+		}
 		return errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: append failed", err)
 	}
 
@@ -101,6 +105,9 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 
 	rows, err := r.db.Query(ctx, query, limit, from)
 	if err != nil {
+		if cancelErr := ctxcancel.Wrap(err, "GetRange", ""); cancelErr != nil {
+			return nil, cancelErr
+		}
 		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: get range failed", err)
 	}
 	defer rows.Close()
@@ -125,6 +132,9 @@ func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters,
 	sql, args := b.Build()
 	rows, err := r.db.Query(ctx, sql, args...)
 	if err != nil {
+		if cancelErr := ctxcancel.Wrap(err, "Query", ""); cancelErr != nil {
+			return nil, cancelErr
+		}
 		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: query failed", err)
 	}
 	defer rows.Close()
@@ -133,6 +143,11 @@ func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters,
 }
 
 // scanAuditEntries scans rows into a slice of AuditEntry.
+//
+// IO error sites (Scan / rows.Err) gate ctx-cancellation through
+// ctxcancel.Wrap before falling through to the generic ErrAuditRepoQuery
+// mapping so client-disconnect mid-stream still routes to HTTP 499 +
+// slog.Warn rather than polluting the 5xx error rate.
 func scanAuditEntries(rows Rows) ([]*domain.AuditEntry, error) {
 	var entries []*domain.AuditEntry
 	for rows.Next() {
@@ -141,11 +156,17 @@ func scanAuditEntries(rows Rows) ([]*domain.AuditEntry, error) {
 			&e.ID, &e.EventID, &e.EventType, &e.ActorID,
 			&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 		); err != nil {
+			if cancelErr := ctxcancel.Wrap(err, "ScanRow", ""); cancelErr != nil {
+				return nil, cancelErr
+			}
 			return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: scan failed", err)
 		}
 		entries = append(entries, &e)
 	}
 	if err := rows.Err(); err != nil {
+		if cancelErr := ctxcancel.Wrap(err, "RowsErr", ""); cancelErr != nil {
+			return nil, cancelErr
+		}
 		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: rows error", err)
 	}
 	return entries, nil

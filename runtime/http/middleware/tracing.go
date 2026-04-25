@@ -170,6 +170,12 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	carrier := &wrapper.AttrCarrier{}
 	ctx = wrapper.WithAttrCarrier(ctx, carrier)
 
+	// Install a cancel-reason slot so writeErrcodeError can record the
+	// 499 originating ctx error ("canceled" vs "deadline_exceeded") for
+	// the post-handler span attribute below. Without this slot installed,
+	// 499 spans fall back to the legacy "context_canceled" label.
+	ctx = httputil.WithCancelReasonSlot(ctx)
+
 	// Start span with tentative name using raw path.
 	// After routing, the span is renamed to use the route pattern.
 	ctx, span := tracer.Start(ctx, r.Method+" "+r.URL.Path)
@@ -219,11 +225,21 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	// without polluting span error rate metrics. The 5xx branch below
 	// naturally skips 499 because 499 < 500.
 	//
+	// Reason granularity: the reason value is sourced from the cancel-reason
+	// slot populated by httputil.writeErrcodeError when ctxcancel.Wrap fed
+	// the 499 path. Falls back to the legacy "context_canceled" label when
+	// the slot is empty — keeps unit tests that emit a raw 499 (without an
+	// errcode.Error) working unchanged.
+	//
 	// ref: open-telemetry/semantic-conventions http-spans.md — 4xx server
 	//      span status Unset; intentional cancellation must not set error.type.
 	if status == httputil.StatusClientClosedRequest {
+		reason := httputil.CancelReason(ctx)
+		if reason == "" {
+			reason = "context_canceled"
+		}
 		span.SetAttributes(
-			tracing.Attr{Key: "client.cancel.reason", Value: "context_canceled"},
+			tracing.Attr{Key: "client.cancel.reason", Value: reason},
 		)
 	}
 

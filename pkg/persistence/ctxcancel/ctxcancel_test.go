@@ -69,3 +69,34 @@ func TestWrap_IsInfraError_Preserved(t *testing.T) {
 	assert.True(t, errcode.IsExpected4xx(got),
 		"ctx cancel must also be IsExpected4xx=true (routes to slog.Warn at HTTP boundary)")
 }
+
+// TestWrap_ReasonInDetails locks the PR271-FU1 contract: the wrapped *errcode.Error
+// must carry Details["reason"] distinguishing context.Canceled (real client
+// disconnect) from context.DeadlineExceeded (server-side / inherited timeout)
+// so dashboards can split 499 by source instead of seeing one opaque bucket.
+//
+// ref: Kratos transport/http/status — Canceled→499, DeadlineExceeded→504
+//
+//	(we keep both at 499 but expose reason for triage).
+func TestWrap_ReasonInDetails(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantReason string
+	}{
+		{name: "context.Canceled → reason=canceled", err: context.Canceled, wantReason: "canceled"},
+		{name: "context.DeadlineExceeded → reason=deadline_exceeded", err: context.DeadlineExceeded, wantReason: "deadline_exceeded"},
+		{name: "wrapped Canceled → reason=canceled", err: fmt.Errorf("scan: %w", context.Canceled), wantReason: "canceled"},
+		{name: "wrapped DeadlineExceeded → reason=deadline_exceeded", err: fmt.Errorf("query: %w", context.DeadlineExceeded), wantReason: "deadline_exceeded"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := Wrap(tt.err, "Op", "id=x")
+			require.NotNil(t, got)
+			require.NotNil(t, got.Details, "Details must be set so tracing middleware can read reason")
+			reason, ok := got.Details["reason"].(string)
+			require.True(t, ok, "Details[\"reason\"] must be a string")
+			assert.Equal(t, tt.wantReason, reason)
+		})
+	}
+}
