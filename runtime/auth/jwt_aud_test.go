@@ -14,7 +14,6 @@
 package auth
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
@@ -77,11 +76,11 @@ func signTokenWithRawAud(t *testing.T, ks *KeySet, audClaim any) string {
 
 // verifierAudCase is a single row in TestJWTVerifier_VerifyIntent_AudienceTable.
 type verifierAudCase struct {
-	name             string
-	expectedAuds     []string                              // verifier config
-	tokenAud         any                                   // []string=array, string=single, int=invalid type, nil=omit claim
-	mintFn           func(t *testing.T, ks *KeySet) string // non-nil overrides tokenAud dispatch
-	wantErrSubstring string                                // empty = expect no error
+	name         string
+	expectedAuds []string                              // verifier config
+	tokenAud     any                                   // []string=array, string=single, int=invalid type, nil=omit claim
+	mintFn       func(t *testing.T, ks *KeySet) string // non-nil overrides tokenAud dispatch
+	wantErrCode  errcode.Code                          // empty = expect no error
 }
 
 // mintTokenForCase dispatches token minting based on case fields.
@@ -111,16 +110,16 @@ func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
 			tokenAud:     []string{"gocell"},
 		},
 		{
-			name:             "rejects_audience_mismatch",
-			expectedAuds:     []string{"gocell"},
-			tokenAud:         []string{"other-service"},
-			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+			name:         "rejects_audience_mismatch",
+			expectedAuds: []string{"gocell"},
+			tokenAud:     []string{"other-service"},
+			wantErrCode:  errcode.ErrAuthInvalidTokenIntent,
 		},
 		{
-			name:             "rejects_missing_audience",
-			expectedAuds:     []string{"gocell"},
-			tokenAud:         nil,
-			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+			name:         "rejects_missing_audience",
+			expectedAuds: []string{"gocell"},
+			tokenAud:     nil,
+			wantErrCode:  errcode.ErrAuthInvalidTokenIntent,
 		},
 		{
 			name:         "accepts_multiple_audiences_when_one_matches",
@@ -134,14 +133,14 @@ func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
 		},
 		{
 			// Intent check fires before audience check: refresh-shaped token verified
-			// as access intent yields ERR_AUTH_INVALID_TOKEN_INTENT even though aud
+			// as access intent yields ErrAuthInvalidTokenIntent even though aud
 			// would also fail.
 			name:         "audience_check_after_intent_check",
 			expectedAuds: []string{"gocell"},
 			mintFn: func(t *testing.T, ks *KeySet) string {
 				return signRawIntentJWT(t, ks, "refresh", "refresh+jwt", []string{"wrong"})
 			},
-			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+			wantErrCode: errcode.ErrAuthInvalidTokenIntent,
 		},
 		{
 			// RFC 7519 §4.1.3: aud may be a single JSON string; parseAudience normalises it.
@@ -151,10 +150,10 @@ func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
 		},
 		{
 			// Non-standard aud type (integer) must be rejected without panicking.
-			name:             "rejects_non_string_type_aud",
-			expectedAuds:     []string{"gocell"},
-			tokenAud:         123,
-			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+			name:         "rejects_non_string_type_aud",
+			expectedAuds: []string{"gocell"},
+			tokenAud:     123,
+			wantErrCode:  errcode.ErrAuthInvalidTokenIntent,
 		},
 	}
 
@@ -167,15 +166,17 @@ func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
 			require.NoError(t, err)
 
 			token := mintTokenForCase(t, ks, tc)
-			claims, err := verifier.VerifyIntent(context.Background(), token, TokenIntentAccess)
+			claims, err := verifier.VerifyIntent(t.Context(), token, TokenIntentAccess)
 
-			if tc.wantErrSubstring == "" {
+			if tc.wantErrCode == "" {
 				require.NoError(t, err)
 				assert.Equal(t, "user-1", claims.Subject)
-			} else {
-				require.Error(t, err)
-				assert.Contains(t, err.Error(), tc.wantErrSubstring)
+				return
 			}
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "verifier error must wrap *errcode.Error")
+			assert.Equal(t, tc.wantErrCode, ec.Code)
 		})
 	}
 }

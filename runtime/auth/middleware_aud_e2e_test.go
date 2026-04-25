@@ -9,12 +9,15 @@ package auth
 // PR-A30 S24 AUTH-MIDDLEWARE-AUD-REFRESH-E2E-01.
 
 import (
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestAuthMiddleware_AudienceE2E_RealServer(t *testing.T) {
@@ -23,10 +26,11 @@ func TestAuthMiddleware_AudienceE2E_RealServer(t *testing.T) {
 		name       string
 		tokenAud   []string // nil = no aud
 		wantStatus int
+		wantCode   errcode.Code // empty = success path
 	}{
-		{"right_audience_200", []string{"gocell"}, http.StatusOK},
-		{"wrong_audience_401", []string{"other-service"}, http.StatusUnauthorized},
-		{"missing_audience_401", nil, http.StatusUnauthorized},
+		{"right_audience_200", []string{"gocell"}, http.StatusOK, ""},
+		{"wrong_audience_401", []string{"other-service"}, http.StatusUnauthorized, errcode.ErrAuthInvalidTokenIntent},
+		{"missing_audience_401", nil, http.StatusUnauthorized, errcode.ErrAuthInvalidTokenIntent},
 	}
 
 	for _, tc := range cases {
@@ -44,7 +48,10 @@ func TestAuthMiddleware_AudienceE2E_RealServer(t *testing.T) {
 			srv := httptest.NewServer(AuthMiddleware(verifier)(audProtectedHandler))
 			t.Cleanup(srv.Close)
 
-			req, err := http.NewRequest(http.MethodGet, srv.URL+"/protected", nil)
+			// Bind the request lifetime to the test's context so that go test's
+			// own -timeout governs hangs — no hardcoded duration that drifts
+			// against CI runner capacity.
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL+"/protected", nil)
 			require.NoError(t, err)
 			req.Header.Set("Authorization", "Bearer "+token)
 
@@ -54,6 +61,17 @@ func TestAuthMiddleware_AudienceE2E_RealServer(t *testing.T) {
 
 			assert.Equal(t, tc.wantStatus, resp.StatusCode,
 				"real-server response status mismatch for case %s", tc.name)
+
+			// Reject paths must surface the audience-mismatch error inside the
+			// middleware's logged chain. Direct verify confirms the error code
+			// (string-free assertion — robust against message wording changes).
+			if tc.wantCode != "" {
+				_, verifyErr := verifier.VerifyIntent(t.Context(), token, TokenIntentAccess)
+				require.Error(t, verifyErr)
+				var ec *errcode.Error
+				require.True(t, errors.As(verifyErr, &ec), "verify error must wrap *errcode.Error")
+				assert.Equal(t, tc.wantCode, ec.Code, "case %s: error code", tc.name)
+			}
 		})
 	}
 }

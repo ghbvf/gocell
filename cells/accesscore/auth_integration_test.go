@@ -14,10 +14,12 @@ package accesscore
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -31,6 +33,7 @@ import (
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
@@ -40,6 +43,18 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// seedAdminPasswordHash caches the bcrypt hash for the seed admin password
+// across every loginAndGetPair invocation. bcrypt at production cost is the
+// dominant per-call cost in the integration suite (~hundreds of ms); a cached
+// hash collapses N-case parallel runs to one hash computation.
+var seedAdminPasswordHash = sync.OnceValue(func() string {
+	hash, err := bcrypt.GenerateFromPassword([]byte(testPassword), domain.BcryptCost)
+	if err != nil {
+		panic(err)
+	}
+	return string(hash)
+})
 
 // loginConfig holds per-test audience configuration for loginAndGetPair.
 type loginConfig struct {
@@ -95,9 +110,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	ctx := context.Background()
 
 	// Pre-fill alice as admin via direct repo seeding (no bootstrap flow).
-	hash, err := bcrypt.GenerateFromPassword([]byte(testPassword), domain.BcryptCost)
-	require.NoError(t, err)
-	alice, err := domain.NewUser("alice", "alice@gocell.local", string(hash))
+	alice, err := domain.NewUser("alice", "alice@gocell.local", seedAdminPasswordHash())
 	require.NoError(t, err)
 	alice.ID = "usr-alice-integration"
 	require.NoError(t, roleRepo.Create(ctx, &domain.Role{
@@ -226,8 +239,10 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	_, err := refreshSvc.Refresh(context.Background(), fx.AccessToken)
 	require.Error(t, err,
 		"access token must NOT be accepted by session-refresh (token confusion defense)")
-	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED",
-		"intent mismatch collapses into ERR_AUTH_REFRESH_FAILED (enumeration defense)")
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "refresh error must wrap *errcode.Error")
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code,
+		"intent mismatch collapses into ErrAuthRefreshFailed (enumeration defense)")
 }
 
 func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
@@ -315,29 +330,32 @@ func TestAuthIntegration_RoleRevokeInvalidatesSession(t *testing.T) {
 // mismatches between issuer and verifier are correctly detected and rejected.
 func TestAuthIntegration_LoginAccessTokenAudienceDrift(t *testing.T) {
 	cases := []struct {
-		name             string
-		issuerAuds       []string
-		verifierAuds     []string
-		wantErrSubstring string // empty = expect verify success
+		name         string
+		issuerAuds   []string
+		verifierAuds []string
+		wantErrCode  errcode.Code // empty = expect verify success
 	}{
 		{"aligned_audiences_pass", []string{"gocell"}, []string{"gocell"}, ""},
-		{"issuer_drift_rejected", []string{"gocell-other"}, []string{"gocell"}, "ERR_AUTH_INVALID_TOKEN_INTENT"},
-		{"token_rejected_when_verifier_expects_other_aud", []string{"gocell"}, []string{"gocell-other"}, "ERR_AUTH_INVALID_TOKEN_INTENT"},
+		{"issuer_drift_rejected", []string{"gocell-other"}, []string{"gocell"}, errcode.ErrAuthInvalidTokenIntent},
+		{"token_rejected_when_verifier_expects_other_aud", []string{"gocell"}, []string{"gocell-other"}, errcode.ErrAuthInvalidTokenIntent},
 		{"multi_aud_one_match_pass", []string{"a", "gocell"}, []string{"gocell"}, ""},
 	}
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			fx := loginAndGetPair(t,
 				withIssuerAuds(tc.issuerAuds...),
 				withVerifierAuds(tc.verifierAuds...),
 			)
-			_, err := fx.Verifier.VerifyIntent(context.Background(), fx.AccessToken, auth.TokenIntentAccess)
-			if tc.wantErrSubstring == "" {
+			_, err := fx.Verifier.VerifyIntent(t.Context(), fx.AccessToken, auth.TokenIntentAccess)
+			if tc.wantErrCode == "" {
 				require.NoError(t, err, "case %s: aligned audiences must pass verifier", tc.name)
 				return
 			}
 			require.Error(t, err, "case %s: drift must be rejected", tc.name)
-			assert.Contains(t, err.Error(), tc.wantErrSubstring)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "case %s: error must wrap *errcode.Error", tc.name)
+			assert.Equal(t, tc.wantErrCode, ec.Code, "case %s: error code", tc.name)
 		})
 	}
 }
