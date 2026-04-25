@@ -13,15 +13,12 @@
 // Each call to New() creates one Manager. The Manager's resource footprint per
 // active lock set is:
 //   - 1 manager goroutine: owns the renewal min-heap and all Driver I/O calls
-//   - 1 watcher goroutine per held lock: forwards parent-ctx cancellation to lockCtx
+//   - 0 per-lock goroutines: lockCtx is derived from the caller's ctx, so parent
+//     cancellation (including custom causes set via context.WithCancelCause),
+//     values, and deadlines propagate automatically via Go's context machinery.
+//     No watcher goroutine is needed.
 //
-// N active locks = 1 manager goroutine + N watcher goroutines + O(N) heap.
-//
-// The watcher goroutines are lightweight: they hold no allocations after
-// starting and exit on either ctx.Done() or lockCtx.Done(). A single shared
-// "all parents" goroutine was considered but would require reflect.Select, which
-// is measurably slower at scale (N ≥ ~10) than individual per-lock goroutines.
-// The per-lock watcher model is the intentional design choice.
+// N active locks = 1 manager goroutine + O(N) heap. One goroutine for N locks.
 //
 // # Non-goals
 //

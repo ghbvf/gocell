@@ -31,6 +31,13 @@ type Timer interface {
 	Reset(d time.Duration) bool
 }
 
+// RealClockForTest returns a Clock backed by the real wall clock. It is
+// exported for use in clock_test.go to test realClock behaviour through the
+// Clock interface without making realClock itself public.
+func RealClockForTest() Clock {
+	return realClock{}
+}
+
 // realClock is the production Clock backed by the standard library.
 type realClock struct{}
 

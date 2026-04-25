@@ -2,6 +2,8 @@ package distlock_test
 
 import (
 	"context"
+	"errors"
+	"math"
 	"runtime"
 	"strconv"
 	"sync"
@@ -227,43 +229,81 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 
 // TC-5: Parent ctx cancel → lockCtx.Done(), Cause == parentErr.
 // release() is still callable without panic.
+//
+// Sub-cases:
+//   - TC-5a: plain context.WithCancel → Cause == context.Canceled
+//   - TC-5b: context.WithCancelCause with custom cause → Cause propagated exactly
 func TestLocker_TC5_ParentCancel(t *testing.T) {
-	fc := locktest.NewFakeClock(time.Time{})
-	fd := locktest.NewFakeDriver()
-	l := newTestLocker(fc, fd)
+	t.Run("TC5a_PlainCancel", func(t *testing.T) {
+		fc := locktest.NewFakeClock(time.Time{})
+		fd := locktest.NewFakeDriver()
+		l := newTestLocker(fc, fd)
 
-	ttl := 10 * time.Second
+		ttl := 10 * time.Second
 
-	parentCtx, parentCancel := context.WithCancel(context.Background())
+		parentCtx, parentCancel := context.WithCancel(context.Background())
 
-	lockCtx, release, err := l.Acquire(parentCtx, "key5", ttl)
-	if err != nil {
-		t.Fatalf("TC-5 Acquire: %v", err)
-	}
+		lockCtx, release, err := l.Acquire(parentCtx, "key5a", ttl)
+		if err != nil {
+			t.Fatalf("TC-5a Acquire: %v", err)
+		}
 
-	<-mgr(l).Started()
+		<-mgr(l).Started()
+		parentCancel()
 
-	releaseCount := fd.Calls("Release")
-	parentCancel()
+		select {
+		case <-lockCtx.Done():
+		case <-time.After(testTimeout):
+			t.Fatal("TC-5a: lockCtx should be Done after parent cancel")
+		}
 
-	select {
-	case <-lockCtx.Done():
-	case <-time.After(testTimeout):
-		t.Fatal("TC-5: lockCtx should be Done after parent cancel")
-	}
+		// Cause should propagate parent's cause (context.Canceled for plain cancel).
+		cause := context.Cause(lockCtx)
+		if cause != context.Canceled {
+			t.Errorf("TC-5a: Cause = %v, want context.Canceled", cause)
+		}
 
-	// Cause should propagate parent's error.
-	cause := context.Cause(lockCtx)
-	if cause != context.Canceled {
-		t.Errorf("TC-5: Cause = %v, want context.Canceled", cause)
-	}
+		// release() should not panic.
+		release()
+	})
 
-	// release() should not panic.
-	release()
+	t.Run("TC5b_CustomCausePropagation", func(t *testing.T) {
+		fc := locktest.NewFakeClock(time.Time{})
+		fd := locktest.NewFakeDriver()
+		l := newTestLocker(fc, fd)
 
-	// Release count should not have increased (parent ctx canceled — driver.Release
-	// still runs via manager.remove, so we allow it).
-	_ = releaseCount // not asserting count == 0 since manager still calls Release
+		ttl := 10 * time.Second
+
+		customErr := errors.New("custom-parent-cause")
+		parentCtx, parentCancelCause := context.WithCancelCause(context.Background())
+
+		lockCtx, release, err := l.Acquire(parentCtx, "key5b", ttl)
+		if err != nil {
+			t.Fatalf("TC-5b Acquire: %v", err)
+		}
+
+		<-mgr(l).Started()
+		parentCancelCause(customErr)
+
+		select {
+		case <-lockCtx.Done():
+		case <-time.After(testTimeout):
+			t.Fatal("TC-5b: lockCtx should be Done after parent cancel with custom cause")
+		}
+
+		// context.Cause(lockCtx) must equal context.Cause(parentCtx) == customErr.
+		cause := context.Cause(lockCtx)
+		parentCause := context.Cause(parentCtx)
+		if cause != parentCause {
+			t.Errorf("TC-5b: Cause = %v, want parentCause = %v", cause, parentCause)
+		}
+		if cause != customErr {
+			t.Errorf("TC-5b: Cause = %v, want customErr = %v", cause, customErr)
+		}
+
+		// release() should not panic.
+		release()
+	})
 }
 
 // TC-6: Double release — idempotent, Driver.Release called exactly once.
@@ -339,12 +379,12 @@ func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
 	}
 }
 
-// TC-9: 100 concurrent Acquire → goroutine count ≤ n + 1 + 2 above baseline.
+// TC-9: 100 concurrent Acquire → goroutine count == 1 (manager only) above baseline.
 //
-// Resource model: 1 manager goroutine + 1 ctx-watcher goroutine per held lock
-// + small slack for runtime jitter. A per-lock goroutine model would add n
-// extra goroutines on top (2n instead of n+1), so exceeding n+3 is a
-// regression indicator.
+// Resource model: 1 manager goroutine for all N held locks (0 per-lock goroutines).
+// lockCtx is derived from ctx, so parent cancellation propagates via stdlib
+// context machinery — no watcher goroutines are needed.
+// After all releases and drain, goroutine count returns to baseline.
 func TestLocker_TC9_GoroutineCount(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
 	fd := locktest.NewFakeDriver()
@@ -382,17 +422,16 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 
 	<-mgr(l).Started()
 
-	// Expected goroutine count above baseline:
-	//   1 manager goroutine + n ctx-watcher goroutines (1 per held lock) + 2 slack for runtime jitter.
-	// A per-lock goroutine model would add n more (total 2n+1), so n+3 is the
-	// tightest bound that still tolerates minor scheduler non-determinism.
+	// Expected goroutine count above baseline: exactly 1 (the manager goroutine).
+	// No per-lock watcher goroutines — lockCtx derives from ctx directly.
+	// Allow +2 slack for test-framework goroutines.
 	after := runtime.NumGoroutine()
 	managerGoroutines := after - baseline
-	const maxExpected = n + 1 + 2 // 1 manager + n ctx-watchers + 2 slack
+	const maxExpected = 1 + 2 // 1 manager + 2 slack
 	if managerGoroutines > maxExpected {
 		t.Errorf("TC-9: goroutine count jumped by %d (baseline %d → %d); expected at most %d "+
-			"(1 manager + %d ctx-watchers + 2 slack)",
-			managerGoroutines, baseline, after, maxExpected, n)
+			"(1 manager + 2 slack — 0 per-lock goroutines)",
+			managerGoroutines, baseline, after, maxExpected)
 	}
 
 	// Release all.
@@ -400,15 +439,14 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 		r.release()
 	}
 
-	// Wait for drain, then do a bounded retry to confirm watcher goroutines
-	// have also fully exited (they may still be exiting when Drained closes).
+	// Wait for drain.
 	select {
 	case <-mgr(l).Drained():
 	case <-time.After(30 * time.Second):
 		t.Fatal("TC-9: manager should drain after all releases")
 	}
 
-	// Bounded goroutine-count check after drain (F29).
+	// Bounded goroutine-count check after drain — must return to baseline.
 	drainDeadline := time.Now().Add(5 * time.Second)
 	for {
 		current := runtime.NumGoroutine()
@@ -416,9 +454,8 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 			break
 		}
 		if time.Now().After(drainDeadline) {
-			// Not a hard failure — signals a potential watcher leak.
-			t.Logf("TC-9: goroutines after drain: %d (baseline %d); possible watcher leak",
-				current, baseline)
+			t.Errorf("TC-9: goroutines after drain: %d (baseline %d); expected ≤ %d",
+				current, baseline, baseline+2)
 			break
 		}
 		runtime.Gosched()
@@ -584,6 +621,278 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 
 	if fd.Calls("Renew") < 2 {
 		t.Errorf("TC-12: expected ≥2 Renew calls, got %d", fd.Calls("Renew"))
+	}
+}
+
+// TestLocker_LockCtxValuePropagation verifies that context values stored in the
+// parent ctx are accessible via lockCtx (lockCtx derives from ctx).
+func TestLocker_LockCtxValuePropagation(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	type ctxKey struct{ name string }
+	key := ctxKey{"trace-id"}
+	val := "test-trace-id-abc123"
+
+	parentCtx := context.WithValue(context.Background(), key, val)
+
+	lockCtx, release, err := l.Acquire(parentCtx, "key-val-prop", 10*time.Second)
+	if err != nil {
+		t.Fatalf("ValuePropagation Acquire: %v", err)
+	}
+	defer release()
+
+	got := lockCtx.Value(key)
+	if got != val {
+		t.Errorf("ValuePropagation: lockCtx.Value(key) = %v, want %v", got, val)
+	}
+}
+
+// TestLocker_LockCtxDeadlinePropagation verifies that the parent deadline is
+// propagated into lockCtx (lockCtx derives from ctx).
+func TestLocker_LockCtxDeadlinePropagation(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	deadline := time.Now().Add(10 * time.Minute)
+	parentCtx, cancel := context.WithDeadline(context.Background(), deadline)
+	defer cancel()
+
+	lockCtx, release, err := l.Acquire(parentCtx, "key-deadline-prop", 10*time.Second)
+	if err != nil {
+		t.Fatalf("DeadlinePropagation Acquire: %v", err)
+	}
+	defer release()
+
+	gotDeadline, ok := lockCtx.Deadline()
+	if !ok {
+		t.Fatal("DeadlinePropagation: lockCtx has no deadline, want parent deadline propagated")
+	}
+	if !gotDeadline.Equal(deadline) {
+		t.Errorf("DeadlinePropagation: lockCtx.Deadline() = %v, want %v", gotDeadline, deadline)
+	}
+}
+
+// TestLocker_New_PanicsOnNilDriver verifies that New panics immediately on nil driver.
+func TestLocker_New_PanicsOnNilDriver(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("New(nil) should panic")
+		}
+	}()
+	_ = distlock.New(nil)
+}
+
+// TestLocker_New_PanicsOnInvalidRenewFraction verifies fail-fast validation in New().
+func TestLocker_New_PanicsOnInvalidRenewFraction(t *testing.T) {
+	tests := []struct {
+		name     string
+		fraction float64
+	}{
+		{"negative", -0.1},
+		{"zero", 0},
+		{"one", 1},
+		{"above_one", 1.5},
+		{"NaN", math.NaN()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fd := locktest.NewFakeDriver()
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("New with renewFraction=%v should panic", tc.fraction)
+				}
+			}()
+			_ = distlock.New(fd, distlock.WithRenewFraction(tc.fraction))
+		})
+	}
+}
+
+// TestLocker_New_PanicsOnInvalidDriftFactor verifies fail-fast validation in New().
+func TestLocker_New_PanicsOnInvalidDriftFactor(t *testing.T) {
+	tests := []struct {
+		name   string
+		factor float64
+	}{
+		{"negative", -0.1},
+		{"one", 1},
+		{"NaN", math.NaN()},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fd := locktest.NewFakeDriver()
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("New with driftFactor=%v should panic", tc.factor)
+				}
+			}()
+			_ = distlock.New(fd, distlock.WithDriftFactor(tc.factor))
+		})
+	}
+}
+
+// TestLocker_New_PanicsOnNonPositiveReleaseTimeout verifies fail-fast validation in New().
+func TestLocker_New_PanicsOnNonPositiveReleaseTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -1 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fd := locktest.NewFakeDriver()
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("New with releaseTimeout=%v should panic", tc.timeout)
+				}
+			}()
+			_ = distlock.New(fd, distlock.WithReleaseTimeout(tc.timeout))
+		})
+	}
+}
+
+// TestLocker_Acquire_RejectsZeroTTL verifies that Acquire returns an error (not panic)
+// when TTL is zero or negative — runtime input validation.
+func TestLocker_Acquire_RejectsZeroTTL(t *testing.T) {
+	tests := []struct {
+		name string
+		ttl  time.Duration
+	}{
+		{"zero", 0},
+		{"negative", -1 * time.Second},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fc := locktest.NewFakeClock(time.Time{})
+			fd := locktest.NewFakeDriver()
+			l := newTestLocker(fc, fd)
+
+			lockCtx, release, err := l.Acquire(context.Background(), "key-zero-ttl", tc.ttl)
+			if err == nil {
+				t.Errorf("Acquire with TTL=%v should return error", tc.ttl)
+				if release != nil {
+					release()
+				}
+			}
+			if lockCtx != nil {
+				t.Error("Acquire with invalid TTL should return nil lockCtx")
+			}
+		})
+	}
+}
+
+// TestLocker_ConcurrentRelease acquires 100 locks then releases all 100 concurrently.
+// Asserts no panic, no race, and all 100 Driver.Release calls are made.
+func TestLocker_ConcurrentRelease(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	const n = 100
+	ttl := time.Minute
+
+	releases := make([]func(), n)
+	for i := range n {
+		key := "concurrent-release-" + strconv.Itoa(i)
+		_, rel, err := l.Acquire(context.Background(), key, ttl)
+		if err != nil {
+			t.Fatalf("ConcurrentRelease Acquire[%d]: %v", i, err)
+		}
+		releases[i] = rel
+	}
+
+	<-mgr(l).Started()
+
+	// Release all 100 concurrently.
+	var wg sync.WaitGroup
+	for _, rel := range releases {
+		wg.Add(1)
+		rel := rel
+		go func() {
+			defer wg.Done()
+			rel()
+		}()
+	}
+	wg.Wait()
+
+	select {
+	case <-mgr(l).Drained():
+	case <-time.After(30 * time.Second):
+		t.Fatal("ConcurrentRelease: manager should drain after all concurrent releases")
+	}
+
+	if fd.Calls("Release") != n {
+		t.Errorf("ConcurrentRelease: expected %d Release calls, got %d", n, fd.Calls("Release"))
+	}
+}
+
+// TestLocker_ExtremeTTL_LongDuration verifies renewal fires at ttl*renewFraction
+// with a 1-hour TTL, using a fake clock (no real waits).
+func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriverWithClock(fc.Now)
+	l := distlock.New(fd,
+		distlock.WithClock(fc),
+		distlock.WithRenewFraction(0.5),
+	)
+
+	ttl := time.Hour
+	renewAt := time.Duration(float64(ttl) * 0.5) // 30 minutes
+
+	_, release, err := l.Acquire(context.Background(), "extreme-long-ttl", ttl)
+	if err != nil {
+		t.Fatalf("ExtremeTTL_Long Acquire: %v", err)
+	}
+	defer release()
+
+	<-mgr(l).Started()
+	waitPendingTimers(t, fc, 1)
+
+	// Advance just past the renew point.
+	fc.Advance(renewAt)
+	waitForRenewL(t, l, fd, 1)
+
+	if fd.Calls("Renew") < 1 {
+		t.Errorf("ExtremeTTL_Long: expected ≥1 Renew call after advancing %v, got %d", renewAt, fd.Calls("Renew"))
+	}
+}
+
+// TestLocker_ExtremeTTL_ShortDuration verifies that a 1ms TTL does not spin-loop.
+// Each Advance(ttl/2) should trigger exactly one renew.
+func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriverWithClock(fc.Now)
+	l := distlock.New(fd,
+		distlock.WithClock(fc),
+		distlock.WithRenewFraction(0.5),
+	)
+
+	ttl := time.Millisecond
+	renewAt := time.Duration(float64(ttl) * 0.5)
+
+	_, release, err := l.Acquire(context.Background(), "extreme-short-ttl", ttl)
+	if err != nil {
+		t.Fatalf("ExtremeTTL_Short Acquire: %v", err)
+	}
+	defer release()
+
+	<-mgr(l).Started()
+
+	// Verify exactly one renew per Advance over 3 cycles.
+	for i := range 3 {
+		waitPendingTimers(t, fc, 1)
+		prev := fd.Calls("Renew")
+		fc.Advance(renewAt)
+		waitForRenewL(t, l, fd, prev+1)
+		got := fd.Calls("Renew")
+		if got != prev+1 {
+			t.Errorf("ExtremeTTL_Short step %d: expected delta=1, got delta=%d (total=%d)",
+				i+1, got-prev, got)
+		}
 	}
 }
 

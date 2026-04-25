@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -19,7 +20,7 @@ import (
 //
 //	context.Cause(lockCtx) == ErrLockReleased  — release() called
 //	context.Cause(lockCtx) == ErrLockLost      — renewal failed / ownership taken
-//	context.Cause(lockCtx) == context.Cause(parent ctx)  — parent context was canceled
+//	context.Cause(lockCtx) == context.Cause(ctx) — parent context was canceled
 //	context.Cause(lockCtx) == context.Canceled (or another error) — manager forced exit
 //
 // Use context.Cause(lockCtx) (not lockCtx.Err()) to distinguish causes.
@@ -41,13 +42,14 @@ type Locker interface {
 	// lockCtx cancel causes:
 	//   - ErrLockReleased — release() was called (normal end-of-critical-section)
 	//   - ErrLockLost     — renewal failed or backend reports ownership taken
-	//   - context.Cause(ctx) — parent context was canceled (propagated faithfully,
-	//     including custom causes set via context.WithCancelCause)
+	//   - context.Cause(ctx) — parent context was canceled; values, deadline, and
+	//     parent cancellation propagate naturally via Go context machinery.
+	//     context.Cause(lockCtx) returns context.Cause(ctx) when the parent cancels,
+	//     including custom causes set via context.WithCancelCause.
 	//   - context.Canceled — manager forced exit during shutdown drain
 	//
-	// NOTE: lockCtx is derived from context.Background() (not from ctx) — caller-side
-	// context values (trace IDs, auth claims) do NOT propagate to lockCtx. If your
-	// downstream calls need request-scoped values, attach them explicitly to lockCtx.
+	// lockCtx is derived from ctx: caller-side context values (trace IDs, auth
+	// claims), deadline, and parent cancellation all propagate automatically.
 	//
 	// Do not pass lockCtx to a goroutine whose lifetime should outlive the lock.
 	// lockCtx is canceled the instant the lock ends.
@@ -55,8 +57,9 @@ type Locker interface {
 	// On failure it returns (nil, nil, err) where err carries ErrLockTimeout when
 	// another holder owns the key, or ctx.Err() if the parent was canceled.
 	//
-	// The lock is auto-renewed by a shared manager goroutine (not per-lock) until
-	// release() is called or renewal fails.
+	// The lock is auto-renewed by a single shared manager goroutine (not per-lock)
+	// until release() is called or renewal fails.
+	// N active locks = 1 manager goroutine + O(N) heap. Zero per-lock goroutines.
 	//
 	// release() takes no context — internally it uses context.Background() with
 	// WithReleaseTimeout. The Driver.Release I/O is fire-and-forget; release()
@@ -73,26 +76,50 @@ type lockerImpl struct {
 
 // New creates a Locker backed by the given Driver.
 //
-// The returned Locker uses a single shared manager goroutine for all locks.
-// The actual resource shape per Acquire call is:
-//   - 1 shared manager goroutine (owns the renewal heap and all Driver calls)
-//   - 1 small watcher goroutine per held lock (forwards parent-ctx cancellation)
+// Panics if driver is nil or if any configuration parameter is out of range:
+//   - renewFraction must be in (0, 1)
+//   - driftFactor must be in [0, 1)
+//   - releaseTimeout must be > 0
 //
-// N active locks = 1 manager goroutine + N watcher goroutines + O(N) heap.
-// The watcher goroutines are minimal (no allocations after start; exit on
-// either ctx.Done or lockCtx.Done). A single shared "all parents" goroutine
-// would require reflect.Select which is slower at scale, so per-lock watchers
-// are preferred — this is an intentional design trade-off.
+// The returned Locker uses a single shared manager goroutine for all locks.
+// Resource shape:
+//   - 1 manager goroutine (owns the renewal heap and all Driver calls)
+//   - 0 per-lock goroutines — lockCtx is derived from ctx, so parent
+//     cancellation propagates automatically via Go context machinery.
+//
+// N active locks = 1 manager goroutine + O(N) heap.
 //
 // ref: plan "共享 manager goroutine" section
 func New(driver Driver, opts ...Option) Locker {
+	if driver == nil {
+		panic("distlock.New: driver must not be nil")
+	}
 	cfg := defaultConfig()
 	for _, o := range opts {
 		o(&cfg)
 	}
+	validateConfig(cfg)
 	return &lockerImpl{
 		mgr: newManager(driver, cfg),
 		cfg: cfg,
+	}
+}
+
+// validateConfig panics if any configuration parameter is outside its valid
+// range. Called once in New() after all options have been applied so that
+// defaults are in effect before validation runs.
+func validateConfig(cfg config) {
+	if cfg.renewFraction <= 0 || cfg.renewFraction >= 1 || math.IsNaN(cfg.renewFraction) {
+		panic("distlock.New: invalid configuration: renewFraction must be in (0, 1), got " +
+			fmt.Sprintf("%v", cfg.renewFraction))
+	}
+	if cfg.driftFactor < 0 || cfg.driftFactor >= 1 || math.IsNaN(cfg.driftFactor) {
+		panic("distlock.New: invalid configuration: driftFactor must be in [0, 1), got " +
+			fmt.Sprintf("%v", cfg.driftFactor))
+	}
+	if cfg.releaseTimeout <= 0 {
+		panic("distlock.New: invalid configuration: releaseTimeout must be > 0, got " +
+			fmt.Sprintf("%v", cfg.releaseTimeout))
 	}
 }
 
@@ -101,6 +128,10 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	// Fast path: parent already canceled.
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
+	}
+	if ttl <= 0 {
+		return nil, nil, errcode.New(ErrLockTimeout,
+			"distlock: ttl must be > 0")
 	}
 
 	token, err := randomToken()
@@ -118,7 +149,16 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 			"distlock: lock already held by another holder")
 	}
 
-	lockCtx, cancelCause := context.WithCancelCause(context.Background())
+	// lockCtx is derived from ctx so that parent values (trace IDs, auth claims),
+	// deadline, and parent cancellation all propagate automatically via stdlib
+	// context machinery. No per-lock watcher goroutine is needed.
+	//
+	// When the parent ctx is canceled, context.Cause(lockCtx) returns
+	// context.Cause(ctx), including custom causes set via context.WithCancelCause.
+	//
+	// The manager goroutine may also cancel lockCtx with ErrLockLost or
+	// ErrLockReleased to signal lock lifecycle events.
+	lockCtx, cancelCause := context.WithCancelCause(ctx)
 
 	id := l.mgr.nextID.Add(1)
 	state := &lockState{
@@ -128,16 +168,6 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 		ttl:    ttl,
 		cancel: cancelCause,
 	}
-
-	// Watch parent ctx: if it is canceled, propagate the cause to lockCtx.
-	// context.Cause propagates custom causes set via context.WithCancelCause.
-	go func() {
-		select {
-		case <-ctx.Done():
-			cancelCause(context.Cause(ctx))
-		case <-lockCtx.Done():
-		}
-	}()
 
 	l.mgr.add(state)
 
