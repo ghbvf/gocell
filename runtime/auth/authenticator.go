@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -130,7 +131,7 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 // The default NonceStore is NoopNonceStore (replay check disabled); production
 // deployments must supply a replay-safe store via WithServiceTokenNonceStore.
 // cmd/corebundle.SharedDeps.Validate enforces this in adapter mode "real".
-func NewServiceTokenAuthenticator(ring *HMACKeyRing, opts ...ServiceTokenOption) Authenticator {
+func NewServiceTokenAuthenticator(ring cell.HMACKeyring, opts ...ServiceTokenOption) Authenticator {
 	cfg := serviceTokenConfig{
 		now:        time.Now,
 		nonceStore: NewNoopNonceStore(),
@@ -175,7 +176,7 @@ func NewServiceTokenAuthenticator(ring *HMACKeyRing, opts ...ServiceTokenOption)
 // from a store failure and map to the correct HTTP status code).
 //
 // This helper is intentionally package-private.
-func verifyServiceTokenPayload(ring *HMACKeyRing, payload string, cfg serviceTokenConfig, r *http.Request) error {
+func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg serviceTokenConfig, r *http.Request) error {
 	parts := strings.SplitN(payload, ":", 3)
 	if len(parts) == 2 {
 		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "legacy 2-part service token format rejected")

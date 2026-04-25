@@ -15,16 +15,16 @@ package cell
 
 import (
 	"context"
+	"time"
 )
 
 // TokenIntent distinguishes how a JWT is meant to be used. The values here are
-// the kernel projection of runtime/auth.TokenIntent; they must remain in sync.
-// kernel/cell uses a distinct named type so kernel does not import runtime/auth.
+// the canonical definition; runtime/auth.TokenIntent is a type alias of this type.
 type TokenIntent string
 
 const (
 	// TokenIntentAccess marks a short-lived credential for calling business
-	// endpoints. Mirrors runtime/auth.TokenIntentAccess.
+	// endpoints. Verifier rejects any access token replayed at /auth/refresh.
 	TokenIntentAccess TokenIntent = "access"
 )
 
@@ -33,17 +33,30 @@ func (t TokenIntent) IsValid() bool {
 	return t == TokenIntentAccess
 }
 
-// Claims is the kernel projection of runtime/auth.Claims. It contains only
-// the fields that bootstrap needs during AuthPlan.Validate / auth plan apply.
-// The full runtime/auth.Claims struct is used within runtime/auth internals.
+// Claims represents the decoded token claims. This is the canonical definition;
+// runtime/auth.Claims is a type alias of this type so callers share the same struct
+// without conversion at package boundaries.
 type Claims struct {
-	Subject               string
-	Issuer                string
-	Audience              []string
-	Roles                 []string
-	SessionID             string
+	// Subject is the principal identifier (user ID, service name, etc.).
+	Subject string
+	// Issuer identifies the token issuer.
+	Issuer string
+	// Audience is the intended recipient(s).
+	Audience []string
+	// ExpiresAt is the expiration time.
+	ExpiresAt time.Time
+	// IssuedAt is the token issue time.
+	IssuedAt time.Time
+	// Roles is the set of roles associated with the subject.
+	Roles []string
+	// TokenUse records the intent declared by the JWT's token_use claim.
+	TokenUse TokenIntent
+	// SessionID is the "sid" claim binding the token to a specific session.
+	SessionID string
+	// PasswordResetRequired indicates that the subject must change their password.
 	PasswordResetRequired bool
-	Extra                 map[string]any
+	// Extra holds additional claims not covered by the standard fields.
+	Extra map[string]any
 }
 
 // IntentTokenVerifier verifies a JWT token and requires its declared intent

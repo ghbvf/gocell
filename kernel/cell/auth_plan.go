@@ -34,12 +34,12 @@ import (
 type AuthKind uint8
 
 const (
-	AuthKindNone         AuthKind = iota // AuthNone
-	AuthKindJWT                          // AuthJWT
-	AuthKindJWTFromAssembly              // AuthJWTFromAssembly
-	AuthKindMTLS                         // AuthMTLS
-	AuthKindServiceToken                 // AuthServiceToken
-	AuthKindVerboseToken                 // AuthVerboseToken
+	AuthKindNone            AuthKind = iota // AuthNone
+	AuthKindJWT                             // AuthJWT
+	AuthKindJWTFromAssembly                 // AuthJWTFromAssembly
+	AuthKindMTLS                            // AuthMTLS
+	AuthKindServiceToken                    // AuthServiceToken
+	AuthKindVerboseToken                    // AuthVerboseToken
 )
 
 // AuthPlan is the sealed base interface for all authentication plans.
@@ -174,8 +174,15 @@ func (AuthJWTFromAssembly) Describe() string       { return "jwt-from-assembly" 
 func (AuthJWTFromAssembly) listenerAuthOK()        {}
 
 // ResolvedVerifier returns the verifier once it has been discovered by phase4.
-// Returns nil before Validate has run.
-func (p *AuthJWTFromAssembly) ResolvedVerifier() IntentTokenVerifier {
+// Returns nil before SetResolved has been called.
+//
+// Method is on value receiver so it works when AuthJWTFromAssembly is stored
+// by value in []ListenerAuth. The underlying atomic.Pointer is already a
+// pointer so concurrent safety is preserved.
+func (p AuthJWTFromAssembly) ResolvedVerifier() IntentTokenVerifier {
+	if p.resolved == nil {
+		return nil
+	}
 	vp := p.resolved.Load()
 	if vp == nil {
 		return nil
@@ -185,8 +192,13 @@ func (p *AuthJWTFromAssembly) ResolvedVerifier() IntentTokenVerifier {
 
 // SetResolved stores the verifier discovered by phase4. Called by bootstrap;
 // must not be called by cell code.
-func (p *AuthJWTFromAssembly) SetResolved(v IntentTokenVerifier) {
-	p.resolved.Store(&v)
+//
+// Method is on value receiver: the internal atomic.Pointer is already a
+// pointer, so the store is visible to all copies of this value.
+func (p AuthJWTFromAssembly) SetResolved(v IntentTokenVerifier) {
+	if p.resolved != nil {
+		p.resolved.Store(&v)
+	}
 }
 
 // Compile-time assertion.

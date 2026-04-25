@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"sync"
 	"time"
+
+	"github.com/ghbvf/gocell/kernel/cell"
 )
 
 // ErrNonceReused is returned by NonceStore.CheckAndMark when a nonce has
@@ -29,21 +31,21 @@ const defaultMaxNonceEntries = 100000
 // standard sync.Mutex + map-with-TTL pattern (cf. gorilla/securecookie token store).
 
 // NonceStoreKind classifies a NonceStore implementation for startup validation.
-// Production deployments must reject NonceStoreKindNoop — the /internal/v1/*
-// service-token guard needs a replay-safe store, not a permissive one.
-type NonceStoreKind string
+// It is an alias of cell.NonceStoreKind so that runtime/auth types satisfy
+// the kernel interface directly without conversion.
+type NonceStoreKind = cell.NonceStoreKind
 
 const (
 	// NonceStoreKindNoop is the explicit disable-replay-check sentinel.
 	// Rejected in adapter mode "real" by cmd/corebundle.SharedDeps.Validate.
-	NonceStoreKindNoop NonceStoreKind = "noop"
+	NonceStoreKindNoop = cell.NonceStoreKindNoop
 	// NonceStoreKindInMemory is the single-process map-backed implementation.
 	// Suitable for single-pod deployments; a shared store is required for
 	// multi-pod replay protection.
-	NonceStoreKindInMemory NonceStoreKind = "in_memory"
+	NonceStoreKindInMemory = cell.NonceStoreKindInMemory
 	// NonceStoreKindDistributed is reserved for shared backends (Redis, consul,
 	// etc.). Production multi-pod deployments must use this kind.
-	NonceStoreKindDistributed NonceStoreKind = "distributed"
+	NonceStoreKindDistributed = cell.NonceStoreKindDistributed
 )
 
 // NonceStore tracks nonces for replay prevention. Implementations must be
@@ -54,6 +56,9 @@ const (
 // Kind reports the implementation classification for startup validation.
 // Control-plane guards in adapter mode "real" must reject NonceStoreKindNoop
 // so replay protection is never silently disabled in production.
+//
+// This interface is identical to cell.NonceStore; runtime/auth types that
+// implement it automatically satisfy the kernel interface.
 type NonceStore interface {
 	CheckAndMark(ctx context.Context, nonce string) error
 	Kind() NonceStoreKind

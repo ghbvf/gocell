@@ -7,58 +7,29 @@ package auth
 import (
 	"context"
 	"crypto/rsa"
-	"time"
+
+	"github.com/ghbvf/gocell/kernel/cell"
 )
 
-// TokenIntent distinguishes how a JWT is meant to be used. GoCell only issues
-// access JWTs; refresh tokens are opaque selector/verifier wire tokens owned by
-// runtime/auth/refresh, not JWT intents.
+// TokenIntent is a type alias of cell.TokenIntent so that runtime/auth and
+// kernel/cell share a single canonical type without conversion at package
+// boundaries. All existing code that references auth.TokenIntent continues
+// to compile without modification.
 //
 // ref: RFC 9068 §2.1 (typ: at+jwt), RFC 8725 §3.11 (token confusion defense)
 // ref: AWS Cognito token_use claim ("access"/"id"), Keycloak TokenUtil.java
-type TokenIntent string
+type TokenIntent = cell.TokenIntent
 
 const (
 	// TokenIntentAccess marks a short-lived credential for calling business
 	// endpoints. Verifier rejects any access token replayed at /auth/refresh.
-	TokenIntentAccess TokenIntent = "access"
+	TokenIntentAccess = cell.TokenIntentAccess
 )
 
-// IsValid reports whether the intent is one of the known enum values.
-func (t TokenIntent) IsValid() bool {
-	return t == TokenIntentAccess
-}
-
-// Claims represents the decoded token claims.
-type Claims struct {
-	// Subject is the principal identifier (user ID, service name, etc.).
-	Subject string
-	// Issuer identifies the token issuer.
-	Issuer string
-	// Audience is the intended recipient(s).
-	Audience []string
-	// ExpiresAt is the expiration time.
-	ExpiresAt time.Time
-	// IssuedAt is the token issue time.
-	IssuedAt time.Time
-	// Roles is the set of roles associated with the subject.
-	Roles []string
-	// TokenUse records the intent declared by the JWT's token_use claim (see
-	// TokenIntent). Empty when absent — callers that enforce intent must
-	// treat empty as fail-closed.
-	TokenUse TokenIntent
-	// SessionID is the "sid" claim binding the token to a specific session.
-	// Empty when absent.
-	SessionID string
-	// PasswordResetRequired indicates that the subject must change their
-	// password before accessing business endpoints (except the exempt list).
-	// Only true when the JWT claim password_reset_required is explicitly true;
-	// defaults to false for backward compatibility with tokens that lack
-	// the claim (e.g., tokens issued before Phase 3.5).
-	PasswordResetRequired bool
-	// Extra holds additional claims not covered by the standard fields.
-	Extra map[string]any
-}
+// Claims is a type alias of cell.Claims so that runtime/auth and kernel/cell
+// share a single canonical struct without conversion at package boundaries.
+// All existing code that references auth.Claims continues to compile.
+type Claims = cell.Claims
 
 // IntentTokenVerifier verifies an authentication token, requiring both
 // cryptographic validity and a declared intent (token_use claim + typ header)
@@ -69,6 +40,9 @@ type Claims struct {
 // interface (Verify without intent) was removed: every production verification
 // path must declare the expected intent to prevent token-confusion attacks
 // (RFC 8725 §3.11).
+//
+// This interface is identical to cell.IntentTokenVerifier; runtime/auth types
+// that implement it automatically satisfy the kernel interface.
 type IntentTokenVerifier interface {
 	// VerifyIntent validates the token and requires that its declared intent
 	// (token_use claim + typ header) matches expected.

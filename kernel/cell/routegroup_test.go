@@ -14,15 +14,15 @@ type testContributor struct {
 func (c *testContributor) RouteGroups() []cell.RouteGroup { return c.groups }
 
 // TestRouteGroup_ZeroValueFields verifies the zero RouteGroup has zero-value
-// Listener / Policy and a nil Register.
+// Listener, nil Auth, and nil Register.
 func TestRouteGroup_ZeroValueFields(t *testing.T) {
 	t.Parallel()
 	var rg cell.RouteGroup
 	if !rg.Listener.IsZero() {
 		t.Error("zero RouteGroup.Listener.IsZero() should be true")
 	}
-	if !rg.Policy.IsZero() {
-		t.Error("zero RouteGroup.Policy should be zero value")
+	if rg.Auth != nil {
+		t.Error("zero RouteGroup.Auth should be nil")
 	}
 	if rg.Register != nil {
 		t.Error("zero RouteGroup.Register should be nil")

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -176,7 +177,10 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 //
 // Principal construction is fully delegated to NewServiceTokenAuthenticator
 // so that the service identity shape is defined in a single place.
-func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
+//
+// ring accepts cell.HMACKeyring (the kernel interface); *HMACKeyRing satisfies
+// it structurally and remains the canonical production implementation.
+func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
 	cfg := serviceTokenConfig{
 		now:        time.Now,
 		logger:     slog.Default(),
@@ -317,7 +321,7 @@ func classifyServiceTokenVerifyError(err error) string {
 
 // verifyServiceTokenMAC checks whether the provided MAC is valid for message
 // under any of the secrets in the key ring.
-func verifyServiceTokenMAC(ring *HMACKeyRing, message string, providedMAC []byte) bool {
+func verifyServiceTokenMAC(ring cell.HMACKeyring, message string, providedMAC []byte) bool {
 	for _, secret := range ring.Secrets() {
 		mac := hmac.New(sha256.New, secret)
 		_, _ = mac.Write([]byte(message))

@@ -237,7 +237,7 @@ func TestTokenIntent_IsValid(t *testing.T) {
 // stubAssemblyRef satisfies cell.AssemblyRef.
 type stubAssemblyRef struct{ id string }
 
-func (s *stubAssemblyRef) ID() string       { return s.id }
+func (s *stubAssemblyRef) ID() string        { return s.id }
 func (s *stubAssemblyRef) CellIDs() []string { return nil }
 
 // stubVerifier satisfies cell.IntentTokenVerifier.
@@ -259,5 +259,5 @@ func (s *stubNonceStore) Kind() cell.NonceStoreKind { return cell.NonceStoreKind
 // stubHMACKeyring satisfies cell.HMACKeyring.
 type stubHMACKeyring struct{}
 
-func (s *stubHMACKeyring) Current() []byte    { return []byte("stub-secret-32-bytes-padding-----") }
-func (s *stubHMACKeyring) Secrets() [][]byte  { return [][]byte{s.Current()} }
+func (s *stubHMACKeyring) Current() []byte   { return []byte("stub-secret-32-bytes-padding-----") }
+func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }

@@ -1,7 +1,9 @@
 package cell
 
+import "net/http"
+
 // RouteGroup declares where a batch of routes physically lives:
-// which listener, what path prefix, optional policy override.
+// which listener, what path prefix, optional auth override.
 // Cells implement [RouteGroupContributor] to return a slice of these;
 // bootstrap collects them at phase5, validates prefix-vs-listener
 // consistency, and mounts the sub-trees on the correct chi.Mux.
@@ -11,9 +13,14 @@ type RouteGroup struct {
 	// Prefix is the URL path prefix for all routes in this group
 	// (e.g. "/api/v1/access", "/internal/v1/access").
 	Prefix string
-	// Policy optionally overrides the listener's default policy for this group.
-	// nil means inherit the listener's default policy.
-	Policy Policy
+	// Auth optionally overrides the listener's default auth plan for this group.
+	// nil means inherit the listener's default auth (no group-level override).
+	// Only GroupAuth implementations are accepted here at compile time — JWT
+	// plans intentionally do NOT implement GroupAuth.
+	Auth GroupAuth
+	// Middleware holds additional (non-auth) HTTP middleware applied to routes
+	// in this group after the Auth middleware. Evaluated in declaration order.
+	Middleware []func(http.Handler) http.Handler
 	// Register is called by bootstrap to mount the cell's sub-tree on the
 	// chosen mux. Required; a nil Register is a programmer error detected
 	// at phase5 validation time.
