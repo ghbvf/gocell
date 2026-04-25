@@ -881,6 +881,11 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 			"encrypt failure on Create must route to ErrConfigEncryptFailed, not ErrConfigRepoQuery")
 		assert.True(t, errcode.IsInfraError(ec),
 			"CategoryInfra must propagate from ErrKeyProviderTransient cause so Vault-outage alerts fire")
+		// Side-effect contract: encrypt-fail must short-circuit before any DB
+		// write. If a future refactor accidentally moves the encrypt call after
+		// the INSERT, these assertions catch it.
+		require.Empty(t, db.execCalls, "Create must not issue any DB write when encrypt fails")
+		require.Empty(t, db.queryRowCalls, "Create must not issue any DB query when encrypt fails")
 	})
 
 	t.Run("UpdateForRollback sensitive entry", func(t *testing.T) {
@@ -903,6 +908,8 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 			"encrypt failure on UpdateForRollback must route to ErrConfigEncryptFailed")
 		assert.True(t, errcode.IsInfraError(ec),
 			"CategoryInfra must propagate from ErrKeyProviderTransient cause")
+		require.Empty(t, db.execCalls, "UpdateForRollback must not issue any DB write when encrypt fails")
+		require.Empty(t, db.queryRowCalls, "UpdateForRollback must not issue UPDATE...RETURNING when encrypt fails")
 	})
 
 	t.Run("PublishVersion sensitive version", func(t *testing.T) {
@@ -928,6 +935,8 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 			"encrypt failure on PublishVersion must route to ErrConfigEncryptFailed")
 		assert.True(t, errcode.IsInfraError(ec),
 			"CategoryInfra must propagate from ErrKeyProviderTransient cause")
+		require.Empty(t, db.execCalls, "PublishVersion must not insert config_versions row when encrypt fails")
+		require.Empty(t, db.queryRowCalls, "PublishVersion must not issue any DB query when encrypt fails")
 	})
 
 	t.Run("cryptoOpError direct — ErrConfigEncryptFailed transient", func(t *testing.T) {
