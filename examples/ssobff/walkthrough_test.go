@@ -688,11 +688,28 @@ func TestWalkthrough(t *testing.T) {
 			"GET must reflect the value written by PUT")
 	})
 
-	// PR-CFG-C negative regression: alice is authenticated but holds no admin
-	// role, so config/flags read endpoints must return 403, not 200.
+	// PR-CFG-C negative regression: an authenticated non-admin caller is
+	// rejected with 403 (not 401, not 200) on every config/flags read route.
+	// The earlier alice-token captured at login was rotated by the refresh
+	// step and then revoked by logout, so we re-login alice here to obtain
+	// a fresh non-admin access token specifically for this assertion.
 	t.Run("non-admin reader is forbidden on /api/v1/config and /api/v1/flags", func(t *testing.T) {
-		require.NotEmpty(t, accessToken,
-			"alice's accessToken must be set; this guard catches walkthrough refactors that drop alice login")
+		loginBody := `{"username":"alice","password":"P@ssw0rd123"}`
+		loginResp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
+			"application/json", strings.NewReader(loginBody))
+		require.NoError(t, err)
+		defer loginResp.Body.Close()
+		require.Equalf(t, http.StatusCreated, loginResp.StatusCode,
+			"alice re-login must return 201 (PR-CFG-C 403 probe needs a live non-admin token)")
+
+		var loginEnvelope struct {
+			Data struct {
+				AccessToken string `json:"accessToken"`
+			} `json:"data"`
+		}
+		require.NoError(t, json.NewDecoder(loginResp.Body).Decode(&loginEnvelope))
+		nonAdminToken := loginEnvelope.Data.AccessToken
+		require.NotEmpty(t, nonAdminToken, "alice re-login response must contain accessToken")
 
 		paths := []string{
 			"/api/v1/config/",
@@ -702,7 +719,7 @@ func TestWalkthrough(t *testing.T) {
 		for _, p := range paths {
 			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, base+p, http.NoBody)
 			require.NoError(t, err)
-			req.Header.Set("Authorization", "Bearer "+accessToken)
+			req.Header.Set("Authorization", "Bearer "+nonAdminToken)
 
 			resp, err := http.DefaultClient.Do(req)
 			require.NoError(t, err)
@@ -710,7 +727,7 @@ func TestWalkthrough(t *testing.T) {
 			resp.Body.Close()
 
 			assert.Equalf(t, http.StatusForbidden, resp.StatusCode,
-				"GET %s with non-admin token must return 403 Forbidden, body=%s", p, body)
+				"GET %s with non-admin token must return 403 Forbidden (not 401/200), body=%s", p, body)
 		}
 	})
 
