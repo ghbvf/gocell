@@ -740,7 +740,9 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// Pre-phase: expand ManagedResources into health checkers, workers, and
 	// LIFO teardown callbacks. Must run before phase0 so checker validation
 	// in phase0ValidateOptions covers resource-contributed checkers.
-	b.expandManagedResources()
+	if err := b.expandManagedResources(); err != nil {
+		return err
+	}
 
 	if err := b.phase0ValidateOptions(); err != nil {
 		return err

@@ -23,6 +23,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	e2erequire "github.com/ghbvf/gocell/tests/e2e/internal/require"
 )
 
 // e2eBaseURL returns the base URL of the running corebundle, defaulting to
@@ -92,7 +94,8 @@ func doJSON(t *testing.T, method, path string, body any, token string) *http.Res
 //   - corebundle with GOCELL_CONFIGCORE_KEY_PROVIDER=local-aes + GOCELL_CONFIGCORE_MASTER_KEY set
 //   - GOCELL_CELL_ADAPTER_MODE=postgres
 func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
-	t.Skip("e2e: requires docker compose environment — run: docker compose -f tests/e2e/docker-compose.e2e.yaml up -d")
+	e2erequire.Docker(t)
+	e2erequire.PG(t)
 	waitForReady(t, 30*time.Second)
 	token := e2eAdminToken()
 	key := fmt.Sprintf("e2e.sensitive.%d", time.Now().UnixNano())
@@ -123,7 +126,8 @@ func TestE2E_ConfigEncryption_SensitiveValueNotExposedInResponse(t *testing.T) {
 // updates it, and verifies the new value can be read back (demonstrating that
 // re-encryption on update works correctly).
 func TestE2E_ConfigEncryption_UpdateAndReadRoundTrip(t *testing.T) {
-	t.Skip("e2e: requires docker compose environment — run: docker compose -f tests/e2e/docker-compose.e2e.yaml up -d")
+	e2erequire.Docker(t)
+	e2erequire.PG(t)
 	waitForReady(t, 30*time.Second)
 	token := e2eAdminToken()
 	key := fmt.Sprintf("e2e.update.%d", time.Now().UnixNano())
@@ -156,7 +160,8 @@ func TestE2E_ConfigEncryption_UpdateAndReadRoundTrip(t *testing.T) {
 // TestE2E_ConfigEncryption_NonSensitiveValueVisibleInResponse verifies that
 // non-sensitive entries are stored and returned as plaintext.
 func TestE2E_ConfigEncryption_NonSensitiveValueVisibleInResponse(t *testing.T) {
-	t.Skip("e2e: requires docker compose environment — run: docker compose -f tests/e2e/docker-compose.e2e.yaml up -d")
+	e2erequire.Docker(t)
+	e2erequire.PG(t)
 	waitForReady(t, 30*time.Second)
 	token := e2eAdminToken()
 	key := fmt.Sprintf("e2e.plain.%d", time.Now().UnixNano())

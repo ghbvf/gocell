@@ -4,11 +4,18 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
+	"strings"
+
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/checker"
+	"golang.org/x/tools/go/packages"
 
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
+	"github.com/ghbvf/gocell/tools/nogo/unconditionalskip"
 )
 
 // runCheck implements:
@@ -18,9 +25,10 @@ import (
 //	gocell check assembly-completeness --id=<assemblyID>
 //	gocell check journey-readiness --journey=<journeyID>
 //	gocell check l0-imports --cell=<cellID>
+//	gocell check unconditional-skip [--format text|json|sarif]
 func runCheck(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell check <contract-health|slice-coverage|assembly-completeness|journey-readiness|l0-imports> [flags]")
+		return fmt.Errorf("usage: gocell check <contract-health|slice-coverage|assembly-completeness|journey-readiness|l0-imports|unconditional-skip> [flags]")
 	}
 
 	subtype := args[0]
@@ -37,6 +45,8 @@ func runCheck(args []string) error {
 		return checkPlaceholder("journey-readiness", subArgs)
 	case "l0-imports":
 		return checkPlaceholder("l0-imports", subArgs)
+	case "unconditional-skip":
+		return checkUnconditionalSkip(subArgs)
 	default:
 		return fmt.Errorf("unknown check type: %s", subtype)
 	}
@@ -171,4 +181,156 @@ func checkPlaceholder(name string, args []string) error {
 	}
 
 	return fmt.Errorf("not implemented: gocell check %s", name)
+}
+
+// checkUnconditionalSkip implements `gocell check unconditional-skip`.
+//
+// It loads packages matching the given patterns (default: "./..."), runs the
+// unconditionalskip analyzer over them, and renders the diagnostics as
+// governance.ValidationResult entries using the configured output format.
+//
+// Exit behaviour mirrors checkContractHealth: a non-zero error is returned
+// when one or more SeverityError findings are emitted, so CI callers can
+// gate on the exit code without parsing the output format.
+func checkUnconditionalSkip(args []string) error {
+	const defaultPattern = "./..."
+	fs := flag.NewFlagSet("check unconditional-skip", flag.ContinueOnError)
+	format := fs.String("format", string(printers.FormatText),
+		"output format: text (default) | json | sarif")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	patterns := fs.Args()
+	if len(patterns) == 0 {
+		patterns = []string{defaultPattern}
+	}
+
+	// Resolve project root so diagnostic file paths can be made repo-relative
+	// for SARIF SRCROOT mapping (artifactLocation.uri must be relative when
+	// uriBaseId="SRCROOT", per PR#270 SARIF SRCROOT contract).
+	root, err := findRoot()
+	if err != nil {
+		return fmt.Errorf("cannot find project root: %w", err)
+	}
+
+	printer, err := printers.New(*format, os.Stdout, toolVersion())
+	if err != nil {
+		return err
+	}
+
+	if *format == string(printers.FormatText) {
+		// Scope hint: scan boundary is the project root, not the user's CWD.
+		// Avoids the trap where a sub-tree invocation emits "PASS" the user
+		// reads as a repo-wide pass.
+		fmt.Printf("Scanned scope: %s (patterns=%v)\n", root, patterns)
+	}
+
+	results, err := runUnconditionalSkipAnalyzer(patterns, root)
+	if err != nil {
+		return err
+	}
+
+	if err := printer.Print(results); err != nil {
+		return fmt.Errorf("emit results: %w", err)
+	}
+
+	errCount := countContractHealthErrors(results)
+	if errCount > 0 {
+		return fmt.Errorf("unconditional-skip: %d issue(s) found", errCount)
+	}
+	if *format == string(printers.FormatText) {
+		fmt.Println("\nPASS: no unconditional skips found")
+	}
+	return nil
+}
+
+// runUnconditionalSkipAnalyzer loads patterns, runs the analyzer, and
+// returns governance ValidationResult entries with repo-relative file
+// paths suitable for SARIF SRCROOT mapping.
+//
+// Pinning Config.Dir to the project root is what makes "./..." a
+// repo-wide scan regardless of where the user invoked the CLI. Without
+// it, packages.Load resolves relative patterns against the current
+// working directory and silently emits "PASS" for a sub-tree scan when
+// the user runs the command from inside one cell.
+func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.ValidationResult, error) {
+	// packages.LoadAllSyntax loads type-annotated syntax for initial packages
+	// and all transitive dependencies — the minimum mode checker.Analyze needs.
+	cfg := &packages.Config{
+		Mode:  packages.LoadAllSyntax,
+		Tests: true,
+		Dir:   root,
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		return nil, fmt.Errorf("load packages: %w", err)
+	}
+	if loadErr := collectPackageErrors(pkgs); loadErr != nil {
+		return nil, loadErr
+	}
+
+	graph, err := checker.Analyze(
+		[]*analysis.Analyzer{unconditionalskip.Analyzer},
+		pkgs,
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("run analyzer: %w", err)
+	}
+
+	var results []governance.ValidationResult
+	for act := range graph.All() {
+		for _, diag := range act.Diagnostics {
+			pos := act.Package.Fset.Position(diag.Pos)
+			results = append(results, governance.ValidationResult{
+				Code:      "UNCONDITIONAL-SKIP-01",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueForbidden,
+				File:      relativeToRoot(root, pos.Filename),
+				Line:      pos.Line,
+				Column:    pos.Column,
+				Message:   diag.Message,
+			})
+		}
+	}
+	return results, nil
+}
+
+// collectPackageErrors aggregates per-package load errors into a single
+// structured error. Returning a non-nil error suppresses analyzer execution
+// — diagnostics on a partially-loaded graph would be incomplete.
+func collectPackageErrors(pkgs []*packages.Package) error {
+	var pkgErrs []packages.Error
+	for _, p := range pkgs {
+		pkgErrs = append(pkgErrs, p.Errors...)
+	}
+	if len(pkgErrs) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	for _, e := range pkgErrs {
+		fmt.Fprintf(&b, "  %s\n", e.Error())
+	}
+	return fmt.Errorf("package load errors:\n%s", b.String())
+}
+
+// relativeToRoot converts an absolute file path returned by go/packages
+// (token.Position.Filename) into a slash-separated path relative to the
+// project root. Required so SARIF artifactLocation.uri stays repo-relative
+// under uriBaseId="SRCROOT" — GitHub Code Scanning silently drops findings
+// whose URI doesn't resolve under the declared base.
+//
+// Falls back to the original path on any failure (filepath.Rel error or
+// unrelated path) so the printer never crashes; SARIF emit is best-effort
+// and a degraded absolute path is preferable to a panic.
+func relativeToRoot(root, abs string) string {
+	if abs == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return abs
+	}
+	return filepath.ToSlash(rel)
 }
