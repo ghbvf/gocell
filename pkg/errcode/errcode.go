@@ -345,6 +345,16 @@ const (
 	// explicitly acknowledge that via the WithReadyzVerboseDisabled option
 	// instead of relying on an absent token to silently disable gating.
 	ErrControlplaneVerboseTokenMissing Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_MISSING"
+
+	// ErrControlplaneVerboseTokenSample signals that
+	// GOCELL_READYZ_VERBOSE_TOKEN is set to the literal placeholder shipped
+	// in .env.example. A production deploy that copies the sample env and
+	// rotates only the other secrets would otherwise pass startup with a
+	// publicly-known token; rejecting the literal value at startup forces
+	// operators to mint a real high-entropy secret. Distinct from
+	// ErrControlplaneVerboseTokenMissing so dashboards and runbooks can
+	// distinguish "forgot to configure" from "configured with the sample".
+	ErrControlplaneVerboseTokenSample Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

@@ -17,11 +17,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
     refused in `GOCELL_ADAPTER_MODE=real`.
   - **Dev / local / CI smoke**: set `GOCELL_READYZ_VERBOSE_DISABLED=1`
     to waive the endpoint, or set `GOCELL_READYZ_VERBOSE_TOKEN` to any
-    non-empty value. `.env.example` carries both env vars (with the
-    waiver line commented out) so `cp .env.example .env && go run
-    ./cmd/corebundle` works post-merge. The repo-root `docker-compose.yml`
-    is infra-only (postgres/redis/rabbitmq/minio) and runs no GoCell app
-    service, so no app-side env wiring is needed there.
+    non-empty value. `cmd/corebundle` reads its configuration via
+    `os.Getenv` only (no `.env` autoloader), so the supported dev
+    bring-up is one of:
+
+    ```sh
+    # Inline (quick smoke):
+    GOCELL_READYZ_VERBOSE_DISABLED=1 \
+      GOCELL_JWT_ISSUER=gocell-dev GOCELL_JWT_AUDIENCE=gocell-dev \
+      go run ./cmd/corebundle
+
+    # Via .env (recommended for repeated runs):
+    cp .env.example .env
+    set -a; source .env; set +a
+    go run ./cmd/corebundle
+    ```
+
+    `.env.example` ships non-empty placeholders for every required env
+    var so the second form works without further editing. The repo-root
+    `docker-compose.yml` is infra-only (postgres/redis/rabbitmq/minio)
+    and runs no GoCell app service, so no app-side env wiring lives
+    there. Note: the placeholder `GOCELL_READYZ_VERBOSE_TOKEN` value is
+    rejected verbatim in `GOCELL_ADAPTER_MODE=real` with
+    `ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE` — production must mint its
+    own high-entropy secret.
 - `/readyz?verbose` with a missing or mismatched `X-Readyz-Token` now
   returns `401 ERR_READYZ_VERBOSE_DENIED` (previously: silent 200
   downgrade). Kubernetes `readinessProbe` **must** use the bare

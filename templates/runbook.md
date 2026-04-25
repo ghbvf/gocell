@@ -59,19 +59,57 @@ curl -sf -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
   "http://{host}:{port}/readyz?verbose" | jq .
 ```
 
-Example verbose response:
+Example verbose response (`200 OK` — every probe healthy):
 
 ```json
 {
-   "status": "healthy",
-   "cells": {
+  "data": {
+    "status": "healthy",
+    "cells": {
       "accesscore": "healthy"
-   },
-   "dependencies": {
-      "config-watcher": "healthy"
-   }
+    },
+    "dependencies": {
+      "config-watcher": { "status": "healthy", "duration_ms": 2 },
+      "postgres-ping":  { "status": "healthy", "duration_ms": 4 }
+    },
+    "adapters": {
+      "storage": "postgres",
+      "eventbus": "rabbitmq"
+    }
+  }
 }
 ```
+
+Example verbose response (`503 Service Unavailable` — at least one probe failing):
+
+```json
+{
+  "error": {
+    "code": "ERR_READYZ_UNHEALTHY",
+    "message": "readiness checks failed",
+    "details": {
+      "cells": {
+        "accesscore": "healthy"
+      },
+      "dependencies": {
+        "config-watcher": { "status": "healthy",   "duration_ms": 2 },
+        "postgres-ping":  { "status": "unhealthy", "duration_ms": 11,
+                             "error": "connection refused" }
+      },
+      "adapters": {
+        "storage": "postgres",
+        "eventbus": "rabbitmq"
+      }
+    }
+  }
+}
+```
+
+PR-A35 envelope: success bodies live under `data.*`, failure bodies under
+`error.details.*`. On-call scripts that walked the pre-PR-A35 bare
+`{status,cells,dependencies}` shape must be updated to that one consistent
+path. Probe entries are structured `ProbeResult` maps (`status` +
+`duration_ms` + optional `error`), not bare strings.
 
 ---
 

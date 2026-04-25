@@ -62,10 +62,24 @@ func main() {
 	ctx, stop := shutdown.NotifyContext(context.Background())
 	defer stop()
 
-	app := bootstrap.New(
+	// PR-A35: /readyz?verbose is token-gated in every mode. Honour
+	// GOCELL_READYZ_VERBOSE_TOKEN if the operator sets one (matches the
+	// curl example in README.md); otherwise waive the verbose endpoint so
+	// the demo binary keeps starting out of the box without exposing
+	// internal topology anonymously.
+	readyzOpts := []bootstrap.Option{}
+	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
+		readyzOpts = append(readyzOpts, bootstrap.WithVerboseToken(tok))
+	} else {
+		readyzOpts = append(readyzOpts, bootstrap.WithVerboseDisabled())
+	}
+
+	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithHTTPPrimaryAddr(":8082"), bootstrap.WithHTTPInternalAddr(":9082"),
-	)
+	}
+	opts = append(opts, readyzOpts...)
+	app := bootstrap.New(opts...)
 
 	logger.Info("todoorder: starting on :8082")
 	if err := app.Run(ctx); err != nil {

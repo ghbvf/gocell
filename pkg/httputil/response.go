@@ -371,6 +371,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrControlplaneServiceSecretMissing: http.StatusInternalServerError,
 	errcode.ErrControlplaneNonceStoreMissing:    http.StatusInternalServerError,
 	errcode.ErrControlplaneVerboseTokenMissing:  http.StatusInternalServerError,
+	errcode.ErrControlplaneVerboseTokenSample:   http.StatusInternalServerError,
 	// ErrReadyzVerboseDenied is a 401 because the verbose endpoint enforces
 	// an X-Readyz-Token bearer check (PR-A35); a mismatched or missing
 	// header is treated exactly like any other bearer-token failure.

@@ -100,6 +100,24 @@ func TestSharedDeps_Validate_VerboseEndpoint(t *testing.T) {
 			wantErr:    true,
 			wantSubstr: "GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed",
 		},
+		{
+			// Regression for the PR-A35 review-3 P1: `cp .env.example .env`
+			// + `s/POSTGRES_PASSWORD/.../` left the public sample verbose
+			// token in place; without this guard a real-mode deploy that
+			// rotated only the database secrets would still ship with a
+			// repo-known token gating /readyz?verbose.
+			name:       "prod mode rejects the .env.example sample verbose token",
+			topo:       prodTopo,
+			mutate:     func(d *SharedDeps) { d.VerboseToken = SampleVerboseToken; d.VerboseDisabled = false },
+			wantErr:    true,
+			wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder",
+		},
+		{
+			name:    "dev mode permits the sample verbose token (out-of-the-box demo path)",
+			topo:    devTopo,
+			mutate:  func(d *SharedDeps) { d.VerboseToken = SampleVerboseToken; d.VerboseDisabled = false },
+			wantErr: false,
+		},
 	}
 
 	for _, tc := range tests {

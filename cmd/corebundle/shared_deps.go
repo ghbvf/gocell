@@ -80,6 +80,14 @@ type SharedDeps struct {
 	metricsHandler http.Handler
 }
 
+// SampleVerboseToken is the literal placeholder shipped in .env.example so
+// `cp .env.example .env && go run ./cmd/corebundle` works without first
+// minting a secret. validateControlPlane rejects this exact value in
+// adapter mode "real" — production deployments must mint their own
+// high-entropy token. Exposed (capitalised) so example/test code and the
+// regression test in shared_deps_test.go reference one source of truth.
+const SampleVerboseToken = "dev-readyz-verbose-token-change-me"
+
 // Validate is the startup invariant check for all cross-cutting dependencies.
 // Storage-specific invariants (PGResource, cursor codecs, HMAC key) are checked
 // inside the corresponding CellModule.Provide, not here.
@@ -169,6 +177,14 @@ func (d *SharedDeps) validateControlPlane() []error {
 			"GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed in adapter mode \"real\"; "+
 				"production must keep the token-gated verbose endpoint available for "+
 				"on-call diagnostics"))
+	}
+	if d.VerboseToken == SampleVerboseToken {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneVerboseTokenSample,
+			"GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder ("+
+				SampleVerboseToken+"); a production deploy must mint its own "+
+				"high-entropy secret. This exact value is publicly known via the repo "+
+				"sample and would expose /readyz?verbose topology to anyone who has "+
+				"read the source tree."))
 	}
 	if d.MetricsToken == "" {
 		errs = append(errs, errcode.New(errcode.ErrValidationFailed,

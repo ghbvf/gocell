@@ -75,7 +75,15 @@ func wrapCtxSafe(fn Checker) Checker {
 			// slog for probes that take a long time to honour cancellation.
 			// The watcher exits as soon as `done` receives, so it never
 			// leaks independently of the inner goroutine.
-			go watchLateProbeOutcome(ctx.Err(), start, done)
+			//
+			// `cancelAt` is captured *here* (not at probe start) so the
+			// cancel_lag the watcher logs is the real time between ctx
+			// cancellation and the inner fn returning, not the total wall
+			// time spent in the probe — a cooperative probe that honours
+			// ctx.Done in the very next instruction must produce a near-zero
+			// cancel_lag even when ctx fires 5s after probe start.
+			cancelAt := time.Now()
+			go watchLateProbeOutcome(ctx.Err(), start, cancelAt, done)
 			return ctx.Err()
 		case o := <-done:
 			if o.panicV != nil {
@@ -87,38 +95,55 @@ func wrapCtxSafe(fn Checker) Checker {
 }
 
 // watchLateProbeOutcome runs in its own goroutine after the outer Checker
-// has already returned ctx.Err(). It records (a) the wall-clock gap between
-// ctx cancellation and the inner fn finally returning (F12 observability)
-// and (b) any panic value the inner fn produced, which would otherwise be
-// discarded (F8). Severity:
+// has already returned ctx.Err(). It records (a) the gap between ctx
+// cancellation and the inner fn finally returning (cancel_lag — F12
+// observability) and (b) any panic value the inner fn produced, which
+// would otherwise be discarded (F8).
 //
-//   - panic  → Warn so operators notice a crashed probe even when its
-//     result no longer affects /readyz (dashboards should grep for this)
-//   - cancel lag > 1s → Warn so investigators can identify non-cooperative
-//     probes (the outer contract still held; this is a nudge, not an alarm)
-//   - cancel lag ≤ 1s → Debug so cooperative probes do not spam prod logs
+// Two durations are captured separately so dashboards can distinguish
+// "probe ignored ctx" (large cancel_lag) from "probe was simply slow"
+// (large probe_total but cancel_lag near zero):
+//
+//   - cancel_lag = time.Since(cancelAt) — captured at the moment the outer
+//     Checker observed ctx.Done. This is the operative signal for "did the
+//     probe honour cancellation"; a cooperative probe must yield ~0 here
+//     regardless of how late ctx fired.
+//   - probe_total = time.Since(start) — total wall time spent in the inner
+//     fn from invocation to return, useful only for cross-checking against
+//     the deadline value.
+//
+// Severity:
+//
+//   - panic            → Warn (dashboards should grep for this)
+//   - cancel_lag > 1s  → Warn so investigators can identify non-cooperative
+//     probes (outer contract still held; this is a nudge, not an alarm)
+//   - cancel_lag ≤ 1s  → Debug so cooperative probes do not spam prod logs
 //
 // The watcher receives from `done` exactly once and exits; it cannot leak
 // beyond the lifetime of the inner goroutine.
-func watchLateProbeOutcome(ctxErr error, start time.Time, done <-chan probeOutcome) {
+func watchLateProbeOutcome(ctxErr error, start, cancelAt time.Time, done <-chan probeOutcome) {
 	o := <-done
-	lag := time.Since(start)
+	cancelLag := time.Since(cancelAt)
+	probeTotal := time.Since(start)
 	switch {
 	case o.panicV != nil:
 		slog.Warn("health: probe panicked after ctx cancellation; result discarded",
 			slog.Any("panic", o.panicV),
 			slog.Any("ctx_err", ctxErr),
-			slog.Duration("cancel_lag", lag),
+			slog.Duration("cancel_lag", cancelLag),
+			slog.Duration("probe_total", probeTotal),
 		)
-	case lag > time.Second:
+	case cancelLag > time.Second:
 		slog.Warn("health: probe did not honour ctx cancellation promptly",
 			slog.Any("ctx_err", ctxErr),
-			slog.Duration("cancel_lag", lag),
+			slog.Duration("cancel_lag", cancelLag),
+			slog.Duration("probe_total", probeTotal),
 		)
 	default:
 		slog.Debug("health: probe cancelled, inner fn returned shortly after",
 			slog.Any("ctx_err", ctxErr),
-			slog.Duration("cancel_lag", lag),
+			slog.Duration("cancel_lag", cancelLag),
+			slog.Duration("probe_total", probeTotal),
 		)
 	}
 }
