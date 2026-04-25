@@ -92,9 +92,9 @@ Every endpoint below except `POST /api/v1/access/sessions/login` and
 `POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
 header. Public routes are declared per-Cell via `auth.Mount(mux, auth.Route{Contract: ..., Public: true})`
 inside `cells/accesscore/cell.go`; the composition root (`examples/ssobff/main.go`)
-装配 JWT 校验通过 listener policy `bootstrap.PolicyJWTFromAssembly(asm)`，
-phase4 时 `cell.Policy.Validate` 钩子从 `authProvider` Cell 自动发现 verifier
-（无 `WithAuthDiscovery` / `WithAuthMiddleware` 等顶层 Bootstrap Option）。
+通过 `bootstrap.WithListener(..., []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)})`
+把 JWT 校验装配到 primary listener auth chain，phase4 从 `authProvider` Cell 自动发现 verifier
+（不再使用顶层 Bootstrap 鉴权发现/中间件选项）。
 `walkthrough_test.go` exercises the same sequence and is the authoritative
 behaviour record if a curl here disagrees.
 
@@ -271,5 +271,6 @@ Infrastructure services are provided for future adapter-based mode:
 cd examples/ssobff
 docker compose up -d
 cd ../..
+# Export GOCELL_SSOBFF_SERVICE_SECRET and the JWT variables from Quick Start first.
 go run ./examples/ssobff
 ```

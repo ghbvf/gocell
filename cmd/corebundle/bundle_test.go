@@ -12,6 +12,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
+	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -127,6 +128,27 @@ func TestBuildConsumerBase_RealMultiPodMissingDistributedClaimerErrors(t *testin
 	require.Error(t, err)
 	assert.Nil(t, cb)
 	assert.Contains(t, err.Error(), "ConsumerClaimer")
+}
+
+func TestBuildConsumerBase_NilSharedDepsErrors(t *testing.T) {
+	cb, err := buildConsumerBase(nil)
+
+	require.Error(t, err)
+	assert.Nil(t, cb)
+	assert.Contains(t, err.Error(), "SharedDeps is nil")
+}
+
+func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
+	shared := buildTestSharedDeps(t)
+	asm := assembly.New(assembly.Config{ID: "test-redis-options", DurabilityMode: cell.DurabilityDemo})
+	cb, err := buildConsumerBase(shared)
+	require.NoError(t, err)
+
+	base := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+	shared.RedisClient = new(adapterredis.Client)
+	withRedis := defaultRuntimeOptions(shared, asm, cb, http.NewServeMux(), adapterInfoForSharedDeps(shared))
+
+	assert.Len(t, withRedis, len(base)+2)
 }
 
 // ---------------------------------------------------------------------------

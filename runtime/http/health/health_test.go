@@ -882,6 +882,12 @@ func TestTruncateErrMsg(t *testing.T) {
 			want:  "abcde...",
 		},
 		{
+			name:  "zero max emits ellipsis",
+			input: "abcdefghij",
+			max:   0,
+			want:  "...",
+		},
+		{
 			name: "multi-byte UTF-8 within limit — no truncation",
 			// "日本語" is 9 bytes (3 bytes per rune); 9 < 512 so no truncation.
 			input: "日本語",
@@ -918,7 +924,7 @@ func TestTruncateErrMsg(t *testing.T) {
 			}
 			// Truncated results must end with "..."
 			if len([]rune(tt.input)) > tt.max {
-				assert.True(t, len(got) > 3 && got[len(got)-3:] == "...",
+				assert.True(t, len(got) >= 3 && got[len(got)-3:] == "...",
 					"truncated result must end with '...'; got %q", got)
 			}
 			assert.True(t, utf8.ValidString(got), "truncated result must remain valid UTF-8")

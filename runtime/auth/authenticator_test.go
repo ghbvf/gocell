@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -628,6 +629,28 @@ func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("expected ok=false for future timestamp token")
+	}
+	if p != nil {
+		t.Fatalf("expected nil principal, got %v", p)
+	}
+}
+
+func TestServiceTokenAuthenticator_FarFutureTimestampOverflow_Error(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Unix(1_700_000_000, 0)
+	farFuture := time.Unix(math.MaxInt64/2, 0)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", farFuture)
+
+	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	p, ok, err := a.Authenticate(req)
+	if err == nil {
+		t.Fatal("expected error for far-future timestamp token, got nil")
+	}
+	if ok {
+		t.Fatal("expected ok=false for far-future timestamp token")
 	}
 	if p != nil {
 		t.Fatalf("expected nil principal, got %v", p)

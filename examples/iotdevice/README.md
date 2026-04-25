@@ -195,7 +195,9 @@ curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \
 
 # 4. Device acknowledges execution
 curl -s -X POST "http://localhost:8083/api/v1/devices/${DEV_ID}/commands/${CMD_ID}/ack" \
-  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}"
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
+  -H 'Content-Type: application/json' \
+  -d '{"reason":"success"}'
 
 # 5. Verify no more pending commands
 curl -s "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \

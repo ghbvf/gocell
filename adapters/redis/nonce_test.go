@@ -13,30 +13,40 @@ import (
 )
 
 func TestNonceStore_FirstUseSucceeds(t *testing.T) {
-	store, err := newNonceStoreFromCmdable(newMockCmdable(), time.Minute)
+	store, err := newNonceStoreFromCmdable(newMockCmdable(), auth.ServiceTokenNonceTTL)
 	require.NoError(t, err)
 
 	require.NoError(t, store.CheckAndMark(context.Background(), "nonce-a"))
 }
 
+func TestNewNonceStore_RejectsNilClient(t *testing.T) {
+	store, err := NewNonceStore(nil, auth.ServiceTokenNonceTTL)
+
+	require.Error(t, err)
+	assert.Nil(t, store)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+}
+
+func TestNewNonceStore_UsesClientCmdable(t *testing.T) {
+	client := newClientFromCmdable(newMockCmdable(), Config{Addr: "redis:6379"})
+
+	store, err := NewNonceStore(client, auth.ServiceTokenNonceTTL)
+
+	require.NoError(t, err)
+	require.NotNil(t, store)
+	require.NoError(t, store.CheckAndMark(context.Background(), "nonce-a"))
+}
+
 func TestNonceStore_ReplayReturnsAuthNonceReused(t *testing.T) {
-	store, err := newNonceStoreFromCmdable(newMockCmdable(), time.Minute)
+	store, err := newNonceStoreFromCmdable(newMockCmdable(), auth.ServiceTokenNonceTTL)
 	require.NoError(t, err)
 
 	require.NoError(t, store.CheckAndMark(context.Background(), "nonce-a"))
 	err = store.CheckAndMark(context.Background(), "nonce-a")
 
 	assert.ErrorIs(t, err, auth.ErrNonceReused)
-}
-
-func TestNonceStore_TTLAllowsReuse(t *testing.T) {
-	store, err := newNonceStoreFromCmdable(newMockCmdable(), 10*time.Millisecond)
-	require.NoError(t, err)
-
-	require.NoError(t, store.CheckAndMark(context.Background(), "nonce-a"))
-	time.Sleep(20 * time.Millisecond)
-
-	require.NoError(t, store.CheckAndMark(context.Background(), "nonce-a"))
 }
 
 func TestNonceStore_ServiceTokenTTLUsesAuthConstant(t *testing.T) {
@@ -58,7 +68,7 @@ func TestNonceStore_ServiceTokenTTLUsesAuthConstant(t *testing.T) {
 func TestNonceStore_RedisErrorWrapped(t *testing.T) {
 	mock := newMockCmdable()
 	mock.setNXErr = errMock
-	store, err := newNonceStoreFromCmdable(mock, time.Minute)
+	store, err := newNonceStoreFromCmdable(mock, auth.ServiceTokenNonceTTL)
 	require.NoError(t, err)
 
 	err = store.CheckAndMark(context.Background(), "nonce-a")
@@ -71,8 +81,39 @@ func TestNonceStore_RedisErrorWrapped(t *testing.T) {
 }
 
 func TestNonceStore_KindDistributed(t *testing.T) {
-	store, err := newNonceStoreFromCmdable(newMockCmdable(), time.Minute)
+	store, err := newNonceStoreFromCmdable(newMockCmdable(), auth.ServiceTokenNonceTTL)
 	require.NoError(t, err)
 
 	assert.Equal(t, auth.NonceStoreKindDistributed, store.Kind())
+}
+
+func TestNonceStore_RejectsReplayUnsafeTTL(t *testing.T) {
+	_, err := newNonceStoreFromCmdable(newMockCmdable(), auth.ServiceTokenNonceTTL-time.Nanosecond)
+
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisSet, ec.Code)
+	assert.Contains(t, err.Error(), "ServiceTokenNonceTTL")
+}
+
+func TestNonceStore_RejectsNilCmdable(t *testing.T) {
+	store, err := newNonceStoreFromCmdable(nil, auth.ServiceTokenNonceTTL)
+
+	require.Error(t, err)
+	assert.Nil(t, store)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisConnect, ec.Code)
+}
+
+func TestNonceStore_RejectsNonPositiveTTL(t *testing.T) {
+	store, err := newNonceStoreFromCmdable(newMockCmdable(), 0)
+
+	require.Error(t, err)
+	assert.Nil(t, store)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrAdapterRedisSet, ec.Code)
+	assert.Contains(t, err.Error(), "positive")
 }

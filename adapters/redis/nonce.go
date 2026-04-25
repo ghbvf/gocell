@@ -37,6 +37,11 @@ func newNonceStoreFromCmdable(rdb cmdable, ttl time.Duration) (*NonceStore, erro
 		return nil, errcode.New(ErrAdapterRedisSet,
 			fmt.Sprintf("redis nonce store: ttl must be positive, got %v", ttl))
 	}
+	if ttl < auth.ServiceTokenNonceTTL {
+		return nil, errcode.New(ErrAdapterRedisSet,
+			fmt.Sprintf("redis nonce store: ttl %v is shorter than ServiceTokenNonceTTL %v; a shorter TTL reintroduces the replay window",
+				ttl, auth.ServiceTokenNonceTTL))
+	}
 	return &NonceStore{rdb: rdb, ttl: ttl}, nil
 }
 

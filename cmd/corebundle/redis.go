@@ -22,8 +22,10 @@ const (
 
 type redisNonceStoreFactory func(*adapterredis.Client, time.Duration) (auth.NonceStore, error)
 type redisConsumerClaimerFactory func(*adapterredis.Client) idempotency.Claimer
+type redisClientFactory func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
 
 var (
+	newRedisClient     redisClientFactory     = adapterredis.NewClient
 	newRedisNonceStore redisNonceStoreFactory = func(client *adapterredis.Client, ttl time.Duration) (auth.NonceStore, error) {
 		return adapterredis.NewNonceStore(client, ttl)
 	}
@@ -80,7 +82,7 @@ func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (*adapterred
 	if !configured {
 		return nil, nil
 	}
-	client, err := adapterredis.NewClient(ctx, cfg)
+	client, err := newRedisClient(ctx, cfg)
 	if err != nil {
 		return nil, fmt.Errorf("build Redis client: %w", err)
 	}
