@@ -833,31 +833,27 @@
 
 ## Deferred follow-ups
 
-以下两项 P1 问题在 PR #260 的第七轮 review 中被识别，但因设计复杂度超出本 PR 范围，推迟到后续独立 PR。来源：docs/reviews/202604251700-pr258-reviewer-consolidated.md（第七轮）。
+以下两项原计划 P1 问题（PR-A20-FU1/FU2）和两项追加项（Locker.Stats、goroutine pprof labels）已在 PR #260 的尾巴清零轮中全部落地（2026-04-25）。来源：docs/reviews/202604251700-pr258-reviewer-consolidated.md（第七轮）。
 
-### PR-A20-FU1 DISTLOCK-RENEW-RETRY-BUDGET-01（Cx3, 🟡 可延后）
+### ✅ PR-A20-FU1 DISTLOCK-RENEW-RETRY-BUDGET-01 — 已落地（PR #260）
 
-**问题**：当前 `Driver.Renew` 单次失败即触发 `ErrLockLost`。瞬态 I/O 错误（网络抖动、Redis 短暂不可用）与永久错误（key 过期、ownership 被抢占）被等同对待，导致网络抖动引发误失锁。
+**落地**：`handleRenew` 新增 retry budget（默认 `maxRenewAttempts=3`）。瞬态 I/O 错误（err != nil）在 renewTimeout 窗口内重试；永久 ownership-lost（held=false）立即 ErrLockLost，不重试。新增 `WithMaxRenewAttempts(n int) Option`（n<1 panic）。`FakeDriver` 新增 `SetRenewErrorPersistent` / `ClearRenewError` 控制。新增 TC-13（transient-then-success）/ TC-14（budget exhausted）/ TC-15（held=false 无重试）三个测试。
 
-**期望行为**：瞬态错误在 TTL 安全窗口内重试（configurable retry budget）；永久错误立即失锁。需要：
-- 错误分类（transient vs permanent），与 `pkg/errcode` 集成
-- retry budget 配置（最大重试次数 / 最大重试时间）
-- retry 期间的 ctx deadline 与 TTL 剩余时间交互设计
-- 可观测性（retry 计数指标、slog 告警）
+### ✅ PR-A20-FU2 DISTLOCK-RELEASE-RETURNS-ERROR-01 — 已落地（PR #260）
 
-**推迟理由**：行为变更（当前 test suite 基于单次失败语义）+ 配置面膨胀 + 与 TTL/driftFactor 交互复杂。需独立 ADR 对齐后再实施。
+**落地**：`Locker.Acquire` 返回签名改为 `(context.Context, func() error, error)`。`manager.remove()` 返回 `error`（Driver.Release 结果）。Manager 内部通过 `resultCh chan error`（buffered=1）将 background goroutine 的 I/O 结果传回 `remove()` 调用方。`FakeDriver` 新增 `SetNextReleaseError`。`releaseWg` 已删除（`remove()` 同步返回结果，Drained() 不再需要等待 releaseWg）。新增 `TestLocker_Release_ReturnsError` 测试。
 
-**目标 PR**：PR-A20-FU1（Wave 3，Cx3，~2-3d）
+### ✅ Locker.Stats() — 已落地（PR #260）
 
-### PR-A20-FU2 DISTLOCK-RELEASE-RETURNS-ERROR-01（Cx2, 🟡 可延后）
+**落地**：`Locker` 接口新增 `Stats() Stats` 方法。`Stats` 结构体含 `ActiveLocks int`。实现委托 `Manager.Snapshot().Locks`。新增 `TestLocker_Stats_Empty`、`TestLocker_Stats_AfterAcquire`、`TestLocker_Stats_AfterRelease` 三个测试。
 
-**问题**：`release()` 函数当前不返回 `error`。`Driver.Release` 的 I/O 错误静默 slog，调用方无法感知 Release 失败（key 可能在 TTL 内持续 linger）。
+### ✅ goroutine pprof labels — 已落地（PR #260）
 
-**期望行为**：`release()` 返回 `error`，让调用方决定是否记录/告警。或通过回调/channel 通知 Release 失败。
+**落地**：`Manager.run()` 首行调用 `pprof.SetGoroutineLabels(pprof.WithLabels(ctx, pprof.Labels("distlock", "manager")))`，使 pprof goroutine dump 中 manager goroutine 可识别。
 
-**推迟理由**：API 破坏性变更（`Locker.Acquire` 签名的 `release func()` 需改为 `release func() error`）；涉及所有调用方迁移；需与 Lock-as-Context 设计对齐（fire-and-forget 语义是否仍合适）。需独立设计讨论。
+### 仍 defer：worker.Worker 生命周期集成
 
-**目标 PR**：PR-A20-FU2（Wave 4，Cx2，~1d）
+**DISTLOCK-WORKER-LIFECYCLE-01**（Cx2, 🟡 P3 可延后）：Manager 是 lazy-start（无 `Start(ctx) error`）+最后一锁释放时 drain；`worker.Worker` 是 `Start(ctx) error / Stop(ctx) error` ctx 驱动关闭模型。两种模型不匹配：(a) 改 Manager 为 Worker-controlled 会破坏 lazy/drain 特性并与 bootstrap 耦合；(b) 适配器层仅增加代码但无生产 caller 需要它。distlock 当前在 `cmd/corebundle` 中零 caller；第一个接入 cell 可自选 wiring 策略。**延后至第一个 Cell 接入时（P3）**。
 
 ---
 
