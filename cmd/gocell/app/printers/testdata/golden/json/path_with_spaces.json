@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "code": "PATH-01",
+      "severity": "error",
+      "issueType": "",
+      "file": "cells/my cell/cell.yaml",
+      "scope": "",
+      "field": "",
+      "message": "spaces test",
+      "line": 1,
+      "column": 0
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}

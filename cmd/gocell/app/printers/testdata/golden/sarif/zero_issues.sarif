@@ -11,7 +11,12 @@
           "rules": []
         }
       },
-      "results": []
+      "results": [],
+      "originalUriBaseIds": {
+        "SRCROOT": {
+          "uri": ""
+        }
+      }
     }
   ]
 }

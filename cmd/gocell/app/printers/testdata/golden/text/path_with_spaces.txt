@@ -1,0 +1,6 @@
+ERRORS (1):
+  [PATH-01] spaces test
+         at cells/my cell/cell.yaml:1
+
+
+Validation complete: 1 error(s), 0 warning(s)

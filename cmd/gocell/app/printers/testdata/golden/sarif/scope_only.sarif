@@ -32,7 +32,12 @@
             "text": "[scope: project] circular dependency detected (field: cells)"
           }
         }
-      ]
+      ],
+      "originalUriBaseIds": {
+        "SRCROOT": {
+          "uri": ""
+        }
+      }
     }
   ]
 }

@@ -1,0 +1,6 @@
+ERRORS (1):
+  [PATH-03] query char test
+         at cells/a?b/file.yaml:1
+
+
+Validation complete: 1 error(s), 0 warning(s)

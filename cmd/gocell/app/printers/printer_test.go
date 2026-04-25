@@ -148,6 +148,42 @@ var goldenCases = []struct {
 	results []governance.ValidationResult
 }{
 	{
+		name: "path_with_spaces",
+		results: []governance.ValidationResult{
+			{
+				Code:     "PATH-01",
+				Severity: governance.SeverityError,
+				File:     "cells/my cell/cell.yaml",
+				Line:     1,
+				Message:  "spaces test",
+			},
+		},
+	},
+	{
+		name: "path_with_backslash",
+		results: []governance.ValidationResult{
+			{
+				Code:     "PATH-02",
+				Severity: governance.SeverityError,
+				File:     "cells\\demo\\cell.yaml",
+				Line:     1,
+				Message:  "backslash test",
+			},
+		},
+	},
+	{
+		name: "path_with_query_chars",
+		results: []governance.ValidationResult{
+			{
+				Code:     "PATH-03",
+				Severity: governance.SeverityError,
+				File:     "cells/a?b/file.yaml",
+				Line:     1,
+				Message:  "query char test",
+			},
+		},
+	},
+	{
 		name:    "zero_issues",
 		results: nil,
 	},
@@ -573,6 +609,71 @@ func TestJSON_EmptyIssues_NotNull(t *testing.T) {
 	assert.Contains(t, body, `"issues": []`)
 	assert.NotContains(t, body, `"issues": null`,
 		"empty issues must serialise as [] not null")
+}
+
+// TestSARIF_NormalizeArtifactURI verifies that normalizeArtifactURI produces
+// RFC 3986 compliant relative URI strings from various raw file path inputs.
+func TestSARIF_NormalizeArtifactURI(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"cells/x/cell.yaml", "cells/x/cell.yaml"},
+		{"cells/my cell/cell.yaml", "cells/my%20cell/cell.yaml"},
+		{"cells/中文/cell.yaml", "cells/%E4%B8%AD%E6%96%87/cell.yaml"},
+		{"cells\\demo\\cell.yaml", "cells/demo/cell.yaml"},
+		{"./cells/x.yaml", "cells/x.yaml"},
+		{"cells/a?b/file.yaml", "cells/a%3Fb/file.yaml"},
+		{"cells/a#b/file.yaml", "cells/a%23b/file.yaml"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			got := normalizeArtifactURI(tt.input)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+// TestSARIF_OriginalUriBaseIDsAlwaysPresent verifies that the SRCROOT base ID
+// declaration is emitted even when there are zero validation results.
+func TestSARIF_OriginalUriBaseIDsAlwaysPresent(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(nil))
+
+	var parsed sarifLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed.Runs, 1)
+	require.NotNil(t, parsed.Runs[0].OriginalUriBaseIDs,
+		"originalUriBaseIds must always be present, even with zero results")
+	_, ok := parsed.Runs[0].OriginalUriBaseIDs[sarifSrcRootBaseID]
+	assert.True(t, ok, "originalUriBaseIds must contain the SRCROOT key")
+}
+
+// TestSARIF_ArtifactLocation_UsesURIBaseId verifies that every file-anchored
+// result carries uriBaseId="SRCROOT" in its artifactLocation, and that a
+// plain ASCII path is unchanged after normalization.
+func TestSARIF_ArtifactLocation_UsesURIBaseId(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:     "REF-01",
+			Severity: governance.SeverityError,
+			File:     "cells/x/cell.yaml",
+			Line:     1,
+			Message:  "base id test",
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(results))
+
+	var parsed sarifLog
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &parsed))
+	require.Len(t, parsed.Runs[0].Results, 1)
+	require.Len(t, parsed.Runs[0].Results[0].Locations, 1)
+	loc := parsed.Runs[0].Results[0].Locations[0].PhysicalLocation.ArtifactLocation
+	assert.Equal(t, sarifSrcRootBaseID, loc.URIBaseId,
+		"artifactLocation.uriBaseId must be SRCROOT")
+	assert.Equal(t, "cells/x/cell.yaml", loc.URI,
+		"plain ASCII path must be unchanged after normalization")
 }
 
 // assertGolden compares actual output bytes to the golden file at

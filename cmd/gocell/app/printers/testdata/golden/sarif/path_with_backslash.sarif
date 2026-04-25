@@ -10,9 +10,9 @@
           "informationUri": "https://github.com/ghbvf/gocell",
           "rules": [
             {
-              "id": "MSG-01",
+              "id": "PATH-02",
               "shortDescription": {
-                "text": "包含 \"引号\" 和 换行\n以及 emoji 🚀"
+                "text": "backslash test"
               },
               "defaultConfiguration": {
                 "level": "error"
@@ -23,16 +23,16 @@
       },
       "results": [
         {
-          "ruleId": "MSG-01",
+          "ruleId": "PATH-02",
           "level": "error",
           "message": {
-            "text": "包含 \"引号\" 和 换行\n以及 emoji 🚀 (field: 名称)"
+            "text": "backslash test"
           },
           "locations": [
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "cells/%E4%B8%AD%E6%96%87/cell.yaml",
+                  "uri": "cells/demo/cell.yaml",
                   "uriBaseId": "SRCROOT"
                 },
                 "region": {

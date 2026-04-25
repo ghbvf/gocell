@@ -60,7 +60,8 @@
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "cells/x/cell.yaml"
+                  "uri": "cells/x/cell.yaml",
+                  "uriBaseId": "SRCROOT"
                 },
                 "region": {
                   "startLine": 2,
@@ -80,13 +81,19 @@
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "cells/x/cell.yaml"
+                  "uri": "cells/x/cell.yaml",
+                  "uriBaseId": "SRCROOT"
                 }
               }
             }
           ]
         }
-      ]
+      ],
+      "originalUriBaseIds": {
+        "SRCROOT": {
+          "uri": ""
+        }
+      }
     }
   ]
 }
