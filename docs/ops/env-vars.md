@@ -54,6 +54,12 @@ Each Cell reads its own env variables. The naming pattern is `GOCELL_<CELLID>_<R
 | `GOCELL_ACCESSCORE_CURSOR_KEY` | HMAC key for access cursor codec | `corebundle-access-cursor-key32!!` | **Real mode** |
 | `GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY` | Previous access cursor key (rotation) | — | No |
 
+### accesscore first-admin provisioning
+
+| Variable | Purpose | Default | Accepted Values |
+|---|---|---|---|
+| `GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE` | Selects first-admin ownership in `cmd/corebundle`. `interactive` leaves `/api/v1/access/setup/admin` as the one-shot owner; `bootstrap` enables the lifecycle that creates a random initial admin password and writes the credential file under `GOCELL_STATE_DIR`. Unknown non-empty values fail fast at startup. | `interactive` | `""`, `"interactive"`, `"bootstrap"` |
+
 ## Encryption Key Provider (required when GOCELL_CELL_ADAPTER_MODE=postgres)
 
 Each Cell that uses PostgreSQL reads its own DB and encryption env variables.

@@ -14,7 +14,10 @@ endpoints:
     noContent: false
     responses:
       400:
-        description: "Bad request — missing or blank required fields"
+        description: "Bad request — missing or blank required fields, oversized username/email, or password outside 8-72 printable ASCII bytes"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      409:
+        description: "Conflict — requested first-admin username already belongs to a non-recoverable user or provisioning attempt"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       410:
         description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details include nextAction=login and loginEndpoint."

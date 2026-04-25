@@ -16,6 +16,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -166,6 +167,7 @@ func (b *bootstrapper) ensureAdmin(ctx context.Context) (worker.Worker, error) {
 		PasswordHash: hash,
 		RequireReset: true,
 		IDPrefix:     "usr-bootstrap-",
+		Source:       domain.UserSourceBootstrap,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("initialadmin: ensure: %w", err)

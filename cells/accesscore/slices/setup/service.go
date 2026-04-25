@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -32,15 +33,15 @@ import (
 // audit logs ("usr-" vs. "usr-bootstrap-").
 const UserIDPrefix = "usr-"
 
-// Password length bounds for the setup endpoint:
-//   - MinPasswordLen mirrors the schema's minLength:8 and is low enough to not
-//     surprise first-run operators on low-entropy test setups.
-//   - MaxPasswordLen caps bcrypt input. bcrypt itself truncates at 72 bytes,
-//     so the cap prevents unbounded CPU / memory on adversarial inputs
-//     without changing effective security (anything beyond 72 is discarded).
+// Password bounds for the setup endpoint:
+//   - Password bytes must be printable ASCII so JSON Schema maxLength and
+//     bcrypt's byte-counted input limit have the same semantics.
+//   - MaxPasswordBytes matches golang.org/x/crypto/bcrypt's hard input limit.
 const (
-	MinPasswordLen = 8
-	MaxPasswordLen = 128
+	MaxUsernameLen   = 128
+	MaxEmailLen      = 256
+	MinPasswordBytes = 8
+	MaxPasswordBytes = 72
 )
 
 // Option configures a Service.
@@ -191,10 +192,23 @@ func validateCreateAdminInput(in CreateAdminInput) error {
 	); err != nil {
 		return err
 	}
-	if len(in.Password) < MinPasswordLen || len(in.Password) > MaxPasswordLen {
+	if utf8.RuneCountInString(in.Username) > MaxUsernameLen {
 		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
-			fmt.Sprintf("password length must be between %d and %d characters",
-				MinPasswordLen, MaxPasswordLen))
+			fmt.Sprintf("username length must be at most %d characters", MaxUsernameLen))
+	}
+	if utf8.RuneCountInString(in.Email) > MaxEmailLen {
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+			fmt.Sprintf("email length must be at most %d characters", MaxEmailLen))
+	}
+	passwordBytes := len(in.Password)
+	if passwordBytes < MinPasswordBytes || passwordBytes > MaxPasswordBytes {
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+			fmt.Sprintf("password length must be %d to %d printable ASCII bytes",
+				MinPasswordBytes, MaxPasswordBytes))
+	}
+	if !isPrintableASCII(in.Password) {
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+			"password must contain only printable ASCII characters")
 	}
 	if strings.ContainsAny(in.Email, "\r\n\t\x00") || strings.ContainsAny(in.Username, "\r\n\t\x00") {
 		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
@@ -203,10 +217,17 @@ func validateCreateAdminInput(in CreateAdminInput) error {
 	return nil
 }
 
+func isPrintableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
+}
+
 // provisionAndMaybeEmit runs adminprovision.Ensure inside the caller-provided
-// tx and emits user.created only on OutcomeCreated. Orphan recovery
-// deliberately skips the event (the crashed prior run already emitted it; a
-// duplicate would confuse idempotent consumers that dedupe on event_type+user_id).
+// tx and emits user.created on freshly created or recovered pending setup rows.
 // Extracted from CreateAdmin to keep CreateAdmin under the cognitive-complexity
 // ceiling after adding the pre-bcrypt Status fast-path.
 func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput, hash []byte) (*domain.User, error) {
@@ -216,6 +237,7 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 		PasswordHash: hash,
 		RequireReset: false,
 		IDPrefix:     UserIDPrefix,
+		Source:       domain.UserSourceSetup,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("setup: ensure admin: %w", err)
@@ -228,9 +250,12 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 			return nil, err
 		}
 	case adminprovision.OutcomeOrphanRecovered:
-		s.logger.Warn("setup: orphan user recovered; event emission skipped",
+		s.logger.Warn("setup: orphan user recovered; emitting user.created",
 			slog.String("event", "setup_orphan_recover"),
 			slog.String("user_id", user.ID))
+		if err := s.publishUserCreated(ctx, user); err != nil {
+			return nil, err
+		}
 	default:
 		return nil, fmt.Errorf("setup: unexpected provision outcome %d", outcome)
 	}

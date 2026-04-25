@@ -1,6 +1,7 @@
 package setup_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 )
@@ -136,4 +138,67 @@ func TestHandler_CreateAdmin_BlankPassword_Returns400(t *testing.T) {
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_AUTH_IDENTITY_INVALID_INPUT")
+}
+
+func TestHandler_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{
+			name: "username too long",
+			body: `{"username":"` + strings.Repeat("u", 129) + `","email":"root@local","password":"SecretPass!23"}`,
+		},
+		{
+			name: "email too long",
+			body: `{"username":"root","email":"` + strings.Repeat("e", 257) + `","password":"SecretPass!23"}`,
+		},
+		{
+			name: "password too long for bcrypt",
+			body: `{"username":"root","email":"root@local","password":"` + strings.Repeat("p", 73) + `"}`,
+		},
+		{
+			name: "password not printable ASCII",
+			body: `{"username":"root","email":"root@local","password":"` + strings.Repeat("界", 8) + `"}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHandlerFresh(t)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			h.HandleCreateAdmin(w, req)
+
+			assert.Equal(t, http.StatusBadRequest, w.Code)
+			assert.Contains(t, w.Body.String(), "ERR_AUTH_IDENTITY_INVALID_INPUT")
+		})
+	}
+}
+
+func TestHandler_CreateAdmin_DuplicateIdentityUser_Returns409(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	seedIdentityUser(t, userRepo, "root", "root@local")
+	svc := newService(t, userRepo, roleRepo, &stubWriter{})
+	h := setup.NewHandler(svc)
+
+	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	h.HandleCreateAdmin(w, req)
+
+	assert.Equal(t, http.StatusConflict, w.Code)
+	assert.Contains(t, w.Body.String(), "ERR_AUTH_USER_DUPLICATE")
+}
+
+func seedIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, email string) {
+	t.Helper()
+	u, err := domain.NewUser(username, email, "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+	require.NoError(t, err)
+	u.ID = "usr-existing"
+	require.NoError(t, userRepo.Create(context.Background(), u))
 }

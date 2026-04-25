@@ -2,6 +2,7 @@ package setup_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,10 +11,12 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
@@ -52,6 +55,11 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"username":"","email":"root@local","password":"p"}`))
 	// Password too short → reject (minLength:8)
 	c.MustRejectRequest(t, []byte(`{"username":"u","email":"u@x","password":"short"}`))
+	// Schema upper bounds must reject oversized public setup requests.
+	c.MustRejectRequest(t, []byte(`{"username":"`+strings.Repeat("u", 129)+`","email":"root@local","password":"SecretPass!23"}`))
+	c.MustRejectRequest(t, []byte(`{"username":"root","email":"`+strings.Repeat("e", 257)+`","password":"SecretPass!23"}`))
+	c.MustRejectRequest(t, []byte(`{"username":"root","email":"root@local","password":"`+strings.Repeat("p", 73)+`"}`))
+	c.MustRejectRequest(t, []byte(`{"username":"root","email":"root@local","password":"`+strings.Repeat("界", 8)+`"}`))
 
 	// Real-handler produced 201 payload must satisfy the response schema.
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
@@ -63,6 +71,61 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	h.HandleCreateAdmin(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	// Real-handler negative contract checks: requests rejected by the schema
+	// must be rejected by the public endpoint before persistence.
+	for _, badBody := range []string{
+		`{"username":"` + strings.Repeat("u", 129) + `","email":"root@local","password":"SecretPass!23"}`,
+		`{"username":"root","email":"` + strings.Repeat("e", 257) + `","password":"SecretPass!23"}`,
+		`{"username":"root","email":"root@local","password":"` + strings.Repeat("p", 73) + `"}`,
+		`{"username":"root","email":"root@local","password":"` + strings.Repeat("界", 8) + `"}`,
+	} {
+		svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
+		h := setup.NewHandler(svc)
+		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(badBody))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.HandleCreateAdmin(rec, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+	}
+
+	t.Run("409 duplicate identity user response satisfies contract", func(t *testing.T) {
+		userRepo := mem.NewUserRepository()
+		roleRepo := mem.NewRoleRepository()
+		seedContractIdentityUser(t, userRepo, "root", "root@local")
+		svc := newService(t, userRepo, roleRepo, &stubWriter{})
+		h := setup.NewHandler(svc)
+
+		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.HandleCreateAdmin(rec, req)
+
+		require.Equal(t, http.StatusConflict, rec.Code)
+		c.ValidateErrorResponse(t, http.StatusConflict, rec.Body.Bytes())
+		requireErrorCode(t, rec.Body.Bytes(), errcode.ErrAuthUserDuplicate)
+	})
+
+	t.Run("409 bootstrap-pending duplicate response satisfies contract", func(t *testing.T) {
+		userRepo := mem.NewUserRepository()
+		roleRepo := mem.NewRoleRepository()
+		orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
+		require.NoError(t, err)
+		orphan.ID = "usr-bootstrap-prior"
+		orphan.MarkProvisionPending(domain.UserSourceBootstrap)
+		require.NoError(t, userRepo.Create(context.Background(), orphan))
+		svc := newService(t, userRepo, roleRepo, &stubWriter{})
+		h := setup.NewHandler(svc)
+
+		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.HandleCreateAdmin(rec, req)
+
+		require.Equal(t, http.StatusConflict, rec.Code)
+		c.ValidateErrorResponse(t, http.StatusConflict, rec.Body.Bytes())
+		requireErrorCode(t, rec.Body.Bytes(), errcode.ErrAuthUserDuplicate)
+	})
 }
 
 // TestEventUserCreatedV1Publish_FromSetup closes the slice.yaml
@@ -93,4 +156,23 @@ func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
 	// Negative: schema rejects an incomplete payload.
 	c.MustRejectPayload(t, []byte(`{"user_id":"x"}`))
+}
+
+func seedContractIdentityUser(t *testing.T, userRepo *mem.UserRepository, username, email string) {
+	t.Helper()
+	u, err := domain.NewUser(username, email, "$2a$10$stubhashXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX")
+	require.NoError(t, err)
+	u.ID = "usr-existing"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+}
+
+func requireErrorCode(t *testing.T, body []byte, code errcode.Code) {
+	t.Helper()
+	var resp struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(body, &resp))
+	require.Equal(t, string(code), resp.Error.Code)
 }

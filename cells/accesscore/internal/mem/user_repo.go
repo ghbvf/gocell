@@ -86,6 +86,8 @@ func cloneUser(u *domain.User) *domain.User {
 		PasswordHash:          u.PasswordHash,
 		PasswordResetRequired: u.PasswordResetRequired,
 		Status:                u.Status,
+		CreationSource:        u.CreationSource,
+		ProvisionState:        u.ProvisionState,
 		CreatedAt:             u.CreatedAt,
 		UpdatedAt:             u.UpdatedAt,
 	}

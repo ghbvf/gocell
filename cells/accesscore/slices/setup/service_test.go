@@ -129,17 +129,17 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.NoError(t, bcrypt.CompareHashAndPassword([]byte(persisted.PasswordHash), []byte("SecretPass!23")))
 }
 
-func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_NoEmit(t *testing.T) {
+func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_EmitsEvent(t *testing.T) {
 	// Pre-seed a user row with the target username but no admin role assigned
 	// (simulates a prior run that crashed between UserRepo.Create and
 	// RoleRepo.AssignToUser). CreateAdmin must recover the orphan row, rewrite
-	// the password hash, assign the admin role, and deliberately NOT emit
-	// event.user.created.v1 — the event was presumably emitted by the crashed
-	// run.
+	// the password hash, assign the admin role, and emit event.user.created.v1
+	// because setup emits only after adminprovision.Ensure returns.
 	userRepo := mem.NewUserRepository()
 	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
 	require.NoError(t, err)
 	orphan.ID = "usr-orphan-prior"
+	orphan.MarkProvisionPending(domain.UserSourceSetup)
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
 	roleRepo := mem.NewRoleRepository()
@@ -155,8 +155,8 @@ func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_NoEmit(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Equal(t, "usr-orphan-prior", out.ID, "orphan row reused")
 
-	// Crucially: no event.user.created.v1 emitted on OrphanRecovered.
-	assert.Empty(t, w.entries, "orphan recovery must not emit duplicate event")
+	require.Len(t, w.entries, 1, "setup orphan recovery must emit user.created")
+	assert.Equal(t, dto.TopicUserCreated, w.entries[0].EventType)
 
 	// Admin role now assigned to the orphan user.
 	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
@@ -214,7 +214,8 @@ func TestService_CreateAdmin_PasswordLengthOutOfRange_Returns400(t *testing.T) {
 		password string
 	}{
 		{"too short (7 chars)", "abc1234"},
-		{"too long (129 chars)", strings.Repeat("x", 129)},
+		{"too long for bcrypt (73 bytes)", strings.Repeat("x", 73)},
+		{"non-ASCII password would make schema chars drift from bcrypt bytes", strings.Repeat("界", 8)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -223,6 +224,32 @@ func TestService_CreateAdmin_PasswordLengthOutOfRange_Returns400(t *testing.T) {
 				Email:    "root@local",
 				Password: tc.password,
 			})
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+		})
+	}
+}
+
+func TestService_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
+	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), nil)
+	tests := []struct {
+		name string
+		in   setup.CreateAdminInput
+	}{
+		{
+			name: "username too long",
+			in:   setup.CreateAdminInput{Username: strings.Repeat("u", 129), Email: "root@local", Password: "SecretPass!23"},
+		},
+		{
+			name: "email too long",
+			in:   setup.CreateAdminInput{Username: "root", Email: strings.Repeat("e", 257), Password: "SecretPass!23"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.CreateAdmin(context.Background(), tc.in)
 			require.Error(t, err)
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
@@ -354,17 +381,15 @@ func TestService_CreateAdmin_AlreadyExists_DoesNotHashPassword(t *testing.T) {
 		"410 fast-path must not call bcrypt")
 }
 
-// TestService_CreateAdmin_OrphanRecovered_ClearsResetFlag_WhenInteractive
-// pins the RequireReset=false semantics on orphan recovery: a row seeded with
-// PasswordResetRequired=true (e.g., prior bootstrap-path run that crashed)
-// must have the flag cleared after setup-path Ensure reclaims it, otherwise
-// the operator who just chose a password would be force-reset on first login
-// (round-1 M-02).
-func TestService_CreateAdmin_OrphanRecovered_ClearsResetFlag_WhenInteractive(t *testing.T) {
+// TestService_CreateAdmin_BootstrapPendingDuplicate_Returns409WithoutTakeover
+// pins the provenance boundary: interactive setup must not reclaim a pending
+// bootstrap row with the same username.
+func TestService_CreateAdmin_BootstrapPendingDuplicate_Returns409WithoutTakeover(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	orphan, err := domain.NewUser("root", "root@local", "$2a$10$oldhash00000000000000000000000000000000000000000000000")
 	require.NoError(t, err)
 	orphan.ID = "usr-bootstrap-prior"
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
 	orphan.MarkPasswordResetRequired()
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
@@ -376,14 +401,21 @@ func TestService_CreateAdmin_OrphanRecovered_ClearsResetFlag_WhenInteractive(t *
 		Email:    "root@local",
 		Password: "SecretPass!23",
 	})
-	require.NoError(t, err)
-	require.NotNil(t, out)
-	assert.Equal(t, "usr-bootstrap-prior", out.ID)
+	require.Error(t, err)
+	assert.Nil(t, out)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 
 	refreshed, err := userRepo.GetByID(context.Background(), "usr-bootstrap-prior")
 	require.NoError(t, err)
-	assert.False(t, refreshed.PasswordResetRequired,
-		"interactive setup must clear the orphan's reset flag so operator-chosen password is immediately usable")
+	assert.Equal(t, "$2a$10$oldhash00000000000000000000000000000000000000000000000", refreshed.PasswordHash)
+	assert.True(t, refreshed.PasswordResetRequired)
+	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
+	assert.Equal(t, domain.ProvisionStatePending, refreshed.ProvisionState)
+	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cnt)
 }
 
 // TestService_CreateAdmin_ControlCharInField_Returns400 pins the email/username
