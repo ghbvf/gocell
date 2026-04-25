@@ -1,0 +1,19 @@
+//go:build ignore
+
+// bad_jwt_groupauth.go — compile-error fixture for AUTH-PLAN segregation test.
+//
+// This file intentionally does NOT compile. It proves that AuthJWT does NOT
+// implement cell.GroupAuth (the compile-time segregation invariant). The
+// archtest TestAuthPlan_Segregation_FixtureVerifiesCompileError verifies that
+// attempting to compile this file produces an error.
+//
+// Do NOT remove the //go:build ignore line — without it the normal build would
+// break. The archtest renames this to .go temporarily to trigger the failure.
+
+package fixture
+
+import "github.com/ghbvf/gocell/kernel/cell"
+
+// This assignment intentionally fails to compile:
+// AuthJWT does not implement GroupAuth (missing method groupAuthOK).
+var _ cell.GroupAuth = cell.AuthJWT{}

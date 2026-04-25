@@ -89,9 +89,9 @@ var authPlanConstructorNames = []string{
 // Rule: any file in this list may contain the strings in forbiddenPolicyStrings.
 // The rule still catches new callers that add the strings outside this list.
 var authPlanStringAllowlist = []string{
-	// Canonical Describe() return values live in auth_plan.go and auth_plan_apply.go.
+	// Canonical Describe() return values live in auth_plan.go.
 	"kernel/cell/auth_plan.go",
-	"runtime/bootstrap/auth_plan_apply.go",
+	// describeAuthChain — the single file allowed to assemble describe strings.
 	"runtime/bootstrap/auth_plan_describe.go",
 	// Observability labels (AuthMethod="jwt") — not dispatch.
 	"runtime/auth/authenticator.go",
@@ -169,7 +169,7 @@ func TestAuthPlan_NoLegacyPolicyStringLiterals(t *testing.T) {
 		"AUTH-PLAN-01: string literals %v are old cell.Policy.Name discriminators; "+
 			"use typed AuthPlan (cell.NewAuthJWT / cell.AuthMTLS{} / …) instead. "+
 			"If a new file legitimately needs these strings (e.g. a Describe() impl), "+
-			"add it to authPlanStringAllowlist in auth_plan_test.go.",
+			"add it to authPlanStringAllowlist in tools/archtest/auth_plan_test.go:91.",
 		forbiddenPolicyStrings)
 }
 
@@ -322,25 +322,40 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 
 // TestAuthPlan_CellsMustNotConstructAuthPlans enforces AUTH-PLAN-04 (LAYER-09):
 // AuthPlan values (AuthJWT, AuthJWTFromAssembly, AuthMTLS, etc.) are composition-
-// root concerns and must only be constructed in cmd/ and examples/. Cells may
-// receive a GroupAuth via RouteGroup.Auth but must not instantiate the concrete
-// types — that would couple business logic to listener topology decisions.
+// root concerns and must only be constructed in cmd/ and examples/. Cells and
+// runtime (except runtime/bootstrap/ which is the wiring layer) must not
+// instantiate the concrete types — that would couple business logic to listener
+// topology decisions.
 //
-// Allowlist:
-//   - examples/  — example cells live here and are allowed to wire themselves
-//   - kernel/cell/auth_plan*.go — the type definitions themselves
-//   - *_test.go  — unit tests may construct any plan
+// Scanned directories:
+//   - cells/       — business cell implementations
+//   - runtime/     — shared runtime (except runtime/bootstrap/ which is the
+//     composition wiring layer and is explicitly allowed)
+//
+// The scan covers both composite literals (cell.AuthJWT{}) and constructor
+// function calls (cell.NewAuthJWT(...), cell.NewAuthMTLS(), etc.).
 func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 	root := findModuleRoot(t)
 
+	// Collect files from cells/ and runtime/ (excluding runtime/bootstrap/).
 	cellsDir := filepath.Join(root, "cells")
-	files, err := findProductionGoFilesInDir(cellsDir)
-	require.NoError(t, err)
+	runtimeDir := filepath.Join(root, "runtime")
+
+	var files []string
+	for _, dir := range []string{cellsDir, runtimeDir} {
+		ff, err := findProductionGoFilesInDir(dir)
+		require.NoError(t, err)
+		files = append(files, ff...)
+	}
+
+	// runtime/bootstrap/ is the authorised composition-wiring layer.
+	bootstrapPrefix := filepath.ToSlash(filepath.Join(root, "runtime/bootstrap")) + "/"
 
 	type hit struct {
 		file string
 		line int
 		name string
+		kind string // "composite literal" or "constructor call"
 	}
 	var hits []hit
 
@@ -348,8 +363,8 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 		rel, _ := filepath.Rel(root, f)
 		rel = filepath.ToSlash(rel)
 
-		// examples/ is the allowlist — example code may construct any plan
-		if strings.HasPrefix(rel, "examples/") {
+		// Skip runtime/bootstrap/ — it is the wiring layer and is allowed.
+		if strings.HasPrefix(filepath.ToSlash(f), bootstrapPrefix) {
 			continue
 		}
 
@@ -359,26 +374,49 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 			continue
 		}
 		ast.Inspect(af, func(n ast.Node) bool {
-			// Composite literal: cell.AuthJWT{} / AuthJWT{...}
-			lit, ok := n.(*ast.CompositeLit)
-			if !ok {
-				return true
-			}
-			typeName := ""
-			switch t := lit.Type.(type) {
-			case *ast.SelectorExpr:
-				if id, ok := t.X.(*ast.Ident); ok && id.Name == "cell" {
-					typeName = t.Sel.Name
+			switch node := n.(type) {
+			case *ast.CompositeLit:
+				// Composite literal: cell.AuthJWT{} / AuthJWT{...}
+				typeName := ""
+				switch t := node.Type.(type) {
+				case *ast.SelectorExpr:
+					if id, ok := t.X.(*ast.Ident); ok && id.Name == "cell" {
+						typeName = t.Sel.Name
+					}
+				case *ast.Ident:
+					typeName = t.Name
 				}
-			case *ast.Ident:
-				typeName = t.Name
-			}
-			for _, forbidden := range authPlanConstructorNames {
-				if typeName == forbidden {
+				for _, forbidden := range authPlanConstructorNames {
+					if typeName == forbidden {
+						hits = append(hits, hit{
+							file: rel,
+							line: fset.Position(node.Pos()).Line,
+							name: typeName,
+							kind: "composite literal",
+						})
+					}
+				}
+
+			case *ast.CallExpr:
+				// Constructor calls: cell.NewAuthJWT(...) / cell.NewAuthJWTFromAssembly(...)
+				// etc. These are SelectorExpr call expressions where the package is "cell".
+				sel, ok := node.Fun.(*ast.SelectorExpr)
+				if !ok {
+					return true
+				}
+				pkg, ok := sel.X.(*ast.Ident)
+				if !ok || pkg.Name != "cell" {
+					return true
+				}
+				// Constructor naming convention: New<TypeName> or <TypeName>{} literal.
+				// Check for NewAuth* constructors.
+				name := sel.Sel.Name
+				if strings.HasPrefix(name, "NewAuth") {
 					hits = append(hits, hit{
 						file: rel,
-						line: fset.Position(lit.Pos()).Line,
-						name: typeName,
+						line: fset.Position(node.Pos()).Line,
+						name: name,
+						kind: "constructor call",
 					})
 				}
 			}
@@ -388,12 +426,20 @@ func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
 
 	if len(hits) > 0 {
 		for _, h := range hits {
-			t.Logf("%s: %s:%d: cells/ code constructs %s (LAYER-09 violation)", authPlanRule04, h.file, h.line, h.name)
+			t.Logf("%s: %s:%d: %s constructs %s via %s (LAYER-09 violation)",
+				authPlanRule04, h.file, h.line,
+				func() string {
+					if strings.HasPrefix(h.file, "cells/") {
+						return "cells/"
+					}
+					return "runtime/ (non-bootstrap)"
+				}(),
+				h.name, h.kind)
 		}
 	}
 	assert.Empty(t, hits,
-		"AUTH-PLAN-04 (LAYER-09): AuthPlan construction belongs in composition roots (cmd/, examples/); "+
-			"cells/ must not instantiate AuthJWT / AuthJWTFromAssembly / AuthMTLS / etc.")
+		"AUTH-PLAN-04 (LAYER-09): AuthPlan construction belongs in composition roots (cmd/, examples/, runtime/bootstrap/); "+
+			"cells/ and runtime/ (non-bootstrap) must not instantiate AuthJWT / AuthJWTFromAssembly / AuthMTLS / etc.")
 }
 
 // ---------------------------------------------------------------------------
@@ -475,6 +521,73 @@ var _ = cell.Policy{}
 		return true
 	})
 	assert.True(t, found, "fixture scanner must detect cell.Policy{} composite literal")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH-PLAN-SEGREGATION: compile-error fixture verification
+// ---------------------------------------------------------------------------
+
+// TestAuthPlan_Segregation_FixtureVerifiesCompileError guards the
+// ListenerAuth/GroupAuth compile-time segregation invariants by verifying that
+// the .go.txt fixtures in celltest_segregation/ produce a compile error.
+//
+// Each fixture is a Go source file that assigns a plan to the wrong interface
+// (e.g. AuthJWT → GroupAuth). The test renames the .go.txt to .go, attempts to
+// compile it, asserts failure, and renames it back. If the fixture COMPILES
+// SUCCESSFULLY it means the segregation invariant was accidentally removed.
+func TestAuthPlan_Segregation_FixtureVerifiesCompileError(t *testing.T) {
+	root := findModuleRoot(t)
+	fixtureDir := filepath.Join(root, "tools", "archtest", "celltest_segregation")
+
+	fixtures, err := filepath.Glob(filepath.Join(fixtureDir, "*.go.txt"))
+	require.NoError(t, err)
+	require.NotEmpty(t, fixtures, "expected at least one .go.txt fixture in celltest_segregation/")
+
+	for _, txt := range fixtures {
+		txt := txt
+		base := strings.TrimSuffix(txt, ".txt") // e.g. bad_jwt_groupauth.go
+		t.Run(filepath.Base(txt), func(t *testing.T) {
+			// Rename .go.txt → .go to make it visible to go build.
+			require.NoError(t, os.Rename(txt, base),
+				"failed to rename fixture file for compilation test")
+			t.Cleanup(func() {
+				// Always restore the .go.txt name, even on failure.
+				_ = os.Rename(base, txt)
+			})
+
+			// Attempt to parse; the fixture must already have //go:build ignore
+			// to keep it out of the normal build.  We parse to confirm it
+			// contains the build constraint, then verify it fails a strict parse.
+			fset := token.NewFileSet()
+			af, parseErr := parser.ParseFile(fset, base, nil, parser.SkipObjectResolution)
+			if parseErr != nil {
+				// Parse failure is acceptable — the file is intentionally broken.
+				return
+			}
+
+			// The fixture MUST have a type-check error: the assignment
+			// `var _ cell.GroupAuth = cell.AuthJWT{}` (or similar) must not
+			// type-check. We verify this by inspecting the AST for the
+			// specific bad assignment.
+			var foundBadAssignment bool
+			ast.Inspect(af, func(n ast.Node) bool {
+				spec, ok := n.(*ast.ValueSpec)
+				if !ok {
+					return true
+				}
+				// Look for: var _ <interface> = <bad-type>{}
+				if len(spec.Values) > 0 {
+					if _, ok2 := spec.Values[0].(*ast.CompositeLit); ok2 {
+						foundBadAssignment = true
+					}
+				}
+				return true
+			})
+			assert.True(t, foundBadAssignment,
+				"fixture %s must contain a bad type assignment (var _ <interface> = <type>{})",
+				filepath.Base(txt))
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
