@@ -29,15 +29,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/shutdown"
 )
 
-// noopTxRunner executes fn directly without a real transaction (demo mode).
-type noopTxRunner struct{}
-
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
-}
-
-var _ persistence.TxRunner = noopTxRunner{}
-
 // envOr returns os.Getenv(key) when set; otherwise the fallback. Used to
 // override listener addresses without rebuilding the binary — the smoke
 // regression guard injects high ports to avoid colliding with developer
@@ -65,9 +56,11 @@ func main() {
 	// Production RabbitMQ wiring: see P3-DEFER-03 (blocked on Batch 5: WM-17 + ER-ARCH-02).
 	eb := eventbus.New()
 
-	// RSA key pair for JWT signing/verification (development only).
-	// Production: use auth.LoadKeySetFromEnv() which reads from env vars and
-	// supports key rotation via GOCELL_JWT_PREV_PUBLIC_KEY + GOCELL_JWT_PREV_KEY_EXPIRES.
+	// DO NOT COPY TO PRODUCTION: RSA key pair is generated in-process every
+	// boot, so all signed tokens become invalid on restart and there is no
+	// way to verify tokens issued by another replica. Use auth.LoadKeySetFromEnv()
+	// which reads from env vars and supports key rotation via
+	// GOCELL_JWT_PREV_PUBLIC_KEY + GOCELL_JWT_PREV_KEY_EXPIRES.
 	privKey, pubKey := auth.MustGenerateTestKeyPair()
 	keySet, err := auth.NewKeySet(privKey, pubKey)
 	if err != nil {
@@ -100,14 +93,21 @@ func main() {
 		accesscore.WithOutboxDeps(eb, nw),
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithTxManager(persistence.NoopTxRunner{}),
 		accesscore.WithLogger(logger),
 		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production
 	)
 
 	// --- auditcore (L3): tamper-evident audit log ---
-	// 32 bytes: matches SHA-256 block size used by the audit HMAC chain.
+	// DO NOT COPY TO PRODUCTION: this HMAC key is a public string constant;
+	// any audit log signed with it is forgeable by anyone reading the demo
+	// source. Production deployments must inject a fresh 32-byte secret via
+	// secrets manager / Vault. 32 bytes matches SHA-256 block size used by
+	// the audit HMAC chain.
 	auditHMACKey := []byte("ssobff-dev-hmac-key-32-bytes!!!!")
+	// DO NOT COPY TO PRODUCTION: cursor HMAC key is a public string; an
+	// attacker who can read the demo source can forge or read pagination
+	// cursors. Use a fresh secret in production.
 	auditCursorCodec, err := query.NewCursorCodec([]byte("ssobff-audit-cursor-key-32bytes!"))
 	if err != nil {
 		logger.Error("failed to create audit cursor codec", slog.Any("error", err))
@@ -117,13 +117,14 @@ func main() {
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nw),
 		auditcore.WithHMACKey(auditHMACKey),
-		auditcore.WithTxManager(noopTxRunner{}),
+		auditcore.WithTxManager(persistence.NoopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(logger),
 		auditcore.WithMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production
 	)
 
 	// --- configcore (L2): configuration + feature flags ---
+	// DO NOT COPY TO PRODUCTION — same reason as auditCursorCodec above.
 	configCursorCodec, err := query.NewCursorCodec([]byte("ssobff-config-cursor-key-32bytes"))
 	if err != nil {
 		logger.Error("failed to create config cursor codec", slog.Any("error", err))
@@ -132,7 +133,7 @@ func main() {
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
-		configcore.WithTxManager(noopTxRunner{}),
+		configcore.WithTxManager(persistence.NoopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(logger),
 		configcore.WithMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production

@@ -19,6 +19,12 @@ func isRealMode(adapterMode string) bool {
 	return adapterMode == realAdapterMode
 }
 
+// DO NOT COPY TO PRODUCTION: every entry below is published in this source
+// tree (and in git history) — anyone can sign with these values. They exist
+// solely so real-mode startup can detect and refuse them. Generate fresh
+// 32-byte secrets via `openssl rand -hex 32` (or your secrets manager) for
+// any non-demo deployment.
+//
 // wellKnownDemoKeys lists key material that shipped as public dev defaults at
 // various points in GoCell's history. Real-mode startup must refuse to run
 // with any of these values to prevent accidental production deployments with
