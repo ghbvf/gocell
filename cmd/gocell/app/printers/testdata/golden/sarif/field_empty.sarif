@@ -32,7 +32,8 @@
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "f.yaml"
+                  "uri": "f.yaml",
+                  "uriBaseId": "SRCROOT"
                 },
                 "region": {
                   "startLine": 7,
@@ -42,7 +43,10 @@
             }
           ]
         }
-      ]
+      ],
+      "originalUriBaseIds": {
+        "SRCROOT": {}
+      }
     }
   ]
 }

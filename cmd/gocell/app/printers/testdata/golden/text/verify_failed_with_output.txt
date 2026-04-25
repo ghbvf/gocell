@@ -1,0 +1,5 @@
+Verify accesscore/sessions: FAILED
+  [FAIL] TestLogin
+    expected 200
+    got 500
+    response body: internal error

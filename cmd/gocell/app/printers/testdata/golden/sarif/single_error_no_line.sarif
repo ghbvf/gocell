@@ -32,13 +32,17 @@
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "cells/accesscore/cell.yaml"
+                  "uri": "cells/accesscore/cell.yaml",
+                  "uriBaseId": "SRCROOT"
                 }
               }
             }
           ]
         }
-      ]
+      ],
+      "originalUriBaseIds": {
+        "SRCROOT": {}
+      }
     }
   ]
 }

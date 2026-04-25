@@ -32,7 +32,8 @@
             {
               "physicalLocation": {
                 "artifactLocation": {
-                  "uri": "cells/中文/cell.yaml"
+                  "uri": "cells/%E4%B8%AD%E6%96%87/cell.yaml",
+                  "uriBaseId": "SRCROOT"
                 },
                 "region": {
                   "startLine": 1,
@@ -42,7 +43,10 @@
             }
           ]
         }
-      ]
+      ],
+      "originalUriBaseIds": {
+        "SRCROOT": {}
+      }
     }
   ]
 }

@@ -7,6 +7,34 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+// parentFieldPath returns the parent of a dotted/bracketed yaml field
+// path. Examples:
+//
+//	"a.b.c"          -> "a.b"
+//	"a.b[0]"         -> "a.b"
+//	"a.b[0].c"       -> "a.b[0]"
+//	"a.b[0][1]"      -> "a.b[0]"
+//	"a"              -> ""
+//
+// Used by locate() so that when a leaf field is *missing* from the YAML
+// (the typical "rule fires because the field is absent" case), the
+// finding can still anchor at the deepest existing ancestor instead of
+// falling back to (0, 0).
+func parentFieldPath(p string) string {
+	if p == "" {
+		return ""
+	}
+	lastDot := strings.LastIndex(p, ".")
+	lastOpen := strings.LastIndex(p, "[")
+	if strings.HasSuffix(p, "]") && lastOpen > lastDot {
+		return p[:lastOpen]
+	}
+	if lastDot >= 0 {
+		return p[:lastDot]
+	}
+	return ""
+}
+
 // locator provides position-enriched ValidationResult construction. It is
 // embedded into Validator and DependencyChecker so both share a single
 // implementation of locate/newResult — one copy, not two.
@@ -20,8 +48,13 @@ type locator struct {
 }
 
 // locate returns the 1-based (line, column) of `field` inside `file` using
-// the yaml.Node cache captured by the parser. Returns (0, 0) when any
-// precondition is missing (no file nodes, no matching file, unresolvable path).
+// the yaml.Node cache captured by the parser. When the leaf field is
+// missing from the YAML (the common "rule fires because the field is
+// absent" case — e.g. CH-03 reporting `responses[401].schemaRef` that
+// was never declared), locate walks up the dotted path until it finds
+// an ancestor that does exist, so callers anchor at the closest concrete
+// parent instead of (0, 0). Returns (0, 0) only when the file is unknown
+// or no part of the path resolves at all.
 // Rules should prefer newResult, which wraps this call.
 func (l *locator) locate(file, field string) (line, col int) {
 	if file == "" || field == "" {
@@ -31,8 +64,12 @@ func (l *locator) locate(file, field string) (line, col int) {
 		return 0, 0
 	}
 	file = l.resolveFile(file)
-	pos := l.project.Locate(file, field)
-	return pos.Line, pos.Column
+	for cur := field; cur != ""; cur = parentFieldPath(cur) {
+		if pos := l.project.Locate(file, cur); pos.Known() {
+			return pos.Line, pos.Column
+		}
+	}
+	return 0, 0
 }
 
 // newResult constructs a ValidationResult with Line/Column auto-populated

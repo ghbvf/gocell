@@ -1,0 +1,30 @@
+{
+  "targetId": "accesscore/all",
+  "passed": false,
+  "results": [
+    {
+      "name": "TestA",
+      "passed": true,
+      "output": "",
+      "zeroMatch": false
+    },
+    {
+      "name": "TestB",
+      "passed": false,
+      "output": "assertion failed",
+      "zeroMatch": false
+    },
+    {
+      "name": "TestC",
+      "passed": true,
+      "output": "",
+      "zeroMatch": false
+    }
+  ],
+  "errors": [
+    "subprocess exit 1"
+  ],
+  "manualPending": [
+    "manual smoke test pending"
+  ]
+}

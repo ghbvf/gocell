@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "code": "PATH-02",
+      "severity": "error",
+      "issueType": "",
+      "file": "cells\\demo\\cell.yaml",
+      "scope": "",
+      "field": "",
+      "message": "backslash test",
+      "line": 1,
+      "column": 0
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}

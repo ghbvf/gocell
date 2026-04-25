@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "code": "PATH-03",
+      "severity": "error",
+      "issueType": "",
+      "file": "cells/a?b/file.yaml",
+      "scope": "",
+      "field": "",
+      "message": "query char test",
+      "line": 1,
+      "column": 0
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}

@@ -72,25 +72,6 @@ func TestReadModuleNotFound(t *testing.T) {
 // further down in this file (TestRunValidate, TestDispatch_Contract,
 // TestDispatch_SuccessPath_ExitZero) exercise the wiring end-to-end.
 
-func TestFormatTestList(t *testing.T) {
-	tests := []struct {
-		input []string
-		want  string
-	}{
-		{nil, "(none)"},
-		{[]string{}, "(none)"},
-		{[]string{"a"}, "a"},
-		{[]string{"a", "b"}, "a, b"},
-	}
-
-	for _, tt := range tests {
-		got := formatTestList(tt.input)
-		if got != tt.want {
-			t.Errorf("formatTestList(%v) = %q, want %q", tt.input, got, tt.want)
-		}
-	}
-}
-
 func TestCommands(t *testing.T) {
 	// Verify all expected commands are registered.
 	expected := []string{"validate", "scaffold", "generate", "check", "verify"}

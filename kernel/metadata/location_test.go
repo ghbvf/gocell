@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -294,6 +295,48 @@ func TestFind_EmptyMapping(t *testing.T) {
 	// foo.bar must fail with "not found", not panic.
 	if _, err := Find(root, "foo.bar"); err == nil {
 		t.Errorf("Find(foo.bar) in empty mapping err = nil, want not found")
+	}
+}
+
+// TestFind_MappingIntKey verifies that [N] on a MappingNode with integer keys
+// (e.g., responses: { 200: {...}, 404: {...} }) resolves via the decimal
+// string form. This addresses YAML contract files that declare
+// endpoints.http.responses as a map[int]Response.
+func TestFind_MappingIntKey(t *testing.T) {
+	src := `
+responses:
+  200:
+    schemaRef: ok
+  404:
+    schemaRef: notfound
+`
+	root := mustParseNode(t, src)
+
+	// Find: responses[200].schemaRef → value node "ok"
+	n, err := Find(root, "responses[200].schemaRef")
+	if err != nil {
+		t.Fatalf("Find(responses[200].schemaRef) err = %v", err)
+	}
+	if n.Value != "ok" {
+		t.Errorf("Find(responses[200].schemaRef).Value = %q, want ok", n.Value)
+	}
+
+	// Locate: responses[404].schemaRef → line > 0
+	pos := Locate(root, "responses[404].schemaRef")
+	if !pos.Known() {
+		t.Errorf("Locate(responses[404].schemaRef) = %+v, want known position", pos)
+	}
+	if pos.Line <= 0 {
+		t.Errorf("Locate(responses[404].schemaRef).Line = %d, want > 0", pos.Line)
+	}
+
+	// Missing key → error containing "mapping key [500] not found"
+	_, err = Find(root, "responses[500]")
+	if err == nil {
+		t.Error("Find(responses[500]) err = nil, want mapping key not found error")
+	}
+	if err != nil && !strings.Contains(err.Error(), "mapping key [500] not found") {
+		t.Errorf("Find(responses[500]) err = %v, want to contain %q", err, "mapping key [500] not found")
 	}
 }
 

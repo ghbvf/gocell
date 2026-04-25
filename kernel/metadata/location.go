@@ -5,6 +5,17 @@
 // node-by-node walk idea but write our own grammar because (a) kernel/ is
 // limited to yaml.v3 + stdlib (no third-party imports), and (b) GoCell only
 // needs a strict subset of JSONPath (no "$", "[*]", ".." or quoted idents).
+//
+// Path grammar (a restricted subset of JSONPath):
+//
+//	path    = segment ("." segment)*
+//	segment = ident ("[" uint "]")*
+//	ident   = [A-Za-z_][A-Za-z0-9_-]*
+//
+// [N] on a SequenceNode selects the N-th element (0-based).
+// [N] on a MappingNode matches the decimal string form of N as a mapping key
+// (e.g., responses[200] addresses a YAML mapping with integer keys such as
+// { 200: { schemaRef: ok }, 404: { schemaRef: notfound } }).
 
 package metadata
 
@@ -39,14 +50,19 @@ func (p Position) Known() bool {
 //	segment = ident ("[" uint "]")*
 //	ident   = [A-Za-z_][A-Za-z0-9_-]*
 //
+// [N] on a SequenceNode selects the N-th element (0-based). [N] on a
+// MappingNode matches the decimal string form of N as a key, which allows
+// addressing YAML mappings with integer keys such as
+// "endpoints.http.responses[200].schemaRef".
+//
 // Examples: "id", "owner.team", "slices[0].contractUsages[1].contract",
-// "matrix[0][1]".
+// "matrix[0][1]", "endpoints.http.responses[200].schemaRef".
 //
 // Unsupported (by design): leading "$", wildcards "[*]", recursive "..",
 // quoted identifiers. We walk the minimum grammar the validator needs.
 //
 // Error conditions: empty/invalid path, missing field, index out of range,
-// type mismatch (indexing a mapping or keying a sequence), empty document.
+// mapping key not found, keying a scalar, empty document.
 // The path prefix that reached the offending step is included in the error.
 func Find(root *yaml.Node, path string) (*yaml.Node, error) {
 	if root == nil {
@@ -229,13 +245,27 @@ func stepField(n *yaml.Node, key string) (*yaml.Node, error) {
 }
 
 func stepIndex(n *yaml.Node, idx int) (*yaml.Node, error) {
-	if n.Kind != yaml.SequenceNode {
-		return nil, fmt.Errorf("expected sequence for index [%d], got kind %d", idx, n.Kind)
+	switch n.Kind {
+	case yaml.SequenceNode:
+		if idx < 0 || idx >= len(n.Content) {
+			return nil, fmt.Errorf("index [%d] out of range (len=%d)", idx, len(n.Content))
+		}
+		return n.Content[idx], nil
+	case yaml.MappingNode:
+		// YAML mappings with integer keys (e.g., responses: { 200: {...},
+		// 404: {...} }) are addressed by [N] using the same syntax as
+		// sequence indexing. The [N] form is unambiguous because mapping
+		// keys parse as strings; we match decimal literal form.
+		key := strconv.Itoa(idx)
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			if n.Content[i].Value == key {
+				return n.Content[i+1], nil
+			}
+		}
+		return nil, fmt.Errorf("mapping key [%d] not found", idx)
+	default:
+		return nil, fmt.Errorf("cannot index node kind %d with [%d]", n.Kind, idx)
 	}
-	if idx >= len(n.Content) {
-		return nil, fmt.Errorf("index %d out of range (length %d)", idx, len(n.Content))
-	}
-	return n.Content[idx], nil
 }
 
 // pathUpTo reconstructs the path string up to (and including) segs[i] and

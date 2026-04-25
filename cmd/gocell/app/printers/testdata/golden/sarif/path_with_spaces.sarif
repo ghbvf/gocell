@@ -10,15 +10,12 @@
           "informationUri": "https://github.com/ghbvf/gocell",
           "rules": [
             {
-              "id": "DEP-02",
+              "id": "PATH-01",
               "shortDescription": {
-                "text": "circular dependency detected"
+                "text": "spaces test"
               },
               "defaultConfiguration": {
                 "level": "error"
-              },
-              "properties": {
-                "issueType": "invalid"
               }
             }
           ]
@@ -26,11 +23,25 @@
       },
       "results": [
         {
-          "ruleId": "DEP-02",
+          "ruleId": "PATH-01",
           "level": "error",
           "message": {
-            "text": "[scope: project] circular dependency detected (field: cells)"
-          }
+            "text": "spaces test"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cells/my%20cell/cell.yaml",
+                  "uriBaseId": "SRCROOT"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 1
+                }
+              }
+            }
+          ]
         }
       ],
       "originalUriBaseIds": {

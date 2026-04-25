@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
+	"path"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/governance"
 )
@@ -33,10 +36,11 @@ func NewSARIFPrinter(w io.Writer, toolVersion string) *SARIFPrinter {
 // SARIF schema constants. Pulled out so the JSON shape lives next to the
 // values rather than scattered through code.
 const (
-	sarifSchema      = "https://json.schemastore.org/sarif-2.1.0.json"
-	sarifVersion     = "2.1.0"
-	sarifToolName    = "gocell"
-	sarifToolInfoURI = "https://github.com/ghbvf/gocell"
+	sarifSchema        = "https://json.schemastore.org/sarif-2.1.0.json"
+	sarifVersion       = "2.1.0"
+	sarifToolName      = "gocell"
+	sarifToolInfoURI   = "https://github.com/ghbvf/gocell"
+	sarifSrcRootBaseID = "SRCROOT"
 )
 
 // SARIF wire-format DTOs. Field names follow the SARIF 2.1.0 schema exactly,
@@ -49,8 +53,9 @@ type sarifLog struct {
 }
 
 type sarifRun struct {
-	Tool    sarifTool     `json:"tool"`
-	Results []sarifResult `json:"results"`
+	Tool               sarifTool                        `json:"tool"`
+	Results            []sarifResult                    `json:"results"`
+	OriginalUriBaseIDs map[string]sarifArtifactLocation `json:"originalUriBaseIds,omitempty"`
 }
 
 type sarifTool struct {
@@ -100,7 +105,8 @@ type sarifPhysicalLocation struct {
 }
 
 type sarifArtifactLocation struct {
-	URI string `json:"uri"`
+	URI       string `json:"uri,omitempty"`
+	URIBaseID string `json:"uriBaseId,omitempty"`
 }
 
 type sarifRegion struct {
@@ -133,6 +139,9 @@ func (p *SARIFPrinter) Print(results []governance.ValidationResult) error {
 					},
 				},
 				Results: sarifResults,
+				OriginalUriBaseIDs: map[string]sarifArtifactLocation{
+					sarifSrcRootBaseID: {URI: ""},
+				},
 			},
 		},
 	}
@@ -194,7 +203,10 @@ func toSARIFResult(r governance.ValidationResult) sarifResult {
 	if r.File != "" {
 		loc := sarifLocation{
 			PhysicalLocation: sarifPhysicalLocation{
-				ArtifactLocation: sarifArtifactLocation{URI: r.File},
+				ArtifactLocation: sarifArtifactLocation{
+					URI:       normalizeArtifactURI(r.File),
+					URIBaseID: sarifSrcRootBaseID,
+				},
 			},
 		}
 		if r.Line > 0 {
@@ -243,4 +255,23 @@ func severityToSARIFLevel(s governance.Severity) string {
 	default:
 		return "none"
 	}
+}
+
+// normalizeArtifactURI converts a repo-relative file path into an
+// RFC 3986 compliant relative URI suitable for SARIF artifactLocation.uri.
+// Steps: backslash → slash (Windows path defense) → path.Clean →
+// PathEscape per segment so spaces / CJK / reserved chars become %XX.
+func normalizeArtifactURI(file string) string {
+	s := strings.ReplaceAll(file, "\\", "/")
+	s = path.Clean(s)
+	if s == "." || s == "/" {
+		return s
+	}
+	// Strip leading "./" left over from Clean of "./foo"
+	// (path.Clean keeps "./" as ".", which we already returned above).
+	parts := strings.Split(s, "/")
+	for i, p := range parts {
+		parts[i] = url.PathEscape(p)
+	}
+	return strings.Join(parts, "/")
 }

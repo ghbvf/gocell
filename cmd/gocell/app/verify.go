@@ -4,8 +4,10 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
+	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/verify"
@@ -39,15 +41,39 @@ func runVerify(args []string) error {
 	}
 }
 
-func verifySlice(args []string) error {
-	fs := flag.NewFlagSet("verify slice", flag.ContinueOnError)
-	id := fs.String("id", "", "slice ID in cellID/sliceID format (required)")
+// verifyResultExec captures the per-subcommand differences (flag name +
+// runner method) so runVerifyResultCmd can share the rest of the wiring.
+type verifyResultExec struct {
+	name string // "slice" / "cell" / "journey"
+	flag string // "id"
+	exec func(ctx context.Context, runner *verify.Runner, id string) (*verify.VerifyResult, error)
+}
+
+// runVerifyResultCmd parses --id + --format, validates the printer choice
+// up front (so an unsupported format is rejected before any metadata
+// parse or test execution), builds the runner, executes `exec`, then
+// renders the VerifyResult. Used by verify slice / cell / journey —
+// verify targets has a different output shape (AffectedTargets) and
+// stays separate.
+func runVerifyResultCmd(args []string, spec verifyResultExec) error {
+	fs := flag.NewFlagSet("verify "+spec.name, flag.ContinueOnError)
+	id := fs.String(spec.flag, "", "<required>")
+	format := fs.String("format", "text",
+		"output format: "+strings.Join(printers.SupportedVerifyFormats(), " | "))
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-
 	if *id == "" {
-		return fmt.Errorf("--id is required")
+		return fmt.Errorf("--%s is required", spec.flag)
+	}
+
+	// Format validation happens before metadata parse / test execution
+	// so a misconfigured CI invocation fails in milliseconds with a
+	// clear message, rather than running the whole verify suite and
+	// then refusing to render the result.
+	printer, err := printers.NewVerifyPrinter(*format, os.Stdout)
+	if err != nil {
+		return err
 	}
 
 	root, project, err := parseProjectMeta()
@@ -56,74 +82,48 @@ func verifySlice(args []string) error {
 	}
 
 	runner := verify.NewRunner(project, root)
-	result, err := runner.VerifySlice(context.Background(), *id)
+	result, err := spec.exec(context.Background(), runner, *id)
 	if err != nil {
-		return fmt.Errorf("verify slice: %w", err)
+		return fmt.Errorf("verify %s: %w", spec.name, err)
 	}
 
-	printVerifyResult(result)
+	if err := printer.Print(result); err != nil {
+		return fmt.Errorf("emit verify result: %w", err)
+	}
 	if !result.Passed {
-		return fmt.Errorf("verify slice %s: FAILED", *id)
+		return fmt.Errorf("verify %s %s: FAILED", spec.name, *id)
 	}
 	return nil
+}
+
+func verifySlice(args []string) error {
+	return runVerifyResultCmd(args, verifyResultExec{
+		name: "slice",
+		flag: "id",
+		exec: func(ctx context.Context, r *verify.Runner, id string) (*verify.VerifyResult, error) {
+			return r.VerifySlice(ctx, id)
+		},
+	})
 }
 
 func verifyCell(args []string) error {
-	fs := flag.NewFlagSet("verify cell", flag.ContinueOnError)
-	id := fs.String("id", "", "cell ID (required)")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *id == "" {
-		return fmt.Errorf("--id is required")
-	}
-
-	root, project, err := parseProjectMeta()
-	if err != nil {
-		return err
-	}
-
-	runner := verify.NewRunner(project, root)
-	result, err := runner.VerifyCell(context.Background(), *id)
-	if err != nil {
-		return fmt.Errorf("verify cell: %w", err)
-	}
-
-	printVerifyResult(result)
-	if !result.Passed {
-		return fmt.Errorf("verify cell %s: FAILED", *id)
-	}
-	return nil
+	return runVerifyResultCmd(args, verifyResultExec{
+		name: "cell",
+		flag: "id",
+		exec: func(ctx context.Context, r *verify.Runner, id string) (*verify.VerifyResult, error) {
+			return r.VerifyCell(ctx, id)
+		},
+	})
 }
 
 func verifyJourney(args []string) error {
-	fs := flag.NewFlagSet("verify journey", flag.ContinueOnError)
-	id := fs.String("id", "", "journey ID (required)")
-	if err := fs.Parse(args); err != nil {
-		return err
-	}
-
-	if *id == "" {
-		return fmt.Errorf("--id is required")
-	}
-
-	root, project, err := parseProjectMeta()
-	if err != nil {
-		return err
-	}
-
-	runner := verify.NewRunner(project, root)
-	result, err := runner.RunJourney(context.Background(), *id)
-	if err != nil {
-		return fmt.Errorf("verify journey: %w", err)
-	}
-
-	printVerifyResult(result)
-	if !result.Passed {
-		return fmt.Errorf("verify journey %s: FAILED", *id)
-	}
-	return nil
+	return runVerifyResultCmd(args, verifyResultExec{
+		name: "journey",
+		flag: "id",
+		exec: func(ctx context.Context, r *verify.Runner, id string) (*verify.VerifyResult, error) {
+			return r.RunJourney(ctx, id)
+		},
+	})
 }
 
 func verifyTargets(args []string) error {
@@ -179,33 +179,6 @@ func parseProjectMeta() (root string, project *metadata.ProjectMeta, err error) 
 	return root, project, nil
 }
 
-// printVerifyResult prints a VerifyResult to stdout.
-func printVerifyResult(r *verify.VerifyResult) {
-	status := "PASSED"
-	if !r.Passed {
-		status = "FAILED"
-	}
-	fmt.Printf("Verify %s: %s\n", r.TargetID, status)
-	for _, tr := range r.Results {
-		marker := "PASS"
-		if !tr.Passed {
-			marker = "FAIL"
-		}
-		fmt.Printf("  [%s] %s\n", marker, tr.Name)
-		if tr.Output != "" {
-			for _, line := range strings.Split(strings.TrimRight(tr.Output, "\n"), "\n") {
-				fmt.Printf("    %s\n", line)
-			}
-		}
-	}
-	for _, e := range r.Errors {
-		fmt.Printf("  error: %v\n", e)
-	}
-	for _, m := range r.ManualPending {
-		fmt.Printf("  [PENDING] %s (manual)\n", m)
-	}
-}
-
 func printTargetList(label string, items []string) {
 	if len(items) == 0 {
 		return
@@ -214,11 +187,4 @@ func printTargetList(label string, items []string) {
 	for _, item := range items {
 		fmt.Printf("    - %s\n", item)
 	}
-}
-
-func formatTestList(tests []string) string {
-	if len(tests) == 0 {
-		return "(none)"
-	}
-	return strings.Join(tests, ", ")
 }

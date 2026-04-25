@@ -1,0 +1,14 @@
+{
+  "targetId": "accesscore/sessions",
+  "passed": true,
+  "results": [
+    {
+      "name": "TestLogin",
+      "passed": true,
+      "output": "",
+      "zeroMatch": false
+    }
+  ],
+  "errors": [],
+  "manualPending": []
+}
