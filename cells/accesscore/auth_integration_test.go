@@ -43,19 +43,20 @@ import (
 
 // loginConfig holds per-test audience configuration for loginAndGetPair.
 type loginConfig struct {
-	// issuerAuds: nil means default ["gocell"]; non-nil empty slice means no aud option.
-	issuerAuds   *[]string
-	verifierAuds []string
+	issuerAudsSet bool     // true = caller explicitly set; false = use default ["gocell"]
+	issuerAuds    []string // empty = no WithIssuerAudiencesFromSlice option (issuer mints aud-less tokens)
+	verifierAuds  []string // default ["gocell"]; empty intentionally panics in Verifier construction
 }
 
 type loginOption func(*loginConfig)
 
 // withIssuerAuds sets the audiences the issuer embeds in tokens.
-// Calling withIssuerAuds() with no arguments sets an empty slice (no aud option — issuer mints aud-less tokens).
+// Calling withIssuerAuds() with no arguments sets issuerAudsSet=true with an empty
+// slice (no aud option — issuer mints aud-less tokens).
 func withIssuerAuds(auds ...string) loginOption {
 	return func(c *loginConfig) {
-		a := append([]string(nil), auds...)
-		c.issuerAuds = &a
+		c.issuerAudsSet = true
+		c.issuerAuds = append([]string(nil), auds...)
 	}
 }
 
@@ -112,13 +113,16 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 
 	ks, _, _ := auth.MustNewTestKeySet()
 
+	require.NotEmpty(t, cfg.verifierAuds, "loginAndGetPair: verifierAuds must not be empty; use withVerifierAuds(\"gocell\") or similar")
+
 	var issuerOpts []auth.JWTIssuerOption
-	if cfg.issuerAuds == nil {
+	switch {
+	case !cfg.issuerAudsSet:
 		issuerOpts = append(issuerOpts, auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
-	} else if len(*cfg.issuerAuds) > 0 {
-		issuerOpts = append(issuerOpts, auth.WithIssuerAudiencesFromSlice(*cfg.issuerAuds))
+	case len(cfg.issuerAuds) > 0:
+		issuerOpts = append(issuerOpts, auth.WithIssuerAudiencesFromSlice(cfg.issuerAuds))
+		// else: explicitly empty → no audience option, issuer mints aud-less tokens.
 	}
-	// empty slice ⇒ no WithIssuerAudiencesFromSlice option (issuer mints aud-less tokens)
 	issuer, err := auth.NewJWTIssuer(ks, "gocell", time.Hour, issuerOpts...)
 	require.NoError(t, err)
 
@@ -318,7 +322,7 @@ func TestAuthIntegration_LoginAccessTokenAudienceDrift(t *testing.T) {
 	}{
 		{"aligned_audiences_pass", []string{"gocell"}, []string{"gocell"}, ""},
 		{"issuer_drift_rejected", []string{"gocell-other"}, []string{"gocell"}, "ERR_AUTH_INVALID_TOKEN_INTENT"},
-		{"verifier_drift_rejected", []string{"gocell"}, []string{"gocell-other"}, "ERR_AUTH_INVALID_TOKEN_INTENT"},
+		{"token_rejected_when_verifier_expects_other_aud", []string{"gocell"}, []string{"gocell-other"}, "ERR_AUTH_INVALID_TOKEN_INTENT"},
 		{"multi_aud_one_match_pass", []string{"a", "gocell"}, []string{"gocell"}, ""},
 	}
 	for _, tc := range cases {

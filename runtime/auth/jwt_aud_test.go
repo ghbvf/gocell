@@ -8,7 +8,7 @@
 // expected audiences are configured (fail-fast per RFC 8725 §3.3). At least
 // one configured audience must appear in the token's aud claim.
 //
-// Shape: 3 Test* funcs — TestJWTVerifier_VerifyIntent_AudienceTable (9 rows),
+// Shape: 3 Test* funcs — TestJWTVerifier_VerifyIntent_AudienceTable (8 rows),
 // TestJWTIssuer_DefaultAudience_Table (3 rows),
 // TestNewJWTVerifier_NoAudiences_ReturnsError (standalone).
 package auth
@@ -101,8 +101,8 @@ func mintTokenForCase(t *testing.T, ks *KeySet, tc verifierAudCase) string {
 }
 
 // TestJWTVerifier_VerifyIntent_AudienceTable covers all audience-validation
-// paths through VerifyIntent (RFC 8725 §3.3). Nine cases folded from
-// the original 9 Test* funcs.
+// paths through VerifyIntent (RFC 8725 §3.3). Eight scenarios; access-path
+// historical duplicate dropped (Verify no longer exists — compile-time guarantee).
 func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
 	cases := []verifierAudCase{
 		{
@@ -141,13 +141,6 @@ func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
 			mintFn: func(t *testing.T, ks *KeySet) string {
 				return signRawIntentJWT(t, ks, "refresh", "refresh+jwt", []string{"wrong"})
 			},
-			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
-		},
-		{
-			// Audience enforcement applies through the only verification API.
-			name:             "rejects_audience_on_access_path",
-			expectedAuds:     []string{"gocell"},
-			tokenAud:         []string{"some-other-service"},
 			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
 		},
 		{

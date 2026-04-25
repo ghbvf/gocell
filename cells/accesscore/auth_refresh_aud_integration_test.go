@@ -16,7 +16,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -24,6 +23,7 @@ import (
 )
 
 func TestAuthIntegration_RefreshAccessTokenAudienceDrift(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name             string
 		issuerAuds       []string // empty = no WithIssuerAudiencesFromSlice option
@@ -32,18 +32,19 @@ func TestAuthIntegration_RefreshAccessTokenAudienceDrift(t *testing.T) {
 	}{
 		{"refresh_returns_aligned_aud_passes", []string{"gocell"}, []string{"gocell"}, ""},
 		{"refresh_returns_drifted_aud_rejected", []string{"gocell-other"}, []string{"gocell"}, "ERR_AUTH_INVALID_TOKEN_INTENT"},
+		// Login itself accepts the aud-less token because /sessions/login is Public:true
+		// (no verifier on the request); the rejection surfaces only on the rotated access JWT.
 		{"refresh_returns_no_default_aud_rejected", []string{}, []string{"gocell"}, "ERR_AUTH_INVALID_TOKEN_INTENT"},
 	}
 
 	for _, tc := range cases {
+		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 			fx := loginAndGetPair(t,
 				withIssuerAuds(tc.issuerAuds...),
 				withVerifierAuds(tc.verifierAuds...),
 			)
-
-			// Advance past Policy.ReuseInterval (2s) to permit rotation.
-			fx.Clock.Advance(3 * time.Second)
 
 			body := strings.NewReader(`{"refreshToken":"` + fx.RefreshToken + `"}`)
 			rec := httptest.NewRecorder()
