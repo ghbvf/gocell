@@ -228,6 +228,22 @@ func TestRunVerifyJourney_ValidID(t *testing.T) {
 	}
 }
 
+// TestRunVerify_RejectsSARIFBeforeExecution locks the contract that an
+// unsupported --format is caught up front — before metadata parse or any
+// test execution. CI invocations that misconfigure the format flag should
+// fail in milliseconds, not after running the full verify suite. The
+// assertion targets the SARIF rejection wording from NewVerifyPrinter, so
+// any future regression that delays format validation past the runner
+// call will produce a different (verify-pipeline) error and trip this test.
+func TestRunVerify_RejectsSARIFBeforeExecution(t *testing.T) {
+	err := runVerify([]string{"slice", "--id=accesscore/identitymanage", "--format=sarif"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SARIF not supported",
+		"format must be rejected before runner execution")
+	assert.NotContains(t, err.Error(), "verify slice:",
+		"runner pipeline must not be touched when format is unsupported")
+}
+
 func TestReadModule_ValidGoMod(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),

@@ -49,10 +49,12 @@ type verifyResultExec struct {
 	exec func(ctx context.Context, runner *verify.Runner, id string) (*verify.VerifyResult, error)
 }
 
-// runVerifyResultCmd parses --id + --format, builds the runner, executes
-// `exec`, then renders the VerifyResult with the chosen printer. Used by
-// verify slice / cell / journey — verify targets has a different output
-// shape (AffectedTargets) and stays separate.
+// runVerifyResultCmd parses --id + --format, validates the printer choice
+// up front (so an unsupported format is rejected before any metadata
+// parse or test execution), builds the runner, executes `exec`, then
+// renders the VerifyResult. Used by verify slice / cell / journey —
+// verify targets has a different output shape (AffectedTargets) and
+// stays separate.
 func runVerifyResultCmd(args []string, spec verifyResultExec) error {
 	fs := flag.NewFlagSet("verify "+spec.name, flag.ContinueOnError)
 	id := fs.String(spec.flag, "", "<required>")
@@ -62,6 +64,15 @@ func runVerifyResultCmd(args []string, spec verifyResultExec) error {
 	}
 	if *id == "" {
 		return fmt.Errorf("--%s is required", spec.flag)
+	}
+
+	// Format validation happens before metadata parse / test execution
+	// so a misconfigured CI invocation fails in milliseconds with a
+	// clear message, rather than running the whole verify suite and
+	// then refusing to render the result.
+	printer, err := printers.NewVerifyPrinter(*format, os.Stdout)
+	if err != nil {
+		return err
 	}
 
 	root, project, err := parseProjectMeta()
@@ -75,10 +86,6 @@ func runVerifyResultCmd(args []string, spec verifyResultExec) error {
 		return fmt.Errorf("verify %s: %w", spec.name, err)
 	}
 
-	printer, err := printers.NewVerifyPrinter(*format, os.Stdout)
-	if err != nil {
-		return err
-	}
 	if err := printer.Print(result); err != nil {
 		return fmt.Errorf("emit verify result: %w", err)
 	}

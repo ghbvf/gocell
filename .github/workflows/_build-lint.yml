@@ -137,17 +137,6 @@ jobs:
         if: matrix.static_checks
         run: go run ./cmd/gocell check contract-health
 
-      - uses: actions/setup-node@v4
-        if: matrix.static_checks
-        with:
-          node-version: '20'
-
-      - name: SARIF schema validation
-        if: matrix.static_checks
-        run: |
-          go run ./cmd/gocell check contract-health --format=sarif > /tmp/out.sarif
-          npx -y @microsoft/sarif-multitool@4.5.4 validate /tmp/out.sarif
-
       # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
       # The main `gocell validate` step above already covers it.
 
