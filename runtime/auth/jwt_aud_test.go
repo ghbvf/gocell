@@ -7,6 +7,10 @@
 // WithExpectedAudiences is required — NewJWTVerifier returns an error when no
 // expected audiences are configured (fail-fast per RFC 8725 §3.3). At least
 // one configured audience must appear in the token's aud claim.
+//
+// Shape: 3 Test* funcs — TestJWTVerifier_VerifyIntent_AudienceTable (9 rows),
+// TestJWTIssuer_DefaultAudience_Table (3 rows),
+// TestNewJWTVerifier_NoAudiences_ReturnsError (standalone).
 package auth
 
 import (
@@ -51,46 +55,136 @@ func makeRawTokenWithoutAud(t *testing.T, ks *KeySet) string {
 	return tokenStr
 }
 
-// TestJWTVerifier_VerifyIntent_AcceptsMatchingAudience verifies that a token
-// whose aud claim contains the configured expected audience is accepted.
-func TestJWTVerifier_VerifyIntent_AcceptsMatchingAudience(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
+// signTokenWithRawAud builds a token with an arbitrary aud claim value (any type).
+// Used for non-standard aud types such as plain string or integer.
+func signTokenWithRawAud(t *testing.T, ks *KeySet, audClaim any) string {
+	t.Helper()
+	claims := jwt.MapClaims{
+		"sub":       "user-1",
+		"iss":       "gocell",
+		"exp":       time.Now().Add(time.Hour).Unix(),
+		"iat":       time.Now().Unix(),
+		"token_use": "access",
+		"aud":       audClaim,
+	}
+	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
+	tok.Header["kid"] = ks.SigningKeyID()
+	tok.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
+	tokenStr, err := tok.SignedString(ks.SigningKey())
 	require.NoError(t, err)
-
-	tok := makeTokenWithAud(t, ks, []string{"gocell"})
-	claims, err := verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.NoError(t, err)
-	assert.Equal(t, "user-1", claims.Subject)
+	return tokenStr
 }
 
-// TestJWTVerifier_VerifyIntent_RejectsAudienceMismatch verifies that a token
-// whose aud claim does not contain the expected audience is rejected with
-// ERR_AUTH_INVALID_TOKEN_INTENT (consistent with intent validation errors).
-func TestJWTVerifier_VerifyIntent_RejectsAudienceMismatch(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
-	require.NoError(t, err)
-
-	tok := makeTokenWithAud(t, ks, []string{"other-service"})
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
-		"audience mismatch must return ERR_AUTH_INVALID_TOKEN_INTENT")
+// verifierAudCase is a single row in TestJWTVerifier_VerifyIntent_AudienceTable.
+type verifierAudCase struct {
+	name             string
+	expectedAuds     []string                              // verifier config
+	tokenAud         any                                   // []string=array, string=single, int=invalid type, nil=omit claim
+	mintFn           func(t *testing.T, ks *KeySet) string // non-nil overrides tokenAud dispatch
+	wantErrSubstring string                                // empty = expect no error
 }
 
-// TestJWTVerifier_VerifyIntent_RejectsMissingAudience verifies that a token
-// with no aud claim at all is rejected when an expected audience is configured.
-func TestJWTVerifier_VerifyIntent_RejectsMissingAudience(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
-	require.NoError(t, err)
+// mintTokenForCase dispatches token minting based on case fields.
+func mintTokenForCase(t *testing.T, ks *KeySet, tc verifierAudCase) string {
+	t.Helper()
+	if tc.mintFn != nil {
+		return tc.mintFn(t, ks)
+	}
+	if tc.tokenAud == nil {
+		return makeRawTokenWithoutAud(t, ks)
+	}
+	if aud, ok := tc.tokenAud.([]string); ok {
+		return makeTokenWithAud(t, ks, aud)
+	}
+	// string or int — use raw aud claim
+	return signTokenWithRawAud(t, ks, tc.tokenAud)
+}
 
-	tok := makeRawTokenWithoutAud(t, ks)
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
-		"token without aud claim must be rejected when expected audience is configured")
+// TestJWTVerifier_VerifyIntent_AudienceTable covers all audience-validation
+// paths through VerifyIntent (RFC 8725 §3.3). Nine cases folded from
+// the original 9 Test* funcs.
+func TestJWTVerifier_VerifyIntent_AudienceTable(t *testing.T) {
+	cases := []verifierAudCase{
+		{
+			name:         "accepts_matching_audience",
+			expectedAuds: []string{"gocell"},
+			tokenAud:     []string{"gocell"},
+		},
+		{
+			name:             "rejects_audience_mismatch",
+			expectedAuds:     []string{"gocell"},
+			tokenAud:         []string{"other-service"},
+			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+		},
+		{
+			name:             "rejects_missing_audience",
+			expectedAuds:     []string{"gocell"},
+			tokenAud:         nil,
+			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+		},
+		{
+			name:         "accepts_multiple_audiences_when_one_matches",
+			expectedAuds: []string{"gocell"},
+			tokenAud:     []string{"api-gateway", "gocell", "metrics"},
+		},
+		{
+			name:         "accepts_when_one_of_multiple_expected_matches",
+			expectedAuds: []string{"gocell", "api-gateway"},
+			tokenAud:     []string{"gocell"},
+		},
+		{
+			// Intent check fires before audience check: refresh-shaped token verified
+			// as access intent yields ERR_AUTH_INVALID_TOKEN_INTENT even though aud
+			// would also fail.
+			name:         "audience_check_after_intent_check",
+			expectedAuds: []string{"gocell"},
+			mintFn: func(t *testing.T, ks *KeySet) string {
+				return signRawIntentJWT(t, ks, "refresh", "refresh+jwt", []string{"wrong"})
+			},
+			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+		},
+		{
+			// Audience enforcement applies through the only verification API.
+			name:             "rejects_audience_on_access_path",
+			expectedAuds:     []string{"gocell"},
+			tokenAud:         []string{"some-other-service"},
+			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+		},
+		{
+			// RFC 7519 §4.1.3: aud may be a single JSON string; parseAudience normalises it.
+			name:         "accepts_single_string_aud",
+			expectedAuds: []string{"gocell"},
+			tokenAud:     "gocell",
+		},
+		{
+			// Non-standard aud type (integer) must be rejected without panicking.
+			name:             "rejects_non_string_type_aud",
+			expectedAuds:     []string{"gocell"},
+			tokenAud:         123,
+			wantErrSubstring: "ERR_AUTH_INVALID_TOKEN_INTENT",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := mustTestKeySet(t)
+			require.NotEmpty(t, tc.expectedAuds, "test case must declare expectedAuds")
+			verifier, err := NewJWTVerifier(ks,
+				WithExpectedAudiences(tc.expectedAuds[0], tc.expectedAuds[1:]...))
+			require.NoError(t, err)
+
+			token := mintTokenForCase(t, ks, tc)
+			claims, err := verifier.VerifyIntent(context.Background(), token, TokenIntentAccess)
+
+			if tc.wantErrSubstring == "" {
+				require.NoError(t, err)
+				assert.Equal(t, "user-1", claims.Subject)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantErrSubstring)
+			}
+		})
+	}
 }
 
 // TestNewJWTVerifier_NoAudiences_ReturnsError verifies that NewJWTVerifier fails
@@ -108,125 +202,6 @@ func TestNewJWTVerifier_NoAudiences_ReturnsError(t *testing.T) {
 		"construction error must use ErrAuthVerifierConfig, not ErrAuthKeyInvalid")
 }
 
-// TestJWTVerifier_VerifyIntent_AcceptsMultipleAudiencesWhenOneMatches verifies
-// RFC 7519 §4.1.3 semantics: when the token's aud is a multi-element array,
-// it is sufficient for one element to match the expected audience.
-func TestJWTVerifier_VerifyIntent_AcceptsMultipleAudiencesWhenOneMatches(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
-	require.NoError(t, err)
-
-	tok := makeTokenWithAud(t, ks, []string{"api-gateway", "gocell", "metrics"})
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.NoError(t, err, "one of the token audiences matching the expected audience is sufficient")
-}
-
-// TestJWTVerifier_VerifyIntent_AcceptsWhenOneOfMultipleExpectedMatches verifies
-// that when multiple expected audiences are configured via WithExpectedAudiences,
-// a token matching any one of them is accepted.
-func TestJWTVerifier_VerifyIntent_AcceptsWhenOneOfMultipleExpectedMatches(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell", "api-gateway"))
-	require.NoError(t, err)
-
-	tok := makeTokenWithAud(t, ks, []string{"gocell"})
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.NoError(t, err)
-
-	tok2 := makeTokenWithAud(t, ks, []string{"api-gateway"})
-	_, err = verifier.VerifyIntent(context.Background(), tok2, TokenIntentAccess)
-	require.NoError(t, err)
-}
-
-// TestJWTVerifier_VerifyIntent_AudienceCheckAppliedAfterIntentCheck confirms the
-// check ordering: intent validation happens before audience validation, so a wrong-intent
-// token returns ErrAuthInvalidTokenIntent even when the audience would also fail.
-func TestJWTVerifier_VerifyIntent_AudienceCheckAppliedAfterIntentCheck(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
-	require.NoError(t, err)
-
-	// Legacy refresh-shaped JWT with wrong audience: intent check fires before audience.
-	refreshTok := signRawIntentJWT(t, ks, "refresh", "refresh+jwt", []string{"wrong"})
-
-	_, err = verifier.VerifyIntent(context.Background(), refreshTok, TokenIntentAccess)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
-		"intent check fires before audience check")
-}
-
-// TestJWTVerifier_VerifyIntent_RejectsAudienceOnAccessPath confirms that
-// audience enforcement applies through the primary VerifyIntent call path —
-// the only verification API in GoCell (TokenVerifier.Verify was removed in
-// favour of a single intent-aware API to prevent accidental audience bypass).
-func TestJWTVerifier_VerifyIntent_RejectsAudienceOnAccessPath(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
-	require.NoError(t, err)
-
-	// Mismatched audience on access path — rejected.
-	tok := makeTokenWithAud(t, ks, []string{"some-other-service"})
-	_, err = verifier.VerifyIntent(context.Background(), tok, TokenIntentAccess)
-	require.Error(t, err, "VerifyIntent must reject a token with a wrong audience")
-	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT")
-}
-
-// TestJWTVerifier_VerifyIntent_AcceptsSingleStringAud verifies RFC 7519 §4.1.3:
-// the aud claim may be a single JSON string (not an array); parseAudience normalises
-// it to []string so VerifyIntent still matches it against expectedAudiences.
-func TestJWTVerifier_VerifyIntent_AcceptsSingleStringAud(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
-	require.NoError(t, err)
-
-	// Build a token manually with aud as a plain JSON string (not an array).
-	claims := jwt.MapClaims{
-		"sub":       "user-1",
-		"iss":       "gocell",
-		"exp":       time.Now().Add(time.Hour).Unix(),
-		"iat":       time.Now().Unix(),
-		"token_use": "access",
-		"aud":       "gocell", // single string, not []string
-	}
-	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	tok.Header["kid"] = ks.SigningKeyID()
-	tok.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
-	tokenStr, err := tok.SignedString(ks.SigningKey())
-	require.NoError(t, err)
-
-	result, err := verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
-	require.NoError(t, err, "single-string aud claim must be accepted when it matches expected audience")
-	assert.Equal(t, "user-1", result.Subject)
-}
-
-// TestJWTVerifier_VerifyIntent_RejectsNonStringTypeAud verifies that aud claims
-// of unexpected types (e.g., integer) are safely rejected without panicking.
-func TestJWTVerifier_VerifyIntent_RejectsNonStringTypeAud(t *testing.T) {
-	ks := mustTestKeySet(t)
-	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
-	require.NoError(t, err)
-
-	// Build a token manually with aud as an integer (invalid per RFC 7519).
-	claims := jwt.MapClaims{
-		"sub":       "user-1",
-		"iss":       "gocell",
-		"exp":       time.Now().Add(time.Hour).Unix(),
-		"iat":       time.Now().Unix(),
-		"token_use": "access",
-		"aud":       123, // invalid type
-	}
-	tok := jwt.NewWithClaims(jwt.SigningMethodRS256, claims)
-	tok.Header["kid"] = ks.SigningKeyID()
-	tok.Header["typ"] = TypHeaderForIntent(TokenIntentAccess)
-	tokenStr, err := tok.SignedString(ks.SigningKey())
-	require.NoError(t, err)
-
-	_, err = verifier.VerifyIntent(context.Background(), tokenStr, TokenIntentAccess)
-	require.Error(t, err, "non-string aud type must be rejected")
-	assert.Contains(t, err.Error(), "ERR_AUTH_INVALID_TOKEN_INTENT",
-		"non-string aud type must return ERR_AUTH_INVALID_TOKEN_INTENT")
-}
-
 // --- WithDefaultAudience + DefaultAudience accessor tests (AUTH-TRUST-BOUNDARY-160) ---
 
 // decodeTokenAudience parses a signed JWT and returns its aud claim as []string.
@@ -240,55 +215,51 @@ func decodeTokenAudience(t *testing.T, tokenStr string) []string {
 	return parseAudience(mc["aud"])
 }
 
-// TestJWTIssuer_WithIssuerAudiencesFromSlice_UsedWhenOptsEmpty verifies that
-// when the issuer is constructed with WithIssuerAudiencesFromSlice (Registry
-// path) and Issue is called with an empty IssueOptions.Audience, the default
-// audience is written into the token.
-func TestJWTIssuer_WithIssuerAudiencesFromSlice_UsedWhenOptsEmpty(t *testing.T) {
-	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
-		WithIssuerAudiencesFromSlice([]string{"gocell"}),
-	)
-	require.NoError(t, err)
-
-	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
-	require.NoError(t, err)
-
-	aud := decodeTokenAudience(t, tok)
-	assert.Equal(t, []string{"gocell"}, aud,
-		"default audience must be written when IssueOptions.Audience is nil")
+// issuerAudCase is a single row in TestJWTIssuer_DefaultAudience_Table.
+type issuerAudCase struct {
+	name         string
+	issuerAuds   []string // WithIssuerAudiencesFromSlice
+	optsAud      []string // IssueOptions.Audience (nil = use default)
+	wantTokenAud []string
 }
 
-// TestJWTIssuer_WithIssuerAudiencesFromSlice_OverriddenByIssueOpts verifies that
-// IssueOptions.Audience takes precedence over the default audience from Registry.
-func TestJWTIssuer_WithIssuerAudiencesFromSlice_OverriddenByIssueOpts(t *testing.T) {
-	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
-		WithIssuerAudiencesFromSlice([]string{"gocell"}),
-	)
-	require.NoError(t, err)
+// TestJWTIssuer_DefaultAudience_Table covers the three issuer-audience
+// configuration paths (AUTH-TRUST-BOUNDARY-160).
+func TestJWTIssuer_DefaultAudience_Table(t *testing.T) {
+	cases := []issuerAudCase{
+		{
+			name:         "default_used_when_opts_empty",
+			issuerAuds:   []string{"gocell"},
+			optsAud:      nil,
+			wantTokenAud: []string{"gocell"},
+		},
+		{
+			name:         "opts_overrides_default",
+			issuerAuds:   []string{"gocell"},
+			optsAud:      []string{"other"},
+			wantTokenAud: []string{"other"},
+		},
+		{
+			name:         "multiple_default_audiences_all_written",
+			issuerAuds:   []string{"gocell", "api-gateway"},
+			optsAud:      nil,
+			wantTokenAud: []string{"gocell", "api-gateway"},
+		},
+	}
 
-	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{Audience: []string{"other"}})
-	require.NoError(t, err)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ks := mustTestKeySet(t)
+			issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
+				WithIssuerAudiencesFromSlice(tc.issuerAuds),
+			)
+			require.NoError(t, err)
 
-	aud := decodeTokenAudience(t, tok)
-	assert.Equal(t, []string{"other"}, aud,
-		"IssueOptions.Audience must override the default audience from Registry")
-}
+			tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{Audience: tc.optsAud})
+			require.NoError(t, err)
 
-// TestJWTIssuer_WithIssuerAudiencesFromSlice_MultipleAudiences verifies that
-// multiple audiences from Registry are all written when IssueOptions.Audience is nil.
-func TestJWTIssuer_WithIssuerAudiencesFromSlice_MultipleAudiences(t *testing.T) {
-	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour,
-		WithIssuerAudiencesFromSlice([]string{"gocell", "api-gateway"}),
-	)
-	require.NoError(t, err)
-
-	tok, err := issuer.Issue(TokenIntentAccess, "user-1", IssueOptions{})
-	require.NoError(t, err)
-
-	aud := decodeTokenAudience(t, tok)
-	assert.Equal(t, []string{"gocell", "api-gateway"}, aud,
-		"all configured audiences must appear in issued token")
+			aud := decodeTokenAudience(t, tok)
+			assert.Equal(t, tc.wantTokenAud, aud)
+		})
+	}
 }
