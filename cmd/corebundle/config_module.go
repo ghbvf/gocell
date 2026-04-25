@@ -77,10 +77,19 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configcore pg config: %w", err)
 	}
-	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus, shared.PromStack.metricProvider, vt)
+	modResult, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         shared.Topology,
+		PGConfig:         pgCfg,
+		Publisher:        shared.EventBus,
+		MetricsProvider:  shared.PromStack.metricProvider,
+		ValueTransformer: vt,
+	})
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	pgRes := modResult.PGResource
+	cellOpts := modResult.CellOptions
+	relayOpts := modResult.BootstrapOpts
 
 	// Register the stale-cipher counter against the isolated per-run registry.
 	// Use Register (not MustRegister) so that repeated Provide calls in the
@@ -97,6 +106,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		// the transactional writer; memory adapter passes writer=nil).
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithOnStaleCipherMetric(staleCipherCounter),
+		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
 	}
 	if vt != nil {
 		baseOpts = append(baseOpts, configcore.WithValueTransformer(vt))
@@ -114,6 +124,9 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		opts = append(opts, bootstrap.WithManagedResource(pgRes))
 		provisional = append(provisional, pgRes)
 	}
+	// Relay opts: in postgres mode, relayOpts contains WithManagedResource(relay)
+	// so the relay worker is independently managed by bootstrap (Worker/Close/Checkers).
+	opts = append(opts, relayOpts...)
 	// A19: when the KeyProvider opts into lifecycle.ManagedResource (today:
 	// vault-transit via TransitKeyProvider.Checkers()["vault_transit_ready"]),
 	// register it with bootstrap so its probes flow into /readyz. Local-aes

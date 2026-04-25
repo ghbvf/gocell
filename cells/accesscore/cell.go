@@ -152,7 +152,10 @@ func WithRefreshGC(interval, retention time.Duration) Option {
 	}
 }
 
-// WithRefreshMetricsProvider sets the metrics provider used by refresh GC.
+// WithRefreshMetricsProvider sets the metrics provider used by the refresh-token
+// GC worker. This is distinct from WithMetricsProvider (on auditcore/configcore)
+// which wires a metrics.Provider into the outbox DirectEmitter: refresh GC uses
+// the provider for GC-specific counters only and does not affect event publishing.
 func WithRefreshMetricsProvider(p metrics.Provider) Option {
 	return func(c *AccessCore) { c.metricsProvider = p }
 }

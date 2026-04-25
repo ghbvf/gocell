@@ -12,6 +12,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -299,7 +300,7 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	fp := testutil.FailingPublisher{Err: errors.New("broker unavailable")}
-	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "configcore", slog.Default())
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 

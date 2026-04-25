@@ -64,7 +64,8 @@ func (s *registrationSpy) counters() []string {
 //	(b) the wiring bug is a pure composition bug — the moment
 //	    assembly.New is called, the dispatcher registers its drop
 //	    counter via the provided Provider. If the Provider reaches the
-//	    Config struct, our spy records "gocell_hook_observer_dropped_total".
+//	    Config struct, our spy records "hook_observer_dropped_total" (bare
+//	    name; Provider Namespace adds "gocell_" prefix for the final fqName).
 //	    If the Provider is Nop (bug present), the name never appears.
 func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 	spy := &registrationSpy{}
@@ -94,8 +95,8 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 	require.NotEmpty(t, names,
 		"hook dispatcher must register its drop counter on the injected Provider; "+
 			"empty means MetricsProvider was not threaded through (finding F1 regressed)")
-	assert.True(t, slices.Contains(names, "gocell_hook_observer_dropped_total"),
-		"expected 'gocell_hook_observer_dropped_total' among registered counters, got %v", names)
+	assert.True(t, slices.Contains(names, "hook_observer_dropped_total"),
+		"expected 'hook_observer_dropped_total' (bare name) among registered counters, got %v", names)
 }
 
 // TestBootstrap_DefaultAssembly_NoProviderUsesNop pins the inverse

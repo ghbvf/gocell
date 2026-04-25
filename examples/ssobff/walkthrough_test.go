@@ -39,6 +39,7 @@ import (
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -202,6 +203,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithLogger(testLogger),
 		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 
 	auditHMACKey := []byte("walkthrough-test-hmac-key-32b!!!")
@@ -214,6 +216,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		auditcore.WithHMACKey(auditHMACKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(testLogger),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	configCursorCodec, err := query.NewCursorCodec([]byte("walkthrough-config-cursor-key-32b"))
@@ -225,6 +228,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		configcore.WithOutboxDeps(eb, nil),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(testLogger),
+		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	ctx := context.Background()

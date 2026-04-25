@@ -90,6 +90,7 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 			TxRunner:          c.txRunner,
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
+			MetricsProvider:   c.metricsProvider,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),

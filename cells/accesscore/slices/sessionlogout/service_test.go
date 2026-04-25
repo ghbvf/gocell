@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -132,7 +133,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 	seedSession(repo, "sess-pub", "usr-1")
 
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
-	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore", slog.Default())
 	require.NoError(t, err)
 	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter))
 
