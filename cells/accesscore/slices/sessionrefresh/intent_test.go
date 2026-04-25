@@ -32,7 +32,7 @@ func TestService_Refresh_RejectsAccessIntentToken(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), bogusAccess)
 	require.Error(t, err, "access-intent token must not be accepted as a refresh token")
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED",
 		"intent mismatch must collapse into the generic refresh-failed code (enumeration defense)")
 }
@@ -50,7 +50,7 @@ func TestService_Refresh_NewTokensCarryCorrectIntents(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.NoError(t, err)
-	require.NotNil(t, pair)
+	require.NotEmpty(t, pair.AccessToken)
 
 	verifier, err := auth.NewJWTVerifier(testKeySet, auth.WithExpectedAudiences("gocell"))
 	require.NoError(t, err)

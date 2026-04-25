@@ -4,24 +4,27 @@ package dto
 
 import "time"
 
-// TokenPair is the service-layer model for an issued token pair. It is shared
-// across slices within accesscore (session-login, identity-manage) via this
-// internal/dto package to avoid cross-slice imports.
+// TokenPair is the service-layer model for an issued token pair, shared by
+// every accesscore slice that mints tokens (sessionlogin / sessionrefresh /
+// identitymanage). All fields are populated on every success path.
 type TokenPair struct {
 	AccessToken           string
 	RefreshToken          string
 	ExpiresAt             time.Time
 	SessionID             string
+	UserID                string
 	PasswordResetRequired bool
 }
 
-// TokenPairResponse is the public DTO for token pairs, isolating the API
-// contract from the service-layer model. Shared by sessionlogin, sessionrefresh,
-// and identitymanage slices (same cell, multi-slice → internal/dto/ per DTO scope rule).
+// TokenPairResponse is the wire shape returned by every token-issuing
+// endpoint. Field order and tags mirror TokenPair so handlers can rely on
+// `dto.TokenPairResponse(p)` value-conversion. JSON shape is stable across
+// login / refresh / change-password.
 type TokenPairResponse struct {
 	AccessToken           string    `json:"accessToken"`
 	RefreshToken          string    `json:"refreshToken"`
 	ExpiresAt             time.Time `json:"expiresAt"`
-	SessionID             string    `json:"sessionId,omitempty"`
+	SessionID             string    `json:"sessionId"`
+	UserID                string    `json:"userId"`
 	PasswordResetRequired bool      `json:"passwordResetRequired"`
 }

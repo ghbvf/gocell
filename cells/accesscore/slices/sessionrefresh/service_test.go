@@ -178,7 +178,7 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "Refresh must fail when role fetch fails")
-	assert.Nil(t, pair, "no token pair on failure")
+	assert.Empty(t, pair.AccessToken, "no token on failure")
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -239,11 +239,13 @@ func TestService_Refresh(t *testing.T) {
 			pair, err := svc.Refresh(context.Background(), wireToken)
 			if tt.wantErr {
 				assert.Error(t, err)
-				assert.Nil(t, pair)
 			} else {
 				require.NoError(t, err)
 				assert.NotEmpty(t, pair.AccessToken)
 				assert.NotEmpty(t, pair.RefreshToken)
+				// TDD: Refresh must populate UserID and SessionID.
+				assert.NotEmpty(t, pair.UserID, "Refresh must return a non-empty UserID")
+				assert.NotEmpty(t, pair.SessionID, "Refresh must return a non-empty SessionID")
 			}
 		})
 	}
@@ -289,8 +291,8 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 
 	const goroutines = 5
 	type result struct {
-		pair *TokenPair
-		err  error
+		refreshToken string
+		err          error
 	}
 	results := make(chan result, goroutines)
 
@@ -300,7 +302,7 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			p, refreshErr := svc.Refresh(context.Background(), wireToken)
-			results <- result{p, refreshErr}
+			results <- result{p.RefreshToken, refreshErr}
 		}()
 	}
 	wg.Wait()
@@ -317,8 +319,8 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 			continue
 		}
 		successes++
-		if r.pair != nil {
-			distinct[r.pair.RefreshToken] = struct{}{}
+		if r.refreshToken != "" {
+			distinct[r.refreshToken] = struct{}{}
 		}
 	}
 
@@ -435,7 +437,7 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "fail-closed: refresh must error when user is unavailable")
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 }
 
 // TestRefresh_FlagPropagatesFromCurrentUser_AfterClear ensures that after a
@@ -528,7 +530,7 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "infra error must cause Refresh to fail")
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
@@ -591,7 +593,7 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "session-not-found must cause Refresh to fail")
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED")
 
 	spy.mu.Lock()
@@ -615,7 +617,7 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
@@ -653,7 +655,7 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
@@ -686,7 +688,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
@@ -757,7 +759,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			svc, wireToken := tc.build(t)
 			pair, err := svc.Refresh(context.Background(), wireToken)
 			require.Error(t, err)
-			assert.Nil(t, pair)
+			assert.Empty(t, pair.AccessToken)
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
 			assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
@@ -816,7 +818,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 
 			pair, err := svc.Refresh(context.Background(), wireToken)
 			require.Error(t, err)
-			assert.Nil(t, pair)
+			assert.Empty(t, pair.AccessToken)
 
 			entry := sloghelper.FindLogEntry(logs.String(), "cascade revoked refresh chain")
 			require.NotNil(t, entry)

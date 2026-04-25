@@ -42,24 +42,22 @@ func setup() *Handler {
 	return NewHandler(svc)
 }
 
-func TestToTokenPairResponse_NilInput(t *testing.T) {
-	var got dto.TokenPairResponse
-	assert.NotPanics(t, func() { got = toTokenPairResponse(nil) })
-	assert.Empty(t, got.AccessToken)
-}
-
 func TestTokenPairResponse_Fields(t *testing.T) {
 	now := time.Now()
-	pair := &TokenPair{
+	pair := dto.TokenPair{
 		AccessToken:  "access-tok-1",
 		RefreshToken: "refresh-tok-1",
 		ExpiresAt:    now,
+		SessionID:    "sess-1",
+		UserID:       "usr-1",
 	}
-	resp := toTokenPairResponse(pair)
+	resp := dto.TokenPairResponse(pair)
 
 	assert.Equal(t, "access-tok-1", resp.AccessToken)
 	assert.Equal(t, "refresh-tok-1", resp.RefreshToken)
 	assert.Equal(t, now, resp.ExpiresAt)
+	assert.Equal(t, "sess-1", resp.SessionID)
+	assert.Equal(t, "usr-1", resp.UserID)
 
 	// Verify JSON key casing via serialization.
 	b, err := json.Marshal(resp)
@@ -68,6 +66,8 @@ func TestTokenPairResponse_Fields(t *testing.T) {
 	assert.Contains(t, s, `"accessToken"`)
 	assert.Contains(t, s, `"refreshToken"`)
 	assert.Contains(t, s, `"expiresAt"`)
+	assert.Contains(t, s, `"sessionId"`)
+	assert.Contains(t, s, `"userId"`)
 }
 
 func TestHandleLogin(t *testing.T) {

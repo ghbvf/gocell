@@ -411,8 +411,9 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 }
 
 // assertPasswordResetErrorWithHint asserts 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response and verifies the change_password_endpoint hint is present (P2-10).
-func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder) {
+// response and verifies the change_password_endpoint hint and resolved_path are present.
+// expectedPath is the URL path of the request that was blocked (always populated).
+func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder, expectedPath string) {
 	t.Helper()
 	var body map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&body)
@@ -423,6 +424,9 @@ func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecord
 	require.True(t, ok, "details must be a map")
 	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["change_password_endpoint"],
 		"403 password-reset response must include change_password_endpoint hint (P2-10)")
+	// TDD: resolved_path must always be present and echo the blocked request's URL path.
+	assert.Equal(t, expectedPath, details["resolved_path"],
+		"403 password-reset response must include resolved_path echoing the blocked endpoint")
 }
 
 // testExemptMatcher returns the canonical (method, path) matcher used by the
@@ -488,7 +492,7 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute(t *testing.T) 
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assertPasswordResetErrorWithHint(t, rec)
+	assertPasswordResetErrorWithHint(t, rec, "/api/v1/configs")
 }
 
 // TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_PathTemplate verifies
@@ -595,14 +599,13 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assertPasswordResetErrorWithHint(t, rec)
+	assertPasswordResetErrorWithHint(t, rec, "/api/v1/access/users/usr-1/password")
 }
 
 // TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured verifies
-// the runtime/auth default: without WithPasswordResetChangeEndpointHintFn, the
-// 403 response body has NO details.change_password_endpoint — runtime/auth
-// carries no business path knowledge, and the composition root opts in to
-// any hint explicitly.
+// that without WithPasswordResetChangeEndpointHintFn, the 403 response body
+// carries details.resolved_path but NO details.change_password_endpoint —
+// runtime/auth carries no business path knowledge.
 func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *testing.T) {
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
@@ -621,9 +624,13 @@ func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *test
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
-	_, hasDetails := errObj["details"]
-	assert.False(t, hasDetails,
-		"without WithPasswordResetChangeEndpointHintFn, the response must carry no details map")
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "details must always be present (typed struct)")
+	_, hasHint := details["change_password_endpoint"]
+	assert.False(t, hasHint,
+		"without WithPasswordResetChangeEndpointHintFn, change_password_endpoint must be absent (omitempty)")
+	assert.Equal(t, "/api/v1/configs", details["resolved_path"],
+		"resolved_path must always echo the blocked request path")
 }
 
 // TestAuthMiddleware_NoResetClaim_PassesThrough verifies that a regular token

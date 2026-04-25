@@ -6,7 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -27,15 +26,6 @@ import (
 // slice. Kept as a single constant so Login and IssueForUser stay in lockstep
 // when the format needs to evolve.
 const sessionIDPrefix = "sess-"
-
-// TokenPair holds the issued access and refresh tokens.
-type TokenPair struct {
-	AccessToken           string
-	RefreshToken          string
-	ExpiresAt             time.Time
-	SessionID             string
-	PasswordResetRequired bool
-}
 
 // Option configures a session-login Service.
 type Option func(*Service)
@@ -119,25 +109,25 @@ type LoginInput struct {
 }
 
 // Login authenticates a user and returns a JWT token pair.
-func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, error) {
+func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthLoginInvalidInput,
 		validation.F("username", input.Username),
 		validation.F("password", input.Password),
 	); err != nil {
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 
 	user, err := s.userRepo.GetByUsername(ctx, input.Username)
 	if err != nil {
-		return nil, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
+		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
 	if user.IsLocked() {
-		return nil, errcode.New(errcode.ErrAuthUserLocked, "account is locked")
+		return dto.TokenPair{}, errcode.New(errcode.ErrAuthUserLocked, "account is locked")
 	}
 
 	if err := bcrypt.CompareHashAndPassword([]byte(user.PasswordHash), []byte(input.Password)); err != nil {
-		return nil, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
+		return dto.TokenPair{}, errcode.New(errcode.ErrAuthLoginFailed, "invalid credentials")
 	}
 
 	sessionID := sessionIDPrefix + uuid.NewString()
@@ -152,27 +142,28 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (*TokenPair, erro
 	if err != nil {
 		s.logger.Error("session-login: token issuance failed",
 			slog.Any("error", err), slog.String("user_id", user.ID))
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 
 	session, err := domain.NewSession(user.ID, minted.AccessToken, minted.ExpiresAt)
 	if err != nil {
-		return nil, fmt.Errorf("session-login: create session: %w", err)
+		return dto.TokenPair{}, fmt.Errorf("session-login: create session: %w", err)
 	}
 	session.ID = sessionID
 
 	refreshWire, err := s.persistSessionWithRefresh(ctx, session, user.ID, true)
 	if err != nil {
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 
 	s.logger.Info("user logged in",
 		slog.String("user_id", user.ID), slog.String("session_id", session.ID))
-	return &TokenPair{
+	return dto.TokenPair{
 		AccessToken:           minted.AccessToken,
 		RefreshToken:          refreshWire,
 		ExpiresAt:             minted.ExpiresAt,
 		SessionID:             sessionID,
+		UserID:                user.ID,
 		PasswordResetRequired: user.PasswordResetRequired,
 	}, nil
 }
@@ -278,6 +269,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		RefreshToken:          refreshWire,
 		ExpiresAt:             minted.ExpiresAt,
 		SessionID:             sessionID,
+		UserID:                userID,
 		PasswordResetRequired: user.PasswordResetRequired,
 	}, nil
 }

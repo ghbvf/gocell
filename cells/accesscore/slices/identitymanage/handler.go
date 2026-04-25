@@ -156,11 +156,6 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	})
 }
 
-// toTokenPairResponse converts a dto.TokenPair to the HTTP response DTO.
-func toTokenPairResponse(p dto.TokenPair) dto.TokenPairResponse {
-	return dto.TokenPairResponse(p)
-}
-
 func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Username             string `json:"username"`
@@ -333,5 +328,5 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toTokenPairResponse(pair)})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": dto.TokenPairResponse(pair)})
 }

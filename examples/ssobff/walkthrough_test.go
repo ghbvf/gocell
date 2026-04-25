@@ -22,7 +22,6 @@ import (
 	"bufio"
 	"bytes"
 	"context"
-	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -317,6 +316,8 @@ func TestWalkthrough(t *testing.T) {
 				AccessToken           string `json:"accessToken"`
 				RefreshToken          string `json:"refreshToken"`
 				ExpiresAt             string `json:"expiresAt"`
+				SessionID             string `json:"sessionId"`
+				UserID                string `json:"userId"`
 				PasswordResetRequired bool   `json:"passwordResetRequired"`
 			} `json:"data"`
 		}
@@ -324,18 +325,17 @@ func TestWalkthrough(t *testing.T) {
 		assert.NotEmpty(t, envelope.Data.AccessToken, "response must include accessToken")
 		assert.NotEmpty(t, envelope.Data.RefreshToken, "response must include refreshToken")
 		assert.NotEmpty(t, envelope.Data.ExpiresAt, "response must include expiresAt")
+		assert.NotEmpty(t, envelope.Data.UserID, "response must include userId")
 		assert.True(t, envelope.Data.PasswordResetRequired,
 			"bootstrap admin login must return passwordResetRequired=true")
 
 		adminToken = envelope.Data.AccessToken
+		adminUserID = envelope.Data.UserID
 	})
 
 	// Guard: remaining subtests need a valid admin token.
 	require.NotEmpty(t, adminToken, "adminToken must be set by admin login subtest")
-
-	// Extract admin user ID from the JWT subject claim.
-	adminUserID = extractSubjectFromJWT(t, adminToken)
-	require.NotEmpty(t, adminUserID, "admin user ID must be extractable from JWT sub claim")
+	require.NotEmpty(t, adminUserID, "adminUserID must be set from login response userId field")
 
 	// Step 2: Business endpoint with reset-required token → 403.
 	t.Run("business endpoint blocked with ERR_AUTH_PASSWORD_RESET_REQUIRED", func(t *testing.T) {
@@ -482,6 +482,7 @@ func TestWalkthrough(t *testing.T) {
 				AccessToken  string `json:"accessToken"`
 				RefreshToken string `json:"refreshToken"`
 				SessionID    string `json:"sessionId"`
+				UserID       string `json:"userId"`
 			} `json:"data"`
 		}
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
@@ -682,25 +683,6 @@ func TestWalkthrough(t *testing.T) {
 	})
 }
 
-// extractSubjectFromJWT extracts the "sub" claim from a JWT without verifying
-// the signature. Used in tests only to retrieve the user ID for change-password.
-//
-// The JWT payload is base64url-encoded between the first and second ".".
-func extractSubjectFromJWT(t *testing.T, tokenStr string) string {
-	t.Helper()
-	parts := strings.SplitN(tokenStr, ".", 3)
-	require.Len(t, parts, 3, "JWT must have 3 parts")
-
-	// base64.RawURLEncoding handles base64url without padding.
-	decoded, err := base64.RawURLEncoding.DecodeString(parts[1])
-	require.NoError(t, err, "JWT payload must be valid base64url")
-
-	var claims map[string]any
-	require.NoError(t, json.Unmarshal(decoded, &claims))
-
-	sub, _ := claims["sub"].(string)
-	return sub
-}
 
 // fetchAuditEntries queries GET /audit/entries with the given bearer token and
 // returns the data array. Returns (nil, false) on any error or empty result.

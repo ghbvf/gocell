@@ -349,6 +349,8 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 		AccessToken:  "new-at",
 		RefreshToken: "new-rt",
 		ExpiresAt:    time.Now().Add(time.Hour),
+		SessionID:    "sess-contract-1",
+		UserID:       "usr-contract-1",
 	}}
 	handler, _ := setupContractHandlerWithIssuer(t, stubIssuer)
 

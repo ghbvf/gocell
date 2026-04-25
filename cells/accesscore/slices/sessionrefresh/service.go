@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -16,14 +17,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
-
-// TokenPair holds the issued access and refresh tokens.
-type TokenPair struct {
-	AccessToken           string
-	RefreshToken          string
-	ExpiresAt             time.Time
-	PasswordResetRequired bool
-}
 
 const errMsgInvalidRefreshToken = "invalid refresh token"
 
@@ -103,16 +96,16 @@ func NewService(
 // selector.verifier wire format) fails ParseOpaque inside refresh.Store and
 // returns refresh.ErrRejected — the same fail-closed behaviour as
 // before (TestAuthIntent_AccessTokenBlockedAtRefreshPath).
-func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair, error) {
+func (s *Service) Refresh(ctx context.Context, refreshToken string) (dto.TokenPair, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthRefreshInvalidInput,
 		validation.F("refreshToken", refreshToken),
 	); err != nil {
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 
 	presented, err := s.refreshStore.Peek(ctx, refreshToken)
 	if err != nil {
-		return nil, s.refreshStoreError("session-refresh: refresh store peek failed", err)
+		return dto.TokenPair{}, s.refreshStoreError("session-refresh: refresh store peek failed", err)
 	}
 
 	// Belt-and-braces: double-check the backing session has not been revoked
@@ -121,18 +114,18 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 	// within the ≤15 limit (F4/F5/gocognit).
 	session, err := s.verifySession(ctx, presented.SessionID)
 	if err != nil {
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 	if session.UserID != presented.SubjectID {
 		if err := s.cascadeRevoke(ctx, presented.SessionID, "subject-mismatch"); err != nil {
-			return nil, err
+			return dto.TokenPair{}, err
 		}
-		return nil, authRefreshRejected()
+		return dto.TokenPair{}, authRefreshRejected()
 	}
 
 	passwordResetRequired, err := s.fetchPasswordResetRequired(ctx, session.ID, session.UserID)
 	if err != nil {
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 
 	minted, err := sessionmint.MintAccess(ctx, sessionmint.Deps{
@@ -148,33 +141,35 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (*TokenPair,
 			slog.Any("error", err),
 			slog.String("user_id", session.UserID),
 			slog.String("session_id", session.ID))
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 
 	// Persist the session validation horizon before the final Rotate. If Rotate
 	// fails afterwards, the refresh lineage is still unchanged and JWT exp still
 	// bounds any already-issued access token.
 	if err := s.persistRefreshedSession(ctx, session, minted.AccessToken, minted.ExpiresAt); err != nil {
-		return nil, err
+		return dto.TokenPair{}, err
 	}
 
 	newWire, rotated, err := s.refreshStore.Rotate(ctx, refreshToken)
 	if err != nil {
-		return nil, s.refreshStoreError("session-refresh: refresh store rotate failed", err)
+		return dto.TokenPair{}, s.refreshStoreError("session-refresh: refresh store rotate failed", err)
 	}
 	if rotated.SessionID != session.ID || rotated.SubjectID != session.UserID {
 		if err := s.cascadeRevoke(ctx, session.ID, "rotated-subject-mismatch"); err != nil {
-			return nil, err
+			return dto.TokenPair{}, err
 		}
-		return nil, authRefreshRejected()
+		return dto.TokenPair{}, authRefreshRejected()
 	}
 
 	s.logger.Info("token refreshed", slog.String("user_id", session.UserID))
 
-	return &TokenPair{
+	return dto.TokenPair{
 		AccessToken:           minted.AccessToken,
 		RefreshToken:          newWire,
 		ExpiresAt:             minted.ExpiresAt,
+		SessionID:             session.ID,
+		UserID:                session.UserID,
 		PasswordResetRequired: passwordResetRequired,
 	}, nil
 }
