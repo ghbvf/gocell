@@ -1,6 +1,7 @@
 .PHONY: build check-build test validate generate cover clean \
         up down \
         test-integration \
+        test-examples-smoke \
         healthcheck-verify
 
 # ---------------------------------------------------------------------------
@@ -54,6 +55,16 @@ test-integration:
 	docker compose up -d --wait
 	go test ./adapters/... ./tests/integration/... -tags=integration -count=1 -v
 	docker compose down
+
+# ---------------------------------------------------------------------------
+# examples/ssobff startup smoke
+# Builds the demo binary and runs TestSSOBFFStartupSmoke (subprocess +
+# /readyz probe + SIGTERM graceful path). Mirrors the CI examples-smoke
+# job; useful before pushing a main.go / option-wiring change.
+# ---------------------------------------------------------------------------
+
+test-examples-smoke:
+	go test ./examples/ssobff/... -tags=examples_smoke -count=1 -timeout 90s -run TestSSOBFFStartupSmoke -v
 
 # ---------------------------------------------------------------------------
 # Healthcheck verification  (T09)

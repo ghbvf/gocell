@@ -195,6 +195,139 @@ func TestRunValidate_StrictFailFast_BaseErrorWinsOverStrict(t *testing.T) {
 		"fail-fast output must not include FMT-16 when base pass already failed")
 }
 
+// writeKebabCellID writes a cell whose directory and yaml id are both
+// kebab-case ("access-core"). The base pass REF-04 (id ↔ dir match) and
+// VERIFY-05 (smoke ref ↔ cell id match) therefore pass, and FMT-16 + FMT-C1
+// are the only strict-only errors. The fixture intentionally trips both
+// FMT-16 and FMT-C1 — REF-04 already catches the dir/id-divergence
+// half-migrations the FMT-C1 doc-string mentions, so the natural fixture
+// shape that exercises FMT-C1 in isolation does not exist; layering
+// FMT-C1 on top of FMT-16 is defence-in-depth.
+func writeKebabCellID(t *testing.T) string {
+	t.Helper()
+	dir := setupProject(t, "cells/access-core") // kebab dir matching id
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "access-core", "cell.yaml"),
+		[]byte("id: access-core\ntype: core\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_access_core\nverify:\n  smoke:\n    - smoke.access-core.startup\n"), 0o644))
+	return dir
+}
+
+// writeAllowedFilesMismatch writes a no-dash slice whose allowedFiles[0] does
+// not match its on-disk directory. Triggers FMT-17 only (FMT-14 is satisfied
+// because allowedFiles is non-empty; FMT-16 stays silent).
+func writeAllowedFilesMismatch(t *testing.T) string {
+	t.Helper()
+	dir := setupProject(t, "cells/accesscore", "cells/accesscore/slices/validdir")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "accesscore", "cell.yaml"),
+		[]byte("id: accesscore\ntype: core\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_accesscore\nverify:\n  smoke:\n    - smoke.accesscore.startup\n"), 0o644))
+	// allowedFiles points to a different slice directory ("wrongdir") — FMT-17 fires.
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "accesscore", "slices", "validdir", "slice.yaml"),
+		[]byte("id: validdir\nbelongsToCell: accesscore\ncontractUsages: []\nverify:\n  unit:\n    - unit.validdir.service\n  contract: []\nallowedFiles:\n  - cells/accesscore/slices/wrongdir/**\n"), 0o644))
+	return dir
+}
+
+// writeKebabAssemblyID writes a no-dash assembly directory whose declared id
+// contains '-'. Triggers FMT-A1 in strict mode (in addition to whatever
+// base findings the metadata layer surfaces for the dir/id mismatch).
+func writeKebabAssemblyID(t *testing.T) string {
+	t.Helper()
+	// REF-11 verifies build.entrypoint exists; the cmd/myasm stub keeps that
+	// rule quiet so the focus stays on FMT-A1.
+	dir := setupProject(t, "assemblies/myasm", "cmd/myasm")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "assemblies", "myasm", "assembly.yaml"),
+		[]byte("id: my-asm\ncells: []\nbuild:\n  entrypoint: cmd/myasm\n  binary: myasm\n  deployTemplate: deploy.yaml\n"), 0o644))
+	return dir
+}
+
+// TestRunValidate_Strict_DetectsKebabCellID locks in FMT-C1 in strict full
+// mode: a kebab-case cell id is rejected only by ValidateStrict(true). The
+// fixture has a kebab directory (necessary because REF-04 enforces id ↔
+// dir match, so an id-only kebab is impossible to construct without a
+// base error pre-empting strict), so FMT-16 fires alongside FMT-C1 — that
+// is the defence-in-depth pair the rule was designed for, and the
+// assertion below verifies both rules light up.
+func TestRunValidate_Strict_DetectsKebabCellID(t *testing.T) {
+	dir := writeKebabCellID(t)
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--strict"})
+	})
+	require.Error(t, gotErr, "strict must return error when FMT-C1 fires on kebab cell id")
+	assert.Contains(t, out, "FMT-C1", "full-mode output must report FMT-C1 code")
+	assert.Contains(t, out, "FMT-16", "FMT-16 must also fire — kebab dir is the natural co-trigger")
+}
+
+// TestRunValidate_Strict_DetectsAllowedFilesMismatch locks in FMT-17: a
+// slice whose allowedFiles[0] does not match its on-disk directory is only
+// caught in strict mode. FMT-14 passes (allowedFiles is non-empty) so this
+// covers the gap between "allowedFiles declared" and "allowedFiles correct".
+func TestRunValidate_Strict_DetectsAllowedFilesMismatch(t *testing.T) {
+	dir := writeAllowedFilesMismatch(t)
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--strict"})
+	})
+	require.Error(t, gotErr, "strict must return error when FMT-17 fires on allowedFiles mismatch")
+	assert.Contains(t, out, "FMT-17", "full-mode output must report FMT-17 code")
+	assert.NotContains(t, out, "FMT-16", "FMT-16 must stay silent — directory itself is no-dash")
+}
+
+// TestRunValidate_Strict_DetectsKebabAssemblyID locks in FMT-A1: assembly
+// ids leak into binary names and deploy templates, so kebab is rejected
+// even when the directory is clean.
+func TestRunValidate_Strict_DetectsKebabAssemblyID(t *testing.T) {
+	dir := writeKebabAssemblyID(t)
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--strict"})
+	})
+	require.Error(t, gotErr, "strict must return error when FMT-A1 fires on kebab assembly id")
+	assert.Contains(t, out, "FMT-A1", "full-mode output must report FMT-A1 code")
+}
+
+// TestRunValidate_Default_IgnoresStrictOnlyRules is the regression guard
+// for the strict gate itself: every fixture that trips FMT-16 / 17 / C1 /
+// A1 in strict mode must remain silent under default mode. Without this
+// case a refactor that accidentally promoted a strict rule to a base rule
+// would slip through (CI gates would still pass, but `gocell validate`
+// without --strict would no longer be the documented "default-permissive"
+// surface).
+//
+// The fixtures here may emit unrelated base findings (e.g. REF-16 warning,
+// or REF-* errors stemming from minimal scaffolding); the test deliberately
+// does NOT assert "no error returned" because the contract being verified
+// is narrower: regardless of base findings, no FMT-16/17/C1/A1 line may
+// appear in default output. `out` is logged on failure so a future drift
+// in base rules surfaces the offending code.
+func TestRunValidate_Default_IgnoresStrictOnlyRules(t *testing.T) {
+	cases := []struct {
+		name string
+		fix  func(*testing.T) string
+	}{
+		{"kebabSliceDir_FMT16", writeKebabSlice},
+		{"kebabCellID_FMTC1", writeKebabCellID},
+		{"allowedFilesMismatch_FMT17", writeAllowedFilesMismatch},
+		{"kebabAssemblyID_FMTA1", writeKebabAssemblyID},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := tc.fix(t)
+
+			out := captureStdout(t, func() {
+				_ = runValidate([]string{"--root", dir})
+			})
+			for _, code := range []string{"FMT-16", "FMT-17", "FMT-C1", "FMT-A1"} {
+				if assert.NotContains(t, out, code, "%s must stay silent under default mode", code) {
+					continue
+				}
+				t.Logf("default-mode validate output:\n%s", out)
+			}
+		})
+	}
+}
+
 // --- scaffold --dry-run ---
 //
 // These tests drive runScaffoldWithRoot directly, bypassing runScaffold's

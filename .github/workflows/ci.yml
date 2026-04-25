@@ -15,4 +15,5 @@ jobs:
       run-integration: true
       run-sonar: true
       run-os-smoke: true
+      run-examples-smoke: true
     secrets: inherit   # needed so sonarcloud job can read SONAR_TOKEN

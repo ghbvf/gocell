@@ -16,9 +16,13 @@ export GOCELL_SSOBFF_SERVICE_SECRET="$(openssl rand -base64 32)"
 go run ./examples/ssobff
 ```
 
-The server starts with primary listener on `:8081` (API + infra) and internal listener on `:9081` (control-plane).
-The internal listener is protected by service-token auth and the process fails
-fast when `GOCELL_SSOBFF_SERVICE_SECRET` is missing or shorter than 32 bytes.
+The server starts three listeners following `docs/ops/listener-topology.md`:
+
+- **primary** on `:8081` — JWT-authenticated business API (`/api/v1/*`)
+- **internal** on `127.0.0.1:9081` — service-token control-plane (`/internal/v1/*`), loopback by default; protected by service-token auth and the process fails fast when `GOCELL_SSOBFF_SERVICE_SECRET` is missing or shorter than 32 bytes
+- **health** on `127.0.0.1:9091` — `/healthz`, `/readyz`, `/metrics`, loopback by default
+
+Each address is overridable via environment variable (see [Environment Variables](#environment-variables)).
 
 ## Seed User
 
@@ -216,11 +220,14 @@ curl -s http://localhost:8081/api/v1/flags/ \
 
 ### 12. Health checks
 
+Health probes live on the dedicated health listener (loopback by default).
+From the same host:
+
 ```bash
-curl -s http://localhost:8081/healthz | jq
-curl -s http://localhost:8081/readyz  | jq
+curl -s http://127.0.0.1:9091/healthz | jq
+curl -s http://127.0.0.1:9091/readyz  | jq
 curl -s -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
-  'http://localhost:8081/readyz?verbose' | jq
+  'http://127.0.0.1:9091/readyz?verbose' | jq
 ```
 
 Responses use the project-wide envelope (PR-A35): success bodies are
@@ -262,6 +269,36 @@ login page or displaying an appropriate error.
 
 Handler-level BFF integration (login/refresh/logout setting cookies) is
 tracked in the backlog. The current PR provides the middleware primitives.
+
+## Environment Variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `GOCELL_STATE_DIR` | (per-OS) | Override the directory holding the bootstrap admin credential file. |
+| `GOCELL_SSOBFF_SERVICE_SECRET` | (required) | Internal listener service-token shared secret. ≥ 32 bytes; missing or short value fails the process at startup. |
+| `GOCELL_SSOBFF_PRIMARY_ADDR` | `:8081` | Primary listener bind address (public business API). |
+| `GOCELL_SSOBFF_INTERNAL_ADDR` | `127.0.0.1:9081` | Internal listener bind (control-plane / service-token). Loopback default keeps it off the public network until the operator opts in. |
+| `GOCELL_SSOBFF_HEALTH_ADDR` | `127.0.0.1:9091` | Health listener bind (`/healthz`, `/readyz`, `/metrics`). Loopback default. |
+| `GOCELL_READYZ_VERBOSE_TOKEN` | (unset) | When set, `/readyz?verbose=true` requires a matching `X-Readyz-Token` header. Unset leaves the verbose body disabled (recommended for demos). |
+
+The smoke test (`make test-examples-smoke`) injects high ports
+(`28081/29081/29091`) via these variables to avoid colliding with
+developer dev servers.
+
+## Development
+
+```bash
+# Build all gocell binaries
+make build
+
+# Run the demo
+go run ./examples/ssobff
+
+# Verify the demo's `main.go` startup path end-to-end (subprocess +
+# /readyz probe + SIGTERM graceful shutdown). Mirrors the CI examples-
+# smoke job. Required before pushing main.go / option-wiring changes.
+make test-examples-smoke
+```
 
 ## Docker Mode (Future)
 
