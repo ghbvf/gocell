@@ -145,6 +145,11 @@ func isPathSegmentPrefix(fullPath, prefix string) bool {
 // empty (or fullPath is not a path-segment extension of prefix), fullPath
 // is returned unchanged — the caller will still receive a valid chi pattern
 // because the mux has no prefix to compose.
+//
+// Invariant: when isPathSegmentPrefix(fullPath, prefix) is true, either
+// fullPath == prefix (stripped == "", returns "/") or
+// fullPath[len(prefix)] == '/' (stripped starts with '/'). There is no
+// case where stripped is non-empty without a leading slash.
 func stripMountPrefix(fullPath, prefix string) string {
 	if prefix == "" || !isPathSegmentPrefix(fullPath, prefix) {
 		return fullPath
@@ -152,9 +157,6 @@ func stripMountPrefix(fullPath, prefix string) string {
 	stripped := strings.TrimPrefix(fullPath, prefix)
 	if stripped == "" {
 		return "/"
-	}
-	if stripped[0] != '/' {
-		return "/" + stripped
 	}
 	return stripped
 }

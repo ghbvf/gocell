@@ -288,15 +288,12 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 
 	received := make(chan observedDelivery, 1)
 	// Subscribe context is deliberately clean (no obs IDs). The only way
-	// obs values reach the handler is through ObservabilityContextMiddleware
-	// restoring them from entry.Observability.
+	// obs values reach the handler is through SubscriberWithMiddleware's
+	// built-in outermost restore step (entry.Observability → ctxkeys).
 	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer subCancel()
 
-	wrappedSub := &outbox.SubscriberWithMiddleware{
-		Inner:      sub,
-		Middleware: []outbox.SubscriptionMiddleware{outbox.ObservabilityContextMiddleware()},
-	}
+	wrappedSub := &outbox.SubscriberWithMiddleware{Inner: sub}
 
 	subErrCh := make(chan error, 1)
 	go func() {
@@ -540,10 +537,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer subCancel()
 
-	wrappedSub := &outbox.SubscriberWithMiddleware{
-		Inner:      sub,
-		Middleware: []outbox.SubscriptionMiddleware{outbox.ObservabilityContextMiddleware()},
-	}
+	wrappedSub := &outbox.SubscriberWithMiddleware{Inner: sub}
 
 	subErrCh := make(chan error, 1)
 	go func() {
@@ -716,6 +710,69 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 
 	relayCancel()
 	_ = relay.Stop(ctx)
+}
+
+// TestIntegration_OutboxObservability_ZeroRoundtrip writes an outbox entry
+// with a zero ObservabilityMetadata, asserts the DB column is SQL NULL,
+// then reclaims the entry via the relay store and asserts the round-tripped
+// ClaimedEntry.Observability is the zero struct (no spurious fields, no
+// unmarshal warnings). Covers the migration-012 documented contract that
+// pre-existing rows or zero-valued writes read back as zero on the consumer
+// side.
+func TestIntegration_OutboxObservability_ZeroRoundtrip(t *testing.T) {
+	ctx := context.Background()
+
+	pool, cleanup := setupPostgresContainer(t)
+	defer cleanup()
+
+	migrator, mErr := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	require.NoError(t, mErr)
+	require.NoError(t, migrator.Up(ctx))
+
+	txm := postgres.NewTxManager(pool)
+	writer := postgres.NewOutboxWriter()
+	store := postgres.NewOutboxStore(pool.DB())
+
+	entryID := uuid.New().String()
+	entry := outbox.Entry{
+		ID:            entryID,
+		AggregateID:   "agg-zero-obs",
+		AggregateType: "zero_obs",
+		EventType:     "test.zero.obs",
+		Payload:       []byte(`{"k":"v"}`),
+		// Metadata: producer-owned domain fields only.
+		Metadata: map[string]string{"source": "zero-obs-test"},
+		// Observability: explicit zero value.
+		Observability: outbox.ObservabilityMetadata{},
+		CreatedAt:     time.Now().UTC(),
+	}
+
+	err := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		return writer.Write(txCtx, entry)
+	})
+	require.NoError(t, err, "outbox write with zero observability should succeed")
+
+	// Verify the observability column is SQL NULL (writer maps zero struct to NULL).
+	var obsRaw *string
+	err = pool.DB().QueryRow(ctx,
+		"SELECT observability::text FROM outbox_entries WHERE id = $1", entryID,
+	).Scan(&obsRaw)
+	require.NoError(t, err, "observability column query should succeed")
+	assert.Nil(t, obsRaw, "observability column must be SQL NULL for zero ObservabilityMetadata")
+
+	// Claim back via the relay-side Store and verify Observability is the zero struct.
+	claimed, err := store.ClaimPending(ctx, 10)
+	require.NoError(t, err, "ClaimPending should succeed")
+	require.Len(t, claimed, 1, "exactly one pending entry should be claimed")
+
+	got := claimed[0]
+	assert.Equal(t, entryID, got.ID)
+	assert.True(t, got.Observability.IsZero(),
+		"round-tripped Observability must be the zero struct for a NULL column")
+	assert.Empty(t, got.Observability.RequestID)
+	assert.Empty(t, got.Observability.CorrelationID)
+	assert.Empty(t, got.Observability.TraceID)
+	assert.Empty(t, got.Observability.TraceParent)
 }
 
 // publishedMessage captures a single Publish call.

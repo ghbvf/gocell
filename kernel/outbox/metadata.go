@@ -1,6 +1,6 @@
 package outbox
 
-// CloneMetadata returns an independent copy of metadata so callers can
+// cloneMetadata returns an independent copy of metadata so callers can
 // mutate the result without affecting the source. Nil input returns a
 // freshly allocated empty map, which lets callers write unconditionally
 // (no nil guard at every write site).
@@ -8,10 +8,10 @@ package outbox
 // The result has capacity for three extra keys so the common pattern of
 // merging extra keys on top does not reallocate.
 //
-// Concurrency: CloneMetadata is safe for concurrent use. The returned map
+// Concurrency: cloneMetadata is safe for concurrent use. The returned map
 // is not — callers own it fully and are responsible for any further
 // synchronization.
-func CloneMetadata(metadata map[string]string) map[string]string {
+func cloneMetadata(metadata map[string]string) map[string]string {
 	if metadata == nil {
 		return make(map[string]string, 3)
 	}

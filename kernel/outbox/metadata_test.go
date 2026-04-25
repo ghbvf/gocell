@@ -8,17 +8,17 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// CloneMetadata
+// cloneMetadata
 // ---------------------------------------------------------------------------
 
 func TestCloneMetadata_NilReturnsEmptyMap(t *testing.T) {
-	got := CloneMetadata(nil)
+	got := cloneMetadata(nil)
 	require.NotNil(t, got, "nil input must return a fresh non-nil map so callers can write unconditionally")
 	assert.Empty(t, got)
 }
 
 func TestCloneMetadata_EmptyMap(t *testing.T) {
-	got := CloneMetadata(map[string]string{})
+	got := cloneMetadata(map[string]string{})
 	require.NotNil(t, got)
 	assert.Empty(t, got)
 }
@@ -28,7 +28,7 @@ func TestCloneMetadata_DeepCopy(t *testing.T) {
 		"business-key": "val-abc",
 		"custom":       "value",
 	}
-	got := CloneMetadata(src)
+	got := cloneMetadata(src)
 	assert.Equal(t, src, got)
 
 	got["business-key"] = "mutated"
@@ -40,7 +40,7 @@ func TestCloneMetadata_DeepCopy(t *testing.T) {
 
 func TestCloneMetadata_MutatingSourceDoesNotAffectClone(t *testing.T) {
 	src := map[string]string{"k": "v"}
-	got := CloneMetadata(src)
+	got := cloneMetadata(src)
 	src["k"] = "mutated"
 	src["added"] = "v2"
 	assert.Equal(t, "v", got["k"], "clone must be isolated from source mutations")

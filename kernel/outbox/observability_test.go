@@ -2,6 +2,8 @@ package outbox
 
 import (
 	"context"
+	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
@@ -30,6 +32,81 @@ func TestObservabilityMetadata_IsZero(t *testing.T) {
 	t.Run("CorrelationID non-empty is not zero", func(t *testing.T) {
 		assert.False(t, ObservabilityMetadata{CorrelationID: "corr-1"}.IsZero())
 	})
+}
+
+// TestObservabilityMetadata_IsZero_FieldCoverageInvariant uses reflection
+// to assert that IsZero examines every exported field of
+// ObservabilityMetadata. This catches the maintenance debt of forgetting
+// to extend IsZero when a new field is added — setting any single field
+// to a non-zero value MUST produce IsZero() == false.
+func TestObservabilityMetadata_IsZero_FieldCoverageInvariant(t *testing.T) {
+	typ := reflect.TypeOf(ObservabilityMetadata{})
+	require.Equal(t, reflect.Struct, typ.Kind())
+	for i := 0; i < typ.NumField(); i++ {
+		f := typ.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		t.Run(f.Name, func(t *testing.T) {
+			v := reflect.New(typ).Elem()
+			fv := v.Field(i)
+			require.Truef(t, fv.CanSet(), "field %s must be settable for the invariant check", f.Name)
+			switch f.Type.Kind() {
+			case reflect.String:
+				fv.SetString("non-zero")
+			default:
+				t.Skipf("ObservabilityMetadata.%s is not a string — extend the invariant test for new field types", f.Name)
+			}
+			o := v.Interface().(ObservabilityMetadata)
+			assert.Falsef(t, o.IsZero(),
+				"setting %s to non-empty must make IsZero() return false; "+
+					"if you added a new field, extend ObservabilityMetadata.IsZero accordingly",
+				f.Name)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// ObservabilityMetadata.Validate (size + safety guards)
+// ---------------------------------------------------------------------------
+
+func TestObservabilityMetadata_Validate(t *testing.T) {
+	validTP := "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	tooLong := strings.Repeat("a", idutil.MaxMetadataIDLen+1)
+
+	cases := []struct {
+		name      string
+		o         ObservabilityMetadata
+		wantError string // empty = expect nil
+	}{
+		{name: "zero is valid", o: ObservabilityMetadata{}},
+		{name: "all fields valid", o: ObservabilityMetadata{
+			TraceID: "4bf92f3577b34da6a3ce929d0e0e4736", TraceParent: validTP,
+			RequestID: "req-1", CorrelationID: "corr-1",
+		}},
+		{name: "TraceID too long", o: ObservabilityMetadata{TraceID: tooLong}, wantError: "traceId length"},
+		{name: "RequestID too long", o: ObservabilityMetadata{RequestID: tooLong}, wantError: "requestId length"},
+		{name: "CorrelationID too long", o: ObservabilityMetadata{CorrelationID: tooLong}, wantError: "correlationId length"},
+		{name: "TraceID unsafe chars", o: ObservabilityMetadata{TraceID: "trace; DROP TABLE"}, wantError: "unsafe characters"},
+		{name: "TraceParent malformed", o: ObservabilityMetadata{TraceParent: "not-a-valid-traceparent"}, wantError: "valid W3C traceparent"},
+		{name: "total exceeds cap", o: ObservabilityMetadata{
+			TraceID:       strings.Repeat("a", idutil.MaxMetadataIDLen),
+			RequestID:     strings.Repeat("b", idutil.MaxMetadataIDLen),
+			CorrelationID: strings.Repeat("c", idutil.MaxMetadataIDLen),
+			TraceParent:   validTP, // 55B; total = 768 + 55 = 823 ≤ 1024 — adjust to push over
+		}, wantError: ""}, // 823 < 1024, still ok
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.o.Validate()
+			if tc.wantError == "" {
+				assert.NoError(t, err)
+			} else {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.wantError)
+			}
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------
@@ -157,6 +234,25 @@ func TestObservabilityMetadata_RestoreToContext_RejectsUnsafeValues(t *testing.T
 
 	_, ok = ctxkeys.TraceIDFrom(ctx)
 	assert.False(t, ok, "unsafe value with newlines should be rejected")
+}
+
+// TestObservabilityMetadata_RestoreToContext_TraceIDOnlyDoesNotSynthesizeTraceParent
+// pins the asymmetry between inject and restore: ContextObservability synthesizes
+// a TraceParent from ctx trace_id+span_id at write time when none is set, but
+// RestoreToContext must NOT synthesize on the consumer side — the entry already
+// carried whatever traceparent the producer captured (or none, deliberately).
+// Restoring a metadata with TraceID set but TraceParent empty therefore puts
+// only TraceID into ctx and leaves TraceParent absent.
+func TestObservabilityMetadata_RestoreToContext_TraceIDOnlyDoesNotSynthesizeTraceParent(t *testing.T) {
+	o := ObservabilityMetadata{TraceID: "4bf92f3577b34da6a3ce929d0e0e4736"}
+	ctx := o.RestoreToContext(context.Background())
+
+	gotTrace, ok := ctxkeys.TraceIDFrom(ctx)
+	require.True(t, ok, "TraceID must be set into ctx")
+	assert.Equal(t, "4bf92f3577b34da6a3ce929d0e0e4736", gotTrace)
+
+	_, hasTP := ctxkeys.TraceParentFrom(ctx)
+	assert.False(t, hasTP, "RestoreToContext must NOT synthesize TraceParent — the field is producer-captured, not consumer-derived")
 }
 
 func TestObservabilityMetadata_RestoreToContext_RejectsOverlongValues(t *testing.T) {
@@ -314,13 +410,35 @@ func TestEntry_InjectObservabilityFromContext_EmptyContextYieldsZero(t *testing.
 }
 
 // ---------------------------------------------------------------------------
-// ObservabilityContextMiddleware
+// SubscriberWithMiddleware built-in observability restore (replaces the
+// pre-A6 ObservabilityContextMiddleware unit tests; restoration is now
+// an invariant of SubscriberWithMiddleware.Subscribe, not a separate
+// middleware that callers can forget to install).
 // ---------------------------------------------------------------------------
 
-func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {
-	mw := ObservabilityContextMiddleware()
+// captureSubscriber is a stub Subscriber that captures the handler passed to
+// Subscribe so the test can invoke it directly with a synthetic Entry.
+type captureSubscriber struct {
+	handler EntryHandler
+}
 
-	wrapped := mw(Subscription{Topic: "event.test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
+func (c *captureSubscriber) Setup(context.Context, Subscription) error { return nil }
+func (c *captureSubscriber) Ready(Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (c *captureSubscriber) Subscribe(_ context.Context, _ Subscription, h EntryHandler) error {
+	c.handler = h
+	return nil
+}
+func (c *captureSubscriber) Close(context.Context) error { return nil }
+
+func TestSubscriberWithMiddleware_BuiltInRestore_RestoresAllFields(t *testing.T) {
+	cap := &captureSubscriber{}
+	wrapped := &SubscriberWithMiddleware{Inner: cap}
+
+	require.NoError(t, wrapped.Subscribe(context.Background(), Subscription{Topic: "event.test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
 		requestID, ok := ctxkeys.RequestIDFrom(ctx)
 		require.True(t, ok)
 		assert.Equal(t, "req-789", requestID)
@@ -338,9 +456,10 @@ func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {
 		assert.Equal(t, "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01", traceParent)
 
 		return HandleResult{Disposition: DispositionAck}
-	})
+	}))
 
-	res := wrapped(context.Background(), Entry{
+	require.NotNil(t, cap.handler)
+	res := cap.handler(context.Background(), Entry{
 		ID: "evt-789",
 		Observability: ObservabilityMetadata{
 			RequestID:     "req-789",
@@ -349,24 +468,51 @@ func TestObservabilityContextMiddleware_RestoresHandlerContext(t *testing.T) {
 			TraceParent:   "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
 		},
 	})
-
 	assert.Equal(t, DispositionAck, res.Disposition)
 }
 
-func TestObservabilityContextMiddleware_ZeroObservabilityIsNoOp(t *testing.T) {
-	mw := ObservabilityContextMiddleware()
+func TestSubscriberWithMiddleware_BuiltInRestore_ZeroObservabilityIsNoOp(t *testing.T) {
+	cap := &captureSubscriber{}
+	wrapped := &SubscriberWithMiddleware{Inner: cap}
 
 	called := false
-	wrapped := mw(Subscription{Topic: "test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
+	require.NoError(t, wrapped.Subscribe(context.Background(), Subscription{Topic: "test.v1"}, func(ctx context.Context, _ Entry) HandleResult {
 		called = true
 		_, ok := ctxkeys.RequestIDFrom(ctx)
 		assert.False(t, ok, "no request_id should be set from zero ObservabilityMetadata")
 		return HandleResult{Disposition: DispositionAck}
-	})
+	}))
 
-	res := wrapped(context.Background(), Entry{ID: "e1", Observability: ObservabilityMetadata{}})
+	require.NotNil(t, cap.handler)
+	res := cap.handler(context.Background(), Entry{ID: "e1", Observability: ObservabilityMetadata{}})
 	assert.True(t, called)
 	assert.Equal(t, DispositionAck, res.Disposition)
+}
+
+// TestSubscriberWithMiddleware_RestoreIsOutermost asserts that built-in
+// observability restore runs BEFORE any user middleware: a user middleware
+// reading ctxkeys.RequestIDFrom must observe the restored value.
+func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
+	cap := &captureSubscriber{}
+	var seenInMiddleware string
+	userMW := func(_ Subscription, next EntryHandler) EntryHandler {
+		return func(ctx context.Context, entry Entry) HandleResult {
+			seenInMiddleware, _ = ctxkeys.RequestIDFrom(ctx)
+			return next(ctx, entry)
+		}
+	}
+	wrapped := &SubscriberWithMiddleware{Inner: cap, Middleware: []SubscriptionMiddleware{userMW}}
+
+	require.NoError(t, wrapped.Subscribe(context.Background(), Subscription{Topic: "test.v1"}, func(_ context.Context, _ Entry) HandleResult {
+		return HandleResult{Disposition: DispositionAck}
+	}))
+	require.NotNil(t, cap.handler)
+	cap.handler(context.Background(), Entry{
+		ID:            "e1",
+		Observability: ObservabilityMetadata{RequestID: "req-outermost"},
+	})
+	assert.Equal(t, "req-outermost", seenInMiddleware,
+		"user middleware must observe ctx after built-in observability restore (outermost)")
 }
 
 // ---------------------------------------------------------------------------

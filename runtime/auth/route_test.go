@@ -218,6 +218,30 @@ func TestStripMountPrefix_PathSegmentBoundary(t *testing.T) {
 			fullPath: "/api/v1/access",
 			want:     "/access",
 		},
+		{
+			name:     "leading double-slash before prefix not a segment match",
+			prefix:   "/api/v1/access",
+			fullPath: "//api/v1/access/x",
+			want:     "//api/v1/access/x",
+		},
+		{
+			name:     "internal v1 prefix does not match public v1 path",
+			prefix:   "/internal/v1",
+			fullPath: "/api/v1/x",
+			want:     "/api/v1/x",
+		},
+		{
+			name:     "public v1 prefix does not match internal v1 path",
+			prefix:   "/api/v1",
+			fullPath: "/internal/v1/x",
+			want:     "/internal/v1/x",
+		},
+		{
+			name:     "deeper segment under same prefix root",
+			prefix:   "/api/v1/access",
+			fullPath: "/api/v1/access/sessions/login",
+			want:     "/sessions/login",
+		},
 	}
 
 	for _, tc := range cases {

@@ -344,35 +344,90 @@ var derived = base`,
 			wantErrors: 1,
 			wantText:   "t",
 		},
+		// PR246-FU1 reverse cases — A4 expanded matrix.
+		// Parenthesised composite literal `var x = (T{})` — accepted (ParenExpr unwraps).
+		{
+			name:       "parenthesised zero-value composite literal",
+			source:     `var paren = (NoopTracer{})`,
+			wantErrors: 0,
+		},
+		// Doubly parenthesised — accepted (loop unwrap).
+		{
+			name:       "doubly parenthesised zero-value composite literal",
+			source:     `var dparen = ((NoopTracer{}))`,
+			wantErrors: 0,
+		},
+		// Pointer-of-composite `&T{}` — rejected (UnaryExpr.X = CompositeLit, not bare composite).
+		{
+			name:       "pointer to zero-value composite literal",
+			source:     `var ptr = &NoopTracer{}`,
+			wantErrors: 1,
+			wantText:   "ptr",
+		},
+		// Function literal RHS — rejected.
+		{
+			name:       "function literal RHS",
+			source:     `var fn = func() Tracer { return NoopTracer{} }`,
+			wantErrors: 1,
+			wantText:   "fn",
+		},
+		// Mixed var block — first is valid blank-ident, second is illegal nil.
+		{
+			name: "mixed var block: blank-ident OK, nil violation",
+			source: `var (
+	_ Tracer = NoopTracer{}
+	bad Tracer = nil
+)`,
+			wantErrors: 1,
+			wantText:   "bad",
+		},
+		// Pointer-typed composite literal `var x = (*T)(nil)` — rejected (CallExpr).
+		{
+			name:       "type conversion to pointer-nil",
+			source:     `var typed = (*Tracer)(nil)`,
+			wantErrors: 1,
+			wantText:   "typed",
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			root := t.TempDir()
-			wrapperDir := filepath.Join(root, "kernel", "wrapper")
-			require.NoError(t, os.MkdirAll(wrapperDir, 0o755))
-			// Production file under test.
-			require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state.go"),
-				[]byte("package wrapper\n\n"+tc.source+"\n"), 0o644))
-			// Test file — violations inside _test.go must be ignored.
-			require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state_test.go"),
-				[]byte("package wrapper\nvar ignored Tracer = nil\n"), 0o644))
-
-			results := NewValidator(&metadata.ProjectMeta{}, root).validateFMT19(true)
-			assert.Len(t, results, tc.wantErrors, "case %q: got results: %v", tc.name, results)
-			for _, r := range results {
-				assert.Equal(t, codeFMT19, r.Code)
-			}
-			if tc.wantText != "" && len(results) > 0 {
-				found := false
-				for _, r := range results {
-					if strings.Contains(r.Message, tc.wantText) {
-						found = true
-						break
-					}
-				}
-				assert.True(t, found, "expected %q in any result message, got: %v", tc.wantText, results)
-			}
+			runFMT19Case(t, tc.source, tc.wantErrors, tc.wantText)
 		})
 	}
+}
+
+// runFMT19Case writes a synthetic kernel/wrapper package, runs validateFMT19,
+// and asserts the result count + message contents. Extracted from the table
+// loop to keep the test runner's cognitive complexity within the project
+// guard (≤ 15) per kernel/wrapper FMT-19 expectations on its own surface.
+func runFMT19Case(t *testing.T, source string, wantErrors int, wantText string) {
+	t.Helper()
+	root := t.TempDir()
+	wrapperDir := filepath.Join(root, "kernel", "wrapper")
+	require.NoError(t, os.MkdirAll(wrapperDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state.go"),
+		[]byte("package wrapper\n\n"+source+"\n"), 0o644))
+	// Violations inside _test.go must be ignored by the scanner.
+	require.NoError(t, os.WriteFile(filepath.Join(wrapperDir, "state_test.go"),
+		[]byte("package wrapper\nvar ignored Tracer = nil\n"), 0o644))
+
+	results := NewValidator(&metadata.ProjectMeta{}, root).validateFMT19(true)
+	assert.Len(t, results, wantErrors, "got results: %v", results)
+	for _, r := range results {
+		assert.Equal(t, codeFMT19, r.Code)
+	}
+	if wantText != "" && len(results) > 0 {
+		assertResultsContain(t, results, wantText)
+	}
+}
+
+func assertResultsContain(t *testing.T, results []ValidationResult, want string) {
+	t.Helper()
+	for _, r := range results {
+		if strings.Contains(r.Message, want) {
+			return
+		}
+	}
+	t.Errorf("expected %q in any result message, got: %v", want, results)
 }

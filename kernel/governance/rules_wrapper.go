@@ -519,10 +519,12 @@ func (v *Validator) scanWrapperPackageStateFile(fset *token.FileSet, path string
 // classifyWrapperVarSpec returns (violationReason, forbidden). Accept rules:
 //
 //	① all Names are blank — compile-time interface check, any RHS allowed.
-//	② single Name + single Value that is a composite literal with zero Elts
-//	   on a plain struct type (identifier or selector expression).
+//	② single Name + single Value that, after unwrapping any number of
+//	   *ast.ParenExpr layers, is a composite literal with zero Elts on a
+//	   plain struct type (identifier or selector expression).
 //
-// Everything else is forbidden.
+// Everything else is forbidden — the kernel/wrapper package may only hold
+// blank-ident interface checks and zero-value sentinels.
 func classifyWrapperVarSpec(vs *ast.ValueSpec) (string, bool) {
 	if allBlank(vs.Names) {
 		return "", false
@@ -533,8 +535,7 @@ func classifyWrapperVarSpec(vs *ast.ValueSpec) (string, bool) {
 	if len(vs.Values) == 0 {
 		return "no initializer — implicit zero-value may be a mutable reference (map/chan/slice/interface)", true
 	}
-	// Exactly one value.
-	cl, ok := vs.Values[0].(*ast.CompositeLit)
+	cl, ok := unwrapCompositeLit(vs.Values[0])
 	if !ok {
 		return "initializer is not a composite literal — only zero-value `Type{}` sentinels allowed at package scope", true
 	}
@@ -546,6 +547,22 @@ func classifyWrapperVarSpec(vs *ast.ValueSpec) (string, bool) {
 		return "initializer is a composite of a reference/container type — only plain struct zero-value sentinels allowed", true
 	}
 	return "", false
+}
+
+// unwrapCompositeLit strips any number of *ast.ParenExpr layers around expr
+// and returns the inner *ast.CompositeLit if found. Returns (nil, false)
+// for any other expression shape (idents, calls, unary expressions like
+// `&T{}`, function literals).
+func unwrapCompositeLit(expr ast.Expr) (*ast.CompositeLit, bool) {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	cl, ok := expr.(*ast.CompositeLit)
+	return cl, ok
 }
 
 func allBlank(names []*ast.Ident) bool {
@@ -562,17 +579,18 @@ func allBlank(names []*ast.Ident) bool {
 
 // isPlainStructCompositeType reports whether expr is an ast type that, when
 // used as a CompositeLit's Type, names a plain struct (ident or pkg.ident)
-// rather than a reference/container type (map, slice, chan, pointer,
-// array). A nil Type is accepted defensively — at package scope the
-// ValueSpec.Type carries the annotation anyway, and the scanner has
-// already verified the composite literal is empty before calling this.
+// rather than a reference/container type (map, slice, chan, pointer, array).
+//
+// At top-level VAR specs, CompositeLit.Type is always set by the parser:
+// both `var x T = T{}` and `var x = T{}` record the type on the
+// CompositeLit. The nil case only arises for nested implicit composite
+// literals (e.g. inner `{}` in `[]T{{}, {}}`); those have non-empty Elts
+// in the outer literal and never reach this helper. nil is therefore
+// rejected defensively rather than accepted — fewer paths, no implicit
+// trust in the upstream zero-Elts check.
 func isPlainStructCompositeType(expr ast.Expr) bool {
 	if expr == nil {
-		// Implicit-typed composite literal: `var x = Type{}` records the
-		// inferred type on the ValueSpec.Type side, not the CompositeLit.
-		// Accept this — the type check elsewhere has already validated
-		// that CompositeLit has zero Elts.
-		return true
+		return false
 	}
 	switch expr.(type) {
 	case *ast.Ident, *ast.SelectorExpr:

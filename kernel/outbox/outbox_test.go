@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
@@ -895,8 +896,27 @@ func TestEntry_Validate_MetadataTotalSize_Exceeds(t *testing.T) {
 
 func TestEntry_Validate_MetadataWithinLimits(t *testing.T) {
 	e := Entry{ID: "test", EventType: "test.event", Payload: []byte(`{}`)}
-	e.Metadata = map[string]string{"trace_id": "abc123", "request_id": "req-456"}
+	// Producer-owned domain keys only — observability IDs (trace_id, request_id,
+	// ...) live in Entry.Observability, not here.
+	e.Metadata = map[string]string{"order_id": "abc123", "tenant": "t-456"}
 	assert.NoError(t, e.Validate())
+}
+
+func TestEntry_Validate_RejectsReservedMetadataKeys(t *testing.T) {
+	for _, k := range ReservedMetadataKeys {
+		t.Run(k, func(t *testing.T) {
+			e := Entry{
+				ID:        "test",
+				EventType: "test.event",
+				Payload:   []byte(`{}`),
+				Metadata:  map[string]string{k: "v"},
+			}
+			err := e.Validate()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "reserved")
+			assert.Contains(t, err.Error(), k)
+		})
+	}
 }
 
 func TestEntry_Validate_NilMetadata_OK(t *testing.T) {

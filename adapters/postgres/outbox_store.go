@@ -7,9 +7,17 @@ import (
 	"log/slog"
 	"time"
 
+	kout "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/outbox"
 )
+
+// maxObservabilityJSONBytes bounds the JSONB payload size accepted from the
+// observability column at scan time. Sized to ~4× MaxObservabilityTotalSize
+// so JSON-encoding overhead (key names, quotes) plus future field additions
+// have headroom while still capping unbounded allocations from a corrupted
+// or maliciously-crafted row at ~4 KB.
+const maxObservabilityJSONBytes = 4 * kout.MaxObservabilityTotalSize
 
 // PGOutboxStore implements runtime/outbox.Store over PostgreSQL using pgx.
 //
@@ -236,12 +244,6 @@ func (s *PGOutboxStore) CleanupDead(ctx context.Context, cutoff time.Time, batch
 // Internal scan helpers
 // ---------------------------------------------------------------------------
 
-// rowScanner is the minimal interface needed to scan a single row.
-// pgx.Rows satisfies it; the mock in outbox_mock_test.go also satisfies it.
-type rowScanner interface {
-	Scan(dest ...any) error
-}
-
 // scanClaimedEntry scans one row from claimPendingQuery RETURNING into a
 // ClaimedEntry. Column order:
 //
@@ -251,7 +253,7 @@ type rowScanner interface {
 // Both metadata and observability are JSONB; NULL is valid for both and is
 // treated as an empty map / zero struct respectively. A JSON parse failure
 // is logged as Warn (data integrity) and the entry is still returned.
-func scanClaimedEntry(rows rowScanner) (outbox.ClaimedEntry, error) {
+func scanClaimedEntry(rows RowScanner) (outbox.ClaimedEntry, error) {
 	var (
 		ce                outbox.ClaimedEntry
 		metadataJSON      []byte
@@ -268,14 +270,31 @@ func scanClaimedEntry(rows rowScanner) (outbox.ClaimedEntry, error) {
 		if err := json.Unmarshal(metadataJSON, &ce.Metadata); err != nil {
 			slog.Warn("outbox store: failed to unmarshal metadata",
 				slog.String("entry_id", ce.ID),
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
 		}
 	}
-	if len(observabilityJSON) > 0 {
+	if len(observabilityJSON) > maxObservabilityJSONBytes {
+		// Defensive: reject oversized observability payloads to prevent
+		// unbounded allocation from a corrupted row. Field-level limits
+		// in ObservabilityMetadata.Validate cover the producer side; this
+		// guard covers tampered/legacy data on the read side.
+		slog.Warn("outbox store: observability JSON exceeds max size, dropping",
+			slog.String("entry_id", ce.ID),
+			slog.Int("size", len(observabilityJSON)),
+			slog.Int("max", maxObservabilityJSONBytes))
+	} else if len(observabilityJSON) > 0 {
 		if err := json.Unmarshal(observabilityJSON, &ce.Observability); err != nil {
 			slog.Warn("outbox store: failed to unmarshal observability",
 				slog.String("entry_id", ce.ID),
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
+		} else if validateErr := ce.Observability.Validate(); validateErr != nil {
+			// Persisted row violates field-size invariants (older row written
+			// before the invariant existed, or schema drift). Clear and warn —
+			// downstream restore must not see partially valid IDs.
+			slog.Warn("outbox store: observability fails validation, clearing",
+				slog.String("entry_id", ce.ID),
+				slog.Any("error", validateErr))
+			ce.Observability = kout.ObservabilityMetadata{}
 		}
 	}
 	return ce, nil
