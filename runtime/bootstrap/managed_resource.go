@@ -58,13 +58,23 @@ func isNilManagedResource(r kernellifecycle.ManagedResource) bool {
 // It is called at the beginning of Run() before any startup step so that
 // health checker validation (Step 0) covers resource-contributed checkers too.
 //
+// Returns an error if two resources register the same checker key (duplicate
+// checker fail-fast): silently shadowing a checker would cause health
+// misreporting that is very difficult to debug at runtime.
+//
 // LIFO teardown: resources are appended to b.managedResourceTeardowns in
 // registration order; Run() iterates teardowns in reverse to achieve LIFO.
-func (b *Bootstrap) expandManagedResources() {
+func (b *Bootstrap) expandManagedResources() error {
+	seen := make(map[string]struct{})
 	for _, r := range b.managedResources {
 		// Expand health checkers: r.Checkers() now returns
 		// map[string]func(context.Context) error matching namedChecker.fn type.
 		for name, fn := range r.Checkers() {
+			if _, exists := seen[name]; exists {
+				return fmt.Errorf("bootstrap: duplicate checker key %q from ManagedResource %T — "+
+					"each managed resource must expose unique checker names", name, r)
+			}
+			seen[name] = struct{}{}
 			fn := fn // capture
 			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
 		}
@@ -85,4 +95,5 @@ func (b *Bootstrap) expandManagedResources() {
 			return err
 		})
 	}
+	return nil
 }

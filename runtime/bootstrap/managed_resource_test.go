@@ -629,3 +629,130 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 		t.Fatal("bootstrap did not shut down in time")
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Unit tests for expandManagedResources — reverse/negative assertions (T-1)
+// ---------------------------------------------------------------------------
+
+// nilWorkerResource is a ManagedResource whose Worker() always returns nil.
+type nilWorkerResource struct{}
+
+func (nilWorkerResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		"nil-worker-checker": func(_ context.Context) error { return nil },
+	}
+}
+
+func (nilWorkerResource) Worker() kworker.Worker { return nil }
+
+func (nilWorkerResource) Close(_ context.Context) error { return nil }
+
+// TestExpandManagedResources_NilWorker_Skip verifies that a ManagedResource
+// whose Worker() returns nil does not register any worker into the Bootstrap
+// worker pool. The checker must still be registered (nil-worker is not
+// nil-resource; only the background goroutine is omitted).
+func TestExpandManagedResources_NilWorker_Skip(t *testing.T) {
+	b := &Bootstrap{}
+	b.managedResources = []kernellifecycle.ManagedResource{nilWorkerResource{}}
+
+	require.NoError(t, b.expandManagedResources())
+
+	assert.Len(t, b.healthCheckers, 1, "checker must still be registered when worker is nil")
+	assert.Empty(t, b.workers, "nil worker must not be added to worker pool")
+	assert.Len(t, b.managedResourceTeardowns, 1, "teardown must still be registered for Close")
+}
+
+// duplicateCheckerResource provides a single checker under a fixed key name.
+type duplicateCheckerResource struct{ key string }
+
+func (r duplicateCheckerResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		r.key: func(_ context.Context) error { return nil },
+	}
+}
+
+func (r duplicateCheckerResource) Worker() kworker.Worker { return nil }
+
+func (r duplicateCheckerResource) Close(_ context.Context) error { return nil }
+
+// TestExpandManagedResources_DuplicateChecker_Phase0Error verifies that two
+// ManagedResources exposing the same checker key cause expandManagedResources
+// to return a non-nil error containing "duplicate checker". This prevents a
+// silent registration collision where the second checker silently shadows the
+// first and health misreporting goes undetected until production.
+func TestExpandManagedResources_DuplicateChecker_Phase0Error(t *testing.T) {
+	b := &Bootstrap{}
+	b.managedResources = []kernellifecycle.ManagedResource{
+		duplicateCheckerResource{key: "db"},
+		duplicateCheckerResource{key: "db"},
+	}
+
+	err := b.expandManagedResources()
+	require.Error(t, err, "duplicate checker key must cause expandManagedResources to fail")
+	assert.Contains(t, err.Error(), "duplicate checker",
+		"error message must name the conflict so operators can identify the culprit")
+}
+
+// TestExpandManagedResources_CloseFailure_TeardownChainContinues verifies that
+// when the first registered resource's Close returns an error, the teardown
+// chain still invokes Close on all remaining resources (LIFO). This matches
+// the documented best-effort close semantics: errors are logged as Warn and
+// the shutdown continues rather than short-circuiting.
+func TestExpandManagedResources_CloseFailure_TeardownChainContinues(t *testing.T) {
+	var closedOrder []string
+
+	firstClose := func(ctx context.Context) error {
+		closedOrder = append(closedOrder, "first")
+		return errors.New("first close failed")
+	}
+
+	secondClosed := false
+	secondClose := func(ctx context.Context) error {
+		closedOrder = append(closedOrder, "second")
+		secondClosed = true
+		return nil
+	}
+
+	b := &Bootstrap{}
+	b.managedResources = []kernellifecycle.ManagedResource{
+		&orderedCloseResource{name: "first", closeFn: firstClose},
+		&orderedCloseResource{name: "second", closeFn: secondClose},
+	}
+
+	require.NoError(t, b.expandManagedResources())
+	require.Len(t, b.managedResourceTeardowns, 2)
+
+	// Teardowns are in registration order; LIFO means we call them reversed.
+	ctx := context.Background()
+	for i := len(b.managedResourceTeardowns) - 1; i >= 0; i-- {
+		_ = b.managedResourceTeardowns[i](ctx) // ignore individual errors; chain must continue
+	}
+
+	// LIFO: second registered → first closed; then first registered → closed second.
+	assert.Equal(t, []string{"second", "first"}, closedOrder,
+		"LIFO teardown must close second before first")
+	assert.True(t, secondClosed,
+		"second resource Close must be called even though first resource Close failed")
+}
+
+// orderedCloseResource is a ManagedResource test double that delegates Close
+// to an injected function so tests can capture close ordering and errors.
+type orderedCloseResource struct {
+	name    string
+	closeFn func(context.Context) error
+}
+
+func (r *orderedCloseResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		r.name: func(_ context.Context) error { return nil },
+	}
+}
+
+func (r *orderedCloseResource) Worker() kworker.Worker { return nil }
+
+func (r *orderedCloseResource) Close(ctx context.Context) error {
+	if r.closeFn != nil {
+		return r.closeFn(ctx)
+	}
+	return nil
+}
