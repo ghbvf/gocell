@@ -1,33 +1,28 @@
 package distlock
 
-import "github.com/ghbvf/gocell/pkg/errcode"
+import (
+	"errors"
 
-// Error codes for distributed lock operations. Values are stable string IDs
-// consumed by client-side error taxonomies and metrics label sets; they must
-// not change without a coordinated rollout.
-//
-// The string values use noun form (ERR_DISTLOCK_ACQUIRE) rather than past
-// tense (ERR_DISTLOCK_ACQUIRED) to match the convention established by
-// pkg/errcode — which fixes the pre-existing value typo in the
-// ERR_ADAPTER_REDIS_LOCK_ACQUIRED string that the old
-// adapters/redis/client.go ErrAdapterRedisLockAcquire constant carried.
-const (
-	ErrLockAcquire errcode.Code = "ERR_DISTLOCK_ACQUIRE" // acquire I/O failure
-	ErrLockRelease errcode.Code = "ERR_DISTLOCK_RELEASE" // release I/O failure
-	ErrLockTimeout errcode.Code = "ERR_DISTLOCK_TIMEOUT" // another holder owns the key
-
-	// ErrLockLost indicates the caller no longer owns the lock at the point of
-	// Release. Covers every case where the Release call finds the lock is gone:
-	//   - The lock TTL expired before Release was issued (implementation detects
-	//     this locally via expiresAt and skips DEL; returns ErrLockLost).
-	//   - The Redis Lua release script found a non-matching value (another
-	//     holder took over, or our TTL expired between the script's GET and DEL).
-	//   - Release was called twice on the same Lock (second call finds the key
-	//     gone from the first).
-	//
-	// Callers can errors.Is / errors.As on this code to branch on loss semantics.
-	// The collapsed Lost() channel (see runtime/distlock.Lock doc) also closes
-	// in all these cases, giving callers two independent views on the same event
-	// (channel-for-select, error-for-branch).
-	ErrLockLost errcode.Code = "ERR_DISTLOCK_LOST"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// Sentinel errors used as context.Cause values on the lock-derived context.
+// Callers distinguish them via errors.Is(context.Cause(lockCtx), ErrLockLost).
+//
+// These are plain sentinel errors (not errcode.Error) because they are used
+// as context cancellation causes, not as API boundary error codes. At the API
+// boundary (Acquire returning an error) errcode is used instead.
+var (
+	// ErrLockLost is set as the context cause when the manager fails to renew
+	// the lock or the backend reports ownership has been taken by another holder.
+	ErrLockLost = errors.New("distlock: lock lost")
+
+	// ErrLockReleased is set as the context cause when release() is called
+	// by the application (normal end-of-critical-section).
+	ErrLockReleased = errors.New("distlock: lock released")
+)
+
+// ErrLockTimeout is returned by Acquire when the key is already held by
+// another holder and the lock cannot be granted.
+// Uses errcode so it can be matched at HTTP handler boundaries.
+const ErrLockTimeout errcode.Code = "ERR_DISTLOCK_TIMEOUT"
