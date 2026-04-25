@@ -179,43 +179,25 @@ func TestPerListener_PrimaryRouter_WithAuthMiddleware_Enforces(t *testing.T) {
 		"/api/v1/* without JWT must return 401 on PrimaryListener router")
 }
 
-// TestPerListener_FinalizeAuth_RejectsDelegatedOnPublicPath verifies the
-// consistency assertion: Delegated=true declared on a non-/internal/v1 path
-// must fail FinalizeAuth.
-func TestDualMux_FinalizeAuth_RejectsDelegatedOnPublicPath(t *testing.T) {
+// TestDualMux_FinalizeAuth_InternalPathOnZeroRefAccepted verifies that a
+// /internal/v1/* route declared on a zero-ref router (unit-test scenario)
+// passes FinalizeAuth — the listener-identity check is skipped for zero-ref.
+func TestDualMux_FinalizeAuth_InternalPathOnZeroRefAccepted(t *testing.T) {
 	rtr, err := NewE()
 	require.NoError(t, err)
 
+	// Zero-ref router: listener-identity check is skipped.
 	rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
-		Method: http.MethodPost, Path: "/api/v1/foo", Delegated: true,
+		Method: http.MethodPost, Path: "/internal/v1/roles",
 	})
 
 	err = rtr.FinalizeAuth()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Delegated")
-	assert.Contains(t, err.Error(), "/internal/v1/")
-}
-
-// TestDualMux_FinalizeAuth_RejectsInternalPathWithoutDelegated verifies the
-// mirror consistency assertion: /internal/v1/* path declared without
-// Delegated:true must fail FinalizeAuth.
-func TestDualMux_FinalizeAuth_RejectsInternalPathWithoutDelegated(t *testing.T) {
-	rtr, err := NewE()
-	require.NoError(t, err)
-
-	rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
-		Method: http.MethodPost, Path: "/internal/v1/roles", Delegated: false,
-	})
-
-	err = rtr.FinalizeAuth()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "Delegated")
-	assert.Contains(t, err.Error(), "/internal/v1/")
+	// Zero-ref router should not fail on internal-path routes.
+	assert.NoError(t, err)
 }
 
 // TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations confirms the happy
-// path: Delegated:true on /internal/v1/* and Delegated:false on /api/v1/*
-// both pass.
+// path: internal /internal/v1/* and public /api/v1/* routes both pass.
 func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
 	rtr, err := NewE(WithPolicyCoverageWhitelist([]string{
 		"/internal/v1/*",
@@ -224,7 +206,7 @@ func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
 	require.NoError(t, err)
 
 	rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
-		Method: http.MethodGet, Path: "/internal/v1/access/roles", Delegated: true,
+		Method: http.MethodGet, Path: "/internal/v1/access/roles",
 	})
 	rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: http.MethodGet, Path: "/api/v1/foo", Public: true,

@@ -366,7 +366,6 @@ func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
 		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusNoContent)
 		}),
-		Delegated: true,
 	})
 	require.NoError(t, r.FinalizeAuth())
 

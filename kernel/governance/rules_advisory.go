@@ -16,7 +16,7 @@ func (v *Validator) validateADV01() []ValidationResult {
 		if !sbJourneys[j.ID] {
 			results = append(results, v.newResult(
 				"ADV-01", SeverityWarning, IssueRefNotFound,
-				journeyFile(j.ID),
+				journeyFile(j),
 				"id",
 				fmt.Sprintf("journey %q has no entry in status-board.yaml", j.ID),
 			))
@@ -28,7 +28,7 @@ func (v *Validator) validateADV01() []ValidationResult {
 // validateADV03 checks that waivers reference contracts that appear in the slice's contractUsages.
 func (v *Validator) validateADV03() []ValidationResult {
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
+	for _, s := range v.project.Slices {
 		// Build set of contracts used by this slice.
 		usedContracts := make(map[string]bool, len(s.ContractUsages))
 		for _, cu := range s.ContractUsages {
@@ -38,7 +38,7 @@ func (v *Validator) validateADV03() []ValidationResult {
 			if w.Contract != "" && !usedContracts[w.Contract] {
 				results = append(results, v.newResult(
 					"ADV-03", SeverityWarning, IssueRefNotFound,
-					sliceFile(key),
+					sliceFile(s),
 					fmt.Sprintf("verify.waivers[%d].contract", i),
 					fmt.Sprintf("waiver for contract %q has no matching contractUsage in slice %q", w.Contract, s.ID),
 				))
@@ -87,7 +87,7 @@ func (v *Validator) validateADV05() []ValidationResult {
 		if len(c.Endpoints.Subscribers) == 0 {
 			results = append(results, v.newResult(
 				"ADV-05", SeverityError, IssueForbidden,
-				contractFile(c.ID),
+				contractFile(c),
 				"endpoints.subscribers",
 				fmt.Sprintf("event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml", c.ID),
 			))

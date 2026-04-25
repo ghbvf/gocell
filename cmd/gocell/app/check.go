@@ -18,6 +18,22 @@ import (
 	"github.com/ghbvf/gocell/tools/nogo/unconditionalskip"
 )
 
+// checkL0NonL0SkipMsg is the message printed when --cell targets a non-L0 cell.
+// Extracted as a constant so tests can assert against it without brittle substring matching.
+// Format args: (cellID, consistencyLevel).
+const checkL0NonL0SkipMsg = "cell %q is %s (not L0); l0-imports check skipped"
+
+const (
+	cmdSliceCoverage      = "slice-coverage"
+	cmdJourneyReadiness   = "journey-readiness"
+	cmdL0Imports          = "l0-imports"
+	errCannotFindRoot     = "cannot find project root: %w"
+	errMetadataParse      = "metadata parse: %w"
+	errEmitResults        = "emit results: %w"
+	flagFormatDescription = "output format: text|json|sarif"
+	flagSetCheckPrefix    = "check "
+)
+
 // runCheck implements:
 //
 //	gocell check contract-health [--format text|json|sarif]
@@ -37,14 +53,14 @@ func runCheck(args []string) error {
 	switch subtype {
 	case "contract-health":
 		return checkContractHealth(subArgs)
-	case "slice-coverage":
-		return checkPlaceholder("slice-coverage", subArgs)
+	case cmdSliceCoverage:
+		return checkSliceCoverage(subArgs)
 	case "assembly-completeness":
-		return checkPlaceholder("assembly-completeness", subArgs)
-	case "journey-readiness":
-		return checkPlaceholder("journey-readiness", subArgs)
-	case "l0-imports":
-		return checkPlaceholder("l0-imports", subArgs)
+		return checkAssemblyCompleteness(subArgs)
+	case cmdJourneyReadiness:
+		return checkJourneyReadiness(subArgs)
+	case cmdL0Imports:
+		return checkL0Imports(subArgs)
 	case "unconditional-skip":
 		return checkUnconditionalSkip(subArgs)
 	default:
@@ -62,13 +78,13 @@ func checkContractHealth(args []string) error {
 
 	root, err := findRoot()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
 	parser := metadata.NewParser(root)
 	project, err := parser.Parse()
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf(errMetadataParse, err)
 	}
 
 	reg := registry.NewContractRegistry(project)
@@ -95,7 +111,7 @@ func checkContractHealth(args []string) error {
 	results := validator.CheckContractHealth(contracts)
 
 	if err := printer.Print(results); err != nil {
-		return fmt.Errorf("emit results: %w", err)
+		return fmt.Errorf(errEmitResults, err)
 	}
 
 	if errCount := countContractHealthErrors(results); errCount > 0 {
@@ -160,7 +176,532 @@ func httpTransportColumns(c *metadata.ContractMeta) (method, path string) {
 // countContractHealthErrors counts SeverityError findings — currently every
 // contract-health rule emits an error, but the helper keeps us safe if we
 // later add advisory warnings.
+// Delegates to countErrors to avoid duplicate logic.
 func countContractHealthErrors(results []governance.ValidationResult) int {
+	return countErrors(results)
+}
+
+// checkSliceCoverage checks that every slices/ subdirectory has a slice.yaml
+// and that each parsed SliceMeta correctly references its parent cell.
+//
+// Flags: --cell=<cellID> (empty = all cells), --format=<text|json|sarif>
+func checkSliceCoverage(args []string) error {
+	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdSliceCoverage, flag.ContinueOnError)
+	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all cells)")
+	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	root, err := findRoot()
+	if err != nil {
+		return fmt.Errorf(errCannotFindRoot, err)
+	}
+
+	parser := metadata.NewParser(root)
+	project, err := parser.Parse()
+	if err != nil {
+		return fmt.Errorf(errMetadataParse, err)
+	}
+
+	var results []governance.ValidationResult
+	cellCount := 0
+	sliceCount := 0
+	if *cellID != "" {
+		cellCount = 1
+		// Count slices for this cell.
+		for _, sl := range project.Slices {
+			if sl.BelongsToCell == *cellID {
+				sliceCount++
+			}
+		}
+		results = sliceCoverageForCell(root, project, *cellID)
+	} else {
+		cellCount = len(project.Cells)
+		sliceCount = len(project.Slices)
+		for cid := range project.Cells {
+			results = append(results, sliceCoverageForCell(root, project, cid)...)
+		}
+	}
+
+	return printAndCheck(*format, results, cmdSliceCoverage,
+		fmt.Sprintf("PASS: slice coverage OK (checked %d slices across %d cells)", sliceCount, cellCount))
+}
+
+// sliceCoverageForCell runs the slice-coverage checks for a single cell.
+func sliceCoverageForCell(root string, project *metadata.ProjectMeta, cid string) []governance.ValidationResult {
+	var results []governance.ValidationResult
+
+	results = append(results, sliceDirCheck(root, cid)...)
+	results = append(results, sliceMetaCheck(project, cid)...)
+	return results
+}
+
+// sliceDirCheck verifies every subdir under cells/<cid>/slices/ has a slice.yaml.
+func sliceDirCheck(root, cid string) []governance.ValidationResult {
+	var results []governance.ValidationResult
+	slicesDir := filepath.Join(root, "cells", cid, "slices")
+	entries, err := os.ReadDir(slicesDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil // cell has no slices/ subdir — not a violation
+		}
+		return []governance.ValidationResult{{
+			Code:      "CHECK-SLICE-DIR-READ-ERROR",
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueInvalid,
+			File:      filepath.ToSlash(filepath.Join("cells", cid, "slices")),
+			Message:   fmt.Sprintf("cannot read slices dir for cell %q: %v", cid, err),
+		}}
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		sliceYAML := filepath.Join(slicesDir, e.Name(), "slice.yaml")
+		if _, statErr := os.Stat(sliceYAML); statErr != nil {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-SLICE-EMPTY-DIR",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueRequired,
+				Scope:     cmdSliceCoverage,
+				Message:   fmt.Sprintf("cell %q: slices/%s has no slice.yaml", cid, e.Name()),
+			})
+		}
+	}
+	return results
+}
+
+// sliceMetaCheck verifies parsed SliceMeta consistency for a single cell.
+func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.ValidationResult {
+	cellMeta, ok := project.Cells[cid]
+	if !ok {
+		return nil
+	}
+	// The canonical parent directory for this cell's slices is derived from the
+	// cell's own file path (e.g. "cells/accesscore/cell.yaml" → "cells/accesscore/slices").
+	// This handles both top-level cells and cells nested under examples/.
+	cellDir := filepath.Dir(cellMeta.File)
+	expectedSlicesParent := filepath.ToSlash(filepath.Join(cellDir, "slices"))
+
+	var results []governance.ValidationResult
+	for _, sl := range project.Slices {
+		if sl.BelongsToCell != cid {
+			continue
+		}
+		actualParent := filepath.ToSlash(filepath.Dir(sl.File))
+		if !strings.HasPrefix(actualParent, expectedSlicesParent) {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-SLICE-BELONGS-TO-MISMATCH",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueMismatch,
+				File:      sl.File,
+				Message:   fmt.Sprintf("slice %q has belongsToCell=%q but lives under %q (expected under %q)", sl.ID, sl.BelongsToCell, actualParent, expectedSlicesParent),
+			})
+		}
+		if sl.Dir != sl.ID {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-SLICE-ID-MISMATCH",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueMismatch,
+				File:      sl.File,
+				Message:   fmt.Sprintf("slice %q: directory name %q does not match slice id %q", sl.ID, sl.Dir, sl.ID),
+			})
+		}
+	}
+	return results
+}
+
+// checkAssemblyCompleteness verifies that all cells declared in an assembly
+// exist in the parsed project metadata and that there are no duplicate entries.
+//
+// Flags: --id=<assemblyID> (required)
+func checkAssemblyCompleteness(args []string) error {
+	fs := flag.NewFlagSet("check assembly-completeness", flag.ContinueOnError)
+	id := fs.String("id", "", "assembly ID (required)")
+	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *id == "" {
+		return fmt.Errorf("--id is required")
+	}
+
+	root, err := findRoot()
+	if err != nil {
+		return fmt.Errorf(errCannotFindRoot, err)
+	}
+
+	parser := metadata.NewParser(root)
+	project, err := parser.Parse()
+	if err != nil {
+		return fmt.Errorf(errMetadataParse, err)
+	}
+
+	asm, ok := project.Assemblies[*id]
+	if !ok {
+		return fmt.Errorf("assembly %q not found in project metadata", *id)
+	}
+
+	var results []governance.ValidationResult
+
+	seen := make(map[string]bool, len(asm.Cells))
+	for _, cid := range asm.Cells {
+		if seen[cid] {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-ASSEMBLY-DUPLICATE-CELL",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueDuplicate,
+				File:      asm.File,
+				Message:   fmt.Sprintf("assembly %q: cell %q declared more than once", *id, cid),
+			})
+			continue
+		}
+		seen[cid] = true
+		if _, exists := project.Cells[cid]; !exists {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-ASSEMBLY-MISSING-CELL",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueRefNotFound,
+				File:      asm.File,
+				Message:   fmt.Sprintf("assembly %q: cell %q not found in project metadata", *id, cid),
+			})
+		}
+	}
+
+	return printAndCheck(*format, results, "assembly-completeness",
+		fmt.Sprintf("PASS: assembly %q complete", *id))
+}
+
+// checkJourneyReadiness verifies that each journey has exactly one status-board
+// entry and that all referenced contracts and cells exist in the project.
+//
+// Flags: --journey=<journeyID> (empty = all journeys)
+func checkJourneyReadiness(args []string) error {
+	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdJourneyReadiness, flag.ContinueOnError)
+	journeyID := fs.String("journey", "", "restrict check to this journey ID (empty = all)")
+	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	root, err := findRoot()
+	if err != nil {
+		return fmt.Errorf(errCannotFindRoot, err)
+	}
+
+	parser := metadata.NewParser(root)
+	project, err := parser.Parse()
+	if err != nil {
+		return fmt.Errorf(errMetadataParse, err)
+	}
+
+	statusCount := buildStatusCount(project)
+
+	var results []governance.ValidationResult
+	journeyCount := 0
+	if *journeyID != "" {
+		jm, ok := project.Journeys[*journeyID]
+		if !ok {
+			return fmt.Errorf("journey %q not found", *journeyID)
+		}
+		journeyCount = 1
+		results = journeyReadinessFor(jm, project, statusCount)
+	} else {
+		journeyCount = len(project.Journeys)
+		for _, jm := range project.Journeys {
+			results = append(results, journeyReadinessFor(jm, project, statusCount)...)
+		}
+	}
+
+	return printAndCheck(*format, results, cmdJourneyReadiness,
+		fmt.Sprintf("PASS: journey readiness OK (checked %d journeys)", journeyCount))
+}
+
+// buildStatusCount builds a map of journeyID → count of status-board entries.
+func buildStatusCount(project *metadata.ProjectMeta) map[string]int {
+	counts := make(map[string]int, len(project.StatusBoard))
+	for _, e := range project.StatusBoard {
+		counts[e.JourneyID]++
+	}
+	return counts
+}
+
+// journeyReadinessFor checks a single journey's readiness.
+func journeyReadinessFor(jm *metadata.JourneyMeta, project *metadata.ProjectMeta, statusCount map[string]int) []governance.ValidationResult {
+	var results []governance.ValidationResult
+
+	results = append(results, journeyStatusCheck(jm, statusCount)...)
+	results = append(results, journeyContractCheck(jm, project)...)
+	results = append(results, journeyCellCheck(jm, project)...)
+	return results
+}
+
+// journeyStatusCheck validates the status-board entry count for a journey.
+func journeyStatusCheck(jm *metadata.JourneyMeta, statusCount map[string]int) []governance.ValidationResult {
+	count := statusCount[jm.ID]
+	switch {
+	case count == 0:
+		return []governance.ValidationResult{{
+			Code:      "CHECK-JOURNEY-NO-STATUS-ENTRY",
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueRequired,
+			File:      jm.File,
+			Message:   fmt.Sprintf("journey %q has no entry in status-board.yaml", jm.ID),
+		}}
+	case count > 1:
+		return []governance.ValidationResult{{
+			Code:      "CHECK-JOURNEY-DUP-STATUS-ENTRY",
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueDuplicate,
+			Scope:     cmdJourneyReadiness,
+			Message:   fmt.Sprintf("journey %q has %d entries in status-board.yaml (expected 1)", jm.ID, count),
+		}}
+	}
+	return nil
+}
+
+// journeyContractCheck validates contract references for a journey.
+func journeyContractCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMeta) []governance.ValidationResult {
+	var results []governance.ValidationResult
+	for _, contractID := range jm.Contracts {
+		if _, exists := project.Contracts[contractID]; !exists {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-JOURNEY-MISSING-CONTRACT",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueRefNotFound,
+				File:      jm.File,
+				Message:   fmt.Sprintf("journey %q references unknown contract %q", jm.ID, contractID),
+			})
+		}
+	}
+	return results
+}
+
+// journeyCellCheck validates cell references for a journey.
+func journeyCellCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMeta) []governance.ValidationResult {
+	var results []governance.ValidationResult
+	for _, cid := range jm.Cells {
+		if _, exists := project.Cells[cid]; !exists {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-JOURNEY-MISSING-CELL",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueRefNotFound,
+				File:      jm.File,
+				Message:   fmt.Sprintf("journey %q references unknown cell %q", jm.ID, cid),
+			})
+		}
+	}
+	return results
+}
+
+// checkL0Imports verifies that L0 cells only import the L0 cell dependencies
+// they declare in cell.yaml::l0Dependencies, and vice versa.
+//
+// Flags: --cell=<cellID> (empty = all L0 cells)
+func checkL0Imports(args []string) error {
+	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdL0Imports, flag.ContinueOnError)
+	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all L0 cells)")
+	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	root, err := findRoot()
+	if err != nil {
+		return fmt.Errorf(errCannotFindRoot, err)
+	}
+
+	parser := metadata.NewParser(root)
+	project, err := parser.Parse()
+	if err != nil {
+		return fmt.Errorf(errMetadataParse, err)
+	}
+
+	if *cellID != "" {
+		return checkL0ImportsForSingleCell(root, project, *cellID, *format)
+	}
+	return checkL0ImportsForAllCells(root, project, *format)
+}
+
+// checkL0ImportsForSingleCell runs l0-imports for a single named cell.
+// Non-L0 cells are silently skipped in all formats — json/sarif consumers
+// receive an empty results array ({"results":[]}) instead of no output at all.
+func checkL0ImportsForSingleCell(root string, project *metadata.ProjectMeta, cellID, format string) error {
+	cm, ok := project.Cells[cellID]
+	if !ok {
+		return fmt.Errorf("cell %q not found in project metadata", cellID)
+	}
+	if cm.ConsistencyLevel != "L0" {
+		if format == string(printers.FormatText) {
+			fmt.Printf(checkL0NonL0SkipMsg+"\n", cellID, cm.ConsistencyLevel)
+			return nil
+		}
+		// json/sarif: emit an empty results document so machine consumers see
+		// "ran but found nothing" rather than silence.
+		return printAndCheck(format, nil, cmdL0Imports, "")
+	}
+	results := l0ImportsForCell(root, cm)
+	return printAndCheck(format, results, cmdL0Imports, "PASS: L0 import declarations OK (checked 1 L0 cells)")
+}
+
+// checkL0ImportsForAllCells runs l0-imports across all L0 cells in the project.
+// Zero L0 cells case is handled uniformly: text prints a message, json/sarif
+// emit an empty results document so machine consumers see a valid empty run.
+func checkL0ImportsForAllCells(root string, project *metadata.ProjectMeta, format string) error {
+	var results []governance.ValidationResult
+	l0Count := 0
+	for _, cm := range project.Cells {
+		if cm.ConsistencyLevel == "L0" {
+			l0Count++
+			results = append(results, l0ImportsForCell(root, cm)...)
+		}
+	}
+	if l0Count == 0 {
+		if format == string(printers.FormatText) {
+			fmt.Println("checked 0 L0 cells, 0 issues")
+			return nil
+		}
+		// json/sarif: emit empty results so machine consumers see a valid empty run.
+		return printAndCheck(format, nil, cmdL0Imports, "")
+	}
+	return printAndCheck(format, results, cmdL0Imports,
+		fmt.Sprintf("PASS: L0 import declarations OK (checked %d L0 cells)", l0Count))
+}
+
+// l0ImportsForCell runs all L0 import checks for a single cell.
+func l0ImportsForCell(root string, cm *metadata.CellMeta) []governance.ValidationResult {
+	declaredDeps := buildDeclaredDeps(cm)
+	var results []governance.ValidationResult
+
+	if len(declaredDeps) == 0 {
+		results = append(results, governance.ValidationResult{
+			Code:      "CHECK-L0-MISSING-L0DEPS",
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueRequired,
+			File:      cm.File,
+			Message:   fmt.Sprintf("L0 cell %q has no l0Dependencies declared in cell.yaml", cm.ID),
+		})
+	}
+
+	imported, loadResults, fatalLoad := loadCellImports(root, cm)
+	results = append(results, loadResults...)
+	if fatalLoad {
+		return results // packages.Load failed; skip diff checks
+	}
+
+	// Fix 2.5: if no l0Dependencies declared, skip undeclared/dangling checks
+	// to avoid noisy false positives.
+	if len(declaredDeps) == 0 {
+		return results
+	}
+
+	results = append(results, l0UndeclaredImports(cm, imported, declaredDeps)...)
+	results = append(results, l0DanglingDeclarations(cm, imported, declaredDeps)...)
+	return results
+}
+
+// buildDeclaredDeps builds a set of declared L0 dependency cell IDs.
+func buildDeclaredDeps(cm *metadata.CellMeta) map[string]bool {
+	deps := make(map[string]bool, len(cm.L0Dependencies))
+	for _, dep := range cm.L0Dependencies {
+		deps[dep.Cell] = true
+	}
+	return deps
+}
+
+// loadCellImports loads packages in the cell directory and returns the set of
+// imported sibling cell IDs. The third return value is true when packages.Load
+// itself fails (fatal — no import data available); per-package errors are
+// returned as error ValidationResults but the import map is still populated.
+//
+// Cell directory is derived from cm.File (the actual parsed cell.yaml path),
+// not from "cells/<cm.ID>", so cells under examples/**/cells/ are also resolved
+// correctly. This mirrors sliceMetaCheck which already uses cellMeta.File.
+func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
+	const cellsImportPrefix = "github.com/ghbvf/gocell/cells/"
+	cellDir := filepath.Dir(filepath.FromSlash(cm.File))
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedImports,
+		Dir:  filepath.Join(root, cellDir),
+	}
+	pkgs, err := packages.Load(cfg, "./...")
+	if err != nil {
+		return nil, []governance.ValidationResult{{
+			Code:      "CHECK-L0-LOAD-ERROR",
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueInvalid,
+			File:      filepath.ToSlash(cm.File),
+			Scope:     cmdL0Imports,
+			Message:   fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
+		}}, true
+	}
+
+	var loadErrs []governance.ValidationResult
+	imported := make(map[string]bool)
+	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 {
+			for _, pe := range pkg.Errors {
+				loadErrs = append(loadErrs, governance.ValidationResult{
+					Code:      "CHECK-L0-LOAD-ERROR",
+					Severity:  governance.SeverityError,
+					IssueType: governance.IssueInvalid,
+					File:      filepath.ToSlash(cm.File),
+					Scope:     cmdL0Imports,
+					Message:   fmt.Sprintf("packages.Load error for cell %q package %q: %v", cm.ID, pkg.PkgPath, pe),
+				})
+			}
+		}
+		for importPath := range pkg.Imports {
+			after, ok := strings.CutPrefix(importPath, cellsImportPrefix)
+			if !ok {
+				continue
+			}
+			importedCellID := strings.SplitN(after, "/", 2)[0]
+			if importedCellID != cm.ID {
+				imported[importedCellID] = true
+			}
+		}
+	}
+	return imported, loadErrs, false
+}
+
+// l0UndeclaredImports finds imported cells not declared as L0 dependencies.
+func l0UndeclaredImports(cm *metadata.CellMeta, imported, declared map[string]bool) []governance.ValidationResult {
+	var results []governance.ValidationResult
+	for importedCellID := range imported {
+		if !declared[importedCellID] {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-L0-UNDECLARED-IMPORT",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueInvalid,
+				File:      cm.File,
+				Message:   fmt.Sprintf("L0 cell %q imports cell %q but does not declare it in l0Dependencies", cm.ID, importedCellID),
+			})
+		}
+	}
+	return results
+}
+
+// l0DanglingDeclarations finds declared L0 deps that are not actually imported.
+func l0DanglingDeclarations(cm *metadata.CellMeta, imported, declared map[string]bool) []governance.ValidationResult {
+	var results []governance.ValidationResult
+	for declaredCellID := range declared {
+		if !imported[declaredCellID] {
+			results = append(results, governance.ValidationResult{
+				Code:      "CHECK-L0-DANGLING-DECLARATION",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueInvalid,
+				File:      cm.File,
+				Message:   fmt.Sprintf("L0 cell %q declares l0Dependency %q but does not import it", cm.ID, declaredCellID),
+			})
+		}
+	}
+	return results
+}
+
+// countErrors counts SeverityError findings in a result set.
+func countErrors(results []governance.ValidationResult) int {
 	n := 0
 	for i := range results {
 		if results[i].Severity == governance.SeverityError {
@@ -170,17 +711,24 @@ func countContractHealthErrors(results []governance.ValidationResult) int {
 	return n
 }
 
-func checkPlaceholder(name string, args []string) error {
-	// Parse flags even for placeholders, so --help works and invalid flags are caught.
-	fs := flag.NewFlagSet("check "+name, flag.ContinueOnError)
-	_ = fs.String("cell", "", "cell ID")
-	_ = fs.String("id", "", "assembly ID")
-	_ = fs.String("journey", "", "journey ID")
-	if err := fs.Parse(args); err != nil {
+// printAndCheck emits results through a text-mode printer and returns an error
+// if any SeverityError findings exist. passMsg is only printed in text mode
+// when all checks pass.
+func printAndCheck(format string, results []governance.ValidationResult, checkName, passMsg string) error {
+	printer, err := printers.New(format, os.Stdout, toolVersion())
+	if err != nil {
 		return err
 	}
-
-	return fmt.Errorf("not implemented: gocell check %s", name)
+	if err := printer.Print(results); err != nil {
+		return fmt.Errorf(errEmitResults, err)
+	}
+	if n := countErrors(results); n > 0 {
+		return fmt.Errorf("%s: %d issue(s) found", checkName, n)
+	}
+	if format == string(printers.FormatText) {
+		fmt.Println(passMsg)
+	}
+	return nil
 }
 
 // checkUnconditionalSkip implements `gocell check unconditional-skip`.
@@ -232,7 +780,7 @@ func checkUnconditionalSkip(args []string) error {
 	}
 
 	if err := printer.Print(results); err != nil {
-		return fmt.Errorf("emit results: %w", err)
+		return fmt.Errorf(errEmitResults, err)
 	}
 
 	errCount := countContractHealthErrors(results)

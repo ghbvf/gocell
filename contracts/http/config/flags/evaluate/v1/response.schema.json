@@ -2,15 +2,17 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "http.config.flags.evaluate.v1.response",
   "type": "object",
+  "required": ["data"],
+  "additionalProperties": false,
   "properties": {
     "data": {
       "type": "object",
+      "required": ["key", "enabled"],
+      "additionalProperties": false,
       "properties": {
         "key": { "type": "string" },
         "enabled": { "type": "boolean" }
-      },
-      "required": ["key", "enabled"]
+      }
     }
-  },
-  "required": ["data"]
+  }
 }

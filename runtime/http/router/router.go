@@ -329,9 +329,9 @@ func earlyResponderMiddleware(er earlyResponder) func(http.Handler) http.Handler
 }
 
 // internalPathPrefix marks URL paths that belong on the internal listener.
-// Used only for FinalizeAuth consistency checks: Delegated=true ↔ path
-// starts with this prefix (or the router serves InternalListener).
-const internalPathPrefix = "/internal/v1/"
+// This is an alias for kcell.InternalPathPrefix, kept as a local const
+// to avoid changing call-site references throughout this file.
+const internalPathPrefix = kcell.InternalPathPrefix
 
 // New creates a Router with default middleware and optional configuration.
 // Convenience wrapper around NewForListener using cell.PrimaryListener and
@@ -601,10 +601,10 @@ func (r *Router) DeclareHTTPContract(spec wrapper.ContractSpec) {
 // matchers used by the auth middleware. Bootstrap calls this after all cells
 // have completed route registration but before the HTTP listener starts.
 //
-// PR-A14b: the Delegated ↔ /internal/v1/* invariant from PR-A14a is relaxed
-// to be per-router context: Delegated=true routes must be on an
-// InternalListener router. When the router has a zero-value ref (created via
-// NewE), the old path-prefix check is preserved for backward compatibility.
+// Internal-route affinity is derived from path prefix via
+// AuthRouteMeta.IsInternal(); /internal/v1/* routes on non-InternalListener
+// routers fail fast at startup. Zero-ref routers (NewE / unit tests) skip
+// the listener-identity check.
 //
 // Returns error (not panic) so Bootstrap can perform a clean rollback:
 //   - "router: FinalizeAuth called twice"
@@ -656,58 +656,41 @@ func (r *Router) FinalizeAuth() error {
 // separately to guide operators toward the correct setup.
 func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/PasswordResetExempt matchers will have no effect",
+		slog.String("listener", r.ref.String()),
 		slog.Int("declared", len(r.declaredAuthMetas)))
 	if len(p.publicEntries) > 0 {
 		slog.Warn("router: Public:true routes declared on a listener with no JWT middleware; "+
 			"Public:true is a JWT exemption flag and has no effect without an auth verifier — "+
 			"use cell.NewAuthJWTFromAssembly(asm) as authChain in bootstrap.WithListener to install JWT auth",
+			slog.String("listener", r.ref.String()),
 			slog.Int("public_routes", len(p.publicEntries)))
 	}
 }
 
-// verifyDelegatedConsistency enforces the Delegated ↔ InternalListener
-// invariant. PR-A14b's intent is that Delegated=true marks an internal-only
-// route, both at the URL prefix layer (/internal/v1/*) and the physical
-// listener layer (mounted on InternalListener). All three projections must
-// agree, otherwise an internal route can land on the public port without the
-// service-token / mTLS gate.
+// verifyDelegatedConsistency verifies that routes with /internal/v1/* paths
+// are mounted on an InternalListener router and vice versa.
 //
-// Rules (router-aware, F2 round-3 fix):
-//   - Delegated=true must use /internal/v1/* prefix.
-//   - Delegated=true must be mounted on InternalListener (or a zero-ref
-//     router used in unit tests where the listener identity is unspecified).
-//   - Delegated=false on /internal/v1/* prefix is rejected on every router.
-//
-// The router-aware InternalListener check closes the F2 gap where a typo'd
-// RouteGroup.Listener ("PrimaryListener" instead of "InternalListener")
-// silently passed FinalizeAuth and exposed an internal route on the public
-// port.
+// The Delegated field was removed; internal-route affinity is now derived
+// structurally from the path prefix via AuthRouteMeta.IsInternal(). This
+// function retains the listener-ref check so that a /internal/v1/* route
+// mounted on the wrong listener still fails fast at startup.
 func (r *Router) verifyDelegatedConsistency() error {
 	isInternal := r.ref == kcell.InternalListener
-	// Zero-ref routers are created by NewE() / New() in unit tests without a
-	// listener identity. The Delegated→InternalListener invariant is a
-	// production-only check; tests that drive FinalizeAuth directly without
-	// going through Bootstrap (which always assigns a real ListenerRef via
-	// NewForListener) would otherwise need to rewire every fixture. Skip the
-	// listener check for zero-ref routers — Bootstrap-built routers always
-	// have a non-zero ref so the prod path stays guarded.
+	// Zero-ref routers are used in unit tests without a listener identity.
+	// Skip the listener-ref check for those; Bootstrap-built routers always
+	// have a real ref so the production path remains guarded.
 	isZeroRef := r.ref.IsZero()
 	for _, m := range r.declaredAuthMetas {
-		pathIsInternal := strings.HasPrefix(m.Path, internalPathPrefix)
-		switch {
-		case m.Delegated && !pathIsInternal:
+		if m.IsInternal() && !isInternal && !isZeroRef {
 			return fmt.Errorf(
-				"router: Delegated=true route %s %s must live under %s",
-				m.Method, m.Path, internalPathPrefix)
-		case m.Delegated && !isInternal && !isZeroRef:
-			return fmt.Errorf(
-				"router: Delegated=true route %s %s must be mounted on InternalListener (got %q); "+
+				"router: route %s %s (internal path) must be mounted on InternalListener (got %q); "+
 					"check the RouteGroup.Listener field",
 				m.Method, m.Path, r.ref.String())
-		case !m.Delegated && pathIsInternal:
+		}
+		if !m.IsInternal() && isInternal {
 			return fmt.Errorf(
-				"router: route %s %s under %s must declare Delegated=true",
-				m.Method, m.Path, internalPathPrefix)
+				"router %q: route %s %s mounted on internal listener but path lacks %s prefix",
+				r.ref, m.Method, m.Path, kcell.InternalPathPrefix)
 		}
 	}
 	return nil

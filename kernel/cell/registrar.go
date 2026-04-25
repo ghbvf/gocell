@@ -27,6 +27,7 @@ package cell
 import (
 	"context"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -145,16 +146,20 @@ type AuthRouteMeta struct {
 	// password-reset gate when an authenticated token carries
 	// password_reset_required=true. Only meaningful when Public is false.
 	PasswordResetExempt bool
-	// Delegated marks the route as living on the internal listener's mux
-	// (service-token / mTLS is the sole auth layer; JWT is never invoked).
-	//
-	// PR-A14a: after the physical dual-mux split, this field acts as a
-	// declarative marker only. Router.FinalizeAuth asserts at startup that
-	// Delegated=true iff the path starts with "/internal/v1/" — so the
-	// flag stays a single source of truth for internal-route affinity but
-	// no longer drives any runtime predicate. Prior to PR-A14a, Delegated
-	// flipped an in-band JWT bypass inside AuthMiddleware.
-	Delegated bool
+}
+
+// InternalPathPrefix is the URL prefix that designates an internal-listener route
+// (service-token / mTLS auth, no JWT). Routes with this prefix are dispatched to
+// cell.InternalListener; all other routes go to cell.PublicListener.
+const InternalPathPrefix = "/internal/v1/"
+
+// IsInternal reports whether this route lives on the internal listener,
+// derived from the URL path prefix. Replaces the former Delegated flag.
+//
+// The authoring invariant (only InternalListener routes may begin with
+// InternalPathPrefix) is enforced by FinalizeAuth in runtime/http/router.
+func (m AuthRouteMeta) IsInternal() bool {
+	return strings.HasPrefix(m.Path, InternalPathPrefix)
 }
 
 // AuthRouteDeclarer is implemented by aggregators that want to receive the

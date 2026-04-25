@@ -66,47 +66,81 @@ func contractConsumers(c *metadata.ContractMeta) []string {
 
 // --- file path helpers ---
 
-func cellFile(cellID string) string {
-	return fmt.Sprintf("cells/%s/cell.yaml", cellID)
-}
-
-func sliceFile(key string) string {
-	// key is "cellID/sliceID"
-	parts := strings.SplitN(key, "/", 2)
-	if len(parts) == 2 {
-		return fmt.Sprintf("cells/%s/slices/%s/slice.yaml", parts[0], parts[1])
+// cellFile returns the YAML file path for the cell metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
+func cellFile(c *metadata.CellMeta) string {
+	if c == nil {
+		return ""
 	}
-	return key
+	return c.File
 }
 
-func contractFile(contractID string) string {
-	// contract IDs are like "http.auth.login.v1"
-	// directory: contracts/http/auth/login/v1/contract.yaml
-	segments := strings.Split(contractID, ".")
-	return fmt.Sprintf("contracts/%s/contract.yaml", strings.Join(segments, "/"))
+// sliceFile returns the YAML file path for the slice metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
+func sliceFile(s *metadata.SliceMeta) string {
+	if s == nil {
+		return ""
+	}
+	return s.File
 }
 
-func journeyFile(journeyID string) string {
-	return fmt.Sprintf("journeys/%s.yaml", journeyID)
+// contractFile returns the YAML file path for the contract metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
+func contractFile(c *metadata.ContractMeta) string {
+	if c == nil {
+		return ""
+	}
+	return c.File
 }
 
-func assemblyFile(assemblyID string) string {
-	return fmt.Sprintf("assemblies/%s/assembly.yaml", assemblyID)
+// journeyFile returns the YAML file path for the journey metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
+func journeyFile(j *metadata.JourneyMeta) string {
+	if j == nil {
+		return ""
+	}
+	return j.File
+}
+
+// assemblyFile returns the YAML file path for the assembly metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
+func assemblyFile(a *metadata.AssemblyMeta) string {
+	if a == nil {
+		return ""
+	}
+	return a.File
+}
+
+// contractFileFromID returns the expected contract.yaml path derived from the
+// contract ID, used when the contract entity is absent from ProjectMeta (i.e.
+// the ID is a dangling reference). Use contractFile(c) when the entity exists;
+// the two may differ for example projects where contracts live under
+// examples/<X>/contracts/.
+// The returned path always uses forward slashes so error messages are
+// cross-platform consistent (Windows filepath.Join would produce backslashes).
+func contractFileFromID(id string) string {
+	return filepath.ToSlash(filepath.Join(contractDirFromID(id), "contract.yaml"))
 }
 
 // contractDirFromID converts a contract ID to its directory path.
 // "http.auth.login.v1" -> "contracts/http/auth/login/v1"
+// The returned path always uses forward slashes (cross-platform safe).
 func contractDirFromID(id string) string {
 	segments := strings.Split(id, ".")
-	return filepath.Join("contracts", filepath.Join(segments...))
+	return filepath.ToSlash(filepath.Join("contracts", filepath.Join(segments...)))
 }
 
 func contractDirFromMeta(c *metadata.ContractMeta) string {
-	if c != nil && c.Dir != "" {
-		return c.Dir
-	}
 	if c == nil {
 		return ""
+	}
+	if c.Dir != "" {
+		return c.Dir
 	}
 	return contractDirFromID(c.ID)
 }

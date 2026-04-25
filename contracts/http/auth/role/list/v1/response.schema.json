@@ -30,5 +30,6 @@
     "nextCursor": { "type": "string" },
     "hasMore": { "type": "boolean" }
   },
-  "required": ["data", "nextCursor", "hasMore"]
+  "required": ["data", "nextCursor", "hasMore"],
+  "additionalProperties": false
 }

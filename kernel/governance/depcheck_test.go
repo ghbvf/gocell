@@ -318,6 +318,95 @@ func TestDEP03_NoAssemblies(t *testing.T) {
 	assert.Empty(t, dep03, "no assemblies should skip DEP-03 check")
 }
 
+// --- CheckFailFast ---
+
+// TestCheckFailFast_StopsOnFirstError verifies CheckFailFast returns as soon
+// as a SeverityError check fires without running subsequent checks.
+func TestCheckFailFast_StopsOnFirstError(t *testing.T) {
+	// DEP-01 will fire (mismatched belongsToCell), which should prevent DEP-02
+	// from running far enough to produce its own error.
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
+			"auditcore":  {ID: "auditcore", ConsistencyLevel: "L1"},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"accesscore/session-login": {
+				ID:            "session-login",
+				BelongsToCell: "auditcore", // mismatch triggers DEP-01 error
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	dc := NewDependencyChecker(project)
+	results := dc.CheckFailFast()
+
+	dep01 := findByCode(results, "DEP-01")
+	require.NotEmpty(t, dep01, "DEP-01 must fire on belongsToCell mismatch")
+	// Since DEP-01 produced an error, CheckFailFast should have returned early.
+	// Verify the total finding count is small (just DEP-01).
+	assert.Len(t, results, len(dep01), "CheckFailFast must stop after first error check")
+}
+
+// TestCheckFailFast_PassesWhenNoErrors verifies CheckFailFast runs all checks
+// when none produce errors, returning the same result set as Check.
+func TestCheckFailFast_PassesWhenNoErrors(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"accesscore/session-login": {
+				ID:            "session-login",
+				BelongsToCell: "accesscore",
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	dc := NewDependencyChecker(project)
+	results := dc.CheckFailFast()
+	assert.Empty(t, results, "clean project must produce no findings from CheckFailFast")
+}
+
+// TestDEP03_CellNotInAnyAssembly verifies that a cell with L0 dependencies
+// that is not assigned to any assembly triggers DEP-03.
+func TestDEP03_CellNotInAnyAssembly(t *testing.T) {
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"app-core": {
+				ID:               "app-core",
+				ConsistencyLevel: "L2",
+				L0Dependencies: []metadata.L0DepMeta{
+					{Cell: "shared-crypto", Reason: "hashing"},
+				},
+			},
+			"shared-crypto": {
+				ID:               "shared-crypto",
+				ConsistencyLevel: "L0",
+			},
+		},
+		Slices:    map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{
+			"bundle-a": {
+				ID:    "bundle-a",
+				Cells: []string{"shared-crypto"}, // app-core not in any assembly
+			},
+		},
+	}
+
+	dc := NewDependencyChecker(project)
+	results := dc.Check()
+	dep03 := findByCode(results, "DEP-03")
+	require.Len(t, dep03, 1, "cell with L0 deps not in any assembly should produce 1 DEP-03 error")
+	assert.Equal(t, SeverityError, dep03[0].Severity)
+	assert.Contains(t, dep03[0].Message, "not assigned to any assembly")
+}
+
 // --- empty project ---
 
 func TestDependencyChecker_EmptyProject(t *testing.T) {

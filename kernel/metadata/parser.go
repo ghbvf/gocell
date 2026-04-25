@@ -191,9 +191,12 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	}
 	// Record the real filesystem directory so strict rules (REF-04) can
 	// compare it against m.ID instead of self-comparing against the map key.
+	// Use ToSlash so that on Windows (where os.DirFS produces backslash paths)
+	// all metadata file paths are normalised to forward slashes — making
+	// validation error messages cross-platform consistent.
 	cellDir, _ := cellDirFromPath(path)
 	m.Dir = cellDir
-	m.File = path
+	m.File = filepath.ToSlash(path)
 	if _, exists := pm.Cells[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate cell ID %q: %s and previous", m.ID, path))
@@ -234,10 +237,11 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	// Record filesystem truth separately from the yaml id. Strict rules
 	// (FMT-16, FMT-17, REF-05) consume these fields so a path-vs-id split
 	// (kebab dir paired with no-dash id, or vice versa) cannot escape the
-	// governance gate.
+	// governance gate. ToSlash normalises Windows backslashes so error
+	// messages are cross-platform consistent.
 	m.Dir = sliceDir
 	m.CellDir = cellID
-	m.File = path
+	m.File = filepath.ToSlash(path)
 
 	key := cellID + "/" + m.ID
 	if _, exists := pm.Slices[key]; exists {
@@ -271,7 +275,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 		m.OwnerCell = m.ProviderEndpoint()
 	}
 	m.Dir, _ = contractDirFromPath(path)
-	m.File = path
+	m.File = filepath.ToSlash(path)
 
 	if _, exists := pm.Contracts[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
@@ -294,7 +298,7 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("journey id is empty in %s", path))
 	}
-	m.File = path
+	m.File = filepath.ToSlash(path)
 	if _, exists := pm.Journeys[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate journey ID %q: %s and previous", m.ID, path))
@@ -321,7 +325,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	// parts[0]=="assemblies", so parts[1] is always the assembly directory.
 	parts := splitPath(path)
 	m.Dir = parts[1]
-	m.File = path
+	m.File = filepath.ToSlash(path)
 	if _, exists := pm.Assemblies[m.ID]; exists {
 		return errcode.New(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("duplicate assembly ID %q: %s and previous", m.ID, path))

@@ -58,6 +58,12 @@
     "description": {
       "type": "string",
       "description": "Human-readable description of the contract's purpose."
+    },
+    "deprecatedAt": {
+      "type": "string",
+      "format": "date",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Date the contract entered the deprecated lifecycle stage (YYYY-MM-DD). Required when lifecycle=deprecated. Enforced by FMT-23."
     }
   },
   "$defs": {

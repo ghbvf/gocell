@@ -96,7 +96,8 @@ func findSliceServiceFiles(root string) ([]string, error) {
 			return err
 		}
 		if d.IsDir() {
-			if d.Name() == "vendor" || d.Name() == ".git" {
+			switch d.Name() {
+			case "vendor", "worktrees", "testdata", "generated", ".git":
 				return filepath.SkipDir
 			}
 			return nil

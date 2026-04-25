@@ -58,7 +58,7 @@ func TestVerifyPolicyCoverage(t *testing.T) {
 				{Method: "GET", Path: "/internal/v1/service"},
 			},
 			metas: []kcell.AuthRouteMeta{
-				{Method: "GET", Path: "/internal/v1/service", Delegated: true},
+				{Method: "GET", Path: "/internal/v1/service"},
 			},
 			wantErr: false,
 		},

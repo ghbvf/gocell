@@ -682,7 +682,7 @@ func (b *Bootstrap) phase5FinalizeAllRouters(routers map[cell.ListenerRef]*route
 // listener are actually gated by an auth-flavoured plan chain. The acceptable
 // plans are AuthJWT / AuthJWTFromAssembly, AuthMTLS, or AuthServiceToken (or
 // any combination). AuthNone chains with protected routes (non-Public,
-// non-Delegated) cause Run() to fail-closed at phase5.
+// non-Internal) cause Run() to fail-closed at phase5.
 //
 // Uses chainProtectsRoutes (from auth_plan_describe.go) for the typed check,
 // replacing the old string-based isAuthFlavoredPolicy check.
@@ -693,7 +693,7 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 	}
 	var protected []string
 	for _, meta := range rtr.DeclaredAuthMetas() {
-		if meta.Public || meta.Delegated {
+		if meta.Public || meta.IsInternal() {
 			continue
 		}
 		protected = append(protected, meta.Method+" "+meta.Path)
@@ -705,7 +705,7 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 	return fmt.Errorf(
 		"bootstrap: listener %q has %d protected route(s) declared without an auth plan: [%s]; "+
 			"set the listener's auth chain to cell.NewAuthJWT(verifier), cell.NewAuthJWTFromAssembly(asm), "+
-			"cell.AuthMTLS{}, or cell.NewAuthServiceToken(...), or mark the route Public/Delegated",
+			"cell.AuthMTLS{}, or cell.NewAuthServiceToken(...), or mark the route Public or use InternalListener",
 		ref.String(), len(protected), strings.Join(protected, ", "),
 	)
 }

@@ -22,7 +22,7 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 		if c.DurabilityMode == "" {
 			results = append(results, v.newResult(
 				"OUTGUARD-01", SeverityError, IssueRequired,
-				cellFile(c.ID),
+				cellFile(c),
 				"durabilityMode",
 				fmt.Sprintf(
 					"cell %q declares %s consistency but has no durabilityMode; "+
@@ -35,7 +35,7 @@ func (v *Validator) validateOUTGUARD01() []ValidationResult {
 		if !isValidDurabilityMode(c.DurabilityMode) {
 			results = append(results, v.newResult(
 				"OUTGUARD-01", SeverityError, IssueInvalid,
-				cellFile(c.ID),
+				cellFile(c),
 				"durabilityMode",
 				fmt.Sprintf(
 					"cell %q has invalid durabilityMode %q; must be \"demo\" or \"durable\"",

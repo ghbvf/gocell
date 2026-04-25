@@ -110,7 +110,7 @@ func findCellProductionGoFiles(root string) ([]string, error) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case "vendor", ".git":
+			case "vendor", "worktrees", "testdata", "generated", ".git":
 				return filepath.SkipDir
 			}
 			return nil

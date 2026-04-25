@@ -120,62 +120,59 @@ func captureSlogWarn(t *testing.T) (*bytes.Buffer, func()) {
 }
 
 // ---------------------------------------------------------------------------
-// F2 round-3: verifyDelegatedConsistency must reject Delegated=true routes on
-// non-Internal listeners. A typo'd RouteGroup.Listener would otherwise mount
-// an internal-only route on the public port.
+// verifyDelegatedConsistency: internal-path routes must be mounted on
+// InternalListener. The former Delegated flag has been removed; internal
+// affinity is now derived from path prefix via AuthRouteMeta.IsInternal().
 // ---------------------------------------------------------------------------
 
-func TestFinalizeAuth_DelegatedOnPrimary_Rejected(t *testing.T) {
+func TestFinalizeAuth_InternalPathOnPrimary_Rejected(t *testing.T) {
 	r, err := NewForListener(kcell.PrimaryListener)
 	require.NoError(t, err)
-	auth.Mount(r, auth.Route{
-		Contract:  testHTTPContract("POST", "/internal/v1/devices/cmd"),
-		Handler:   okHandler,
-		Delegated: true,
+	// Declare an internal-path meta directly (auth.Route no longer has Delegated).
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/devices/cmd",
 	})
 	err = r.FinalizeAuth()
-	require.Error(t, err, "FinalizeAuth must reject Delegated=true on PrimaryListener")
+	require.Error(t, err, "FinalizeAuth must reject /internal/v1/* on PrimaryListener")
 	assert.Contains(t, err.Error(), "must be mounted on InternalListener")
 	assert.Contains(t, err.Error(), `"primary"`)
 }
 
-func TestFinalizeAuth_DelegatedOnHealth_Rejected(t *testing.T) {
+func TestFinalizeAuth_InternalPathOnHealth_Rejected(t *testing.T) {
 	r, err := NewForListener(kcell.HealthListener)
 	require.NoError(t, err)
-	auth.Mount(r, auth.Route{
-		Contract:  testHTTPContract("GET", "/internal/v1/probe"),
-		Handler:   okHandler,
-		Delegated: true,
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "GET",
+		Path:   "/internal/v1/probe",
 	})
 	err = r.FinalizeAuth()
-	require.Error(t, err, "FinalizeAuth must reject Delegated=true on HealthListener")
+	require.Error(t, err, "FinalizeAuth must reject /internal/v1/* on HealthListener")
 	assert.Contains(t, err.Error(), "must be mounted on InternalListener")
 }
 
-func TestFinalizeAuth_DelegatedOnInternal_Accepted(t *testing.T) {
+func TestFinalizeAuth_InternalPathOnInternal_Accepted(t *testing.T) {
 	r, err := NewForListener(kcell.InternalListener)
 	require.NoError(t, err)
 	auth.Mount(r, auth.Route{
-		Contract:  testHTTPContract("GET", "/internal/v1/probe"),
-		Handler:   okHandler,
-		Delegated: true,
+		Contract: testHTTPContract("GET", "/internal/v1/probe"),
+		Handler:  okHandler,
 	})
 	require.NoError(t, r.FinalizeAuth(),
-		"Delegated=true on InternalListener must finalize cleanly")
+		"internal-path route on InternalListener must finalize cleanly")
 }
 
-func TestFinalizeAuth_DelegatedOnZeroRef_Accepted(t *testing.T) {
+func TestFinalizeAuth_InternalPathOnZeroRef_Accepted(t *testing.T) {
 	// Unit-test routers built via New() / NewE() have a zero-value ListenerRef;
 	// the consistency check skips the listener-identity rule for that case so
 	// existing test fixtures stay valid.
 	r := New()
 	auth.Mount(r, auth.Route{
-		Contract:  testHTTPContract("GET", "/internal/v1/probe"),
-		Handler:   okHandler,
-		Delegated: true,
+		Contract: testHTTPContract("GET", "/internal/v1/probe"),
+		Handler:  okHandler,
 	})
 	require.NoError(t, r.FinalizeAuth(),
-		"Delegated=true on a zero-ref router (NewE) must still finalize for unit tests")
+		"internal-path route on a zero-ref router must still finalize for unit tests")
 }
 
 func TestFinalizeAuth_NoVerifier_EmitsWarn_ByDefault(t *testing.T) {
@@ -443,6 +440,38 @@ func TestFinalizeAuth_NoVerifier_LogsWarning(t *testing.T) {
 //   - TestDualMux_PublicRoutes_StillEnforceJWT
 //   - TestDualMux_FinalizeAuth_Rejects{Delegated,NonDelegated}* (consistency)
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// verifyDelegatedConsistency: bidirectional listener consistency
+// ---------------------------------------------------------------------------
+
+// TestFinalizeAuth_RejectsInternalPathOnPrimaryListener is a regression guard:
+// an /internal/v1/* path mounted on PrimaryListener must fail fast.
+func TestFinalizeAuth_RejectsInternalPathOnPrimaryListener(t *testing.T) {
+	r, err := NewForListener(kcell.PrimaryListener)
+	require.NoError(t, err)
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/admin/cmd",
+	})
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject /internal/v1/* on PrimaryListener")
+	assert.Contains(t, err.Error(), "internal", "error must mention 'internal'")
+}
+
+// TestFinalizeAuth_RejectsNonInternalPathOnInternalListener ensures the inverse:
+// a non-/internal/v1/* path must not be mounted on InternalListener.
+func TestFinalizeAuth_RejectsNonInternalPathOnInternalListener(t *testing.T) {
+	r, err := NewForListener(kcell.InternalListener)
+	require.NoError(t, err)
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "GET",
+		Path:   "/api/v1/items",
+	})
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject non-/internal/v1/* path on InternalListener")
+	assert.Contains(t, err.Error(), "internal listener", "error must mention 'internal listener'")
+}
 
 // ---------------------------------------------------------------------------
 // Policy coverage verification tests

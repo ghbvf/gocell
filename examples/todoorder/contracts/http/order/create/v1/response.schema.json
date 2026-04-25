@@ -10,8 +10,10 @@
         "item": { "type": "string" },
         "status": { "type": "string" }
       },
-      "required": ["id", "item", "status"]
+      "required": ["id", "item", "status"],
+      "additionalProperties": false
     }
   },
-  "required": ["data"]
+  "required": ["data"],
+  "additionalProperties": false
 }

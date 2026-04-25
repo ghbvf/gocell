@@ -11,7 +11,7 @@ import (
 // validateTOPO01 checks that contractUsages[].role is valid for the contract's kind.
 func (v *Validator) validateTOPO01() []ValidationResult {
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
+	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			c, ok := v.project.Contracts[cu.Contract]
 			if !ok {
@@ -21,7 +21,7 @@ func (v *Validator) validateTOPO01() []ValidationResult {
 			if !containsRole(validRoles, cell.ContractRole(cu.Role)) {
 				results = append(results, v.newResult(
 					"TOPO-01", SeverityError, IssueInvalid,
-					sliceFile(key),
+					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].role", i),
 					fmt.Sprintf("role %q is not valid for contract kind %q (contract %q)", cu.Role, c.Kind, cu.Contract),
 				))
@@ -34,7 +34,7 @@ func (v *Validator) validateTOPO01() []ValidationResult {
 // validateTOPO02 checks that a provider-role slice's belongsToCell matches the contract's provider.
 func (v *Validator) validateTOPO02() []ValidationResult {
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
+	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			if !cell.IsProviderRole(cell.ContractRole(cu.Role)) {
 				continue
@@ -47,7 +47,7 @@ func (v *Validator) validateTOPO02() []ValidationResult {
 			if provider != "" && s.BelongsToCell != provider {
 				results = append(results, v.newResult(
 					"TOPO-02", SeverityError, IssueMismatch,
-					sliceFile(key),
+					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].role", i),
 					fmt.Sprintf(
 						"slice %q (cell %q) has provider role %q but contract %q provider is %q",
@@ -63,7 +63,7 @@ func (v *Validator) validateTOPO02() []ValidationResult {
 // validateTOPO03 checks that a consumer-role slice's belongsToCell is in the contract's consumers.
 func (v *Validator) validateTOPO03() []ValidationResult {
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
+	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			if !cell.IsConsumerRole(cell.ContractRole(cu.Role)) {
 				continue
@@ -76,7 +76,7 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 			if len(consumers) > 0 && !containsString(consumers, "*") && !containsString(consumers, s.BelongsToCell) {
 				results = append(results, v.newResult(
 					"TOPO-03", SeverityError, IssueMismatch,
-					sliceFile(key),
+					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].role", i),
 					fmt.Sprintf(
 						"slice %q (cell %q) has consumer role %q but is not in contract %q consumers %v",
@@ -149,7 +149,7 @@ func (v *Validator) checkContractProviderLevel(
 		if contractLevel > providerLevel {
 			return []ValidationResult{v.newResult(
 				"TOPO-04", SeverityError, IssueMismatch,
-				contractFile(c.ID),
+				contractFile(c),
 				"consistencyLevel",
 				fmt.Sprintf(
 					"contract %q consistencyLevel %s exceeds provider cell %q level %s",
@@ -177,7 +177,7 @@ func (v *Validator) checkContractProviderLevel(
 	if maxLvl, ok := actorMaxLevel[providerID]; ok && contractLevel > maxLvl {
 		return []ValidationResult{v.newResult(
 			"TOPO-04", SeverityError, IssueMismatch,
-			contractFile(c.ID),
+			contractFile(c),
 			"consistencyLevel",
 			fmt.Sprintf(
 				"contract %q consistencyLevel %s exceeds external actor %q maxConsistencyLevel %s",
@@ -213,7 +213,7 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 		if l0Cells[provider] {
 			results = append(results, v.newResult(
 				"TOPO-05", SeverityError, IssueForbidden,
-				contractFile(ct.ID),
+				contractFile(ct),
 				"endpoints",
 				fmt.Sprintf("L0 cell %q must not appear as provider in contract %q", provider, ct.ID),
 			))
@@ -222,7 +222,7 @@ func (v *Validator) validateTOPO05() []ValidationResult {
 			if l0Cells[consumer] {
 				results = append(results, v.newResult(
 					"TOPO-05", SeverityError, IssueForbidden,
-					contractFile(ct.ID),
+					contractFile(ct),
 					"endpoints",
 					fmt.Sprintf("L0 cell %q must not appear as consumer in contract %q", consumer, ct.ID),
 				))
@@ -300,7 +300,7 @@ func (v *Validator) checkConsumerActors(
 		if maxLvl, ok := actorMaxLevel[consumerID]; ok && contractLevel > maxLvl {
 			results = append(results, v.newResult(
 				"TOPO-07", SeverityError, IssueMismatch,
-				contractFile(c.ID),
+				contractFile(c),
 				fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i),
 				fmt.Sprintf(
 					"contract %q consistencyLevel %s exceeds consumer actor %q maxConsistencyLevel %s",
@@ -329,7 +329,7 @@ func (v *Validator) validateTOPO08() []ValidationResult {
 		return nil
 	}
 
-	for key, s := range v.project.Slices {
+	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
 			if deprecated[cu.Contract] {
 				ownerCell := ""
@@ -338,7 +338,7 @@ func (v *Validator) validateTOPO08() []ValidationResult {
 				}
 				results = append(results, v.newResult(
 					"TOPO-08", SeverityError, IssueForbidden,
-					sliceFile(key),
+					sliceFile(s),
 					fmt.Sprintf("contractUsages[%d].contract", i),
 					fmt.Sprintf("slice %q references deprecated contract %q (ownerCell: %q); check the contract description or contact the ownerCell team for the replacement", s.ID, cu.Contract, ownerCell),
 				))
@@ -366,7 +366,7 @@ func (v *Validator) validateTOPO06() []ValidationResult {
 			if existing, ok := cellAssembly[cellRef]; ok {
 				results = append(results, v.newResult(
 					"TOPO-06", SeverityError, IssueDuplicate,
-					assemblyFile(a.ID),
+					assemblyFile(a),
 					fmt.Sprintf("cells[%d]", i),
 					fmt.Sprintf(
 						"cell %q is already assigned to assembly %q, cannot also be in %q",

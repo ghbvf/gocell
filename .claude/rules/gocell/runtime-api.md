@@ -43,9 +43,8 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
             Prefix:   "/internal/v1/access",
             Register: func(mux cell.RouteMux) {
                 auth.Mount(mux, auth.Route{
-                    Contract:  specRolesAssign,
-                    Handler:   http.HandlerFunc(c.rbacAssignHandler.HandleAssign),
-                    Delegated: true,
+                    Contract: specRolesAssign,
+                    Handler:  http.HandlerFunc(c.rbacAssignHandler.HandleAssign),
                 })
             },
         },
@@ -144,7 +143,6 @@ bootstrap.WithListener(WebhookListener, ":8090",
 | `Policy` | `auth.Policy` — 路由级策略 | 可选；`Public=true` 时必须为 nil |
 | `Public` | JWT 豁免 | 与 `Policy` / `PasswordResetExempt` 互斥 |
 | `PasswordResetExempt` | 允许 password-reset token | 与 `Public` 互斥；handler 内做细粒度校验 |
-| `Delegated` | `/internal/v1/*` 路由一致性标记 | `Delegated: true` ⇔ 路径必须以 `/internal/v1/` 开头且路由组挂在 `InternalListener`。FinalizeAuth 校验一致性并 fail-fast (PR-258 F2 round-3：router-aware listener identity 检查)。 |
 
 ### 三 listener 分流（PR-A14b）
 
@@ -166,7 +164,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 
 1. 收集所有 `auth.Mount` 推送的 `AuthRouteMeta`
 2. 去重 `(method, path)` — 重复 fail-fast
-3. 校验 `Delegated` ↔ `/internal/v1/*` 一致性（PR-A14a）
+3. 校验 `IsInternal()` ↔ `/internal/v1/*` 路径一致性（PR-A14a）：internal 路径必须在 InternalListener 上，非 internal 路径不得在 InternalListener 上
 4. 编译 public / password-reset-exempt 匹配器
 5. 从首个 `POST + PasswordResetExempt=true` 路由派生 password-reset change-endpoint hint
 6. AuthMiddleware 在请求时通过 Router 字段 lazy 读取匹配器
@@ -184,7 +182,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - `Public: true` 不能与路由级 `Policy` 同时设置（FinalizeAuth fail-fast）
 - `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义
 - JWT 单一路径（PR262）：`cell.NewAuthJWT(verifier)` 直接注入；`cell.NewAuthJWTFromAssembly(asm)` phase4 时通过 `AuthJWTFromAssembly.Validate()` 从 `authProvider` Cell 发现 verifier。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。Verifier 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher，零样板。
-- `Delegated=true` 路由必须挂在 InternalListener（F2 round-3：FinalizeAuth router-aware 校验，Primary/Health 上 Delegated 直接 fail-fast）。
+- `/internal/v1/*` 路由（`IsInternal()` 为 true）必须挂在 InternalListener；非 internal 路径不得挂在 InternalListener（FinalizeAuth 双向 fail-fast 校验）。
 
 ### 规则
 
