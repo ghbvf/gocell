@@ -89,8 +89,9 @@ Every endpoint below except `POST /api/v1/access/sessions/login` and
 `POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
 header. Public routes are declared per-Cell via `auth.Mount(mux, auth.Route{Contract: ..., Public: true})`
 inside `cells/accesscore/cell.go`; the composition root (`examples/ssobff/main.go`)
-opts into verifier discovery via `bootstrap.WithAuthDiscovery()` without
-hardcoding any endpoint list.
+装配 JWT 校验通过 listener policy `bootstrap.PolicyJWTFromAssembly(asm)`，
+phase4 时 `cell.Policy.Validate` 钩子从 `authProvider` Cell 自动发现 verifier
+（无 `WithAuthDiscovery` / `WithAuthMiddleware` 等顶层 Bootstrap Option）。
 `walkthrough_test.go` exercises the same sequence and is the authoritative
 behaviour record if a curl here disagrees.
 

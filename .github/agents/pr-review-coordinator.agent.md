@@ -7,7 +7,8 @@ tools:
   - read
   - search
   - todo
-  - terminal
+  - bash/git
+  - bash/gh
   - edit/createFile
   - edit/editFiles
   - web/fetch
@@ -52,28 +53,9 @@ target: vscode
 - pr: #<number> (if any)
 - base...head: <baseRef>(<baseSha7>)...<headRef>(<headSha7>)
 - changedFiles: <count> files
-- evidenceSource: gh-pr-metadata|local-git-diff|user-provided-diff
-- consistencyCheck: PASS|FAIL (gh-files=<n>, local-files=<m>)
+- evidenceSource: github-api|local-git-diff|user-provided-diff
+- consistencyCheck: PASS|FAIL (api-files=<n>, local-files=<m>)
 ```
-
-硬门禁：
-
-- `consistencyCheck=FAIL` 时，不得进入席位审查。
-- `Preflight` 任一字段缺失时，不得进入席位审查。
-
-## 目标锁定协议（必须执行）
-
-当用户给出 PR 编号时：
-
-1. 必须先调用 GitHub 权威元数据（`gh pr view --repo ghbvf/gocell --json ...`）解析 `base/head` 与文件清单。
-2. 必须对齐本地 diff 基线到 `base...head`，禁止以工作区改动或 `HEAD~1` 代替。
-3. 必须先输出 `ReviewPacket`，再启动席位。
-4. 若 GitHub 文件列表与本地 diff 不一致，立即停止审查，只提出一个澄清问题。
-
-降级模式（GitHub 不可用）
-
-- 必须明确标注“降级审查（非 PR 权威 diff）”。
-- 未经用户确认，不得给出阻塞合并结论。
 
 ## 必须启动的审查席位
 

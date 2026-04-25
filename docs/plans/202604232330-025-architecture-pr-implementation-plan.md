@@ -1,6 +1,6 @@
 # 架构项 PR 实施计划
 
-> 日期: 2026-04-23（2026-04-25 回灌 PR-A12b/#252 command 生命周期收口）
+> 日期: 2026-04-23（2026-04-25 第十三轮回灌 PR-A14b round-3/#262 + PR-A30/#263 + accesscore harden/#264 + distlock flaky/#265 全部落地，Wave 2 主线全部完工，无在飞 PR；第十二轮新增 Wave 2.5 Config 域审查回灌 PR-CFG-1..7；第十一轮回灌 PR-A14b/#258 + PR-A31/#259 + PR-A20/#260 + PR-A10/#261 一批）
 > 来源: `docs/plans/docs-backlog-md-docs-reviews-2026042219-graceful-backus.md` 架构层（P1/P2/P3）+ `202604191515-auth-federated-whistle.md`（F1-F7 基石）+ `202604211245-024-auth-rebaseline-implementation-plan.md`（A/B/C）+ `202604200313-v1.0-pre-release-plan.md` 残余 + 2026-04-24 六席位复核新发现
 > 基线: `develop @ ce33f6a`（PR#233 合入后 — PR-A2/A3/A4/A8/#231/#233 已落地）
 > 目标: 把架构层约 40 条任务 + auth/config 域剩余任务拆成 40 个内聚 PR，明确 wave 顺序、搭车关系、依赖、风险
@@ -53,6 +53,32 @@
 > 2026-04-25 更新（第九轮 · PR-A12b kernel/command 生命周期收口）:
 > - 新增 **PR-A12b 🔨 PR#252**：在 PR-A12 `kernel/command` L4 底座之上继续收口 Dequeue / Report / Ack / ExtendLease + ActiveScanner，关闭 device command 的领取、回报、确认、续租和 active 扫描生命周期。
 > - PR-A12b review 残余 Cx3/Cx4 已登记 backlog：`PR252-F1 COMMAND-QUEUE-REGISTRAR-BOOTSTRAP-FAILFAST-01` / `PR252-F2 COMMAND-SWEEPER-PRODUCTION-GOVERNANCE-01`。
+>
+> 2026-04-25 更新（第十轮 · Wave 2 几乎清零 + Wave 3/4 启动 + 三 PR 在飞）:
+> - 合并回灌：**PR-A12b ✅ PR#252**（command 生命周期收口）/ **PR-A18 ✅ PR#242**（vault test split + PR-id comment 清理）/ **PR-A11 ✅ PR#246**（kernel/wrapper contract-level observable proxy）/ **PR-A6 ✅ PR#250**（typed event payloads + camelCase + `Emit[T]` 泛型；S4 + S41 残余清零）/ **PR-A29 ✅ PR#251**（AUTH-REFRESH-MAIN — opaque refresh tokens + append-only lineage，X10/X11/X15 一批清零）/ **PR-A35 ✅ PR#256**（READYZ-POLISH — wrapCtxSafe + singleflight + strict verbose token；B' 方案彻底替换 Plan 原三件套）/ **PR-257**（PR246-FU1 typed observability + Mount fail-fast + FMT-19 AST，PR-A11 post-merge round-6 review 收口）/ **PR#254**（integration test package 对齐）/ **PR#255**（CI build-test 4 路 matrix shard）
+> - **🎯 v1.0 发布硬约束（🔴 区块）全部清零**：PR-A29 ✅ 是最后一块拼图；Wave 1 + Wave 2 主链全绿。**Wave 2 仅剩 PR-A10 OUTPUT-JSON-SARIF（🟡 6h，独立可延）+ PR-A30 AUTH-TEST-COVERAGE（依赖 PR-A29 已合，可启动）+ PR-A31 AUTH-FIRSTRUN-DX（🔨 PR#259 已开）**。
+> - **新开 in-flight**：**PR-A14b 🔨 PR#258**（INTERNAL-LISTENER-FULL — three-listener + RouteGroup 声明式 API；R2-01..R2-11 fixes 已合 follow-up commit fc4e54e7）/ **PR-A31 🔨 PR#259**（AUTH-FIRSTRUN-DX — userId + resolved_path + collapse TokenPair）/ **PR-A20 🔨 PR#260**（Wave 4 提前启动：DistLock context-derived lock + shared manager goroutine）。
+> - 下一批优先：(1) 走完三个 in-flight；(2) 启动 PR-A10 JSON-SARIF；(3) Wave 3 余项 PR-A15/A16/A17 / PR-A36 / PR-A37 DEVTOOLS-METADATA-EXPORT / PR-A38 TOOLS/DEPGRAPH 按排期推进；(4) Wave 4 PR-A33 REFRESH-OPAQUE-POLISH（PR-A29 已合可解锁）/ PR-A22 Cell ISP / PR-A23 ER-ARCH-01 / PR-A24 长期债打包（PR-A19 已早期完工，Wave 4 不再含此条）。
+>
+> 2026-04-25 更新（第十一轮 · 第十轮在飞四 PR 全部落地 + PR-A10 提前清零 + 仅剩 PR#262 round-3 follow-up）:
+> - 合并回灌：**PR-A14b ✅ PR#258**（three-listener + RouteGroup 声明式 API；R2 fixes 已合 fc4e54e7）/ **PR-A31 ✅ PR#259**（AUTH-FIRSTRUN-DX — userId + resolved_path + collapse TokenPair）/ **PR-A20 ✅ PR#260**（DistLock context-derived lock + shared manager goroutine — Wave 4 长期债提前清零）/ **PR-A10 ✅ PR#261**（OUTPUT-JSON-SARIF — 统一诊断模型 + DX hints；Wave 2 6h 独立项一气呵成）。
+> - **新开 in-flight**：**PR#262 🔨**（PR-A14b round-3 reviewer findings #1-#11 — `isAuthFlavoredPolicy` PolicyStack 解析 bug / PolicyVerboseToken SHA-256 比较 / PolicyMTLS API 重写 fail-fast / PolicyJWTFromAssembly typed marker mismatch fail-fast / readyzPayload 401 envelope 兜底 + 4 个 phase0 回归测试），分支 `247-pr-a14b-round3-reviewer`，挂 PR-A14b 后续质量收口
+> - **Wave 2 100% 清零（除 PR-A30 测试增强外）**：PR-A14b/A31/A20/A10 在 24h 内一批落地，是发布后清债的密集窗口
+> - 下一批优先：(1) 走完 PR#262 PR-A14b round-3；(2) 启动 PR-A30 AUTH-TEST-COVERAGE（最后一条 Wave 2 主线）；(3) Wave 3 PR-A36 metrics realign / PR-A37 DEVTOOLS-METADATA-EXPORT / PR-A38 TOOLS/DEPGRAPH 按排期推进；(4) Wave 4 PR-A33 REFRESH-OPAQUE-POLISH / PR-A22 Cell ISP / PR-A23 ER-ARCH-01 / PR-A24 长期债打包。
+>
+> 2026-04-25 更新（第十二轮 · Wave 2.5 Config 域审查回灌 7 PR）:
+> - 来源：2026-04-25 config 域全链路静态审查（develop @ `788e03e3` 快照），8 条 finding（6×P1 + 2×P2），与 [`docs/reviews/archive/baseline-review-report-2026-04-05.md`](../reviews/archive/baseline-review-report-2026-04-05.md) §7 四根因簇（Fractured Source Of Truth / Non-Canonical Project Graph / Verification Is Not Executable Reality / Runtime Kernel Is A Leaky Stub）残余 instance 对齐——不是新问题，是 Wave 1/2 内未在 config 域内闭合的根因簇残留
+> - 新增 7 PR：**PR-CFG-1..7**，按"架构治理先行 → 业务修跟"批次组织（详见新增 Wave 2.5 段）。设计原则：治理 PR 与最后一处违规清零同 PR，避免 allowlist 维护
+> - 关联调整：(a) backlog `MULTI-REVIEW-RES-2` 范围收窄（readyz 由 PR-CFG-1 吸收 / counter+archtest 由 PR-CFG-6 吸收）；(b) backlog `PR250-F1` 由 PR-CFG-3 激进方案 supersede（删 wire `sensitive` 字段一并落地）；(c) 触发条件项 `T6 CONTRACT-EVENT-PAYLOAD-CODEGEN-01` cross-ref PR-CFG-3 (B1c) 手写 decoder 后续可由 codegen 替换
+> - 工期：~5 工作日（架构治理 11h + 业务修 17h + 测试基建 1d），可与 Wave 3 余项并行（adapter/cells 文件不重叠）
+> - 详细 finding + Cx + 影响面：`docs/backlog.md` PR-CFG-1..7
+>
+> 2026-04-25 更新（第十三轮 · 收尾 + 4 PR 一气清零，Wave 2 主线全部完工）:
+> - 合并回灌：**PR-A14b round-3 ✅ PR#262**（reviewer findings #1-#11：`isAuthFlavoredPolicy` PolicyStack envelope 解析 / PolicyVerboseToken SHA-256 hashed compare / readyzPayload 401 envelope fallback / PolicyMTLS API 重写并删 misleading 参数 + phase0 fail-fast / PolicyJWTFromAssembly typed marker mismatch fail-fast + 6 个 phase0 回归测试）/ **PR-A30 ✅ PR#263**（AUTH-TEST-COVERAGE — S19/S21/S22/S24 一批：jwt aud table-driven + login/refresh drift integ + middleware e2e；Wave 2 最后一条主线收口）/ **fix(accesscore) ✅ PR#264**（first-admin harden：UserSource + ProvisionState provenance / printable ASCII password / GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE env + first-run-setup.md 双模式说明 — 顺带收口 backlog `PR247-N7` + `MULTI-REVIEW-RES-1`）/ **test(distlock) ✅ PR#265**（TestManager_HeapOrder flaky race 修：`waitTrackedLocks(m, 2)` barrier 让两次 handleAdd 都落在 fake-clock 0；PR-A20 #260 残留 flake）
+> - **Wave 2 主线 100% 完工**：PR-A30 是 Wave 2 最后一条，Wave 2 至此全部清零；🎯 v1.0 发布硬约束在第十一轮已清零，本轮把 Wave 2 测试覆盖 / round-3 polish / first-admin 安全收口三件并行清完
+> - **当前在飞 PR**：无（最近 8 个 PR 已合并）
+> - 关联 backlog 收口：(a) S19/S21/S22/S24 由 PR#263 标 ✅；(b) PR247-N7 SETUP-ADMIN-EMAIL-CONTROL-CHAR-GUARD-01 由 PR#264 收口（password ASCII pattern + email/username 控制字符拒绝）；(c) MULTI-REVIEW-RES-1 SETUP-410-MIGRATION-DOC-CONSOLIDATE-01 由 PR#264 收口（first-run-setup.md 双模式段落 + env-vars.md 新变量）；(d) 新增 backlog `PR262-AUTH-POLICY-PLAN-01`：PR#262 已点修 PolicyStack 解析 + MTLS API + JWTFromAssembly typed marker，但**typed `ListenerAuth/GroupAuth` plan 完整重构**仍是后续 P1 安全/架构条目（Cx3，1-2d，🟡 当前最小修后可延后）
+> - 下一批优先：(1) **Wave 2.5 Config 域 PR-CFG-1..7 batch1 启动**（4 worktree 并行，~1.5d 净，含两条 🔴 安全 + 一条 🔴 生产 gate）；(2) Wave 3 PR-A37 DEVTOOLS-METADATA-EXPORT 短链路高价值（解锁 gocell-web 自包含构建）；(3) Wave 3 PR-A36 metrics realign（🟠 多 cell assembly 部署前触发）
 
 ---
 
@@ -74,15 +100,16 @@
 |---|---|---|---|---|
 | **Wave 1** — 低风险抽取 + 治理 + auth v1.0 必做 + config 样板收敛 + INTERNAL-LISTENER-MIN | 为后续业务改造铺平基础 + 发布硬约束 | 15 | 9.7d | 14d / 7d（三路 worktree 并行） |
 | **Wave 2** — 中等架构收口 + auth refresh 主链 + auth 测试 + DX + outbox 模式收口 | Contract 模型 / kernel 新模块 + refresh opaque 主链（X11+X15）+ auth 收尾 + Emitter 抽象 | 10 | 11d | 15d / 9-10d（A9 + A5c 双 Cx3 瓶颈；A12b 为 command 生命周期收口） |
-| **Wave 3** — P2 架构延展 + INTERNAL-LISTENER-FULL + F3 Selector 收尾 | v1.1 kernel 子模块 + listener 完整版 | 8 | 9.75d | 14d / 8d |
-| **Wave 4** — P3 长期架构演进 + refresh opaque 收尾 | 分层重整 / 接口拆分 / 类型保护 / refresh polish | 7 | 9.5d | 13d / 8d |
-| **合计** | | 40 | **~40d** | **~56d / ~34d** |
+| **Wave 2.5** — Config 域审查回灌（治理先行 + 业务修） | 把 baseline review §7 四根因簇在 config 域的残余清零 + 平台治理硬化（HealthCheckers 自动聚合 / dead-event validate / 跨 cell event archtest） | 7 | ~5d | 7d / 4d（batch1 4 worktree 并行；batch2/3 串） |
+| **Wave 3** — P2 架构延展 + INTERNAL-LISTENER-FULL + F3 Selector 收尾 + DevTools 元数据出口 | v1.1 kernel 子模块 + listener 完整版 + gocell-web 自包含化 | 10 | 12.25d | 17.5d / 10d |
+| **Wave 4** — P3 长期架构演进 + refresh opaque 收尾 | 分层重整 / 接口拆分 / 类型保护 / refresh polish | 6 | 8.25d | 11.5d / 7d（PR-A19 已早期完工剔除） |
+| **合计** | | 48 | **~46.25d** | **~65d / ~39d**（Wave 2.5 +7 PR / +5d） |
 
 > **v1.0 路径（Wave 1 + Wave 2）**：净编码 ~21d；含 buffer **单人 ~29d（~6 周）/ 双人并行 ~16-17d（~3-4 周）**。
 >
 > Buffer 1.4x 乘数含 review 往返、integration 调试、Cx3/Cx4 ADR 讨论。实际 PR 编码时间通常只占项目时间 60-70%。
 
-> **⚠️ 发布前必做（🔴 硬约束）**：PR-A25 ✅（#244） / PR-A26 ✅（#247） / PR-A14a ✅（#237） / PR-A27 ✅（#216） / PR-A28 ✅（并入 #227）+ PR-A5a ✅（#234）+ PR-A34 OUTBOX-SAFETY-GATING ✅（已随 #245 收口） — 仅剩 **PR-A29 AUTH-REFRESH-MAIN（Wave 2 refresh 主链）** 未落地。
+> **⚠️ 发布前必做（🔴 硬约束）**：PR-A25 ✅（#244） / PR-A26 ✅（#247） / PR-A14a ✅（#237） / PR-A27 ✅（#216） / PR-A28 ✅（并入 #227）+ PR-A5a ✅（#234）+ PR-A34 OUTBOX-SAFETY-GATING ✅（已随 #245 收口）+ **PR-A29 AUTH-REFRESH-MAIN ✅ PR#251**（2026-04-25）— **🎯 v1.0 发布硬约束全部清零**。
 > **🟡 已完工基石（不占 Wave 计划）**：F1 JWT Registry / F3 Selector 基础设施 / F5 Errcode Classifier / F6 Lifecycle 基础设施 / L10 RoleInternalAdmin / S42 ROLELIST-CURSOR。详见末尾"已完工基石声明"章节。
 
 ---
@@ -212,9 +239,11 @@
 
 ---
 
-### PR-A6 EventRouter 身份拆分 + typed event payload + marshal err 显式（预计 7h，🟡 部分完成）
+### PR-A6 EventRouter 身份拆分 + typed event payload + marshal err 显式 ✅ 已落地 PR #250（2026-04-24）
 
-> **状态**：主线 **EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01 ✅ 已由 PR #224 顺带落地**（`kernel/outbox/subscription.go` `ConsumerGroup` + `CellID` 双字段 + `TraceIdentity()` helper）。搭车项 **S4 EVENT-PAYLOAD-TYPED-01 + S41 MARSHAL-ERR-EXPLICIT-01 仍未做**（sessionlogin:149 / sessionlogout:94 仍 `payload, _ := json.Marshal(map[string]any{...})`）；剩余范围收敛为"S4 + S41 + 任何需要让 CellID 与 ConsumerGroup 分叉的应用层"。
+> **状态**：✅ 全部清零。PR220-5 EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01 由 PR #224 先行落地（`kernel/outbox/subscription.go` `ConsumerGroup` + `CellID` 双字段 + `TraceIdentity()` helper）；S4 EVENT-PAYLOAD-TYPED-01 + S41 MARSHAL-ERR-EXPLICIT-01 由 PR #250 收口（typed event payloads + camelCase wire format + `outbox.Emit[T]` 泛型 helper 消除 `payload, _ := json.Marshal(map[string]any{...})` 模式）。
+>
+> **PR #250 round-1 review 残余 backlog**：`PR250-F1 SENSITIVE-FLAG` / `PR250-F2 USER-FLAG-EVENT-CAMELCASE-FOLLOWUP` / `PR250-F3 WIRE-BYTE-PINNING-TEST`，详见 `docs/backlog.md`。
 
 **主线**：
 - **PR220-5 EVENTROUTER-SUBSCRIPTION-IDENTITY-SPLIT-01** `ConsumerGroup`（broker）与 `CellID`（observability）拆两字段（3h）
@@ -378,7 +407,7 @@
 
 ## Wave 2 — 中等架构收口（~13 工作日）
 
-> **状态（2026-04-25）**：已落 **PR-A9/#239 · PR-A12/#249 · PR-A13/#235 · PR-A5c/#224+#245**。🔨 在飞 **PR-A11/#246**（kernel/wrapper）/ **PR-A12b/#252**（kernel/command lifecycle closure）。待开 **PR-A10 JSON-SARIF · PR-A29 🔴 AUTH-REFRESH-MAIN · PR-A30 AUTH-TEST-COVERAGE · PR-A31 AUTH-FIRSTRUN-DX**。
+> **状态（2026-04-25 第十三轮）**：✅ **Wave 2 主线 100% 完工**——已落 **PR-A6/#250 · PR-A9/#239 · PR-A10/#261 · PR-A11/#246 (+#257 FU1) · PR-A12/#249 · PR-A12b/#252 · PR-A13/#235 · PR-A29/#251 · PR-A30/#263 · PR-A31/#259 · PR-A5c/#224+#245**。Wave 2 已无待办主线。
 
 ### PR-A9 CONTRACT-META-01 传输层一等公民 ✅ 已落地 PR #239（2026-04-24）
 
@@ -397,23 +426,29 @@
 
 ---
 
-### PR-A10 OUTPUT-JSON-SARIF 诊断模型（~6h）
+### PR-A10 OUTPUT-JSON-SARIF 诊断模型 ✅ 已落地 PR #261（2026-04-25，~6h）
 
 **主线**：
-- **P1-4 OUTPUT-JSON-SARIF-01** 统一诊断模型（单一 `Issue` struct → text/JSON/SARIF 三 printer）
+- **P1-4 OUTPUT-JSON-SARIF-01** ✅ 统一诊断模型（单一 `Issue` struct → text/JSON/SARIF 三 printer）+ DX hints
 
 **搭车**：无（独立 refactor，不挂 review 其他内容）
 
 **文件面**：`cmd/gocell/` + `kernel/governance/` 序列化
 
-**风险**：低-中；输出格式改动，需保证 legacy text 输出兼容 CI consumer。
+**风险评估**：低-中；输出格式改动已通过 CI 与 SARIF schema 校验。
 
 ---
 
-### PR-A11 KERNEL/WRAPPER（P1，~1d）
+### PR-A11 KERNEL/WRAPPER ✅ 已落地 PR #246（2026-04-24，P1，主线 ~1d + 后续 PR246-FU1 PR#257）
 
 **主线**：
-- **LATER-K1 KERNEL/WRAPPER** 契约级可观测代理（Traced wrapper）
+- **LATER-K1 KERNEL/WRAPPER** ✅ 契约级可观测代理（Traced wrapper）落地为 `kernel/wrapper/` 新模块；接收 PR-A9 落地后的完整 Method/Path/PathParams 做 trace span 标注
+
+**post-merge 收口（PR246-FU1 ✅ PR#257）**：三条 P1 correctness/security fix —
+- `auth.Mount` prefix fail-fast（无前缀路由注册时拒绝 mount）
+- 路径段边界正确性（防止 `/foo` 误匹配 `/foobar`）
+- typed observability metadata precedence（wrapper 自带 metadata 覆盖默认推断）
+- FMT-19 规避语法 AST 测试覆盖
 
 **搭车**：无（独立新模块）
 
@@ -445,7 +480,7 @@
 
 ---
 
-### PR-A12b KERNEL/COMMAND 生命周期收口 🔨 PR #252（2026-04-25，P1，~1d）
+### PR-A12b KERNEL/COMMAND 生命周期收口 ✅ 已落地 PR #252（2026-04-25，P1，~1d）
 
 **主线**：
 - 在 PR-A12 的 queue 底座上补完整命令生命周期：**Dequeue / Report / Ack / ExtendLease**。
@@ -484,62 +519,56 @@
 
 ---
 
-### PR-A29 AUTH-REFRESH-MAIN（🔴 发布前必做，X11 + X15，~10h）
+### PR-A29 AUTH-REFRESH-MAIN ✅ 已落地 PR #251（2026-04-25，🔴 发布前必做 → 已清零，X10 + X11 + X15 一批）
 
-**主线**（按**强依赖顺序**执行，两阶段一个 PR 内完成或拆两个子 PR 串行）：
-- **X11 REFRESH-HMAC-SPLIT-01**（4h）`adapters/postgres/refresh_store.go` 改 token 存储为 `selector|verifier` 两段式：
-  - DB 存 `selector TEXT` 明文 + `verifier_hash TEXT`（SHA-256(verifier)）
-  - `Issue` 生成 `selector(16B) + "." + verifier(32B)` base64url 字符串
-  - `Rotate` CAS 条件改 `selector = $1 AND verifier_hash = sha256($2)`
-  - Migration `009_refresh_tokens_hmac_split.sql`（新列 + 回填 NULL）
-  - ref: Hydra / Zitadel
-- **X15 REFRESH-OPAQUE-INTEGRATION-01**（6h）`sessionlogin/service.go` + `sessionrefresh/service.go` 切换主链：
-  - 不再走 JWT refresh 旋转，改调 `refresh.Store.Issue/Rotate/Revoke`
-  - 返回给客户端的 refresh token 从 JWT string → opaque `selector.verifier`
-  - 移除旧 `GetByPreviousRefreshToken` 应用层 reuse 检测（store CAS 内聚）
-  - 对外 contract schema 更新（token length 变化）
-  - `cmd/corebundle/access_module.go` wiring 切换
+**实际交付**：
+- **X10 AUTH-REFRESH-OPAQUE-01** ✅ refresh token 已切为 opaque selector/verifier + server-side append-only rotation store；JWT refresh 发行路径删除
+- **X11 REFRESH-HMAC-SPLIT-01** ✅ selector 明文查找 + SHA-256(verifier) 存储；migration 012 重建 schema，并增加 destructive hard gate
+- **X15 REFRESH-OPAQUE-INTEGRATION-01** ✅ sessionlogin / sessionrefresh 已接入 opaque `refresh.Store`；corebundle 接入 refresh GC lifecycle + metrics
+- 实际 migration 编号为 012（不是原计划的 009），因 PR-A29 落地时间晚于 010/011 占位
 
-**硬依赖**：**X11 必须在 X15 之前**——X15 明文 token 入库后再改 HMAC-split 格式需要数据迁移
+**硬依赖落地**：X11 与 X15 通过单 PR 内合并落地，避免数据迁移。
 
-**搭车**：无（两步已是一个主题，不再搭其他）
+**搭车**：无。
 
-**文件面**：`adapters/postgres/refresh_store.go` + migration 009 + `runtime/auth/refresh/` + `cells/accesscore/slices/sessionlogin/service.go` + `cells/accesscore/slices/sessionrefresh/service.go` + `cells/accesscore/access_module.go` + `cmd/corebundle/`
+**文件面**（已实交付）：`adapters/postgres/refresh_store.go` + migration 012 + `runtime/auth/refresh/` + `cells/accesscore/slices/sessionlogin/service.go` + `cells/accesscore/slices/sessionrefresh/service.go` + `cells/accesscore/access_module.go` + `cmd/corebundle/`
 
-**风险**：高；主链重构 + CAS SQL + 对外 token 格式变化；必须 `go test -race -tags=integration` 全通过
+**解锁**：PR-A30 AUTH-TEST-COVERAGE（依赖 PR-A29 的 opaque path 测试用例）+ PR-A33 REFRESH-OPAQUE-POLISH（X12 idle / X13 partition / X14 grace counter，已转 backlog 待 Wave 4）。
 
 ---
 
-### PR-A30 AUTH-TEST-COVERAGE（~6h）
+### PR-A30 AUTH-TEST-COVERAGE ✅ 已落地 PR #263（2026-04-25，~6h，Wave 2 最后一条主线）
 
-**主线**：
-- **S19 JWT-AUDIENCE-DRIFT-INTEG-TEST-01** 真实 sessionlogin 路径 audience drift 检测（2h）
-- **S21 JWT-AUD-TEST-TABLE-DRIVEN-01** `runtime/auth/jwt_aud_test.go` 9 场景改 table-driven（1h）
-- **S22 REFRESH-AUD-REAL-ROUTE-TEST-01** 真实 HTTP refresh wrong/missing aud 集测（2h）
-- **S24 AUTH-MIDDLEWARE-AUD-REFRESH-E2E-01** `httptest.NewServer` + 真实 `AuthMiddleware` e2e（1h）
+**主线**（实际交付）：
+- **S19 JWT-AUDIENCE-DRIFT-INTEG-TEST-01** ✅ `cells/accesscore/auth_integration_test.go::loginAndGetPair` 重构为 options + struct return（`withIssuerAuds` / `withVerifierAuds` 注入 drift），新增 `TestAuthIntegration_LoginAccessTokenAudienceDrift` 覆盖 issuer-drift / verifier-drift / multi-aud-one-match / aligned 四象限
+- **S21 JWT-AUD-TEST-TABLE-DRIVEN-01** ✅ `runtime/auth/jwt_aud_test.go` 13 个 Test\* 折叠为 3 个 table-driven（`TestJWTVerifier_VerifyIntent_AudienceTable` 9 行 + `TestJWTIssuer_DefaultAudience_Table` 3 行 + `TestNewJWTVerifier_NoAudiences_ReturnsError` 构造探针）
+- **S22 REFRESH-AUD-REAL-ROUTE-TEST-01** ✅ 新 `cells/accesscore/auth_refresh_aud_integration_test.go::TestAuthIntegration_RefreshAccessTokenAudienceDrift`（refresh token 已 opaque/PR-A29 后，audience 在 response access JWT 上验证）
+- **S24 AUTH-MIDDLEWARE-AUD-REFRESH-E2E-01** ✅ 新 `runtime/auth/middleware_aud_e2e_test.go` 单一 table test 覆盖 `httptest.NewServer` + `AuthMiddleware` 完整链路（right/wrong/missing aud → 200/401/401）
+
+**实际特点**：纯测试 PR，零生产代码改动；Closes Wave 2 PR-A30（v1.0 前最后一条主线）
 
 **搭车**：无
 
-**搭车理由**：全是 auth 回归测试，F1 / F7 已完工后本批测试阻力最小；独立 PR 便于 review
+**文件面**：`runtime/auth/jwt_aud_test.go` + `runtime/auth/middleware_aud_e2e_test.go`（新）+ `cells/accesscore/auth_integration_test.go` + `cells/accesscore/auth_refresh_aud_integration_test.go`（新）
 
-**文件面**：`runtime/auth/jwt_aud_test.go` + `runtime/auth/middleware_aud_test.go` + `cells/accesscore/auth_integration_test.go` + `cmd/corebundle/`
+**依赖**：PR-A29 ✅ PR#251 已合（refresh 主链 opaque 切换后，本 PR 与新路径对齐）
 
-**依赖**：PR-A29 完成（refresh 主链切换后测试用例需对齐新 opaque path）
+**post-merge 修复**：PR #265 修复 PR-A20 #260 残留的 distlock TestManager_HeapOrder flaky race（在 PR#263 上首次 surface）
 
 ---
 
-### PR-A31 AUTH-FIRSTRUN-DX（~2h）
+### PR-A31 AUTH-FIRSTRUN-DX ✅ 已落地 PR #259（2026-04-25，~2h）
 
 **主线**：
-- **C2-A LOGIN-USERID-RESPONSE** `sessionlogin/service.go` 登录响应补 `userId` 字段
-- **C2-B 403-HINT-RESOLVED-PATH** `runtime/auth/middleware.go` 403 错误 hint 包含 resolved path
-- **C2-C README-MACOS-BASE64** `examples/ssobff/README.md` macOS `base64` flag 可移植化（去 Linux 特定参数）
+- **C2-A LOGIN-USERID-RESPONSE** ✅ `sessionlogin/service.go` 登录响应补 `userId` 字段
+- **C2-B 403-HINT-RESOLVED-PATH** ✅ `runtime/auth/middleware.go` 403 错误 hint 包含 resolved path
+- **C2-C README-MACOS-BASE64** ✅ `examples/ssobff/README.md` macOS `base64` flag 可移植化（去 Linux 特定参数）
 
-**搭车**：无
+**搭车实际**：collapse TokenPair 重复 ✅（合并 PR-A29 落地后 sessionlogin/sessionrefresh 共享的 token mint 收口）
 
 **文件面**：`cells/accesscore/slices/sessionlogin/` + `runtime/auth/middleware.go` + `examples/ssobff/README.md`
 
-**风险**：低；DX 打磨
+**风险评估**：低；DX 打磨。
 
 ---
 
@@ -630,22 +659,137 @@
 
 ---
 
+## Wave 2.5 — Config 域审查回灌（~5 工作日，PR-CFG-1..7）
+
+> 来源：2026-04-25 config 域全链路静态审查（develop @ `788e03e3` 快照），8 条 finding（6×P1 + 2×P2）
+>
+> **与 baseline review 2026-04-05 的关系**：[`docs/reviews/archive/baseline-review-report-2026-04-05.md`](../reviews/archive/baseline-review-report-2026-04-05.md) §7 识别 4 根因簇——本批次是这些根因簇在 config 域的残余 instance 清零 + 平台治理硬化（防止其他 cell 再种类似问题）：
+>
+> | baseline §7 根因簇 | 涉及 PR-CFG | 残余原因（2026-04-25 仍存在的 instance） |
+> |---|---|---|
+> | 7.1 Fractured Source Of Truth | PR-CFG-3, PR-CFG-4 | event 在 producer Go 包 / contract / consumer cache 三处建模（accesscore 直 import `cells/configcore/events`）；config DTO 加了 sensitive 字段但 response.schema.json 未声明 |
+> | 7.2 Non-Canonical Project Graph | PR-CFG-2 | `gocell validate` 没有"event contract 必须有非空 publishers + subscribers"规则，allow `flag.changed.v1` 死事件长期存在 |
+> | 7.3 Verification Is Not Executable Reality | PR-CFG-1, PR-CFG-5, PR-CFG-7 | `Relay.HealthCheckers()` 实现了无人调（readyz 假绿）；real 模式 + local-aes 仍能启动（启动 gate 假绿）；`tests/e2e/config_pilot_e2e_test.go` 全部 `t.Skip` 但 CI 绿（验证假绿） |
+> | 7.4 Runtime Kernel Is A Leaky Stub | PR-CFG-1, PR-CFG-6 | ManagedResource 的 HealthCheckers 没有自动聚合到 readyz 治理约束；fail-open silent drop 无 counter |
+>
+> **设计原则**：架构治理先行 (PR-CFG-1/2/3) → 业务修跟 (PR-CFG-4/5/6/7)；治理 PR 与最后一处违规清零同 PR，避免 allowlist 维护
+>
+> **状态（2026-04-25 第十二轮登记后）**：7 PR 全部待开，已登记 `docs/backlog.md`。
+
+### 执行批次
+
+**batch1 — 架构基线先落（4 worktree 并行，~1.5d 净）**：
+- PR-CFG-1 READYZ-MANAGEDRESOURCE-AUTO-AGGREGATE-01（4h，治理 P1，🔴）— 关联 baseline §7.4 + §7.3
+- PR-CFG-2 EVENT-DEAD-SUBSCRIBER-VALIDATE + FLAG-CHANGED-RETIRE（3h，治理+清理，🟡）— 关联 baseline §7.2
+- PR-CFG-3 EVENT-CONTRACT-BOUNDARY-RECOMPLY-01（2d，安全/契约/架构 P1，🔴 Cx4）— 关联 baseline §7.1，supersedes backlog `PR250-F1`
+- PR-CFG-5 KEYPROVIDER-LOCALAES-REAL-MODE-REJECT-01（1h，业务 P1，🔴）— 关联 baseline §7.3
+
+**batch2 — 治理基线落地后业务修（3 worktree 并行，~1d 净）**：
+- PR-CFG-4 CONFIG-READ-METADATA-ADMIN-GATE-01（1d，安全 P1，🔴）— 与 batch1 任意 PR 文件无冲突，可并行
+- PR-CFG-6 OUTBOX-EMIT-FAILOPEN-DROP-COUNTER-01（2h，ops，🟡，依赖 PR-CFG-1）— 吸收 backlog `MULTI-REVIEW-RES-2`
+
+**batch3 — 测试基建（1d）**：
+- PR-CFG-7 CONFIG-PILOT-E2E-CONDITIONAL-SKIP-01（1d，测试，🟡，依赖 PR-CFG-3 — 等 entry-upserted metadata-only 落地后写真实 consumer 副作用断言）
+
+### 7 PR 详细范围（详见 backlog 同名条目）
+
+#### PR-CFG-1 READYZ-MANAGEDRESOURCE-AUTO-AGGREGATE-01（治理 P1，🔴 Cx2，~4h）
+
+**问题**：`runtime/outbox/relay.go::HealthCheckers()` 已实现 `outbox-relay-poll/reclaim/cleanup` 三 budget probe 但**全仓零调用方**——relay 连续失败时 HTTP/DB readiness 仍绿（假绿就绪）。
+**修复**：`kernel/lifecycle.ManagedResource` 注册时自动收集 `Checkers()` → bootstrap phase5 统一聚合到 readyz handler → archtest 拦"adapter 暴露 HealthCheckers 但未通过 ManagedResource 注册"。
+**关联**：吸收 backlog `MULTI-REVIEW-RES-2` 的 readyz 降级部分。
+**ref**：Kubernetes `healthz.go` post-start hook 命名检查可单项诊断；Kratos transport server 生命周期与 health 联动；Temporal worker heartbeat 后台 worker 失败独立状态源。
+**文件**：`kernel/lifecycle/managed_resource.go` + `runtime/http/health/health.go` + `runtime/bootstrap/bootstrap_phases.go` + 测试。
+
+#### PR-CFG-2 EVENT-DEAD-SUBSCRIBER-VALIDATE-01 + FLAG-CHANGED-RETIRE（治理+清理 P1+P2，🟡 Cx2，~3h）
+
+**问题**：`event.flag.changed.v1` contract subscribers 为空、无 cell 消费，是正式架构里的死事件。
+**修复（同 PR）**：(1) 治理：`kernel/governance/contracthealth.go` 加 `CONTRACT-DEAD-EVENT-01`（event kind contract 必须有非空 publishers + subscribers，`lifecycle: deprecated` 给豁免）；(2) 业务：删 `flagwrite/service.go` emit + contract.yaml 标 `lifecycle: deprecated`。
+**为什么同 PR**：单合规则会因 flag.changed 立即 CI 红，必须同 PR 清最后一处违规。
+**文件**：`kernel/governance/contracthealth.go` + `cells/configcore/slices/flagwrite/service.go` + `contracts/event/flag/changed/v1/contract.yaml`。
+
+#### PR-CFG-3 EVENT-CONTRACT-BOUNDARY-RECOMPLY-01（激进方案）（安全/契约/架构 P1，🔴 Cx4，~2d）
+
+**问题**（三件同 PR）：
+- (a) `event.config.entry-upserted.v1` contract 宣称 "subscribers should apply current value"，但 producer 对 sensitive entry 主动降级为 `******` 占位符，subscriber 还把占位符写进本地 cache——同一事件混用 metadata 通知 + 可应用状态语义
+- (b) `cells/accesscore/slices/configreceive/service.go:11` 直接 `import configevents "github.com/ghbvf/gocell/cells/configcore/events"`，跨 cell 边界退化为 Go 包依赖，contract 不再是唯一事实源
+- (c) gocell 平台没有 archtest 拦"cells/X import cells/Y/{events,internal,**}"
+
+**修复（激进方案，三件同 PR — 用户 2026-04-25 拍板）**：
+1. **B1b**：`contracts/event/config/entry-upserted/v1/payload.schema.json` 删 value 字段，事件变 metadata-only 通知（"key/version 变了，请来取"，对标 NATS/Watermill/go-micro 边界模型）；删 configsubscribe 占位符 cache；改 producer 不再发 value
+2. **B1c**：删 accesscore configreceive 对 `configcore/events` 的 import；新建 `cells/accesscore/internal/dto/config_event_decoder.go` 本地 decode（schema 仍是 contracts/ 单一真理源）
+3. **G1**：`tools/archtest/cell_boundary_test.go` 新增规则禁止 `cells/X` import `cells/Y/{events,internal,**}`
+
+**为什么三件同 PR**：B1b 改 schema → B1c consumer 跟着改 → G1 archtest 装上来时违规已清零；任意一件单合都会让另两件爆雷或要 allowlist 维护。
+**Supersedes**：backlog `PR250-F1`（删 wire `sensitive` 字段决策一并落地）。
+**Cross-ref**：触发条件项 `T6 CONTRACT-EVENT-PAYLOAD-CODEGEN-01` 后续可用 codegen 替换 B1c 手写 decoder。
+**ref**：Watermill `cqrs/marshaler_json.go`（边界是 payload bytes，typed decode 在 consumer 进程内）；go-micro `broker/broker.go`（发布端先编码 body，消费端按本地 handler 类型解码）；NATS JetStream（API 只处理 subject 和 bytes）。
+**文件**：`contracts/event/config/entry-upserted/v1/payload.schema.json` + `cells/configcore/slices/{configpublish,configwrite,configrollback,configsubscribe}/service.go` + `cells/configcore/events/config_events.go` + `cells/accesscore/slices/configreceive/service.go` + `cells/accesscore/internal/dto/config_event_decoder.go`（新）+ `tools/archtest/cell_boundary_test.go`。
+
+#### PR-CFG-4 CONFIG-READ-METADATA-ADMIN-GATE-01（安全 P1，🔴 Cx2，~1d）
+
+**问题**：`cells/configcore/cell_routes.go:67-78` 把 `GET /api/v1/config/` 与 `GET /api/v1/config/{key}` 挂在 `auth.Authenticated()` 下，任意已登录用户都能枚举 key 列表 + 读 sensitive 元数据；同时 response.schema.json 未声明 `sensitive` 字段但真实 DTO 已写——contract-first 调用方误判线上响应非法。
+**修复（同 PR）**：(1) 两条 GET 改 `auth.AnyRole(auth.RoleAdmin)`；(2) `contracts/http/config/{get,list}/v1/response.schema.json` 显式声明 `sensitive: bool`；(3) handler/service/DTO 校齐；(4) contract_test 加 `MustRejectResponse` 负向断言。
+**ref**：Vault KV v2 `data` vs `metadata` 路径分离授权；K8s RBAC ConfigMap/Secret 默认不进 `view`；Consul KV 把 keys 枚举与 metadata/value 读取分离。
+**文件**：`cells/configcore/cell_routes.go` + `contracts/http/config/{get,list}/v1/response.schema.json` + `cells/configcore/slices/configread/{handler,service,contract_test}.go`。
+
+#### PR-CFG-5 KEYPROVIDER-LOCALAES-REAL-MODE-REJECT-01（生产 gate P1，🔴 Cx1，~1h）
+
+**问题**：`cmd/corebundle/bundle.go::buildKeyProvider` 的 `case "local-aes":` 只检查 `rejectDemoKey`，未检查 `isRealMode(adapterMode)`。real 模式 + 一个非 demo 的随机 32 字节 hex key 仍能让 local-aes provider 启动，绕过 `vault_transit_ready` checker、token 续租 worker 与续租指标，但服务仍能宣告 ready。
+**修复**：`buildKeyProvider` 在 `case "local-aes":` 首行加 `if isRealMode(adapterMode) { return errcode.New(...) }`；同步 `cmd/corebundle/demo_keys_test.go` 加正向用例。
+**文件**：`cmd/corebundle/bundle.go` + `cmd/corebundle/demo_keys_test.go`。
+
+#### PR-CFG-6 OUTBOX-EMIT-FAILOPEN-DROP-COUNTER-01（ops 可观测 P1，🟡 Cx2，~2h）
+
+**问题**：原 backlog `MULTI-REVIEW-RES-2` 的 (1) counter + (2) archtest AST 残余——PR-CFG-1 落地后 readyz 部分已解决，本 PR 收口剩余两件。
+**修复**：(1) `kernel/outbox/emitter.go` 增加 `gocell_outbox_emit_failopen_dropped_total{cell, topic}` counter；(2) archtest 升级用 AST 解析 topic 常量传播链路（参考 PR#257 PR246-FU1 FMT-19 AST 改造模式）。
+**关联**：与 backlog `MULTI-REVIEW-RES-2` 合并实施；MULTI-REVIEW-RES-2 描述已同步收窄。
+**文件**：`kernel/outbox/emitter.go` + `runtime/observability/metrics/` + `tools/archtest/outbox_topic_test.go`。
+
+#### PR-CFG-7 CONFIG-PILOT-E2E-CONDITIONAL-SKIP-01（测试基建 P2，🟡 Cx2，~1d，🟠 触发：PR-CFG-3 合后）
+
+**问题**：`tests/e2e/config_pilot_e2e_test.go` 唯一一条覆盖 HTTP → corebundle → PG → encryption → outbox → consumer 的 e2e 用例**全部无条件 `t.Skip("requires full assembly")`**——这正是 P1-1..P1-6 一系列问题能同时留在 develop 上不被发现的原因（baseline §7.3 残余）。
+**修复**：(a) skip 改为条件 skip（`requireDocker(t)` / `requirePG(t)` / `requireRMQ(t)`）；(b) 补一条断言：发布 entry → accesscore configreceive 落库副作用可见（PR-CFG-3 落地后写真实 metadata-event 消费）；(c) `.github/workflows/_build-lint.yml` integration-test job 把 `tests/e2e/...` 加进 scope。
+**前置**：PR-CFG-3 合后做，否则 consumer 形态会再变一次。
+**Cross-ref**：与 backlog F10 (`TEST-JOURNEY-ASSEMBLY-HARNESS-01`) 不同——后者是 28 条 journey skip，本条是 config 域单条 e2e。
+**文件**：`tests/e2e/config_pilot_e2e_test.go` + `.github/workflows/_build-lint.yml`。
+
+---
+
 ## Wave 3 — P2 架构延展（~10 工作日）
 
-### PR-A14b INTERNAL-LISTENER-FULL（Cx4，~1d，v1.1）
+### PR-A14b INTERNAL-LISTENER-FULL ✅ 已落地 PR #258（2026-04-24，Cx4，~1d）+ ✅ PR #262 round-3 follow-up（2026-04-25）
 
 > **注**：已拆分成 PR-A14a（Wave 1 最小双 listener）+ PR-A14b（Wave 3 完整版）。本条是完整版。
 
-**主线**：
-- **R4 INTERNAL-LISTENER-FULL** 在 PR-A14a 最小双 listener 基础上升级完整 RouteGroup：新增 `health` listener（`/healthz|/readyz|/metrics`）+ service-token/mTLS 策略 + `bootstrap.WithRouteGroup` 声明式 API + 编译期 listener 引用校验
-- **依赖**：PR-A14a 已合入（primary + internal 双 listener 基座已稳定）
+**主线（实际交付）**：
+- **R4 INTERNAL-LISTENER-FULL** ✅ **three-listener**（primary + internal + health）+ 完整 **RouteGroup 声明式 API**：`bootstrap.WithRouteGroup`、`bootstrap.WithHealthRoutes(WithReadyzPolicy(PolicyVerboseToken(...)))` 装配模式 + 编译期 listener 引用校验
+- **依赖**：PR-A14a 已合入（primary + internal 双 listener 基座已稳定）；PR-A35 已合入（health 端点 envelope + verbose token 严格化）
 
-**搭车**：
-- 配合 **PR-A32 SELECTOR-CLOSURE** 在本 PR 后删除 `bootstrap.WithInternalEndpointGuard` 过渡层（F3 彻底收尾）
+**Round-2 review R2-01..R2-11 已合 follow-up commit `fc4e54e7`**（IN_SCOPE 全清零）：
+- R2-01 + R2-04：verbose-token 双机制彻底合一（删 `WithVerboseToken` Option + `health.SetVerboseToken` handler 闸 + 重复 `readyzVerbose` / `policyVerboseActive`；新 `runtime/http/health/probequery` 子包）
+- R2-03：`shutdownAllServers` parent ctx 上限闭合（`shutGrace` 不再可越过全局 `shutdownTimeout`）
+- R2-05：`routerOpts` 类型化断言（`runtime.FuncForPC` 标识检查 vs 脆弱 `Len==2`）
+- R2-06 / R2-07 / R2-11：unit test 缺口补全 + ssobff walkthrough_test 迁移到 RouteGroups（解 PR-A14b 起 integration-tag CI red）
+- R2-09：Bootstrap 45 字段加 11 个 group 注释
+- R2-10：`listener-topology.md` fallback 章节
+- R2-11：`Router.WithSuppressNoAuthVerifierWarn` 选 Health/InternalListener 装配
+- R2-08：已存在 stuck-checker timeout test（RESOLVED）
 
-**文件面**：`runtime/bootstrap/bootstrap.go` + `runtime/http/router/group.go`（新）+ 全部 Cell 路由注册 API
+**Round-3 follow-up ✅ PR #262**（已合并 2026-04-25；分支 `247-pr-a14b-round3-reviewer`，独立 reviewer + 用户复审 11 条 finding 全部清零）：
+- **#1** P1 — `isAuthFlavoredPolicy` PolicyStack 解析 bug：`strings.Split(p.Name, " + ")` 永远不匹配 `"stack[a, b, c]"` 格式；任何使用 `PolicyStack(PolicyJWT(...), ...)` 作 listener 默认 policy 的调用方会触发 `validateAuthVerifierForDeclaredRoutes` 误 fail-fast
+- **#2** P1 — PolicyVerboseToken length oracle：raw-bytes → SHA-256 hashed `subtle.ConstantTimeCompare`（与 `health.verboseDecision` / `cmd/corebundle/metrics.go` 模型一致）
+- **#3** P1 — `readyzPayload` 401 envelope gap：缺 `details` 时 fallback 裸 `error` 对象
+- **#5/#9/#11** P1 — PolicyMTLS API 重写：删除误导参数 `pool *x509.CertPool`；签名改 `PolicyMTLS()`；phase0 fail-fast：listener 用 PolicyMTLS 但缺 TLS / `ClientAuth` 不严 / `ClientCAs` nil
+- **#10** P1 — PolicyJWTFromAssembly mismatch fail-fast：typed `*jwtFromAssemblyMarker` Extension 携带捕获的 asm 引用，phase0 与 `b.assembly` 比较并 fail-fast
+- **#6/#7/#8** P2 — DX/文档/test 锁严
+- 新增 `TestPhase0_RejectsPolicyMTLSWithoutTLS` 等 6 个 phase0 回归测试
 
-**风险**：高；签名破坏性变更，所有 cell 需同步更新。
+**~~搭车 PR-A32 SELECTOR-CLOSURE~~**：已被 PR-A14a 吸收，无需再开。
+
+**文件面**：`runtime/bootstrap/bootstrap.go` + `runtime/http/router/group.go`（新）+ `runtime/http/health/probequery/`（新子包）+ 全部 Cell 路由注册 API + `docs/architecture/listener-topology.md`
+
+**风险评估**：高；签名破坏性变更，所有 cell 已同步更新；diff +5363/-2072 的 Cx4 大 PR，已通过 round-2 + round-3 双轮 reviewer 收口。
 
 ---
 
@@ -788,24 +932,106 @@
 
 ---
 
-## Wave 4 — P3 长期架构演进（~2-3 周）
+### PR-A37 DEVTOOLS-METADATA-EXPORT（Cx2，~1d，🟡 解锁 gocell-web 自包含构建）
 
-### ~~PR-A19 AL-01 Outbox Relay → runtime~~ ✅ PR#177（S30 搭车）
+**来源**：`gocell-web/docs/backend-integration.md` — 前端 DevTools 在 `src/cells/devtools/shared/parser.ts` 用 Vite `import.meta.glob('../../../../../gocell/**.yaml')` 直接读 sibling repo YAML，gocell-web 仓库无法独立 clone/构建。后端需要提供单一 JSON 元数据出口。
 
-**已完工（commit 4cee1f19，S30 搭车）**：AL-01 OUTBOX-RELAY-RUNTIME-MIGRATE-01 已在 PR#177 落地。`adapters/postgres/outbox_relay.go` 已删除，轮询调度循环整体迁移至 `runtime/outbox/relay.go`，relay 生命周期由 runtime 层管理；Adapter 侧仅保留 Store API（SQL 存取原语），分层边界完全收口。无遗留工作项。
+**主线**：
+- **DEVTOOLS-METADATA-EXPORT-01** 新 `gocell export metadata` 子命令：
+  - `gocell export metadata [--format=json|yaml] [--out=<path>] [--include-deps] [--root=<dir>]`
+  - 复用 `kernel/metadata.NewParser` 解析全部 cell.yaml / slice.yaml / contract.yaml / assembly.yaml / journey.yaml + status-board.yaml
+  - 输出顶层结构：`{schemaVersion, generatedAt, cells, slices, contracts, assemblies, journeys, journeyStatuses, cellDependencyGraph}`
+  - `cellDependencyGraph` 复用 `kernel/governance.DependencyChecker.buildDependencyGraph()`（已有，`depcheck.go:121`，cell→cell 边由 contractUsages provider/consumer 推导）
+  - `--include-deps` 可选：拼入 PR-A38 `tools/depgraph` 的包级 import graph（A38 落地前该 flag 直接 fail-fast `--include-deps requires PR-A38 depgraph`）
+  - JSON tags 已被 `kernel/metadata/meta_struct_guard_test.go` camelCase 守住，零额外修整即可序列化
+- 部署模式：**静态导出优先**——gocell-web Dockerfile build 阶段执行 `gocell export metadata --include-deps --out=public/metadata.json`，前端 `parser.ts` 改为 `fetch('/metadata.json')`，彻底脱离 sibling repo 依赖；零 CORS、零 live endpoint 部署耦合
+
+**搭车**：无（独立 export 主题；按用户决策不与 PR-A10 OUTPUT-JSON-SARIF 合并，二者共用 JSON 序列化原则但不共用代码以避免 review 互相污染）
+
+**ADR 决策点（开工前）**：
+- 静态导出 vs live endpoint：建议静态（理由见上）；如未来需要 live，再开 follow-up `devtoolsexport` slice 挂 internal listener，复用本 PR 的 export 函数
+- `schemaVersion: "v1"` 字符串字段固定 wire 形态；任何破坏性变更先升 v2，老 frontend 按 v1 兼容
+- 导出范围：默认 platform 元数据；`--include-examples` 可选扩到 examples/* 元数据
+
+**文件面**：
+- `cmd/gocell/app/export.go`（新）+ dispatch.go 注册子命令
+- `kernel/metadata/export.go`（新薄壳，组装 ExportDocument 结构）
+- `kernel/metadata/export_test.go`（新，golden file 校验 wire 形态）
+- 复用 `kernel/governance/depcheck.go::buildDependencyGraph`（暴露为 public helper 或新增 `Graph()` 方法）
+- 文档：`docs/guides/devtools-metadata-export.md`（新）+ gocell-web 仓库的 `docs/backend-integration.md` 同步
+
+**对标参考**：`kubectl get -o json` / `helm show all` / goda `pkgs -json` 都属"读 + 转 JSON"模式，无新设计
+
+**风险**：低；纯只读导出，不影响运行时；wire 形态由 schemaVersion + golden test 守
+
+**依赖**：无（PR-A38 是可选增强，不是硬依赖）
 
 ---
 
-### PR-A20 AL-02 DistLock → runtime 抽象（~2d）🔨 in flight (refactor/531)
+### PR-A38 TOOLS/DEPGRAPH（Cx3，~1.5-2d，🟡 v1.0 后做，goda-like 包级图）
+
+**来源**：本 plan 2026-04-25 PR-A37 讨论扩充 — 前端 DevTools 希望在 cell 级元数据基础上再加一层"Go 包级 import 依赖"视图，覆盖 `kernel/` / `cells/` / `runtime/` / `adapters/` / `pkg/` / `cmd/` / `examples/` 的实际导入边，做架构合规可视化（类似 goda）。当前 `kernel/governance.depcheck.go` 只到 cell 维度，`tools/archtest/` 是规则一次性扫描，无图模型。
 
 **主线**：
-- **AL-02 DISTLOCK-RUNTIME-ABSTRACT-01** 上下文驱动锁生命周期重设计——破坏性 API 变更，但零生产 caller，迁移成本为零
+- **TOOLS-DEPGRAPH-01** 新模块 `tools/depgraph/`（**严禁放 `kernel/`** — 会引入 `golang.org/x/tools/go/packages`，违反 CLAUDE.md "kernel 只依赖标准库 + pkg/ + yaml.v3" 硬规则；放 `tools/` 与 `tools/archtest/` 同级生态）
+  - API：`Load(rootDir string, opts Options) (*Graph, error)` → `Graph{Nodes []PkgNode, Edges []PkgEdge, RootModule string}`
+  - `PkgNode = {ImportPath, Layer (kernel|cells|runtime|adapters|pkg|cmd|examples|tools|external), CellID (cells/<id>/... 推导), Files int, LinesApprox int}`
+  - `PkgEdge = {From, To, Direct bool}`
+  - Layer 字段从 import path 段位推断（与 CLAUDE.md 分层规则强一致），CellID 同理
+  - 默认只扫 `github.com/ghbvf/gocell/...`；stdlib + 第三方默认折叠成单节点 `external/<module>`，`--include-stdlib` / `--include-thirdparty` 显式打开
+  - 输出 JSON（被 PR-A37 `--include-deps` 消费）+ DOT（开发者本地 `graphviz` 可视化）
+  - 依赖：`golang.org/x/tools/go/packages`（已是 archtest 邻居生态，无新供应链风险）
+- **CLI**：`tools/depgraph/cmd/depgraph/main.go`（独立小 CLI，便于本地调试），但主入口走 `gocell export metadata --include-deps`
 
-**新设计要点**：
-- **Lock-as-Context**：`Acquire` 返回 `(context.Context, func(), error)`，镜像 `context.WithCancelCause`——锁到期时 ctx 自动取消，调用方通过 `ctx.Err()` 感知
-- **单共享 manager goroutine + min-heap**：替代旧方案的每锁一 goroutine；heap 按续期截止时间排序，单 goroutine 驱动全部续期调度，大幅降低 goroutine 数量
-- **Driver 三原语**：`SetNX(ctx, key, token, ttl) error` / `Renew(ctx, key, token, ttl) error` / `Release(ctx, key, token) error`；不暴露 Lua/Eval 抽象，语义原语化
-- **时间纪律**：禁止字面量 `sleep`/`timer`/`time.Floor`，全部走注入式 `Clock` 接口，测试可完全控制时钟
+**搭车（可选，不强制）**：
+- **LAYER-GO-IMPORT-01 governance rule**：用 depgraph 数据替换/增强 `tools/archtest/` 现有的文件级 string scan（OUTBOX-SERVICE-03 等规则现是 `goimport` 字符串匹配，迁到 depgraph 后可做"传递闭包"级校验，比如 `cells/foo` 不允许间接传递依赖到 `adapters/`）。本搭车不在主线，留作 follow-up，理由见下
+
+**搭车不强制理由**：archtest 的 string scan 是稳定的文件级单点防御，迁到 depgraph 是"基础设施升级"，不属本 PR 主题；混进来会让 review 失去焦点。建议本 PR 只交付图模型 + JSON 出口，archtest 重写另开 PR-A39
+
+**ADR 决策点（开工前）**：
+- 模块归属：`tools/depgraph/` ✅（与 archtest 同级，标准库以外的 `x/tools/go/packages` 不污染 kernel）
+- 导出粒度：包级 ✅（不下到文件级 — 体量爆炸，前端可视化无收益）
+- 缓存策略：默认 in-memory（首次 ~3-10s，后续 export 无加速诉求），不引入 disk cache 复杂度
+
+**文件面**：
+- `tools/depgraph/depgraph.go`（新）+ `depgraph_test.go`
+- `tools/depgraph/graph.go`（PkgNode/PkgEdge/Graph 类型）
+- `tools/depgraph/layer.go`（layer 推断）
+- `tools/depgraph/cmd/depgraph/main.go`（独立 CLI，可选）
+- `cmd/gocell/app/export.go`（PR-A37 落地后 import depgraph 实现 `--include-deps`）
+- `docs/guides/depgraph.md`（新）
+
+**对标参考**：
+- `loov/goda` — 表达式语言 `reach()` / `cut` / `nodes` 不复刻，本 PR 只提供"加载 + 输出图"基座
+- `golang.org/x/tools/go/packages` — 标准包加载 API
+- `kubectl explain` / k8s `pkg/api/types.go` 自描述模式
+
+**风险**：中；
+- `x/tools/go/packages` 全量 Load 体量较重，但属编译期工具非运行时，可接受
+- meta_struct_guard 已守元数据 JSON tag，但 depgraph 新增 wire 字段需补 golden test 用例
+- depgraph 输出量级估算：~200 包 × ~200B/节点 + ~800 边 × ~80B/边 ≈ 100KB JSON，前端无压力
+
+**依赖**：PR-A37 落地（PR-A38 是 PR-A37 `--include-deps` flag 的提供方；A37 自身无需 A38 也可单独工作）
+
+---
+
+## Wave 4 — P3 长期架构演进（~2-3 周）
+
+### PR-A19 AL-01 Outbox Relay → runtime ✅ 已完工（早期落地，PR #177 + PR #188）
+
+> **代码核实（2026-04-25）**：
+> - `runtime/outbox/relay.go` 702 行已实现：lifecycle state machine（stopped/starting/running/stopping）+ poll/cleanup/reclaim 三 loop + 实现 `kernel/outbox.Relay` + `runtime/worker.Worker` 接口
+> - `adapters/postgres/outbox_relay.go` **不存在**（已删除）；adapter 仅保留 `outbox_store.go` 的 Store API（`ClaimPending` / `MarkPublished` / `MarkRetry` / `MarkDead` / `ReclaimStale` / `CleanupPublished` / `CleanupDead` / `OldestEligibleAt`）
+> - **关键 commit**：PR #177 `refactor(outbox): S30 — hoist Store interface to runtime/outbox + S28 envelope share` 已完成搬迁；后续 PR #188 `feat(outbox): P1-15 relay failure budget + readiness probe` 在 runtime/outbox 上继续扩展
+>
+> 本计划登记本 PR 时未对齐源码现状（早于 plan 创建日 2026-04-23 即落地），实际无需再开 PR-A19。Wave 4 不再保留此条。
+
+---
+
+### PR-A20 AL-02 DistLock → runtime 抽象 ✅ 已落地 PR #260（2026-04-25，~1d，Wave 4 长期债提前清零）
+
+**主线**：
+- **AL-02 DISTLOCK-RUNTIME-ABSTRACT-01** ✅ context-derived lock + shared manager goroutine：续期 goroutine + TTL 刷新 → 通用 DistLock 接口；Redis 仅留 NX/Eval 原语
 
 **搭车**：无
 
@@ -929,54 +1155,33 @@
 
 ---
 
-## PR 依赖关系图
+## PR 依赖关系图（仅列待开 / 在飞 PR）
 
 ```
-Wave 1 (可并行，无相互依赖)：
-  PR-A1 治理规则 ─┬─ 对 PR-A13 docs clean 有软依赖
-  PR-A2 pkg helper ✅ PR#225
-  PR-A3 入口 + per-cell adapter ✅ PR#227
-  PR-A4 运行时可观测 ✅ PR#228（残余 PR-A35/A36 延 Wave 3）
-  PR-A5a accesscore 拆分 + A5 lifecycle 迁移 ──→ PR-A5b configcore 拆分 + S15 ctx 分类
-  PR-A6 EventRouter 拆分 + S4 typed + S41 marshal
-  PR-A7 Principal 契约（F7）
-  PR-A8 Vault auth ✅ PR#230（残余 K8s auth e2e → PR-A8-RESIDUAL backlog）
-  PR-A14a INTERNAL-LISTENER-MIN 🔴 发布前必做（独立 listener 最小版）
-  PR-A25 AUTH-PROD-HARDENING 🟠 （S-nonce 默认 InMemoryNonceStore + real-mode fail-fast + S32）
-  PR-A26 AUTH-SETUP-ENDPOINT 🔴 （P1-19 setup slice + contract）
-  PR-A27 CONFIGWRITE-RETURNING 🔴 （configwrite TOCTOU 收敛）
-  PR-A28 CONFIG-DOCS-REWRITE 🟡 （pg-cell-template 重写）
-  PR-A34 OUTBOX-SAFETY-GATING 🔴 （DirectPublishFailOpen 对安全事件 fail-closed + counter）
+Wave 1：✅ 全部完工（15 PR 见各章节状态）
 
-Wave 2：
-  PR-A9 CONTRACT-META-01 ──→ PR-A11 kernel/wrapper
-  PR-A10 JSON-SARIF（独立）
-  PR-A12 kernel/command ──→ PR-A12b command lifecycle closure
-  PR-A13 docs clean ─────→ 激活 PR-A1 里的 DOC-NAMING-GUARD
-  PR-A29 AUTH-REFRESH-MAIN 🔴 （X11 HMAC-split → X15 opaque 主链切换，强依赖 X11 先）
-  PR-A30 AUTH-TEST-COVERAGE（S19+S21+S22+S24，依赖 PR-A29）
-  PR-A31 AUTH-FIRSTRUN-DX（login userId + 403 hint + macOS base64）
-  PR-A5c OUTBOX-EMITTER-UNIFY 🟡 （Emitter 抽象 + envelope 下沉 + 跨 cell service 迁移，依赖 PR-A5a + PR-A5b + ADR）
+Wave 2：🎯 v1.0 发布硬约束已清零；仅剩 PR-A30 一条
+  PR-A30 AUTH-TEST-COVERAGE（S19+S21+S22+S24，PR-A29 已合，依赖解锁，可随时启动）
 
 Wave 3：
-  PR-A14b INTERNAL-LISTENER-FULL（完整 RouteGroup + health + mTLS，依赖 PR-A14a）
-  PR-A32 SELECTOR-CLOSURE（删 WithInternalEndpointGuard，依赖 PR-A14b）
-  PR-A15 kernel/webhook（依赖 L3 Outbox 稳定）
+  PR-A14b INTERNAL-LISTENER-FULL ✅ PR#258（main 已合）+ 🔨 PR#262 round-3 follow-up（11 条 reviewer findings）
+  PR-A15 kernel/webhook（依赖 L3 Outbox 稳定 + SSRF 安全评审）
   PR-A16 kernel/reconcile + LATER-F-1 L3 示例
   PR-A17 runtime/scheduler + WM-18
-  ~~PR-A18 Vault + RMQ 剩余~~ ✅ 已落地（PR#240）
-  PR-A35 READYZ-POLISH（verbose token deny + uncooperative checker guardrails）
-  PR-A36 HTTP-METRICS-LABEL-REALIGN（🟠 多 cell assembly 前触发）
+  PR-A36 HTTP-METRICS-LABEL-REALIGN（🟠 多 cell assembly 部署前触发）
+  PR-A37 DEVTOOLS-METADATA-EXPORT（gocell export metadata，解锁 gocell-web 自包含构建）
+  PR-A38 TOOLS/DEPGRAPH（goda-like 包级 import 图，PR-A37 --include-deps 提供方；依赖 PR-A37）
 
 Wave 4 (v1.1+)：
-  ~~PR-A19 AL-01 Outbox → runtime~~ ✅ PR#177 (S30 搭车)
-  PR-A20 AL-02 DistLock → runtime 🔨 in flight (refactor/531)
-  PR-A21 AL-04 Auth JWT 评估
-  PR-A22 Cell ISP 拆分
-  PR-A23 ER-ARCH-01 Subscriber Setup/Run
-  PR-A24 DURABLE-TYPE + G-6 + replay/rollback
-  PR-A33 REFRESH-OPAQUE-POLISH（X12 idle + X14 grace + X13 partition，依赖 PR-A29）
+  PR-A20 AL-02 DistLock → runtime ✅ PR#260（提前清零）
+  PR-A21 AL-04 Auth JWT 评估（可能 won't-do）
+  PR-A22 Cell ISP 拆分（破坏性，所有 cell + examples 同步）
+  PR-A23 ER-ARCH-01 Subscriber Setup/Run（修 router 启动 time.After 时序竞态）
+  PR-A24 DURABLE-TYPE + G-6 + replay/rollback（v1.1 长期债打包）
+  PR-A33 REFRESH-OPAQUE-POLISH（X12 idle + X14 grace + X13 partition；PR-A29 已合可启动）
 ```
+
+> 已完工 PR 不在依赖图列出，详见各 PR 章节状态标记 `✅ PR#xxx`。
 
 ---
 
@@ -1009,25 +1214,48 @@ Wave 4 (v1.1+)：
 
 ## 推荐执行顺序
 
-> 下面的 Week 编号按**双人并行 + buffer**给出（每周 ~5 个净工作日）。单人场景把每周拉长到 1.8 倍即可。
+> **🎯 v1.0 发布硬约束已达成 @ 2026-04-25**（PR-A29 ✅ PR#251 是最后一块拼图）。Wave 1 全部 ✅；Wave 2 仅剩独立可延项；Wave 3 进入推进期。
+>
+> 下面按**双人并行 + buffer**给出每周 ~5 个净工作日；单人场景把每周拉长到 1.8 倍。
 
-**Week 1**（Wave 1 前半 ~5d 净）：PR-A1（10h）+ PR-A2（7h）+ PR-A3（4h）+ PR-A14a（4h）—— 四路并行 worktree，基础设施打底
+### 现阶段（v1.0 已达成 + Wave 2 主线 100% 完工，进入 Wave 2.5 / Wave 3 推进期）
 
-**Week 2**（Wave 1 中段 ~5d 净）：PR-A4（6h）+ PR-A5a（6-7h A5 lifecycle）+ PR-A5b（3h）+ PR-A6（7h）+ PR-A7（6h）—— cell 内部重组 + EventRouter + Principal 契约
+**当前在飞**：无（最近 8 个 PR — #258/#259/#260/#261/#262/#263/#264/#265 — 已全部合并）
 
-**Week 3**（Wave 1 收尾 + Wave 2 启动 ~5d 净）：PR-A8 Vault（5h）+ PR-A25 AUTH-PROD-HARDENING（4h）+ PR-A26 AUTH-SETUP-ENDPOINT（4h）+ PR-A27 CONFIGWRITE-RETURNING（5h）+ PR-A28 CONFIG-DOCS（3h）+ PR-A13 docs clean（6h）—— Wave 1 发布硬约束全部落地
+**Wave 2 收尾**：✅ 全部完工（PR-A30 ✅ PR#263 是最后一条主线）
 
-**Week 4**（Wave 2 重磅 ~5d 净）：PR-A9 CONTRACT-META-01（3d Cx3 瓶颈）+ PR-A29 AUTH-REFRESH-MAIN（X11→X15 串行 10h 🔴）并行
+### Wave 2.5 推进期（~5d 净，**优先于 Wave 3**——含两条 🔴 安全 + 一条 🔴 生产 gate）
 
-**Week 5**（Wave 2 收尾 ~4.5d 净）：PR-A10 JSON-SARIF（6h）+ PR-A11 wrapper（1d）+ PR-A12 command（1d）+ PR-A12b command lifecycle closure（1d）+ PR-A30 AUTH-TEST-COVERAGE（6h）+ PR-A31 AUTH-FIRSTRUN-DX（2h）；**ADR A5c Emitter 抽象评审启动**
+**batch1**（4 worktree 并行，~1.5d 净）：
+- PR-CFG-1 READYZ-MANAGEDRESOURCE-AUTO-AGGREGATE（4h，🔴 治理）
+- PR-CFG-2 EVENT-DEAD-SUBSCRIBER-VALIDATE + FLAG-CHANGED-RETIRE（3h，🟡 治理+清理）
+- PR-CFG-3 EVENT-CONTRACT-BOUNDARY-RECOMPLY 激进方案（2d，🔴 安全/契约/架构 Cx4）
+- PR-CFG-5 KEYPROVIDER-LOCALAES-REAL-MODE-REJECT（1h，🔴 生产 gate）
 
-**Week 5.5**（PR-A5c 专攻 ~1.5-2d）：PR-A5c OUTBOX-EMITTER-UNIFY（12-15h，Cx3，ADR 通过后落地，三 cell service 同批迁移 + archtest 规则）
+**batch2**（CFG-1 合后启动，可与 batch1 残余并行，~1d 净）：
+- PR-CFG-4 CONFIG-READ-METADATA-ADMIN-GATE（1d，🔴 安全数据泄漏，文件无冲突可早起）
+- PR-CFG-6 OUTBOX-EMIT-FAILOPEN-DROP-COUNTER（2h，依赖 PR-CFG-1）
 
-**🎯 v1.0 发布节点 @ Week 5.5 末**（双人）/ **Week 9 末**（单人）：Wave 1 + Wave 2 全部落地（PR-A12b 追加 1d command lifecycle 收口；PR-A5c 标 🟡 建议但非硬约束，若 ADR 或实现延期可滑入 v1.1）
+**batch3**（CFG-3 合后，1d 净）：
+- PR-CFG-7 CONFIG-PILOT-E2E-CONDITIONAL-SKIP（1d，依赖 PR-CFG-3）
 
-**Week 6-8**（Wave 3，可与问题/功能层并行，~8-9d 净）：PR-A14b INTERNAL-LISTENER-FULL → PR-A32 SELECTOR-CLOSURE → PR-A15 webhook → PR-A16 reconcile → PR-A17 scheduler → PR-A18
+### Wave 3 推进期（~10-12d 净，与问题/功能层并行）
 
-**v1.1+**（Wave 4，~10d 净）：长期债 ~~PR-A19~~ ✅ PR#177 / PR-A20 ~ PR-A24 + PR-A33 refresh polish，按季度排
+**优先级 A（短链路高价值）**：
+- PR-A37 DEVTOOLS-METADATA-EXPORT（1d；解锁 gocell-web 自包含 docker build，无依赖）
+- PR-A38 TOOLS/DEPGRAPH（1.5-2d；A37 落地后启动）
+- PR-A36 HTTP-METRICS-LABEL-REALIGN（4h；🟠 多 cell assembly 部署前触发）
+
+**优先级 B（v1.1 kernel 子模块）**：
+- PR-A15 KERNEL/WEBHOOK + WM-32 mTLS（3d；Cx3，需 SSRF 安全评审 + ADR 前置）
+- PR-A16 KERNEL/RECONCILE + LATER-F-1 L3 示例（2d；ADR Reconciler API）
+- PR-A17 RUNTIME/SCHEDULER + WM-18 延迟消息（2d；分布式协调依赖 Redis/etcd）
+
+### Wave 4 v1.1+（~7.5d 净，按季度排）
+
+PR-A20 ✅ PR#260（提前清零）→ PR-A21 / PR-A22 / PR-A23 / PR-A24 / PR-A33 长期债
+
+> 历史 Week 1-5 排期已完成（Wave 1 + Wave 2 全部落地），不在此重复列出。详细 PR 完工概览见各 PR 章节及头部第十轮回灌摘要。
 
 ---
 
@@ -1077,53 +1305,39 @@ Wave 4 (v1.1+)：
 ~~| 5 | PR-A4 运行时可观测收口 |~~ ✅ PR #228
 ~~| 6 | PR-A8 Vault auth 批量 |~~ ✅ PR #230
 
-### 现阶段（2026-04-24 晚间后）在飞 / 待启动主线
+### 现阶段（2026-04-25 第十一轮后）在飞 / 待启动主线
 
 | Lane | 在飞 PR | 下一个待启动 |
 |---|---|---|
-| Governance / Contract | 🔨 PR #246 PR-A11 kernel/wrapper | PR-A10 JSON-SARIF |
-| Access / Auth | — | 🔴 **PR-A29 AUTH-REFRESH-MAIN**（X11 → X15 串行，发布前必做） |
-| Outbox / Event | — | PR-A6 残余（S4 typed + S41 marshal err） |
-| Entry / Bootstrap | — | PR-A14b INTERNAL-LISTENER-FULL（v1.1） |
-| Config / Vault / New Modules | 🔨 PR #242 PR-A18 test split / 🔨 PR #252 PR-A12b command lifecycle closure | PR-A16 reconcile / PR-A17 scheduler |
-| Health / Base Runtime | — | PR-A35 READYZ-POLISH / PR-A36 metrics realign |
+| Governance / Contract | — | PR-A24（Wave 4 长期债打包） |
+| Access / Auth | — | PR-A33 REFRESH-OPAQUE-POLISH（Wave 4）（PR-A30 ✅ PR#263 已合，**Wave 2 主线全部完工**） |
+| Outbox / Event | — | PR-A23 ER-ARCH-01 Subscriber Setup/Run（Wave 4）（PR-A19 已早期完工） |
+| Entry / Bootstrap | — | PR-A36 metrics realign（PR-A14b round-3 ✅ PR#262 已合） |
+| Config / Vault / New Modules | — | **Wave 2.5 PR-CFG-1..7（config 域回灌，2026-04-25 登记，🔴 batch1 优先）** / PR-A16 kernel/reconcile / PR-A17 runtime/scheduler / PR-A21 Auth JWT 评估 / PR-A22 Cell ISP |
+| Health / Base Runtime | — | （PR-A35 ✅ PR#256 已合，Lane 暂无在飞） |
+| DevTools / Tooling | — | PR-A37 DEVTOOLS-METADATA-EXPORT / PR-A38 TOOLS/DEPGRAPH |
+| Wave 4 Long-term | — | PR-A22 / PR-A23 / PR-A24 / PR-A33（PR-A19 + PR-A20 均已完工） |
 
-### 长期 6 条 lane（后续持续滚动）
+### 长期 7 条 lane（后续持续滚动，含实际 PR 编号）
 
 | Lane | 任务链 |
 |---|---|
-| Governance / Contract | PR-A1 ✅ → PR-A13 ✅ → PR-A9 ✅ → PR-A11 🔨（PR #246 open） → PR-A10 → PR-A24 |
-| Outbox / Event | PR #224 ✅ → PR-A5c ✅（主线 PR #224 + 全量收口 PR #245：F2/F3+F7/F4/F5/F6 六批 Cell Option 去原生 publisher/writer） → PR-A6 🟡（主线已入 PR#224；S4/S41 残余） → ~~PR-A19~~ ✅ PR#177 → PR-A23 |
-| Entry / Bootstrap | PR-A3 ✅ → PR-A14a ✅ → PR-A25 ✅（PR #244：S-nonce + S32） → PR-A14b → ~~PR-A32~~（已吸收进 PR-A14a） |
-| Health / Base Runtime | PR-A4 ✅（并入 Entry / Bootstrap lane） |
-| Access / Auth | PR-A5a ✅ → PR-A7 ✅ → PR-A26 ✅（PR #247：setup slice + adminprovision） → PR-A29 🔴 下一批 → PR-A31 → PR-A30 → PR-A33 |
-| Config / Vault / New Modules | PR-A5b ✅ → PR-A27 ✅；并行填充 PR-A8 ✅ → PR-A18 ✅（PR #242 open：test split 整理） → PR-A12 ✅（PR #249） → PR-A12b 🔨（PR #252） → PR-A16 → PR-A17 → PR-A20 → PR-A21 → PR-A22 |
+| Governance / Contract | PR-A1 ✅ PR#226 → PR-A13 ✅ PR#235 → PR-A9 ✅ PR#239 → PR-A11 ✅ PR#246 (+ FU1 PR#257) → PR-A10 ✅ PR#261 → PR-A24（Wave 4） |
+| Outbox / Event | PR #224 ✅ → PR-A5c ✅ PR#224+#245（F2/F3+F7/F4/F5/F6 六批 Cell Option 去原生 publisher/writer） → PR-A6 ✅ PR#250（typed event payloads + Emit[T]，S4/S41 清零） → PR-A19 ✅ 早期完工 → PR-A23（Wave 4） |
+| Entry / Bootstrap | PR-A3 ✅ PR#227 → PR-A14a ✅ PR#237（吸收 PR-A32） → PR-A25 ✅ PR#244（S-nonce + S32） → PR-A14b ✅ PR#258（three-listener + RouteGroup）+ PR#262 ✅ round-3 follow-up（11 条 reviewer findings 清零） → PR-A36 metrics realign（待开） |
+| Health / Base Runtime | PR-A4 ✅ PR#228 → PR-A35 ✅ PR#256（B' 方案：wrapCtxSafe + singleflight + verbose token strict + 统一 envelope；并入 Entry / Bootstrap lane） |
+| Access / Auth | PR-A5a ✅ PR#234 → PR-A7 ✅ PR#241 → PR-A26 ✅ PR#247（setup slice + adminprovision；PR#264 ✅ first-admin harden + provenance state） → PR-A29 ✅ PR#251（X10/X11/X15 一批 🎯 v1.0 最后一块拼图） → PR-A31 ✅ PR#259（DX 打磨） → PR-A30 ✅ PR#263（S19/S21/S22/S24，**Wave 2 最后一条主线**） → PR-A33（Wave 4） |
+| Config / Vault / New Modules | PR-A5b ✅ PR#238 → PR-A27 ✅ PR#216；并行填充 PR-A8 ✅ PR#230 → PR-A18 ✅ PR#240（主线）+ PR#242（test split） → PR-A12 ✅ PR#249 → PR-A12b ✅ PR#252（command lifecycle closure） → PR-A16 / PR-A17（待开） → PR-A21 / PR-A22（Wave 4） |
+| DevTools / Tooling | PR-A37 DEVTOOLS-METADATA-EXPORT（解锁 gocell-web 自包含构建） → PR-A38 TOOLS/DEPGRAPH（goda-like 包级图，PR-A37 `--include-deps` 提供方） |
+| Wave 4 Long-term | PR-A20 ✅ PR#260（DistLock 提前清零） → PR-A21 / PR-A22 / PR-A23 / PR-A24 / PR-A33 按季度排（~~PR-A19~~ ✅ 早期 PR#177+#188 完工，已剔除） |
 
-### 当前排期的硬规则
+### 高风险 PR 清单（便于快速筛选，仅列待开）
 
-1. **PR-A3 永远放在 PR #224 后面处理**，作为 stacked / rebased 分支合入。
-2. **PR-A5a / PR-A5b 只能做 stacked，不开 sibling PR。**
-3. **PR-A27 不复用旧分支**；等 PR-A5b 后重起。
-4. **PR-A6 / PR-A5c / ~~PR-A19~~ ✅ PR#177 / PR-A23 共用 outbox/event 热区，一次只开一个主 PR。**
-5. **PR-A14a / PR-A25 / PR-A14b / PR-A32 共用 bootstrap/cmd 热区，一次只开一个主 PR。**
-6. **PR-A29 开始后，auth lane 的其它改动必须围着 PR-A29 排。**
+- **PR-CFG-3** EVENT-CONTRACT-BOUNDARY-RECOMPLY（Cx4 激进方案，🔴 安全/契约/架构三件同 PR；2d）
+- **PR-A15** KERNEL/WEBHOOK（Cx3，需 SSRF 安全评审 + HMAC 签名 ADR）
+- **PR-A22** Cell ISP 拆分（破坏性，所有 cell + examples 同步）
+- **PR-A23** ER-ARCH-01 Subscriber Setup/Run（协议级改造，跨 AZ 时序竞态修复）
+- **PR-A24** DURABLE-TYPE + G-6 + replay/rollback（v1.1 长期债打包）
+- **PR-A33** REFRESH-OPAQUE-POLISH（X12/X13/X14；X13 partition 涉及数据迁移）
 
----
-
-### 高风险 PR 清单（便于快速筛选）
-
-- PR #224
-- PR-A6
-- PR-A9
-- PR-A14a
-- PR-A14b
-- PR-A15
-- ~~PR-A19~~ ✅ PR#177
-- PR-A22
-- PR-A23
-- PR-A24
-- PR-A25
-- PR-A27
-- PR-A29
-- PR-A33
-- PR-A5c
+> 已合并的 4 个 round-3/test PR（#262/#263/#264/#265）从本清单移除；PR-A14b round-3 风险已通过 reviewer + 用户复审 + 6 个 phase0 回归测试收口。

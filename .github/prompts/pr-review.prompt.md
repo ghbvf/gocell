@@ -8,8 +8,6 @@ agent: PR审查总控
 
 把本提示词接收到的输入作为审查目标。目标可以是 PR 编号、分支、差异、文件列表，或选中代码。
 
-使用 /opt/homebrew/bin/gh 进行github pr获取等操作，可提权，避免获取缓存数据
-
 执行要求：
 
 0. 先输出 `Preflight`（repo/reviewTargetType/pr/base...head/changedFiles/evidenceSource/consistencyCheck），确认后再进入审查
@@ -18,7 +16,6 @@ agent: PR审查总控
 2. 按根因合并问题
 3. 在给出任何“最佳实践”或“推荐设计”建议之前，先针对彼此独立的优秀开源项目并行运行 3 个或以上“开源模式研究员”子 agent
 4. 对主要问题补充数据流、函数调用链、架构和设计分析
-5. 若 PR 权威元数据与本地 diff 不一致，停止并只提一个澄清问题
 
 Preflight 模板（固定）：
 
@@ -30,8 +27,8 @@ Preflight 模板（固定）：
 - pr: #<number> (if any)
 - base...head: <baseRef>(<baseSha7>)...<headRef>(<headSha7>)
 - changedFiles: <count> files
-- evidenceSource: gh-pr-metadata|local-git-diff|user-provided-diff
-- consistencyCheck: PASS|FAIL (gh-files=<n>, local-files=<m>)
+- evidenceSource: github-api|local-git-diff|user-provided-diff
+- consistencyCheck: PASS|FAIL (api-files=<n>, local-files=<m>)
 ```
 
 默认输出中文；只有用户明确要求其他语言时才切换。
