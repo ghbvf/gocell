@@ -38,6 +38,17 @@ func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) e
 
 var _ persistence.TxRunner = noopTxRunner{}
 
+// envOr returns os.Getenv(key) when set; otherwise the fallback. Used to
+// override listener addresses without rebuilding the binary — the smoke
+// regression guard injects high ports to avoid colliding with developer
+// docker/dev-server bindings on the canonical 8081/9081/9091 trio.
+func envOr(key, fallback string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return fallback
+}
+
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
@@ -162,11 +173,21 @@ func main() {
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
+	primaryAddr := envOr("GOCELL_SSOBFF_PRIMARY_ADDR", ":8081")
+	internalAddr := envOr("GOCELL_SSOBFF_INTERNAL_ADDR", ":9081")
+	healthAddr := envOr("GOCELL_SSOBFF_HEALTH_ADDR", "127.0.0.1:9091")
+
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithListener(cell.PrimaryListener, ":8081", []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
-		bootstrap.WithListener(cell.InternalListener, ":9081", internalAuthChain),
+		bootstrap.WithListener(cell.PrimaryListener, primaryAddr, []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
+		bootstrap.WithListener(cell.InternalListener, internalAddr, internalAuthChain),
+		// Dedicated health listener on a loopback port — keeps /healthz, /readyz,
+		// /metrics off the public port (8081) so probes and metric scrapers do
+		// not share the auth-fronted business surface. Also gives operators a
+		// stable port to script readiness against (referenced by
+		// examples/ssobff/smoke_test.go and docs/ops/listener-topology.md).
+		bootstrap.WithListener(cell.HealthListener, healthAddr, nil),
 		bootstrap.WithHealthRoutes(healthOpts...),
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
 	)
