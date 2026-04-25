@@ -344,6 +344,7 @@ func makeDeliveryBody(t *testing.T, entry outbox.Entry) []byte {
 		Topic:         entry.Topic,
 		Payload:       json.RawMessage(payload),
 		Metadata:      entry.Metadata,
+		Observability: entry.Observability,
 		CreatedAt:     entry.CreatedAt,
 	}
 	b, err := json.Marshal(wire)
@@ -2265,7 +2266,7 @@ func TestConsumerBase_AsMiddleware_WithSubscriberWithMiddleware(t *testing.T) {
 	assert.False(t, handlerCalled, "duplicate should be skipped by ConsumerBase middleware")
 }
 
-func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing.T) {
+func TestConsumerBase_AsMiddleware_RestoresObservabilityViaSubscriberWrapper(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &sequenceClaimer{responses: []claimResponse{{
 		state:   idempotency.ClaimAcquired,
@@ -2283,10 +2284,12 @@ func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing
 		},
 	}
 
+	// Restoration of entry.Observability into ctx is built into
+	// SubscriberWithMiddleware.Subscribe as the outermost wrapper, so
+	// AsMiddleware sees a populated ctx without an explicit middleware.
 	wrappedSub := &outbox.SubscriberWithMiddleware{
 		Inner: innerSub,
 		Middleware: []outbox.SubscriptionMiddleware{
-			outbox.ObservabilityContextMiddleware(),
 			cb.AsMiddleware(),
 		},
 	}
@@ -2306,10 +2309,10 @@ func TestConsumerBase_AsMiddleware_WithObservabilityContextMiddleware(t *testing
 	entry := outbox.Entry{
 		ID:        "evt-context-001",
 		EventType: "events.test",
-		Metadata: map[string]string{
-			"request_id":     "req-rmq-1",
-			"correlation_id": "corr-rmq-1",
-			"trace_id":       "trace-rmq-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-rmq-1",
+			CorrelationID: "corr-rmq-1",
+			TraceID:       "trace-rmq-1",
 		},
 	}
 
@@ -2351,7 +2354,6 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 	wrappedSub := &outbox.SubscriberWithMiddleware{
 		Inner: innerSub,
 		Middleware: []outbox.SubscriptionMiddleware{
-			outbox.ObservabilityContextMiddleware(),
 			cb.AsMiddleware(),
 		},
 	}
@@ -2370,10 +2372,10 @@ func TestConsumerBase_AsMiddleware_LogsRestoredContext(t *testing.T) {
 	res := capturedHandler(context.Background(), outbox.Entry{
 		ID:        "evt-log-001",
 		EventType: "events.test",
-		Metadata: map[string]string{
-			"request_id":     "req-log-1",
-			"correlation_id": "corr-log-1",
-			"trace_id":       "trace-log-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-log-1",
+			CorrelationID: "corr-log-1",
+			TraceID:       "trace-log-1",
 		},
 	})
 	assert.Equal(t, outbox.DispositionReject, res.Disposition)
@@ -3001,7 +3003,7 @@ func TestProcessDelivery_NilReceipt_NoPanic(t *testing.T) {
 // TestProcessDelivery_PassesThroughContextWithoutRestore verifies that
 // processDelivery passes the parent context to the handler as-is, without
 // restoring observability metadata. Context restoration is handled by
-// ObservabilityContextMiddleware at the middleware layer, not by the subscriber.
+// SubscriberWithMiddleware at the wrapper layer, not by the subscriber.
 func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
@@ -3013,13 +3015,16 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
+	// Entry has Observability populated, but since the bare Subscriber is
+	// invoked here (no SubscriberWithMiddleware wrapper, which owns restore),
+	// subscriber MUST NOT restore ctx itself.
 	entry := outbox.Entry{
 		ID:        "evt-ctx-restore",
 		EventType: "test.restore",
-		Metadata: map[string]string{
-			"request_id":     "req-sub-1",
-			"correlation_id": "corr-sub-1",
-			"trace_id":       "trace-sub-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-sub-1",
+			CorrelationID: "corr-sub-1",
+			TraceID:       "trace-sub-1",
 		},
 	}
 	entryBytes := makeDeliveryBody(t, entry)
@@ -3061,7 +3066,7 @@ func TestProcessDelivery_PassesThroughContextWithoutRestore(t *testing.T) {
 // TestProcessDelivery_DoesNotRestoreObservabilityContext verifies that
 // the subscriber's processDelivery does NOT restore observability metadata
 // into the handler context. Context restoration is the responsibility of
-// ObservabilityContextMiddleware (registered via bootstrap or manually).
+// SubscriberWithMiddleware.Subscribe (built-in invariant; bootstrap wires it).
 func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
@@ -3073,13 +3078,16 @@ func TestProcessDelivery_DoesNotRestoreObservabilityContext(t *testing.T) {
 		DLXExchange: "test.dlx",
 	})
 
+	// Entry has Observability populated; processDelivery must not restore it
+	// (restoration is built into SubscriberWithMiddleware.Subscribe, not the
+	// bare subscriber's processDelivery).
 	entry := outbox.Entry{
 		ID:        "evt-no-restore",
 		EventType: "test.restore",
-		Metadata: map[string]string{
-			"request_id":     "req-log-1",
-			"correlation_id": "corr-log-1",
-			"trace_id":       "trace-log-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-log-1",
+			CorrelationID: "corr-log-1",
+			TraceID:       "trace-log-1",
 		},
 	}
 	entryBytes := makeDeliveryBody(t, entry)

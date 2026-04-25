@@ -135,7 +135,7 @@ func TestMigrationsFS_SubDirectory(t *testing.T) {
 			sqlFiles = append(sqlFiles, e.Name())
 		}
 	}
-	assert.Len(t, sqlFiles, 12, "should have 12 goose-annotated SQL files (001-012)")
+	assert.Len(t, sqlFiles, 13, "should have 13 goose-annotated SQL files (001-013)")
 }
 
 func TestMigrationDirection_Values(t *testing.T) {

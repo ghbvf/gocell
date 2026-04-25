@@ -190,7 +190,8 @@ type ConsumerBase struct {
 
 // logWithContext delegates to slog.LogAttrs with the given context, ensuring
 // any ContextHandler extracts observability fields (request_id, correlation_id,
-// trace_id) restored by ObservabilityContextMiddleware on the consumer path.
+// trace_id) restored by SubscriberWithMiddleware.Subscribe on the consumer
+// path (built-in outermost wrapper, no separate middleware to install).
 func logWithContext(ctx context.Context, level slog.Level, msg string, attrs ...slog.Attr) {
 	slog.LogAttrs(ctx, level, msg, attrs...)
 }

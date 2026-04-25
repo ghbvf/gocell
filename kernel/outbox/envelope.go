@@ -18,16 +18,17 @@ var ErrUnknownEnvelopeVersion = errcode.New(errcode.ErrEnvelopeSchema,
 // WireMessage is the canonical wire envelope used by outbox relay and direct
 // publisher paths across transports.
 type WireMessage struct {
-	SchemaVersion string            `json:"schemaVersion"`
-	ID            string            `json:"id"`
-	AggregateID   string            `json:"aggregateId,omitempty"`
-	AggregateType string            `json:"aggregateType,omitempty"`
-	EventType     string            `json:"eventType"`
-	Topic         string            `json:"topic,omitempty"`
-	Payload       json.RawMessage   `json:"payload"`
-	Metadata      map[string]string `json:"metadata,omitempty"`
-	CreatedAt     time.Time         `json:"createdAt"`
-	Attempts      int               `json:"attempts,omitempty"`
+	SchemaVersion string                `json:"schemaVersion"`
+	ID            string                `json:"id"`
+	AggregateID   string                `json:"aggregateId,omitempty"`
+	AggregateType string                `json:"aggregateType,omitempty"`
+	EventType     string                `json:"eventType"`
+	Topic         string                `json:"topic,omitempty"`
+	Payload       json.RawMessage       `json:"payload"`
+	Metadata      map[string]string     `json:"metadata,omitempty"`
+	Observability ObservabilityMetadata `json:"observability,omitempty"`
+	CreatedAt     time.Time             `json:"createdAt"`
+	Attempts      int                   `json:"attempts,omitempty"`
 }
 
 // MarshalEnvelope serializes an Entry into the canonical v1 wire envelope.
@@ -45,6 +46,7 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 		Topic:         entry.RoutingTopic(),
 		Payload:       json.RawMessage(entry.Payload),
 		Metadata:      entry.Metadata,
+		Observability: entry.Observability,
 		CreatedAt:     createdAt,
 	}
 	b, err := json.Marshal(msg)
@@ -105,6 +107,7 @@ func UnmarshalEnvelope(topic string, raw []byte) (Entry, error) {
 		Topic:         entryTopic,
 		Payload:       []byte(msg.Payload),
 		Metadata:      msg.Metadata,
+		Observability: msg.Observability,
 		CreatedAt:     msg.CreatedAt,
 	}, nil
 }

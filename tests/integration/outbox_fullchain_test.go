@@ -175,7 +175,7 @@ func waitForSubscriberReady(t *testing.T, conn *rabbitmq.Connection, queueName s
 // Infrastructure: PostgreSQL + RabbitMQ + Redis (3 testcontainers).
 func TestIntegration_OutboxFullChain(t *testing.T) {
 	// Publish-side context carries observability IDs that will be injected
-	// into outbox entry metadata by MergeObservabilityMetadata.
+	// into entry.Observability by InjectObservabilityFromContext at write time.
 	publishCtx := context.Background()
 	publishCtx = ctxkeys.WithRequestID(publishCtx, "req-full-chain-001")
 	publishCtx = ctxkeys.WithCorrelationID(publishCtx, "corr-full-chain-001")
@@ -245,7 +245,7 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	)`)
 	require.NoError(t, err, "create test_orders table")
 
-	// Use publishCtx so MergeObservabilityMetadata picks up the obs IDs.
+	// Use publishCtx so InjectObservabilityFromContext picks up the obs IDs.
 	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
 		// Business write.
 		tx, ok := postgres.TxFromContext(txCtx)
@@ -288,15 +288,12 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 
 	received := make(chan observedDelivery, 1)
 	// Subscribe context is deliberately clean (no obs IDs). The only way
-	// obs values reach the handler is through ObservabilityContextMiddleware
-	// restoring them from entry.Metadata.
+	// obs values reach the handler is through SubscriberWithMiddleware's
+	// built-in outermost restore step (entry.Observability → ctxkeys).
 	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer subCancel()
 
-	wrappedSub := &outbox.SubscriberWithMiddleware{
-		Inner:      sub,
-		Middleware: []outbox.SubscriptionMiddleware{outbox.ObservabilityContextMiddleware()},
-	}
+	wrappedSub := &outbox.SubscriberWithMiddleware{Inner: sub}
 
 	subErrCh := make(chan error, 1)
 	go func() {
@@ -356,18 +353,23 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 		string(got.entry.Payload),
 		"payload should match original business event")
 
-	// The relay serialises the full outbox.Entry as the AMQP body, so
-	// metadata round-trips through JSON. The outbox writer should inject
-	// observability metadata from context before persistence, and the
-	// subscriber should restore those values into the consumer handler context.
+	// The relay serialises the full outbox.Entry (including entry.Observability)
+	// as the AMQP body. The outbox writer injects observability from context into
+	// entry.Observability at write time; the consumer middleware restores it into
+	// the handler context. Business metadata and observability are now distinct columns.
 	assert.Equal(t, "integration-test", got.entry.Metadata["source"],
 		"business metadata should be preserved")
-	assert.Equal(t, "req-full-chain-001", got.entry.Metadata["request_id"],
-		"request_id should be injected from context")
-	assert.Equal(t, "corr-full-chain-001", got.entry.Metadata["correlation_id"],
-		"correlation_id should be injected from context")
-	assert.Equal(t, "trace-full-chain-001", got.entry.Metadata["trace_id"],
-		"trace_id should survive the full chain")
+	_, hasReqIDInMeta := got.entry.Metadata["request_id"]
+	assert.False(t, hasReqIDInMeta,
+		"request_id must not be in business metadata — it belongs in entry.Observability")
+
+	assert.Equal(t, "req-full-chain-001", got.entry.Observability.RequestID,
+		"request_id should be in entry.Observability, injected from context at write time")
+	assert.Equal(t, "corr-full-chain-001", got.entry.Observability.CorrelationID,
+		"correlation_id should be in entry.Observability")
+	assert.Equal(t, "trace-full-chain-001", got.entry.Observability.TraceID,
+		"trace_id should survive the full chain via entry.Observability")
+
 	assert.Equal(t, "req-full-chain-001", got.requestID,
 		"request_id should be restored into consumer handler context")
 	assert.Equal(t, "corr-full-chain-001", got.correlationID,
@@ -503,7 +505,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	)`)
 	require.NoError(t, err, "create test_orders table")
 
-	// Use publishCtx so MergeObservabilityMetadata picks up the obs IDs.
+	// Use publishCtx so InjectObservabilityFromContext picks up the obs IDs.
 	err = txm.RunInTx(publishCtx, func(txCtx context.Context) error {
 		tx, ok := postgres.TxFromContext(txCtx)
 		if !ok {
@@ -535,10 +537,7 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	subCtx, subCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer subCancel()
 
-	wrappedSub := &outbox.SubscriberWithMiddleware{
-		Inner:      sub,
-		Middleware: []outbox.SubscriptionMiddleware{outbox.ObservabilityContextMiddleware()},
-	}
+	wrappedSub := &outbox.SubscriberWithMiddleware{Inner: sub}
 
 	subErrCh := make(chan error, 1)
 	go func() {
@@ -593,17 +592,19 @@ func TestIntegration_OutboxFullChain_NoTrace(t *testing.T) {
 	// Business metadata preserved.
 	assert.Equal(t, "no-trace-test", got.entry.Metadata["source"],
 		"business metadata should be preserved")
+	_, hasReqIDInMeta := got.entry.Metadata["request_id"]
+	assert.False(t, hasReqIDInMeta,
+		"request_id must not be in business metadata — it belongs in entry.Observability")
 
-	// request_id and correlation_id should round-trip in entry metadata.
-	assert.Equal(t, "req-no-trace-001", got.entry.Metadata["request_id"],
-		"request_id should be injected from context")
-	assert.Equal(t, "corr-no-trace-001", got.entry.Metadata["correlation_id"],
-		"correlation_id should be injected from context")
+	// request_id and correlation_id round-trip via entry.Observability.
+	assert.Equal(t, "req-no-trace-001", got.entry.Observability.RequestID,
+		"request_id should be in entry.Observability, injected from context at write time")
+	assert.Equal(t, "corr-no-trace-001", got.entry.Observability.CorrelationID,
+		"correlation_id should be in entry.Observability")
 
-	// trace_id should NOT be present in metadata (was never in context).
-	traceVal, tracePresent := got.entry.Metadata["trace_id"]
-	assert.True(t, !tracePresent || traceVal == "",
-		"trace_id should be absent or empty in metadata when not in originating context, got %q", traceVal)
+	// trace_id should NOT be present in Observability (was never in context).
+	assert.Empty(t, got.entry.Observability.TraceID,
+		"trace_id should be empty in entry.Observability when not in originating context")
 
 	// request_id and correlation_id should be restored into consumer context.
 	assert.Equal(t, "req-no-trace-001", got.requestID,
@@ -709,6 +710,69 @@ func TestIntegration_OutboxWriteRelayMockPublisher(t *testing.T) {
 
 	relayCancel()
 	_ = relay.Stop(ctx)
+}
+
+// TestIntegration_OutboxObservability_ZeroRoundtrip writes an outbox entry
+// with a zero ObservabilityMetadata, asserts the DB column is SQL NULL,
+// then reclaims the entry via the relay store and asserts the round-tripped
+// ClaimedEntry.Observability is the zero struct (no spurious fields, no
+// unmarshal warnings). Covers the migration-012 documented contract that
+// pre-existing rows or zero-valued writes read back as zero on the consumer
+// side.
+func TestIntegration_OutboxObservability_ZeroRoundtrip(t *testing.T) {
+	ctx := context.Background()
+
+	pool, cleanup := setupPostgresContainer(t)
+	defer cleanup()
+
+	migrator, mErr := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	require.NoError(t, mErr)
+	require.NoError(t, migrator.Up(ctx))
+
+	txm := postgres.NewTxManager(pool)
+	writer := postgres.NewOutboxWriter()
+	store := postgres.NewOutboxStore(pool.DB())
+
+	entryID := uuid.New().String()
+	entry := outbox.Entry{
+		ID:            entryID,
+		AggregateID:   "agg-zero-obs",
+		AggregateType: "zero_obs",
+		EventType:     "test.zero.obs",
+		Payload:       []byte(`{"k":"v"}`),
+		// Metadata: producer-owned domain fields only.
+		Metadata: map[string]string{"source": "zero-obs-test"},
+		// Observability: explicit zero value.
+		Observability: outbox.ObservabilityMetadata{},
+		CreatedAt:     time.Now().UTC(),
+	}
+
+	err := txm.RunInTx(ctx, func(txCtx context.Context) error {
+		return writer.Write(txCtx, entry)
+	})
+	require.NoError(t, err, "outbox write with zero observability should succeed")
+
+	// Verify the observability column is SQL NULL (writer maps zero struct to NULL).
+	var obsRaw *string
+	err = pool.DB().QueryRow(ctx,
+		"SELECT observability::text FROM outbox_entries WHERE id = $1", entryID,
+	).Scan(&obsRaw)
+	require.NoError(t, err, "observability column query should succeed")
+	assert.Nil(t, obsRaw, "observability column must be SQL NULL for zero ObservabilityMetadata")
+
+	// Claim back via the relay-side Store and verify Observability is the zero struct.
+	claimed, err := store.ClaimPending(ctx, 10)
+	require.NoError(t, err, "ClaimPending should succeed")
+	require.Len(t, claimed, 1, "exactly one pending entry should be claimed")
+
+	got := claimed[0]
+	assert.Equal(t, entryID, got.ID)
+	assert.True(t, got.Observability.IsZero(),
+		"round-tripped Observability must be the zero struct for a NULL column")
+	assert.Empty(t, got.Observability.RequestID)
+	assert.Empty(t, got.Observability.CorrelationID)
+	assert.Empty(t, got.Observability.TraceID)
+	assert.Empty(t, got.Observability.TraceParent)
 }
 
 // publishedMessage captures a single Publish call.

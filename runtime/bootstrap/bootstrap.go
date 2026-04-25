@@ -439,17 +439,6 @@ func WithVerboseDisabled() Option {
 	}
 }
 
-// WithDisableObservabilityRestore prevents the bootstrap from registering
-// ObservabilityContextMiddleware on the event subscriber. When set, consumer
-// handlers will not have request_id/correlation_id/trace_id restored from
-// entry metadata into the handler context. This is the canonical kill switch
-// for the consume-side observability bridge.
-func WithDisableObservabilityRestore() Option {
-	return func(b *Bootstrap) {
-		b.disableObservabilityRestore = true
-	}
-}
-
 // WithEventRouterReadyTimeout overrides the EventRouter Phase-3 ready-wait
 // budget. A non-positive value disables the bound (router waits indefinitely
 // until ctx cancel). Default: eventrouter.DefaultReadyTimeout (30s).
@@ -486,10 +475,10 @@ func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
 //
 // Typical use: inject ConsumerBase.AsMiddleware so every consumer inherits
 // two-phase Claimer idempotency, backoff retry, and DLX routing without each
-// slice wiring it individually. Bootstrap always prepends
-// ObservabilityContextMiddleware (unless disabled via
-// WithDisableObservabilityRestore) so trace_id/request_id restoration runs
-// before any middleware registered here.
+// slice wiring it individually. Observability context restoration
+// (entry.Observability → ctx) is the outermost step inside
+// outbox.SubscriberWithMiddleware.Subscribe, so middleware registered here
+// always sees a context populated with trace_id/request_id/correlation_id.
 //
 // ref: ThreeDotsLabs/watermill message/router.go — AddMiddleware wraps handlers
 // at router level; MassTransit UseMessageRetry — pipeline middleware at
@@ -607,37 +596,36 @@ type namedChecker struct {
 
 // Bootstrap orchestrates the GoCell application lifecycle.
 type Bootstrap struct {
-	configPath                  string
-	envPrefix                   string
-	primaryAddr                 string // PR-A14a: primary HTTP listener addr (public, /api/v1/*, infra)
-	internalAddr                string // PR-A14a: internal HTTP listener addr (/internal/v1/*)
-	assembly                    *assembly.CoreAssembly
-	workers                     []worker.Worker
-	publisher                   outbox.Publisher
-	subscriber                  outbox.Subscriber
-	routerOpts                  []router.Option
-	authVerifier                auth.IntentTokenVerifier
-	authDiscovery               bool // true when WithAuthDiscovery was called
-	shutdownTimeout             time.Duration
-	preShutdownDelay            time.Duration
-	primaryListener             net.Listener // PR-A14a: pre-bound listener for primary server (tests)
-	internalListener            net.Listener // PR-A14a: pre-bound listener for internal server (tests)
-	healthCheckers              []namedChecker
-	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
-	verboseToken                string            // token for /readyz?verbose access control
-	verboseDisabled             bool              // PR-A35: suppress /readyz?verbose entirely (used when operator waives the debug channel)
-	closers                     []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
-	disableObservabilityRestore bool
-	eventRouterReadyTimeout     time.Duration
-	eventRouterReadyTimeoutSet  bool
-	consumerMiddleware          []outbox.SubscriptionMiddleware
-	hookTimeout                 time.Duration // applied when assembly not pre-built
-	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
-	hookObserver                cell.LifecycleHookObserver
-	metricsProvider             kernelmetrics.Provider
-	shutdownMet                 *shutdownMetrics // nil only when provider is nil
-	shutdownMetricsErr          error            // non-nil when metric registration failed in New
-	runOnce                     sync.Once
+	configPath                 string
+	envPrefix                  string
+	primaryAddr                string // PR-A14a: primary HTTP listener addr (public, /api/v1/*, infra)
+	internalAddr               string // PR-A14a: internal HTTP listener addr (/internal/v1/*)
+	assembly                   *assembly.CoreAssembly
+	workers                    []worker.Worker
+	publisher                  outbox.Publisher
+	subscriber                 outbox.Subscriber
+	routerOpts                 []router.Option
+	authVerifier               auth.IntentTokenVerifier
+	authDiscovery              bool // true when WithAuthDiscovery was called
+	shutdownTimeout            time.Duration
+	preShutdownDelay           time.Duration
+	primaryListener            net.Listener // PR-A14a: pre-bound listener for primary server (tests)
+	internalListener           net.Listener // PR-A14a: pre-bound listener for internal server (tests)
+	healthCheckers             []namedChecker
+	adapterInfo                map[string]string // static adapter metadata for /readyz verbose
+	verboseToken               string            // token for /readyz?verbose access control
+	verboseDisabled            bool              // PR-A35: suppress /readyz?verbose entirely (used when operator waives the debug channel)
+	closers                    []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
+	eventRouterReadyTimeout    time.Duration
+	eventRouterReadyTimeoutSet bool
+	consumerMiddleware         []outbox.SubscriptionMiddleware
+	hookTimeout                time.Duration // applied when assembly not pre-built
+	hookTimeoutSet             bool          // distinguishes zero-value "unset" from explicit zero
+	hookObserver               cell.LifecycleHookObserver
+	metricsProvider            kernelmetrics.Provider
+	shutdownMet                *shutdownMetrics // nil only when provider is nil
+	shutdownMetricsErr         error            // non-nil when metric registration failed in New
+	runOnce                    sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures

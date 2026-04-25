@@ -803,11 +803,13 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		return b.checkNoEventRegistrars(s.asm)
 	}
 
-	var mws []outbox.SubscriptionMiddleware
-	if !b.disableObservabilityRestore {
-		mws = append(mws, outbox.ObservabilityContextMiddleware())
+	// Observability context restoration is the OUTERMOST step inside
+	// SubscriberWithMiddleware.Subscribe — built-in invariant, not a
+	// middleware here. ContractTracingMiddleware therefore observes a
+	// ctx already populated with entry.Observability fields.
+	mws := []outbox.SubscriptionMiddleware{
+		eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor),
 	}
-	mws = append(mws, eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor))
 	mws = append(mws, b.consumerMiddleware...)
 
 	var evtRouterOpts []eventrouter.Option

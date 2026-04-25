@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strconv"
 	"strings"
 
@@ -58,10 +57,6 @@ type contractSpecLiteral struct {
 	topic      string
 	unresolved bool
 }
-
-// wrapperVarDeclRe is used by FMT-19 only (line-based scan is sufficient
-// because the rule targets simple `var x Type = ...` forms).
-var wrapperVarDeclRe = regexp.MustCompile(`^var\s+(\w+)\s+(.+?)\s*=\s*(.+)$`)
 
 // validateFMT18 scans `cells/**/*.go` for wrapper.ContractSpec{} literals
 // AND wrapper.EventSpec(...) calls, then cross-checks each against
@@ -439,9 +434,20 @@ func resolveBinaryConcat(e *ast.BinaryExpr, consts map[string]string) (string, b
 	return left + right, true
 }
 
-// validateFMT19 scans kernel/wrapper/*.go for package-level var declarations
-// and rejects any whose RHS is not a zero-value struct literal or a
-// compile-time interface check.
+// FMT-19 AST rewrite (PR246-FU1 finding ③):
+//
+//   - Accept rule ①: `var _ Type = expr` (blank-identifier compile-time
+//     interface/typecheck — all Names must be '_').
+//   - Accept rule ②: `var name [Type] = CompositeLit{}` where the initializer
+//     is a composite literal with zero Elts and a plain struct type (identifier
+//     or selector expression). Slice/map/chan/pointer composite literals are
+//     rejected even when empty — they are reference types.
+//   - Reject everything else structurally (no hard-coded type whitelist).
+//
+// The pre-FU1 line-regex + fmt19KnownValueTypes whitelist missed grouped
+// `var (...)` blocks, no-initializer vars, multi-name declarations, and
+// mutable container types (map/chan/slice); the AST rewrite closes all
+// five evasion classes by scanning the syntax tree directly.
 func (v *Validator) validateFMT19(strict bool) []ValidationResult {
 	if !strict {
 		return nil
@@ -459,13 +465,14 @@ func (v *Validator) validateFMT19(strict bool) []ValidationResult {
 		}
 	}
 
+	fset := token.NewFileSet()
 	var out []ValidationResult
 	for _, entry := range entries {
 		if !shouldScanWrapperFile(entry) {
 			continue
 		}
 		path := filepath.Join(dir, entry.Name())
-		out = append(out, v.validateWrapperPackageStateFile(path)...)
+		out = append(out, v.scanWrapperPackageStateFile(fset, path)...)
 	}
 	return out
 }
@@ -477,75 +484,129 @@ func shouldScanWrapperFile(entry os.DirEntry) bool {
 		!strings.HasSuffix(name, "_test.go")
 }
 
-func (v *Validator) validateWrapperPackageStateFile(path string) []ValidationResult {
-	data, err := os.ReadFile(path)
+func (v *Validator) scanWrapperPackageStateFile(fset *token.FileSet, path string) []ValidationResult {
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
 		return []ValidationResult{v.newResult(codeFMT19, SeverityError, IssueInvalid,
 			path, "",
-			fmt.Sprintf("FMT-19: failed to read %s: %v", path, err))}
+			fmt.Sprintf("FMT-19: failed to parse %s: %v", path, err))}
 	}
 
 	var out []ValidationResult
-	for i, line := range strings.Split(string(data), "\n") {
-		name, typ, forbidden := forbiddenWrapperVar(strings.TrimSpace(line))
-		if !forbidden {
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.VAR {
 			continue
 		}
-		out = append(out, v.newResult(codeFMT19, SeverityError, IssueInvalid,
-			path, "",
-			fmt.Sprintf("FMT-19: %s:%d forbids mutable package-level variable %q of type %q — "+
-				"kernel/wrapper must stay stateless (round-4 constructor-injection invariant)",
-				path, i+1, name, typ)))
+		for _, spec := range gen.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			if reason, forbidden := classifyWrapperVarSpec(vs); forbidden {
+				nameList := formatVarSpecNames(vs)
+				out = append(out, v.newResult(codeFMT19, SeverityError, IssueInvalid,
+					path, "",
+					fmt.Sprintf("FMT-19: %s:%d forbids package-level var %s — %s "+
+						"(kernel/wrapper must stay stateless: round-4 constructor-injection invariant)",
+						path, fset.Position(vs.Pos()).Line, nameList, reason)))
+			}
+		}
 	}
 	return out
 }
 
-func forbiddenWrapperVar(line string) (name string, typ string, forbidden bool) {
-	if !strings.HasPrefix(line, "var ") || isCompileTimeInterfaceCheck(line) {
-		return "", "", false
+// classifyWrapperVarSpec returns (violationReason, forbidden). Accept rules:
+//
+//	① all Names are blank — compile-time interface check, any RHS allowed.
+//	② single Name + single Value that, after unwrapping any number of
+//	   *ast.ParenExpr layers, is a composite literal with zero Elts on a
+//	   plain struct type (identifier or selector expression).
+//
+// Everything else is forbidden — the kernel/wrapper package may only hold
+// blank-ident interface checks and zero-value sentinels.
+func classifyWrapperVarSpec(vs *ast.ValueSpec) (string, bool) {
+	if allBlank(vs.Names) {
+		return "", false
 	}
-	sm := wrapperVarDeclRe.FindStringSubmatch(line)
-	if len(sm) < 4 {
-		return "", "", false
+	if len(vs.Names) > 1 {
+		return "multi-name declaration forbidden (use separate var blocks or move to constants)", true
 	}
-	name = sm[1]
-	typ = strings.TrimSpace(sm[2])
-	rhs := strings.TrimSpace(sm[3])
-	return name, typ, !strings.HasSuffix(rhs, "{}") && isInterfaceOrPointerType(typ)
+	if len(vs.Values) == 0 {
+		return "no initializer — implicit zero-value may be a mutable reference (map/chan/slice/interface)", true
+	}
+	cl, ok := unwrapCompositeLit(vs.Values[0])
+	if !ok {
+		return "initializer is not a composite literal — only zero-value `Type{}` sentinels allowed at package scope", true
+	}
+	if len(cl.Elts) > 0 {
+		return "initializer is a non-empty composite literal — only zero-value (empty) sentinels allowed", true
+	}
+	// Reject slice/map/chan/pointer composite literals (still reference types even when empty).
+	if !isPlainStructCompositeType(cl.Type) {
+		return "initializer is a composite of a reference/container type — only plain struct zero-value sentinels allowed", true
+	}
+	return "", false
 }
 
-func isCompileTimeInterfaceCheck(line string) bool {
-	return strings.HasPrefix(line, "var _ ") || strings.HasPrefix(line, "var _\t")
+// unwrapCompositeLit strips any number of *ast.ParenExpr layers around expr
+// and returns the inner *ast.CompositeLit if found. Returns (nil, false)
+// for any other expression shape (idents, calls, unary expressions like
+// `&T{}`, function literals).
+func unwrapCompositeLit(expr ast.Expr) (*ast.CompositeLit, bool) {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			break
+		}
+		expr = paren.X
+	}
+	cl, ok := expr.(*ast.CompositeLit)
+	return cl, ok
 }
 
-// fmt19KnownValueTypes lists kernel/wrapper types whose package-level
-// declarations FMT-19 considers harmless (struct values + named scalars
-// that are safe to expose as immutable sentinels). Shared as a
-// package-level var so the FMT-19 hot path does not re-allocate the map
-// on every line it inspects.
-var fmt19KnownValueTypes = map[string]bool{
-	"Attr":          true,
-	"ContractSpec":  true,
-	"Disposition":   true,
-	"Entry":         true,
-	"HandleResult":  true,
-	"NoopTracer":    true,
-	"StatusCode":    true,
-	"ConsumerFunc":  true,
-	"ErrorRedactor": true,
-}
-
-// isInterfaceOrPointerType is a shallow classifier — pointers by leading
-// '*', interfaces by capitalised identifier not in the known-struct
-// allowlist. Used only by FMT-19 to decide whether a package-level var
-// carries a potentially-mutable reference.
-func isInterfaceOrPointerType(typ string) bool {
-	typ = strings.TrimSpace(typ)
-	if typ == "" {
+func allBlank(names []*ast.Ident) bool {
+	if len(names) == 0 {
 		return false
 	}
-	if strings.HasPrefix(typ, "*") {
-		return true
+	for _, n := range names {
+		if n.Name != "_" {
+			return false
+		}
 	}
-	return !fmt19KnownValueTypes[typ]
+	return true
+}
+
+// isPlainStructCompositeType reports whether expr is an ast type that, when
+// used as a CompositeLit's Type, names a plain struct (ident or pkg.ident)
+// rather than a reference/container type (map, slice, chan, pointer, array).
+//
+// At top-level VAR specs, CompositeLit.Type is always set by the parser:
+// both `var x T = T{}` and `var x = T{}` record the type on the
+// CompositeLit. The nil case only arises for nested implicit composite
+// literals (e.g. inner `{}` in `[]T{{}, {}}`); those have non-empty Elts
+// in the outer literal and never reach this helper. nil is therefore
+// rejected defensively rather than accepted — fewer paths, no implicit
+// trust in the upstream zero-Elts check.
+func isPlainStructCompositeType(expr ast.Expr) bool {
+	if expr == nil {
+		return false
+	}
+	switch expr.(type) {
+	case *ast.Ident, *ast.SelectorExpr:
+		return true
+	default:
+		return false
+	}
+}
+
+func formatVarSpecNames(vs *ast.ValueSpec) string {
+	if len(vs.Names) == 0 {
+		return "<anon>"
+	}
+	names := make([]string, 0, len(vs.Names))
+	for _, n := range vs.Names {
+		names = append(names, n.Name)
+	}
+	return strings.Join(names, ", ")
 }
