@@ -25,7 +25,7 @@ func TestRandomToken_LengthAndUniqueness(t *testing.T) {
 	l := distlock.New(fd, distlock.WithClock(fc))
 
 	tokens := make(map[string]bool, n)
-	releases := make([]func(), 0, n)
+	releases := make([]func() error, 0, n)
 
 	for i := range n {
 		key := fmt.Sprintf("token-test-key-%d", i)

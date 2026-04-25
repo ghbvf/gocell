@@ -20,16 +20,23 @@ type config struct {
 	// calls. Default 5s. See WithReleaseTimeout.
 	releaseTimeout time.Duration
 
+	// maxRenewAttempts is the number of Driver.Renew attempts per renewal tick
+	// before the lock is declared lost. Only transient I/O errors are retried;
+	// ownership-lost (held=false) is permanent and skips retries. Default 3.
+	// See WithMaxRenewAttempts.
+	maxRenewAttempts int
+
 	// clock is the time source. Defaults to realClock{}.
 	clock Clock
 }
 
 func defaultConfig() config {
 	return config{
-		renewFraction:  0.5,
-		driftFactor:    0.01,
-		releaseTimeout: 5 * time.Second,
-		clock:          realClock{},
+		renewFraction:    0.5,
+		driftFactor:      0.01,
+		releaseTimeout:   5 * time.Second,
+		maxRenewAttempts: 3,
+		clock:            realClock{},
 	}
 }
 
@@ -67,6 +74,21 @@ func WithDriftFactor(f float64) Option {
 func WithReleaseTimeout(d time.Duration) Option {
 	return func(c *config) {
 		c.releaseTimeout = d
+	}
+}
+
+// WithMaxRenewAttempts sets the maximum number of Driver.Renew attempts per
+// renewal tick before the lock is declared lost. Must be ≥ 1. Default: 3.
+//
+// Only transient I/O errors (err != nil) are retried; permanent ownership-lost
+// responses (held=false, err=nil) immediately declare the lock lost regardless
+// of this setting.
+//
+// All retry attempts share the same renewTimeout window derived from the lock
+// TTL and drift factor. New() panics if the final value is < 1.
+func WithMaxRenewAttempts(n int) Option {
+	return func(c *config) {
+		c.maxRenewAttempts = n
 	}
 }
 

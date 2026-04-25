@@ -4,6 +4,7 @@ import (
 	"container/heap"
 	"context"
 	"log/slog"
+	"runtime/pprof"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -67,9 +68,10 @@ const (
 
 // managerEvent carries a single instruction to the manager goroutine.
 type managerEvent struct {
-	kind  eventKind
-	state *lockState // eventAdd: the new lock to register
-	id    lockID     // eventRemove: lock to unregister
+	kind     eventKind
+	state    *lockState // eventAdd: the new lock to register
+	id       lockID     // eventRemove: lock to unregister
+	resultCh chan error // eventRemove: receives the Driver.Release result; closed after send
 }
 
 // ManagerSnapshot is a read-only view of the manager's current state.
@@ -113,12 +115,6 @@ type Manager struct {
 	// Protected by mu (written by add/run; read by run).
 	pendingReleases int
 	events          chan managerEvent
-
-	// releaseWg tracks in-flight background Driver.Release goroutines.
-	// The Drained() channel closes only after all release goroutines complete,
-	// so callers waiting on Drained() are guaranteed Driver.Release has run
-	// for every lock that called release() during this manager lifecycle.
-	releaseWg sync.WaitGroup
 
 	// renewNotify receives a signal after each successful Driver.Renew call.
 	// Buffered (cap 16) to avoid blocking the manager on slow consumers.
@@ -186,20 +182,29 @@ func (m *Manager) add(state *lockState) {
 	m.events <- managerEvent{kind: eventAdd, state: state}
 }
 
-// remove asks the manager to release a lock. It is fire-and-forget: the event
-// is sent and remove returns immediately. The actual Driver.Release I/O runs
-// asynchronously in a background goroutine. Callers that need to wait for all
-// in-flight releases to complete should use Manager.Drained().
+// remove asks the manager to release a lock and returns the result of
+// Driver.Release. It blocks until the release I/O completes (bounded by
+// WithReleaseTimeout, default 5s). The manager goroutine is not blocked during
+// the I/O — it dispatches the release to a background goroutine and signals
+// resultCh when done, so the manager loop remains live for other events.
 //
-// Idempotent: the sync.Once in the Acquire closure ensures remove is called at
-// most once per lock.
-func (m *Manager) remove(id lockID) {
-	m.events <- managerEvent{kind: eventRemove, id: id}
+// Returns nil on successful Driver.Release, or a wrapped error on I/O failure
+// or timeout. Idempotent: the sync.Once in the Acquire closure ensures remove
+// is called at most once per lock.
+func (m *Manager) remove(id lockID) error {
+	resultCh := make(chan error, 1)
+	m.events <- managerEvent{kind: eventRemove, id: id, resultCh: resultCh}
+	return <-resultCh
 }
 
 // run is the manager's main goroutine. It must not be called directly.
 // It is the sole writer of locks, h, and items.
 func (m *Manager) run() {
+	// Label this goroutine for pprof stack traces and heap profiles.
+	// "distlock"="manager" appears in go tool pprof goroutine listings.
+	pprof.SetGoroutineLabels(pprof.WithLabels(context.Background(),
+		pprof.Labels("distlock", "manager")))
+
 	locks := make(map[lockID]*lockState)
 	items := make(map[lockID]*heapItem)
 	var h renewHeap
@@ -282,15 +287,19 @@ func (m *Manager) dispatchEvent(
 		// it; only the explicit remove() path decrements it. This ensures
 		// the manager stays alive until release() is called for every lock,
 		// even if some locks are already lost via renewal failure.
+		//
+		// Note: handleRemove spawns a background goroutine for Driver.Release
+		// I/O and signals ev.resultCh when done. The remove() caller blocks on
+		// resultCh, so by the time we decrement pendingReleases here the
+		// release goroutine has NOT necessarily finished yet — it may still be
+		// in-flight. We do NOT wait here; Drained() closes once all
+		// pendingReleases reach zero, which is sufficient since remove() itself
+		// returns the I/O result to the caller.
 		m.mu.Lock()
 		m.pendingReleases--
 		pending := m.pendingReleases
 		m.mu.Unlock()
 		if pending == 0 {
-			// Wait for all background Driver.Release goroutines to complete
-			// before closing drained, so callers of Drained() are guaranteed
-			// that every release() call has had its I/O flushed.
-			m.releaseWg.Wait()
 			m.mu.Lock()
 			m.running = false
 			m.snapshotLocks = 0
@@ -319,7 +328,13 @@ func (m *Manager) handleAdd(state *lockState, locks map[lockID]*lockState, items
 	m.mu.Unlock()
 }
 
-// handleRenew pops the earliest item, calls Driver.Renew, and re-queues or cancels.
+// handleRenew pops the earliest item, calls Driver.Renew (with retry budget for
+// transient I/O errors), and re-queues on success or cancels the lock on failure.
+//
+// Retry semantics:
+//   - held=false (ownership lost): permanent — skip retries, immediate ErrLockLost.
+//   - err != nil (I/O error): transient by default — retry up to maxRenewAttempts.
+//   - All attempts share the same renewTimeout budget derived from TTL and driftFactor.
 func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*heapItem, h *renewHeap) {
 	if h.Len() == 0 {
 		return
@@ -352,52 +367,68 @@ func (m *Manager) handleRenew(locks map[lockID]*lockState, items map[lockID]*hea
 		renewCtx = context.Background()
 	}
 
-	held, err := m.driver.Renew(renewCtx, state.key, state.token, ttl)
-	if err != nil {
-		slog.Error("distlock: renewal I/O error; lock lost",
+	maxAttempts := m.cfg.maxRenewAttempts
+	var lastErr error
+	for attempt := range maxAttempts {
+		held, err := m.driver.Renew(renewCtx, state.key, state.token, ttl)
+		if err == nil && !held {
+			// Permanent: backend reports ownership lost (token mismatch or key gone).
+			// Skip retries — no amount of retrying will recover ownership.
+			slog.Error("distlock: renewal ownership lost",
+				"key", state.key,
+				"op", "Renew",
+				"ttl", state.ttl)
+			state.cancel(ErrLockLost)
+			delete(locks, item.id)
+			m.mu.Lock()
+			m.snapshotLocks = len(locks)
+			m.mu.Unlock()
+			return
+		}
+		if err == nil {
+			// Success — re-queue and notify.
+			// Re-queue: schedule the next renew at now + ttl * renewFraction.
+			// ref: plan main loop — "requeue 用 driver 实际成功时间 + ttl × renewFraction"
+			item.nextRenew = m.cfg.clock.Now().Add(time.Duration(float64(ttl) * m.cfg.renewFraction))
+			item.index = -1
+			items[item.id] = item
+			heap.Push(h, item)
+
+			// Signal renewNotify so tests can synchronize on renew completion.
+			select {
+			case m.renewNotify <- struct{}{}:
+			default:
+			}
+			return
+		}
+		// Transient I/O error — log at Debug level for intermediate attempts.
+		lastErr = err
+		slog.Debug("distlock: renewal I/O error (will retry)",
 			"key", state.key,
 			"op", "Renew",
-			"ttl", state.ttl,
+			"attempt", attempt+1,
+			"max_attempts", maxAttempts,
 			"error", err)
-		state.cancel(ErrLockLost)
-		delete(locks, item.id)
-		m.mu.Lock()
-		m.snapshotLocks = len(locks)
-		m.mu.Unlock()
-		return
-	}
-	if !held {
-		slog.Error("distlock: renewal ownership lost",
-			"key", state.key,
-			"op", "Renew",
-			"ttl", state.ttl)
-		state.cancel(ErrLockLost)
-		delete(locks, item.id)
-		m.mu.Lock()
-		m.snapshotLocks = len(locks)
-		m.mu.Unlock()
-		return
 	}
 
-	// Re-queue: schedule the next renew at now + ttl * renewFraction.
-	// The renewFraction-based schedule ensures timely renewal regardless of drift.
-	// ref: plan main loop — "requeue 用 driver 实际成功时间 + ttl × renewFraction"
-	item.nextRenew = m.cfg.clock.Now().Add(time.Duration(float64(ttl) * m.cfg.renewFraction))
-	item.index = -1
-	items[item.id] = item
-	heap.Push(h, item)
-
-	// Signal renewNotify so tests can synchronize on renew completion.
-	select {
-	case m.renewNotify <- struct{}{}:
-	default:
-	}
+	// All attempts exhausted — declare lock lost.
+	slog.Error("distlock: renewal I/O error; budget exhausted; lock lost",
+		"key", state.key,
+		"op", "Renew",
+		"ttl", state.ttl,
+		"attempts", maxAttempts,
+		"error", lastErr)
+	state.cancel(ErrLockLost)
+	delete(locks, item.id)
+	m.mu.Lock()
+	m.snapshotLocks = len(locks)
+	m.mu.Unlock()
 }
 
-// handleRemove processes a remove event. The event is fire-and-forget:
-// Driver.Release runs in a background goroutine and handleRemove returns
-// immediately so the manager loop is not blocked on I/O. Callers that need
-// to synchronize on release completion should use Manager.Drained().
+// handleRemove processes a remove event. Driver.Release I/O runs in a background
+// goroutine so the manager loop is not blocked. The result is sent to ev.resultCh
+// so the remove() caller can observe the outcome. ev.resultCh is always signaled
+// (even when the lock was already removed) so the caller never blocks indefinitely.
 func (m *Manager) handleRemove(ev managerEvent, locks map[lockID]*lockState, items map[lockID]*heapItem, h *renewHeap) {
 	state, ok := locks[ev.id]
 	if ok {
@@ -409,25 +440,28 @@ func (m *Manager) handleRemove(ev managerEvent, locks map[lockID]*lockState, ite
 		m.mu.Lock()
 		m.snapshotLocks = len(locks)
 		m.mu.Unlock()
+		state.cancel(ErrLockReleased)
 	}
 
 	if ok {
-		state.cancel(ErrLockReleased)
-		// Driver.Release runs in a background goroutine so the manager loop
-		// is not blocked on I/O. A timeout is applied so a hung backend cannot
-		// leak the goroutine indefinitely. releaseWg is decremented when done
-		// so Drained() waits for all in-flight releases to complete.
-		m.releaseWg.Add(1)
+		// Driver.Release runs in a background goroutine so the manager loop is
+		// not blocked on I/O. A timeout is applied so a hung backend cannot leak
+		// the goroutine indefinitely. The result is sent to ev.resultCh so the
+		// remove() caller can observe the outcome (nil = success, non-nil = I/O error).
 		go func() {
-			defer m.releaseWg.Done()
 			ctx, cancel := context.WithTimeout(context.Background(), m.cfg.releaseTimeout)
 			defer cancel()
-			if err := m.driver.Release(ctx, state.key, state.token); err != nil {
+			err := m.driver.Release(ctx, state.key, state.token)
+			if err != nil {
 				slog.Warn("distlock: release I/O error (lock may linger until TTL)",
 					"key", state.key,
 					"error", err)
 			}
+			ev.resultCh <- err
 		}()
+	} else {
+		// Lock was already removed (lost before release was called) — idempotent.
+		// Signal nil so the caller unblocks immediately.
+		ev.resultCh <- nil
 	}
-	// If !ok the lock was already removed (lost before release was called) — no-op.
 }

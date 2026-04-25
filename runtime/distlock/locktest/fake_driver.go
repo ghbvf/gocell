@@ -38,10 +38,11 @@ type fakeEntry struct {
 // It is intended for unit tests only.
 //
 // Controls:
-//   - NextSetNXResult: if set to false, the next SetNX returns (false, nil) — simulates busy key
-//   - NextRenewError:  if non-nil, the next Renew call returns (false, err)
-//   - NextRenewHeld:   if set to false, the next Renew returns (false, nil) — simulates ownership lost
-//   - ErrIO:           if non-nil, injected as the error for SetNX/Renew/Release calls
+//   - NextSetNXResult:    if set to false, the next SetNX returns (false, nil) — simulates busy key
+//   - NextRenewError:     if non-nil, the next Renew call returns (false, err) — single-shot
+//   - persistRenewError:  if non-nil, every Renew call returns (false, err) until ClearRenewError
+//   - NextRenewHeld:      if set to false, the next Renew returns (false, nil) — simulates ownership lost
+//   - NextReleaseError:   if non-nil, the next Release call returns err — single-shot
 //
 // Use NewFakeDriverWithClock when pairing with FakeClock to ensure the driver's
 // TTL expiry logic uses the same logical time as the manager.
@@ -50,10 +51,12 @@ type FakeDriver struct {
 	keys  map[string]*fakeEntry
 	calls map[string]*atomic.Int64
 
-	// Injection controls (consumed once per call, then reset).
-	nextSetNXResult *bool
-	nextRenewError  error
-	nextRenewHeld   *bool
+	// Injection controls.
+	nextSetNXResult   *bool // single-shot: consumed once
+	nextRenewError    error // single-shot: consumed once per call
+	persistRenewError error // persistent: stays set until ClearRenewError
+	nextRenewHeld     *bool // single-shot: consumed once
+	nextReleaseError  error // single-shot: consumed once
 
 	// clock for TTL expiry checks (defaults to real time.Now).
 	clock func() time.Time
@@ -113,11 +116,38 @@ func (fd *FakeDriver) SetNextSetNX(acquired bool) {
 	fd.nextSetNXResult = &acquired
 }
 
-// SetNextRenewError injects an I/O error for the next Renew call.
+// SetNextRenewError injects an I/O error for the next Renew call (single-shot).
+// After one Renew call consumes the error, subsequent calls behave normally
+// (unless SetRenewErrorPersistent is also set).
 func (fd *FakeDriver) SetNextRenewError(err error) {
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
 	fd.nextRenewError = err
+}
+
+// SetRenewErrorPersistent injects an I/O error that is returned by every Renew
+// call until ClearRenewError is called. Use this to simulate persistent backend
+// unavailability (e.g. to exhaust the retry budget in TC-14).
+func (fd *FakeDriver) SetRenewErrorPersistent(err error) {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	fd.persistRenewError = err
+}
+
+// ClearRenewError clears both the single-shot and persistent renew error
+// injections. After this call, Renew behaves normally (uses in-memory state).
+func (fd *FakeDriver) ClearRenewError() {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	fd.nextRenewError = nil
+	fd.persistRenewError = nil
+}
+
+// SetNextReleaseError injects an I/O error for the next Release call (single-shot).
+func (fd *FakeDriver) SetNextReleaseError(err error) {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	fd.nextReleaseError = err
 }
 
 // SetNextRenewHeld injects the held result for the next Renew call.
@@ -204,11 +234,15 @@ func (fd *FakeDriver) Renew(ctx context.Context, key, token string, ttl time.Dur
 		fd.lastRenewDeadline = dl
 	}
 
-	// Consume injected error.
+	// Consume single-shot injected error (takes priority over persistent).
 	if fd.nextRenewError != nil {
 		err := fd.nextRenewError
 		fd.nextRenewError = nil
 		return false, err
+	}
+	// Persistent error — not consumed; stays until ClearRenewError.
+	if fd.persistRenewError != nil {
+		return false, fd.persistRenewError
 	}
 
 	// Consume injected held.
@@ -244,6 +278,13 @@ func (fd *FakeDriver) Release(_ context.Context, key, token string) error {
 
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
+
+	// Consume single-shot release error.
+	if fd.nextReleaseError != nil {
+		err := fd.nextReleaseError
+		fd.nextReleaseError = nil
+		return err
+	}
 
 	entry, ok := fd.keys[key]
 	if !ok {

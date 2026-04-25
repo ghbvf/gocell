@@ -61,11 +61,20 @@ type Locker interface {
 	// until release() is called or renewal fails.
 	// N active locks = 1 manager goroutine + O(N) heap. Zero per-lock goroutines.
 	//
-	// release() takes no context — internally it uses context.Background() with
-	// WithReleaseTimeout. The Driver.Release I/O is fire-and-forget; release()
-	// returns immediately. Use Locker.Manager().Drained() if you need to wait for
-	// all in-flight releases to complete.
-	Acquire(ctx context.Context, key string, ttl time.Duration) (lockCtx context.Context, release func(), err error)
+	// release() internally uses context.Background() with WithReleaseTimeout (default
+	// 5s) as the Driver.Release deadline. It blocks until the I/O completes and
+	// returns nil on success or a wrapped error on I/O failure. release() is
+	// idempotent — a second call returns nil without contacting the backend.
+	Acquire(ctx context.Context, key string, ttl time.Duration) (lockCtx context.Context, release func() error, err error)
+
+	// Stats reports observable state of the Locker for health checks and metrics.
+	Stats() Stats
+}
+
+// Stats reports observable state of a Locker instance.
+type Stats struct {
+	// ActiveLocks is the number of locks currently held and tracked by the manager.
+	ActiveLocks int
 }
 
 // lockerImpl is the concrete Locker returned by New.
@@ -121,10 +130,14 @@ func validateConfig(cfg config) {
 		panic("distlock.New: invalid configuration: releaseTimeout must be > 0, got " +
 			fmt.Sprintf("%v", cfg.releaseTimeout))
 	}
+	if cfg.maxRenewAttempts < 1 {
+		panic("distlock.New: invalid configuration: maxRenewAttempts must be ≥ 1, got " +
+			fmt.Sprintf("%v", cfg.maxRenewAttempts))
+	}
 }
 
 // Acquire implements Locker.
-func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration) (context.Context, func(), error) {
+func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration) (context.Context, func() error, error) {
 	// Fast path: parent already canceled.
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
@@ -172,13 +185,20 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	l.mgr.add(state)
 
 	var once sync.Once
-	release := func() {
+	var releaseErr error
+	release := func() error {
 		once.Do(func() {
-			l.mgr.remove(id)
+			releaseErr = l.mgr.remove(id)
 		})
+		return releaseErr
 	}
 
 	return lockCtx, release, nil
+}
+
+// Stats implements Locker.
+func (l *lockerImpl) Stats() Stats {
+	return Stats{ActiveLocks: l.mgr.Snapshot().Locks}
 }
 
 // Manager returns the internal Manager for test use.

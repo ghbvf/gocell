@@ -66,7 +66,9 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 		t.Errorf("TC-1: expected at least 1 Renew call, got %d", fd.Calls("Renew"))
 	}
 
-	release()
+	if err := release(); err != nil {
+		t.Errorf("TC-1: release() returned unexpected error: %v", err)
+	}
 
 	select {
 	case <-lockCtx.Done():
@@ -114,13 +116,21 @@ func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
 	}
 }
 
-// TC-3: NextRenewError → lockCtx canceled with ErrLockLost.
+// TC-3: RenewError exhausts retry budget → lockCtx canceled with ErrLockLost.
 // Also verifies sibling-lock isolation: after key3a is lost, key3b continues
-// to be renewed independently (the renew error only affects the lock it targets).
+// to be renewed independently.
+//
+// maxRenewAttempts=1 is used so a single-shot error fully exhausts the budget.
+// SetNextRenewError is single-shot: key3a's one attempt consumes the error;
+// key3b's renew call has no injected error and succeeds.
 func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
 	fd := locktest.NewFakeDriver()
-	l := newTestLocker(fc, fd)
+	// Use maxRenewAttempts=1 so a single injected error exhausts the budget.
+	l := distlock.New(fd,
+		distlock.WithClock(fc),
+		distlock.WithMaxRenewAttempts(1),
+	)
 
 	ttl := 10 * time.Second
 
@@ -155,7 +165,9 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	// increment this counter after key3a is lost.
 	renewBefore := fd.Calls("Renew")
 
-	// Inject error — fires on the next Renew call (key3a has the earlier deadline).
+	// Inject single-shot error. With maxRenewAttempts=1, key3a's single attempt
+	// consumes this error (budget exhausted → ErrLockLost). key3b's renew call
+	// has no injected error and succeeds normally (sibling isolation).
 	fd.SetNextRenewError(locktest.ErrDriverIO)
 
 	// Advance to trigger the first renew (key3a, earlier in heap).
@@ -165,7 +177,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	select {
 	case <-lockCtx1.Done():
 	case <-time.After(testTimeout):
-		t.Fatal("TC-3: lockCtx1 should be Done after renew error")
+		t.Fatal("TC-3: lockCtx1 should be Done after renew error budget exhausted")
 	}
 
 	cause := context.Cause(lockCtx1)
@@ -321,8 +333,12 @@ func TestLocker_TC6_DoubleRelease(t *testing.T) {
 
 	<-mgr(l).Started()
 
-	release()
-	release() // second call — must not panic or double-release
+	if err := release(); err != nil {
+		t.Errorf("TC-6: first release() returned unexpected error: %v", err)
+	}
+	if err := release(); err != nil { // second call — must not panic, must return nil (idempotent)
+		t.Errorf("TC-6: second release() should return nil (idempotent), got: %v", err)
+	}
 
 	// Wait for manager to drain.
 	select {
@@ -397,7 +413,7 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 
 	type result struct {
 		lCtx    context.Context
-		release func()
+		release func() error
 	}
 	results := make([]result, 0, n)
 	var mu sync.Mutex
@@ -795,7 +811,7 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 	const n = 100
 	ttl := time.Minute
 
-	releases := make([]func(), n)
+	releases := make([]func() error, n)
 	for i := range n {
 		key := "concurrent-release-" + strconv.Itoa(i)
 		_, rel, err := l.Acquire(context.Background(), key, ttl)
@@ -807,14 +823,16 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 
 	<-mgr(l).Started()
 
-	// Release all 100 concurrently.
+	// Release all 100 concurrently. All release() calls should return nil.
 	var wg sync.WaitGroup
 	for _, rel := range releases {
 		wg.Add(1)
 		rel := rel
 		go func() {
 			defer wg.Done()
-			rel()
+			if err := rel(); err != nil {
+				t.Errorf("ConcurrentRelease: release() returned unexpected error: %v", err)
+			}
 		}()
 	}
 	wg.Wait()
@@ -893,6 +911,267 @@ func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
 			t.Errorf("ExtremeTTL_Short step %d: expected delta=1, got delta=%d (total=%d)",
 				i+1, got-prev, got)
 		}
+	}
+}
+
+// TC-13: Transient-then-success — FakeDriver returns one I/O error then succeeds.
+// With the default retry budget (maxRenewAttempts=3), the manager retries and
+// the lock is NOT lost. Calls("Renew") == 2 (1 fail + 1 success).
+func TestLocker_TC13_TransientRenewError_ThenSuccess(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
+
+	ttl := 10 * time.Second
+
+	lockCtx, release, err := l.Acquire(context.Background(), "key13", ttl)
+	if err != nil {
+		t.Fatalf("TC-13 Acquire: %v", err)
+	}
+	defer release()
+
+	<-mgr(l).Started()
+	waitPendingTimers(t, fc, 1)
+
+	// Inject single-shot error — first attempt fails, second succeeds.
+	fd.SetNextRenewError(locktest.ErrDriverIO)
+
+	// Advance to trigger renewal.
+	fc.Advance(time.Duration(float64(ttl) * 0.5))
+
+	// Wait for both attempts (1 fail + 1 success = 2 Renew calls).
+	// waitForRenewL uses fd.Calls("Renew") >= want as the condition,
+	// so waiting for 2 ensures both the failed attempt and the successful retry
+	// have been made.
+	waitForRenewL(t, l, fd, 2)
+
+	// Lock must NOT be lost — lockCtx should still be live.
+	select {
+	case <-lockCtx.Done():
+		t.Errorf("TC-13: lockCtx should NOT be canceled after transient error + successful retry; cause=%v",
+			context.Cause(lockCtx))
+	default:
+		// Good — lock still live.
+	}
+
+	// Exactly 2 Renew calls: attempt 1 (error) + attempt 2 (success).
+	if got := fd.Calls("Renew"); got != 2 {
+		t.Errorf("TC-13: expected 2 Renew calls (1 fail + 1 success), got %d", got)
+	}
+}
+
+// TC-14: Budget exhausted → lock lost. FakeDriver returns persistent I/O error.
+// With maxRenewAttempts=3, all 3 attempts fail → ErrLockLost.
+// Calls("Renew") == 3.
+func TestLocker_TC14_BudgetExhausted_LockLost(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
+
+	ttl := 10 * time.Second
+
+	lockCtx, release, err := l.Acquire(context.Background(), "key14", ttl)
+	if err != nil {
+		t.Fatalf("TC-14 Acquire: %v", err)
+	}
+	defer release()
+
+	<-mgr(l).Started()
+	waitPendingTimers(t, fc, 1)
+
+	// Inject persistent error — all attempts fail.
+	fd.SetRenewErrorPersistent(locktest.ErrDriverIO)
+
+	// Advance to trigger renewal.
+	fc.Advance(time.Duration(float64(ttl) * 0.5))
+
+	// Lock must be lost.
+	select {
+	case <-lockCtx.Done():
+	case <-time.After(testTimeout):
+		t.Fatal("TC-14: lockCtx should be Done after budget exhausted")
+	}
+
+	cause := context.Cause(lockCtx)
+	if cause != distlock.ErrLockLost {
+		t.Errorf("TC-14: Cause = %v, want ErrLockLost", cause)
+	}
+
+	// Exactly 3 Renew calls (default budget=3).
+	if got := fd.Calls("Renew"); got != 3 {
+		t.Errorf("TC-14: expected 3 Renew calls (budget=3, all failed), got %d", got)
+	}
+}
+
+// TC-15: Permanent ownership-lost (held=false) skips retry → immediate ErrLockLost.
+// Even with maxRenewAttempts=3, held=false is not an I/O error — no retry.
+// Calls("Renew") == 1.
+func TestLocker_TC15_PermanentOwnershipLost_NoRetry(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd) // default maxRenewAttempts=3
+
+	ttl := 10 * time.Second
+
+	lockCtx, release, err := l.Acquire(context.Background(), "key15", ttl)
+	if err != nil {
+		t.Fatalf("TC-15 Acquire: %v", err)
+	}
+	defer release()
+
+	<-mgr(l).Started()
+	waitPendingTimers(t, fc, 1)
+
+	// Simulate ownership lost (held=false, no I/O error) — permanent; no retry.
+	fd.SetNextRenewHeld(false)
+
+	// Advance to trigger renewal.
+	fc.Advance(time.Duration(float64(ttl) * 0.5))
+
+	// Lock must be lost immediately.
+	select {
+	case <-lockCtx.Done():
+	case <-time.After(testTimeout):
+		t.Fatal("TC-15: lockCtx should be Done immediately on ownership lost")
+	}
+
+	cause := context.Cause(lockCtx)
+	if cause != distlock.ErrLockLost {
+		t.Errorf("TC-15: Cause = %v, want ErrLockLost", cause)
+	}
+
+	// Exactly 1 Renew call — no retry on permanent ownership loss.
+	if got := fd.Calls("Renew"); got != 1 {
+		t.Errorf("TC-15: expected 1 Renew call (no retry on held=false), got %d", got)
+	}
+}
+
+// TestLocker_WithMaxRenewAttempts_Validation verifies that New() panics on invalid values.
+func TestLocker_WithMaxRenewAttempts_Validation(t *testing.T) {
+	tests := []struct {
+		name string
+		n    int
+	}{
+		{"zero", 0},
+		{"negative", -1},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fd := locktest.NewFakeDriver()
+			defer func() {
+				if r := recover(); r == nil {
+					t.Errorf("New with maxRenewAttempts=%d should panic", tc.n)
+				}
+			}()
+			_ = distlock.New(fd, distlock.WithMaxRenewAttempts(tc.n))
+		})
+	}
+}
+
+// TestLocker_Release_ReturnsError verifies that release() propagates Driver.Release errors.
+func TestLocker_Release_ReturnsError(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	_, release, err := l.Acquire(context.Background(), "key-release-err", 10*time.Second)
+	if err != nil {
+		t.Fatalf("Acquire: %v", err)
+	}
+
+	<-mgr(l).Started()
+
+	// Inject a release error.
+	fd.SetNextReleaseError(locktest.ErrDriverIO)
+
+	releaseErr := release()
+	if releaseErr == nil {
+		t.Error("release() should return an error when Driver.Release fails")
+	}
+	if !errors.Is(releaseErr, locktest.ErrDriverIO) {
+		t.Errorf("release() error = %v, want wrapping ErrDriverIO", releaseErr)
+	}
+}
+
+// TestLocker_Stats_Empty verifies that a fresh Locker reports 0 active locks.
+func TestLocker_Stats_Empty(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	s := l.Stats()
+	if s.ActiveLocks != 0 {
+		t.Errorf("Stats_Empty: ActiveLocks = %d, want 0", s.ActiveLocks)
+	}
+}
+
+// TestLocker_Stats_AfterAcquire verifies that Stats().ActiveLocks reflects active count.
+func TestLocker_Stats_AfterAcquire(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	_, r1, _ := l.Acquire(context.Background(), "stats-key1", time.Minute)
+	_, r2, _ := l.Acquire(context.Background(), "stats-key2", time.Minute)
+	_, r3, _ := l.Acquire(context.Background(), "stats-key3", time.Minute)
+
+	<-mgr(l).Started()
+
+	// Wait for all 3 to appear in snapshot.
+	deadline := time.Now().Add(testTimeout)
+	for l.Stats().ActiveLocks < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Stats_AfterAcquire: timed out; ActiveLocks = %d, want 3", l.Stats().ActiveLocks)
+		}
+		runtime.Gosched()
+	}
+
+	if got := l.Stats().ActiveLocks; got != 3 {
+		t.Errorf("Stats_AfterAcquire: ActiveLocks = %d, want 3", got)
+	}
+
+	defer r1()
+	defer r2()
+	defer r3()
+}
+
+// TestLocker_Stats_AfterRelease verifies Stats().ActiveLocks decrements on release.
+func TestLocker_Stats_AfterRelease(t *testing.T) {
+	fc := locktest.NewFakeClock(time.Time{})
+	fd := locktest.NewFakeDriver()
+	l := newTestLocker(fc, fd)
+
+	_, r1, _ := l.Acquire(context.Background(), "stats-rel-key1", time.Minute)
+	_, r2, _ := l.Acquire(context.Background(), "stats-rel-key2", time.Minute)
+	_, r3, _ := l.Acquire(context.Background(), "stats-rel-key3", time.Minute)
+	defer r2()
+	defer r3()
+
+	<-mgr(l).Started()
+
+	// Wait for all 3.
+	deadline := time.Now().Add(testTimeout)
+	for l.Stats().ActiveLocks < 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Stats_AfterRelease: timed out waiting for 3 active locks; got %d", l.Stats().ActiveLocks)
+		}
+		runtime.Gosched()
+	}
+
+	// Release one lock.
+	r1()
+
+	// Wait for count to drop to 2.
+	deadline = time.Now().Add(testTimeout)
+	for l.Stats().ActiveLocks != 2 {
+		if time.Now().After(deadline) {
+			t.Fatalf("Stats_AfterRelease: timed out waiting for ActiveLocks=2; got %d", l.Stats().ActiveLocks)
+		}
+		runtime.Gosched()
+	}
+
+	if got := l.Stats().ActiveLocks; got != 2 {
+		t.Errorf("Stats_AfterRelease: ActiveLocks = %d, want 2", got)
 	}
 }
 

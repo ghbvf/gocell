@@ -310,6 +310,86 @@ func TestFakeDriver_ResetCalls(t *testing.T) {
 	}
 }
 
+// TestFakeDriver_SetRenewErrorPersistent verifies that persistent renew errors
+// are returned on every Renew call until ClearRenewError is called.
+func TestFakeDriver_SetRenewErrorPersistent(t *testing.T) {
+	fd := locktest.NewFakeDriver()
+	ctx := context.Background()
+
+	ok, _ := fd.SetNX(ctx, "key", "tok", time.Minute)
+	if !ok {
+		t.Fatal("setup SetNX failed")
+	}
+
+	fd.SetRenewErrorPersistent(locktest.ErrDriverIO)
+
+	// Multiple Renew calls should all return the error.
+	for i := range 3 {
+		_, err := fd.Renew(ctx, "key", "tok", time.Minute)
+		if err == nil {
+			t.Errorf("Renew attempt %d: expected persistent error, got nil", i+1)
+		}
+	}
+
+	// After ClearRenewError, Renew should succeed.
+	fd.ClearRenewError()
+	held, err := fd.Renew(ctx, "key", "tok", time.Minute)
+	if err != nil || !held {
+		t.Errorf("Renew after ClearRenewError: held=%v err=%v, want held=true err=nil", held, err)
+	}
+}
+
+// TestFakeDriver_ClearRenewError_ClearsBothInjections verifies that ClearRenewError
+// clears both single-shot and persistent errors.
+func TestFakeDriver_ClearRenewError_ClearsBothInjections(t *testing.T) {
+	fd := locktest.NewFakeDriver()
+	ctx := context.Background()
+
+	ok, _ := fd.SetNX(ctx, "key", "tok", time.Minute)
+	if !ok {
+		t.Fatal("setup SetNX failed")
+	}
+
+	// Set both single-shot and persistent.
+	fd.SetNextRenewError(locktest.ErrDriverIO)
+	fd.SetRenewErrorPersistent(locktest.ErrDriverIO)
+
+	// Clear both.
+	fd.ClearRenewError()
+
+	// Renew should succeed immediately.
+	held, err := fd.Renew(ctx, "key", "tok", time.Minute)
+	if err != nil || !held {
+		t.Errorf("Renew after ClearRenewError: held=%v err=%v, want held=true err=nil", held, err)
+	}
+}
+
+// TestFakeDriver_SetNextReleaseError verifies that a single-shot release error
+// is returned once and then cleared.
+func TestFakeDriver_SetNextReleaseError(t *testing.T) {
+	fd := locktest.NewFakeDriver()
+	ctx := context.Background()
+
+	ok, _ := fd.SetNX(ctx, "key", "tok", time.Minute)
+	if !ok {
+		t.Fatal("setup SetNX failed")
+	}
+
+	fd.SetNextReleaseError(locktest.ErrDriverIO)
+
+	// First Release: should return injected error.
+	err := fd.Release(ctx, "key", "tok")
+	if err == nil {
+		t.Error("Release should return injected error")
+	}
+
+	// Second Release: injection consumed, no error.
+	err2 := fd.Release(ctx, "key", "tok")
+	if err2 != nil {
+		t.Errorf("Release after injection consumed: unexpected error %v", err2)
+	}
+}
+
 // TestFakeDriver_Release_WrongToken_Idempotent verifies that releasing with
 // the wrong token is a no-op (C-3 conformance re-stated as a unit test).
 func TestFakeDriver_Release_WrongToken_Idempotent(t *testing.T) {
