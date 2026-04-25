@@ -57,8 +57,9 @@ func WithAssembly(asm *assembly.CoreAssembly) Option {
 	}
 }
 
-// WithAssemblyID sets the cell ID label used in HTTP metrics emitted by the
-// auto-wired metrics collector (R2).
+// WithAssemblyID sets only the `cell_id` label used by the auto-wired HTTP
+// metrics collector (R2). It does not change assembly identity, cell metadata,
+// routing, health, tracing, or non-HTTP metrics.
 //
 // Recommended to set this matching asm.ID() when using WithAssembly(asm);
 // omit to reuse assembly ID (auto-derived). Explicit value overrides
@@ -573,8 +574,8 @@ type Bootstrap struct {
 	// Zero means use health.Handler default (5 s).
 	readyzDeadline time.Duration
 
-	// assemblyID is the cell ID label used in HTTP metrics emitted by the
-	// auto-wired metrics collector. Defaults to "default" when empty.
+	// assemblyID is only the `cell_id` label used in HTTP metrics emitted by
+	// the auto-wired metrics collector. Defaults to "default" when empty.
 	assemblyID string
 
 	// --- kernel/cell Lifecycle (uber/fx-style start/stop) ---
@@ -592,12 +593,12 @@ type Bootstrap struct {
 	// by expandManagedResources() at the beginning of Run().
 	managedResources []kernellifecycle.ManagedResource
 
-	// managedResourceTeardowns holds LIFO close functions derived from
+	// managedResourceTeardowns holds named LIFO close functions derived from
 	// managedResources during expandManagedResources(). Iterated in reverse
 	// order during shutdown so the last-registered resource is closed first.
-	// Each func returns the Close error so phase10LIFOTeardown can aggregate
-	// it into the Run() return value.
-	managedResourceTeardowns []func(ctx context.Context) error
+	// Each teardown returns the Close error so phase10LIFOTeardown can wrap it
+	// with the resource type and aggregate it into the Run() return value.
+	managedResourceTeardowns []namedTeardown
 
 	// managedResourceNil is set by WithManagedResource when a nil resource is
 	// passed. Checked in phase0 to fail-fast rather than silently skipping
@@ -761,7 +762,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// managedResourceTeardowns is in registration order; reversed by the LIFO
 	// shutdown loop at the end of Run().
 	for _, td := range b.managedResourceTeardowns {
-		s.addTeardown(td) // td already returns error; phase10 aggregates via LIFO teardown chain
+		s.addNamedTeardown(td.name, td.fn) // td already returns error; phase10 aggregates via LIFO teardown chain
 	}
 
 	rollback := func(cause error) error {

@@ -367,6 +367,9 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 		if !strings.Contains(runErr.Error(), "simulated close failure") {
 			t.Errorf("Run error %q must contain %q", runErr.Error(), "simulated close failure")
 		}
+		if !strings.Contains(runErr.Error(), "*bootstrap.fakeResource") {
+			t.Errorf("Run error %q must contain managed resource type", runErr.Error())
+		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
 	}
@@ -725,7 +728,7 @@ func TestExpandManagedResources_CloseFailure_TeardownChainContinues(t *testing.T
 	// Teardowns are in registration order; LIFO means we call them reversed.
 	ctx := context.Background()
 	for i := len(b.managedResourceTeardowns) - 1; i >= 0; i-- {
-		_ = b.managedResourceTeardowns[i](ctx) // ignore individual errors; chain must continue
+		_ = b.managedResourceTeardowns[i].fn(ctx) // ignore individual errors; chain must continue
 	}
 
 	// LIFO: second registered → first closed; then first registered → closed second.
@@ -733,6 +736,34 @@ func TestExpandManagedResources_CloseFailure_TeardownChainContinues(t *testing.T
 		"LIFO teardown must close second before first")
 	assert.True(t, secondClosed,
 		"second resource Close must be called even though first resource Close failed")
+}
+
+func TestExpandManagedResources_CloseFailure_TeardownErrorIncludesResourceType(t *testing.T) {
+	b := &Bootstrap{}
+	b.managedResources = []kernellifecycle.ManagedResource{
+		&orderedCloseResource{
+			name: "typed-resource",
+			closeFn: func(context.Context) error {
+				return errors.New("close failed")
+			},
+		},
+	}
+
+	require.NoError(t, b.expandManagedResources())
+	require.Len(t, b.managedResourceTeardowns, 1)
+
+	_, s := newPhaseState()
+	for _, td := range b.managedResourceTeardowns {
+		s.addNamedTeardown(td.name, td.fn)
+	}
+
+	errs := New().phase10LIFOTeardown(context.Background(), s)
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Error(), "*bootstrap.orderedCloseResource")
+
+	var pe *phaseError
+	require.True(t, errors.As(errs[0], &pe), "managed resource teardown error must use named phase wrapping")
+	assert.Contains(t, pe.Phase, "*bootstrap.orderedCloseResource")
 }
 
 // orderedCloseResource is a ManagedResource test double that delegates Close

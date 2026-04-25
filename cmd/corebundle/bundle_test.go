@@ -10,8 +10,10 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
+	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -31,7 +33,7 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 	t.Helper()
 	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
 	require.NoError(t, err)
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenMaxAge + nonceStoreBuffer)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
 	require.NoError(t, err)
 	return &internalGuard{
 		ring:       ring,
@@ -109,9 +111,22 @@ func TestLogInitialAdminCredPath_ValidStateDir(t *testing.T) {
 // TestBuildConsumerBase_ReturnsNonNil verifies the happy path of
 // buildConsumerBase: the returned ConsumerBase must be non-nil and usable.
 func TestBuildConsumerBase_ReturnsNonNil(t *testing.T) {
-	cb, err := buildConsumerBase()
+	deps := buildTestSharedDeps(t)
+	cb, err := buildConsumerBase(deps)
 	require.NoError(t, err)
 	require.NotNil(t, cb, "buildConsumerBase must return a non-nil ConsumerBase")
+}
+
+func TestBuildConsumerBase_RealMultiPodMissingDistributedClaimerErrors(t *testing.T) {
+	deps := newValidatedSharedDeps(t, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"})
+	deps.ConsumerClaimer = nil
+	deps.ConsumerClaimerKind = consumerClaimerKindUnknown
+
+	cb, err := buildConsumerBase(deps)
+
+	require.Error(t, err)
+	assert.Nil(t, cb)
+	assert.Contains(t, err.Error(), "ConsumerClaimer")
 }
 
 // ---------------------------------------------------------------------------
@@ -199,10 +214,12 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 	require.NoError(t, err)
 
 	return &SharedDeps{
-		Topology:  bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
-		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack: ps,
-		EventBus:  eb,
+		Topology:            bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
+		JWTDeps:             jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:           ps,
+		EventBus:            eb,
+		ConsumerClaimer:     idempotency.NewInMemClaimer(),
+		ConsumerClaimerKind: consumerClaimerKindInMemory,
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
 		// just waive it — nothing here exercises the verbose body.
 		VerboseDisabled: true,
@@ -237,10 +254,12 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 	require.NoError(t, err)
 
 	deps := &SharedDeps{
-		Topology:  topo,
-		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack: ps,
-		EventBus:  eventbus.New(),
+		Topology:            topo,
+		JWTDeps:             jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:           ps,
+		EventBus:            eventbus.New(),
+		ConsumerClaimer:     idempotency.NewInMemClaimer(),
+		ConsumerClaimerKind: consumerClaimerKindInMemory,
 		// PR-A35: verbose endpoint is now gated in every mode. A test-time
 		// token keeps the dev baseline valid; prod tests override via the
 		// mutate callback when they want to exercise the missing-token path.
@@ -312,7 +331,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Li
 		return nil, err
 	}
 
-	consumerBase, err := buildConsumerBase()
+	consumerBase, err := buildConsumerBase(shared)
 	if err != nil {
 		return nil, err
 	}
@@ -322,7 +341,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Li
 		return nil, err
 	}
 
-	adapterInfo := shared.Topology.AdapterInfo()
+	adapterInfo := adapterInfoForSharedDeps(shared)
 	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
 	// Primary listener carries the JWT policy resolved from the assembly. F3
@@ -336,6 +355,28 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Li
 	))
 	opts = append(opts, extra...)
 	return bootstrap.New(opts...), nil
+}
+
+func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
+	shared := newValidatedSharedDeps(t, bootstrap.Topology{
+		StorageBackend:            "postgres",
+		AdapterMode:               "real",
+		SinglePodReplayProtection: true,
+	})
+
+	info := adapterInfoForSharedDeps(shared)
+
+	assert.Equal(t, "not-configured", info["redis"])
+	assert.Equal(t, string(auth.NonceStoreKindInMemory), info["service_token_nonce_store"])
+	assert.Equal(t, string(consumerClaimerKindInMemory), info["outbox_consumer_claimer"])
+
+	shared.RedisClient = new(adapterredis.Client)
+	shared.ConsumerClaimerKind = consumerClaimerKindDistributed
+
+	info = adapterInfoForSharedDeps(shared)
+
+	assert.Equal(t, "configured", info["redis"])
+	assert.Equal(t, string(consumerClaimerKindDistributed), info["outbox_consumer_claimer"])
 }
 
 // TestSharedDeps_Validate covers every invariant enforced by SharedDeps.Validate.
@@ -381,6 +422,15 @@ func TestSharedDeps_Validate(t *testing.T) {
 		},
 		{name: "prod missing metrics token", topo: prodTopo, mutate: func(d *SharedDeps) { d.MetricsToken = "" }, wantErr: true, wantSubstr: "GOCELL_METRICS_TOKEN"},
 		{name: "prod missing internal guard", topo: prodTopo, mutate: func(d *SharedDeps) { d.InternalGuard = nil }, wantErr: true, wantSubstr: "GOCELL_SERVICE_SECRET"},
+		{
+			name: "real multi-pod with in-memory claimer rejected",
+			topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: false},
+			mutate: func(d *SharedDeps) {
+				d.ConsumerClaimerKind = consumerClaimerKindInMemory
+			},
+			wantErr:    true,
+			wantSubstr: "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED",
+		},
 		{
 			name: "prod guard with noop nonce store rejected",
 			topo: prodTopo,
@@ -436,10 +486,11 @@ func TestSharedDeps_Validate(t *testing.T) {
 			// can grep service-secret and nonce-store misconfigurations
 			// independently.
 			allowedCodes := map[errcode.Code]struct{}{
-				errcode.ErrValidationFailed:                 {},
-				errcode.ErrControlplaneServiceSecretMissing: {},
-				errcode.ErrControlplaneNonceStoreMissing:    {},
-				errcode.ErrControlplaneVerboseTokenMissing:  {},
+				errcode.ErrValidationFailed:                  {},
+				errcode.ErrControlplaneServiceSecretMissing:  {},
+				errcode.ErrControlplaneNonceStoreMissing:     {},
+				errcode.ErrControlplaneVerboseTokenMissing:   {},
+				errcode.ErrControlplaneClaimerNotDistributed: {},
 			}
 			for _, sub := range allJoinedErrors(err) {
 				var ec *errcode.Error

@@ -41,6 +41,17 @@ func WithServiceTokenLogger(l *slog.Logger) ServiceTokenOption {
 // rejected. Tokens with timestamps at or beyond this window are refused.
 const ServiceTokenMaxAge = 5 * time.Minute
 
+// ServiceTokenClockSkew is the maximum future timestamp skew accepted for
+// service tokens. It is intentionally separate from ServiceTokenMaxAge:
+// old tokens expire by age, while future-dated tokens are only tolerated for
+// bounded clock drift.
+const ServiceTokenClockSkew = 30 * time.Second
+
+// ServiceTokenNonceTTL is the required replay-retention window for nonce
+// stores used with service tokens. It covers the full token validity window
+// plus the accepted future clock skew.
+const ServiceTokenNonceTTL = ServiceTokenMaxAge + ServiceTokenClockSkew
+
 // MinHMACKeyBytes aliases cell.MinHMACKeyBytes so runtime/auth and kernel/cell
 // share a single canonical strength threshold (NIST SP 800-107: HMAC-SHA-256
 // requires ≥256-bit keys). Kept as a const for callers that reference the

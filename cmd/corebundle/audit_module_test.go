@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -38,10 +39,12 @@ func minimalSharedDepsForAuditTest(t *testing.T, adapterMode string) *SharedDeps
 	require.NoError(t, err)
 
 	return &SharedDeps{
-		Topology:  bootstrap.Topology{StorageBackend: "memory", AdapterMode: adapterMode},
-		JWTDeps:   jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack: ps,
-		EventBus:  eb,
+		Topology:            bootstrap.Topology{StorageBackend: "memory", AdapterMode: adapterMode},
+		JWTDeps:             jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:           ps,
+		EventBus:            eb,
+		ConsumerClaimer:     idempotency.NewInMemClaimer(),
+		ConsumerClaimerKind: consumerClaimerKindInMemory,
 	}
 }
 

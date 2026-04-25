@@ -11,44 +11,32 @@ import (
 	"context"
 	"log/slog"
 	"os"
-	"time"
 
 	devicecell "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 )
-
-const demoAdminToken = "iotdevice-admin-demo-token"
-
-type demoTokenVerifier struct{}
-
-func (demoTokenVerifier) VerifyIntent(_ context.Context, token string, expected auth.TokenIntent) (auth.Claims, error) {
-	if expected != auth.TokenIntentAccess || token != demoAdminToken {
-		return auth.Claims{}, errcode.New(errcode.ErrAuthUnauthorized, "invalid demo token")
-	}
-	now := time.Now()
-	return auth.Claims{
-		Subject:   "iotdevice-demo-admin",
-		Issuer:    "iotdevice-demo",
-		Audience:  []string{"gocell"},
-		IssuedAt:  now,
-		ExpiresAt: now.Add(8 * time.Hour),
-		Roles:     []string{devicecell.RoleAdmin, devicecell.RoleOperator, devicecell.RoleDevice},
-		TokenUse:  auth.TokenIntentAccess,
-	}, nil
-}
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	}))
 	slog.SetDefault(logger)
+
+	internalAuthChain, err := newInternalAuthChainFromEnv()
+	if err != nil {
+		logger.Error("failed to configure internal listener auth", slog.Any("error", err))
+		os.Exit(1)
+	}
+	jwtVerifier, err := newJWTVerifierFromEnv()
+	if err != nil {
+		logger.Error("failed to configure JWT verifier", slog.Any("error", err))
+		os.Exit(1)
+	}
 
 	// In-memory event bus for demo mode.
 	eb := eventbus.New()
@@ -94,12 +82,12 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{cell.NewAuthJWT(demoTokenVerifier{})}),
-		bootstrap.WithListener(cell.InternalListener, ":9083", nil),
+		bootstrap.WithListener(cell.PrimaryListener, ":8083", []cell.ListenerAuth{cell.NewAuthJWT(jwtVerifier)}),
+		bootstrap.WithListener(cell.InternalListener, ":9083", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	)
 
-	logger.Info("iotdevice: starting on :8083; protected routes require the documented demo bearer token")
+	logger.Info("iotdevice: starting on :8083; protected routes require an RS256 bearer token")
 	if err := app.Run(ctx); err != nil {
 		logger.Error("iotdevice: application exited with error", slog.Any("error", err))
 		os.Exit(1)

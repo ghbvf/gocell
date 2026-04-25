@@ -292,6 +292,12 @@ const (
 	// must not be replayable within its 5-minute validity window.
 	ErrControlplaneNonceStoreMissing Code = "ERR_CONTROLPLANE_NONCE_STORE_MISSING"
 
+	// ErrControlplaneClaimerNotDistributed signals that a real multi-pod
+	// corebundle deployment is using a process-local outbox idempotency
+	// Claimer. Operators must configure Redis so consumers coordinate
+	// idempotency across pods before restart.
+	ErrControlplaneClaimerNotDistributed Code = "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED"
+
 	// ErrAuthReplayDetected distinguishes a service-token replay signal from
 	// generic authentication failures (invalid MAC, expired token, missing
 	// header). Machine-side consumers (monitoring, alerting, SDKs) can match

@@ -247,7 +247,12 @@ func TestAuthMiddleware_WithLogger_LogsToBuffer(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code)
-	assert.Contains(t, buf.String(), "token verification failed")
+	entry := sloghelper.FindLogEntry(buf.String(), "token verification failed")
+	require.NotNil(t, entry, "expected structured token verification log")
+	assert.Equal(t, "ERROR", entry["level"])
+	assert.Equal(t, "token expired", entry["error"])
+	assert.Equal(t, "/api/v1/data", entry["path"])
+	assert.NotEmpty(t, entry["remote_addr"])
 }
 
 // TestAuthMiddleware_LogLevel_Expected4xx_Warn verifies S43: expected 4xx errors
@@ -638,10 +643,13 @@ func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *test
 	// (the blocked request's context is emitted via slog.Info on the auth logger only —
 	// info-exposure boundary).
 	assert.Empty(t, details, "details must be empty when no hint is configured")
-	// The path and method must be observable via slog.Info on the auth logger.
-	logOut := logBuf.String()
-	assert.Contains(t, logOut, "/api/v1/configs", "blocked path must appear in slog output")
-	assert.Contains(t, logOut, "GET", "blocked method must appear in slog output")
+	// The path and method must be observable via structured slog fields.
+	entry := sloghelper.FindLogEntry(logBuf.String(), "password reset required gate blocked request")
+	require.NotNil(t, entry, "expected password-reset gate log")
+	assert.Equal(t, "INFO", entry["level"])
+	assert.Equal(t, "usr-bootstrap", entry["subject"])
+	assert.Equal(t, "/api/v1/configs", entry["path"])
+	assert.Equal(t, "GET", entry["method"])
 }
 
 // TestAuthMiddleware_NoResetClaim_PassesThrough verifies that a regular token

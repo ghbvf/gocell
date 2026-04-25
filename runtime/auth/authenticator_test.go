@@ -393,7 +393,7 @@ func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
 func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
 	if err != nil {
 		t.Fatalf("NewInMemoryNonceStore: %v", err)
 	}
@@ -609,13 +609,13 @@ func TestServiceTokenAuthenticator_LegacyTwoPart_Error(t *testing.T) {
 }
 
 // TestServiceTokenAuthenticator_FutureTimestamp_Error verifies that a token
-// with a timestamp in the future (age > ServiceTokenMaxAge) is rejected.
+// with a timestamp beyond the allowed service-token clock skew is rejected.
 func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	// "now" as seen by the authenticator.
 	now := time.Now()
-	// Token is signed 10 minutes in the future relative to the authenticator's clock.
-	futureTime := now.Add(10 * time.Minute)
+	// Token is signed just beyond the explicit future-skew window.
+	futureTime := now.Add(ServiceTokenClockSkew + time.Second)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", futureTime)
 
 	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
@@ -628,6 +628,50 @@ func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
 	}
 	if ok {
 		t.Fatal("expected ok=false for future timestamp token")
+	}
+	if p != nil {
+		t.Fatalf("expected nil principal, got %v", p)
+	}
+}
+
+func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Now()
+	futureTime := now.Add(ServiceTokenClockSkew)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", futureTime)
+
+	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	p, ok, err := a.Authenticate(req)
+	if err != nil {
+		t.Fatalf("expected token within skew to pass, got error: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected ok=true for token within future skew")
+	}
+	if p == nil {
+		t.Fatal("expected principal for token within future skew")
+	}
+}
+
+func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	now := time.Now()
+	oldTime := now.Add(-ServiceTokenMaxAge)
+	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", oldTime)
+
+	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
+	req.Header.Set("Authorization", "ServiceToken "+token)
+
+	p, ok, err := a.Authenticate(req)
+	if err == nil {
+		t.Fatal("expected token at max age boundary to be expired")
+	}
+	if ok {
+		t.Fatal("expected ok=false for expired token")
 	}
 	if p != nil {
 		t.Fatalf("expected nil principal, got %v", p)

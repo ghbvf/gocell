@@ -6,15 +6,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
-
-// nonceStoreBuffer extends the nonce retention window past the token validity
-// bound so a nonce cannot be replayed as the token approaches expiry.
-const nonceStoreBuffer = 30 * time.Second
 
 // internalGuard is the resolved /internal/v1/* service-token guard plus the
 // dependencies the guard was built from. Holding the NonceStore and ring
@@ -58,7 +53,7 @@ func (g *internalGuard) NonceStore() auth.NonceStore { return g.nonceStore }
 // ref: Kubernetes kube-apiserver service-account verification — guard only when
 // key material is present; no guard is better than a broken guard.
 // ref: gorilla/securecookie — replay protection defaults on, not opt-in.
-func internalGuardFromEnv(adapterMode string) (*internalGuard, error) {
+func internalGuardFromEnv(adapterMode string, store auth.NonceStore) (*internalGuard, error) {
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
 		if isRealMode(adapterMode) {
@@ -83,9 +78,12 @@ func internalGuardFromEnv(adapterMode string) (*internalGuard, error) {
 	if err != nil {
 		return nil, fmt.Errorf("build service HMAC key ring: %w", err)
 	}
-	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenMaxAge + nonceStoreBuffer)
-	if err != nil {
-		return nil, fmt.Errorf("build service token nonce store: %w", err)
+	if store == nil {
+		var err error
+		store, err = auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+		if err != nil {
+			return nil, fmt.Errorf("build service token nonce store: %w", err)
+		}
 	}
 	mw := auth.ServiceTokenMiddleware(ring, auth.WithServiceTokenNonceStore(store))
 	slog.Info("controlplane guard installed",

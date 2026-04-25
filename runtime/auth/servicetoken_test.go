@@ -448,7 +448,7 @@ func TestGenerateServiceToken_NonceUniqueness(t *testing.T) {
 func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
 	require.NoError(t, err)
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
@@ -477,7 +477,7 @@ func TestServiceTokenMiddleware_WithNonceStore_ReplayRejected(t *testing.T) {
 func TestServiceTokenMiddleware_WithNonceStore_UniqueTokensAccepted(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	store, err := NewInMemoryNonceStore(5 * time.Minute)
+	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
 	require.NoError(t, err)
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),

@@ -71,19 +71,22 @@ func run(ctx context.Context) error {
 		return fmt.Errorf("build assembly: %w", err)
 	}
 
-	consumerBase, err := buildConsumerBase()
+	consumerBase, err := buildConsumerBase(shared)
 	if err != nil {
 		return err
 	}
 
 	metricsHandler := shared.metricsHandler
 
-	adapterInfo := shared.Topology.AdapterInfo()
+	adapterInfo := adapterInfoForSharedDeps(shared)
 	slog.Info("corebundle: startup configuration",
 		slog.String("adapter_mode", adapterInfo["mode"]),
 		slog.String("storage", adapterInfo["storage"]),
 		slog.String("event_bus", adapterInfo["event_bus"]),
-		slog.String("outbox_storage", adapterInfo["outbox_storage"]))
+		slog.String("outbox_storage", adapterInfo["outbox_storage"]),
+		slog.String("redis", adapterInfo["redis"]),
+		slog.String("service_token_nonce_store", adapterInfo["service_token_nonce_store"]),
+		slog.String("outbox_consumer_claimer", adapterInfo["outbox_consumer_claimer"]))
 
 	logInitialAdminCredPath()
 

@@ -12,10 +12,13 @@ All dependencies are in-memory (no external services required).
 ## Quick Start
 
 ```bash
+export GOCELL_SSOBFF_SERVICE_SECRET="$(openssl rand -base64 32)"
 go run ./examples/ssobff
 ```
 
 The server starts with primary listener on `:8081` (API + infra) and internal listener on `:9081` (control-plane).
+The internal listener is protected by service-token auth and the process fails
+fast when `GOCELL_SSOBFF_SERVICE_SECRET` is missing or shorter than 32 bytes.
 
 ## Seed User
 

@@ -14,7 +14,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
-	"github.com/ghbvf/gocell/kernel/idempotency"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -122,6 +121,12 @@ func defaultRuntimeOptions(
 	// Tests inject their own HealthListener via extra bootstrap.WithListener options.
 	if shared.HealthHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, nil))
+	}
+	if shared.RedisClient != nil {
+		opts = append(opts,
+			bootstrap.WithHealthChecker("redis", shared.RedisClient.Health),
+			bootstrap.WithManagedCloser(shared.RedisClient),
+		)
 	}
 	return opts
 }
@@ -351,10 +356,16 @@ func logInitialAdminCredPath() {
 		slog.String("cred_path", credPath))
 }
 
-// buildConsumerBase constructs the in-process ConsumerBase for outbox
-// consumer middleware. Uses an in-memory Claimer (idempotency.NewInMemClaimer).
-func buildConsumerBase() (*outbox.ConsumerBase, error) {
-	cb, err := outbox.NewConsumerBase(idempotency.NewInMemClaimer(), outbox.ConsumerBaseConfig{})
+// buildConsumerBase constructs ConsumerBase from the topology-selected
+// idempotency claimer built in LoadSharedDepsFromEnv.
+func buildConsumerBase(deps *SharedDeps) (*outbox.ConsumerBase, error) {
+	if deps == nil {
+		return nil, fmt.Errorf("construct ConsumerBase: SharedDeps is nil")
+	}
+	if deps.ConsumerClaimer == nil {
+		return nil, fmt.Errorf("construct ConsumerBase: SharedDeps.ConsumerClaimer must be set")
+	}
+	cb, err := outbox.NewConsumerBase(deps.ConsumerClaimer, outbox.ConsumerBaseConfig{})
 	if err != nil {
 		return nil, fmt.Errorf("construct ConsumerBase: %w", err)
 	}

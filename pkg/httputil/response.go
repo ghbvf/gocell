@@ -435,10 +435,11 @@ var codeToStatus = map[errcode.Code]int{
 	// Control-plane startup configuration errors — fail-fast at boot, never
 	// reach HTTP in practice. 500 is the conservative choice if one ever
 	// escapes: operator misconfiguration is a deployment bug, not a client bug.
-	errcode.ErrControlplaneServiceSecretMissing: http.StatusInternalServerError,
-	errcode.ErrControlplaneNonceStoreMissing:    http.StatusInternalServerError,
-	errcode.ErrControlplaneVerboseTokenMissing:  http.StatusInternalServerError,
-	errcode.ErrControlplaneVerboseTokenSample:   http.StatusInternalServerError,
+	errcode.ErrControlplaneServiceSecretMissing:  http.StatusInternalServerError,
+	errcode.ErrControlplaneNonceStoreMissing:     http.StatusInternalServerError,
+	errcode.ErrControlplaneClaimerNotDistributed: http.StatusInternalServerError,
+	errcode.ErrControlplaneVerboseTokenMissing:   http.StatusInternalServerError,
+	errcode.ErrControlplaneVerboseTokenSample:    http.StatusInternalServerError,
 	// ErrReadyzVerboseDenied is a 401 because the verbose endpoint enforces
 	// an X-Readyz-Token bearer check (PR-A35); a mismatched or missing
 	// header is treated exactly like any other bearer-token failure.

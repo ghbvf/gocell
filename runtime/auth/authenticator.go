@@ -199,9 +199,10 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 	tokenTime := time.Unix(ts, 0)
 	age := now.Sub(tokenTime)
 	if age < 0 {
-		age = -age
-	}
-	if age >= ServiceTokenMaxAge {
+		if -age > ServiceTokenClockSkew {
+			return errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token timestamp is too far in the future")
+		}
+	} else if age >= ServiceTokenMaxAge {
 		return errcode.NewAuth(errcode.ErrAuthTokenExpired, "service token expired")
 	}
 

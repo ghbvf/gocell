@@ -85,14 +85,18 @@ func (b *Bootstrap) expandManagedResources() error {
 		// Register LIFO teardown. Capture r in a local so the closure is
 		// bound to this iteration's resource, not the loop variable.
 		res := r
-		b.managedResourceTeardowns = append(b.managedResourceTeardowns, func(ctx context.Context) error {
-			err := res.Close(ctx)
-			if err != nil {
-				slog.Warn("managed resource Close failed",
-					slog.String("resource_type", fmt.Sprintf("%T", res)),
-					slog.Any("error", err))
-			}
-			return err
+		resourceType := fmt.Sprintf("%T", res)
+		b.managedResourceTeardowns = append(b.managedResourceTeardowns, namedTeardown{
+			name: resourceType,
+			fn: func(ctx context.Context) error {
+				err := res.Close(ctx)
+				if err != nil {
+					slog.Warn("managed resource Close failed",
+						slog.String("resource_type", resourceType),
+						slog.Any("error", err))
+				}
+				return err
+			},
 		})
 	}
 	return nil

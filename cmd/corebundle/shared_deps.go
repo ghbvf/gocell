@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 
+	adapterredis "github.com/ghbvf/gocell/adapters/redis"
+	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
@@ -35,6 +37,16 @@ type SharedDeps struct {
 
 	// EventBus is the in-process event bus used for both publish and subscribe.
 	EventBus *eventbus.InMemoryEventBus
+
+	// RedisClient is configured when distributed replay/idempotency state is
+	// required or when the operator explicitly provides Redis env vars.
+	RedisClient *adapterredis.Client
+
+	// ConsumerClaimer coordinates outbox consumer idempotency. The separate
+	// kind field is corebundle-local metadata; kernel/idempotency.Claimer stays
+	// behaviour-only and does not grow a topology method.
+	ConsumerClaimer     idempotency.Claimer
+	ConsumerClaimerKind consumerClaimerKind
 
 	// InternalGuard is the service-token guard protecting /internal/v1/*.
 	// Required when Topology.RequireProductionControlPlane() is true; nil in
@@ -85,6 +97,80 @@ type SharedDeps struct {
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
+}
+
+type sharedReplayDeps struct {
+	RedisClient         *adapterredis.Client
+	NonceStore          auth.NonceStore
+	ConsumerClaimer     idempotency.Claimer
+	ConsumerClaimerKind consumerClaimerKind
+}
+
+func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology) (sharedReplayDeps, error) {
+	redisClient, err := buildRedisClient(ctx, topo)
+	if err != nil {
+		return sharedReplayDeps{}, err
+	}
+	loaded := false
+	defer func() {
+		if !loaded {
+			closeRedisClientAfterFailedLoad(ctx, redisClient)
+		}
+	}()
+
+	nonceStore, err := buildServiceNonceStore(topo, redisClient)
+	if err != nil {
+		return sharedReplayDeps{}, err
+	}
+	claimer, claimerKind, err := buildConsumerClaimer(topo, redisClient)
+	if err != nil {
+		return sharedReplayDeps{}, err
+	}
+
+	loaded = true
+	return sharedReplayDeps{
+		RedisClient:         redisClient,
+		NonceStore:          nonceStore,
+		ConsumerClaimer:     claimer,
+		ConsumerClaimerKind: claimerKind,
+	}, nil
+}
+
+func (d sharedReplayDeps) closeRedisAfterFailedLoad(ctx context.Context, loaded bool) {
+	if loaded {
+		return
+	}
+	closeRedisClientAfterFailedLoad(ctx, d.RedisClient)
+}
+
+func closeRedisClientAfterFailedLoad(ctx context.Context, client *adapterredis.Client) {
+	if client == nil {
+		return
+	}
+	if closeErr := client.Close(ctx); closeErr != nil {
+		slog.Warn("corebundle: failed to close Redis client after startup validation failure",
+			slog.String("error", closeErr.Error()))
+	}
+}
+
+func adapterInfoForSharedDeps(shared *SharedDeps) map[string]string {
+	info := shared.Topology.AdapterInfo()
+	redisState := "not-configured"
+	if shared.RedisClient != nil {
+		redisState = "configured"
+	}
+	nonceStoreKind := string(auth.NonceStoreKindNoop)
+	if shared.InternalGuard != nil && shared.InternalGuard.NonceStore() != nil {
+		nonceStoreKind = string(shared.InternalGuard.NonceStore().Kind())
+	}
+	claimerKind := string(shared.ConsumerClaimerKind)
+	if claimerKind == "" {
+		claimerKind = string(consumerClaimerKindUnknown)
+	}
+	info["redis"] = redisState
+	info["service_token_nonce_store"] = nonceStoreKind
+	info["outbox_consumer_claimer"] = claimerKind
+	return info
 }
 
 // SampleVerboseToken is the literal placeholder shipped in .env.example so
@@ -164,6 +250,9 @@ func (d *SharedDeps) validateCore() []error {
 	if d.EventBus == nil {
 		missing("EventBus")
 	}
+	if d.ConsumerClaimer == nil {
+		missing("ConsumerClaimer")
+	}
 	return errs
 }
 
@@ -217,6 +306,11 @@ func (d *SharedDeps) validateControlPlane() []error {
 				"or a distributed store via WithServiceTokenNonceStore (multi-pod); "+
 				"refuse fail-open"))
 	}
+	if requiresDistributedReplay(d.Topology) && d.ConsumerClaimerKind != consumerClaimerKindDistributed {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneClaimerNotDistributed,
+			"ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED: real multi-pod deployments require Redis-backed "+
+				"outbox idempotency claimer; set "+envRedisAddr+" or run with GOCELL_SINGLE_POD=1"))
+	}
 	return errs
 }
 
@@ -243,9 +337,18 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		return nil, err
 	}
 
+	replay, err := buildSharedReplayDeps(ctx, topo)
+	if err != nil {
+		return nil, err
+	}
+	loaded := false
+	defer func() {
+		replay.closeRedisAfterFailedLoad(ctx, loaded)
+	}()
+
 	eb := eventbus.New()
 
-	internalGuard, err := internalGuardFromEnv(adapterMode)
+	internalGuard, err := internalGuardFromEnv(adapterMode, replay.NonceStore)
 	if err != nil {
 		return nil, err
 	}
@@ -297,22 +400,26 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 
 	deps := &SharedDeps{
-		Topology:         topo,
-		JWTDeps:          jwt,
-		PromStack:        ps,
-		EventBus:         eb,
-		InternalGuard:    internalGuard,
-		PrimaryHTTPAddr:  primaryAddr,
-		InternalHTTPAddr: internalAddr,
-		HealthHTTPAddr:   healthAddr,
-		MetricsToken:     metricsToken,
-		VerboseToken:     verboseToken,
-		VerboseDisabled:  verboseDisabled,
-		metricsHandler:   metricsHandler,
+		Topology:            topo,
+		JWTDeps:             jwt,
+		PromStack:           ps,
+		EventBus:            eb,
+		RedisClient:         replay.RedisClient,
+		ConsumerClaimer:     replay.ConsumerClaimer,
+		ConsumerClaimerKind: replay.ConsumerClaimerKind,
+		InternalGuard:       internalGuard,
+		PrimaryHTTPAddr:     primaryAddr,
+		InternalHTTPAddr:    internalAddr,
+		HealthHTTPAddr:      healthAddr,
+		MetricsToken:        metricsToken,
+		VerboseToken:        verboseToken,
+		VerboseDisabled:     verboseDisabled,
+		metricsHandler:      metricsHandler,
 	}
 
 	if err := deps.Validate(); err != nil {
 		return nil, err
 	}
+	loaded = true
 	return deps, nil
 }

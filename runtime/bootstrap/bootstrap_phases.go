@@ -16,6 +16,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"reflect"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -244,9 +245,20 @@ func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
 		s.addTeardown(sub.Close)
 	}
 	// Avoid double-close when pub and sub are the same instance.
-	if pub != nil && any(pub) != any(sub) {
+	if pub != nil && !samePubSubIdentity(pub, sub) {
 		s.addTeardown(pub.Close)
 	}
+}
+
+func samePubSubIdentity(pub outbox.Publisher, sub outbox.Subscriber) bool {
+	if pub == nil || sub == nil {
+		return false
+	}
+	pubType := reflect.TypeOf(pub)
+	if pubType != reflect.TypeOf(sub) || !pubType.Comparable() {
+		return false
+	}
+	return any(pub) == any(sub)
 }
 
 // phase3InitAssembly builds (or reuses) the CoreAssembly, registers its LIFO

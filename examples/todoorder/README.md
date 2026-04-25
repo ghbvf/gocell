@@ -25,12 +25,27 @@ This example application runs in demo mode. The reusable `ordercell` code can al
 ## Quick Start (In-Memory Mode)
 
 No external dependencies required. Uses an in-memory repository and in-process event bus.
+The primary listener verifies RS256 JWTs from the `GOCELL_JWT_*` environment,
+and the internal listener requires a service-token secret.
 
 ```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+  -out /tmp/gocell-todoorder-jwt.key
+openssl rsa -in /tmp/gocell-todoorder-jwt.key -pubout \
+  -out /tmp/gocell-todoorder-jwt.pub
+
+export GOCELL_JWT_PRIVATE_KEY="$(cat /tmp/gocell-todoorder-jwt.key)"
+export GOCELL_JWT_PUBLIC_KEY="$(cat /tmp/gocell-todoorder-jwt.pub)"
+export GOCELL_JWT_ISSUER=todoorder-local
+export GOCELL_JWT_AUDIENCE=gocell
+export GOCELL_TODOORDER_SERVICE_SECRET="$(openssl rand -base64 32)"
+
+export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken)"
 go run ./examples/todoorder
 ```
 
 The server starts with primary listener on `:8082` (API + infra) and internal listener on `:9082` (control-plane).
+`TODOORDER_TOKEN` is a real RS256 access token signed by the local key above.
 
 ## Docker Mode
 
@@ -40,6 +55,7 @@ Start infrastructure services, then run the application:
 cd examples/todoorder
 docker compose up -d
 cd ../..
+# Export the JWT and GOCELL_TODOORDER_SERVICE_SECRET variables from Quick Start first.
 go run ./examples/todoorder
 ```
 
@@ -50,19 +66,19 @@ Docker mode here only starts surrounding infrastructure. The example still runs 
 ### Authentication (demo mode)
 
 PR-CFG-C made `RoleCustomer` mandatory for every `/api/v1/orders/*` route, so
-the example installs a tiny `demoTokenVerifier` in `main.go` that accepts a
-single hard-coded bearer token. Export it once and reuse it in every curl
-invocation below:
-
-```bash
-export TODOORDER_TOKEN=todoorder-customer-demo-token
-```
+the example expects an RS256 access token carrying `role:customer`. The
+Quick Start's `localtoken` helper issues one from `GOCELL_JWT_PRIVATE_KEY`,
+`GOCELL_JWT_ISSUER`, and `GOCELL_JWT_AUDIENCE`; reuse `$TODOORDER_TOKEN` in
+every curl invocation below.
 
 Anonymous calls (no `Authorization: Bearer ...` header) receive `401 Unauthorized`;
 calls with a different token receive `401`; valid tokens missing `role:customer`
-would receive `403 Forbidden`. The demo verifier always issues the customer
-role — to exercise the 403 path, replace the verifier or strip
-`ordercell.RoleCustomer` from the issued claims.
+receive `403 Forbidden`. To exercise the 403 path locally, mint a token with a
+different role:
+
+```bash
+export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken -roles role:viewer)"
+```
 
 ### Create an order
 

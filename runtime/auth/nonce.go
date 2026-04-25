@@ -50,8 +50,9 @@ const (
 
 // NonceStore tracks nonces for replay prevention. Implementations must be
 // safe for concurrent use. The store must retain nonces for at least
-// ServiceTokenMaxAge (5 minutes) to prevent replay within the token
-// validity window; a shorter TTL creates a replay vulnerability.
+// ServiceTokenNonceTTL to prevent replay across the token validity window
+// plus the accepted future clock skew; a shorter TTL creates a replay
+// vulnerability.
 //
 // Kind reports the implementation classification for startup validation.
 // Control-plane guards in adapter mode "real" must reject NonceStoreKindNoop
@@ -108,15 +109,16 @@ func WithMaxNonceEntries(n int) InMemoryNonceOption {
 }
 
 // NewInMemoryNonceStore creates an InMemoryNonceStore with the given maxAge.
-// maxAge must be at least ServiceTokenMaxAge; a shorter value reintroduces the
-// replay window the store is designed to close, and is rejected with an error.
+// maxAge must be at least ServiceTokenNonceTTL; a shorter value reintroduces
+// the replay window the store is designed to close, and is rejected with an
+// error.
 func NewInMemoryNonceStore(maxAge time.Duration, opts ...InMemoryNonceOption) (*InMemoryNonceStore, error) {
 	if maxAge <= 0 {
 		return nil, fmt.Errorf("auth: nonce store maxAge must be positive, got %v", maxAge)
 	}
-	if maxAge < ServiceTokenMaxAge {
-		return nil, fmt.Errorf("auth: nonce store maxAge %v is shorter than ServiceTokenMaxAge %v; a shorter TTL reintroduces the replay window",
-			maxAge, ServiceTokenMaxAge)
+	if maxAge < ServiceTokenNonceTTL {
+		return nil, fmt.Errorf("auth: nonce store maxAge %v is shorter than ServiceTokenNonceTTL %v; a shorter TTL reintroduces the replay window",
+			maxAge, ServiceTokenNonceTTL)
 	}
 	s := &InMemoryNonceStore{
 		seen:       make(map[string]time.Time),

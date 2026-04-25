@@ -168,6 +168,7 @@ func TestRun_MissingJWTAudience_FailsFast(t *testing.T) {
 func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
 	privPEM, pubPEM := generateTestPEM(t)
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	t.Setenv("GOCELL_SINGLE_POD", "1")
 	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
@@ -274,6 +275,7 @@ func TestRun_RealMode_MissingServiceSecret_FailsFast(t *testing.T) {
 	t.Setenv("GOCELL_ACCESSCORE_CURSOR_KEY", "access-cursor-key-32b-padded-x!!")
 	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
 	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
+	t.Setenv("GOCELL_SINGLE_POD", "1")
 	// The trip-wire: service secret is empty.
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
 

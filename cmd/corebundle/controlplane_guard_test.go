@@ -18,14 +18,14 @@ import (
 
 func TestInternalGuardFromEnv_DevMode_MissingSecret_ReturnsNilGuard(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
-	guard, err := internalGuardFromEnv("") // dev mode
+	guard, err := internalGuardFromEnv("", nil) // dev mode
 	require.NoError(t, err)
 	assert.Nil(t, guard, "dev mode with empty secret must return nil guard (guard disabled)")
 }
 
 func TestInternalGuardFromEnv_RealMode_MissingSecret_Error(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
-	_, err := internalGuardFromEnv("real")
+	_, err := internalGuardFromEnv("real", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
 		"real mode must fail fast when service secret is unset")
@@ -33,14 +33,14 @@ func TestInternalGuardFromEnv_RealMode_MissingSecret_Error(t *testing.T) {
 
 func TestInternalGuardFromEnv_WithSecret_ReturnsGuard(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
-	guard, err := internalGuardFromEnv("")
+	guard, err := internalGuardFromEnv("", nil)
 	require.NoError(t, err)
 	assert.NotNil(t, guard, "non-empty secret must produce a non-nil guard")
 }
 
 func TestInternalGuardFromEnv_WithSecret_GuardRejects401WhenNoHeader(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
-	guard, err := internalGuardFromEnv("")
+	guard, err := internalGuardFromEnv("", nil)
 	require.NoError(t, err)
 	require.NotNil(t, guard)
 
@@ -63,7 +63,7 @@ func TestInternalGuardFromEnv_WithSecret_GuardRejects401WhenNoHeader(t *testing.
 // forging ServiceTokens using the public demo secret shipped in test fixtures.
 func TestInternalGuardFromEnv_RealMode_DemoServiceSecret_Rejected(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
-	_, err := internalGuardFromEnv("real")
+	_, err := internalGuardFromEnv("real", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
 		"error must name the offending env var")
@@ -76,7 +76,7 @@ func TestInternalGuardFromEnv_RealMode_DemoServiceSecret_Rejected(t *testing.T) 
 // the dev/test workflow where demo fixture values are acceptable.
 func TestInternalGuardFromEnv_DevMode_DemoServiceSecret_Allowed(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "service-secret-32-bytes-xxxxxx!!")
-	guard, err := internalGuardFromEnv("") // dev mode
+	guard, err := internalGuardFromEnv("", nil) // dev mode
 	require.NoError(t, err)
 	assert.NotNil(t, guard, "dev mode must accept demo key and return a guard")
 }
@@ -87,7 +87,7 @@ func TestInternalGuardFromEnv_DevMode_DemoServiceSecret_Allowed(t *testing.T) {
 func TestInternalGuardFromEnv_RealMode_DemoPreviousServiceSecret_Rejected(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_SERVICE_SECRET_PREVIOUS", "service-secret-32-bytes-xxxxxx!!")
-	_, err := internalGuardFromEnv("real")
+	_, err := internalGuardFromEnv("real", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET_PREVIOUS",
 		"error must name the offending env var")
@@ -105,7 +105,7 @@ func TestInternalGuardFromEnv_DefaultStoreRejectsReplay(t *testing.T) {
 	secret := freshTestServiceSecret(t)
 	t.Setenv("GOCELL_SERVICE_SECRET", secret)
 
-	guard, err := internalGuardFromEnv("") // dev mode still installs store
+	guard, err := internalGuardFromEnv("", nil) // dev mode still installs store
 	require.NoError(t, err)
 	require.NotNil(t, guard, "guard must be installed when secret is present")
 
@@ -142,7 +142,7 @@ func TestInternalGuardFromEnv_DefaultStoreRejectsReplay(t *testing.T) {
 // silently exposes the control plane.
 func TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
-	guard, err := internalGuardFromEnv("real")
+	guard, err := internalGuardFromEnv("real", nil)
 	require.NoError(t, err)
 	require.NotNil(t, guard,
 		"real mode with valid service secret must install a non-nil guard")
@@ -155,24 +155,14 @@ func TestInternalGuardFromEnv_RealMode_GuardInstalledWithSecret(t *testing.T) {
 			"(multi-pod deployments replace it with a shared store)")
 }
 
-// TestInternalGuardFromEnv_NonceStoreTTL_ExceedsTokenWindowByBuffer pins the
-// invariant that the nonce store TTL configured by internalGuardFromEnv exceeds
-// ServiceTokenMaxAge by at least nonceStoreBuffer. Shrinking the buffer to zero
-// would allow a nonce to expire at exactly the token validity boundary, creating
-// a race window. This test uses MaxAge() rather than driving real time so it
-// runs deterministically without sleeping.
-//
-// F6: also asserts nonceStoreBuffer > 0 to catch an accidental zero-constant edit.
-func TestInternalGuardFromEnv_NonceStoreTTL_ExceedsTokenWindowByBuffer(t *testing.T) {
+func TestInternalGuardFromEnv_NonceStoreTTL_UsesServiceTokenNonceTTL(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 	t.Setenv("GOCELL_SINGLE_POD", "1") // required after F1: real mode + in_memory needs opt-in
-	guard, err := internalGuardFromEnv("real")
+	guard, err := internalGuardFromEnv("real", nil)
 	require.NoError(t, err)
 
 	store, ok := guard.NonceStore().(*auth.InMemoryNonceStore)
 	require.True(t, ok, "production guard must use *InMemoryNonceStore by default")
-	assert.GreaterOrEqual(t, store.MaxAge(), auth.ServiceTokenMaxAge+nonceStoreBuffer,
-		"nonce TTL must exceed token validity window by at least nonceStoreBuffer")
-	assert.Greater(t, nonceStoreBuffer, time.Duration(0),
-		"nonceStoreBuffer must be positive so exclusive age boundary has a safety margin")
+	assert.Equal(t, auth.ServiceTokenNonceTTL, store.MaxAge(),
+		"nonce TTL must use the centralized service-token retention constant")
 }

@@ -182,6 +182,9 @@ func (p *Pool) PoolStats() PoolStats {
 
 // Stats returns pool statistics as a formatted string for diagnostics.
 func (p *Pool) Stats() string {
+	if p == nil || p.inner == nil {
+		return "pool not initialized"
+	}
 	s := p.inner.Stat()
 	return fmt.Sprintf(
 		"total=%d idle=%d acquired=%d constructing=%d max=%d",

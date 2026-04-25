@@ -27,18 +27,29 @@ connectivity, high latency, or constrained bandwidth.
 ## Quick Start (In-Memory Mode)
 
 No external dependencies required. Uses in-memory repositories and event bus.
+The primary listener verifies RS256 JWTs from the `GOCELL_JWT_*` environment,
+and the internal listener requires a service-token secret.
 
 ```bash
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+  -out /tmp/gocell-iotdevice-jwt.key
+openssl rsa -in /tmp/gocell-iotdevice-jwt.key -pubout \
+  -out /tmp/gocell-iotdevice-jwt.pub
+
+export GOCELL_JWT_PRIVATE_KEY="$(cat /tmp/gocell-iotdevice-jwt.key)"
+export GOCELL_JWT_PUBLIC_KEY="$(cat /tmp/gocell-iotdevice-jwt.pub)"
+export GOCELL_JWT_ISSUER=iotdevice-local
+export GOCELL_JWT_AUDIENCE=gocell
+export GOCELL_IOTDEVICE_SERVICE_SECRET="$(openssl rand -base64 32)"
+
+export IOT_ADMIN_TOKEN="$(go run ./examples/iotdevice/localtoken)"
 go run ./examples/iotdevice
 ```
 
 The server starts with primary listener on `:8083` (API + infra) and internal listener on `:9083` (control-plane).
-
-Protected routes use a fixed demo bearer token:
-
-```bash
-export IOT_ADMIN_TOKEN=iotdevice-admin-demo-token
-```
+`IOT_ADMIN_TOKEN` is a real RS256 access token signed by the local key above.
+The helper defaults to the roles needed by the walkthrough; override with
+`go run ./examples/iotdevice/localtoken -roles admin,role:operator,role:device`.
 
 ## Docker Mode
 
@@ -48,6 +59,7 @@ Start infrastructure services, then run the application:
 cd examples/iotdevice
 docker compose up -d
 cd ../..
+# Export the JWT and GOCELL_IOTDEVICE_SERVICE_SECRET variables from Quick Start first.
 go run ./examples/iotdevice
 ```
 
