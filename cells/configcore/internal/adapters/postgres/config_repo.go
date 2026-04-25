@@ -67,8 +67,8 @@ func (r *ConfigRepository) wrapCtxCancel(_ context.Context, op, identifier strin
 // Public Message stays a generic descriptor; InternalMessage embeds the
 // identifier (config key or configID) for internal triage only. The HTTP
 // status mapping is driven independently by codeToStatus
-// (ErrConfigDecryptFailed → 500, ErrConfigRepoQuery → 500,
-// ErrClientCanceled → 499); only the in-process classifier shifts.
+// (ErrConfigEncryptFailed → 500, ErrConfigDecryptFailed → 500,
+// ErrConfigRepoQuery → 500, ErrClientCanceled → 499); only the in-process classifier shifts.
 //
 // ref: google/tink aead/subtle/aes_gcm.go — symmetric crypto errors do not
 // carry key identifiers in Error() strings.
@@ -204,7 +204,7 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 	aad := configcrypto.AADForConfig(cellID, key)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
-		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigRepoQuery, "Encrypt", "key="+key, err)
+		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "Encrypt", "key="+key, err)
 	}
 	return ct, keyID, nonce, edk, nil
 }
@@ -236,7 +236,7 @@ func (r *ConfigRepository) encryptVersionValue(ctx context.Context, configID, va
 	aad := configcrypto.AADForVersion(cellID, configID)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
-		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigRepoQuery, "EncryptVersion", "config_id="+configID, err)
+		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigEncryptFailed, "EncryptVersion", "config_id="+configID, err)
 	}
 	return ct, keyID, nonce, edk, nil
 }
@@ -303,8 +303,13 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		if cancelErr := r.wrapCtxCancel(ctx, "Create", "key="+entry.Key, err); cancelErr != nil {
 			return cancelErr
 		}
-		return errcode.WrapInfra(errcode.ErrConfigRepoQuery,
-			fmt.Sprintf("config repo: create failed for key %s", entry.Key), err)
+		return &errcode.Error{
+			Code:            errcode.ErrConfigRepoQuery,
+			Message:         "config repo: create failed",
+			InternalMessage: fmt.Sprintf("config repo: Create failed (key=%s)", entry.Key),
+			Cause:           err,
+			Category:        errcode.CategoryInfra,
+		}
 	}
 	return nil
 }

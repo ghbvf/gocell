@@ -430,6 +430,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrKeyProviderDecryptFailed: http.StatusInternalServerError,
 	errcode.ErrKeyProviderRotateFailed:  http.StatusInternalServerError,
 	errcode.ErrConfigDecryptFailed:      http.StatusInternalServerError,
+	errcode.ErrConfigEncryptFailed:      http.StatusInternalServerError,
 	errcode.ErrConfigKeyMissing:         http.StatusInternalServerError,
 	// Control-plane startup configuration errors — fail-fast at boot, never
 	// reach HTTP in practice. 500 is the conservative choice if one ever

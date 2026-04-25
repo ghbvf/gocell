@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -301,6 +302,33 @@ func TestFlagRepo_NotFound_Errors(t *testing.T) {
 		require.ErrorAs(t, err, &ec)
 		assert.Equal(t, errcode.ErrFlagNotFound, ec.Code)
 	})
+}
+
+// TestFlagRepo_Create_PublicMessageDoesNotLeakKey verifies that when Create
+// fails (e.g. a DB error), the public Message on the returned error does NOT
+// contain the flag.Key (user-controlled input). The key must only appear in
+// InternalMessage, preventing public error responses from echoing user input.
+func TestFlagRepo_Create_PublicMessageDoesNotLeakKey(t *testing.T) {
+	db := &mockDB{
+		execErr: assert.AnError,
+	}
+	repo := newFlagRepositoryFromDBTX(db)
+
+	err := repo.Create(context.Background(), &domain.FeatureFlag{
+		ID:  "f-1",
+		Key: "user_secret_flag_key",
+	})
+	require.Error(t, err)
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+	assert.Equal(t, errcode.ErrFlagRepoQuery, ec.Code)
+	assert.NotContains(t, ec.Message, "user_secret_flag_key",
+		"public Message must not contain the flag key (prevents input echo in API error responses)")
+	assert.Contains(t, ec.InternalMessage, "key=user_secret_flag_key",
+		"InternalMessage must carry the key for operator triage")
+	assert.True(t, errcode.IsInfraError(ec),
+		"wrapNonScanQueryErr must preserve CategoryInfra so DB-failure alerts fire")
 }
 
 // TestFlagRepo_WithoutTx_WritePathsRequireTx verifies session-based repo

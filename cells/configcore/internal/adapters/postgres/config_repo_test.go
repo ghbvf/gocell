@@ -46,12 +46,14 @@ func TestConfigRepository_Create_Error(t *testing.T) {
 	db := &mockDB{execErr: assert.AnError}
 	repo := newConfigRepositoryFromDBTX(db)
 
-	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "k"})
+	err := repo.Create(context.Background(), &domain.ConfigEntry{Key: "secret_user_key"})
 	require.Error(t, err)
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
+	assert.NotContains(t, ec.Message, "secret_user_key", "public Message must not leak entry.Key")
+	assert.Contains(t, ec.InternalMessage, "key=secret_user_key", "InternalMessage must carry key for triage")
 }
 
 func TestConfigRepository_GetByKey(t *testing.T) {
@@ -254,9 +256,9 @@ func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 		code errcode.Code
 		op   string
 	}{
-		{"encrypt", errcode.ErrConfigRepoQuery, "Encrypt"},
+		{"encrypt", errcode.ErrConfigEncryptFailed, "Encrypt"},
 		{"decrypt", errcode.ErrConfigDecryptFailed, "Decrypt"},
-		{"encrypt version", errcode.ErrConfigRepoQuery, "EncryptVersion"},
+		{"encrypt version", errcode.ErrConfigEncryptFailed, "EncryptVersion"},
 		{"decrypt version", errcode.ErrConfigDecryptFailed, "DecryptVersion"},
 	}
 
