@@ -240,6 +240,8 @@ func TestEventConfigRollbackV1Publish_RollbackEmitsStateThenAudit(t *testing.T) 
 	assert.Equal(t, domain.TopicConfigEntryUpserted, stateEntry.EventType)
 	upserted.ValidatePayload(t, stateEntry.Payload)
 	upserted.ValidateHeaders(t, []byte(`{"event_id":"`+stateEntry.ID+`"}`))
+	// Metadata-only: value field must be absent and forbidden.
+	upserted.MustRejectPayload(t, []byte(`{"key":"app.name","value":"v1","version":2}`))
 
 	auditEntry := writer.Entries[1]
 	assert.Equal(t, domain.TopicConfigRollback, auditEntry.EventType)

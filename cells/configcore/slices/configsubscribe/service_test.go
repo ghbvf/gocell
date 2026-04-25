@@ -12,10 +12,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func makeEntryUpserted(key, value string, version int) outbox.Entry {
+// makeEntryUpserted builds a metadata-only outbox.Entry for entry-upserted.
+// The payload carries only key+version — no value field.
+func makeEntryUpserted(key string, version int) outbox.Entry {
 	payload, _ := json.Marshal(domain.ConfigEntryUpsertedEvent{
 		Key:     key,
-		Value:   value,
 		Version: version,
 	})
 	return outbox.Entry{ID: "test-upsert", Topic: TopicConfigEntryUpserted, Payload: payload}
@@ -28,35 +29,35 @@ func makeEntryDeleted(key string) outbox.Entry {
 
 func TestService_HandleEntryUpserted(t *testing.T) {
 	tests := []struct {
-		name      string
-		events    []outbox.Entry
-		wantKey   string
-		wantValue string
-		wantLen   int
+		name        string
+		events      []outbox.Entry
+		wantKey     string
+		wantVersion int
+		wantLen     int
 	}{
 		{
-			name:      "created state updates cache",
-			events:    []outbox.Entry{makeEntryUpserted("app.name", "gocell", 1)},
-			wantKey:   "app.name",
-			wantValue: "gocell",
-			wantLen:   1,
+			name:        "created state updates cache",
+			events:      []outbox.Entry{makeEntryUpserted("app.name", 1)},
+			wantKey:     "app.name",
+			wantVersion: 1,
+			wantLen:     1,
 		},
 		{
-			name: "updated state updates cache",
+			name: "updated state updates cache to latest version",
 			events: []outbox.Entry{
-				makeEntryUpserted("k", "v1", 1),
-				makeEntryUpserted("k", "v2", 2),
+				makeEntryUpserted("k", 1),
+				makeEntryUpserted("k", 2),
 			},
-			wantKey:   "k",
-			wantValue: "v2",
-			wantLen:   1,
+			wantKey:     "k",
+			wantVersion: 2,
+			wantLen:     1,
 		},
 		{
-			name:      "empty value is cached",
-			events:    []outbox.Entry{makeEntryUpserted("empty", "", 1)},
-			wantKey:   "empty",
-			wantValue: "",
-			wantLen:   1,
+			name:        "version 5 is tracked",
+			events:      []outbox.Entry{makeEntryUpserted("timeout", 5)},
+			wantKey:     "timeout",
+			wantVersion: 5,
+			wantLen:     1,
 		},
 	}
 
@@ -69,20 +70,20 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 			}
 
 			assert.Equal(t, tt.wantLen, svc.Cache().Len())
-			v, ok := svc.Cache().Get(tt.wantKey)
+			v, ok := svc.Cache().GetVersion(tt.wantKey)
 			require.True(t, ok)
-			assert.Equal(t, tt.wantValue, v)
+			assert.Equal(t, tt.wantVersion, v)
 		})
 	}
 }
 
 func TestService_HandleEntryDeleted(t *testing.T) {
 	svc := NewService(slog.Default())
-	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", "v", 1)))
+	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
 	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k")))
 
 	assert.Equal(t, 0, svc.Cache().Len())
-	_, ok := svc.Cache().Get("k")
+	_, ok := svc.Cache().GetVersion("k")
 	assert.False(t, ok)
 }
 
@@ -93,11 +94,12 @@ func TestService_HandleEntryUpserted_InvalidPayload(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json"), "unmarshal"},
-		{"missing key", []byte(`{"value":"v","version":1}`), "missing key"},
-		{"missing value", []byte(`{"key":"k","version":1}`), "missing value"},
-		{"invalid version", []byte(`{"key":"k","value":"v","version":0}`), "invalid version"},
-		{"extra sensitive field", []byte(`{"key":"k","value":"v","version":1,"sensitive":false}`), "unknown field"},
-		{"old action field", []byte(`{"action":"updated","key":"k","value":"v","version":1}`), "unknown field"},
+		{"missing key", []byte(`{"version":1}`), "missing key"},
+		// value field must now be rejected (metadata-only schema)
+		{"value field present", []byte(`{"key":"k","value":"v","version":1}`), "unknown field"},
+		{"invalid version zero", []byte(`{"key":"k","version":0}`), "invalid version"},
+		{"extra sensitive field", []byte(`{"key":"k","version":1,"sensitive":false}`), "unknown field"},
+		{"old action field", []byte(`{"action":"updated","key":"k","version":1}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -130,7 +132,7 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-			require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("existing.key", "existing-value", 1)))
+			require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("existing.key", 1)))
 
 			entry := outbox.Entry{ID: "bad-delete", Topic: TopicConfigEntryDeleted, Payload: tt.payload}
 			err := svc.HandleEntryDeleted(context.Background(), entry)
@@ -139,9 +141,8 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 			var permErr *outbox.PermanentError
 			require.ErrorAs(t, err, &permErr)
 			assert.Equal(t, 1, svc.Cache().Len(), "cache must be unchanged after invalid delete")
-			v, ok := svc.Cache().Get("existing.key")
+			_, ok := svc.Cache().GetVersion("existing.key")
 			require.True(t, ok)
-			assert.Equal(t, "existing-value", v)
 		})
 	}
 }
@@ -157,11 +158,16 @@ func TestWrapLegacyHandler_InvalidPayload_Reject(t *testing.T) {
 	assert.Error(t, result.Err)
 }
 
-func TestWrapLegacyHandler_MissingValue_Reject(t *testing.T) {
+func TestWrapLegacyHandler_ValueFieldPresent_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
 	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
-	entry := outbox.Entry{ID: "bad", Topic: TopicConfigEntryUpserted, Payload: []byte(`{"key":"k","version":1}`)}
+	// Old wire format with value field — must be rejected
+	entry := outbox.Entry{
+		ID:      "bad",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"k","value":"some-value","version":1}`),
+	}
 	result := handler(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)

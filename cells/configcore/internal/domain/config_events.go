@@ -1,6 +1,6 @@
 package domain
 
-import "github.com/ghbvf/gocell/cells/configcore/events"
+import "github.com/ghbvf/gocell/cells/configcore/internal/events"
 
 // Event payload structs for configcore (L2 OutboxFact).
 //
@@ -8,10 +8,11 @@ import "github.com/ghbvf/gocell/cells/configcore/events"
 // 统一 camelCase). The previous snake_case fields (config_id, target_version,
 // new_version) were retired as part of PR-A6's full-break sweep.
 //
-// State-sync payload aliases point at cells/configcore/events so other cells
-// can decode public config events without importing configcore/internal.
+// ConfigEntryUpsertedEvent is metadata-only: subscribers MUST refetch via
+// GET /api/v1/config/{key} to obtain the value.
+// ref: NATS subject+bytes / Watermill payload-bytes boundary.
 
-// ConfigEntryUpsertedEvent is the payload for event.config.entry-upserted.v1.
+// ConfigEntryUpsertedEvent is the metadata-only payload for event.config.entry-upserted.v1.
 type ConfigEntryUpsertedEvent = events.EntryUpserted
 
 // ConfigEntryDeletedEvent is the payload for event.config.entry-deleted.v1.

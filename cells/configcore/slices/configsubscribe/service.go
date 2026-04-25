@@ -1,5 +1,9 @@
 // Package configsubscribe implements the config-subscribe slice: consumes
-// config state-sync events to update a local cache.
+// config state-sync events to update a local version-tracking cache.
+//
+// Metadata-only model: event.config.entry-upserted.v1 carries only key+version.
+// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
+// ref: NATS subject+bytes / Watermill payload-bytes boundary.
 package configsubscribe
 
 import (
@@ -8,8 +12,8 @@ import (
 	"log/slog"
 	"sync"
 
-	configevents "github.com/ghbvf/gocell/cells/configcore/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -20,28 +24,29 @@ const (
 	TopicConfigEntryDeleted  = domain.TopicConfigEntryDeleted
 )
 
-// Cache holds the latest config values observed from events.
+// Cache tracks the latest known version for each config key observed from events.
+// It does NOT store values — subscribers must refetch via GET /api/v1/config/{key}.
 type Cache struct {
-	mu     sync.RWMutex
-	values map[string]string
+	mu       sync.RWMutex
+	versions map[string]int
 }
 
-// Get returns the cached value for a key.
-func (c *Cache) Get(key string) (string, bool) {
+// GetVersion returns the last known version for a key.
+func (c *Cache) GetVersion(key string) (int, bool) {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	v, ok := c.values[key]
+	v, ok := c.versions[key]
 	return v, ok
 }
 
-// Len returns the number of cached entries.
+// Len returns the number of tracked keys.
 func (c *Cache) Len() int {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
-	return len(c.values)
+	return len(c.versions)
 }
 
-// Service consumes config change events and maintains a local cache.
+// Service consumes config change events and maintains a local version-tracking cache.
 type Service struct {
 	cache  *Cache
 	logger *slog.Logger
@@ -50,7 +55,7 @@ type Service struct {
 // NewService creates a config-subscribe Service.
 func NewService(logger *slog.Logger) *Service {
 	return &Service{
-		cache:  &Cache{values: make(map[string]string)},
+		cache:  &Cache{versions: make(map[string]int)},
 		logger: logger,
 	}
 }
@@ -61,11 +66,13 @@ func (s *Service) Cache() *Cache {
 }
 
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
+// Records the known version for the key; does not store a value.
+// Callers wanting the current value must refetch via GET /api/v1/config/{key}.
 //
 // Consumer: cg-configcore-entry-upserted
-// Idempotency key: N/A (in-memory cache, idempotent by nature)
-// ACK timing: after cache update
-// Retry: transient errors -> NACK+backoff / permanent errors -> dead letter
+// Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
+// Disposition: Ack on success / Requeue on transient / Reject on permanent
+// DLX: broker-native via DispositionReject → Nack(requeue=false)
 func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
 	event, err := configevents.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
@@ -75,7 +82,7 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 	}
 
 	s.cache.mu.Lock()
-	s.cache.values[event.Key] = event.Value
+	s.cache.versions[event.Key] = event.Version
 	s.cache.mu.Unlock()
 	s.logger.Info("config-subscribe: cache updated",
 		slog.String("key", event.Key),
@@ -93,7 +100,7 @@ func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) erro
 	}
 
 	s.cache.mu.Lock()
-	delete(s.cache.values, event.Key)
+	delete(s.cache.versions, event.Key)
 	s.cache.mu.Unlock()
 	s.logger.Info("config-subscribe: key deleted from cache",
 		slog.String("key", event.Key))

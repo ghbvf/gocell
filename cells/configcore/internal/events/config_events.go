@@ -1,4 +1,12 @@
-// Package events defines configcore's public event wire payloads and decoders.
+// Package events defines configcore's internal event wire payloads and decoders.
+//
+// This package is internal to configcore. External cells that consume
+// event.config.entry-upserted.v1 must maintain their own local decoder — the
+// canonical schema is contracts/event/config/entry-upserted/v1/payload.schema.json.
+//
+// ref: NATS subject+bytes / Watermill payload-bytes boundary — event carries
+// metadata only (key + version). Subscribers MUST refetch via
+// GET /api/v1/config/{key} to obtain the current value.
 package events
 
 import (
@@ -9,10 +17,10 @@ import (
 	"strings"
 )
 
-// EntryUpserted is the payload for event.config.entry-upserted.v1.
+// EntryUpserted is the metadata-only payload for event.config.entry-upserted.v1.
+// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
 type EntryUpserted struct {
 	Key     string `json:"key"`
-	Value   string `json:"value"`
 	Version int    `json:"version"`
 }
 
@@ -21,28 +29,20 @@ type EntryDeleted struct {
 	Key string `json:"key"`
 }
 
-type entryUpsertedWire struct {
-	Key     string  `json:"key"`
-	Value   *string `json:"value"`
-	Version int     `json:"version"`
-}
-
 // DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.
+// The payload must not contain a "value" field — this decoder rejects unknown fields.
 func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
-	var wire entryUpsertedWire
-	if err := decodeStrict(data, &wire); err != nil {
+	var event EntryUpserted
+	if err := decodeStrict(data, &event); err != nil {
 		return EntryUpserted{}, err
 	}
-	if strings.TrimSpace(wire.Key) == "" {
+	if strings.TrimSpace(event.Key) == "" {
 		return EntryUpserted{}, fmt.Errorf("entry-upserted missing key")
 	}
-	if wire.Value == nil {
-		return EntryUpserted{}, fmt.Errorf("entry-upserted missing value for key %q", wire.Key)
+	if event.Version < 1 {
+		return EntryUpserted{}, fmt.Errorf("entry-upserted invalid version %d for key %q", event.Version, event.Key)
 	}
-	if wire.Version < 1 {
-		return EntryUpserted{}, fmt.Errorf("entry-upserted invalid version %d for key %q", wire.Version, wire.Key)
-	}
-	return EntryUpserted{Key: wire.Key, Value: *wire.Value, Version: wire.Version}, nil
+	return event, nil
 }
 
 // DecodeEntryDeleted strictly decodes and validates event.config.entry-deleted.v1.

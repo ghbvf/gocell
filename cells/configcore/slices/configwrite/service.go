@@ -155,13 +155,11 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 }
 
 func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry) error {
-	eventValue := entry.Value
-	if entry.Sensitive {
-		eventValue = "******"
-	}
+	// Metadata-only: event carries key+version only.
+	// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
+	// ref: NATS subject+bytes / Watermill payload-bytes boundary.
 	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryUpserted, domain.ConfigEntryUpsertedEvent{
 		Key:     entry.Key,
-		Value:   eventValue,
 		Version: entry.Version,
 	})
 }

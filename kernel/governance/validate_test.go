@@ -2479,6 +2479,108 @@ func TestADV04(t *testing.T) {
 	}
 }
 
+// --- ADV-05: active event contract with no subscribers ---
+
+func TestADV05(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+		wantSev   Severity
+	}{
+		{
+			name: "event contract active with empty subscribers → 1 error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.dead.nosubscribers.v1"] = &metadata.ContractMeta{
+					ID:               "event.dead.nosubscribers.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{},
+					},
+				}
+			},
+			wantCount: 1,
+			wantSev:   SeverityError,
+		},
+		{
+			name: "event contract active with nil subscribers → 1 error",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.dead.nilsubs.v1"] = &metadata.ContractMeta{
+					ID:               "event.dead.nilsubs.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: nil,
+					},
+				}
+			},
+			wantCount: 1,
+			wantSev:   SeverityError,
+		},
+		{
+			name: "event contract active with subscribers → 0 findings",
+			setup: func(pm *metadata.ProjectMeta) {
+				// event.session.created.v1 already has subscribers in validProject()
+			},
+			wantCount: 0,
+		},
+		{
+			name: "event contract deprecated with empty subscribers → 0 findings (exempt)",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.old.deprecated.v1"] = &metadata.ContractMeta{
+					ID:               "event.old.deprecated.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "deprecated",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{},
+					},
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "http contract with no clients field → 0 findings (not event kind)",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.some.endpoint.v1"] = &metadata.ContractMeta{
+					ID:               "http.some.endpoint.v1",
+					Kind:             "http",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L1",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Server: "accesscore",
+					},
+				}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateADV05(), "ADV-05")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, tt.wantSev, r.Severity)
+				assert.Equal(t, IssueForbidden, r.IssueType)
+				assert.Contains(t, r.Message, "active but has no subscribers")
+			}
+		})
+	}
+}
+
 // --- helper function tests for new utilities ---
 
 func TestContractDirFromID(t *testing.T) {

@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	configevents "github.com/ghbvf/gocell/cells/configcore/events"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -36,7 +36,7 @@ func NewService(logger *slog.Logger) *Service {
 
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
 func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
-	event, err := configevents.DecodeEntryUpserted(entry.Payload)
+	event, err := dto.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
@@ -51,7 +51,7 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 
 // HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
 func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) error {
-	event, err := configevents.DecodeEntryDeleted(entry.Payload)
+	event, err := dto.DecodeEntryDeleted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))

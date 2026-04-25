@@ -2,9 +2,7 @@ package flagwrite
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 	"time"
@@ -32,17 +30,15 @@ var _ persistence.TxRunner = (*failingTxRunner)(nil)
 
 // --- helpers ---
 
-func newDurableTestService(t *testing.T) (*Service, *mem.FlagRepository, *testutil.RecordingWriter) {
+func newTestService(t *testing.T) (*Service, *mem.FlagRepository) {
 	t.Helper()
 	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)),
 		WithTxManager(&testutil.NoopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return svc, repo, writer
+	return svc, repo
 }
 
 func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) *domain.FeatureFlag {
@@ -61,7 +57,7 @@ func seedFlag(t *testing.T, repo *mem.FlagRepository, key string) *domain.Featur
 	return flag
 }
 
-// --- Test: XOR violation guard ---
+// --- Test: constructor ---
 
 // TestNewService_AllowsHalfWiredDemoPath verifies that service construction no
 // longer uses nil-mode coupling; Cell wiring owns durable-mode validation.
@@ -70,8 +66,8 @@ func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 		name string
 		opts []Option
 	}{
-		{"only_emitter", []Option{WithEmitter(testoutbox.MustEmitter(t, &testutil.RecordingWriter{}))}},
 		{"only_tx_runner", []Option{WithTxManager(&testutil.NoopTxRunner{})}},
+		{"no_opts", []Option{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -83,14 +79,12 @@ func TestNewService_AllowsHalfWiredDemoPath(t *testing.T) {
 
 // --- Test: Create atomicity ---
 
-// TestFlagWrite_Create_Atomic_RepoAndOutbox verifies that Create writes repo +
-// outbox in a single tx; repo failure also prevents outbox write.
-func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
+// TestFlagWrite_Create_Atomic_RepoInTx verifies that Create writes repo
+// inside a single tx; repo failure propagates correctly.
+func TestFlagWrite_Create_Atomic_RepoInTx(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{}
 	tx := &testutil.NoopTxRunner{}
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
+	svc, err := NewService(repo, slog.Default(), WithTxManager(tx))
 	require.NoError(t, err)
 
 	flag, err := svc.Create(context.Background(), CreateInput{
@@ -100,25 +94,18 @@ func TestFlagWrite_Create_Atomic_RepoAndOutbox(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "my-flag", flag.Key)
 	assert.Equal(t, 1, tx.Calls, "Create must call RunInTx exactly once")
-	require.Len(t, writer.Entries, 1)
-	assert.Equal(t, TopicFlagChanged, writer.Entries[0].EventType)
+
+	// Flag must be persisted in repo.
+	got, err := repo.GetByKey(context.Background(), "my-flag")
+	require.NoError(t, err)
+	assert.Equal(t, "my-flag", got.Key)
 }
 
-// TestFlagWrite_Create_RepoFails_NoOutboxWrite verifies that a tx-level
-// failure propagates as an error to the caller.
-//
-// Scope note: the in-memory recordingWriter has no transaction-aware
-// rollback — it records every Write call unconditionally. This test
-// therefore exercises only the error-propagation path; the "outbox is not
-// durable when tx rolls back" invariant is verified at the L2 durability
-// boundary by PG integration tests that run against a real database
-// where Write inside a rolled-back tx is genuinely discarded.
-func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
+// TestFlagWrite_Create_RepoFails propagates tx-level failures to the caller.
+func TestFlagWrite_Create_RepoFails(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{}
 	tx := &failingTxRunner{failErr: errors.New("tx commit failed")}
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
+	svc, err := NewService(repo, slog.Default(), WithTxManager(tx))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
@@ -126,34 +113,24 @@ func TestFlagWrite_RepoFails_NoOutboxWrite(t *testing.T) {
 	assert.Contains(t, err.Error(), "tx commit failed")
 }
 
-// --- Test: Toggle emits flag.changed.v1 ---
+// --- Test: Toggle business result ---
 
-// TestFlagWrite_Toggle_EmitsFlagChangedEvent verifies Toggle writes
-// outbox with action=toggled payload.
-func TestFlagWrite_Toggle_EmitsFlagChangedEvent(t *testing.T) {
-	svc, repo, writer := newDurableTestService(t)
+// TestFlagWrite_Toggle_TogglesFlag verifies Toggle sets the correct enabled state.
+func TestFlagWrite_Toggle_TogglesFlag(t *testing.T) {
+	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feature-x")
 
 	flag, err := svc.Toggle(context.Background(), "feature-x", true)
 	require.NoError(t, err)
 	assert.True(t, flag.Enabled)
-
-	require.Len(t, writer.Entries, 1)
-	assert.Equal(t, TopicFlagChanged, writer.Entries[0].EventType)
-
-	var payload FlagChangedPayload
-	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &payload))
-	assert.Equal(t, "toggled", payload.Action)
-	assert.Equal(t, "feature-x", payload.Key)
-	assert.True(t, payload.Enabled)
+	assert.Equal(t, "feature-x", flag.Key)
 }
 
-// --- Test: Update emits flag.changed.v1 ---
+// --- Test: Update business result ---
 
-// TestFlagWrite_Update_EmitsFlagChangedEvent verifies Update outbox payload
-// has action=updated.
-func TestFlagWrite_Update_EmitsFlagChangedEvent(t *testing.T) {
-	svc, repo, writer := newDurableTestService(t)
+// TestFlagWrite_Update_UpdatesFlag verifies Update modifies the flag fields.
+func TestFlagWrite_Update_UpdatesFlag(t *testing.T) {
+	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feat-update")
 
 	flag, err := svc.Update(context.Background(), UpdateInput{
@@ -164,42 +141,30 @@ func TestFlagWrite_Update_EmitsFlagChangedEvent(t *testing.T) {
 	})
 	require.NoError(t, err)
 	assert.Equal(t, "feat-update", flag.Key)
-
-	require.Len(t, writer.Entries, 1)
-	var payload FlagChangedPayload
-	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &payload))
-	assert.Equal(t, "updated", payload.Action)
-	assert.Equal(t, "feat-update", payload.Key)
+	assert.True(t, flag.Enabled)
+	assert.Equal(t, 50, flag.RolloutPercentage)
+	assert.Equal(t, "updated desc", flag.Description)
 }
 
-// --- Test: Delete emits flag.changed.v1 ---
+// --- Test: Delete business result ---
 
-// TestFlagWrite_Delete_EmitsFlagChangedEvent verifies Delete outbox payload
-// has action=deleted.
-func TestFlagWrite_Delete_EmitsFlagChangedEvent(t *testing.T) {
-	svc, repo, writer := newDurableTestService(t)
+// TestFlagWrite_Delete_RemovesFlag verifies Delete removes the flag from repo.
+func TestFlagWrite_Delete_RemovesFlag(t *testing.T) {
+	svc, repo := newTestService(t)
 	seedFlag(t, repo, "feat-delete")
 
 	err := svc.Delete(context.Background(), "feat-delete")
 	require.NoError(t, err)
 
-	require.Len(t, writer.Entries, 1)
-	var payload FlagChangedPayload
-	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &payload))
-	assert.Equal(t, "deleted", payload.Action)
-	assert.Equal(t, "feat-delete", payload.Key)
+	_, getErr := repo.GetByKey(context.Background(), "feat-delete")
+	require.Error(t, getErr, "flag must be removed after Delete")
 }
 
-// --- Test: outbox write failure propagates ---
+// --- Test: validation ---
 
-func TestFlagWrite_OutboxWriteError_PropagatesFromCreate(t *testing.T) {
-	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
-	require.NoError(t, err)
-
-	_, err = svc.Create(context.Background(), CreateInput{Key: "k"})
+// TestFlagWrite_Create_BlankKey rejects blank key with validation error.
+func TestFlagWrite_Create_BlankKey(t *testing.T) {
+	svc, _ := newTestService(t)
+	_, err := svc.Create(context.Background(), CreateInput{Key: ""})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "outbox")
 }
