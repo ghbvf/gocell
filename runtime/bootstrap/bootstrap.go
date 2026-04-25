@@ -29,7 +29,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 	metricsmiddleware "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
-	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -268,41 +267,6 @@ func WithHealthChecker(name string, fn func(context.Context) error) Option {
 func WithReadyzDeadline(d time.Duration) Option {
 	return func(b *Bootstrap) {
 		b.readyzDeadline = d
-	}
-}
-
-// WithRelayHealth registers the relay's named health checkers (one per enabled
-// FailureBudget) into the /readyz endpoint. Checkers are named:
-//
-//   - "outbox-relay-poll"
-//   - "outbox-relay-reclaim"
-//   - "outbox-relay-cleanup"
-//
-// Only budgets with a positive threshold are registered; threshold=0 (disabled)
-// budgets are silently skipped. A nil relay is rejected at Run() time with a
-// fatal error, mirroring the WithCircuitBreaker fail-fast contract.
-//
-// ref: controller-runtime AddReadyzCheck — named-checker aggregation pattern.
-// ref: runtime/bootstrap.WithCircuitBreaker — sibling fail-fast pattern.
-func WithRelayHealth(r *runtimeoutbox.Relay) Option {
-	return func(b *Bootstrap) {
-		if r == nil {
-			b.relayHealthNil = true
-			return
-		}
-		checkers := r.HealthCheckers()
-		names := make([]string, 0, len(checkers))
-		for k := range checkers {
-			names = append(names, k)
-		}
-		sort.Strings(names)
-		for _, name := range names {
-			fn := checkers[name] // capture loop var
-			b.healthCheckers = append(b.healthCheckers, namedChecker{
-				name: name,
-				fn:   func(ctx context.Context) error { return fn(ctx) },
-			})
-		}
 	}
 }
 
@@ -604,10 +568,6 @@ type Bootstrap struct {
 	// circuitBreakerNil is set by WithCircuitBreaker when a nil Allower is
 	// passed. Checked at Run() to fail-fast instead of silently skipping CB.
 	circuitBreakerNil bool
-
-	// relayHealthNil is set by WithRelayHealth when a nil relay is passed.
-	// Checked at Run() to fail-fast rather than silently skipping relay health.
-	relayHealthNil bool
 
 	// readyzDeadline overrides the per-probe deadline for /readyz.
 	// Zero means use health.Handler default (5 s).

@@ -59,14 +59,15 @@ type L0DepMeta struct {
 // map key prevents a path-vs-id split from fooling the validator (e.g. a
 // kebab directory paired with a no-dash id in slice.yaml).
 type SliceMeta struct {
-	ID             string          `yaml:"id"`
-	BelongsToCell  string          `yaml:"belongsToCell"`
-	ContractUsages []ContractUsage `yaml:"contractUsages"`
-	Verify         SliceVerifyMeta `yaml:"verify"`
-	AllowedFiles   []string        `yaml:"allowedFiles,omitempty"`
-	Dir            string          `yaml:"-"` // slice directory segment, set by parser
-	CellDir        string          `yaml:"-"` // parent cell directory segment, set by parser
-	File           string          `yaml:"-"` // parsed slice.yaml path relative to project root
+	ID               string          `yaml:"id"`
+	BelongsToCell    string          `yaml:"belongsToCell"`
+	ConsistencyLevel string          `yaml:"consistencyLevel,omitempty"` // "L0"-"L4"; if empty, inherits cell.ConsistencyLevel; if set, MUST be ≤ cell.ConsistencyLevel
+	ContractUsages   []ContractUsage `yaml:"contractUsages"`
+	Verify           SliceVerifyMeta `yaml:"verify"`
+	AllowedFiles     []string        `yaml:"allowedFiles,omitempty"`
+	Dir              string          `yaml:"-"` // slice directory segment, set by parser
+	CellDir          string          `yaml:"-"` // parent cell directory segment, set by parser
+	File             string          `yaml:"-"` // parsed slice.yaml path relative to project root
 }
 
 // ContractUsage declares a Slice's participation in a Contract.

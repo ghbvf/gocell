@@ -19,6 +19,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -84,6 +85,7 @@ func main() {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
 		accesscore.WithLogger(logger),
+		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production
 	)
 
 	// --- auditcore (L3): tamper-evident audit log ---
@@ -101,6 +103,7 @@ func main() {
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(logger),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production
 	)
 
 	// --- configcore (L2): configuration + feature flags ---
@@ -115,6 +118,7 @@ func main() {
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(logger),
+		configcore.WithMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production
 	)
 
 	// Build assembly and register all three Cells.

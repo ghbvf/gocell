@@ -9,6 +9,7 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
 	"github.com/stretchr/testify/assert"
@@ -88,7 +89,7 @@ func TestService_Register_PersistsDevice(t *testing.T) {
 
 func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 	repo := mem.NewDeviceRepository()
-	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailOpen, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "devicecell", slog.Default())
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 
@@ -100,7 +101,7 @@ func TestService_Register_PublishFails_StillReturnsDevice(t *testing.T) {
 
 func TestService_Register_PublishFails_FailClosedReturnsError(t *testing.T) {
 	repo := mem.NewDeviceRepository()
-	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailClosed, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailClosed, metrics.NopProvider{}, "devicecell", slog.Default())
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 
@@ -115,7 +116,7 @@ func TestService_Register_FailOpenDoesNotLogPublished(t *testing.T) {
 	repo := mem.NewDeviceRepository()
 	var logBuf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailOpen, logger)
+	emitter, err := outbox.NewDirectEmitter(failPublisher{}, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "devicecell", logger)
 	require.NoError(t, err)
 	svc := NewService(repo, logger, WithEmitter(emitter))
 

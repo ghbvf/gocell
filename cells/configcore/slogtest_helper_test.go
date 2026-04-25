@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/require"
 )
@@ -58,6 +59,7 @@ func TestConfigCore_InitDemoMode_EmitsL2DegradationWarn(t *testing.T) {
 		WithInMemoryDefaults(),
 		WithOutboxDeps(eventbus.New(), nil),
 		WithLogger(logger),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, c.Init(context.Background(),
 		cell.Dependencies{DurabilityMode: cell.DurabilityDemo}))

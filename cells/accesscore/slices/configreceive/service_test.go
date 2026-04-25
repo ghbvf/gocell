@@ -2,11 +2,9 @@ package configreceive
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"testing"
 
-	configevents "github.com/ghbvf/gocell/cells/configcore/events"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -14,29 +12,21 @@ import (
 
 func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
 	tests := []struct {
-		name  string
-		value string
+		name    string
+		payload []byte
 	}{
-		{"non-empty value", "30m"},
-		{"empty value is present", ""},
+		{"metadata-only key+version", []byte(`{"key":"jwt.ttl","version":1}`)},
+		{"higher version", []byte(`{"key":"jwt.ttl","version":42}`)},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := NewService(slog.Default())
-			payload, err := json.Marshal(configevents.EntryUpserted{
-				Key:     "jwt.ttl",
-				Value:   tt.value,
-				Version: 1,
-			})
-			require.NoError(t, err)
-
 			entry := outbox.Entry{
 				ID:      "evt-1",
 				Topic:   TopicConfigEntryUpserted,
-				Payload: payload,
+				Payload: tt.payload,
 			}
-
 			assert.NoError(t, svc.HandleEntryUpserted(context.Background(), entry))
 		})
 	}
@@ -49,11 +39,15 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json{"), "unmarshal"},
-		{"missing key", []byte(`{"value":"30m","version":1}`), "missing key"},
-		{"missing value field", []byte(`{"key":"jwt.ttl","version":1}`), "missing value"},
-		{"invalid version", []byte(`{"key":"jwt.ttl","value":"30m","version":0}`), "invalid version"},
-		{"extra sensitive field", []byte(`{"key":"jwt.ttl","value":"30m","version":1,"sensitive":false}`), "unknown field"},
-		{"old action field", []byte(`{"action":"updated","key":"jwt.ttl","value":"30m","version":1}`), "unknown field"},
+		{"missing key", []byte(`{"version":1}`), "missing key"},
+		{"empty key", []byte(`{"key":"","version":1}`), "missing key"},
+		{"blank key whitespace", []byte(`{"key":"   ","version":1}`), "missing key"},
+		{"missing version", []byte(`{"key":"jwt.ttl"}`), "invalid version"},
+		{"invalid version zero", []byte(`{"key":"jwt.ttl","version":0}`), "invalid version"},
+		// value field is rejected — payload must be metadata-only
+		{"value field present", []byte(`{"key":"jwt.ttl","value":"30m","version":1}`), "unknown field"},
+		{"extra sensitive field", []byte(`{"key":"jwt.ttl","version":1,"sensitive":false}`), "unknown field"},
+		{"old action field", []byte(`{"action":"updated","key":"jwt.ttl","version":1}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -77,15 +71,11 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 
 func TestHandleEntryDeleted_ValidPayload(t *testing.T) {
 	svc := NewService(slog.Default())
-	payload, err := json.Marshal(configevents.EntryDeleted{Key: "jwt.ttl"})
-	require.NoError(t, err)
-
 	entry := outbox.Entry{
 		ID:      "evt-del-1",
 		Topic:   TopicConfigEntryDeleted,
-		Payload: payload,
+		Payload: []byte(`{"key":"jwt.ttl","version":3}`),
 	}
-
 	assert.NoError(t, svc.HandleEntryDeleted(context.Background(), entry))
 }
 
@@ -96,8 +86,10 @@ func TestHandleEntryDeleted_InvalidPayload_PermanentError(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json{"), "unmarshal"},
-		{"missing key", []byte(`{}`), "missing key"},
-		{"extra value field", []byte(`{"key":"jwt.ttl","value":"old"}`), "unknown field"},
+		{"missing key", []byte(`{"version":1}`), "missing key"},
+		{"missing version", []byte(`{"key":"jwt.ttl"}`), "invalid version"},
+		{"version zero", []byte(`{"key":"jwt.ttl","version":0}`), "invalid version"},
+		{"extra value field", []byte(`{"key":"jwt.ttl","version":1,"value":"old"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -128,14 +120,11 @@ func TestWrapLegacyHandler_EntryUpserted_ValidPayload_Ack(t *testing.T) {
 	svc := NewService(slog.Default())
 	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
-	payload, err := json.Marshal(configevents.EntryUpserted{
-		Key:     "jwt.ttl",
-		Value:   "",
-		Version: 1,
-	})
-	require.NoError(t, err)
-
-	entry := outbox.Entry{ID: "evt-wrap-1", Topic: TopicConfigEntryUpserted, Payload: payload}
+	entry := outbox.Entry{
+		ID:      "evt-wrap-1",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":1}`),
+	}
 	result := handler(context.Background(), entry)
 
 	assert.Equal(t, outbox.DispositionAck, result.Disposition)
@@ -153,14 +142,15 @@ func TestWrapLegacyHandler_EntryUpserted_InvalidJSON_Reject(t *testing.T) {
 	assert.Error(t, result.Err)
 }
 
-func TestWrapLegacyHandler_EntryUpserted_MissingValue_Reject(t *testing.T) {
+func TestWrapLegacyHandler_EntryUpserted_ValueField_Reject(t *testing.T) {
 	svc := NewService(slog.Default())
 	handler := outbox.WrapLegacyHandler(svc.HandleEntryUpserted)
 
+	// value field is now rejected — metadata-only schema
 	entry := outbox.Entry{
 		ID:      "evt-wrap-3",
 		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1}`),
+		Payload: []byte(`{"key":"jwt.ttl","value":"30m","version":1}`),
 	}
 	result := handler(context.Background(), entry)
 

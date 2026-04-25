@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
@@ -19,12 +20,22 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcommand "github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
+)
+
+// Role constants re-exported from internal/dto for use by the assembly root
+// (main.go). The internal package is not importable from outside the
+// examples/iotdevice/cells/devicecell subtree per Go's internal package rule.
+const (
+	RoleAdmin    = dto.RoleAdmin
+	RoleOperator = dto.RoleOperator
+	RoleDevice   = dto.RoleDevice
 )
 
 // Compile-time interface checks.
@@ -63,15 +74,23 @@ func WithLogger(l *slog.Logger) Option {
 	return func(c *DeviceCell) { c.logger = l }
 }
 
+// WithMetricsProvider sets the metrics.Provider used by the outbox emitter to
+// record fail-open dropped counters. Defaults to metrics.NopProvider{} when not
+// set (appropriate for demo/example deployments).
+func WithMetricsProvider(mp metrics.Provider) Option {
+	return func(c *DeviceCell) { c.metricsProvider = mp }
+}
+
 // DeviceCell is the devicecell Cell implementation.
 type DeviceCell struct {
 	*cell.BaseCell
-	deviceRepo     domain.DeviceRepository
-	publisher      outbox.Publisher
-	cursorCodec    *query.CursorCodec
-	logger         *slog.Logger
-	commandQueue   commandQueueStore
-	commandSweeper *commandruntime.SweeperLifecycle
+	deviceRepo      domain.DeviceRepository
+	publisher       outbox.Publisher
+	cursorCodec     *query.CursorCodec
+	logger          *slog.Logger
+	metricsProvider metrics.Provider
+	commandQueue    commandQueueStore
+	commandSweeper  *commandruntime.SweeperLifecycle
 
 	registerHandler *deviceregister.Handler
 	commandHandler  *devicecommand.Handler
@@ -118,6 +137,17 @@ func NewDeviceCell(opts ...Option) *DeviceCell {
 	return c
 }
 
+// buildEmitter creates a DirectEmitter using the cell's publisher and metrics
+// provider. Falls back to metrics.NopProvider{} when no provider is injected.
+// Extracted from Init to keep Init's cognitive complexity within the ≤15 limit.
+func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
+	mp := c.metricsProvider
+	if mp == nil {
+		mp = metrics.NopProvider{}
+	}
+	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, "devicecell", c.logger)
+}
+
 // Init sets up repositories, slice services, and handlers.
 // L4 Cells do not use outboxWriter (KG-07 decision). The Cell boundary
 // adapts the publisher to a direct emitter for event publishing.
@@ -145,7 +175,7 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "devicecell", c.publisher); err != nil {
 		return err
 	}
-	emitter, err := outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, c.logger)
+	emitter, err := c.buildEmitter()
 	if err != nil {
 		return err
 	}
@@ -266,13 +296,13 @@ func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 					auth.Mount(devices, auth.Route{
 						Contract: specDeviceList,
 						Handler:  http.HandlerFunc(c.listHandler.HandleList),
-						Policy:   auth.AnyRole("admin"),
+						Policy:   auth.AnyRole(dto.RoleAdmin),
 					})
-					// Device status is queried by authenticated operators/devices.
+					// Device status is queried by operators or by the device itself.
 					auth.Mount(devices, auth.Route{
 						Contract: specDeviceStatus,
 						Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleOperator, dto.RoleDevice),
 					})
 					// device-command public routes (enqueue, dequeue, report, ack,
 					// extend-lease) live under /api/v1/devices/{id}/commands.

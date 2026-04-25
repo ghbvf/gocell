@@ -1,77 +1,48 @@
 // Package flagwrite implements the flag-write slice: Create/Update/Delete/Toggle
-// feature flags with transactional outbox event publishing (L2 consistency).
+// feature flags with transactional repo writes (L1 consistency).
 //
-// L2 OutboxFact: repo writes + outbox writes are wrapped in a single RunInTx
-// per operation. Failure in either rolls back both.
+// L1 LocalTx: repo writes are wrapped in a single RunInTx per operation.
+// Failure rolls back the transaction.
 //
-// ref: Unleash src/lib/db/feature-environment-store.ts — "write + event must
-// be in the same transaction" (Unleash lesson: splitting them caused data loss).
+// event.flag.changed.v1 was retired by PR-CFG-B (2026-04-25): the contract
+// never had a subscriber, so emitting it was dead work. The contract is now
+// lifecycle: deprecated. Flag write is downgraded to L1.
 package flagwrite
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
-	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/google/uuid"
 )
 
-// TopicFlagChanged is the outbox event topic for flag change events.
-const TopicFlagChanged = domain.TopicFlagChanged
-
-// FlagChangedPayload is the typed event payload for flag.changed.v1.
-// JSON keys are camelCase per GoCell event payload convention.
-type FlagChangedPayload struct {
-	EventID    string    `json:"eventId"`
-	Action     string    `json:"action"`
-	Key        string    `json:"key"`
-	Enabled    bool      `json:"enabled"`
-	Version    int       `json:"version"`
-	OccurredAt time.Time `json:"occurredAt"`
-}
-
 // Option configures a flag-write Service.
 type Option func(*Service)
 
-// WithEmitter sets the event emitter.
-func WithEmitter(e outbox.Emitter) Option {
-	return func(s *Service) {
-		if e != nil {
-			s.emitter = e
-		}
-	}
-}
-
-// WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
+// WithTxManager sets the TxRunner for transactional guarantees (L1 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
 	return func(s *Service) { s.txRunner = persistence.RunnerOrNoop(tx) }
 }
 
-// Service implements flag write business logic (L2 OutboxFact).
+// Service implements flag write business logic (L1 LocalTx).
 type Service struct {
 	repo     ports.FlagRepository
 	txRunner persistence.TxRunner
-	emitter  outbox.Emitter
 	logger   *slog.Logger
 }
 
 // NewService creates a flag-write Service.
-// Cell wiring decides whether the injected emitter/runner pair is backed by a
-// durable outbox path or by demo defaults; the service always runs through the
-// same TxRunner + Emitter abstractions.
 func NewService(repo ports.FlagRepository, logger *slog.Logger, opts ...Option) (*Service, error) {
 	s := &Service{
 		repo:     repo,
 		txRunner: persistence.NoopTxRunner{},
-		emitter:  outbox.NewNoopEmitter(),
 		logger:   logger,
 	}
 	for _, o := range opts {
@@ -96,7 +67,7 @@ type UpdateInput struct {
 	Description       string
 }
 
-// Create creates a new feature flag and emits flag.changed.v1 (action=created).
+// Create creates a new feature flag (L1 LocalTx).
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.FeatureFlag, error) {
 	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
 		validation.F("key", input.Key),
@@ -120,7 +91,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 		if err := s.repo.Create(txCtx, flag); err != nil {
 			return fmt.Errorf("flag-write: create: %w", err)
 		}
-		return s.emitFlagChanged(txCtx, "created", flag)
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -129,7 +100,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Featur
 	return flag, nil
 }
 
-// Update modifies an existing feature flag and emits flag.changed.v1 (action=updated).
+// Update modifies an existing feature flag (L1 LocalTx).
 // The repo UPDATE uses version=version+1 RETURNING to eliminate the read-modify-write
 // TOCTOU race: two concurrent Updates both see the same DB-authoritative version.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.FeatureFlag, error) {
@@ -147,7 +118,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Featur
 		if err != nil {
 			return fmt.Errorf("flag-write: update: %w", err)
 		}
-		return s.emitFlagChanged(txCtx, "updated", updated)
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -158,7 +129,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Featur
 	return updated, nil
 }
 
-// Toggle toggles the enabled state of a feature flag and emits flag.changed.v1 (action=toggled).
+// Toggle toggles the enabled state of a feature flag (L1 LocalTx).
 // Toggle does not overwrite rollout_percentage or description.
 func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain.FeatureFlag, error) {
 	if err := validation.RequireNotBlank(errcode.ErrFlagInvalidInput,
@@ -175,7 +146,7 @@ func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain
 		if err != nil {
 			return fmt.Errorf("flag-write: toggle: %w", err)
 		}
-		return s.emitFlagChanged(txCtx, "toggled", updated)
+		return nil
 	}); err != nil {
 		return nil, err
 	}
@@ -186,7 +157,7 @@ func (s *Service) Toggle(ctx context.Context, key string, enabled bool) (*domain
 	return updated, nil
 }
 
-// Delete removes a feature flag and emits flag.changed.v1 (action=deleted).
+// Delete removes a feature flag (L1 LocalTx).
 // The repo DELETE uses RETURNING to obtain the deleted entity atomically, eliminating
 // the read-before-delete TOCTOU race where a concurrent Update could change the
 // flag between GetByKey and DELETE.
@@ -198,11 +169,10 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 	}
 
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		deleted, err := s.repo.Delete(txCtx, key)
-		if err != nil {
+		if _, err := s.repo.Delete(txCtx, key); err != nil {
 			return fmt.Errorf("flag-write: delete: %w", err)
 		}
-		return s.emitFlagChanged(txCtx, "deleted", deleted)
+		return nil
 	}); err != nil {
 		return err
 	}
@@ -213,41 +183,4 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	return s.txRunner.RunInTx(ctx, fn)
-}
-
-func (s *Service) emitFlagChanged(ctx context.Context, action string, flag *domain.FeatureFlag) error {
-	// Single event identifier shared by both the transport envelope and the
-	// payload body. headers.event_id (contract idempotency key) is carried in
-	// outbox.Entry.ID at the transport level; payload.eventId mirrors it so
-	// legacy consumers that read the body see the same value. Two parallel
-	// UUIDs here would drift, making headers-based idempotency inconsistent
-	// with payload-based inspection.
-	//
-	// ref: Watermill message/router.go handleMessage — message.UUID is the
-	// single identity threaded through publisher, middleware, and consumer.
-	// ref: contracts/event/session/created/v1/headers.schema.json — same
-	// convention ("event_id is carried in outbox.Entry.ID at the transport
-	// level"), now applied uniformly to flag.changed.v1.
-	eventID := outbox.NewEntryID()
-	payload, err := json.Marshal(FlagChangedPayload{
-		EventID:    eventID,
-		Action:     action,
-		Key:        flag.Key,
-		Enabled:    flag.Enabled,
-		Version:    flag.Version,
-		OccurredAt: time.Now(),
-	})
-	if err != nil {
-		return fmt.Errorf("flag-write: marshal flag.changed.v1 payload: %w", err)
-	}
-
-	entry := outbox.Entry{
-		ID:        eventID,
-		EventType: TopicFlagChanged,
-		Payload:   payload,
-	}
-	if err := s.emitter.Emit(ctx, entry); err != nil {
-		return fmt.Errorf("flag-write: emit event: %w", err)
-	}
-	return nil
 }

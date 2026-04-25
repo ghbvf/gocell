@@ -19,6 +19,9 @@ endpoints:
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated principal lacks the admin role required to evaluate flags (admin-only because evaluation results may include sensitive subject mapping)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

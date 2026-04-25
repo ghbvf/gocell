@@ -124,12 +124,14 @@ func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
 	assert.Equal(t, domain.TopicConfigEntryUpserted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
-	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":1}`))
-	c.MustRejectPayload(t, []byte(`{"key":"app.name","value":"myapp"}`))
-	c.MustRejectPayload(t, []byte(`{"key":"","value":"myapp","version":1}`))
-	c.MustRejectPayload(t, []byte(`{"key":"   ","value":"myapp","version":1}`))
-	c.MustRejectPayload(t, []byte(`{"key":"app.name","value":"myapp","version":0}`))
-	c.ValidatePayload(t, []byte(`{"key":"app.name","value":"","version":1}`))
+	// Metadata-only: missing version must be rejected; value field must be rejected.
+	c.MustRejectPayload(t, []byte(`{"key":"app.name"}`))
+	c.MustRejectPayload(t, []byte(`{"version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"   ","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":0}`))
+	// value field is now forbidden (additionalProperties: false)
+	c.MustRejectPayload(t, []byte(`{"key":"app.name","value":"myapp","version":1}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
@@ -169,7 +171,12 @@ func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
 	assert.Equal(t, domain.TopicConfigEntryDeleted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+
+	// Negative cases: missing required fields or invalid version.
 	c.MustRejectPayload(t, []byte(`{}`))
 	c.MustRejectPayload(t, []byte(`{"key":""}`))
 	c.MustRejectPayload(t, []byte(`{"key":"   "}`))
+	c.MustRejectPayload(t, []byte(`{"key":"k"}`))                           // missing version
+	c.MustRejectPayload(t, []byte(`{"key":"k","version":0}`))               // invalid version
+	c.MustRejectPayload(t, []byte(`{"key":"k","version":1,"value":"old"}`)) // extra field
 }

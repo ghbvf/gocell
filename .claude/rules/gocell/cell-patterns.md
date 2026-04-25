@@ -27,9 +27,48 @@ type OrderCreatedEvent struct {
 payload, _ := json.Marshal(OrderCreatedEvent{ID: o.ID, Item: o.Item})
 ```
 
-DTO 作用域：单 slice → handler.go 同包；同 cell 多 slice 共享 → `internal/dto/`；跨 cell → 禁止。
-
 JSON 字段命名：HTTP DTO 和事件 payload 统一 camelCase。已有 snake_case 事件（session.created）在 v1.0 后迁移。
+
+## DTO 作用域三档
+
+按耦合范围放置，**严禁跨档跃迁**：
+
+| 档 | 适用 | 路径 |
+|---|---|---|
+| A | 单 slice 自用 | `cells/{cell}/slices/{slice}/handler.go` 同包 |
+| B | 同 cell 多 slice 共享（publisher + lifecycle / handler + projection 等） | `cells/{cell}/internal/dto/`（HTTP / event payload）或 `internal/domain/`（含不变量） |
+| C | 跨 cell 共享 wire 类型 | **禁止手写共享包** |
+
+C 档的禁止位置（任意均不允许）：
+- `pkg/events/`（污染 pkg 边界，违反"pkg 不依赖 cells"）
+- `cells/{cell}/events/`（非 internal 不等于合规；同样把跨 cell 耦合从 contract 拽回 Go 类型层）
+- `contracts/event/.../payload.go`（污染权威源目录，schema 才是 SoR）
+- `runtime/events/`（让 runtime 反向知道业务事件形状）
+
+### 为什么禁止跨 cell 共享 Go 类型
+
+CLAUDE.md "Cell 之间只通过 contract 通信"——**contract = `payload.schema.json`，不是 Go type**。
+跨 cell 共享 Go 类型会：
+- 把消费者 cell 的 release/build 顺序绑死到生产者 cell
+- 让 Go 类型与 schema 出现两个真理源（必然漂移）
+- 一旦开口，每个 cell 都会建 `events/` 包，contract 目录沦为装饰
+
+### 跨 cell decode 重复属于预期成本
+
+每个 subscribing cell 在自己的 `internal/dto/` 维护 typed view + decode/validate（如 `accesscore/configreceive` 与 `configcore/configsubscribe` 各 ~40 行同形态代码）是 cell 隔离架构的合理代价，**不是技术债**：
+
+- SonarCloud / 重复率指标命中此模式时，PR review 标 "Architectural debt accepted"，**不修，也不加 sonar 豁免规则**（保持 metrics 可见）
+- 不要为消除重复而引入跨 cell 共享包（A→C 的伪 DRY 重构）
+
+### 升级到 codegen 的触发条件
+
+如果未来 decode/validate 重复扩散到 **≥ 5 cell consumer**，启动 codegen 路线：
+
+- 目标：`generated/contracts/event/{domain}/{name}/v{N}/payload.gen.go`
+- 来源：`gocell generate event-payload` 从 `payload.schema.json` 派生（CLAUDE.md `generated/` 禁止手工编辑）
+- consumer 改 import 生成产物，语义等价 protobuf `*.pb.go`——双方对齐到 schema，不对齐到对方类型
+
+当前 `gocell` CLI 的 `scaffold` / `generate` 不含 schema → Go 能力，见 backlog 触发项 T6。
 
 ## Init() fail-fast
 
@@ -55,3 +94,17 @@ h.ServeHTTP(rec, req)
 c.ValidateHTTPResponseRecorder(t, rec)
 c.ValidatePayload(t, pub.calls[0].payload)
 ```
+
+## ADV-05 治理规则：active event 必须有 subscriber
+
+`kernel/governance` ADV-05 在 `gocell validate` 阶段对每个 `kind: event` 的 contract 强制：
+- 若 `lifecycle: active` 且 `endpoints.subscribers` 为空（nil 或 []），SeverityError 阻断 CI
+- `lifecycle: draft` 给豁免（设计期允许"未连线"，转 active 时再要求订阅，对标 K8s API deprecation policy / Watermill router lifecycle）
+- `lifecycle: deprecated` 给豁免（dead event 标记为 deprecated 即可）
+- subscribers 可以是 cell ID 或 actor ID（actors.yaml 注册的 external 系统）
+
+典型修复路径：
+- 真死事件 → `lifecycle: deprecated`
+- 设计中尚未连线 → `lifecycle: draft`（待真实 producer/consumer 落地后转 active）
+- 内部 fan-out 但还没 consumer → 添加占位 cell consumer（注释说明意图）
+- 对外 fan-out 给 SIEM/外部平台 → actors.yaml 注册 actor + subscribers 引用 actor ID

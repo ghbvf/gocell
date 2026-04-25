@@ -9,13 +9,16 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
+	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -35,6 +38,108 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 		nonceStore: store,
 		mw:         func(h http.Handler) http.Handler { return h },
 	}
+}
+
+// ---------------------------------------------------------------------------
+// buildInternalAuthChain coverage
+// ---------------------------------------------------------------------------
+
+// TestBuildInternalAuthChain_NilGuard_ReturnsNil verifies the nil-guard
+// branch of buildInternalAuthChain (dev mode where no service secret is set).
+// A nil chain means no authentication middleware on the internal listener.
+func TestBuildInternalAuthChain_NilGuard_ReturnsNil(t *testing.T) {
+	chain := buildInternalAuthChain(nil)
+	assert.Nil(t, chain, "nil guard must produce a nil auth chain (no auth middleware)")
+}
+
+// TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken verifies that
+// a real guard produces an AuthServiceToken plan in the chain.
+func TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken(t *testing.T) {
+	guard := newTestInternalGuard(t)
+	chain := buildInternalAuthChain(guard)
+	require.Len(t, chain, 1, "non-nil guard must produce a 1-plan chain")
+	_, ok := chain[0].(cell.AuthServiceToken)
+	assert.True(t, ok, "plan must be cell.AuthServiceToken; got %T", chain[0])
+}
+
+// ---------------------------------------------------------------------------
+// buildAssembly error branch coverage
+// ---------------------------------------------------------------------------
+
+// TestBuildAssembly_RegisterError verifies that buildAssembly propagates the
+// error returned by asm.Register when a duplicate cell ID is detected.
+func TestBuildAssembly_RegisterError(t *testing.T) {
+	ps, err := buildPromStack()
+	require.NoError(t, err)
+
+	// Two cells with the same ID causes asm.Register to fail on the second call.
+	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "dup-cell", Type: cell.CellTypeCore})
+	c2 := cell.NewBaseCell(cell.CellMetadata{ID: "dup-cell", Type: cell.CellTypeCore})
+
+	_, err = buildAssembly(ps, cell.DurabilityDemo, c1, c2)
+	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
+	assert.Contains(t, err.Error(), "dup-cell",
+		"error must mention the duplicate cell ID so operators can diagnose the conflict")
+}
+
+// ---------------------------------------------------------------------------
+// logInitialAdminCredPath coverage
+// ---------------------------------------------------------------------------
+
+// TestLogInitialAdminCredPath_InvalidStateDir verifies that logInitialAdminCredPath
+// emits a warning (and does not panic) when GOCELL_STATE_DIR is set to a
+// relative path (which ResolveBootstrapCredentialPath rejects as unsafe).
+func TestLogInitialAdminCredPath_InvalidStateDir(t *testing.T) {
+	t.Setenv("GOCELL_STATE_DIR", "relative/not/absolute")
+	// Must not panic; warning is logged but not surfaced as an error.
+	require.NotPanics(t, func() { logInitialAdminCredPath() })
+}
+
+// TestLogInitialAdminCredPath_ValidStateDir verifies that logInitialAdminCredPath
+// runs without panic when GOCELL_STATE_DIR is a valid absolute path.
+func TestLogInitialAdminCredPath_ValidStateDir(t *testing.T) {
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	require.NotPanics(t, func() { logInitialAdminCredPath() })
+}
+
+// ---------------------------------------------------------------------------
+// buildConsumerBase coverage
+// ---------------------------------------------------------------------------
+
+// TestBuildConsumerBase_ReturnsNonNil verifies the happy path of
+// buildConsumerBase: the returned ConsumerBase must be non-nil and usable.
+func TestBuildConsumerBase_ReturnsNonNil(t *testing.T) {
+	cb, err := buildConsumerBase()
+	require.NoError(t, err)
+	require.NotNil(t, cb, "buildConsumerBase must return a non-nil ConsumerBase")
+}
+
+// ---------------------------------------------------------------------------
+// buildConfigCoreOpts: postgres pool-error path
+// ---------------------------------------------------------------------------
+
+// TestBuildConfigCoreOpts_PGMode_InvalidDSN_PoolError verifies that when the
+// DSN is syntactically invalid (non-empty but unparseable by pgx), the function
+// returns an error containing "PG pool" without leaking a ManagedResource.
+//
+// This exercises the pool-creation failure branch (lines after the empty-DSN
+// guard) without requiring a running Postgres instance.
+func TestBuildConfigCoreOpts_PGMode_InvalidDSN_PoolError(t *testing.T) {
+	ctx := context.Background()
+	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
+	// "not-a-dsn" is not a valid DSN format — pgxpool.ParseConfig or Ping will fail.
+	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         topo,
+		PGConfig:         adapterpg.Config{DSN: "not-a-valid-dsn"},
+		Publisher:        discardPublisher{},
+		MetricsProvider:  metrics.NopProvider{},
+		ValueTransformer: crypto.NoopTransformer{},
+	})
+
+	require.Error(t, err, "postgres mode with invalid DSN must return an error")
+	assert.Contains(t, err.Error(), "PG pool",
+		"error must mention 'PG pool' so operators know which subsystem failed")
+	assert.Nil(t, result.PGResource, "error path must not leak a ManagedResource")
 }
 
 // fastAdminBootstrapOpts returns accesscore LifecycleOptions that

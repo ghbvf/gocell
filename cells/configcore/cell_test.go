@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -41,6 +42,7 @@ func newTestCell() *ConfigCore {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
 
@@ -152,6 +154,7 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
 		WithOutboxDeps(eventbus.New(), nil),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)
@@ -296,10 +299,11 @@ func TestConfigCore_RouteConfigList(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/", nil)
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"GET /api/v1/config/ should not return 404 (got %d)", rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"GET /api/v1/config/ with admin context should return 200 (got %d)", rec.Code)
 }
 
 func TestConfigCore_RouteConfigCreate(t *testing.T) {
@@ -320,13 +324,16 @@ func TestConfigCore_RouteConfigGetByKey(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/app.name", nil)
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
-	// A business-logic 404 returns a JSON error body with an error code;
-	// a routing 404 returns plain text. Verify the route matched by checking
-	// the response is JSON (meaning our handler ran, not the router's default 404).
+	// Handler ran (not routing 404): response must be JSON and must not be an auth rejection.
 	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json",
 		"GET /api/v1/config/{key} should return JSON (route matched), got plain text (routing 404)")
+	assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
+		"GET /api/v1/config/{key} with admin context must not be 401; got body %s", rec.Body)
+	assert.NotEqual(t, http.StatusForbidden, rec.Code,
+		"GET /api/v1/config/{key} with admin context must not be 403; got body %s", rec.Body)
 }
 
 func TestConfigCore_RouteFlagsList(t *testing.T) {
@@ -334,10 +341,11 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/", nil)
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"GET /api/v1/flags/ should not return 404 (got %d)", rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"GET /api/v1/flags/ with admin context should return 200 (got %d)", rec.Code)
 }
 
 // TestConfigCore_ProductionAuthGateLock is the P0 integration test demanded by
@@ -362,6 +370,11 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 		body   string
 	}
 	paths := []adminWritePath{
+		{"config-read:list", http.MethodGet, "/api/v1/config/", ""},
+		{"config-read:get", http.MethodGet, "/api/v1/config/k", ""},
+		{"flag-read:list", http.MethodGet, "/api/v1/flags/", ""},
+		{"flag-read:get", http.MethodGet, "/api/v1/flags/k", ""},
+		{"flag-read:evaluate", http.MethodPost, "/api/v1/flags/k/evaluate", `{"subject":"test"}`},
 		{"config-write:create", http.MethodPost, "/api/v1/config/", `{"key":"k","value":"v"}`},
 		{"config-write:update", http.MethodPut, "/api/v1/config/k", `{"value":"v"}`},
 		{"config-write:delete", http.MethodDelete, "/api/v1/config/k", ``},
@@ -428,10 +441,10 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	}
 
 	// Get config-read page with limit=1 to obtain a cursor.
-	// config-read declares auth.Authenticated() so a principal is required.
+	// config-read declares auth.AnyRole(dto.RoleAdmin) so an admin principal is required.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/?limit=1", nil)
-	req = req.WithContext(auth.TestContext("tester", nil))
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -444,11 +457,11 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	require.NotEmpty(t, configPage.NextCursor)
 
 	// Use config-read cursor on feature-flag list endpoint — must be rejected.
-	// feature-flag also declares auth.Authenticated() so supply a principal.
+	// feature-flag also declares auth.AnyRole(dto.RoleAdmin) so supply an admin principal.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/flags/?cursor="+configPage.NextCursor, nil)
-	req = req.WithContext(auth.TestContext("tester", nil))
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
@@ -483,10 +496,10 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	}
 
 	// Get flag page with limit=1 to obtain a cursor.
-	// feature-flag declares auth.Authenticated() so a principal is required.
+	// feature-flag declares auth.AnyRole(dto.RoleAdmin) so an admin principal is required.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/?limit=1", nil)
-	req = req.WithContext(auth.TestContext("tester", nil))
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -498,11 +511,11 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	require.True(t, flagPage.HasMore, "need hasMore to get a flag cursor")
 
 	// Use flag cursor on config-read endpoint — must be rejected.
-	// config-read also declares auth.Authenticated() so supply a principal.
+	// config-read also declares auth.AnyRole(dto.RoleAdmin) so supply an admin principal.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/config/?cursor="+flagPage.NextCursor, nil)
-	req = req.WithContext(auth.TestContext("tester", nil))
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,

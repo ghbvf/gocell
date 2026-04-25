@@ -19,6 +19,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -69,12 +70,14 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -82,6 +85,7 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!")),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	asm := assembly.New(assembly.Config{ID: "setup-test", DurabilityMode: cell.DurabilityDemo})

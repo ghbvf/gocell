@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -1030,7 +1031,7 @@ func TestDeclareAuth_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
 	// the verifier always fails so a GET without a token still returns 401.
 	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("GET must not bypass auth when only POST is declared public")
-	}), Policy: auth.Authenticated()})
+	}), Policy: authtest.RequireAuthenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -1119,7 +1120,7 @@ func TestDeclareAuth_ProtectedStillRequiresAuth(t *testing.T) {
 
 	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 	// /api/v1/data is protected — declared with a policy to satisfy coverage enforcement.
-	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Policy: auth.Authenticated()})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Policy: authtest.RequireAuthenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Protected endpoint without token → 401.
@@ -1300,7 +1301,7 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 	// Register the GET handler with a policy so it is covered by policy enforcement;
 	// auth middleware will require a valid token for GET.
-	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Policy: auth.Authenticated()})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Policy: authtest.RequireAuthenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	// POST without token → public, 200.

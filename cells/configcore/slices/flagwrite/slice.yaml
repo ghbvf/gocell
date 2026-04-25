@@ -1,5 +1,6 @@
 id: flagwrite
 belongsToCell: configcore
+consistencyLevel: L1  # L1 LocalTx; flag-write dropped outbox emission (event.flag.changed.v1 retired by PR #266)
 contractUsages:
   - contract: http.config.flags.create.v1
     role: serve
@@ -9,8 +10,6 @@ contractUsages:
     role: serve
   - contract: http.config.flags.delete.v1
     role: serve
-  - contract: event.flag.changed.v1
-    role: publish
 verify:
   unit:
     - unit.flagwrite.service
@@ -19,7 +18,6 @@ verify:
     - contract.http.config.flags.update.v1.serve
     - contract.http.config.flags.toggle.v1.serve
     - contract.http.config.flags.delete.v1.serve
-    - contract.event.flag.changed.v1.publish
   waivers: []
 
 allowedFiles:

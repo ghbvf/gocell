@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "DEPRECATED 2026-04-25 (PR #266): retired event, no subscriber",
   "title": "event.flag.changed.v1.payload",
   "type": "object",
   "required": ["eventId", "action", "key", "enabled", "version", "occurredAt"],

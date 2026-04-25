@@ -171,6 +171,24 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 			if v := checkCellOwnedSubpackage(modPrefix, pkg.ImportPath, imp, srcLayer); v != nil {
 				out = append(out, *v)
 			}
+
+			// LAYER-09: cells/X must not import cells/Y/events (cross-cell public events package).
+			// rationale: cell-patterns.md three-tier DTO rule — cells/{cell}/events/ packages
+			// are owned by the declaring cell; sibling cells must use contract wire types instead.
+			// Same-cell self-import is allowed; cmd/ and examples/ are unrestricted.
+			impCell := cellOf(modPrefix, imp)
+			if srcCell != "" && impCell != "" && srcCell != impCell {
+				impRel := strings.TrimPrefix(imp, modPrefix)
+				eventsPrefix := "cells/" + impCell + "/events"
+				if impRel == eventsPrefix || strings.HasPrefix(impRel, eventsPrefix+"/") {
+					out = append(out, violation{
+						Rule:    "LAYER-09",
+						Pkg:     pkg.ImportPath,
+						Import:  imp,
+						Message: fmt.Sprintf("LAYER-09: %s imports %s (cross-cell events package; use contract wire types instead)", pkg.ImportPath, imp),
+					})
+				}
+			}
 		}
 	}
 	return out
@@ -334,6 +352,15 @@ func TestLayeringRules(t *testing.T) {
 		}
 		assert.Empty(t, hits,
 			"HTTPRegistrar must not appear anywhere in the codebase; the legacy interface has been fully removed (PR-A14b)")
+	})
+
+	// LAYER-09: cells/X must not import cells/Y/events (cross-cell public events package).
+	// cells/{cell}/events/ packages are owned by the declaring cell; sibling cells must
+	// communicate via contract wire types, not by directly importing the events package.
+	t.Run("LAYER-09_no_cross_cell_events_imports", func(t *testing.T) {
+		assert.Empty(t, byRule["LAYER-09"],
+			"cells/ must not import another cell's events/ package (cells/{cell}/events/); "+
+				"use contract wire types instead (cell-patterns.md three-tier DTO rule)")
 	})
 }
 
@@ -783,6 +810,57 @@ func TestCheckLayering(t *testing.T) {
 			// This case documents the expected clean result so the table is self-consistent.
 			wantRules: nil,
 		},
+		// LAYER-09: cells/X must not import cells/Y/events (cross-cell public events package).
+		// rationale: cell-patterns.md three-tier DTO rule — cells/{cell}/events/ must not be
+		// shared as wire types across cell boundaries.
+		{
+			name: "LAYER-09 violation: cells/auditcore imports cells/configcore/events",
+			pkgs: []pkgInfo{
+				{
+					ImportPath: "github.com/ghbvf/gocell/cells/auditcore/slices/auditappend",
+					Imports: []string{
+						"github.com/ghbvf/gocell/cells/configcore/events", // cross-cell events import — forbidden
+					},
+				},
+			},
+			wantRules: []string{"LAYER-09"},
+		},
+		{
+			name: "LAYER-09 clean: cells/configcore imports cells/configcore/events (same cell, allowed)",
+			pkgs: []pkgInfo{
+				{
+					ImportPath: "github.com/ghbvf/gocell/cells/configcore/slices/configpublish",
+					Imports: []string{
+						"github.com/ghbvf/gocell/cells/configcore/events", // same cell — OK
+					},
+				},
+			},
+			wantRules: nil,
+		},
+		{
+			name: "LAYER-09 clean: examples imports cells/configcore/events (unrestricted)",
+			pkgs: []pkgInfo{
+				{
+					ImportPath: "github.com/ghbvf/gocell/examples/ssobff",
+					Imports: []string{
+						"github.com/ghbvf/gocell/cells/configcore/events", // examples unrestricted
+					},
+				},
+			},
+			wantRules: nil,
+		},
+		{
+			name: "LAYER-09 clean: cmd imports cells/configcore/events (unrestricted)",
+			pkgs: []pkgInfo{
+				{
+					ImportPath: "github.com/ghbvf/gocell/cmd/corebundle",
+					Imports: []string{
+						"github.com/ghbvf/gocell/cells/configcore/events", // cmd unrestricted
+					},
+				},
+			},
+			wantRules: nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -886,4 +964,69 @@ func TestLayeringRules_LAYER08_NegativeProbe(t *testing.T) {
 		"LAYER-08 negative probe: grepInDir must detect 'HTTPRegistrar' in the synthetic fixture")
 	assert.Contains(t, hits[0], "fake_router.go",
 		"hit must reference the violating file")
+}
+
+// TestLayeringRules_LAYER09_NegativeProbe is the "test the test" meta-test for
+// LAYER-09. It builds synthetic pkgInfo slices covering all four boundary cases
+// (cross-cell violation, same-cell allowed, examples allowed, cmd allowed) and
+// runs checkLayering to confirm the rule fires exactly when expected.
+func TestLayeringRules_LAYER09_NegativeProbe(t *testing.T) {
+	t.Parallel()
+
+	const modPrefix = "github.com/ghbvf/gocell/"
+
+	tests := []struct {
+		name        string
+		src         string
+		imp         string
+		wantViolate bool
+	}{
+		{
+			name:        "cross-cell: auditcore imports configcore/events → violation",
+			src:         modPrefix + "cells/auditcore/slices/auditappend",
+			imp:         modPrefix + "cells/configcore/events",
+			wantViolate: true,
+		},
+		{
+			name:        "same-cell: configcore imports configcore/events → allowed",
+			src:         modPrefix + "cells/configcore/slices/configpublish",
+			imp:         modPrefix + "cells/configcore/events",
+			wantViolate: false,
+		},
+		{
+			name:        "examples imports configcore/events → allowed",
+			src:         modPrefix + "examples/ssobff",
+			imp:         modPrefix + "cells/configcore/events",
+			wantViolate: false,
+		},
+		{
+			name:        "cmd imports configcore/events → allowed",
+			src:         modPrefix + "cmd/corebundle",
+			imp:         modPrefix + "cells/configcore/events",
+			wantViolate: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pkgs := []pkgInfo{{ImportPath: tt.src, Imports: []string{tt.imp}}}
+			violations := checkLayering(modPrefix, pkgs)
+			var layer09 []violation
+			for _, v := range violations {
+				if v.Rule == "LAYER-09" {
+					layer09 = append(layer09, v)
+				}
+			}
+			if tt.wantViolate {
+				require.NotEmpty(t, layer09,
+					"LAYER-09 negative probe: expected violation for %s → %s", tt.src, tt.imp)
+				assert.Contains(t, layer09[0].Message, "LAYER-09")
+				assert.Contains(t, layer09[0].Message, tt.imp)
+			} else {
+				assert.Empty(t, layer09,
+					"LAYER-09 negative probe: expected no violation for %s → %s", tt.src, tt.imp)
+			}
+		})
+	}
 }

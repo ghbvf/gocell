@@ -19,6 +19,9 @@ endpoints:
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated principal lacks the admin role required to read config metadata"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
       404:
         description: "Config key not found"
         schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

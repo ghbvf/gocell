@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditquery"
 	"github.com/ghbvf/gocell/cells/auditcore/slices/auditverify"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -127,6 +128,13 @@ func WithHMACKey(key []byte) Option {
 	return func(c *AuditCore) { c.hmacKey = key }
 }
 
+// WithMetricsProvider sets the metrics provider used by the DirectEmitter in
+// demo mode. Required when WithOutboxDeps sets a publisher without a real
+// outboxWriter. Pass metrics.NopProvider{} explicitly in tests.
+func WithMetricsProvider(p metrics.Provider) Option {
+	return func(c *AuditCore) { c.metricsProvider = p }
+}
+
 // WithCursorCodec sets the cursor codec for pagination.
 func WithCursorCodec(codec *query.CursorCodec) Option {
 	return func(c *AuditCore) { c.cursorCodec = codec }
@@ -153,10 +161,11 @@ type AuditCore struct {
 	pendingOutboxPub    outbox.Publisher
 	pendingOutboxWriter outbox.Writer
 
-	txRunner    persistence.TxRunner
-	cursorCodec *query.CursorCodec
-	logger      *slog.Logger
-	hmacKey     []byte
+	txRunner        persistence.TxRunner
+	cursorCodec     *query.CursorCodec
+	logger          *slog.Logger
+	hmacKey         []byte
+	metricsProvider metrics.Provider
 
 	// Slice services.
 	appendSvc    *auditappend.Service
@@ -229,6 +238,7 @@ func (c *AuditCore) resolveEmitter(mode cell.DurabilityMode) error {
 			TxRunner:          c.txRunner,
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
+			MetricsProvider:   c.metricsProvider,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),

@@ -7,8 +7,12 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 )
 
-// Metric names for shutdown observability. All names carry the gocell_ prefix
-// per the project naming convention (ref: kernel/outbox relay_collector.go).
+// Metric names for shutdown observability. Names are bare semantic identifiers
+// (no namespace prefix). The final fully-qualified Prometheus name is assembled
+// by the Provider's Namespace field (e.g. "gocell") via
+// prom.BuildFQName(Namespace, Subsystem, Name), matching the canonical pattern
+// used by kernel/outbox relay_collector.go and runtime/observability metrics.
+// Provider configuration lives in cmd/corebundle/metrics.go (Namespace: "gocell").
 const (
 	// shutdownPhaseCounterName counts entries into each named shutdown phase.
 	// Labels: phase = readiness_flip | lifo_teardown | closed.
@@ -19,13 +23,13 @@ const (
 	// in, operators must compare the delta between successive phase counters; a
 	// phase counter that fails to increment while earlier phases have incremented
 	// indicates the pod is stuck in the previous phase.
-	shutdownPhaseCounterName = "gocell_bootstrap_shutdown_phase_entries_total"
+	shutdownPhaseCounterName = "bootstrap_shutdown_phase_entries_total"
 
 	// shutdownPhaseDurationName records per-phase wall-clock latency.
 	// Labels: phase = readiness_flip | lifo_teardown | total.
 	// SRE use: P99 histogram in Grafana reveals which phase dominates
 	// shutdown latency.
-	shutdownPhaseDurationName = "gocell_bootstrap_shutdown_phase_duration_seconds"
+	shutdownPhaseDurationName = "bootstrap_shutdown_phase_duration_seconds"
 
 	// shutdownTotalCounterName counts completed shutdowns by outcome.
 	// Labels: outcome ∈ {success, timeout, teardown_error, signal_error}.
@@ -37,7 +41,7 @@ const (
 	// SRE use: alert on timeout / teardown_error; signal_error rate reveals
 	// how often shutdown is triggered by component failures vs. human action.
 	// ref: Kubernetes pod termination (success/failure/timeout tri-state).
-	shutdownTotalCounterName = "gocell_bootstrap_shutdown_total"
+	shutdownTotalCounterName = "bootstrap_shutdown_total"
 )
 
 // Phase label values for shutdownPhaseCounterName.
@@ -81,7 +85,8 @@ type shutdownMetrics struct {
 	// lifo_teardown, and the overall total.
 	phaseDuration kernelmetrics.HistogramVec
 
-	// shutdownTotal counts completed shutdowns by outcome (success | timeout).
+	// shutdownTotal counts completed shutdowns by outcome (success | timeout |
+	// teardown_error | signal_error).
 	shutdownTotal kernelmetrics.CounterVec
 }
 
@@ -132,7 +137,7 @@ func newShutdownMetrics(p kernelmetrics.Provider) (*shutdownMetrics, error) {
 
 	shutdownTotal, err := p.CounterVec(kernelmetrics.CounterOpts{
 		Name:       shutdownTotalCounterName,
-		Help:       "Total completed shutdowns by outcome (success|timeout).",
+		Help:       "Total completed shutdowns by outcome (success|timeout|teardown_error|signal_error).",
 		LabelNames: []string{"outcome"},
 	})
 	if err != nil {
@@ -164,8 +169,8 @@ func (m *shutdownMetrics) observePhaseDuration(phase string, d time.Duration) {
 	m.phaseDuration.With(kernelmetrics.Labels{"phase": phase}).Observe(d.Seconds())
 }
 
-// countOutcome increments the shutdown outcome counter. outcome must be
-// "success" or "timeout". No-op on nil receiver.
+// countOutcome increments the shutdown outcome counter. outcome must be one of
+// "success", "timeout", "teardown_error", or "signal_error". No-op on nil receiver.
 func (m *shutdownMetrics) countOutcome(outcome string) {
 	if m == nil {
 		return

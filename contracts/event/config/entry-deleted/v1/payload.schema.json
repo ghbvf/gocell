@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "event.config.entry-deleted.v1.payload",
   "type": "object",
-  "description": "Emitted after config Delete to tell subscribers to remove the key from local state.",
+  "description": "Emitted after config Delete. Metadata-only: carries key + version. version is the version of the deleted entry and is used by subscribers for monotonic tombstone protection — a replayed older upsert (at-least-once delivery) must be rejected when version <= tombstone version.",
   "properties": {
-    "key": { "type": "string", "pattern": "\\S" }
+    "key":     { "type": "string", "pattern": "\\S" },
+    "version": { "type": "integer", "minimum": 1, "description": "Version of the deleted config entry. Subscribers use this to protect against stale upsert replays after a delete." }
   },
-  "required": ["key"],
+  "required": ["key", "version"],
   "additionalProperties": false
 }

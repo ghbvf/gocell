@@ -3,8 +3,11 @@ package outbox
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,14 +35,14 @@ func TestWriterEmitter_EmitDelegatesToWriter(t *testing.T) {
 }
 
 func TestDirectEmitter_ConstructRejectsNilPublisher(t *testing.T) {
-	_, err := NewDirectEmitter(nil, DirectPublishFailClosed)
+	_, err := NewDirectEmitter(nil, DirectPublishFailClosed, metrics.NopProvider{}, "testcell")
 
 	assert.Error(t, err)
 }
 
 func TestDirectEmitter_EmitWrapsV1EnvelopeAndPublishes(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "testcell")
 	require.NoError(t, err)
 
 	entry := validEntry("direct-emitter")
@@ -63,7 +66,7 @@ func TestDirectEmitter_EmitWrapsV1EnvelopeAndPublishes(t *testing.T) {
 func TestDirectEmitter_FailClosedReturnsPublishError(t *testing.T) {
 	want := errors.New("broker down")
 	publisher := &recordingEmitterPublisher{err: want}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "testcell")
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), validEntry("direct-fail-closed"))
@@ -74,7 +77,7 @@ func TestDirectEmitter_FailClosedReturnsPublishError(t *testing.T) {
 func TestDirectEmitter_FailOpenSwallowsPublishError(t *testing.T) {
 	want := errors.New("broker down")
 	publisher := &recordingEmitterPublisher{err: want}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), validEntry("direct-fail-open"))
@@ -85,7 +88,7 @@ func TestDirectEmitter_FailOpenSwallowsPublishError(t *testing.T) {
 
 func TestDirectEmitter_InvalidEntryFailsBeforePublish(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), Entry{})
@@ -145,7 +148,7 @@ func TestWriterEmitter_Durable(t *testing.T) {
 
 // TestDirectEmitter_Durable: DirectEmitter is always non-durable by design.
 func TestDirectEmitter_Durable(t *testing.T) {
-	e, err := NewDirectEmitter(&recordingEmitterPublisher{}, DirectPublishFailOpen)
+	e, err := NewDirectEmitter(&recordingEmitterPublisher{}, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
 	require.NoError(t, err)
 	assert.False(t, e.Durable())
 	assert.False(t, ReportDurable(e))
@@ -188,7 +191,7 @@ func TestDirectEmitter_EntryFailurePolicyOverridesCtorDefault(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
-			emitter, err := NewDirectEmitter(publisher, tc.ctorMode)
+			emitter, err := NewDirectEmitter(publisher, tc.ctorMode, metrics.NopProvider{}, "testcell")
 			require.NoError(t, err)
 
 			entry := validEntry("policy-test-" + tc.name)
@@ -222,4 +225,199 @@ func TestFailurePolicy_Resolve(t *testing.T) {
 		assert.Equal(t, tc.want, tc.policy.Resolve(tc.ctorDefault),
 			"policy=%v default=%v", tc.policy, tc.ctorDefault)
 	}
+}
+
+// TM5: TestDirectEmitter_FailOpenCounterIncrement verifies that the
+// gocell_outbox_emit_failopen_dropped_total counter increments on each
+// fail-open dropped event.
+func TestDirectEmitter_FailOpenCounterIncrement(t *testing.T) {
+	spy := &spyMetricsProvider{}
+	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
+
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, spy, "testcell")
+	require.NoError(t, err)
+
+	entry := validEntry("counter-test")
+	entry.Topic = "test.topic.v1"
+
+	require.NoError(t, emitter.Emit(context.Background(), entry))
+	require.NoError(t, emitter.Emit(context.Background(), entry))
+	require.NoError(t, emitter.Emit(context.Background(), entry))
+
+	assert.Equal(t, 3, spy.counter.count, "failopen_dropped counter must increment on each dropped event")
+}
+
+// TestDirectEmitter_FailClosedCounterNotIncremented verifies that the
+// fail-open dropped counter does NOT increment on a fail-closed publish error.
+// The counter is only for events dropped (swallowed); fail-closed surfaces the
+// error instead of dropping it.
+func TestDirectEmitter_FailClosedCounterNotIncremented(t *testing.T) {
+	spy := &spyMetricsProvider{}
+	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
+
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, spy, "testcell")
+	require.NoError(t, err)
+
+	entry := validEntry("counter-not-inc-test")
+	entry.Topic = "test.topic.v1"
+
+	got := emitter.Emit(context.Background(), entry)
+	require.Error(t, got, "fail-closed must return publish error")
+
+	// Ensure spy.counter was registered (CounterVec was called) but never incremented.
+	require.NotNil(t, spy.counter, "counter must be registered by constructor")
+	assert.Equal(t, 0, spy.counter.count, "fail-closed path must NOT increment fail-open dropped counter")
+}
+
+// TM7: TestNewDirectEmitter_NilProvider verifies that passing a nil
+// metrics.Provider returns an errcode error (fail-fast, not nil-propagation).
+func TestNewDirectEmitter_NilProvider(t *testing.T) {
+	publisher := &recordingEmitterPublisher{}
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, nil, "testcell")
+	require.Error(t, err)
+	// errcode type assertion
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "must be an errcode.Error, got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ec.Code, "expected ErrCellMissingOutbox code")
+}
+
+// ---------------------------------------------------------------------------
+// spy metrics helpers (test-only, same package)
+// ---------------------------------------------------------------------------
+
+type spyCounter struct{ count int }
+
+func (c *spyCounter) Inc()          { c.count++ }
+func (c *spyCounter) Add(d float64) { c.count += int(d) }
+
+type spyCounterVec struct {
+	counter *spyCounter
+	labels  []string
+}
+
+func (v *spyCounterVec) Registered() bool { return true }
+func (v *spyCounterVec) With(l metrics.Labels) metrics.Counter {
+	metrics.MustValidateLabels(v.labels, l)
+	return v.counter
+}
+
+type spyHistogramVec struct{ labels []string }
+
+func (v *spyHistogramVec) Registered() bool { return true }
+func (v *spyHistogramVec) With(l metrics.Labels) metrics.Histogram {
+	metrics.MustValidateLabels(v.labels, l)
+	return spyHistogram{}
+}
+
+type spyHistogram struct{}
+
+func (spyHistogram) Observe(_ float64) {}
+
+type spyMetricsProvider struct {
+	counter *spyCounter
+}
+
+func (p *spyMetricsProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
+	p.counter = &spyCounter{}
+	return &spyCounterVec{counter: p.counter, labels: opts.LabelNames}, nil
+}
+
+func (p *spyMetricsProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	return &spyHistogramVec{labels: opts.LabelNames}, nil
+}
+
+func (p *spyMetricsProvider) Unregister(_ metrics.Collector) error { return nil }
+
+// ---------------------------------------------------------------------------
+// Coverage gap tests — paths not exercised by the initial test suite
+// ---------------------------------------------------------------------------
+
+// TestNewNoopEmitter_ReturnsNonNilEmitter verifies NewNoopEmitter returns a
+// usable Emitter backed by NoopWriter (does not panic, validates entries).
+func TestNewNoopEmitter_ReturnsNonNilEmitter(t *testing.T) {
+	e := NewNoopEmitter()
+	require.NotNil(t, e)
+
+	// Valid entry → no error.
+	require.NoError(t, e.Emit(context.Background(), validEntry("noop-emitter")))
+
+	// Invalid entry → validation error.
+	assert.Error(t, e.Emit(context.Background(), Entry{}))
+}
+
+// TestWriterEmitter_Emit_NilReceiver verifies that calling Emit on a nil
+// *WriterEmitter returns an errcode error instead of panicking.
+func TestWriterEmitter_Emit_NilReceiver(t *testing.T) {
+	var e *WriterEmitter
+	err := e.Emit(context.Background(), validEntry("nil-writer"))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ec.Code)
+}
+
+// TestDirectEmitter_Emit_NilReceiver verifies that calling Emit on a nil
+// *DirectEmitter returns an errcode error instead of panicking.
+func TestDirectEmitter_Emit_NilReceiver(t *testing.T) {
+	var e *DirectEmitter
+	err := e.Emit(context.Background(), validEntry("nil-direct"))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ec.Code)
+}
+
+// TestNewDirectEmitter_EmptyCellID verifies that an empty cellID is rejected
+// at construction time with ErrValidationFailed.
+func TestNewDirectEmitter_EmptyCellID(t *testing.T) {
+	publisher := &recordingEmitterPublisher{}
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
+// alwaysFailProvider is a metrics.Provider whose CounterVec always returns an
+// error, used to exercise the registration-failure branch in NewDirectEmitter.
+type alwaysFailProvider struct{}
+
+func (alwaysFailProvider) CounterVec(_ metrics.CounterOpts) (metrics.CounterVec, error) {
+	return nil, errors.New("simulated counter registration failure")
+}
+
+func (alwaysFailProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	return nil, errors.New("simulated histogram registration failure")
+}
+
+func (alwaysFailProvider) Unregister(_ metrics.Collector) error { return nil }
+
+// TestNewDirectEmitter_CounterVecRegistrationFailure verifies that a
+// CounterVec registration failure in the constructor is propagated as an error
+// (not swallowed) so the caller knows the emitter was not initialised.
+func TestNewDirectEmitter_CounterVecRegistrationFailure(t *testing.T) {
+	publisher := &recordingEmitterPublisher{}
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, alwaysFailProvider{}, "testcell")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failopen_dropped counter")
+}
+
+// TestNewDirectEmitter_WithLogger verifies that the optional variadic logger
+// parameter is accepted and wired into the emitter (covers the logger-injection
+// branch in NewDirectEmitter).
+func TestNewDirectEmitter_WithLogger(t *testing.T) {
+	logger := slog.Default()
+	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell", logger)
+	require.NoError(t, err)
+	require.NotNil(t, emitter)
+	// Confirm emitter works — fail-open path must not error.
+	assert.NoError(t, emitter.Emit(context.Background(), validEntry("logger-injected")))
+}
+
+// TestWriterEmitter_Durable_NilReceiver verifies that calling Durable on a
+// nil *WriterEmitter returns false (safe default, no panic).
+func TestWriterEmitter_Durable_NilReceiver(t *testing.T) {
+	var e *WriterEmitter
+	assert.False(t, e.Durable())
 }

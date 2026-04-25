@@ -114,14 +114,6 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 	assert.Contains(t, err.Error(), "circuit breaker must not be nil")
 }
 
-func TestPhase0_RejectsNilRelayHealth(t *testing.T) {
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
-	b.relayHealthNil = true
-	err := b.phase0ValidateOptions()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "relay must not be nil")
-}
-
 // TestPhase0_RejectsMutuallyExclusiveAuthOptions was removed in F3 round-3:
 // WithAuthMiddleware and the standalone PolicyJWTFromAssembly Option are gone,
 // so phase0 has nothing to reject. JWT auth flows through []cell.ListenerAuth

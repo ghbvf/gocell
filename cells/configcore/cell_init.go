@@ -90,6 +90,7 @@ func (c *ConfigCore) resolveEmitter(mode cell.DurabilityMode) error {
 			TxRunner:          c.txRunner,
 			Logger:            c.logger,
 			DirectPublishMode: outbox.DirectPublishFailClosed,
+			MetricsProvider:   c.metricsProvider,
 		},
 		PreResolved:      c.emitter,
 		ConsistencyLevel: c.ConsistencyLevel(),
@@ -182,15 +183,16 @@ func (c *ConfigCore) initFlagSlice(runMode query.RunMode) error {
 	return nil
 }
 
-// initFlagWriteSlice registers the flag-write L2 slice: Create/Update/Toggle/Delete
-// with transactional outbox (flag.changed.v1 event).
+// initFlagWriteSlice registers the flag-write L1 slice: Create/Update/Toggle/Delete
+// with local transaction only. event.flag.changed.v1 was retired (PR-CFG-B 2026-04-25):
+// the contract never had a subscriber, so outbox emission was dead work.
 func (c *ConfigCore) initFlagWriteSlice() error {
-	opts := []flagwrite.Option{flagwrite.WithEmitter(c.emitter), flagwrite.WithTxManager(c.txRunner)}
+	opts := []flagwrite.Option{flagwrite.WithTxManager(c.txRunner)}
 	flagWriteSvc, err := flagwrite.NewService(c.flagRepo, c.logger, opts...)
 	if err != nil {
 		return fmt.Errorf("configcore: init flag-write slice: %w", err)
 	}
 	c.flagWriteHandler = flagwrite.NewHandler(flagWriteSvc)
-	c.AddSlice(cell.NewBaseSlice("flagwrite", "configcore", cell.L2))
+	c.AddSlice(cell.NewBaseSlice("flagwrite", "configcore", cell.L1))
 	return nil
 }

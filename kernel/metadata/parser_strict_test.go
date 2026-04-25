@@ -327,3 +327,54 @@ verify:
 	assert.True(t, lineNumberRe.MatchString(err.Error()),
 		fmt.Sprintf("expected error to contain 'line N' but got: %s", err.Error()))
 }
+
+// TestParser_SliceConsistencyLevelAccepted verifies that the new optional
+// slice.yaml field "consistencyLevel" is accepted by KnownFields(true) and
+// correctly round-trips through the parser into SliceMeta.ConsistencyLevel.
+func TestParser_SliceConsistencyLevelAccepted(t *testing.T) {
+	tests := []struct {
+		name      string
+		sliceYAML string
+		wantLevel string
+	}{
+		{
+			name: "slice with explicit L1 accepted",
+			sliceYAML: `id: testslice
+belongsToCell: testcell
+consistencyLevel: L1
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`,
+			wantLevel: "L1",
+		},
+		{
+			name: "slice without consistencyLevel accepted",
+			sliceYAML: `id: testslice
+belongsToCell: testcell
+contractUsages: []
+verify:
+  unit: []
+  contract: []
+`,
+			wantLevel: "",
+		},
+	}
+
+	for _, tt := range tests {
+		tt := tt
+		t.Run(tt.name, func(t *testing.T) {
+			fsys := fstest.MapFS{
+				"cells/testcell/cell.yaml":                   &fstest.MapFile{Data: []byte(minimalCellYAML)},
+				"cells/testcell/slices/testslice/slice.yaml": &fstest.MapFile{Data: []byte(tt.sliceYAML)},
+			}
+			p := NewParser("")
+			pm, err := p.ParseFS(fsys)
+			require.NoError(t, err, "slice.yaml with consistencyLevel must not be rejected")
+			s, ok := pm.Slices["testcell/testslice"]
+			require.True(t, ok, "expected slice to be parsed")
+			assert.Equal(t, tt.wantLevel, s.ConsistencyLevel)
+		})
+	}
+}

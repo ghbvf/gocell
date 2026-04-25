@@ -3,7 +3,6 @@ package flagwrite
 import (
 	"context"
 	"errors"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
@@ -42,14 +41,11 @@ var _ persistence.TxRunner = (*cancellingTxRunner)(nil)
 // the context without calling fn:
 //  1. Service.Create returns context.Canceled.
 //  2. The in-memory repo has no entry for the key (rollback side-effect absent).
-//  3. The outbox writer received no entries.
 func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{}
 	txRunner := &cancellingTxRunner{}
 
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(txRunner))
+	svc, err := NewService(repo, slog.Default(), WithTxManager(txRunner))
 	require.NoError(t, err)
 
 	_, err = svc.Create(context.Background(), CreateInput{
@@ -68,9 +64,6 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 	require.ErrorAs(t, repoErr, &ecErr)
 	assert.Equal(t, errcode.ErrFlagNotFound, ecErr.Code,
 		"ErrFlagNotFound expected — flag must not persist after ctx cancel rollback")
-
-	// Verify outbox has no durable entries.
-	assert.Empty(t, writer.Entries, "outbox must have no entries after rollback")
 }
 
 // TestFlagWrite_Toggle_CtxCancel_ReturnsError verifies Toggle propagates
@@ -78,17 +71,14 @@ func TestFlagWrite_CtxCancel_RollsBackTx(t *testing.T) {
 func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository()
 	// Seed a flag so Toggle reaches the RunInTx call.
-	writer := &testutil.RecordingWriter{}
-	seedSvc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
+	seedSvc, err := NewService(repo, slog.Default(), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 	_, err = seedSvc.Create(context.Background(), CreateInput{Key: "toggle-cancel"})
 	require.NoError(t, err)
 
 	// Now create a service with the cancelling tx runner.
 	cancelTx := &cancellingTxRunner{}
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &testutil.RecordingWriter{})), WithTxManager(cancelTx))
+	svc, err := NewService(repo, slog.Default(), WithTxManager(cancelTx))
 	require.NoError(t, err)
 
 	_, err = svc.Toggle(context.Background(), "toggle-cancel", true)
@@ -105,9 +95,7 @@ func TestFlagWrite_Toggle_CtxCancel_ReturnsError(t *testing.T) {
 // context cancellation and leaves the flag unchanged.
 func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{}
-	seedSvc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
+	seedSvc, err := NewService(repo, slog.Default(), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 	_, err = seedSvc.Create(context.Background(), CreateInput{
 		Key:         "update-cancel",
@@ -116,8 +104,7 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 	require.NoError(t, err)
 
 	cancelTx := &cancellingTxRunner{}
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &testutil.RecordingWriter{})), WithTxManager(cancelTx))
+	svc, err := NewService(repo, slog.Default(), WithTxManager(cancelTx))
 	require.NoError(t, err)
 
 	_, err = svc.Update(context.Background(), UpdateInput{
@@ -139,16 +126,13 @@ func TestFlagWrite_Update_CtxCancel_ReturnsError(t *testing.T) {
 // context cancellation and leaves the flag in the repo.
 func TestFlagWrite_Delete_CtxCancel_ReturnsError(t *testing.T) {
 	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{}
-	seedSvc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
+	seedSvc, err := NewService(repo, slog.Default(), WithTxManager(&testutil.NoopTxRunner{}))
 	require.NoError(t, err)
 	_, err = seedSvc.Create(context.Background(), CreateInput{Key: "delete-cancel"})
 	require.NoError(t, err)
 
 	cancelTx := &cancellingTxRunner{}
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, &testutil.RecordingWriter{})), WithTxManager(cancelTx))
+	svc, err := NewService(repo, slog.Default(), WithTxManager(cancelTx))
 	require.NoError(t, err)
 
 	err = svc.Delete(context.Background(), "delete-cancel")

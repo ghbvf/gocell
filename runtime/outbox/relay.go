@@ -8,7 +8,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kout "github.com/ghbvf/gocell/kernel/outbox"
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
@@ -16,6 +18,7 @@ import (
 // Compile-time interface checks.
 var _ kout.Relay = (*Relay)(nil)
 var _ worker.Worker = (*Relay)(nil)
+var _ kernellifecycle.ManagedResource = (*Relay)(nil)
 
 // ---------------------------------------------------------------------------
 // Relay lifecycle state machine
@@ -224,16 +227,21 @@ func (r *Relay) Start(ctx context.Context) error {
 // Stop signals the relay to shut down gracefully and waits for goroutines.
 // It respects the caller's context deadline: if ctx expires before goroutines
 // finish, Stop returns an error instead of blocking indefinitely.
+// Stop is fully idempotent: calling it multiple times (e.g. via both
+// ManagedResource.Close and WorkerGroup.Stop) is safe and returns nil on every
+// call after the relay is already stopping or stopped.
 func (r *Relay) Stop(ctx context.Context) error {
-	// If never started (or already stopped), no-op (consistent with worker.Worker
-	// contract).  We detect this by checking cancel under mu: cancel is only set
-	// during an active Start() call and cleared by the Start() defer on shutdown.
+	// If never started, already stopped, or already stopping — no-op.
+	// cancel is only set during an active Start() call and cleared by the
+	// Start() defer on shutdown.
 	r.mu.Lock()
-	notStarted := r.cancel == nil && relayState(r.state.Load()) == relayStopped
+	state := relayState(r.state.Load())
+	notStarted := r.cancel == nil && state == relayStopped
+	alreadyStopping := state == relayStopping
 	ready := r.readyCh
 	r.mu.Unlock()
 
-	if notStarted {
+	if notStarted || alreadyStopping {
 		return nil
 	}
 
@@ -640,7 +648,7 @@ func (r *Relay) cappedDelay(d time.Duration) time.Duration {
 // Health and readiness
 // ---------------------------------------------------------------------------
 
-// HealthCheckers returns a map of named health checker functions, one per
+// Checkers returns a map of named health checker functions, one per
 // enabled failure budget. The returned functions implement the
 // health.Checker contract: nil return = healthy; non-nil = unhealthy.
 //
@@ -648,8 +656,10 @@ func (r *Relay) cappedDelay(d time.Duration) time.Duration {
 // budgets are excluded from the map so callers can safely iterate all entries
 // and register them unconditionally.
 //
+// Implements kernellifecycle.ManagedResource.Checkers.
+//
 // ref: controller-runtime/pkg/healthz AddReadyzCheck — named-checker aggregation.
-func (r *Relay) HealthCheckers() map[string]func(context.Context) error {
+func (r *Relay) Checkers() map[string]func(context.Context) error {
 	m := make(map[string]func(context.Context) error)
 	if r.pollBudget != nil {
 		m["outbox-relay-poll"] = r.pollBudget.Checker()
@@ -661,6 +671,25 @@ func (r *Relay) HealthCheckers() map[string]func(context.Context) error {
 		m["outbox-relay-cleanup"] = r.cleanupBudget.Checker()
 	}
 	return m
+}
+
+// Worker returns the Relay itself as the background worker.
+// Relay implements kernel/worker.Worker (Start/Stop), so bootstrap can manage
+// its goroutine lifecycle via the ManagedResource contract.
+//
+// Implements kernellifecycle.ManagedResource.Worker.
+//
+// ref: uber-go/fx internal/lifecycle/lifecycle.go — resource self-reports hook.
+func (r *Relay) Worker() kworker.Worker {
+	return r
+}
+
+// Close gracefully stops the relay, bounded by ctx.
+// Delegates to Stop so bootstrap can call Close in LIFO shutdown order.
+//
+// Implements kernellifecycle.ManagedResource.Close.
+func (r *Relay) Close(ctx context.Context) error {
+	return r.Stop(ctx)
 }
 
 // Ready returns the channel that is closed when Start() has transitioned the

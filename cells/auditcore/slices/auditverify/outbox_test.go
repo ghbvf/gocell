@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -147,7 +148,7 @@ func TestService_VerifyChain_PublishError_DoesNotFailVerify(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	// No outboxWriter → goes through direct-publish path.
-	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "auditcore", slog.Default())
 	require.NoError(t, err)
 	svc := NewService(repo, testHMACKey, slog.Default(), WithEmitter(emitter))
 

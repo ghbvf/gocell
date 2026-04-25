@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -150,6 +151,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		WithJWTIssuer(issuer),
 		WithJWTVerifier(verifier),
 		WithRefreshStore(intRefreshStore),
+		WithRefreshMetricsProvider(metrics.NopProvider{}),
 		// Demo mode: no tx+outbox required.
 	)
 	require.NoError(t, c.Init(context.Background(), cell.Dependencies{

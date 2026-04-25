@@ -123,9 +123,13 @@ func TestParseRealProject(t *testing.T) {
 	assert.GreaterOrEqual(t, len(pm.StatusBoard), 8, "expected at least 8 status-board entries")
 	assert.LessOrEqual(t, len(pm.StatusBoard), 12, "unexpected extra status-board entries parsed — update this bound if new entries were added intentionally")
 
-	// --- Actors: 1 ---
-	assert.Len(t, pm.Actors, 1, "expected 1 actor")
-	assert.Equal(t, "edge-bff", pm.Actors[0].ID)
+	// --- Actors: 4 (edge-bff + 3 external subscribers added by PR-CFG-B for ADV-05) ---
+	assert.Len(t, pm.Actors, 4, "expected 4 actors")
+	actorIDs := make([]string, 0, len(pm.Actors))
+	for _, a := range pm.Actors {
+		actorIDs = append(actorIDs, a.ID)
+	}
+	assert.ElementsMatch(t, []string{"edge-bff", "external-audit-sink", "example-iot-platform", "example-order-platform"}, actorIDs)
 
 	// Spot-check a well-known cell.
 	ac := pm.Cells["accesscore"]

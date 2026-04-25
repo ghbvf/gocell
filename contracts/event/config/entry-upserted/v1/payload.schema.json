@@ -2,12 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "event.config.entry-upserted.v1.payload",
   "type": "object",
-  "description": "Emitted after config Create/Update/Rollback to distribute the current config value that subscribers should apply. value is required and may be an empty string.",
+  "description": "Metadata-only notification: subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value. ref: NATS subject+bytes / Watermill payload-bytes boundary.",
   "properties": {
-    "key": { "type": "string", "pattern": "\\S" },
-    "value": { "type": "string" },
-    "version": { "type": "integer", "minimum": 1 }
+    "key": { "type": "string", "pattern": "\\S", "description": "non-blank config key; matches ConfigEntry.Key validation" },
+    "version": { "type": "integer", "minimum": 1, "description": "monotonically increasing; starts at 1, matches ConfigEntry.Version" }
   },
-  "required": ["key", "value", "version"],
+  "required": ["key", "version"],
   "additionalProperties": false
 }

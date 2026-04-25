@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -36,11 +35,18 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "memory"}
 	// Pass an empty Config; DSN check is only reached in postgres mode.
-	res, opts, err := buildConfigCoreOpts(ctx, topo, adapterpg.Config{}, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
+	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         topo,
+		PGConfig:         adapterpg.Config{},
+		Publisher:        discardPublisher{},
+		MetricsProvider:  metrics.NopProvider{},
+		ValueTransformer: crypto.NoopTransformer{},
+	})
 
 	require.NoError(t, err)
-	assert.Nil(t, res, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
-	assert.NotEmpty(t, opts, "in-memory mode must return cell options (WithInMemoryDefaults)")
+	assert.Nil(t, result.PGResource, "in-memory mode must not create a ManagedResource (no PG pool, no relay)")
+	assert.NotEmpty(t, result.CellOptions, "in-memory mode must return cell options (WithInMemoryDefaults)")
+	assert.Empty(t, result.BootstrapOpts, "in-memory mode must not return bootstrap opts (no relay)")
 }
 
 // TestBuildConfigCoreOpts_UnknownMode_Error asserts that an unrecognised
@@ -50,11 +56,17 @@ func TestBuildConfigCoreOpts_InMemoryMode_NoRelay(t *testing.T) {
 func TestBuildConfigCoreOpts_UnknownMode_Error(t *testing.T) {
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "cassandra"}
-	res, _, err := buildConfigCoreOpts(ctx, topo, adapterpg.Config{}, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
+	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         topo,
+		PGConfig:         adapterpg.Config{},
+		Publisher:        discardPublisher{},
+		MetricsProvider:  metrics.NopProvider{},
+		ValueTransformer: crypto.NoopTransformer{},
+	})
 
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "cassandra")
-	assert.Nil(t, res, "error path must not leak a ManagedResource")
+	assert.Nil(t, result.PGResource, "error path must not leak a ManagedResource")
 }
 
 // TestBuildConfigCoreOpts_PGMode_MissingDSN asserts that postgres mode with an
@@ -65,42 +77,18 @@ func TestBuildConfigCoreOpts_PGMode_MissingDSN(t *testing.T) {
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
 
-	res, _, err := buildConfigCoreOpts(ctx, topo, adapterpg.Config{}, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
+	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         topo,
+		PGConfig:         adapterpg.Config{},
+		Publisher:        discardPublisher{},
+		MetricsProvider:  metrics.NopProvider{},
+		ValueTransformer: crypto.NoopTransformer{},
+	})
 
 	require.Error(t, err, "postgres mode with empty DSN must return an error")
 	assert.Contains(t, err.Error(), "GOCELL_CONFIGCORE_DATABASE_URL",
 		"error must name the missing env var so operators know what to set")
-	assert.Nil(t, res, "error path must not leak a ManagedResource")
-}
-
-// TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil asserts that postgres mode
-// produces a non-nil ManagedResource with a relay worker. This test requires a
-// running PostgreSQL instance (GOCELL_CONFIGCORE_DATABASE_URL must be set); it
-// skips gracefully if the DSN is absent so it does not block unit test suites.
-//
-// The assertion that res != nil is the critical regression check for A11: before
-// the fix, buildConfigCoreOpts never returned a relay, so the bootstrap could not
-// register it.
-func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
-	pgDSN, ok := os.LookupEnv("GOCELL_CONFIGCORE_DATABASE_URL")
-	if !ok || pgDSN == "" {
-		t.Skip("GOCELL_CONFIGCORE_DATABASE_URL not set; skipping PG-mode relay wiring test")
-	}
-
-	ctx := context.Background()
-	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
-	pgCfg := adapterpg.Config{DSN: pgDSN}
-	res, opts, err := buildConfigCoreOpts(ctx, topo, pgCfg, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
-
-	require.NoError(t, err, "postgres mode must not error when DSN is valid")
-	require.NotNil(t, res, "postgres mode must return a non-nil ManagedResource (wraps pool + relay)")
-	assert.NotEmpty(t, opts, "postgres mode must return cell options")
-
-	// ManagedResource must have a non-nil relay worker (A11 fix).
-	assert.NotNil(t, res.Worker(), "postgres ManagedResource must carry a relay worker")
-
-	// Close the pool via ManagedResource.Close(ctx) so pool.Close(ctx) is called.
-	require.NoError(t, res.Close(context.Background()))
+	assert.Nil(t, result.PGResource, "error path must not leak a ManagedResource")
 }
 
 // TestTopologyAdapterInfo_TableDriven locks the adapter_info map shape that

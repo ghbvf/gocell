@@ -2,7 +2,6 @@ package flagwrite
 
 import (
 	"context"
-	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -12,7 +11,6 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
@@ -42,9 +40,8 @@ func newContractMux(svc *Service) http.Handler {
 func newContractService(t *testing.T) *Service {
 	t.Helper()
 	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{}
 	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
+		WithTxManager(&testutil.NoopTxRunner{}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,39 +175,6 @@ func TestHttpConfigFlagsDeleteV1Serve(t *testing.T) {
 	req = req.WithContext(auth.TestContext(testAdminSubject, []string{dto.RoleAdmin}))
 	mux.ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusNoContent, rec.Code, "body: %s", rec.Body)
-}
-
-// --- Event contract test ---
-
-func TestEventFlagChangedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.flag.changed.v1")
-
-	repo := mem.NewFlagRepository()
-	writer := &testutil.RecordingWriter{}
-	svc, err := NewService(repo, slog.Default(),
-		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
-	require.NoError(t, err)
-
-	_, err = svc.Create(testAdminCtx(), CreateInput{Key: "event-flag", Enabled: true, Description: "ev"})
-	require.NoError(t, err)
-
-	require.Len(t, writer.Entries, 1)
-	var payload FlagChangedPayload
-	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &payload))
-
-	c.ValidatePayload(t, writer.Entries[0].Payload)
-	assert.Equal(t, "created", payload.Action)
-	assert.Equal(t, "event-flag", payload.Key)
-
-	// Contract invariant: payload.eventId must equal the transport-level
-	// envelope identifier (outbox.Entry.ID) because headers.event_id —
-	// declared idempotencyKey in contract.yaml — is carried via Entry.ID.
-	// Two independent UUIDs here would let headers-based idempotency drift
-	// from payload-based inspection. See headers.schema.json description.
-	assert.Equal(t, writer.Entries[0].ID, payload.EventID,
-		"contract drift: payload.eventId must mirror outbox.Entry.ID so "+
-			"headers.event_id (idempotencyKey) is coherent across envelope and body")
 }
 
 func testAdminCtx() context.Context {

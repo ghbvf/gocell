@@ -19,7 +19,9 @@ const (
 	DefaultHookObserverDrainTimeout = 5 * time.Second
 )
 
-// Drop reason label values emitted on gocell_hook_observer_dropped_total.
+// Drop reason label values emitted on hook_observer_dropped_total (bare name;
+// the Provider's Namespace field adds the "gocell_" prefix to produce the
+// final Prometheus fqName "gocell_hook_observer_dropped_total").
 // Exported so downstream tests (and operators wiring Grafana variables)
 // can refer to the reason string by symbolic name instead of duplicating
 // the literal — a rename of the literal flips every call site at once.
@@ -35,7 +37,7 @@ const (
 // Design:
 //   - **Non-blocking emit** via `select { case ch <- e: default: drop }`.
 //     Assembly critical path never blocks on a stuck sink. Full queue is
-//     reported via `gocell_hook_observer_dropped_total{reason="queue_full"}`.
+//     reported via `hook_observer_dropped_total{reason="queue_full"}`.
 //   - **Per-sink timeout** via goroutine+channel race (mirroring
 //     go.uber.org/fx app.go withTimeout); a slow sink is abandoned to its
 //     own goroutine and counted `reason="sink_timeout"`. A broken observer
@@ -106,7 +108,7 @@ func newHookDispatcher(cfg dispatcherConfig) (*hookDispatcher, error) {
 	}
 
 	dropped, err := cfg.Provider.CounterVec(metrics.CounterOpts{
-		Name:       "gocell_hook_observer_dropped_total",
+		Name:       "hook_observer_dropped_total",
 		Help:       "Total number of hook events dropped by the async hook dispatcher, partitioned by reason.",
 		LabelNames: []string{"reason"},
 	})
