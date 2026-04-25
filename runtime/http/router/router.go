@@ -195,6 +195,28 @@ func WithPublicPathPrefix(prefix string) Option {
 	}
 }
 
+// WithEarlyResponder registers a predicate-driven middleware that runs
+// before the policy layer (auth, rate limit, etc.). When the predicate
+// matches, handler writes the response and the chain short-circuits.
+//
+// Intended for framework-owned isolation contracts that should NOT depend
+// on a public-matcher exemption. The canonical example is the primary
+// listener's /internal/v1/* 404 isolation: by deciding the response BEFORE
+// auth runs, we avoid having to add the prefix to the JWT public-bypass
+// matcher (which would also bypass any cell route mistakenly registered
+// under that prefix). PR-258 RES-5 narrowing.
+//
+// Multiple WithEarlyResponder calls accumulate in declaration order; the
+// first matching predicate wins.
+func WithEarlyResponder(predicate func(*http.Request) bool, handler http.HandlerFunc) Option {
+	return func(r *Router) {
+		r.earlyResponders = append(r.earlyResponders, earlyResponder{
+			predicate: predicate,
+			handler:   handler,
+		})
+	}
+}
+
 // WithSuppressNoAuthVerifierWarn silences the FinalizeAuth slog.Warn that
 // fires when auth route metas are declared on a router with no AuthMiddleware
 // installed.
@@ -260,6 +282,32 @@ type Router struct {
 	// service-token gates) so their startup does not produce false alarms.
 	// R2-11 ops noise fix.
 	suppressNoVerifierWarn bool
+
+	// earlyResponders runs as middleware BEFORE the policy layer; the first
+	// matching predicate writes a response and short-circuits the chain.
+	// Owned by the framework (e.g. /internal/v1/* 404 isolation on primary).
+	// PR-258 RES-5 narrowing.
+	earlyResponders []earlyResponder
+}
+
+// earlyResponder captures a predicate + response handler pair.
+type earlyResponder struct {
+	predicate func(*http.Request) bool
+	handler   http.HandlerFunc
+}
+
+// earlyResponderMiddleware turns an earlyResponder into a chi middleware that
+// short-circuits when the predicate matches.
+func earlyResponderMiddleware(er earlyResponder) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if er.predicate(r) {
+				er.handler(w, r)
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
 }
 
 // internalPathPrefix marks URL paths that belong on the internal listener.
@@ -405,6 +453,17 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler, defaultPolic
 		middleware.Recovery,
 		middleware.SecurityHeadersWithOptions(r.securityHeadersOpts...),
 	)
+
+	// --- Early responders (PR-258 RES-5 narrowing) ---
+	// Predicate-driven middleware that short-circuits BEFORE the policy
+	// layer so framework-owned isolation contracts (e.g. /internal/v1/*
+	// 404 on the primary listener) do not depend on a public-matcher
+	// exemption that would bypass JWT for any future cell mistakenly
+	// registering routes under that prefix. The predicate is the only
+	// surface that can match — no per-route policy is consulted.
+	for _, er := range r.earlyResponders {
+		r.mux.Use(earlyResponderMiddleware(er))
+	}
 
 	// --- Policy layer (listener-default policy) ---
 	// Apply the policy middleware AFTER observability so all requests are
@@ -737,16 +796,23 @@ func not404Handler(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"error":{"code":"ERR_NOT_FOUND","message":"not found"}}`))
 }
 
-// InstallInternalPrefixIsolation registers explicit 404 handlers for the
-// /internal/v1/* prefix on a PrimaryListener router. Bootstrap calls this
-// during phase5 after all RouteGroups are mounted, preserving the PR-A14a
-// physical-isolation contract (primary listener never reveals that
-// /internal/v1/* routes exist).
+// InternalPrefixIsolationResponder returns a router.Option that 404s any
+// request whose path starts with /internal/v1 (or equals the bare path)
+// BEFORE any auth or policy middleware runs. Bootstrap installs this on
+// the primary listener via WithEarlyResponder so the physical-isolation
+// contract — primary listener never reveals that /internal/v1/* routes
+// exist — does not depend on a JWT public-matcher exemption.
 //
-// Two entries cover both chi wildcard match forms.
-func InstallInternalPrefixIsolation(r *Router) {
-	r.mux.Handle(internalPathPrefix+"*", http.HandlerFunc(not404Handler))
-	r.mux.Handle(strings.TrimSuffix(internalPathPrefix, "/"), http.HandlerFunc(not404Handler))
+// PR-258 RES-5 narrowing: replaces the prior chi.Handle("/internal/v1/*",
+// 404) + WithPublicPathPrefix("/internal/v1/") + frameworkPrimaryWhitelist
+// triple-mechanism. The new model has a single surface: the predicate.
+func InternalPrefixIsolationResponder() Option {
+	bare := strings.TrimSuffix(internalPathPrefix, "/")
+	predicate := func(r *http.Request) bool {
+		p := r.URL.Path
+		return strings.HasPrefix(p, internalPathPrefix) || p == bare
+	}
+	return WithEarlyResponder(predicate, not404Handler)
 }
 
 // resolveHTTPContractAttrs looks up span attributes for a request by matching

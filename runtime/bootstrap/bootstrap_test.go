@@ -93,6 +93,25 @@ func waitForHealthy(t *testing.T, addr string) {
 	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
 }
 
+// readyzPayload extracts the readyz inner payload regardless of envelope.
+// PR-A35 wraps /readyz in {"data": {...}} on 200 and
+// {"error": {"details": {...}}} on 503; both shapes carry the same fields
+// (status, cells, dependencies, adapters). The helper lets a single
+// assertion path work whether the response was 200 or 503.
+func readyzPayload(t *testing.T, body map[string]any) map[string]any {
+	t.Helper()
+	if data, ok := body["data"].(map[string]any); ok {
+		return data
+	}
+	if errObj, ok := body["error"].(map[string]any); ok {
+		if details, ok := errObj["details"].(map[string]any); ok {
+			return details
+		}
+	}
+	t.Fatalf("readyz body has neither data nor error.details envelope: %#v", body)
+	return nil
+}
+
 // testCell is a minimal Cell for bootstrap testing.
 type testCell struct {
 	*cell.BaseCell
@@ -478,10 +497,13 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	sub := &invokeOnceSubscriber{entry: outbox.Entry{
 		ID:        "evt-context-1",
 		EventType: "test.context",
-		Metadata: map[string]string{
-			"request_id":     "req-ctx-1",
-			"correlation_id": "corr-ctx-1",
-			"trace_id":       "trace-ctx-1",
+		// PR-A11 FU1: observability fields moved from Metadata into the
+		// typed Observability struct; SubscriberWithMiddleware restores via
+		// entry.Observability.RestoreToContext, not via Metadata merge.
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-ctx-1",
+			CorrelationID: "corr-ctx-1",
+			TraceID:       "trace-ctx-1",
 		},
 	}}
 
@@ -657,7 +679,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
 	require.True(t, ok, "rabbitmq entry must be a map")
@@ -713,7 +735,7 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
 	require.True(t, ok, "rabbitmq entry must be a map")
@@ -766,7 +788,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	adapters, ok := body["adapters"].(map[string]any)
+	adapters, ok := readyzPayload(t, body)["adapters"].(map[string]any)
 	require.True(t, ok, "verbose readyz must contain adapters map")
 	assert.Equal(t, "in-memory", adapters["mode"])
 	assert.Equal(t, "in-memory", adapters["storage"])
@@ -840,7 +862,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	sessionStore, ok := deps["session-store"].(map[string]any)
 	require.True(t, ok, "session-store entry must be a map")
@@ -991,7 +1013,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
 	require.True(t, ok, "rabbitmq entry must be a map")
@@ -999,7 +1021,11 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	postgresEntry, ok := deps["postgres"].(map[string]any)
 	require.True(t, ok, "postgres entry must be a map")
 	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
-	assert.Equal(t, "unhealthy", body["status"], "overall status must be unhealthy")
+	// PR-A35 503 envelope conveys overall status via error.code; status code
+	// 503 (asserted above) and "ERR_READYZ_UNHEALTHY" together mean unhealthy.
+	errObj, _ := body["error"].(map[string]any)
+	require.NotNil(t, errObj, "503 readyz must carry an error envelope")
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", errObj["code"], "overall status must be unhealthy")
 
 	cancel()
 	select {
@@ -1125,7 +1151,7 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1182,7 +1208,7 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1328,7 +1354,7 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1436,7 +1462,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
 	erProbe, ok := deps["eventrouter"].(map[string]any)
 	require.True(t, ok, "eventrouter probe must be a structured ProbeResult")
@@ -3654,7 +3680,7 @@ func TestWithRelayHealth_RegistersCheckers(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 
 	assert.Contains(t, deps, "outbox-relay-poll", "poll checker must be in /readyz?verbose")
@@ -3793,7 +3819,7 @@ func TestWithRelayHealth_TrippedBudget_Returns503(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
 	pollProbe, ok := deps["outbox-relay-poll"].(map[string]any)
@@ -3856,7 +3882,7 @@ func TestWithRelayHealth_DisabledBudget_SkipsChecker(t *testing.T) {
 
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, _ := body["dependencies"].(map[string]any)
+	deps, _ := readyzPayload(t, body)["dependencies"].(map[string]any)
 
 	assert.NotContains(t, deps, "outbox-relay-poll",
 		"disabled poll budget must not register a checker")

@@ -187,11 +187,10 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
             Listener: cell.PrimaryListener,
             Prefix:   "/api/v1/my-domain",
             Register: func(mux cell.RouteMux) {
-                auth.Declare(mux, auth.RouteDecl{
-                    Method:  http.MethodGet,
-                    Path:    "/resource",
-                    Handler: http.HandlerFunc(c.handleGet),
-                    Policy:  auth.Authenticated(),
+                auth.Mount(mux, auth.Route{
+                    Contract: specGetResource, // wrapper.ContractSpec — Method+Path+Kind=http
+                    Handler:  http.HandlerFunc(c.handleGet),
+                    Policy:   auth.Authenticated(),
                 })
             },
         },
@@ -199,9 +198,8 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
             Listener: cell.InternalListener,
             Prefix:   "/internal/v1/my-domain",
             Register: func(mux cell.RouteMux) {
-                auth.Declare(mux, auth.RouteDecl{
-                    Method:    http.MethodPost,
-                    Path:      "/admin/action",
+                auth.Mount(mux, auth.Route{
+                    Contract:  specAdminAction,
                     Handler:   http.HandlerFunc(c.handleAdminAction),
                     Delegated: true,
                 })

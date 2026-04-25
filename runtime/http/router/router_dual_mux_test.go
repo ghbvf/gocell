@@ -234,20 +234,20 @@ func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
 	assert.NoError(t, err)
 }
 
-// TestInstallInternalPrefixIsolation verifies that the helper installs explicit
-// 404 handlers for /internal/v1/* on a PrimaryListener router, preserving
-// the physical isolation contract.
-func TestInstallInternalPrefixIsolation(t *testing.T) {
-	rtr, err := NewForListener(kcell.PrimaryListener, kcell.Policy{})
+// TestInternalPrefixIsolationResponder verifies the early-responder
+// middleware 404's /internal/v1/* on a PrimaryListener router BEFORE any
+// auth or policy runs (PR-258 RES-5 narrowing — replaces the prior chi-
+// route + public-matcher-prefix + policy-coverage-whitelist mechanism).
+func TestInternalPrefixIsolationResponder(t *testing.T) {
+	rtr, err := NewForListener(kcell.PrimaryListener, kcell.Policy{},
+		InternalPrefixIsolationResponder())
 	require.NoError(t, err)
-
-	InstallInternalPrefixIsolation(rtr)
 
 	for _, p := range []string{"/internal/v1", "/internal/v1/", "/internal/v1/anything"} {
 		req := httptest.NewRequest(http.MethodGet, p, nil)
 		rec := httptest.NewRecorder()
 		rtr.Handler().ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusNotFound, rec.Code,
-			"primary handler must 404 on %q (PR-A14b isolation)", p)
+			"primary handler must 404 on %q (PR-A14b isolation, RES-5 middleware-based)", p)
 	}
 }

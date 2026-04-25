@@ -8,11 +8,13 @@ paths:
 
 # Runtime API
 
-## Auth 路由声明 (F3) + 三 listener + RouteGroup (PR-A14b)
+## Auth 路由声明 + 三 listener + RouteGroup (PR-A14b)
 
 每个 Cell 实现 `RouteGroupContributor` 接口，通过 `RouteGroups()` 声明路由组。
 每个路由组指定目标 listener、URL 前缀、以及注册回调（`Register func(mux cell.RouteMux)`）。
 Bootstrap 在 phase5 收集所有路由组并挂载到对应 listener 的 chi.Mux 上。
+
+每条业务路由通过 `auth.Mount(mux, auth.Route{...})` 注册（**不是** `auth.Declare`/`auth.RouteDecl` —— 这两个旧符号已删除）。`auth.Route.Contract` 是 `wrapper.ContractSpec`，承载 method+path+contract id；Mount 自动 strip listener prefix、注册 chi handler、转发 AuthRouteMeta 给 FinalizeAuth。
 
 ```go
 // Cell.RouteGroups — PR-A14b 声明式路由组
@@ -23,15 +25,13 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
             Prefix:   "/api/v1/access",
             Register: func(mux cell.RouteMux) {
                 mux.Route("/sessions", func(s cell.RouteMux) {
-                    auth.Declare(s, auth.RouteDecl{
-                        Method:  "POST",
-                        Path:    "/login",
-                        Handler: http.HandlerFunc(c.loginHandler.HandleLogin),
-                        Public:  true,                     // JWT 豁免
+                    auth.Mount(s, auth.Route{
+                        Contract: specSessionsLogin, // wrapper.ContractSpec — Method+Path+Kind=http
+                        Handler:  http.HandlerFunc(c.loginHandler.HandleLogin),
+                        Public:   true,                     // JWT 豁免
                     })
-                    auth.Declare(s, auth.RouteDecl{
-                        Method:              "DELETE",
-                        Path:                "/{id}",
+                    auth.Mount(s, auth.Route{
+                        Contract:            specSessionsLogout,
                         Handler:             http.HandlerFunc(c.logoutHandler.HandleLogout),
                         PasswordResetExempt: true,         // 允许 reset-required token 穿过
                     })
@@ -42,9 +42,8 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
             Listener: cell.InternalListener,
             Prefix:   "/internal/v1/access",
             Register: func(mux cell.RouteMux) {
-                auth.Declare(mux, auth.RouteDecl{
-                    Method:    "POST",
-                    Path:      "/roles/assign",
+                auth.Mount(mux, auth.Route{
+                    Contract:  specRolesAssign,
                     Handler:   http.HandlerFunc(c.rbacAssignHandler.HandleAssign),
                     Delegated: true,
                 })
@@ -74,7 +73,7 @@ bootstrap.New(
 
 ### bootstrap.WithListener 策略
 
-每个 listener 在构建时绑定一个默认 Policy，决定所有未经 `auth.Declare` 覆盖路由的鉴权行为：
+每个 listener 在构建时绑定一个默认 Policy，决定所有未经 `auth.Mount` 路由级 Policy 覆盖路由的鉴权行为：
 
 | Policy | 说明 | 典型 listener |
 |--------|------|--------------|
@@ -86,17 +85,16 @@ bootstrap.New(
 | `PolicyNone` | 无验证 | HealthListener（loopback 隔离） |
 | `PolicyStack(a, b)` | 组合策略 | 任意（注意：JWT 不可嵌入 stack — Bootstrap 通过 Name=="jwt" 提取 verifier） |
 
-### RouteDecl 字段
+### auth.Route 字段
 
 | 字段 | 说明 | 约束 |
 |------|------|------|
-| `Method` | HTTP 动词（GET/POST/...） | 必填，大写 |
-| `Path` | 路径（相对当前 mux 作用域） | 必填，以 `/` 开头 |
+| `Contract` | `wrapper.ContractSpec`（Method + Path + Kind="http"） | 必填，drives 注册 pattern + span attrs |
 | `Handler` | `http.Handler` | 必填，非 nil |
 | `Policy` | `auth.Policy` — 路由级策略 | 可选；`Public=true` 时必须为 nil |
 | `Public` | JWT 豁免 | 与 `Policy` / `PasswordResetExempt` 互斥 |
 | `PasswordResetExempt` | 允许 password-reset token | 与 `Public` 互斥；handler 内做细粒度校验 |
-| `Delegated` | `/internal/v1/*` 路由一致性标记 | `Delegated: true` ⇔ 路径必须以 `/internal/v1/` 开头且路由组挂在 `InternalListener`。FinalizeAuth 校验一致性并 fail-fast。 |
+| `Delegated` | `/internal/v1/*` 路由一致性标记 | `Delegated: true` ⇔ 路径必须以 `/internal/v1/` 开头且路由组挂在 `InternalListener`。FinalizeAuth 校验一致性并 fail-fast (PR-258 F2 round-3：router-aware listener identity 检查)。 |
 
 ### 三 listener 分流（PR-A14b）
 
@@ -116,7 +114,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 
 `Bootstrap.Run` 在所有 `RouteGroups()` 挂载完成后自动调用 primary listener 的 `rtr.FinalizeAuth()`：
 
-1. 收集所有 `auth.Declare` 推送的 `AuthRouteMeta`
+1. 收集所有 `auth.Mount` 推送的 `AuthRouteMeta`
 2. 去重 `(method, path)` — 重复 fail-fast
 3. 校验 `Delegated` ↔ `/internal/v1/*` 一致性（PR-A14a）
 4. 编译 public / password-reset-exempt 匹配器
@@ -127,9 +125,9 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 
 每个进入 listener 的请求经历三层鉴权策略，优先级从高到低：
 
-1. **路由级 Policy**（`auth.Declare` 中的 `Policy` 字段）— 仅对该路由生效，覆盖一切
-2. **Public / PasswordResetExempt**（`auth.Declare` 中的 `Public: true` 或 `PasswordResetExempt: true`）— 豁免 JWT 验证
-3. **Listener 默认 Policy**（`WithListener(ref, addr, defaultPolicy)` 的 `defaultPolicy`）— 对未被 auth.Declare 覆盖的路由生效
+1. **路由级 Policy**（`auth.Route.Policy`）— 仅对该路由生效，覆盖一切
+2. **Public / PasswordResetExempt**（`auth.Route.Public: true` 或 `auth.Route.PasswordResetExempt: true`）— 豁免 JWT 验证
+3. **Listener 默认 Policy**（`WithListener(ref, addr, defaultPolicy)` 的 `defaultPolicy`）— 对未被 `auth.Mount` 覆盖的路由生效
 
 优先级规则：
 - 路由级 Policy 存在时，Listener 默认 Policy 被完全旁路
@@ -144,6 +142,6 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - `(method, path)` 重复出现 → FinalizeAuth 返回 error（保护配置清洁度）
 - `Path` 经过 `path.Clean` 规范化
 - Handler 内业务校验优先级高于 Route Policy（如 logout 校验 session 归属）
-- CORS OPTIONS：当前无 CORS middleware；如需公开 OPTIONS 请显式 `auth.Declare` + `Public: true`
+- CORS OPTIONS：当前无 CORS middleware；如需公开 OPTIONS 请显式 `auth.Mount` + `Public: true`
 - 禁止在 `cmd/*` / `examples/*/main.go` 硬编码业务路径字面量（`grep '"POST /api/v1/"'` 必须为空）
 - Cell 禁止直接 import `runtime/http/router`；通过 `cell.RouteMux` / `cell.RouteGroup` 声明路由（LAYER-07）

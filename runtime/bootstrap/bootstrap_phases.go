@@ -36,15 +36,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
-// frameworkPrimaryWhitelist contains the policy-coverage whitelist entries for
-// routes that bootstrap itself mounts on the primary listener without
-// auth.Mount — the internal-prefix isolation 404 handler.
+// PR-258 RES-5: frameworkPrimaryWhitelist is gone. The internal-prefix
+// isolation 404 used to require a policy-coverage whitelist entry because
+// the handler was a chi route registered without auth.Mount. After
+// RES-5 the isolation runs as router early-responder middleware before
+// FinalizeAuth's policy-coverage walk reaches it, so no whitelist hole is
+// needed.
 // Health probes (/healthz, /readyz) are declared via auth.Mount(Public:true)
-// inside HealthRouteGroups and do not need to be whitelisted here.
-// Using prefix form "/path/*" exempts all methods on those paths.
-var frameworkPrimaryWhitelist = []string{
-	"/internal/v1/*",
-}
+// inside HealthRouteGroups and do not need any whitelist entry.
 
 // phaseState extends runState with phase-local values that must be shared
 // across phases but are not part of the teardown/error-channel core.
@@ -664,10 +663,15 @@ func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _
 //
 // CORR-01: previously only the primary router was finalized, silently skipping
 // verifyDelegatedConsistency + verifyPolicyCoverage for Internal and Health routers.
+//
+// PR-258 RES-5: the /internal/v1/* 404 isolation is now installed as an
+// early-responder middleware via WithEarlyResponder at router-build time
+// (see buildListenerRouterOpts), not as a chi route here. The middleware
+// runs BEFORE the policy layer so the contract does not depend on a
+// public-matcher exemption.
 func (b *Bootstrap) phase5FinalizeAllRouters(routers map[cell.ListenerRef]*router.Router) error {
-	// Primary: install port-isolation 404 + auth policy check + FinalizeAuth.
+	// Primary: auth policy check + FinalizeAuth.
 	if primaryRtr, ok := routers[cell.PrimaryListener]; ok {
-		router.InstallInternalPrefixIsolation(primaryRtr)
 		if err := b.validateAuthVerifierForDeclaredRoutes(cell.PrimaryListener, primaryRtr); err != nil {
 			return err
 		}
@@ -765,15 +769,13 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 		return nil, err
 	}
 
-	// Primary listener: whitelist framework-owned routes (health + internal-
-	// prefix isolation) that are mounted without auth.Mount.
-	// PR-A14b: also pre-seed the public matcher with the /internal/v1/* prefix
-	// so that JWT auth middleware passes those requests through to the 404
-	// isolation handler (installed by phase5FinalizePrimaryRouter) rather than
-	// returning 401 — the port-level isolation contract requires a 404, not 401.
+	// Primary listener: install the /internal/v1/* 404 isolation as an
+	// early-responder middleware so the contract runs BEFORE auth and does
+	// NOT require a JWT public-matcher exemption nor a policy-coverage
+	// whitelist. PR-258 RES-5 narrowing: replaces WithPolicyCoverageWhitelist
+	// + WithPublicPathPrefix + chi-route 404 with a single predicate.
 	if ref == cell.PrimaryListener {
-		opts = append(opts, router.WithPolicyCoverageWhitelist(frameworkPrimaryWhitelist))
-		opts = append(opts, router.WithPublicPathPrefix("/internal/v1/"))
+		opts = append(opts, router.InternalPrefixIsolationResponder())
 	}
 
 	// F3 round-3: extract the verifier from the listener's policy and wire
