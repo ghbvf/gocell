@@ -219,6 +219,13 @@ func checkUnconditionalSkip(args []string) error {
 		return err
 	}
 
+	if *format == string(printers.FormatText) {
+		// Scope hint: scan boundary is the project root, not the user's CWD.
+		// Avoids the trap where a sub-tree invocation emits "PASS" the user
+		// reads as a repo-wide pass.
+		fmt.Printf("Scanned scope: %s (patterns=%v)\n", root, patterns)
+	}
+
 	results, err := runUnconditionalSkipAnalyzer(patterns, root)
 	if err != nil {
 		return err
@@ -241,12 +248,19 @@ func checkUnconditionalSkip(args []string) error {
 // runUnconditionalSkipAnalyzer loads patterns, runs the analyzer, and
 // returns governance ValidationResult entries with repo-relative file
 // paths suitable for SARIF SRCROOT mapping.
+//
+// Pinning Config.Dir to the project root is what makes "./..." a
+// repo-wide scan regardless of where the user invoked the CLI. Without
+// it, packages.Load resolves relative patterns against the current
+// working directory and silently emits "PASS" for a sub-tree scan when
+// the user runs the command from inside one cell.
 func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.ValidationResult, error) {
 	// packages.LoadAllSyntax loads type-annotated syntax for initial packages
 	// and all transitive dependencies — the minimum mode checker.Analyze needs.
 	cfg := &packages.Config{
 		Mode:  packages.LoadAllSyntax,
 		Tests: true,
+		Dir:   root,
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {
