@@ -662,6 +662,95 @@ func TestCheckAdditionalProperties_TrueValueTreatedAsMissing(t *testing.T) {
 		"additionalProperties:true must be treated as missing (only false is accepted)")
 }
 
+// TestFMT20_EndpointResponseSchemaRef verifies that FMT-20 also scans schemas
+// declared in endpoints.http.responses[*].schemaRef (A.1).
+func TestFMT20_EndpointResponseSchemaRef(t *testing.T) {
+	dir := t.TempDir()
+	contractDir := filepath.Join(dir, "contracts", "http", "errtest", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+
+	// Error response schema missing additionalProperties:false at top level.
+	errSchemaPath := filepath.Join(contractDir, "error-404.schema.json")
+	require.NoError(t, os.WriteFile(errSchemaPath, []byte(`{"type":"object","properties":{"message":{"type":"string"}}}`), 0o644))
+
+	pm := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.errtest.v1": {
+				ID:        "http.errtest.v1",
+				Kind:      "http",
+				OwnerCell: "testcell",
+				Lifecycle: "active",
+				Endpoints: metadata.EndpointsMeta{
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "GET",
+						Path:          "/test",
+						SuccessStatus: 200,
+						Responses: map[int]metadata.HTTPResponseMeta{
+							404: {Description: "Not found", SchemaRef: "error-404.schema.json"},
+						},
+					},
+				},
+				Dir:  "contracts/http/errtest/v1",
+				File: "contracts/http/errtest/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(pm, dir)
+	results := v.Validate()
+	matches := findByCode(results, "FMT-20")
+	assert.Len(t, matches, 1,
+		"FMT-20 must fire for endpoints.http.responses[404].schemaRef missing additionalProperties:false, got %d: %v",
+		len(matches), matches)
+}
+
+// TestFMT20_MalformedSchemaEmitsIssueInvalid verifies that A.2: a malformed JSON
+// schema (not a missing file) produces a FMT-20 violation with IssueInvalid.
+func TestFMT20_MalformedSchemaEmitsIssueInvalid(t *testing.T) {
+	dir := t.TempDir()
+	contractDir := filepath.Join(dir, "contracts", "http", "badschema", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+
+	// Write a malformed JSON file.
+	badSchemaPath := filepath.Join(contractDir, "response.schema.json")
+	require.NoError(t, os.WriteFile(badSchemaPath, []byte(`not valid json {{{`), 0o644))
+
+	pm := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.badschema.v1": {
+				ID:        "http.badschema.v1",
+				Kind:      "http",
+				OwnerCell: "testcell",
+				Lifecycle: "active",
+				SchemaRefs: metadata.SchemaRefsMeta{
+					Response: "response.schema.json",
+				},
+				Dir:  "contracts/http/badschema/v1",
+				File: "contracts/http/badschema/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(pm, dir)
+	results := v.Validate()
+	matches := findByCode(results, "FMT-20")
+	require.Len(t, matches, 1,
+		"malformed JSON schema must produce 1 FMT-20 violation, got %d: %v", len(matches), matches)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType,
+		"malformed schema violation must use IssueInvalid")
+	assert.Equal(t, SeverityError, matches[0].Severity)
+	assert.Contains(t, matches[0].Message, "failed to parse",
+		"violation message must mention parse failure")
+}
+
 // TestFMT20_MissingSchemaFileSkipped verifies that FMT-20 silently skips contracts
 // whose schema files don't exist (those are caught by FMT-09 / REF rules).
 func TestFMT20_MissingSchemaFileSkipped(t *testing.T) {

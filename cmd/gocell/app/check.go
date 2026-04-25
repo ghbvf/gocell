@@ -241,7 +241,16 @@ func sliceDirCheck(root, cid string) []governance.ValidationResult {
 	slicesDir := filepath.Join(root, "cells", cid, "slices")
 	entries, err := os.ReadDir(slicesDir)
 	if err != nil {
-		return nil // No slices directory — not a violation.
+		if os.IsNotExist(err) {
+			return nil // cell has no slices/ subdir — not a violation
+		}
+		return []governance.ValidationResult{{
+			Code:      "CHECK-SLICE-DIR-READ-ERROR",
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueInvalid,
+			File:      filepath.ToSlash(filepath.Join("cells", cid, "slices")),
+			Message:   fmt.Sprintf("cannot read slices dir for cell %q: %v", cid, err),
+		}}
 	}
 	for _, e := range entries {
 		if !e.IsDir() {
@@ -514,6 +523,8 @@ func checkL0Imports(args []string) error {
 }
 
 // checkL0ImportsForSingleCell runs l0-imports for a single named cell.
+// Non-L0 cells are silently skipped in all formats — json/sarif consumers
+// receive an empty results array ({"results":[]}) instead of no output at all.
 func checkL0ImportsForSingleCell(root string, project *metadata.ProjectMeta, cellID, format string) error {
 	cm, ok := project.Cells[cellID]
 	if !ok {
@@ -522,14 +533,19 @@ func checkL0ImportsForSingleCell(root string, project *metadata.ProjectMeta, cel
 	if cm.ConsistencyLevel != "L0" {
 		if format == string(printers.FormatText) {
 			fmt.Printf(checkL0NonL0SkipMsg+"\n", cellID, cm.ConsistencyLevel)
+			return nil
 		}
-		return nil
+		// json/sarif: emit an empty results document so machine consumers see
+		// "ran but found nothing" rather than silence.
+		return printAndCheck(format, nil, cmdL0Imports, "")
 	}
 	results := l0ImportsForCell(root, cm)
 	return printAndCheck(format, results, cmdL0Imports, "PASS: L0 import declarations OK (checked 1 L0 cells)")
 }
 
 // checkL0ImportsForAllCells runs l0-imports across all L0 cells in the project.
+// Zero L0 cells case is handled uniformly: text prints a message, json/sarif
+// emit an empty results document so machine consumers see a valid empty run.
 func checkL0ImportsForAllCells(root string, project *metadata.ProjectMeta, format string) error {
 	var results []governance.ValidationResult
 	l0Count := 0
@@ -542,8 +558,10 @@ func checkL0ImportsForAllCells(root string, project *metadata.ProjectMeta, forma
 	if l0Count == 0 {
 		if format == string(printers.FormatText) {
 			fmt.Println("checked 0 L0 cells, 0 issues")
+			return nil
 		}
-		return nil
+		// json/sarif: emit empty results so machine consumers see a valid empty run.
+		return printAndCheck(format, nil, cmdL0Imports, "")
 	}
 	return printAndCheck(format, results, cmdL0Imports,
 		fmt.Sprintf("PASS: L0 import declarations OK (checked %d L0 cells)", l0Count))
@@ -593,21 +611,27 @@ func buildDeclaredDeps(cm *metadata.CellMeta) map[string]bool {
 // loadCellImports loads packages in the cell directory and returns the set of
 // imported sibling cell IDs. The third return value is true when packages.Load
 // itself fails (fatal — no import data available); per-package errors are
-// returned as warning ValidationResults but the import map is still populated.
+// returned as error ValidationResults but the import map is still populated.
+//
+// Cell directory is derived from cm.File (the actual parsed cell.yaml path),
+// not from "cells/<cm.ID>", so cells under examples/**/cells/ are also resolved
+// correctly. This mirrors sliceMetaCheck which already uses cellMeta.File.
 func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
 	const cellsImportPrefix = "github.com/ghbvf/gocell/cells/"
+	cellDir := filepath.Dir(filepath.FromSlash(cm.File))
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,
-		Dir:  filepath.Join(root, "cells", cm.ID),
+		Dir:  filepath.Join(root, cellDir),
 	}
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
 		return nil, []governance.ValidationResult{{
 			Code:      "CHECK-L0-LOAD-ERROR",
-			Severity:  governance.SeverityWarning,
+			Severity:  governance.SeverityError,
 			IssueType: governance.IssueInvalid,
+			File:      filepath.ToSlash(cm.File),
 			Scope:     cmdL0Imports,
-			Message:   fmt.Sprintf("L0 cell %q: package load error: %v", cm.ID, err),
+			Message:   fmt.Sprintf("packages.Load failed for cell %q: %v", cm.ID, err),
 		}}, true
 	}
 
@@ -618,10 +642,11 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 			for _, pe := range pkg.Errors {
 				loadErrs = append(loadErrs, governance.ValidationResult{
 					Code:      "CHECK-L0-LOAD-ERROR",
-					Severity:  governance.SeverityWarning,
+					Severity:  governance.SeverityError,
 					IssueType: governance.IssueInvalid,
+					File:      filepath.ToSlash(cm.File),
 					Scope:     cmdL0Imports,
-					Message:   fmt.Sprintf("L0 cell %q: package %q load error: %v", cm.ID, pkg.PkgPath, pe),
+					Message:   fmt.Sprintf("packages.Load error for cell %q package %q: %v", cm.ID, pkg.PkgPath, pe),
 				})
 			}
 		}

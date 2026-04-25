@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -40,7 +41,16 @@ func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
 			absPath := filepath.Join(v.root, schemaRef)
 			missing, err := scanSchemaForStrictMissing(absPath)
 			if err != nil {
-				// Missing schema file is reported by FMT-09 / REF rules; skip here.
+				if os.IsNotExist(err) {
+					// Missing schema file is reported by FMT-09 / REF rules; skip here.
+					continue
+				}
+				// Parse/IO errors are definitive FMT-20 violations (fail-closed).
+				results = append(results, v.newResult(
+					ruleFMT20, SeverityError, IssueInvalid,
+					schemaRef, "$",
+					fmt.Sprintf("contract %q schema %q failed to parse: %v", c.ID, schemaRef, err),
+				))
 				continue
 			}
 			for _, loc := range missing {
@@ -55,8 +65,10 @@ func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
 	return results
 }
 
-// collectHTTPSchemaPaths returns the relative schema paths (request + response)
-// for an HTTP contract, resolved relative to the project root.
+// collectHTTPSchemaPaths returns the relative schema paths for an HTTP contract,
+// resolved relative to the project root. It includes the top-level request and
+// response refs from schemaRefs, plus the per-status schemaRef from
+// endpoints.http.responses[*] so FMT-20 also covers error response schemas.
 func collectHTTPSchemaPaths(c *metadata.ContractMeta) []string {
 	var paths []string
 	if c.SchemaRefs.Request != "" {
@@ -64,6 +76,20 @@ func collectHTTPSchemaPaths(c *metadata.ContractMeta) []string {
 	}
 	if c.SchemaRefs.Response != "" {
 		paths = append(paths, filepath.Join(c.Dir, c.SchemaRefs.Response))
+	}
+	if c.Endpoints.HTTP != nil && len(c.Endpoints.HTTP.Responses) > 0 {
+		// Sort by int key for deterministic violation ordering across runs.
+		keys := make([]int, 0, len(c.Endpoints.HTTP.Responses))
+		for k := range c.Endpoints.HTTP.Responses {
+			keys = append(keys, k)
+		}
+		sort.Ints(keys)
+		for _, k := range keys {
+			r := c.Endpoints.HTTP.Responses[k]
+			if r.SchemaRef != "" {
+				paths = append(paths, filepath.Join(c.Dir, r.SchemaRef))
+			}
+		}
 	}
 	return paths
 }

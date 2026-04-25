@@ -524,7 +524,8 @@ func TestCheckL0ImportsForAllCells_ZeroL0Cells(t *testing.T) {
 }
 
 // TestCheckL0ImportsForSingleCell_NonL0JSONFormat verifies JSON format produces
-// no output when a non-L0 cell is targeted.
+// an empty results document (not silence) when a non-L0 cell is targeted.
+// This lets machine consumers distinguish "ran and found nothing" from "didn't run".
 func TestCheckL0ImportsForSingleCell_NonL0JSONFormat(t *testing.T) {
 	root := t.TempDir()
 	project := &metadata.ProjectMeta{
@@ -539,8 +540,14 @@ func TestCheckL0ImportsForSingleCell_NonL0JSONFormat(t *testing.T) {
 		err := checkL0ImportsForSingleCell(root, project, "accesscore", "json")
 		assert.NoError(t, err, "non-L0 cell in json format must succeed")
 	})
-	// In JSON mode, no skip message is printed (format != text).
-	assert.Empty(t, out, "JSON format must produce no output for non-L0 skip")
+	// In JSON mode, an empty results document is emitted so machine consumers
+	// can distinguish "ran, found nothing" from "didn't run" (B.4).
+	require.NotEmpty(t, out, "JSON format must produce an empty results document for non-L0 skip")
+	var doc struct {
+		Issues []any `json:"issues"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(out), &doc), "output must be valid JSON: %q", out)
+	assert.Empty(t, doc.Issues, "non-L0 skip must produce zero issues")
 }
 
 // ---------------------------------------------------------------------------
