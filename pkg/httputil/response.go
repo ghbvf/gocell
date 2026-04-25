@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/persistence/ctxcancel"
 )
 
 const msgInternalServerError = "internal server error"
@@ -146,6 +147,13 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 // errcode.New(code, fmt.Sprintf("…%s…", userID)) — see errcode.Message vs
 // InternalMessage contract: Message is supplied to response writers, while
 // InternalMessage is diagnostic-only and safe for server logs.
+//
+// 499 logs additionally carry the cancel_reason field ("canceled" |
+// "deadline_exceeded") so dashboards / SLO queries can split client-disconnect
+// from server-timeout buckets at the log layer without falling back to a
+// tracing query. The value is the same low-cardinality enum surfaced via the
+// span attribute client.cancel.reason and is sourced from
+// ctxcancel.Wrap → ecErr.Details["reason"].
 func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int) {
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
@@ -153,6 +161,11 @@ func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int)
 	}
 	if ecErr.InternalMessage != "" {
 		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
+	}
+	if status == StatusClientClosedRequest {
+		if reason, ok := ecErr.Details[ctxcancel.DetailsKeyReason].(string); ok && reason != "" {
+			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
+		}
 	}
 	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
 	slog.Warn(label+" (4xx)", logAttrs...)
@@ -208,7 +221,7 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	// a no-op when no slot was installed (e.g. unit tests writing a 499
 	// directly), preserving the legacy "context_canceled" fallback.
 	if status == StatusClientClosedRequest {
-		if reason, ok := details["reason"].(string); ok {
+		if reason, ok := details[ctxcancel.DetailsKeyReason].(string); ok {
 			setCancelReason(ctx, reason)
 		}
 	}

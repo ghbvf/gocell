@@ -95,6 +95,47 @@ func TestAuditRepository_CtxCancel_AllIOBoundaries(t *testing.T) {
 				return err
 			},
 		},
+		// Query() also flows through scanAuditEntries — the same scan / iter
+		// IO sites must surface ctx-cancel through ErrClientCanceled when
+		// reached via the filtered/keyset path, not just the GetRange path.
+		{
+			name: "scan error during Query iteration",
+			fixture: func(db *mockDB, ce error) {
+				db.queryRows = &mockRowSet{scanErr: ce}
+			},
+			invoke: func(r *AuditRepository) error {
+				_, err := r.Query(context.Background(),
+					ports.AuditFilters{},
+					query.ListParams{
+						Limit: 10,
+						Sort: []query.SortColumn{
+							{Name: "timestamp", Direction: query.SortDESC},
+							{Name: "id", Direction: query.SortASC},
+						},
+					},
+				)
+				return err
+			},
+		},
+		{
+			name: "rows.Err() during Query iteration",
+			fixture: func(db *mockDB, ce error) {
+				db.queryRows = &mockRowSet{iterErr: ce}
+			},
+			invoke: func(r *AuditRepository) error {
+				_, err := r.Query(context.Background(),
+					ports.AuditFilters{},
+					query.ListParams{
+						Limit: 10,
+						Sort: []query.SortColumn{
+							{Name: "timestamp", Direction: query.SortDESC},
+							{Name: "id", Direction: query.SortASC},
+						},
+					},
+				)
+				return err
+			},
+		},
 	}
 
 	causes := []struct {

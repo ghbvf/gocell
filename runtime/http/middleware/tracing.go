@@ -227,9 +227,21 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	//
 	// Reason granularity: the reason value is sourced from the cancel-reason
 	// slot populated by httputil.writeErrcodeError when ctxcancel.Wrap fed
-	// the 499 path. Falls back to the legacy "context_canceled" label when
-	// the slot is empty — keeps unit tests that emit a raw 499 (without an
-	// errcode.Error) working unchanged.
+	// the 499 path. Three values are possible on the span attribute:
+	//
+	//   "canceled"          — IO boundary returned ctxcancel.Wrap on
+	//                          context.Canceled (real client disconnect).
+	//   "deadline_exceeded" — IO boundary returned ctxcancel.Wrap on
+	//                          context.DeadlineExceeded (server-side / inherited
+	//                          timeout — investigate as a server timeout, not
+	//                          a noisy client).
+	//   "context_canceled"  — fallback: a handler emitted a raw 499 status
+	//                          without going through ctxcancel.Wrap, so the
+	//                          originating ctx error is not knowable here.
+	//                          Distinct from "canceled" on purpose: dashboards
+	//                          surface this bucket as "instrumentation gap"
+	//                          (operator should route the IO site through
+	//                          ctxcancel.Wrap to upgrade the signal).
 	//
 	// ref: open-telemetry/semantic-conventions http-spans.md — 4xx server
 	//      span status Unset; intentional cancellation must not set error.type.
