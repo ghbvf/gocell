@@ -126,8 +126,14 @@ type CreateInput struct {
 
 // Create creates a new user and publishes an event.
 // The plain-text password is bcrypt-hashed before storage.
+//
+// Validation order matches setup.CreateAdmin (username → email → password) so
+// both code paths reject the same blank input with the same field message,
+// avoiding domain-layer error-class drift (audit S-4).
 func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
+		validation.F("username", input.Username),
+		validation.F("email", input.Email),
 		validation.F("password", input.Password),
 	); err != nil {
 		return nil, err
@@ -186,46 +192,69 @@ type UpdateInput struct {
 
 // Update modifies user attributes using JSON merge patch semantics:
 // only non-nil fields are applied; missing fields are left unchanged.
+//
+// Read-modify-write atomicity: GetByID, the in-place field application and
+// Update share a single RunInTx closure, mirroring Lock/Unlock — a concurrent
+// transaction mutating the user between the read and the write would otherwise
+// be silently lost (audit S-3 same-pattern, reviewer F7).
+//
+// The status string is validated before opening the tx: it is a pure input
+// check and rejecting invalid values upfront avoids opening a tx that will
+// only roll back.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", input.ID),
 	); err != nil {
 		return nil, err
 	}
-
-	user, err := s.repo.GetByID(ctx, input.ID)
-	if err != nil {
-		return nil, fmt.Errorf("identity-manage: update: %w", err)
+	if input.Status != nil &&
+		*input.Status != string(domain.StatusActive) &&
+		*input.Status != string(domain.StatusSuspended) {
+		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
 	}
 
-	if input.Name != nil {
-		user.Username = *input.Name
-	}
-	if input.Email != nil {
-		user.Email = *input.Email
-	}
-	if input.Status != nil {
-		status := domain.UserStatus(*input.Status)
-		if *input.Status != string(domain.StatusActive) && *input.Status != string(domain.StatusSuspended) {
-			return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
+	var user *domain.User
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		u, err := s.repo.GetByID(txCtx, input.ID)
+		if err != nil {
+			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-		user.Status = status
-	}
-	if input.RequirePasswordReset != nil {
-		if *input.RequirePasswordReset {
-			user.MarkPasswordResetRequired()
-		} else {
-			user.ClearPasswordResetRequired()
+		applyUpdateFields(u, input)
+		if err := s.repo.Update(txCtx, u); err != nil {
+			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-	}
-	user.UpdatedAt = time.Now()
-
-	if err := s.repo.Update(ctx, user); err != nil {
-		return nil, fmt.Errorf("identity-manage: update: %w", err)
+		user = u
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	s.logger.Info("user updated", slog.String("user_id", user.ID))
 	return user, nil
+}
+
+// applyUpdateFields applies JSON-merge-patch semantics in-place on u: every
+// non-nil field in input overwrites the corresponding field on u. Pure
+// function — extracted from Update to keep that method's cognitive complexity
+// inside the 15-line CLAUDE.md budget once the RunInTx closure was added.
+func applyUpdateFields(u *domain.User, input UpdateInput) {
+	if input.Name != nil {
+		u.Username = *input.Name
+	}
+	if input.Email != nil {
+		u.Email = *input.Email
+	}
+	if input.Status != nil {
+		u.Status = domain.UserStatus(*input.Status)
+	}
+	if input.RequirePasswordReset != nil {
+		if *input.RequirePasswordReset {
+			u.MarkPasswordResetRequired()
+		} else {
+			u.ClearPasswordResetRequired()
+		}
+	}
+	u.UpdatedAt = time.Now()
 }
 
 // Delete removes a user. Before the user row is deleted, all sessions and
@@ -258,20 +287,36 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 }
 
 // Lock locks a user account and publishes an event.
+//
+// Read-modify-write atomicity: GetByID, user.Lock(), Update, session/refresh
+// revoke and the outbox publish all run inside the same RunInTx closure. A
+// concurrent transaction that mutates the user between the read and the write
+// would otherwise be silently lost (audit S-3).
+//
+// The transactional body lives in lockUserAndRevokeSessions to keep this
+// outer method's cognitive complexity within the CLAUDE.md ≤15 budget that
+// the 5-step closure would otherwise blow past (mirrors the
+// updatePasswordAndRevokeSessions split used by ChangePassword).
 func (s *Service) Lock(ctx context.Context, id string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
 	}
-
-	user, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("identity-manage: lock: %w", err)
+	if err := s.lockUserAndRevokeSessions(ctx, id); err != nil {
+		return err
 	}
+	s.logger.Info("user locked", slog.String("user_id", id))
+	return nil
+}
 
-	user.Lock()
-	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id string) error {
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		user, err := s.repo.GetByID(txCtx, id)
+		if err != nil {
+			return fmt.Errorf("identity-manage: lock: %w", err)
+		}
+		user.Lock()
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
 		}
@@ -290,15 +335,14 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 			return err
 		}
 		return nil
-	}); err != nil {
-		return err
-	}
-
-	s.logger.Info("user locked", slog.String("user_id", id))
-	return nil
+	})
 }
 
 // Unlock unlocks a user account.
+//
+// Read-modify-write atomicity: GetByID + user.Unlock() + Update share one
+// RunInTx closure so a concurrent mutation between the read and the write
+// cannot be silently lost (audit S-3, mirrors Lock).
 func (s *Service) Unlock(ctx context.Context, id string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
@@ -306,14 +350,18 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		return err
 	}
 
-	user, err := s.repo.GetByID(ctx, id)
-	if err != nil {
-		return fmt.Errorf("identity-manage: unlock: %w", err)
-	}
-
-	user.Unlock()
-	if err := s.repo.Update(ctx, user); err != nil {
-		return fmt.Errorf("identity-manage: unlock: %w", err)
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		user, err := s.repo.GetByID(txCtx, id)
+		if err != nil {
+			return fmt.Errorf("identity-manage: unlock: %w", err)
+		}
+		user.Unlock()
+		if err := s.repo.Update(txCtx, user); err != nil {
+			return fmt.Errorf("identity-manage: unlock: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	s.logger.Info("user unlocked", slog.String("user_id", id))

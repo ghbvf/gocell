@@ -1,6 +1,7 @@
 package identitymanage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -12,9 +13,12 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -562,4 +566,377 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	})
 	require.NoError(t, err, "publish failure in demo mode must not fail Create")
 	assert.NotEmpty(t, user.ID)
+}
+
+// ---------------------------------------------------------------------------
+// PR-CFG-H — Lock/Unlock atomicity (audit S-3) +
+//             Create blank-input validation (audit S-4)
+// ---------------------------------------------------------------------------
+
+// recordingTxRunner observes whether the wrapped repository call happened
+// inside RunInTx. inTx is true only between RunInTx invocation and the
+// closure's return. runs counts how many times RunInTx was invoked.
+type recordingTxRunner struct {
+	inTx bool
+	runs int
+}
+
+func (r *recordingTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	r.runs++
+	r.inTx = true
+	defer func() { r.inTx = false }()
+	return fn(ctx)
+}
+
+// observingUserRepo snapshots `runner.inTx` at the moment GetByID / Update
+// fire so a test can assert read-modify-write atomicity. Embedding the
+// ports.UserRepository interface satisfies the contract for unobserved
+// methods (GetByUsername / Delete).
+type observingUserRepo struct {
+	ports.UserRepository
+	runner      *recordingTxRunner
+	getInTx     bool
+	updInTx     bool
+	createCalls int
+}
+
+func (r *observingUserRepo) Create(ctx context.Context, user *domain.User) error {
+	r.createCalls++
+	return r.UserRepository.Create(ctx, user)
+}
+
+func (r *observingUserRepo) GetByID(ctx context.Context, id string) (*domain.User, error) {
+	r.getInTx = r.runner.inTx
+	return r.UserRepository.GetByID(ctx, id)
+}
+
+func (r *observingUserRepo) Update(ctx context.Context, user *domain.User) error {
+	r.updInTx = r.runner.inTx
+	return r.UserRepository.Update(ctx, user)
+}
+
+// failingUpdateRepo wraps a real repo but always fails Update — used to
+// drive the Unlock-error-propagation test. GetByID is forwarded so the
+// service's read step succeeds.
+type failingUpdateRepo struct {
+	ports.UserRepository
+	updateErr error
+	updates   int
+}
+
+func (r *failingUpdateRepo) Update(_ context.Context, _ *domain.User) error {
+	r.updates++
+	return r.updateErr
+}
+
+// newAtomicitySvc wires Service with a recordingTxRunner + observingUserRepo
+// so atomicity tests can inspect inTx state without touching production wiring.
+func newAtomicitySvc(t *testing.T) (*Service, *observingUserRepo, *recordingTxRunner) {
+	t.Helper()
+	runner := &recordingTxRunner{}
+	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
+	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer),
+		WithTxManager(runner))
+	require.NoError(t, err)
+	return svc, repo, runner
+}
+
+// TestService_Lock_GetByIDAndUpdateInsideTx asserts the read-modify-write
+// chain in Lock executes inside one RunInTx, closing the TOCTOU window where
+// a concurrent transaction could mutate the user between the read and the
+// write (audit S-3).
+func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
+	svc, repo, runner := newAtomicitySvc(t)
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "lock-atomic", Email: "l@a.t", Password: "hash",
+	})
+	require.NoError(t, err)
+	// Reset observation state so the Lock call is captured in isolation
+	// (Create itself runs inside RunInTx and would otherwise be conflated).
+	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
+
+	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	assert.Equal(t, 1, runner.runs, "Lock must run inside exactly one tx")
+	assert.True(t, repo.getInTx, "Lock.GetByID must be observed inside RunInTx (no TOCTOU window)")
+	assert.True(t, repo.updInTx, "Lock.Update must run inside the same tx")
+}
+
+// TestService_Update_GetByIDAndUpdateInsideTx asserts Update's read-modify-
+// write chain runs inside a single RunInTx, closing the same TOCTOU window
+// pattern as Lock/Unlock (audit S-3 same-pattern, reviewer F7). Pre-fix
+// Update had no tx wrapping; post-fix both repo calls observe inTx=true.
+func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
+	svc, repo, runner := newAtomicitySvc(t)
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "update-atomic", Email: "u@p.t", Password: "hash",
+	})
+	require.NoError(t, err)
+	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
+
+	newEmail := "new@p.t"
+	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Email: &newEmail})
+	require.NoError(t, err)
+	assert.Equal(t, "new@p.t", updated.Email)
+	assert.Equal(t, 1, runner.runs, "Update must run inside exactly one tx")
+	assert.True(t, repo.getInTx, "Update.GetByID must be observed inside RunInTx (no TOCTOU window)")
+	assert.True(t, repo.updInTx, "Update.Update must run inside the same tx")
+}
+
+// TestService_Update_InvalidStatusFailsBeforeTx asserts that the cheap
+// status string validation rejects invalid values before opening a tx —
+// invalid input is not a database concern.
+func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
+	svc, repo, runner := newAtomicitySvc(t)
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "upd-bad-status", Email: "b@s.t", Password: "hash",
+	})
+	require.NoError(t, err)
+	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
+
+	bad := "deleted"
+	_, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &bad})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+	assert.Equal(t, 0, runner.runs, "invalid status must be rejected before opening a tx")
+}
+
+// TestService_Unlock_GetByIDAndUpdateInsideTx asserts Unlock now runs the
+// read-modify-write chain in a single RunInTx. Pre-fix, Unlock had no tx
+// wrapping at all; post-fix both repo calls observe inTx=true (audit S-3).
+func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
+	svc, repo, runner := newAtomicitySvc(t)
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "unlock-atomic", Email: "u@a.t", Password: "hash",
+	})
+	require.NoError(t, err)
+	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
+
+	require.NoError(t, svc.Unlock(context.Background(), user.ID))
+	assert.Equal(t, 1, runner.runs, "Unlock must run inside exactly one tx")
+	assert.True(t, repo.getInTx, "Unlock.GetByID must be observed inside RunInTx (no TOCTOU window)")
+	assert.True(t, repo.updInTx, "Unlock.Update must run inside the same tx")
+}
+
+// TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog asserts that an
+// Update failure inside Unlock's tx returns a wrapped error and prevents the
+// success log line from running. The error must wrap "identity-manage:
+// unlock:" so the call site is identifiable.
+func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
+	innerRepo := mem.NewUserRepository()
+	user, err := domain.NewUser("rb", "rb@e.t", "hash")
+	require.NoError(t, err)
+	user.ID = "usr-rb"
+	user.Lock()
+	require.NoError(t, innerRepo.Create(context.Background(), user))
+
+	failRepo := &failingUpdateRepo{UserRepository: innerRepo, updateErr: errors.New("disk full")}
+	runner := &recordingTxRunner{}
+	svc, err := NewService(failRepo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer),
+		WithTxManager(runner))
+	require.NoError(t, err)
+
+	err = svc.Unlock(context.Background(), "usr-rb")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "identity-manage: unlock:",
+		"error must wrap with the unlock call-site prefix")
+	assert.Contains(t, err.Error(), "disk full", "underlying error must be unwrapable")
+	assert.Equal(t, 1, runner.runs, "RunInTx must have been invoked exactly once")
+	assert.Equal(t, 1, failRepo.updates, "Update was attempted inside the tx")
+}
+
+// TestService_Create_BlankUsername_RejectsBeforeRepoCreate asserts that a
+// blank username is caught by validation.RequireNotBlank with the typed
+// invalid-input code, and that no expensive work (bcrypt, repo.Create) runs
+// (audit S-4).
+func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
+	runner := &recordingTxRunner{}
+	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
+	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer),
+		WithTxManager(runner))
+	require.NoError(t, err)
+
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "", Email: "ok@e.t", Password: "pw",
+	})
+	require.Error(t, err)
+	assert.Nil(t, user)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code,
+		"blank username must be rejected with the identity-invalid-input code")
+	assert.Contains(t, err.Error(), "username is required")
+	assert.Equal(t, 0, repo.createCalls, "repo.Create must not run when input is blank")
+	assert.Equal(t, 0, runner.runs, "RunInTx must not run when input validation fails")
+}
+
+// TestService_Create_BlankEmail_RejectsBeforeRepoCreate is the email-blank
+// twin of TestService_Create_BlankUsername_RejectsBeforeRepoCreate.
+func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
+	runner := &recordingTxRunner{}
+	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
+	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer),
+		WithTxManager(runner))
+	require.NoError(t, err)
+
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "ok", Email: "", Password: "pw",
+	})
+	require.Error(t, err)
+	assert.Nil(t, user)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+	assert.Contains(t, err.Error(), "email is required")
+	assert.Equal(t, 0, repo.createCalls)
+	assert.Equal(t, 0, runner.runs)
+}
+
+// TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode covers the
+// third RequireNotBlank field. Pre-fix this path was already wired
+// (password was the sole field), so the case is a regression guard ensuring
+// the error code stays bound to the service boundary
+// (ErrAuthIdentityInvalidInput) and never leaks domain.NewUser's
+// ErrAuthInvalidInput.
+func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.T) {
+	runner := &recordingTxRunner{}
+	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
+	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer),
+		WithTxManager(runner))
+	require.NoError(t, err)
+
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "ok", Email: "ok@e.t", Password: "",
+	})
+	require.Error(t, err)
+	assert.Nil(t, user)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+	assert.Contains(t, err.Error(), "password is required")
+	assert.Equal(t, 0, repo.createCalls)
+	assert.Equal(t, 0, runner.runs)
+}
+
+// TestService_Create_RequireNotBlankShortCircuitsOnFirstField asserts the
+// validator returns on the FIRST blank field in declaration order
+// (username → email → password), matching setup.CreateAdmin's order so the
+// two paths produce identical messages for identical inputs. Asserts both
+// the typed error code (stable contract) and the field-name message
+// (debuggability).
+func TestService_Create_RequireNotBlankShortCircuitsOnFirstField(t *testing.T) {
+	svc := newTestService()
+	_, err := svc.Create(context.Background(), CreateInput{
+		Username: "", Email: "", Password: "",
+	})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code,
+		"blank-input rejection must route the typed identity-invalid-input code regardless of which field short-circuits")
+	assert.Contains(t, err.Error(), "username is required",
+		"validator must short-circuit on the first declared field; setup.CreateAdmin uses the same order")
+	assert.NotContains(t, err.Error(), "email is required")
+	assert.NotContains(t, err.Error(), "password is required")
+}
+
+// ---------------------------------------------------------------------------
+// PR-CFG-H — Lock failure-injection coverage (review six-role P2-1)
+// ---------------------------------------------------------------------------
+
+// spyEmitter implements outbox.Emitter, counting calls and returning a fixed
+// error so tests can assert publish-path failure handling. err == nil makes
+// it pure-counter spy.
+type spyEmitter struct {
+	err   error
+	calls int
+}
+
+func (e *spyEmitter) Emit(_ context.Context, _ outbox.Entry) error {
+	e.calls++
+	return e.err
+}
+
+// failingRefreshStore wraps a real refresh.Store and forces RevokeUser to
+// return a fixed error, exercising Lock's refresh-revoke failure branch
+// (review P2-1).
+type failingRefreshStore struct {
+	refresh.Store
+	revokeUserErr error
+	calls         int
+}
+
+func (s *failingRefreshStore) RevokeUser(_ context.Context, _ string) error {
+	s.calls++
+	return s.revokeUserErr
+}
+
+// TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog asserts the
+// Lock transaction aborts on refresh-store revoke failure: the error wraps
+// the call-site prefix, the outbox publish does not run (would commit a
+// "user.locked" event for a still-unrevoked refresh chain), and the success
+// log line does not fire (would mislead operators).
+func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	domainUser, err := domain.NewUser("rf-fail", "rf@e.t", "hash")
+	require.NoError(t, err)
+	domainUser.ID = "usr-rf-fail"
+	require.NoError(t, userRepo.Create(context.Background(), domainUser))
+
+	failRefresh := &failingRefreshStore{
+		Store:         newIdentityRefreshStore(),
+		revokeUserErr: errors.New("refresh DB unavailable"),
+	}
+	emitter := &spyEmitter{}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	svc, err := NewService(userRepo, mem.NewSessionRepository(), failRefresh, logger,
+		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	err = svc.Lock(context.Background(), "usr-rf-fail")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "lock revoke refresh chains",
+		"error must wrap the refresh-revoke call-site prefix")
+	assert.Contains(t, err.Error(), "refresh DB unavailable", "underlying error must be unwrapable")
+	assert.Equal(t, 1, failRefresh.calls, "refresh.RevokeUser was attempted once")
+	assert.Equal(t, 0, emitter.calls,
+		"publish must not run after refresh-revoke failure: tx must abort first or a TopicUserLocked event would commit while the refresh chain stays live")
+	assert.Nil(t, sloghelper.FindLogEntry(buf.String(), "user locked"),
+		"success log line must not fire when the tx aborts")
+}
+
+// TestService_Lock_PublishFailureAbortsBeforeLog asserts the success log
+// does not fire when the outbox publish itself fails: the failed publish is
+// the last step inside the tx, so a missing log line is the operator-visible
+// signal that the lock was not durably announced.
+func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	domainUser, err := domain.NewUser("pub-fail", "pub@e.t", "hash")
+	require.NoError(t, err)
+	domainUser.ID = "usr-pub-fail"
+	require.NoError(t, userRepo.Create(context.Background(), domainUser))
+
+	emitter := &spyEmitter{err: errors.New("broker unavailable")}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	svc, err := NewService(userRepo, mem.NewSessionRepository(), newIdentityRefreshStore(), logger,
+		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	err = svc.Lock(context.Background(), "usr-pub-fail")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "broker unavailable", "underlying publish error must be unwrapable")
+	assert.Equal(t, 1, emitter.calls, "publish was attempted exactly once for TopicUserLocked")
+	assert.Nil(t, sloghelper.FindLogEntry(buf.String(), "user locked"),
+		"success log line must not fire when the tx publish step fails")
 }
