@@ -363,14 +363,42 @@ const (
 	// "Client Closed Request"); operators should treat as a client-direction
 	// signal, not a server fault, so it never pollutes 5xx error-rate SLOs.
 	//
-	// IO-boundary helpers should wrap context cancellation errors with this
+	// IO-boundary helpers should wrap context.Canceled errors with this
 	// code so the HTTP layer routes the response to 499 + slog.Warn via the
 	// 4xx response writer path.
+	//
+	// Distinct from ErrServerTimeout (504): this is "the client gave up",
+	// the latter is "the server's own deadline fired". Splitting the two
+	// codes lets dashboards / SDK retry policies / circuit breakers react
+	// differently — 499 is benign noise, 504 is a real timeout to alert on.
 	//
 	// ref: nginx ngx_http_special_response.c — 499 emitted on client disconnect
 	// ref: OTel semantic conventions http-spans.md — 4xx server spans Unset;
 	//      intentional cancellation should not set error.type
 	ErrClientCanceled Code = "ERR_CLIENT_CANCELED"
+
+	// ErrServerTimeout signals that the request exceeded a server-side or
+	// upstream-inherited deadline — typically context.DeadlineExceeded
+	// surfaced from a downstream IO operation. Maps to HTTP 504 (Gateway
+	// Timeout); operators should treat as a real server-direction failure
+	// and route through the standard 5xx error path (slog.Error + 5xx error
+	// rate / SLO bucket).
+	//
+	// IO-boundary helpers should wrap context.DeadlineExceeded errors with
+	// this code (NOT ErrClientCanceled) so the HTTP layer surfaces the
+	// timeout via 504 instead of conflating it with client disconnect.
+	//
+	// Distinct from ErrClientCanceled (499): this is "the server's deadline
+	// fired", the latter is "the client gave up". Aligns with NGINX (499 vs
+	// 504), Kratos transport/http/status (Canceled→499, DeadlineExceeded→504),
+	// and standard ingress / load-balancer expectations for retry semantics.
+	//
+	// CategoryInfra so IsInfraError predicates (health bucket, retry
+	// classifiers) treat timeouts as real infrastructure faults.
+	//
+	// ref: RFC 9110 §15.6.5 — 504 Gateway Timeout
+	// ref: kratos transport/http/status — Canceled→499, DeadlineExceeded→504
+	ErrServerTimeout Code = "ERR_SERVER_TIMEOUT"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

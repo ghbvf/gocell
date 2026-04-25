@@ -302,6 +302,17 @@ func TestIsExpected4xx(t *testing.T) {
 			err:  New(ErrClientCanceled, "request canceled"),
 			want: true,
 		},
+		// PR275 P2-3 split pin: ErrServerTimeout maps to HTTP 504 (5xx),
+		// MUST NOT be in the expected4xx whitelist. If someone copies the
+		// ErrClientCanceled registration and accidentally adds
+		// ErrServerTimeout to expected4xxCodes, server timeouts would be
+		// downgraded from slog.Error to slog.Warn — silently masking real
+		// timeouts. This case fails the build before that regression ships.
+		{
+			name: "ErrServerTimeout (504) is NOT expected 4xx",
+			err:  New(ErrServerTimeout, "request timed out"),
+			want: false,
+		},
 	}
 
 	for _, tt := range tests {

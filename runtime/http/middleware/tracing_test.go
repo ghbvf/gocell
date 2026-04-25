@@ -326,20 +326,33 @@ func TestTracing_499_AttrAndUnsetStatus(t *testing.T) {
 		"499 must not record a status description (status remains Unset)")
 }
 
-// TestTracing_499_ReasonFromCanceled and TestTracing_499_ReasonFromDeadline
-// lock the PR271-FU1 contract: when an IO boundary returns ctxcancel.Wrap(err),
-// the resulting 499 span attribute must reflect the originating ctx error so
-// dashboards can split client-disconnect from server-timeout buckets without
-// a second log query.
+// TestTracing_499_ReasonFromCanceled and TestTracing_504_FromDeadline lock
+// the PR271-FU1 + PR275 P2-3 contracts:
 //
-// Wiring path under test:
+//   - context.Canceled → ErrClientCanceled (HTTP 499) + span attribute
+//     client.cancel.reason="canceled" + span.Status Unset (4xx)
+//   - context.DeadlineExceeded → ErrServerTimeout (HTTP 504) + span.Status
+//     Error (5xx) + NO client.cancel.reason attribute (504 carries the
+//     timeout signal in its status code)
 //
-//	ctxcancel.Wrap → *errcode.Error.Details["reason"]
+// Wiring path under test for 499:
+//
+//	ctxcancel.Wrap(context.Canceled) → *errcode.Error{Code: ErrClientCanceled,
+//	                                                  Details["reason"]: "canceled"}
 //	    ↓
-//	httputil.writeErrcodeError (ErrClientCanceled branch) → setCancelReason(ctx, reason)
+//	httputil.writeErrcodeError (499 branch) → setCancelReason(ctx, "canceled")
 //	    ↓
-//	tracing.serveSpanned reads the slot at end-of-request and stamps
-//	span attribute "client.cancel.reason" = reason.
+//	tracing.serveSpanned reads the slot at end-of-request → span attribute
+//	"client.cancel.reason" = "canceled".
+//
+// Wiring path under test for 504:
+//
+//	ctxcancel.Wrap(context.DeadlineExceeded) → *errcode.Error{Code: ErrServerTimeout, ...}
+//	    ↓
+//	httputil.writeErrcodeError (5xx branch) → log5xx + sanitized response
+//	    ↓
+//	tracing.serveSpanned: status >= 500 → span.SetStatus(Error, …); no
+//	client.cancel.reason attribute (500-block guard skips the 499-only branch).
 func TestTracing_499_ReasonFromCanceled(t *testing.T) {
 	spy := &spyTracer{}
 
@@ -362,7 +375,7 @@ func TestTracing_499_ReasonFromCanceled(t *testing.T) {
 		"499 must not set span.Status=Error")
 }
 
-func TestTracing_499_ReasonFromDeadline(t *testing.T) {
+func TestTracing_504_FromDeadline(t *testing.T) {
 	spy := &spyTracer{}
 
 	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -375,13 +388,17 @@ func TestTracing_499_ReasonFromDeadline(t *testing.T) {
 	rec := httptest.NewRecorder()
 	handler.ServeHTTP(rec, req)
 
-	require.Equal(t, httputil.StatusClientClosedRequest, rec.Code)
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code,
+		"context.DeadlineExceeded must surface as HTTP 504 (real server-side timeout), "+
+			"not 499 — feeds 5xx alerting + SDK retry-on-504 policies")
 	spans := spy.Spans()
 	require.Len(t, spans, 1)
-	assert.Equal(t, "deadline_exceeded", spans[0].Attr("client.cancel.reason"),
-		"context.DeadlineExceeded must surface as reason=deadline_exceeded")
-	assert.Nil(t, spans[0].Attr("_status_error"),
-		"499 must not set span.Status=Error")
+	assert.Equal(t, int64(504), spans[0].Attr("http.status_code"))
+	assert.Equal(t, true, spans[0].Attr("_status_error"),
+		"504 (5xx) MUST set span.Status=Error per OTel HTTP semantic conventions")
+	assert.Nil(t, spans[0].Attr("client.cancel.reason"),
+		"client.cancel.reason is a 499-only attribute; 504 carries the timeout "+
+			"signal in its status code and must not piggyback on the 499 attribute")
 }
 
 // TestTracing_4xxNoErrorSpanStatus_NoCancelAttr ensures plain 4xx (e.g.

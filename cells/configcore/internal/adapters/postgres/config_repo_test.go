@@ -2,6 +2,7 @@ package postgres
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 	"time"
@@ -122,15 +123,17 @@ func TestGetByKey_NotFound_HasDomainCategory(t *testing.T) {
 }
 
 // TestConfigRepo_CtxCanceled_ReturnsClientCanceled verifies that
-// context.Canceled and context.DeadlineExceeded are classified as
-// ErrClientCanceled (HTTP 499 + slog.Warn at the response boundary), never
-// as domain not-found. Covers GetByKey, Update SELECT-FOR-UPDATE,
-// Update RETURNING, GetVersion, and Delete (PR-A50+A51 ctx-cancel
-// consolidation; supersedes the prior S15 ErrConfigRepoQuery classification).
+// context.Canceled and context.DeadlineExceeded are classified through
+// ctxcancel.Wrap, never as domain not-found. Covers GetByKey, Update
+// SELECT-FOR-UPDATE, Update RETURNING, GetVersion, and Delete.
 //
-// IsInfraError is preserved (true) so health.Checker timeout-bucket
-// behaviour is unchanged; the HTTP layer routes 499 via codeToStatus, not
-// via IsInfraError.
+// PR275 P2-3 split: the expected code now branches by ctx error variant —
+//   - context.Canceled         → ErrClientCanceled (HTTP 499 + slog.Warn)
+//   - context.DeadlineExceeded → ErrServerTimeout  (HTTP 504 + slog.Error)
+//
+// IsInfraError is preserved (true) for both branches so health.Checker
+// timeout-bucket behaviour is unchanged; the HTTP layer routes 499/504 via
+// codeToStatus, not via IsInfraError.
 func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -139,18 +142,26 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 		{"ctx canceled", context.Canceled},
 		{"ctx deadline exceeded", context.DeadlineExceeded},
 	}
-	assertCtxCancelErr := func(t *testing.T, err error) {
+	assertCtxCancelErr := func(t *testing.T, err error, scanErr error) {
 		t.Helper()
 		require.Error(t, err)
 		require.True(t, errcode.IsInfraError(err),
 			"IsInfraError preserved (preserves health/timeout bucket behaviour)")
-		require.True(t, errcode.IsExpected4xx(err),
-			"IsExpected4xx must route the response through log4xx → slog.Warn")
 		require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
 			"ctx cancel must not leak into domain not-found branch")
 		var ec *errcode.Error
 		require.ErrorAs(t, err, &ec)
-		assert.Equal(t, errcode.ErrClientCanceled, ec.Code)
+
+		expectedCode := errcode.ErrClientCanceled
+		expected4xx := true
+		if errors.Is(scanErr, context.DeadlineExceeded) {
+			expectedCode = errcode.ErrServerTimeout
+			expected4xx = false
+		}
+		assert.Equal(t, expectedCode, ec.Code,
+			"Canceled→ErrClientCanceled (499) / DeadlineExceeded→ErrServerTimeout (504)")
+		assert.Equal(t, expected4xx, errcode.IsExpected4xx(err),
+			"499 routes through log4xx → slog.Warn; 504 routes through log5xx → slog.Error")
 		require.Contains(t, ec.InternalMessage, "ctx canceled",
 			"must hit wrapCtxCancel path, not generic scan-error fallthrough")
 	}
@@ -160,19 +171,19 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
 			_, err := repo.GetByKey(context.Background(), "any")
-			assertCtxCancelErr(t, err)
+			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Update_SelectForUpdate/"+tc.name, func(t *testing.T) {
 			seqDB := &sequencedMockDB{rows: []*mockRow{{scanErr: tc.scanErr}}}
 			repo := newConfigRepositoryFromDBTX(seqDB)
 			_, err := repo.Update(context.Background(), "k", "v")
-			assertCtxCancelErr(t, err)
+			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("GetVersion/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
 			_, err := repo.GetVersion(context.Background(), "cfg-1", 1)
-			assertCtxCancelErr(t, err)
+			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Update_Returning/"+tc.name, func(t *testing.T) {
 			// SELECT FOR UPDATE succeeds (sensitive=false); UPDATE RETURNING ctx-cancels.
@@ -182,13 +193,13 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 			}}
 			repo := newConfigRepositoryFromDBTX(seqDB)
 			_, err := repo.Update(context.Background(), "k", "v")
-			assertCtxCancelErr(t, err)
+			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Delete/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
 			_, err := repo.Delete(context.Background(), "k")
-			assertCtxCancelErr(t, err)
+			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("List/QueryErr/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryErr: tc.scanErr}
@@ -196,7 +207,7 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 			_, err := repo.List(context.Background(), query.ListParams{
 				Sort: []query.SortColumn{{Name: "key", Direction: query.SortASC}},
 			})
-			assertCtxCancelErr(t, err)
+			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("PublishVersion/"+tc.name, func(t *testing.T) {
 			db := &mockDB{execErr: tc.scanErr}
@@ -208,7 +219,7 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 				Value:     "x",
 				Sensitive: false,
 			})
-			assertCtxCancelErr(t, err)
+			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 		t.Run("Create/"+tc.name, func(t *testing.T) {
 			db := &mockDB{execErr: tc.scanErr}
@@ -219,7 +230,7 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 				Value:     "v",
 				Sensitive: false,
 			})
-			assertCtxCancelErr(t, err)
+			assertCtxCancelErr(t, err, tc.scanErr)
 		})
 	}
 }

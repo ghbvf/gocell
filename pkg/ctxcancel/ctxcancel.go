@@ -1,14 +1,20 @@
 // Package ctxcancel provides shared helpers for translating context
 // cancellation surfaced from IO operations (DB scan, RPC call, message bus
-// claim) into structured *errcode.Error values that map to HTTP 499 (nginx
-// "Client Closed Request") rather than 500.
+// claim) into structured *errcode.Error values with the correct HTTP status
+// for each ctx error variant:
 //
-// Cell repositories that expose long-running IO should use Detect / Wrap to
-// keep client-direction signals (user disconnect, request timeout) out of
-// the 5xx error rate. The wrapped *errcode.Error carries
-// errcode.ErrClientCanceled with CategoryInfra so existing IsInfraError
-// predicates (health bucket, retry classifiers) preserve their semantics
-// while the HTTP layer routes the response to 499 + slog.Warn.
+//   - context.Canceled         → ErrClientCanceled  → HTTP 499 + slog.Warn
+//     (real client-direction signal: keeps 5xx SLO clean)
+//   - context.DeadlineExceeded → ErrServerTimeout   → HTTP 504 + slog.Error
+//     (real server-direction timeout: feeds 5xx alerting + SDK retry)
+//
+// Splitting by ctx error variant aligns with NGINX (499 vs 504), Kratos
+// transport/http/status (Canceled→499, DeadlineExceeded→504), and standard
+// load-balancer / SDK retry expectations: 499 is benign client noise, 504
+// is a real timeout that should be alerted on.
+//
+// Both wrapped errors carry CategoryInfra so existing IsInfraError
+// predicates (health bucket, retry classifiers) preserve their semantics.
 package ctxcancel
 
 import (
@@ -43,35 +49,40 @@ func Detect(err error) bool {
 	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
-// Wrap returns a structured *errcode.Error with code ErrClientCanceled and
-// CategoryInfra when err is a context cancellation; nil otherwise.
+// Wrap returns a structured *errcode.Error for context cancellation errors,
+// classifying by ctx error variant; nil when err is not a ctx cancellation.
 //
+//   - context.Canceled         → Code=ErrClientCanceled, public Message
+//     "request canceled"        (HTTP 499, log4xx, span Unset)
+//   - context.DeadlineExceeded → Code=ErrServerTimeout,  public Message
+//     "request timed out"       (HTTP 504, log5xx, span Error)
+//
+// Parameters:
 //   - op: PascalCase operation label (e.g. "Insert", "ScanRow"); recorded in
 //     InternalMessage for operator triage.
 //   - identifier: caller-redacted resource locator (e.g. "key=foo",
 //     "configID=…"); recorded in InternalMessage only.
 //
-// Public Message is the constant "request canceled". The wrapped err is
-// preserved as Cause so errors.Is(returned, context.Canceled) still works
-// for callers that need to detect cancellation up the stack.
+// The wrapped err is preserved as Cause so errors.Is(returned, context.Canceled)
+// or errors.Is(returned, context.DeadlineExceeded) still works for callers
+// that need to detect cancellation up the stack.
 //
-// Details["reason"] disambiguates the originating ctx error so the HTTP
-// boundary can route a distinct tracing attribute, span the log4xx
-// cancel_reason field, and dashboards can split "client disconnect"
-// (canceled) from "server-side / inherited timeout" (deadline_exceeded)
-// without a second log query. Both still map to 499 — the split is in
-// observability, not in the public response status.
+// Details["reason"] mirrors the variant ("canceled" / "deadline_exceeded")
+// for observability fan-out: tracing span attribute (client.cancel.reason
+// for 499 only) and log4xx cancel_reason field. The HTTP status carries the
+// primary signal; the reason field provides supplementary low-cardinality
+// dimension for dashboards that bucket by both.
 //
 // Privacy contract:
-//   - Public Message (the constant "request canceled") and Details
-//     (currently `{"reason": "canceled" | "deadline_exceeded"}`) are
-//     consumed by pkg/httputil.writeErrcodeError and DO appear in the
-//     4xx HTTP response body. The reason enum is intentionally
-//     low-cardinality and free of user identifiers — safe to expose.
-//   - InternalMessage carries the operator-grade op/identifier (key
-//     names, config IDs) and is routed to log4xx slog.Warn only;
-//     pkg/httputil never writes InternalMessage to the response body,
-//     so identifier may freely contain such detail.
+//   - Public Message and Details are consumed by pkg/httputil.writeErrcodeError
+//     and appear in 4xx HTTP response bodies (5xx responses sanitize Message
+//     to "internal server error" and strip Details per the standard pipeline).
+//     The reason enum is intentionally low-cardinality and free of user
+//     identifiers — safe to expose.
+//   - InternalMessage carries the operator-grade op/identifier (key names,
+//     config IDs) and is routed to slog only; pkg/httputil never writes
+//     InternalMessage to the response body, so identifier may freely contain
+//     such detail.
 //
 // Maintainers extending Details MUST keep new fields enum-typed and
 // caller-redacted, otherwise rotate them through InternalMessage instead.
@@ -79,14 +90,27 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 	if !Detect(err) {
 		return nil
 	}
+	code, message := codeAndMessageFor(err)
 	return &errcode.Error{
-		Code:            errcode.ErrClientCanceled,
-		Message:         "request canceled",
+		Code:            code,
+		Message:         message,
 		InternalMessage: fmt.Sprintf("%s ctx canceled %s", op, identifier),
 		Cause:           err,
 		Category:        errcode.CategoryInfra,
 		Details:         map[string]any{DetailsKeyReason: reasonOf(err)},
 	}
+}
+
+// codeAndMessageFor selects the (errcode, public message) pair based on the
+// originating ctx error: context.DeadlineExceeded → ErrServerTimeout/504,
+// anything else (default = context.Canceled branch) → ErrClientCanceled/499.
+// Kept separate from reasonOf so the 499/504 split and the reason enum can
+// evolve independently (e.g. if a third variant is ever added).
+func codeAndMessageFor(err error) (errcode.Code, string) {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return errcode.ErrServerTimeout, "request timed out"
+	}
+	return errcode.ErrClientCanceled, "request canceled"
 }
 
 // reasonOf maps a context cancellation error to a stable low-cardinality

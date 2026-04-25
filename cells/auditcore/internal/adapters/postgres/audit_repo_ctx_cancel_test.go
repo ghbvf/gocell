@@ -19,12 +19,16 @@ import (
 // TestAuditRepository_CtxCancel_AllIOBoundaries locks the PR271-FU3 contract:
 // every IO error returned from auditcore postgres adapter must run through
 // ctxcancel.Wrap before falling through to the generic ErrAuditRepoQuery
-// mapping. Without this, a client disconnect mid-Append still pollutes the
-// 5xx error rate / slog.Error bucket — defeating the same SLO hygiene goal
-// PR#271 already established for configcore.
+// mapping.
 //
-// Coverage matrix: every Append / GetRange / Query IO error site × {Canceled,
-// DeadlineExceeded} → ErrClientCanceled + ctxcancel.Detect == true.
+// PR275 P2-3 split: the expected code is branch-aware:
+//   - context.Canceled wrappers         → ErrClientCanceled (HTTP 499, slog.Warn)
+//   - context.DeadlineExceeded wrappers → ErrServerTimeout  (HTTP 504, slog.Error)
+//
+// Coverage matrix: every Append / GetRange / Query IO error site × every
+// {Canceled, DeadlineExceeded} variant. Without this dual mapping a real
+// server-side timeout would either pollute the 5xx error rate (old
+// "everything → 499" design) or be invisible to retry-on-504 SDKs.
 func TestAuditRepository_CtxCancel_AllIOBoundaries(t *testing.T) {
 	tests := []struct {
 		name string
@@ -162,8 +166,15 @@ func TestAuditRepository_CtxCancel_AllIOBoundaries(t *testing.T) {
 				var ec *errcode.Error
 				require.ErrorAs(t, err, &ec,
 					"ctx-cancel must surface as *errcode.Error, not raw context.* sentinel")
-				assert.Equal(t, errcode.ErrClientCanceled, ec.Code,
-					"ctx-cancel must map to ErrClientCanceled (HTTP 499), not ErrAuditRepoQuery (HTTP 500)")
+
+				expectedCode := errcode.ErrClientCanceled
+				if errors.Is(c.cause, context.DeadlineExceeded) {
+					expectedCode = errcode.ErrServerTimeout
+				}
+				assert.Equal(t, expectedCode, ec.Code,
+					"Canceled→ErrClientCanceled (499) / DeadlineExceeded→ErrServerTimeout (504); "+
+						"never ErrAuditRepoQuery (500) — that would pollute the 5xx error rate "+
+						"with client-direction noise or hide real timeouts")
 				assert.True(t, ctxcancel.Detect(err),
 					"ctxcancel.Detect must traverse the Cause chain back to context.* sentinel")
 			})

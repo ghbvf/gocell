@@ -37,7 +37,9 @@ func TestWrap_NilWhenNotCancel(t *testing.T) {
 	assert.Nil(t, Wrap(errors.New("bad conn"), "Insert", "key=k"))
 }
 
-func TestWrap_ReturnsClientCanceled(t *testing.T) {
+// TestWrap_CanceledReturnsClientCanceled locks the 499 (client-direction)
+// branch: real client disconnect → ErrClientCanceled → log4xx + slog.Warn.
+func TestWrap_CanceledReturnsClientCanceled(t *testing.T) {
 	got := Wrap(context.Canceled, "Insert", "key=foo")
 	require.NotNil(t, got)
 	assert.Equal(t, errcode.ErrClientCanceled, got.Code)
@@ -50,34 +52,50 @@ func TestWrap_ReturnsClientCanceled(t *testing.T) {
 		"Cause must be preserved so errors.Is(err, context.Canceled) works upstream")
 }
 
-func TestWrap_PreservesDeadlineExceeded(t *testing.T) {
+// TestWrap_DeadlineReturnsServerTimeout locks the 504 (server-direction)
+// branch: server-side / inherited timeout → ErrServerTimeout → log5xx +
+// slog.Error + 5xx alerting. PR275 P2-3: split aligns with NGINX (499 vs
+// 504) and Kratos transport/http/status (Canceled→499, DeadlineExceeded→504).
+func TestWrap_DeadlineReturnsServerTimeout(t *testing.T) {
 	got := Wrap(context.DeadlineExceeded, "ScanRow", "configID=cfg-1")
 	require.NotNil(t, got)
-	assert.Equal(t, errcode.ErrClientCanceled, got.Code)
-	assert.ErrorIs(t, got, context.DeadlineExceeded)
+	assert.Equal(t, errcode.ErrServerTimeout, got.Code,
+		"context.DeadlineExceeded must surface as ErrServerTimeout (504), "+
+			"not ErrClientCanceled (499) — server-direction timeouts feed 5xx alerts")
+	assert.Equal(t, "request timed out", got.Message)
+	assert.Equal(t, errcode.CategoryInfra, got.Category)
+	assert.ErrorIs(t, got, context.DeadlineExceeded,
+		"Cause must be preserved so errors.Is(err, context.DeadlineExceeded) works upstream")
 }
 
-// TestWrap_IsInfraError_Preserved guards the explicit decision in PR-A50+A51:
-// ErrClientCanceled keeps IsInfraError == true so health.Checker timeout-bucket
-// behaviour is unchanged. The HTTP layer routes 499 via codeToStatus mapping,
-// not via IsInfraError. See plan §风险 #2.
+// TestWrap_IsInfraError_Preserved guards the category invariant for both
+// branches: ErrClientCanceled and ErrServerTimeout remain CategoryInfra so
+// health.Checker timeout-bucket behaviour is unchanged. HTTP status mapping
+// (499 vs 504) is driven by codeToStatus, not by IsInfraError.
 func TestWrap_IsInfraError_Preserved(t *testing.T) {
-	got := Wrap(context.Canceled, "Insert", "key=k")
-	require.NotNil(t, got)
-	assert.True(t, errcode.IsInfraError(got),
-		"ctx cancel must remain IsInfraError=true (preserves health/timeout bucket)")
-	assert.True(t, errcode.IsExpected4xx(got),
-		"ctx cancel must also be IsExpected4xx=true (routes to slog.Warn at HTTP boundary)")
+	canceled := Wrap(context.Canceled, "Insert", "key=k")
+	require.NotNil(t, canceled)
+	assert.True(t, errcode.IsInfraError(canceled),
+		"client cancel must remain IsInfraError=true (preserves health/timeout bucket)")
+	assert.True(t, errcode.IsExpected4xx(canceled),
+		"client cancel must be IsExpected4xx=true (routes to slog.Warn)")
+
+	deadline := Wrap(context.DeadlineExceeded, "ScanRow", "configID=cfg-1")
+	require.NotNil(t, deadline)
+	assert.True(t, errcode.IsInfraError(deadline),
+		"server timeout must remain IsInfraError=true (preserves health/timeout bucket)")
+	assert.False(t, errcode.IsExpected4xx(deadline),
+		"server timeout must NOT be IsExpected4xx — 504 is 5xx, routes to slog.Error")
 }
 
 // TestWrap_ReasonInDetails locks the PR271-FU1 contract: the wrapped *errcode.Error
-// must carry Details["reason"] distinguishing context.Canceled (real client
-// disconnect) from context.DeadlineExceeded (server-side / inherited timeout)
-// so dashboards can split 499 by source instead of seeing one opaque bucket.
+// carries Details["reason"] mirroring the originating ctx error variant.
+// After the PR275 P2-3 split the primary signal is the HTTP status (499 vs
+// 504), but the reason field still provides a low-cardinality dimension for
+// dashboards that bucket by both status and reason (e.g. ratio of canceled
+// 499 to deadline-rooted 504, useful when investigating regressions).
 //
 // ref: Kratos transport/http/status — Canceled→499, DeadlineExceeded→504
-//
-//	(we keep both at 499 but expose reason for triage).
 func TestWrap_ReasonInDetails(t *testing.T) {
 	tests := []struct {
 		name       string

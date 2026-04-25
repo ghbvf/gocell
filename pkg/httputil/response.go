@@ -345,10 +345,25 @@ var codeToStatus = map[errcode.Code]int{
 
 	// --- 499 Client Closed Request ---
 	// Nginx-style 499: the client disconnected before the server finished
-	// responding (context.Canceled / DeadlineExceeded surfaced from a
-	// downstream IO operation). Routed to log4xx → slog.Warn so the 5xx
-	// error rate stays clean of client-direction noise.
+	// responding (context.Canceled surfaced from a downstream IO
+	// operation). Routed to log4xx → slog.Warn so the 5xx error rate stays
+	// clean of client-direction noise.
+	//
+	// Note: context.DeadlineExceeded does NOT come here — it is a real
+	// server-side / inherited timeout and maps to ErrServerTimeout → 504
+	// below, so it correctly counts toward the 5xx error rate.
 	errcode.ErrClientCanceled: StatusClientClosedRequest,
+
+	// --- 504 Gateway Timeout ---
+	// Server-side or inherited request timeout — context.DeadlineExceeded
+	// surfaced from a downstream IO operation. Distinct from 499 (client
+	// disconnect): a 504 is a real server-direction timeout that should
+	// trigger SDK retry policies and 5xx alerting. Routed to log5xx →
+	// slog.Error per the standard 5xx response path.
+	//
+	// ref: RFC 9110 §15.6.5 — 504 Gateway Timeout
+	// ref: kratos transport/http/status — DeadlineExceeded → 504
+	errcode.ErrServerTimeout: http.StatusGatewayTimeout,
 
 	// --- 413 Request Entity Too Large ---
 	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
