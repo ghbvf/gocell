@@ -14,8 +14,8 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/persistence/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/jackc/pgx/v5"
 )
@@ -37,7 +37,7 @@ import (
 // a second Warn at the repository layer produces duplicate observability
 // noise without adding new context.
 //
-// ref: pkg/persistence/ctxcancel.Wrap — canonical helper.
+// ref: pkg/ctxcancel.Wrap — canonical helper.
 //
 // ctx is accepted for callsite ergonomics (every IO callsite already has
 // a ctx in scope); it is currently unused but reserved for future
@@ -345,7 +345,7 @@ func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKey
 // The ctx.Canceled guard is checked first (before pgx.ErrNoRows) to prevent
 // context cancellation from being misclassified as a domain not-found
 // condition (S15 ctx-cancel classification fix). Client cancellation now
-// routes via pkg/persistence/ctxcancel → 499 + slog.Warn, distinct from 5xx
+// routes via pkg/ctxcancel → 499 + slog.Warn, distinct from 5xx
 // infrastructure failures so 5xx error-rate SLOs stay clean.
 //
 // op is the method name used only in InternalMessage for operator

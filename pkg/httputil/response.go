@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -146,6 +147,13 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 // errcode.New(code, fmt.Sprintf("…%s…", userID)) — see errcode.Message vs
 // InternalMessage contract: Message is supplied to response writers, while
 // InternalMessage is diagnostic-only and safe for server logs.
+//
+// 499 logs additionally carry the cancel_reason field ("canceled" |
+// "deadline_exceeded") so dashboards / SLO queries can split client-disconnect
+// from server-timeout buckets at the log layer without falling back to a
+// tracing query. The value is the same low-cardinality enum surfaced via the
+// span attribute client.cancel.reason and is sourced from
+// ctxcancel.Wrap → ecErr.Details["reason"].
 func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int) {
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
@@ -154,11 +162,21 @@ func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int)
 	if ecErr.InternalMessage != "" {
 		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
 	}
+	if status == StatusClientClosedRequest {
+		if reason := ctxcancel.ReasonFromDetails(ecErr.Details); reason != "" {
+			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
+		}
+	}
 	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
 	slog.Warn(label+" (4xx)", logAttrs...)
 }
 
 // log5xx emits a slog.Error record for a 5xx response, including cause and correlation IDs.
+//
+// 504 (ErrServerTimeout) records additionally carry the cancel_reason field
+// ("deadline_exceeded") symmetric with the log4xx 499 path — dashboards can
+// aggregate cancel_reason across both 499 and 504 streams to compare
+// canceled-vs-deadline ratios without a per-status query split.
 func log5xx(ctx context.Context, label string, ecErr *errcode.Error) {
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
@@ -169,6 +187,11 @@ func log5xx(ctx context.Context, label string, ecErr *errcode.Error) {
 	}
 	if ecErr.Cause != nil {
 		logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
+	}
+	if ecErr.Code == errcode.ErrServerTimeout {
+		if reason := ctxcancel.ReasonFromDetails(ecErr.Details); reason != "" {
+			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
+		}
 	}
 	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
 	slog.Error(label+" (5xx)", logAttrs...)
@@ -199,6 +222,18 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	details := ecErr.Details
 	if details == nil {
 		details = map[string]any{}
+	}
+
+	// 499 reason transit: surface the reason recorded by ctxcancel.Wrap
+	// (Details["reason"] = "canceled" | "deadline_exceeded") onto the
+	// request-scoped cancel-reason slot so tracing middleware can stamp
+	// span attribute "client.cancel.reason" with the actual cause. Stays
+	// a no-op when no slot was installed (e.g. unit tests writing a 499
+	// directly), preserving the legacy "context_canceled" fallback.
+	if status == StatusClientClosedRequest {
+		if reason := ctxcancel.ReasonFromDetails(details); reason != "" {
+			setCancelReason(ctx, reason)
+		}
 	}
 
 	msg := ecErr.Message
@@ -320,10 +355,25 @@ var codeToStatus = map[errcode.Code]int{
 
 	// --- 499 Client Closed Request ---
 	// Nginx-style 499: the client disconnected before the server finished
-	// responding (context.Canceled / DeadlineExceeded surfaced from a
-	// downstream IO operation). Routed to log4xx → slog.Warn so the 5xx
-	// error rate stays clean of client-direction noise.
+	// responding (context.Canceled surfaced from a downstream IO
+	// operation). Routed to log4xx → slog.Warn so the 5xx error rate stays
+	// clean of client-direction noise.
+	//
+	// Note: context.DeadlineExceeded does NOT come here — it is a real
+	// server-side / inherited timeout and maps to ErrServerTimeout → 504
+	// below, so it correctly counts toward the 5xx error rate.
 	errcode.ErrClientCanceled: StatusClientClosedRequest,
+
+	// --- 504 Gateway Timeout ---
+	// Server-side or inherited request timeout — context.DeadlineExceeded
+	// surfaced from a downstream IO operation. Distinct from 499 (client
+	// disconnect): a 504 is a real server-direction timeout that should
+	// trigger SDK retry policies and 5xx alerting. Routed to log5xx →
+	// slog.Error per the standard 5xx response path.
+	//
+	// ref: RFC 9110 §15.6.5 — 504 Gateway Timeout
+	// ref: kratos transport/http/status — DeadlineExceeded → 504
+	errcode.ErrServerTimeout: http.StatusGatewayTimeout,
 
 	// --- 413 Request Entity Too Large ---
 	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,

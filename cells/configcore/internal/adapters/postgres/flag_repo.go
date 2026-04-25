@@ -9,8 +9,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
+	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/persistence/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/jackc/pgx/v5"
 )
@@ -78,7 +78,7 @@ func (r *FlagRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 // a second Warn at the repository layer produces duplicate observability
 // noise without adding new context.
 //
-// ref: pkg/persistence/ctxcancel.Wrap — canonical helper.
+// ref: pkg/ctxcancel.Wrap — canonical helper.
 func (r *FlagRepository) wrapCtxCancel(_ context.Context, op, identifier string, err error) *errcode.Error {
 	return ctxcancel.Wrap(err, op, identifier)
 }

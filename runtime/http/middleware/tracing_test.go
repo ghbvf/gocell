@@ -10,7 +10,9 @@ import (
 
 	kernelctxkeys "github.com/ghbvf/gocell/kernel/ctxkeys"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	"github.com/go-chi/chi/v5"
 	"github.com/stretchr/testify/assert"
@@ -322,6 +324,109 @@ func TestTracing_499_AttrAndUnsetStatus(t *testing.T) {
 		"499 (4xx) MUST NOT set span.Status=Error per OTel conventions")
 	assert.Nil(t, spans[0].Attr("_status_desc"),
 		"499 must not record a status description (status remains Unset)")
+}
+
+// TestTracing_499_ReasonFromCanceled and TestTracing_504_FromDeadline lock
+// the PR271-FU1 + PR275 P2-3 contracts:
+//
+//   - context.Canceled → ErrClientCanceled (HTTP 499) + span attribute
+//     client.cancel.reason="canceled" + span.Status Unset (4xx)
+//   - context.DeadlineExceeded → ErrServerTimeout (HTTP 504) + span.Status
+//     Error (5xx) + NO client.cancel.reason attribute (504 carries the
+//     timeout signal in its status code)
+//
+// Wiring path under test for 499:
+//
+//	ctxcancel.Wrap(context.Canceled) → *errcode.Error{Code: ErrClientCanceled,
+//	                                                  Details["reason"]: "canceled"}
+//	    ↓
+//	httputil.writeErrcodeError (499 branch) → setCancelReason(ctx, "canceled")
+//	    ↓
+//	tracing.serveSpanned reads the slot at end-of-request → span attribute
+//	"client.cancel.reason" = "canceled".
+//
+// Wiring path under test for 504:
+//
+//	ctxcancel.Wrap(context.DeadlineExceeded) → *errcode.Error{Code: ErrServerTimeout, ...}
+//	    ↓
+//	httputil.writeErrcodeError (5xx branch) → log5xx + sanitized response
+//	    ↓
+//	tracing.serveSpanned: status >= 500 → span.SetStatus(Error, …); no
+//	client.cancel.reason attribute (500-block guard skips the 499-only branch).
+func TestTracing_499_ReasonFromCanceled(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ecErr := ctxcancel.Wrap(context.Canceled, "Insert", "id=x")
+		require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.Canceled")
+		httputil.WriteDomainError(r.Context(), w, ecErr)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/canceled-flow", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, httputil.StatusClientClosedRequest, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "canceled", spans[0].Attr("client.cancel.reason"),
+		"context.Canceled must surface as reason=canceled")
+	assert.Nil(t, spans[0].Attr("_status_error"),
+		"499 must not set span.Status=Error")
+}
+
+func TestTracing_504_FromDeadline(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ecErr := ctxcancel.Wrap(context.DeadlineExceeded, "Query", "id=x")
+		require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.DeadlineExceeded")
+		httputil.WriteDomainError(r.Context(), w, ecErr)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/deadline-flow", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, http.StatusGatewayTimeout, rec.Code,
+		"context.DeadlineExceeded must surface as HTTP 504 (real server-side timeout), "+
+			"not 499 — feeds 5xx alerting + SDK retry-on-504 policies")
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, int64(504), spans[0].Attr("http.status_code"))
+	assert.Equal(t, true, spans[0].Attr("_status_error"),
+		"504 (5xx) MUST set span.Status=Error per OTel HTTP semantic conventions")
+	assert.Nil(t, spans[0].Attr("client.cancel.reason"),
+		"client.cancel.reason is a 499-only attribute; 504 carries the timeout "+
+			"signal in its status code and must not piggyback on the 499 attribute")
+}
+
+// TestTracing_499_ReasonViaWriteDecodeError pins the slot transit through
+// the WriteDecodeError path (PR275 P2-2). WriteDecodeError shares the same
+// writeErrcodeError pipeline as WriteDomainError, so in principle the slot
+// flows through automatically — but without a test, a future split where
+// WriteDecodeError takes a fast path could silently drop reason without
+// breaking anything else. This test forces the contract: any 499 emitted
+// via writeErrcodeError surface (WriteDomainError, WriteDecodeError, or
+// future writers) must populate the slot.
+func TestTracing_499_ReasonViaWriteDecodeError(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ecErr := ctxcancel.Wrap(context.Canceled, "Decode", "id=x")
+		require.NotNil(t, ecErr)
+		httputil.WriteDecodeError(r.Context(), w, ecErr)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/decode-canceled", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, httputil.StatusClientClosedRequest, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "canceled", spans[0].Attr("client.cancel.reason"),
+		"WriteDecodeError must transit reason through the same slot as WriteDomainError")
 }
 
 // TestTracing_4xxNoErrorSpanStatus_NoCancelAttr ensures plain 4xx (e.g.

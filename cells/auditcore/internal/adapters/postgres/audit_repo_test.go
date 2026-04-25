@@ -213,13 +213,36 @@ type mockRowValues struct {
 type mockRowSet struct {
 	entries []mockRowValues
 	idx     int
+	// scanErr, when non-nil, is returned from Scan after Next yields true.
+	// The scan loop is forced to advance once so Append-style assertions
+	// observe the error on the first row.
+	scanErr error
+	// iterErr, when non-nil, is returned from Err() after iteration ends.
+	// Used to simulate row-stream cancellation surfaced by rows.Err() —
+	// pgx returns ctx-cancel on this surface, not on the initial Query.
+	iterErr error
 }
 
 func (r *mockRowSet) Next() bool {
-	return r.idx < len(r.entries)
+	if r.scanErr != nil {
+		// Surface a single iteration so Scan can return scanErr.
+		// Subsequent Next() calls return false (idx > 0).
+		if r.idx == 0 {
+			r.idx++
+			return true
+		}
+		return false
+	}
+	if r.idx < len(r.entries) {
+		return true
+	}
+	return false
 }
 
 func (r *mockRowSet) Scan(dest ...any) error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
 	row := r.entries[r.idx]
 	r.idx++
 	for i, v := range row.values {
@@ -236,4 +259,4 @@ func (r *mockRowSet) Scan(dest ...any) error {
 }
 
 func (r *mockRowSet) Close()     {}
-func (r *mockRowSet) Err() error { return nil }
+func (r *mockRowSet) Err() error { return r.iterErr }
