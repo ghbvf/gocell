@@ -629,7 +629,7 @@ func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, i
 	register := rg.Register
 	// Apply group-level Auth plan (if any) as a scoped middleware.
 	if rg.Auth != nil {
-		groupMW, _, err := applyGroupAuth(rg.Auth)
+		groupMW, err := applyGroupAuth(rg.Auth)
 		if err != nil {
 			return fmt.Errorf("bootstrap: %s: %w", routeGroupSource(i, rg), err)
 		}
@@ -1102,6 +1102,7 @@ type boundServer struct {
 	ln        net.Listener
 	owned     bool          // true when bootstrap bound the socket (not caller-injected)
 	shutGrace time.Duration // 0 means inherit the global shutdownTimeout
+	authDesc  string        // OPS-09: auth chain description for startup log
 }
 
 func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
@@ -1129,8 +1130,8 @@ func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
 // and log lines appear in a consistent order for operators.
 // SEC-11: http.Server is constructed with ReadTimeout, WriteTimeout, and
 // IdleTimeout to prevent Slowloris / slow-write DoS attacks.
-// OPS-06: emit slog.Info after each successful bind (listener + addr + policy).
-// OPS-07: emit slog.Warn when a non-loopback listener binds with PolicyNone.
+// OPS-06: emit slog.Info after each successful bind (listener + addr + auth).
+// OPS-07: emit slog.Warn when a non-loopback listener binds with AuthNone or empty auth chain.
 func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 	// Collect and sort refs for deterministic iteration order.
 	refs := make([]cell.ListenerRef, 0, len(b.listenerConfigs))
@@ -1163,15 +1164,18 @@ func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 			slog.String("auth", authDesc))
 
 		// OPS-07 / F7 round-3: warn when a non-loopback address is served with
-		// AuthNone (no auth chain). The dangerous case is the wildcard bind
+		// AuthNone or an empty auth chain. The dangerous case is the wildcard bind
 		// (0.0.0.0 / ::): the listener is reachable on every interface, including
 		// externally routable addresses, but ServeHTTP runs without an auth gate.
+		// explicit_auth_none=true means the caller deliberately passed AuthNone{};
+		// false means the chain was nil/empty (possibly an omission).
 		if authDesc == "none" || authDesc == "" {
 			if tcpAddr, ok2 := ln.Addr().(*net.TCPAddr); ok2 && !tcpAddr.IP.IsLoopback() {
 				slog.Warn("bootstrap: listener bound to non-loopback address without auth; ensure network-level isolation",
 					slog.String("listener", ref.String()),
 					slog.String("addr", ln.Addr().String()),
-					slog.Bool("wildcard_bind", tcpAddr.IP.IsUnspecified()))
+					slog.Bool("wildcard_bind", tcpAddr.IP.IsUnspecified()),
+					slog.Bool("explicit_auth_none", explicitAuthNone(cfg.authChain)))
 			}
 		}
 
@@ -1187,6 +1191,7 @@ func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 			ln:        ln,
 			owned:     owned,
 			shutGrace: cfg.shutGrace,
+			authDesc:  authDesc, // OPS-09: passed to phase7ServeAll startup log
 		})
 	}
 	return servers, nil
@@ -1212,7 +1217,8 @@ func (b *Bootstrap) phase7ServeAll(servers []boundServer) chan error {
 		go func() {
 			slog.Info("bootstrap: HTTP server starting",
 				slog.String("listener", bs.name),
-				slog.String("addr", bs.ln.Addr().String()))
+				slog.String("addr", bs.ln.Addr().String()),
+				slog.String("auth", bs.authDesc))
 			err := bs.srv.Serve(bs.ln)
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				httpErrCh <- fmt.Errorf("%s listener: %w", bs.name, err)

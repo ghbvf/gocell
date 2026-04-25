@@ -101,6 +101,8 @@ var _ GroupAuth = AuthNone{}
 type AuthJWT struct {
 	// Verifier is the IntentTokenVerifier used to validate JWTs. Required; nil
 	// is rejected by NewAuthJWT with a panic.
+	// Do not set this field directly after construction; use NewAuthJWT(v)
+	// which enforces the non-nil invariant.
 	Verifier IntentTokenVerifier
 }
 
@@ -122,15 +124,13 @@ var _ ListenerAuth = AuthJWT{}
 
 // ─── AuthJWTFromAssembly ──────────────────────────────────────────────────────
 
-// AssemblyRef is a minimal interface used by AuthJWTFromAssembly to hold a
-// reference to a CoreAssembly without importing kernel/assembly (which would
-// create an import cycle). Bootstrap passes the concrete *assembly.CoreAssembly
-// which satisfies this interface; identity checks are done in bootstrap.
+// AssemblyRef exposes the minimum contract kernel needs: ID() for identity
+// comparison and CellIDs() for authProvider discovery. Using a named interface
+// instead of any preserves type safety at composition boundaries.
 //
-// The interface exposes only what kernel needs: nothing — it is a marker type
-// used purely for identity comparison in bootstrap.phase0. Using the empty
-// interface would lose the type safety; a named marker interface is explicit
-// about intent.
+// Bootstrap passes the concrete *assembly.CoreAssembly which satisfies this
+// interface structurally; identity checks (same pointer) are done in
+// runtime/bootstrap, not in kernel.
 type AssemblyRef interface {
 	// ID returns the assembly's unique identifier.
 	ID() string
@@ -170,8 +170,12 @@ func NewAuthJWTFromAssembly(asm AssemblyRef) AuthJWTFromAssembly {
 }
 
 func (AuthJWTFromAssembly) authPlanKind() AuthKind { return AuthKindJWTFromAssembly }
-func (AuthJWTFromAssembly) Describe() string       { return "jwt-from-assembly" }
-func (AuthJWTFromAssembly) listenerAuthOK()        {}
+
+// Describe returns "jwt" so that operator dashboards and alert rules that
+// filter on auth=jwt match both AuthJWT and AuthJWTFromAssembly paths
+// consistently. Both ultimately install the same JWT verifier mechanism.
+func (AuthJWTFromAssembly) Describe() string { return "jwt" }
+func (AuthJWTFromAssembly) listenerAuthOK()  {}
 
 // ResolvedVerifier returns the verifier once it has been discovered by phase4.
 // Returns nil before SetResolved has been called.
@@ -192,6 +196,11 @@ func (p AuthJWTFromAssembly) ResolvedVerifier() IntentTokenVerifier {
 
 // SetResolved stores the verifier discovered by phase4. Called by bootstrap;
 // must not be called by cell code.
+//
+// This method is exported to allow access from runtime/bootstrap (a different
+// package), but is not part of the public API for cell authors. The archtest
+// in tools/archtest/auth_plan_test.go (AUTH-PLAN-04) enforces that cells/ do
+// not call it.
 //
 // Method is on value receiver: the internal atomic.Pointer is already a
 // pointer, so the store is visible to all copies of this value.

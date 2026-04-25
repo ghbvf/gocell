@@ -111,14 +111,3 @@ type HMACKeyring interface {
 type AuthProvider interface {
 	TokenVerifier() IntentTokenVerifier
 }
-
-// kernelNonceStoreKind ensures NonceStoreKind values are kept in sync with
-// runtime/auth. The compile-time assertion below is enforced by the archtest
-// that walks imports. This comment documents the intent.
-//
-// runtime/auth.NonceStoreKind is a string type with identical constant values;
-// both types share the same underlying kind so values can be safely converted.
-var _ = NonceStoreKind("") // zero-value self-reference, satisfies linter
-
-// kernelTokenIntentCompileCheck ensures TokenIntent zero-value is valid string.
-var _ = TokenIntent("") // zero-value self-reference, satisfies linter

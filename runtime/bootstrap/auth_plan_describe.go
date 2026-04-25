@@ -69,3 +69,16 @@ func chainContainsAuthMTLS(chain []cell.ListenerAuth) bool {
 	}
 	return false
 }
+
+// explicitAuthNone reports whether the chain contains at least one AuthNone
+// entry, distinguishing a deliberate AuthNone{} from a nil/empty chain omission.
+// Used by the OPS-07 non-loopback Warn log to help operators distinguish
+// "intentionally no auth" from "forgot to wire auth".
+func explicitAuthNone(chain []cell.ListenerAuth) bool {
+	for _, p := range chain {
+		if _, ok := p.(cell.AuthNone); ok {
+			return true
+		}
+	}
+	return false
+}

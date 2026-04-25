@@ -101,13 +101,13 @@ func WithMetricsAuth(a cell.GroupAuth) HealthRouteGroupOption {
 
 // WithReadyzVerboseToken plumbs a verbose-token to the health.Handler's
 // strict-gate path (PR-A35 defense-in-depth). Set this alongside
-// WithReadyzPolicy(PolicyVerboseToken(..., token)) so that both layers see
-// the same secret: the policy middleware 401's at the route group, and the
-// handler 401's defensively if a future misconfiguration drops the policy.
+// WithReadyzAuth(cell.NewAuthVerboseToken(..., token)) so that both layers see
+// the same secret: the auth middleware 401's at the route group, and the
+// handler 401's defensively if a future misconfiguration drops the auth plan.
 //
 // Empty token leaves the handler-level gate disabled — verbose requests
-// then rely solely on the route-group PolicyVerboseToken (or render plain
-// body when no policy is wired and WithReadyzVerboseDisabled is set).
+// then rely solely on the route-group cell.NewAuthVerboseToken (or render plain
+// body when no auth plan is wired and WithReadyzVerboseDisabled is set).
 func WithReadyzVerboseToken(token string) HealthRouteGroupOption {
 	return func(c *healthRouteGroupCfg) { c.verboseToken = token }
 }

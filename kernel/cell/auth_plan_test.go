@@ -54,7 +54,7 @@ func TestAuthPlan_Describe(t *testing.T) {
 	}{
 		{"AuthNone", cell.AuthNone{}, "none"},
 		{"AuthJWT", cell.NewAuthJWT(verifier), "jwt"},
-		{"AuthJWTFromAssembly", cell.NewAuthJWTFromAssembly(asm), "jwt-from-assembly"},
+		{"AuthJWTFromAssembly", cell.NewAuthJWTFromAssembly(asm), "jwt"},
 		{"AuthMTLS", cell.AuthMTLS{}, "mtls"},
 		{"AuthServiceToken", cell.NewAuthServiceToken(store, ring), "service-token"},
 		{"AuthVerboseToken", cell.NewAuthVerboseToken("X-Token", "secret"), "verbose-token"},
@@ -114,7 +114,7 @@ func TestNewAuthJWTFromAssembly_NilPanics(t *testing.T) {
 			t.Error("expected panic for nil assembly, got none")
 		}
 	}()
-	cell.NewAuthJWTFromAssembly(nil) //nolint:staticcheck
+	cell.NewAuthJWTFromAssembly(nil) //nolint:staticcheck // SA1012: deliberate nil arg to test panic guard
 }
 
 func TestNewAuthServiceToken_NilStorePanics(t *testing.T) {

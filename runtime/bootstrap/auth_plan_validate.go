@@ -43,10 +43,11 @@ func (b *Bootstrap) validateAuthPlanAssemblyMatch() error {
 			}
 			// Identity check: same pointer, not just same ID.
 			if p.Assembly != b.assembly {
-				return fmt.Errorf(
-					"bootstrap: listener %q AuthJWTFromAssembly received a different assembly than WithAssembly; "+
-						"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
-					ref.String())
+				return errcode.New(errcode.ErrCellInvalidConfig,
+					fmt.Sprintf(
+						"bootstrap: listener %q AuthJWTFromAssembly carries assembly %q but WithAssembly registered %q; "+
+							"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
+						ref.String(), p.Assembly.ID(), b.assembly.ID()))
 			}
 		}
 	}
@@ -97,23 +98,26 @@ func (b *Bootstrap) validateAuthPlanMTLSBindings(groups []cell.RouteGroup) error
 // VerifyClientCertIfGiven, and has a non-nil ClientCAs pool.
 func validateMTLSTLSConfig(source string, tlsCfg *tls.Config) error {
 	if tlsCfg == nil {
-		return fmt.Errorf(
-			"bootstrap: %s uses AuthMTLS without WithListenerTLS; "+
-				"set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> "+
-				"so the handshake layer enforces the chain",
-			source)
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf(
+				"bootstrap: %s uses AuthMTLS without WithListenerTLS; "+
+					"set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> "+
+					"so the handshake layer enforces the chain",
+				source))
 	}
 	if tlsCfg.ClientAuth < tls.VerifyClientCertIfGiven {
-		return fmt.Errorf(
-			"bootstrap: %s uses AuthMTLS but tls.Config.ClientAuth=%v; "+
-				"set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
-			source, tlsCfg.ClientAuth)
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf(
+				"bootstrap: %s uses AuthMTLS but tls.Config.ClientAuth=%v; "+
+					"set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
+				source, tlsCfg.ClientAuth))
 	}
 	if tlsCfg.ClientCAs == nil {
-		return fmt.Errorf(
-			"bootstrap: %s uses AuthMTLS but tls.Config.ClientCAs is nil; "+
-				"set ClientCAs to the CA pool the handshake should accept",
-			source)
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf(
+				"bootstrap: %s uses AuthMTLS but tls.Config.ClientCAs is nil; "+
+					"set ClientCAs to the CA pool the handshake should accept",
+				source))
 	}
 	return nil
 }

@@ -126,8 +126,8 @@ func TestPhase0_RejectsNilRelayHealth(t *testing.T) {
 
 // TestPhase0_RejectsMutuallyExclusiveAuthOptions was removed in F3 round-3:
 // WithAuthMiddleware and the standalone PolicyJWTFromAssembly Option are gone,
-// so phase0 has nothing to reject. JWT auth flows through cell.Policy on the
-// listener exclusively.
+// so phase0 has nothing to reject. JWT auth flows through []cell.ListenerAuth
+// authChain passed to WithListener.
 
 // Round-3 finding #10: AuthJWTFromAssembly must capture the same assembly
 // instance as WithAssembly. A mismatch would silently discover the verifier
@@ -142,7 +142,9 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "AuthJWTFromAssembly received a different assembly")
+	assert.Contains(t, err.Error(), "AuthJWTFromAssembly carries assembly")
+	assert.Contains(t, err.Error(), "asm-a")
+	assert.Contains(t, err.Error(), "asm-b")
 }
 
 func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {

@@ -117,9 +117,9 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // via auth.Mount with Public:true inside cell RouteGroups bypass JWT
 // verification; FinalizeAuth compiles them into the router's auth predicates.
 //
-// In the new per-listener model this option is most commonly used for the
-// PrimaryListener router. InternalListener routers use PolicyServiceToken or
-// PolicyMTLS at the listener level, not this option.
+// In the per-listener model this option is most commonly used for the
+// PrimaryListener router. InternalListener routers use cell.NewAuthServiceToken
+// or cell.AuthMTLS{} at the listener level, not this option.
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
@@ -224,7 +224,7 @@ func WithEarlyResponder(predicate func(*http.Request) bool, handler http.Handler
 // Intended for routers that intentionally serve auth-declared routes without
 // a JWT verifier — typically the HealthListener (whose framework probes use
 // auth.Mount with Public:true) and the InternalListener (which gates traffic
-// with mTLS or PolicyServiceToken instead of JWT). Without this opt-out the
+// with cell.AuthMTLS{} or cell.NewAuthServiceToken instead of JWT). Without this opt-out the
 // router emits a Warn at every production startup, drowning operators in
 // alert noise. R2-11.
 func WithSuppressNoAuthVerifierWarn() Option {
@@ -660,7 +660,7 @@ func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	if len(p.publicEntries) > 0 {
 		slog.Warn("router: Public:true routes declared on a listener with no JWT middleware; "+
 			"Public:true is a JWT exemption flag and has no effect without an auth verifier — "+
-			"use PolicyJWTFromAssembly(asm) or WithAuthMiddleware(verifier) to install JWT auth",
+			"use cell.NewAuthJWTFromAssembly(asm) as authChain in bootstrap.WithListener to install JWT auth",
 			slog.Int("public_routes", len(p.publicEntries)))
 	}
 }

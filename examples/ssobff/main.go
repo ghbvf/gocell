@@ -136,10 +136,10 @@ func main() {
 	defer stop()
 
 	// Public routes and password-reset-exempt routes are declared by the
-	// accesscore Cell itself via auth.Mount; PolicyJWTFromAssembly is a
-	// cell.Policy whose Validate hook resolves the verifier from accesscore
+	// accesscore Cell itself via auth.Mount; cell.NewAuthJWTFromAssembly(asm)
+	// in the []cell.ListenerAuth authChain resolves the verifier from accesscore
 	// at phase4 and Bootstrap installs the matcher-aware AuthMiddleware on
-	// the primary listener's router (F3 round-3 collapse).
+	// the primary listener's router (PR262 typed auth plan).
 	//
 	// PR-A35 + PR-A14b: /readyz?verbose is policy-gated. Honour
 	// GOCELL_READYZ_VERBOSE_TOKEN if the operator sets one; otherwise waive

@@ -31,25 +31,15 @@ const (
 // All existing code that references auth.Claims continues to compile.
 type Claims = cell.Claims
 
-// IntentTokenVerifier verifies an authentication token, requiring both
-// cryptographic validity and a declared intent (token_use claim + typ header)
-// that matches the expected usage scope. Audience is
-// enforced when the verifier is configured with WithExpectedAudiences.
+// IntentTokenVerifier is a type alias of cell.IntentTokenVerifier so that
+// runtime/auth and kernel/cell share a single canonical interface without
+// conversion at package boundaries. All existing code that references
+// auth.IntentTokenVerifier continues to compile without modification.
 //
-// This is the only verification interface in GoCell. The narrower TokenVerifier
-// interface (Verify without intent) was removed: every production verification
-// path must declare the expected intent to prevent token-confusion attacks
-// (RFC 8725 §3.11).
-//
-// This interface is identical to cell.IntentTokenVerifier; runtime/auth types
-// that implement it automatically satisfy the kernel interface.
-type IntentTokenVerifier interface {
-	// VerifyIntent validates the token and requires that its declared intent
-	// (token_use claim + typ header) matches expected.
-	// Returns ErrAuthInvalidTokenIntent when the intent does not match, is
-	// missing, or header/claim diverge.
-	VerifyIntent(ctx context.Context, token string, expected TokenIntent) (Claims, error)
-}
+// This is the only verification interface in GoCell. Every production
+// verification path must declare the expected intent to prevent token-confusion
+// attacks (RFC 8725 §3.11).
+type IntentTokenVerifier = cell.IntentTokenVerifier
 
 // Authorizer checks whether a subject is allowed to perform an action on a resource.
 // Implementations may use RBAC, ABAC, or external policy engines.

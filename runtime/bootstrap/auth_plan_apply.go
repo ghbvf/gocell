@@ -17,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"sort"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -26,14 +27,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
-// authProvider is the optional cell-level interface that exposes an
-// IntentTokenVerifier for runtime authentication. AuthJWTFromAssembly scans
-// the assembly for cells implementing this interface during phase4.
-//
-// Moved from policy_jwt_from_assembly.go; kept bootstrap-private.
-type authProvider interface {
-	TokenVerifier() auth.IntentTokenVerifier
-}
+// cell.AuthProvider is the kernel-defined interface for auth provider cells.
+// Bootstrap uses it instead of a private interface to eliminate the two-definition
+// redundancy (G — Architecture A1). Any cell whose TokenVerifier() returns a
+// non-nil auth.IntentTokenVerifier automatically satisfies cell.AuthProvider
+// because auth.IntentTokenVerifier and cell.IntentTokenVerifier are structurally
+// identical (auth.TokenIntent = cell.TokenIntent; auth.Claims = cell.Claims).
 
 // applyListenerAuthChain applies all plans in chain to a listener, returning:
 //   - mws:        non-JWT middleware functions to install on the listener mux.
@@ -93,29 +92,29 @@ func (b *Bootstrap) applyListenerAuthChain(
 }
 
 // applyGroupAuth converts a GroupAuth plan into an HTTP middleware function.
-// Returns (nil, "none", nil) for AuthNone or nil auth.
-func applyGroupAuth(plan cell.GroupAuth) (func(http.Handler) http.Handler, string, error) {
+// Returns (nil, nil) for AuthNone or nil auth.
+func applyGroupAuth(plan cell.GroupAuth) (func(http.Handler) http.Handler, error) {
 	if plan == nil {
-		return nil, "none", nil
+		return nil, nil
 	}
 	switch p := plan.(type) {
 	case cell.AuthNone:
-		return nil, "none", nil
+		return nil, nil
 
 	case cell.AuthMTLS:
-		return mtlsMiddleware(), "mtls", nil
+		return mtlsMiddleware(), nil
 
 	case cell.AuthServiceToken:
 		mw := auth.ServiceTokenMiddleware(p.Ring, auth.WithServiceTokenNonceStore(p.Store))
-		return mw, "service-token", nil
+		return mw, nil
 
 	case cell.AuthVerboseToken:
 		mw := verboseTokenMiddleware(p.Header, p.HashedToken)
-		return mw, "verbose-token", nil
+		return mw, nil
 
 	default:
 		// Sealed interface: theoretically unreachable.
-		return nil, "", errcode.New(errcode.ErrCellInvalidConfig,
+		return nil, errcode.New(errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("unknown GroupAuth type %T (sealed interface violation)", plan))
 	}
 }
@@ -127,7 +126,7 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 	refs := sortedListenerRefs(b.listenerConfigs)
 	for _, ref := range refs {
 		cfg := b.listenerConfigs[ref]
-		for i, plan := range cfg.authChain {
+		for _, plan := range cfg.authChain {
 			p, ok := plan.(cell.AuthJWTFromAssembly)
 			if !ok {
 				continue
@@ -137,9 +136,9 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 				return fmt.Errorf("bootstrap: listener %q: %w", ref.String(), err)
 			}
 			// Write back the resolved verifier into the chain element's atomic.Pointer.
-			// Since cfg.authChain[i] is a value copy, p.SetResolved writes through
-			// the internal atomic.Pointer which is shared with the original.
-			cfg.authChain[i].(cell.AuthJWTFromAssembly).SetResolved(v)
+			// p was already extracted via type assertion above; SetResolved writes
+			// through the internal atomic.Pointer which is shared with the original.
+			p.SetResolved(v)
 			// Also update cfg so subsequent reads see the resolved verifier.
 			b.listenerConfigs[ref] = cfg
 		}
@@ -153,26 +152,32 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 //
 // Moved from policy_jwt_from_assembly.go; kept bootstrap-private.
 func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVerifier, error) {
+	if asm == nil {
+		return nil, errcode.New(errcode.ErrCellInvalidConfig,
+			"bootstrap: AuthJWTFromAssembly.Assembly is nil; use cell.NewAuthJWTFromAssembly(asm)")
+	}
 	var (
 		found   auth.IntentTokenVerifier
 		foundID string
 	)
 	for _, id := range asm.CellIDs() {
-		// We need to look up the actual cell — but AssemblyRef is a minimal
-		// interface that doesn't expose Cell(id). We need to use the full
-		// assembly. This is bridged in bootstrap via a local interface.
+		// AssemblyRef is a minimal interface; assemblyWithCell adds Cell(id).
+		// Bootstrap bridges the gap via asmCellLookup.
 		ap, ok := asmCellLookup(asm, id)
 		if !ok {
 			continue
 		}
+		// cell.AuthProvider.TokenVerifier() returns cell.IntentTokenVerifier.
+		// auth.IntentTokenVerifier is a type alias of cell.IntentTokenVerifier
+		// (F6), so the assignment is direct with no runtime conversion needed.
 		v := ap.TokenVerifier()
 		if v == nil {
 			return nil, fmt.Errorf(
-				"bootstrap: cell %q implements authProvider but TokenVerifier() returned nil", id)
+				"bootstrap: cell %q implements cell.AuthProvider but TokenVerifier() returned nil", id)
 		}
 		if found != nil {
 			return nil, fmt.Errorf(
-				"bootstrap: multiple authProvider cells discovered: %q and %q; "+
+				"bootstrap: multiple cell.AuthProvider cells discovered: %q and %q; "+
 					"keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
 				foundID, id)
 		}
@@ -181,7 +186,7 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 	}
 	if found == nil {
 		return nil, fmt.Errorf(
-			"bootstrap: AuthJWTFromAssembly found no authProvider cell in the assembly; " +
+			"bootstrap: AuthJWTFromAssembly found no cell.AuthProvider cell in the assembly; " +
 				"register a cell whose TokenVerifier() returns a non-nil auth.IntentTokenVerifier, " +
 				"or wire the verifier explicitly via cell.NewAuthJWT(verifier)")
 	}
@@ -195,15 +200,15 @@ type assemblyWithCell interface {
 	Cell(id string) cell.Cell
 }
 
-// asmCellLookup type-asserts asm to assemblyWithCell and looks up an authProvider.
+// asmCellLookup type-asserts asm to assemblyWithCell and looks up a cell.AuthProvider.
 // Returns (nil, false) if asm doesn't have the Cell(id) method or the cell doesn't
-// implement authProvider.
-func asmCellLookup(asm cell.AssemblyRef, id string) (authProvider, bool) {
+// implement cell.AuthProvider.
+func asmCellLookup(asm cell.AssemblyRef, id string) (cell.AuthProvider, bool) {
 	awc, ok := asm.(assemblyWithCell)
 	if !ok {
 		return nil, false
 	}
-	ap, ok := awc.Cell(id).(authProvider)
+	ap, ok := awc.Cell(id).(cell.AuthProvider)
 	return ap, ok
 }
 
@@ -278,11 +283,6 @@ func sortedListenerRefs(configs map[cell.ListenerRef]listenerConfig) []cell.List
 	for ref := range configs {
 		refs = append(refs, ref)
 	}
-	// Sort by string representation for deterministic iteration.
-	for i := 1; i < len(refs); i++ {
-		for j := i; j > 0 && refs[j].String() < refs[j-1].String(); j-- {
-			refs[j], refs[j-1] = refs[j-1], refs[j]
-		}
-	}
+	sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
 	return refs
 }
