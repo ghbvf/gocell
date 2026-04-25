@@ -1,6 +1,7 @@
 package identitymanage
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
@@ -16,6 +17,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -825,15 +828,115 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 // TestService_Create_RequireNotBlankShortCircuitsOnFirstField asserts the
 // validator returns on the FIRST blank field in declaration order
 // (username → email → password), matching setup.CreateAdmin's order so the
-// two paths produce identical messages for identical inputs.
+// two paths produce identical messages for identical inputs. Asserts both
+// the typed error code (stable contract) and the field-name message
+// (debuggability).
 func TestService_Create_RequireNotBlankShortCircuitsOnFirstField(t *testing.T) {
 	svc := newTestService()
 	_, err := svc.Create(context.Background(), CreateInput{
 		Username: "", Email: "", Password: "",
 	})
 	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code,
+		"blank-input rejection must route the typed identity-invalid-input code regardless of which field short-circuits")
 	assert.Contains(t, err.Error(), "username is required",
 		"validator must short-circuit on the first declared field; setup.CreateAdmin uses the same order")
 	assert.NotContains(t, err.Error(), "email is required")
 	assert.NotContains(t, err.Error(), "password is required")
+}
+
+// ---------------------------------------------------------------------------
+// PR-CFG-H — Lock failure-injection coverage (review six-role P2-1)
+// ---------------------------------------------------------------------------
+
+// spyEmitter implements outbox.Emitter, counting calls and returning a fixed
+// error so tests can assert publish-path failure handling. err == nil makes
+// it pure-counter spy.
+type spyEmitter struct {
+	err   error
+	calls int
+}
+
+func (e *spyEmitter) Emit(_ context.Context, _ outbox.Entry) error {
+	e.calls++
+	return e.err
+}
+
+// failingRefreshStore wraps a real refresh.Store and forces RevokeUser to
+// return a fixed error, exercising Lock's refresh-revoke failure branch
+// (review P2-1).
+type failingRefreshStore struct {
+	refresh.Store
+	revokeUserErr error
+	calls         int
+}
+
+func (s *failingRefreshStore) RevokeUser(_ context.Context, _ string) error {
+	s.calls++
+	return s.revokeUserErr
+}
+
+// TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog asserts the
+// Lock transaction aborts on refresh-store revoke failure: the error wraps
+// the call-site prefix, the outbox publish does not run (would commit a
+// "user.locked" event for a still-unrevoked refresh chain), and the success
+// log line does not fire (would mislead operators).
+func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	domainUser, err := domain.NewUser("rf-fail", "rf@e.t", "hash")
+	require.NoError(t, err)
+	domainUser.ID = "usr-rf-fail"
+	require.NoError(t, userRepo.Create(context.Background(), domainUser))
+
+	failRefresh := &failingRefreshStore{
+		Store:         newIdentityRefreshStore(),
+		revokeUserErr: errors.New("refresh DB unavailable"),
+	}
+	emitter := &spyEmitter{}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	svc, err := NewService(userRepo, mem.NewSessionRepository(), failRefresh, logger,
+		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	err = svc.Lock(context.Background(), "usr-rf-fail")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "lock revoke refresh chains",
+		"error must wrap the refresh-revoke call-site prefix")
+	assert.Contains(t, err.Error(), "refresh DB unavailable", "underlying error must be unwrapable")
+	assert.Equal(t, 1, failRefresh.calls, "refresh.RevokeUser was attempted once")
+	assert.Equal(t, 0, emitter.calls,
+		"publish must not run after refresh-revoke failure: tx must abort first or a TopicUserLocked event would commit while the refresh chain stays live")
+	assert.Nil(t, sloghelper.FindLogEntry(buf.String(), "user locked"),
+		"success log line must not fire when the tx aborts")
+}
+
+// TestService_Lock_PublishFailureAbortsBeforeLog asserts the success log
+// does not fire when the outbox publish itself fails: the failed publish is
+// the last step inside the tx, so a missing log line is the operator-visible
+// signal that the lock was not durably announced.
+func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	domainUser, err := domain.NewUser("pub-fail", "pub@e.t", "hash")
+	require.NoError(t, err)
+	domainUser.ID = "usr-pub-fail"
+	require.NoError(t, userRepo.Create(context.Background(), domainUser))
+
+	emitter := &spyEmitter{err: errors.New("broker unavailable")}
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	svc, err := NewService(userRepo, mem.NewSessionRepository(), newIdentityRefreshStore(), logger,
+		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	err = svc.Lock(context.Background(), "usr-pub-fail")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "broker unavailable", "underlying publish error must be unwrapable")
+	assert.Equal(t, 1, emitter.calls, "publish was attempted exactly once for TopicUserLocked")
+	assert.Nil(t, sloghelper.FindLogEntry(buf.String(), "user locked"),
+		"success log line must not fire when the tx publish step fails")
 }

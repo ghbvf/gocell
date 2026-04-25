@@ -292,14 +292,26 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 // revoke and the outbox publish all run inside the same RunInTx closure. A
 // concurrent transaction that mutates the user between the read and the write
 // would otherwise be silently lost (audit S-3).
+//
+// The transactional body lives in lockUserAndRevokeSessions to keep this
+// outer method's cognitive complexity within the CLAUDE.md ≤15 budget that
+// the 5-step closure would otherwise blow past (mirrors the
+// updatePasswordAndRevokeSessions split used by ChangePassword).
 func (s *Service) Lock(ctx context.Context, id string) error {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", id),
 	); err != nil {
 		return err
 	}
+	if err := s.lockUserAndRevokeSessions(ctx, id); err != nil {
+		return err
+	}
+	s.logger.Info("user locked", slog.String("user_id", id))
+	return nil
+}
 
-	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id string) error {
+	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		user, err := s.repo.GetByID(txCtx, id)
 		if err != nil {
 			return fmt.Errorf("identity-manage: lock: %w", err)
@@ -323,12 +335,7 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 			return err
 		}
 		return nil
-	}); err != nil {
-		return err
-	}
-
-	s.logger.Info("user locked", slog.String("user_id", id))
-	return nil
+	})
 }
 
 // Unlock unlocks a user account.
