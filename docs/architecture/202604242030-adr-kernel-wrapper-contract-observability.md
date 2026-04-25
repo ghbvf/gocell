@@ -299,13 +299,22 @@ same hook is easy to thread through `middleware.WithErrorRedactor`.
 
 Two new strict-only governance rules land with this PR:
 
-- **FMT-18 SPEC-CONTRACT-SYNC**: `gocell validate --strict` scans
-  `cells/**/*.go` for `wrapper.ContractSpec{...}` literals and
-  cross-checks each against `contracts/**/contract.yaml`. Drift
-  between Kind / Method / Path (for http) or the ID lookup (for
-  event) fails the CI gate. `examples/**` is exempt — demo routes
-  frequently carry contract IDs without backing YAML by design.
-  Implements the long-deferred check the pilot
+- **FMT-18 SPEC-CONTRACT-SYNC**: `gocell validate --strict` parses
+  `cells/**/*.go` with `go/parser` (AST, not regex) and extracts
+  both `wrapper.ContractSpec{...}` composite literals **and**
+  `wrapper.EventSpec(id, transport)` call expressions. Each finding
+  is cross-checked against `contracts/**/contract.yaml`: drift
+  between Kind / Method / Path (http) or ID lookup (event) fails
+  the CI gate. The AST scan is alias-aware (e.g. `import w "…/wrapper"`)
+  and walks the file's import set + identifier resolution to filter
+  to the real `kernel/wrapper` package. When a `ContractSpec.ID` /
+  `EventSpec(id, …)` argument is not a string literal (e.g. a
+  computed expression or unexported const from another file), the
+  literal is recorded with `unresolved=true` and surfaces as a
+  WARNING — the rule cannot prove drift but tells the reviewer to
+  inline the literal or add a test. `examples/**` is exempt — demo
+  routes frequently carry contract IDs without backing YAML by
+  design. Implements the long-deferred check the pilot
   `TODO(FMT-17)` markers pointed at, and makes the
   "ContractSpec is a value type duplicated alongside YAML" choice
   in §2 safe in the long run.
