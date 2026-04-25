@@ -62,8 +62,8 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 	var onStartCalled bool
 
 	b := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newIntegrationListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newIntegrationListener(t))),
 		WithShutdownTimeout(3*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -142,7 +142,7 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 	// Run proceeds to the lifecycle.Start phase.
 	integLn := newIntegrationListener(t)
 	b := New(
-		WithListener(cell.PrimaryListener, integLn.Addr().String(), cell.Policy{}, WithListenerNet(integLn)),
+		WithListener(cell.PrimaryListener, integLn.Addr().String(), nil, WithListenerNet(integLn)),
 		WithShutdownTimeout(3*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			// Hook A: succeeds; its OnStop must run during rollback.

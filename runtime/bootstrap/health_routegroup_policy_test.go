@@ -34,9 +34,9 @@ func TestRouteGroupPolicy_VerboseTokenOnReadyz_E2E(t *testing.T) {
 
 	app := New(
 		WithAssembly(asm),
-		WithListener(cell.HealthListener, healthAddr, cell.Policy{}, WithListenerNet(healthLn)),
+		WithListener(cell.HealthListener, healthAddr, nil, WithListenerNet(healthLn)),
 		WithHealthRoutes(
-			WithReadyzPolicy(PolicyVerboseToken(headerName, token)),
+			WithReadyzAuth(cell.NewAuthVerboseToken(headerName, token)),
 		),
 		WithShutdownTimeout(2*time.Second),
 	)
@@ -119,9 +119,9 @@ func TestRouteGroupPolicy_LivezUnaffectedByReadyzPolicy(t *testing.T) {
 
 	app := New(
 		WithAssembly(asm),
-		WithListener(cell.HealthListener, healthAddr, cell.Policy{}, WithListenerNet(healthLn)),
+		WithListener(cell.HealthListener, healthAddr, nil, WithListenerNet(healthLn)),
 		WithHealthRoutes(
-			WithReadyzPolicy(PolicyVerboseToken("X-Readyz-Token", "secret")),
+			WithReadyzAuth(cell.NewAuthVerboseToken("X-Readyz-Token", "secret")),
 		),
 		WithShutdownTimeout(2*time.Second),
 	)
