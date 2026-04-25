@@ -135,7 +135,7 @@ func (b *InMemoryEventBus) Publish(_ context.Context, topic string, payload []by
 	if unmarshalErr != nil {
 		slog.Warn("eventbus: rejecting invalid envelope, routing to dead letter",
 			slog.String("topic", topic),
-			slog.String("error", unmarshalErr.Error()))
+			slog.Any("error", unmarshalErr))
 		b.appendDeadLetter(topic, outbox.Entry{Topic: topic}, unmarshalErr)
 		return unmarshalErr
 	}
@@ -433,7 +433,7 @@ func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entr
 				slog.Warn("eventbus: receipt commit failed, downgrading Ack to Requeue",
 					slog.String("topic", topic),
 					slog.String("entry_id", entry.ID),
-					slog.String("error", commitErr.Error()))
+					slog.Any("error", commitErr))
 				return false, commitErr
 			}
 		}
@@ -543,7 +543,7 @@ func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string)
 		slog.Error("eventbus: receipt commit failed",
 			slog.String("topic", topic),
 			slog.String("entry_id", entryID),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		return err
 	}
 	return nil
@@ -557,7 +557,7 @@ func releaseReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string
 		slog.Error("eventbus: receipt release failed",
 			slog.String("topic", topic),
 			slog.String("entry_id", entryID),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 	}
 }
 

@@ -397,7 +397,7 @@ func (c *Connection) reconnectLoop() {
 			}
 			if amqpErr != nil {
 				slog.Warn("rabbitmq: connection lost, reconnecting",
-					slog.String("error", amqpErr.Error()))
+					slog.Any("error", amqpErr))
 			}
 		}
 
@@ -529,7 +529,7 @@ func (c *Connection) drainChannelPool() {
 		case ch := <-c.channelPool:
 			if err := ch.Close(); err != nil {
 				slog.Debug("rabbitmq: error closing pooled channel",
-					slog.String("error", err.Error()))
+					slog.Any("error", err))
 			}
 		default:
 			return
@@ -577,7 +577,7 @@ func (c *Connection) ReleaseChannel(ch AMQPChannel) {
 	default:
 		if err := ch.Close(); err != nil {
 			slog.Debug("rabbitmq: error closing excess channel",
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
 		}
 	}
 }

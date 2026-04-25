@@ -143,7 +143,7 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 				slog.String("topic", topic),
 				slog.String("entry_id", entry.ID),
 				slog.String("event_type", entry.EventType),
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
 			e.failOpenDroppedCv.With(metrics.Labels{
 				"cell":  e.cellID,
 				"topic": topic,

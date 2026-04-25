@@ -349,7 +349,7 @@ func logInitialAdminCredPath() {
 		// GOCELL_STATE_DIR is not absolute — the bootstrapper will fail-fast too,
 		// so log the error here and let the user fix the config.
 		slog.Warn("corebundle: invalid GOCELL_STATE_DIR; initial admin credential path unresolvable",
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		return
 	}
 	slog.Info("corebundle: starting; if first run, initial admin credentials are written to "+credPath,

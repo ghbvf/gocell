@@ -63,7 +63,7 @@ func BuildApp(
 				// handling a primary error and cannot propagate rollback errors
 				// to the caller without losing the root cause.
 				slog.Warn("BuildApp: provisional rollback Close failed",
-					slog.String("error", stopErr.Error()))
+					slog.Any("error", stopErr))
 			}
 		}
 	}
