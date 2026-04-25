@@ -90,7 +90,7 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 	}
 	s.cache.versions[event.Key] = event.Version
 	s.cache.mu.Unlock()
-	s.logger.Info("config-subscribe: cache updated",
+	s.logger.Debug("config-subscribe: cache updated",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	return nil
@@ -111,7 +111,7 @@ func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) erro
 	s.cache.mu.Unlock()
 
 	if existed {
-		s.logger.Info("config-subscribe: key deleted from cache",
+		s.logger.Debug("config-subscribe: key deleted from cache",
 			slog.String("key", event.Key))
 	} else {
 		s.logger.Debug("config-subscribe: delete event for unknown key (idempotent)",

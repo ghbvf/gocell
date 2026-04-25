@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -158,14 +159,14 @@ func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry
 	// Metadata-only: event carries key+version only.
 	// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
 	// ref: NATS subject+bytes / Watermill payload-bytes boundary.
-	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryUpserted, domain.ConfigEntryUpsertedEvent{
+	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
 		Key:     entry.Key,
 		Version: entry.Version,
 	})
 }
 
 func (s *Service) publishDeleted(ctx context.Context, entry *domain.ConfigEntry) error {
-	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryDeleted, domain.ConfigEntryDeletedEvent{
+	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryDeleted, configevents.EntryDeleted{
 		Key: entry.Key,
 	})
 }

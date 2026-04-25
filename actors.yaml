@@ -8,10 +8,10 @@
   maxConsistencyLevel: L4
 - id: external-audit-sink
   type: external
-  maxConsistencyLevel: L4
+  maxConsistencyLevel: L2
 - id: example-iot-platform
   type: external
   maxConsistencyLevel: L4
 - id: example-order-platform
   type: external
-  maxConsistencyLevel: L4
+  maxConsistencyLevel: L2

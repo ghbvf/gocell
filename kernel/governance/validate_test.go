@@ -2565,7 +2565,7 @@ func TestADV05(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "draft lifecycle empty subscribers should error (draft not exempt)",
+			name: "draft lifecycle with empty subscribers → 0 findings (draft exempt)",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["event.draft.nosubscribers.v1"] = &metadata.ContractMeta{
 					ID:               "event.draft.nosubscribers.v1",
@@ -2579,11 +2579,10 @@ func TestADV05(t *testing.T) {
 					},
 				}
 			},
-			wantCount: 1,
-			wantSev:   SeverityError,
+			wantCount: 0,
 		},
 		{
-			name: "draft lifecycle with subscribers → 0 findings",
+			name: "draft lifecycle with subscribers → 0 findings (draft exempt)",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Contracts["event.draft.withsubs.v1"] = &metadata.ContractMeta{
 					ID:               "event.draft.withsubs.v1",
@@ -4057,7 +4056,7 @@ func TestOUTGUARD01(t *testing.T) {
 	}
 }
 
-func TestOUTGUARD01_L3_L4_Warning(t *testing.T) {
+func TestOUTGUARD01_L3_L4_Error(t *testing.T) {
 	pm := validProject()
 	// Suppress existing L2 warnings.
 	pm.Cells["accesscore"].DurabilityMode = "durable"

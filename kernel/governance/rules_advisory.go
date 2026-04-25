@@ -69,18 +69,19 @@ func (v *Validator) validateADV04() []ValidationResult {
 // validateADV05 checks that active event contracts have at least one subscriber.
 // An event contract with lifecycle "active" and an empty (or nil) subscribers list
 // is a dead event — it will never be consumed and its producer is publishing to
-// no one. The contract must either be marked lifecycle: deprecated or a subscriber
-// must be added.
+// no one. The contract must either be wired with subscribers or moved out of active.
 //
-// lifecycle "deprecated" is explicitly exempted because the contract is already
-// on its way out; non-event contracts (http, command, projection) are not checked.
+// Only lifecycle "active" is checked. Draft contracts are allowed to be unwired
+// during the design phase — subscribers are not required until the contract
+// transitions to active. Deprecated contracts are on their way out and are also
+// exempt. Non-event contracts (http, command, projection) are not checked.
 func (v *Validator) validateADV05() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if c.Kind != "event" {
 			continue
 		}
-		if c.Lifecycle == "deprecated" {
+		if c.Lifecycle != "active" {
 			continue
 		}
 		if len(c.Endpoints.Subscribers) == 0 {

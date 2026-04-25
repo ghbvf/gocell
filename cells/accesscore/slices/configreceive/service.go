@@ -48,7 +48,7 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err))
 	}
 
-	s.logger.Info("config-receive: config upserted",
+	s.logger.Debug("config-receive: config upserted",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	return nil
@@ -63,6 +63,6 @@ func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) erro
 		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err))
 	}
 
-	s.logger.Info("config-receive: config deleted", slog.String("key", event.Key))
+	s.logger.Debug("config-receive: config deleted", slog.String("key", event.Key))
 	return nil
 }

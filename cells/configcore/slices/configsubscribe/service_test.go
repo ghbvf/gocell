@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -15,7 +16,7 @@ import (
 // makeEntryUpserted builds a metadata-only outbox.Entry for entry-upserted.
 // The payload carries only key+version — no value field.
 func makeEntryUpserted(key string, version int) outbox.Entry {
-	payload, _ := json.Marshal(domain.ConfigEntryUpsertedEvent{
+	payload, _ := json.Marshal(configevents.EntryUpserted{
 		Key:     key,
 		Version: version,
 	})
@@ -23,7 +24,7 @@ func makeEntryUpserted(key string, version int) outbox.Entry {
 }
 
 func makeEntryDeleted(key string) outbox.Entry {
-	payload, _ := json.Marshal(domain.ConfigEntryDeletedEvent{Key: key})
+	payload, _ := json.Marshal(configevents.EntryDeleted{Key: key})
 	return outbox.Entry{ID: "test-delete", Topic: domain.TopicConfigEntryDeleted, Payload: payload}
 }
 
