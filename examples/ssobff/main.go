@@ -173,8 +173,13 @@ func main() {
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
+	// Listener address defaults follow docs/ops/listener-topology.md:
+	// primary on :8081 (public), internal + health on loopback (control
+	// plane / probes never face the public network without explicit
+	// override). All three accept ENV overrides for smoke tests and
+	// containerised deployments.
 	primaryAddr := envOr("GOCELL_SSOBFF_PRIMARY_ADDR", ":8081")
-	internalAddr := envOr("GOCELL_SSOBFF_INTERNAL_ADDR", ":9081")
+	internalAddr := envOr("GOCELL_SSOBFF_INTERNAL_ADDR", "127.0.0.1:9081")
 	healthAddr := envOr("GOCELL_SSOBFF_HEALTH_ADDR", "127.0.0.1:9091")
 
 	app := bootstrap.New(

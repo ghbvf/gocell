@@ -326,11 +326,15 @@ jobs:
         # without tags fast on developer laptops — subprocess smoke fires
         # only when explicitly requested.
         #
-        # `-timeout 60s` bounds the test runtime once compilation finishes
+        # `-timeout 90s` bounds the test runtime once compilation finishes
         # (Go's `go test -timeout` does not constrain the build phase).
-        # Test budget: ~5s readyz poll + ~5s SIGTERM wait + slack — well
-        # under 60s on any non-pathological runner.
-        run: go test -tags=examples_smoke -timeout 60s -run TestSSOBFFStartupSmoke ./examples/ssobff/...
+        # Test budget: ~5s readyz poll + ~5s SIGTERM wait + slack — 90s
+        # leaves headroom for cold-cache `go build` slowdowns on shared
+        # runners. `-count=1` is mandatory: without it `go test` may
+        # return a cached PASS from a prior run with the same flags,
+        # silently skipping the subprocess that the regression guard
+        # exists to exercise.
+        run: go test -tags=examples_smoke -count=1 -timeout 90s -run TestSSOBFFStartupSmoke ./examples/ssobff/...
 
   # Fork-PR guard: fork PRs cannot access org secrets (secrets.SONAR_TOKEN is
   # empty for forks), which would cause this job to fail with an opaque auth

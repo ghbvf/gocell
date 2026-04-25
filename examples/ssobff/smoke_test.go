@@ -23,11 +23,37 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"syscall"
 	"testing"
 	"time"
 )
+
+// smokeEnvAllowlist is the set of host environment variables we forward to
+// the ssobff subprocess. Using an allowlist (instead of os.Environ() pass-
+// through) keeps CI secrets — GITHUB_TOKEN, SONAR_TOKEN, anything in the
+// runner job env — from crossing into the child binary. The kept variables
+// cover Go toolchain plumbing and PATH/HOME-style basics needed by `go run`
+// or any future helper command we shell out to.
+var smokeEnvAllowlist = map[string]struct{}{
+	"PATH":           {},
+	"HOME":           {},
+	"USER":           {},
+	"TMPDIR":         {},
+	"GOPATH":         {},
+	"GOCACHE":        {},
+	"GOMODCACHE":     {},
+	"GOTMPDIR":       {},
+	"GOROOT":         {},
+	"LANG":           {},
+	"LC_ALL":         {},
+	"SYSTEMROOT":     {},
+	"COMSPEC":        {},
+	"WINDIR":         {},
+	"PROGRAMFILES":   {},
+	"PROGRAMFILESX86": {},
+}
 
 // TestSSOBFFStartupSmoke boots ./examples/ssobff as a subprocess, waits up
 // to 5 s for /readyz on the dedicated health listener (127.0.0.1:9091),
@@ -71,11 +97,15 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 
 	logs := newSyncBuffer()
 	cmd := exec.Command(binPath)
-	cmd.Env = append(os.Environ(),
+	cmd.Env = append(filteredEnv(),
 		"GOCELL_STATE_DIR="+stateDir,
 		"GOCELL_SSOBFF_PRIMARY_ADDR="+smokePrimaryAddr,
 		"GOCELL_SSOBFF_INTERNAL_ADDR="+smokeInternalAddr,
 		"GOCELL_SSOBFF_HEALTH_ADDR="+smokeHealthAddr,
+		// PR-CFG-F made the internal listener service-token mandatory; the
+		// process fails fast when this is missing or shorter than 32 bytes.
+		// A literal 32-byte filler keeps the smoke test self-contained.
+		"GOCELL_SSOBFF_SERVICE_SECRET=ssobff-smoke-service-secret-32b!!",
 	)
 	cmd.Stdout = logs
 	cmd.Stderr = logs
@@ -83,22 +113,27 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start ssobff: %v", err)
 	}
-	// `waited` is closed by whichever path reaches Wait first (the SIGTERM
-	// goroutine on the happy path, the cleanup on early failures). The
-	// cleanup checks it before issuing its own Wait so we never call
-	// cmd.Wait twice — `exec.Cmd.Wait` documents "Callers may call Wait at
-	// most once" and a second call races on Cmd.ProcessState under -race.
-	waited := make(chan struct{})
+	// Single-Wait discipline: the goroutine below is the sole caller of
+	// cmd.Wait (`exec.Cmd.Wait` documents "Callers may call Wait at most
+	// once"). `done` is closed (not send) so multiple receivers — the
+	// happy-path select and the cleanup hook — can both observe
+	// completion without competing for a single value.
+	var waitErr error
+	done := make(chan struct{})
+	go func() {
+		waitErr = cmd.Wait()
+		close(done)
+	}()
 	t.Cleanup(func() {
 		if cmd.Process != nil {
-			_ = cmd.Process.Signal(syscall.SIGKILL)
+			// Kill is the cross-platform "force terminate" entry point:
+			// SIGKILL on POSIX, TerminateProcess on Windows. It is a
+			// no-op (ErrProcessDone) once the process has already exited
+			// via the SIGTERM path, so the call is safe in both happy
+			// and failure paths.
+			_ = cmd.Process.Kill()
 		}
-		select {
-		case <-waited:
-			// happy path Wait already ran
-		default:
-			_ = cmd.Wait()
-		}
+		<-done // wait for cmd.Wait to release stdout/stderr pipes before TempDir teardown
 	})
 
 	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
@@ -107,23 +142,45 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 		t.Fatalf("ssobff /readyz did not return 200 within 5s\nlogs:\n%s", logs.String())
 	}
 
-	if err := cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := sigtermProcess(cmd); err != nil {
 		t.Fatalf("send SIGTERM: %v", err)
 	}
 
-	done := make(chan error, 1)
-	go func() {
-		done <- cmd.Wait()
-		close(waited)
-	}()
 	select {
-	case err := <-done:
-		if err != nil {
-			t.Fatalf("ssobff exited non-zero on SIGTERM: %v\nlogs:\n%s", err, logs.String())
+	case <-done:
+		if waitErr != nil {
+			t.Fatalf("ssobff exited non-zero on SIGTERM: %v\nlogs:\n%s", waitErr, logs.String())
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatalf("ssobff did not exit within 5s of SIGTERM\nlogs:\n%s", logs.String())
 	}
+}
+
+// filteredEnv returns os.Environ() trimmed to the keys in smokeEnvAllowlist.
+// See smokeEnvAllowlist's doc comment for the rationale.
+func filteredEnv() []string {
+	src := os.Environ()
+	out := make([]string, 0, len(smokeEnvAllowlist))
+	for _, kv := range src {
+		k, _, found := strings.Cut(kv, "=")
+		if !found {
+			continue
+		}
+		if _, ok := smokeEnvAllowlist[strings.ToUpper(k)]; ok {
+			out = append(out, kv)
+		}
+	}
+	return out
+}
+
+// sigtermProcess sends SIGTERM to cmd. The outer test skips on Windows
+// (where SIGTERM has no graceful-shutdown semantics), so this lives in
+// the smoke_test.go body with no GOOS guard.
+func sigtermProcess(cmd *exec.Cmd) error {
+	if cmd.Process == nil {
+		return nil
+	}
+	return cmd.Process.Signal(syscall.SIGTERM)
 }
 
 // pollReadyz hits url every 100 ms until a 200 is observed or ctx expires.
@@ -132,7 +189,14 @@ func pollReadyz(ctx context.Context, url string) bool {
 	defer tick.Stop()
 	client := &http.Client{Timeout: 500 * time.Millisecond}
 	for {
-		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			// URL is a const literal so this is unreachable in practice,
+			// but `_ = err` violates the project's error-handling rule
+			// and would mask a future regression that swaps the URL
+			// for an env-derived value.
+			return false
+		}
 		if resp, err := client.Do(req); err == nil {
 			_ = resp.Body.Close()
 			if resp.StatusCode == http.StatusOK {
