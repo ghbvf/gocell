@@ -147,8 +147,9 @@ func main() {
 	// out of the box without exposing internal topology anonymously.
 	healthOpts := []bootstrap.HealthRouteGroupOption{}
 	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
-		healthOpts = append(healthOpts, bootstrap.WithReadyzPolicy(
-			bootstrap.PolicyVerboseToken("X-Readyz-Token", tok)))
+		healthOpts = append(healthOpts, bootstrap.WithReadyzAuth(
+			cell.NewAuthVerboseToken("X-Readyz-Token", tok)))
+		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseToken(tok))
 	} else {
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
@@ -156,8 +157,8 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithListener(cell.PrimaryListener, ":8081", bootstrap.PolicyJWTFromAssembly(asm)),
-		bootstrap.WithListener(cell.InternalListener, ":9081", cell.Policy{}),
+		bootstrap.WithListener(cell.PrimaryListener, ":8081", []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
+		bootstrap.WithListener(cell.InternalListener, ":9081", nil),
 		bootstrap.WithHealthRoutes(healthOpts...),
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
 	)

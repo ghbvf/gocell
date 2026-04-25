@@ -62,23 +62,24 @@ func main() {
 	ctx, stop := shutdown.NotifyContext(context.Background())
 	defer stop()
 
-	// PR-A35 + PR-A14b: /readyz?verbose is policy-gated. When the operator
-	// sets GOCELL_READYZ_VERBOSE_TOKEN, attach PolicyVerboseToken to the
+	// PR-A35 + PR-A14b: /readyz?verbose is auth-gated. When the operator
+	// sets GOCELL_READYZ_VERBOSE_TOKEN, attach AuthVerboseToken to the
 	// readyz route group; otherwise waive the verbose endpoint via
 	// WithReadyzVerboseDisabled so the demo binary keeps starting out of the
 	// box without exposing internal topology anonymously.
 	healthOpts := []bootstrap.HealthRouteGroupOption{}
 	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
-		healthOpts = append(healthOpts, bootstrap.WithReadyzPolicy(
-			bootstrap.PolicyVerboseToken("X-Readyz-Token", tok)))
+		healthOpts = append(healthOpts, bootstrap.WithReadyzAuth(
+			cell.NewAuthVerboseToken("X-Readyz-Token", tok)))
+		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseToken(tok))
 	} else {
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ":8082", cell.Policy{}),
-		bootstrap.WithListener(cell.InternalListener, ":9082", cell.Policy{}),
+		bootstrap.WithListener(cell.PrimaryListener, ":8082", nil),
+		bootstrap.WithListener(cell.InternalListener, ":9082", nil),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	)
 

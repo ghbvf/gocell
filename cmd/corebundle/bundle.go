@@ -67,16 +67,16 @@ func defaultRuntimeOptions(
 	// internal (/internal/v1/* + service-token auth), health (/healthz /readyz
 	// /metrics on a dedicated port).
 	//
-	// Primary listener: PolicyJWTFromAssembly discovers IntentTokenVerifier from
-	// accesscore post-Init (lazy on first request, fail-closed).
-	// Internal listener: PolicyServiceToken from InternalGuard (nil → PolicyNone
+	// Primary listener: AuthJWTFromAssembly discovers IntentTokenVerifier from
+	// accesscore post-Init (lazy phase4 resolution, fail-closed).
+	// Internal listener: AuthServiceToken from InternalGuard (nil → no auth
 	// in dev mode where GOCELL_SERVICE_SECRET is unset).
 	// Health listener: framework-owned /healthz, /readyz, /metrics route groups;
-	// when shared.VerboseToken is set, PolicyVerboseToken is attached to the
+	// when shared.VerboseToken is set, AuthVerboseToken is attached to the
 	// /readyz group so verbose responses require a bearer token.
 	//
 	// ref: go-kratos/kratos app.go — per-server option pattern.
-	internalPolicy := buildInternalPolicy(shared.InternalGuard)
+	internalChain := buildInternalAuthChain(shared.InternalGuard)
 
 	healthRouteOpts := []bootstrap.HealthRouteGroupOption{
 		bootstrap.WithMetricsHandler(metricsHandler),
@@ -84,13 +84,13 @@ func defaultRuntimeOptions(
 	if shared.VerboseToken != "" {
 		// Two layers consulting the same token (PR-A35 defense-in-depth +
 		// PR-A14b R2-01 single-config-source):
-		//  - WithReadyzPolicy: PolicyVerboseToken middleware on the route
+		//  - WithReadyzAuth: AuthVerboseToken middleware on the route
 		//    group 401's at the listener layer.
 		//  - WithReadyzVerboseToken: health.Handler's strict gate 401's at
 		//    the handler layer.
 		healthRouteOpts = append(healthRouteOpts,
-			bootstrap.WithReadyzPolicy(
-				bootstrap.PolicyVerboseToken("X-Readyz-Token", shared.VerboseToken),
+			bootstrap.WithReadyzAuth(
+				cell.NewAuthVerboseToken("X-Readyz-Token", shared.VerboseToken),
 			),
 			bootstrap.WithReadyzVerboseToken(shared.VerboseToken),
 		)
@@ -108,37 +108,36 @@ func defaultRuntimeOptions(
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
 	}
-	// Primary listener carries the JWT auth policy. PolicyJWTFromAssembly
-	// resolves an IntentTokenVerifier from an authProvider cell during phase4
-	// (Validate hook). Tests that pre-bind their own listener still go through
-	// this path — they inject the same listener via extra bootstrap.WithListener
-	// options downstream.
+	// Primary listener carries the JWT auth plan. AuthJWTFromAssembly
+	// resolves an IntentTokenVerifier from an authProvider cell during phase4.
+	// Tests that pre-bind their own listener still go through this path —
+	// they inject the same listener via extra bootstrap.WithListener options downstream.
 	if shared.PrimaryHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(
 			cell.PrimaryListener, shared.PrimaryHTTPAddr,
-			bootstrap.PolicyJWTFromAssembly(asm),
+			[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)},
 		))
 	}
 	if shared.InternalHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalPolicy))
+		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalChain))
 	}
 	// B2: HealthListener is required when a metrics handler is configured.
 	// Production deployments always set GOCELL_HTTP_HEALTH_ADDR.
 	// Tests inject their own HealthListener via extra bootstrap.WithListener options.
 	if shared.HealthHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, cell.Policy{}))
+		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, nil))
 	}
 	return opts
 }
 
-// buildInternalPolicy constructs the policy for the internal listener.
-// In dev mode (InternalGuard == nil) PolicyNone is used; in production the
-// InternalGuard's store and ring are promoted to PolicyServiceToken.
-func buildInternalPolicy(guard *internalGuard) cell.Policy {
+// buildInternalAuthChain constructs the auth chain for the internal listener.
+// In dev mode (InternalGuard == nil) nil is returned (no auth); in production
+// the InternalGuard's store and ring are promoted to AuthServiceToken.
+func buildInternalAuthChain(guard *internalGuard) []cell.ListenerAuth {
 	if guard == nil {
-		return bootstrap.PolicyNone()
+		return nil
 	}
-	return bootstrap.PolicyServiceToken(guard.NonceStore(), guard.ring)
+	return []cell.ListenerAuth{cell.NewAuthServiceToken(guard.NonceStore(), guard.ring)}
 }
 
 // buildKeyProvider constructs the KeyProvider from the supplied providerName,
