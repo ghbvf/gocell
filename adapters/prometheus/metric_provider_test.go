@@ -252,6 +252,255 @@ func TestMetricProvider_Registered_AlwaysTrue(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// HistogramVec AlreadyRegisteredError branches
+// ---------------------------------------------------------------------------
+
+// TestMetricProvider_HistogramVec_DuplicateReturnsExisting verifies that a
+// second HistogramVec registration with the same name returns the existing
+// collector (AlreadyRegisteredError reuse path) without error — mirroring the
+// CounterVec idempotent pattern.
+func TestMetricProvider_HistogramVec_DuplicateReturnsExisting(t *testing.T) {
+	p, reg := newTestProvider(t)
+	opts := metrics.HistogramOpts{
+		Name:       "dup_hist_seconds",
+		Help:       "h",
+		LabelNames: []string{"phase"},
+		Buckets:    []float64{0.1, 1.0},
+	}
+	hv1, err := p.HistogramVec(opts)
+	if err != nil {
+		t.Fatalf("first HistogramVec: %v", err)
+	}
+	hv2, err := p.HistogramVec(opts)
+	if err != nil {
+		t.Fatalf("duplicate HistogramVec must succeed (return existing), got error: %v", err)
+	}
+	// Both vecs must be functional and share the same underlying collector.
+	hv1.With(metrics.Labels{"phase": "start"}).Observe(0.05)
+	hv2.With(metrics.Labels{"phase": "start"}).Observe(0.50)
+	// Exactly 1 series since both writes go to the same underlying histogram.
+	if cnt := testutil.CollectAndCount(reg, "gocelltest_dup_hist_seconds"); cnt != 1 {
+		t.Fatalf("expected 1 series after shared histogram writes, got %d", cnt)
+	}
+}
+
+// TestMetricProvider_HistogramVec_DifferentLabelNamesErrors verifies that
+// re-registering a HistogramVec with a different label set (different names)
+// returns an ErrAdapterPromRegister error. With different label names Prometheus
+// returns a descriptor conflict error (not AlreadyRegisteredError), so the
+// provider surfaces it as ErrAdapterPromRegister directly.
+func TestMetricProvider_HistogramVec_DifferentLabelNamesErrors(t *testing.T) {
+	p, _ := newTestProvider(t)
+	_, err := p.HistogramVec(metrics.HistogramOpts{
+		Name:       "label_conflict_hist_seconds",
+		Help:       "h",
+		LabelNames: []string{"a", "b"},
+	})
+	if err != nil {
+		t.Fatalf("first HistogramVec: %v", err)
+	}
+	// Different label names → Prometheus descriptor conflict, not AlreadyRegisteredError.
+	_, err = p.HistogramVec(metrics.HistogramOpts{
+		Name:       "label_conflict_hist_seconds",
+		Help:       "h",
+		LabelNames: []string{"x", "y"},
+	})
+	if err == nil {
+		t.Fatal("expected error for conflicting histogram descriptor, got nil")
+	}
+	if !strings.Contains(err.Error(), "ERR_ADAPTER_PROM_REGISTER") {
+		t.Fatalf("error should be ErrAdapterPromRegister, got: %v", err)
+	}
+}
+
+// TestMetricProvider_CounterVec_DifferentLabelNamesErrors verifies that
+// re-registering a CounterVec with different label names returns
+// ErrAdapterPromRegister (Prometheus descriptor conflict path).
+func TestMetricProvider_CounterVec_DifferentLabelNamesErrors(t *testing.T) {
+	p, _ := newTestProvider(t)
+	_, err := p.CounterVec(metrics.CounterOpts{
+		Name:       "label_conflict_counter_total",
+		Help:       "h",
+		LabelNames: []string{"a", "b"},
+	})
+	if err != nil {
+		t.Fatalf("first CounterVec: %v", err)
+	}
+	// Different label names → Prometheus descriptor conflict.
+	_, err = p.CounterVec(metrics.CounterOpts{
+		Name:       "label_conflict_counter_total",
+		Help:       "h",
+		LabelNames: []string{"x", "y"},
+	})
+	if err == nil {
+		t.Fatal("expected error for conflicting counter descriptor, got nil")
+	}
+	if !strings.Contains(err.Error(), "ERR_ADAPTER_PROM_REGISTER") {
+		t.Fatalf("error should be ErrAdapterPromRegister, got: %v", err)
+	}
+}
+
+// TestMetricProvider_CounterVec_ExistingCollectorTypeMismatch verifies that
+// re-registering a name that was registered as a HistogramVec (not CounterVec)
+// returns an ErrAdapterPromRegister cast-fail error.
+func TestMetricProvider_CounterVec_ExistingCollectorTypeMismatch(t *testing.T) {
+	// Use an isolated registry so we can register the same name as histogram first.
+	reg := prom.NewRegistry()
+	p1, err := gcprom.NewMetricProvider(gcprom.MetricProviderConfig{
+		Registry:  reg,
+		Namespace: "typemismatch",
+	})
+	if err != nil {
+		t.Fatalf("NewMetricProvider: %v", err)
+	}
+	// Register as histogram via the underlying prom registry directly so that
+	// the provider's CounterVec call encounters an existing *prom.HistogramVec.
+	hv := prom.NewHistogramVec(prom.HistogramOpts{
+		Namespace: "typemismatch",
+		Name:      "shared_name_total",
+		Help:      "h",
+	}, []string{"l"})
+	if err := reg.Register(hv); err != nil {
+		t.Fatalf("pre-register histogram: %v", err)
+	}
+	// Now CounterVec on the same name must encounter type mismatch.
+	_, err = p1.CounterVec(metrics.CounterOpts{
+		Name:       "shared_name_total",
+		Help:       "h",
+		LabelNames: []string{"l"},
+	})
+	if err == nil {
+		t.Fatal("expected type mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "type mismatch") {
+		t.Fatalf("error should mention type mismatch, got: %v", err)
+	}
+}
+
+// TestMetricProvider_HistogramVec_ExistingCollectorTypeMismatch mirrors
+// TestMetricProvider_CounterVec_ExistingCollectorTypeMismatch for HistogramVec:
+// pre-register a CounterVec, then attempt HistogramVec on the same name.
+func TestMetricProvider_HistogramVec_ExistingCollectorTypeMismatch(t *testing.T) {
+	reg := prom.NewRegistry()
+	p1, err := gcprom.NewMetricProvider(gcprom.MetricProviderConfig{
+		Registry:  reg,
+		Namespace: "histtypemismatch",
+	})
+	if err != nil {
+		t.Fatalf("NewMetricProvider: %v", err)
+	}
+	cv := prom.NewCounterVec(prom.CounterOpts{
+		Namespace: "histtypemismatch",
+		Name:      "shared_hist_total",
+		Help:      "h",
+	}, []string{"l"})
+	if err := reg.Register(cv); err != nil {
+		t.Fatalf("pre-register counter: %v", err)
+	}
+	_, err = p1.HistogramVec(metrics.HistogramOpts{
+		Name:       "shared_hist_total",
+		Help:       "h",
+		LabelNames: []string{"l"},
+	})
+	if err == nil {
+		t.Fatal("expected type mismatch error, got nil")
+	}
+	if !strings.Contains(err.Error(), "type mismatch") {
+		t.Fatalf("error should mention type mismatch, got: %v", err)
+	}
+}
+
+// TestMetricProvider_CounterVec_CrossProvider_ReuseWithoutLabelCheck verifies
+// that when a second provider encounters an AlreadyRegisteredError for a name
+// registered by a DIFFERENT provider (i.e., the existing *prom.CounterVec is
+// NOT in the second provider's vecs map), lookupCounterVecLabels returns nil
+// and the collector is reused without label validation — the safe fallback.
+// This exercises the "return nil" branch in lookupCounterVecLabels.
+func TestMetricProvider_CounterVec_CrossProvider_ReuseWithoutLabelCheck(t *testing.T) {
+	reg := prom.NewRegistry()
+	p1, err := gcprom.NewMetricProvider(gcprom.MetricProviderConfig{Registry: reg, Namespace: "cross"})
+	if err != nil {
+		t.Fatalf("p1: %v", err)
+	}
+	p2, err := gcprom.NewMetricProvider(gcprom.MetricProviderConfig{Registry: reg, Namespace: "cross"})
+	if err != nil {
+		t.Fatalf("p2: %v", err)
+	}
+	opts := metrics.CounterOpts{Name: "shared_counter_total", Help: "h", LabelNames: []string{"l"}}
+	cv1, err := p1.CounterVec(opts)
+	if err != nil {
+		t.Fatalf("p1.CounterVec: %v", err)
+	}
+	// p2 encounters AlreadyRegisteredError; existing is not in p2's vecs map
+	// → lookupCounterVecLabels returns nil → reuse without label check.
+	cv2, err := p2.CounterVec(opts)
+	if err != nil {
+		t.Fatalf("p2.CounterVec (cross-provider reuse) must succeed, got: %v", err)
+	}
+	// Both vecs must share the same underlying collector.
+	cv1.With(metrics.Labels{"l": "v"}).Inc()
+	cv2.With(metrics.Labels{"l": "v"}).Inc()
+	if cnt := testutil.CollectAndCount(reg, "cross_shared_counter_total"); cnt != 1 {
+		t.Fatalf("expected 1 series, got %d", cnt)
+	}
+}
+
+// TestMetricProvider_HistogramVec_CrossProvider_ReuseWithoutLabelCheck mirrors
+// the counter version for HistogramVec, exercising the "return nil" branch in
+// lookupHistogramVecLabels.
+func TestMetricProvider_HistogramVec_CrossProvider_ReuseWithoutLabelCheck(t *testing.T) {
+	reg := prom.NewRegistry()
+	p1, err := gcprom.NewMetricProvider(gcprom.MetricProviderConfig{Registry: reg, Namespace: "crosshist"})
+	if err != nil {
+		t.Fatalf("p1: %v", err)
+	}
+	p2, err := gcprom.NewMetricProvider(gcprom.MetricProviderConfig{Registry: reg, Namespace: "crosshist"})
+	if err != nil {
+		t.Fatalf("p2: %v", err)
+	}
+	opts := metrics.HistogramOpts{Name: "shared_hist_seconds", Help: "h", LabelNames: []string{"l"}}
+	hv1, err := p1.HistogramVec(opts)
+	if err != nil {
+		t.Fatalf("p1.HistogramVec: %v", err)
+	}
+	hv2, err := p2.HistogramVec(opts)
+	if err != nil {
+		t.Fatalf("p2.HistogramVec (cross-provider reuse) must succeed, got: %v", err)
+	}
+	hv1.With(metrics.Labels{"l": "v"}).Observe(1.0)
+	hv2.With(metrics.Labels{"l": "v"}).Observe(2.0)
+	if cnt := testutil.CollectAndCount(reg, "crosshist_shared_hist_seconds"); cnt != 1 {
+		t.Fatalf("expected 1 series, got %d", cnt)
+	}
+}
+
+// TestMetricProvider_HistogramVec_DifferentLabelNames_DescriptorConflict verifies
+// that conflicting HistogramVec descriptor produces an ErrAdapterPromRegister error.
+func TestMetricProvider_HistogramVec_DifferentLabelNames_DescriptorConflict(t *testing.T) {
+	p, _ := newTestProvider(t)
+	_, err := p.HistogramVec(metrics.HistogramOpts{
+		Name:       "desc_conflict_hist_seconds",
+		Help:       "h",
+		LabelNames: []string{"cat", "dog"},
+	})
+	if err != nil {
+		t.Fatalf("first HistogramVec: %v", err)
+	}
+	// Different label count → Prometheus descriptor conflict.
+	_, err = p.HistogramVec(metrics.HistogramOpts{
+		Name:       "desc_conflict_hist_seconds",
+		Help:       "h",
+		LabelNames: []string{"x"},
+	})
+	if err == nil {
+		t.Fatal("expected descriptor conflict error, got nil")
+	}
+	if !strings.Contains(err.Error(), "ERR_ADAPTER_PROM_REGISTER") {
+		t.Fatalf("error should be ErrAdapterPromRegister, got: %v", err)
+	}
+}
+
 // collect fetches a single labeled Counter/Histogram from the registry for
 // testutil.ToFloat64. prom.Collector must be obtained indirectly; easiest is
 // to reflect via testutil.GatherAndCount for histogram bucket sums, but for

@@ -2,6 +2,8 @@ package prometheus_test
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -152,5 +154,73 @@ func TestPrometheusExposition_RelayCollector_FamiliesAndBuckets(t *testing.T) {
 	// DefaultRelayBatchBuckets include 500 as the upper boundary.
 	if !strings.Contains(body, `le="500"`) {
 		t.Errorf("batch_size histogram missing 500 default boundary; got:\n%s", body)
+	}
+}
+
+// stubPublisher is a minimal outbox.Publisher whose Publish always returns the
+// configured error. Used to trigger the fail-open branch in DirectEmitter.
+type stubPublisher struct{ err error }
+
+func (s *stubPublisher) Publish(_ context.Context, _ string, _ []byte) error { return s.err }
+func (s *stubPublisher) Close(_ context.Context) error                       { return nil }
+
+// TestPrometheusExposition_OutboxEmitter_FailOpenDropped_Family pins the
+// metric naming convention for the fail-open dropped counter emitted by
+// kernel/outbox.DirectEmitter. The Provider injects Namespace="gocell", so
+// the exposed name must be gocell_outbox_emit_failopen_dropped_total (single
+// prefix). The double-prefix regression gocell_gocell_outbox_emit_failopen_dropped_total
+// is explicitly asserted absent.
+//
+// ref: prometheus/client_golang prometheus/metric.go BuildFQName —
+//
+//	fqName = Namespace + "_" + Subsystem + "_" + Name (Namespace injected by Provider,
+//	Name must carry bare semantics, not the full fqName).
+//
+// ref: kernel/outbox/relay_collector.go (Name="outbox_relayed_total") and
+//
+//	runtime/observability/metrics/provider_collector.go (Name="http_requests_total")
+//	as canonical same-repo examples of the Namespace-in-wrapper pattern.
+func TestPrometheusExposition_OutboxEmitter_FailOpenDropped_Family(t *testing.T) {
+	p, reg := newProvider(t) // Namespace="gocell"
+
+	// Fail-open emitter: any Publish error is swallowed, counter incremented.
+	pub := &stubPublisher{err: errors.New("broker unavailable")}
+	emitter, err := outbox.NewDirectEmitter(pub, outbox.DirectPublishFailOpen, p, "test-cell")
+	if err != nil {
+		t.Fatalf("NewDirectEmitter: %v", err)
+	}
+
+	// Construct a valid entry to pass Validate() and reach the publish path.
+	entry := outbox.Entry{
+		ID:        "test-entry-1",
+		EventType: "test.event.v1",
+		Topic:     "test.topic.v1",
+		Payload:   []byte(`{"ok":true}`),
+		CreatedAt: time.Now(),
+	}
+
+	// Emit once — Publish will fail → fail-open path → counter +1.
+	if err := emitter.Emit(context.Background(), entry); err != nil {
+		t.Fatalf("Emit (fail-open) must not return error, got: %v", err)
+	}
+
+	body := expose(t, reg)
+
+	// 1. Family TYPE line must use single-prefixed fqName.
+	const wantType = "# TYPE gocell_outbox_emit_failopen_dropped_total counter"
+	if !strings.Contains(body, wantType) {
+		t.Errorf("exposition missing %q; got:\n%s", wantType, body)
+	}
+
+	// 2. Sample must carry cell and topic labels with value = 1.
+	wantSample := `gocell_outbox_emit_failopen_dropped_total{cell="test-cell",topic="test.topic.v1"} 1`
+	if !strings.Contains(body, wantSample) {
+		t.Errorf("exposition missing sample %q; got:\n%s", wantSample, body)
+	}
+
+	// 3. Double-prefix regression guard: must NOT appear in the output.
+	const badPrefix = "gocell_gocell_outbox_emit_failopen_dropped_total"
+	if strings.Contains(body, badPrefix) {
+		t.Errorf("double-prefix regression: %q must NOT appear in exposition; got:\n%s", badPrefix, body)
 	}
 }

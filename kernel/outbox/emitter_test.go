@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -326,3 +327,97 @@ func (p *spyMetricsProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.H
 }
 
 func (p *spyMetricsProvider) Unregister(_ metrics.Collector) error { return nil }
+
+// ---------------------------------------------------------------------------
+// Coverage gap tests — paths not exercised by the initial test suite
+// ---------------------------------------------------------------------------
+
+// TestNewNoopEmitter_ReturnsNonNilEmitter verifies NewNoopEmitter returns a
+// usable Emitter backed by NoopWriter (does not panic, validates entries).
+func TestNewNoopEmitter_ReturnsNonNilEmitter(t *testing.T) {
+	e := NewNoopEmitter()
+	require.NotNil(t, e)
+
+	// Valid entry → no error.
+	require.NoError(t, e.Emit(context.Background(), validEntry("noop-emitter")))
+
+	// Invalid entry → validation error.
+	assert.Error(t, e.Emit(context.Background(), Entry{}))
+}
+
+// TestWriterEmitter_Emit_NilReceiver verifies that calling Emit on a nil
+// *WriterEmitter returns an errcode error instead of panicking.
+func TestWriterEmitter_Emit_NilReceiver(t *testing.T) {
+	var e *WriterEmitter
+	err := e.Emit(context.Background(), validEntry("nil-writer"))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ec.Code)
+}
+
+// TestDirectEmitter_Emit_NilReceiver verifies that calling Emit on a nil
+// *DirectEmitter returns an errcode error instead of panicking.
+func TestDirectEmitter_Emit_NilReceiver(t *testing.T) {
+	var e *DirectEmitter
+	err := e.Emit(context.Background(), validEntry("nil-direct"))
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrCellMissingOutbox, ec.Code)
+}
+
+// TestNewDirectEmitter_EmptyCellID verifies that an empty cellID is rejected
+// at construction time with ErrValidationFailed.
+func TestNewDirectEmitter_EmptyCellID(t *testing.T) {
+	publisher := &recordingEmitterPublisher{}
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "")
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, errcode.ErrValidationFailed, ec.Code)
+}
+
+// alwaysFailProvider is a metrics.Provider whose CounterVec always returns an
+// error, used to exercise the registration-failure branch in NewDirectEmitter.
+type alwaysFailProvider struct{}
+
+func (alwaysFailProvider) CounterVec(_ metrics.CounterOpts) (metrics.CounterVec, error) {
+	return nil, errors.New("simulated counter registration failure")
+}
+
+func (alwaysFailProvider) HistogramVec(_ metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	return nil, errors.New("simulated histogram registration failure")
+}
+
+func (alwaysFailProvider) Unregister(_ metrics.Collector) error { return nil }
+
+// TestNewDirectEmitter_CounterVecRegistrationFailure verifies that a
+// CounterVec registration failure in the constructor is propagated as an error
+// (not swallowed) so the caller knows the emitter was not initialised.
+func TestNewDirectEmitter_CounterVecRegistrationFailure(t *testing.T) {
+	publisher := &recordingEmitterPublisher{}
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, alwaysFailProvider{}, "testcell")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "failopen_dropped counter")
+}
+
+// TestNewDirectEmitter_WithLogger verifies that the optional variadic logger
+// parameter is accepted and wired into the emitter (covers the logger-injection
+// branch in NewDirectEmitter).
+func TestNewDirectEmitter_WithLogger(t *testing.T) {
+	logger := slog.Default()
+	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell", logger)
+	require.NoError(t, err)
+	require.NotNil(t, emitter)
+	// Confirm emitter works — fail-open path must not error.
+	assert.NoError(t, emitter.Emit(context.Background(), validEntry("logger-injected")))
+}
+
+// TestWriterEmitter_Durable_NilReceiver verifies that calling Durable on a
+// nil *WriterEmitter returns false (safe default, no panic).
+func TestWriterEmitter_Durable_NilReceiver(t *testing.T) {
+	var e *WriterEmitter
+	assert.False(t, e.Durable())
+}

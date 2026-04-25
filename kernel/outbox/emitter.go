@@ -72,9 +72,10 @@ type DirectEmitter struct {
 // envelopes. cellID is the owning Cell's ID and is used as the "cell" label on
 // the fail-open dropped counter; it must be non-empty (empty string returns
 // errcode.ErrValidationFailed). mp is a required metrics.Provider used to
-// register the gocell_outbox_emit_failopen_dropped_total counter; pass
-// metrics.NopProvider{} in tests or demos where no backend is wired. A nil mp
-// returns an errcode error. A nil logger uses slog.Default().
+// register the fail-open dropped counter (fqName after Namespace injection:
+// gocell_outbox_emit_failopen_dropped_total); pass metrics.NopProvider{} in
+// tests or demos where no backend is wired. A nil mp returns an errcode error.
+// A nil logger uses slog.Default().
 func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, cellID string, loggers ...*slog.Logger) (*DirectEmitter, error) {
 	if isNilEmitterDependency(p) {
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
@@ -89,7 +90,7 @@ func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Pro
 			"outbox: cellID must not be empty for DirectEmitter")
 	}
 	cv, err := mp.CounterVec(metrics.CounterOpts{
-		Name:       "gocell_outbox_emit_failopen_dropped_total",
+		Name:       "outbox_emit_failopen_dropped_total",
 		Help:       "Total outbox entries dropped in fail-open mode. cell=Cell ID; topic=routing topic.",
 		LabelNames: []string{"cell", "topic"},
 	})
