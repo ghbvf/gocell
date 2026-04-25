@@ -6,12 +6,14 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"net/http"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -204,6 +206,146 @@ func TestPhase0_AcceptsPolicyMTLSWithProperTLS(t *testing.T) {
 			WithListenerTLS(cfg)),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
+}
+
+func TestIsAuthFlavoredPolicy_RejectsJWTInsidePolicyStack(t *testing.T) {
+	tests := []struct {
+		name string
+		p    cell.Policy
+		want bool
+	}{
+		{
+			name: "direct_jwt_supported",
+			p:    cell.Policy{Name: "jwt"},
+			want: true,
+		},
+		{
+			name: "jwt_stack_not_supported",
+			p:    cell.Policy{Name: "stack[jwt, verbose-token]"},
+			want: false,
+		},
+		{
+			name: "mtls_stack_supported",
+			p:    cell.Policy{Name: "stack[mtls, verbose-token]"},
+			want: true,
+		},
+		{
+			name: "service_token_stack_supported",
+			p:    cell.Policy{Name: "stack[service-token, verbose-token]"},
+			want: true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, isAuthFlavoredPolicy(tc.p))
+		})
+	}
+}
+
+type mtlsRouteGroupPolicyCell struct {
+	*cell.BaseCell
+	policy cell.Policy
+}
+
+func newMTLSRouteGroupPolicyCell(id string, policy cell.Policy) *mtlsRouteGroupPolicyCell {
+	return &mtlsRouteGroupPolicyCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
+		policy:   policy,
+	}
+}
+
+func (c *mtlsRouteGroupPolicyCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{{
+		Listener: cell.InternalListener,
+		Prefix:   "",
+		Policy:   c.policy,
+		Register: func(mux cell.RouteMux) {
+			auth.Mount(mux, auth.Route{
+				Contract:  testHTTPContract(http.MethodPost, "/internal/v1/mtls/ping"),
+				Handler:   http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+				Delegated: true,
+			})
+		},
+	}}
+}
+
+func buildPhase5MTLSRouteGroupBootstrap(t *testing.T, tlsCfg *tls.Config) (*Bootstrap, *phaseState) {
+	t.Helper()
+
+	asm := assembly.New(assembly.Config{ID: "phase5-mtls-routegroup", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newMTLSRouteGroupPolicyCell("mtls-routegroup-cell", PolicyMTLS())))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	_, s := newPhaseState()
+	s.asm = asm
+
+	b := New(
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerTLS(tlsCfg)),
+	)
+	return b, s
+}
+
+func TestPhase5_RejectsRouteGroupPolicyMTLSWithInvalidTLS(t *testing.T) {
+	pool := x509.NewCertPool()
+	tests := []struct {
+		name         string
+		tlsCfg       *tls.Config
+		wantContains string
+	}{
+		{
+			name:         "without_tls",
+			tlsCfg:       nil,
+			wantContains: "without WithListenerTLS",
+		},
+		{
+			name: "request_client_cert",
+			tlsCfg: &tls.Config{
+				ClientAuth: tls.RequestClientCert,
+				ClientCAs:  pool,
+			},
+			wantContains: "ClientAuth",
+		},
+		{
+			name: "require_any_client_cert",
+			tlsCfg: &tls.Config{
+				ClientAuth: tls.RequireAnyClientCert, // cert is required but not verified
+				ClientCAs:  pool,
+			},
+			wantContains: "ClientAuth",
+		},
+		{
+			name: "without_client_cas",
+			tlsCfg: &tls.Config{
+				ClientAuth: tls.RequireAndVerifyClientCert,
+			},
+			wantContains: "ClientCAs is nil",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			b, s := buildPhase5MTLSRouteGroupBootstrap(t, tc.tlsCfg)
+
+			err := b.phase5BuildRouters(s)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "RouteGroup")
+			assert.Contains(t, err.Error(), "PolicyMTLS")
+			assert.Contains(t, err.Error(), tc.wantContains)
+		})
+	}
+}
+
+func TestPhase5_AcceptsRouteGroupPolicyMTLSWithProperTLS(t *testing.T) {
+	pool := x509.NewCertPool()
+	b, s := buildPhase5MTLSRouteGroupBootstrap(t, &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  pool,
+	})
+
+	require.NoError(t, b.phase5BuildRouters(s))
 }
 
 // TestPhase0_ValidatesInternalMiddleware was removed in PR-A14b because

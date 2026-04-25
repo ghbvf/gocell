@@ -197,28 +197,36 @@ func (b *Bootstrap) validateListenerPolicyAssemblyMatch() error {
 // TLS wiring is a programmer error, not a runtime acceptance.
 func (b *Bootstrap) validateListenerPolicyMTLSBinding() error {
 	for ref, cfg := range b.listenerConfigs {
-		if !mtlsPolicyApplies(cfg.policy) {
-			continue
+		source := fmt.Sprintf("listener %q", ref.String())
+		if err := validatePolicyMTLSBinding(source, cfg.policy, cfg.tls); err != nil {
+			return err
 		}
-		if cfg.tls == nil {
-			return fmt.Errorf(
-				"bootstrap: listener %q uses PolicyMTLS without WithListenerTLS; "+
-					"set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> "+
-					"so the handshake layer enforces the chain",
-				ref.String())
-		}
-		if cfg.tls.ClientAuth < tls.VerifyClientCertIfGiven {
-			return fmt.Errorf(
-				"bootstrap: listener %q uses PolicyMTLS but tls.Config.ClientAuth=%v; "+
-					"set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
-				ref.String(), cfg.tls.ClientAuth)
-		}
-		if cfg.tls.ClientCAs == nil {
-			return fmt.Errorf(
-				"bootstrap: listener %q uses PolicyMTLS but tls.Config.ClientCAs is nil; "+
-					"set ClientCAs to the CA pool the handshake should accept",
-				ref.String())
-		}
+	}
+	return nil
+}
+
+func validatePolicyMTLSBinding(source string, p cell.Policy, tlsCfg *tls.Config) error {
+	if !mtlsPolicyApplies(p) {
+		return nil
+	}
+	if tlsCfg == nil {
+		return fmt.Errorf(
+			"bootstrap: %s uses PolicyMTLS without WithListenerTLS; "+
+				"set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> "+
+				"so the handshake layer enforces the chain",
+			source)
+	}
+	if tlsCfg.ClientAuth < tls.VerifyClientCertIfGiven {
+		return fmt.Errorf(
+			"bootstrap: %s uses PolicyMTLS but tls.Config.ClientAuth=%v; "+
+				"set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
+			source, tlsCfg.ClientAuth)
+	}
+	if tlsCfg.ClientCAs == nil {
+		return fmt.Errorf(
+			"bootstrap: %s uses PolicyMTLS but tls.Config.ClientCAs is nil; "+
+				"set ClientCAs to the CA pool the handshake should accept",
+			source)
 	}
 	return nil
 }
@@ -599,6 +607,9 @@ func (b *Bootstrap) phase5BuildRouters(s *phaseState) error {
 		return err
 	}
 	groups := b.phase5CollectRouteGroups(s, routers)
+	if err := b.validateRouteGroupPolicyMTLSBindings(groups); err != nil {
+		return err
+	}
 	if err := b.phase5MountRouteGroups(routers, groups); err != nil {
 		return err
 	}
@@ -692,6 +703,37 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.Lis
 		}
 	}
 	return groups
+}
+
+// validateRouteGroupPolicyMTLSBindings applies the same mTLS/TLS binding
+// invariant to RouteGroup.Policy as phase0 applies to listener default
+// policies. RouteGroups are only known after assembly discovery, so this runs
+// in phase5 before mounting routes or binding sockets.
+func (b *Bootstrap) validateRouteGroupPolicyMTLSBindings(groups []cell.RouteGroup) error {
+	for i, rg := range groups {
+		if !mtlsPolicyApplies(rg.Policy) {
+			continue
+		}
+		cfg, ok := b.listenerConfigs[rg.Listener]
+		if !ok {
+			return fmt.Errorf(
+				"bootstrap: %s references undeclared listener %q; add WithListener(%s,...) to bootstrap options",
+				routeGroupPolicySource(i, rg), rg.Listener.String(), rg.Listener.String())
+		}
+		if err := validatePolicyMTLSBinding(routeGroupPolicySource(i, rg), rg.Policy, cfg.tls); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func routeGroupPolicySource(i int, rg cell.RouteGroup) string {
+	cellID := rg.CellID
+	if cellID == "" {
+		cellID = "<framework>"
+	}
+	return fmt.Sprintf("RouteGroup %d (cell=%s, listener=%s, prefix=%q)",
+		i, cellID, rg.Listener.String(), rg.Prefix)
 }
 
 // phase5MountRouteGroups mounts each RouteGroup on its listener's router.
@@ -790,8 +832,11 @@ func (b *Bootstrap) phase5FinalizeAllRouters(routers map[cell.ListenerRef]*route
 // listener are actually gated by an auth-flavoured policy. The acceptable
 // policies are PolicyJWT / PolicyJWTFromAssembly (Name="jwt"), PolicyMTLS
 // (Name="mtls"), PolicyServiceToken (Name="service-token"), or any
-// PolicyStack containing one of those by name. Listeners with PolicyNone or
-// no policy at all that still declare protected routes (non-Public,
+// PolicyStack containing PolicyMTLS or PolicyServiceToken by name. JWT inside
+// PolicyStack is intentionally not accepted because PolicyJWT carries its
+// verifier in Extension and Bootstrap only installs router-aware JWT
+// middleware for a direct listener default policy. Listeners with PolicyNone
+// or no policy at all that still declare protected routes (non-Public,
 // non-Delegated) cause Run() to fail-closed at phase5.
 //
 // F3 round-3: the previous check looked at b.authVerifier; that field is gone
@@ -826,7 +871,8 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 // so the kernel/cell layer remains agnostic of runtime/auth.
 //
 // PolicyStack names follow the format "stack[a, b, c]" (see PolicyStack in
-// policy.go). Match any inner component that is auth-flavoured.
+// policy.go). Match only stackable auth components. JWT is deliberately
+// excluded inside stacks because the JWT verifier would otherwise be dropped.
 func isAuthFlavoredPolicy(p cell.Policy) bool {
 	if isAuthFlavoredName(p.Name) {
 		return true
@@ -835,7 +881,7 @@ func isAuthFlavoredPolicy(p cell.Policy) bool {
 	if strings.HasPrefix(p.Name, stackPrefix) && strings.HasSuffix(p.Name, "]") {
 		inner := strings.TrimSuffix(strings.TrimPrefix(p.Name, stackPrefix), "]")
 		for _, name := range strings.Split(inner, ", ") {
-			if isAuthFlavoredName(strings.TrimSpace(name)) {
+			if isStackableAuthFlavoredName(strings.TrimSpace(name)) {
 				return true
 			}
 		}
@@ -848,6 +894,17 @@ func isAuthFlavoredPolicy(p cell.Policy) bool {
 func isAuthFlavoredName(name string) bool {
 	switch name {
 	case "jwt", "mtls", "service-token":
+		return true
+	}
+	return false
+}
+
+// isStackableAuthFlavoredName matches auth policies whose enforcement survives
+// PolicyStack's middleware-only composition. JWT is excluded because its
+// verifier lives in Extension, not Middleware.
+func isStackableAuthFlavoredName(name string) bool {
+	switch name {
+	case "mtls", "service-token":
 		return true
 	}
 	return false

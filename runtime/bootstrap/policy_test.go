@@ -496,6 +496,16 @@ func TestPolicyStack(t *testing.T) {
 			t.Errorf("status = %d, want 401", rr.Code)
 		}
 	})
+
+	t.Run("jwt_rejected", func(t *testing.T) {
+		t.Parallel()
+
+		require.PanicsWithValue(t,
+			"bootstrap: PolicyStack does not support PolicyJWT or PolicyJWTFromAssembly; pass JWT directly as the listener default policy",
+			func() {
+				bootstrap.PolicyStack(bootstrap.PolicyJWT(stubVerifier{}), bootstrap.PolicyNone())
+			})
+	})
 }
 
 // TestPolicyVerboseToken_QueryParamBoundary verifies the boundary values of
