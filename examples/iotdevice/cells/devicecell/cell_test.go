@@ -300,7 +300,7 @@ func TestDeviceCell_RouteEnqueueCommand(t *testing.T) {
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"reboot"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("operator-1", []string{"operator"}))
+	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusCreated, rec.Code)
@@ -320,6 +320,8 @@ func TestDeviceCell_RouteDequeueCommands(t *testing.T) {
 	deviceID := data["id"].(string)
 
 	// Dequeue (should be empty). Inject auth context: device authenticates as itself.
+	// nil roles is intentional: dequeue uses auth.SelfOr("id", "admin") which
+	// passes when subject == path {id}, so no role is required for the device.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/commands", nil)
 	req = req.WithContext(auth.TestContext(deviceID, nil))
@@ -345,7 +347,7 @@ func TestDeviceCell_RouteAckCommand(t *testing.T) {
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+deviceID+"/commands", strings.NewReader(`{"payload":"reboot"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("operator-1", []string{"operator"}))
+	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 

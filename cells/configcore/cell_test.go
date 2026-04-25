@@ -296,10 +296,11 @@ func TestConfigCore_RouteConfigList(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/", nil)
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"GET /api/v1/config/ should not return 404 (got %d)", rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"GET /api/v1/config/ with admin context should return 200 (got %d)", rec.Code)
 }
 
 func TestConfigCore_RouteConfigCreate(t *testing.T) {
@@ -320,13 +321,16 @@ func TestConfigCore_RouteConfigGetByKey(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/app.name", nil)
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
-	// A business-logic 404 returns a JSON error body with an error code;
-	// a routing 404 returns plain text. Verify the route matched by checking
-	// the response is JSON (meaning our handler ran, not the router's default 404).
+	// Handler ran (not routing 404): response must be JSON and must not be an auth rejection.
 	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json",
 		"GET /api/v1/config/{key} should return JSON (route matched), got plain text (routing 404)")
+	assert.NotEqual(t, http.StatusUnauthorized, rec.Code,
+		"GET /api/v1/config/{key} with admin context must not be 401; got body %s", rec.Body)
+	assert.NotEqual(t, http.StatusForbidden, rec.Code,
+		"GET /api/v1/config/{key} with admin context must not be 403; got body %s", rec.Body)
 }
 
 func TestConfigCore_RouteFlagsList(t *testing.T) {
@@ -334,10 +338,11 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/", nil)
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
-	assert.NotEqual(t, http.StatusNotFound, rec.Code,
-		"GET /api/v1/flags/ should not return 404 (got %d)", rec.Code)
+	assert.Equal(t, http.StatusOK, rec.Code,
+		"GET /api/v1/flags/ with admin context should return 200 (got %d)", rec.Code)
 }
 
 // TestConfigCore_ProductionAuthGateLock is the P0 integration test demanded by
@@ -362,6 +367,11 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 		body   string
 	}
 	paths := []adminWritePath{
+		{"config-read:list", http.MethodGet, "/api/v1/config/", ""},
+		{"config-read:get", http.MethodGet, "/api/v1/config/k", ""},
+		{"flag-read:list", http.MethodGet, "/api/v1/flags/", ""},
+		{"flag-read:get", http.MethodGet, "/api/v1/flags/k", ""},
+		{"flag-read:evaluate", http.MethodPost, "/api/v1/flags/k/evaluate", `{"subject":"test"}`},
 		{"config-write:create", http.MethodPost, "/api/v1/config/", `{"key":"k","value":"v"}`},
 		{"config-write:update", http.MethodPut, "/api/v1/config/k", `{"value":"v"}`},
 		{"config-write:delete", http.MethodDelete, "/api/v1/config/k", ``},

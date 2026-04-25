@@ -9,8 +9,8 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/auth/authtest"
 )
 
 func TestTestMux_HandleGroupAndWith(t *testing.T) {
@@ -171,7 +171,20 @@ func TestTestMux_Route_ComposesPrefix(t *testing.T) {
 				// auth.Mount strips the nested mux prefix to derive the
 				// chi-relative registration path.
 				auth.Mount(sess, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
-				auth.Mount(sess, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: authtest.RequireAuthenticated(), PasswordResetExempt: true})
+				auth.Mount(sess, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: func(r *http.Request) error {
+					// local helper to avoid kernel/ depending on runtime/auth/authtest
+					p, ok := auth.FromContext(r.Context())
+					if !ok {
+						return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+					}
+					if p.Kind == auth.PrincipalAnonymous {
+						return errcode.New(errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
+					}
+					if p.Kind == auth.PrincipalUser && p.Subject == "" {
+						return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
+					}
+					return nil
+				}, PasswordResetExempt: true})
 			})
 		})
 	})

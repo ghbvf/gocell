@@ -256,6 +256,11 @@ func handleRequireRole(authorizer Authorizer, roles []string, roleSet map[string
 		}
 	}
 
+	loggerFrom(r.Context()).Info("authorization role check failed",
+		slog.String("subject", p.Subject),
+		slog.String("path", r.URL.Path),
+		slog.Any("required_roles", roles),
+	)
 	httputil.WriteError(r.Context(), w, http.StatusForbidden, "ERR_AUTH_FORBIDDEN", "insufficient permissions")
 }
 

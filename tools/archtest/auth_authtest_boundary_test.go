@@ -59,15 +59,16 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 				"authtest.RequireAuthenticated() in runtime _test.go files")
 	})
 
-	// AUTH-AUTHTEST-B: cells/** and examples/** must not import authtest,
-	// even in _test.go files — production and example test code must not
+	// AUTH-AUTHTEST-B: cells/**, examples/**, and kernel/** must not import
+	// authtest, even in _test.go files — kernel must not depend on runtime/
+	// (layering violation), and production/example test code must not
 	// depend on runtime test helpers.
-	t.Run("AUTH-AUTHTEST-B_cells_examples_no_authtest_import", func(t *testing.T) {
+	t.Run("AUTH-AUTHTEST-B_cells_examples_kernel_no_authtest_import", func(t *testing.T) {
 		var violations []string
 		for _, f := range allGoFiles {
 			rel, _ := filepath.Rel(root, f)
 			rel = filepath.ToSlash(rel)
-			if !strings.HasPrefix(rel, "cells/") && !strings.HasPrefix(rel, "examples/") {
+			if !strings.HasPrefix(rel, "cells/") && !strings.HasPrefix(rel, "examples/") && !strings.HasPrefix(rel, "kernel/") {
 				continue
 			}
 			imports, err := parseImports(f)
@@ -75,7 +76,7 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 			for _, imp := range imports {
 				if imp == authtestImport {
 					violations = append(violations,
-						fmt.Sprintf("AUTH-AUTHTEST-B: %s imports %s (cells/examples must not import runtime test helpers)", rel, imp))
+						fmt.Sprintf("AUTH-AUTHTEST-B: %s imports %s (cells/examples/kernel must not import runtime test helpers)", rel, imp))
 				}
 			}
 		}
@@ -85,7 +86,8 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 			}
 		}
 		assert.Empty(t, violations,
-			"cells/ and examples/ must not import runtime/auth/authtest; "+
+			"cells/, examples/, and kernel/ must not import runtime/auth/authtest; "+
+				"kernel/ must not depend on runtime/ (layering violation); "+
 				"use auth.AnyRole(...) or auth.SelfOr(...) for production routes")
 	})
 
@@ -122,7 +124,8 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 		}
 		assert.Empty(t, violations,
 			"non-test .go files must not import runtime/auth/authtest; "+
-				"only _test.go files in runtime/ packages may use this test helper")
+				"move your auth policy helper into a _test.go file, or use "+
+				"auth.TestContext(subject, roles) for cell handler tests")
 	})
 }
 
@@ -215,6 +218,18 @@ func TestAuthAuthtestBoundary_NegativeProbes(t *testing.T) {
 
 	const modPath = "github.com/ghbvf/gocell"
 	authtestImport := modPath + "/runtime/auth/authtest"
+
+	// Probe A: grepInDir must detect "auth.Authenticated()" literal in a temp file.
+	t.Run("A_detects_auth_Authenticated_call", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+		bogus := filepath.Join(tmp, "bogus_test.go")
+		if err := os.WriteFile(bogus, []byte("package x\nvar _ = auth.Authenticated()\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		hits := grepInDir(t, tmp, "auth.Authenticated()")
+		assert.NotEmpty(t, hits, "negative probe: grepInDir must detect auth.Authenticated() literal in temp file")
+	})
 
 	// Probe B: a cells/ file importing authtest must be caught.
 	t.Run("B_detects_cells_authtest_import", func(t *testing.T) {

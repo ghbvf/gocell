@@ -28,6 +28,15 @@ import (
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
 )
 
+// Role constants re-exported from internal/dto for use by the assembly root
+// (main.go). The internal package is not importable from outside the
+// examples/iotdevice/cells/devicecell subtree per Go's internal package rule.
+const (
+	RoleAdmin    = dto.RoleAdmin
+	RoleOperator = dto.RoleOperator
+	RoleDevice   = dto.RoleDevice
+)
+
 // Compile-time interface checks.
 var (
 	_ cell.Cell                  = (*DeviceCell)(nil)
@@ -267,7 +276,7 @@ func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 					auth.Mount(devices, auth.Route{
 						Contract: specDeviceList,
 						Handler:  http.HandlerFunc(c.listHandler.HandleList),
-						Policy:   auth.AnyRole("admin"),
+						Policy:   auth.AnyRole(dto.RoleAdmin),
 					})
 					// Device status is queried by operators or by the device itself.
 					auth.Mount(devices, auth.Route{

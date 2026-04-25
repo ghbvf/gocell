@@ -346,3 +346,81 @@ func TestOrderCell_RouteGetOrder_NotFound(t *testing.T) {
 	assert.Equal(t, http.StatusNotFound, rec.Code,
 		"GET /api/v1/orders/{id} should return 404 for nonexistent order")
 }
+
+// TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole verifies that the
+// three protected routes (POST /orders, GET /orders, GET /orders/{id}) reject
+// requests with no auth context (→ 401) and with an incorrect role (→ 403).
+// This test acts as a regression guard: if the policy is accidentally changed
+// to Public, all positive-path tests still pass but these cases will fail.
+func TestOrderCell_Authz_RejectsUnauthenticatedAndWrongRole(t *testing.T) {
+	r := initCellWithRouter(t)
+
+	body := `{"item":"test-widget"}`
+
+	tests := []struct {
+		name       string
+		method     string
+		path       string
+		ctx        context.Context
+		wantStatus int
+	}{
+		{
+			name:       "create no context → 401",
+			method:     http.MethodPost,
+			path:       "/api/v1/orders/",
+			ctx:        context.Background(),
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "create wrong role → 403",
+			method:     http.MethodPost,
+			path:       "/api/v1/orders/",
+			ctx:        auth.TestContext("u-1", []string{"viewer"}),
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "list no context → 401",
+			method:     http.MethodGet,
+			path:       "/api/v1/orders/",
+			ctx:        context.Background(),
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "list wrong role → 403",
+			method:     http.MethodGet,
+			path:       "/api/v1/orders/",
+			ctx:        auth.TestContext("u-1", []string{"viewer"}),
+			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "get no context → 401",
+			method:     http.MethodGet,
+			path:       "/api/v1/orders/some-id",
+			ctx:        context.Background(),
+			wantStatus: http.StatusUnauthorized,
+		},
+		{
+			name:       "get wrong role → 403",
+			method:     http.MethodGet,
+			path:       "/api/v1/orders/some-id",
+			ctx:        auth.TestContext("u-1", []string{"viewer"}),
+			wantStatus: http.StatusForbidden,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			var req *http.Request
+			if tt.method == http.MethodPost {
+				req = httptest.NewRequest(tt.method, tt.path, strings.NewReader(body))
+				req.Header.Set("Content-Type", "application/json")
+			} else {
+				req = httptest.NewRequest(tt.method, tt.path, nil)
+			}
+			req = req.WithContext(tt.ctx)
+			r.ServeHTTP(rec, req)
+			assert.Equal(t, tt.wantStatus, rec.Code, "route %s %s", tt.method, tt.path)
+		})
+	}
+}
