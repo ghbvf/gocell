@@ -1,0 +1,6 @@
+ERRORS (1):
+  [REF-02] owner missing (field: owner)
+         at cells/accesscore/cell.yaml
+
+
+Validation complete: 1 error(s), 0 warning(s)

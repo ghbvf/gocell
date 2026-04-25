@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "gocell",
+          "version": "test-1.0.0",
+          "informationUri": "https://github.com/ghbvf/gocell",
+          "rules": [
+            {
+              "id": "DEP-02",
+              "shortDescription": {
+                "text": "circular dependency detected"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "issueType": "invalid"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "DEP-02",
+          "level": "error",
+          "message": {
+            "text": "[scope: project] circular dependency detected (field: cells)"
+          }
+        }
+      ]
+    }
+  ]
+}

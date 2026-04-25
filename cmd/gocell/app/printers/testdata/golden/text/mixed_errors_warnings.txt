@@ -1,0 +1,12 @@
+ERRORS (2):
+  [FMT-02] cell type invalid (field: type)
+         at [scope: project]
+  [REF-01] cell ID is required (field: id)
+         at cells/x/cell.yaml:2:1
+
+WARNINGS (1):
+  [ADV-01] owner role is recommended (field: owner.role)
+         at cells/x/cell.yaml
+
+
+Validation complete: 2 error(s), 1 warning(s)

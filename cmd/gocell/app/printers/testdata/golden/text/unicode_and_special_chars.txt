@@ -1,0 +1,7 @@
+ERRORS (1):
+  [MSG-01] 包含 "引号" 和 换行
+以及 emoji 🚀 (field: 名称)
+         at cells/中文/cell.yaml:1:1
+
+
+Validation complete: 1 error(s), 0 warning(s)

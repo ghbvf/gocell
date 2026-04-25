@@ -1,0 +1,6 @@
+ERRORS (1):
+  [TEST-01] no field set
+         at f.yaml:7
+
+
+Validation complete: 1 error(s), 0 warning(s)

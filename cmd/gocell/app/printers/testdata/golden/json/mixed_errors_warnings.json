@@ -1,0 +1,41 @@
+{
+  "issues": [
+    {
+      "code": "FMT-02",
+      "severity": "error",
+      "issueType": "invalid",
+      "file": "",
+      "scope": "project",
+      "field": "type",
+      "message": "cell type invalid",
+      "line": 0,
+      "column": 0
+    },
+    {
+      "code": "REF-01",
+      "severity": "error",
+      "issueType": "",
+      "file": "cells/x/cell.yaml",
+      "scope": "",
+      "field": "id",
+      "message": "cell ID is required",
+      "line": 2,
+      "column": 1
+    },
+    {
+      "code": "ADV-01",
+      "severity": "warning",
+      "issueType": "",
+      "file": "cells/x/cell.yaml",
+      "scope": "",
+      "field": "owner.role",
+      "message": "owner role is recommended",
+      "line": 0,
+      "column": 0
+    }
+  ],
+  "summary": {
+    "errors": 2,
+    "warnings": 1
+  }
+}

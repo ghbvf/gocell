@@ -1,0 +1,6 @@
+ERRORS (1):
+  [REF-01] contract 'auth.session.v1' not found (field: contractUsages[0].contractId)
+         at cells/accesscore/cell.yaml:14:5
+
+
+Validation complete: 1 error(s), 0 warning(s)

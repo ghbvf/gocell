@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "code": "TEST-01",
+      "severity": "error",
+      "issueType": "",
+      "file": "f.yaml",
+      "scope": "",
+      "field": "",
+      "message": "no field set",
+      "line": 7,
+      "column": 0
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}

@@ -3,44 +3,20 @@ package app
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // --- validate --fail-fast ---
-
-// formatResultsFailFast must print only the first error encountered, and then
-// stop — no "ERRORS (N):" banner, no warnings, no trailing summary. Errors
-// win over warnings regardless of slice order.
-func TestFormatResultsFailFast_FirstError(t *testing.T) {
-	results := []governance.ValidationResult{
-		{Code: "ADV-01", Severity: governance.SeverityWarning, Message: "warn first"},
-		{Code: "REF-01", Severity: governance.SeverityError, Message: "first error"},
-		{Code: "REF-02", Severity: governance.SeverityError, Message: "second error"},
-	}
-	out := captureStdout(t, func() { formatResultsFailFast(results) })
-	assert.Contains(t, out, "REF-01")
-	assert.Contains(t, out, "first error")
-	assert.NotContains(t, out, "REF-02", "second error must not be printed")
-	assert.NotContains(t, out, "second error")
-	assert.NotContains(t, out, "warn first", "warnings must not be printed in fail-fast")
-	assert.NotContains(t, out, "ERRORS (", "fail-fast mode skips the banner")
-}
-
-// When no errors exist, fail-fast acts as a no-op (no spurious output). The
-// caller is responsible for deciding success; formatResultsFailFast itself
-// only prints when an error is present.
-func TestFormatResultsFailFast_NoErrors(t *testing.T) {
-	results := []governance.ValidationResult{
-		{Code: "ADV-01", Severity: governance.SeverityWarning, Message: "just a warning"},
-	}
-	out := captureStdout(t, func() { formatResultsFailFast(results) })
-	assert.Empty(t, strings.TrimSpace(out), "no output expected when no errors: %q", out)
-}
+//
+// TestFormatResultsFailFast_FirstError / NoErrors previously called
+// formatResultsFailFast directly. After PR-A10 the renderer moved into
+// cmd/gocell/app/printers; coverage of "first-error-only, no banner, no
+// summary" lives there as TestText_PrintFailFast and
+// TestText_PrintFailFast_NoErrors. The integration tests below still
+// exercise the wiring end-to-end through runValidate.
 
 // runValidate --fail-fast on the live project: if errors exist it returns
 // error; the printed output must not include a "Validation complete:" summary

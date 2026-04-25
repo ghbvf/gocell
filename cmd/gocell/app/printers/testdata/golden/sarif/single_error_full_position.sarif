@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "gocell",
+          "version": "test-1.0.0",
+          "informationUri": "https://github.com/ghbvf/gocell",
+          "rules": [
+            {
+              "id": "REF-01",
+              "shortDescription": {
+                "text": "contract 'auth.session.v1' not found"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "issueType": "referenceNotFound"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "REF-01",
+          "level": "error",
+          "message": {
+            "text": "contract 'auth.session.v1' not found (field: contractUsages[0].contractId)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cells/accesscore/cell.yaml"
+                },
+                "region": {
+                  "startLine": 14,
+                  "startColumn": 5
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

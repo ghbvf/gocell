@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "code": "MSG-01",
+      "severity": "error",
+      "issueType": "",
+      "file": "cells/中文/cell.yaml",
+      "scope": "",
+      "field": "名称",
+      "message": "包含 \"引号\" 和 换行\n以及 emoji 🚀",
+      "line": 1,
+      "column": 1
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}
