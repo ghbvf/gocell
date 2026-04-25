@@ -15,9 +15,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   - **Production**: set `GOCELL_READYZ_VERBOSE_TOKEN` to a high-entropy
     secret. This is also the only supported path — `VERBOSE_DISABLED=1` is
     refused in `GOCELL_ADAPTER_MODE=real`.
-  - **Dev / docker-compose / CI smoke**: set
-    `GOCELL_READYZ_VERBOSE_DISABLED=1` to waive the endpoint. The project
-    `docker-compose.yml` is updated to include this by default.
+  - **Dev / local / CI smoke**: set `GOCELL_READYZ_VERBOSE_DISABLED=1`
+    to waive the endpoint, or set `GOCELL_READYZ_VERBOSE_TOKEN` to any
+    non-empty value. `.env.example` carries both env vars (with the
+    waiver line commented out) so `cp .env.example .env && go run
+    ./cmd/corebundle` works post-merge. The repo-root `docker-compose.yml`
+    is infra-only (postgres/redis/rabbitmq/minio) and runs no GoCell app
+    service, so no app-side env wiring is needed there.
 - `/readyz?verbose` with a missing or mismatched `X-Readyz-Token` now
   returns `401 ERR_READYZ_VERBOSE_DENIED` (previously: silent 200
   downgrade). Kubernetes `readinessProbe` **must** use the bare
