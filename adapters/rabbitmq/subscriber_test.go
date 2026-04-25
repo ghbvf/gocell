@@ -714,3 +714,177 @@ func TestProcessDelivery_ValidEntryID_PassesToHandler(t *testing.T) {
 	ch.mu.Unlock()
 	assert.Equal(t, uint64(9), ackTag)
 }
+
+// ---------------------------------------------------------------------------
+// Error-log paths introduced in PR-A39 C5: slog.Any("error", err)
+// ---------------------------------------------------------------------------
+
+// TestDispatchAck_CommitFail_NackFail exercises the double-failure path in
+// dispatchAck: Receipt.Commit fails AND the subsequent ch.Nack also fails.
+// This covers the slog.LogAttrs "nack(requeue) failed after commit failure"
+// branch (subscriber.go ~line 813-816).
+func TestDispatchAck_CommitFail_NackFail(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.nackErr = errors.New("broker unavailable")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
+	})
+
+	commitErr := errors.New("lease expired")
+	receipt := &mockReceipt{commitErr: commitErr}
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionAck,
+			Receipt:     receipt,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-commit-nack-fail",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 20, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	// Nack is still called (and fails) — verify via nackCalled within Eventually.
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.nackCalled
+	}, 2*time.Second, 5*time.Millisecond, "Nack must be called even when it fails")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	ch.mu.Lock()
+	ackCalled := ch.ackCalled
+	nackRequeue := ch.nackRequeue
+	ch.mu.Unlock()
+
+	assert.False(t, ackCalled, "Ack must not be called when Commit fails")
+	assert.True(t, nackRequeue, "Nack(requeue=true) must be called after Commit failure")
+}
+
+// TestDispatchAck_AckFail exercises the ack-failure log path in dispatchAck:
+// Receipt.Commit succeeds but ch.Ack returns an error.
+// This covers the slog.LogAttrs "ack failed" branch (subscriber.go ~line 822-825).
+func TestDispatchAck_AckFail(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	ch.ackErr = errors.New("broker channel closed")
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
+	})
+
+	receipt := &mockReceipt{} // commitErr nil → Commit succeeds
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionAck,
+			Receipt:     receipt,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-ack-fail",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 21, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	// Ack is attempted (and fails) — verify via ackCalled.
+	require.Eventually(t, func() bool {
+		ch.mu.Lock()
+		defer ch.mu.Unlock()
+		return ch.ackCalled
+	}, 2*time.Second, 5*time.Millisecond, "Ack must be attempted even when it fails")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	receipt.mu.Lock()
+	commitCalled := receipt.commitCalled
+	receipt.mu.Unlock()
+
+	assert.True(t, commitCalled, "Commit must be called before Ack attempt")
+}
+
+// TestReleaseReceipt_ReleaseFail exercises the release-failure log path in
+// releaseReceipt: receipt.Release returns an error, triggering the
+// slog.LogAttrs "receipt release failed" branch (subscriber.go ~line 841-847).
+// The failure path is reached via DispositionReject.
+func TestReleaseReceipt_ReleaseFail(t *testing.T) {
+	conn, mockConn := newTestConnection(t)
+
+	ch := newMockChannel()
+	mockConn.mu.Lock()
+	mockConn.nextCh = ch
+	mockConn.mu.Unlock()
+
+	sub := NewSubscriber(conn, SubscriberConfig{
+		QueueName:   "test-queue",
+		DLXExchange: "test.dlx",
+	})
+
+	receipt := &mockReceipt{releaseErr: errors.New("release store unavailable")}
+
+	handler := func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+		return outbox.HandleResult{
+			Disposition: outbox.DispositionReject,
+			Receipt:     receipt,
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	body := makeDeliveryBody(t, outbox.Entry{
+		ID:        "evt-release-fail",
+		EventType: "test.event",
+		Payload:   []byte(`{}`),
+	})
+	ch.consumeDeliveries <- amqp.Delivery{DeliveryTag: 22, Body: body}
+
+	subDone := make(chan error, 1)
+	go func() { subDone <- sub.Subscribe(ctx, outbox.Subscription{Topic: "test.topic"}, handler) }()
+
+	// Nack(requeue=false) is called for DispositionReject, then Release is called.
+	require.Eventually(t, func() bool {
+		receipt.mu.Lock()
+		defer receipt.mu.Unlock()
+		return receipt.releaseCalled
+	}, 2*time.Second, 5*time.Millisecond, "Release must be called on DispositionReject")
+
+	cancel()
+	assert.NoError(t, <-subDone)
+
+	ch.mu.Lock()
+	nackRequeue := ch.nackRequeue
+	ch.mu.Unlock()
+	assert.False(t, nackRequeue, "DispositionReject must Nack with requeue=false")
+}

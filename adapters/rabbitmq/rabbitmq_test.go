@@ -458,6 +458,30 @@ func TestConnection_ReleaseChannel_PoolFull(t *testing.T) {
 	extraCh.mu.Unlock()
 }
 
+// TestConnection_ReleaseChannel_PoolFull_CloseError covers the slog.Debug
+// "error closing excess channel" branch (connection.go ReleaseChannel default:
+// path) when the pool is already full and the excess channel's Close fails.
+func TestConnection_ReleaseChannel_PoolFull_CloseError(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	// Fill the pool to capacity.
+	for range conn.config.ChannelPoolSize {
+		conn.ReleaseChannel(newMockChannel())
+	}
+
+	// Extra channel with a Close error — exercises the slog.Debug log branch.
+	extraCh := newMockChannel()
+	extraCh.closeErr = errors.New("channel already closed")
+	conn.ReleaseChannel(extraCh)
+
+	extraCh.mu.Lock()
+	closeCalled := extraCh.closeCalled
+	extraCh.mu.Unlock()
+
+	// Close must have been attempted even though it returns an error.
+	assert.True(t, closeCalled, "Close must be called on excess channel even when it returns an error")
+}
+
 func TestConnection_AcquireFromPool(t *testing.T) {
 	conn, _ := newTestConnection(t)
 
