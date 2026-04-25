@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -19,6 +20,15 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// spanIDs extracts trace/span ids from an otelSpan — replaces the removed
+// TraceID()/SpanID() methods on the generic Span interface.
+func spanIDs(t *testing.T, s tracing.Span) (string, string) {
+	t.Helper()
+	os, ok := s.(*otelSpan)
+	require.True(t, ok, "expected *otelSpan, got %T", s)
+	return os.TraceID(), os.SpanID()
+}
 
 // newTestTracer creates a Tracer backed by an in-memory span exporter for testing.
 func newTestTracer(t *testing.T) (*Tracer, *tracetest.InMemoryExporter) {
@@ -55,17 +65,22 @@ func TestTracer_StartCreatesSpan(t *testing.T) {
 	assert.Equal(t, "test-operation", spans[0].Name)
 
 	// Verify trace/span IDs are non-empty.
-	assert.NotEmpty(t, span.TraceID())
-	assert.NotEmpty(t, span.SpanID())
+	sTrace, sSpan := spanIDs(t, span)
+	assert.NotEmpty(t, sTrace)
+	assert.NotEmpty(t, sSpan)
 
 	// Verify ctxkeys propagation.
 	traceID, ok := ctxkeys.TraceIDFrom(ctx)
 	require.True(t, ok)
-	assert.Equal(t, span.TraceID(), traceID)
+	assert.Equal(t, sTrace, traceID)
 
 	spanID, ok := ctxkeys.SpanIDFrom(ctx)
 	require.True(t, ok)
-	assert.Equal(t, span.SpanID(), spanID)
+	assert.Equal(t, sSpan, spanID)
+
+	traceParent, ok := ctxkeys.TraceParentFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, "00-"+sTrace+"-"+sSpan+"-01", traceParent)
 }
 
 func TestTracer_SetAttribute(t *testing.T) {
@@ -74,21 +89,35 @@ func TestTracer_SetAttribute(t *testing.T) {
 
 	_, span := tracer.Start(ctx, "attr-test")
 
-	span.SetAttribute("str_key", "value")
-	span.SetAttribute("int_key", 42)
-	span.SetAttribute("int64_key", int64(100))
-	span.SetAttribute("float_key", 3.14)
-	span.SetAttribute("bool_key", true)
-	span.SetAttribute("fallback_key", []byte("bytes"))
+	span.SetAttributes(
+		wrapper.Attr{Key: "str_key", Value: "value"},
+		wrapper.Attr{Key: "int_key", Value: 42},
+		wrapper.Attr{Key: "int64_key", Value: int64(100)},
+		wrapper.Attr{Key: "float_key", Value: 3.14},
+		wrapper.Attr{Key: "bool_key", Value: true},
+		wrapper.Attr{Key: "bytes_key", Value: []byte("bytes")},
+		wrapper.Attr{Key: "fallback_key", Value: struct{ X int }{X: 1}},
+	)
 
 	span.End()
 
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
 
-	// Verify attributes were set (at least one).
-	attrs := spans[0].Attributes
-	assert.NotEmpty(t, attrs, "span should have attributes")
+	// Build attribute map for precise assertions.
+	got := make(map[string]string, len(spans[0].Attributes))
+	for _, kv := range spans[0].Attributes {
+		got[string(kv.Key)] = kv.Value.Emit()
+	}
+
+	assert.Equal(t, "[redacted bytes len=5 sha256=277089d91c0bdf4f]", got["bytes_key"],
+		"[]byte attributes must never export raw payload bytes")
+	assert.NotEqual(t, "bytes", got["bytes_key"])
+	// fallback_key (unknown type) still flows through fmt.Sprint.
+	assert.Equal(t, "{1}", got["fallback_key"])
+	assert.Equal(t, "value", got["str_key"])
+	assert.Equal(t, "42", got["int_key"])
+	assert.Equal(t, "100", got["int64_key"])
 }
 
 func TestTracer_NestedSpansShareTraceID(t *testing.T) {
@@ -105,7 +134,9 @@ func TestTracer_NestedSpansShareTraceID(t *testing.T) {
 	require.Len(t, spans, 2)
 
 	// Both spans should share the same trace ID.
-	assert.Equal(t, parentSpan.TraceID(), childSpan.TraceID())
+	pTrace, _ := spanIDs(t, parentSpan)
+	cTrace, _ := spanIDs(t, childSpan)
+	assert.Equal(t, pTrace, cTrace)
 }
 
 func TestTracer_StartContinuesRemoteParent(t *testing.T) {
@@ -124,8 +155,9 @@ func TestTracer_StartContinuesRemoteParent(t *testing.T) {
 
 	spans := exporter.GetSpans()
 	require.Len(t, spans, 1)
-	assert.Equal(t, parentTraceID.String(), span.TraceID())
-	assert.NotEqual(t, parentSpanID.String(), span.SpanID())
+	sTrace, sSpan := spanIDs(t, span)
+	assert.Equal(t, parentTraceID.String(), sTrace)
+	assert.NotEqual(t, parentSpanID.String(), sSpan)
 
 	traceID, ok := ctxkeys.TraceIDFrom(ctx)
 	require.True(t, ok)
@@ -133,7 +165,32 @@ func TestTracer_StartContinuesRemoteParent(t *testing.T) {
 
 	spanID, ok := ctxkeys.SpanIDFrom(ctx)
 	require.True(t, ok)
-	assert.Equal(t, span.SpanID(), spanID)
+	assert.Equal(t, sSpan, spanID)
+}
+
+func TestTracer_StartContinuesTraceParentFromCtxkeys(t *testing.T) {
+	tracer, exporter := newTestTracer(t)
+	parentTraceID := mustTraceID(t, "4bf92f3577b34da6a3ce929d0e0e4736")
+	parentSpanID := mustSpanID(t, "00f067aa0ba902b7")
+	ctx := ctxkeys.WithTraceParent(context.Background(),
+		"00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01")
+
+	ctx, span := tracer.Start(ctx, "consumer")
+	span.End()
+
+	spans := exporter.GetSpans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, parentTraceID.String(), spans[0].SpanContext.TraceID().String())
+	assert.Equal(t, parentSpanID.String(), spans[0].Parent.SpanID().String())
+	assert.NotEqual(t, parentSpanID.String(), spans[0].SpanContext.SpanID().String())
+
+	traceID, ok := ctxkeys.TraceIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, parentTraceID.String(), traceID)
+
+	spanID, ok := ctxkeys.SpanIDFrom(ctx)
+	require.True(t, ok)
+	assert.Equal(t, spans[0].SpanContext.SpanID().String(), spanID)
 }
 
 // TestTracer_IngressPropagation_OTel proves the full HTTP ingress path:
@@ -319,7 +376,7 @@ func TestTracerConfig_Validate(t *testing.T) {
 
 func TestSpan_ImplementsInterface(t *testing.T) {
 	var _ tracing.Span = (*otelSpan)(nil)
-	var _ tracing.SpanRecorder = (*otelSpan)(nil)
+	var _ wrapper.SpanRenamer = (*otelSpan)(nil)
 }
 
 func TestSpan_RecordError(t *testing.T) {
@@ -365,8 +422,9 @@ func TestSpan_SetStatus_Ok(t *testing.T) {
 	assert.Equal(t, otelcodes.Ok, spans[0].Status.Code)
 }
 
-func TestSpanHelper_NonRecorder(t *testing.T) {
-	// simpleSpan does not implement SpanRecorder — helpers must not panic.
+func TestSpanHelper_SimpleSpanAcceptsAll(t *testing.T) {
+	// simpleSpan now implements the full wrapper.Span interface — helpers
+	// just delegate; assert they pass through without panic.
 	simple := tracing.NewTracer("test")
 	_, span := simple.Start(context.Background(), "op")
 	defer span.End()

@@ -1,6 +1,14 @@
 //go:build integration
 
-package bootstrap_test
+package bootstrap
+
+// Note: file lives in internal `package bootstrap` to match every other
+// *_test.go in this directory. The earlier `package bootstrap_test` caused a
+// build failure under `go test -tags=integration ./runtime/bootstrap/...`
+// because the file referenced the unexported helper `newLocalListener` and the
+// option constructor `WithInternalListener` without a package qualifier.
+// Current integration CI scope does not include runtime/bootstrap so the break
+// stayed invisible in CI; local full-repo integration runs would hit it.
 
 import (
 	"context"
@@ -13,7 +21,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -54,12 +61,12 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 
 	var onStartCalled bool
 
-	b := bootstrap.New(
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newIntegrationListener(t))),
-		bootstrap.WithShutdownTimeout(3*time.Second),
-		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
-			_ = lc.Append(bootstrap.Hook{
+	b := New(
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newIntegrationListener(t))),
+		WithShutdownTimeout(3*time.Second),
+		WithLifecycle(func(lc Lifecycle) {
+			_ = lc.Append(Hook{
 				Name: "timing-probe",
 				OnStart: func(_ context.Context) error {
 					mu.Lock()
@@ -134,12 +141,12 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 	// lifecycle tests; inject an ephemeral listener so validation passes and
 	// Run proceeds to the lifecycle.Start phase.
 	integLn := newIntegrationListener(t)
-	b := bootstrap.New(
-		bootstrap.WithListener(cell.PrimaryListener, integLn.Addr().String(), nil, bootstrap.WithListenerNet(integLn)),
-		bootstrap.WithShutdownTimeout(3*time.Second),
-		bootstrap.WithLifecycle(func(lc bootstrap.Lifecycle) {
+	b := New(
+		WithListener(cell.PrimaryListener, integLn.Addr().String(), cell.Policy{}, WithListenerNet(integLn)),
+		WithShutdownTimeout(3*time.Second),
+		WithLifecycle(func(lc Lifecycle) {
 			// Hook A: succeeds; its OnStop must run during rollback.
-			_ = lc.Append(bootstrap.Hook{
+			_ = lc.Append(Hook{
 				Name: "A",
 				OnStart: func(_ context.Context) error {
 					record("A.start")
@@ -152,7 +159,7 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 			})
 			// Hook B: OnStart fails — triggers LIFO rollback of A.
 			// B.OnStop must NOT be called (B never completed OnStart).
-			_ = lc.Append(bootstrap.Hook{
+			_ = lc.Append(Hook{
 				Name: "B",
 				OnStart: func(_ context.Context) error {
 					return boomErr
@@ -163,7 +170,7 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 				},
 			})
 			// Hook C: must never run at all (B failed before C was reached).
-			_ = lc.Append(bootstrap.Hook{
+			_ = lc.Append(Hook{
 				Name: "C",
 				OnStart: func(_ context.Context) error {
 					t.Error("C.OnStart must not run")

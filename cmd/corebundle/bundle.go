@@ -67,8 +67,8 @@ func defaultRuntimeOptions(
 	// internal (/internal/v1/* + service-token auth), health (/healthz /readyz
 	// /metrics on a dedicated port).
 	//
-	// Primary listener: JWT auth is wired via WithAuthDiscovery (discovers
-	// IntentTokenVerifier from accesscore post-Init).
+	// Primary listener: PolicyJWTFromAssembly discovers IntentTokenVerifier from
+	// accesscore post-Init (lazy on first request, fail-closed).
 	// Internal listener: PolicyServiceToken from InternalGuard (nil → PolicyNone
 	// in dev mode where GOCELL_SERVICE_SECRET is unset).
 	// Health listener: metricsHandler registered via HealthRouteGroups variadic;
@@ -83,31 +83,31 @@ func defaultRuntimeOptions(
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
-		// Public routes and password-reset-exempt routes are declared by the
-		// owning Cells via auth.Declare (see cells/accesscore/cell.go and
-		// cells/accesscore/slices/identitymanage/handler.go). Bootstrap only
-		// needs the opt-in signal that an auth provider cell will be wired.
-		bootstrap.WithAuthDiscovery(),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthMetricsHandler(metricsHandler),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
+		// Discover JWT verifier from the assembly. This option sets authDiscovery=true
+		// so the primary listener's JWT auth middleware is wired via
+		// discoverAuthVerifier (phase4). Tests that inject their own PrimaryListener
+		// with cell.Policy{} also need auth discovery to pass
+		// validateAuthVerifierForDeclaredRoutes.
+		bootstrap.PolicyJWTFromAssembly(asm),
 	}
 	// Primary and internal listeners are only registered when an address is
 	// configured. Tests that pre-bind their own listener inject it via extra
 	// bootstrap.WithListener options; registering an empty-addr placeholder
 	// here would cause a duplicate-ref phase0 error (CORR-02).
 	if shared.PrimaryHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr, nil))
+		opts = append(opts, bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr, cell.Policy{}))
 	}
 	if shared.InternalHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalPolicy))
 	}
-	// Health listener is optional: when HealthHTTPAddr is empty (e.g. tests that
-	// inject PrimaryListener + InternalListener but not HealthListener), bootstrap
-	// falls back to mounting /healthz and /readyz on the PrimaryListener.
+	// B2: HealthListener is required when a metrics handler is configured.
 	// Production deployments always set GOCELL_HTTP_HEALTH_ADDR.
+	// Tests inject their own HealthListener via extra bootstrap.WithListener options.
 	if shared.HealthHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, nil))
+		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, cell.Policy{}))
 	}
 	if shared.VerboseToken != "" {
 		opts = append(opts, bootstrap.WithVerboseToken(shared.VerboseToken))

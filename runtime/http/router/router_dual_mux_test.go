@@ -44,7 +44,7 @@ func countingMW(counter *atomic.Int64) func(http.Handler) http.Handler {
 // the primary listener router (built via NewForListener) returns 404 for any
 // path not registered, including /internal/v1/* and /healthz.
 func TestPerListener_PrimaryRouter_Returns404_ForUnregisteredPaths(t *testing.T) {
-	rtr, err := NewForListener(kcell.PrimaryListener, nil)
+	rtr, err := NewForListener(kcell.PrimaryListener, kcell.Policy{})
 	require.NoError(t, err)
 
 	cases := []string{
@@ -66,7 +66,7 @@ func TestPerListener_PrimaryRouter_Returns404_ForUnregisteredPaths(t *testing.T)
 // TestPerListener_InternalRouter_RoutesInternalPrefix verifies that a route
 // registered on an InternalListener router is reachable through that router.
 func TestPerListener_InternalRouter_RoutesInternalPrefix(t *testing.T) {
-	rtr, err := NewForListener(kcell.InternalListener, nil)
+	rtr, err := NewForListener(kcell.InternalListener, kcell.Policy{})
 	require.NoError(t, err)
 
 	var hit atomic.Int64
@@ -88,7 +88,7 @@ func TestPerListener_InternalRouter_RoutesInternalPrefix(t *testing.T) {
 // TestPerListener_HealthRouter_RoutesHealthPrefix verifies a health-listener
 // router serves health paths.
 func TestPerListener_HealthRouter_RoutesHealthPrefix(t *testing.T) {
-	rtr, err := NewForListener(kcell.HealthListener, nil)
+	rtr, err := NewForListener(kcell.HealthListener, kcell.Policy{})
 	require.NoError(t, err)
 
 	var hit atomic.Int64
@@ -111,7 +111,7 @@ func TestPerListener_Middleware_AppliedToSingleMux(t *testing.T) {
 	var guardCount atomic.Int64
 	guard := countingMW(&guardCount)
 
-	rtr, err := NewForListener(kcell.InternalListener, nil)
+	rtr, err := NewForListener(kcell.InternalListener, kcell.Policy{})
 	require.NoError(t, err)
 
 	rtr.Route("/internal/v1/access", func(sub kcell.RouteMux) {
@@ -132,7 +132,7 @@ func TestPerListener_Middleware_AppliedToSingleMux(t *testing.T) {
 // is explicitly passed. Policy enforcement is at the listener level via
 // PolicyServiceToken / PolicyMTLS, not via WithAuthMiddleware.
 func TestPerListener_InternalRoutes_NoDefaultAuth(t *testing.T) {
-	rtr, err := NewForListener(kcell.InternalListener, nil) // no policy, no auth middleware
+	rtr, err := NewForListener(kcell.InternalListener, kcell.Policy{}) // no policy, no auth middleware
 	require.NoError(t, err)
 
 	var reached atomic.Int64
@@ -156,7 +156,7 @@ func TestPerListener_InternalRoutes_NoDefaultAuth(t *testing.T) {
 func TestPerListener_PrimaryRouter_WithAuthMiddleware_Enforces(t *testing.T) {
 	verifier := &dualMuxMockVerifier{err: errors.New("no token provided")}
 
-	rtr, err := NewForListener(kcell.PrimaryListener, nil,
+	rtr, err := NewForListener(kcell.PrimaryListener, kcell.Policy{},
 		WithAuthMiddleware(verifier),
 		// Whitelist the test path from policy coverage; this test validates JWT
 		// enforcement, not auth.Declare coverage.
@@ -238,7 +238,7 @@ func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
 // 404 handlers for /internal/v1/* on a PrimaryListener router, preserving
 // the physical isolation contract.
 func TestInstallInternalPrefixIsolation(t *testing.T) {
-	rtr, err := NewForListener(kcell.PrimaryListener, nil)
+	rtr, err := NewForListener(kcell.PrimaryListener, kcell.Policy{})
 	require.NoError(t, err)
 
 	InstallInternalPrefixIsolation(rtr)

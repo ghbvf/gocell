@@ -5,9 +5,23 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Contract spec literals — cross-checked against
+// contracts/http/auth/role/{list,check}/v1/contract.yaml by FMT-18.
+var (
+	specRoleList = wrapper.ContractSpec{
+		ID: "http.auth.role.list.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/access/roles/{userID}",
+	}
+	specRoleCheck = wrapper.ContractSpec{
+		ID: "http.auth.role.check.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/access/roles/{userID}/{roleName}",
+	}
 )
 
 // RoleResponse is the public DTO for Role, isolating the API contract from the
@@ -47,21 +61,19 @@ func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
 }
 
-// RegisterRoutes registers rbac-check routes on the given mux.
-// Policy is declared at registration time via auth.Declare so that handler
-// bodies contain only business logic (no inline guard calls).
+// RegisterRoutes registers rbac-check routes on the given mux via auth.Mount
+// so every request emits a contract-tagged span. Policy is declared at
+// registration time; handler bodies contain only business logic.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/{userID}",
-		Handler: http.HandlerFunc(h.handleListRoles),
-		Policy:  auth.SelfOr("userID", "admin"),
+	auth.Mount(mux, auth.Route{
+		Contract: specRoleList,
+		Handler:  http.HandlerFunc(h.handleListRoles),
+		Policy:   auth.SelfOr("userID", "admin"),
 	})
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/{userID}/{roleName}",
-		Handler: http.HandlerFunc(h.handleHasRole),
-		Policy:  auth.SelfOr("userID", "admin"),
+	auth.Mount(mux, auth.Route{
+		Contract: specRoleCheck,
+		Handler:  http.HandlerFunc(h.handleHasRole),
+		Policy:   auth.SelfOr("userID", "admin"),
 	})
 }
 

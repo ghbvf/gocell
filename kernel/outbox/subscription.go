@@ -22,6 +22,18 @@ type Subscription struct {
 	// CellID is an optional observability label. When set it is used in log
 	// fields and metrics labels; falls back to ConsumerGroup when empty.
 	CellID string
+
+	// ContractID/Kind/Transport identify the contract bound to this
+	// subscription. They are intentionally primitive strings rather than a
+	// wrapper.ContractSpec to keep kernel/outbox independent of
+	// kernel/wrapper (wrapper already imports outbox for EntryHandler).
+	//
+	// Runtime eventrouter fills these fields for AddContractHandler
+	// registrations so subscription middleware can install the contract span
+	// outside ConsumerBase while still after observability metadata restore.
+	ContractID        string
+	ContractKind      string
+	ContractTransport string
 }
 
 // Validate returns an error when required fields are missing.

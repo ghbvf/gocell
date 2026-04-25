@@ -8,19 +8,27 @@ import (
 )
 
 // AdvanceCommand validates a transition and applies the timestamp side effects
-// that the kernel owns. This is the canonical entry point for all state changes.
-// Adapters MUST call this before persisting the new status.
+// that the kernel owns. This is a kernel-internal helper used by Queue
+// implementations; service/application code MUST use Queue methods directly
+// (Enqueue/Dequeue/Report/Ack/ExtendLease/Cancel), which internally
+// delegate to AdvanceCommand.
 //
 // Side effects by target status:
 //   - Sent:      sets SentAt, increments Attempt
 //   - Delivered: sets DeliveredAt
 //   - Succeeded/Failed/Expired/Canceled: sets CompletedAt
+//   - Pending:   ResetForRetry path; use ResetForRetry directly, not AdvanceCommand
 //
-// Returns an error if the transition is invalid or if a required prerequisite
-// timestamp is missing (e.g., transitioning to Delivered without SentAt).
+// Returns an error if the transition is invalid per statusTransitions, or if
+// a required prerequisite timestamp is missing (e.g., Sent→Delivered without SentAt).
 func AdvanceCommand(entry *Entry, to Status, now time.Time) error {
 	if entry == nil {
 		return errcode.New(errcode.ErrValidationFailed, "command: nil Entry")
+	}
+	// AdvanceCommand does not handle → Pending; ResetForRetry does.
+	if to == StatusPending {
+		return errcode.New(errcode.ErrValidationFailed,
+			"command: AdvanceCommand does not support transitions to Pending; use ResetForRetry")
 	}
 	if err := Transition(entry.Status, to); err != nil {
 		return err
@@ -43,7 +51,12 @@ func AdvanceCommand(entry *Entry, to Status, now time.Time) error {
 				"command: cannot transition to Delivered without SentAt")
 		}
 		entry.DeliveredAt = &now
-	case StatusSucceeded, StatusFailed, StatusExpired, StatusCanceled:
+	case StatusSucceeded:
+		// Succeeded is reachable from Sent (no Delivered) or Delivered.
+		// DeliveredAt left nil when transitioning from Sent — signals device
+		// skipped the intermediate Report event.
+		entry.CompletedAt = &now
+	case StatusFailed, StatusExpired, StatusCanceled:
 		entry.CompletedAt = &now
 	}
 

@@ -24,8 +24,8 @@ func TestRouteGroup(t *testing.T) {
 		if !rg.Listener.IsZero() {
 			t.Error("zero RouteGroup.Listener.IsZero() should be true")
 		}
-		if rg.Policy != nil {
-			t.Error("zero RouteGroup.Policy should be nil")
+		if !rg.Policy.IsZero() {
+			t.Error("zero RouteGroup.Policy should be zero value")
 		}
 		if rg.Register != nil {
 			t.Error("zero RouteGroup.Register should be nil")

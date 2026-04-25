@@ -2,11 +2,12 @@ package sessionlogout
 
 import (
 	"context"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -33,20 +34,20 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewSessionRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedSession(repo, "sess-1", "usr-1")
 
 	require.NoError(t, svc.Logout(context.Background(), "sess-1", "usr-1"))
 
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, TopicSessionRevoked, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicSessionRevoked, ow.entries[0].EventType)
 }
 
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewSessionRepository()
 	tx := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(), WithTxManager(tx))
+	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(tx))
 
 	seedSession(repo, "sess-1", "usr-1")
 
@@ -58,7 +59,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	repo := mem.NewSessionRepository()
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := NewService(repo, slog.Default(),
+	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 
 	seedSession(repo, "sess-1", "usr-1")

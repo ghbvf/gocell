@@ -60,9 +60,9 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 // phase0 error (duplicate listener declaration).
 //
 // defaultPolicy is the policy applied to the listener's root mux. Individual
-// RouteGroups may override this with a group-level Policy. A nil defaultPolicy
-// means no listener-level auth middleware; each route must then declare its
-// own policy via auth.Declare.
+// RouteGroups may override this with a group-level Policy. A zero-value Policy
+// (cell.Policy{}) means no listener-level auth middleware; each route must then
+// declare its own policy via auth.Mount.
 //
 // ref: go-kratos/kratos transport/http/server.go — options applied before server start.
 func WithListener(ref cell.ListenerRef, addr string, defaultPolicy cell.Policy, opts ...ListenerOption) Option {

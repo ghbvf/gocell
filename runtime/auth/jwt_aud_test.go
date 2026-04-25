@@ -143,14 +143,11 @@ func TestJWTVerifier_VerifyIntent_AcceptsWhenOneOfMultipleExpectedMatches(t *tes
 // token returns ErrAuthInvalidTokenIntent even when the audience would also fail.
 func TestJWTVerifier_VerifyIntent_AudienceCheckAppliedAfterIntentCheck(t *testing.T) {
 	ks := mustTestKeySet(t)
-	issuer, err := NewJWTIssuer(ks, "gocell", time.Hour)
-	require.NoError(t, err)
 	verifier, err := NewJWTVerifier(ks, WithExpectedAudiences("gocell"))
 	require.NoError(t, err)
 
-	// Refresh token with wrong audience: intent check fires first.
-	refreshTok, err := issuer.Issue(TokenIntentRefresh, "user-1", IssueOptions{Audience: []string{"wrong"}})
-	require.NoError(t, err)
+	// Legacy refresh-shaped JWT with wrong audience: intent check fires before audience.
+	refreshTok := signRawIntentJWT(t, ks, "refresh", "refresh+jwt", []string{"wrong"})
 
 	_, err = verifier.VerifyIntent(context.Background(), refreshTok, TokenIntentAccess)
 	require.Error(t, err)

@@ -1,21 +1,11 @@
 package bootstrap
 
 import (
+	"net/http"
+
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/go-chi/chi/v5"
 )
-
-// policyJWT applies JWT authentication middleware via auth.AuthMiddleware.
-type policyJWT struct {
-	verifier auth.IntentTokenVerifier
-	opts     []auth.AuthOption
-}
-
-func (p *policyJWT) Describe() string { return "jwt" }
-
-func (p *policyJWT) Apply(mux *chi.Mux) {
-	mux.Use(auth.AuthMiddleware(p.verifier, p.opts...))
-}
 
 // PolicyJWT returns a cell.Policy that installs JWT authentication middleware
 // using the provided IntentTokenVerifier.
@@ -28,9 +18,14 @@ func (p *policyJWT) Apply(mux *chi.Mux) {
 //
 // ref: go-kratos/kratos transport/http/server.go — middleware injected at server build time.
 // ref: zeromicro/go-zero rest/server.go — WithJwt at server option level, fail-fast on empty secret.
-func PolicyJWT(v auth.IntentTokenVerifier, opts ...auth.AuthOption) *policyJWT {
+func PolicyJWT(v auth.IntentTokenVerifier, opts ...auth.AuthOption) cell.Policy {
 	if v == nil {
-		panic("bootstrap: PolicyJWT verifier must not be nil; use WithAuthDiscovery() to discover from an authProvider cell")
+		panic("bootstrap: PolicyJWT verifier must not be nil; use PolicyJWTFromAssembly(asm) to discover from an authProvider cell")
 	}
-	return &policyJWT{verifier: v, opts: opts}
+	return cell.Policy{
+		Name: "jwt",
+		Middleware: func(next http.Handler) http.Handler {
+			return auth.AuthMiddleware(v, opts...)(next)
+		},
+	}
 }

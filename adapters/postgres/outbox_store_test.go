@@ -374,8 +374,12 @@ func TestPGOutboxStore_ClaimPending_SQLContainsSkipLocked(t *testing.T) {
 
 	require.NotEmpty(t, db.queryCalls)
 	sql := db.queryCalls[0].sql
+	assert.Contains(t, sql, "WITH picked AS MATERIALIZED")
 	assert.Contains(t, sql, "FOR UPDATE SKIP LOCKED")
 	assert.Contains(t, sql, "next_retry_at IS NULL OR next_retry_at <= now()")
+	assert.Contains(t, sql, "ORDER BY next_retry_at NULLS FIRST, created_at, id")
+	assert.Contains(t, sql, "FROM updated")
+	assert.Contains(t, sql, "ORDER BY picked_next_retry_at NULLS FIRST, picked_created_at, id")
 
 	args := db.queryCalls[0].args
 	assert.Equal(t, statusClaiming, args[0])

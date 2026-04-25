@@ -19,7 +19,7 @@ import (
 // --- phase0ValidateOptions tests ---
 
 func TestPhase0_AcceptsValidOptions(t *testing.T) {
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
 	require.NoError(t, b.phase0ValidateOptions())
 }
 
@@ -47,7 +47,7 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 }
 
 func TestPhase0_RejectsNilRelayHealth(t *testing.T) {
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
 	b.relayHealthNil = true
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
@@ -55,7 +55,7 @@ func TestPhase0_RejectsNilRelayHealth(t *testing.T) {
 }
 
 func TestPhase0_RejectsMutuallyExclusiveAuthOptions(t *testing.T) {
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
 	b.authVerifier = &phaseTestVerifier{}
 	b.authDiscovery = true
 	err := b.phase0ValidateOptions()

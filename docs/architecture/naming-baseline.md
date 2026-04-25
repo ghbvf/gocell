@@ -46,7 +46,7 @@ Journey ID 使用 `J-` 前缀加小写业务 token，例如 `J-ssologin`、`J-co
 Contract ID 使用小写点分格式，例如：
 
 - `http.auth.login.v1`
-- `event.config.changed.v1`
+- `event.config.entry-upserted.v1`
 - `http.device.command.enqueue.v1`
 
 Contract ID 是协议边界名，不得被当作 Cell/Slice/Assembly ID 的命名先例。

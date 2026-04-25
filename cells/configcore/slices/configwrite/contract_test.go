@@ -3,16 +3,19 @@ package configwrite
 import (
 	"context"
 	"encoding/json"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -28,17 +31,19 @@ func newContractService(t testing.TB) (*Service, *mem.ConfigRepository, *testuti
 	return svc, repo, writer
 }
 
-// newContractMux registers configwrite routes on a mux at the canonical API
-// prefix via RegisterRoutes + http.StripPrefix. RegisterRoutes calls
-// auth.Declare to install the admin policy, so the contract test exercises
-// the same guard the production mux uses — not just the happy-path handler.
-func newContractMux(svc *Service) *http.ServeMux {
+// newContractMux registers configwrite routes under the canonical API
+// prefix. TestMux.Route mirrors production chi so auth.Mount strips the
+// prefix off Contract.Path directly; no alias magic. RegisterRoutes
+// calls auth.Mount to install the admin policy, so the contract test
+// exercises the same guard the production mux uses — not just the
+// happy-path handler.
+func newContractMux(svc *Service) http.Handler {
 	h := NewHandler(svc)
-	sub := http.NewServeMux()
-	h.RegisterRoutes(sub)
-	outer := http.NewServeMux()
-	outer.Handle("/api/v1/config/", http.StripPrefix("/api/v1/config", sub))
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/config", func(sub cell.RouteMux) {
+		h.RegisterRoutes(sub)
+	})
+	return mux
 }
 
 // --- HTTP contract test ---
@@ -106,9 +111,9 @@ func TestHttpConfigWriteV1_AuthzNegative(t *testing.T) {
 
 // --- Event contract tests ---
 
-func TestEventConfigChangedV1Publish_Create(t *testing.T) {
+func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "app.name", Value: "myapp"})
@@ -116,15 +121,21 @@ func TestEventConfigChangedV1Publish_Create(t *testing.T) {
 
 	require.Len(t, writer.Entries, 1, "Create must emit one outbox entry")
 	entry := writer.Entries[0]
+	assert.Equal(t, domain.TopicConfigEntryUpserted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
-	c.MustRejectPayload(t, []byte(`{"action":"created","key":"app.name"}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name","value":"myapp"}`))
+	c.MustRejectPayload(t, []byte(`{"key":"","value":"myapp","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"   ","value":"myapp","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name","value":"myapp","version":0}`))
+	c.ValidatePayload(t, []byte(`{"key":"app.name","value":"","version":1}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
-func TestEventConfigChangedV1Publish_Update(t *testing.T) {
+func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v1"})
@@ -136,13 +147,14 @@ func TestEventConfigChangedV1Publish_Update(t *testing.T) {
 
 	require.Len(t, writer.Entries, 1, "Update must emit one outbox entry")
 	entry := writer.Entries[0]
+	assert.Equal(t, domain.TopicConfigEntryUpserted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
 }
 
-func TestEventConfigChangedV1Publish_Delete(t *testing.T) {
+func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
 	svc, _, writer := newContractService(t)
 
 	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
@@ -154,6 +166,10 @@ func TestEventConfigChangedV1Publish_Delete(t *testing.T) {
 
 	require.Len(t, writer.Entries, 1, "Delete must emit one outbox entry")
 	entry := writer.Entries[0]
+	assert.Equal(t, domain.TopicConfigEntryDeleted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.MustRejectPayload(t, []byte(`{}`))
+	c.MustRejectPayload(t, []byte(`{"key":""}`))
+	c.MustRejectPayload(t, []byte(`{"key":"   "}`))
 }

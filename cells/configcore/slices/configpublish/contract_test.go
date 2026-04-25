@@ -3,7 +3,6 @@ package configpublish
 import (
 	"context"
 	"encoding/json"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -14,8 +13,12 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -36,16 +39,18 @@ func seedContractEntry(repo *mem.ConfigRepository, key, value string) {
 	})
 }
 
-// newContractMux registers configpublish routes on a mux at the canonical API
-// prefix via RegisterRoutes + http.StripPrefix. RegisterRoutes calls
-// auth.Declare so contract tests exercise the same admin policy production uses.
-func newContractMux(svc *Service) *http.ServeMux {
+// newContractMux registers configpublish routes under the canonical API
+// prefix. The TestMux.Route sub-mux structure mirrors production chi so
+// auth.Mount strips the prefix off Contract.Path directly; no alias magic.
+// RegisterRoutes calls auth.Mount so contract tests exercise the same
+// admin policy production uses.
+func newContractMux(svc *Service) http.Handler {
 	h := NewHandler(svc)
-	sub := http.NewServeMux()
-	h.RegisterRoutes(sub)
-	outer := http.NewServeMux()
-	outer.Handle("/api/v1/config/", http.StripPrefix("/api/v1/config", sub))
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/config", func(sub cell.RouteMux) {
+		h.RegisterRoutes(sub)
+	})
+	return mux
 }
 
 // --- HTTP contract test ---
@@ -195,9 +200,9 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 
 // --- Event contract tests ---
 
-func TestEventConfigChangedV1Publish(t *testing.T) {
+func TestEventConfigVersionPublishedV1Publish(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.changed.v1")
+	c := contracttest.LoadByID(t, root, "event.config.version-published.v1")
 	svc, repo, writer := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
 
@@ -206,15 +211,18 @@ func TestEventConfigChangedV1Publish(t *testing.T) {
 
 	require.Len(t, writer.Entries, 1, "Publish must emit one outbox entry")
 	entry := writer.Entries[0]
+	assert.Equal(t, domain.TopicConfigVersionPublished, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
-	c.MustRejectPayload(t, []byte(`{"action":"published","key":"app.name"}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name"}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name","configId":"cfg-1","version":1,"sensitive":false}`))
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
-func TestEventConfigRollbackV1Publish(t *testing.T) {
+func TestEventConfigRollbackV1Publish_RollbackEmitsStateThenAudit(t *testing.T) {
 	root := contracttest.ContractsRoot()
-	c := contracttest.LoadByID(t, root, "event.config.rollback.v1")
+	upserted := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
+	rollback := contracttest.LoadByID(t, root, "event.config.rollback.v1")
 	svc, repo, writer := newContractService(t)
 	seedContractEntry(repo, "app.name", "v1")
 
@@ -226,10 +234,17 @@ func TestEventConfigRollbackV1Publish(t *testing.T) {
 	_, err = svc.Rollback(context.Background(), "app.name", 1)
 	require.NoError(t, err)
 
-	require.Len(t, writer.Entries, 1, "Rollback must emit one outbox entry")
-	entry := writer.Entries[0]
-	c.ValidatePayload(t, entry.Payload)
-	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
-	c.MustRejectPayload(t, []byte(`{"action":"rollback","key":"app.name"}`))
-	c.MustRejectHeaders(t, []byte(`{}`))
+	require.Len(t, writer.Entries, 2, "Rollback must emit state-sync then audit outbox entries")
+
+	stateEntry := writer.Entries[0]
+	assert.Equal(t, domain.TopicConfigEntryUpserted, stateEntry.EventType)
+	upserted.ValidatePayload(t, stateEntry.Payload)
+	upserted.ValidateHeaders(t, []byte(`{"event_id":"`+stateEntry.ID+`"}`))
+
+	auditEntry := writer.Entries[1]
+	assert.Equal(t, domain.TopicConfigRollback, auditEntry.EventType)
+	rollback.ValidatePayload(t, auditEntry.Payload)
+	rollback.ValidateHeaders(t, []byte(`{"event_id":"`+auditEntry.ID+`"}`))
+	rollback.MustRejectPayload(t, []byte(`{"key":"app.name"}`))
+	rollback.MustRejectHeaders(t, []byte(`{}`))
 }

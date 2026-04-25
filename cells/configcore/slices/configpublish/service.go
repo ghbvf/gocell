@@ -9,7 +9,6 @@ package configpublish
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -21,13 +20,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/google/uuid"
-)
-
-// Re-exported from domain for backward compatibility within this package's
-// tests and callers.
-const (
-	TopicConfigChanged  = domain.TopicConfigChanged
-	TopicConfigRollback = domain.TopicConfigRollback
 )
 
 // Option configures a config-publish Service.
@@ -95,21 +87,14 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 			PublishedAt: &now,
 		}
 
-		payload, err := json.Marshal(map[string]any{
-			"action":    "published",
-			"key":       key,
-			"config_id": entry.ID,
-			"version":   version.Version,
-			"sensitive": entry.Sensitive,
-		})
-		if err != nil {
-			return fmt.Errorf("config-publish: marshal event payload: %w", err)
-		}
-
 		if err := s.repo.PublishVersion(txCtx, version); err != nil {
 			return fmt.Errorf("config-publish: publish version: %w", err)
 		}
-		return s.publishEvent(txCtx, TopicConfigChanged, payload)
+		return outbox.Emit(txCtx, s.emitter, domain.TopicConfigVersionPublished, domain.ConfigVersionPublishedEvent{
+			Key:      key,
+			ConfigID: entry.ID,
+			Version:  version.Version,
+		})
 	}); err != nil {
 		return nil, err
 	}
@@ -153,16 +138,23 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 			return fmt.Errorf("config-publish: rollback update: %w", err)
 		}
 
-		payload, err := json.Marshal(map[string]any{
-			"action":         "rollback",
-			"key":            key,
-			"target_version": targetVersion,
-			"new_version":    updated.Version,
-		})
-		if err != nil {
-			return fmt.Errorf("config-publish: marshal event payload: %w", err)
+		eventValue := updated.Value
+		if updated.Sensitive {
+			eventValue = "******"
 		}
-		return s.publishEvent(txCtx, TopicConfigRollback, payload)
+		if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigEntryUpserted, domain.ConfigEntryUpsertedEvent{
+			Key:     key,
+			Value:   eventValue,
+			Version: updated.Version,
+		}); err != nil {
+			return err
+		}
+
+		return outbox.Emit(txCtx, s.emitter, domain.TopicConfigRollback, domain.ConfigRollbackEvent{
+			Key:           key,
+			TargetVersion: targetVersion,
+			NewVersion:    updated.Version,
+		})
 	}); err != nil {
 		return nil, err
 	}
@@ -174,17 +166,4 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 
 func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	return s.txRunner.RunInTx(ctx, fn)
-}
-
-// publishEvent emits the config event through the injected emitter.
-func (s *Service) publishEvent(ctx context.Context, topic string, payload []byte) error {
-	entry := outbox.Entry{
-		ID:        outbox.NewEntryID(),
-		EventType: topic,
-		Payload:   payload,
-	}
-	if err := s.emitter.Emit(ctx, entry); err != nil {
-		return fmt.Errorf("config-publish: emit event for topic %s: %w", topic, err)
-	}
-	return nil
 }

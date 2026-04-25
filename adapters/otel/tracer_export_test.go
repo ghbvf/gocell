@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
@@ -38,8 +39,10 @@ func TestTracer_SpanNameAndAttributes(t *testing.T) {
 	tr, exp, _ := newInMemoryTracer(t)
 
 	ctx, span := tr.Start(context.Background(), "outer-op")
-	span.SetAttribute("cell.id", "accesscore")
-	span.SetAttribute("retry.count", 3)
+	span.SetAttributes(
+		wrapper.Attr{Key: "cell.id", Value: "accesscore"},
+		wrapper.Attr{Key: "retry.count", Value: 3},
+	)
 	tracing.SpanSetStatus(span, false, "")
 	span.End()
 

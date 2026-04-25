@@ -81,9 +81,8 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithListener(cell.PrimaryListener, ":8083", nil),
-		bootstrap.WithListener(cell.InternalListener, ":9083", nil),
-		bootstrap.WithAuthMiddleware(demoTokenVerifier{}),
+		bootstrap.WithListener(cell.PrimaryListener, ":8083", bootstrap.PolicyJWT(demoTokenVerifier{})),
+		bootstrap.WithListener(cell.InternalListener, ":9083", cell.Policy{}),
 	)
 
 	logger.Info("iotdevice: starting on :8083; protected routes require the documented demo bearer token")

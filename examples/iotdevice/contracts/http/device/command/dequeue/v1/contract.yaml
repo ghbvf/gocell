@@ -1,0 +1,19 @@
+id: http.device.command.dequeue.v1
+kind: http
+ownerCell: devicecell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: devicecell
+  clients:
+    - edge-bff
+  http:
+    method: GET
+    path: /api/v1/devices/{id}/commands
+    pathParams:
+      id:
+        type: string
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json

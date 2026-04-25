@@ -10,14 +10,13 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
-// ApplyPolicyForTest applies the policy's middleware to mux if p implements the
-// internal mountablePolicy interface. External test packages cannot call
-// mountablePolicy.Apply directly; this helper bridges the gap.
+// ApplyPolicyForTest applies the policy's middleware to mux if it has a
+// non-nil Middleware function. External test packages cannot call the router's
+// applyPolicyToMux directly; this helper bridges the gap.
 //
-// If p does not implement mountablePolicy (e.g., a pure cell.Policy from
-// outside runtime/bootstrap), ApplyPolicyForTest is a no-op.
+// If p.Middleware is nil (PolicyNone / zero Policy), ApplyPolicyForTest is a no-op.
 func ApplyPolicyForTest(p cell.Policy, mux *chi.Mux) {
-	if mp, ok := p.(mountablePolicy); ok {
-		mp.Apply(mux)
+	if p.Middleware != nil {
+		mux.Use(p.Middleware)
 	}
 }

@@ -6,10 +6,16 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+var specDeviceListSlice = wrapper.ContractSpec{
+	ID: "http.device.list.v1", Kind: "http", Transport: "http",
+	Method: "GET", Path: "/api/v1/devices/",
+}
 
 // DeviceResponse is the public DTO for Device.
 type DeviceResponse struct {
@@ -40,11 +46,10 @@ func NewHandler(svc *Service) *Handler {
 
 // RegisterRoutes registers device-list routes.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	auth.Declare(mux, auth.RouteDecl{
-		Method:  "GET",
-		Path:    "/",
-		Handler: http.HandlerFunc(h.HandleList),
-		Policy:  auth.AnyRole("admin"),
+	auth.Mount(mux, auth.Route{
+		Contract: specDeviceListSlice,
+		Handler:  http.HandlerFunc(h.HandleList),
+		Policy:   auth.AnyRole("admin"),
 	})
 }
 

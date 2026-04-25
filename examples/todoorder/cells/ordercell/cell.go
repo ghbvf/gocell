@@ -16,6 +16,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -172,6 +173,23 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 	return nil
 }
 
+// Contract specs for ordercell example routes (examples not backed by
+// contracts/ YAML; FMT-18 exempts examples/**).
+var (
+	specOrderCreate = wrapper.ContractSpec{
+		ID: "http.todoorder.orders.create.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/orders/",
+	}
+	specOrderList = wrapper.ContractSpec{
+		ID: "http.todoorder.orders.list.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/orders/",
+	}
+	specOrderGet = wrapper.ContractSpec{
+		ID: "http.todoorder.orders.get.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/orders/{id}",
+	}
+)
+
 // RouteGroups declares ordercell's HTTP route groups on the PrimaryListener.
 //
 // ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
@@ -182,23 +200,20 @@ func (c *OrderCell) RouteGroups() []cell.RouteGroup {
 			Prefix:   "/api/v1",
 			Register: func(mux cell.RouteMux) {
 				mux.Route("/orders", func(orders cell.RouteMux) {
-					auth.Declare(orders, auth.RouteDecl{
-						Method:  "POST",
-						Path:    "/",
-						Handler: http.HandlerFunc(c.createHandler.HandleCreate),
-						Policy:  auth.Authenticated(),
+					auth.Mount(orders, auth.Route{
+						Contract: specOrderCreate,
+						Handler:  http.HandlerFunc(c.createHandler.HandleCreate),
+						Policy:   auth.Authenticated(),
 					})
-					auth.Declare(orders, auth.RouteDecl{
-						Method:  "GET",
-						Path:    "/",
-						Handler: http.HandlerFunc(c.queryHandler.HandleList),
-						Policy:  auth.Authenticated(),
+					auth.Mount(orders, auth.Route{
+						Contract: specOrderList,
+						Handler:  http.HandlerFunc(c.queryHandler.HandleList),
+						Policy:   auth.Authenticated(),
 					})
-					auth.Declare(orders, auth.RouteDecl{
-						Method:  "GET",
-						Path:    "/{id}",
-						Handler: http.HandlerFunc(c.queryHandler.HandleGet),
-						Policy:  auth.Authenticated(),
+					auth.Mount(orders, auth.Route{
+						Contract: specOrderGet,
+						Handler:  http.HandlerFunc(c.queryHandler.HandleGet),
+						Policy:   auth.Authenticated(),
 					})
 				})
 			},

@@ -243,7 +243,13 @@ func TestConfigCore_RegisterSubscriptions(t *testing.T) {
 
 	r := &celltest.StubEventRouter{}
 	require.NoError(t, c.RegisterSubscriptions(r))
-	assert.Equal(t, 1, r.HandlerCount(), "configcore should register 1 topic handler")
+	assert.Equal(t, 2, r.HandlerCount(),
+		"configcore registers entry-upserted + entry-deleted state-sync handlers")
+	assert.Equal(t, []string{
+		"event.config.entry-upserted.v1",
+		"event.config.entry-deleted.v1",
+	}, r.Topics)
+	assert.Equal(t, []string{"configcore", "configcore"}, r.ConsumerGroups)
 }
 
 // stubMux implements cell.RouteMux for testing.
@@ -336,7 +342,7 @@ func TestConfigCore_RouteFlagsList(t *testing.T) {
 
 // TestConfigCore_ProductionAuthGateLock is the P0 integration test demanded by
 // the PR review: it exercises the REAL production routing path (cell.go ->
-// slice.RegisterRoutes -> auth.Declare) and locks the 401 / 403 / 2xx
+// slice.RegisterRoutes -> auth.Mount) and locks the 401 / 403 / 2xx
 // spectrum end-to-end for each admin-guarded write endpoint.
 //
 // This test would have caught the prior drift where cell.go attached raw
@@ -385,13 +391,13 @@ func TestConfigCore_ProductionAuthGateLock(t *testing.T) {
 			// --- 401: no authenticated subject on context.
 			rec := exec(t, p, context.Background())
 			assert.Equal(t, http.StatusUnauthorized, rec.Code,
-				"unauthenticated %s %s must be 401 (auth.Declare -> Authenticated); got body %s",
+				"unauthenticated %s %s must be 401 (auth.Mount -> Authenticated); got body %s",
 				p.method, p.path, rec.Body)
 
 			// --- 403: authenticated but wrong role.
 			rec = exec(t, p, auth.TestContext("user-non-admin", []string{"viewer"}))
 			assert.Equal(t, http.StatusForbidden, rec.Code,
-				"non-admin %s %s must be 403 (auth.Declare -> AnyRole(admin)); got body %s",
+				"non-admin %s %s must be 403 (auth.Mount -> AnyRole(admin)); got body %s",
 				p.method, p.path, rec.Body)
 
 			// --- 2xx: admin role. We do not pin the exact success code

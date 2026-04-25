@@ -115,7 +115,7 @@ func TestAuditRepository_Query_Sort_ByEventType(t *testing.T) {
 		id        string
 		eventType string
 	}{
-		{"ae-1", "config.changed"},
+		{"ae-1", "config.entry-upserted"},
 		{"ae-2", "audit.archived"},
 		{"ae-3", "session.created"},
 	}

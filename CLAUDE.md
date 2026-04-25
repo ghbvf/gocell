@@ -59,7 +59,7 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 |------|------|------|
 | L0 LocalOnly | 单 slice 内部本地处理 | 纯计算、校验 |
 | L1 LocalTx | 单 cell 本地事务 | session 创建、审计写入 |
-| L2 OutboxFact | 本地事务 + outbox 发布 | session.created 事件、config.changed 事件 |
+| L2 OutboxFact | 本地事务 + outbox 发布 | session.created 事件、config.entry-upserted 事件 |
 | L3 WorkflowEventual | 跨 cell 最终一致 | 查询投影、合规追踪 |
 | L4 DeviceLatent | 设备长延迟闭环 | 命令回执、证书续期 |
 

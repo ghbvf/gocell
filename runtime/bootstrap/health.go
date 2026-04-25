@@ -14,8 +14,28 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/health"
+)
+
+// Framework-internal ContractSpecs for health probe endpoints. These are not
+// business contracts and are exempt from FMT-18 cross-validation because they
+// live in runtime/ (not cells/ or contracts/) and are registered by bootstrap
+// itself rather than by a Cell RouteGroups implementation.
+var (
+	specHealthLivez = wrapper.ContractSpec{
+		ID: "http.framework.health.livez.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/healthz",
+	}
+	specHealthReadyz = wrapper.ContractSpec{
+		ID: "http.framework.health.readyz.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/readyz",
+	}
+	specHealthMetrics = wrapper.ContractSpec{
+		ID: "http.framework.health.metrics.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/metrics",
+	}
 )
 
 // HealthRouteGroups returns the RouteGroups that mount health and metrics
@@ -32,22 +52,20 @@ func HealthRouteGroups(h *health.Handler, metricsHandlers ...http.Handler) []cel
 	groups := []cell.RouteGroup{
 		{
 			Listener: cell.HealthListener,
-			// Use auth.Declare with Public:true so that when health endpoints
+			// Use auth.Mount with Public:true so that when health endpoints
 			// fall back to the PrimaryListener (no separate HealthListener
 			// declared), the auth middleware treats them as public probes.
 			// On the HealthListener (no auth middleware), this is a no-op.
 			Register: func(mux cell.RouteMux) {
-				auth.Declare(mux, auth.RouteDecl{
-					Method:  "GET",
-					Path:    "/healthz",
-					Handler: h.LivezHandler(),
-					Public:  true,
+				auth.Mount(mux, auth.Route{
+					Contract: specHealthLivez,
+					Handler:  h.LivezHandler(),
+					Public:   true,
 				})
-				auth.Declare(mux, auth.RouteDecl{
-					Method:  "GET",
-					Path:    "/readyz",
-					Handler: h.ReadyzHandler(),
-					Public:  true,
+				auth.Mount(mux, auth.Route{
+					Contract: specHealthReadyz,
+					Handler:  h.ReadyzHandler(),
+					Public:   true,
 				})
 			},
 		},
@@ -60,11 +78,10 @@ func HealthRouteGroups(h *health.Handler, metricsHandlers ...http.Handler) []cel
 		groups = append(groups, cell.RouteGroup{
 			Listener: cell.HealthListener,
 			Register: func(mux cell.RouteMux) {
-				auth.Declare(mux, auth.RouteDecl{
-					Method:  "GET",
-					Path:    "/metrics",
-					Handler: mh,
-					Public:  true,
+				auth.Mount(mux, auth.Route{
+					Contract: specHealthMetrics,
+					Handler:  mh,
+					Public:   true,
 				})
 			},
 		})

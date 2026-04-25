@@ -16,26 +16,25 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
-	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
-// testIssuer/testVerifier are declared in service_test.go
-
-func issueRefreshToken(userID string) string {
-	tok, _ := testIssuer.Issue(auth.TokenIntentRefresh, userID, auth.IssueOptions{
-		Audience:  []string{"gocell"},
-		SessionID: "sess-handler-test",
-	})
-	return tok
-}
+// testIssuer is declared in service_test.go
 
 func setup() (*Handler, string) {
 	sessionRepo := mem.NewSessionRepository()
-	refreshTok := issueRefreshToken("usr-1")
+	refreshStore := newTestRefreshStore()
 
-	sess, _ := domain.NewSession("usr-1", "access-tok", refreshTok, time.Now().Add(time.Hour))
+	sess, _ := domain.NewSession("usr-1", "access-tok", time.Now().Add(time.Hour))
 	sess.ID = "sess-1"
 	_ = sessionRepo.Create(context.Background(), sess)
+
+	// Issue an opaque wire token for sess-1.
+	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-1", "usr-1")
+	if err != nil {
+		panic("setup: issue refresh token: " + err.Error())
+	}
 
 	// F1 fail-closed requires the session's user to be resolvable; seed a user
 	// so rotateAndIssue does not abort.
@@ -44,8 +43,31 @@ func setup() (*Handler, string) {
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
 
-	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, testIssuer, testVerifier, slog.Default())
-	return NewHandler(svc), refreshTok
+	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
+	return NewHandler(svc), wireToken
+}
+
+type unavailableRefreshStore struct {
+	refresh.Store
+}
+
+func (s unavailableRefreshStore) Peek(context.Context, string) (*refresh.Token, error) {
+	return nil, errcode.NewInfra(errcode.ErrInternal, "refresh db unavailable")
+}
+
+func assertErrorBody(t *testing.T, body []byte, code, message string) {
+	t.Helper()
+	var resp struct {
+		Error struct {
+			Code    string         `json:"code"`
+			Message string         `json:"message"`
+			Details map[string]any `json:"details"`
+		} `json:"error"`
+	}
+	require.NoError(t, json.Unmarshal(body, &resp))
+	assert.Equal(t, code, resp.Error.Code)
+	assert.Equal(t, message, resp.Error.Message)
+	assert.NotNil(t, resp.Error.Details)
 }
 
 func TestToTokenPairResponse_NilInput(t *testing.T) {
@@ -119,12 +141,15 @@ func TestHandleRefresh(t *testing.T) {
 		},
 		{
 			name:       "invalid token returns 401",
-			body:       `{"refreshToken":"not.a.jwt"}`,
+			body:       `{"refreshToken":"not.a.valid.opaque.token"}`,
 			wantStatus: http.StatusUnauthorized,
+			checkBody: func(t *testing.T, body []byte) {
+				assertErrorBody(t, body, "ERR_AUTH_REFRESH_FAILED", "invalid refresh token")
+			},
 		},
 		{
 			name:       "unknown field returns 400",
-			body:       `{"refreshToken":"not.a.jwt","extra":"y"}`,
+			body:       `{"refreshToken":"not.a.valid.opaque.token","extra":"y"}`,
 			wantStatus: http.StatusBadRequest,
 		},
 	}
@@ -141,6 +166,22 @@ func TestHandleRefresh(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	userRepo := mem.NewUserRepository()
+	store := unavailableRefreshStore{Store: newTestRefreshStore()}
+	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default())
+	h := NewHandler(svc)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/refresh", strings.NewReader(`{"refreshToken":"opaque"}`))
+	req.Header.Set("Content-Type", "application/json")
+	h.HandleRefresh(w, req)
+
+	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
+	assertErrorBody(t, w.Body.Bytes(), "ERR_AUTH_REFRESH_UNAVAILABLE", "internal server error")
 }
 
 // TestHandler_Refresh_BlankToken verifies that submitting an empty refreshToken

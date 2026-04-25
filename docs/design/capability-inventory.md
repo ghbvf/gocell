@@ -14,7 +14,7 @@
 | **cells/** | 3 platform Cell, 19 platform slices | 全部 IMPL | accesscore(9s) / auditcore(4s) / configcore(6s) |
 | **cmd/** | 2 CLI | 全部 IMPL | gocell (validate/scaffold/generate/check/verify) + corebundle |
 | **pkg/** | 5 包 | 全部 IMPL | errcode/ctxkeys/httputil/id/uid |
-| **contracts/** | 52 active YAML | 声明完成 | 38 platform + 14 examples |
+| **contracts/** | 64 active YAML | 声明完成 | 45 platform + 19 examples |
 | **journeys/** | 8 YAML | 声明完成 | SSO/onboarding/lockout/refresh/logout/audit-trail/hot-reload/rollback |
 | **infra** | 4 服务 | 配置完成 | Docker Compose (PG/Redis/RabbitMQ/MinIO) + Makefile |
 | **docs** | 28 文件 | 完成 | 架构/指南/评审/参考 |
@@ -213,7 +213,7 @@
 | rbaccheck | RBAC 角色查询与检查 | GET /api/v1/access/roles/{userID}, GET /api/v1/access/roles/{userID}/{roleName} |
 | rbacassign | RBAC 角色授予/撤销 | POST /internal/v1/access/roles/assign, POST /internal/v1/access/roles/revoke |
 | authorizationdecide | 权限决策 | internal service capability; no public HTTP route |
-| configreceive | 配置变更接收 | event.config.changed.v1 subscriber |
+| configreceive | 配置状态同步接收 | event.config.entry-upserted.v1 + event.config.entry-deleted.v1 subscriber |
 
 Domain: User (PasswordHash/Status/CreatedAt) + Session (TokenPair/ExpiresAt/PreviousRefreshToken) + Role
 Ports: UserRepository + SessionRepository + RoleRepository
@@ -267,13 +267,13 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 
 ---
 
-## 7. Contracts（52 active, including examples）
+## 7. Contracts（64 active, including examples）
 
 | Scope | HTTP | Event | Command | Total |
 |-------|------|-------|---------|-------|
-| Platform (`contracts/`) | 27 | 11 | 0 | 38 |
-| Examples (`examples/*/contracts/`) | 9 | 2 | 3 | 14 |
-| Total | 36 | 13 | 3 | 52 |
+| Platform (`contracts/`) | 32 | 13 | 0 | 45 |
+| Examples (`examples/*/contracts/`) | 12 | 2 | 5 | 19 |
+| Total | 44 | 15 | 5 | 64 |
 
 当前公开 HTTP route 只来自 `contract.yaml` 的 `kind: http` + `method/path`。`sessionvalidate` 与 `authorizationdecide` 是 accesscore 内部 service 能力，不再作为公开 HTTP route 记录。
 
@@ -297,8 +297,8 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 | J-sessionrefresh | accesscore | 单 Cell |
 | J-sessionlogout | accesscore | 单 Cell |
 | J-auditlogintrail | auditcore, accesscore | 跨 Cell |
-| J-confighotreload | configcore | 单 Cell |
-| J-configrollback | configcore | 单 Cell |
+| J-confighotreload | configcore, accesscore, auditcore | 跨 Cell |
+| J-configrollback | configcore, accesscore, auditcore | 跨 Cell |
 
 ---
 

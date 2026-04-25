@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -14,9 +15,42 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+func newTestRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
+
+type failingIssueRefreshStore struct {
+	refresh.Store
+	err error
+}
+
+func (s failingIssueRefreshStore) Issue(context.Context, string, string) (string, *refresh.Token, error) {
+	return "", nil, s.err
+}
+
+type trackingSessionRepo struct {
+	*mem.SessionRepository
+	created []string
+	deleted []string
+}
+
+func (r *trackingSessionRepo) Create(ctx context.Context, session *domain.Session) error {
+	r.created = append(r.created, session.ID)
+	return r.SessionRepository.Create(ctx, session)
+}
+
+func (r *trackingSessionRepo) Delete(ctx context.Context, id string) error {
+	r.deleted = append(r.deleted, id)
+	return r.SessionRepository.Delete(ctx, id)
+}
 
 var (
 	testKeySet, _, _ = auth.MustNewTestKeySet()
@@ -53,18 +87,15 @@ func TestNewService_IssuerDefaultAudienceWrittenToTokens(t *testing.T) {
 	assert.Contains(t, accessClaims.Audience, "gocell",
 		"access token aud must be populated from issuer default audience (Registry)")
 
-	// The refresh token must also carry the audience.
-	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
-	require.NoError(t, err)
-	assert.Contains(t, refreshClaims.Audience, "gocell",
-		"refresh token aud must be populated from issuer default audience (Registry)")
+	// The refresh token is now an opaque wire token (not a JWT) — it must be non-empty.
+	assert.NotEmpty(t, pair.RefreshToken, "login must issue a non-empty opaque refresh token")
 }
 
 func newTestService() (*Service, *mem.UserRepository) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	return NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default()), userRepo
+	return NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default()), userRepo
 }
 
 // seedUser creates a user with a bcrypt-hashed password.
@@ -138,6 +169,26 @@ func TestService_Login(t *testing.T) {
 	}
 }
 
+func TestService_Login_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := mem.NewRoleRepository()
+	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
+	svc := NewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default())
+	seedUser(userRepo, "refresh-down", "pass123")
+
+	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
+	require.Error(t, err)
+	assert.Nil(t, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+	require.Len(t, sessionRepo.created, 1)
+	require.Equal(t, sessionRepo.created, sessionRepo.deleted)
+	_, lookupErr := sessionRepo.GetByID(context.Background(), sessionRepo.created[0])
+	require.Error(t, lookupErr, "failed refresh issue must not leave an orphan session in demo/noop tx mode")
+}
+
 func TestService_Login_TokensContainSessionID(t *testing.T) {
 	svc, userRepo := newTestService()
 	seedUser(userRepo, "sid-user", "pass123")
@@ -156,12 +207,9 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	assert.NotEmpty(t, sid, "access token must contain sid claim")
 	assert.True(t, strings.HasPrefix(sid, "sess-"), "sid must start with sess-")
 
-	// Refresh token must contain same sid.
-	refreshClaims, err := verifier.VerifyIntent(context.Background(), pair.RefreshToken, auth.TokenIntentRefresh)
-	require.NoError(t, err)
-	refreshSid := refreshClaims.SessionID
-	assert.NotEmpty(t, refreshSid, "refresh token must contain sid claim")
-	assert.Equal(t, sid, refreshSid, "both tokens must share the same session ID")
+	// Refresh token is now an opaque wire token (not a JWT).
+	// It must be non-empty; the session linkage is tracked in the refresh store, not in the token payload.
+	assert.NotEmpty(t, pair.RefreshToken, "login must issue a non-empty opaque refresh token")
 }
 
 // failingPublisher returns an error on every Publish call.
@@ -234,7 +282,7 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	svc := NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default())
+	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default())
 	seedUser(userRepo, "issue-persist", "pass123")
 
 	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
@@ -251,6 +299,26 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	assert.Equal(t, u.ID, session.UserID)
 	assert.False(t, session.IsRevoked(), "newly issued session must not be revoked")
 	assert.False(t, session.IsExpired(), "newly issued session must not be expired")
+}
+
+func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := mem.NewRoleRepository()
+	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
+	svc := NewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default())
+	seedUser(userRepo, "issue-refresh-down", "pass123")
+	u, err := userRepo.GetByUsername(context.Background(), "issue-refresh-down")
+	require.NoError(t, err)
+
+	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	require.Error(t, err)
+	assert.Empty(t, pair.AccessToken)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+	require.Len(t, sessionRepo.created, 1)
+	require.Equal(t, sessionRepo.created, sessionRepo.deleted)
 }
 
 // TestService_Login_BlankFieldsRejected verifies that RequireNotBlank is
@@ -337,7 +405,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 	seedUser(userRepo, "role-outage", "pass123")
 
 	emitter := &countingEmitter{}
-	svc := NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default(), WithEmitter(emitter))
+	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
 	require.Error(t, err, "Login must fail when role fetch fails")
@@ -362,7 +430,7 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	u, err := userRepo.GetByUsername(context.Background(), "issue-outage")
 	require.NoError(t, err)
 
-	svc := NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default())
+	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default())
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.Error(t, err, "IssueForUser must fail when role fetch fails")
@@ -384,7 +452,7 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, slog.Default())
 	require.NoError(t, err)
-	svc := NewService(userRepo, sessionRepo, roleRepo, testIssuer, slog.Default(), WithEmitter(emitter))
+	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")

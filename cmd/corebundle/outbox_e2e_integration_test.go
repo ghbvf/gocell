@@ -55,14 +55,15 @@ import (
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
 
-// configChangedBusinessPayload is the business event shape that
-// cells/configcore/slices/configsubscribe/service.go expects. If the relay's
-// wire envelope reaches subscribers unwrapped (F1 bug), these fields will all
-// be empty and the regression guard fires.
-type configChangedBusinessPayload struct {
-	Action string `json:"action"`
-	Key    string `json:"key"`
-	Value  string `json:"value"`
+// configEntryUpsertedBusinessPayload is the business event shape that
+// cells/configcore/slices/configsubscribe/service.go expects on
+// event.config.entry-upserted.v1. If the relay's wire envelope reaches
+// subscribers unwrapped (F1 bug), these fields will all be empty and the
+// regression guard fires.
+type configEntryUpsertedBusinessPayload struct {
+	Key     string `json:"key"`
+	Value   string `json:"value"`
+	Version int    `json:"version"`
 }
 
 // TestOutboxE2E_PGMode_WriteToSubscribe is the combined A11 + F1 regression
@@ -126,11 +127,11 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
 	// This is the F1 regression guard: if the bus forwards envelope-wrapped
 	// bytes as-is, the business payload parse below gets empty fields.
-	const topic = "event.config.changed.v1"
+	const topic = "event.config.entry-upserted.v1"
 
 	type received struct {
 		entry   outbox.Entry
-		payload configChangedBusinessPayload
+		payload configEntryUpsertedBusinessPayload
 		parsed  bool
 	}
 	var (
@@ -142,7 +143,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	defer subCancel()
 	go func() {
 		_ = eb.Subscribe(subCtx, outbox.Subscription{Topic: topic, ConsumerGroup: "e2e-test"}, func(_ context.Context, e outbox.Entry) outbox.HandleResult {
-			var p configChangedBusinessPayload
+			var p configEntryUpsertedBusinessPayload
 			err := json.Unmarshal(e.Payload, &p)
 			recvMu.Lock()
 			recvs = append(recvs, received{entry: e, payload: p, parsed: err == nil})
@@ -208,14 +209,14 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
-		// (change-password, logout) are declared via auth.Declare inside accesscore's
-		// RegisterRoutes. WithAuthDiscovery discovers the verifier from accesscore.
-		bootstrap.WithAuthDiscovery(),
+		// (change-password, logout) are declared via auth.Mount inside accesscore's
+		// RegisterRoutes. PolicyJWTFromAssembly discovers the verifier lazily.
+		bootstrap.PolicyJWTFromAssembly(asm),
 		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
 		// not from a manual adapterpg.NewOutboxRelay call. If the production
 		// wiring stops producing a relay worker, require.NotNil above fires.
@@ -270,15 +271,14 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		defer recvMu.Unlock()
 		for _, r := range recvs {
 			if r.parsed && r.payload.Key == "e2e.test.key" &&
-				(r.payload.Action == "created" || r.payload.Action == "updated" ||
-					r.payload.Action == "published") {
+				r.payload.Value == "e2e-value" && r.payload.Version >= 1 {
 				return true
 			}
 		}
 		return false
 	}, 30*time.Second, 200*time.Millisecond,
-		"A11+F1 regression guard: business payload with action/key must reach subscriber; "+
-			"empty Action or missing Key indicates relay→eventbus envelope was not unwrapped")
+		"A11+F1 regression guard: entry-upserted business payload with key/value/version must reach subscriber; "+
+			"missing fields indicate relay→eventbus envelope was not unwrapped")
 
 	// Additional diagnostic: list what actually arrived in case the above fails.
 	recvMu.Lock()

@@ -1,42 +1,44 @@
 package cell_test
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 )
 
-// testDoublePolicy is a test-local implementation of cell.Policy that is
-// constructed entirely within the kernel/cell_test package, without any
-// dependency on runtime/bootstrap. This confirms that the cell.Policy interface
-// is satisfiable independently of runtime code.
-type testDoublePolicy struct {
-	description string
-}
-
-func (p testDoublePolicy) Describe() string { return p.description }
-
-// Compile-time assertion: testDoublePolicy must satisfy cell.Policy.
-// This guards against accidental breakage of the interface definition.
-var _ cell.Policy = testDoublePolicy{}
-
-func TestPolicyInterface(t *testing.T) {
+func TestPolicyIsZero(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		policy    cell.Policy
-		wantDescr string
+		name   string
+		policy cell.Policy
+		want   bool
 	}{
 		{
-			name:      "basic describe",
-			policy:    testDoublePolicy{description: "test-policy"},
-			wantDescr: "test-policy",
+			name:   "zero value is zero",
+			policy: cell.Policy{},
+			want:   true,
 		},
 		{
-			name:      "empty description",
-			policy:    testDoublePolicy{description: ""},
-			wantDescr: "",
+			name:   "name only is not zero",
+			policy: cell.Policy{Name: "some-policy"},
+			want:   false,
+		},
+		{
+			name: "middleware only is not zero",
+			policy: cell.Policy{
+				Middleware: func(next http.Handler) http.Handler { return next },
+			},
+			want: false,
+		},
+		{
+			name: "name and middleware is not zero",
+			policy: cell.Policy{
+				Name:       "full-policy",
+				Middleware: func(next http.Handler) http.Handler { return next },
+			},
+			want: false,
 		},
 	}
 
@@ -44,9 +46,18 @@ func TestPolicyInterface(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := tc.policy.Describe(); got != tc.wantDescr {
-				t.Errorf("Describe() = %q, want %q", got, tc.wantDescr)
+			if got := tc.policy.IsZero(); got != tc.want {
+				t.Errorf("IsZero() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestPolicyName(t *testing.T) {
+	t.Parallel()
+
+	p := cell.Policy{Name: "test-policy"}
+	if got := p.Name; got != "test-policy" {
+		t.Errorf("Name = %q, want %q", got, "test-policy")
 	}
 }

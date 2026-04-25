@@ -64,8 +64,8 @@ func main() {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ":8082", nil),
-		bootstrap.WithListener(cell.InternalListener, ":9082", nil),
+		bootstrap.WithListener(cell.PrimaryListener, ":8082", cell.Policy{}),
+		bootstrap.WithListener(cell.InternalListener, ":9082", cell.Policy{}),
 	)
 
 	logger.Info("todoorder: starting on :8082")

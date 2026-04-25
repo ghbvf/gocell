@@ -61,6 +61,57 @@ func TestJourneyIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestContractIDRoundTrip(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+	}{
+		{name: "http contract id", value: "http.auth.login.v1"},
+		{name: "event contract id", value: "event.session.revoked.v1"},
+		{name: "empty string", value: ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := WithContractID(context.Background(), tt.value)
+			got, ok := ContractIDFrom(ctx)
+			assert.True(t, ok)
+			assert.Equal(t, tt.value, got)
+		})
+	}
+}
+
+func TestContractAttrsRoundTrip(t *testing.T) {
+	attrs := []struct {
+		Key   string
+		Value any
+	}{
+		{Key: "gocell.contract.id", Value: "http.auth.login.v1"},
+		{Key: "http.status_code", Value: int64(200)},
+	}
+
+	ctx := WithContractAttrs(context.Background(), attrs)
+	got, ok := ContractAttrsFrom(ctx)
+	assert.True(t, ok)
+	assert.Equal(t, attrs, got)
+}
+
+func TestWithContractAttrs_NilNoop(t *testing.T) {
+	ctx := WithCellID(context.Background(), "accesscore")
+
+	gotCtx := WithContractAttrs(ctx, nil)
+	assert.Same(t, ctx, gotCtx)
+
+	got, ok := ContractAttrsFrom(gotCtx)
+	assert.False(t, ok)
+	assert.Nil(t, got)
+}
+
+func TestContractAttrsFrom_MissingKey(t *testing.T) {
+	got, ok := ContractAttrsFrom(context.Background())
+	assert.False(t, ok)
+	assert.Nil(t, got)
+}
+
 func TestFromMissingKey(t *testing.T) {
 	ctx := context.Background()
 
@@ -71,6 +122,7 @@ func TestFromMissingKey(t *testing.T) {
 		{name: "CellID missing", fn: CellIDFrom},
 		{name: "SliceID missing", fn: SliceIDFrom},
 		{name: "JourneyID missing", fn: JourneyIDFrom},
+		{name: "ContractID missing", fn: ContractIDFrom},
 	}
 
 	for _, tt := range tests {

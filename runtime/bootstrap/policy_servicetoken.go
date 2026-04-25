@@ -1,21 +1,11 @@
 package bootstrap
 
 import (
+	"net/http"
+
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/go-chi/chi/v5"
 )
-
-// policyServiceToken applies HMAC-SHA256 service token middleware.
-type policyServiceToken struct {
-	store auth.NonceStore
-	ring  *auth.HMACKeyRing
-}
-
-func (p *policyServiceToken) Describe() string { return "service-token" }
-
-func (p *policyServiceToken) Apply(mux *chi.Mux) {
-	mux.Use(auth.ServiceTokenMiddleware(p.ring, auth.WithServiceTokenNonceStore(p.store)))
-}
 
 // PolicyServiceToken returns a cell.Policy that installs the HMAC-SHA256
 // service token authentication middleware.
@@ -28,12 +18,17 @@ func (p *policyServiceToken) Apply(mux *chi.Mux) {
 // Noop/test doubles may be passed for non-production deployments.
 //
 // ref: PR-A25 ErrControlplaneNonceStoreMissing style — fail-fast at startup for nil deps.
-func PolicyServiceToken(store auth.NonceStore, ring *auth.HMACKeyRing) *policyServiceToken {
+func PolicyServiceToken(store auth.NonceStore, ring *auth.HMACKeyRing) cell.Policy {
 	if store == nil {
 		panic("bootstrap: PolicyServiceToken store must not be nil")
 	}
 	if ring == nil {
 		panic("bootstrap: PolicyServiceToken ring must not be nil")
 	}
-	return &policyServiceToken{store: store, ring: ring}
+	return cell.Policy{
+		Name: "service-token",
+		Middleware: func(next http.Handler) http.Handler {
+			return auth.ServiceTokenMiddleware(ring, auth.WithServiceTokenNonceStore(store))(next)
+		},
+	}
 }

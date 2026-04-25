@@ -4,7 +4,6 @@ package configwrite
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 	"time"
@@ -17,10 +16,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 	"github.com/google/uuid"
 )
-
-// TopicConfigChanged is re-exported from domain for backward compatibility
-// within this package's tests and callers.
-const TopicConfigChanged = domain.TopicConfigChanged
 
 // Option configures a config-write Service.
 type Option func(*Service)
@@ -91,10 +86,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		if err := s.repo.Create(txCtx, entry); err != nil {
 			return fmt.Errorf("config-write: create: %w", err)
 		}
-		if err := s.publishChange(txCtx, "created", entry); err != nil {
-			return err
-		}
-		return nil
+		return s.publishUpserted(txCtx, entry)
 	}); err != nil {
 		return nil, err
 	}
@@ -127,7 +119,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}
-		return s.publishChange(txCtx, "updated", updated)
+		return s.publishUpserted(txCtx, updated)
 	}); err != nil {
 		return nil, err
 	}
@@ -149,10 +141,7 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 		if err != nil {
 			return fmt.Errorf("config-write: delete: %w", err)
 		}
-		if err := s.publishChange(txCtx, "deleted", deleted); err != nil {
-			return err
-		}
-		return nil
+		return s.publishDeleted(txCtx, deleted)
 	}); err != nil {
 		return err
 	}
@@ -165,27 +154,20 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 	return s.txRunner.RunInTx(ctx, fn)
 }
 
-func (s *Service) publishChange(ctx context.Context, action string, entry *domain.ConfigEntry) error {
+func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry) error {
 	eventValue := entry.Value
 	if entry.Sensitive {
 		eventValue = "******"
 	}
-	payload, err := json.Marshal(map[string]any{
-		"action":  action,
-		"key":     entry.Key,
-		"value":   eventValue,
-		"version": entry.Version,
+	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryUpserted, domain.ConfigEntryUpsertedEvent{
+		Key:     entry.Key,
+		Value:   eventValue,
+		Version: entry.Version,
 	})
-	if err != nil {
-		return fmt.Errorf("config-write: marshal event payload: %w", err)
-	}
-	outboxEntry := outbox.Entry{
-		ID:        outbox.NewEntryID(),
-		EventType: TopicConfigChanged,
-		Payload:   payload,
-	}
-	if err := s.emitter.Emit(ctx, outboxEntry); err != nil {
-		return fmt.Errorf("config-write: emit event: %w", err)
-	}
-	return nil
+}
+
+func (s *Service) publishDeleted(ctx context.Context, entry *domain.ConfigEntry) error {
+	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryDeleted, domain.ConfigEntryDeletedEvent{
+		Key: entry.Key,
+	})
 }

@@ -1,0 +1,21 @@
+id: http.device.command.report.v1
+kind: http
+ownerCell: devicecell
+consistencyLevel: L4
+lifecycle: active
+endpoints:
+  server: devicecell
+  clients:
+    - edge-bff
+  http:
+    method: POST
+    path: /api/v1/devices/{id}/commands/{cmdId}/report
+    pathParams:
+      id:
+        type: string
+      cmdId:
+        type: string
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  response: response.schema.json

@@ -6,39 +6,35 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// Session represents an authenticated user session with tokens and expiry.
+// Session represents an authenticated user session with its access token and
+// expiry. Refresh tokens live in runtime/auth/refresh.Store (append-only
+// lineage per migration 012) and are not mirrored on Session.
 type Session struct {
-	ID                   string
-	UserID               string
-	AccessToken          string
-	RefreshToken         string
-	PreviousRefreshToken string // tracks the last rotated-out refresh token for reuse detection
-	ExpiresAt            time.Time
-	RevokedAt            *time.Time // nil = not revoked
-	CreatedAt            time.Time
-	Version              int64 // optimistic lock version; incremented on each update
+	ID          string
+	UserID      string
+	AccessToken string
+	ExpiresAt   time.Time
+	RevokedAt   *time.Time // nil = not revoked
+	CreatedAt   time.Time
+	Version     int64 // optimistic lock version; incremented on each update
 }
 
 // NewSession creates a new session for the given user.
 // Returns an errcode.Error if any required field is empty.
-func NewSession(userID, accessToken, refreshToken string, expiresAt time.Time) (*Session, error) {
+func NewSession(userID, accessToken string, expiresAt time.Time) (*Session, error) {
 	if userID == "" {
 		return nil, errcode.New(errcode.ErrAuthSessionInvalidInput, "userID is required")
 	}
 	if accessToken == "" {
 		return nil, errcode.New(errcode.ErrAuthSessionInvalidInput, "accessToken is required")
 	}
-	if refreshToken == "" {
-		return nil, errcode.New(errcode.ErrAuthSessionInvalidInput, "refreshToken is required")
-	}
 
 	return &Session{
-		UserID:       userID,
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresAt:    expiresAt,
-		CreatedAt:    time.Now(),
-		Version:      1,
+		UserID:      userID,
+		AccessToken: accessToken,
+		ExpiresAt:   expiresAt,
+		CreatedAt:   time.Now(),
+		Version:     1,
 	}, nil
 }
 

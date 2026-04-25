@@ -1,97 +1,68 @@
-// Package tracing provides a Tracer interface and HTTP middleware for
-// distributed tracing. The default implementation generates trace/span IDs
-// and propagates them via context. Production deployments should use an
-// adapter (e.g., adapters/otel) that integrates with OpenTelemetry.
+// Package tracing provides a lightweight Tracer implementation and HTTP
+// middleware glue. The canonical Tracer / Span interfaces are defined in
+// kernel/wrapper; this package re-exports them so legacy callers can
+// continue writing `tracing.Tracer` / `tracing.Span`, and supplies a stdlib-
+// only simpleTracer useful for tests and demo-mode runs. Production
+// deployments should wire the OTel adapter in adapters/otel.
 //
 // ref: go.opentelemetry.io/otel — Tracer/Span API, W3C TraceContext propagation
-// Adopted: Tracer/Span interface shape, trace_id+span_id in context.
+// Adopted: Tracer/Span interface shape, trace_id+span_id in context (shape now
+// lives in kernel/wrapper to keep layering pure — runtime re-exports).
 // Deviated: lightweight stdlib-only implementation; OTel integration lives
-// in adapters/ to keep runtime/ dependency-free.
+// in adapters/otel to keep runtime/ dependency-free.
 package tracing
 
 import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"sync"
 
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 )
 
-// Span represents a unit of work in a trace.
-type Span interface {
-	// End completes the span.
-	End()
-	// SetAttribute records a key-value pair on the span.
-	SetAttribute(key string, value any)
-	// TraceID returns the trace identifier.
-	TraceID() string
-	// SpanID returns the span identifier.
-	SpanID() string
-}
-
-// SpanRecorder is an optional interface that Span implementations may support
-// for recording errors and setting status. Use the SpanRecordError and
-// SpanSetStatus helper functions which handle type-assertion gracefully.
-type SpanRecorder interface {
-	// RecordError adds an error event to the span for diagnostics.
-	RecordError(err error)
-	// SetStatus sets the span's status. When isError is true the span is
-	// marked as failed with the given description; otherwise it is marked OK.
-	SetStatus(isError bool, description string)
-}
-
-// SpanRenamer is an optional interface that Span implementations may support
-// for updating the span name after creation. This is used by HTTP middleware
-// to rename spans from the initial "{method} {path}" to the low-cardinality
-// "{method} {routePattern}" after routing completes.
-type SpanRenamer interface {
-	// SetName updates the span's display name.
-	SetName(name string)
-}
-
-// SpanSetName renames the span if it implements SpanRenamer.
-// Spans that do not support renaming are silently skipped.
-func SpanSetName(s Span, name string) {
-	if r, ok := s.(SpanRenamer); ok {
-		r.SetName(name)
-	}
-}
-
-// SpanRecordError records an error on the span if it implements SpanRecorder.
-// Spans that do not support error recording are silently skipped.
-func SpanRecordError(s Span, err error) {
-	if r, ok := s.(SpanRecorder); ok {
-		r.RecordError(err)
-	}
-}
-
-// SpanSetStatus sets the status on the span if it implements SpanRecorder.
-// Spans that do not support status setting are silently skipped.
-func SpanSetStatus(s Span, isError bool, description string) {
-	if r, ok := s.(SpanRecorder); ok {
-		r.SetStatus(isError, description)
-	}
-}
-
-// Tracer creates spans.
-type Tracer interface {
-	// Start creates a new span with the given name. The returned context
-	// carries the span and its trace/span IDs.
-	//
-	// Implementations MUST continue the parent trace when the input context
-	// carries an upstream trace identity (e.g. ctxkeys.TraceID for the
-	// simple tracer, or a remote SpanContext for OTel). When no parent is
-	// present, a new root trace is started.
-	Start(ctx context.Context, name string) (context.Context, Span)
-}
-
-// Compile-time checks: simpleSpan implements Span and SpanRenamer.
-var (
-	_ Span        = (*simpleSpan)(nil)
-	_ SpanRenamer = (*simpleSpan)(nil)
+// Tracer and Span re-export the canonical kernel types so callers that
+// imported runtime/observability/tracing keep compiling. Prefer
+// kernel/wrapper directly in new code.
+type (
+	// Tracer is a re-export of kernel/wrapper.Tracer.
+	Tracer = wrapper.Tracer
+	// Span is a re-export of kernel/wrapper.Span.
+	Span = wrapper.Span
+	// Attr is a re-export of kernel/wrapper.Attr.
+	Attr = wrapper.Attr
 )
 
-// simpleTracer is a lightweight Tracer that generates random IDs.
+// SpanSetName renames the span if it implements wrapper.SpanRenamer.
+// Kept here for backwards compatibility with HTTP middleware that was
+// written before the kernel interface existed. New code can call
+// wrapper.SetSpanName directly.
+func SpanSetName(s Span, name string) {
+	wrapper.SetSpanName(s, name)
+}
+
+// SpanRecordError records an error on the span. Thin shim over
+// wrapper.Span.RecordError kept for backwards compatibility.
+func SpanRecordError(s Span, err error) {
+	s.RecordError(err)
+}
+
+// SpanSetStatus is a thin shim over wrapper.Span.SetStatus that maps the
+// legacy boolean to wrapper.StatusCode so existing callers compile.
+func SpanSetStatus(s Span, isError bool, description string) {
+	if isError {
+		s.SetStatus(wrapper.StatusError, description)
+		return
+	}
+	s.SetStatus(wrapper.StatusOK, description)
+}
+
+// Compile-time assertion: simpleSpan implements the kernel Span interface.
+var _ Span = (*simpleSpan)(nil)
+
+// simpleTracer is a stdlib-only Tracer useful for tests and demo-mode
+// deployments that have no OTel backend wired.
 type simpleTracer struct {
 	name string
 }
@@ -102,11 +73,10 @@ func NewTracer(name string) Tracer {
 	return &simpleTracer{name: name}
 }
 
-func (t *simpleTracer) Start(ctx context.Context, name string) (context.Context, Span) {
+func (t *simpleTracer) Start(ctx context.Context, name string, attrs ...Attr) (context.Context, Span) {
 	traceID := generateID(16)
 	spanID := generateID(8)
 
-	// Check if parent trace ID exists in context.
 	if parentTrace, ok := ctxkeys.TraceIDFrom(ctx); ok && parentTrace != "" {
 		traceID = parentTrace
 	}
@@ -116,34 +86,69 @@ func (t *simpleTracer) Start(ctx context.Context, name string) (context.Context,
 		spanID:  spanID,
 		name:    name,
 	}
+	if len(attrs) > 0 {
+		s.SetAttributes(attrs...)
+	}
 
 	ctx = ctxkeys.WithTraceID(ctx, traceID)
 	ctx = ctxkeys.WithSpanID(ctx, spanID)
 	return ctx, s
 }
 
-// simpleSpan is a lightweight span implementation.
+// simpleSpan is a lightweight span implementation used by simpleTracer.
 type simpleSpan struct {
+	mu      sync.Mutex
 	traceID string
 	spanID  string
 	name    string
-	attrs   map[string]any
+	status  wrapper.StatusCode
+	stDesc  string
+	err     error
+	attrs   []Attr
 }
 
+// SetAttributes records key-value pairs on the span.
+func (s *simpleSpan) SetAttributes(attrs ...Attr) {
+	if len(attrs) == 0 {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.attrs = append(s.attrs, attrs...)
+}
+
+// RecordError stores the most recent error attached to the span.
+func (s *simpleSpan) RecordError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.err = err
+}
+
+// SetStatus updates the span's terminal status.
+func (s *simpleSpan) SetStatus(code wrapper.StatusCode, description string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.status = code
+	s.stDesc = description
+}
+
+// End completes the span — a no-op for the stdlib simpleSpan.
 func (s *simpleSpan) End() {}
 
-func (s *simpleSpan) SetAttribute(key string, value any) {
-	if s.attrs == nil {
-		s.attrs = make(map[string]any)
-	}
-	s.attrs[key] = value
+// SetName updates the span's display name. Implementing SpanRenamer keeps
+// two-phase rename (initial "{method} {path}" → "{method} {routePattern}")
+// working for HTTP middleware that was written before kernel/wrapper.
+func (s *simpleSpan) SetName(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.name = name
 }
 
+// TraceID returns the trace identifier.
 func (s *simpleSpan) TraceID() string { return s.traceID }
-func (s *simpleSpan) SpanID() string  { return s.spanID }
 
-// SetName updates the span's display name.
-func (s *simpleSpan) SetName(name string) { s.name = name }
+// SpanID returns the span identifier.
+func (s *simpleSpan) SpanID() string { return s.spanID }
 
 // generateID creates a random hex-encoded ID of the given byte length.
 func generateID(byteLen int) string {

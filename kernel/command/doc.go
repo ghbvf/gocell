@@ -3,17 +3,26 @@
 //
 // # Lifecycle
 //
-// Commands move through a linear state machine:
+// Commands move through a state machine driven by distinct Queue methods,
+// each triggering exactly one transition:
 //
-//	Pending → Sent → Delivered → {Succeeded / Failed / Expired / Canceled}
+//	Enqueue  → Pending
+//	Dequeue  → Pending → Sent         (claim + lease, single atomic step)
+//	Report   → Sent    → Delivered    (optional: device acknowledged receipt)
+//	Ack      → any non-terminal → {Succeeded / Failed / Expired / Canceled}
+//	Cancel   → any non-terminal → Canceled
 //
 // Pending:   enqueued, awaiting send to device transport.
 // Sent:      transmitted to device transport; delivery attempt counter incremented.
-// Delivered: device ACK'd receipt (not execution).
+// Delivered: device reported receipt and began execution (optional state).
 // Succeeded: device confirmed successful execution.
 // Failed:    permanent failure (device error or retries exhausted).
 // Expired:   deadline elapsed before completion.
 // Canceled:  explicitly canceled by operator/system.
+//
+// Devices MAY skip Report and go directly from Sent to Succeeded via
+// Ack(Success); in that case DeliveredAt remains nil, marking the absence of
+// the intermediate event.
 //
 // # Three-tier timeouts
 //
@@ -22,44 +31,46 @@
 //   - SendToComplete:  max duration from Sent to a terminal state.
 //   - OverallDeadline: absolute max duration from creation to any terminal state.
 //
-// The [Sweeper] worker evaluates these deadlines periodically and calls
-// [StateAdvancer.AdvanceStatus] to transition overdue entries to [StatusExpired].
+// The [Sweeper] worker evaluates these deadlines periodically (via
+// [ActiveScanner.ScanActive]) and calls [Queue.Ack](..., [AckTimeout], now)
+// to transition overdue entries to [StatusExpired].
 //
-// # High-level facade
+// # Facade
 //
-// [Queue] is the Cell-facing interface:
-//   - Enqueue stores an entry atomically; optional [EnqueueOptions.Authz] for T3 RBAC.
-//   - Dequeue returns leased entries for a target device.
-//   - Ack finalises a command with an [AckReason].
-//   - ExtendLease renews a lease for long-running operations.
-//   - Cancel aborts a non-terminal command.
+// [Queue] is the service-facing interface. All state transitions are owned
+// by Queue methods; services MUST NOT mutate entry.Status directly.
+//
+// [ActiveScanner] is the role-based scan port used by Sweeper and by
+// operational views that list non-terminal entries. It is intentionally
+// distinct from Queue.Dequeue (the claim-with-lease primary consumer path).
+//
+// [QueueRegistrar] is an optional Cell-side interface; the runtime consumer
+// lives in runtime/command (discovery + SweeperLifecycle wiring).
 //
 // # Testing
 //
 // The commandtest sub-package provides [commandtest.InMemQueue], an in-memory
-// implementation of Queue + Reader + Writer + StateAdvancer suitable for unit
-// tests and examples.
+// implementation of Queue + ActiveScanner + Writer suitable for unit tests
+// and examples. Not suitable for production: single-process only.
 //
 // # References
 //
-// ref: ThreeDotsLabs/watermill message/router.go@master — Ack/Nack semantics adopted
-// for Disposition (DispositionAck/Requeue/Reject). GoCell command Ack maps to
-// broker-level Ack; AckTimeout maps to Nack+requeue.
+// ref: kubernetes/kubernetes client-go util/workqueue/queue.go@master
+// — Add/Get/Done primitive shape influences Enqueue/Dequeue/Ack; workqueue
+// intentionally omits reason semantics, GoCell adds AckReason (mapped in
+// SDK/runtime-equivalent layers, not app code).
 //
-// ref: kubernetes/kubernetes staging/src/k8s.io/client-go/util/workqueue/queue.go@master
-// — Add/Get/Done three-state model inspired Queue.Enqueue/Dequeue/Ack. ShutDownWithDrain
-// semantics influence Sweeper.Stop idempotency.
+// ref: nats-io/nats.go jetstream/message.go@main — InProgress maps to Report
+// (Sent→Delivered, distinct network event); Ack/Nak/Term are single-step
+// terminal dispositions; ConsumerInfo (ops view) is separate from Fetch
+// (primary consume). GoCell follows the same split: ActiveScanner vs Dequeue.
 //
-// ref: nats-io/nats.go jetstream Msg — InProgress (heartbeat lease extension) maps to
-// Queue.ExtendLease; NakWithDelay maps to AckTimeout+requeue; Term maps to
-// AckRejected→StatusCanceled.
+// ref: temporalio/sdk-go internal/internal_task_handlers.go@master —
+// ScheduledTime, StartedTime, CompletedTime are distinct events on the
+// history; GoCell SentAt/DeliveredAt/CompletedAt mirror this per-event
+// recording (not batched at Ack time).
 //
-// ref: rabbitmq/amqp091-go channel.go@main — Ack/Nack(requeue=false)→DLX pattern
-// mirrors AckRejected routing to dead-letter. Optimistic-lock AdvanceStatus prevents
-// double-expire across replicas, consistent with RabbitMQ single-active-consumer.
-//
-// ref: temporal Nexus operations — ScheduleToCloseTimeout / ScheduleToStartTimeout /
-// StartToCloseTimeout three-tier timeout model directly maps to Timeouts struct.
-// Temporal's Nexus async operation lifecycle (SCHEDULED→STARTED→terminal) maps to
-// Pending→Sent→terminal.
+// ref: temporal activity timeouts — ScheduleToStart / StartToClose /
+// Heartbeat / ScheduleToClose four-tier model; GoCell simplifies to three
+// tiers (ScheduleToSend / SendToComplete / OverallDeadline).
 package command

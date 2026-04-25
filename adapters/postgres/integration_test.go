@@ -216,41 +216,21 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
-		// Down() rolls back one migration at a time. Derive the count from the
-		// embedded migration FS so adding a new migration does not require
-		// updating this loop — the outbox_entries table disappears only after
-		// rolling back 001 in the final Down() below.
-		total, err := ExpectedVersion(MigrationsFS())
-		require.NoError(t, err, "read migration count from FS")
-		require.GreaterOrEqual(t, total, int64(2), "test assumes at least 2 migrations")
-
-		for i := total; i > 1; i-- {
-			dErr := migrator.Down(ctx)
-			require.NoError(t, dErr, "Down() should roll back migration %d without error", i)
-
-			var exists bool
-			qErr := pool.DB().QueryRow(ctx,
-				"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
-				Scan(&exists)
-			require.NoError(t, qErr)
-			assert.True(t, exists, "outbox_entries table should still exist after rolling back migration %d", i)
-		}
-
-		// Final Down() rolls back 001 (drops outbox_entries table).
-		require.NoError(t, migrator.Down(ctx), "Down() should roll back migration 001")
+		dErr := migrator.Down(ctx)
+		require.Error(t, dErr, "migration 012 down must be hard-gated by default")
+		assert.Contains(t, dErr.Error(), "gocell.allow_destructive_refresh_tokens_down")
 
 		var exists bool
 		qErr := pool.DB().QueryRow(ctx,
 			"SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'outbox_entries')").
 			Scan(&exists)
 		require.NoError(t, qErr)
-		assert.False(t, exists, "outbox_entries table should not exist after rolling back 001")
+		assert.True(t, exists, "outbox_entries table should still exist after refused rollback")
 
-		// Status should show all migrations as unapplied.
 		statuses, sErr := migrator.Status(ctx)
 		require.NoError(t, sErr)
 		require.NotEmpty(t, statuses)
-		assert.False(t, statuses[0].Applied, "migration 001 should be unapplied")
+		assert.True(t, statuses[len(statuses)-1].Applied, "latest migration should remain applied after refused rollback")
 	})
 }
 

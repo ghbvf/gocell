@@ -1,13 +1,16 @@
 id: configsubscribe
 belongsToCell: configcore
 contractUsages:
-  - contract: event.config.changed.v1
+  - contract: event.config.entry-upserted.v1
+    role: subscribe
+  - contract: event.config.entry-deleted.v1
     role: subscribe
 verify:
   unit:
     - unit.configsubscribe.service
   contract:
-    - contract.event.config.changed.v1.subscribe
+    - contract.event.config.entry-upserted.v1.subscribe
+    - contract.event.config.entry-deleted.v1.subscribe
   waivers: []
 
 allowedFiles:

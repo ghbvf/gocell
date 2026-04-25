@@ -74,7 +74,7 @@ func setup(t *testing.T, runMode query.RunMode) http.Handler {
 		panic(err)
 	}
 	mux := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(mux)
+	mux.Route("/api/v1/access/roles", NewHandler(svc).RegisterRoutes)
 	return mux
 }
 
@@ -89,7 +89,7 @@ func TestHandler(t *testing.T) {
 	}{
 		{
 			name:       "GET /{userID} self-access returns roles with permissions",
-			path:       "/user-1",
+			path:       "/api/v1/access/roles/user-1",
 			subject:    "user-1",
 			roles:      nil,
 			wantStatus: http.StatusOK,
@@ -116,7 +116,7 @@ func TestHandler(t *testing.T) {
 		},
 		{
 			name:       "GET /{userID} self-access no roles returns empty",
-			path:       "/unknown-user",
+			path:       "/api/v1/access/roles/unknown-user",
 			subject:    "unknown-user",
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
@@ -129,7 +129,7 @@ func TestHandler(t *testing.T) {
 		},
 		{
 			name:       "GET /{userID}/{roleName} self-access has role",
-			path:       "/user-1/admin",
+			path:       "/api/v1/access/roles/user-1/admin",
 			subject:    "user-1",
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
@@ -144,7 +144,7 @@ func TestHandler(t *testing.T) {
 		},
 		{
 			name:       "GET /{userID}/{roleName} self-access missing role",
-			path:       "/user-1/viewer",
+			path:       "/api/v1/access/roles/user-1/viewer",
 			subject:    "user-1",
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
@@ -160,28 +160,28 @@ func TestHandler(t *testing.T) {
 		// Trust boundary tests (#27r)
 		{
 			name:       "GET /{userID} admin bypass allowed",
-			path:       "/user-1",
+			path:       "/api/v1/access/roles/user-1",
 			subject:    "admin-user",
 			roles:      []string{"admin"},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "GET /{userID} different user no admin returns 403",
-			path:       "/user-1",
+			path:       "/api/v1/access/roles/user-1",
 			subject:    "user-2",
 			roles:      []string{"viewer"},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "GET /{userID}/{roleName} different user no admin returns 403",
-			path:       "/user-1/admin",
+			path:       "/api/v1/access/roles/user-1/admin",
 			subject:    "user-2",
 			roles:      []string{"viewer"},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "GET /{userID} no subject returns 401",
-			path:       "/user-1",
+			path:       "/api/v1/access/roles/user-1",
 			subject:    "", // no auth context
 			wantStatus: http.StatusUnauthorized,
 		},
@@ -207,7 +207,7 @@ func TestHandler(t *testing.T) {
 func TestHandler_ListRoles_ProdMode_InvalidCursor_Returns400(t *testing.T) {
 	r := setup(t, query.RunModeProd)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/user-1?cursor=not-a-valid-cursor", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/user-1?cursor=not-a-valid-cursor", nil)
 	req = req.WithContext(auth.TestContext("user-1", nil))
 
 	r.ServeHTTP(w, req)

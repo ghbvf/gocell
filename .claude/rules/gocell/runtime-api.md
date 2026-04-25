@@ -57,10 +57,10 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 // defaultPolicy nil → no listener-level auth; routes declare policy via auth.Declare.
 bootstrap.New(
     bootstrap.WithAssembly(asm),
-    bootstrap.WithListener(cell.PrimaryListener, ":8080", nil),
+    bootstrap.WithListener(cell.PrimaryListener, ":8080", cell.Policy{}),
     bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090", bootstrap.PolicyServiceToken(ring)),
-    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", nil),
-    bootstrap.WithAuthDiscovery(),  // 从 Cell 发现 IntentTokenVerifier
+    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", cell.Policy{}),
+    bootstrap.PolicyJWTFromAssembly(asm),  // 从 Cell 发现 IntentTokenVerifier，作用于 PrimaryListener
 )
 ```
 
@@ -133,8 +133,10 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 优先级规则：
 - 路由级 Policy 存在时，Listener 默认 Policy 被完全旁路
 - `Public: true` 不能与路由级 `Policy` 同时设置（FinalizeAuth fail-fast）
-- `WithAuthDiscovery()` 发现的 JWT 验证器作用于 PrimaryListener；WithAuthMiddleware 显式安装时同理
-- `WithAuthMiddleware` 与 `WithAuthDiscovery` 互斥；两者同时设置会在 phase0 被拒绝
+- `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义；在无 JWT 的 listener（如 HealthListener）上声明 `Public: true` 会在 FinalizeAuth 时触发 `slog.Warn`（运行时可观测，不 fail-fast）
+- `PolicyJWTFromAssembly(asm)` 从 Cell 发现 IntentTokenVerifier，作用于 PrimaryListener（等价于旧 `WithAuthDiscovery()`）
+- `WithAuthMiddleware(v)` 直接注入 verifier，适用于测试或不依赖 assembly 发现的场景
+- `PolicyJWTFromAssembly` 与 `WithAuthMiddleware` 互斥；两者同时设置会在 phase0 被拒绝
 
 ### 规则
 

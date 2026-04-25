@@ -97,7 +97,7 @@ After this the `ADMIN_TOKEN` works for all business endpoints.
 
 Every endpoint below except `POST /api/v1/access/sessions/login` and
 `POST /api/v1/access/sessions/refresh` requires a `Authorization: Bearer $TOKEN`
-header. Public routes are declared per-Cell via `auth.Declare(mux, auth.RouteDecl{Public: true})`
+header. Public routes are declared per-Cell via `auth.Mount(mux, auth.Route{Contract: ..., Public: true})`
 inside `cells/accesscore/cell.go`; the composition root (`examples/ssobff/main.go`)
 opts into verifier discovery via `bootstrap.WithAuthDiscovery()` without
 hardcoding any endpoint list.

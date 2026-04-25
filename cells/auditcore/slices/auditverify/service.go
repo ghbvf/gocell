@@ -4,18 +4,14 @@ package auditverify
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
+	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-)
-
-const (
-	TopicIntegrityVerified = "event.audit.integrity-verified.v1"
 )
 
 // VerifyResult holds the outcome of a chain verification.
@@ -89,17 +85,14 @@ func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult,
 	// Publish the verification result through the injected emitter. Cell wiring
 	// decides whether that emitter is backed by durable outbox delivery or demo
 	// direct delivery.
-	payload, err := json.Marshal(map[string]any{
-		"valid":             valid,
-		"firstInvalidIndex": firstInvalid,
-		"entriesChecked":    len(entries),
-	})
-	if err != nil {
-		return result, fmt.Errorf("audit-verify: marshal payload: %w", err)
+	event := dto.AuditIntegrityVerifiedEvent{
+		Valid:             valid,
+		FirstInvalidIndex: firstInvalid,
+		EntriesChecked:    len(entries),
 	}
 
 	// Persist + outbox write in a transaction for L2 atomicity.
-	persistFn := s.buildPersistFn(payload)
+	persistFn := s.buildPersistFn(event)
 	if persistErr := s.runPersist(ctx, persistFn); persistErr != nil {
 		return result, fmt.Errorf("audit-verify: persist: %w", persistErr)
 	}
@@ -111,13 +104,9 @@ func (s *Service) VerifyChain(ctx context.Context, from, to int) (*VerifyResult,
 }
 
 // buildPersistFn returns a transaction function that writes the outbox event.
-func (s *Service) buildPersistFn(payload []byte) func(context.Context) error {
+func (s *Service) buildPersistFn(event dto.AuditIntegrityVerifiedEvent) func(context.Context) error {
 	return func(txCtx context.Context) error {
-		return s.emitter.Emit(txCtx, outbox.Entry{
-			ID:        outbox.NewEntryID(),
-			EventType: TopicIntegrityVerified,
-			Payload:   payload,
-		})
+		return outbox.Emit(txCtx, s.emitter, dto.TopicAuditIntegrityVerified, event)
 	}
 }
 

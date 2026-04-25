@@ -28,7 +28,7 @@ func setupHandler() (http.Handler, *mem.RoleRepository) {
 
 	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
 	mux := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(mux)
+	mux.Route("/internal/v1/access/roles", NewHandler(svc).RegisterRoutes)
 	return mux, roleRepo
 }
 
@@ -100,7 +100,7 @@ func TestHandler_Assign(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _ := setupHandler()
-			req := httptest.NewRequest(http.MethodPost, "/assign", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/assign", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
@@ -198,7 +198,7 @@ func TestHandler_Revoke(t *testing.T) {
 			if tc.setup != nil {
 				tc.setup(roleRepo)
 			}
-			req := httptest.NewRequest(http.MethodPost, "/revoke", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, "/internal/v1/access/roles/revoke", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			if tc.subject != "" {
 				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))

@@ -7,12 +7,12 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -42,21 +42,9 @@ func newContractDeviceListHandler(t *testing.T) http.Handler {
 		t.Fatal(err)
 	}
 
-	inner := celltest.NewTestMux()
-	NewHandler(svc).RegisterRoutes(inner)
-
-	outer := http.NewServeMux()
-	prefix := "/api/v1/devices/"
-	stripped := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r2 := r.Clone(r.Context())
-		r2.URL.Path = "/" + strings.TrimPrefix(r.URL.Path, prefix)
-		if r2.URL.Path == "/" || r2.URL.Path == "" {
-			r2.URL.Path = "/"
-		}
-		inner.ServeHTTP(w, r2)
-	})
-	outer.Handle("/api/v1/devices/", stripped)
-	return outer
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { NewHandler(svc).RegisterRoutes(sub) })
+	return mux
 }
 
 type deviceListPage struct {
@@ -132,4 +120,21 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 		t.Errorf("invalid cursor: expected 400, got %d", recBadCursor.Code)
 	}
 	c.ValidateErrorResponse(t, http.StatusBadRequest, recBadCursor.Body.Bytes())
+}
+
+func TestDeviceListContractSpecMatchesContract(t *testing.T) {
+	root := contracttest.ExampleContractsRoot("iotdevice")
+	c := contracttest.LoadByID(t, root, "http.device.list.v1")
+	if c.HTTP == nil {
+		t.Fatal("http.device.list.v1 must declare HTTP transport metadata")
+	}
+	if specDeviceListSlice.ID != c.ID {
+		t.Fatalf("ContractSpec ID = %q, want %q", specDeviceListSlice.ID, c.ID)
+	}
+	if specDeviceListSlice.Method != c.HTTP.Method {
+		t.Fatalf("ContractSpec Method = %q, want %q", specDeviceListSlice.Method, c.HTTP.Method)
+	}
+	if specDeviceListSlice.Path != c.HTTP.Path {
+		t.Fatalf("ContractSpec Path = %q, want %q", specDeviceListSlice.Path, c.HTTP.Path)
+	}
 }

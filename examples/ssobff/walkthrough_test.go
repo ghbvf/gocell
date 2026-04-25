@@ -229,7 +229,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	}
 
 	// F3: public routes (login, refresh) and PasswordResetExempt routes
-	// (change-password, logout) are declared via auth.Declare inside accesscore's
+	// (change-password, logout) are declared via auth.Mount inside accesscore's
 	// RegisterRoutes. FinalizeAuth compiles them into the router's auth predicates.
 	r := router.New(
 		router.WithAuthMiddleware(ac.TokenVerifier()),
@@ -551,6 +551,26 @@ func TestWalkthrough(t *testing.T) {
 		bodyBytes = bytes.TrimSpace(bodyBytes)
 		assert.Empty(t, bodyBytes,
 			"logout response body must be empty (piping to jq would fail otherwise)")
+	})
+
+	t.Run("refresh token is rejected after logout (cascade revoke end-to-end)", func(t *testing.T) {
+		// F15: prove that the logout-revokes-refresh cascade works through the
+		// full HTTP stack. After logout the held refreshToken must be rejected
+		// with 401 (or 410 Gone if the store distinguishes revoked from expired).
+		payload := fmt.Sprintf(`{"refreshToken":%q}`, refreshToken)
+		req, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPost,
+			base+"/api/v1/access/sessions/refresh",
+			strings.NewReader(payload))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+
+		resp, err := http.DefaultClient.Do(req)
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		assert.True(t, resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusGone,
+			"post-logout refresh must return 401 or 410, got %d", resp.StatusCode)
 	})
 
 	t.Run("audit entries require auth and contain timestamp field not createdAt", func(t *testing.T) {

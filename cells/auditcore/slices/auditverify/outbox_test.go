@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/auditcore/internal/domain"
+	"github.com/ghbvf/gocell/cells/auditcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
@@ -61,7 +62,7 @@ func TestService_WithEmitter(t *testing.T) {
 
 	// Outbox should have received the integrity-verified event.
 	require.Len(t, ow.entries, 1)
-	assert.Equal(t, TopicIntegrityVerified, ow.entries[0].EventType)
+	assert.Equal(t, dto.TopicAuditIntegrityVerified, ow.entries[0].EventType)
 }
 
 func TestService_WithTxManager(t *testing.T) {

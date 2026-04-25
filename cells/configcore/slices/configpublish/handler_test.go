@@ -14,6 +14,8 @@ import (
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
@@ -96,12 +98,15 @@ func TestConfigVersionResponse_OmitsNilPublishedAt(t *testing.T) {
 
 // --- handler tests ---
 
+// configPrefix matches cell-level Route("/api/v1/config", ...).
+const configPrefix = "/api/v1/config"
+
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	svc := NewService(repo, slog.Default())
 	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := celltest.NewTestMux()
+	mux.Route(configPrefix, func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
 	return mux, repo
 }
 
@@ -119,7 +124,7 @@ func TestHandler_HandlePublish_OK(t *testing.T) {
 	seedForPublish(t, repo, "app.name", "v1")
 
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/app.name/publish", nil))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil))
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -132,7 +137,7 @@ func TestHandler_HandlePublish_NotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/missing/publish", nil))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/missing/publish", nil))
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -147,7 +152,7 @@ func TestHandler_HandlePublish_RequiresAuth(t *testing.T) {
 	seedForPublish(t, repo, "app.name", "v1")
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/app.name/publish", nil) // no auth
+	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil) // no auth
 	handler.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusUnauthorized, w.Code, "publish without subject must be 401")
@@ -158,7 +163,7 @@ func TestHandler_HandlePublish_RequiresAdminRole(t *testing.T) {
 	seedForPublish(t, repo, "app.name", "v1")
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/app.name/publish", nil).
+	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil).
 		WithContext(auth.TestContext("user-1", []string{"viewer"}))
 	handler.ServeHTTP(w, req)
 
@@ -169,7 +174,7 @@ func TestHandler_HandleRollback_RequiresAuth(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/app.name/rollback",
+	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
 		strings.NewReader(`{"version":1}`))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
@@ -182,7 +187,7 @@ func TestHandler_HandleRollback_RequiresAdminRole(t *testing.T) {
 	seedForPublish(t, repo, "app.name", "v1")
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/app.name/rollback",
+	req := httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
 		strings.NewReader(`{"version":1}`)).
 		WithContext(auth.TestContext("user-1", []string{"viewer"}))
 	req.Header.Set("Content-Type", "application/json")
@@ -202,7 +207,7 @@ func TestHandler_HandlePublish_SensitiveRedacted(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/db.password/publish", nil))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/db.password/publish", nil))
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
@@ -227,7 +232,7 @@ func TestHandler_HandlePublish_NonSensitiveVisible(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/app.name/publish", nil))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil))
 	handler.ServeHTTP(w, req)
 	require.Equal(t, http.StatusOK, w.Code)
 
@@ -252,7 +257,7 @@ func TestHandler_HandleRollback_OK(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"version":1}`
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/app.name/rollback", strings.NewReader(body)))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
@@ -266,7 +271,7 @@ func TestHandler_HandleRollback_KeyNotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/missing/rollback",
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/missing/rollback",
 		strings.NewReader(`{"version":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
@@ -283,7 +288,7 @@ func TestHandler_HandleRollback_VersionNotFound(t *testing.T) {
 	seedForPublish(t, repo, "app.name", "v1") // entry exists, but no version published yet
 
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/app.name/rollback",
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback",
 		strings.NewReader(`{"version":42}`)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
@@ -311,7 +316,7 @@ func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/db.password/rollback",
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/db.password/rollback",
 		strings.NewReader(`{"version":1}`)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
@@ -334,7 +339,7 @@ func TestHandler_HandleRollback_UnknownField(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"version":1,"extra":"y"}`
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/app.name/rollback", strings.NewReader(body)))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback", strings.NewReader(body)))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
@@ -345,7 +350,7 @@ func TestHandler_HandleRollback_BadJSON(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, "/app.name/rollback", strings.NewReader("{bad")))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback", strings.NewReader("{bad")))
 	req.Header.Set("Content-Type", "application/json")
 	handler.ServeHTTP(w, req)
 
@@ -368,7 +373,7 @@ func TestHandler_HandleRollback_InvalidVersion(t *testing.T) {
 
 			w := httptest.NewRecorder()
 			body := fmt.Sprintf(`{"version":%d}`, tt.version)
-			req := withAdmin(httptest.NewRequest(http.MethodPost, "/app.name/rollback", strings.NewReader(body)))
+			req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/rollback", strings.NewReader(body)))
 			req.Header.Set("Content-Type", "application/json")
 			handler.ServeHTTP(w, req)
 
@@ -390,7 +395,7 @@ func TestService_WithEmitter(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1)
-	assert.Equal(t, TopicConfigChanged, ow.entries[0].EventType)
+	assert.Equal(t, domain.TopicConfigVersionPublished, ow.entries[0].EventType)
 }
 
 func TestService_WithTxManager(t *testing.T) {
@@ -417,8 +422,9 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 	_, err = svc.Rollback(context.Background(), "k3", 1)
 	require.NoError(t, err)
 
-	assert.Len(t, ow.entries, 2, "publish + rollback should each write to outbox")
-	assert.Equal(t, TopicConfigRollback, ow.entries[1].EventType)
+	assert.Len(t, ow.entries, 3, "publish writes version-published; rollback writes state-sync then audit")
+	assert.Equal(t, domain.TopicConfigEntryUpserted, ow.entries[1].EventType)
+	assert.Equal(t, domain.TopicConfigRollback, ow.entries[2].EventType)
 }
 
 func seedForService(repo *mem.ConfigRepository, key, value string) {

@@ -16,6 +16,8 @@ import (
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -45,12 +47,12 @@ func setupCommandHandler() (*Handler, *mem.DeviceRepository, *commandtest.InMemQ
 	return NewHandler(svc), devRepo, q
 }
 
-// setupCommandMux creates a full http.ServeMux with policies registered via
+// setupCommandMux creates a TestMux with policies registered via
 // Secured, used by trust boundary tests so that policy checks run as in production.
 func setupCommandMux() (http.Handler, *mem.DeviceRepository, *commandtest.InMemQueue) {
 	h, devRepo, q := setupCommandHandler()
-	mux := http.NewServeMux()
-	h.RegisterRoutes(mux)
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/devices", func(sub cell.RouteMux) { h.RegisterRoutes(sub) })
 	return mux, devRepo, q
 }
 
@@ -125,7 +127,7 @@ func TestHandleEnqueue(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _, _ := setupCommandHandler()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/devices/"+tc.deviceID+"/commands", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+tc.deviceID+"/commands", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			req.SetPathValue("id", tc.deviceID)
 			req = req.WithContext(auth.TestContext("operator-1", []string{"operator"}))
@@ -139,10 +141,7 @@ func TestHandleEnqueue(t *testing.T) {
 	}
 }
 
-// TestHandleEnqueue_NoRoutePolicy verifies that enqueue works for any
-// authenticated caller — devicecell carries no route-level policy post-F3
-// revert (Policy:nil, pre-F3 state).
-func TestHandleEnqueue_NoRoutePolicy(t *testing.T) {
+func TestHandleEnqueue_RoutePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		subject    string
@@ -162,16 +161,16 @@ func TestHandleEnqueue_NoRoutePolicy(t *testing.T) {
 			wantStatus: http.StatusCreated,
 		},
 		{
-			name:       "device role allowed (no route policy)",
+			name:       "device role denied",
 			subject:    "dev-99",
 			roles:      []string{"device"},
-			wantStatus: http.StatusCreated,
+			wantStatus: http.StatusForbidden,
 		},
 		{
-			name:       "no roles allowed (no route policy)",
+			name:       "no roles denied",
 			subject:    "user-1",
 			roles:      nil,
-			wantStatus: http.StatusCreated,
+			wantStatus: http.StatusForbidden,
 		},
 	}
 
@@ -179,7 +178,7 @@ func TestHandleEnqueue_NoRoutePolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mux, _, _ := setupCommandMux()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/dev-1/commands", strings.NewReader(`{"payload":"reboot"}`))
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/commands", strings.NewReader(`{"payload":"reboot"}`))
 			req.Header.Set("Content-Type", "application/json")
 			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
@@ -189,31 +188,31 @@ func TestHandleEnqueue_NoRoutePolicy(t *testing.T) {
 	}
 }
 
-func TestHandleListPending_InvalidLimit(t *testing.T) {
+func TestHandleDequeue_InvalidLimit(t *testing.T) {
 	h, _, _ := setupCommandHandler()
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=abc", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/dev-1/commands?limit=abc", nil)
 	req.SetPathValue("id", "dev-1")
 	req = req.WithContext(auth.TestContext("dev-1", nil))
-	h.HandleListPending(w, req)
+	h.HandleDequeue(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
 }
 
-func TestHandleListPending_ExceedsMaxLimit(t *testing.T) {
+func TestHandleDequeue_ExceedsMaxLimit(t *testing.T) {
 	h, _, _ := setupCommandHandler()
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?limit=501", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/dev-1/commands?limit=501", nil)
 	req.SetPathValue("id", "dev-1")
 	req = req.WithContext(auth.TestContext("dev-1", nil))
-	h.HandleListPending(w, req)
+	h.HandleDequeue(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
 }
 
-func TestHandleListPending(t *testing.T) {
+func TestHandleDequeue(t *testing.T) {
 	tests := []struct {
 		name       string
 		deviceID   string
@@ -254,11 +253,11 @@ func TestHandleListPending(t *testing.T) {
 			}
 
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/devices/"+tc.deviceID+"/commands", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+tc.deviceID+"/commands", nil)
 			req.SetPathValue("id", tc.deviceID)
 			// Device authenticates as itself (self-access).
 			req = req.WithContext(auth.TestContext(tc.deviceID, nil))
-			h.HandleListPending(w, req)
+			h.HandleDequeue(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.wantStatus == http.StatusOK {
@@ -268,12 +267,18 @@ func TestHandleListPending(t *testing.T) {
 				require.True(t, ok, "response should have data array")
 				assert.Len(t, data, tc.wantLen)
 				assert.Equal(t, false, resp["hasMore"])
+				assert.Equal(t, "", resp["nextCursor"])
+				for _, item := range data {
+					m := item.(map[string]any)
+					assert.Equal(t, "sent", m["status"])
+					assert.NotEmpty(t, m["sentAt"])
+				}
 			}
 		})
 	}
 }
 
-func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
+func TestHandleDequeue_ClaimBatches(t *testing.T) {
 	h, _, q := setupCommandHandler()
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -283,18 +288,14 @@ func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
 	}
 
 	var allIDs []string
-	cursor := ""
 
-	for page := 0; page < 10; page++ {
-		url := "/devices/dev-1/commands?limit=3"
-		if cursor != "" {
-			url += "&cursor=" + cursor
-		}
+	for page := 0; page < 3; page++ {
+		url := "/api/v1/devices/dev-1/commands?limit=3"
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)
 		req.SetPathValue("id", "dev-1")
 		req = req.WithContext(auth.TestContext("dev-1", nil))
-		h.HandleListPending(w, req)
+		h.HandleDequeue(w, req)
 
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]any
@@ -307,12 +308,9 @@ func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
 			allIDs = append(allIDs, id)
 		}
 
-		hasMore := resp["hasMore"].(bool)
-		if !hasMore {
+		if len(data) == 0 {
 			break
 		}
-		cursor = resp["nextCursor"].(string)
-		require.NotEmpty(t, cursor)
 	}
 
 	// All 7 commands collected, no duplicates
@@ -324,7 +322,7 @@ func TestHandleListPending_Pagination_FullTraversal(t *testing.T) {
 	}
 }
 
-func TestHandleListPending_InvalidCursor(t *testing.T) {
+func TestHandleScanActive_InvalidCursor(t *testing.T) {
 	codec := testCodec()
 
 	wrongSort := []query.SortColumn{{Name: "other", Direction: query.SortASC}, {Name: "x", Direction: query.SortASC}}
@@ -348,10 +346,9 @@ func TestHandleListPending_InvalidCursor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _, _ := setupCommandHandler()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/devices/dev-1/commands?cursor="+tc.cursor, nil)
-			req.SetPathValue("id", "dev-1")
-			req = req.WithContext(auth.TestContext("dev-1", nil))
-			h.HandleListPending(w, req)
+			req := httptest.NewRequest(http.MethodGet, "/internal/v1/devicecommands?deviceId=dev-1&cursor="+tc.cursor, nil)
+			req = req.WithContext(auth.TestContext(auth.ServiceNameInternal, []string{auth.RoleInternalAdmin}))
+			h.HandleScanActive(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
@@ -368,7 +365,7 @@ func TestHandleAck(t *testing.T) {
 		wantStatus int
 	}{
 		{
-			name:       "ack pending command returns 200",
+			name:       "ack sent command returns 200",
 			deviceID:   "dev-1",
 			cmdID:      "cmd-ack",
 			seedCmd:    true,
@@ -387,11 +384,14 @@ func TestHandleAck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h, _, q := setupCommandHandler()
 			if tc.seedCmd {
-				_ = q.Enqueue(context.Background(), command.NewEntry(tc.cmdID, tc.deviceID, "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+				ctx := context.Background()
+				_ = q.Enqueue(ctx, command.NewEntry(tc.cmdID, tc.deviceID, "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+				_, _ = q.Dequeue(ctx, tc.deviceID, 1, command.DefaultLeaseDuration)
 			}
 
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/devices/"+tc.deviceID+"/commands/"+tc.cmdID+"/ack", nil)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+tc.deviceID+"/commands/"+tc.cmdID+"/ack", strings.NewReader(`{"reason":"success"}`))
+			req.Header.Set("Content-Type", "application/json")
 			req.SetPathValue("id", tc.deviceID)
 			req.SetPathValue("cmdId", tc.cmdID)
 			// Device authenticates as itself.
@@ -410,6 +410,54 @@ func TestHandleAck(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleAck_RejectsTimeoutReason(t *testing.T) {
+	h, _, q := setupCommandHandler()
+	ctx := context.Background()
+	require.NoError(t, q.Enqueue(ctx,
+		command.NewEntry("cmd-timeout", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),
+		command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands/cmd-timeout/ack", strings.NewReader(`{"reason":"timeout"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "dev-1")
+	req.SetPathValue("cmdId", "cmd-timeout")
+	req = req.WithContext(auth.TestContext("dev-1", nil))
+	h.HandleAck(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	got, err := q.GetCommand(ctx, "cmd-timeout")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, command.StatusSent, got.Status)
+}
+
+func TestHandleAck_RejectsFailedAlias(t *testing.T) {
+	h, _, q := setupCommandHandler()
+	ctx := context.Background()
+	require.NoError(t, q.Enqueue(ctx,
+		command.NewEntry("cmd-failed-alias", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()),
+		command.EnqueueOptions{}))
+	_, err := q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
+	require.NoError(t, err)
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/devices/dev-1/commands/cmd-failed-alias/ack", strings.NewReader(`{"reason":"failed"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req.SetPathValue("id", "dev-1")
+	req.SetPathValue("cmdId", "cmd-failed-alias")
+	req = req.WithContext(auth.TestContext("dev-1", nil))
+	h.HandleAck(w, req)
+
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+	got, err := q.GetCommand(ctx, "cmd-failed-alias")
+	require.NoError(t, err)
+	require.NotNil(t, got)
+	assert.Equal(t, command.StatusSent, got.Status)
 }
 
 func TestCommandResponse_CompletedAt_Serialization(t *testing.T) {
@@ -448,9 +496,7 @@ func TestCommandResponse_CompletedAt_Serialization(t *testing.T) {
 	})
 }
 
-// TestHandleListPending_NoRoutePolicy verifies that list returns 200 for any
-// caller — devicecell carries no route-level policy post-F3 revert.
-func TestHandleListPending_NoRoutePolicy(t *testing.T) {
+func TestHandleDequeue_RoutePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		deviceID   string
@@ -472,11 +518,11 @@ func TestHandleListPending_NoRoutePolicy(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "different device allowed (no route policy)",
+			name:       "different device denied",
 			deviceID:   "dev-1",
 			subject:    "dev-2",
 			roles:      []string{"device"},
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusForbidden,
 		},
 	}
 
@@ -484,7 +530,7 @@ func TestHandleListPending_NoRoutePolicy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mux, _, _ := setupCommandMux()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/"+tc.deviceID+"/commands", nil)
+			req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+tc.deviceID+"/commands", nil)
 			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
 
@@ -493,9 +539,7 @@ func TestHandleListPending_NoRoutePolicy(t *testing.T) {
 	}
 }
 
-// TestHandleAck_NoRoutePolicy verifies that ack returns 200 for any caller —
-// devicecell carries no route-level policy post-F3 revert.
-func TestHandleAck_NoRoutePolicy(t *testing.T) {
+func TestHandleAck_RoutePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		subject    string
@@ -514,20 +558,23 @@ func TestHandleAck_NoRoutePolicy(t *testing.T) {
 			wantStatus: http.StatusOK,
 		},
 		{
-			name:       "different device allowed (no route policy)",
+			name:       "different device denied",
 			subject:    "dev-2",
 			roles:      []string{"device"},
-			wantStatus: http.StatusOK,
+			wantStatus: http.StatusForbidden,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			mux, _, q := setupCommandMux()
-			_ = q.Enqueue(context.Background(), command.NewEntry("cmd-ack", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+			ctx := context.Background()
+			_ = q.Enqueue(ctx, command.NewEntry("cmd-ack", "dev-1", "reboot", []byte("x"), command.Timeouts{}, time.Now()), command.EnqueueOptions{})
+			_, _ = q.Dequeue(ctx, "dev-1", 1, command.DefaultLeaseDuration)
 
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/dev-1/commands/cmd-ack/ack", nil)
+			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/dev-1/commands/cmd-ack/ack", strings.NewReader(`{"reason":"success"}`))
+			req.Header.Set("Content-Type", "application/json")
 			req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
 			mux.ServeHTTP(w, req)
 

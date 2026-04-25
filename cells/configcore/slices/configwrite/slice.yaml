@@ -3,14 +3,23 @@ belongsToCell: configcore
 contractUsages:
   - contract: http.config.write.v1
     role: serve
-  - contract: event.config.changed.v1
+  - contract: http.config.update.v1
+    role: serve
+  - contract: http.config.delete.v1
+    role: serve
+  - contract: event.config.entry-upserted.v1
+    role: publish
+  - contract: event.config.entry-deleted.v1
     role: publish
 verify:
   unit:
     - unit.configwrite.service
   contract:
     - contract.http.config.write.v1.serve
-    - contract.event.config.changed.v1.publish
+    - contract.http.config.update.v1.serve
+    - contract.http.config.delete.v1.serve
+    - contract.event.config.entry-upserted.v1.publish
+    - contract.event.config.entry-deleted.v1.publish
   waivers: []
 
 allowedFiles:

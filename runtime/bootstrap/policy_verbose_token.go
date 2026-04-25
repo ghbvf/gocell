@@ -19,7 +19,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/go-chi/chi/v5"
+	"github.com/ghbvf/gocell/kernel/cell"
 )
 
 // policyVerboseActive reports whether the request has opted into verbose mode.
@@ -59,21 +59,9 @@ func mustEncodeVerboseTokenError() []byte {
 	return body
 }
 
-// policyVerboseToken guards ?verbose mode with a shared secret header.
-type policyVerboseToken struct {
-	headerName string
-	token      string
-}
-
-func (p *policyVerboseToken) Describe() string { return "verbose-token" }
-
-func (p *policyVerboseToken) Apply(mux *chi.Mux) {
-	mux.Use(p.middleware())
-}
-
-func (p *policyVerboseToken) middleware() func(http.Handler) http.Handler {
-	headerName := p.headerName
-	token := p.token
+// verboseTokenMiddleware creates an HTTP middleware that guards ?verbose mode
+// with a shared secret supplied in a request header.
+func verboseTokenMiddleware(headerName, token string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// SEC-06: only enforce when ?verbose is semantically "on" — same
@@ -111,12 +99,15 @@ func (p *policyVerboseToken) middleware() func(http.Handler) http.Handler {
 //   - token empty      → panic "bootstrap: PolicyVerboseToken token must not be empty"
 //
 // This absorbs PR-A35 READYZ-VERBOSE-TOKEN-DENY-01.
-func PolicyVerboseToken(headerName, token string) *policyVerboseToken {
+func PolicyVerboseToken(headerName, token string) cell.Policy {
 	if headerName == "" {
 		panic("bootstrap: PolicyVerboseToken headerName must not be empty")
 	}
 	if token == "" {
 		panic("bootstrap: PolicyVerboseToken token must not be empty")
 	}
-	return &policyVerboseToken{headerName: headerName, token: token}
+	return cell.Policy{
+		Name:       "verbose-token",
+		Middleware: verboseTokenMiddleware(headerName, token),
+	}
 }

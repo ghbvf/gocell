@@ -358,10 +358,12 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))))
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -369,9 +371,9 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
+	healthAddr := healthLn.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
+		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
 		if err != nil {
 			return false
 		}
@@ -380,7 +382,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "memory bootstrap must become healthy")
 
 	// /readyz must be healthy (no PG checker to fail).
-	resp, err := http.Get("http://" + addr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -416,10 +418,12 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithManagedResource(fakePG),
 	)
 	require.NoError(t, err)
@@ -428,9 +432,9 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
+	healthAddr := healthLn.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
+		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
 		if err != nil {
 			return false
 		}
@@ -458,19 +462,21 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))))
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
+	healthAddr := healthLn.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
+		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
 		if err != nil {
 			return false
 		}
@@ -479,7 +485,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond, "full assembly must become healthy")
 
 	// /readyz confirms all three cells started and registered their probes.
-	resp, err := http.Get("http://" + addr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,

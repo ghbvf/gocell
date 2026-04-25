@@ -71,16 +71,16 @@ func TestPolicyNone(t *testing.T) {
 
 	p := bootstrap.PolicyNone()
 
-	t.Run("describe", func(t *testing.T) {
+	t.Run("name", func(t *testing.T) {
 		t.Parallel()
-		if got := p.Describe(); got != "none" {
-			t.Errorf("Describe() = %q, want %q", got, "none")
+		if got := p.Name; got != "none" {
+			t.Errorf("Name = %q, want %q", got, "none")
 		}
 	})
 
 	t.Run("passes_all_requests", func(t *testing.T) {
 		t.Parallel()
-		// serveRequest calls ApplyPolicyForTest → apply (no-op) then registers handler.
+		// serveRequest calls ApplyPolicyForTest → no-op then registers handler.
 		rr := serveRequest(t, p, http.MethodGet, "/", nil)
 		if rr.Code != http.StatusOK {
 			t.Errorf("status = %d, want 200", rr.Code)
@@ -109,11 +109,11 @@ func TestPolicyNone(t *testing.T) {
 func TestPolicyJWT(t *testing.T) {
 	t.Parallel()
 
-	t.Run("describe", func(t *testing.T) {
+	t.Run("name", func(t *testing.T) {
 		t.Parallel()
 		p := bootstrap.PolicyJWT(stubVerifier{})
-		if got := p.Describe(); got != "jwt" {
-			t.Errorf("Describe() = %q, want %q", got, "jwt")
+		if got := p.Name; got != "jwt" {
+			t.Errorf("Name = %q, want %q", got, "jwt")
 		}
 	})
 
@@ -157,11 +157,11 @@ func TestPolicyServiceToken(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Run("describe", func(t *testing.T) {
+	t.Run("name", func(t *testing.T) {
 		t.Parallel()
 		p := bootstrap.PolicyServiceToken(auth.NewNoopNonceStore(), ring)
-		if got := p.Describe(); got != "service-token" {
-			t.Errorf("Describe() = %q, want %q", got, "service-token")
+		if got := p.Name; got != "service-token" {
+			t.Errorf("Name = %q, want %q", got, "service-token")
 		}
 	})
 
@@ -211,11 +211,11 @@ func TestPolicyMTLS(t *testing.T) {
 
 	pool := x509.NewCertPool()
 
-	t.Run("describe", func(t *testing.T) {
+	t.Run("name", func(t *testing.T) {
 		t.Parallel()
 		p := bootstrap.PolicyMTLS(pool)
-		if got := p.Describe(); got != "mtls" {
-			t.Errorf("Describe() = %q, want %q", got, "mtls")
+		if got := p.Name; got != "mtls" {
+			t.Errorf("Name = %q, want %q", got, "mtls")
 		}
 	})
 
@@ -243,8 +243,8 @@ func TestPolicyMTLS(t *testing.T) {
 		t.Parallel()
 		// Verify WithMTLSClientAuth option does not panic.
 		p := bootstrap.PolicyMTLS(pool, bootstrap.WithMTLSClientAuth(tls.RequireAnyClientCert))
-		if got := p.Describe(); got != "mtls" {
-			t.Errorf("Describe() = %q, want %q", got, "mtls")
+		if got := p.Name; got != "mtls" {
+			t.Errorf("Name = %q, want %q", got, "mtls")
 		}
 		// Also verify middleware still rejects non-TLS requests.
 		rr := serveRequest(t, p, http.MethodGet, "/", nil)
@@ -324,11 +324,11 @@ func TestPolicyVerboseToken(t *testing.T) {
 		token      = "secret-token"
 	)
 
-	t.Run("describe", func(t *testing.T) {
+	t.Run("name", func(t *testing.T) {
 		t.Parallel()
 		p := bootstrap.PolicyVerboseToken(headerName, token)
-		if got := p.Describe(); got != "verbose-token" {
-			t.Errorf("Describe() = %q, want %q", got, "verbose-token")
+		if got := p.Name; got != "verbose-token" {
+			t.Errorf("Name = %q, want %q", got, "verbose-token")
 		}
 	})
 
@@ -426,11 +426,11 @@ func TestPolicyVerboseToken(t *testing.T) {
 func TestPolicyStack(t *testing.T) {
 	t.Parallel()
 
-	t.Run("describe", func(t *testing.T) {
+	t.Run("name", func(t *testing.T) {
 		t.Parallel()
 		p := bootstrap.PolicyStack(bootstrap.PolicyNone(), bootstrap.PolicyNone())
-		if got := p.Describe(); got != "stack[none, none]" {
-			t.Errorf("Describe() = %q, want %q", got, "stack[none, none]")
+		if got := p.Name; got != "stack[none, none]" {
+			t.Errorf("Name = %q, want %q", got, "stack[none, none]")
 		}
 	})
 
@@ -439,8 +439,7 @@ func TestPolicyStack(t *testing.T) {
 	t.Run("empty_stack", func(t *testing.T) {
 		t.Parallel()
 		p := bootstrap.PolicyStack()
-		require.NotNil(t, p, "PolicyStack() must return a non-nil policy")
-		require.Equal(t, "stack[]", p.Describe(), "empty stack Describe must be stack[]")
+		require.Equal(t, "stack[]", p.Name, "empty stack Name must be stack[]")
 
 		mux := chi.NewMux()
 		bootstrap.ApplyPolicyForTest(p, mux)
@@ -496,4 +495,65 @@ func TestPolicyStack(t *testing.T) {
 			t.Errorf("status = %d, want 401", rr.Code)
 		}
 	})
+}
+
+// TestPolicyVerboseToken_QueryParamBoundary verifies the boundary values of
+// the ?verbose query parameter parsing (policyVerboseActive). The middleware
+// must only enforce the token guard when verbose mode is semantically "on";
+// negative/falsy values must be treated as "verbose off" and pass through.
+// This test covers SEC-06: false positive 401s must be prevented for k8s probes
+// that pass ?verbose=false.
+func TestPolicyVerboseToken_QueryParamBoundary(t *testing.T) {
+	t.Parallel()
+
+	const (
+		headerName = "X-Readyz-Token"
+		token      = "boundary-test-token"
+	)
+
+	tests := []struct {
+		name        string
+		url         string
+		supplyToken bool // whether to include the correct token header
+		wantStatus  int
+	}{
+		// Falsy values — verbose is OFF, middleware is a pass-through regardless of token.
+		{name: "verbose=false_no_token_passthrough", url: "/?verbose=false", supplyToken: false, wantStatus: http.StatusOK},
+		{name: "verbose=0_no_token_passthrough", url: "/?verbose=0", supplyToken: false, wantStatus: http.StatusOK},
+		{name: "verbose=other_no_token_passthrough", url: "/?verbose=nope", supplyToken: false, wantStatus: http.StatusOK},
+		// Truthy values — verbose is ON, token required.
+		{name: "verbose_bare_no_token_401", url: "/?verbose", supplyToken: false, wantStatus: http.StatusUnauthorized},
+		{name: "verbose_equal_no_token_401", url: "/?verbose=", supplyToken: false, wantStatus: http.StatusUnauthorized},
+		{name: "verbose=1_no_token_401", url: "/?verbose=1", supplyToken: false, wantStatus: http.StatusUnauthorized},
+		{name: "verbose=true_no_token_401", url: "/?verbose=true", supplyToken: false, wantStatus: http.StatusUnauthorized},
+		{name: "verbose=TRUE_case_insensitive_no_token_401", url: "/?verbose=TRUE", supplyToken: false, wantStatus: http.StatusUnauthorized},
+		// Truthy with correct token — pass.
+		{name: "verbose=true_with_token_pass", url: "/?verbose=true", supplyToken: true, wantStatus: http.StatusOK},
+		{name: "verbose=1_with_token_pass", url: "/?verbose=1", supplyToken: true, wantStatus: http.StatusOK},
+	}
+
+	p := bootstrap.PolicyVerboseToken(headerName, token)
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			mux := chi.NewMux()
+			bootstrap.ApplyPolicyForTest(p, mux)
+			mux.MethodFunc(http.MethodGet, "/", okHandler.ServeHTTP)
+
+			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
+			if tc.supplyToken {
+				req.Header.Set(headerName, token)
+			}
+			rr := httptest.NewRecorder()
+			mux.ServeHTTP(rr, req)
+
+			if rr.Code != tc.wantStatus {
+				t.Errorf("url=%q supplyToken=%v: status = %d, want %d; body = %s",
+					tc.url, tc.supplyToken, rr.Code, tc.wantStatus, rr.Body.String())
+			}
+		})
+	}
 }

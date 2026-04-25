@@ -3,8 +3,10 @@ package bootstrap_test
 // listener_test.go — table-driven coverage for WithListener and ListenerOption helpers.
 
 import (
+	"context"
 	"crypto/tls"
 	"net"
+	"strings"
 	"testing"
 	"time"
 
@@ -121,5 +123,33 @@ func TestWithListenerShutdownGrace_ZeroValue(t *testing.T) {
 	)
 	if b == nil {
 		t.Fatal("Bootstrap.New returned nil")
+	}
+}
+
+// TestWithListenerShutdownGrace_NegativeRejectsAtPhase0 verifies that a negative
+// shutdownGrace causes phase0 validation to fail with an actionable error message.
+// Negative values are stored as-is by New (no panic), but Run must reject them.
+func TestWithListenerShutdownGrace_NegativeRejectsAtPhase0(t *testing.T) {
+	t.Parallel()
+
+	b := bootstrap.New(
+		bootstrap.WithListener(
+			cell.PrimaryListener, ":9090", bootstrap.PolicyNone(),
+			bootstrap.WithListenerShutdownGrace(-1*time.Second),
+		),
+	)
+	if b == nil {
+		t.Fatal("Bootstrap.New returned nil")
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	err := b.Run(ctx)
+	if err == nil {
+		t.Fatal("Bootstrap.Run must return an error for negative shutdownGrace, got nil")
+	}
+	if !strings.Contains(err.Error(), "negative shutdownGrace") {
+		t.Errorf("error must mention 'negative shutdownGrace'; got: %v", err)
 	}
 }

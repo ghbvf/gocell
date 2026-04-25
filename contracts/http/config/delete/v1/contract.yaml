@@ -1,0 +1,24 @@
+id: http.config.delete.v1
+kind: http
+ownerCell: configcore
+consistencyLevel: L2
+lifecycle: active
+endpoints:
+  server: configcore
+  clients:
+    - edge-bff
+  http:
+    method: DELETE
+    path: /api/v1/config/{key}
+    pathParams:
+      key:
+        type: string
+    successStatus: 204
+    noContent: true
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid bearer token"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — authenticated but lacks admin role"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"

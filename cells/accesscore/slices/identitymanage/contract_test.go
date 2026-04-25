@@ -3,25 +3,32 @@ package identitymanage
 import (
 	"context"
 	"encoding/json"
-	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/refresh"
+	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
+	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 	"github.com/stretchr/testify/require"
 )
+
+func newIdentityRefreshStore() refresh.Store {
+	clock := storetest.NewFakeClock(time.Now())
+	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
 
 // testPassword is a deterministic credential used only in contract tests.
 // Extracted as a constant to satisfy S6437 (no hardcoded credentials).
@@ -52,7 +59,7 @@ var contractStubIssuer TokenIssuer = &stubTokenIssuer{}
 
 func setupContractHandler(t testing.TB) http.Handler {
 	t.Helper()
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(contractStubIssuer))
 	if err != nil {
 		t.Fatalf("setupContractHandler: %v", err)
@@ -63,7 +70,7 @@ func setupContractHandler(t testing.TB) http.Handler {
 func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecordingWriter) {
 	t.Helper()
 	writer := &contractRecordingWriter{}
-	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(contractTxRunner{}), WithTokenIssuer(contractStubIssuer))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithOutbox: %v", err)
@@ -71,61 +78,23 @@ func setupContractHandlerWithOutbox(t testing.TB) (http.Handler, *contractRecord
 	return buildMux(svc), writer
 }
 
-// prefixMux wraps a celltest.TestMux and prepends a path prefix to every
-// Handle call. auth.Declare on a Handler.RegisterRoutes call uses Handle
-// with relative paths (e.g. "POST /", "GET /{id}"); prefixMux translates
-// those to fully-qualified paths so contract tests can drive requests at
-// the canonical API path without duplicating the route table.
-//
-// DeclareAuthMeta is overridden to compose the prefix so that the root
-// TestMux records correct absolute paths (e.g. "/api/v1/access/users/{id}/password"
-// with PasswordResetExempt=true) — preventing silent drift between production
-// metadata and what the contract test observes.
-type prefixMux struct {
-	prefix string
-	*celltest.TestMux
-}
-
-func newPrefixMux(prefix string) *prefixMux {
-	return &prefixMux{prefix: prefix, TestMux: celltest.NewTestMux()}
-}
-
-// Handle overrides TestMux.Handle to prepend the configured prefix.
-// Pattern: "POST /" → "POST /api/v1/access/users"
-//
-//	"GET /{id}" → "GET /api/v1/access/users/{id}"
-func (m *prefixMux) Handle(pattern string, handler http.Handler) {
-	if idx := strings.IndexByte(pattern, ' '); idx >= 0 {
-		method := pattern[:idx]
-		p := path.Join(m.prefix, pattern[idx+1:])
-		m.TestMux.Handle(method+" "+p, handler)
-	} else {
-		m.TestMux.Handle(m.prefix+pattern, handler)
-	}
-}
-
-// DeclareAuthMeta overrides TestMux.DeclareAuthMeta to compose the prefix
-// with the declared path before forwarding to the root TestMux.
-func (m *prefixMux) DeclareAuthMeta(meta kcell.AuthRouteMeta) {
-	meta.Path = path.Join(m.prefix, meta.Path)
-	m.TestMux.DeclareAuthMeta(meta)
-}
-
 // buildMux uses h.RegisterRoutes as the single source of truth for route
-// and auth-metadata declarations. This prevents drift between production
-// metadata (e.g. PasswordResetExempt on the password endpoint) and the
-// contract test mux.
-func buildMux(svc *Service) http.Handler {
+// and auth-metadata declarations. TestMux.Route mirrors the production chi
+// sub-router structure — auth.Mount strips the canonical API prefix off
+// Contract.Path so requests match without any relative-alias magic.
+func buildMux(svc *Service) *celltest.TestMux {
 	h := NewHandler(svc)
-	m := newPrefixMux("/api/v1/access/users")
-	h.RegisterRoutes(m)
-	return m.TestMux
+	mux := celltest.NewTestMux()
+	mux.Route("/api/v1/access/users", func(sub kcell.RouteMux) {
+		h.RegisterRoutes(sub)
+	})
+	return mux
 }
 
 func setupContractHandlerWithIssuer(t testing.TB, issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 	t.Helper()
 	repo := mem.NewUserRepository()
-	svc, err := NewService(repo, mem.NewSessionRepository(), slog.Default(),
+	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithTokenIssuer(issuer))
 	if err != nil {
 		t.Fatalf("setupContractHandlerWithIssuer: %v", err)

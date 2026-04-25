@@ -23,6 +23,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -33,6 +34,7 @@ import (
 // Compile-time checks.
 var _ kcell.RouteMux = (*Router)(nil)
 var _ kcell.AuthRouteDeclarer = (*Router)(nil)
+var _ kcell.HTTPContractDeclarer = (*Router)(nil)
 
 // Option configures a Router.
 type Option func(*Router)
@@ -112,7 +114,7 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // WithAuthMiddleware enables authentication middleware with an explicitly
 // injected verifier. The middleware is placed in the mux chain after any
 // rate-limiter/circuit-breaker and before BodyLimit. Public endpoints declared
-// via auth.Declare with Public:true inside cell RouteGroups bypass JWT
+// via auth.Mount with Public:true inside cell RouteGroups bypass JWT
 // verification; FinalizeAuth compiles them into the router's auth predicates.
 //
 // In the new per-listener model this option is most commonly used for the
@@ -171,10 +173,10 @@ func WithPolicyCoverageWhitelist(patterns []string) Option {
 // any request whose URL path begins with prefix bypasses JWT authentication.
 // Multiple calls OR-merge the predicates. The seed is applied before FinalizeAuth
 // compiles the per-route declarations, so the merged matcher includes both the
-// prefix exemption and any auth.Declare(Public:true) routes.
+// prefix exemption and any auth.Mount(Public:true) routes.
 //
 // Use this for framework-owned path prefixes that must be exempt from auth but
-// are not declared via auth.Declare (e.g. the /internal/v1/* 404 isolation
+// are not declared via auth.Mount (e.g. the /internal/v1/* 404 isolation
 // handler on the primary listener).
 func WithPublicPathPrefix(prefix string) Option {
 	return func(r *Router) {
@@ -215,9 +217,13 @@ type Router struct {
 	trustedProxies      []string
 
 	// FinalizeAuth state
-	authPublicMatcher          func(*http.Request) bool
-	authFinalized              bool
-	declaredAuthMetas          []kcell.AuthRouteMeta
+	authPublicMatcher func(*http.Request) bool
+	authFinalized     bool
+	declaredAuthMetas []kcell.AuthRouteMeta
+	// declaredHTTPContracts accumulates HTTP ContractSpec entries forwarded
+	// by auth.Mount. Tracing uses these as a fallback when upstream middleware
+	// short-circuits before wrapper.HTTPHandler can contribute attrs.
+	declaredHTTPContracts      []wrapper.ContractSpec
 	passwordResetExemptMatcher func(method, urlPath string) bool
 	derivedHint                string
 
@@ -254,12 +260,12 @@ func New(opts ...Option) *Router {
 // ref: gin-gonic/gin — SetTrustedProxies returns error at config time
 // ref: uber-go/fx — startup failures return error, trigger rollback
 func NewE(opts ...Option) (*Router, error) {
-	return NewForListener(kcell.ListenerRef{}, nil, opts...)
+	return NewForListener(kcell.ListenerRef{}, kcell.Policy{}, opts...)
 }
 
 // NewForListener builds a Router for a specific listener. defaultPolicy is
 // applied to the mux root (via its middleware) after the observability chain
-// is installed but before any routes are registered. A nil defaultPolicy is
+// is installed but before any routes are registered. A zero-value Policy is
 // treated as PolicyNone (no policy middleware; observability only).
 //
 // The observability chain is:
@@ -334,14 +340,20 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //	→ [Auth] → BodyLimit → handlers
 func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler, defaultPolicy kcell.Policy) {
 	// Lazy public predicate so Tracing/RequestID honour public routes declared
-	// later via auth.Declare / FinalizeAuth.
+	// later via auth.Mount / FinalizeAuth.
 	lazyPublic := func(req *http.Request) bool {
 		if r.authPublicMatcher == nil {
 			return false
 		}
 		return r.authPublicMatcher(req)
 	}
-	r.tracingOpts = append([]middleware.TracingOption{middleware.WithPublicEndpointFn(lazyPublic)}, r.tracingOpts...)
+	r.tracingOpts = append(
+		[]middleware.TracingOption{
+			middleware.WithPublicEndpointFn(lazyPublic),
+			middleware.WithContractAttrsResolver(r.resolveHTTPContractAttrs),
+		},
+		r.tracingOpts...,
+	)
 	r.requestIDOpts = append([]middleware.RequestIDOption{middleware.WithReqIDPublicEndpointFn(lazyPublic)}, r.requestIDOpts...)
 
 	// --- Observability layer ---
@@ -365,7 +377,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler, defaultPolic
 	// --- Policy layer (listener-default policy) ---
 	// Apply the policy middleware AFTER observability so all requests are
 	// observable regardless of whether they pass the policy gate.
-	if defaultPolicy != nil {
+	if !defaultPolicy.IsZero() {
 		applyPolicyToMux(defaultPolicy, r.mux)
 	}
 
@@ -382,20 +394,14 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler, defaultPolic
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
 }
 
-// applyPolicyToMux applies the policy's middleware to mux if it implements
-// the mountable interface. The exported Apply method is used (not an unexported
-// method) so that policy implementations from sibling packages (e.g.
-// runtime/bootstrap) can satisfy this interface — Go's structural typing
-// requires exported method names to cross package boundaries.
+// applyPolicyToMux installs the policy's middleware on mux. If p.Middleware is
+// nil (PolicyNone / zero Policy) the function is a no-op.
 //
-// This function is intentionally a package-level helper so tests can also call
-// it via export_test.go.
+// B1 simplification: cell.Policy is now a value struct, not an interface, so
+// no type-assertion is needed — middleware is accessed directly.
 func applyPolicyToMux(p kcell.Policy, mux *chi.Mux) {
-	type mountable interface {
-		Apply(mux *chi.Mux)
-	}
-	if mp, ok := p.(mountable); ok {
-		mp.Apply(mux)
+	if p.Middleware != nil {
+		mux.Use(p.Middleware)
 	}
 }
 
@@ -437,7 +443,10 @@ func (r *Router) Group(fn func(kcell.RouteMux)) {
 	})
 }
 
-// Route mounts a sub-router under the given pattern.
+// Route mounts a sub-router under the given pattern. The adapter carries
+// both the chi sub-router and a reference to the Router-rooted declarer so
+// that auth.Mount called on a nested sub-mux composes the mount prefix
+// with the declared path and forwards AuthRouteMeta to the top-level Router.
 func (r *Router) Route(pattern string, fn func(kcell.RouteMux)) {
 	r.mux.Route(pattern, func(cr chi.Router) {
 		sub := &chiRouterAdapter{cr: cr, prefix: pattern, declarer: r}
@@ -456,8 +465,13 @@ func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
 	return &chiRouterAdapter{cr: r.mux.With(mw...), declarer: r}
 }
 
-// DeclareAuthMeta implements cell.AuthRouteDeclarer. Panics if called after
-// FinalizeAuth.
+// DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
+// metadata forwarded by auth.Mount during Cell RegisterRoutes. FinalizeAuth
+// compiles the accumulated metas into matchers that the AuthMiddleware reads
+// via lazy closures installed in buildAuthOpts.
+//
+// Panics if called after FinalizeAuth — all declarations must precede the
+// compile step.
 func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 	if r.authFinalized {
 		panic(fmt.Sprintf(
@@ -465,6 +479,18 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 			m.Method, m.Path))
 	}
 	r.declaredAuthMetas = append(r.declaredAuthMetas, m)
+}
+
+// DeclareHTTPContract implements cell.HTTPContractDeclarer. It stores the
+// route contract metadata separately from auth metadata so Tracing can tag
+// spans for requests rejected before reaching wrapper.HTTPHandler.
+func (r *Router) DeclareHTTPContract(spec wrapper.ContractSpec) {
+	if r.authFinalized {
+		panic(fmt.Sprintf(
+			"router: DeclareHTTPContract called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
+			spec.Method, spec.Path))
+	}
+	r.declaredHTTPContracts = append(r.declaredHTTPContracts, spec)
 }
 
 // FinalizeAuth compiles all accumulated AuthRouteMeta declarations into
@@ -476,7 +502,13 @@ func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 // InternalListener router. When the router has a zero-value ref (created via
 // NewE), the old path-prefix check is preserved for backward compatibility.
 //
-// Returns error (not panic) so Bootstrap can perform a clean rollback.
+// Returns error (not panic) so Bootstrap can perform a clean rollback:
+//   - "router: FinalizeAuth called twice"
+//   - "router: duplicate auth declaration METHOD /path"
+//
+// It is safe to call FinalizeAuth with an empty declaredAuthMetas slice; the
+// policy coverage check still runs to catch routes registered without any
+// auth.Mount call.
 func (r *Router) FinalizeAuth() error {
 	if r.authFinalized {
 		return fmt.Errorf("router: FinalizeAuth called twice")
@@ -502,8 +534,7 @@ func (r *Router) FinalizeAuth() error {
 		r.deriveHint()
 
 		if r.authVerifier == nil {
-			slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/PasswordResetExempt matchers will have no effect",
-				slog.Int("declared", len(r.declaredAuthMetas)))
+			r.warnNoAuthVerifier(partitioned)
 		}
 	}
 
@@ -514,6 +545,20 @@ func (r *Router) FinalizeAuth() error {
 	}
 
 	return nil
+}
+
+// warnNoAuthVerifier emits observability warnings when auth declarations have been
+// compiled but no AuthMiddleware is installed. Public:true warnings are emitted
+// separately to guide operators toward the correct setup.
+func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
+	slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/PasswordResetExempt matchers will have no effect",
+		slog.Int("declared", len(r.declaredAuthMetas)))
+	if len(p.publicEntries) > 0 {
+		slog.Warn("router: Public:true routes declared on a listener with no JWT middleware; "+
+			"Public:true is a JWT exemption flag and has no effect without an auth verifier — "+
+			"use PolicyJWTFromAssembly(asm) or WithAuthMiddleware(verifier) to install JWT auth",
+			slog.Int("public_routes", len(p.publicEntries)))
+	}
 }
 
 // verifyDelegatedConsistency enforces the Delegated ↔ /internal/v1/* invariant:
@@ -656,6 +701,58 @@ func InstallInternalPrefixIsolation(r *Router) {
 	r.mux.Handle(strings.TrimSuffix(internalPathPrefix, "/"), http.HandlerFunc(not404Handler))
 }
 
+// resolveHTTPContractAttrs looks up span attributes for a request by matching
+// against declared HTTP contract specs. Used by the Tracing middleware as a
+// fallback when upstream middleware short-circuits before wrapper.HTTPHandler
+// can contribute contract attributes.
+func (r *Router) resolveHTTPContractAttrs(method, urlPath string) ([]wrapper.Attr, bool) {
+	for _, spec := range r.declaredHTTPContracts {
+		if !contractMethodMatches(spec.Method, method) {
+			continue
+		}
+		if !contractPathMatches(spec.Path, urlPath) {
+			continue
+		}
+		return httpContractAttrs(spec), true
+	}
+	return nil, false
+}
+
+func contractMethodMatches(contractMethod, requestMethod string) bool {
+	return contractMethod == requestMethod || (contractMethod == http.MethodGet && requestMethod == http.MethodHead)
+}
+
+func contractPathMatches(template, concrete string) bool {
+	tParts := strings.Split(strings.Trim(template, "/"), "/")
+	cParts := strings.Split(strings.Trim(concrete, "/"), "/")
+	if len(tParts) != len(cParts) {
+		return false
+	}
+	for i, t := range tParts {
+		c := cParts[i]
+		if strings.HasPrefix(t, "{") && strings.HasSuffix(t, "}") {
+			if c == "" {
+				return false
+			}
+			continue
+		}
+		if t != c {
+			return false
+		}
+	}
+	return true
+}
+
+func httpContractAttrs(spec wrapper.ContractSpec) []wrapper.Attr {
+	return []wrapper.Attr{
+		{Key: "gocell.contract.id", Value: spec.ID},
+		{Key: "gocell.contract.kind", Value: spec.Kind},
+		{Key: "gocell.contract.transport", Value: spec.Transport},
+		{Key: "http.method", Value: spec.Method},
+		{Key: "http.route", Value: spec.Path},
+	}
+}
+
 // orMergeRequest returns a predicate that returns true when either a or b matches.
 func orMergeRequest(a, b func(*http.Request) bool) func(*http.Request) bool {
 	if a == nil {
@@ -676,15 +773,27 @@ func orMergeMethodPath(a, b func(method, urlPath string) bool) func(string, stri
 	}
 }
 
-// chiRouterAdapter wraps chi.Router to implement cell.RouteMux.
+// chiRouterAdapter wraps chi.Router to implement cell.RouteMux. prefix is the
+// mount prefix the adapter inherited from its parent Route; declarer points to
+// the Router-rooted AuthRouteDeclarer so nested auth.Mount calls propagate
+// metadata with the fully-composed path.
 type chiRouterAdapter struct {
 	cr       chi.Router
 	prefix   string
 	declarer kcell.AuthRouteDeclarer
 }
 
-// Compile-time check.
+// Compile-time checks: chiRouterAdapter forwards AuthRouteMeta + declares
+// its mount prefix so auth.Mount can derive chi-relative registration paths
+// from fully-qualified Contract.Path literals.
 var _ kcell.AuthRouteDeclarer = (*chiRouterAdapter)(nil)
+var _ kcell.Prefixer = (*chiRouterAdapter)(nil)
+var _ kcell.HTTPContractDeclarer = (*chiRouterAdapter)(nil)
+
+// Prefix returns the sub-route mount prefix this adapter inherited from
+// its parent Route. An empty prefix means the adapter sits directly under
+// the Router (Group / top-level) and contributes no path composition.
+func (a *chiRouterAdapter) Prefix() string { return a.prefix }
 
 func (a *chiRouterAdapter) Handle(pattern string, handler http.Handler) {
 	a.cr.Handle(pattern, handler)
@@ -728,7 +837,21 @@ func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) {
 	a.declarer.DeclareAuthMeta(m)
 }
 
-// joinPrefix composes a parent mount prefix with a child pattern/path.
+// DeclareHTTPContract forwards the route's full ContractSpec to the
+// Router-rooted declarer. ContractSpec.Path is already the canonical full
+// path, so unlike AuthRouteMeta it is not composed with the chi prefix.
+func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) {
+	if a.declarer == nil {
+		return
+	}
+	if declarer, ok := a.declarer.(kcell.HTTPContractDeclarer); ok {
+		declarer.DeclareHTTPContract(spec)
+	}
+}
+
+// joinPrefix composes a parent mount prefix with a child pattern/path,
+// normalising the result via path.Clean so nested chains like
+// `/api/v1` + `/access` + `/sessions/{id}` collapse to `/api/v1/access/sessions/{id}`.
 func joinPrefix(parent, child string) string {
 	if parent == "" {
 		return child

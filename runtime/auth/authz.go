@@ -10,7 +10,7 @@ import (
 // RequireSelfOrRole checks that the authenticated subject matches targetID
 // or holds one of the specified bypass roles. Returns nil on success.
 //
-// Deprecated: use auth.SelfOr inside auth.RouteDecl.Policy instead. This
+// Deprecated: use auth.SelfOr inside auth.Route.Policy instead. This
 // internal function backs the SelfOr Policy constructor and should not be
 // called directly from handlers.
 //
@@ -61,7 +61,7 @@ func principalHasAnyRole(p *Principal, roles []string) bool {
 // RequireAnyRole checks that the authenticated subject holds at least one of
 // the specified roles. Returns nil on success.
 //
-// Deprecated: use auth.AnyRole inside auth.RouteDecl.Policy instead. This
+// Deprecated: use auth.AnyRole inside auth.Route.Policy instead. This
 // internal function backs the AnyRole Policy constructor and should not be
 // called directly from handlers.
 //

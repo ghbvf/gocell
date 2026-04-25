@@ -12,6 +12,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -21,14 +22,13 @@ import (
 )
 
 // InMemQueue is a process-local, thread-safe implementation of command.Queue,
-// command.Reader, command.Writer, and command.StateAdvancer backed by a map.
+// command.ActiveScanner, and command.Writer backed by a map.
 // It is NOT suitable for multi-replica coordination — use for tests and examples.
 //
 // Implements:
-//   - command.Queue (Enqueue/Dequeue/Ack/ExtendLease/Cancel/ListPending)
-//   - command.Reader (PendingCommands/GetCommand)
-//   - command.Writer (WriteCommand)
-//   - command.StateAdvancer (AdvanceStatus)
+//   - command.Queue          (Enqueue/Dequeue/Report/Ack/ExtendLease/Cancel)
+//   - command.ActiveScanner  (ScanActive/GetCommand)
+//   - command.Writer         (WriteCommand — for test seeding)
 type InMemQueue struct {
 	mu              sync.RWMutex
 	entries         map[string]*command.Entry
@@ -42,9 +42,8 @@ type InMemQueue struct {
 // Compile-time interface checks.
 var (
 	_ command.Queue         = (*InMemQueue)(nil)
-	_ command.Reader        = (*InMemQueue)(nil)
+	_ command.ActiveScanner = (*InMemQueue)(nil)
 	_ command.Writer        = (*InMemQueue)(nil)
-	_ command.StateAdvancer = (*InMemQueue)(nil)
 )
 
 // NewInMemQueue creates a new InMemQueue with the default wall clock.
@@ -174,11 +173,39 @@ func (q *InMemQueue) Dequeue(_ context.Context, targetID string, n int, leaseDur
 	return result, nil
 }
 
-// Ack finalises a command. The AckReason determines the target status:
-//   - AckSuccess:   Sent→Delivered→Succeeded (or Delivered→Succeeded)
-//   - AckFailed:    current→StatusFailed
-//   - AckTimeout:   releases lease and calls ResetForRetry (back to Pending)
-//   - AckRejected:  current→StatusCanceled
+// Report advances a command from Sent to Delivered, recording that the device
+// has acknowledged receipt and begun execution. No-op (nil) if the command is
+// already Delivered (idempotent); returns ErrValidationFailed for any other
+// non-Sent status.
+func (q *InMemQueue) Report(_ context.Context, commandID string, now time.Time) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+
+	e, ok := q.entries[commandID]
+	if !ok {
+		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
+	}
+	if e.Status == command.StatusDelivered {
+		return nil // idempotent
+	}
+	if err := command.AdvanceCommand(e, command.StatusDelivered, now); err != nil {
+		return fmt.Errorf("commandtest: report: %w", err)
+	}
+	return nil
+}
+
+// Ack finalises a command atomically in a single transition step. The AckReason
+// maps directly to a terminal status:
+//   - AckSuccess:  current → StatusSucceeded
+//   - AckFailed:   current → StatusFailed
+//   - AckTimeout:  current → StatusExpired (used by Sweeper on deadline elapse)
+//   - AckRejected: current → StatusCanceled
+//
+// No chaining: Ack does NOT advance through intermediate states. Acking from
+// StatusSent directly to StatusSucceeded leaves DeliveredAt nil, which is the
+// signal that the device skipped the optional Report step.
+// Already-terminal entries are idempotent only when the requested reason maps
+// to the existing terminal status. A different terminal target is rejected.
 func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.AckReason, now time.Time) error {
 	if !reason.Valid() {
 		return errcode.New(errcode.ErrValidationFailed, "commandtest: invalid AckReason")
@@ -192,52 +219,18 @@ func (q *InMemQueue) Ack(_ context.Context, commandID string, reason command.Ack
 		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+commandID)
 	}
 
-	delete(q.leases, commandID)
-	return q.applyAck(e, reason, now)
-}
-
-// applyAck applies the ack reason transition to the entry (must be called
-// with q.mu held). Separated to reduce cognitive complexity of Ack.
-func (q *InMemQueue) applyAck(e *command.Entry, reason command.AckReason, now time.Time) error {
-	switch reason {
-	case command.AckSuccess:
-		return q.ackSuccess(e, now)
-	case command.AckFailed:
-		if err := command.AdvanceCommand(e, command.StatusFailed, now); err != nil {
-			return fmt.Errorf("commandtest: advance to Failed: %w", err)
+	target := reason.TargetStatus()
+	if e.Status.IsTerminal() {
+		if e.Status == target {
+			return nil
 		}
-	case command.AckTimeout:
-		return q.ackTimeout(e)
-	case command.AckRejected:
-		if err := command.AdvanceCommand(e, command.StatusCanceled, now); err != nil {
-			return fmt.Errorf("commandtest: advance to Canceled: %w", err)
-		}
-	}
-	return nil
-}
-
-// ackSuccess advances the entry to Succeeded, first going through Delivered
-// if the entry is currently in Sent status.
-func (q *InMemQueue) ackSuccess(e *command.Entry, now time.Time) error {
-	if e.Status == command.StatusSent {
-		if err := command.AdvanceCommand(e, command.StatusDelivered, now); err != nil {
-			return fmt.Errorf("commandtest: advance to Delivered: %w", err)
-		}
-	}
-	if err := command.AdvanceCommand(e, command.StatusSucceeded, now); err != nil {
-		return fmt.Errorf("commandtest: advance to Succeeded: %w", err)
-	}
-	return nil
-}
-
-// ackTimeout releases the processing lease and resets the entry for retry.
-func (q *InMemQueue) ackTimeout(e *command.Entry) error {
-	if e.Status == command.StatusPending {
 		return errcode.New(errcode.ErrValidationFailed,
-			"commandtest: AckTimeout on Pending entry is not allowed; entry is not leased")
+			fmt.Sprintf("commandtest: command already terminal with status %s; cannot ack as %s", e.Status, target))
 	}
-	if err := command.ResetForRetry(e); err != nil {
-		return fmt.Errorf("commandtest: reset for retry: %w", err)
+
+	delete(q.leases, commandID)
+	if err := command.AdvanceCommand(e, target, now); err != nil {
+		return fmt.Errorf("commandtest: advance to %s: %w", target, err)
 	}
 	return nil
 }
@@ -263,7 +256,7 @@ func (q *InMemQueue) ExtendLease(_ context.Context, commandID string, extension 
 	return nil
 }
 
-// Cancel transitions a non-terminal command to StatusCanceled.
+// Cancel transitions a non-terminal command to StatusCanceled (operator action).
 func (q *InMemQueue) Cancel(_ context.Context, commandID string, now time.Time) error {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -285,46 +278,58 @@ func (q *InMemQueue) Cancel(_ context.Context, commandID string, now time.Time) 
 	return nil
 }
 
-// ListPending returns up to limit non-terminal entries (Pending/Sent/Delivered)
-// for targetID, ordered by CreatedAt.
-func (q *InMemQueue) ListPending(_ context.Context, targetID string, limit int) ([]command.Entry, error) {
+// ---------------------------------------------------------------------------
+// command.ActiveScanner implementation
+// ---------------------------------------------------------------------------
+
+// ScanActive returns all non-terminal entries matching filter, ordered by
+// CreatedAt ascending. filter.DeviceID="" means scan all devices;
+// filter.Statuses=nil means all non-terminal statuses (Pending/Sent/Delivered).
+// Terminal statuses in filter.Statuses are silently ignored.
+func (q *InMemQueue) ScanActive(_ context.Context, filter command.ScanFilter) ([]command.Entry, error) {
 	q.mu.RLock()
 	defer q.mu.RUnlock()
 
+	wantStatus := buildStatusAllowlist(filter.Statuses)
+
 	var result []command.Entry
 	for _, e := range q.entries {
-		if e.DeviceID == targetID && !e.Status.IsTerminal() {
-			result = append(result, *e)
+		if e.Status.IsTerminal() {
+			continue
 		}
+		if filter.DeviceID != "" && e.DeviceID != filter.DeviceID {
+			continue
+		}
+		if wantStatus != nil && !slices.Contains(wantStatus, e.Status) {
+			continue
+		}
+		result = append(result, *e)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		return result[i].CreatedAt.Before(result[j].CreatedAt)
 	})
-	if limit > 0 && len(result) > limit {
-		result = result[:limit]
-	}
 	return result, nil
 }
 
-// ---------------------------------------------------------------------------
-// command.Reader implementation
-// ---------------------------------------------------------------------------
-
-// PendingCommands returns entries in StatusPending for the given device.
-func (q *InMemQueue) PendingCommands(_ context.Context, deviceID string) ([]command.Entry, error) {
-	q.mu.RLock()
-	defer q.mu.RUnlock()
-
-	var result []command.Entry
-	for _, e := range q.entries {
-		if e.DeviceID == deviceID && e.Status == command.StatusPending {
-			result = append(result, *e)
+// buildStatusAllowlist normalises the caller-supplied filter to the set of
+// non-terminal statuses we actually match against. Returns nil to mean
+// "all non-terminal" (cheaper than building a default list).
+func buildStatusAllowlist(in []command.Status) []command.Status {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]command.Status, 0, len(in))
+	for _, s := range in {
+		if !s.IsTerminal() {
+			out = append(out, s)
 		}
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].CreatedAt.Before(result[j].CreatedAt)
-	})
-	return result, nil
+	if len(out) == 0 {
+		// All requested statuses were terminal — caller asked for nothing.
+		// Return an empty (non-nil) slice so the filter rejects everything.
+		return []command.Status{}
+	}
+	return out
 }
 
 // GetCommand returns a single command by ID, or nil if not found.
@@ -341,7 +346,7 @@ func (q *InMemQueue) GetCommand(_ context.Context, id string) (*command.Entry, e
 }
 
 // ---------------------------------------------------------------------------
-// command.Writer implementation
+// command.Writer implementation (test fixture seeding)
 // ---------------------------------------------------------------------------
 
 // WriteCommand stores an entry directly (bypasses Enqueue validation).
@@ -353,25 +358,4 @@ func (q *InMemQueue) WriteCommand(_ context.Context, entry command.Entry) error 
 	cp := entry
 	q.entries[entry.ID] = &cp
 	return nil
-}
-
-// ---------------------------------------------------------------------------
-// command.StateAdvancer implementation
-// ---------------------------------------------------------------------------
-
-// AdvanceStatus fetches the entry, checks that current status equals from,
-// calls AdvanceCommand to apply side effects, and persists.
-func (q *InMemQueue) AdvanceStatus(_ context.Context, id string, from, to command.Status, now time.Time) error {
-	q.mu.Lock()
-	defer q.mu.Unlock()
-
-	e, ok := q.entries[id]
-	if !ok {
-		return errcode.New(errcode.ErrCommandNotFound, "commandtest: command not found: "+id)
-	}
-	if e.Status != from {
-		return errcode.New(errcode.ErrValidationFailed,
-			fmt.Sprintf("commandtest: optimistic lock: expected status %s, got %s", from, e.Status))
-	}
-	return command.AdvanceCommand(e, to, now)
 }

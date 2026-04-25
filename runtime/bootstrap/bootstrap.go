@@ -24,6 +24,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -114,13 +115,28 @@ func WithRouterOptions(opts ...router.Option) Option {
 	}
 }
 
-// WithTracer enables distributed tracing for HTTP requests. The tracer is
-// forwarded to the router's middleware chain via router.WithTracer.
+// WithTracer enables distributed tracing. The tracer is forwarded to
+// router.WithTracer (the single HTTP request span owner) and stored on
+// Bootstrap.wrapperTracer so eventrouter.ContractTracingMiddleware can create
+// consumer-side wrapper.WrapConsumer spans. Without this option, HTTP tracing
+// is disabled and WrapConsumer falls back to wrapper.NoopTracer{}; a slog.Warn
+// is emitted at bootstrap time so ops notice the silent degrade.
 //
 // ref: go-zero — observability configuration at app level
 func WithTracer(t tracing.Tracer) Option {
 	return func(b *Bootstrap) {
-		b.routerOpts = append(b.routerOpts, router.WithTracer(t))
+		b.routerOpts = append(b.routerOpts,
+			router.WithTracer(t),
+			// Skip span creation for canonical infra probe endpoints
+			// (/healthz, /readyz, /metrics) so high-rate liveness/readiness
+			// probes do not pollute trace storage. Pre-PR-A14b this was
+			// implicit because probe routes lived on the outer mux and
+			// bypassed Tracing entirely; with per-listener routers the
+			// HealthListener's full middleware chain runs, so we must
+			// install the filter explicitly here.
+			router.WithTracingOptions(middleware.WithProbeFilter(middleware.DefaultProbeFilter)),
+		)
+		b.wrapperTracer = t
 	}
 }
 
@@ -208,7 +224,7 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 // the primary listener. The verifier is wired into the PrimaryListener's
 // router at phase5 via router.WithAuthMiddleware.
 //
-// Public endpoints are declared via auth.Declare with Public:true inside each
+// Public endpoints are declared via auth.Mount with Public:true inside each
 // Cell's RouteGroups; Bootstrap's FinalizeAuth compiles them into the router's
 // auth predicates.
 //
@@ -332,26 +348,47 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 	if len(b.listenerConfigs) == 0 {
 		return fmt.Errorf("bootstrap: no HTTP listeners declared; use WithListener to declare at least one listener")
 	}
-	if len(b.duplicateListenerRefs) > 0 {
-		dups := make([]string, 0, len(b.duplicateListenerRefs))
-		seen := make(map[string]bool)
-		for _, ref := range b.duplicateListenerRefs {
-			name := ref.String()
-			if !seen[name] {
-				dups = append(dups, name)
-				seen[name] = true
-			}
-		}
-		sort.Strings(dups)
-		return fmt.Errorf("bootstrap: duplicate WithListener call(s) for ref(s): [%s]; each listener ref may only be declared once",
-			strings.Join(dups, ", "))
+	if err := b.validateNoDuplicateListenerRefs(); err != nil {
+		return err
 	}
 	for ref, cfg := range b.listenerConfigs {
 		if cfg.net == nil && cfg.addr == "" {
 			return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
 		}
+		if cfg.shutGrace < 0 {
+			return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v; use a non-negative duration or zero to inherit the global shutdownTimeout", ref.String(), cfg.shutGrace)
+		}
+	}
+	// B2: when a metrics handler is configured, a dedicated HealthListener must
+	// be declared so /metrics is isolated from the public primary listener.
+	if b.healthMetricsHandler != nil {
+		if _, ok := b.listenerConfigs[cell.HealthListener]; !ok {
+			return fmt.Errorf(
+				"bootstrap: WithHealthMetricsHandler requires a dedicated HealthListener; " +
+					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener")
+		}
 	}
 	return nil
+}
+
+// validateNoDuplicateListenerRefs returns an error when the same ListenerRef
+// was declared more than once via WithListener (CORR-02).
+func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
+	if len(b.duplicateListenerRefs) == 0 {
+		return nil
+	}
+	dups := make([]string, 0, len(b.duplicateListenerRefs))
+	seen := make(map[string]bool)
+	for _, ref := range b.duplicateListenerRefs {
+		name := ref.String()
+		if !seen[name] {
+			dups = append(dups, name)
+			seen[name] = true
+		}
+	}
+	sort.Strings(dups)
+	return fmt.Errorf("bootstrap: duplicate WithListener call(s) for ref(s): [%s]; each listener ref may only be declared once",
+		strings.Join(dups, ", "))
 }
 
 // WithAdapterInfo sets static adapter configuration metadata that is exposed
@@ -405,6 +442,22 @@ func WithEventRouterReadyTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
 		b.eventRouterReadyTimeoutSet = true
 		b.eventRouterReadyTimeout = d
+	}
+}
+
+// WithErrorRedactor installs a wrapper.ErrorRedactor that scrubs error text
+// before it reaches span.RecordError on HTTP request spans and consumer-side
+// CONSUME spans. A nil fn disables redaction (identity semantics).
+//
+// Use when strict source-side sanitisation is required (regulated
+// environments); otherwise leave unset and let the OTel span processor /
+// exporter filter handle scrubbing at export time.
+func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
+	return func(b *Bootstrap) {
+		if fn != nil {
+			b.errorRedactor = fn
+			b.routerOpts = append(b.routerOpts, router.WithTracingOptions(middleware.WithErrorRedactor(fn)))
+		}
 	}
 }
 
@@ -517,33 +570,36 @@ type namedChecker struct {
 
 // Bootstrap orchestrates the GoCell application lifecycle.
 type Bootstrap struct {
-	configPath                  string
-	envPrefix                   string
-	assembly                    *assembly.CoreAssembly
-	workers                     []worker.Worker
-	publisher                   outbox.Publisher
-	subscriber                  outbox.Subscriber
-	routerOpts                  []router.Option
-	authVerifier                auth.IntentTokenVerifier
-	authDiscovery               bool // true when WithAuthDiscovery was called
-	shutdownTimeout             time.Duration
-	preShutdownDelay            time.Duration
-	healthCheckers              []namedChecker
-	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
-	verboseToken                string            // token for /readyz?verbose access control
-	closers                     []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
-	disableObservabilityRestore bool
-	eventRouterReadyTimeout     time.Duration
-	eventRouterReadyTimeoutSet  bool
-	consumerMiddleware          []outbox.SubscriptionMiddleware
-	hookTimeout                 time.Duration // applied when assembly not pre-built
-	hookTimeoutSet              bool          // distinguishes zero-value "unset" from explicit zero
-	hookObserver                cell.LifecycleHookObserver
-	metricsProvider             kernelmetrics.Provider
-	httpCollector               metricsmiddleware.Collector // cached auto-wired HTTP collector (created once, shared across listeners)
-	shutdownMet                 *shutdownMetrics            // nil only when provider is nil
-	shutdownMetricsErr          error                       // non-nil when metric registration failed in New
-	runOnce                     sync.Once
+	configPath    string
+	envPrefix     string
+	assembly      *assembly.CoreAssembly
+	workers       []worker.Worker
+	publisher     outbox.Publisher
+	subscriber    outbox.Subscriber
+	routerOpts    []router.Option
+	authVerifier  auth.IntentTokenVerifier
+	authDiscovery bool // true when WithAuthDiscovery or PolicyJWTFromAssembly was called
+	// policyJWTFromAssemblyMismatch is set when PolicyJWTFromAssembly receives a
+	// different *assembly.CoreAssembly than WithAssembly. Surfaced by phase0.
+	policyJWTFromAssemblyMismatch error
+	shutdownTimeout               time.Duration
+	preShutdownDelay              time.Duration
+	healthCheckers                []namedChecker
+	adapterInfo                   map[string]string // static adapter metadata for /readyz verbose
+	verboseToken                  string            // token for /readyz?verbose access control
+	closers                       []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
+	disableObservabilityRestore   bool
+	eventRouterReadyTimeout       time.Duration
+	eventRouterReadyTimeoutSet    bool
+	consumerMiddleware            []outbox.SubscriptionMiddleware
+	hookTimeout                   time.Duration // applied when assembly not pre-built
+	hookTimeoutSet                bool          // distinguishes zero-value "unset" from explicit zero
+	hookObserver                  cell.LifecycleHookObserver
+	metricsProvider               kernelmetrics.Provider
+	httpCollector                 metricsmiddleware.Collector // cached auto-wired HTTP collector (created once, shared across listeners)
+	shutdownMet                   *shutdownMetrics            // nil only when provider is nil
+	shutdownMetricsErr            error                       // non-nil when metric registration failed in New
+	runOnce                       sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures
@@ -602,6 +658,17 @@ type Bootstrap struct {
 	// healthMetricsHandler is an optional http.Handler to mount at /metrics
 	// on the HealthListener. Set via WithHealthMetricsHandler.
 	healthMetricsHandler http.Handler
+
+	// wrapperTracer is the Tracer supplied via WithTracer. It is threaded into
+	// router.WithTracer (HTTP) and ContractTracingMiddleware (consumer) at
+	// phase6/phase7 construction. When nil, wrapper.HTTPHandler and
+	// wrapper.WrapConsumer each fall back to wrapper.NoopTracer{} at call
+	// time, and phase1 logs a slog.Warn so missing tracer wiring surfaces.
+	wrapperTracer tracing.Tracer
+
+	// errorRedactor (set via WithErrorRedactor) sanitises error text before
+	// it reaches span.RecordError on consumer spans. nil → identity.
+	errorRedactor wrapper.ErrorRedactor
 }
 
 // New creates a Bootstrap with the given options.

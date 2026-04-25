@@ -37,10 +37,12 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), nil, bootstrap.WithListenerNet(ln)),
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))))
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -56,11 +58,12 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 		}
 	})
 
-	addr := ln.Addr().String()
+	primaryAddr := ln.Addr().String()
+	healthAddr := healthLn.Addr().String()
 
-	// Wait until the server is healthy before firing measurement requests.
+	// Wait until the health listener is healthy before firing measurement requests.
 	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
+		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
 		if err != nil {
 			return false
 		}
@@ -68,15 +71,18 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 5*time.Second, 50*time.Millisecond, "bootstrap must become healthy before R2 assertions")
 
-	// Fire a request to /healthz — this traverses outerMux which includes the
-	// Metrics middleware wired by autoWireHTTPMetricsCollector. The request is
-	// counted against the Prometheus registry backing the auto-wired collector.
-	resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
+	// Fire a request to the primary listener — this traverses outerMux which
+	// includes the Metrics middleware wired by autoWireHTTPMetricsCollector. The
+	// request is counted against the Prometheus registry backing the auto-wired
+	// collector. Use /healthz on primary (fallback: not found, still traverses
+	// outerMux) — any path will trigger the Metrics middleware.
+	resp, err := http.Get("http://" + primaryAddr + "/healthz") //nolint:noctx
 	require.NoError(t, err)
 	resp.Body.Close()
 
-	// Scrape /metrics and verify http_requests_total is present.
-	metricsResp, err := http.Get("http://" + addr + "/metrics") //nolint:noctx
+	// Scrape /metrics from the HealthListener (B2: metrics are isolated on the
+	// dedicated health port, not the primary listener).
+	metricsResp, err := http.Get("http://" + healthAddr + "/metrics") //nolint:noctx
 	require.NoError(t, err)
 	defer metricsResp.Body.Close()
 	require.Equal(t, http.StatusOK, metricsResp.StatusCode,
