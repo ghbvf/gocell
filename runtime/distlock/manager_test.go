@@ -24,6 +24,21 @@ func waitPendingTimers(t *testing.T, fc *locktest.FakeClock, want int) {
 	}
 }
 
+// waitTrackedLocks spins until m.Snapshot().Locks >= want. Used after Acquire
+// to force a synchronization point: Acquire merely enqueues an eventAdd to
+// the manager goroutine, so without this barrier subsequent fc.Advance calls
+// can race ahead of handleAdd and capture a later nextRenew baseline.
+func waitTrackedLocks(t *testing.T, m *distlock.Manager, want int) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for m.Snapshot().Locks < want {
+		if time.Now().After(deadline) {
+			t.Fatalf("waitTrackedLocks: timed out waiting for %d tracked locks (got %d)", want, m.Snapshot().Locks)
+		}
+		runtime.Gosched()
+	}
+}
+
 // waitForRenewM waits until fd.Calls("Renew") >= want using RenewNotify.
 func waitForRenewM(t *testing.T, m *distlock.Manager, fd *locktest.FakeDriver, want int) {
 	t.Helper()
@@ -75,6 +90,11 @@ func TestManager_HeapOrder(t *testing.T) {
 	m := mgr(l)
 	<-m.Started()
 
+	// Synchronization barrier: both Acquires only enqueue eventAdd events. We
+	// need both handleAdd calls to land at fake-clock time 0 so key2.nextRenew
+	// is fixed at 5s (not at "time of first Advance" + 5s). Without this, the
+	// later phases assume a heap layout that may not hold.
+	waitTrackedLocks(t, m, 2)
 	// Wait for the manager to register the first timer (h[0]=key1, deadline 2s).
 	waitPendingTimers(t, fc, 1)
 
