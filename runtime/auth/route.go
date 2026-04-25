@@ -76,6 +76,13 @@ func Mount(mux cell.RouteHandler, r Route) {
 	if p, ok := mux.(cell.Prefixer); ok {
 		prefix = p.Prefix()
 	}
+	// Root prefix "/" is semantically identical to no prefix — chi mounted
+	// at root owns the whole tree, so contract paths are registered at
+	// their absolute form. Normalising here keeps isPathSegmentPrefix /
+	// stripMountPrefix free of a special case for "/".
+	if prefix == "/" {
+		prefix = ""
+	}
 	if prefix != "" && !isPathSegmentPrefix(r.Contract.Path, prefix) {
 		panic(fmt.Sprintf(
 			"auth.Mount %s %s: Contract.Path does not extend mux mount prefix %q — "+

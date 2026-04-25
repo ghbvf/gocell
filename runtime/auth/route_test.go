@@ -242,6 +242,17 @@ func TestStripMountPrefix_PathSegmentBoundary(t *testing.T) {
 			fullPath: "/api/v1/access/sessions/login",
 			want:     "/sessions/login",
 		},
+		{
+			// stripMountPrefix called directly with prefix "/" — isPathSegmentPrefix
+			// returns false (next char is 'a' not '/'), so the early return kicks
+			// in and the path is preserved unchanged. Documents the invariant
+			// that the helper itself does not need to special-case "/", because
+			// Mount normalises "/" → "" before reaching here.
+			name:     "root prefix is treated as no-op via isPathSegmentPrefix=false",
+			prefix:   "/",
+			fullPath: "/api/v1/x",
+			want:     "/api/v1/x",
+		},
 	}
 
 	for _, tc := range cases {
@@ -250,6 +261,28 @@ func TestStripMountPrefix_PathSegmentBoundary(t *testing.T) {
 			assert.Equal(t, tc.want, got)
 		})
 	}
+}
+
+// TestMount_AcceptsRootPrefix pins the F2 fix: a mux that reports
+// Prefix() == "/" must NOT trigger the prefix-mismatch panic. Root
+// prefix is normalised to no prefix, so contract paths are registered
+// at their absolute form (chi at root owns the whole tree).
+func TestMount_AcceptsRootPrefix(t *testing.T) {
+	mux := newPrefixedCaptureMux("/")
+	require.NotPanics(t, func() {
+		Mount(mux, Route{
+			Contract: wrapper.ContractSpec{
+				ID: "http.auth.login.v1", Kind: "http", Transport: "http",
+				Method: "POST", Path: "/api/v1/access/sessions/login",
+			},
+			Handler: noopHandler,
+			Public:  true,
+		})
+	})
+	require.Len(t, mux.metas, 1)
+	// Path is registered at its absolute form (no relative-path stripping
+	// for root mount).
+	assert.Equal(t, "/api/v1/access/sessions/login", mux.metas[0].Path)
 }
 
 func TestMount_PanicsOnPrefixMismatch(t *testing.T) {
