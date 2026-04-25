@@ -70,10 +70,23 @@ func runValidate(args []string) error {
 // and the dependency checker stop at the first SeverityError. When strict is
 // true, FMT-16/17 are appended only if the base pass finds no errors.
 //
-// Output rendering depends on the --format:
-//   - text: only the first error is shown (no banner, no summary). On clean
-//     runs, prints "OK: no errors." to keep the existing CI surface.
-//   - json / sarif: full document with one issue (or zero on success).
+// Output rendering depends on the --format and the run's outcome:
+//
+//   - errors present (any rule produced SeverityError): emit only the first
+//     error in text mode (single line, no banner, no summary); in
+//     json/sarif emit a full document containing that one issue.
+//   - no errors but warnings present: emit the full warning set via the
+//     printer's standard Print path. `ValidateFailFast` and `CheckFailFast`
+//     in kernel/governance explicitly preserve warnings on the clean-error
+//     path; dropping them at the command layer would silently hide
+//     warning-only repos.
+//   - no errors, no warnings: text emits the legacy "OK: no errors." line;
+//     json/sarif emit an empty document so consumers can always parse a
+//     result regardless of outcome.
+//
+// Printer write failures are returned as the command's error: a truncated
+// JSON / SARIF report is more dangerous than a missing one because CI
+// pipelines may still ingest it.
 func runValidateFailFast(
 	printer printers.Printer,
 	format string,
@@ -83,24 +96,45 @@ func runValidateFailFast(
 ) error {
 	valResults := runValidatorFailFast(validator, strict)
 	if firstErr := firstError(valResults); firstErr != nil {
-		emitFailFast(printer, format, valResults)
+		if err := emitFailFast(printer, format, valResults); err != nil {
+			return fmt.Errorf("emit results: %w", err)
+		}
 		return fmt.Errorf("validation failed: %s", firstErr.Code)
 	}
 	depResults := depChecker.CheckFailFast()
 	if firstErr := firstError(depResults); firstErr != nil {
-		emitFailFast(printer, format, depResults)
+		if err := emitFailFast(printer, format, depResults); err != nil {
+			return fmt.Errorf("emit results: %w", err)
+		}
 		return fmt.Errorf("validation failed: %s", firstErr.Code)
 	}
 
-	// Clean run. Text mode keeps the legacy single-line "OK" ack so existing
-	// scripts and the TestRunValidate_FailFast_NoErrors_PrintsOK contract
-	// remain green. Structured formats emit an empty document so consumers
-	// can always parse a result regardless of outcome.
-	if format == string(printers.FormatText) {
-		fmt.Println("OK: no errors.")
+	// No errors. Combine the validator and depcheck results so warnings from
+	// either accumulator are preserved.
+	allResults := append(valResults, depResults...)
+
+	if len(allResults) == 0 {
+		// Truly clean run. Text mode keeps the legacy single-line "OK"
+		// ack so existing scripts and TestRunValidate_FailFast_NoErrors_
+		// PrintsOK stay green. Structured formats still emit an empty
+		// document so consumers can parse a result regardless of outcome.
+		if format == string(printers.FormatText) {
+			fmt.Println("OK: no errors.")
+			return nil
+		}
+		if err := printer.Print(nil); err != nil {
+			return fmt.Errorf("emit results: %w", err)
+		}
 		return nil
 	}
-	return printer.Print(nil)
+
+	// Warnings only — emit them through the standard printer path so they
+	// reach CI / SARIF Explorer / jq just like in non-fail-fast runs. The
+	// short-circuit guarantee is "stop at first error", not "drop warnings".
+	if err := printer.Print(allResults); err != nil {
+		return fmt.Errorf("emit results: %w", err)
+	}
+	return nil
 }
 
 // emitFailFast renders the first error using the printer's fail-fast mode if
@@ -108,25 +142,17 @@ func runValidateFailFast(
 // fail-fast a single concept across all three formats while letting text
 // mode drop its banner / summary lines.
 //
-// Writer errors (closed pipe, full disk on a stdout redirect, etc.) are
-// surfaced to stderr — silently swallowing them previously meant CI saw
-// "no validation output" without explanation. The validation result itself
-// is still propagated by the caller via its returned error, so an output
-// failure is observable but does not mask the original validation outcome.
-func emitFailFast(printer printers.Printer, format string, results []governance.ValidationResult) {
-	var emitErr error
+// Writer errors are returned to the caller; the caller wraps them with an
+// "emit results:" prefix so the CLI's exit status reflects the output
+// failure rather than the validation outcome (which the caller could not
+// reliably report anyway when stdout is broken).
+func emitFailFast(printer printers.Printer, format string, results []governance.ValidationResult) error {
 	if format == string(printers.FormatText) {
 		if ff, ok := printer.(printers.FailFastPrinter); ok {
-			emitErr = ff.PrintFailFast(results)
-		} else {
-			emitErr = printer.Print([]governance.ValidationResult{*firstError(results)})
+			return ff.PrintFailFast(results)
 		}
-	} else {
-		emitErr = printer.Print([]governance.ValidationResult{*firstError(results)})
 	}
-	if emitErr != nil {
-		fmt.Fprintf(os.Stderr, "warning: failed to emit fail-fast result: %v\n", emitErr)
-	}
+	return printer.Print([]governance.ValidationResult{*firstError(results)})
 }
 
 // runValidatorFailFast selects the appropriate validator method for fail-fast mode.
