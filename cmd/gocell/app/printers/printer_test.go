@@ -625,6 +625,10 @@ func TestSARIF_NormalizeArtifactURI(t *testing.T) {
 		{"./cells/x.yaml", "cells/x.yaml"},
 		{"cells/a?b/file.yaml", "cells/a%3Fb/file.yaml"},
 		{"cells/a#b/file.yaml", "cells/a%23b/file.yaml"},
+		// Pre-existing percent signs are treated as literal path characters
+		// (input is a filesystem path, not an already-encoded URI).
+		// url.PathEscape escapes % to %25, producing double-encoding.
+		{"cells/has%20space/file.yaml", "cells/has%2520space/file.yaml"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -649,10 +653,10 @@ func TestSARIF_OriginalUriBaseIDsAlwaysPresent(t *testing.T) {
 	assert.True(t, ok, "originalUriBaseIds must contain the SRCROOT key")
 }
 
-// TestSARIF_ArtifactLocation_UsesURIBaseId verifies that every file-anchored
+// TestSARIF_ArtifactLocation_UsesURIBaseID verifies that every file-anchored
 // result carries uriBaseId="SRCROOT" in its artifactLocation, and that a
 // plain ASCII path is unchanged after normalization.
-func TestSARIF_ArtifactLocation_UsesURIBaseId(t *testing.T) {
+func TestSARIF_ArtifactLocation_UsesURIBaseID(t *testing.T) {
 	results := []governance.ValidationResult{
 		{
 			Code:     "REF-01",
@@ -670,7 +674,7 @@ func TestSARIF_ArtifactLocation_UsesURIBaseId(t *testing.T) {
 	require.Len(t, parsed.Runs[0].Results, 1)
 	require.Len(t, parsed.Runs[0].Results[0].Locations, 1)
 	loc := parsed.Runs[0].Results[0].Locations[0].PhysicalLocation.ArtifactLocation
-	assert.Equal(t, sarifSrcRootBaseID, loc.URIBaseId,
+	assert.Equal(t, sarifSrcRootBaseID, loc.URIBaseID,
 		"artifactLocation.uriBaseId must be SRCROOT")
 	assert.Equal(t, "cells/x/cell.yaml", loc.URI,
 		"plain ASCII path must be unchanged after normalization")

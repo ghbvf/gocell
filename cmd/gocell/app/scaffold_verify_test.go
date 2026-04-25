@@ -177,6 +177,8 @@ func TestNewVerifyPrinter_RejectsSARIF(t *testing.T) {
 	_, err := printers.NewVerifyPrinter("sarif", &buf)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "SARIF not supported")
+	assert.Contains(t, err.Error(), "test-execution outcomes",
+		"error must explain why SARIF is rejected so callers understand the constraint")
 }
 
 func TestNewVerifyPrinter_RejectsUnknown(t *testing.T) {

@@ -105,8 +105,8 @@ type sarifPhysicalLocation struct {
 }
 
 type sarifArtifactLocation struct {
-	URI       string `json:"uri"`
-	URIBaseId string `json:"uriBaseId,omitempty"`
+	URI       string `json:"uri,omitempty"`
+	URIBaseID string `json:"uriBaseId,omitempty"`
 }
 
 type sarifRegion struct {
@@ -205,7 +205,7 @@ func toSARIFResult(r governance.ValidationResult) sarifResult {
 			PhysicalLocation: sarifPhysicalLocation{
 				ArtifactLocation: sarifArtifactLocation{
 					URI:       normalizeArtifactURI(r.File),
-					URIBaseId: sarifSrcRootBaseID,
+					URIBaseID: sarifSrcRootBaseID,
 				},
 			},
 		}

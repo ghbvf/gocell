@@ -45,9 +45,7 @@
         }
       ],
       "originalUriBaseIds": {
-        "SRCROOT": {
-          "uri": ""
-        }
+        "SRCROOT": {}
       }
     }
   ]

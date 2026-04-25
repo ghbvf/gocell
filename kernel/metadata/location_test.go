@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -334,22 +335,9 @@ responses:
 	if err == nil {
 		t.Error("Find(responses[500]) err = nil, want mapping key not found error")
 	}
-	if err != nil && !containsSubstr(err.Error(), "mapping key [500] not found") {
+	if err != nil && !strings.Contains(err.Error(), "mapping key [500] not found") {
 		t.Errorf("Find(responses[500]) err = %v, want to contain %q", err, "mapping key [500] not found")
 	}
-}
-
-// containsSubstr is a tiny helper so location_test.go stays import-free from
-// testing packages that are unavailable in this file.
-func containsSubstr(s, sub string) bool {
-	return len(sub) == 0 || (len(s) >= len(sub) && func() bool {
-		for i := 0; i+len(sub) <= len(s); i++ {
-			if s[i:i+len(sub)] == sub {
-				return true
-			}
-		}
-		return false
-	}())
 }
 
 // TestFind_IdentNames accepts letters/digits/underscore/dash after first char.

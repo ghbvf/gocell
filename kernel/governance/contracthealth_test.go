@@ -356,7 +356,7 @@ func assertContractHealthIssues(t *testing.T, issues []ValidationResult, wantErr
 	for _, issue := range issues {
 		assert.Equal(t, SeverityError, issue.Severity,
 			"contract-health findings must be SeverityError")
-		assert.Contains(t, []string{"CH-01", "CH-02", "CH-03"}, issue.Code,
+		assert.Contains(t, []string{CodeContractHealthOwner, CodeContractHealthLifecycle, CodeContractHealthSchema}, issue.Code,
 			"contract-health code must be CH-* family")
 	}
 }

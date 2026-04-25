@@ -180,10 +180,3 @@ func printTargetList(label string, items []string) {
 		fmt.Printf("    - %s\n", item)
 	}
 }
-
-func formatTestList(tests []string) string {
-	if len(tests) == 0 {
-		return "(none)"
-	}
-	return strings.Join(tests, ", ")
-}

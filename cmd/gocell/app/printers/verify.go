@@ -19,7 +19,8 @@ type VerifyPrinter interface {
 
 // NewVerifyPrinter constructs the printer for the requested format. SARIF
 // is rejected explicitly because verify outcomes are not findings; falling
-// back silently to text would hide a misuse from CI consumers.
+// back silently to text would hide a misuse from CI consumers. An empty
+// format string is treated as text.
 func NewVerifyPrinter(format string, w io.Writer) (VerifyPrinter, error) {
 	switch Format(format) {
 	case FormatText, "":
