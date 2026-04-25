@@ -656,11 +656,13 @@ func (r *Router) FinalizeAuth() error {
 // separately to guide operators toward the correct setup.
 func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	slog.Warn("router: FinalizeAuth compiled route auth declarations but AuthMiddleware is not installed; Public/PasswordResetExempt matchers will have no effect",
+		slog.String("listener", r.ref.String()),
 		slog.Int("declared", len(r.declaredAuthMetas)))
 	if len(p.publicEntries) > 0 {
 		slog.Warn("router: Public:true routes declared on a listener with no JWT middleware; "+
 			"Public:true is a JWT exemption flag and has no effect without an auth verifier — "+
 			"use cell.NewAuthJWTFromAssembly(asm) as authChain in bootstrap.WithListener to install JWT auth",
+			slog.String("listener", r.ref.String()),
 			slog.Int("public_routes", len(p.publicEntries)))
 	}
 }
@@ -684,6 +686,11 @@ func (r *Router) verifyDelegatedConsistency() error {
 				"router: route %s %s (internal path) must be mounted on InternalListener (got %q); "+
 					"check the RouteGroup.Listener field",
 				m.Method, m.Path, r.ref.String())
+		}
+		if !m.IsInternal() && isInternal {
+			return fmt.Errorf(
+				"router %q: route %s %s mounted on internal listener but path lacks %s prefix",
+				r.ref, m.Method, m.Path, kcell.InternalPathPrefix)
 		}
 	}
 	return nil

@@ -28,8 +28,8 @@ var businessMethods = map[string]bool{
 }
 
 // verifyPolicyCoverage checks that every registered business route has an
-// auth declaration (via auth.Mount). Routes that are Public, Delegated,
-// or whitelisted are auto-exempted.
+// auth declaration (via auth.Mount). Routes that are Public, internal
+// (IsInternal()), or whitelisted are auto-exempted.
 //
 // Returns an error listing all uncovered routes. Intended to be called by
 // FinalizeAuth after all Cell RegisterRoutes calls have completed.
@@ -54,7 +54,7 @@ func verifyPolicyCoverage(
 	declaredMetas []kcell.AuthRouteMeta,
 	whitelist []string,
 ) error {
-	// Build declared set: any auth.Mount call (Public/Delegated/Policy) counts
+	// Build declared set: any auth.Mount call (Public/IsInternal()/Policy) counts
 	// as coverage. Keyed on "METHOD\x00/clean/path".
 	declared := make(map[string]bool, len(declaredMetas))
 	// Track GET declarations for HEAD auto-coverage (RFC 7231 §4.3.2).

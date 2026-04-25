@@ -18,6 +18,11 @@ import (
 	"github.com/ghbvf/gocell/tools/nogo/unconditionalskip"
 )
 
+// checkL0NonL0SkipMsg is the message printed when --cell targets a non-L0 cell.
+// Extracted as a constant so tests can assert against it without brittle substring matching.
+// Format args: (cellID, consistencyLevel).
+const checkL0NonL0SkipMsg = "cell %q is %s (not L0); l0-imports check skipped"
+
 // runCheck implements:
 //
 //	gocell check contract-health [--format text|json|sarif]
@@ -194,15 +199,27 @@ func checkSliceCoverage(args []string) error {
 	}
 
 	var results []governance.ValidationResult
+	cellCount := 0
+	sliceCount := 0
 	if *cellID != "" {
+		cellCount = 1
+		// Count slices for this cell.
+		for _, sl := range project.Slices {
+			if sl.BelongsToCell == *cellID {
+				sliceCount++
+			}
+		}
 		results = sliceCoverageForCell(root, project, *cellID)
 	} else {
+		cellCount = len(project.Cells)
+		sliceCount = len(project.Slices)
 		for cid := range project.Cells {
 			results = append(results, sliceCoverageForCell(root, project, cid)...)
 		}
 	}
 
-	return printAndCheck(*format, results, "slice-coverage", "PASS: slice coverage OK")
+	return printAndCheck(*format, results, "slice-coverage",
+		fmt.Sprintf("PASS: slice coverage OK (checked %d slices across %d cells)", sliceCount, cellCount))
 }
 
 // sliceCoverageForCell runs the slice-coverage checks for a single cell.
@@ -367,19 +384,23 @@ func checkJourneyReadiness(args []string) error {
 	statusCount := buildStatusCount(project)
 
 	var results []governance.ValidationResult
+	journeyCount := 0
 	if *journeyID != "" {
 		jm, ok := project.Journeys[*journeyID]
 		if !ok {
 			return fmt.Errorf("journey %q not found", *journeyID)
 		}
+		journeyCount = 1
 		results = journeyReadinessFor(jm, project, statusCount)
 	} else {
+		journeyCount = len(project.Journeys)
 		for _, jm := range project.Journeys {
 			results = append(results, journeyReadinessFor(jm, project, statusCount)...)
 		}
 	}
 
-	return printAndCheck(*format, results, "journey-readiness", "PASS: journey readiness OK")
+	return printAndCheck(*format, results, "journey-readiness",
+		fmt.Sprintf("PASS: journey readiness OK (checked %d journeys)", journeyCount))
 }
 
 // buildStatusCount builds a map of journeyID → count of status-board entries.
@@ -482,32 +503,46 @@ func checkL0Imports(args []string) error {
 		return fmt.Errorf("metadata parse: %w", err)
 	}
 
-	var results []governance.ValidationResult
 	if *cellID != "" {
-		cm, ok := project.Cells[*cellID]
-		if !ok {
-			return fmt.Errorf("cell %q not found in project metadata", *cellID)
+		return checkL0ImportsForSingleCell(root, project, *cellID, *format)
+	}
+	return checkL0ImportsForAllCells(root, project, *format)
+}
+
+// checkL0ImportsForSingleCell runs l0-imports for a single named cell.
+func checkL0ImportsForSingleCell(root string, project *metadata.ProjectMeta, cellID, format string) error {
+	cm, ok := project.Cells[cellID]
+	if !ok {
+		return fmt.Errorf("cell %q not found in project metadata", cellID)
+	}
+	if cm.ConsistencyLevel != "L0" {
+		if format == string(printers.FormatText) {
+			fmt.Printf(checkL0NonL0SkipMsg+"\n", cellID, cm.ConsistencyLevel)
 		}
-		if cm.ConsistencyLevel != "L0" {
-			fmt.Printf("cell %q is %s (not L0); l0-imports check skipped\n", *cellID, cm.ConsistencyLevel)
-			return nil
-		}
-		results = l0ImportsForCell(root, cm)
-	} else {
-		l0Count := 0
-		for _, cm := range project.Cells {
-			if cm.ConsistencyLevel == "L0" {
-				l0Count++
-				results = append(results, l0ImportsForCell(root, cm)...)
-			}
-		}
-		if l0Count == 0 {
-			fmt.Println("checked 0 L0 cells, 0 issues")
-			return nil
+		return nil
+	}
+	results := l0ImportsForCell(root, cm)
+	return printAndCheck(format, results, "l0-imports", "PASS: L0 import declarations OK (checked 1 L0 cells)")
+}
+
+// checkL0ImportsForAllCells runs l0-imports across all L0 cells in the project.
+func checkL0ImportsForAllCells(root string, project *metadata.ProjectMeta, format string) error {
+	var results []governance.ValidationResult
+	l0Count := 0
+	for _, cm := range project.Cells {
+		if cm.ConsistencyLevel == "L0" {
+			l0Count++
+			results = append(results, l0ImportsForCell(root, cm)...)
 		}
 	}
-
-	return printAndCheck(*format, results, "l0-imports", "PASS: L0 import declarations OK")
+	if l0Count == 0 {
+		if format == string(printers.FormatText) {
+			fmt.Println("checked 0 L0 cells, 0 issues")
+		}
+		return nil
+	}
+	return printAndCheck(format, results, "l0-imports",
+		fmt.Sprintf("PASS: L0 import declarations OK (checked %d L0 cells)", l0Count))
 }
 
 // l0ImportsForCell runs all L0 import checks for a single cell.
@@ -525,10 +560,16 @@ func l0ImportsForCell(root string, cm *metadata.CellMeta) []governance.Validatio
 		})
 	}
 
-	imported, loadResults := loadCellImports(root, cm)
+	imported, loadResults, fatalLoad := loadCellImports(root, cm)
 	results = append(results, loadResults...)
-	if loadResults != nil {
-		return results // load failed; skip diff checks
+	if fatalLoad {
+		return results // packages.Load failed; skip diff checks
+	}
+
+	// Fix 2.5: if no l0Dependencies declared, skip undeclared/dangling checks
+	// to avoid noisy false positives.
+	if len(declaredDeps) == 0 {
+		return results
 	}
 
 	results = append(results, l0UndeclaredImports(cm, imported, declaredDeps)...)
@@ -546,8 +587,10 @@ func buildDeclaredDeps(cm *metadata.CellMeta) map[string]bool {
 }
 
 // loadCellImports loads packages in the cell directory and returns the set of
-// imported sibling cell IDs. Returns (nil, violations) on load error.
-func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult) {
+// imported sibling cell IDs. The third return value is true when packages.Load
+// itself fails (fatal — no import data available); per-package errors are
+// returned as warning ValidationResults but the import map is still populated.
+func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []governance.ValidationResult, bool) {
 	const cellsImportPrefix = "github.com/ghbvf/gocell/cells/"
 	cfg := &packages.Config{
 		Mode: packages.NeedName | packages.NeedImports,
@@ -556,16 +599,28 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 	pkgs, err := packages.Load(cfg, "./...")
 	if err != nil {
 		return nil, []governance.ValidationResult{{
-			Code:      "CHECK-L0-MISSING-L0DEPS",
+			Code:      "CHECK-L0-LOAD-ERROR",
 			Severity:  governance.SeverityWarning,
 			IssueType: governance.IssueInvalid,
 			Scope:     "l0-imports",
 			Message:   fmt.Sprintf("L0 cell %q: package load error: %v", cm.ID, err),
-		}}
+		}}, true
 	}
 
+	var loadErrs []governance.ValidationResult
 	imported := make(map[string]bool)
 	for _, pkg := range pkgs {
+		if len(pkg.Errors) > 0 {
+			for _, pe := range pkg.Errors {
+				loadErrs = append(loadErrs, governance.ValidationResult{
+					Code:      "CHECK-L0-LOAD-ERROR",
+					Severity:  governance.SeverityWarning,
+					IssueType: governance.IssueInvalid,
+					Scope:     "l0-imports",
+					Message:   fmt.Sprintf("L0 cell %q: package %q load error: %v", cm.ID, pkg.PkgPath, pe),
+				})
+			}
+		}
 		for importPath := range pkg.Imports {
 			after, ok := strings.CutPrefix(importPath, cellsImportPrefix)
 			if !ok {
@@ -577,7 +632,7 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 			}
 		}
 	}
-	return imported, nil
+	return imported, loadErrs, false
 }
 
 // l0UndeclaredImports finds imported cells not declared as L0 dependencies.

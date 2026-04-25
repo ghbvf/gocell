@@ -11,12 +11,13 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// --- FMT-RESPONSE-STRICT-01 ---
+// --- FMT-20 (formerly FMT-RESPONSE-STRICT-01) ---
 
 // validateFMTResponseStrict01 scans every HTTP-kind contract's request/response
 // JSON schemas. For each "type":"object" node in the schema (recursive), if it
 // lacks "additionalProperties": false, a violation is emitted.
 //
+// Rule ID: FMT-20.
 // Severity: Error, IssueRequired.
 // ref: k8s.io/apiserver admission/plugin/schema — strict schema validation pattern.
 func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
@@ -34,7 +35,7 @@ func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
 			}
 			for _, loc := range missing {
 				results = append(results, v.newResult(
-					"FMT-RESPONSE-STRICT-01", SeverityError, IssueRequired,
+					"FMT-20", SeverityError, IssueRequired,
 					schemaRef, loc,
 					fmt.Sprintf("contract %q schema must declare additionalProperties:false at %s", c.ID, loc),
 				))
@@ -79,45 +80,65 @@ func scanSchemaForStrictMissing(absPath string) ([]string, error) {
 // type (map with "type":"object"), it checks for additionalProperties:false and
 // recurses into "properties" and "items".
 func walkSchemaObject(node map[string]any, path string, missing *[]string) {
+	walkSchemaObjectDepth(node, path, missing, 0)
+}
+
+// walkSchemaObjectDepth is the depth-guarded implementation of walkSchemaObject.
+// depth > 32 causes early return to prevent unbounded recursion on pathological schemas.
+//
+// For "type":"object" nodes: checks additionalProperties and recurses into properties.
+// For any node with an "items" sub-schema (including "type":"array" nodes): recurses
+// into items so that array-typed properties with object items are also validated.
+func walkSchemaObjectDepth(node map[string]any, path string, missing *[]string, depth int) {
+	if depth > 32 {
+		return
+	}
 	typVal, _ := node["type"].(string)
 	if typVal == "object" {
 		checkAdditionalProperties(node, path, missing)
-		walkSchemaProperties(node, path, missing)
+		walkSchemaPropertiesDepth(node, path, missing, depth+1)
 	}
-	walkSchemaItems(node, path, missing)
+	// Always recurse into items (covers "type":"array" nodes whose items is an object).
+	walkSchemaItemsDepth(node, path, missing, depth+1)
 }
 
-// checkAdditionalProperties emits a violation when the node lacks
-// "additionalProperties": false.
+// checkAdditionalProperties emits a violation when the node lacks exactly
+// "additionalProperties": false. An object value (e.g. {"type":"string"}) is
+// treated as missing — only bool(false) is accepted.
 func checkAdditionalProperties(node map[string]any, path string, missing *[]string) {
 	ap, hasAP := node["additionalProperties"]
-	if !hasAP || ap != false {
+	if !hasAP {
+		*missing = append(*missing, path)
+		return
+	}
+	b, ok := ap.(bool)
+	if !ok || b {
 		*missing = append(*missing, path)
 	}
 }
 
-// walkSchemaProperties recurses into the "properties" sub-map of a schema object node.
-func walkSchemaProperties(node map[string]any, path string, missing *[]string) {
+// walkSchemaPropertiesDepth is the depth-guarded implementation for recursing into properties.
+func walkSchemaPropertiesDepth(node map[string]any, path string, missing *[]string, depth int) {
 	props, ok := node["properties"].(map[string]any)
 	if !ok {
 		return
 	}
 	for key, val := range props {
 		if child, ok := val.(map[string]any); ok {
-			walkSchemaObject(child, path+"."+key, missing)
+			walkSchemaObjectDepth(child, path+"."+key, missing, depth)
 		}
 	}
 }
 
-// walkSchemaItems recurses into the "items" sub-schema when it describes an object.
-func walkSchemaItems(node map[string]any, path string, missing *[]string) {
+// walkSchemaItemsDepth is the depth-guarded implementation for recursing into items.
+func walkSchemaItemsDepth(node map[string]any, path string, missing *[]string, depth int) {
 	items, ok := node["items"].(map[string]any)
 	if ok {
-		walkSchemaObject(items, path+".items", missing)
+		walkSchemaObjectDepth(items, path+".items", missing, depth)
 	}
 }
 
-// --- FMT-CONTRACT-DIR-ID-MATCH-01 ---
+// --- FMT-21 (formerly FMT-CONTRACT-DIR-ID-MATCH-01) ---
 
 // validateFMTContractDirIDMatch01 checks that every contract's Dir matches the
 // directory derived from its ID. For example, "http.auth.login.v1" must live at
@@ -131,7 +152,6 @@ func walkSchemaItems(node map[string]any, path string, missing *[]string) {
 // Severity: Error, IssueMismatch.
 func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
 	var results []ValidationResult
-	contractsSep := "contracts" + string(filepath.Separator)
 	for _, c := range v.project.Contracts {
 		if c.Dir == "" {
 			continue
@@ -139,23 +159,30 @@ func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
 		derived := filepath.Clean(contractDirFromID(c.ID)) // e.g. "contracts/http/auth/login/v1"
 		actualClean := filepath.Clean(c.Dir)
 
-		// Find the last occurrence of "contracts/" within the actual dir so that
-		// paths like "examples/iotdevice/contracts/http/foo/v1" match the same
-		// derived suffix as a top-level "contracts/http/foo/v1".
-		idx := strings.LastIndex(actualClean, contractsSep)
-		if idx < 0 {
-			// No "contracts/" segment anywhere → definite mismatch.
+		// Find the last path segment equal to "contracts" so that paths like
+		// "examples/iotdevice/contracts/http/foo/v1" match the same derived suffix
+		// as a top-level "contracts/http/foo/v1". Use segment-aware matching to
+		// avoid matching "mycontracts/" as if it were a "contracts/" root.
+		parts := strings.Split(filepath.ToSlash(actualClean), "/")
+		lastIdx := -1
+		for i, p := range parts {
+			if p == "contracts" {
+				lastIdx = i
+			}
+		}
+		if lastIdx < 0 {
+			// No "contracts" segment anywhere → definite mismatch.
 			results = append(results, v.newResult(
-				"FMT-CONTRACT-DIR-ID-MATCH-01", SeverityError, IssueMismatch,
+				"FMT-21", SeverityError, IssueMismatch,
 				contractFile(c), "id",
 				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
 			))
 			continue
 		}
-		actualSuffix := actualClean[idx:] // "contracts/http/auth/login/v1"
+		actualSuffix := filepath.Join(parts[lastIdx:]...) // "contracts/http/auth/login/v1"
 		if actualSuffix != derived {
 			results = append(results, v.newResult(
-				"FMT-CONTRACT-DIR-ID-MATCH-01", SeverityError, IssueMismatch,
+				"FMT-21", SeverityError, IssueMismatch,
 				contractFile(c), "id",
 				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
 			))
@@ -164,7 +191,7 @@ func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
 	return results
 }
 
-// --- STATUSBOARD-STATE-ENUM-01 ---
+// --- FMT-22 (formerly STATUSBOARD-STATE-ENUM-01) ---
 
 // validStatusBoardStates contains the accepted state values for status-board entries.
 var validStatusBoardStates = map[string]bool{
@@ -182,7 +209,7 @@ func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
 	for i, e := range v.project.StatusBoard {
 		if !validStatusBoardStates[e.State] {
 			results = append(results, v.newResult(
-				"STATUSBOARD-STATE-ENUM-01", SeverityError, IssueInvalid,
+				"FMT-22", SeverityError, IssueInvalid,
 				"journeys/status-board.yaml",
 				fmt.Sprintf("[%d].state", i),
 				fmt.Sprintf(
@@ -195,7 +222,7 @@ func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
 	return results
 }
 
-// --- CONTRACT-DEPRECATED-CLEANUP-01 ---
+// --- FMT-23 (formerly CONTRACT-DEPRECATED-CLEANUP-01) ---
 
 // validateContractDeprecatedCleanup01 enforces that deprecated contracts carry a
 // valid deprecatedAt date and are not stale (>90 days since deprecation).
@@ -213,24 +240,24 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 		}
 		if c.DeprecatedAt == "" {
 			results = append(results, v.newResult(
-				"CONTRACT-DEPRECATED-CLEANUP-01", SeverityError, IssueRequired,
+				"FMT-23", SeverityError, IssueRequired,
 				contractFile(c), "deprecatedAt",
 				fmt.Sprintf("contract %q is deprecated but missing deprecatedAt", c.ID),
 			))
 			continue
 		}
-		ts, err := time.Parse("2006-01-02", c.DeprecatedAt)
+		ts, err := time.ParseInLocation("2006-01-02", c.DeprecatedAt, time.UTC)
 		if err != nil {
 			results = append(results, v.newResult(
-				"CONTRACT-DEPRECATED-CLEANUP-01", SeverityError, IssueInvalid,
+				"FMT-23", SeverityError, IssueInvalid,
 				contractFile(c), "deprecatedAt",
 				fmt.Sprintf("contract %q deprecatedAt %q is not YYYY-MM-DD", c.ID, c.DeprecatedAt),
 			))
 			continue
 		}
-		if now.Sub(ts) > 90*24*time.Hour {
+		if now.UTC().Sub(ts) > 90*24*time.Hour {
 			results = append(results, v.newResult(
-				"CONTRACT-DEPRECATED-CLEANUP-01", SeverityWarning, IssueForbidden,
+				"FMT-23", SeverityWarning, IssueForbidden,
 				contractFile(c), "lifecycle",
 				fmt.Sprintf(
 					"contract %q has been deprecated for >90d (since %s); remove or extend",

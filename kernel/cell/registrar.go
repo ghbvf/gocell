@@ -155,6 +155,9 @@ const InternalPathPrefix = "/internal/v1/"
 
 // IsInternal reports whether this route lives on the internal listener,
 // derived from the URL path prefix. Replaces the former Delegated flag.
+//
+// The authoring invariant (only InternalListener routes may begin with
+// InternalPathPrefix) is enforced by FinalizeAuth in runtime/http/router.
 func (m AuthRouteMeta) IsInternal() bool {
 	return strings.HasPrefix(m.Path, InternalPathPrefix)
 }

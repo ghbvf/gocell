@@ -153,7 +153,7 @@ FMT-13 治理规则（PR-A9）：
 | `command` | `handler` | `invokers` |
 | `projection` | `provider` | `readers` |
 
-生命周期：`draft → active → deprecated`，单向不可逆。
+生命周期：`draft → active → deprecated`，单向不可逆。contracts 标记为 `lifecycle: deprecated` 时**必须**同时设置 `deprecatedAt: YYYY-MM-DD`（弃用日期）。由规则 `FMT-23` 强制检查；弃用超过 90 天的条目产生 warning。
 
 Event 额外必填：`replayable`、`idempotencyKey`、`deliverySemantics`。
 Projection 额外必填：`replayable`。

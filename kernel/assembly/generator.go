@@ -12,7 +12,9 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"sort"
+	"strconv"
 	"text/template"
 	"time"
 
@@ -103,7 +105,7 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	fingerprint := g.sourceFingerprint(assemblyID, exported, imported)
 
 	ctx := boundaryContext{
-		GeneratedAt:       time.Now().UTC().Format(time.RFC3339),
+		GeneratedAt:       sourceDateEpochOrNow(),
 		Fingerprint:       fingerprint,
 		AssemblyID:        assemblyID,
 		ExportedContracts: exported,
@@ -112,6 +114,19 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	}
 
 	return g.executeTemplate("boundary.yaml.tpl", ctx)
+}
+
+// sourceDateEpochOrNow returns a deterministic RFC3339 timestamp when the
+// SOURCE_DATE_EPOCH environment variable is set (Unix seconds), otherwise
+// returns the current UTC time. This enables reproducible builds.
+// ref: https://reproducible-builds.org/docs/source-date-epoch/
+func sourceDateEpochOrNow() string {
+	if v := os.Getenv("SOURCE_DATE_EPOCH"); v != "" {
+		if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
+			return time.Unix(secs, 0).UTC().Format(time.RFC3339)
+		}
+	}
+	return time.Now().UTC().Format(time.RFC3339)
 }
 
 // computeBoundaryContracts determines which contracts cross the assembly boundary.

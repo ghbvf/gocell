@@ -442,6 +442,38 @@ func TestFinalizeAuth_NoVerifier_LogsWarning(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
+// verifyDelegatedConsistency: bidirectional listener consistency
+// ---------------------------------------------------------------------------
+
+// TestFinalizeAuth_RejectsInternalPathOnPrimaryListener is a regression guard:
+// an /internal/v1/* path mounted on PrimaryListener must fail fast.
+func TestFinalizeAuth_RejectsInternalPathOnPrimaryListener(t *testing.T) {
+	r, err := NewForListener(kcell.PrimaryListener)
+	require.NoError(t, err)
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/admin/cmd",
+	})
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject /internal/v1/* on PrimaryListener")
+	assert.Contains(t, err.Error(), "internal", "error must mention 'internal'")
+}
+
+// TestFinalizeAuth_RejectsNonInternalPathOnInternalListener ensures the inverse:
+// a non-/internal/v1/* path must not be mounted on InternalListener.
+func TestFinalizeAuth_RejectsNonInternalPathOnInternalListener(t *testing.T) {
+	r, err := NewForListener(kcell.InternalListener)
+	require.NoError(t, err)
+	r.DeclareAuthMeta(kcell.AuthRouteMeta{
+		Method: "GET",
+		Path:   "/api/v1/items",
+	})
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject non-/internal/v1/* path on InternalListener")
+	assert.Contains(t, err.Error(), "internal listener", "error must mention 'internal listener'")
+}
+
+// ---------------------------------------------------------------------------
 // Policy coverage verification tests
 // ---------------------------------------------------------------------------
 

@@ -9,7 +9,9 @@ exclude:
   - docs/reviews/**
   - docs/plans/**
   - docs/architecture/naming-guard.yaml
+  # docs/bak/** — archived drafts; backtick-boundary false positives
   - docs/bak/**
+  # docs/backlog.md — inline code snippets trigger replacements
   - docs/backlog.md
 replacements:
   - literal: access-core

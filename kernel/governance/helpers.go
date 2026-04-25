@@ -66,6 +66,9 @@ func contractConsumers(c *metadata.ContractMeta) []string {
 
 // --- file path helpers ---
 
+// cellFile returns the YAML file path for the cell metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
 func cellFile(c *metadata.CellMeta) string {
 	if c == nil {
 		return ""
@@ -73,6 +76,9 @@ func cellFile(c *metadata.CellMeta) string {
 	return c.File
 }
 
+// sliceFile returns the YAML file path for the slice metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
 func sliceFile(s *metadata.SliceMeta) string {
 	if s == nil {
 		return ""
@@ -80,6 +86,9 @@ func sliceFile(s *metadata.SliceMeta) string {
 	return s.File
 }
 
+// contractFile returns the YAML file path for the contract metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
 func contractFile(c *metadata.ContractMeta) string {
 	if c == nil {
 		return ""
@@ -87,6 +96,9 @@ func contractFile(c *metadata.ContractMeta) string {
 	return c.File
 }
 
+// journeyFile returns the YAML file path for the journey metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
 func journeyFile(j *metadata.JourneyMeta) string {
 	if j == nil {
 		return ""
@@ -94,6 +106,9 @@ func journeyFile(j *metadata.JourneyMeta) string {
 	return j.File
 }
 
+// assemblyFile returns the YAML file path for the assembly metadata entity.
+// Returns "" if the input is nil; callers are responsible for checking nil if
+// a file path is required for the violation report.
 func assemblyFile(a *metadata.AssemblyMeta) string {
 	if a == nil {
 		return ""
@@ -101,9 +116,11 @@ func assemblyFile(a *metadata.AssemblyMeta) string {
 	return a.File
 }
 
-// contractFileFromID returns the expected contract.yaml path for a contract ID
-// even when the contract entity is missing from ProjectMeta. Used by REF-* rules
-// that report dangling references.
+// contractFileFromID returns the expected contract.yaml path derived from the
+// contract ID, used when the contract entity is absent from ProjectMeta (i.e.
+// the ID is a dangling reference). Use contractFile(c) when the entity exists;
+// the two may differ for example projects where contracts live under
+// examples/<X>/contracts/.
 func contractFileFromID(id string) string {
 	return filepath.Join(contractDirFromID(id), "contract.yaml")
 }
@@ -116,11 +133,11 @@ func contractDirFromID(id string) string {
 }
 
 func contractDirFromMeta(c *metadata.ContractMeta) string {
-	if c != nil && c.Dir != "" {
-		return c.Dir
-	}
 	if c == nil {
 		return ""
+	}
+	if c.Dir != "" {
+		return c.Dir
 	}
 	return contractDirFromID(c.ID)
 }

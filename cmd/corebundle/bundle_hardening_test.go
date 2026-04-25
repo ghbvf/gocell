@@ -16,7 +16,7 @@ import (
 // TestBundle_NoBusinessPathLiterals locks in the F3 invariant: the composition
 // roots (cmd/*/bundle.go, cmd/*/main.go, examples/*/main.go) must not
 // hard-code cell-owned business paths like "POST /api/v1/access/sessions/login".
-// Each route's Public / PasswordResetExempt / Delegated attributes are owned
+// Each route's Public / PasswordResetExempt / IsInternal() attributes are owned
 // by the declaring Cell via auth.Mount; the composition root only wires the
 // listener policy (PolicyJWTFromAssembly on PrimaryListener post-F3 round-3).
 //

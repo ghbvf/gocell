@@ -12,11 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- FMT-RESPONSE-STRICT-01 ---
+// --- FMT-20 (HTTP schema strict additionalProperties) ---
 
 // TestFMTResponseStrict01_TopLevelMissingAdditionalProperties tests that
-// FMT-RESPONSE-STRICT-01 fires when a top-level object in a schema lacks
-// additionalProperties:false.
+// FMT-20 fires when a top-level object in a schema lacks additionalProperties:false.
 func TestFMTResponseStrict01_TopLevelMissingAdditionalProperties(t *testing.T) {
 	// Build a temp dir with two schema files:
 	// 1. response.schema.json: top-level object missing additionalProperties
@@ -70,13 +69,13 @@ func TestFMTResponseStrict01_TopLevelMissingAdditionalProperties(t *testing.T) {
 	v := NewValidator(pm, dir)
 	results := v.Validate()
 
-	matches := findByCode(results, "FMT-RESPONSE-STRICT-01")
+	matches := findByCode(results, "FMT-20")
 	// Should fire for:
 	// - top-level of response.schema.json ("$")
 	// - nested $.data object
 	// Total: 2 violations
 	assert.Len(t, matches, 2,
-		"expected 2 FMT-RESPONSE-STRICT-01 violations (top-level + nested data), got %d: %v",
+		"expected 2 FMT-20 violations (top-level + nested data), got %d: %v",
 		len(matches), matches)
 	for _, r := range matches {
 		assert.Equal(t, SeverityError, r.Severity)
@@ -128,8 +127,8 @@ func TestFMTResponseStrict01_CleanSchema(t *testing.T) {
 
 	v := NewValidator(pm, dir)
 	results := v.Validate()
-	matches := findByCode(results, "FMT-RESPONSE-STRICT-01")
-	assert.Empty(t, matches, "clean schema should produce no FMT-RESPONSE-STRICT-01 violations")
+	matches := findByCode(results, "FMT-20")
+	assert.Empty(t, matches, "clean schema should produce no FMT-20 violations")
 }
 
 // TestFMTResponseStrict01_NonHTTPContractIgnored verifies that non-HTTP
@@ -158,14 +157,14 @@ func TestFMTResponseStrict01_NonHTTPContractIgnored(t *testing.T) {
 
 	v := NewValidator(pm, dir)
 	results := v.Validate()
-	matches := findByCode(results, "FMT-RESPONSE-STRICT-01")
-	assert.Empty(t, matches, "non-HTTP contract should not be scanned by FMT-RESPONSE-STRICT-01")
+	matches := findByCode(results, "FMT-20")
+	assert.Empty(t, matches, "non-HTTP contract should not be scanned by FMT-20")
 }
 
-// --- FMT-CONTRACT-DIR-ID-MATCH-01 ---
+// --- FMT-21 (contract dir ↔ ID match) ---
 
 // TestFMTContractDirIDMatch01_Mismatch verifies that a contract whose Dir does
-// not match the ID-derived path emits a FMT-CONTRACT-DIR-ID-MATCH-01 violation.
+// not match the ID-derived path emits a FMT-21 violation.
 func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -214,7 +213,7 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 
 			v := NewValidator(pm, "")
 			results := v.Validate()
-			matches := findByCode(results, "FMT-CONTRACT-DIR-ID-MATCH-01")
+			matches := findByCode(results, "FMT-21")
 			assert.Len(t, matches, tc.wantCount,
 				"test %q: expected %d violations, got %d: %v",
 				tc.name, tc.wantCount, len(matches), matches)
@@ -279,7 +278,7 @@ func TestFMTContractDirIDMatch01_ExamplesPrefix(t *testing.T) {
 
 			v := NewValidator(pm, "")
 			results := v.Validate()
-			matches := findByCode(results, "FMT-CONTRACT-DIR-ID-MATCH-01")
+			matches := findByCode(results, "FMT-21")
 			assert.Len(t, matches, tc.wantCount,
 				"test %q: expected %d violations, got %d: %v",
 				tc.name, tc.wantCount, len(matches), matches)
@@ -287,7 +286,7 @@ func TestFMTContractDirIDMatch01_ExamplesPrefix(t *testing.T) {
 	}
 }
 
-// --- STATUSBOARD-STATE-ENUM-01 ---
+// --- FMT-22 (status-board state enum) ---
 
 // TestStatusBoardStateEnum01 verifies that invalid state values are flagged.
 func TestStatusBoardStateEnum01(t *testing.T) {
@@ -341,7 +340,7 @@ func TestStatusBoardStateEnum01(t *testing.T) {
 
 			v := NewValidator(pm, "")
 			results := v.Validate()
-			matches := findByCode(results, "STATUSBOARD-STATE-ENUM-01")
+			matches := findByCode(results, "FMT-22")
 			assert.Len(t, matches, tc.wantCount,
 				"test %q: expected %d violations, got %d: %v",
 				tc.name, tc.wantCount, len(matches), matches)
@@ -352,7 +351,7 @@ func TestStatusBoardStateEnum01(t *testing.T) {
 	}
 }
 
-// --- CONTRACT-DEPRECATED-CLEANUP-01 ---
+// --- FMT-23 (contract deprecated cleanup) ---
 
 // TestContractDeprecatedCleanup01 verifies the three deprecation violation cases.
 func TestContractDeprecatedCleanup01(t *testing.T) {
@@ -423,7 +422,7 @@ func TestContractDeprecatedCleanup01(t *testing.T) {
 
 			v := NewValidator(pm, "")
 			results := v.Validate()
-			matches := findByCode(results, "CONTRACT-DEPRECATED-CLEANUP-01")
+			matches := findByCode(results, "FMT-23")
 			require.Len(t, matches, tc.wantCount,
 				"test %q: expected %d violations, got %d: %v",
 				tc.name, tc.wantCount, len(matches), matches)
@@ -433,6 +432,149 @@ func TestContractDeprecatedCleanup01(t *testing.T) {
 				assert.Equal(t, tc.wantField, matches[0].Field,
 					"test %q: wrong field", tc.name)
 			}
+		})
+	}
+}
+
+// TestFMT20_ArrayItemsObjectMissingAdditionalProperties verifies FMT-20 fires
+// for an "items" object inside an array property that lacks additionalProperties.
+func TestFMT20_ArrayItemsObjectMissingAdditionalProperties(t *testing.T) {
+	dir := t.TempDir()
+	contractDir := filepath.Join(dir, "contracts", "http", "arraytest", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+
+	// Schema: top-level object with additionalProperties:false, has an "items"
+	// array whose items is an object missing additionalProperties.
+	responsePath := filepath.Join(contractDir, "response.schema.json")
+	responseContent := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"list": {
+				"type": "array",
+				"items": {
+					"type": "object",
+					"properties": {
+						"id": {"type": "string"}
+					}
+				}
+			}
+		}
+	}`
+	require.NoError(t, os.WriteFile(responsePath, []byte(responseContent), 0o644))
+
+	pm := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.arraytest.v1": {
+				ID:        "http.arraytest.v1",
+				Kind:      "http",
+				OwnerCell: "testcell",
+				Lifecycle: "active",
+				SchemaRefs: metadata.SchemaRefsMeta{
+					Response: "response.schema.json",
+				},
+				Dir:  "contracts/http/arraytest/v1",
+				File: "contracts/http/arraytest/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	v := NewValidator(pm, dir)
+	results := v.Validate()
+	matches := findByCode(results, "FMT-20")
+	// Should fire for $.list.items — the array items object lacks additionalProperties.
+	assert.Len(t, matches, 1,
+		"expected 1 FMT-20 violation at $.list.items, got %d: %v", len(matches), matches)
+	if len(matches) == 1 {
+		assert.Equal(t, "$.list.items", matches[0].Field,
+			"violation field must point to the items object path")
+	}
+}
+
+// TestFMT22_EmptyStateViolation verifies FMT-22 fires when state is empty string.
+func TestFMT22_EmptyStateViolation(t *testing.T) {
+	pm := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+		StatusBoard: []metadata.StatusBoardEntry{
+			{JourneyID: "J-empty", State: ""},
+		},
+	}
+
+	v := NewValidator(pm, "")
+	results := v.Validate()
+	matches := findByCode(results, "FMT-22")
+	assert.Len(t, matches, 1,
+		"empty state must produce 1 FMT-22 violation, got %d: %v", len(matches), matches)
+	if len(matches) == 1 {
+		assert.Equal(t, SeverityError, matches[0].Severity)
+	}
+}
+
+// TestFMT23_DeprecatedCleanup_BoundaryCheck verifies the 90-day boundary.
+// Note: the check uses time.Parse (midnight UTC) vs time.Now().UTC() (current time),
+// so "N days ago" means midnight of that date. With 89 days the difference is
+// < 90 days + intraday remainder, guaranteeing no warning. With 91 days the
+// difference exceeds 90 days even at midnight, guaranteeing a warning.
+func TestFMT23_DeprecatedCleanup_BoundaryCheck(t *testing.T) {
+	tests := []struct {
+		name      string
+		daysAgo   int
+		wantCount int
+	}{
+		{
+			name:      "89 days ago — no warning (well within 90d)",
+			daysAgo:   89,
+			wantCount: 0,
+		},
+		{
+			name:      "91 days ago — warning fires (>90d)",
+			daysAgo:   91,
+			wantCount: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			deprecatedDate := time.Now().UTC().AddDate(0, 0, -tc.daysAgo).Format("2006-01-02")
+			pm := &metadata.ProjectMeta{
+				Cells:  map[string]*metadata.CellMeta{},
+				Slices: map[string]*metadata.SliceMeta{},
+				Contracts: map[string]*metadata.ContractMeta{
+					"http.test.old.v1": {
+						ID:           "http.test.old.v1",
+						Kind:         "http",
+						OwnerCell:    "testcell",
+						Lifecycle:    "deprecated",
+						DeprecatedAt: deprecatedDate,
+						Dir:          "contracts/http/test/old/v1",
+						File:         "contracts/http/test/old/v1/contract.yaml",
+					},
+				},
+				Journeys:   map[string]*metadata.JourneyMeta{},
+				Assemblies: map[string]*metadata.AssemblyMeta{},
+			}
+
+			v := NewValidator(pm, "")
+			results := v.Validate()
+			matches := findByCode(results, "FMT-23")
+			// Filter to warnings only (we don't want IssueRequired or IssueInvalid counts).
+			var warnings []ValidationResult
+			for _, r := range matches {
+				if r.Severity == SeverityWarning {
+					warnings = append(warnings, r)
+				}
+			}
+			assert.Len(t, warnings, tc.wantCount,
+				"test %q: expected %d FMT-23 warnings, got %d: %v",
+				tc.name, tc.wantCount, len(warnings), warnings)
 		})
 	}
 }
