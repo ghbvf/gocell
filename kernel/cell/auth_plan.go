@@ -1,19 +1,17 @@
 package cell
 
-// auth_plan.go — sealed AuthPlan interface + 6 typed plan structs.
+// auth_plan.go — sealed AuthPlan interface + typed plan structs.
 //
 // Design goals:
-//   1. Sealed via unexported marker methods (authPlanKind/listenerAuthOK/groupAuthOK).
-//   2. Two sub-interfaces segregate usage sites at compile time:
-//      ListenerAuth — plans valid as the default policy on a physical listener.
-//      GroupAuth    — plans valid as the policy override on a RouteGroup.
-//   3. AuthJWT/AuthJWTFromAssembly implement only ListenerAuth (not GroupAuth)
-//      because the JWT verifier must flow through the router's matcher-aware
-//      AuthMiddleware chain; direct RouteGroup use would silently drop the verifier.
-//   4. AuthVerboseToken implements only GroupAuth (not ListenerAuth) because it
-//      is a per-endpoint ?verbose guard, not a listener-wide auth scheme.
-//   5. AuthNone/AuthMTLS/AuthServiceToken implement both, giving callers maximum
-//      composability.
+//   1. Sealed via unexported marker methods (authPlanKind/listenerAuthOK).
+//   2. AuthPlan implementations are valid as the default authentication scheme
+//      on a physical HTTP listener (ListenerAuth). Auth scheme is a listener-
+//      scope concern — RouteGroups inherit their listener's auth chain. Cells
+//      that need a different scheme should declare their routes on a different
+//      listener (e.g. webhook listener with HMAC-only chain).
+//   3. AuthJWT/AuthJWTFromAssembly install via the router's matcher-aware
+//      AuthMiddleware (driven by FinalizeAuth Public/PasswordResetExempt
+//      compilation); the chain forces this to the head position via phase0.
 //
 // Dependency note: kernel/cell MUST NOT import kernel/assembly (cycle via
 // assembly.go importing cell). AuthJWTFromAssembly holds an AssemblyIdentity
@@ -25,9 +23,18 @@ package cell
 // ref: zeromicro/go-zero rest/types.go featuredRoutes — typed plan + single wiring point.
 
 import (
-	"crypto/sha256"
+	"fmt"
 	"sync/atomic"
 )
+
+// MinHMACKeyBytes is the minimum byte length required for HMAC secrets used by
+// AuthServiceToken. NIST SP 800-107 §5.3.4 recommends an HMAC key strength of
+// at least the security strength of the underlying hash; for HMAC-SHA-256 that
+// is 256 bits = 32 bytes. NewAuthServiceToken enforces this at construction
+// time; runtime/auth.ServiceTokenMiddleware enforces it again at wiring time
+// (defense in depth) so any cell.HMACKeyring implementation that returns a
+// shorter Current() secret is rejected at both ends.
+const MinHMACKeyBytes = 32
 
 // AuthKind is the discriminant for an AuthPlan variant.
 // Declared as uint8 to keep the type small; the iota values are stable.
@@ -39,7 +46,6 @@ const (
 	AuthKindJWTFromAssembly                 // AuthJWTFromAssembly
 	AuthKindMTLS                            // AuthMTLS
 	AuthKindServiceToken                    // AuthServiceToken
-	AuthKindVerboseToken                    // AuthVerboseToken
 )
 
 // AuthPlan is the sealed base interface for all authentication plans.
@@ -53,40 +59,28 @@ type AuthPlan interface {
 	Describe() string
 }
 
-// ListenerAuth is the sub-interface for plans that can serve as the default
-// authentication scheme on a physical HTTP listener. JWT plans live here only;
-// AuthVerboseToken does NOT implement ListenerAuth.
+// ListenerAuth is the (only) typed authentication scheme accepted by
+// bootstrap.WithListener. RouteGroups inherit their listener's auth chain
+// uniformly — there is no group-level override (PR269 round-3: cells that need
+// a different scheme should declare their routes on a different listener).
 type ListenerAuth interface {
 	AuthPlan
-	listenerAuthOK() // compile-time segregation marker
-}
-
-// GroupAuth is the sub-interface for plans that can serve as the per-RouteGroup
-// auth override. AuthJWT / AuthJWTFromAssembly do NOT implement GroupAuth —
-// JWT must flow through the router's matcher-aware AuthMiddleware installed at
-// listener level.
-type GroupAuth interface {
-	AuthPlan
-	groupAuthOK() // compile-time segregation marker
+	listenerAuthOK() // compile-time seal marker (unexported, prevents external impls)
 }
 
 // ─── AuthNone ────────────────────────────────────────────────────────────────
 
-// AuthNone is the no-op auth plan. Use it for listeners/groups that are
+// AuthNone is the no-op auth plan. Use it for listeners that are
 // network-isolated and require no authentication gate (e.g. the HealthListener
 // behind a Kubernetes probe path).
-//
-// AuthNone implements both ListenerAuth and GroupAuth.
 type AuthNone struct{}
 
 func (AuthNone) authPlanKind() AuthKind { return AuthKindNone }
 func (AuthNone) Describe() string       { return "none" }
 func (AuthNone) listenerAuthOK()        {}
-func (AuthNone) groupAuthOK()           {}
 
-// Compile-time assertions.
+// Compile-time assertion.
 var _ ListenerAuth = AuthNone{}
-var _ GroupAuth = AuthNone{}
 
 // ─── AuthJWT ─────────────────────────────────────────────────────────────────
 
@@ -94,10 +88,6 @@ var _ GroupAuth = AuthNone{}
 // construction time via NewAuthJWT. Bootstrap extracts it during phase5 and
 // installs the router-aware AuthMiddleware so that Public/PasswordResetExempt
 // routes declared via auth.Mount are honoured.
-//
-// AuthJWT implements only ListenerAuth. It intentionally does NOT implement
-// GroupAuth — installing JWT at RouteGroup level would silently drop the
-// verifier from the router chain.
 type AuthJWT struct {
 	// Verifier is the IntentTokenVerifier used to validate JWTs. Required; nil
 	// is rejected by NewAuthJWT with a panic.
@@ -219,25 +209,19 @@ var _ ListenerAuth = AuthJWTFromAssembly{}
 // request arrived over a TLS connection with at least one peer certificate.
 // Chain verification MUST be delegated to tls.Config.ClientAuth; see the
 // runtime/bootstrap phase0 validation (validateAuthPlanMTLSBindings).
-//
-// AuthMTLS implements both ListenerAuth and GroupAuth.
 type AuthMTLS struct{}
 
 func (AuthMTLS) authPlanKind() AuthKind { return AuthKindMTLS }
 func (AuthMTLS) Describe() string       { return "mtls" }
 func (AuthMTLS) listenerAuthOK()        {}
-func (AuthMTLS) groupAuthOK()           {}
 
-// Compile-time assertions.
+// Compile-time assertion.
 var _ ListenerAuth = AuthMTLS{}
-var _ GroupAuth = AuthMTLS{}
 
 // ─── AuthServiceToken ─────────────────────────────────────────────────────────
 
 // AuthServiceToken is the HMAC-SHA256 service token plan. Bootstrap installs
 // auth.ServiceTokenMiddleware with the provided ring and nonce store.
-//
-// AuthServiceToken implements both ListenerAuth and GroupAuth.
 type AuthServiceToken struct {
 	// Store is the NonceStore for replay prevention. Required.
 	Store NonceStore
@@ -245,9 +229,12 @@ type AuthServiceToken struct {
 	Ring HMACKeyring
 }
 
-// NewAuthServiceToken constructs an AuthServiceToken plan.
-// Panics if either argument is nil — both are required for a properly guarded
-// internal listener.
+// NewAuthServiceToken constructs an AuthServiceToken plan. Panics if either
+// argument is nil or if ring.Current() returns fewer than MinHMACKeyBytes bytes
+// — both are required for a properly guarded internal listener; a short HMAC
+// secret silently weakens MAC strength and is rejected at construction time
+// (NIST SP 800-107 §5.3.4 — HMAC key length must match underlying hash
+// security strength: 256-bit / 32-byte for HMAC-SHA-256).
 func NewAuthServiceToken(store NonceStore, ring HMACKeyring) AuthServiceToken {
 	if store == nil {
 		panic("cell: NewAuthServiceToken store must not be nil")
@@ -255,58 +242,17 @@ func NewAuthServiceToken(store NonceStore, ring HMACKeyring) AuthServiceToken {
 	if ring == nil {
 		panic("cell: NewAuthServiceToken ring must not be nil")
 	}
+	if got := len(ring.Current()); got < MinHMACKeyBytes {
+		panic(fmt.Sprintf(
+			"cell: NewAuthServiceToken HMAC ring.Current() returned %d bytes, minimum is %d (NIST SP 800-107)",
+			got, MinHMACKeyBytes))
+	}
 	return AuthServiceToken{Store: store, Ring: ring}
 }
 
 func (AuthServiceToken) authPlanKind() AuthKind { return AuthKindServiceToken }
 func (AuthServiceToken) Describe() string       { return "service-token" }
 func (AuthServiceToken) listenerAuthOK()        {}
-func (AuthServiceToken) groupAuthOK()           {}
-
-// Compile-time assertions.
-var _ ListenerAuth = AuthServiceToken{}
-var _ GroupAuth = AuthServiceToken{}
-
-// ─── AuthVerboseToken ─────────────────────────────────────────────────────────
-
-// AuthVerboseToken is the ?verbose-mode access guard. When a request carries
-// the ?verbose query parameter, the request must supply a matching token in the
-// configured header. Requests without ?verbose pass through unconditionally.
-//
-// Intended for the /readyz RouteGroup only. AuthVerboseToken implements only
-// GroupAuth — it is semantically a per-route guard, not a listener-wide scheme.
-//
-// The configured token is stored as its SHA-256 hash so raw token bytes are
-// never held in memory after construction (SEC-06 defense-in-depth).
-type AuthVerboseToken struct {
-	// Header is the HTTP header name carrying the token (e.g. "X-Readyz-Token").
-	Header string
-	// HashedToken is the SHA-256 hash of the configured token for constant-time
-	// comparison (avoids timing oracle on the raw token length).
-	HashedToken [32]byte
-}
-
-// NewAuthVerboseToken constructs an AuthVerboseToken plan.
-// Panics if headerName or token is empty — both are required.
-func NewAuthVerboseToken(headerName, token string) AuthVerboseToken {
-	if headerName == "" {
-		panic("cell: NewAuthVerboseToken headerName must not be empty")
-	}
-	if token == "" {
-		panic("cell: NewAuthVerboseToken token must not be empty")
-	}
-	return AuthVerboseToken{
-		Header:      headerName,
-		HashedToken: sha256.Sum256([]byte(token)),
-	}
-}
-
-func (AuthVerboseToken) authPlanKind() AuthKind { return AuthKindVerboseToken }
-func (AuthVerboseToken) Describe() string       { return "verbose-token" }
-func (AuthVerboseToken) groupAuthOK()           {}
 
 // Compile-time assertion.
-var _ GroupAuth = AuthVerboseToken{}
-
-// NOTE: AuthVerboseToken intentionally does NOT implement ListenerAuth.
-// The archtest in tools/archtest/auth_plan_test.go verifies this at CI time.
+var _ ListenerAuth = AuthServiceToken{}

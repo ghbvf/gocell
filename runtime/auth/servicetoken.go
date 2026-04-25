@@ -35,9 +35,11 @@ func WithServiceTokenLogger(l *slog.Logger) ServiceTokenOption {
 // rejected. Tokens with timestamps at or beyond this window are refused.
 const ServiceTokenMaxAge = 5 * time.Minute
 
-// MinHMACKeyBytes is the minimum HMAC secret length. NIST recommends 256-bit
-// (32-byte) keys for HMAC-SHA256; this constant enforces that minimum.
-const MinHMACKeyBytes = 32
+// MinHMACKeyBytes aliases cell.MinHMACKeyBytes so runtime/auth and kernel/cell
+// share a single canonical strength threshold (NIST SP 800-107: HMAC-SHA-256
+// requires ≥256-bit keys). Kept as a const for callers that reference the
+// runtime/auth namespace; the source of truth lives in kernel/cell.
+const MinHMACKeyBytes = cell.MinHMACKeyBytes
 
 // serviceTokenConfig holds per-middleware options.
 type serviceTokenConfig struct {
@@ -195,6 +197,24 @@ func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) f
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				cfg.metrics.recordServiceVerify("failure", "internal")
 				cfg.logger.Error("service token middleware called with nil key ring")
+				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+			})
+		}
+	}
+
+	// Defense-in-depth strength check (PR269 round-3 F5): cell.NewAuthServiceToken
+	// already enforces MinHMACKeyBytes at construction time, but ServiceTokenMiddleware
+	// is also reachable via direct call paths (tests, custom wiring) that bypass
+	// the kernel constructor. Reject sub-strength rings here so no path leaks a
+	// short HMAC secret into hmac.New.
+	if got := len(ring.Current()); got < MinHMACKeyBytes {
+		shortLen := got
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				cfg.metrics.recordServiceVerify("failure", "internal")
+				cfg.logger.Error("service token middleware: HMAC ring secret shorter than minimum",
+					slog.Int("got_bytes", shortLen),
+					slog.Int("min_bytes", MinHMACKeyBytes))
 				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			})
 		}

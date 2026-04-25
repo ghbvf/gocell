@@ -2,6 +2,7 @@ package cell_test
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -15,27 +16,14 @@ var _ cell.AuthPlan = cell.AuthJWT{}
 var _ cell.AuthPlan = cell.AuthJWTFromAssembly{}
 var _ cell.AuthPlan = cell.AuthMTLS{}
 var _ cell.AuthPlan = cell.AuthServiceToken{}
-var _ cell.AuthPlan = cell.AuthVerboseToken{}
 
-// ListenerAuth assertions: plans that CAN be used as listener-level auth.
+// ListenerAuth assertions: every AuthPlan in the closed enumeration must
+// satisfy ListenerAuth. Auth scheme is a listener-scope concern.
 var _ cell.ListenerAuth = cell.AuthNone{}
 var _ cell.ListenerAuth = cell.AuthJWT{}
 var _ cell.ListenerAuth = cell.AuthJWTFromAssembly{}
 var _ cell.ListenerAuth = cell.AuthMTLS{}
 var _ cell.ListenerAuth = cell.AuthServiceToken{}
-
-// GroupAuth assertions: plans that CAN be used as route-group-level auth.
-var _ cell.GroupAuth = cell.AuthNone{}
-var _ cell.GroupAuth = cell.AuthMTLS{}
-var _ cell.GroupAuth = cell.AuthServiceToken{}
-var _ cell.GroupAuth = cell.AuthVerboseToken{}
-
-// Segregation: AuthJWT/AuthJWTFromAssembly MUST NOT implement GroupAuth.
-// This is enforced at compile-time; the negative check is verified by the
-// archtest fixture in tools/archtest/celltest_segregation/.
-//
-// Segregation: AuthVerboseToken MUST NOT implement ListenerAuth.
-// Same — see archtest fixture.
 
 // ─── Describe() golden values ─────────────────────────────────────────────────
 
@@ -57,7 +45,6 @@ func TestAuthPlan_Describe(t *testing.T) {
 		{"AuthJWTFromAssembly", cell.NewAuthJWTFromAssembly(asm), "jwt"},
 		{"AuthMTLS", cell.AuthMTLS{}, "mtls"},
 		{"AuthServiceToken", cell.NewAuthServiceToken(store, ring), "service-token"},
-		{"AuthVerboseToken", cell.NewAuthVerboseToken("X-Token", "secret"), "verbose-token"},
 	}
 
 	for _, tc := range tests {
@@ -84,7 +71,6 @@ func TestAuthPlan_AuthKind(t *testing.T) {
 		cell.AuthKindJWTFromAssembly,
 		cell.AuthKindMTLS,
 		cell.AuthKindServiceToken,
-		cell.AuthKindVerboseToken,
 	}
 	seen := make(map[cell.AuthKind]struct{})
 	for _, k := range kinds {
@@ -137,24 +123,34 @@ func TestNewAuthServiceToken_NilRingPanics(t *testing.T) {
 	cell.NewAuthServiceToken(&stubNonceStore{}, nil)
 }
 
-func TestNewAuthVerboseToken_EmptyHeaderPanics(t *testing.T) {
-	t.Parallel()
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty header, got none")
-		}
-	}()
-	cell.NewAuthVerboseToken("", "token")
-}
+// shortHMACKeyring intentionally returns a secret below MinHMACKeyBytes to
+// exercise the construction-time strength check.
+type shortHMACKeyring struct{}
 
-func TestNewAuthVerboseToken_EmptyTokenPanics(t *testing.T) {
+func (*shortHMACKeyring) Current() []byte   { return []byte("31-byte-secret-padding---------") }
+func (*shortHMACKeyring) Secrets() [][]byte { return [][]byte{(&shortHMACKeyring{}).Current()} }
+
+func TestNewAuthServiceToken_RejectsShortKey(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic for empty token, got none")
+		r := recover()
+		if r == nil {
+			t.Fatal("expected panic for short HMAC ring.Current(), got none")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value is not string: %T %v", r, r)
+		}
+		if !strings.Contains(msg, "MinHMACKeyBytes") && !strings.Contains(msg, "minimum is 32") {
+			t.Errorf("panic message must mention MinHMACKeyBytes / minimum=32: %q", msg)
 		}
 	}()
-	cell.NewAuthVerboseToken("X-Token", "")
+	// Pre-condition: stub returns 31 bytes (one short of MinHMACKeyBytes=32).
+	if got := len((&shortHMACKeyring{}).Current()); got >= cell.MinHMACKeyBytes {
+		t.Fatalf("test fixture broken: shortHMACKeyring.Current() returned %d bytes, want < %d",
+			got, cell.MinHMACKeyBytes)
+	}
+	cell.NewAuthServiceToken(&stubNonceStore{}, &shortHMACKeyring{})
 }
 
 // ─── AuthJWT fields ───────────────────────────────────────────────────────────
@@ -186,26 +182,6 @@ func TestAuthJWTFromAssembly_ResolvedVerifier(t *testing.T) {
 
 	if got := p.ResolvedVerifier(); got != v {
 		t.Errorf("after SetResolved: got %v, want %v", got, v)
-	}
-}
-
-// ─── AuthVerboseToken hashed token ────────────────────────────────────────────
-
-func TestNewAuthVerboseToken_DifferentHashForDifferentTokens(t *testing.T) {
-	t.Parallel()
-	a := cell.NewAuthVerboseToken("X-Token", "secret-a")
-	b := cell.NewAuthVerboseToken("X-Token", "secret-b")
-	if a.HashedToken == b.HashedToken {
-		t.Error("different tokens should produce different hashes")
-	}
-}
-
-func TestNewAuthVerboseToken_SameHashForSameToken(t *testing.T) {
-	t.Parallel()
-	a := cell.NewAuthVerboseToken("X-Token", "secret")
-	b := cell.NewAuthVerboseToken("X-Token", "secret")
-	if a.HashedToken != b.HashedToken {
-		t.Error("same token should produce same hash")
 	}
 }
 

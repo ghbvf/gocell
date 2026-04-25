@@ -174,7 +174,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 			[]cell.ListenerAuth{cell.AuthMTLS{}},
 			nil, // no tls.Config
 		)
-		err := b.validateAuthPlanMTLSBindings(nil)
+		err := b.validateAuthPlanMTLSBindings()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "AuthMTLS")
 		assert.Contains(t, err.Error(), cell.InternalListener.String())
@@ -190,7 +190,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 				ClientCAs:  x509.NewCertPool(),
 			},
 		)
-		err := b.validateAuthPlanMTLSBindings(nil)
+		err := b.validateAuthPlanMTLSBindings()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ClientAuth")
 	})
@@ -205,7 +205,7 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 				ClientCAs:  nil, // missing
 			},
 		)
-		err := b.validateAuthPlanMTLSBindings(nil)
+		err := b.validateAuthPlanMTLSBindings()
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "ClientCAs")
 	})
@@ -217,46 +217,10 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 			[]cell.ListenerAuth{cell.AuthMTLS{}},
 			validMTLSTLSConfig(),
 		)
-		require.NoError(t, b.validateAuthPlanMTLSBindings(nil))
+		require.NoError(t, b.validateAuthPlanMTLSBindings())
 	})
-
-	t.Run("RouteGroupPath_NoTLSConfig", func(t *testing.T) {
-		t.Parallel()
-		b := bootstrapWithListener(
-			cell.InternalListener,
-			[]cell.ListenerAuth{cell.AuthNone{}},
-			nil,
-		)
-		groups := []cell.RouteGroup{
-			{
-				Listener: cell.InternalListener,
-				Prefix:   "/internal/v1/admin",
-				Auth:     cell.AuthMTLS{},
-				CellID:   "my-cell",
-			},
-		}
-		err := b.validateAuthPlanMTLSBindings(groups)
-		require.Error(t, err)
-		assert.Contains(t, err.Error(), "AuthMTLS")
-	})
-
-	t.Run("RouteGroupPath_ValidTLS", func(t *testing.T) {
-		t.Parallel()
-		b := bootstrapWithListener(
-			cell.InternalListener,
-			[]cell.ListenerAuth{cell.AuthNone{}},
-			validMTLSTLSConfig(),
-		)
-		groups := []cell.RouteGroup{
-			{
-				Listener: cell.InternalListener,
-				Prefix:   "/internal/v1/admin",
-				Auth:     cell.AuthMTLS{},
-				CellID:   "my-cell",
-			},
-		}
-		require.NoError(t, b.validateAuthPlanMTLSBindings(groups))
-	})
+	// PR269 round-3: RouteGroupPath_* subtests removed — RouteGroup.Auth no
+	// longer exists; mTLS bindings are validated only at listener scope.
 }
 
 // ─── TestCheckJWTSingleton (unit test of inner helper) ───────────────────────

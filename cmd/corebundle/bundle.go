@@ -72,8 +72,9 @@ func defaultRuntimeOptions(
 	// Internal listener: AuthServiceToken from InternalGuard (nil → no auth
 	// in dev mode where GOCELL_SERVICE_SECRET is unset).
 	// Health listener: framework-owned /healthz, /readyz, /metrics route groups;
-	// when shared.VerboseToken is set, AuthVerboseToken is attached to the
-	// /readyz group so verbose responses require a bearer token.
+	// when shared.VerboseToken is set, the health handler's strict-gate path
+	// (WithReadyzVerboseToken → SetVerboseToken) requires a matching X-Readyz-Token
+	// for ?verbose=true requests; mismatches return 401 ErrReadyzVerboseDenied.
 	//
 	// ref: go-kratos/kratos app.go — per-server option pattern.
 	internalChain := buildInternalAuthChain(shared.InternalGuard)
@@ -82,16 +83,11 @@ func defaultRuntimeOptions(
 		bootstrap.WithMetricsHandler(metricsHandler),
 	}
 	if shared.VerboseToken != "" {
-		// Two layers consulting the same token (PR-A35 defense-in-depth +
-		// PR-A14b R2-01 single-config-source):
-		//  - WithReadyzAuth: AuthVerboseToken middleware on the route
-		//    group 401's at the listener layer.
-		//  - WithReadyzVerboseToken: health.Handler's strict gate 401's at
-		//    the handler layer.
+		// PR269 round-3: verbose-mode gating is a disclosure concern owned by
+		// the health handler, not an authentication scheme. WithReadyzVerboseToken
+		// plumbs the token to health.Handler.SetVerboseToken, which on mismatch
+		// produces the canonical 401 ErrReadyzVerboseDenied envelope.
 		healthRouteOpts = append(healthRouteOpts,
-			bootstrap.WithReadyzAuth(
-				cell.NewAuthVerboseToken("X-Readyz-Token", shared.VerboseToken),
-			),
 			bootstrap.WithReadyzVerboseToken(shared.VerboseToken),
 		)
 	}

@@ -2,24 +2,26 @@ package cell
 
 import "net/http"
 
-// RouteGroup declares where a batch of routes physically lives:
-// which listener, what path prefix, optional auth override.
+// RouteGroup declares where a batch of routes physically lives: which listener
+// and what path prefix. The group inherits its listener's auth chain uniformly
+// — there is no group-level auth override (PR269 round-3: cells that need a
+// different auth scheme must declare their routes on a different listener).
+//
 // Cells implement [RouteGroupContributor] to return a slice of these;
-// bootstrap collects them at phase5, validates prefix-vs-listener
-// consistency, and mounts the sub-trees on the correct chi.Mux.
+// bootstrap collects them at phase5, validates prefix-vs-listener consistency,
+// and mounts the sub-trees on the correct chi.Mux.
 type RouteGroup struct {
 	// Listener identifies the physical HTTP listener this group belongs to.
 	Listener ListenerRef
 	// Prefix is the URL path prefix for all routes in this group
 	// (e.g. "/api/v1/access", "/internal/v1/access").
 	Prefix string
-	// Auth optionally overrides the listener's default auth plan for this group.
-	// nil means inherit the listener's default auth (no group-level override).
-	// Only GroupAuth implementations are accepted here at compile time — JWT
-	// plans intentionally do NOT implement GroupAuth.
-	Auth GroupAuth
-	// Middleware holds additional (non-auth) HTTP middleware applied to routes
-	// in this group after the Auth middleware. Evaluated in declaration order.
+	// Middleware holds non-auth HTTP middleware applied to all routes in this
+	// group, evaluated in declaration order (the listener's auth chain runs
+	// first via mux-level middleware, then these run as the group sub-mux
+	// chain, then the route handler). Authentication itself MUST be expressed
+	// via the listener's authChain — installing auth here defeats the
+	// listener-as-auth-boundary contract enforced in phase5.
 	Middleware []func(http.Handler) http.Handler
 	// Register is called by bootstrap to mount the cell's sub-tree on the
 	// chosen mux. Required; a nil Register is a programmer error detected

@@ -6,6 +6,64 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed (Breaking) — PR269 round-3 AUTH-POLICY-PLAN-CONSOLIDATE
+
+Auth scheme is exclusively a **listener-scope** concern. The PR262 dual-承载点
+model (listener `authChain` + RouteGroup `Auth`) has been removed in favour of a
+single承载点 — listener — eliminating four review findings (F4 ambiguous
+override semantics, F5 HMAC key strength bypass, F6 inverted middleware order,
+S1 group Auth invisible to phase5 validation) at their root cause.
+
+**Removed (deletions, no aliases):**
+
+- `cell.GroupAuth` interface — auth plans only need `ListenerAuth` now.
+- `cell.RouteGroup.Auth GroupAuth` field — RouteGroups inherit their listener's
+  auth chain; cells needing a different scheme must declare routes on a
+  different listener (e.g. open a `cell.WebhookListener` with HMAC chain).
+- `cell.AuthVerboseToken` type + `cell.NewAuthVerboseToken` — verbose-mode
+  gating is a disclosure gate owned by the health handler, not an auth scheme.
+- `cell.AuthKindVerboseToken` constant.
+- `bootstrap.WithLivezAuth(cell.GroupAuth)` / `WithReadyzAuth(cell.GroupAuth)`
+  / `WithMetricsAuth(cell.GroupAuth)` — health route groups inherit
+  HealthListener's chain (typically nil) without per-group overrides.
+- `runtime/bootstrap/applyGroupAuth` + `verboseTokenMiddleware` (internal).
+- `tools/archtest/celltest_segregation/` directory + `TestAuthPlan_Segregation_*`
+  — with `GroupAuth` gone there is no sub-interface to segregate from
+  `ListenerAuth`; the closed enumeration is enforced solely by the unexported
+  `listenerAuthOK()` seal marker.
+
+**Migration:**
+
+| Before | After |
+|--------|-------|
+| `bootstrap.WithReadyzAuth(cell.NewAuthVerboseToken(h, t))` | `bootstrap.WithReadyzVerboseToken(t)` (already existed; now the single source) |
+| `bootstrap.WithLivezAuth(...)` / `WithMetricsAuth(...)` | (no replacement — health probes are listener-scoped) |
+| `cell.RouteGroup{Listener: X, Auth: cell.NewAuthServiceToken(...), ...}` | declare a separate listener carrying that auth and move the routes there |
+
+Verbose-token semantics unchanged for callers: `WithReadyzVerboseToken` plumbs
+to `health.Handler.SetVerboseToken`, which on mismatch returns the canonical
+`401 ErrReadyzVerboseDenied` envelope via `httputil.WritePublicError`
+(established in PR269 round-1 — both the deleted middleware path and the
+handler path were already converging on this contract).
+
+### Changed (Breaking) — F5 HMAC key-strength enforcement
+
+`cell.MinHMACKeyBytes = 32` is now the canonical strength threshold for
+HMAC-SHA-256 service tokens (NIST SP 800-107 §5.3.4). Three layers reject
+sub-strength rings:
+
+1. `cell.NewAuthServiceToken(store, ring)` panics if `ring.Current()` returns
+   fewer than `MinHMACKeyBytes` bytes (kernel boundary).
+2. `runtime/auth.ServiceTokenMiddleware(ring, ...)` returns an error middleware
+   (500 + `ERR_INTERNAL` + structured log) on sub-strength rings (defense in
+   depth for direct-call paths bypassing the kernel constructor).
+3. `runtime/auth.NewHMACKeyRing(current, prev)` enforces the same minimum
+   (already existed; preserved as a third floor).
+
+Any custom `cell.HMACKeyring` implementation must return ≥32 bytes from
+`Current()`; previously a structurally-satisfied ring with a short secret
+silently weakened MAC strength.
+
 ### Changed (Breaking) — PR262 AUTH-POLICY-PLAN-01
 
 - **`cell.Policy` struct and all `bootstrap.Policy*` factory functions are deleted.**
@@ -19,13 +77,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   | `bootstrap.PolicyServiceToken(s, r)` | `[]cell.ListenerAuth{cell.NewAuthServiceToken(s, r)}` |
   | `bootstrap.PolicyMTLS()` | `[]cell.ListenerAuth{cell.AuthMTLS{}}` |
   | `bootstrap.PolicyNone()` / `cell.Policy{}` | `nil` |
-  | `bootstrap.PolicyVerboseToken(h, t)` | `cell.NewAuthVerboseToken(h, t)` (GroupAuth, not ListenerAuth) |
+  | `bootstrap.PolicyVerboseToken(h, t)` | `bootstrap.WithReadyzVerboseToken(t)` (PR269 round-3 simplification) |
   | `bootstrap.PolicyStack(a, b)` | pass multiple elements in the `[]cell.ListenerAuth` slice |
 
-- **`WithReadyzPolicy` / `WithLivezPolicy` / `WithMetricsPolicy`** renamed to
-  `WithReadyzAuth` / `WithLivezAuth` / `WithMetricsAuth`; accept `cell.GroupAuth`.
-
-- **`cell.RouteGroup.Policy cell.Policy`** field renamed to `Auth cell.GroupAuth`.
+- **`cell.RouteGroup.Policy cell.Policy`** field deleted (PR269 round-3 supersedes the PR262 rename to `Auth GroupAuth`).
 
 - Hard break: no migration shim, no deprecated aliases.
   `tools/archtest/auth_plan_test.go` (AUTH-PLAN-01..04) guards against regression.

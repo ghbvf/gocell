@@ -147,8 +147,6 @@ func main() {
 	// out of the box without exposing internal topology anonymously.
 	healthOpts := []bootstrap.HealthRouteGroupOption{}
 	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
-		healthOpts = append(healthOpts, bootstrap.WithReadyzAuth(
-			cell.NewAuthVerboseToken("X-Readyz-Token", tok)))
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseToken(tok))
 	} else {
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())

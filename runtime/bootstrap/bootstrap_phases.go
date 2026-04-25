@@ -147,7 +147,7 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if err := b.validateAuthPlanAssemblyMatch(); err != nil {
 		return err
 	}
-	if err := b.validateAuthPlanMTLSBindings(nil); err != nil {
+	if err := b.validateAuthPlanMTLSBindings(); err != nil {
 		return err
 	}
 	if err := b.validateAuthChainJWTSingleton(); err != nil {
@@ -496,7 +496,7 @@ func (b *Bootstrap) phase5BuildRouters(s *phaseState) error {
 		return err
 	}
 	groups := b.phase5CollectRouteGroups(s, routers)
-	if err := b.validateAuthPlanMTLSBindings(groups); err != nil {
+	if err := b.validateAuthPlanMTLSBindings(); err != nil {
 		return err
 	}
 	if err := b.phase5MountRouteGroups(routers, groups); err != nil {
@@ -618,34 +618,19 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 	return nil
 }
 
-// mountOneRouteGroup mounts a single RouteGroup on its router and applies the
-// group's Auth plan middleware (if any) so it scopes only to the routes mounted
-// by rg.Register. The pattern mirrors go-kratos/kratos transport/http/router.go
-// FilterChain(r.filters...)(next): per-group middleware is installed at
-// registration time on the sub-mux, not at the listener level — registering
-// without the wrap is impossible because there is no codepath that calls
-// rg.Register without first wiring the auth plan. F1 round-3 fix.
-func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, i int) error {
+// mountOneRouteGroup mounts a single RouteGroup on its router and applies any
+// non-auth Middleware in declaration order. PR269 round-3: group-level auth is
+// gone — auth scheme is a listener concern (cells that need a different scheme
+// declare their routes on a different listener). Listener-level authChain is
+// already installed by router.WithDefaultMiddleware; group Middleware runs
+// after that chain at request time (chi sub-mux With order).
+func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _ int) error {
 	register := rg.Register
-	// Apply group-level Auth plan (if any) as a scoped middleware.
-	if rg.Auth != nil {
-		groupMW, err := applyGroupAuth(rg.Auth)
-		if err != nil {
-			return fmt.Errorf("bootstrap: %s: %w", routeGroupSource(i, rg), err)
-		}
-		if groupMW != nil {
-			inner := rg.Register
-			register = func(sub cell.RouteMux) {
-				inner(sub.With(groupMW))
-			}
-		}
-	}
-	// Also apply any explicit Middleware slice on the group (non-auth middleware).
 	if len(rg.Middleware) > 0 {
 		mws := rg.Middleware
-		innerReg := register
+		inner := register
 		register = func(sub cell.RouteMux) {
-			innerReg(sub.With(mws...))
+			inner(sub.With(mws...))
 		}
 	}
 	if rg.Prefix != "" {

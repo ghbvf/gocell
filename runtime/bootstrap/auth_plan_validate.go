@@ -6,7 +6,7 @@ package bootstrap
 //
 //   validateAuthPlanAssemblyMatch  — phase0: AuthJWTFromAssembly.Assembly must be
 //                                    the same instance as WithAssembly's assembly.
-//   validateAuthPlanMTLSBindings   — phase0: any listener/group with AuthMTLS must
+//   validateAuthPlanMTLSBindings   — phase0: any listener with AuthMTLS must
 //                                    have ClientAuth + ClientCAs set on tls.Config.
 //   validateAuthChainJWTSingleton  — phase0: at most 1 JWT plan in a listener chain,
 //                                    and it must be the first element.
@@ -54,40 +54,21 @@ func (b *Bootstrap) validateAuthPlanAssemblyMatch() error {
 	return nil
 }
 
-// validateAuthPlanMTLSBindings enforces that any listener or RouteGroup using
-// AuthMTLS has a *tls.Config with ClientAuth >= VerifyClientCertIfGiven AND a
-// non-nil ClientCAs pool. The handshake-layer check (crypto/tls) only runs
-// when these are set, so AuthMTLS without proper TLS config is a programming
-// error that must fail fast at startup.
+// validateAuthPlanMTLSBindings enforces that any listener using AuthMTLS has
+// a *tls.Config with ClientAuth >= VerifyClientCertIfGiven AND a non-nil
+// ClientCAs pool. The handshake-layer check (crypto/tls) only runs when these
+// are set, so AuthMTLS without proper TLS config is a programming error that
+// must fail fast at startup.
 //
-// Replaces: validateListenerPolicyMTLSBinding + validateRouteGroupPolicyMTLSBindings.
-func (b *Bootstrap) validateAuthPlanMTLSBindings(groups []cell.RouteGroup) error {
-	// Check listener-level chains.
+// PR269 round-3: RouteGroup-level Auth no longer exists; mTLS bindings are
+// validated only at listener scope.
+func (b *Bootstrap) validateAuthPlanMTLSBindings() error {
 	for ref, cfg := range b.listenerConfigs {
 		if !chainContainsAuthMTLS(cfg.authChain) {
 			continue
 		}
 		source := fmt.Sprintf("listener %q", ref.String())
 		if err := validateMTLSTLSConfig(source, cfg.tls); err != nil {
-			return err
-		}
-	}
-	// Check RouteGroup Auth overrides.
-	for i, rg := range groups {
-		if rg.Auth == nil {
-			continue
-		}
-		if _, ok := rg.Auth.(cell.AuthMTLS); !ok {
-			continue
-		}
-		source := routeGroupSource(i, rg)
-		listenerCfg, ok := b.listenerConfigs[rg.Listener]
-		if !ok {
-			return fmt.Errorf(
-				"bootstrap: %s references undeclared listener %q; add WithListener(%s,...) to bootstrap options",
-				source, rg.Listener.String(), rg.Listener.String())
-		}
-		if err := validateMTLSTLSConfig(source, listenerCfg.tls); err != nil {
 			return err
 		}
 	}
@@ -166,15 +147,4 @@ func checkJWTSingleton(listenerDesc string, chain []cell.ListenerAuth) error {
 				listenerDesc, jwtPos))
 	}
 	return nil
-}
-
-// routeGroupSource formats a RouteGroup's identity for error messages.
-// Replaces the old routeGroupPolicySource.
-func routeGroupSource(i int, rg cell.RouteGroup) string {
-	cellID := rg.CellID
-	if cellID == "" {
-		cellID = "<framework>"
-	}
-	return fmt.Sprintf("RouteGroup %d (cell=%s, listener=%s, prefix=%q)",
-		i, cellID, rg.Listener.String(), rg.Prefix)
 }

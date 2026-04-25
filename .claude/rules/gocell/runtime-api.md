@@ -104,28 +104,36 @@ bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
 运行时执行顺序是非 JWT guard（mTLS / ServiceToken）先作为外层运行，然后 JWT 作为最内层 auth 检查。
 声明顺序与运行时执行顺序相反；这是有意为之 — 外层 transport guard 在 JWT 密码学校验之前运行。
 
-`cell.AuthVerboseToken` 仅实现 `GroupAuth`（非 `ListenerAuth`），用于 RouteGroup 级别：
+### verbose-token 与 listener auth 正交 (PR269 round-3)
+
+`/readyz?verbose=true` 的详情披露守卫**不是** auth scheme — 它只控制 verbose body 是否渲染，不参与 listener 认证决策。配置方式：
 
 ```go
 bootstrap.WithHealthRoutes(
-    bootstrap.WithReadyzAuth(cell.NewAuthVerboseToken("X-Readyz-Token", token)),
+    bootstrap.WithReadyzVerboseToken(token),    // X-Readyz-Token 必须匹配
+)
+// 或显式禁用：
+bootstrap.WithHealthRoutes(
+    bootstrap.WithReadyzVerboseDisabled(),
 )
 ```
 
-### RouteGroup 级别认证 (PR262)
+token 直接 plumb 到 `runtime/http/health.Handler.SetVerboseToken`；不匹配的 `?verbose=true` 请求拿到 `401 ErrReadyzVerboseDenied` 标准 envelope（`httputil.WritePublicError` 一致出口，含 `request_id` 透传）。该路径与 `WithListener(cell.HealthListener, ..., chain)` 的 listener auth chain 完全独立。
 
-`cell.RouteGroup.Auth cell.GroupAuth` 对单个路由组施加认证中间件：
+### 单 listener 单 auth scheme（删除 RouteGroup.Auth, PR269 round-3)
+
+`cell.RouteGroup` 不再承载 auth 字段。所有挂载在同一 listener 上的路由共享同一 listener authChain。如果一组路由需要独立的 auth scheme（例如 webhook 收件路径用 HMAC 而业务 API 用 JWT），开新 `cell.ListenerRef` 并用 `bootstrap.WithListener(...)` 单独配置：
 
 ```go
-cell.RouteGroup{
-    Listener: cell.InternalListener,
-    Prefix:   "/internal/v1/admin",
-    Auth:     cell.AuthMTLS{},
-    Register: func(mux cell.RouteMux) { ... },
-}
+const WebhookListener cell.ListenerRef = "webhook"
+
+bootstrap.WithListener(cell.PrimaryListener, ":8080",
+    []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)})
+bootstrap.WithListener(WebhookListener, ":8090",
+    []cell.ListenerAuth{cell.NewAuthServiceToken(store, ring)})
 ```
 
-`cell.GroupAuth` 的实现类型：`cell.AuthMTLS`、`cell.AuthNone`、`cell.AuthServiceToken`、`cell.AuthVerboseToken`。
+历史 `cell.GroupAuth` 接口、`cell.AuthVerboseToken` 类型、`bootstrap.WithLivezAuth/WithReadyzAuth/WithMetricsAuth` options 均已删除。`AUTH-PLAN-04 (LAYER-09)` archtest 仍禁止 cells 直接构造 AuthPlan（composition root 责任）。
 
 ### auth.Route 字段
 

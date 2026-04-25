@@ -12,8 +12,6 @@ package bootstrap
 //      — middleware injected at server build time.
 
 import (
-	"crypto/sha256"
-	"crypto/subtle"
 	"fmt"
 	"net/http"
 	"sort"
@@ -22,7 +20,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/http/health/probequery"
 	"github.com/ghbvf/gocell/runtime/http/router"
 )
 
@@ -88,34 +85,6 @@ func (b *Bootstrap) applyListenerAuthChain(
 	}
 	describe = describeAuthChain(chain)
 	return mws, routerOpts, describe, nil
-}
-
-// applyGroupAuth converts a GroupAuth plan into an HTTP middleware function.
-// Returns (nil, nil) for AuthNone or nil auth.
-func applyGroupAuth(plan cell.GroupAuth) (func(http.Handler) http.Handler, error) {
-	if plan == nil {
-		return nil, nil
-	}
-	switch p := plan.(type) {
-	case cell.AuthNone:
-		return nil, nil
-
-	case cell.AuthMTLS:
-		return mtlsMiddleware(), nil
-
-	case cell.AuthServiceToken:
-		mw := auth.ServiceTokenMiddleware(p.Ring, auth.WithServiceTokenNonceStore(p.Store))
-		return mw, nil
-
-	case cell.AuthVerboseToken:
-		mw := verboseTokenMiddleware(p.Header, p.HashedToken)
-		return mw, nil
-
-	default:
-		// Sealed interface: theoretically unreachable.
-		return nil, errcode.New(errcode.ErrCellInvalidConfig,
-			fmt.Sprintf("unknown GroupAuth type %T (sealed interface violation)", plan))
-	}
 }
 
 // runAuthPlanValidateHooks iterates over all listener chains and, for any
@@ -225,44 +194,6 @@ func mtlsMiddleware() func(http.Handler) http.Handler {
 			if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
 				httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
 					"ERR_AUTH_MTLS_REQUIRED", "mTLS client certificate required")
-				return
-			}
-			next.ServeHTTP(w, r)
-		})
-	}
-}
-
-// verboseTokenMiddleware creates an HTTP middleware that guards ?verbose mode
-// with a pre-hashed token. The hashedToken is the SHA-256 hash of the
-// configured token (stored in cell.AuthVerboseToken.HashedToken).
-//
-// SEC-06: comparing fixed-length 32-byte digests avoids the length-oracle
-// that comparing raw bytes exhibits on length mismatch (the sha256 approach
-// is consistent with what the health handler uses).
-//
-// On token mismatch, the middleware writes the same envelope as
-// runtime/http/health.Handler.sendVerboseDenied so /readyz?verbose returns a
-// single contract regardless of which layer rejects (PR269 F1: middleware and
-// handler-layer gates share the canonical ERR_READYZ_VERBOSE_DENIED code with
-// request_id propagation via httputil.WritePublicError).
-//
-// Moved from policy_verbose_token.go; accepts the pre-hashed form from AuthVerboseToken.
-func verboseTokenMiddleware(headerName string, configuredHash [32]byte) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if !probequery.Verbose(r) {
-				next.ServeHTTP(w, r)
-				return
-			}
-			submittedHash := sha256.Sum256([]byte(r.Header.Get(headerName)))
-			if subtle.ConstantTimeCompare(submittedHash[:], configuredHash[:]) != 1 {
-				httputil.WritePublicError(
-					r.Context(),
-					w,
-					http.StatusUnauthorized,
-					string(errcode.ErrReadyzVerboseDenied),
-					"verbose output requires a matching X-Readyz-Token header",
-				)
 				return
 			}
 			next.ServeHTTP(w, r)

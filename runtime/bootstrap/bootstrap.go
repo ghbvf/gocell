@@ -373,19 +373,18 @@ func WithAdapterInfo(info map[string]string) Option {
 // canonical use cases are:
 //
 //	bootstrap.WithHealthRoutes(bootstrap.WithMetricsHandler(promHandler))
-//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzAuth(
-//	    cell.NewAuthVerboseToken("X-Readyz-Token", token)))
+//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseToken(token))
 //	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled())
 //
 // Multiple WithHealthRoutes calls accumulate; later options for the same
-// concern (metrics handler, livez/readyz/metrics auth, verbose disabled)
-// overwrite earlier ones in the order they were appended. Pass nil-valued
-// options at your peril — they overwrite any previously-set value with the
-// zero value.
+// concern (metrics handler, verbose-token, verbose-disabled) overwrite earlier
+// ones in the order they were appended. Pass nil-valued options at your peril —
+// they overwrite any previously-set value with the zero value.
 //
-// PR-A35 strict semantics: a request with ?verbose= but no matching readyz
-// policy / disabled flag yields 401 (or the configured policy's response),
-// never a silent downgrade to plain 200.
+// PR-A35 / PR269 round-3 strict semantics: a request with ?verbose= but no
+// matching readyz verbose-token / disabled flag yields 401
+// ErrReadyzVerboseDenied at the health handler layer, never a silent
+// downgrade to plain 200.
 func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 	return func(b *Bootstrap) {
 		b.healthRouteGroupOpts = append(b.healthRouteGroupOpts, opts...)

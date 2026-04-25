@@ -6,14 +6,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -262,110 +260,9 @@ func TestChainProtectsRoutes(t *testing.T) {
 	}
 }
 
-type mtlsRouteGroupAuthCell struct {
-	*cell.BaseCell
-	groupAuth cell.GroupAuth
-}
-
-func newMTLSRouteGroupAuthCell(id string, groupAuth cell.GroupAuth) *mtlsRouteGroupAuthCell {
-	return &mtlsRouteGroupAuthCell{
-		BaseCell:  cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
-		groupAuth: groupAuth,
-	}
-}
-
-func (c *mtlsRouteGroupAuthCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.InternalListener,
-		Prefix:   "",
-		Auth:     c.groupAuth,
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{
-				Contract:  testHTTPContract(http.MethodPost, "/internal/v1/mtls/ping"),
-				Handler:   http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-				Delegated: true,
-			})
-		},
-	}}
-}
-
-func buildPhase5MTLSRouteGroupBootstrap(t *testing.T, tlsCfg *tls.Config) (*Bootstrap, *phaseState) {
-	t.Helper()
-
-	asm := assembly.New(assembly.Config{ID: "phase5-mtls-routegroup", DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, asm.Register(newMTLSRouteGroupAuthCell("mtls-routegroup-cell", cell.AuthMTLS{})))
-	require.NoError(t, asm.Start(context.Background()))
-	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
-
-	_, s := newPhaseState()
-	s.asm = asm
-
-	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerTLS(tlsCfg)),
-	)
-	return b, s
-}
-
-func TestPhase5_RejectsRouteGroupPolicyMTLSWithInvalidTLS(t *testing.T) {
-	pool := x509.NewCertPool()
-	tests := []struct {
-		name         string
-		tlsCfg       *tls.Config
-		wantContains string
-	}{
-		{
-			name:         "without_tls",
-			tlsCfg:       nil,
-			wantContains: "without WithListenerTLS",
-		},
-		{
-			name: "request_client_cert",
-			tlsCfg: &tls.Config{
-				ClientAuth: tls.RequestClientCert,
-				ClientCAs:  pool,
-			},
-			wantContains: "ClientAuth",
-		},
-		{
-			name: "require_any_client_cert",
-			tlsCfg: &tls.Config{
-				ClientAuth: tls.RequireAnyClientCert, // cert is required but not verified
-				ClientCAs:  pool,
-			},
-			wantContains: "ClientAuth",
-		},
-		{
-			name: "without_client_cas",
-			tlsCfg: &tls.Config{
-				ClientAuth: tls.RequireAndVerifyClientCert,
-			},
-			wantContains: "ClientCAs is nil",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			b, s := buildPhase5MTLSRouteGroupBootstrap(t, tc.tlsCfg)
-
-			err := b.phase5BuildRouters(s)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "RouteGroup")
-			assert.Contains(t, err.Error(), "AuthMTLS")
-			assert.Contains(t, err.Error(), tc.wantContains)
-		})
-	}
-}
-
-func TestPhase5_AcceptsRouteGroupPolicyMTLSWithProperTLS(t *testing.T) {
-	pool := x509.NewCertPool()
-	b, s := buildPhase5MTLSRouteGroupBootstrap(t, &tls.Config{
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs:  pool,
-	})
-
-	require.NoError(t, b.phase5BuildRouters(s))
-}
+// PR269 round-3: TestPhase5_*RouteGroupPolicyMTLS* tests removed along with
+// cell.RouteGroup.Auth — RouteGroup-level mTLS no longer exists. Listener-level
+// AuthMTLS validation is covered by auth_plan_validate_test.go.
 
 // TestPhase0_ValidatesInternalMiddleware was removed in PR-A14b because
 // WithInternalMiddleware and the internalMiddlewares field are deleted.
@@ -1054,5 +951,9 @@ func (s *stubNonceStore) Kind() cell.NonceStoreKind {
 
 type stubHMACKeyring struct{}
 
-func (s *stubHMACKeyring) Current() []byte   { return []byte("test-secret") }
-func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{[]byte("test-secret")} }
+// Current/Secrets must return >= cell.MinHMACKeyBytes (32 bytes) — short keys
+// panic at NewAuthServiceToken construction (PR269 round-3 F5).
+func (s *stubHMACKeyring) Current() []byte {
+	return []byte("test-secret-32-bytes-padding----")
+}
+func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }

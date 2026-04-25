@@ -24,7 +24,6 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -76,7 +75,6 @@ var authPlanConstructorNames = []string{
 	"AuthMTLS",
 	"AuthNone",
 	"AuthServiceToken",
-	"AuthVerboseToken",
 }
 
 // ---------------------------------------------------------------------------
@@ -314,7 +312,7 @@ func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
 		}
 	}
 	assert.Empty(t, hits,
-		"AUTH-PLAN-03: cell.Policy was deleted in PR262; use []cell.ListenerAuth / cell.GroupAuth instead")
+		"AUTH-PLAN-03: cell.Policy was deleted in PR262; use []cell.ListenerAuth instead")
 }
 
 // ---------------------------------------------------------------------------
@@ -522,89 +520,6 @@ var _ = cell.Policy{}
 		return true
 	})
 	assert.True(t, found, "fixture scanner must detect cell.Policy{} composite literal")
-}
-
-// ---------------------------------------------------------------------------
-// AUTH-PLAN-SEGREGATION: compile-error fixture verification
-// ---------------------------------------------------------------------------
-
-// TestAuthPlan_Segregation_FixtureVerifiesCompileError guards the
-// ListenerAuth/GroupAuth compile-time segregation invariants by running the
-// real Go type-checker against the fixtures in celltest_segregation/.
-//
-// Each fixture is a Go source file gated behind `//go:build segregation_check`
-// that assigns a plan to the wrong interface (e.g. AuthJWT → GroupAuth). The
-// test invokes `go build -tags=segregation_check` against the fixture package
-// and asserts that:
-//
-//  1. The build fails (non-zero exit).
-//  2. Stderr contains the expected `does not implement` message naming both
-//     the offending struct type and the missing marker method.
-//
-// If a fixture compiles successfully, the segregation invariant in
-// kernel/cell/auth_plan.go was removed and the marker method (listenerAuthOK
-// or groupAuthOK) is no longer doing its job — the test FAILS to surface the
-// regression.
-//
-// This is a real type-check, not a structural AST sniff: removing the marker
-// method is exactly the kind of subtle break an AST scanner would miss.
-func TestAuthPlan_Segregation_FixtureVerifiesCompileError(t *testing.T) {
-	root := findModuleRoot(t)
-	fixtureDir := filepath.Join(root, "tools", "archtest", "celltest_segregation")
-
-	cases := []struct {
-		fixture       string // file basename, exists in fixtureDir
-		offendingType string // e.g. "cell.AuthJWT"
-		targetIface   string // e.g. "cell.GroupAuth"
-		missingMethod string // e.g. "groupAuthOK"
-	}{
-		{
-			fixture:       "bad_jwt_groupauth.go",
-			offendingType: "cell.AuthJWT",
-			targetIface:   "cell.GroupAuth",
-			missingMethod: "groupAuthOK",
-		},
-		{
-			fixture:       "bad_verbose_listener.go",
-			offendingType: "cell.AuthVerboseToken",
-			targetIface:   "cell.ListenerAuth",
-			missingMethod: "listenerAuthOK",
-		},
-	}
-
-	// Sanity: every declared fixture must exist on disk so removing or
-	// renaming a fixture without updating the table fails loudly.
-	for _, c := range cases {
-		_, err := os.Stat(filepath.Join(fixtureDir, c.fixture))
-		require.NoError(t, err, "fixture %s missing from %s", c.fixture, fixtureDir)
-	}
-
-	// One subprocess invocation against the package — `go build` with the
-	// segregation_check tag activates the fixtures and the type-checker
-	// reports every bad assignment in a single pass.
-	cmd := exec.Command("go", "build", "-tags=segregation_check",
-		"./tools/archtest/celltest_segregation/")
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
-	require.Error(t, err,
-		"`go build -tags=segregation_check` must fail; segregation marker "+
-			"method(s) appear to have been removed.\noutput:\n%s", string(out))
-
-	output := string(out)
-	for _, c := range cases {
-		c := c
-		t.Run(c.fixture, func(t *testing.T) {
-			assert.Contains(t, output, c.offendingType,
-				"build error must reference offending type %s", c.offendingType)
-			assert.Contains(t, output, c.targetIface,
-				"build error must reference target interface %s", c.targetIface)
-			assert.Contains(t, output,
-				fmt.Sprintf("does not implement %s (missing method %s)",
-					c.targetIface, c.missingMethod),
-				"build error must name the missing marker method %s on %s",
-				c.missingMethod, c.targetIface)
-		})
-	}
 }
 
 // ---------------------------------------------------------------------------
