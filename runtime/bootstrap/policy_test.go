@@ -213,103 +213,65 @@ func TestPolicyServiceToken(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// PolicyMTLS — constructor fail-fast + middleware
+// PolicyMTLS — constructor + peer-cert-presence middleware
 // ---------------------------------------------------------------------------
+//
+// PolicyMTLS post-RES-#11 is a peer-cert-presence guard. Chain verification
+// is delegated to the listener's *tls.Config (ClientAuth +
+// ClientCAs), enforced by Bootstrap.phase0 via
+// validateListenerPolicyMTLSBinding. The policy itself takes no arguments —
+// the previously-misleading PolicyMTLS(pool *x509.CertPool, ...) signature
+// is gone.
 
 func TestPolicyMTLS(t *testing.T) {
 	t.Parallel()
 
-	pool := x509.NewCertPool()
-
 	t.Run("name", func(t *testing.T) {
 		t.Parallel()
-		p := bootstrap.PolicyMTLS(pool)
+		p := bootstrap.PolicyMTLS()
 		if got := p.Name; got != "mtls" {
 			t.Errorf("Name = %q, want %q", got, "mtls")
 		}
 	})
 
-	t.Run("nil_pool_panics", func(t *testing.T) {
-		t.Parallel()
-		defer func() {
-			if recover() == nil {
-				t.Error("expected panic for nil pool, got none")
-			}
-		}()
-		bootstrap.PolicyMTLS(nil)
-	})
-
 	t.Run("no_tls_connection_rejected", func(t *testing.T) {
 		t.Parallel()
-		p := bootstrap.PolicyMTLS(pool)
-		// Request with no TLS (r.TLS == nil) — expect 401.
+		p := bootstrap.PolicyMTLS()
 		rr := serveRequest(t, p, http.MethodGet, "/", nil)
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("status = %d, want 401 (no mTLS)", rr.Code)
 		}
 	})
-
-	t.Run("with_mtls_client_auth_option", func(t *testing.T) {
-		t.Parallel()
-		// Verify WithMTLSClientAuth option does not panic.
-		p := bootstrap.PolicyMTLS(pool, bootstrap.WithMTLSClientAuth(tls.RequireAnyClientCert))
-		if got := p.Name; got != "mtls" {
-			t.Errorf("Name = %q, want %q", got, "mtls")
-		}
-		// Also verify middleware still rejects non-TLS requests.
-		rr := serveRequest(t, p, http.MethodGet, "/", nil)
-		if rr.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401", rr.Code)
-		}
-	})
 }
 
-// TestPolicyMTLS_HappyPath_ValidCert verifies that a request with a valid peer
-// certificate chaining to the CA pool returns 200 OK (TEST-04).
-func TestPolicyMTLS_HappyPath_ValidCert(t *testing.T) {
+// TestPolicyMTLS_HappyPath_PeerCertPresent verifies that a request whose
+// TLS state already carries a peer certificate (i.e. the handshake-layer
+// chain check already passed at this point) reaches the inner handler.
+func TestPolicyMTLS_HappyPath_PeerCertPresent(t *testing.T) {
 	t.Parallel()
 
-	// Generate self-signed CA + leaf cert entirely in memory.
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	require.NoError(t, err)
-
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "test-ca"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	require.NoError(t, err)
-	caCert, err := x509.ParseCertificate(caDER)
-	require.NoError(t, err)
-
+	// Generate a leaf certificate. The handshake-layer chain check is
+	// outside this unit test's scope — we simulate "handshake already
+	// validated this cert against the CA pool" by populating PeerCertificates
+	// directly.
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	require.NoError(t, err)
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "test-client"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
 	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, leafTemplate, &leafKey.PublicKey, leafKey)
 	require.NoError(t, err)
 	leafCert, err := x509.ParseCertificate(leafDER)
 	require.NoError(t, err)
 
-	// Build CA pool containing only our CA.
-	pool := x509.NewCertPool()
-	pool.AddCert(caCert)
-
-	p := bootstrap.PolicyMTLS(pool)
+	p := bootstrap.PolicyMTLS()
 	mux := chi.NewMux()
 	bootstrap.ApplyPolicyForTest(p, mux)
 	mux.MethodFunc(http.MethodGet, "/", okHandler.ServeHTTP)
 
-	// Inject peer certificate into the request's TLS state (bypasses actual TLS).
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.TLS = &tls.ConnectionState{
 		PeerCertificates: []*x509.Certificate{leafCert},
@@ -318,7 +280,7 @@ func TestPolicyMTLS_HappyPath_ValidCert(t *testing.T) {
 	mux.ServeHTTP(rr, req)
 
 	if rr.Code != http.StatusOK {
-		t.Errorf("status = %d, want 200 (valid peer cert chaining to CA pool)", rr.Code)
+		t.Errorf("status = %d, want 200 (peer cert present; handshake assumed to have validated)", rr.Code)
 	}
 }
 
@@ -429,9 +391,15 @@ func runVerboseTokenCase(t *testing.T, p cell.Policy, url string, headers map[st
 }
 
 // assertVerboseTokenErrorBody validates that a 401 response carries the
-// canonical {"error": {...}} envelope.
+// canonical {"error":{"code":"ERR_AUTH_VERBOSE_TOKEN","message":"..."}}
+// envelope and the application/json content type. PR-A35 + PR-258 RES-6
+// hardening: the response shape is stable wire contract for monitoring /
+// SIEM consumers, so we lock down code, message, and content-type.
 func assertVerboseTokenErrorBody(t *testing.T, rr *httptest.ResponseRecorder) {
 	t.Helper()
+	if got := rr.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("401 Content-Type = %q, want %q", got, "application/json")
+	}
 	body, _ := io.ReadAll(rr.Body)
 	var errResp map[string]any
 	if err := json.Unmarshal(body, &errResp); err != nil {
@@ -441,6 +409,14 @@ func assertVerboseTokenErrorBody(t *testing.T, rr *httptest.ResponseRecorder) {
 	errField, _ := errResp["error"].(map[string]any)
 	if errField == nil {
 		t.Errorf("401 body missing 'error' field; body = %s", body)
+		return
+	}
+	if got, _ := errField["code"].(string); got != "ERR_AUTH_VERBOSE_TOKEN" {
+		t.Errorf("401 error.code = %q, want %q; body = %s",
+			got, "ERR_AUTH_VERBOSE_TOKEN", body)
+	}
+	if got, _ := errField["message"].(string); got == "" {
+		t.Errorf("401 error.message must be non-empty; body = %s", body)
 	}
 }
 
@@ -519,6 +495,16 @@ func TestPolicyStack(t *testing.T) {
 		if rr.Code != http.StatusUnauthorized {
 			t.Errorf("status = %d, want 401", rr.Code)
 		}
+	})
+
+	t.Run("jwt_rejected", func(t *testing.T) {
+		t.Parallel()
+
+		require.PanicsWithValue(t,
+			"bootstrap: PolicyStack does not support PolicyJWT or PolicyJWTFromAssembly; pass JWT directly as the listener default policy",
+			func() {
+				bootstrap.PolicyStack(bootstrap.PolicyJWT(stubVerifier{}), bootstrap.PolicyNone())
+			})
 	})
 }
 

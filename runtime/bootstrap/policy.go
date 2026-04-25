@@ -18,10 +18,18 @@ import (
 //
 // For an empty ps, PolicyStack returns a no-op policy (PolicyNone semantics).
 // Nil-Middleware policies in ps are silently skipped.
+//
+// JWT policies are intentionally rejected: PolicyJWT / PolicyJWTFromAssembly
+// carry their verifier in Extension and rely on Bootstrap to install the
+// router-aware AuthMiddleware. Stacking them would preserve only the display
+// name and silently drop the verifier.
 func PolicyStack(ps ...cell.Policy) cell.Policy {
 	var middlewares []func(http.Handler) http.Handler
 	names := make([]string, 0, len(ps))
 	for _, p := range ps {
+		if p.Name == "jwt" {
+			panic("bootstrap: PolicyStack does not support PolicyJWT or PolicyJWTFromAssembly; pass JWT directly as the listener default policy")
+		}
 		names = append(names, p.Name)
 		if p.Middleware != nil {
 			middlewares = append(middlewares, p.Middleware)
