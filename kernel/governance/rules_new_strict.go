@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -122,15 +123,37 @@ func walkSchemaItems(node map[string]any, path string, missing *[]string) {
 // directory derived from its ID. For example, "http.auth.login.v1" must live at
 // "contracts/http/auth/login/v1".
 //
+// Contracts under example projects (e.g. "examples/iotdevice/contracts/…") are
+// accepted as long as the segment after the last "contracts/" separator matches
+// the ID-derived suffix. A Dir that contains no "contracts/" component at all
+// is itself a violation.
+//
 // Severity: Error, IssueMismatch.
 func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
 	var results []ValidationResult
+	contractsSep := "contracts" + string(filepath.Separator)
 	for _, c := range v.project.Contracts {
 		if c.Dir == "" {
 			continue
 		}
-		derived := contractDirFromID(c.ID)
-		if filepath.Clean(c.Dir) != filepath.Clean(derived) {
+		derived := filepath.Clean(contractDirFromID(c.ID)) // e.g. "contracts/http/auth/login/v1"
+		actualClean := filepath.Clean(c.Dir)
+
+		// Find the last occurrence of "contracts/" within the actual dir so that
+		// paths like "examples/iotdevice/contracts/http/foo/v1" match the same
+		// derived suffix as a top-level "contracts/http/foo/v1".
+		idx := strings.LastIndex(actualClean, contractsSep)
+		if idx < 0 {
+			// No "contracts/" segment anywhere → definite mismatch.
+			results = append(results, v.newResult(
+				"FMT-CONTRACT-DIR-ID-MATCH-01", SeverityError, IssueMismatch,
+				contractFile(c), "id",
+				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
+			))
+			continue
+		}
+		actualSuffix := actualClean[idx:] // "contracts/http/auth/login/v1"
+		if actualSuffix != derived {
 			results = append(results, v.newResult(
 				"FMT-CONTRACT-DIR-ID-MATCH-01", SeverityError, IssueMismatch,
 				contractFile(c), "id",

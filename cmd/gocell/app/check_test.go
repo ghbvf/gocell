@@ -353,12 +353,15 @@ func TestCheckL0Imports_NoL0Cells(t *testing.T) {
 	assert.NoError(t, err, "l0-imports must pass when no L0 cells exist")
 }
 
-// TestCheckL0Imports_NonL0CellReturnsError verifies that requesting --cell
-// for a non-L0 cell returns an error.
-func TestCheckL0Imports_NonL0CellReturnsError(t *testing.T) {
-	err := runCheck([]string{"l0-imports", "--cell=accesscore"})
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not L0")
+// TestCheckL0Imports_NonL0CellSkipsWithSuccess verifies that requesting --cell
+// for a non-L0 cell prints an informational message and exits 0 (success).
+func TestCheckL0Imports_NonL0CellSkipsWithSuccess(t *testing.T) {
+	out := captureStdout(t, func() {
+		err := runCheck([]string{"l0-imports", "--cell=accesscore"})
+		assert.NoError(t, err, "non-L0 cell must exit 0 with skip message")
+	})
+	assert.Contains(t, out, "not L0", "output must mention the cell is not L0")
+	assert.Contains(t, out, "skipped", "output must indicate the check was skipped")
 }
 
 // ---------------------------------------------------------------------------

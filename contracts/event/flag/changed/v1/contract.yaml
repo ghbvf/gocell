@@ -4,6 +4,7 @@ kind: event
 ownerCell: configcore
 consistencyLevel: L2
 lifecycle: deprecated
+deprecatedAt: "2026-04-25"
 endpoints:
   publisher: configcore
   subscribers: []

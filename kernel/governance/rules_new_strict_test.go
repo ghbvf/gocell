@@ -222,6 +222,71 @@ func TestFMTContractDirIDMatch01_Mismatch(t *testing.T) {
 	}
 }
 
+// TestFMTContractDirIDMatch01_ExamplesPrefix verifies that contracts living
+// under an examples/* subtree are accepted as long as the segment after the
+// last "contracts/" separator matches the ID-derived suffix.
+func TestFMTContractDirIDMatch01_ExamplesPrefix(t *testing.T) {
+	tests := []struct {
+		name        string
+		contractID  string
+		contractDir string
+		wantCount   int
+	}{
+		{
+			name:        "examples/iotdevice prefix — correct suffix",
+			contractID:  "http.bar.v1",
+			contractDir: "examples/foo/contracts/http/bar/v1",
+			wantCount:   0,
+		},
+		{
+			name:        "examples/todoorder prefix — correct suffix",
+			contractID:  "event.device.registered.v1",
+			contractDir: "examples/iotdevice/contracts/event/device/registered/v1",
+			wantCount:   0,
+		},
+		{
+			name:        "examples prefix — wrong suffix must still fire",
+			contractID:  "http.bar.v1",
+			contractDir: "examples/foo/contracts/http/baz/v1",
+			wantCount:   1,
+		},
+		{
+			name:        "no contracts/ segment in dir — violation",
+			contractID:  "http.bar.v1",
+			contractDir: "examples/foo/http/bar/v1",
+			wantCount:   1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			pm := &metadata.ProjectMeta{
+				Cells:  map[string]*metadata.CellMeta{},
+				Slices: map[string]*metadata.SliceMeta{},
+				Contracts: map[string]*metadata.ContractMeta{
+					tc.contractID: {
+						ID:        tc.contractID,
+						Kind:      "http",
+						OwnerCell: "testcell",
+						Lifecycle: "active",
+						Dir:       tc.contractDir,
+						File:      tc.contractDir + "/contract.yaml",
+					},
+				},
+				Journeys:   map[string]*metadata.JourneyMeta{},
+				Assemblies: map[string]*metadata.AssemblyMeta{},
+			}
+
+			v := NewValidator(pm, "")
+			results := v.Validate()
+			matches := findByCode(results, "FMT-CONTRACT-DIR-ID-MATCH-01")
+			assert.Len(t, matches, tc.wantCount,
+				"test %q: expected %d violations, got %d: %v",
+				tc.name, tc.wantCount, len(matches), matches)
+		})
+	}
+}
+
 // --- STATUSBOARD-STATE-ENUM-01 ---
 
 // TestStatusBoardStateEnum01 verifies that invalid state values are flagged.

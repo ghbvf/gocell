@@ -489,14 +489,21 @@ func checkL0Imports(args []string) error {
 			return fmt.Errorf("cell %q not found in project metadata", *cellID)
 		}
 		if cm.ConsistencyLevel != "L0" {
-			return fmt.Errorf("cell %q has consistencyLevel=%q, not L0", *cellID, cm.ConsistencyLevel)
+			fmt.Printf("cell %q is %s (not L0); l0-imports check skipped\n", *cellID, cm.ConsistencyLevel)
+			return nil
 		}
 		results = l0ImportsForCell(root, cm)
 	} else {
+		l0Count := 0
 		for _, cm := range project.Cells {
 			if cm.ConsistencyLevel == "L0" {
+				l0Count++
 				results = append(results, l0ImportsForCell(root, cm)...)
 			}
+		}
+		if l0Count == 0 {
+			fmt.Println("checked 0 L0 cells, 0 issues")
+			return nil
 		}
 	}
 
