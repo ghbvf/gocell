@@ -448,6 +448,20 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	assert.Equal(t, 0, sessionRepo.creates, "no session must be persisted on fail-closed")
 }
 
+// TestService_IssueForUser_GetByIDError verifies that when userRepo.GetByID
+// returns an error (e.g. user not found), IssueForUser wraps and propagates the
+// error with "IssueForUser get user" context rather than panicking or returning
+// an empty pair silently.
+func TestService_IssueForUser_GetByIDError(t *testing.T) {
+	svc, _ := newTestService() // userRepo is empty — GetByID will return not-found
+
+	pair, err := svc.IssueForUser(context.Background(), "nonexistent-user-id")
+	require.Error(t, err, "IssueForUser must fail when user does not exist")
+	assert.Empty(t, pair.AccessToken, "no token on GetByID failure")
+	assert.Contains(t, err.Error(), "IssueForUser get user",
+		"error must be wrapped with IssueForUser get user context")
+}
+
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
