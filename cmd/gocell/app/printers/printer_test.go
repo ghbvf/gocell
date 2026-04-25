@@ -246,6 +246,23 @@ var goldenCases = []struct {
 			},
 		},
 	},
+	{
+		// HTML-flavored characters in the message must round-trip
+		// unescaped in JSON / SARIF: validation rules legitimately
+		// reference path templates like `<userId>` or comparison
+		// operators (`<`, `>`, `&`). See SetEscapeHTML(false).
+		name: "html_chars_in_message",
+		results: []governance.ValidationResult{
+			{
+				Code:     "MSG-02",
+				Severity: governance.SeverityError,
+				File:     "cells/x/cell.yaml",
+				Line:     1,
+				Field:    "schema",
+				Message:  "type <string> & ref <user/x> not allowed when count > 0",
+			},
+		},
+	},
 }
 
 // TestGolden_Text fans the golden corpus through TextPrinter and compares to
@@ -434,6 +451,53 @@ func TestText_PrintFailFast_NoErrors(t *testing.T) {
 	var buf bytes.Buffer
 	require.NoError(t, NewTextPrinter(&buf).PrintFailFast(results))
 	assert.Empty(t, strings.TrimSpace(buf.String()))
+}
+
+// TestJSON_DoesNotEscapeHTMLChars locks SetEscapeHTML(false): messages with
+// `<`, `>`, `&` must round-trip as the raw bytes, not as < / > / &
+// — otherwise jq output and SARIF viewer text become illegible. Pinning
+// this so a future stylistic edit doesn't accidentally re-enable the
+// default and silently degrade output quality.
+func TestJSON_DoesNotEscapeHTMLChars(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:     "X-1",
+			Severity: governance.SeverityError,
+			File:     "f.yaml",
+			Message:  "type <string> & ref <user>",
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewJSONPrinter(&buf).Print(results))
+	body := buf.String()
+	assert.Contains(t, body, "<string>", "JSON output must keep < and > raw")
+	assert.Contains(t, body, "& ref", "JSON output must keep & raw")
+	assert.NotContains(t, body, "\\u003c", "must not escape < as \\u003c")
+	assert.NotContains(t, body, "\\u003e", "must not escape > as \\u003e")
+	assert.NotContains(t, body, "\\u0026", "must not escape & as \\u0026")
+}
+
+// TestSARIF_DoesNotEscapeHTMLChars same assertion for SARIF output. SARIF
+// viewers (VS Code SARIF Explorer, GitHub Code Scanning) display
+// message.text verbatim; HTML-escaping turns rule descriptions like
+// `placeholder <userId>` into noise.
+func TestSARIF_DoesNotEscapeHTMLChars(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:     "X-2",
+			Severity: governance.SeverityError,
+			File:     "f.yaml",
+			Message:  "placeholder <userId> & path /users/<id>",
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewSARIFPrinter(&buf, "test").Print(results))
+	body := buf.String()
+	assert.Contains(t, body, "<userId>")
+	assert.Contains(t, body, "& path")
+	assert.NotContains(t, body, "\\u003c")
+	assert.NotContains(t, body, "\\u003e")
+	assert.NotContains(t, body, "\\u0026")
 }
 
 // TestJSON_EmptyIssues_NotNull: zero results must serialise as

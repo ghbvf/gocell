@@ -107,15 +107,26 @@ func runValidateFailFast(
 // available; otherwise the printer receives a one-element slice. This keeps
 // fail-fast a single concept across all three formats while letting text
 // mode drop its banner / summary lines.
+//
+// Writer errors (closed pipe, full disk on a stdout redirect, etc.) are
+// surfaced to stderr — silently swallowing them previously meant CI saw
+// "no validation output" without explanation. The validation result itself
+// is still propagated by the caller via its returned error, so an output
+// failure is observable but does not mask the original validation outcome.
 func emitFailFast(printer printers.Printer, format string, results []governance.ValidationResult) {
+	var emitErr error
 	if format == string(printers.FormatText) {
 		if ff, ok := printer.(printers.FailFastPrinter); ok {
-			_ = ff.PrintFailFast(results)
-			return
+			emitErr = ff.PrintFailFast(results)
+		} else {
+			emitErr = printer.Print([]governance.ValidationResult{*firstError(results)})
 		}
+	} else {
+		emitErr = printer.Print([]governance.ValidationResult{*firstError(results)})
 	}
-	first := []governance.ValidationResult{*firstError(results)}
-	_ = printer.Print(first)
+	if emitErr != nil {
+		fmt.Fprintf(os.Stderr, "warning: failed to emit fail-fast result: %v\n", emitErr)
+	}
 }
 
 // runValidatorFailFast selects the appropriate validator method for fail-fast mode.

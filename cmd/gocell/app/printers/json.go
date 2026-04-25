@@ -84,6 +84,13 @@ func (p *JSONPrinter) Print(results []governance.ValidationResult) error {
 
 	enc := json.NewEncoder(p.w)
 	enc.SetIndent("", "  ")
+	// Disable HTML escaping: validation messages routinely contain `<`, `>`,
+	// and `&` (XML-style placeholders, comparison operators, etc.). Default
+	// escaping renders these as < / > / & which is unreadable
+	// in jq output and SARIF viewers without changing meaning. The output
+	// remains valid JSON; we just don't pre-defend against being embedded
+	// in HTML, which is not a use case for CLI output.
+	enc.SetEscapeHTML(false)
 	if err := enc.Encode(doc); err != nil {
 		return fmt.Errorf("encode json: %w", err)
 	}

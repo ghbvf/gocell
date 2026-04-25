@@ -2,12 +2,14 @@ package app
 
 import (
 	"bytes"
+	"encoding/json"
 	"io"
 	"os"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // captureDispatch runs Dispatch with args while capturing stdout and stderr
@@ -110,4 +112,72 @@ func TestDispatch_SuccessPath_ExitZero(t *testing.T) {
 	assert.Equal(t, ExitOK, exit, "stderr=%q", stderr)
 	assert.Empty(t, strings.TrimSpace(stderr), "nothing on stderr for success")
 	assert.Contains(t, stdout, "Validation complete:", "summary line expected")
+}
+
+// TestDispatch_ValidateFormats pins the contract for `gocell validate
+// --format=...` at the integration boundary. Plan Batch C #12: machine-
+// parseable formats must produce well-formed output and the unknown-format
+// path must surface a recognisable error. Three cases × empty project so
+// the validator emits a clean pass; we then assert format-specific shape.
+func TestDispatch_ValidateFormats(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(dir+"/go.mod",
+		[]byte("module example.com/empty\n"), 0o644))
+
+	t.Run("json on clean project", func(t *testing.T) {
+		exit, stdout, stderr := captureDispatch(t,
+			[]string{"validate", "--root", dir, "--format=json"})
+		assert.Equal(t, ExitOK, exit, "stderr=%q", stderr)
+		assert.Empty(t, strings.TrimSpace(stderr))
+
+		var doc struct {
+			Issues  []map[string]any `json:"issues"`
+			Summary struct {
+				Errors   int `json:"errors"`
+				Warnings int `json:"warnings"`
+			} `json:"summary"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &doc),
+			"stdout must be valid JSON: %q", stdout)
+		assert.NotNil(t, doc.Issues,
+			"issues key must be present (never null) even on clean runs")
+	})
+
+	t.Run("sarif on clean project", func(t *testing.T) {
+		exit, stdout, stderr := captureDispatch(t,
+			[]string{"validate", "--root", dir, "--format=sarif"})
+		assert.Equal(t, ExitOK, exit, "stderr=%q", stderr)
+
+		var sarifLog struct {
+			Schema  string `json:"$schema"`
+			Version string `json:"version"`
+			Runs    []struct {
+				Tool struct {
+					Driver struct {
+						Name string `json:"name"`
+					} `json:"driver"`
+				} `json:"tool"`
+				Results []map[string]any `json:"results"`
+			} `json:"runs"`
+		}
+		require.NoError(t, json.Unmarshal([]byte(stdout), &sarifLog),
+			"stdout must be valid SARIF JSON: %q", stdout)
+		assert.Equal(t, "2.1.0", sarifLog.Version)
+		require.Len(t, sarifLog.Runs, 1)
+		assert.Equal(t, "gocell", sarifLog.Runs[0].Tool.Driver.Name)
+	})
+
+	t.Run("unknown format returns ExitRuntime with descriptive stderr", func(t *testing.T) {
+		exit, _, stderr := captureDispatch(t,
+			[]string{"validate", "--root", dir, "--format=yaml"})
+		// Unknown format surfaces from runValidate -> printers.New, so the
+		// dispatcher categorises it as a sub-command runtime error
+		// (ExitRuntime), not an unknown-command usage error (ExitUsage).
+		// This is consistent with how scaffold/check report sub-flag
+		// errors today.
+		assert.Equal(t, ExitRuntime, exit)
+		assert.Contains(t, stderr, "unknown format")
+		assert.Contains(t, stderr, "supported formats are",
+			"error must list valid formats so users self-correct")
+	})
 }

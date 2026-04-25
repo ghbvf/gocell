@@ -139,6 +139,11 @@ func (p *SARIFPrinter) Print(results []governance.ValidationResult) error {
 
 	enc := json.NewEncoder(p.w)
 	enc.SetIndent("", "  ")
+	// Disable HTML escaping: see json.go for rationale. SARIF viewers (VS
+	// Code SARIF Explorer, GitHub Code Scanning) do not interpret the
+	// message text as HTML, so escaping `<` / `>` / `&` only obscures
+	// rule descriptions that legitimately contain those characters.
+	enc.SetEscapeHTML(false)
 	if err := enc.Encode(log); err != nil {
 		return fmt.Errorf("encode sarif: %w", err)
 	}

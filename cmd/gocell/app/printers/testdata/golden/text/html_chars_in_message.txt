@@ -1,0 +1,6 @@
+ERRORS (1):
+  [MSG-02] type <string> & ref <user/x> not allowed when count > 0 (field: schema)
+         at cells/x/cell.yaml:1
+
+
+Validation complete: 1 error(s), 0 warning(s)
