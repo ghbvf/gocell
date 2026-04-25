@@ -52,7 +52,7 @@ func TestTokenPairResponse_Fields(t *testing.T) {
 		UserID:                "usr-1",
 		PasswordResetRequired: true,
 	}
-	resp := dto.TokenPairResponse(pair)
+	resp := dto.ToTokenPairResponse(pair)
 
 	assert.Equal(t, "access-tok-1", resp.AccessToken)
 	assert.Equal(t, "refresh-tok-1", resp.RefreshToken)

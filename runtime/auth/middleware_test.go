@@ -411,9 +411,10 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 }
 
 // assertPasswordResetErrorWithHint asserts 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response and verifies the changePasswordEndpoint hint and resolvedPath are present.
-// expectedPath is the URL path of the request that was blocked (always populated).
-func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder, expectedPath string) {
+// response and verifies the changePasswordEndpoint hint is present. The blocked
+// request's method and path are intentionally absent from the response body —
+// they are emitted via slog.Info on the auth logger (info-exposure boundary).
+func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder, _ string) {
 	t.Helper()
 	var body map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&body)
@@ -424,9 +425,10 @@ func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecord
 	require.True(t, ok, "details must be a map")
 	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["changePasswordEndpoint"],
 		"403 password-reset response must include changePasswordEndpoint hint (P2-10)")
-	// TDD: resolvedPath must always be present and echo the blocked request's URL path.
-	assert.Equal(t, expectedPath, details["resolvedPath"],
-		"403 password-reset response must include resolvedPath echoing the blocked endpoint")
+	// Only changePasswordEndpoint should be present in details; no path/method keys
+	// (the blocked request's context is emitted via slog.Info on the auth logger only —
+	// info-exposure boundary).
+	assert.Len(t, details, 1, "details must have exactly one key: changePasswordEndpoint")
 }
 
 // testExemptMatcher returns the canonical (method, path) matcher used by the
@@ -604,13 +606,16 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 
 // TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured verifies
 // that without WithPasswordResetChangeEndpointHintFn, the 403 response body
-// carries details.resolvedPath but NO details.changePasswordEndpoint —
-// runtime/auth carries no business path knowledge.
+// carries an empty details object. The blocked request's method and path are
+// observable via slog.Info only — runtime/auth carries no business path
+// knowledge and never echoes request context back to the client.
 func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := AuthMiddleware(verifier, WithLogger(logger))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("should not reach handler")
 	}))
 
@@ -629,8 +634,14 @@ func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *test
 	_, hasHint := details["changePasswordEndpoint"]
 	assert.False(t, hasHint,
 		"without WithPasswordResetChangeEndpointHintFn, changePasswordEndpoint must be absent (omitempty)")
-	assert.Equal(t, "/api/v1/configs", details["resolvedPath"],
-		"resolvedPath must always echo the blocked request path")
+	// Without a hint, details must be empty — no path/method or other fields
+	// (the blocked request's context is emitted via slog.Info on the auth logger only —
+	// info-exposure boundary).
+	assert.Empty(t, details, "details must be empty when no hint is configured")
+	// The path and method must be observable via slog.Info on the auth logger.
+	logOut := logBuf.String()
+	assert.Contains(t, logOut, "/api/v1/configs", "blocked path must appear in slog output")
+	assert.Contains(t, logOut, "GET", "blocked method must appear in slog output")
 }
 
 // TestAuthMiddleware_NoResetClaim_PassesThrough verifies that a regular token

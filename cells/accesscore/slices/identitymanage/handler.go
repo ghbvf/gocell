@@ -328,5 +328,5 @@ func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": dto.TokenPairResponse(pair)})
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": dto.ToTokenPairResponse(pair)})
 }

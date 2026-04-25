@@ -185,19 +185,10 @@ TOKEN_RESP=$(curl -s -X POST http://localhost:8080/api/v1/access/sessions/login 
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"admin\",\"password\":\"${INIT_PASS}\"}")
 echo "$TOKEN_RESP"
-# {"data":{"accessToken":"...","refreshToken":"...","passwordResetRequired":true,...}}
+# {"data":{"accessToken":"...","refreshToken":"...","sessionId":"sess-...","userId":"usr-...","expiresAt":"...","passwordResetRequired":true}}
 
 ACCESS_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
-# login response does not include userId; decode it from the access token's
-# `sub` claim (RFC 7519). JWT uses base64url (RFC 4648 §5) WITHOUT padding,
-# but base64 -d on Linux/macOS expects padded base64 — restore padding before
-# decoding, otherwise base64 -d errors silently and USER_ID becomes empty.
-USER_ID=$(echo "$ACCESS_TOKEN" \
-  | cut -d. -f2 \
-  | tr '_-' '/+' \
-  | awk '{ pad = (4 - length($0) % 4) % 4; while (pad-- > 0) $0 = $0 "="; print }' \
-  | base64 -d \
-  | jq -r '.sub')
+USER_ID=$(echo "$TOKEN_RESP"     | jq -r '.data.userId')
 
 # 4. 试调业务接口 — 被 middleware 拦截
 curl -i -X GET http://localhost:8080/api/v1/access/roles/admin \
