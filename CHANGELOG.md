@@ -6,6 +6,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed (Breaking) — PR262 AUTH-POLICY-PLAN-01
+
+- **`cell.Policy` struct and all `bootstrap.Policy*` factory functions are deleted.**
+  `WithListener` third parameter changes from `cell.Policy` to `[]cell.ListenerAuth`.
+  Replacement map:
+
+  | Deleted | Replacement |
+  |---------|-------------|
+  | `bootstrap.PolicyJWT(v)` | `[]cell.ListenerAuth{cell.NewAuthJWT(v)}` |
+  | `bootstrap.PolicyJWTFromAssembly(asm)` | `[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}` |
+  | `bootstrap.PolicyServiceToken(s, r)` | `[]cell.ListenerAuth{cell.NewAuthServiceToken(s, r)}` |
+  | `bootstrap.PolicyMTLS()` | `[]cell.ListenerAuth{cell.AuthMTLS{}}` |
+  | `bootstrap.PolicyNone()` / `cell.Policy{}` | `nil` |
+  | `bootstrap.PolicyVerboseToken(h, t)` | `cell.NewAuthVerboseToken(h, t)` (GroupAuth, not ListenerAuth) |
+  | `bootstrap.PolicyStack(a, b)` | pass multiple elements in the `[]cell.ListenerAuth` slice |
+
+- **`WithReadyzPolicy` / `WithLivezPolicy` / `WithMetricsPolicy`** renamed to
+  `WithReadyzAuth` / `WithLivezAuth` / `WithMetricsAuth`; accept `cell.GroupAuth`.
+
+- **`cell.RouteGroup.Policy cell.Policy`** field renamed to `Auth cell.GroupAuth`.
+
+- Hard break: no migration shim, no deprecated aliases.
+  `tools/archtest/auth_plan_test.go` (AUTH-PLAN-01..04) guards against regression.
+
 ### Changed (Breaking) — PR-A35 READYZ-POLISH
 
 - **`GOCELL_READYZ_VERBOSE_TOKEN` is now required in every adapter mode.**

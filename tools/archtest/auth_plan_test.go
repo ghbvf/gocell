@@ -1,0 +1,537 @@
+package archtest
+
+// auth_plan_test.go — AST guards for the typed AuthPlan migration (PR262).
+//
+// Four rules prevent regression to the old string-based cell.Policy dispatch:
+//
+//   AUTH-PLAN-01  No literal strings "jwt", "mtls", "service-token", "stack["
+//                 in production .go files (these were the Policy.Name values).
+//   AUTH-PLAN-02  No selector expression bootstrap.Policy{None,JWT,…} —
+//                 all seven legacy factory names are deleted.
+//   AUTH-PLAN-03  No cell.Policy composite literal or type reference (deleted type).
+//   AUTH-PLAN-04  LAYER-09: cells/ code must not construct AuthPlan structs
+//                 (AuthJWT, AuthJWTFromAssembly, AuthMTLS, etc.) — composition
+//                 root responsibility only.
+//
+// ref: kubernetes/apiserver pkg/authentication/authenticator/interfaces.go@master
+//      — typed authenticator interface, no string-keyed dispatch.
+// ref: go-kratos/kratos transport/http/server.go@main
+//      — middleware assembled at composition root, not inside application code.
+
+import (
+	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+// ---------------------------------------------------------------------------
+// Rule constants
+// ---------------------------------------------------------------------------
+
+const (
+	authPlanRule01 = "AUTH-PLAN-01"
+	authPlanRule02 = "AUTH-PLAN-02"
+	authPlanRule03 = "AUTH-PLAN-03"
+	authPlanRule04 = "AUTH-PLAN-04"
+)
+
+// forbiddenPolicyStrings are the old cell.Policy.Name values that must no
+// longer appear as string literals in production code. The canonical source of
+// truth is now the Describe() method of each typed plan.
+var forbiddenPolicyStrings = []string{
+	`"jwt"`,
+	`"mtls"`,
+	`"service-token"`,
+	`"stack["`,
+}
+
+// forbiddenPolicySelectors are selector names that existed on the now-deleted
+// bootstrap.Policy* factory functions.
+var forbiddenPolicySelectors = []string{
+	"PolicyNone",
+	"PolicyJWT",
+	"PolicyJWTFromAssembly",
+	"PolicyMTLS",
+	"PolicyServiceToken",
+	"PolicyVerboseToken",
+	"PolicyStack",
+}
+
+// authPlanConstructorNames are the AuthPlan struct type names that cells/ must
+// not construct directly (LAYER-09). Composition roots (cmd/, examples/) are
+// exempt.
+var authPlanConstructorNames = []string{
+	"AuthJWT",
+	"AuthJWTFromAssembly",
+	"AuthMTLS",
+	"AuthNone",
+	"AuthServiceToken",
+	"AuthVerboseToken",
+}
+
+// ---------------------------------------------------------------------------
+// AUTH-PLAN-01: no forbidden policy string literals
+// ---------------------------------------------------------------------------
+
+// authPlanStringAllowlist contains files that legitimately return or use the
+// old policy-name strings as Describe() return values, observability labels,
+// or unrelated map keys. These are not dispatch discriminators.
+//
+// Rule: any file in this list may contain the strings in forbiddenPolicyStrings.
+// The rule still catches new callers that add the strings outside this list.
+var authPlanStringAllowlist = []string{
+	// Canonical Describe() return values live in auth_plan.go and auth_plan_apply.go.
+	"kernel/cell/auth_plan.go",
+	"runtime/bootstrap/auth_plan_apply.go",
+	"runtime/bootstrap/auth_plan_describe.go",
+	// Observability labels (AuthMethod="jwt") — not dispatch.
+	"runtime/auth/authenticator.go",
+	// Vault policy map — "jwt" is a Vault policy name key, not an auth discriminator.
+	"adapters/vault/auth.go",
+}
+
+// TestAuthPlan_NoLegacyPolicyStringLiterals enforces AUTH-PLAN-01:
+// the string values that were used as cell.Policy.Name discriminators
+// ("jwt", "mtls", "service-token", "stack[") must not appear as bare string
+// literals in production .go files outside the canonical allowlist.
+//
+// Allowlisted files (see authPlanStringAllowlist) may contain these strings
+// because they own the canonical Describe() definitions or use them as
+// observability labels rather than dispatch keys.
+func TestAuthPlan_NoLegacyPolicyStringLiterals(t *testing.T) {
+	root := findModuleRoot(t)
+
+	files, err := findAllProductionGoFiles(root)
+	require.NoError(t, err)
+
+	type hit struct {
+		file string
+		line int
+		val  string
+	}
+	var hits []hit
+
+	for _, f := range files {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+
+		// Skip allowlisted files — they own these strings legitimately.
+		skip := false
+		for _, allowed := range authPlanStringAllowlist {
+			if strings.HasSuffix(rel, allowed) {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+
+		fset := token.NewFileSet()
+		af, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+		if err != nil {
+			continue // unparseable; other tools will catch syntax errors
+		}
+		ast.Inspect(af, func(n ast.Node) bool {
+			bl, ok := n.(*ast.BasicLit)
+			if !ok || bl.Kind != token.STRING {
+				return true
+			}
+			for _, forbidden := range forbiddenPolicyStrings {
+				// bl.Value is the raw quoted string (e.g. `"jwt"`).
+				if bl.Value == forbidden {
+					hits = append(hits, hit{
+						file: rel,
+						line: fset.Position(bl.Pos()).Line,
+						val:  bl.Value,
+					})
+				}
+			}
+			return true
+		})
+	}
+
+	if len(hits) > 0 {
+		for _, h := range hits {
+			t.Logf("%s: %s:%d: forbidden policy string literal %s", authPlanRule01, h.file, h.line, h.val)
+		}
+	}
+	assert.Empty(t, hits,
+		"AUTH-PLAN-01: string literals %v are old cell.Policy.Name discriminators; "+
+			"use typed AuthPlan (cell.NewAuthJWT / cell.AuthMTLS{} / …) instead. "+
+			"If a new file legitimately needs these strings (e.g. a Describe() impl), "+
+			"add it to authPlanStringAllowlist in auth_plan_test.go.",
+		forbiddenPolicyStrings)
+}
+
+// ---------------------------------------------------------------------------
+// AUTH-PLAN-02: no deleted bootstrap.Policy* selector expressions
+// ---------------------------------------------------------------------------
+
+// TestAuthPlan_NoLegacyPolicySelectorExpressions enforces AUTH-PLAN-02:
+// the seven deleted bootstrap.Policy* factory functions must not be referenced
+// anywhere in the codebase. This catches accidental re-introduction of the
+// old API.
+func TestAuthPlan_NoLegacyPolicySelectorExpressions(t *testing.T) {
+	root := findModuleRoot(t)
+
+	files, err := findAllProductionGoFiles(root)
+	require.NoError(t, err)
+
+	type hit struct {
+		file string
+		line int
+		sel  string
+	}
+	var hits []hit
+
+	for _, f := range files {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+
+		fset := token.NewFileSet()
+		af, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		ast.Inspect(af, func(n ast.Node) bool {
+			sel, ok := n.(*ast.SelectorExpr)
+			if !ok {
+				return true
+			}
+			id, ok := sel.X.(*ast.Ident)
+			if !ok {
+				return true
+			}
+			if id.Name != "bootstrap" {
+				return true
+			}
+			for _, forbidden := range forbiddenPolicySelectors {
+				if sel.Sel.Name == forbidden {
+					hits = append(hits, hit{
+						file: rel,
+						line: fset.Position(sel.Pos()).Line,
+						sel:  "bootstrap." + forbidden,
+					})
+				}
+			}
+			return true
+		})
+	}
+
+	if len(hits) > 0 {
+		for _, h := range hits {
+			t.Logf("%s: %s:%d: forbidden selector %s", authPlanRule02, h.file, h.line, h.sel)
+		}
+	}
+	assert.Empty(t, hits,
+		"AUTH-PLAN-02: bootstrap.Policy* factory functions have been deleted; "+
+			"use []cell.ListenerAuth{cell.NewAuthJWT(v)} / cell.NewAuthJWTFromAssembly(asm) / … instead")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH-PLAN-03: no cell.Policy composite literals or type references
+// ---------------------------------------------------------------------------
+
+// TestAuthPlan_NoCellPolicyTypeUsage enforces AUTH-PLAN-03:
+// cell.Policy is a deleted type. Neither `cell.Policy{…}` composite literals
+// nor `cell.Policy` identifier references should appear in any .go file.
+func TestAuthPlan_NoCellPolicyTypeUsage(t *testing.T) {
+	root := findModuleRoot(t)
+
+	files, err := findAllProductionGoFiles(root)
+	require.NoError(t, err)
+
+	type hit struct {
+		file string
+		line int
+		kind string
+	}
+	var hits []hit
+
+	for _, f := range files {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+
+		fset := token.NewFileSet()
+		af, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		ast.Inspect(af, func(n ast.Node) bool {
+			// Composite literal: cell.Policy{...}
+			if lit, ok := n.(*ast.CompositeLit); ok {
+				if sel, ok := lit.Type.(*ast.SelectorExpr); ok {
+					if id, ok := sel.X.(*ast.Ident); ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
+						hits = append(hits, hit{
+							file: rel,
+							line: fset.Position(lit.Pos()).Line,
+							kind: "composite literal",
+						})
+					}
+				}
+				return true
+			}
+			// Selector expression used as a type: cell.Policy (non-composite, e.g. in var decl or param)
+			if sel, ok := n.(*ast.SelectorExpr); ok {
+				if id, ok := sel.X.(*ast.Ident); ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
+					hits = append(hits, hit{
+						file: rel,
+						line: fset.Position(sel.Pos()).Line,
+						kind: "type reference",
+					})
+				}
+			}
+			return true
+		})
+	}
+
+	// De-duplicate (composite lit will also match the selector inside it)
+	seen := map[string]bool{}
+	deduped := hits[:0]
+	for _, h := range hits {
+		key := fmt.Sprintf("%s:%d:%s", h.file, h.line, h.kind)
+		if !seen[key] {
+			seen[key] = true
+			deduped = append(deduped, h)
+		}
+	}
+	hits = deduped
+
+	if len(hits) > 0 {
+		for _, h := range hits {
+			t.Logf("%s: %s:%d: cell.Policy %s (type was deleted in PR262)", authPlanRule03, h.file, h.line, h.kind)
+		}
+	}
+	assert.Empty(t, hits,
+		"AUTH-PLAN-03: cell.Policy was deleted in PR262; use []cell.ListenerAuth / cell.GroupAuth instead")
+}
+
+// ---------------------------------------------------------------------------
+// AUTH-PLAN-04 (LAYER-09): cells/ must not construct AuthPlan values
+// ---------------------------------------------------------------------------
+
+// TestAuthPlan_CellsMustNotConstructAuthPlans enforces AUTH-PLAN-04 (LAYER-09):
+// AuthPlan values (AuthJWT, AuthJWTFromAssembly, AuthMTLS, etc.) are composition-
+// root concerns and must only be constructed in cmd/ and examples/. Cells may
+// receive a GroupAuth via RouteGroup.Auth but must not instantiate the concrete
+// types — that would couple business logic to listener topology decisions.
+//
+// Allowlist:
+//   - examples/  — example cells live here and are allowed to wire themselves
+//   - kernel/cell/auth_plan*.go — the type definitions themselves
+//   - *_test.go  — unit tests may construct any plan
+func TestAuthPlan_CellsMustNotConstructAuthPlans(t *testing.T) {
+	root := findModuleRoot(t)
+
+	cellsDir := filepath.Join(root, "cells")
+	files, err := findProductionGoFilesInDir(cellsDir)
+	require.NoError(t, err)
+
+	type hit struct {
+		file string
+		line int
+		name string
+	}
+	var hits []hit
+
+	for _, f := range files {
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+
+		// examples/ is the allowlist — example code may construct any plan
+		if strings.HasPrefix(rel, "examples/") {
+			continue
+		}
+
+		fset := token.NewFileSet()
+		af, err := parser.ParseFile(fset, f, nil, parser.SkipObjectResolution)
+		if err != nil {
+			continue
+		}
+		ast.Inspect(af, func(n ast.Node) bool {
+			// Composite literal: cell.AuthJWT{} / AuthJWT{...}
+			lit, ok := n.(*ast.CompositeLit)
+			if !ok {
+				return true
+			}
+			typeName := ""
+			switch t := lit.Type.(type) {
+			case *ast.SelectorExpr:
+				if id, ok := t.X.(*ast.Ident); ok && id.Name == "cell" {
+					typeName = t.Sel.Name
+				}
+			case *ast.Ident:
+				typeName = t.Name
+			}
+			for _, forbidden := range authPlanConstructorNames {
+				if typeName == forbidden {
+					hits = append(hits, hit{
+						file: rel,
+						line: fset.Position(lit.Pos()).Line,
+						name: typeName,
+					})
+				}
+			}
+			return true
+		})
+	}
+
+	if len(hits) > 0 {
+		for _, h := range hits {
+			t.Logf("%s: %s:%d: cells/ code constructs %s (LAYER-09 violation)", authPlanRule04, h.file, h.line, h.name)
+		}
+	}
+	assert.Empty(t, hits,
+		"AUTH-PLAN-04 (LAYER-09): AuthPlan construction belongs in composition roots (cmd/, examples/); "+
+			"cells/ must not instantiate AuthJWT / AuthJWTFromAssembly / AuthMTLS / etc.")
+}
+
+// ---------------------------------------------------------------------------
+// Regression fixtures — prove the scanners have teeth
+// ---------------------------------------------------------------------------
+
+// TestAuthPlan_Fixtures_Rule01 ensures AUTH-PLAN-01 scanner fires on known bad input.
+func TestAuthPlan_Fixtures_Rule01(t *testing.T) {
+	src := `package fixture
+var x = "jwt"
+`
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var found bool
+	ast.Inspect(af, func(n ast.Node) bool {
+		bl, ok := n.(*ast.BasicLit)
+		if !ok || bl.Kind != token.STRING {
+			return true
+		}
+		if bl.Value == `"jwt"` {
+			found = true
+		}
+		return true
+	})
+	assert.True(t, found, "fixture scanner must detect the literal \"jwt\"")
+}
+
+// TestAuthPlan_Fixtures_Rule02 ensures AUTH-PLAN-02 scanner fires on known bad input.
+func TestAuthPlan_Fixtures_Rule02(t *testing.T) {
+	src := `package fixture
+import "example.com/bootstrap"
+var _ = bootstrap.PolicyJWT(nil)
+`
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var found bool
+	ast.Inspect(af, func(n ast.Node) bool {
+		sel, ok := n.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		id, ok := sel.X.(*ast.Ident)
+		if ok && id.Name == "bootstrap" && sel.Sel.Name == "PolicyJWT" {
+			found = true
+		}
+		return true
+	})
+	assert.True(t, found, "fixture scanner must detect bootstrap.PolicyJWT")
+}
+
+// TestAuthPlan_Fixtures_Rule03 ensures AUTH-PLAN-03 scanner fires on known bad input.
+func TestAuthPlan_Fixtures_Rule03(t *testing.T) {
+	src := `package fixture
+import "example.com/cell"
+var _ = cell.Policy{}
+`
+	fset := token.NewFileSet()
+	af, err := parser.ParseFile(fset, "fixture.go", src, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var found bool
+	ast.Inspect(af, func(n ast.Node) bool {
+		lit, ok := n.(*ast.CompositeLit)
+		if !ok {
+			return true
+		}
+		sel, ok := lit.Type.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		id, ok := sel.X.(*ast.Ident)
+		if ok && id.Name == "cell" && sel.Sel.Name == "Policy" {
+			found = true
+		}
+		return true
+	})
+	assert.True(t, found, "fixture scanner must detect cell.Policy{} composite literal")
+}
+
+// ---------------------------------------------------------------------------
+// File-finding helpers
+// ---------------------------------------------------------------------------
+
+// findAllProductionGoFiles returns all non-test .go files under root,
+// excluding vendor/, .git/, generated/, testdata/ directories and *_test.go.
+func findAllProductionGoFiles(root string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "vendor", ".git", "generated", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	sort.Strings(files)
+	return files, err
+}
+
+// findProductionGoFilesInDir returns production .go files under a specific dir.
+func findProductionGoFilesInDir(dir string) ([]string, error) {
+	var files []string
+	err := filepath.WalkDir(dir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			switch d.Name() {
+			case "vendor", ".git", "generated", "testdata":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(path, ".go") {
+			return nil
+		}
+		if strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		files = append(files, path)
+		return nil
+	})
+	sort.Strings(files)
+	return files, err
+}

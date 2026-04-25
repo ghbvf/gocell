@@ -8,7 +8,7 @@ paths:
 
 # Runtime API
 
-## Auth 路由声明 + 三 listener + RouteGroup (PR-A14b)
+## Auth 路由声明 + 三 listener + RouteGroup (PR-A14b / PR262)
 
 每个 Cell 实现 `RouteGroupContributor` 接口，通过 `RouteGroups()` 声明路由组。
 每个路由组指定目标 listener、URL 前缀、以及注册回调（`Register func(mux cell.RouteMux)`）。
@@ -52,14 +52,16 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
     }
 }
 
-// composition root — WithListener(ref, addr, defaultPolicy, ...ListenerOption)
-// JWT auth lives on the listener policy (PolicyJWT / PolicyJWTFromAssembly);
-// there is no separate WithAuthMiddleware / WithAuthDiscovery option.
+// composition root — WithListener(ref, addr, authChain []cell.ListenerAuth, ...ListenerOption)
+// JWT auth lives on the listener auth chain; there is no separate WithAuthMiddleware /
+// WithAuthDiscovery option (PR262: typed AuthPlan replaces cell.Policy).
 bootstrap.New(
     bootstrap.WithAssembly(asm),
-    bootstrap.WithListener(cell.PrimaryListener, ":8080", bootstrap.PolicyJWTFromAssembly(asm)),
-    bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090", bootstrap.PolicyServiceToken(ring)),
-    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", cell.Policy{}),
+    bootstrap.WithListener(cell.PrimaryListener, ":8080",
+        []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
+    bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
+        []cell.ListenerAuth{cell.NewAuthServiceToken(nonceStore, ring)}),
+    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", nil),
 )
 ```
 
@@ -71,19 +73,42 @@ bootstrap.New(
 | `cell.InternalListener` | control-plane | `/internal/v1/*` | `127.0.0.1:9090` |
 | `cell.HealthListener` | infra | `/healthz` `/readyz` `/metrics` | `127.0.0.1:9091` |
 
-### bootstrap.WithListener 策略
+### bootstrap.WithListener 认证链 (PR262)
 
-每个 listener 在构建时绑定一个默认 Policy，决定所有未经 `auth.Mount` 路由级 Policy 覆盖路由的鉴权行为：
+`WithListener(ref, addr, authChain []cell.ListenerAuth, opts...)` 的第三参数是一个
+**sealed interface slice**。每个元素实现 `cell.ListenerAuth`（marker method `listenerAuthOK()`）。
+传 `nil` 表示无认证（等同于旧 `PolicyNone`）。
 
-| Policy | 说明 | 典型 listener |
-|--------|------|--------------|
-| `PolicyJWT(verifier)` | JWT 验证（直接注入 IntentTokenVerifier） | PrimaryListener |
-| `PolicyJWTFromAssembly(asm)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
-| `PolicyServiceToken` | HMAC-SHA256 service token | InternalListener |
-| `PolicyMTLS` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
-| `PolicyVerboseToken` | bearer token gate for ?verbose probes | HealthListener readyz route group（可选） |
-| `PolicyNone` | 无验证 | HealthListener（loopback 隔离） |
-| `PolicyStack(a, b)` | 组合策略 | 任意（注意：JWT 不可嵌入 stack — Bootstrap 通过 Name=="jwt" 提取 verifier） |
+| 构造函数 | 说明 | 典型 listener |
+|---------|------|--------------|
+| `cell.NewAuthJWT(verifier)` | JWT 验证（直接注入 IntentTokenVerifier） | PrimaryListener |
+| `cell.NewAuthJWTFromAssembly(asm)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
+| `cell.NewAuthServiceToken(store, ring)` | HMAC-SHA256 service token | InternalListener |
+| `cell.AuthMTLS{}` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
+| `nil` | 无验证 | HealthListener（loopback 隔离） |
+
+`cell.AuthVerboseToken` 仅实现 `GroupAuth`（非 `ListenerAuth`），用于 RouteGroup 级别：
+
+```go
+bootstrap.WithHealthRoutes(
+    bootstrap.WithReadyzAuth(cell.NewAuthVerboseToken("X-Readyz-Token", token)),
+)
+```
+
+### RouteGroup 级别认证 (PR262)
+
+`cell.RouteGroup.Auth cell.GroupAuth` 对单个路由组施加认证中间件：
+
+```go
+cell.RouteGroup{
+    Listener: cell.InternalListener,
+    Prefix:   "/internal/v1/admin",
+    Auth:     cell.AuthMTLS{},
+    Register: func(mux cell.RouteMux) { ... },
+}
+```
+
+`cell.GroupAuth` 的实现类型：`cell.AuthMTLS`、`cell.AuthNone`、`cell.AuthServiceToken`、`cell.AuthVerboseToken`。
 
 ### auth.Route 字段
 
@@ -100,15 +125,15 @@ bootstrap.New(
 
 Bootstrap 为每个声明的 listener 构建独立的 `*router.Router`（内含独立 chi.Mux）：
 
-- **primary**：挂 `/api/v1/*` 业务路由；JWT AuthMiddleware。primary listener 显式 404 所有 `/internal/v1/*` 请求，实现端口级物理隔离。
-- **internal**：仅挂 `/internal/v1/*` 路由；ServiceToken / mTLS 策略，无 JWT 中间件。
+- **primary**：挂 `/api/v1/*` 业务路由；JWT AuthMiddleware（来自 `[]cell.ListenerAuth` 中的 AuthJWT/AuthJWTFromAssembly）。primary listener 显式 404 所有 `/internal/v1/*` 请求，实现端口级物理隔离。
+- **internal**：仅挂 `/internal/v1/*` 路由；AuthServiceToken / AuthMTLS 策略，无 JWT 中间件。
 - **health**：仅挂 `/healthz` `/readyz` `/metrics`；框架自动注册，Cell 不声明此 listener。
 
 详见 `docs/ops/listener-topology.md`。
 
 ### `/internal/v1/*` 服务令牌防重放（PR-A25）
 
-internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth.NonceStore`。`cmd/corebundle.internalGuardFromEnv` 默认构造 `auth.InMemoryNonceStore(ttl = ServiceTokenMaxAge + 30s)`。real 模式启动时 `SharedDeps.Validate` 会拒绝 `NonceStoreKindNoop`（返回 `ERR_CONTROLPLANE_NONCE_STORE_MISSING`）。多 pod 部署须通过 `auth.WithServiceTokenNonceStore(sharedStore)` 注入分布式实现（例如 Redis）；in-memory 仅保证单 pod 防重放。
+internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth.NonceStore`。`cmd/corebundle.internalGuardFromEnv` 默认构造 `auth.InMemoryNonceStore(ttl = ServiceTokenMaxAge + 30s)`。real 模式启动时 `SharedDeps.Validate` 会拒绝 `NonceStoreKindNoop`（返回 `ERR_CONTROLPLANE_NONCE_STORE_MISSING`）。多 pod 部署须注入分布式实现（例如 Redis）；in-memory 仅保证单 pod 防重放。
 
 ### FinalizeAuth 生命周期
 
@@ -127,13 +152,13 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 
 1. **路由级 Policy**（`auth.Route.Policy`）— 仅对该路由生效，覆盖一切
 2. **Public / PasswordResetExempt**（`auth.Route.Public: true` 或 `auth.Route.PasswordResetExempt: true`）— 豁免 JWT 验证
-3. **Listener 默认 Policy**（`WithListener(ref, addr, defaultPolicy)` 的 `defaultPolicy`）— 对未被 `auth.Mount` 覆盖的路由生效
+3. **Listener 认证链**（`WithListener(ref, addr, authChain)` 的 `authChain`）— 对所有路由生效
 
 优先级规则：
-- 路由级 Policy 存在时，Listener 默认 Policy 被完全旁路
+- 路由级 Policy 存在时，Listener 认证链中间件在路由层之前运行（链中间件先于路由 handler）
 - `Public: true` 不能与路由级 `Policy` 同时设置（FinalizeAuth fail-fast）
-- `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义；在无 JWT 的 listener（如 HealthListener）上声明 `Public: true` 是无效的（HealthListener 默认配置 `WithSuppressNoAuthVerifierWarn`，Warn 已抑制 — R2-11）
-- JWT 单一路径（F3 round-3）：`PolicyJWT(verifier)` 直接注入；`PolicyJWTFromAssembly(asm)` phase4 时通过 `cell.Policy.Validate` 钩子从 `authProvider` Cell 发现 verifier。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。Verifier 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher，零样板。
+- `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义
+- JWT 单一路径（PR262）：`cell.NewAuthJWT(verifier)` 直接注入；`cell.NewAuthJWTFromAssembly(asm)` phase4 时通过 `AuthJWTFromAssembly.Validate()` 从 `authProvider` Cell 发现 verifier。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。Verifier 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher，零样板。
 - `Delegated=true` 路由必须挂在 InternalListener（F2 round-3：FinalizeAuth router-aware 校验，Primary/Health 上 Delegated 直接 fail-fast）。
 
 ### 规则
@@ -145,3 +170,4 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - CORS OPTIONS：当前无 CORS middleware；如需公开 OPTIONS 请显式 `auth.Mount` + `Public: true`
 - 禁止在 `cmd/*` / `examples/*/main.go` 硬编码业务路径字面量（`grep '"POST /api/v1/"'` 必须为空）
 - Cell 禁止直接 import `runtime/http/router`；通过 `cell.RouteMux` / `cell.RouteGroup` 声明路由（LAYER-07）
+- Cell 禁止构造 AuthPlan 值（`cell.NewAuthJWT` 等）；认证计划由 composition root（`cmd/`）组装后通过 `WithListener` 注入（LAYER-09 / AUTH-PLAN-04）
