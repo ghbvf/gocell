@@ -8,6 +8,21 @@
 // Locker / Lock interfaces must live here rather than in adapters/redis.
 // The shape follows PR#177's runtime/outbox.Store precedent exactly.
 //
+// # Resource model
+//
+// Each call to New() creates one Manager. The Manager's resource footprint per
+// active lock set is:
+//   - 1 manager goroutine: owns the renewal min-heap and all Driver I/O calls
+//   - 1 watcher goroutine per held lock: forwards parent-ctx cancellation to lockCtx
+//
+// N active locks = 1 manager goroutine + N watcher goroutines + O(N) heap.
+//
+// The watcher goroutines are lightweight: they hold no allocations after
+// starting and exit on either ctx.Done() or lockCtx.Done(). A single shared
+// "all parents" goroutine was considered but would require reflect.Select, which
+// is measurably slower at scale (N ≥ ~10) than individual per-lock goroutines.
+// The per-lock watcher model is the intentional design choice.
+//
 // # Non-goals
 //
 // This is an efficiency lock, NOT a correctness lock. It is suitable for

@@ -115,7 +115,8 @@ goal:      First-class（PG/Redis/OIDC）+ Family（RabbitMQ/WebSocket）+ Optio
 
 ```
 primary:   kubernetes/client-go    → tools/leaderelection/resourcelock/interface.go
-           runtime / adapter 拆分：storage primitives（SetNX/Renew/Release）仅在 adapter，
+           runtime / adapter 拆分：Driver interface（SetNX/Renew/Release）defined in
+           runtime/distlock; implementations live in adapters/（mirrors PR#177 outbox.Store split）
            锁生命周期（续期调度、ctx 取消传播）由 runtime 层管理
 
 secondary: go-redsync/redsync      → redis/redis.go（Driver 接口形态；NX/Eval 三原语）

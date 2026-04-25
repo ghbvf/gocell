@@ -2,7 +2,9 @@ package distlock
 
 import "time"
 
-// Clock abstracts wall-clock access so tests can control time deterministically.
+// Clock abstracts wall-clock access for distlock package internals so tests can
+// control time deterministically. This discipline applies only within distlock;
+// callers may use time.Now() freely in their own code.
 //
 // ref: golang stdlib time package — same method signatures, injectable interface
 // ref: plan "时间纪律" section — all timing flows through Clock; no literal waits
