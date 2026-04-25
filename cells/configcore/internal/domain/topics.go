@@ -16,5 +16,4 @@ const (
 	TopicConfigEntryDeleted     = "event.config.entry-deleted.v1"
 	TopicConfigVersionPublished = "event.config.version-published.v1"
 	TopicConfigRollback         = "event.config.rollback.v1"
-	TopicFlagChanged            = "event.flag.changed.v1"
 )

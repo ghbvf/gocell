@@ -5,7 +5,7 @@ consistencyLevel: L4
 lifecycle: active
 endpoints:
   publisher: devicecell
-  subscribers: []
+  subscribers: [example-iot-platform]
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json

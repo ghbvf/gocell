@@ -1,5 +1,6 @@
 id: setup
 belongsToCell: accesscore
+consistencyLevel: L2
 contractUsages:
   - contract: http.auth.setup.status.v1
     role: serve

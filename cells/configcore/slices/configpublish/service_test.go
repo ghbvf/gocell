@@ -2,6 +2,7 @@ package configpublish
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -388,4 +390,46 @@ func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 	rolled, err := svc.Rollback(context.Background(), "app.x", 1)
 	require.NoError(t, err, "FailOpen: publisher failure must be swallowed on rollback")
 	assert.Equal(t, "v1", rolled.Value)
+}
+
+// TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly asserts that the
+// entry-upserted event emitted during Rollback carries only key+version
+// and does NOT include a "value" field (metadata-only contract, F-TEST-03).
+func TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly(t *testing.T) {
+	svc, repo, writer := newDurableTestService(t)
+
+	mustSeedEntry(repo, "app.name", "v1")
+
+	// Publish first to create a version snapshot.
+	_, err := svc.Publish(context.Background(), "app.name")
+	require.NoError(t, err)
+	writer.Entries = writer.Entries[:0] // reset writer after publish
+
+	// Rollback to version 1.
+	_, err = svc.Rollback(context.Background(), "app.name", 1)
+	require.NoError(t, err)
+
+	// Rollback emits two entries: [0]=entry-upserted, [1]=config-rollback.
+	require.GreaterOrEqual(t, len(writer.Entries), 1, "Rollback must emit at least one outbox entry")
+
+	// Find the entry-upserted entry.
+	var upsertedPayload []byte
+	for _, e := range writer.Entries {
+		if e.EventType == domain.TopicConfigEntryUpserted {
+			upsertedPayload = e.Payload
+			break
+		}
+	}
+	require.NotNil(t, upsertedPayload, "Rollback must emit a TopicConfigEntryUpserted entry")
+
+	// Assert payload decodes correctly as metadata-only.
+	decoded, decErr := events.DecodeEntryUpserted(upsertedPayload)
+	require.NoError(t, decErr, "entry-upserted payload from Rollback must be valid")
+	assert.Equal(t, "app.name", decoded.Key)
+
+	// Assert no "value" field is present.
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(upsertedPayload, &raw))
+	_, hasValue := raw["value"]
+	assert.False(t, hasValue, "entry-upserted payload must NOT contain 'value' field (metadata-only)")
 }

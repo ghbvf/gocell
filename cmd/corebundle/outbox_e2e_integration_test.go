@@ -18,8 +18,13 @@
 //   - Publisher passed to buildConfigCoreOpts is the in-memory eventbus `eb`
 //     (matching cmd/corebundle/main.go:492).
 //   - Subscription is registered on the same `eb` and asserts the received
-//     Entry.Payload parses as a business event (action/key/value), which
+//     Entry.Payload parses as a business event (action/key/version), which
 //     requires the F1 envelope-unwrap fix to work.
+//
+// PR-CFG-B metadata-only model: event.config.entry-upserted.v1 payload carries
+// only key+version (no value field). The A11+F1 regression guard still validates
+// the full envelope-unwrap path; only the payload field set has changed.
+// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
 package main
 
 import (
@@ -60,9 +65,10 @@ import (
 // event.config.entry-upserted.v1. If the relay's wire envelope reaches
 // subscribers unwrapped (F1 bug), these fields will all be empty and the
 // regression guard fires.
+//
+// PR-CFG-B metadata-only model: only key+version are present; value is omitted.
 type configEntryUpsertedBusinessPayload struct {
 	Key     string `json:"key"`
-	Value   string `json:"value"`
 	Version int    `json:"version"`
 }
 
@@ -263,13 +269,13 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		defer recvMu.Unlock()
 		for _, r := range recvs {
 			if r.parsed && r.payload.Key == "e2e.test.key" &&
-				r.payload.Value == "e2e-value" && r.payload.Version >= 1 {
+				r.payload.Version >= 1 {
 				return true
 			}
 		}
 		return false
 	}, 30*time.Second, 200*time.Millisecond,
-		"A11+F1 regression guard: entry-upserted business payload with key/value/version must reach subscriber; "+
+		"A11+F1 regression guard: entry-upserted business payload with key/version must reach subscriber (PR-CFG-B metadata-only model); "+
 			"missing fields indicate relay→eventbus envelope was not unwrapped")
 
 	// Additional diagnostic: list what actually arrived in case the above fails.

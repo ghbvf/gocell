@@ -1,4 +1,5 @@
 id: event.config.entry-upserted.v1
+description: "Metadata-only: subscribers MUST refetch current value via GET /api/v1/config/{key}. Payload carries only key+version for cache invalidation."
 kind: event
 ownerCell: configcore
 consistencyLevel: L2

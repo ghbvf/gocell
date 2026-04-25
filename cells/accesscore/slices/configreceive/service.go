@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 
-	configevents "github.com/ghbvf/gocell/cells/configcore/events"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -20,6 +20,11 @@ const (
 )
 
 // Service consumes config change events for accesscore.
+//
+// NOTE: HandleEntryUpserted/HandleEntryDeleted are currently observability-only
+// (logs only). Real consumers (JWT TTL refresh, key rotation interval) will land
+// in a follow-up; the current subscription is a placeholder per ADV-05
+// (active event must have subscribers).
 //
 // Consumer: cg-accesscore-config-events
 // Idempotency: log-only (no side effects), inherently idempotent
@@ -36,14 +41,14 @@ func NewService(logger *slog.Logger) *Service {
 
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
 func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
-	event, err := configevents.DecodeEntryUpserted(entry.Payload)
+	event, err := dto.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err))
 	}
 
-	s.logger.Info("config-receive: config upserted",
+	s.logger.Debug("config-receive: config upserted",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 	return nil
@@ -51,13 +56,15 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 
 // HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
 func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) error {
-	event, err := configevents.DecodeEntryDeleted(entry.Payload)
+	event, err := dto.DecodeEntryDeleted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
 		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err))
 	}
 
-	s.logger.Info("config-receive: config deleted", slog.String("key", event.Key))
+	s.logger.Debug("config-receive: config deleted",
+		slog.String("key", event.Key),
+		slog.Int("version", event.Version))
 	return nil
 }

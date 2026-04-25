@@ -2,12 +2,14 @@ package configwrite
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"log/slog"
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	"github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -224,6 +226,16 @@ func TestService_Create_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	assert.Equal(t, "k", entry.Key)
 	require.Len(t, writer.Entries, 1)
 	assert.Equal(t, domain.TopicConfigEntryUpserted, writer.Entries[0].EventType)
+
+	// F-TEST-02: assert payload is metadata-only — no "value" field.
+	decoded, decErr := events.DecodeEntryUpserted(writer.Entries[0].Payload)
+	require.NoError(t, decErr, "outbox payload must decode as valid entry-upserted")
+	assert.Equal(t, "k", decoded.Key)
+
+	var raw map[string]any
+	require.NoError(t, json.Unmarshal(writer.Entries[0].Payload, &raw))
+	_, hasValue := raw["value"]
+	assert.False(t, hasValue, "entry-upserted payload must NOT contain 'value' field (metadata-only)")
 }
 
 // TestCreate_CallsTxRunnerRunInTxOnce asserts that Create wraps both the repo

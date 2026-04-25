@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
@@ -138,13 +139,11 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 			return fmt.Errorf("config-publish: rollback update: %w", err)
 		}
 
-		eventValue := updated.Value
-		if updated.Sensitive {
-			eventValue = "******"
-		}
-		if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigEntryUpserted, domain.ConfigEntryUpsertedEvent{
+		// Metadata-only: event carries key+version only.
+		// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
+		// ref: NATS subject+bytes / Watermill payload-bytes boundary.
+		if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
 			Key:     key,
-			Value:   eventValue,
 			Version: updated.Version,
 		}); err != nil {
 			return err

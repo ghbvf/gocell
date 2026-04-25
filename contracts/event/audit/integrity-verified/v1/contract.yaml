@@ -5,7 +5,7 @@ consistencyLevel: L2
 lifecycle: active
 endpoints:
   publisher: auditcore
-  subscribers: []
+  subscribers: [external-audit-sink]
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json

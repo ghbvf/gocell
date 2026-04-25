@@ -269,7 +269,11 @@ func TestHandler_HandleUpdate_SensitiveRedacted(t *testing.T) {
 	assert.NotContains(t, w.Body.String(), "new-secret")
 }
 
-func TestService_Create_SensitiveEventPayloadRedacted(t *testing.T) {
+// TestService_Create_SensitiveEventPayloadMetadataOnly verifies that the event
+// payload for a sensitive entry carries only metadata (key+version) — no value
+// field at all. Metadata-only model eliminates redaction entirely by not
+// including the value in the event. Subscribers must refetch via GET /api/v1/config/{key}.
+func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	ow := &stubOutboxWriter{}
 	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
@@ -282,9 +286,10 @@ func TestService_Create_SensitiveEventPayloadRedacted(t *testing.T) {
 	require.Len(t, ow.entries, 1)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(ow.entries[0].Payload, &payload))
-	assert.Equal(t, "******", payload["value"], "sensitive value must be redacted in event payload")
-	assert.NotEqual(t, "s3cret!", payload["value"])
+	assert.NotContains(t, payload, "value", "metadata-only event must not contain value field")
 	assert.NotContains(t, payload, "sensitive", "state-sync events must not expose sensitive classification")
+	assert.Equal(t, "db.password", payload["key"])
+	assert.Equal(t, float64(1), payload["version"])
 }
 
 // --- outbox/tx service tests ---
