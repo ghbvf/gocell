@@ -231,10 +231,11 @@ func TestRunCheckContractHealth(t *testing.T) {
 	}
 }
 
-func TestRunCheckUnconditionalSkipPlaceholder(t *testing.T) {
+func TestRunCheckUnconditionalSkip(t *testing.T) {
+	// PR-CFG-D wired the real analyzer; the repo is clean so it must succeed.
 	err := runCheck([]string{"unconditional-skip"})
-	if err == nil {
-		t.Error("check unconditional-skip should return not-implemented error")
+	if err != nil {
+		t.Errorf("check unconditional-skip should succeed on clean repo, got: %v", err)
 	}
 }
 
