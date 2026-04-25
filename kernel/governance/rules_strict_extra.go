@@ -57,7 +57,7 @@ func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
 				results = append(results, v.newResult(
 					ruleFMT20, SeverityError, IssueRequired,
 					schemaRef, loc,
-					fmt.Sprintf("contract %q schema must declare additionalProperties:false at %s", c.ID, loc),
+					fmt.Sprintf("contract %q schema must declare additionalProperties explicitly (true=open, false=strict) at %s", c.ID, loc),
 				))
 			}
 		}
@@ -113,8 +113,8 @@ func scanSchemaForStrictMissing(absPath string) ([]string, error) {
 }
 
 // walkSchemaObject recursively walks a schema node. When the node is an object
-// type (map with "type":"object"), it checks for additionalProperties:false and
-// recurses into "properties" and "items".
+// type (map with "type":"object"), it checks for an explicit additionalProperties
+// declaration (true or false) and recurses into "properties" and "items".
 func walkSchemaObject(node map[string]any, path string, missing *[]string) {
 	walkSchemaObjectDepth(node, path, missing, 0)
 }
@@ -138,19 +138,24 @@ func walkSchemaObjectDepth(node map[string]any, path string, missing *[]string, 
 	walkSchemaItemsDepth(node, path, missing, depth+1)
 }
 
-// checkAdditionalProperties emits a violation when the node lacks exactly
-// "additionalProperties": false. An object value (e.g. {"type":"string"}) is
-// treated as missing — only bool(false) is accepted.
+// checkAdditionalProperties emits a violation when the node has no
+// "additionalProperties" key at all. An explicit bool (true or false) is
+// accepted — the schema author consciously opted in or out of extra properties.
+// An object value (e.g. {"type":"string"}) is treated as missing because it is
+// not a deliberate open/closed declaration.
 func checkAdditionalProperties(node map[string]any, path string, missing *[]string) {
 	ap, hasAP := node["additionalProperties"]
 	if !hasAP {
+		// No declaration at all — emit violation.
 		*missing = append(*missing, path)
 		return
 	}
-	b, ok := ap.(bool)
-	if !ok || b {
-		*missing = append(*missing, path)
+	// Explicit bool (true = open, false = strict) — author made a choice, accept.
+	if _, ok := ap.(bool); ok {
+		return
 	}
+	// Object value (schema form) is not a deliberate open/closed declaration.
+	*missing = append(*missing, path)
 }
 
 // walkSchemaPropertiesDepth is the depth-guarded implementation for recursing into properties.

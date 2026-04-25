@@ -649,17 +649,42 @@ func TestCheckAdditionalProperties_ObjectValueTreatedAsMissing(t *testing.T) {
 		"additionalProperties as object value must be treated as missing")
 }
 
-// TestCheckAdditionalProperties_TrueValueTreatedAsMissing verifies that
-// additionalProperties: true also triggers a violation (only false is accepted).
-func TestCheckAdditionalProperties_TrueValueTreatedAsMissing(t *testing.T) {
+// TestCheckAdditionalProperties_TrueValueAccepted verifies that an explicit
+// additionalProperties: true is accepted (author chose open schema intentionally).
+func TestCheckAdditionalProperties_TrueValueAccepted(t *testing.T) {
 	node := map[string]any{
 		"type":                 "object",
 		"additionalProperties": true,
 	}
 	var missing []string
 	checkAdditionalProperties(node, "$", &missing)
+	assert.Empty(t, missing,
+		"additionalProperties:true must be accepted — author explicitly declared open schema")
+}
+
+// TestCheckAdditionalProperties_FalseValueAccepted verifies that an explicit
+// additionalProperties: false is accepted (author chose strict schema).
+func TestCheckAdditionalProperties_FalseValueAccepted(t *testing.T) {
+	node := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+	}
+	var missing []string
+	checkAdditionalProperties(node, "$", &missing)
+	assert.Empty(t, missing,
+		"additionalProperties:false must be accepted — author explicitly declared strict schema")
+}
+
+// TestCheckAdditionalProperties_MissingViolation verifies that a missing
+// additionalProperties key triggers a violation.
+func TestCheckAdditionalProperties_MissingViolation(t *testing.T) {
+	node := map[string]any{
+		"type": "object",
+	}
+	var missing []string
+	checkAdditionalProperties(node, "$", &missing)
 	assert.Equal(t, []string{"$"}, missing,
-		"additionalProperties:true must be treated as missing (only false is accepted)")
+		"missing additionalProperties must emit a violation")
 }
 
 // TestFMT20_EndpointResponseSchemaRef verifies that FMT-20 also scans schemas

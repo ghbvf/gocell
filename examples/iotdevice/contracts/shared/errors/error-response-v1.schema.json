@@ -14,7 +14,7 @@
       "properties": {
         "code": {"type": "string", "pattern": "^ERR_[A-Z0-9_]+$"},
         "message": {"type": "string"},
-        "details": {"type": "object", "additionalProperties": false},
+        "details": {"type": "object", "additionalProperties": true},
         "request_id": {"type": "string"}
       }
     }

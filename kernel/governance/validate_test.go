@@ -2639,8 +2639,8 @@ func TestADV05(t *testing.T) {
 // --- helper function tests for new utilities ---
 
 func TestContractDirFromID(t *testing.T) {
-	assert.Equal(t, filepath.Join("contracts", "http", "auth", "login", "v1"), contractDirFromID("http.auth.login.v1"))
-	assert.Equal(t, filepath.Join("contracts", "event", "session", "created", "v1"), contractDirFromID("event.session.created.v1"))
+	assert.Equal(t, "contracts/http/auth/login/v1", contractDirFromID("http.auth.login.v1"))
+	assert.Equal(t, "contracts/event/session/created/v1", contractDirFromID("event.session.created.v1"))
 }
 
 func TestRepositoryRoot(t *testing.T) {
