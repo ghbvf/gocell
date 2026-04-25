@@ -831,6 +831,34 @@
 - `ref: go-redsync/redsync redsync.go driftFactor=0.01` — 时钟偏差容忍（drift factor）
 - `ref: PR#177 (S30) 镜像拆分` — adapter 只暴露 Store/Driver 原语，runtime 管理生命周期，与 AL-01 同一拆分模式
 
+## Deferred follow-ups
+
+以下两项 P1 问题在 PR #260 的第七轮 review 中被识别，但因设计复杂度超出本 PR 范围，推迟到后续独立 PR。来源：docs/reviews/202604251700-pr258-reviewer-consolidated.md（第七轮）。
+
+### PR-A20-FU1 DISTLOCK-RENEW-RETRY-BUDGET-01（Cx3, 🟡 可延后）
+
+**问题**：当前 `Driver.Renew` 单次失败即触发 `ErrLockLost`。瞬态 I/O 错误（网络抖动、Redis 短暂不可用）与永久错误（key 过期、ownership 被抢占）被等同对待，导致网络抖动引发误失锁。
+
+**期望行为**：瞬态错误在 TTL 安全窗口内重试（configurable retry budget）；永久错误立即失锁。需要：
+- 错误分类（transient vs permanent），与 `pkg/errcode` 集成
+- retry budget 配置（最大重试次数 / 最大重试时间）
+- retry 期间的 ctx deadline 与 TTL 剩余时间交互设计
+- 可观测性（retry 计数指标、slog 告警）
+
+**推迟理由**：行为变更（当前 test suite 基于单次失败语义）+ 配置面膨胀 + 与 TTL/driftFactor 交互复杂。需独立 ADR 对齐后再实施。
+
+**目标 PR**：PR-A20-FU1（Wave 3，Cx3，~2-3d）
+
+### PR-A20-FU2 DISTLOCK-RELEASE-RETURNS-ERROR-01（Cx2, 🟡 可延后）
+
+**问题**：`release()` 函数当前不返回 `error`。`Driver.Release` 的 I/O 错误静默 slog，调用方无法感知 Release 失败（key 可能在 TTL 内持续 linger）。
+
+**期望行为**：`release()` 返回 `error`，让调用方决定是否记录/告警。或通过回调/channel 通知 Release 失败。
+
+**推迟理由**：API 破坏性变更（`Locker.Acquire` 签名的 `release func()` 需改为 `release func() error`）；涉及所有调用方迁移；需与 Lock-as-Context 设计对齐（fire-and-forget 语义是否仍合适）。需独立设计讨论。
+
+**目标 PR**：PR-A20-FU2（Wave 4，Cx2，~1d）
+
 ---
 
 ### PR-A21 AL-04 Auth JWT 依赖评估（~0.5-1d）
