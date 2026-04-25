@@ -60,14 +60,19 @@ func TestDecodeEntryDeleted(t *testing.T) {
 		payload     []byte
 		wantErr     bool
 		wantKey     string
+		wantVersion int
 		errContains string
 	}{
-		{"valid", []byte(`{"key":"jwt.ttl"}`), false, "jwt.ttl", ""},
-		{"missing key", []byte(`{}`), true, "", "missing key"},
-		{"blank key", []byte(`{"key":"  "}`), true, "", "missing key"},
-		{"unknown field", []byte(`{"key":"jwt.ttl","value":"old"}`), true, "", "unknown field"},
-		{"multiple json values", []byte(`{"key":"jwt.ttl"}{}`), true, "", "multiple JSON values"},
-		{"invalid json", []byte("not-json"), true, "", "invalid"},
+		{"valid v1", []byte(`{"key":"jwt.ttl","version":1}`), false, "jwt.ttl", 1, ""},
+		{"valid v42", []byte(`{"key":"app.name","version":42}`), false, "app.name", 42, ""},
+		{"missing key", []byte(`{"version":1}`), true, "", 0, "missing key"},
+		{"blank key", []byte(`{"key":"  ","version":1}`), true, "", 0, "missing key"},
+		{"missing version", []byte(`{"key":"jwt.ttl"}`), true, "", 0, "invalid version"},
+		{"version zero", []byte(`{"key":"jwt.ttl","version":0}`), true, "", 0, "invalid version"},
+		{"version negative", []byte(`{"key":"jwt.ttl","version":-1}`), true, "", 0, "invalid version"},
+		{"unknown field", []byte(`{"key":"jwt.ttl","version":1,"value":"old"}`), true, "", 0, "unknown field"},
+		{"multiple json values", []byte(`{"key":"jwt.ttl","version":1}{}`), true, "", 0, "multiple JSON values"},
+		{"invalid json", []byte("not-json"), true, "", 0, "invalid"},
 	}
 
 	for _, tt := range tests {
@@ -82,6 +87,7 @@ func TestDecodeEntryDeleted(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantKey, got.Key)
+			assert.Equal(t, tt.wantVersion, got.Version)
 		})
 	}
 }

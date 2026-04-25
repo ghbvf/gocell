@@ -74,7 +74,7 @@ func TestHandleEntryDeleted_ValidPayload(t *testing.T) {
 	entry := outbox.Entry{
 		ID:      "evt-del-1",
 		Topic:   TopicConfigEntryDeleted,
-		Payload: []byte(`{"key":"jwt.ttl"}`),
+		Payload: []byte(`{"key":"jwt.ttl","version":3}`),
 	}
 	assert.NoError(t, svc.HandleEntryDeleted(context.Background(), entry))
 }
@@ -86,8 +86,10 @@ func TestHandleEntryDeleted_InvalidPayload_PermanentError(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json{"), "unmarshal"},
-		{"missing key", []byte(`{}`), "missing key"},
-		{"extra value field", []byte(`{"key":"jwt.ttl","value":"old"}`), "unknown field"},
+		{"missing key", []byte(`{"version":1}`), "missing key"},
+		{"missing version", []byte(`{"key":"jwt.ttl"}`), "invalid version"},
+		{"version zero", []byte(`{"key":"jwt.ttl","version":0}`), "invalid version"},
+		{"extra value field", []byte(`{"key":"jwt.ttl","version":1,"value":"old"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {

@@ -27,8 +27,12 @@ type EntryUpserted struct {
 }
 
 // EntryDeleted is accesscore's local typed view of event.config.entry-deleted.v1.
+// Version is the version of the deleted entry; consumers use it for monotonic
+// tombstone protection — a replayed older upsert must be rejected when
+// event.Version <= tombstone version.
 type EntryDeleted struct {
-	Key string
+	Key     string
+	Version int
 }
 
 // internal wire structs; not exported
@@ -38,7 +42,8 @@ type entryUpsertedWire struct {
 }
 
 type entryDeletedWire struct {
-	Key string `json:"key"`
+	Key     string `json:"key"`
+	Version int    `json:"version"`
 }
 
 // DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.
@@ -58,7 +63,7 @@ func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 }
 
 // DecodeEntryDeleted strictly decodes and validates event.config.entry-deleted.v1.
-// Rejects unknown fields and enforces non-empty key.
+// Rejects unknown fields and enforces non-empty key and version >= 1.
 func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	var wire entryDeletedWire
 	if err := decodeStrict(data, &wire); err != nil {
@@ -66,6 +71,9 @@ func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	}
 	if strings.TrimSpace(wire.Key) == "" {
 		return EntryDeleted{}, fmt.Errorf("entry-deleted missing key")
+	}
+	if wire.Version < 1 {
+		return EntryDeleted{}, fmt.Errorf("entry-deleted invalid version %d for key %q", wire.Version, wire.Key)
 	}
 	return EntryDeleted(wire), nil
 }

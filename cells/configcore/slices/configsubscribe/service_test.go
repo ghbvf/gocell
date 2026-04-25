@@ -23,8 +23,9 @@ func makeEntryUpserted(key string, version int) outbox.Entry {
 	return outbox.Entry{ID: "test-upsert", Topic: domain.TopicConfigEntryUpserted, Payload: payload}
 }
 
-func makeEntryDeleted(key string) outbox.Entry {
-	payload, _ := json.Marshal(configevents.EntryDeleted{Key: key})
+// makeEntryDeleted builds an outbox.Entry for entry-deleted with the given version.
+func makeEntryDeleted(key string, version int) outbox.Entry {
+	payload, _ := json.Marshal(configevents.EntryDeleted{Key: key, Version: version})
 	return outbox.Entry{ID: "test-delete", Topic: domain.TopicConfigEntryDeleted, Payload: payload}
 }
 
@@ -34,6 +35,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 		events      []outbox.Entry
 		wantKey     string
 		wantVersion int
+		wantPresent bool
 		wantLen     int
 	}{
 		{
@@ -41,6 +43,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 			events:      []outbox.Entry{makeEntryUpserted("app.name", 1)},
 			wantKey:     "app.name",
 			wantVersion: 1,
+			wantPresent: true,
 			wantLen:     1,
 		},
 		{
@@ -51,6 +54,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 			},
 			wantKey:     "k",
 			wantVersion: 2,
+			wantPresent: true,
 			wantLen:     1,
 		},
 		{
@@ -58,6 +62,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 			events:      []outbox.Entry{makeEntryUpserted("timeout", 5)},
 			wantKey:     "timeout",
 			wantVersion: 5,
+			wantPresent: true,
 			wantLen:     1,
 		},
 	}
@@ -72,7 +77,7 @@ func TestService_HandleEntryUpserted(t *testing.T) {
 
 			assert.Equal(t, tt.wantLen, svc.Cache().Len())
 			v, ok := svc.Cache().GetVersion(tt.wantKey)
-			require.True(t, ok)
+			require.Equal(t, tt.wantPresent, ok)
 			assert.Equal(t, tt.wantVersion, v)
 		})
 	}
@@ -96,20 +101,106 @@ func TestService_HandleEntryUpserted_Monotonicity(t *testing.T) {
 func TestService_HandleEntryDeleted(t *testing.T) {
 	svc := NewService(slog.Default())
 	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k")))
+	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
 
+	// Len counts only active entries; after delete, Len must be 0.
 	assert.Equal(t, 0, svc.Cache().Len())
-	_, ok := svc.Cache().GetVersion("k")
-	assert.False(t, ok)
+	// GetVersion still returns the tombstone version, but present=false.
+	v, present := svc.Cache().GetVersion("k")
+	assert.False(t, present, "tombstoned key must return present=false")
+	assert.Equal(t, 2, v, "tombstone must record the delete version")
 }
 
 // TestService_HandleEntryDeleted_NonExistentKey verifies that deleting a key that
-// was never seen is a no-op (idempotent) and does not error.
+// was never seen records a tombstone and does not error.
 func TestService_HandleEntryDeleted_NonExistentKey(t *testing.T) {
 	svc := NewService(slog.Default())
 
-	// No prior upsert — delete should succeed silently.
-	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("nonexistent")))
+	// No prior upsert — delete must still succeed and record a tombstone.
+	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("nonexistent", 1)))
+	assert.Equal(t, 0, svc.Cache().Len())
+	v, present := svc.Cache().GetVersion("nonexistent")
+	assert.False(t, present)
+	assert.Equal(t, 1, v)
+}
+
+// TestService_Tombstone_ReplayedOlderUpsertRejected verifies the core protection:
+// upsert v1 → delete v2 → replayed upsert v1 → cache stays tombstoned at v2.
+func TestService_Tombstone_ReplayedOlderUpsertRejected(t *testing.T) {
+	svc := NewService(slog.Default())
+
+	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
+	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
+	// Replayed older upsert must be rejected.
+	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
+
+	v, present := svc.Cache().GetVersion("k")
+	assert.False(t, present, "replayed upsert must not resurrect a tombstoned key")
+	assert.Equal(t, 2, v, "tombstone version must not be overwritten by stale upsert")
+	assert.Equal(t, 0, svc.Cache().Len())
+}
+
+// TestService_Tombstone_ReplayedOlderDeleteRejected verifies symmetric replay
+// protection on the delete side: upsert v3 → delete v2 (stale) → cache stays
+// active at v3.
+func TestService_Tombstone_ReplayedOlderDeleteRejected(t *testing.T) {
+	svc := NewService(slog.Default())
+
+	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+	// Stale delete with older version must be dropped.
+	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
+
+	v, present := svc.Cache().GetVersion("k")
+	assert.True(t, present, "stale delete must not tombstone a newer active entry")
+	assert.Equal(t, 3, v)
+	assert.Equal(t, 1, svc.Cache().Len())
+}
+
+// TestService_Tombstone_DeleteThenHigherUpsertRestores verifies the recovery
+// path: delete v2 → upsert v3 → cache becomes active at v3.
+func TestService_Tombstone_DeleteThenHigherUpsertRestores(t *testing.T) {
+	svc := NewService(slog.Default())
+
+	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 1)))
+	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 2)))
+	// A new upsert with version > tombstone restores the entry.
+	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+
+	v, present := svc.Cache().GetVersion("k")
+	assert.True(t, present, "upsert after delete with higher version must restore entry")
+	assert.Equal(t, 3, v)
+	assert.Equal(t, 1, svc.Cache().Len())
+}
+
+// TestService_GetVersion_AfterDelete_ReturnsTombstoneVersion explicitly asserts
+// the tombstone semantics of GetVersion: present=false, version=tombstone version.
+// The delete event carries the same version as the last upsert (normal producer path).
+func TestService_GetVersion_AfterDelete_ReturnsTombstoneVersion(t *testing.T) {
+	svc := NewService(slog.Default())
+
+	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 5)))
+	// Normal delete: version equals the last upsert version (V >= known → accepted).
+	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 5)))
+
+	v, present := svc.Cache().GetVersion("k")
+	assert.False(t, present, "GetVersion must return present=false after delete")
+	assert.Equal(t, 5, v, "GetVersion must return the tombstone version")
+}
+
+// TestService_Tombstone_SameVersionDeleteAccepted verifies that a delete event
+// carrying the same version as the last upsert is accepted and tombstones the entry.
+// This is the normal producer path: Delete returns the row's current version, so
+// the delete event version == last upsert version.
+func TestService_Tombstone_SameVersionDeleteAccepted(t *testing.T) {
+	svc := NewService(slog.Default())
+
+	require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("k", 3)))
+	// delete at same version as existing upsert: V >= known → accepted as tombstone.
+	require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("k", 3)))
+
+	v, present := svc.Cache().GetVersion("k")
+	assert.False(t, present, "same-version delete must tombstone the entry")
+	assert.Equal(t, 3, v)
 	assert.Equal(t, 0, svc.Cache().Len())
 }
 
@@ -151,8 +242,10 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json"), "unmarshal"},
-		{"missing key", []byte(`{}`), "missing key"},
-		{"extra value field", []byte(`{"key":"existing.key","value":"old"}`), "unknown field"},
+		{"missing key", []byte(`{"version":1}`), "missing key"},
+		{"missing version", []byte(`{"key":"existing.key"}`), "invalid version"},
+		{"version zero", []byte(`{"key":"existing.key","version":0}`), "invalid version"},
+		{"extra value field", []byte(`{"key":"existing.key","value":"old","version":1}`), "unknown field"},
 	}
 
 	for _, tt := range tests {

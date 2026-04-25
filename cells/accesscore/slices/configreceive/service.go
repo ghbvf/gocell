@@ -63,6 +63,8 @@ func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) erro
 		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err))
 	}
 
-	s.logger.Debug("config-receive: config deleted", slog.String("key", event.Key))
+	s.logger.Debug("config-receive: config deleted",
+		slog.String("key", event.Key),
+		slog.Int("version", event.Version))
 	return nil
 }

@@ -36,10 +36,23 @@ func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
 
-	c.ValidatePayload(t, []byte(`{"key":"app.name"}`))
+	// Valid: key + version (metadata-only + tombstone protection).
+	c.ValidatePayload(t, []byte(`{"key":"app.name","version":1}`))
+	c.ValidatePayload(t, []byte(`{"key":"app.name","version":42}`))
 	c.ValidateHeaders(t, []byte(`{"event_id":"evt-del-1"}`))
+
+	// Missing required fields.
 	c.MustRejectPayload(t, []byte(`{}`))
-	c.MustRejectPayload(t, []byte(`{"key":""}`))
-	c.MustRejectPayload(t, []byte(`{"key":"   "}`))
+	c.MustRejectPayload(t, []byte(`{"key":"app.name"}`)) // missing version
+	c.MustRejectPayload(t, []byte(`{"version":1}`))      // missing key
+	c.MustRejectPayload(t, []byte(`{"key":"","version":1}`))
+	c.MustRejectPayload(t, []byte(`{"key":"   ","version":1}`))
+
+	// Invalid version.
+	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":0}`))
+
+	// Additional properties forbidden.
+	c.MustRejectPayload(t, []byte(`{"key":"app.name","version":1,"value":"old"}`))
+
 	c.MustRejectHeaders(t, []byte(`{}`))
 }

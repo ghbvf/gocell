@@ -171,7 +171,12 @@ func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
 	assert.Equal(t, domain.TopicConfigEntryDeleted, entry.EventType)
 	c.ValidatePayload(t, entry.Payload)
 	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+
+	// Negative cases: missing required fields or invalid version.
 	c.MustRejectPayload(t, []byte(`{}`))
 	c.MustRejectPayload(t, []byte(`{"key":""}`))
 	c.MustRejectPayload(t, []byte(`{"key":"   "}`))
+	c.MustRejectPayload(t, []byte(`{"key":"k"}`))                           // missing version
+	c.MustRejectPayload(t, []byte(`{"key":"k","version":0}`))               // invalid version
+	c.MustRejectPayload(t, []byte(`{"key":"k","version":1,"value":"old"}`)) // extra field
 }

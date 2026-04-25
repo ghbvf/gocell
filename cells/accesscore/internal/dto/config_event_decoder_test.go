@@ -83,12 +83,17 @@ func TestDecodeEntryDeleted(t *testing.T) {
 		payload string
 		wantErr bool
 		wantKey string
+		wantVer int
 	}{
-		{"valid", `{"key":"k1"}`, false, "k1"},
-		{"missing-key", `{}`, true, ""},
-		{"empty-key", `{"key":""}`, true, ""},
-		{"unknown-field", `{"key":"k1","extra":"x"}`, true, ""},
-		{"multiple-json-values", `{"key":"k1"}{"key":"k2"}`, true, ""},
+		{"valid v1", `{"key":"k1","version":1}`, false, "k1", 1},
+		{"valid v42", `{"key":"k1","version":42}`, false, "k1", 42},
+		{"missing-key", `{"version":1}`, true, "", 0},
+		{"empty-key", `{"key":"","version":1}`, true, "", 0},
+		{"missing-version", `{"key":"k1"}`, true, "", 0},
+		{"version-zero", `{"key":"k1","version":0}`, true, "", 0},
+		{"version-negative", `{"key":"k1","version":-1}`, true, "", 0},
+		{"unknown-field", `{"key":"k1","version":1,"extra":"x"}`, true, "", 0},
+		{"multiple-json-values", `{"key":"k1","version":1}{"key":"k2","version":2}`, true, "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -99,6 +104,39 @@ func TestDecodeEntryDeleted(t *testing.T) {
 			}
 			require.NoError(t, err)
 			assert.Equal(t, tc.wantKey, ev.Key)
+			assert.Equal(t, tc.wantVer, ev.Version)
+		})
+	}
+}
+
+// TestDecodeEntryDeleted_AlignedWithContractSchema verifies that every
+// valid payload accepted by DecodeEntryDeleted also passes the canonical
+// JSON Schema at contracts/event/config/entry-deleted/v1/payload.schema.json.
+func TestDecodeEntryDeleted_AlignedWithContractSchema(t *testing.T) {
+	c := contracttest.LoadByID(t, contracttest.ContractsRoot(), "event.config.entry-deleted.v1")
+
+	validCases := []struct {
+		name    string
+		payload string
+	}{
+		{"minimal valid", `{"key":"k1","version":1}`},
+		{"version 42", `{"key":"app.name","version":42}`},
+	}
+
+	for _, tc := range validCases {
+		t.Run(tc.name, func(t *testing.T) {
+			payloadBytes := []byte(tc.payload)
+
+			ev, err := DecodeEntryDeleted(payloadBytes)
+			require.NoError(t, err, "decoder rejected a payload that should be valid")
+
+			encoded, err := json.Marshal(map[string]any{
+				"key":     ev.Key,
+				"version": ev.Version,
+			})
+			require.NoError(t, err)
+
+			c.ValidatePayload(t, encoded)
 		})
 	}
 }

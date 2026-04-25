@@ -63,10 +63,19 @@ func TestEventConfigEntryDeletedV1Subscribe(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
 
-	c.ValidatePayload(t, []byte(`{"key":"k"}`))
+	// Valid: key + version required.
+	c.ValidatePayload(t, []byte(`{"key":"k","version":1}`))
+	c.ValidatePayload(t, []byte(`{"key":"k","version":7}`))
+
+	// Missing required fields.
 	c.MustRejectPayload(t, []byte(`{}`))
+	c.MustRejectPayload(t, []byte(`{"key":"k"}`))   // missing version
+	c.MustRejectPayload(t, []byte(`{"version":1}`)) // missing key
 	c.MustRejectPayload(t, []byte(`{"key":""}`))
 	c.MustRejectPayload(t, []byte(`{"key":"   "}`))
+
+	// Invalid version.
+	c.MustRejectPayload(t, []byte(`{"key":"k","version":0}`))
 }
 
 func TestEventConfigVersionPublishedV1Subscribe(t *testing.T) {

@@ -26,9 +26,13 @@ type EntryUpserted struct {
 	Version int    `json:"version"`
 }
 
-// EntryDeleted is the payload for event.config.entry-deleted.v1.
+// EntryDeleted is the metadata-only payload for event.config.entry-deleted.v1.
+// Version is the version of the deleted entry; subscribers use it for monotonic
+// tombstone protection — a replayed older upsert must be rejected when
+// event.Version <= tombstone version.
 type EntryDeleted struct {
-	Key string `json:"key"`
+	Key     string `json:"key"`
+	Version int    `json:"version"`
 }
 
 // DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.
@@ -55,6 +59,9 @@ func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	}
 	if strings.TrimSpace(event.Key) == "" {
 		return EntryDeleted{}, fmt.Errorf("entry-deleted missing key")
+	}
+	if event.Version < 1 {
+		return EntryDeleted{}, fmt.Errorf("entry-deleted invalid version %d for key %q", event.Version, event.Key)
 	}
 	return event, nil
 }

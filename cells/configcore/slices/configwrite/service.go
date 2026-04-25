@@ -166,7 +166,10 @@ func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry
 }
 
 func (s *Service) publishDeleted(ctx context.Context, entry *domain.ConfigEntry) error {
+	// Metadata-only: event carries key+version of the deleted entry.
+	// Subscribers use version for monotonic tombstone protection against stale upsert replays.
 	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryDeleted, configevents.EntryDeleted{
-		Key: entry.Key,
+		Key:     entry.Key,
+		Version: entry.Version,
 	})
 }
