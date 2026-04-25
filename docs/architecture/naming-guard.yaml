@@ -9,6 +9,8 @@ exclude:
   - docs/reviews/**
   - docs/plans/**
   - docs/architecture/naming-guard.yaml
+  - docs/bak/**
+  - docs/backlog.md
 replacements:
   - literal: access-core
     replacement: accesscore
