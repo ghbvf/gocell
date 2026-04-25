@@ -112,6 +112,10 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 	if err := entry.Validate(); err != nil {
 		return err
 	}
+	// Inject observability from context right before publishing so the entry
+	// carries the originating request's trace/request/correlation identity
+	// across the async boundary. Mirrors adapters/postgres/outbox_writer.go:61.
+	entry.InjectObservabilityFromContext(ctx)
 	envelope, err := MarshalEnvelope(entry)
 	if err != nil {
 		return err

@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -420,4 +421,37 @@ func TestNewDirectEmitter_WithLogger(t *testing.T) {
 func TestWriterEmitter_Durable_NilReceiver(t *testing.T) {
 	var e *WriterEmitter
 	assert.False(t, e.Durable())
+}
+
+// TestDirectEmitter_InjectsObservabilityFromContext verifies that DirectEmitter.Emit
+// populates entry.Observability from the context before publishing, mirroring the
+// behaviour of Postgres OutboxWriter.Write (adapters/postgres/outbox_writer.go:60-61).
+// Trace correlation across async boundaries is broken when DirectEmitter silently
+// drops request_id / trace_id — this test pins the fix.
+func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
+	const wantRequestID = "req-abc123"
+	const wantTraceID = "aabbccddeeff00112233445566778899" // 32 lowercase hex chars
+
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, wantRequestID)
+	ctx = ctxkeys.WithTraceID(ctx, wantTraceID)
+
+	publisher := &recordingEmitterPublisher{}
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{}, "testcell")
+	require.NoError(t, err)
+
+	entry := validEntry("obs-inject-test")
+	entry.Topic = "test.event.v1"
+	entry.EventType = "test.event.v1"
+
+	require.NoError(t, emitter.Emit(ctx, entry))
+	require.Len(t, publisher.calls, 1, "publish must be attempted")
+
+	// Decode the published envelope and inspect the entry it carries.
+	got, err := UnmarshalEnvelope(entry.Topic, publisher.calls[0].payload)
+	require.NoError(t, err)
+	assert.Equal(t, wantRequestID, got.Observability.RequestID,
+		"DirectEmitter must inject request_id from ctx into entry.Observability")
+	assert.Equal(t, wantTraceID, got.Observability.TraceID,
+		"DirectEmitter must inject trace_id from ctx into entry.Observability")
 }
