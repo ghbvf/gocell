@@ -1235,18 +1235,22 @@ func TestPublisher_Publish_TerminalState_ReturnsPermanentError(t *testing.T) {
 
 func TestSubscriber_InterfaceCompliance(t *testing.T) {
 	var _ outbox.Subscriber = (*Subscriber)(nil)
-	//nolint:staticcheck // SubscriberInitializer is deprecated but Subscriber implements it for backward compat.
-	var _ outbox.SubscriberInitializer = (*Subscriber)(nil)
 }
 
-func TestSubscriber_InitializeSubscription_DeclaresTopology(t *testing.T) {
+// setupTopic is a tiny helper that builds the canonical Subscription value
+// each Setup test uses, reducing line noise.
+func setupTopic(topic, group string) outbox.Subscription {
+	return outbox.Subscription{Topic: topic, ConsumerGroup: group}
+}
+
+func TestSubscriber_Setup_DeclaresTopology(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	mockConn.nextCh = ch
 
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	err := sub.InitializeSubscription(context.Background(), "test.topic", "cg-1")
+	err := sub.Setup(context.Background(), setupTopic("test.topic", "cg-1"))
 	require.NoError(t, err)
 
 	// Verify topology was declared: 2 exchanges (main + DLX), 1 queue, 1 binding.
@@ -1259,27 +1263,27 @@ func TestSubscriber_InitializeSubscription_DeclaresTopology(t *testing.T) {
 	assert.Equal(t, "test.dlx", ch.queueDeclareArgs[0]["x-dead-letter-exchange"])
 }
 
-func TestSubscriber_InitializeSubscription_EmptyDLX_ReturnsError(t *testing.T) {
+func TestSubscriber_Setup_EmptyDLX_ReturnsError(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: ""})
 
-	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "DLXExchange is required")
 }
 
-func TestSubscriber_InitializeSubscription_AcquireChannelFailure(t *testing.T) {
+func TestSubscriber_Setup_AcquireChannelFailure(t *testing.T) {
 	conn, _ := newTestConnection(t)
 	// Close the connection to make AcquireChannel fail.
 	_ = conn.Close(context.Background())
 
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
 }
 
-func TestSubscriber_InitializeSubscription_ExchangeDeclareFailure(t *testing.T) {
+func TestSubscriber_Setup_ExchangeDeclareFailure(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	ch.exchangeDeclareErr = errors.New("exchange declare failed")
@@ -1287,12 +1291,12 @@ func TestSubscriber_InitializeSubscription_ExchangeDeclareFailure(t *testing.T) 
 
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "declare exchange")
 }
 
-func TestSubscriber_InitializeSubscription_QueueDeclareFailure(t *testing.T) {
+func TestSubscriber_Setup_QueueDeclareFailure(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	ch.queueDeclareErr = errors.New("queue declare failed")
@@ -1300,12 +1304,12 @@ func TestSubscriber_InitializeSubscription_QueueDeclareFailure(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "declare queue")
 }
 
-func TestSubscriber_InitializeSubscription_QueueBindFailure(t *testing.T) {
+func TestSubscriber_Setup_QueueBindFailure(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	ch.queueBindErr = errors.New("queue bind failed")
@@ -1313,19 +1317,19 @@ func TestSubscriber_InitializeSubscription_QueueBindFailure(t *testing.T) {
 
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	err := sub.InitializeSubscription(context.Background(), "test.topic", "")
+	err := sub.Setup(context.Background(), setupTopic("test.topic", ""))
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "bind queue")
 }
 
-func TestSubscriber_InitializeSubscription_EmptyGroup_DefaultsToTopic(t *testing.T) {
+func TestSubscriber_Setup_EmptyGroup_DefaultsToTopic(t *testing.T) {
 	conn, mockConn := newTestConnection(t)
 	ch := newMockChannel()
 	mockConn.nextCh = ch
 
 	sub := NewSubscriber(conn, SubscriberConfig{DLXExchange: "test.dlx"})
 
-	err := sub.InitializeSubscription(context.Background(), "my.topic", "")
+	err := sub.Setup(context.Background(), setupTopic("my.topic", ""))
 	require.NoError(t, err)
 
 	// Empty group → queue name = topic.
@@ -2143,7 +2147,7 @@ func TestSubscriber_ProcessDelivery_CtxCancelled_NackWithRequeue(t *testing.T) {
 // ConsumerBase.AsMiddleware Tests
 // =============================================================================
 
-func TestConsumerBase_AsMiddleware_ReturnsTopicHandlerMiddleware(t *testing.T) {
+func TestConsumerBase_AsMiddleware_ReturnsSubscriptionMiddleware(t *testing.T) {
 	receipt := &mockReceipt{}
 	claimer := &mockClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
 

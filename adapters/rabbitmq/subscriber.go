@@ -58,8 +58,6 @@ func isRecoverableAMQPError(err error) bool {
 var (
 	_ outbox.Subscriber              = (*Subscriber)(nil)
 	_ outbox.SubscriberIntakeStopper = (*Subscriber)(nil)
-	//nolint:staticcheck // SubscriberInitializer is deprecated but Subscriber implements it for backward compat.
-	_ outbox.SubscriberInitializer = (*Subscriber)(nil)
 )
 
 // SubscriberConfig configures how a Subscriber consumes messages.
@@ -180,8 +178,8 @@ func (s *Subscriber) resolveQueueName(topic, consumerGroup string) string {
 // channel. All operations are idempotent — safe to call multiple times.
 //
 // Precondition: s.config.DLXExchange must be non-empty. Both call sites
-// (Subscribe, InitializeSubscription) validate this, but the guard here
-// prevents accidental misuse from future code paths.
+// (Subscribe, Setup) validate this, but the guard here prevents accidental
+// misuse from future code paths.
 func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) error {
 	if s.config.DLXExchange == "" {
 		return fmt.Errorf("rabbitmq: declareTopology: DLXExchange must not be empty")
@@ -248,14 +246,6 @@ func (s *Subscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 	return ch
-}
-
-// InitializeSubscription implements outbox.SubscriberInitializer for backward
-// compatibility. Delegates to Setup.
-//
-// Deprecated: callers should use Setup directly.
-func (s *Subscriber) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
-	return s.Setup(ctx, outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup})
 }
 
 // Subscribe registers a handler for the given subscription and blocks until ctx

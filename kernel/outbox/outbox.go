@@ -627,26 +627,6 @@ type SubscriberIntakeStopper interface {
 	StopIntake(ctx context.Context) error
 }
 
-// ErrInitializerNotSupported is kept for backward-compatible callers that still
-// perform SubscriberInitializer detection. Deprecated: use Subscriber.Setup.
-var ErrInitializerNotSupported = errors.New("subscriber does not implement SubscriberInitializer")
-
-// SubscriberInitializer is deprecated. Topology pre-declaration is now part of
-// the Subscriber interface (Setup method). Kept so existing callers compile
-// during migration.
-//
-// Deprecated: implement Subscriber.Setup instead.
-type SubscriberInitializer interface {
-	InitializeSubscription(ctx context.Context, topic, consumerGroup string) error
-}
-
-// TopicHandlerMiddleware is kept for backward compatibility with existing code
-// that uses bootstrap wiring.
-//
-// Deprecated: new code should use SubscriptionMiddleware (subscription.go)
-// which carries the full Subscription identity.
-type TopicHandlerMiddleware func(topic string, next EntryHandler) EntryHandler
-
 // SubscriberWithMiddleware wraps a Subscriber so that every handler passed to
 // Subscribe is first wrapped by the SubscriptionMiddleware chain.
 // Middleware is applied in order: [0] is outermost, [len-1] is innermost.
@@ -694,14 +674,6 @@ func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscripti
 		return wrapped(entry.Observability.RestoreToContext(reqCtx), entry)
 	}
 	return s.Inner.Subscribe(ctx, sub, withRestore)
-}
-
-// InitializeSubscription implements SubscriberInitializer for backward
-// compatibility. Delegates to Inner.Setup using a synthetic Subscription.
-//
-// Deprecated: callers should use Setup directly.
-func (s *SubscriberWithMiddleware) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
-	return s.Inner.Setup(ctx, Subscription{Topic: topic, ConsumerGroup: consumerGroup})
 }
 
 // Close delegates to the inner subscriber, forwarding the ctx unchanged so
