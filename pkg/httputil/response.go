@@ -172,6 +172,11 @@ func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int)
 }
 
 // log5xx emits a slog.Error record for a 5xx response, including cause and correlation IDs.
+//
+// 504 (ErrServerTimeout) records additionally carry the cancel_reason field
+// ("deadline_exceeded") symmetric with the log4xx 499 path — dashboards can
+// aggregate cancel_reason across both 499 and 504 streams to compare
+// canceled-vs-deadline ratios without a per-status query split.
 func log5xx(ctx context.Context, label string, ecErr *errcode.Error) {
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
@@ -182,6 +187,11 @@ func log5xx(ctx context.Context, label string, ecErr *errcode.Error) {
 	}
 	if ecErr.Cause != nil {
 		logAttrs = append(logAttrs, slog.Any("cause", ecErr.Cause))
+	}
+	if ecErr.Code == errcode.ErrServerTimeout {
+		if reason := ctxcancel.ReasonFromDetails(ecErr.Details); reason != "" {
+			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
+		}
 	}
 	logAttrs = appendCorrelationAttrs(ctx, logAttrs)
 	slog.Error(label+" (5xx)", logAttrs...)

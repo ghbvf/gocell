@@ -15,6 +15,7 @@ import (
 	"strconv"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
@@ -103,6 +104,11 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 
 		// 499 Client Closed Request (nginx-style — client cancellation)
 		{errcode.ErrClientCanceled, StatusClientClosedRequest},
+
+		// 504 Gateway Timeout (server-side / inherited deadline) — distinct
+		// from 499 since the failure is server-direction and should feed 5xx
+		// alerting + retry-on-504 SDK policies (PR275 P2-3 split).
+		{errcode.ErrServerTimeout, http.StatusGatewayTimeout},
 
 		// Verify/kernel codes
 		{errcode.ErrCheckRefInvalid, http.StatusBadRequest},
@@ -791,6 +797,17 @@ func findWarnRecord(h *captureHandler) *slog.Record {
 	return nil
 }
 
+// findErrorRecord returns the first slog.Record at Error level captured by h,
+// or nil if none was recorded. Symmetric with findWarnRecord for 5xx tests.
+func findErrorRecord(h *captureHandler) *slog.Record {
+	for i := range h.records {
+		if h.records[i].Level == slog.LevelError {
+			return &h.records[i]
+		}
+	}
+	return nil
+}
+
 // assertStringAttr asserts that the named attr is present on the record and
 // equals want.
 func assertStringAttr(t *testing.T, rec slog.Record, key, want string) {
@@ -923,10 +940,16 @@ func TestWriteDomainError_4xx_LogsWarn_NoCorrelation(t *testing.T) {
 	assert.False(t, hasSpanID, "log record must NOT contain 'span_id' attr when not set in ctx")
 }
 
-// TestWriteDomainError_499_LogsWarn locks the PR-A50+A51 contract:
+// TestWriteDomainError_499_LogsWarn locks the PR-A50+A51 + PR275 contract:
 // ErrClientCanceled (HTTP 499 client closed request) must route through the
 // 4xx writer path — message preserved (4xx does not mask), slog level Warn
-// (so 5xx Error rate SLOs stay clean), and code surfaced verbatim.
+// (so 5xx Error rate SLOs stay clean), code surfaced verbatim, and the
+// cancel_reason slog field carrying the originating ctx error variant
+// ("canceled") for dashboard aggregation.
+//
+// Constructed via ctxcancel.Wrap (the canonical producer) instead of a raw
+// errcode.NewInfra so the full Details["reason"] → ReasonFromDetails →
+// log4xx slog field pipeline is end-to-end validated.
 func TestWriteDomainError_499_LogsWarn(t *testing.T) {
 	handler := &captureHandler{}
 	orig := slog.Default()
@@ -937,8 +960,9 @@ func TestWriteDomainError_499_LogsWarn(t *testing.T) {
 	ctx = ctxkeys.WithRequestID(ctx, "req-499")
 
 	rec := httptest.NewRecorder()
-	WriteDomainError(ctx, rec,
-		errcode.NewInfra(errcode.ErrClientCanceled, "request canceled"))
+	ecErr := ctxcancel.Wrap(context.Canceled, "Insert", "key=foo")
+	require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.Canceled")
+	WriteDomainError(ctx, rec, ecErr)
 
 	assert.Equal(t, StatusClientClosedRequest, rec.Code,
 		"ctx-cancel must produce HTTP 499")
@@ -958,6 +982,45 @@ func TestWriteDomainError_499_LogsWarn(t *testing.T) {
 	}
 	assertStringAttr(t, *warnRec, "code", "ERR_CLIENT_CANCELED")
 	assertStringAttr(t, *warnRec, "request_id", "req-499")
+	assertStringAttr(t, *warnRec, "cancel_reason", "canceled")
+}
+
+// TestWriteDomainError_504_LogsError locks the PR275 P2-3 split contract:
+// ErrServerTimeout (HTTP 504 Gateway Timeout) must route through the 5xx
+// writer path — message sanitized to "internal server error", slog level
+// Error (so 5xx alerting + retry-on-504 SDK policies fire), code surfaced
+// verbatim, and the cancel_reason slog field carrying "deadline_exceeded"
+// (PR275 P1: log5xx parity with log4xx) so dashboards can aggregate
+// cancel_reason across both 499 and 504 streams.
+func TestWriteDomainError_504_LogsError(t *testing.T) {
+	handler := &captureHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, "req-504")
+
+	rec := httptest.NewRecorder()
+	ecErr := ctxcancel.Wrap(context.DeadlineExceeded, "Query", "id=x")
+	require.NotNil(t, ecErr, "ctxcancel.Wrap must produce *errcode.Error for context.DeadlineExceeded")
+	WriteDomainError(ctx, rec, ecErr)
+
+	assert.Equal(t, http.StatusGatewayTimeout, rec.Code,
+		"server-side timeout must produce HTTP 504, not 499")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_SERVER_TIMEOUT", errObj["code"])
+	assert.Equal(t, msgInternalServerError, errObj["message"],
+		"5xx response must mask message to prevent internal-detail leakage")
+
+	errRec := findErrorRecord(handler)
+	require.NotNil(t, errRec, "504 must emit slog.Error (not Warn)")
+	assertStringAttr(t, *errRec, "code", "ERR_SERVER_TIMEOUT")
+	assertStringAttr(t, *errRec, "request_id", "req-504")
+	assertStringAttr(t, *errRec, "cancel_reason", "deadline_exceeded")
 }
 
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,

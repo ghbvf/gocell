@@ -90,38 +90,32 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 	if !Detect(err) {
 		return nil
 	}
-	code, message := codeAndMessageFor(err)
+	code, message, reason := classify(err)
 	return &errcode.Error{
 		Code:            code,
 		Message:         message,
 		InternalMessage: fmt.Sprintf("%s ctx canceled %s", op, identifier),
 		Cause:           err,
 		Category:        errcode.CategoryInfra,
-		Details:         map[string]any{DetailsKeyReason: reasonOf(err)},
+		Details:         map[string]any{DetailsKeyReason: reason},
 	}
 }
 
-// codeAndMessageFor selects the (errcode, public message) pair based on the
-// originating ctx error: context.DeadlineExceeded → ErrServerTimeout/504,
-// anything else (default = context.Canceled branch) → ErrClientCanceled/499.
-// Kept separate from reasonOf so the 499/504 split and the reason enum can
-// evolve independently (e.g. if a third variant is ever added).
-func codeAndMessageFor(err error) (errcode.Code, string) {
+// classify resolves all per-variant attributes (errcode, public message,
+// observation reason) in a single errors.Is traversal of the cause chain.
+// Centralising the dispatch here avoids walking the chain twice (once per
+// attribute) and ensures the variant boundary is consistent: code, message,
+// and reason can never disagree about which branch err belongs to.
+//
+// context.DeadlineExceeded → ErrServerTimeout (504) / "request timed out" /
+// ReasonDeadlineExceeded (server-direction, feeds 5xx alerting).
+// Anything else (default = context.Canceled branch) → ErrClientCanceled
+// (499) / "request canceled" / ReasonCanceled (client-direction, slog.Warn).
+func classify(err error) (errcode.Code, string, string) {
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errcode.ErrServerTimeout, "request timed out"
+		return errcode.ErrServerTimeout, "request timed out", ReasonDeadlineExceeded
 	}
-	return errcode.ErrClientCanceled, "request canceled"
-}
-
-// reasonOf maps a context cancellation error to a stable low-cardinality
-// label safe to attach to a tracing span attribute. Defaults to
-// ReasonCanceled for the context.Canceled branch (covers both raw and
-// wrapped sentinels).
-func reasonOf(err error) string {
-	if errors.Is(err, context.DeadlineExceeded) {
-		return ReasonDeadlineExceeded
-	}
-	return ReasonCanceled
+	return errcode.ErrClientCanceled, "request canceled", ReasonCanceled
 }
 
 // ReasonFromDetails extracts and canonicalizes the reason value from an
