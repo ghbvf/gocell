@@ -231,13 +231,10 @@ func TestRunCheckContractHealth(t *testing.T) {
 	}
 }
 
-func TestRunCheckPlaceholders(t *testing.T) {
-	placeholders := []string{"slice-coverage", "assembly-completeness", "journey-readiness", "l0-imports"}
-	for _, name := range placeholders {
-		err := runCheck([]string{name})
-		if err == nil {
-			t.Errorf("check %s should return not-implemented error", name)
-		}
+func TestRunCheckUnconditionalSkipPlaceholder(t *testing.T) {
+	err := runCheck([]string{"unconditional-skip"})
+	if err == nil {
+		t.Error("check unconditional-skip should return not-implemented error")
 	}
 }
 

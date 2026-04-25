@@ -426,7 +426,26 @@ func TestAuthRouteMeta_ZeroValue(t *testing.T) {
 	assert.Empty(t, m.Path)
 	assert.False(t, m.Public)
 	assert.False(t, m.PasswordResetExempt)
-	assert.False(t, m.Delegated)
+	assert.False(t, m.IsInternal(), "zero-value AuthRouteMeta should not be internal (empty path)")
+}
+
+func TestAuthRouteMeta_IsInternal(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		internal bool
+	}{
+		{name: "internal path", path: "/internal/v1/rbac/check", internal: true},
+		{name: "api path", path: "/api/v1/sessions", internal: false},
+		{name: "empty path", path: "", internal: false},
+		{name: "partial prefix", path: "/internal/", internal: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := AuthRouteMeta{Path: tt.path}
+			assert.Equal(t, tt.internal, m.IsInternal())
+		})
+	}
 }
 
 // ---------------------------------------------------------------------------

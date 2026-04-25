@@ -43,10 +43,6 @@ type Route struct {
 
 	// PasswordResetExempt allows reset-required tokens through this route.
 	PasswordResetExempt bool
-
-	// Delegated marks an /internal/v1/* route. FinalizeAuth validates the
-	// Delegated ⇔ path-prefix implication so discrepancies fail at startup.
-	Delegated bool
 }
 
 // Mount registers the Route on mux. It:
@@ -114,7 +110,6 @@ func Mount(mux cell.RouteHandler, r Route) {
 			Path:                cleanedRel,
 			Public:              r.Public,
 			PasswordResetExempt: r.PasswordResetExempt,
-			Delegated:           r.Delegated,
 		})
 	}
 	if declarer, ok := mux.(cell.HTTPContractDeclarer); ok {

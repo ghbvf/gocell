@@ -49,7 +49,7 @@ func (c *dualListenerCell) RouteGroups() []cell.RouteGroup {
 			Listener: cell.InternalListener,
 			Prefix:   "",
 			Register: func(mux cell.RouteMux) {
-				auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/internal/v1/admin/ping"), Handler: http.HandlerFunc(c.onInternal), Delegated: true})
+				auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/internal/v1/admin/ping"), Handler: http.HandlerFunc(c.onInternal)})
 			},
 		},
 	}

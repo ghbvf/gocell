@@ -3941,15 +3941,13 @@ func (c *duplicateInternalCell) RouteGroups() []cell.RouteGroup {
 		Prefix:   "",
 		Register: func(mux cell.RouteMux) {
 			auth.Mount(mux, auth.Route{
-				Contract:  testHTTPContract("POST", "/internal/v1/dup-internal"),
-				Handler:   handler,
-				Delegated: true,
+				Contract: testHTTPContract("POST", "/internal/v1/dup-internal"),
+				Handler:  handler,
 			})
 			// Duplicate declaration — must trigger FinalizeAuth error.
 			auth.Mount(mux, auth.Route{
-				Contract:  testHTTPContract("POST", "/internal/v1/dup-internal"),
-				Handler:   handler,
-				Delegated: true,
+				Contract: testHTTPContract("POST", "/internal/v1/dup-internal"),
+				Handler:  handler,
 			})
 		},
 	}}

@@ -118,10 +118,11 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 // the route policy then requires the built-in internal admin role.
 func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) {
 	auth.Mount(mux, auth.Route{
-		Contract:  specInternalCommandScanActive,
-		Handler:   http.HandlerFunc(h.HandleScanActive),
-		Policy:    auth.AnyRole(auth.RoleInternalAdmin),
-		Delegated: true,
+		Contract: specInternalCommandScanActive,
+		Handler:  http.HandlerFunc(h.HandleScanActive),
+		Policy:   auth.AnyRole(auth.RoleInternalAdmin),
+		// Route lives on InternalListener (/internal/v1/*); internal affinity
+		// is derived from the path prefix via AuthRouteMeta.IsInternal().
 	})
 }
 

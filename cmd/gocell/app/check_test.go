@@ -208,6 +208,163 @@ func TestRelativeToRoot(t *testing.T) {
 	}
 }
 
+// ---------------------------------------------------------------------------
+// checkSliceCoverage
+// ---------------------------------------------------------------------------
+
+// TestCheckSliceCoverage_HappyPath exercises the real accesscore cell —
+// its slices/ directory is well-formed so the check should pass.
+func TestCheckSliceCoverage_HappyPath(t *testing.T) {
+	err := runCheck([]string{"slice-coverage", "--cell=accesscore"})
+	assert.NoError(t, err, "slice-coverage on a well-formed cell must pass")
+}
+
+// TestCheckSliceCoverage_AllCells exercises all cells (no --cell flag).
+func TestCheckSliceCoverage_AllCells(t *testing.T) {
+	err := runCheck([]string{"slice-coverage"})
+	assert.NoError(t, err, "slice-coverage with no --cell must pass on this project")
+}
+
+// TestCheckSliceCoverage_EmptyDirViolation creates a synthetic slices/ subdir
+// without a slice.yaml and verifies the CHECK-SLICE-EMPTY-DIR violation fires.
+func TestCheckSliceCoverage_EmptyDirViolation(t *testing.T) {
+	root := t.TempDir()
+
+	// Minimal go.mod so findRoot() resolves to tempdir.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n"), 0o644))
+
+	// Build minimal project structure with a cell and an empty slice dir.
+	cellDir := filepath.Join(root, "cells", "testcell")
+	require.NoError(t, os.MkdirAll(filepath.Join(cellDir, "slices", "emptyslice"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte(
+		"id: testcell\ntype: core\nconsistencyLevel: L1\nowner:\n  team: t\n  role: r\nschema:\n  primary: t\nverify:\n  smoke: []\n"),
+		0o644))
+
+	// Run check against this synthetic root by changing cwd.
+	orig, _ := os.Getwd()
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err := runCheck([]string{"slice-coverage", "--cell=testcell"})
+	require.Error(t, err, "must fail when a slices/ subdir lacks slice.yaml")
+	assert.Contains(t, err.Error(), "issue(s)")
+}
+
+// ---------------------------------------------------------------------------
+// checkAssemblyCompleteness
+// ---------------------------------------------------------------------------
+
+// TestCheckAssemblyCompleteness_HappyPath checks the real corebundle assembly.
+func TestCheckAssemblyCompleteness_HappyPath(t *testing.T) {
+	err := runCheck([]string{"assembly-completeness", "--id=corebundle"})
+	assert.NoError(t, err, "assembly-completeness on corebundle must pass")
+}
+
+// TestCheckAssemblyCompleteness_MissingID ensures --id is required.
+func TestCheckAssemblyCompleteness_MissingID(t *testing.T) {
+	err := runCheck([]string{"assembly-completeness"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "--id is required")
+}
+
+// TestCheckAssemblyCompleteness_MissingCell creates a synthetic assembly
+// referencing a nonexistent cell, expecting CHECK-ASSEMBLY-MISSING-CELL.
+func TestCheckAssemblyCompleteness_MissingCell(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n"), 0o644))
+
+	// Real cell.
+	cellDir := filepath.Join(root, "cells", "realcell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte(
+		"id: realcell\ntype: core\nconsistencyLevel: L1\nowner:\n  team: t\n  role: r\nschema:\n  primary: t\nverify:\n  smoke: []\n"),
+		0o644))
+
+	// Assembly referencing a missing cell.
+	asmDir := filepath.Join(root, "assemblies", "testbundle")
+	require.NoError(t, os.MkdirAll(asmDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(asmDir, "assembly.yaml"), []byte(
+		"id: testbundle\ncells:\n  - realcell\n  - ghostcell\nbuild:\n  entrypoint: cmd/test/main.go\n  binary: test\n  deployTemplate: k8s\n"),
+		0o644))
+
+	orig, _ := os.Getwd()
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err := runCheck([]string{"assembly-completeness", "--id=testbundle"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "issue(s)")
+}
+
+// ---------------------------------------------------------------------------
+// checkJourneyReadiness
+// ---------------------------------------------------------------------------
+
+// TestCheckJourneyReadiness_HappyPath checks a single known-good journey.
+func TestCheckJourneyReadiness_HappyPath(t *testing.T) {
+	err := runCheck([]string{"journey-readiness", "--journey=J-ssologin"})
+	assert.NoError(t, err, "J-ssologin must pass journey-readiness")
+}
+
+// TestCheckJourneyReadiness_AllJourneys checks all journeys in the project.
+func TestCheckJourneyReadiness_AllJourneys(t *testing.T) {
+	err := runCheck([]string{"journey-readiness"})
+	assert.NoError(t, err, "all journeys must pass readiness on this project")
+}
+
+// TestCheckJourneyReadiness_UnknownJourney verifies error for unknown journey ID.
+func TestCheckJourneyReadiness_UnknownJourney(t *testing.T) {
+	err := runCheck([]string{"journey-readiness", "--journey=J-nonexistent"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// TestCheckJourneyReadiness_NoStatusEntry creates a synthetic project where a
+// journey has no status-board entry, expecting CHECK-JOURNEY-NO-STATUS-ENTRY.
+func TestCheckJourneyReadiness_NoStatusEntry(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n"), 0o644))
+
+	journeysDir := filepath.Join(root, "journeys")
+	require.NoError(t, os.MkdirAll(journeysDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(journeysDir, "J-orphan.yaml"), []byte(
+		"id: J-orphan\ngoal: test\nowner:\n  team: t\n  role: r\ncells: []\ncontracts: []\npassCriteria: []\n"),
+		0o644))
+	// Empty status-board.
+	require.NoError(t, os.WriteFile(filepath.Join(journeysDir, "status-board.yaml"), []byte("[]\n"), 0o644))
+
+	orig, _ := os.Getwd()
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err := runCheck([]string{"journey-readiness", "--journey=J-orphan"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "issue(s)")
+}
+
+// ---------------------------------------------------------------------------
+// checkL0Imports
+// ---------------------------------------------------------------------------
+
+// TestCheckL0Imports_NoL0Cells verifies that the check passes cleanly when
+// there are no L0 cells (the common project state right now).
+func TestCheckL0Imports_NoL0Cells(t *testing.T) {
+	err := runCheck([]string{"l0-imports"})
+	assert.NoError(t, err, "l0-imports must pass when no L0 cells exist")
+}
+
+// TestCheckL0Imports_NonL0CellReturnsError verifies that requesting --cell
+// for a non-L0 cell returns an error.
+func TestCheckL0Imports_NonL0CellReturnsError(t *testing.T) {
+	err := runCheck([]string{"l0-imports", "--cell=accesscore"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not L0")
+}
+
+// ---------------------------------------------------------------------------
+// httpTransportColumns
+// ---------------------------------------------------------------------------
+
 // TestHTTPTransportColumns covers the cell-table helper directly — both
 // branches: HTTP contract with method+path, and non-HTTP / missing
 // transport gets "-" placeholders so the table column widths stay stable.
