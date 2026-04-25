@@ -66,6 +66,45 @@ func TestCheckContractHealth_UnknownFormat(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown format")
 }
 
+// TestRelativeToRoot pins the SARIF SRCROOT contract: file paths handed to
+// printers must be repo-relative slash-separated, not absolute. Regression
+// guard for F-R2-4 (PR#276 round-2): pos.Filename from go/packages is
+// absolute on every platform, and feeding it raw to normalizeArtifactURI
+// emits `<SRCROOT>/Users/...` which GitHub Code Scanning cannot map back.
+func TestRelativeToRoot(t *testing.T) {
+	tests := []struct {
+		name string
+		root string
+		abs  string
+		want string
+	}{
+		{
+			name: "absolute path under root → relative slash path",
+			root: "/repo",
+			abs:  "/repo/cmd/gocell/app/check.go",
+			want: "cmd/gocell/app/check.go",
+		},
+		{
+			name: "empty filename → empty",
+			root: "/repo",
+			abs:  "",
+			want: "",
+		},
+		{
+			name: "path outside root → still relative (filepath.Rel inserts ..)",
+			root: "/repo",
+			abs:  "/other/foo.go",
+			want: "../other/foo.go",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := relativeToRoot(tc.root, tc.abs)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 // TestHTTPTransportColumns covers the cell-table helper directly — both
 // branches: HTTP contract with method+path, and non-HTTP / missing
 // transport gets "-" placeholders so the table column widths stay stable.

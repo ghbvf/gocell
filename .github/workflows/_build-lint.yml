@@ -137,6 +137,10 @@ jobs:
         if: matrix.static_checks
         run: go run ./cmd/gocell check contract-health
 
+      - name: Check unconditional t.Skip
+        if: matrix.static_checks
+        run: go run ./cmd/gocell check unconditional-skip ./...
+
       # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
       # The main `gocell validate` step above already covers it.
 

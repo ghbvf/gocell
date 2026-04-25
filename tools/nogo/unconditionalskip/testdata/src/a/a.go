@@ -59,3 +59,25 @@ func TestSkipNotFirst(t *testing.T) {
 func Test(t *testing.T) {
 	t.Skip("boundary case — exact 4-char name") // want "unconditional t\\.Skip"
 }
+
+// case 10: setup then t.Run with unconditional Skip in sub-body — should be
+// reported. F-R2-3: previously checkBody only inspected body.List[0] and
+// missed t.Run calls placed after a setup statement.
+func TestSetupThenRunSkip(t *testing.T) {
+	_ = 1 // setup statement
+	t.Run("sub", func(t *testing.T) {
+		t.Skip("setup precedes the run; sub-body still unconditional") // want "unconditional t\\.Skip"
+	})
+}
+
+// case 11: two sibling t.Run calls; the second's first stmt is t.Skip —
+// should be reported. F-R2-3: checkBody must scan every t.Run, not only
+// the first statement.
+func TestTwoSiblingRuns(t *testing.T) {
+	t.Run("first", func(t *testing.T) {
+		_ = 1
+	})
+	t.Run("second", func(t *testing.T) {
+		t.Skip("second sibling sub-body unconditional") // want "unconditional t\\.Skip"
+	})
+}

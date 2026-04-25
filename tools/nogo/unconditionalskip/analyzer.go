@@ -93,25 +93,30 @@ func isTestingTorB(pass *analysis.Pass, expr ast.Expr) bool {
 	return obj.Name() == "T" || obj.Name() == "B"
 }
 
-// checkBody inspects the first statement of body. If it is an unconditional
-// call to t.Skip, t.Skipf, or t.SkipNow, a diagnostic is reported.
-// Sub-functions passed to t.Run are also inspected recursively.
+// checkBody inspects body for unconditional Skip calls. The rule is anchored
+// at the *first statement* of any function body (the outer test function
+// and every sub-function passed to t.Run). To catch sub-tests defined after
+// setup or after a sibling t.Run, the scan walks the entire stmt list and
+// recurses into each t.Run literal it finds — but the report itself only
+// fires when a body's first statement is the Skip call.
 func checkBody(pass *analysis.Pass, body *ast.BlockStmt) {
 	if body == nil || len(body.List) == 0 {
 		return
 	}
 
-	first := body.List[0]
-
-	// Direct: t.Skip(...), t.Skipf(...), t.SkipNow()
-	if isSkipCall(pass, first) {
-		pass.Reportf(first.Pos(), diagMessage)
+	// Direct: first statement of this body is t.Skip(...) / t.Skipf(...) / t.SkipNow().
+	if isSkipCall(pass, body.List[0]) {
+		pass.Reportf(body.List[0].Pos(), diagMessage)
 		return
 	}
 
-	// t.Run(name, func(t *testing.T) { ... }) — recurse into the literal body.
-	if sub, ok := extractRunLitBody(pass, first); ok {
-		checkBody(pass, sub)
+	// Recurse into every t.Run(name, func(t *testing.T) { ... }) regardless
+	// of position so setup-then-Run and multiple sibling t.Run calls are
+	// covered. Each sub-body is itself first-statement-anchored.
+	for _, stmt := range body.List {
+		if sub, ok := extractRunLitBody(pass, stmt); ok {
+			checkBody(pass, sub)
+		}
 	}
 }
 

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -205,58 +206,22 @@ func checkUnconditionalSkip(args []string) error {
 		patterns = []string{defaultPattern}
 	}
 
+	// Resolve project root so diagnostic file paths can be made repo-relative
+	// for SARIF SRCROOT mapping (artifactLocation.uri must be relative when
+	// uriBaseId="SRCROOT", per PR#270 SARIF SRCROOT contract).
+	root, err := findRoot()
+	if err != nil {
+		return fmt.Errorf("cannot find project root: %w", err)
+	}
+
 	printer, err := printers.New(*format, os.Stdout, toolVersion())
 	if err != nil {
 		return err
 	}
 
-	// Load packages with full type information required by the analyzer.
-	// packages.LoadAllSyntax is the minimum mode required by checker.Analyze:
-	// it loads type-annotated syntax for the initial packages and all their
-	// transitive dependencies so that the inspector can walk the full AST.
-	cfg := &packages.Config{
-		Mode:  packages.LoadAllSyntax,
-		Tests: true,
-	}
-	pkgs, err := packages.Load(cfg, patterns...)
+	results, err := runUnconditionalSkipAnalyzer(patterns, root)
 	if err != nil {
-		return fmt.Errorf("load packages: %w", err)
-	}
-	var pkgErrs []packages.Error
-	for _, p := range pkgs {
-		pkgErrs = append(pkgErrs, p.Errors...)
-	}
-	if len(pkgErrs) > 0 {
-		var b strings.Builder
-		for _, e := range pkgErrs {
-			fmt.Fprintf(&b, "  %s\n", e.Error())
-		}
-		return fmt.Errorf("package load errors:\n%s", b.String())
-	}
-
-	graph, err := checker.Analyze(
-		[]*analysis.Analyzer{unconditionalskip.Analyzer},
-		pkgs,
-		nil,
-	)
-	if err != nil {
-		return fmt.Errorf("run analyzer: %w", err)
-	}
-
-	var results []governance.ValidationResult
-	for act := range graph.All() {
-		for _, diag := range act.Diagnostics {
-			pos := act.Package.Fset.Position(diag.Pos)
-			results = append(results, governance.ValidationResult{
-				Code:      "UNCONDITIONAL-SKIP-01",
-				Severity:  governance.SeverityError,
-				IssueType: governance.IssueForbidden,
-				File:      pos.Filename,
-				Line:      pos.Line,
-				Column:    pos.Column,
-				Message:   diag.Message,
-			})
-		}
+		return err
 	}
 
 	if err := printer.Print(results); err != nil {
@@ -271,4 +236,87 @@ func checkUnconditionalSkip(args []string) error {
 		fmt.Println("\nPASS: no unconditional skips found")
 	}
 	return nil
+}
+
+// runUnconditionalSkipAnalyzer loads patterns, runs the analyzer, and
+// returns governance ValidationResult entries with repo-relative file
+// paths suitable for SARIF SRCROOT mapping.
+func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.ValidationResult, error) {
+	// packages.LoadAllSyntax loads type-annotated syntax for initial packages
+	// and all transitive dependencies — the minimum mode checker.Analyze needs.
+	cfg := &packages.Config{
+		Mode:  packages.LoadAllSyntax,
+		Tests: true,
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		return nil, fmt.Errorf("load packages: %w", err)
+	}
+	if loadErr := collectPackageErrors(pkgs); loadErr != nil {
+		return nil, loadErr
+	}
+
+	graph, err := checker.Analyze(
+		[]*analysis.Analyzer{unconditionalskip.Analyzer},
+		pkgs,
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("run analyzer: %w", err)
+	}
+
+	var results []governance.ValidationResult
+	for act := range graph.All() {
+		for _, diag := range act.Diagnostics {
+			pos := act.Package.Fset.Position(diag.Pos)
+			results = append(results, governance.ValidationResult{
+				Code:      "UNCONDITIONAL-SKIP-01",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueForbidden,
+				File:      relativeToRoot(root, pos.Filename),
+				Line:      pos.Line,
+				Column:    pos.Column,
+				Message:   diag.Message,
+			})
+		}
+	}
+	return results, nil
+}
+
+// collectPackageErrors aggregates per-package load errors into a single
+// structured error. Returning a non-nil error suppresses analyzer execution
+// — diagnostics on a partially-loaded graph would be incomplete.
+func collectPackageErrors(pkgs []*packages.Package) error {
+	var pkgErrs []packages.Error
+	for _, p := range pkgs {
+		pkgErrs = append(pkgErrs, p.Errors...)
+	}
+	if len(pkgErrs) == 0 {
+		return nil
+	}
+	var b strings.Builder
+	for _, e := range pkgErrs {
+		fmt.Fprintf(&b, "  %s\n", e.Error())
+	}
+	return fmt.Errorf("package load errors:\n%s", b.String())
+}
+
+// relativeToRoot converts an absolute file path returned by go/packages
+// (token.Position.Filename) into a slash-separated path relative to the
+// project root. Required so SARIF artifactLocation.uri stays repo-relative
+// under uriBaseId="SRCROOT" — GitHub Code Scanning silently drops findings
+// whose URI doesn't resolve under the declared base.
+//
+// Falls back to the original path on any failure (filepath.Rel error or
+// unrelated path) so the printer never crashes; SARIF emit is best-effort
+// and a degraded absolute path is preferable to a panic.
+func relativeToRoot(root, abs string) string {
+	if abs == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(root, abs)
+	if err != nil {
+		return abs
+	}
+	return filepath.ToSlash(rel)
 }
