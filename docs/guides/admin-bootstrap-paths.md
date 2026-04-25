@@ -17,7 +17,7 @@
 | 路径 | 触发者 | admin 身份来源 |
 |---|---|---|
 | **Interactive** | 运维通过 HTTP 端点 `POST /api/v1/access/setup/admin` 主动提供 | 运维自选用户名 / 邮箱 / 密码 |
-| **Bootstrap** | `accesscore` lifecycle 在启动时自动检测并创建 | 框架生成随机用户名 + 随机密码，写凭据文件，运维读文件登录后强制改密 |
+| **Bootstrap** | `accesscore` lifecycle 在启动时自动检测并创建 | 框架生成随机密码（用户名默认 `admin`，可通过 `initialadmin.WithUsername` 在 lifecycle 装配时覆盖），写凭据文件，运维读文件登录后强制改密 |
 
 `cmd/corebundle` 通过环境变量 `GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE` 选择，仅接受空值 / `interactive` / `bootstrap`，其他值启动 fail-fast。
 
@@ -58,7 +58,7 @@
   ├────────────────────────────────────►   410 Gone
   │
   │  POST /api/v1/access/sessions/login
-  ├────────────────────────────────────►   200 OK + access/refresh tokens
+  ├────────────────────────────────────►   201 Created + access/refresh tokens
 ```
 
 要点：
@@ -75,18 +75,19 @@
   │  set GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE=bootstrap
   │  start gocell
   ├────────────────────────────────────►   detects admin role empty
-  │                                        generates random user + password
+  │                                        generates random password (username
+  │                                          defaults to "admin")
   │                                        writes credential file (0600)
   │                                        starts 24h TTL purge worker
 
 [client]                              [accesscore]
-  │  read credential file              (运维带外动作)
+  │  read credential file              (运维带外动作；文件含 username + password)
   │
   │  POST /api/v1/access/sessions/login
-  │  { "username":"<random>","password":"<random>" }
-  ├────────────────────────────────────►   200 OK + reset-required token
+  │  { "username":"admin","password":"<from-cred-file>" }
+  ├────────────────────────────────────►   201 Created + reset-required token
   │
-  │  POST /api/v1/access/sessions/<id>/password
+  │  POST /api/v1/access/users/{userId}/password
   │  { "old":"...", "new":"..." }
   ├────────────────────────────────────►   200 OK
   │  (middleware 在改密完成前会拒绝任何业务端点)
