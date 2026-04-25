@@ -14,7 +14,6 @@ package bootstrap
 import (
 	"crypto/sha256"
 	"crypto/subtle"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"sort"
@@ -233,22 +232,6 @@ func mtlsMiddleware() func(http.Handler) http.Handler {
 	}
 }
 
-// verboseTokenErrorBody is pre-encoded to avoid per-request JSON marshalling.
-var verboseTokenErrorBody = mustEncodeVerboseTokenError()
-
-func mustEncodeVerboseTokenError() []byte {
-	body, err := json.Marshal(map[string]any{
-		"error": map[string]any{
-			"code":    "ERR_AUTH_VERBOSE_TOKEN",
-			"message": "verbose token mismatch",
-		},
-	})
-	if err != nil {
-		panic("bootstrap: failed to pre-encode verbose token error body: " + err.Error())
-	}
-	return body
-}
-
 // verboseTokenMiddleware creates an HTTP middleware that guards ?verbose mode
 // with a pre-hashed token. The hashedToken is the SHA-256 hash of the
 // configured token (stored in cell.AuthVerboseToken.HashedToken).
@@ -256,6 +239,12 @@ func mustEncodeVerboseTokenError() []byte {
 // SEC-06: comparing fixed-length 32-byte digests avoids the length-oracle
 // that comparing raw bytes exhibits on length mismatch (the sha256 approach
 // is consistent with what the health handler uses).
+//
+// On token mismatch, the middleware writes the same envelope as
+// runtime/http/health.Handler.sendVerboseDenied so /readyz?verbose returns a
+// single contract regardless of which layer rejects (PR269 F1: middleware and
+// handler-layer gates share the canonical ERR_READYZ_VERBOSE_DENIED code with
+// request_id propagation via httputil.WritePublicError).
 //
 // Moved from policy_verbose_token.go; accepts the pre-hashed form from AuthVerboseToken.
 func verboseTokenMiddleware(headerName string, configuredHash [32]byte) func(http.Handler) http.Handler {
@@ -267,9 +256,13 @@ func verboseTokenMiddleware(headerName string, configuredHash [32]byte) func(htt
 			}
 			submittedHash := sha256.Sum256([]byte(r.Header.Get(headerName)))
 			if subtle.ConstantTimeCompare(submittedHash[:], configuredHash[:]) != 1 {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusUnauthorized)
-				_, _ = w.Write(verboseTokenErrorBody)
+				httputil.WritePublicError(
+					r.Context(),
+					w,
+					http.StatusUnauthorized,
+					string(errcode.ErrReadyzVerboseDenied),
+					"verbose output requires a matching X-Readyz-Token header",
+				)
 				return
 			}
 			next.ServeHTTP(w, r)

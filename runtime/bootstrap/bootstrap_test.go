@@ -99,11 +99,12 @@ func waitForHealthy(t *testing.T, addr string) {
 // (status, cells, dependencies, adapters). The helper lets a single
 // assertion path work whether the response was 200 or 503.
 //
-// PolicyVerboseToken middleware 401 responses use a flatter envelope —
-// {"error":{"code":"...","message":"..."}} with no "details" — so the
-// helper falls back to the bare error object when "details" is absent.
-// Callers asserting on dependencies/cells must check the response status
-// code first; this helper only normalises the body shape.
+// All 401 responses on /readyz?verbose now share the canonical envelope shape
+// emitted by httputil.WritePublicError — {"error":{"code":"ERR_READYZ_VERBOSE_DENIED",
+// "message":"...","details":{},"request_id":"..."}} — regardless of which layer
+// rejected (route-group middleware or handler-layer gate). Callers asserting on
+// dependencies/cells must check the response status code first; this helper
+// only normalises the body shape.
 func readyzPayload(t *testing.T, body map[string]any) map[string]any {
 	t.Helper()
 	if data, ok := body["data"].(map[string]any); ok {
@@ -113,10 +114,7 @@ func readyzPayload(t *testing.T, body map[string]any) map[string]any {
 		if details, ok := errObj["details"].(map[string]any); ok {
 			return details
 		}
-		// 401 / 4xx envelopes (e.g. ERR_AUTH_VERBOSE_TOKEN) have no
-		// `details` field — return the error object so callers can still
-		// inspect code/message via readyzPayload(...)[
-		// "code" | "message"].
+		// Legacy fallback: pre-PR269 envelopes had no `details` field.
 		return errObj
 	}
 	t.Fatalf("readyz body has neither data nor error envelope: %#v", body)

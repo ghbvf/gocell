@@ -24,6 +24,7 @@ import (
 	"go/parser"
 	"go/token"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -528,64 +529,80 @@ var _ = cell.Policy{}
 // ---------------------------------------------------------------------------
 
 // TestAuthPlan_Segregation_FixtureVerifiesCompileError guards the
-// ListenerAuth/GroupAuth compile-time segregation invariants by verifying that
-// the .go.txt fixtures in celltest_segregation/ produce a compile error.
+// ListenerAuth/GroupAuth compile-time segregation invariants by running the
+// real Go type-checker against the fixtures in celltest_segregation/.
 //
-// Each fixture is a Go source file that assigns a plan to the wrong interface
-// (e.g. AuthJWT → GroupAuth). The test renames the .go.txt to .go, attempts to
-// compile it, asserts failure, and renames it back. If the fixture COMPILES
-// SUCCESSFULLY it means the segregation invariant was accidentally removed.
+// Each fixture is a Go source file gated behind `//go:build segregation_check`
+// that assigns a plan to the wrong interface (e.g. AuthJWT → GroupAuth). The
+// test invokes `go build -tags=segregation_check` against the fixture package
+// and asserts that:
+//
+//  1. The build fails (non-zero exit).
+//  2. Stderr contains the expected `does not implement` message naming both
+//     the offending struct type and the missing marker method.
+//
+// If a fixture compiles successfully, the segregation invariant in
+// kernel/cell/auth_plan.go was removed and the marker method (listenerAuthOK
+// or groupAuthOK) is no longer doing its job — the test FAILS to surface the
+// regression.
+//
+// This is a real type-check, not a structural AST sniff: removing the marker
+// method is exactly the kind of subtle break an AST scanner would miss.
 func TestAuthPlan_Segregation_FixtureVerifiesCompileError(t *testing.T) {
 	root := findModuleRoot(t)
 	fixtureDir := filepath.Join(root, "tools", "archtest", "celltest_segregation")
 
-	fixtures, err := filepath.Glob(filepath.Join(fixtureDir, "*.go.txt"))
-	require.NoError(t, err)
-	require.NotEmpty(t, fixtures, "expected at least one .go.txt fixture in celltest_segregation/")
+	cases := []struct {
+		fixture       string // file basename, exists in fixtureDir
+		offendingType string // e.g. "cell.AuthJWT"
+		targetIface   string // e.g. "cell.GroupAuth"
+		missingMethod string // e.g. "groupAuthOK"
+	}{
+		{
+			fixture:       "bad_jwt_groupauth.go",
+			offendingType: "cell.AuthJWT",
+			targetIface:   "cell.GroupAuth",
+			missingMethod: "groupAuthOK",
+		},
+		{
+			fixture:       "bad_verbose_listener.go",
+			offendingType: "cell.AuthVerboseToken",
+			targetIface:   "cell.ListenerAuth",
+			missingMethod: "listenerAuthOK",
+		},
+	}
 
-	for _, txt := range fixtures {
-		txt := txt
-		base := strings.TrimSuffix(txt, ".txt") // e.g. bad_jwt_groupauth.go
-		t.Run(filepath.Base(txt), func(t *testing.T) {
-			// Rename .go.txt → .go to make it visible to go build.
-			require.NoError(t, os.Rename(txt, base),
-				"failed to rename fixture file for compilation test")
-			t.Cleanup(func() {
-				// Always restore the .go.txt name, even on failure.
-				_ = os.Rename(base, txt)
-			})
+	// Sanity: every declared fixture must exist on disk so removing or
+	// renaming a fixture without updating the table fails loudly.
+	for _, c := range cases {
+		_, err := os.Stat(filepath.Join(fixtureDir, c.fixture))
+		require.NoError(t, err, "fixture %s missing from %s", c.fixture, fixtureDir)
+	}
 
-			// Attempt to parse; the fixture must already have //go:build ignore
-			// to keep it out of the normal build.  We parse to confirm it
-			// contains the build constraint, then verify it fails a strict parse.
-			fset := token.NewFileSet()
-			af, parseErr := parser.ParseFile(fset, base, nil, parser.SkipObjectResolution)
-			if parseErr != nil {
-				// Parse failure is acceptable — the file is intentionally broken.
-				return
-			}
+	// One subprocess invocation against the package — `go build` with the
+	// segregation_check tag activates the fixtures and the type-checker
+	// reports every bad assignment in a single pass.
+	cmd := exec.Command("go", "build", "-tags=segregation_check",
+		"./tools/archtest/celltest_segregation/")
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	require.Error(t, err,
+		"`go build -tags=segregation_check` must fail; segregation marker "+
+			"method(s) appear to have been removed.\noutput:\n%s", string(out))
 
-			// The fixture MUST have a type-check error: the assignment
-			// `var _ cell.GroupAuth = cell.AuthJWT{}` (or similar) must not
-			// type-check. We verify this by inspecting the AST for the
-			// specific bad assignment.
-			var foundBadAssignment bool
-			ast.Inspect(af, func(n ast.Node) bool {
-				spec, ok := n.(*ast.ValueSpec)
-				if !ok {
-					return true
-				}
-				// Look for: var _ <interface> = <bad-type>{}
-				if len(spec.Values) > 0 {
-					if _, ok2 := spec.Values[0].(*ast.CompositeLit); ok2 {
-						foundBadAssignment = true
-					}
-				}
-				return true
-			})
-			assert.True(t, foundBadAssignment,
-				"fixture %s must contain a bad type assignment (var _ <interface> = <type>{})",
-				filepath.Base(txt))
+	output := string(out)
+	for _, c := range cases {
+		c := c
+		t.Run(c.fixture, func(t *testing.T) {
+			assert.Contains(t, output, c.offendingType,
+				"build error must reference offending type %s", c.offendingType)
+			assert.Contains(t, output, c.targetIface,
+				"build error must reference target interface %s", c.targetIface)
+			assert.Contains(t, output,
+				fmt.Sprintf("does not implement %s (missing method %s)",
+					c.targetIface, c.missingMethod),
+				"build error must name the missing marker method %s on %s",
+				c.missingMethod, c.targetIface)
 		})
 	}
 }

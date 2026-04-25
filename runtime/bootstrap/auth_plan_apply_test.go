@@ -10,11 +10,14 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	routerpkg "github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
@@ -359,6 +362,62 @@ func TestVerboseTokenMiddleware_QueryParamBoundary(t *testing.T) {
 			assert.Equal(t, tc.wantStatus, w.Code)
 		})
 	}
+}
+
+// ─── TestVerboseTokenMiddleware_DeniedEnvelope ────────────────────────────────
+
+// TestVerboseTokenMiddleware_DeniedEnvelope locks down the canonical envelope
+// shape produced by the route-group verbose-token middleware.
+//
+// PR269 F1: previously the middleware emitted ERR_AUTH_VERBOSE_TOKEN through a
+// pre-encoded body, while runtime/http/health.Handler.sendVerboseDenied emitted
+// ERR_READYZ_VERBOSE_DENIED via httputil.WritePublicError — same semantics, two
+// public contracts. Both layers now share one envelope:
+//
+//	HTTP 401
+//	Content-Type: application/json
+//	{"error":{"code":"ERR_READYZ_VERBOSE_DENIED","message":"...",
+//	          "details":{}, "request_id":"<from ctx>"}}
+//
+// Any future divergence (a new layer that rejects verbose differently) must
+// update both this test and the handler-layer test in
+// runtime/http/health/health_test.go in lockstep.
+func TestVerboseTokenMiddleware_DeniedEnvelope(t *testing.T) {
+	t.Parallel()
+
+	const headerName = "X-Readyz-Token" // matches runtime/http/health.VerboseTokenHeader
+	const token = "the-secret"
+	hashedToken := sha256.Sum256([]byte(token))
+
+	mw := verboseTokenMiddleware(headerName, hashedToken)
+	handler := mw(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	const requestID = "req-abc-123"
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req.Header.Set(headerName, "wrong-token")
+	req = req.WithContext(ctxkeys.WithRequestID(req.Context(), requestID))
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	require.Equal(t, http.StatusUnauthorized, w.Code)
+	require.Equal(t, "application/json", w.Header().Get("Content-Type"))
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &body), "body must be JSON")
+
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok, "envelope must have an 'error' object: %#v", body)
+	assert.Equal(t, string(errcode.ErrReadyzVerboseDenied), errObj["code"],
+		"middleware must use the same code as health.Handler.sendVerboseDenied")
+	assert.Equal(t, "verbose output requires a matching X-Readyz-Token header",
+		errObj["message"])
+	_, hasDetails := errObj["details"].(map[string]any)
+	assert.True(t, hasDetails, "envelope must carry a (possibly empty) details object")
+	assert.Equal(t, requestID, errObj["request_id"],
+		"middleware must propagate request_id from ctx (httputil.WritePublicError contract)")
 }
 
 // ─── TestVerboseTokenMiddleware_TokenComparison ───────────────────────────────

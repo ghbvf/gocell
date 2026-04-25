@@ -84,12 +84,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
   through `data` (success) or `error.details` (failure).
 
 ### Added
-- **PR-A14a dual HTTP listener** — `runtime/bootstrap` now runs two `http.Server` instances: `primary` (default `:8080`, serves `/api/v1/*` + `/healthz` + `/readyz` + `/metrics`) and `internal` (default `127.0.0.1:9090`, serves `/internal/v1/*` only). `runtime/http/router.Router` physically splits routes across `publicMux` + `internalMux` via prefix dispatch; the primary listener explicitly 404s `/internal/v1/*` so the internal prefix never leaks through public AuthMiddleware. `ref: go-kratos/kratos app.go L95-122 errgroup goroutine-pair; ory/kratos cmd/daemon/serve.go named public/admin constructors; kubernetes/apiserver pkg/server/secure_serving.go pre-bind listener`.
-- `bootstrap.WithHTTPPrimaryAddr` / `WithHTTPInternalAddr` — new option pair replacing `WithHTTPAddr`.
-- `bootstrap.WithPrimaryListener` / `WithInternalListener` — new test-injection options replacing `WithListener`.
-- `bootstrap.WithInternalMiddleware(mw ...)` — variadic middleware option for the internal mux chain (service-token / mTLS). Replaces `WithInternalEndpointGuard(prefix, guard)`.
-- `router.Router.PublicHandler()` / `InternalHandler()` — explicit per-listener `http.Handler` accessors for Bootstrap wiring.
-- Env vars `GOCELL_HTTP_PRIMARY_ADDR` + `GOCELL_HTTP_INTERNAL_ADDR` (consumed by `cmd/corebundle`).
+- **PR-A14b three-listener topology with declarative RouteGroups** — `runtime/bootstrap` runs N `http.Server` instances driven by `cell.ListenerRef` (`PrimaryListener` `:8080` for `/api/v1/*`, `InternalListener` `127.0.0.1:9090` for `/internal/v1/*`, `HealthListener` `127.0.0.1:9091` for `/healthz` `/readyz` `/metrics`). Each listener owns an independent `*router.Router`; the primary listener physically 404s `/internal/v1/*`. Cells declare routes via `RouteGroupContributor.RouteGroups()` and Bootstrap mounts them at phase5. `ref: go-kratos/kratos app.go L95-122 errgroup goroutine-pair; ory/kratos cmd/daemon/serve.go named public/admin constructors; kubernetes/apiserver pkg/server/secure_serving.go pre-bind listener`.
+- `bootstrap.WithListener(ref cell.ListenerRef, addr string, authChain []cell.ListenerAuth, opts ...ListenerOption)` — single declarative listener option carrying ref, address, and the typed auth chain. `WithListenerNet(ln)` injects a pre-bound `net.Listener` for tests.
 - `kernel/cell.LifecycleContributor` interface + `LifecycleHook` struct. Bootstrap auto-discovers lifecycle hooks at phase3b (mirror of `HealthContributor` discovery at phase5), eliminating composition-root boilerplate. `ref: github.com/uber-go/fx internal/lifecycle/lifecycle.go`.
 - `kernel/cell.ResolveEmitter` / `EmitterConfig` / `EmitterOutcome` consolidating the durable/demo outbox emitter selection logic that was duplicated across accesscore / configcore / auditcore (~120 LOC removed).
 - `cells/accesscore/initialadmin.Lifecycle` promoting first-run admin bootstrap from internal plumbing to a first-class `cell.LifecycleContributor` Hook. `OnStart` launches the cleaner in a background goroutine (Cleaner.Start blocks on ctx.Done until TTL expires); `OnStop` cancels it.
@@ -105,14 +101,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - RabbitMQ /readyz probe name changed from `"rabbitmq"` to `"rabbitmq_ready"` for parity with sibling adapter probe names (`"vault_transit_ready"`, etc.). Operator dashboards and alert rules consuming `/readyz?verbose` dependencies must be updated. (PR-A18 / RMQ-STATUS-01)
 
 ### Removed (breaking)
-- **PR-A14a listener / guard API**:
-  - `bootstrap.WithHTTPAddr` → use `WithHTTPPrimaryAddr` + `WithHTTPInternalAddr`.
-  - `bootstrap.WithListener` → use `WithPrimaryListener` + `WithInternalListener`.
-  - `bootstrap.WithInternalEndpointGuard(prefix, guard)` → `WithInternalMiddleware(mw)` (no prefix parameter; routes dispatch by pattern).
-  - `router.WithInternalPathPrefixGuard` + `auth.WithDelegatedMatcher` — deleted; physical mux split makes in-band JWT bypass unnecessary.
-  - `router.Router.Handler()` — deleted; use `PublicHandler()` or `InternalHandler()`.
-  - `auth.Route.Delegated` field semantic change: still a `bool` with the same field name, but the runtime JWT-bypass behaviour is gone. `FinalizeAuth` now asserts `Delegated=true ⇔ path begins with /internal/v1/` at startup; callers must set the flag consistently with the path prefix or startup fails. The old `auth.RouteDecl` shim has been removed; use `auth.Mount(mux, auth.Route{Contract: ..., ...})`.
-  - PR-A32 F3-CLOSURE SELECTOR-GUARD-REMOVE-01 absorbed: `cmd/corebundle/bundle.go` no longer wires a `WithInternalEndpointGuard` transitional guard.
+- **PR-A14a/A14b listener / guard API** — the historical single-listener and prefix-guard surface is gone. Current canonical surface is `bootstrap.WithListener(ref, addr, authChain, opts...)` per ref (see "Added" above and the Migration section). Removed names:
+  - `bootstrap.WithHTTPAddr` (single global addr) — pass per-ref addresses through `WithListener`.
+  - `bootstrap.WithInternalEndpointGuard(prefix, guard)` — internal mux is its own listener; attach guards via the listener's `authChain` (e.g. `[]cell.ListenerAuth{cell.NewAuthServiceToken(store, ring)}`).
+  - `router.WithInternalPathPrefixGuard` + `auth.WithDelegatedMatcher` — physical mux split makes in-band JWT bypass unnecessary.
+  - `router.Router.Handler()` — each `*router.Router` is now per-listener; obtain it from `bootstrap` wiring rather than via a global handler.
+  - `auth.Route.Delegated` runtime JWT-bypass behaviour. The `Delegated bool` field remains; `FinalizeAuth` now asserts `Delegated=true ⇔ path begins with /internal/v1/` and the route is mounted on `InternalListener`. The old `auth.RouteDecl` shim has been removed; use `auth.Mount(mux, auth.Route{Contract: ..., ...})`.
 - `runtime/bootstrap.BrokerHealthChecker` interface + `WithBrokerHealth` Option + `isNilBrokerHealthChecker` helper. Compose RabbitMQ readiness via `bootstrap.WithManagedResource(conn)` instead. (PR-A18 / RMQ-STATUS-01)
 - `accesscore.WithBootstrapWorkerSink` — Bootstrap phase3b auto-discovery replaces sink plumbing. Remove both the `WithBootstrapWorkerSink(...)` call and the paired `bootstrap.WithWorkers(worker.Lazy())` wiring.
 - `accesscore.InitialAdminOption` type alias + all `WithBootstrap{Username,CredentialPath,TTL,PasswordHasher}` options — moved to `cells/accesscore/initialadmin.With{Username,CredentialPath,TTL,PasswordHasher}`.
@@ -147,10 +141,10 @@ accessCore := accesscore.NewAccessCore(accessOpts...)
 app := bootstrap.New(bootstrap.WithAssembly(asm)) // phase3b auto-discovers
 ```
 
-**PR-A14a dual-listener migration:**
+**PR-A14b/PR262 listener migration:**
 
 ```go
-// Before
+// Before (pre-PR-A14a — single global addr + prefix guard)
 app := bootstrap.New(
     bootstrap.WithAssembly(asm),
     bootstrap.WithHTTPAddr(":8080"),
@@ -158,17 +152,22 @@ app := bootstrap.New(
     bootstrap.WithInternalEndpointGuard("/internal/v1/", serviceTokenMW),
 )
 
-// After — primary listener serves /api/v1/* + infra; internal listener
-// serves /internal/v1/* only. Service-token / mTLS attaches to internalMux
-// directly (no prefix parameter; routes dispatch by pattern).
+// After — one WithListener per ref; auth chain is typed (PR262):
+//   primary    serves /api/v1/* with JWT verifier discovered from the assembly
+//   internal   serves /internal/v1/* with mTLS + service-token chain
+//   health     serves /healthz /readyz /metrics on loopback (no auth)
 app := bootstrap.New(
     bootstrap.WithAssembly(asm),
-    bootstrap.WithHTTPPrimaryAddr(":8080"),
-    bootstrap.WithHTTPInternalAddr("127.0.0.1:9090"), // loopback by default; bind VPC in prod
-    bootstrap.WithPrimaryListener(primaryLn),
-    bootstrap.WithInternalListener(internalLn),
-    bootstrap.WithInternalMiddleware(serviceTokenMW),
+    bootstrap.WithListener(cell.PrimaryListener, ":8080",
+        []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
+    bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
+        []cell.ListenerAuth{
+            cell.AuthMTLS{},
+            cell.NewAuthServiceToken(nonceStore, ring),
+        },
+        bootstrap.WithListenerTLS(tlsCfg)),
+    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", nil),
 )
 ```
 
-Operators: set `GOCELL_HTTP_PRIMARY_ADDR` + `GOCELL_HTTP_INTERNAL_ADDR` env vars. The pre-PR-A14a `GOCELL_HTTP_ADDR` var is no longer consumed; `cmd/corebundle` emits `slog.Warn` at startup if it is set while the new vars are not.
+For tests, inject a pre-bound listener via `bootstrap.WithListenerNet(ln)` as a `WithListener` option.
