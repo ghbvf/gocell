@@ -153,3 +153,63 @@ func TestDependencyChecker_Locate_FallsBack(t *testing.T) {
 	assert.Zero(t, line)
 	assert.Zero(t, col)
 }
+
+// TestParentFieldPath table-drives the parent walker used by locate's
+// fallback. Mistakes here propagate to every rule that points at a
+// missing leaf, so lock the corner cases (empty / no separator /
+// trailing index / mixed dot+index).
+func TestParentFieldPath(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"", ""},
+		{"a", ""},
+		{"a.b", "a"},
+		{"a.b.c", "a.b"},
+		{"a.b[0]", "a.b"},
+		{"a.b[0].c", "a.b[0]"},
+		{"a.b[0][1]", "a.b[0]"},
+		{"endpoints.http.responses[401].schemaRef", "endpoints.http.responses[401]"},
+		{"endpoints.http.responses[401]", "endpoints.http.responses"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			assert.Equal(t, tc.want, parentFieldPath(tc.in))
+		})
+	}
+}
+
+// TestValidator_Locate_FallsBackToParentForMissingLeaf is the CH-03
+// regression: when a rule fires *because* a leaf field is absent
+// (responses[401] declared without a schemaRef), locate must walk up to
+// the deepest existing ancestor rather than returning (0, 0). Without
+// the fallback, IDE click-to-open and SARIF anchors degrade to
+// "file-only" precision and the PR's "carry yaml.Node field-level
+// Line/Column" promise breaks for the most common contract-health case.
+func TestValidator_Locate_FallsBackToParentForMissingLeaf(t *testing.T) {
+	src := "id: demo.v1\n" + // line 1
+		"endpoints:\n" + // line 2
+		"  http:\n" + // line 3
+		"    responses:\n" + // line 4
+		"      401:\n" + // line 5 — key
+		"        description: unauthorized\n" // line 6 — value's first content; yaml.v3 anchors the mapping value here
+
+	pm := &metadata.ProjectMeta{
+		Contracts: map[string]*metadata.ContractMeta{},
+	}
+	prepareNode(t, pm, "contracts/http/demo/v1/contract.yaml", src)
+	v := NewValidator(pm, "")
+
+	// The leaf .schemaRef does not exist in the YAML — locator must walk
+	// up to the parent responses[401] mapping value, which yaml.v3 places
+	// at the first content line (line 6, "description: ..."), not the
+	// key line (line 5). One line off the ideal but adjacent — the real
+	// improvement is over the previous (0, 0) regression.
+	line, col := v.locate(
+		"contracts/http/demo/v1/contract.yaml",
+		"endpoints.http.responses[401].schemaRef",
+	)
+	assert.Equal(t, 6, line, "fallback should anchor at responses[401] value's first content line")
+	assert.Positive(t, col)
+}

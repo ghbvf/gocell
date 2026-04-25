@@ -58,7 +58,8 @@ type verifyResultExec struct {
 func runVerifyResultCmd(args []string, spec verifyResultExec) error {
 	fs := flag.NewFlagSet("verify "+spec.name, flag.ContinueOnError)
 	id := fs.String(spec.flag, "", "<required>")
-	format := fs.String("format", "text", "output format: text | json")
+	format := fs.String("format", "text",
+		"output format: "+strings.Join(printers.SupportedVerifyFormats(), " | "))
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

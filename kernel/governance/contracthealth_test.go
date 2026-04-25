@@ -338,6 +338,63 @@ schemaRefs:
 	assert.Greater(t, ownerFinding.Column, 0, "Column must be populated by locator (regression: PR-A41)")
 }
 
+// TestCheckContractHealth_CH03_PopulatesLineColumn covers the CH-03 case
+// where a declared responses[N] entry is missing schemaRef. The leaf
+// field doesn't exist in the YAML (that's why the rule fires), so the
+// locator must walk up to the parent responses[N] block via the
+// parentFieldPath fallback. Without that, IDE click-to-open and SARIF
+// anchors degrade to file-only precision — the exact failure mode
+// flagged in the round-3 review.
+func TestCheckContractHealth_CH03_PopulatesLineColumn(t *testing.T) {
+	dir := t.TempDir()
+	contractDir := filepath.Join(dir, "contracts", "http", "demo", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+	contractYAML := `id: http.demo.v1
+kind: http
+ownerCell: democell
+lifecycle: active
+endpoints:
+  http:
+    method: GET
+    path: /demo
+    responses:
+      200:
+        schemaRef: ok.json
+      401:
+        description: unauthorized
+schemaRefs:
+  response: ok.json
+`
+	require.NoError(t, os.WriteFile(filepath.Join(contractDir, "contract.yaml"), []byte(contractYAML), 0o644))
+
+	parser := metadata.NewParser(dir)
+	project, err := parser.Parse()
+	require.NoError(t, err)
+
+	contracts := make([]*metadata.ContractMeta, 0, len(project.Contracts))
+	for _, c := range project.Contracts {
+		contracts = append(contracts, c)
+	}
+
+	v := NewValidator(project, dir)
+	results := v.CheckContractHealth(contracts)
+	require.NotEmpty(t, results, "responses[401] missing schemaRef must produce a CH-03 finding")
+
+	var schemaFinding *ValidationResult
+	for i := range results {
+		if results[i].Code == CodeContractHealthSchema && strings.Contains(results[i].Field, "responses[401]") {
+			schemaFinding = &results[i]
+			break
+		}
+	}
+	require.NotNil(t, schemaFinding, "CH-03 finding for responses[401] must be present")
+	assert.Equal(t, "endpoints.http.responses[401].schemaRef", schemaFinding.Field,
+		"display field path must keep the missing leaf for clarity")
+	assert.Greater(t, schemaFinding.Line, 0,
+		"Line must point at the parent responses[401] block (regression: round-3 P1)")
+	assert.Greater(t, schemaFinding.Column, 0)
+}
+
 // assertContractHealthIssues centralises the per-case assertion logic.
 // Two-arm shape:
 //   - wantErr=false: issues must be empty.
