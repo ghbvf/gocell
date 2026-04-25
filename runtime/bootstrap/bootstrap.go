@@ -24,7 +24,6 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -34,14 +33,6 @@ import (
 	"github.com/ghbvf/gocell/runtime/shutdown"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
-
-// authProvider is discovered post-Init from cells that provide a
-// session-aware IntentTokenVerifier (e.g. accesscore's TokenVerifier()).
-// Intent-awareness is required so AuthMiddleware can enforce
-// token_use=access at the type level.
-type authProvider interface {
-	TokenVerifier() auth.IntentTokenVerifier
-}
 
 // Option configures a Bootstrap instance.
 type Option func(*Bootstrap)
@@ -219,39 +210,17 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 	}
 }
 
-// WithAuthMiddleware enables JWT authentication for HTTP business routes on
-// the primary listener. The verifier is wired into the PrimaryListener's
-// router at phase5 via router.WithAuthMiddleware.
+// JWT authentication is wired exclusively through cell.Policy values mounted
+// on a listener via WithListener:
 //
-// Public endpoints are declared via auth.Mount with Public:true inside each
-// Cell's RouteGroups; Bootstrap's FinalizeAuth compiles them into the router's
-// auth predicates.
+//	bootstrap.WithListener(cell.PrimaryListener, addr, bootstrap.PolicyJWT(verifier))
+//	bootstrap.WithListener(cell.PrimaryListener, addr, bootstrap.PolicyJWTFromAssembly(asm))
 //
-// Use WithAuthDiscovery when a cell in the assembly exposes an AuthProvider for
-// automatic discovery; use this option when the verifier must be supplied
-// directly (tests, advanced scenarios, non-cell composition).
-//
-// ref: go-kratos/kratos — auth middleware at service level
-// ref: go-zero — per-route WithJwt() opt-in auth
-func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
-	return func(b *Bootstrap) {
-		b.authVerifier = verifier
-	}
-}
-
-// WithAuthDiscovery opts into auth verifier discovery from the assembly.
-// When invoked, Bootstrap inspects every Cell post-Init for an AuthProvider
-// implementation and wires the discovered verifier into the PrimaryListener
-// router's AuthMiddleware. If no provider is found (or multiple conflicting
-// ones), Run returns an error — fail-closed.
-//
-// Mutually exclusive with WithAuthMiddleware — that option injects the
-// verifier directly, bypassing discovery. Using both is rejected by phase 0.
-func WithAuthDiscovery() Option {
-	return func(b *Bootstrap) {
-		b.authDiscovery = true
-	}
-}
+// The previous bootstrap.WithAuthMiddleware / WithAuthDiscovery options have
+// been removed (PR-A14b round-3 F3): one mechanism, one source of truth. The
+// listener's policy carries the verifier; Bootstrap installs the router-aware
+// AuthMiddleware at phase5 so Public / PasswordResetExempt route bypass works
+// for free.
 
 // WithShutdownTimeout overrides the default graceful shutdown timeout.
 func WithShutdownTimeout(d time.Duration) Option {
@@ -457,6 +426,18 @@ func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
 	}
 }
 
+// WithDisableObservabilityRestore prevents the consumer-side
+// ObservabilityContextMiddleware from restoring request_id / correlation_id /
+// trace_id from outbox entry metadata into the handler context. The kill
+// switch for the consume-side observability bridge — set this only when
+// integrating with a custom observability stack that resets context keys
+// itself.
+func WithDisableObservabilityRestore() Option {
+	return func(b *Bootstrap) {
+		b.disableObservabilityRestore = true
+	}
+}
+
 // WithConsumerMiddleware registers subscriber-side middleware applied to every
 // topic handler before it is passed to the underlying Subscriber.Subscribe call.
 // Middleware is applied in registration order; each entry wraps the next, so the
@@ -580,13 +561,8 @@ type Bootstrap struct {
 	publisher  outbox.Publisher
 	subscriber outbox.Subscriber
 
-	// --- auth (verifier discovery + double-JWT guard) ---
-	routerOpts    []router.Option
-	authVerifier  auth.IntentTokenVerifier
-	authDiscovery bool // true when WithAuthDiscovery or PolicyJWTFromAssembly was called
-	// policyJWTFromAssemblyMismatch is set when PolicyJWTFromAssembly receives a
-	// different *assembly.CoreAssembly than WithAssembly. Surfaced by phase0.
-	policyJWTFromAssemblyMismatch error
+	// --- router options (per-listener routerOpts append target) ---
+	routerOpts []router.Option
 
 	// --- shutdown + draining budgets ---
 	shutdownTimeout  time.Duration

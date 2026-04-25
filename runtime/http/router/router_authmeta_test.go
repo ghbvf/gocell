@@ -118,6 +118,65 @@ func captureSlogWarn(t *testing.T) (*bytes.Buffer, func()) {
 	return &buf, func() { slog.SetDefault(prev) }
 }
 
+// ---------------------------------------------------------------------------
+// F2 round-3: verifyDelegatedConsistency must reject Delegated=true routes on
+// non-Internal listeners. A typo'd RouteGroup.Listener would otherwise mount
+// an internal-only route on the public port.
+// ---------------------------------------------------------------------------
+
+func TestFinalizeAuth_DelegatedOnPrimary_Rejected(t *testing.T) {
+	r, err := NewForListener(kcell.PrimaryListener, kcell.Policy{})
+	require.NoError(t, err)
+	auth.Mount(r, auth.Route{
+		Contract:  testHTTPContract("POST", "/internal/v1/devices/cmd"),
+		Handler:   okHandler,
+		Delegated: true,
+	})
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject Delegated=true on PrimaryListener")
+	assert.Contains(t, err.Error(), "must be mounted on InternalListener")
+	assert.Contains(t, err.Error(), `"primary"`)
+}
+
+func TestFinalizeAuth_DelegatedOnHealth_Rejected(t *testing.T) {
+	r, err := NewForListener(kcell.HealthListener, kcell.Policy{})
+	require.NoError(t, err)
+	auth.Mount(r, auth.Route{
+		Contract:  testHTTPContract("GET", "/internal/v1/probe"),
+		Handler:   okHandler,
+		Delegated: true,
+	})
+	err = r.FinalizeAuth()
+	require.Error(t, err, "FinalizeAuth must reject Delegated=true on HealthListener")
+	assert.Contains(t, err.Error(), "must be mounted on InternalListener")
+}
+
+func TestFinalizeAuth_DelegatedOnInternal_Accepted(t *testing.T) {
+	r, err := NewForListener(kcell.InternalListener, kcell.Policy{})
+	require.NoError(t, err)
+	auth.Mount(r, auth.Route{
+		Contract:  testHTTPContract("GET", "/internal/v1/probe"),
+		Handler:   okHandler,
+		Delegated: true,
+	})
+	require.NoError(t, r.FinalizeAuth(),
+		"Delegated=true on InternalListener must finalize cleanly")
+}
+
+func TestFinalizeAuth_DelegatedOnZeroRef_Accepted(t *testing.T) {
+	// Unit-test routers built via New() / NewE() have a zero-value ListenerRef;
+	// the consistency check skips the listener-identity rule for that case so
+	// existing test fixtures stay valid.
+	r := New()
+	auth.Mount(r, auth.Route{
+		Contract:  testHTTPContract("GET", "/internal/v1/probe"),
+		Handler:   okHandler,
+		Delegated: true,
+	})
+	require.NoError(t, r.FinalizeAuth(),
+		"Delegated=true on a zero-ref router (NewE) must still finalize for unit tests")
+}
+
 func TestFinalizeAuth_NoVerifier_EmitsWarn_ByDefault(t *testing.T) {
 	buf, restore := captureSlogWarn(t)
 	defer restore()

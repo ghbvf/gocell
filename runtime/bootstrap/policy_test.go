@@ -128,19 +128,29 @@ func TestPolicyJWT(t *testing.T) {
 		bootstrap.PolicyJWT(nil)
 	})
 
-	t.Run("apply_installs_jwt_middleware_rejects_unauthenticated", func(t *testing.T) {
+	t.Run("middleware_is_nil_extension_carries_verifier", func(t *testing.T) {
 		t.Parallel()
-		// apply() installs AuthMiddleware; requests without a bearer token
-		// should receive 401. This covers the apply() code path.
-		p := bootstrap.PolicyJWT(stubVerifier{})
+		// F3 round-3: PolicyJWT is a marker. Its Middleware is nil because the
+		// matcher-aware AuthMiddleware is built by router.WithAuthMiddleware at
+		// phase5 — Bootstrap extracts the verifier from Policy.Extension.
+		// Standalone application on a mux is a no-op (no auth installed).
+		v := stubVerifier{}
+		p := bootstrap.PolicyJWT(v)
+		if p.Middleware != nil {
+			t.Error("PolicyJWT.Middleware must be nil; Bootstrap installs router-aware variant via Extension")
+		}
+		if p.Extension == nil {
+			t.Fatal("PolicyJWT.Extension must carry the verifier for Bootstrap to extract")
+		}
+		// Standalone apply: no middleware → handler runs unauthenticated, 200.
 		mux := chi.NewMux()
 		bootstrap.ApplyPolicyForTest(p, mux)
 		mux.Get("/", okHandler.ServeHTTP)
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rr := httptest.NewRecorder()
 		mux.ServeHTTP(rr, req)
-		if rr.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401 (no bearer token)", rr.Code)
+		if rr.Code != http.StatusOK {
+			t.Errorf("status = %d, want 200 (PolicyJWT used standalone has no middleware)", rr.Code)
 		}
 	})
 }
@@ -168,7 +178,7 @@ func TestPolicyServiceToken(t *testing.T) {
 	t.Run("nil_store_panics", func(t *testing.T) {
 		t.Parallel()
 		defer func() {
-			if r := recover(); r == nil {
+			if recover() == nil {
 				t.Error("expected panic for nil store, got none")
 			}
 		}()
@@ -178,7 +188,7 @@ func TestPolicyServiceToken(t *testing.T) {
 	t.Run("nil_ring_panics", func(t *testing.T) {
 		t.Parallel()
 		defer func() {
-			if r := recover(); r == nil {
+			if recover() == nil {
 				t.Error("expected panic for nil ring, got none")
 			}
 		}()
@@ -222,7 +232,7 @@ func TestPolicyMTLS(t *testing.T) {
 	t.Run("nil_pool_panics", func(t *testing.T) {
 		t.Parallel()
 		defer func() {
-			if r := recover(); r == nil {
+			if recover() == nil {
 				t.Error("expected panic for nil pool, got none")
 			}
 		}()
@@ -316,41 +326,41 @@ func TestPolicyMTLS_HappyPath_ValidCert(t *testing.T) {
 // PolicyVerboseToken
 // ---------------------------------------------------------------------------
 
-func TestPolicyVerboseToken(t *testing.T) {
+const (
+	verboseTokenHeader = "X-Readyz-Token"
+	verboseTokenSecret = "secret-token"
+)
+
+func TestPolicyVerboseToken_Name(t *testing.T) {
 	t.Parallel()
+	p := bootstrap.PolicyVerboseToken(verboseTokenHeader, verboseTokenSecret)
+	if got := p.Name; got != "verbose-token" {
+		t.Errorf("Name = %q, want %q", got, "verbose-token")
+	}
+}
 
-	const (
-		headerName = "X-Readyz-Token"
-		token      = "secret-token"
-	)
-
-	t.Run("name", func(t *testing.T) {
-		t.Parallel()
-		p := bootstrap.PolicyVerboseToken(headerName, token)
-		if got := p.Name; got != "verbose-token" {
-			t.Errorf("Name = %q, want %q", got, "verbose-token")
+func TestPolicyVerboseToken_EmptyHeaderPanics(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Error("expected panic for empty headerName, got none")
 		}
-	})
+	}()
+	bootstrap.PolicyVerboseToken("", verboseTokenSecret)
+}
 
-	t.Run("empty_header_panics", func(t *testing.T) {
-		t.Parallel()
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("expected panic for empty headerName, got none")
-			}
-		}()
-		bootstrap.PolicyVerboseToken("", token)
-	})
+func TestPolicyVerboseToken_EmptyTokenPanics(t *testing.T) {
+	t.Parallel()
+	defer func() {
+		if recover() == nil {
+			t.Error("expected panic for empty token, got none")
+		}
+	}()
+	bootstrap.PolicyVerboseToken(verboseTokenHeader, "")
+}
 
-	t.Run("empty_token_panics", func(t *testing.T) {
-		t.Parallel()
-		defer func() {
-			if r := recover(); r == nil {
-				t.Error("expected panic for empty token, got none")
-			}
-		}()
-		bootstrap.PolicyVerboseToken(headerName, "")
-	})
+func TestPolicyVerboseToken_RequestStatuses(t *testing.T) {
+	t.Parallel()
 
 	tests := []struct {
 		name       string
@@ -366,13 +376,13 @@ func TestPolicyVerboseToken(t *testing.T) {
 		{
 			name:       "verbose with matching token — pass through",
 			url:        "/?verbose",
-			headers:    map[string]string{headerName: token},
+			headers:    map[string]string{verboseTokenHeader: verboseTokenSecret},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "verbose with mismatched token — 401",
 			url:        "/?verbose",
-			headers:    map[string]string{headerName: "wrong"},
+			headers:    map[string]string{verboseTokenHeader: "wrong"},
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
@@ -382,40 +392,55 @@ func TestPolicyVerboseToken(t *testing.T) {
 		},
 	}
 
-	p := bootstrap.PolicyVerboseToken(headerName, token)
+	p := bootstrap.PolicyVerboseToken(verboseTokenHeader, verboseTokenSecret)
 
 	for _, tc := range tests {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-
-			mux := chi.NewMux()
-			bootstrap.ApplyPolicyForTest(p, mux)
-			mux.MethodFunc(http.MethodGet, "/", okHandler.ServeHTTP)
-
-			req := httptest.NewRequest(http.MethodGet, tc.url, nil)
-			for k, v := range tc.headers {
-				req.Header.Set(k, v)
-			}
-			rr := httptest.NewRecorder()
-			mux.ServeHTTP(rr, req)
-
-			if rr.Code != tc.wantStatus {
-				t.Errorf("status = %d, want %d; body = %s", rr.Code, tc.wantStatus, rr.Body.String())
-			}
-			if tc.wantStatus == http.StatusUnauthorized {
-				// Verify error body structure.
-				body, _ := io.ReadAll(rr.Body)
-				var errResp map[string]any
-				if err := json.Unmarshal(body, &errResp); err != nil {
-					t.Errorf("401 body not valid JSON: %v; body = %s", err, body)
-				}
-				errField, _ := errResp["error"].(map[string]any)
-				if errField == nil {
-					t.Errorf("401 body missing 'error' field; body = %s", body)
-				}
-			}
+			runVerboseTokenCase(t, p, tc.url, tc.headers, tc.wantStatus)
 		})
+	}
+}
+
+// runVerboseTokenCase exercises one PolicyVerboseToken scenario against a
+// fresh chi mux. Extracted from TestPolicyVerboseToken_RequestStatuses to keep
+// per-case cognitive complexity low.
+func runVerboseTokenCase(t *testing.T, p cell.Policy, url string, headers map[string]string, wantStatus int) {
+	t.Helper()
+
+	mux := chi.NewMux()
+	bootstrap.ApplyPolicyForTest(p, mux)
+	mux.MethodFunc(http.MethodGet, "/", okHandler.ServeHTTP)
+
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, req)
+
+	if rr.Code != wantStatus {
+		t.Errorf("status = %d, want %d; body = %s", rr.Code, wantStatus, rr.Body.String())
+	}
+	if wantStatus == http.StatusUnauthorized {
+		assertVerboseTokenErrorBody(t, rr)
+	}
+}
+
+// assertVerboseTokenErrorBody validates that a 401 response carries the
+// canonical {"error": {...}} envelope.
+func assertVerboseTokenErrorBody(t *testing.T, rr *httptest.ResponseRecorder) {
+	t.Helper()
+	body, _ := io.ReadAll(rr.Body)
+	var errResp map[string]any
+	if err := json.Unmarshal(body, &errResp); err != nil {
+		t.Errorf("401 body not valid JSON: %v; body = %s", err, body)
+		return
+	}
+	errField, _ := errResp["error"].(map[string]any)
+	if errField == nil {
+		t.Errorf("401 body missing 'error' field; body = %s", body)
 	}
 }
 

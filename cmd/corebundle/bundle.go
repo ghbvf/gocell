@@ -82,11 +82,21 @@ func defaultRuntimeOptions(
 		bootstrap.WithMetricsHandler(metricsHandler),
 	}
 	if shared.VerboseToken != "" {
+		// Two layers consulting the same token (PR-A35 defense-in-depth +
+		// PR-A14b R2-01 single-config-source):
+		//  - WithReadyzPolicy: PolicyVerboseToken middleware on the route
+		//    group 401's at the listener layer.
+		//  - WithReadyzVerboseToken: health.Handler's strict gate 401's at
+		//    the handler layer.
 		healthRouteOpts = append(healthRouteOpts,
 			bootstrap.WithReadyzPolicy(
 				bootstrap.PolicyVerboseToken("X-Readyz-Token", shared.VerboseToken),
 			),
+			bootstrap.WithReadyzVerboseToken(shared.VerboseToken),
 		)
+	}
+	if shared.VerboseDisabled {
+		healthRouteOpts = append(healthRouteOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
 	opts := []bootstrap.Option{
@@ -97,19 +107,17 @@ func defaultRuntimeOptions(
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
-		// Discover JWT verifier from the assembly. This option sets authDiscovery=true
-		// so the primary listener's JWT auth middleware is wired via
-		// discoverAuthVerifier (phase4). Tests that inject their own PrimaryListener
-		// with cell.Policy{} also need auth discovery to pass
-		// validateAuthVerifierForDeclaredRoutes.
-		bootstrap.PolicyJWTFromAssembly(asm),
 	}
-	// Primary and internal listeners are only registered when an address is
-	// configured. Tests that pre-bind their own listener inject it via extra
-	// bootstrap.WithListener options; registering an empty-addr placeholder
-	// here would cause a duplicate-ref phase0 error (CORR-02).
+	// Primary listener carries the JWT auth policy. PolicyJWTFromAssembly
+	// resolves an IntentTokenVerifier from an authProvider cell during phase4
+	// (Validate hook). Tests that pre-bind their own listener still go through
+	// this path — they inject the same listener via extra bootstrap.WithListener
+	// options downstream.
 	if shared.PrimaryHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.PrimaryListener, shared.PrimaryHTTPAddr, cell.Policy{}))
+		opts = append(opts, bootstrap.WithListener(
+			cell.PrimaryListener, shared.PrimaryHTTPAddr,
+			bootstrap.PolicyJWTFromAssembly(asm),
+		))
 	}
 	if shared.InternalHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalPolicy))

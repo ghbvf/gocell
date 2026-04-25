@@ -10,7 +10,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -121,14 +120,10 @@ func TestPhase0_RejectsNilRelayHealth(t *testing.T) {
 	assert.Contains(t, err.Error(), "relay must not be nil")
 }
 
-func TestPhase0_RejectsMutuallyExclusiveAuthOptions(t *testing.T) {
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
-	b.authVerifier = &phaseTestVerifier{}
-	b.authDiscovery = true
-	err := b.phase0ValidateOptions()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mutually exclusive")
-}
+// TestPhase0_RejectsMutuallyExclusiveAuthOptions was removed in F3 round-3:
+// WithAuthMiddleware and the standalone PolicyJWTFromAssembly Option are gone,
+// so phase0 has nothing to reject. JWT auth flows through cell.Policy on the
+// listener exclusively.
 
 // TestPhase0_ValidatesInternalMiddleware was removed in PR-A14b because
 // WithInternalMiddleware and the internalMiddlewares field are deleted.
@@ -633,13 +628,6 @@ func (w *watcherCloserSpy) Close(ctx context.Context) error {
 }
 
 // --- Helpers / stubs (existing) ---
-
-// phaseTestVerifier satisfies auth.IntentTokenVerifier for phase0 tests.
-type phaseTestVerifier struct{}
-
-func (v *phaseTestVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
-	return auth.Claims{}, nil
-}
 
 // phaseTestPublisher is a no-op outbox.Publisher for phase tests.
 type phaseTestPublisher struct{}

@@ -54,13 +54,13 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 }
 
 // composition root — WithListener(ref, addr, defaultPolicy, ...ListenerOption)
-// defaultPolicy nil → no listener-level auth; routes declare policy via auth.Declare.
+// JWT auth lives on the listener policy (PolicyJWT / PolicyJWTFromAssembly);
+// there is no separate WithAuthMiddleware / WithAuthDiscovery option.
 bootstrap.New(
     bootstrap.WithAssembly(asm),
-    bootstrap.WithListener(cell.PrimaryListener, ":8080", cell.Policy{}),
+    bootstrap.WithListener(cell.PrimaryListener, ":8080", bootstrap.PolicyJWTFromAssembly(asm)),
     bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090", bootstrap.PolicyServiceToken(ring)),
     bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", cell.Policy{}),
-    bootstrap.PolicyJWTFromAssembly(asm),  // 从 Cell 发现 IntentTokenVerifier，作用于 PrimaryListener
 )
 ```
 
@@ -78,12 +78,13 @@ bootstrap.New(
 
 | Policy | 说明 | 典型 listener |
 |--------|------|--------------|
-| `PolicyJWT` | JWT 验证（标准业务路由） | PrimaryListener |
+| `PolicyJWT(verifier)` | JWT 验证（直接注入 IntentTokenVerifier） | PrimaryListener |
+| `PolicyJWTFromAssembly(asm)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
 | `PolicyServiceToken` | HMAC-SHA256 service token | InternalListener |
-| `PolicyMTLS` | mTLS 客户端证书 | InternalListener（高安全场景） |
-| `PolicyVerboseToken` | bearer token + verbose readyz | HealthListener（可选） |
+| `PolicyMTLS` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
+| `PolicyVerboseToken` | bearer token gate for ?verbose probes | HealthListener readyz route group（可选） |
 | `PolicyNone` | 无验证 | HealthListener（loopback 隔离） |
-| `PolicyStack(a, b)` | 组合策略 | 任意 |
+| `PolicyStack(a, b)` | 组合策略 | 任意（注意：JWT 不可嵌入 stack — Bootstrap 通过 Name=="jwt" 提取 verifier） |
 
 ### RouteDecl 字段
 
@@ -133,10 +134,9 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 优先级规则：
 - 路由级 Policy 存在时，Listener 默认 Policy 被完全旁路
 - `Public: true` 不能与路由级 `Policy` 同时设置（FinalizeAuth fail-fast）
-- `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义；在无 JWT 的 listener（如 HealthListener）上声明 `Public: true` 会在 FinalizeAuth 时触发 `slog.Warn`（运行时可观测，不 fail-fast）
-- `PolicyJWTFromAssembly(asm)` 从 Cell 发现 IntentTokenVerifier，作用于 PrimaryListener（等价于旧 `WithAuthDiscovery()`）
-- `WithAuthMiddleware(v)` 直接注入 verifier，适用于测试或不依赖 assembly 发现的场景
-- `PolicyJWTFromAssembly` 与 `WithAuthMiddleware` 互斥；两者同时设置会在 phase0 被拒绝
+- `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义；在无 JWT 的 listener（如 HealthListener）上声明 `Public: true` 是无效的（HealthListener 默认配置 `WithSuppressNoAuthVerifierWarn`，Warn 已抑制 — R2-11）
+- JWT 单一路径（F3 round-3）：`PolicyJWT(verifier)` 直接注入；`PolicyJWTFromAssembly(asm)` phase4 时通过 `cell.Policy.Validate` 钩子从 `authProvider` Cell 发现 verifier。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。Verifier 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher，零样板。
+- `Delegated=true` 路由必须挂在 InternalListener（F2 round-3：FinalizeAuth router-aware 校验，Primary/Health 上 Delegated 直接 fail-fast）。
 
 ### 规则
 

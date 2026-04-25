@@ -209,14 +209,13 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), bootstrap.PolicyJWTFromAssembly(asm), bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
 		// (change-password, logout) are declared via auth.Mount inside accesscore's
 		// RegisterRoutes. PolicyJWTFromAssembly discovers the verifier lazily.
-		bootstrap.PolicyJWTFromAssembly(asm),
 		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
 		// not from a manual adapterpg.NewOutboxRelay call. If the production
 		// wiring stops producing a relay worker, require.NotNil above fires.

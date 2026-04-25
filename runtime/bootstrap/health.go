@@ -50,7 +50,8 @@ type healthRouteGroupCfg struct {
 	livezPolicy     cell.Policy
 	readyzPolicy    cell.Policy
 	metricsPolicy   cell.Policy
-	verboseDisabled bool // PR-A35: when true, /readyz?verbose is answered with the plain aggregate body (no internal topology disclosed)
+	verboseDisabled bool   // PR-A35: when true, /readyz?verbose is answered with the plain aggregate body (no internal topology disclosed)
+	verboseToken    string // PR-A35 defense-in-depth: handler-level X-Readyz-Token strict gate (in addition to PolicyVerboseToken middleware)
 }
 
 // applyHealthRouteGroupOpts evaluates a slice of HealthRouteGroupOption against
@@ -96,6 +97,19 @@ func WithReadyzPolicy(p cell.Policy) HealthRouteGroupOption {
 // Zero value (cell.Policy{}) means inherit the listener default policy.
 func WithMetricsPolicy(p cell.Policy) HealthRouteGroupOption {
 	return func(c *healthRouteGroupCfg) { c.metricsPolicy = p }
+}
+
+// WithReadyzVerboseToken plumbs a verbose-token to the health.Handler's
+// strict-gate path (PR-A35 defense-in-depth). Set this alongside
+// WithReadyzPolicy(PolicyVerboseToken(..., token)) so that both layers see
+// the same secret: the policy middleware 401's at the route group, and the
+// handler 401's defensively if a future misconfiguration drops the policy.
+//
+// Empty token leaves the handler-level gate disabled — verbose requests
+// then rely solely on the route-group PolicyVerboseToken (or render plain
+// body when no policy is wired and WithReadyzVerboseDisabled is set).
+func WithReadyzVerboseToken(token string) HealthRouteGroupOption {
+	return func(c *healthRouteGroupCfg) { c.verboseToken = token }
 }
 
 // WithReadyzVerboseDisabled suppresses the /readyz?verbose body entirely.

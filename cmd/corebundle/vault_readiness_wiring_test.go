@@ -77,7 +77,7 @@ var (
 // buildBootstrapWithFakeKeyProvider is the test harness for A19. It mirrors
 // buildBootstrapFromShared but injects ConfigCoreModule{KeyProviderOverride}
 // so the readiness wiring can be exercised without GOCELL_CONFIGCORE_KEY_PROVIDER / Vault.
-func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider, primaryLn net.Listener, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -108,6 +108,12 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 	adapterInfo := shared.Topology.AdapterInfo()
 	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
+	opts = append(opts, bootstrap.WithListener(
+		cell.PrimaryListener,
+		primaryLn.Addr().String(),
+		bootstrap.PolicyJWTFromAssembly(asm),
+		bootstrap.WithListenerNet(primaryLn),
+	))
 	opts = append(opts, extra...)
 	return bootstrap.New(opts...), nil
 }
@@ -136,8 +142,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	require.NoError(t, err)
 
 	healthLn := newCorebundleLocalListener(t)
-	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
@@ -208,8 +213,7 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 	require.NoError(t, err)
 
 	healthLn2 := newCorebundleLocalListener(t)
-	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithListener(cell.HealthListener, healthLn2.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn2)))
 	require.NoError(t, err)

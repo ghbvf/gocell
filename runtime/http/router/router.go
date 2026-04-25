@@ -178,10 +178,18 @@ func WithPolicyCoverageWhitelist(patterns []string) Option {
 // Use this for framework-owned path prefixes that must be exempt from auth but
 // are not declared via auth.Mount (e.g. the /internal/v1/* 404 isolation
 // handler on the primary listener).
+//
+// F6 round-3: matches both the prefix form (".../path/") and the exact bare
+// path (".../path") so the canonical isolation 404 fires for both
+// /internal/v1 and /internal/v1/foo. Without the bare-path branch the
+// pre-prefix path was challenged by JWT (401) instead of reaching the 404
+// isolation handler — leaking the existence of the internal subtree.
 func WithPublicPathPrefix(prefix string) Option {
+	bare := strings.TrimSuffix(prefix, "/")
 	return func(r *Router) {
 		seed := func(req *http.Request) bool {
-			return strings.HasPrefix(req.URL.Path, prefix)
+			p := req.URL.Path
+			return strings.HasPrefix(p, prefix) || p == bare
 		}
 		r.authPublicMatcher = orMergeRequest(r.authPublicMatcher, seed)
 	}
@@ -585,14 +593,26 @@ func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	}
 }
 
-// verifyDelegatedConsistency enforces the Delegated ↔ /internal/v1/* invariant:
-//   - On an InternalListener router: Delegated=false routes with /internal/v1/ prefix → error
-//   - On a non-InternalListener router (or zero-ref): Delegated=true routes must start with /internal/v1/
-//   - On an InternalListener router: Delegated=true routes must start with /internal/v1/
+// verifyDelegatedConsistency enforces the Delegated ↔ InternalListener
+// invariant. PR-A14b's intent is that Delegated=true marks an internal-only
+// route, both at the URL prefix layer (/internal/v1/*) and the physical
+// listener layer (mounted on InternalListener). All three projections must
+// agree, otherwise an internal route can land on the public port without the
+// service-token / mTLS gate.
 //
-// The invariant ensures that auth declarations match the physical listener assignment.
+// Rules (router-aware, F2 round-3 fix):
+//   - Delegated=true must use /internal/v1/* prefix.
+//   - Delegated=true must be mounted on InternalListener (or a zero-ref
+//     router used in unit tests where the listener identity is unspecified).
+//   - Delegated=false on /internal/v1/* prefix is rejected on every router.
+//
+// The router-aware InternalListener check closes the F2 gap where a typo'd
+// RouteGroup.Listener ("PrimaryListener" instead of "InternalListener")
+// silently passed FinalizeAuth and exposed an internal route on the public
+// port.
 func (r *Router) verifyDelegatedConsistency() error {
 	isInternal := r.ref == kcell.InternalListener
+	isZeroRef := r.ref.IsZero()
 	for _, m := range r.declaredAuthMetas {
 		pathIsInternal := strings.HasPrefix(m.Path, internalPathPrefix)
 		switch {
@@ -600,14 +620,15 @@ func (r *Router) verifyDelegatedConsistency() error {
 			return fmt.Errorf(
 				"router: Delegated=true route %s %s must live under %s",
 				m.Method, m.Path, internalPathPrefix)
-		case !m.Delegated && pathIsInternal && !isInternal:
+		case m.Delegated && !isInternal && !isZeroRef:
 			return fmt.Errorf(
-				"router: route %s %s on %s prefix must declare Delegated=true",
+				"router: Delegated=true route %s %s must be mounted on InternalListener (got %q); "+
+					"check the RouteGroup.Listener field",
+				m.Method, m.Path, r.ref.String())
+		case !m.Delegated && pathIsInternal:
+			return fmt.Errorf(
+				"router: route %s %s under %s must declare Delegated=true",
 				m.Method, m.Path, internalPathPrefix)
-		case !m.Delegated && pathIsInternal && isInternal:
-			return fmt.Errorf(
-				"router: route %s %s on InternalListener must declare Delegated=true",
-				m.Method, m.Path)
 		}
 	}
 	return nil

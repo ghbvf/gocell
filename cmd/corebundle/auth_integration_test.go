@@ -94,15 +94,15 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, asm.Register(auc))
 
 	// F3: public routes (login, refresh) are declared via auth.Mount(Public:true)
-	// inside accesscore's RegisterRoutes. PolicyJWTFromAssembly discovers the
-	// verifier lazily from the assembly (replaces WithAuthDiscovery).
+	// inside accesscore's RegisterRoutes. PolicyJWTFromAssembly is now a
+	// cell.Policy (round-3 collapse): its Validate hook resolves the verifier
+	// from accesscore's authProvider during phase4.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), bootstrap.PolicyJWTFromAssembly(asm), bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
-		bootstrap.PolicyJWTFromAssembly(asm),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -304,19 +304,18 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// listener. JWT AuthMiddleware is never installed on the internal mux —
 	// PolicyServiceToken is the sole authentication layer for the control plane.
 	// F3: public routes (login, refresh) are declared by accesscore via
-	// auth.Mount(Public:true); PolicyJWTFromAssembly discovers the verifier and
-	// wires it onto the primary mux only (replaces WithAuthDiscovery).
+	// auth.Mount(Public:true); PolicyJWTFromAssembly is the PrimaryListener's
+	// cell.Policy (round-3 collapse) and resolves the verifier lazily at phase4.
 	_ = guard // guard is superseded by PolicyServiceToken below
 	internalLn := newCorebundleLocalListener(t)
 	internalPolicy := bootstrap.PolicyServiceToken(nonceStore, ring)
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), bootstrap.PolicyJWTFromAssembly(asm), bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalPolicy,
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
-		bootstrap.PolicyJWTFromAssembly(asm),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -518,7 +517,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), cell.Policy{},
+		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), bootstrap.PolicyJWTFromAssembly(asm),
 			bootstrap.WithListenerNet(primaryLn)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), cell.Policy{},
 			bootstrap.WithListenerNet(internalLn)),
@@ -527,7 +526,6 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
-		bootstrap.PolicyJWTFromAssembly(asm),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())

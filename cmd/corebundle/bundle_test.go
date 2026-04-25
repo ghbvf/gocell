@@ -183,10 +183,13 @@ func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 }
 
 // buildBootstrapFromShared is the test-path assembly helper, equivalent to the
-// production run() flow but accepts extra bootstrap.Options (e.g. WithListener).
-// Uses memory topology (modules' Provide path) and AccessCoreModule with a
-// fast-bcrypt option.
-func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+// production run() flow. It owns the PrimaryListener registration so the JWT
+// policy (PolicyJWTFromAssembly) is wired with the assembly that BuildApp
+// constructs internally. Tests supply the primary net.Listener and any extra
+// options (typically WithListener for InternalListener/HealthListener,
+// WithManagedResource, etc.). Uses memory topology and AccessCoreModule with
+// a fast-bcrypt option.
+func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -217,6 +220,15 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstr
 	adapterInfo := shared.Topology.AdapterInfo()
 	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
+	// Primary listener carries the JWT policy resolved from the assembly. F3
+	// round-3: this is the single source of truth for JWT auth — there is no
+	// longer a standalone bootstrap.PolicyJWTFromAssembly Option.
+	opts = append(opts, bootstrap.WithListener(
+		cell.PrimaryListener,
+		primaryLn.Addr().String(),
+		bootstrap.PolicyJWTFromAssembly(asm),
+		bootstrap.WithListenerNet(primaryLn),
+	))
 	opts = append(opts, extra...)
 	return bootstrap.New(opts...), nil
 }
@@ -381,8 +393,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newCorebundleLocalListener(t)
 
-	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+	app, err := buildBootstrapFromShared(t, shared, ln,
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
@@ -434,8 +445,7 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newCorebundleLocalListener(t)
 
-	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+	app, err := buildBootstrapFromShared(t, shared, ln,
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithManagedResource(fakePG),
@@ -471,8 +481,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newCorebundleLocalListener(t)
 
-	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+	app, err := buildBootstrapFromShared(t, shared, ln,
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)

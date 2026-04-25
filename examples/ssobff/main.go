@@ -136,8 +136,11 @@ func main() {
 	defer stop()
 
 	// Public routes and password-reset-exempt routes are declared by the
-	// accesscore Cell itself via auth.Mount. Bootstrap only needs the
-	// opt-in signal that the assembly expects an auth provider cell.
+	// accesscore Cell itself via auth.Mount; PolicyJWTFromAssembly is a
+	// cell.Policy whose Validate hook resolves the verifier from accesscore
+	// at phase4 and Bootstrap installs the matcher-aware AuthMiddleware on
+	// the primary listener's router (F3 round-3 collapse).
+	//
 	// PR-A35 + PR-A14b: /readyz?verbose is policy-gated. Honour
 	// GOCELL_READYZ_VERBOSE_TOKEN if the operator sets one; otherwise waive
 	// the verbose endpoint via WithReadyzVerboseDisabled so this demo runs
@@ -150,16 +153,14 @@ func main() {
 		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
-	opts := []bootstrap.Option{
+	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithListener(cell.PrimaryListener, ":8081", cell.Policy{}),
+		bootstrap.WithListener(cell.PrimaryListener, ":8081", bootstrap.PolicyJWTFromAssembly(asm)),
 		bootstrap.WithListener(cell.InternalListener, ":9081", cell.Policy{}),
 		bootstrap.WithHealthRoutes(healthOpts...),
-		bootstrap.PolicyJWTFromAssembly(asm),
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
-	}
-	app := bootstrap.New(opts...)
+	)
 
 	// Pass "" so per-OS platform defaults in ResolveBootstrapCredentialPath kick in.
 	// Override with GOCELL_STATE_DIR to redirect to a custom directory.

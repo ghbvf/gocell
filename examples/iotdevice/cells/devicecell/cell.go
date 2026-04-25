@@ -235,7 +235,14 @@ var (
 	}
 )
 
-// RouteGroups declares devicecell's HTTP route groups on the PrimaryListener.
+// RouteGroups declares devicecell's HTTP route groups: the public
+// /api/v1/devices/* tree on the PrimaryListener and the internal
+// /internal/v1/devicecommands ops route on the InternalListener.
+//
+// F5 round-3: the InternalListener group restores RegisterInternalRoutes
+// which the PR-A14b RouteGroups migration accidentally dropped. The
+// commandHandler.HandleScanActive endpoint is required by the
+// http.device.command.scan-active.v1 contract.
 //
 // ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
 func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
@@ -267,13 +274,17 @@ func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 						Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
 						Policy:   auth.Authenticated(),
 					})
-					// device-command routes: no route-level policy. Pre-F3 devicecell
-					// had no policy wrapping; restoring Policy:nil matches that state.
-					// When a deployment wants authz, wire WithAuthDiscovery() and add a
-					// Policy or rely on AuthMiddleware's baseline JWT check.
-					// Hardening devicecell authz is out of scope for the F3 migration.
+					// device-command public routes (enqueue, dequeue, report, ack,
+					// extend-lease) live under /api/v1/devices/{id}/commands.
 					c.commandHandler.RegisterRoutes(devices)
 				})
+			},
+		},
+		{
+			Listener: cell.InternalListener,
+			Prefix:   "",
+			Register: func(mux cell.RouteMux) {
+				c.commandHandler.RegisterInternalRoutes(mux)
 			},
 		},
 	}

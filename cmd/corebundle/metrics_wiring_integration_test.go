@@ -39,8 +39,7 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 	require.NoError(t, err)
 	healthLn := newCorebundleLocalListener(t)
 
-	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(ln)),
+	app, err := buildBootstrapFromShared(t, shared, ln,
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)

@@ -2,43 +2,97 @@ package bootstrap
 
 import (
 	"fmt"
+	"sync/atomic"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// PolicyJWTFromAssembly returns a bootstrap.Option that discovers an
-// IntentTokenVerifier from the assembly's cells and wires it into the primary
-// listener's JWT auth middleware (same as WithAuthDiscovery, but requires an
-// explicit assembly reference so the dependency is visible at composition root).
+// authProvider is the optional cell-level interface that exposes an
+// IntentTokenVerifier for runtime authentication. PolicyJWTFromAssembly
+// scans the assembly for cells implementing this interface during phase4.
+type authProvider interface {
+	TokenVerifier() auth.IntentTokenVerifier
+}
+
+// PolicyJWTFromAssembly returns a cell.Policy that resolves its verifier
+// from an authProvider cell in the assembly during phase4 (Policy.Validate).
+// Use it when the verifier is owned by a cell (typical for accesscore-style
+// designs where the auth cell publishes its own verifier).
 //
-// Discovery runs during phase4 (discoverAuthVerifier): the assembly is scanned
-// for cells that implement the authProvider interface
-// (TokenVerifier() IntentTokenVerifier). Exactly one provider must exist; zero
-// or multiple providers cause Bootstrap.Run to return an error — fail-closed.
+//	bootstrap.WithListener(cell.PrimaryListener, ":8080", bootstrap.PolicyJWTFromAssembly(asm))
 //
-// Equivalent migration:
+// Fail-fast: a nil assembly panics with "bootstrap: PolicyJWTFromAssembly
+// assembly must not be nil". If zero or multiple authProvider cells exist
+// at phase4 the validation step returns an error and Bootstrap.Run exits
+// before the listener binds — same fail-closed semantics as the prior
+// WithAuthDiscovery option.
 //
-//	Old: WithAuthDiscovery()
-//	New: PolicyJWTFromAssembly(asm)
-//
-// The assembly passed here must be the same instance as the one passed to
-// WithAssembly. Passing a different instance is a programming error and will
-// cause Bootstrap.Run to fail at phase0.
-//
-// ref: go-kratos/kratos transport/http/server.go — middleware wired at server level.
-func PolicyJWTFromAssembly(asm *assembly.CoreAssembly) Option {
+// The supplied assembly should be the same instance passed to WithAssembly.
+// Bootstrap does not re-check the identity (the assembly only owns cells
+// once registered, so a mismatch surfaces as "no provider found" at Validate
+// time, fail-closed).
+func PolicyJWTFromAssembly(asm *assembly.CoreAssembly) cell.Policy {
 	if asm == nil {
 		panic("bootstrap: PolicyJWTFromAssembly assembly must not be nil")
 	}
-	return func(b *Bootstrap) {
-		// Verify the asm matches what was set via WithAssembly, if already set.
-		// Mismatch is a programming error at composition root.
-		if b.assembly != nil && b.assembly != asm {
-			b.policyJWTFromAssemblyMismatch = fmt.Errorf(
-				"bootstrap: PolicyJWTFromAssembly(asm) received a different assembly than WithAssembly(asm); " +
-					"both must receive the same *assembly.CoreAssembly instance")
-			return
-		}
-		b.authDiscovery = true
+	holder := &atomic.Pointer[auth.IntentTokenVerifier]{}
+	return cell.Policy{
+		Name: "jwt",
+		Extension: jwtVerifierGetterFn(func() auth.IntentTokenVerifier {
+			vp := holder.Load()
+			if vp == nil {
+				return nil
+			}
+			return *vp
+		}),
+		Validate: func() error {
+			v, err := discoverAuthVerifierFromAssembly(asm)
+			if err != nil {
+				return err
+			}
+			holder.Store(&v)
+			return nil
+		},
 	}
+}
+
+// discoverAuthVerifierFromAssembly walks the assembly's cells in deterministic
+// order and returns the unique IntentTokenVerifier exposed by an authProvider
+// cell. Zero providers, multiple providers, and nil verifiers all return an
+// error so the failure surfaces during Bootstrap.Run rather than the first
+// request.
+func discoverAuthVerifierFromAssembly(asm *assembly.CoreAssembly) (auth.IntentTokenVerifier, error) {
+	var (
+		found   auth.IntentTokenVerifier
+		foundID string
+	)
+	for _, id := range asm.CellIDs() {
+		ap, ok := asm.Cell(id).(authProvider)
+		if !ok {
+			continue
+		}
+		v := ap.TokenVerifier()
+		if v == nil {
+			return nil, fmt.Errorf(
+				"bootstrap: cell %q implements authProvider but TokenVerifier() returned nil",
+				id)
+		}
+		if found != nil {
+			return nil, fmt.Errorf(
+				"bootstrap: multiple authProvider cells discovered: %q and %q; "+
+					"keep only one or supply the verifier explicitly via PolicyJWT(verifier)",
+				foundID, id)
+		}
+		found = v
+		foundID = id
+	}
+	if found == nil {
+		return nil, fmt.Errorf(
+			"bootstrap: PolicyJWTFromAssembly found no authProvider cell in the assembly; " +
+				"register a cell whose TokenVerifier() returns a non-nil IntentTokenVerifier, " +
+				"or wire the verifier explicitly via PolicyJWT(verifier)")
+	}
+	return found, nil
 }
