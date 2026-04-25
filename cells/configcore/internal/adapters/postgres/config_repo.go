@@ -303,8 +303,13 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		if cancelErr := r.wrapCtxCancel(ctx, "Create", "key="+entry.Key, err); cancelErr != nil {
 			return cancelErr
 		}
-		return errcode.WrapInfra(errcode.ErrConfigRepoQuery,
-			fmt.Sprintf("config repo: create failed for key %s", entry.Key), err)
+		return &errcode.Error{
+			Code:            errcode.ErrConfigRepoQuery,
+			Message:         "config repo: create failed",
+			InternalMessage: fmt.Sprintf("config repo: Create failed (key=%s)", entry.Key),
+			Cause:           err,
+			Category:        errcode.CategoryInfra,
+		}
 	}
 	return nil
 }

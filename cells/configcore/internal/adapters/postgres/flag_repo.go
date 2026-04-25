@@ -157,6 +157,7 @@ func (r *FlagRepository) wrapNonScanQueryErr(ctx context.Context, op, identifier
 		Message:         msg,
 		InternalMessage: internal,
 		Cause:           err,
+		Category:        errcode.CategoryInfra,
 	}
 }
 

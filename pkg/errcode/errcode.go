@@ -240,6 +240,7 @@ const (
 	ErrKeyProviderTransient Code = "ERR_KEY_PROVIDER_TRANSIENT"
 	// ErrConfigDecryptFailed signals that a sensitive config value could not be
 	// decrypted at the repository boundary. Maps to HTTP 500 (internal error).
+	// Symmetric with ErrConfigEncryptFailed for the encrypt boundary.
 	ErrConfigDecryptFailed Code = "ERR_CONFIG_DECRYPT_FAILED"
 	// ErrConfigEncryptFailed signals that a sensitive config value could not be
 	// encrypted at the repository boundary (Encrypt/EncryptVersion). Maps to

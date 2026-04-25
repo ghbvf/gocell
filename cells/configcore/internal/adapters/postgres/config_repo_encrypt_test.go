@@ -941,6 +941,23 @@ func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
 		assert.Contains(t, ec.InternalMessage, "Encrypt",
 			"InternalMessage must carry the PascalCase op label")
 	})
+
+	// Update (non-Rollback) path: SELECT FOR UPDATE + doUpdate → encryptValue.
+	// Setting up the SELECT FOR UPDATE mock is complex, so we cover the encrypt
+	// failure path via encryptValue direct call — this exercises the exact same
+	// encryptValue → cryptoOpError chain that doUpdate uses for sensitive writes.
+	t.Run("encryptValue direct call (covers Update sensitive write path)", func(t *testing.T) {
+		tr := &fakeValueTransformer{currentKeyID: "v1", failEncrypt: true}
+		repo := newEncryptedRepoFromDBTX(&mockDB{}, tr)
+		_, _, _, _, err := repo.encryptValue(ctx, "update_key", "new_value")
+		require.Error(t, err)
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+		assert.Equal(t, errcode.ErrConfigEncryptFailed, ec.Code,
+			"encryptValue failure must route to ErrConfigEncryptFailed (covers Update/doUpdate path)")
+		assert.True(t, errcode.IsInfraError(ec),
+			"CategoryInfra must propagate so Vault-outage alerts fire")
+	})
 }
 
 // TestGetByKey_FreshKey_OnStaleCipherCallback_NotCalled verifies that the
