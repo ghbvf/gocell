@@ -11,8 +11,10 @@
         "status": { "type": "string" },
         "lastSeen": { "type": "string", "format": "date-time" }
       },
-      "required": ["id", "name", "status", "lastSeen"]
+      "required": ["id", "name", "status", "lastSeen"],
+      "additionalProperties": false
     }
   },
-  "required": ["data"]
+  "required": ["data"],
+  "additionalProperties": false
 }

@@ -13,11 +13,13 @@
           "status": { "type": "string" },
           "createdAt": { "type": "string", "format": "date-time" }
         },
-        "required": ["id", "item", "status", "createdAt"]
+        "required": ["id", "item", "status", "createdAt"],
+        "additionalProperties": false
       }
     },
     "nextCursor": { "type": "string" },
     "hasMore": { "type": "boolean" }
   },
-  "required": ["data", "nextCursor", "hasMore"]
+  "required": ["data", "nextCursor", "hasMore"],
+  "additionalProperties": false
 }

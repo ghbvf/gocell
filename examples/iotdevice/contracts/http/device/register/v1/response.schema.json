@@ -10,8 +10,10 @@
         "name": { "type": "string" },
         "status": { "type": "string" }
       },
-      "required": ["id", "name", "status"]
+      "required": ["id", "name", "status"],
+      "additionalProperties": false
     }
   },
-  "required": ["data"]
+  "required": ["data"],
+  "additionalProperties": false
 }
