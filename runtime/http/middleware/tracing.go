@@ -7,6 +7,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
 	oteltrace "go.opentelemetry.io/otel/trace"
 )
@@ -209,6 +210,21 @@ func serveSpanned(tracer tracing.Tracer, cfg tracingConfig, next http.Handler, w
 	// handler, fall back to the router-supplied contract resolver.
 	if len(contractAttrs) > 0 {
 		span.SetAttributes(contractAttrs...)
+	}
+
+	// 499 (client closed request): preserve OTel HTTP semantic conventions —
+	// SERVER span status MUST remain Unset for 4xx; intentional cancellation
+	// SHOULD NOT set error.type. Record a structured attribute so operators
+	// can distinguish client cancellation from other 4xx (validation / auth)
+	// without polluting span error rate metrics. The 5xx branch below
+	// naturally skips 499 because 499 < 500.
+	//
+	// ref: open-telemetry/semantic-conventions http-spans.md — 4xx server
+	//      span status Unset; intentional cancellation must not set error.type.
+	if status == httputil.StatusClientClosedRequest {
+		span.SetAttributes(
+			tracing.Attr{Key: "client.cancel.reason", Value: "context_canceled"},
+		)
 	}
 
 	// 5xx → error span; 4xx and below → unset (otelhttp convention).

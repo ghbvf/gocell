@@ -356,6 +356,21 @@ const (
 	// Maps to HTTP 409 Conflict at the API boundary.
 	// runtime/distlock aliases this as ErrLockTimeout for ergonomic local use.
 	ErrDistlockTimeout Code = "ERR_DISTLOCK_TIMEOUT"
+
+	// ErrClientCanceled signals that the request was canceled by the client
+	// before the server finished processing — typically context.Canceled
+	// surfaced from a downstream IO operation. Maps to HTTP 499 (nginx
+	// "Client Closed Request"); operators should treat as a client-direction
+	// signal, not a server fault, so it never pollutes 5xx error-rate SLOs.
+	//
+	// IO-boundary helpers should wrap context cancellation errors with this
+	// code so the HTTP layer routes the response to 499 + slog.Warn via the
+	// 4xx response writer path.
+	//
+	// ref: nginx ngx_http_special_response.c — 499 emitted on client disconnect
+	// ref: OTel semantic conventions http-spans.md — 4xx server spans Unset;
+	//      intentional cancellation should not set error.type
+	ErrClientCanceled Code = "ERR_CLIENT_CANCELED"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

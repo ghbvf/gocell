@@ -14,6 +14,14 @@ import (
 
 const msgInternalServerError = "internal server error"
 
+// StatusClientClosedRequest is nginx's non-standard 499 status code returned
+// when the client closes the connection before the server finishes
+// responding. Go stdlib does not define this constant, so it is declared
+// here for use across the codeToStatus mapping and the tracing middleware.
+//
+// ref: nginx ngx_http_request.h — NGX_HTTP_CLIENT_CLOSED_REQUEST 499
+const StatusClientClosedRequest = 499
+
 // WriteJSON writes v as a JSON response with the given HTTP status code.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -309,6 +317,13 @@ var codeToStatus = map[errcode.Code]int{
 
 	// --- 429 Too Many Requests ---
 	errcode.ErrRateLimited: http.StatusTooManyRequests,
+
+	// --- 499 Client Closed Request ---
+	// Nginx-style 499: the client disconnected before the server finished
+	// responding (context.Canceled / DeadlineExceeded surfaced from a
+	// downstream IO operation). Routed to log4xx → slog.Warn so the 5xx
+	// error rate stays clean of client-direction noise.
+	errcode.ErrClientCanceled: StatusClientClosedRequest,
 
 	// --- 413 Request Entity Too Large ---
 	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,

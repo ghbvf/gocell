@@ -121,11 +121,17 @@ func TestGetByKey_NotFound_HasDomainCategory(t *testing.T) {
 		"domain not-found must not be treated as infra")
 }
 
-// TestConfigRepo_CtxCanceled_ClassifiedAsInfra verifies that context.Canceled
-// and context.DeadlineExceeded are always classified as infra (never domain
-// not-found), across GetByKey, Update SELECT-FOR-UPDATE, and GetVersion
-// (S15 ctx-cancel classification fix).
-func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
+// TestConfigRepo_CtxCanceled_ReturnsClientCanceled verifies that
+// context.Canceled and context.DeadlineExceeded are classified as
+// ErrClientCanceled (HTTP 499 + slog.Warn at the response boundary), never
+// as domain not-found. Covers GetByKey, Update SELECT-FOR-UPDATE,
+// Update RETURNING, GetVersion, and Delete (PR-A50+A51 ctx-cancel
+// consolidation; supersedes the prior S15 ErrConfigRepoQuery classification).
+//
+// IsInfraError is preserved (true) so health.Checker timeout-bucket
+// behaviour is unchanged; the HTTP layer routes 499 via codeToStatus, not
+// via IsInfraError.
+func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 	tests := []struct {
 		name    string
 		scanErr error
@@ -133,48 +139,40 @@ func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
 		{"ctx canceled", context.Canceled},
 		{"ctx deadline exceeded", context.DeadlineExceeded},
 	}
+	assertCtxCancelErr := func(t *testing.T, err error) {
+		t.Helper()
+		require.Error(t, err)
+		require.True(t, errcode.IsInfraError(err),
+			"IsInfraError preserved (preserves health/timeout bucket behaviour)")
+		require.True(t, errcode.IsExpected4xx(err),
+			"IsExpected4xx must route the response through log4xx → slog.Warn")
+		require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
+			"ctx cancel must not leak into domain not-found branch")
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrClientCanceled, ec.Code)
+		require.Contains(t, ec.InternalMessage, "ctx canceled",
+			"must hit wrapCtxCancel path, not generic scan-error fallthrough")
+	}
 	for _, tc := range tests {
 		tc := tc
 		t.Run("GetByKey/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
-
 			_, err := repo.GetByKey(context.Background(), "any")
-			require.Error(t, err)
-			require.True(t, errcode.IsInfraError(err))
-			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound),
-				"ctx cancel must not leak into domain not-found branch")
-			var ec *errcode.Error
-			require.ErrorAs(t, err, &ec)
-			assert.Equal(t, errcode.ErrConfigRepoQuery, ec.Code)
-			require.Contains(t, ec.InternalMessage, "ctx canceled",
-				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+			assertCtxCancelErr(t, err)
 		})
 		t.Run("Update_SelectForUpdate/"+tc.name, func(t *testing.T) {
 			seqDB := &sequencedMockDB{rows: []*mockRow{{scanErr: tc.scanErr}}}
 			repo := newConfigRepositoryFromDBTX(seqDB)
-
 			_, err := repo.Update(context.Background(), "k", "v")
-			require.Error(t, err)
-			require.True(t, errcode.IsInfraError(err))
-			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
-			var ec *errcode.Error
-			require.ErrorAs(t, err, &ec)
-			require.Contains(t, ec.InternalMessage, "ctx canceled",
-				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+			assertCtxCancelErr(t, err)
 		})
 		t.Run("GetVersion/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
-
 			_, err := repo.GetVersion(context.Background(), "cfg-1", 1)
-			require.Error(t, err)
-			require.True(t, errcode.IsInfraError(err))
-			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
-			var ec *errcode.Error
-			require.ErrorAs(t, err, &ec)
-			require.Contains(t, ec.InternalMessage, "ctx canceled",
-				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+			assertCtxCancelErr(t, err)
 		})
 		t.Run("Update_Returning/"+tc.name, func(t *testing.T) {
 			// SELECT FOR UPDATE succeeds (sensitive=false); UPDATE RETURNING ctx-cancels.
@@ -184,27 +182,117 @@ func TestConfigRepo_CtxCanceled_ClassifiedAsInfra(t *testing.T) {
 			}}
 			repo := newConfigRepositoryFromDBTX(seqDB)
 			_, err := repo.Update(context.Background(), "k", "v")
-			require.Error(t, err)
-			require.True(t, errcode.IsInfraError(err))
-			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
-			var ec *errcode.Error
-			require.ErrorAs(t, err, &ec)
-			require.Contains(t, ec.InternalMessage, "ctx canceled",
-				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+			assertCtxCancelErr(t, err)
 		})
 		t.Run("Delete/"+tc.name, func(t *testing.T) {
 			db := &mockDB{queryRowResult: &mockRow{scanErr: tc.scanErr}}
 			repo := newConfigRepositoryFromDBTX(db)
 			_, err := repo.Delete(context.Background(), "k")
-			require.Error(t, err)
-			require.True(t, errcode.IsInfraError(err))
-			require.False(t, errcode.IsDomainNotFound(err, errcode.ErrConfigRepoNotFound))
-			var ec *errcode.Error
-			require.ErrorAs(t, err, &ec)
-			require.Contains(t, ec.InternalMessage, "ctx canceled",
-				"must hit ctxCanceledError path, not generic scan-error fallthrough")
+			assertCtxCancelErr(t, err)
+		})
+		t.Run("List/QueryErr/"+tc.name, func(t *testing.T) {
+			db := &mockDB{queryErr: tc.scanErr}
+			repo := newConfigRepositoryFromDBTX(db)
+			_, err := repo.List(context.Background(), query.ListParams{
+				Sort: []query.SortColumn{{Name: "key", Direction: query.SortASC}},
+			})
+			assertCtxCancelErr(t, err)
+		})
+		t.Run("PublishVersion/"+tc.name, func(t *testing.T) {
+			db := &mockDB{execErr: tc.scanErr}
+			repo := newConfigRepositoryFromDBTX(db)
+			err := repo.PublishVersion(context.Background(), &domain.ConfigVersion{
+				ID:        "v-1",
+				ConfigID:  "cfg-1",
+				Version:   1,
+				Value:     "x",
+				Sensitive: false,
+			})
+			assertCtxCancelErr(t, err)
+		})
+		t.Run("Create/"+tc.name, func(t *testing.T) {
+			db := &mockDB{execErr: tc.scanErr}
+			repo := newConfigRepositoryFromDBTX(db)
+			err := repo.Create(context.Background(), &domain.ConfigEntry{
+				ID:        "cfg-1",
+				Key:       "k",
+				Value:     "v",
+				Sensitive: false,
+			})
+			assertCtxCancelErr(t, err)
 		})
 	}
+}
+
+// TestConfigRepo_CryptoOpError_CauseAwareClassification verifies that
+// cryptoOpError fans out by cause class (PR-A50+A51 + #271 review P2):
+//   - context cancel cause → ErrClientCanceled (HTTP 499 + Warn), preserves
+//     IsInfraError=true (driven by stdlib sentinel detection in classify.go)
+//   - ErrKeyProviderTransient cause → preserves CategoryInfra (Vault outage
+//     must remain in infra bucket so existing alerts still fire)
+//   - other cause (auth / tamper) → CategoryAuth (distinguishes KMS auth
+//     from generic infra outages on dashboards)
+//
+// The HTTP status mapping for the non-cancel branches is unchanged
+// (ErrConfigDecryptFailed / ErrConfigRepoQuery → 500); only the in-process
+// classifier shifts.
+func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
+	repo := newConfigRepositoryFromDBTX(&mockDB{})
+	ops := []struct {
+		name string
+		code errcode.Code
+		op   string
+	}{
+		{"encrypt", errcode.ErrConfigRepoQuery, "Encrypt"},
+		{"decrypt", errcode.ErrConfigDecryptFailed, "Decrypt"},
+		{"encrypt version", errcode.ErrConfigRepoQuery, "EncryptVersion"},
+		{"decrypt version", errcode.ErrConfigDecryptFailed, "DecryptVersion"},
+	}
+
+	t.Run("ctx cancel cause routes to ErrClientCanceled", func(t *testing.T) {
+		for _, tc := range ops {
+			t.Run(tc.name, func(t *testing.T) {
+				ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", context.Canceled)
+				require.NotNil(t, ec)
+				assert.Equal(t, errcode.ErrClientCanceled, ec.Code,
+					"ctx cancel via crypto boundary must route to ErrClientCanceled (HTTP 499)")
+				assert.True(t, errcode.IsExpected4xx(ec),
+					"ErrClientCanceled must hit log4xx → slog.Warn path")
+			})
+		}
+	})
+
+	t.Run("transient KeyProvider cause preserves CategoryInfra", func(t *testing.T) {
+		transient := errcode.NewInfra(errcode.ErrKeyProviderTransient, "vault sealed")
+		for _, tc := range ops {
+			t.Run(tc.name, func(t *testing.T) {
+				ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", transient)
+				require.NotNil(t, ec)
+				assert.Equal(t, tc.code, ec.Code,
+					"transient cause must NOT rewrite to ErrClientCanceled")
+				assert.Equal(t, errcode.CategoryInfra, ec.Category,
+					"transient KeyProvider faults must remain CategoryInfra (Vault outage signal)")
+				assert.True(t, errcode.IsInfraError(ec),
+					"IsInfraError must stay true so existing infra alerts fire")
+			})
+		}
+	})
+
+	t.Run("opaque cause classified as CategoryAuth", func(t *testing.T) {
+		for _, tc := range ops {
+			t.Run(tc.name, func(t *testing.T) {
+				ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", assert.AnError)
+				require.NotNil(t, ec)
+				assert.Equal(t, tc.code, ec.Code)
+				assert.Equal(t, errcode.CategoryAuth, ec.Category,
+					"unclassified KMS / tamper failures must be CategoryAuth")
+				assert.False(t, errcode.IsInfraError(ec),
+					"CategoryAuth must NOT match IsInfraError (separates KMS auth from infra)")
+				assert.Contains(t, ec.InternalMessage, tc.op,
+					"InternalMessage must carry the PascalCase op label for operator triage")
+			})
+		}
+	})
 }
 
 // TestConfigRepository_GetByKey_NotFound is a legacy name kept for backward

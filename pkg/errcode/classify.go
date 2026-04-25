@@ -258,6 +258,11 @@ var expected4xxCodes = map[Code]bool{
 
 	// 429 — rate limited
 	ErrRateLimited: true,
+
+	// 499 — client closed request (context canceled / deadline exceeded
+	// surfaced from a downstream IO operation). Treated as a client-direction
+	// signal: log at Warn, do not pollute 5xx error rate.
+	ErrClientCanceled: true,
 }
 
 // IsTransient reports whether err, or any error in its Unwrap chain, carries

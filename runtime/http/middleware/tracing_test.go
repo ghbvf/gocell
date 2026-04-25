@@ -292,6 +292,59 @@ func TestTracing_5xxSetsErrorSpanStatus(t *testing.T) {
 	assert.Equal(t, "Internal Server Error", spans[0].Attr("_status_desc"))
 }
 
+// TestTracing_499_AttrAndUnsetStatus locks the OTel-compliant 499 contract
+// from PR-A50+A51: client cancellation MUST NOT set span.Status=Error
+// (4xx server spans MUST remain Unset per OTel HTTP semantic conventions),
+// but SHOULD record a structured `client.cancel.reason` attribute so
+// dashboards distinguish client-direction signals from validation/auth 4xx.
+//
+// ref: open-telemetry/semantic-conventions http-spans.md — 4xx server span
+//
+//	status MUST be left Unset; intentional cancellation MUST NOT set
+//	error.type.
+func TestTracing_499_AttrAndUnsetStatus(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(499)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/canceled", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "context_canceled", spans[0].Attr("client.cancel.reason"),
+		"499 must attach client.cancel.reason attribute for dashboards")
+	assert.Equal(t, int64(499), spans[0].Attr("http.status_code"))
+	assert.Nil(t, spans[0].Attr("_status_error"),
+		"499 (4xx) MUST NOT set span.Status=Error per OTel conventions")
+	assert.Nil(t, spans[0].Attr("_status_desc"),
+		"499 must not record a status description (status remains Unset)")
+}
+
+// TestTracing_4xxNoErrorSpanStatus_NoCancelAttr ensures plain 4xx (e.g.
+// validation 400) leaves span.Status Unset (already covered by current
+// behaviour) AND does NOT spuriously add the client.cancel.reason
+// attribute introduced for 499. Guards against accidentally widening the
+// attribute to all 4xx responses.
+func TestTracing_4xxNoErrorSpanStatus_NoCancelAttr(t *testing.T) {
+	spy := &spyTracer{}
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	req := httptest.NewRequest(http.MethodGet, "/bad", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Nil(t, spans[0].Attr("_status_error"))
+	assert.Nil(t, spans[0].Attr("client.cancel.reason"),
+		"client.cancel.reason must be 499-only, not generic 4xx")
+}
+
 func TestTracing_RecoveryRecordsRedactedPanicError(t *testing.T) {
 	spy := &spyTracer{}
 	handler := Tracing(spy, WithErrorRedactor(func(error) error {

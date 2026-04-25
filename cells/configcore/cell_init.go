@@ -39,7 +39,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 				c.staleCipherCounter.Inc()
 			}))
 		}
-		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, nil, repoOpts...)
+		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, c.logger, repoOpts...)
 		c.flagRepo = cellpg.NewFlagRepository(session)
 	}
 
