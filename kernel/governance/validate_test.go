@@ -3161,6 +3161,35 @@ func TestFMT13(t *testing.T) {
 	}
 }
 
+// TestFMT13_HasHowToFixHint locks in the PR239-DX1 message-quality
+// improvement: the "no pathParams declaration" error must include a YAML
+// fix snippet so the diagnostic explains *how* to fix it, not just *what*
+// is missing. The hint is a concrete YAML fragment a user can copy-paste
+// under their endpoints.http: block.
+func TestFMT13_HasHowToFixHint(t *testing.T) {
+	pm := validProject()
+	pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = &metadata.HTTPTransportMeta{
+		Method:        "GET",
+		Path:          "/api/v1/auth/users/{userId}",
+		SuccessStatus: 200,
+	}
+	pm.Contracts["http.auth.login.v1"].SchemaRefs.Response = "response.schema.json"
+
+	val := NewValidator(pm, "")
+	got := findByCode(val.validateFMT13(), "FMT-13")
+	require.Len(t, got, 1, "expected one FMT-13 finding")
+
+	msg := got[0].Message
+	assert.Contains(t, msg, "add to contract.yaml:",
+		"FMT-13 message must announce the fix hint inline")
+	assert.Contains(t, msg, "pathParams:",
+		"FMT-13 hint must include the pathParams: key")
+	assert.Contains(t, msg, "userId:",
+		"FMT-13 hint must include the offending placeholder name (userId)")
+	assert.Contains(t, msg, "type: string",
+		"FMT-13 hint must include a type: string fallback")
+}
+
 // --- TOPO-07: actor maxConsistencyLevel constraint for consumers ---
 
 func TestTOPO07(t *testing.T) {

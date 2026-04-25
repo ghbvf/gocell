@@ -476,13 +476,16 @@ func (v *Validator) validateFMT13PathParams(c *metadata.ContractMeta, h *metadat
 	var results []ValidationResult
 
 	// Placeholder without declaration → Error.
+	// PR239-DX1: append a YAML fix hint so the diagnostic tells the user
+	// *how* to fix it, not just *what* is missing. Indentation matches the
+	// schema (top-level `pathParams:` under `endpoints.http:` block).
 	for _, name := range placeholders {
 		if _, ok := declared[name]; !ok {
 			results = append(results, v.newResult(
 				codeFMT13, SeverityError, IssueRequired,
 				file,
 				"endpoints.http.pathParams",
-				fmt.Sprintf("http contract %q path placeholder %q has no pathParams declaration", c.ID, name),
+				fmt.Sprintf("http contract %q path placeholder %q has no pathParams declaration; add to contract.yaml:\n  pathParams:\n    %s:\n      type: string", c.ID, name, name),
 			))
 		}
 	}

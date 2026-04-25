@@ -3,60 +3,82 @@ package app
 import (
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
-	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // --- validate --fail-fast ---
+//
+// TestFormatResultsFailFast_FirstError / NoErrors previously called
+// formatResultsFailFast directly. After PR-A10 the renderer moved into
+// cmd/gocell/app/printers; coverage of "first-error-only, no banner, no
+// summary" lives there as TestText_PrintFailFast and
+// TestText_PrintFailFast_NoErrors. The integration tests below still
+// exercise the wiring end-to-end through runValidate.
 
-// formatResultsFailFast must print only the first error encountered, and then
-// stop — no "ERRORS (N):" banner, no warnings, no trailing summary. Errors
-// win over warnings regardless of slice order.
-func TestFormatResultsFailFast_FirstError(t *testing.T) {
-	results := []governance.ValidationResult{
-		{Code: "ADV-01", Severity: governance.SeverityWarning, Message: "warn first"},
-		{Code: "REF-01", Severity: governance.SeverityError, Message: "first error"},
-		{Code: "REF-02", Severity: governance.SeverityError, Message: "second error"},
-	}
-	out := captureStdout(t, func() { formatResultsFailFast(results) })
-	assert.Contains(t, out, "REF-01")
-	assert.Contains(t, out, "first error")
-	assert.NotContains(t, out, "REF-02", "second error must not be printed")
-	assert.NotContains(t, out, "second error")
-	assert.NotContains(t, out, "warn first", "warnings must not be printed in fail-fast")
-	assert.NotContains(t, out, "ERRORS (", "fail-fast mode skips the banner")
-}
+// TestRunValidate_FailFast_OnError_TrimsToFirstError fixes the output
+// shape when fail-fast hits an error: only the offending issue is shown,
+// no banner, no summary. Drives a deterministic FMT-02 fixture so the
+// assertion does not depend on live repo state.
+func TestRunValidate_FailFast_OnError_TrimsToFirstError(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/test\n"), 0o644))
+	cellDir := filepath.Join(dir, "cells", "bad")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"),
+		[]byte("id: bad\ntype: INVALID\nconsistencyLevel: L1\nowner:\n  team: squad\n  role: cell-owner\nschema:\n  primary: cell_bad\nverify:\n  smoke:\n    - smoke.bad.startup\n"), 0o644))
 
-// When no errors exist, fail-fast acts as a no-op (no spurious output). The
-// caller is responsible for deciding success; formatResultsFailFast itself
-// only prints when an error is present.
-func TestFormatResultsFailFast_NoErrors(t *testing.T) {
-	results := []governance.ValidationResult{
-		{Code: "ADV-01", Severity: governance.SeverityWarning, Message: "just a warning"},
-	}
-	out := captureStdout(t, func() { formatResultsFailFast(results) })
-	assert.Empty(t, strings.TrimSpace(out), "no output expected when no errors: %q", out)
-}
-
-// runValidate --fail-fast on the live project: if errors exist it returns
-// error; the printed output must not include a "Validation complete:" summary
-// or a "WARNINGS (" banner. We only assert format invariants here — whether
-// there are errors or not depends on the repo state at test time.
-func TestRunValidate_FailFast_FormatInvariants(t *testing.T) {
-	root, err := findRoot()
-	require.NoError(t, err)
-
+	var gotErr error
 	out := captureStdout(t, func() {
-		_ = runValidate([]string{"--root", root, "--fail-fast"})
+		gotErr = runValidate([]string{"--root", dir, "--fail-fast"})
 	})
+	require.Error(t, gotErr, "fail-fast must surface the validation error")
+	assert.Contains(t, out, "FMT-02", "first error code must be printed")
 	assert.NotContains(t, out, "Validation complete:",
-		"fail-fast must not emit summary line")
+		"fail-fast on error must not emit summary line")
 	assert.NotContains(t, out, "WARNINGS (",
-		"fail-fast must not emit warnings banner")
+		"fail-fast on error must not emit warnings banner")
+	assert.NotContains(t, out, "ERRORS (",
+		"fail-fast on error must not emit the multi-error banner")
+}
+
+// TestRunValidate_FailFast_OnWarningsOnly_PrintsWarnings locks in the F1
+// fix: when fail-fast finds no errors but the validator / depcheck
+// returned warnings, those warnings must reach the output. ValidateFailFast
+// and CheckFailFast both preserve warnings on the no-error path
+// (kernel/governance/{validate,depcheck}.go); previously the command layer
+// silently dropped them.
+//
+// Fixture: a project whose only metadata issue is REF-16 (assembly missing
+// generated/boundary.yaml) — that rule emits SeverityWarning, no errors.
+func TestRunValidate_FailFast_OnWarningsOnly_PrintsWarnings(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"),
+		[]byte("module example.com/test\n"), 0o644))
+	asmDir := filepath.Join(dir, "assemblies", "warnasm")
+	require.NoError(t, os.MkdirAll(asmDir, 0o755))
+	// REF-11 verifies build.entrypoint exists on disk; satisfy it with a
+	// stub directory so only REF-16 (missing generated/boundary.yaml)
+	// fires — and REF-16 is SeverityWarning.
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "cmd", "warnasm"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(asmDir, "assembly.yaml"),
+		[]byte("id: warnasm\ncells: []\nbuild:\n  entrypoint: cmd/warnasm\n  binary: warnasm\n  deployTemplate: deploy.yaml\n"), 0o644))
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--fail-fast"})
+	})
+	require.NoError(t, gotErr,
+		"warnings alone must not fail fail-fast — exit 0")
+	assert.Contains(t, out, "WARNINGS (",
+		"fail-fast must surface the warning banner when warnings exist")
+	assert.Contains(t, out, "Validation complete:",
+		"fail-fast must include the summary line so the warning count is visible")
+	assert.NotContains(t, out, "OK: no errors.",
+		"OK line is for truly clean runs only — warnings present must replace it")
 }
 
 // Output contract for --fail-fast on a clean project: prints exactly

@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "gocell",
+          "version": "test-1.0.0",
+          "informationUri": "https://github.com/ghbvf/gocell",
+          "rules": [
+            {
+              "id": "FMT-02",
+              "shortDescription": {
+                "text": "cell type invalid"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              },
+              "properties": {
+                "issueType": "invalid"
+              }
+            },
+            {
+              "id": "REF-01",
+              "shortDescription": {
+                "text": "cell ID is required"
+              },
+              "defaultConfiguration": {
+                "level": "error"
+              }
+            },
+            {
+              "id": "ADV-01",
+              "shortDescription": {
+                "text": "owner role is recommended"
+              },
+              "defaultConfiguration": {
+                "level": "warning"
+              }
+            }
+          ]
+        }
+      },
+      "results": [
+        {
+          "ruleId": "FMT-02",
+          "level": "error",
+          "message": {
+            "text": "[scope: project] cell type invalid (field: type)"
+          }
+        },
+        {
+          "ruleId": "REF-01",
+          "level": "error",
+          "message": {
+            "text": "cell ID is required (field: id)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cells/x/cell.yaml"
+                },
+                "region": {
+                  "startLine": 2,
+                  "startColumn": 1
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "ADV-01",
+          "level": "warning",
+          "message": {
+            "text": "owner role is recommended (field: owner.role)"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "cells/x/cell.yaml"
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

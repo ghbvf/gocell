@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "code": "REF-02",
+      "severity": "error",
+      "issueType": "",
+      "file": "cells/accesscore/cell.yaml",
+      "scope": "",
+      "field": "owner",
+      "message": "owner missing",
+      "line": 0,
+      "column": 0
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}

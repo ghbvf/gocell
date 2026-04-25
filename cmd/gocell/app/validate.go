@@ -3,19 +3,32 @@ package app
 import (
 	"flag"
 	"fmt"
+	"os"
+	"runtime/debug"
+	"strings"
 
+	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
-// runValidate implements: gocell validate [--root <path>]
+// errEmitFmt is the wrapping format every printer write failure is reported
+// under. Using a single constant keeps the CLI exit-status surface stable —
+// CI scripts and tests can grep on the "emit results:" prefix without
+// brittle reliance on multiple call sites agreeing on wording.
+const errEmitFmt = "emit results: %w"
+
+// runValidate implements: gocell validate [--root <path>] [--fail-fast] [--strict] [--format text|json|sarif]
 // Parses all metadata, runs validate-meta and depcheck.
 // exit 0 = pass, exit 1 = errors found.
 //
-// --fail-fast: true short-circuit. The validator and the dependency checker
-// stop at the first rule that produces a SeverityError — subsequent rules do
-// not run, which is the point of the flag for CI pipelines over large repos.
-// Output is also trimmed to a single error line.
+// --fail-fast: short-circuits at the first SeverityError. Output is trimmed
+// to a single error line in text mode; JSON and SARIF still emit a full
+// document containing that one issue.
+//
+// --format selects the output renderer. The default "text" format is
+// declared non-stable: scripts that need machine-parseable output should
+// use --format=json or --format=sarif.
 func runValidate(args []string) error {
 	fs := flag.NewFlagSet("validate", flag.ContinueOnError)
 	root := fs.String("root", "", "project root directory (default: auto-detect from go.mod)")
@@ -23,6 +36,8 @@ func runValidate(args []string) error {
 		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
 	strict := fs.Bool("strict", false,
 		"enforce no-dash naming and allowedFiles-mismatch rules (FMT-16 slice/cell/assembly dirs, FMT-17 allowedFiles, FMT-C1 cell id, FMT-A1 assembly id); strict-only, silent without this flag")
+	format := fs.String("format", string(printers.FormatText),
+		"output format: text (non-stable, default) | json | sarif")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -36,6 +51,11 @@ func runValidate(args []string) error {
 		}
 	}
 
+	printer, err := printers.New(*format, os.Stdout, toolVersion())
+	if err != nil {
+		return err
+	}
+
 	// Parse all metadata.
 	parser := metadata.NewParser(rootDir)
 	project, err := parser.Parse()
@@ -47,27 +67,98 @@ func runValidate(args []string) error {
 	depChecker := governance.NewDependencyChecker(project)
 
 	if *failFast {
-		return runValidateFailFast(validator, depChecker, *strict)
+		return runValidateFailFast(printer, *format, validator, depChecker, *strict)
 	}
-	return runValidateFull(validator, depChecker, *strict)
+	return runValidateFull(printer, validator, depChecker, *strict)
 }
 
 // runValidateFailFast runs validation in short-circuit mode: the validator
 // and the dependency checker stop at the first SeverityError. When strict is
 // true, FMT-16/17 are appended only if the base pass finds no errors.
-func runValidateFailFast(validator *governance.Validator, depChecker *governance.DependencyChecker, strict bool) error {
+//
+// Output rendering depends on the --format and the run's outcome:
+//
+//   - errors present (any rule produced SeverityError): emit only the first
+//     error in text mode (single line, no banner, no summary); in
+//     json/sarif emit a full document containing that one issue.
+//   - no errors but warnings present: emit the full warning set via the
+//     printer's standard Print path. `ValidateFailFast` and `CheckFailFast`
+//     in kernel/governance explicitly preserve warnings on the clean-error
+//     path; dropping them at the command layer would silently hide
+//     warning-only repos.
+//   - no errors, no warnings: text emits the legacy "OK: no errors." line;
+//     json/sarif emit an empty document so consumers can always parse a
+//     result regardless of outcome.
+//
+// Printer write failures are returned as the command's error: a truncated
+// JSON / SARIF report is more dangerous than a missing one because CI
+// pipelines may still ingest it.
+func runValidateFailFast(
+	printer printers.Printer,
+	format string,
+	validator *governance.Validator,
+	depChecker *governance.DependencyChecker,
+	strict bool,
+) error {
 	valResults := runValidatorFailFast(validator, strict)
 	if firstErr := firstError(valResults); firstErr != nil {
-		formatResultsFailFast(valResults)
+		if err := emitFailFast(printer, format, valResults); err != nil {
+			return fmt.Errorf(errEmitFmt, err)
+		}
 		return fmt.Errorf("validation failed: %s", firstErr.Code)
 	}
 	depResults := depChecker.CheckFailFast()
 	if firstErr := firstError(depResults); firstErr != nil {
-		formatResultsFailFast(depResults)
+		if err := emitFailFast(printer, format, depResults); err != nil {
+			return fmt.Errorf(errEmitFmt, err)
+		}
 		return fmt.Errorf("validation failed: %s", firstErr.Code)
 	}
-	fmt.Println("OK: no errors.")
+
+	// No errors. Combine the validator and depcheck results so warnings from
+	// either accumulator are preserved.
+	allResults := append(valResults, depResults...)
+
+	if len(allResults) == 0 {
+		// Truly clean run. Text mode keeps the legacy single-line "OK"
+		// ack so existing scripts and TestRunValidate_FailFast_NoErrors_
+		// PrintsOK stay green. Structured formats still emit an empty
+		// document so consumers can parse a result regardless of outcome.
+		if format == string(printers.FormatText) {
+			fmt.Println("OK: no errors.")
+			return nil
+		}
+		if err := printer.Print(nil); err != nil {
+			return fmt.Errorf(errEmitFmt, err)
+		}
+		return nil
+	}
+
+	// Warnings only — emit them through the standard printer path so they
+	// reach CI / SARIF Explorer / jq just like in non-fail-fast runs. The
+	// short-circuit guarantee is "stop at first error", not "drop warnings".
+	if err := printer.Print(allResults); err != nil {
+		return fmt.Errorf(errEmitFmt, err)
+	}
 	return nil
+}
+
+// emitFailFast renders the first error using the printer's fail-fast mode if
+// available; otherwise the printer receives a one-element slice. This keeps
+// fail-fast a single concept across all three formats while letting text
+// mode drop its banner / summary lines.
+//
+// Writer errors are returned to the caller; the caller wraps them with an
+// "emit results:" prefix so the CLI's exit status reflects the output
+// failure rather than the validation outcome (which the caller could not
+// reliably report anyway when stdout is broken).
+func emitFailFast(printer printers.Printer, format string, results []governance.ValidationResult) error {
+	if format == string(printers.FormatText) {
+		if ff, ok := printer.(printers.FailFastPrinter); ok {
+			return ff.PrintFailFast(results)
+		}
+	}
+	return printer.Print([]governance.ValidationResult{*firstError(results)})
 }
 
 // runValidatorFailFast selects the appropriate validator method for fail-fast mode.
@@ -78,17 +169,29 @@ func runValidatorFailFast(validator *governance.Validator, strict bool) []govern
 	return validator.ValidateFailFast()
 }
 
-// runValidateFull runs all validation rules and prints a summary.
-func runValidateFull(validator *governance.Validator, depChecker *governance.DependencyChecker, strict bool) error {
+// runValidateFull runs all validation rules and emits via the configured printer.
+// The printer owns the summary line; we only return an error when SeverityError
+// results are present so the CLI exit code reflects validation outcome.
+func runValidateFull(
+	printer printers.Printer,
+	validator *governance.Validator,
+	depChecker *governance.DependencyChecker,
+	strict bool,
+) error {
 	valResults := runValidatorFull(validator, strict)
 	depResults := depChecker.Check()
 	allResults := append(valResults, depResults...)
 
-	formatResults(allResults)
+	if err := printer.Print(allResults); err != nil {
+		return fmt.Errorf(errEmitFmt, err)
+	}
 
-	errCount, warnCount := countSeverities(allResults)
-	fmt.Printf("\nValidation complete: %d error(s), %d warning(s)\n", errCount, warnCount)
-
+	errCount := 0
+	for i := range allResults {
+		if allResults[i].Severity == governance.SeverityError {
+			errCount++
+		}
+	}
 	if errCount > 0 {
 		return fmt.Errorf("validation failed with %d error(s)", errCount)
 	}
@@ -103,19 +206,6 @@ func runValidatorFull(validator *governance.Validator, strict bool) []governance
 	return validator.Validate()
 }
 
-// countSeverities returns the number of errors and warnings in results.
-func countSeverities(results []governance.ValidationResult) (errCount, warnCount int) {
-	for i := range results {
-		switch results[i].Severity {
-		case governance.SeverityError:
-			errCount++
-		case governance.SeverityWarning:
-			warnCount++
-		}
-	}
-	return
-}
-
 // firstError returns the first result whose severity is error, or nil.
 func firstError(results []governance.ValidationResult) *governance.ValidationResult {
 	for i := range results {
@@ -124,4 +214,27 @@ func firstError(results []governance.ValidationResult) *governance.ValidationRes
 		}
 	}
 	return nil
+}
+
+// toolVersion derives a SARIF-friendly version string from the Go build info.
+// VCS revision wins (matches release tooling); falls back to the module
+// version, then the literal "dev" so the SARIF output is never empty.
+func toolVersion() string {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "dev"
+	}
+	for _, s := range info.Settings {
+		if s.Key == "vcs.revision" && s.Value != "" {
+			rev := s.Value
+			if len(rev) > 12 {
+				rev = rev[:12]
+			}
+			return rev
+		}
+	}
+	if info.Main.Version != "" && !strings.HasPrefix(info.Main.Version, "(devel") {
+		return info.Main.Version
+	}
+	return "dev"
 }

@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "code": "DEP-02",
+      "severity": "error",
+      "issueType": "invalid",
+      "file": "",
+      "scope": "project",
+      "field": "cells",
+      "message": "circular dependency detected",
+      "line": 0,
+      "column": 0
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}

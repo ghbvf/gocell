@@ -1,0 +1,6 @@
+ERRORS (1):
+  [DEP-02] circular dependency detected (field: cells)
+         at [scope: project]
+
+
+Validation complete: 1 error(s), 0 warning(s)

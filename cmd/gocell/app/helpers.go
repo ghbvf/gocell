@@ -6,8 +6,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/ghbvf/gocell/kernel/governance"
 )
 
 // findRoot walks up from the current working directory to find the directory
@@ -50,84 +48,4 @@ func readModule(root string) (string, error) {
 	}
 
 	return "", fmt.Errorf("module directive not found in go.mod")
-}
-
-// formatResultsFailFast prints only the first error found and returns. It
-// emits no banner, no warnings, and no summary — giving CI a single, loud
-// signal. A caller that needs rich output should use formatResults instead.
-func formatResultsFailFast(results []governance.ValidationResult) {
-	for i := range results {
-		if results[i].Severity == governance.SeverityError {
-			printResult(results[i])
-			return
-		}
-	}
-}
-
-// formatResults prints validation results grouped by severity.
-func formatResults(results []governance.ValidationResult) {
-	if len(results) == 0 {
-		fmt.Println("No issues found.")
-		return
-	}
-
-	// Group by severity.
-	var errors, warnings []governance.ValidationResult
-	for i := range results {
-		switch results[i].Severity {
-		case governance.SeverityError:
-			errors = append(errors, results[i])
-		case governance.SeverityWarning:
-			warnings = append(warnings, results[i])
-		}
-	}
-
-	if len(errors) > 0 {
-		fmt.Printf("ERRORS (%d):\n", len(errors))
-		for _, r := range errors {
-			printResult(r)
-		}
-		fmt.Println()
-	}
-
-	if len(warnings) > 0 {
-		fmt.Printf("WARNINGS (%d):\n", len(warnings))
-		for _, r := range warnings {
-			printResult(r)
-		}
-		fmt.Println()
-	}
-}
-
-// printResult prints a single validation result in human-readable format.
-//
-// Output shape differs by what the finding is anchored to:
-//   - File set:  "at <file>[:<line>[:<col>]]" — a plain file:line:col prefix
-//     so IDE / terminal "click-to-open" (GoLand, VS Code, iTerm2) can jump.
-//   - Scope set: "at [scope: <name>]" — a virtual domain (e.g. "project")
-//     rendered as a bracketed label so users do not mistake it for a
-//     jumpable path.
-//   - Neither:   no location line is printed.
-//
-// The field name stays on the message line in every case.
-func printResult(r governance.ValidationResult) {
-	msg := r.Message
-	if r.Field != "" {
-		msg += fmt.Sprintf(" (field: %s)", r.Field)
-	}
-	fmt.Printf("  [%s] %s\n", r.Code, msg)
-
-	switch {
-	case r.Scope != "":
-		fmt.Printf("         at [scope: %s]\n", r.Scope)
-	case r.File != "":
-		location := r.File
-		if r.Line > 0 {
-			location += fmt.Sprintf(":%d", r.Line)
-			if r.Column > 0 {
-				location += fmt.Sprintf(":%d", r.Column)
-			}
-		}
-		fmt.Printf("         at %s\n", location)
-	}
 }

@@ -1,0 +1,19 @@
+{
+  "issues": [
+    {
+      "code": "REF-01",
+      "severity": "error",
+      "issueType": "referenceNotFound",
+      "file": "cells/accesscore/cell.yaml",
+      "scope": "",
+      "field": "contractUsages[0].contractId",
+      "message": "contract 'auth.session.v1' not found",
+      "line": 14,
+      "column": 5
+    }
+  ],
+  "summary": {
+    "errors": 1,
+    "warnings": 0
+  }
+}
