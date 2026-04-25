@@ -16,7 +16,7 @@ import (
 // upgrading would silently break the cell-level contract.
 func (v *Validator) validateSliceConsistency() []ValidationResult {
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
+	for _, s := range v.project.Slices {
 		if s.ConsistencyLevel == "" {
 			// empty means inherit cell — always valid
 			continue
@@ -25,7 +25,7 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 		if err != nil {
 			results = append(results, v.newResult(
 				"SLICE-CONSISTENCY-01", SeverityError, IssueInvalid,
-				sliceFile(key),
+				sliceFile(s),
 				"consistencyLevel",
 				fmt.Sprintf(
 					"slice %q declares consistencyLevel %q which is not valid (must be L0-L4)",
@@ -47,7 +47,7 @@ func (v *Validator) validateSliceConsistency() []ValidationResult {
 		if sliceLevel > cellLevel {
 			results = append(results, v.newResult(
 				"SLICE-CONSISTENCY-01", SeverityError, IssueInvalid,
-				sliceFile(key),
+				sliceFile(s),
 				"consistencyLevel",
 				fmt.Sprintf(
 					"slice %q declares consistencyLevel %q which is stronger than parent cell %q (%q); "+

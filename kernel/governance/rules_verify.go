@@ -16,15 +16,15 @@ import (
 // waiver match: waiver.Contract == contractUsage.Contract
 func (v *Validator) validateVERIFY01() []ValidationResult {
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
-		results = append(results, v.validateSliceVERIFY01(key, s)...)
+	for _, s := range v.project.Slices {
+		results = append(results, v.validateSliceVERIFY01(s)...)
 	}
 	return results
 }
 
 // validateSliceVERIFY01 checks a single slice's contractUsages against its
 // verify.contract entries and active waivers.
-func (v *Validator) validateSliceVERIFY01(key string, s *metadata.SliceMeta) []ValidationResult {
+func (v *Validator) validateSliceVERIFY01(s *metadata.SliceMeta) []ValidationResult {
 	verifySet := make(map[string]bool, len(s.Verify.Contract))
 	for _, vc := range s.Verify.Contract {
 		verifySet[vc] = true
@@ -37,7 +37,7 @@ func (v *Validator) validateSliceVERIFY01(key string, s *metadata.SliceMeta) []V
 		if !verifySet[verifyKey] && !waiverSet[cu.Contract] {
 			results = append(results, v.newResult(
 				"VERIFY-01", SeverityError, IssueRequired,
-				sliceFile(key),
+				sliceFile(s),
 				fmt.Sprintf("contractUsages[%d]", i),
 				fmt.Sprintf(
 					"usage of contract %q (role %q) in slice %q has no verify.contract entry or valid waiver",
@@ -73,9 +73,9 @@ func (v *Validator) buildActiveWaiverSet(s *metadata.SliceMeta) map[string]bool 
 // Required: contract, owner, reason, expiresAt (valid date, not expired).
 func (v *Validator) validateVERIFY02() []ValidationResult {
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
+	for _, s := range v.project.Slices {
 		for i, w := range s.Verify.Waivers {
-			results = append(results, v.validateWaiverVERIFY02(sliceFile(key), i, w)...)
+			results = append(results, v.validateWaiverVERIFY02(sliceFile(s), i, w)...)
 		}
 	}
 	return results
@@ -154,7 +154,7 @@ func (v *Validator) validateVERIFY03() []ValidationResult {
 			if targetLevel != cell.L0 {
 				results = append(results, v.newResult(
 					"VERIFY-03", SeverityError, IssueMismatch,
-					cellFile(c.ID),
+					cellFile(c),
 					fmt.Sprintf("l0Dependencies[%d].cell", i),
 					fmt.Sprintf(
 						"cell %q declares l0Dependency on %q but target has consistencyLevel %s (expected L0)",
@@ -188,7 +188,7 @@ func (v *Validator) validateVERIFY04() []ValidationResult {
 		if !v.hasProviderSlice(c.ID, providerID) {
 			results = append(results, v.newResult(
 				"VERIFY-04", SeverityError, IssueRequired,
-				contractFile(c.ID),
+				contractFile(c),
 				"lifecycle",
 				fmt.Sprintf(
 					"active contract %q has no provider-role slice in cell %q",
@@ -283,7 +283,7 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 
 	// cell.yaml verify.smoke refs
 	for _, c := range v.project.Cells {
-		file := cellFile(c.ID)
+		file := cellFile(c)
 		for i, ref := range c.Verify.Smoke {
 			field := fmt.Sprintf("verify.smoke[%d]", i)
 			results = append(results, v.validateVerifyRef(ref, file, field)...)
@@ -291,8 +291,8 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 	}
 
 	// slice.yaml verify.unit + verify.contract refs
-	for key, s := range v.project.Slices {
-		file := sliceFile(key)
+	for _, s := range v.project.Slices {
+		file := sliceFile(s)
 		for i, ref := range s.Verify.Unit {
 			field := fmt.Sprintf("verify.unit[%d]", i)
 			results = append(results, v.validateVerifyRef(ref, file, field)...)
@@ -305,7 +305,7 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 
 	// journey passCriteria[].checkRef
 	for _, j := range v.project.Journeys {
-		file := journeyFile(j.ID)
+		file := journeyFile(j)
 		for i, pc := range j.PassCriteria {
 			if pc.CheckRef == "" {
 				continue

@@ -73,7 +73,7 @@ func (dc *DependencyChecker) checkDEP01() []ValidationResult {
 		if s.BelongsToCell != keyCellID {
 			results = append(results, dc.newResult(
 				"DEP-01", SeverityError, IssueMismatch,
-				sliceFile(key),
+				sliceFile(s),
 				"belongsToCell",
 				fmt.Sprintf(
 					"slice %q declares belongsToCell %q but is registered under cell %q",
@@ -148,7 +148,7 @@ func (dc *DependencyChecker) addSliceEdges(graph map[string]map[string]bool, s *
 		if consErr != nil {
 			errs = append(errs, dc.newResult(
 				"DEP-02", SeverityError, IssueInvalid,
-				sliceFile(providerCell+"/"+s.ID),
+				sliceFile(s),
 				"contractUsages",
 				fmt.Sprintf(
 					"cannot resolve consumers for contract %q: %v — dependency graph may be incomplete",
@@ -253,7 +253,7 @@ func (dc *DependencyChecker) checkDEP03() []ValidationResult {
 			// Cell with L0 dependencies must be assigned to an assembly.
 			results = append(results, dc.newResult(
 				"DEP-03", SeverityError, IssueRequired,
-				cellFile(c.ID),
+				cellFile(c),
 				"l0Dependencies",
 				fmt.Sprintf(
 					"cell %q has L0 dependencies but is not assigned to any assembly",
@@ -267,7 +267,7 @@ func (dc *DependencyChecker) checkDEP03() []ValidationResult {
 			if depAssembly == "" {
 				results = append(results, dc.newResult(
 					"DEP-03", SeverityError, IssueRequired,
-					cellFile(c.ID),
+					cellFile(c),
 					fmt.Sprintf("l0Dependencies[%d].cell", i),
 					fmt.Sprintf(
 						"cell %q (assembly %q) has L0 dependency on %q which is not in any assembly",
@@ -277,7 +277,7 @@ func (dc *DependencyChecker) checkDEP03() []ValidationResult {
 			} else if assemblyID != depAssembly {
 				results = append(results, dc.newResult(
 					"DEP-03", SeverityError, IssueMismatch,
-					cellFile(c.ID),
+					cellFile(c),
 					fmt.Sprintf("l0Dependencies[%d].cell", i),
 					fmt.Sprintf(
 						"cell %q (assembly %q) has L0 dependency on %q (assembly %q); both must be in the same assembly",

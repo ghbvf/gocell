@@ -86,14 +86,14 @@ func (v *Validator) validateFMT16(strict bool) []ValidationResult {
 		return nil
 	}
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
-		results = append(results, v.checkKebabDir(s.Dir, s.ID, sliceFile(key), "slice")...)
+	for _, s := range v.project.Slices {
+		results = append(results, v.checkKebabDir(s.Dir, s.ID, sliceFile(s), "slice")...)
 	}
 	for _, c := range v.project.Cells {
-		results = append(results, v.checkKebabDir(c.Dir, c.ID, cellFile(c.ID), "cell")...)
+		results = append(results, v.checkKebabDir(c.Dir, c.ID, cellFile(c), "cell")...)
 	}
 	for _, a := range v.project.Assemblies {
-		results = append(results, v.checkKebabDir(a.Dir, a.ID, assemblyFile(a.ID), "assembly")...)
+		results = append(results, v.checkKebabDir(a.Dir, a.ID, assemblyFile(a), "assembly")...)
 	}
 	return results
 }
@@ -125,7 +125,7 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 		return nil
 	}
 	var results []ValidationResult
-	for key, s := range v.project.Slices {
+	for _, s := range v.project.Slices {
 		if len(s.AllowedFiles) == 0 {
 			// FMT-14 already covers missing allowedFiles; skip here.
 			continue
@@ -144,7 +144,7 @@ func (v *Validator) validateFMT17(strict bool) []ValidationResult {
 		if !strings.HasPrefix(normalized, expected) && normalized != expected {
 			results = append(results, v.newResult(
 				"FMT-17", SeverityError, IssueMismatch,
-				sliceFile(key),
+				sliceFile(s),
 				"allowedFiles[0]",
 				fmt.Sprintf(
 					"slice %q allowedFiles first entry %q does not match slice directory %q (want prefix %q)",
@@ -174,7 +174,7 @@ func (v *Validator) validateFMTC1(strict bool) []ValidationResult {
 		}
 		results = append(results, v.newResult(
 			"FMT-C1", SeverityError, IssueInvalid,
-			cellFile(c.ID),
+			cellFile(c),
 			"id",
 			fmt.Sprintf(
 				"cell id %q contains '-'; kebab-case cell ids are disallowed in strict mode (rename to %q)",
@@ -201,7 +201,7 @@ func (v *Validator) validateFMTA1(strict bool) []ValidationResult {
 		}
 		results = append(results, v.newResult(
 			"FMT-A1", SeverityError, IssueInvalid,
-			assemblyFile(a.ID),
+			assemblyFile(a),
 			"id",
 			fmt.Sprintf(
 				"assembly id %q contains '-'; kebab-case assembly ids are disallowed in strict mode (rename to %q)",

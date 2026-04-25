@@ -66,32 +66,46 @@ func contractConsumers(c *metadata.ContractMeta) []string {
 
 // --- file path helpers ---
 
-func cellFile(cellID string) string {
-	return fmt.Sprintf("cells/%s/cell.yaml", cellID)
-}
-
-func sliceFile(key string) string {
-	// key is "cellID/sliceID"
-	parts := strings.SplitN(key, "/", 2)
-	if len(parts) == 2 {
-		return fmt.Sprintf("cells/%s/slices/%s/slice.yaml", parts[0], parts[1])
+func cellFile(c *metadata.CellMeta) string {
+	if c == nil {
+		return ""
 	}
-	return key
+	return c.File
 }
 
-func contractFile(contractID string) string {
-	// contract IDs are like "http.auth.login.v1"
-	// directory: contracts/http/auth/login/v1/contract.yaml
-	segments := strings.Split(contractID, ".")
-	return fmt.Sprintf("contracts/%s/contract.yaml", strings.Join(segments, "/"))
+func sliceFile(s *metadata.SliceMeta) string {
+	if s == nil {
+		return ""
+	}
+	return s.File
 }
 
-func journeyFile(journeyID string) string {
-	return fmt.Sprintf("journeys/%s.yaml", journeyID)
+func contractFile(c *metadata.ContractMeta) string {
+	if c == nil {
+		return ""
+	}
+	return c.File
 }
 
-func assemblyFile(assemblyID string) string {
-	return fmt.Sprintf("assemblies/%s/assembly.yaml", assemblyID)
+func journeyFile(j *metadata.JourneyMeta) string {
+	if j == nil {
+		return ""
+	}
+	return j.File
+}
+
+func assemblyFile(a *metadata.AssemblyMeta) string {
+	if a == nil {
+		return ""
+	}
+	return a.File
+}
+
+// contractFileFromID returns the expected contract.yaml path for a contract ID
+// even when the contract entity is missing from ProjectMeta. Used by REF-* rules
+// that report dangling references.
+func contractFileFromID(id string) string {
+	return filepath.Join(contractDirFromID(id), "contract.yaml")
 }
 
 // contractDirFromID converts a contract ID to its directory path.

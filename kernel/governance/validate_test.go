@@ -33,6 +33,7 @@ func validProject() *metadata.ProjectMeta {
 				Schema:           metadata.SchemaMeta{Primary: "cell_access_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.accesscore.startup"}},
 				Dir:              "accesscore",
+				File:             "cells/accesscore/cell.yaml",
 			},
 			"auditcore": {
 				ID:               "auditcore",
@@ -43,6 +44,7 @@ func validProject() *metadata.ProjectMeta {
 				Schema:           metadata.SchemaMeta{Primary: "cell_audit_core"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.auditcore.startup"}},
 				Dir:              "auditcore",
+				File:             "cells/auditcore/cell.yaml",
 			},
 			"shared-crypto": {
 				ID:               "shared-crypto",
@@ -51,6 +53,7 @@ func validProject() *metadata.ProjectMeta {
 				Owner:            metadata.OwnerMeta{Team: "platform", Role: "cell-owner"},
 				Verify:           metadata.CellVerifyMeta{Smoke: []string{"smoke.shared-crypto.startup"}},
 				Dir:              "shared-crypto",
+				File:             "cells/shared-crypto/cell.yaml",
 			},
 		},
 		Slices: map[string]*metadata.SliceMeta{
@@ -76,6 +79,7 @@ func validProject() *metadata.ProjectMeta {
 				},
 				Dir:     "session-login",
 				CellDir: "accesscore",
+				File:    "cells/accesscore/slices/session-login/slice.yaml",
 			},
 			"auditcore/audit-write": {
 				ID:            "audit-write",
@@ -93,6 +97,7 @@ func validProject() *metadata.ProjectMeta {
 				},
 				Dir:     "audit-write",
 				CellDir: "auditcore",
+				File:    "cells/auditcore/slices/audit-write/slice.yaml",
 			},
 		},
 		Contracts: map[string]*metadata.ContractMeta{
@@ -106,6 +111,8 @@ func validProject() *metadata.ProjectMeta {
 					Server:  "accesscore",
 					Clients: []string{"auditcore"},
 				},
+				Dir:  "contracts/http/auth/login/v1",
+				File: "contracts/http/auth/login/v1/contract.yaml",
 			},
 			"event.session.created.v1": {
 				ID:               "event.session.created.v1",
@@ -120,6 +127,8 @@ func validProject() *metadata.ProjectMeta {
 				Replayable:        &replayable,
 				IdempotencyKey:    "session-id",
 				DeliverySemantics: "at-least-once",
+				Dir:               "contracts/event/session/created/v1",
+				File:              "contracts/event/session/created/v1/contract.yaml",
 			},
 			"projection.session.active.v1": {
 				ID:               "projection.session.active.v1",
@@ -132,6 +141,8 @@ func validProject() *metadata.ProjectMeta {
 					Readers:  []string{"auditcore"},
 				},
 				Replayable: &replayable,
+				Dir:        "contracts/projection/session/active/v1",
+				File:       "contracts/projection/session/active/v1/contract.yaml",
 			},
 		},
 		Journeys: map[string]*metadata.JourneyMeta{
@@ -148,6 +159,7 @@ func validProject() *metadata.ProjectMeta {
 					{Text: "login returns token", Mode: "auto", CheckRef: "journey.J-ssologin.login-returns-token"},
 					{Text: "manual review", Mode: "manual"},
 				},
+				File: "journeys/J-ssologin.yaml",
 			},
 		},
 		Assemblies: map[string]*metadata.AssemblyMeta{
@@ -159,6 +171,8 @@ func validProject() *metadata.ProjectMeta {
 					Binary:         "corebundle",
 					DeployTemplate: "k8s",
 				},
+				Dir:  "corebundle",
+				File: "assemblies/corebundle/assembly.yaml",
 			},
 		},
 		StatusBoard: []metadata.StatusBoardEntry{
@@ -1734,16 +1748,23 @@ func TestContractProviderAndConsumers(t *testing.T) {
 }
 
 func TestFilePathHelpers(t *testing.T) {
-	assert.Equal(t, "cells/accesscore/cell.yaml", cellFile("accesscore"))
-	assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", sliceFile("accesscore/session-login"))
-	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml", contractFile("http.auth.login.v1"))
-	assert.Equal(t, "journeys/J-ssologin.yaml", journeyFile("J-ssologin"))
-	assert.Equal(t, "assemblies/corebundle/assembly.yaml", assemblyFile("corebundle"))
+	assert.Equal(t, "cells/accesscore/cell.yaml", cellFile(&metadata.CellMeta{File: "cells/accesscore/cell.yaml"}))
+	assert.Equal(t, "cells/accesscore/slices/session-login/slice.yaml", sliceFile(&metadata.SliceMeta{File: "cells/accesscore/slices/session-login/slice.yaml"}))
+	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml", contractFile(&metadata.ContractMeta{File: "contracts/http/auth/login/v1/contract.yaml"}))
+	assert.Equal(t, "journeys/J-ssologin.yaml", journeyFile(&metadata.JourneyMeta{File: "journeys/J-ssologin.yaml"}))
+	assert.Equal(t, "assemblies/corebundle/assembly.yaml", assemblyFile(&metadata.AssemblyMeta{File: "assemblies/corebundle/assembly.yaml"}))
 }
 
-func TestSliceFileFallback(t *testing.T) {
-	// If key has no slash, fallback to key itself
-	assert.Equal(t, "no-slash", sliceFile("no-slash"))
+func TestFilePathHelpersNilSafety(t *testing.T) {
+	assert.Equal(t, "", cellFile(nil))
+	assert.Equal(t, "", sliceFile(nil))
+	assert.Equal(t, "", contractFile(nil))
+	assert.Equal(t, "", journeyFile(nil))
+	assert.Equal(t, "", assemblyFile(nil))
+}
+
+func TestContractFileFromID(t *testing.T) {
+	assert.Equal(t, "contracts/http/auth/login/v1/contract.yaml", contractFileFromID("http.auth.login.v1"))
 }
 
 // --- Integration: Validate() aggregation ---
@@ -3363,7 +3384,7 @@ func TestTOPO07(t *testing.T) {
 			},
 			wantCount:     1,
 			wantIssueType: IssueMismatch,
-			wantFile:      contractFile("http.auth.login.v1"),
+			wantFile:      contractFileFromID("http.auth.login.v1"),
 		},
 		{
 			name: "consumer actor with no max level (unconstrained)",
@@ -3546,7 +3567,7 @@ func TestTOPO08(t *testing.T) {
 				pm.Contracts["http.auth.login.v1"].Lifecycle = "deprecated"
 			},
 			wantCount: 1, // session-login uses http.auth.login.v1
-			wantFile:  sliceFile("accesscore/session-login"),
+			wantFile:  "cells/accesscore/slices/session-login/slice.yaml",
 		},
 		{
 			name: "deprecated contract referenced by multiple slices",

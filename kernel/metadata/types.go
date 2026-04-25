@@ -104,6 +104,7 @@ type ContractMeta struct {
 	IdempotencyKey    string         `yaml:"idempotencyKey,omitempty"`
 	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
 	Description       string         `yaml:"description,omitempty"`
+	DeprecatedAt      string         `yaml:"deprecatedAt,omitempty"`
 	Dir               string         `yaml:"-"` // parsed contract version directory relative to project root
 	File              string         `yaml:"-"` // parsed contract.yaml path relative to project root
 }
