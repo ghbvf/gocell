@@ -3,6 +3,7 @@ package printers
 import (
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/governance"
 )
@@ -56,9 +57,15 @@ func (t *textWriter) writeln(s string) {
 //   - Empty input: "No issues found.\n" + blank line + "Validation complete: ...".
 //   - Non-empty:   "ERRORS (N):" / "WARNINGS (M):" blocks then summary.
 //
+// **Input order is preserved** within each severity group. Validator.rules()
+// in kernel/governance emits results in a deterministic rule sequence
+// (REF → TOPO → VERIFY → FMT → ...), and downstream tooling has come to
+// rely on that ordering. JSON / SARIF apply sortResults for stable
+// machine-parseable output; text mode keeps the legacy ordering so
+// IDE-style click-through remains predictable.
+//
 // The first write error is returned and aborts further output; later
-// writes are skipped. Callers see io errors via the returned value rather
-// than partial output without explanation.
+// writes are skipped.
 func (p *TextPrinter) Print(results []governance.ValidationResult) error {
 	tw := &textWriter{w: p.w}
 
@@ -68,15 +75,13 @@ func (p *TextPrinter) Print(results []governance.ValidationResult) error {
 		return tw.err
 	}
 
-	sorted := sortResults(results)
-
 	var errors, warnings []governance.ValidationResult
-	for i := range sorted {
-		switch sorted[i].Severity {
+	for i := range results {
+		switch results[i].Severity {
 		case governance.SeverityError:
-			errors = append(errors, sorted[i])
+			errors = append(errors, results[i])
 		case governance.SeverityWarning:
-			warnings = append(warnings, sorted[i])
+			warnings = append(warnings, results[i])
 		}
 	}
 
@@ -96,7 +101,7 @@ func (p *TextPrinter) Print(results []governance.ValidationResult) error {
 		tw.writeln("")
 	}
 
-	errCount, warnCount := countSeverities(sorted)
+	errCount, warnCount := countSeverities(results)
 	tw.writelnf("\nValidation complete: %d error(s), %d warning(s)\n", errCount, warnCount)
 	return tw.err
 }
@@ -119,7 +124,7 @@ func (p *TextPrinter) PrintFailFast(results []governance.ValidationResult) error
 // than reading p.w directly) so Print and PrintFailFast share the per-call
 // textWriter and stop emitting on first failure.
 //
-// Layout:
+// Layout (single-line message):
 //
 //	[CODE] message (field: <field>)
 //	       at <file>[:<line>[:<col>]]
@@ -129,14 +134,30 @@ func (p *TextPrinter) PrintFailFast(results []governance.ValidationResult) error
 //	[CODE] message (field: <field>)
 //	       at [scope: <name>]
 //
+// Layout (multi-line message — e.g. FMT-13's copy-pasteable YAML hint):
+// the (field: <field>) suffix lands on the first line only; remaining
+// lines follow verbatim so embedded snippets stay copy-paste-correct.
+//
+//	[CODE] first line of message (field: <field>)
+//	  rest of the message verbatim
+//	  ...
+//	       at <file>[:<line>[:<col>]]
+//
 // Field is omitted entirely when empty. The anchor line is omitted when
 // neither File nor Scope is set.
 func (p *TextPrinter) writeOne(tw *textWriter, r governance.ValidationResult) {
-	msg := r.Message
+	firstLine, rest, multiline := strings.Cut(r.Message, "\n")
+	header := firstLine
 	if r.Field != "" {
-		msg += fmt.Sprintf(" (field: %s)", r.Field)
+		header += fmt.Sprintf(" (field: %s)", r.Field)
 	}
-	tw.writelnf("  [%s] %s\n", r.Code, msg)
+	tw.writelnf("  [%s] %s\n", r.Code, header)
+	if multiline {
+		// Render remaining lines unmodified so any embedded YAML / code
+		// fragment keeps its native indentation. Trailing blank line is
+		// preserved by the final "\n".
+		tw.writelnf("%s\n", rest)
+	}
 
 	switch {
 	case r.Scope != "":

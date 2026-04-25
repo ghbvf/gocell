@@ -453,6 +453,70 @@ func TestText_PrintFailFast_NoErrors(t *testing.T) {
 	assert.Empty(t, strings.TrimSpace(buf.String()))
 }
 
+// TestText_PreservesInputOrderWithinSeverity locks the contract that
+// TextPrinter does not re-sort within an error or warning group. The
+// validator (kernel/governance) emits results in a meaningful rule order
+// (REF → TOPO → VERIFY → FMT → ...), and IDE-style click-through tooling
+// expects that ordering. Sorting belongs to JSON / SARIF where consumer
+// reproducibility matters; text output stays input-order.
+func TestText_PreservesInputOrderWithinSeverity(t *testing.T) {
+	// Errors interleaved with warnings, codes deliberately not in
+	// alphabetical order. If TextPrinter sorted, the error group would
+	// become FMT-02, REF-01 (alphabetical); preserved input order yields
+	// REF-01, FMT-02.
+	results := []governance.ValidationResult{
+		{Code: "ADV-01", Severity: governance.SeverityWarning, Message: "warn one"},
+		{Code: "REF-01", Severity: governance.SeverityError, Message: "first error"},
+		{Code: "FMT-02", Severity: governance.SeverityError, Message: "second error"},
+		{Code: "ADV-02", Severity: governance.SeverityWarning, Message: "warn two"},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewTextPrinter(&buf).Print(results))
+	out := buf.String()
+
+	refIdx := strings.Index(out, "REF-01")
+	fmtIdx := strings.Index(out, "FMT-02")
+	require.NotEqual(t, -1, refIdx, "REF-01 missing from output")
+	require.NotEqual(t, -1, fmtIdx, "FMT-02 missing from output")
+	assert.Less(t, refIdx, fmtIdx,
+		"errors must keep input order: REF-01 was emitted before FMT-02; sort would invert this")
+
+	advIdx1 := strings.Index(out, "ADV-01")
+	advIdx2 := strings.Index(out, "ADV-02")
+	require.NotEqual(t, -1, advIdx1)
+	require.NotEqual(t, -1, advIdx2)
+	assert.Less(t, advIdx1, advIdx2,
+		"warnings must keep input order: ADV-01 before ADV-02")
+}
+
+// TestText_MultilineMessage_FieldOnFirstLineOnly locks the F#2 fix:
+// when a message contains \n (e.g. FMT-13's copy-pasteable YAML hint),
+// the (field: ...) suffix lands on the first line only. Subsequent
+// lines render verbatim so the embedded snippet stays copy-pasteable
+// without trailing field info corrupting it.
+func TestText_MultilineMessage_FieldOnFirstLineOnly(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:     "FMT-13",
+			Severity: governance.SeverityError,
+			File:     "contracts/x/contract.yaml",
+			Field:    "endpoints.http.pathParams",
+			Message:  "placeholder \"id\" has no pathParams declaration; add to contract.yaml:\n  pathParams:\n    id:\n      type: string",
+		},
+	}
+	var buf bytes.Buffer
+	require.NoError(t, NewTextPrinter(&buf).Print(results))
+	out := buf.String()
+
+	assert.Contains(t, out,
+		"add to contract.yaml: (field: endpoints.http.pathParams)\n",
+		"field suffix must end the first line of the message")
+	assert.Contains(t, out, "  pathParams:\n    id:\n      type: string\n",
+		"YAML hint lines must render verbatim, no (field: ...) appended after them")
+	assert.NotContains(t, out, "type: string (field:",
+		"field suffix must NOT trail the multi-line YAML hint")
+}
+
 // TestJSON_DoesNotEscapeHTMLChars locks SetEscapeHTML(false): messages with
 // `<`, `>`, `&` must round-trip as the raw bytes, not as < / > / &
 // — otherwise jq output and SARIF viewer text become illegible. Pinning
