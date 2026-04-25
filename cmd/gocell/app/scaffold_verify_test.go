@@ -1,10 +1,13 @@
 package app
 
 import (
+	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/kernel/verify"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -62,12 +65,7 @@ func TestRunScaffoldJourney_Success(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestPrintVerifyResult_Passed(t *testing.T) {
-	// Capture stdout.
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
+func TestVerifyTextPrinter_Passed(t *testing.T) {
 	result := &verify.VerifyResult{
 		TargetID: "test-target",
 		Passed:   true,
@@ -75,24 +73,18 @@ func TestPrintVerifyResult_Passed(t *testing.T) {
 			{Name: "unit-test", Passed: true, Output: "all passed"},
 		},
 	}
-	printVerifyResult(result)
 
-	w.Close()
-	os.Stdout = old
-
-	buf := make([]byte, 4096)
-	n, _ := r.Read(buf)
-	output := string(buf[:n])
+	var buf bytes.Buffer
+	p, err := printers.NewVerifyPrinter("text", &buf)
+	require.NoError(t, err)
+	require.NoError(t, p.Print(result))
+	output := buf.String()
 
 	assert.Contains(t, output, "PASSED")
 	assert.Contains(t, output, "test-target")
 }
 
-func TestPrintVerifyResult_Failed(t *testing.T) {
-	old := os.Stdout
-	r, w, _ := os.Pipe()
-	os.Stdout = w
-
+func TestVerifyTextPrinter_Failed(t *testing.T) {
 	result := &verify.VerifyResult{
 		TargetID: "fail-target",
 		Passed:   false,
@@ -102,19 +94,96 @@ func TestPrintVerifyResult_Failed(t *testing.T) {
 		Errors:        []error{assert.AnError},
 		ManualPending: []string{"manual-check-1"},
 	}
-	printVerifyResult(result)
 
-	w.Close()
-	os.Stdout = old
-
-	buf := make([]byte, 4096)
-	n, _ := r.Read(buf)
-	output := string(buf[:n])
+	var buf bytes.Buffer
+	p, err := printers.NewVerifyPrinter("text", &buf)
+	require.NoError(t, err)
+	require.NoError(t, p.Print(result))
+	output := buf.String()
 
 	assert.Contains(t, output, "FAILED")
 	assert.Contains(t, output, "fail-target")
 	assert.Contains(t, output, "error output")
 	assert.Contains(t, output, "PENDING")
+}
+
+func TestVerifyJSONPrinter_Schema(t *testing.T) {
+	result := &verify.VerifyResult{
+		TargetID: "accesscore/sessions",
+		Passed:   true,
+		Results: []verify.TestResult{
+			{Name: "TestLogin", Passed: true, Output: "ok", ZeroMatch: false},
+		},
+		Errors:        []error{assert.AnError},
+		ManualPending: []string{"check-1"},
+	}
+
+	var buf bytes.Buffer
+	p, err := printers.NewVerifyPrinter("json", &buf)
+	require.NoError(t, err)
+	require.NoError(t, p.Print(result))
+
+	// Re-parse into a local DTO that mirrors the wire schema.
+	type testResultDTO struct {
+		Name      string `json:"name"`
+		Passed    bool   `json:"passed"`
+		Output    string `json:"output"`
+		ZeroMatch bool   `json:"zeroMatch"`
+	}
+	type doc struct {
+		TargetID      string          `json:"targetId"`
+		Passed        bool            `json:"passed"`
+		Results       []testResultDTO `json:"results"`
+		Errors        []string        `json:"errors"`
+		ManualPending []string        `json:"manualPending"`
+	}
+
+	var got doc
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &got))
+	assert.Equal(t, "accesscore/sessions", got.TargetID)
+	assert.True(t, got.Passed)
+	require.Len(t, got.Results, 1)
+	assert.Equal(t, "TestLogin", got.Results[0].Name)
+	assert.True(t, got.Results[0].Passed)
+	assert.Equal(t, "ok", got.Results[0].Output)
+	assert.False(t, got.Results[0].ZeroMatch)
+	require.Len(t, got.Errors, 1)
+	assert.NotEmpty(t, got.Errors[0])
+	require.Len(t, got.ManualPending, 1)
+	assert.Equal(t, "check-1", got.ManualPending[0])
+}
+
+func TestVerifyJSONPrinter_NilSlicesEmitEmptyArrays(t *testing.T) {
+	result := &verify.VerifyResult{
+		TargetID: "x",
+		Passed:   true,
+		// Results, Errors, ManualPending intentionally nil
+	}
+
+	var buf bytes.Buffer
+	p, err := printers.NewVerifyPrinter("json", &buf)
+	require.NoError(t, err)
+	require.NoError(t, p.Print(result))
+
+	body := buf.String()
+	assert.Contains(t, body, `"results": []`, "nil Results must serialise as []")
+	assert.Contains(t, body, `"errors": []`, "nil Errors must serialise as []")
+	assert.Contains(t, body, `"manualPending": []`, "nil ManualPending must serialise as []")
+	assert.NotContains(t, body, "null", "no field should be null")
+}
+
+func TestNewVerifyPrinter_RejectsSARIF(t *testing.T) {
+	var buf bytes.Buffer
+	_, err := printers.NewVerifyPrinter("sarif", &buf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "SARIF not supported")
+}
+
+func TestNewVerifyPrinter_RejectsUnknown(t *testing.T) {
+	var buf bytes.Buffer
+	_, err := printers.NewVerifyPrinter("yaml", &buf)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unsupported format")
 }
 
 func TestRunGenerateAssembly_MissingID(t *testing.T) {

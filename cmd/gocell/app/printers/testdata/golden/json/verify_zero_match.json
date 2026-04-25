@@ -1,0 +1,16 @@
+{
+  "targetId": "accesscore/sessions",
+  "passed": false,
+  "results": [
+    {
+      "name": "TestNonexistent",
+      "passed": false,
+      "output": "",
+      "zeroMatch": true
+    }
+  ],
+  "errors": [
+    "zero tests matched -run pattern"
+  ],
+  "manualPending": []
+}

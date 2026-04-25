@@ -1,0 +1,10 @@
+{
+  "targetId": "J-ssologin",
+  "passed": false,
+  "results": [],
+  "errors": [],
+  "manualPending": [
+    "operator confirms IdP redirect lands on /login",
+    "operator validates audit log entry"
+  ]
+}

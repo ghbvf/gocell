@@ -1,0 +1,7 @@
+Verify accesscore/all: FAILED
+  [PASS] TestA
+  [FAIL] TestB
+    assertion failed
+  [PASS] TestC
+  error: subprocess exit 1
+  [PENDING] manual smoke test pending (manual)

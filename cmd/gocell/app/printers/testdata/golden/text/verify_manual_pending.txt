@@ -1,0 +1,3 @@
+Verify J-ssologin: FAILED
+  [PENDING] operator confirms IdP redirect lands on /login (manual)
+  [PENDING] operator validates audit log entry (manual)

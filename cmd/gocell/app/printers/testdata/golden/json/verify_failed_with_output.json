@@ -1,0 +1,14 @@
+{
+  "targetId": "accesscore/sessions",
+  "passed": false,
+  "results": [
+    {
+      "name": "TestLogin",
+      "passed": false,
+      "output": "expected 200\ngot 500\nresponse body: internal error",
+      "zeroMatch": false
+    }
+  ],
+  "errors": [],
+  "manualPending": []
+}
