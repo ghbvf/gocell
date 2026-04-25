@@ -41,9 +41,12 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 	c.ValidateHTTPResponseRecorder(t, rec)
 
 	t.Run("500 provisioner failure response satisfies contract", func(t *testing.T) {
-		// PR-A42 N5: status endpoint contract.yaml previously declared no
-		// responses[5xx]; this case pins the handler's actual 500 path through
-		// the contract envelope so future drift surfaces in CI.
+		// PR-A42 搭车修复（status endpoint 5xx contract coverage）：本 PR 之前
+		// status/v1/contract.yaml 的 responses 字段全空白，但 handler 实际能返回
+		// 500（provisioner failure）。补 responses[500] 声明 + 此 contract test
+		// 覆盖。同步断言 5xx body 不泄漏内部细节（pkg/httputil 的 5xx 路径会清空
+		// details，本断言把"5xx envelope 不含敏感字段"沉淀为防退化保护）。
+		// countErrRoleRepo 定义于同包 service_test.go（package setup_test 共享）。
 		userRepo := mem.NewUserRepository()
 		roleRepo := &countErrRoleRepo{err: errors.New("provisioner status: pg unreachable")}
 		svc := newService(t, userRepo, roleRepo, nil)
@@ -55,6 +58,14 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 
 		require.Equal(t, http.StatusInternalServerError, rec.Code)
 		c.ValidateErrorResponse(t, http.StatusInternalServerError, rec.Body.Bytes())
+
+		bodyStr := rec.Body.String()
+		assert.NotContains(t, bodyStr, "pg unreachable",
+			"5xx body must not leak underlying infra error message")
+		assert.NotContains(t, bodyStr, "loginEndpoint",
+			"5xx body must not carry retired loginEndpoint key")
+		assert.Contains(t, bodyStr, `"details":{}`,
+			"5xx envelope must clear details — pkg/httputil pins this invariant")
 	})
 }
 

@@ -119,7 +119,7 @@ setup 端点退休后，所有 `POST /api/v1/access/setup/admin` 请求得到统
 设计决定：
 
 - `details` 上**只暴露语义动词** `nextAction`，不嵌入任何 HTTP path 字面量
-- login 端点的实际路径由 contract 定义（`http.auth.sessions.login.v1`），客户端通过 OpenAPI / contract registry / 自身路由表解析
+- login 端点的实际路径由 contract 定义（`http.auth.login.v1`），客户端通过 OpenAPI / contract registry / 自身路由表解析
 - 该响应跨部署稳定——即便 sessions/login 路径未来改版，410 body 字段不变
 
 ---
@@ -168,7 +168,7 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
         return fmt.Errorf("setup: 410 with unexpected nextAction %v", env.Error.Details)
     }
     // login 路径由 contract registry 提供，不读 410 body 上的字面量
-    return c.LoginByContractID(ctx, "http.auth.sessions.login.v1", in.LoginCreds())
+    return c.LoginByContractID(ctx, "http.auth.login.v1", in.LoginCreds())
 }
 ```
 
@@ -183,7 +183,7 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
 | 状态 | errcode | 触发条件 | 客户端建议处理 |
 |---|---|---|---|
 | **400** | `ERR_AUTH_IDENTITY_INVALID_INPUT` | 请求体字段缺失、超长、非可打印 ASCII 密码、控制字符 | 校验输入 → 提示用户 → 重发 |
-| **400** | `ERR_VALIDATION_*`（DecodeJSONStrict） | JSON malformed、未知字段、Content-Type 错误 | 修请求体格式 → 重发 |
+| **400** | `ERR_VALIDATION_FAILED` | JSON malformed、未知字段、Content-Type 错误（含 `DecodeJSONStrict` 触发的所有校验失败） | 修请求体格式 → 重发 |
 | **409** | `ERR_AUTH_USER_DUPLICATE` | 请求 username 已被其他 user（identity 路径或 bootstrap pending 行）占用，但**还没成为 admin** | 换 username → 重试；不要静默 retry 同名 |
 | **410** | `ERR_SETUP_ALREADY_INITIALIZED` | admin role 已有 user（来自 interactive 或 bootstrap） | 进入 login 流；**不要重试 setup**；视为终态 |
 

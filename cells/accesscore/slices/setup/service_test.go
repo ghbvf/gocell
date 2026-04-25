@@ -164,7 +164,7 @@ func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_EmitsEvent(t *testing.T
 	assert.Equal(t, 1, cnt)
 }
 
-func TestService_CreateAdmin_AlreadyExists_Returns409_NoEmit(t *testing.T) {
+func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
@@ -182,7 +182,7 @@ func TestService_CreateAdmin_AlreadyExists_Returns409_NoEmit(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code)
-	assert.Empty(t, w.entries, "no event on 409 path")
+	assert.Empty(t, w.entries, "no event on 410 path")
 }
 
 func TestService_CreateAdmin_BlankField_Returns400(t *testing.T) {
