@@ -5,6 +5,8 @@
 **Scope**: Structural root cause analysis of 6 recurring findings across 4 independent PR#68 reviews
 **Commit baseline**: d68ea14 (Solution B two-phase idempotency + DLX enforcement)
 
+**Status (2026-04-26)**: ✅ **All 3 phases delivered.** This document is retained as historical analysis; the proposed direction is now part of the codebase. See [§Implementation Status](#implementation-status-2026-04-26) at the end for the landed PRs and current code locations.
+
 ---
 
 ## Executive Summary
@@ -303,3 +305,46 @@ The 6 recurring problems are not independent bugs -- they trace to two architect
 - **PR 3** (Phase 3): Removes deprecated code, simplifies ConsumerBase by ~40%
 
 Total estimated diff: ~300 lines added (Router), ~200 lines removed (Checker path + timer hacks), ~100 lines changed (Cell migrations).
+
+---
+
+## Implementation Status (2026-04-26)
+
+All three phases proposed in this analysis have shipped. This section verifies the present state against each phase's success criteria and points to the canonical code paths.
+
+### Phase 1 — `PermanentError` moved to `kernel/outbox` ✅
+
+- **Definition**: `kernel/outbox/outbox.go:506-517` — `outbox.PermanentError` is the canonical type.
+- **Detection**: `kernel/outbox/consumer_base.go:393-403` — `ConsumerBase.Wrap` uses `errors.As(err, &permErr)` to detect wrapped `*outbox.PermanentError` and returns `DispositionReject`.
+- **Adapter call sites**: `adapters/rabbitmq/*` constructs `outbox.NewPermanentError(...)` directly (e.g. `Publisher.Publish_TerminalState_ReturnsPermanentError`, `ConsumerBase_AsMiddleware_RejectOnPermanentError`); no shadow type alias is required.
+- **Behavior**: `WrapLegacyHandler` correctly maps `PermanentError` to `DispositionReject` (root-cause #2 closed).
+
+### Phase 2 — `EventRouter` introduced in `runtime/eventrouter` ✅
+
+- **Package**: `runtime/eventrouter/router.go` — implements the `AddContractHandler` / `Run` / `Running` / `Close` pattern documented in this analysis.
+- **Lifecycle**: 4-phase `Run()` separates `Subscriber.Setup` (synchronous, returns setup errors), `Subscribe` goroutine launch, an explicit `Subscriber.Ready` signal (no 100ms heuristic), and the blocking consume loop.
+- **Cell migration**: `kernel/cell.EventRegistrar` now declares subscriptions via `r.AddHandler(topic, handler)`; cells no longer launch `go func() { sub.Subscribe(...) }()`. The 100ms `time.After` heuristic and `context.Background()` patterns referenced in §"Current Cell Code" are gone.
+- **Layering**: interface lives in `kernel/cell`, concrete `Router` in `runtime/eventrouter` — matches the §"Layering Verification" table.
+- **Behavior**: root-cause #1 closed (P1 race / P5 divergence / P6 goroutine supervision all resolved).
+
+### Phase 3 — `Checker` deprecated, Receipt consolidated ✅
+
+- **`kernel/idempotency/Checker` interface**: removed. `grep "type Checker"` under `kernel/idempotency/` returns 0 matches.
+- **`ConsumerBase` simplified to a single path**: `kernel/outbox/consumer_base.go:255 ConsumerBase.Wrap` is now the only entry point — the dual `wrapWithChecker` / `wrapWithClaimer` split is gone, replaced by the two-phase Claim/Commit/Release flow described in lines 165-194.
+- **Adapter cleanup**: `adapters/redis/IdempotencyChecker` removed (`grep` under `adapters/redis/` and `kernel/idempotency/` returns 0 matches for `type Checker` / `IdempotencyChecker`).
+- **Receipt double-settlement guard**: `outbox.Receipt` implementations are protected so a duplicate Commit/Release is a no-op; ConsumerBase enforces LeaseTTL vs RetryLoop budget validation during construction.
+
+### Findings closure
+
+| # | Finding | Status |
+|---|---------|--------|
+| 1 | PermanentError mislayered in adapters | ✅ closed (Phase 1) |
+| 2 | `Subscribe()` mixes setup + run | ✅ closed (Phase 2) |
+| 3 | `EventRegistrar` breaking change | ✅ landed atomically across in-tree cells |
+| 4 | LeaseTTL vs RetryLoop validation | ✅ ConsumerBaseConfig validates on construction |
+| 5 | per-topic goroutine launch cost | ✅ Router-owned WaitGroup replaces per-cell `go func` |
+| 6 | InMemoryEventBus delivery semantics | ✅ at-most-once + bounded retries documented; `runtime/eventbus` and Router share `outbox.PermanentError` detection |
+
+### Why this analysis is archived
+
+All structural recommendations have been implemented. Future event-architecture work should reference the live code (`runtime/eventrouter/router.go` and `kernel/outbox/`) rather than this document. Retained for historical context on why the current shape exists.
