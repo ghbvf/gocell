@@ -1,8 +1,11 @@
 package main
 
 import (
+	"context"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -133,4 +136,36 @@ func TestSharedDeps_Validate_VerboseEndpoint(t *testing.T) {
 			assert.Contains(t, err.Error(), tc.wantSubstr)
 		})
 	}
+}
+
+type validateDistributedNonceStore struct{}
+
+func (validateDistributedNonceStore) Kind() auth.NonceStoreKind {
+	return auth.NonceStoreKindDistributed
+}
+
+func (validateDistributedNonceStore) CheckAndMark(context.Context, string) error {
+	return nil
+}
+
+func TestSharedDeps_Validate_RealMultiPodRejectsInMemoryClaimerCode(t *testing.T) {
+	topo := bootstrap.Topology{
+		StorageBackend:            "postgres",
+		AdapterMode:               "real",
+		SinglePodReplayProtection: false,
+	}
+	deps := newValidatedSharedDeps(t, topo)
+	deps.InternalGuard.nonceStore = validateDistributedNonceStore{}
+	deps.ConsumerClaimerKind = consumerClaimerKindInMemory
+
+	err := deps.Validate()
+
+	require.Error(t, err)
+	leaves := allJoinedErrors(err)
+	require.Len(t, leaves, 1)
+
+	var ec *errcode.Error
+	require.ErrorAs(t, leaves[0], &ec)
+	assert.Equal(t, errcode.ErrControlplaneClaimerNotDistributed, ec.Code)
+	assert.Contains(t, ec.Error(), "ERR_CONTROLPLANE_CLAIMER_NOT_DISTRIBUTED")
 }

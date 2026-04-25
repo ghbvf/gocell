@@ -346,6 +346,35 @@ func TestPhase2_InitPubSub_NoDuplicateTeardownForSharedInstance(t *testing.T) {
 	assert.Equal(t, 1, closeCalled, "shared pub/sub must only be closed once")
 }
 
+func TestSamePubSubIdentity(t *testing.T) {
+	t.Run("same comparable instance", func(t *testing.T) {
+		eb := &phaseTestSharedBus{}
+		assert.True(t, samePubSubIdentity(eb, eb))
+	})
+
+	t.Run("different comparable instances", func(t *testing.T) {
+		assert.False(t, samePubSubIdentity(&phaseTestSharedBus{}, &phaseTestSharedBus{}))
+	})
+
+	t.Run("non-comparable dynamic type", func(t *testing.T) {
+		bus := nonComparablePubSub{labels: []string{"in-memory"}}
+		require.NotPanics(t, func() {
+			assert.False(t, samePubSubIdentity(bus, bus))
+		})
+	})
+}
+
+func TestPhase2_InitPubSub_NonComparablePubSubDoesNotPanic(t *testing.T) {
+	bus := nonComparablePubSub{labels: []string{"in-memory"}}
+	b := New(WithPublisher(bus), WithSubscriber(bus))
+	_, s := newPhaseState()
+
+	require.NotPanics(t, func() {
+		b.phase2InitPubSub(s)
+	})
+	assert.Len(t, s.teardowns, 2, "non-comparable pub/sub values cannot be identity-compared, so both closes are registered")
+}
+
 // --- phase3InitAssembly tests ---
 
 func TestPhase3_InitAssembly_BuildsDefaultAssemblyWhenNoneProvided(t *testing.T) {
@@ -860,6 +889,24 @@ func (s *pubSubCtxSpy) Subscribe(_ context.Context, _ outbox.Subscription, _ out
 func (s *pubSubCtxSpy) Close(ctx context.Context) error {
 	return s.closeFn(ctx)
 }
+
+type nonComparablePubSub struct {
+	labels []string
+}
+
+func (b nonComparablePubSub) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (b nonComparablePubSub) Setup(_ context.Context, _ outbox.Subscription) error {
+	return nil
+}
+func (b nonComparablePubSub) Ready(_ outbox.Subscription) <-chan struct{} {
+	ch := make(chan struct{})
+	close(ch)
+	return ch
+}
+func (b nonComparablePubSub) Subscribe(_ context.Context, _ outbox.Subscription, _ outbox.EntryHandler) error {
+	return nil
+}
+func (b nonComparablePubSub) Close(_ context.Context) error { return nil }
 
 // ---------------------------------------------------------------------------
 // F21: phaseError label tests

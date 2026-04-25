@@ -1,0 +1,64 @@
+package main
+
+import (
+	"flag"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	ordercell "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+func main() {
+	subject := flag.String("subject", "todoorder-local-customer", "JWT subject")
+	roles := flag.String("roles", ordercell.RoleCustomer, "comma-separated roles")
+	ttl := flag.Duration("ttl", 8*time.Hour, "token TTL")
+	flag.Parse()
+
+	token, err := issueToken(*subject, *roles, *ttl)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "localtoken: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stdout, token)
+}
+
+func issueToken(subject string, rolesCSV string, ttl time.Duration) (string, error) {
+	if ttl <= 0 {
+		return "", fmt.Errorf("ttl must be positive")
+	}
+	issuerName := strings.TrimSpace(os.Getenv("GOCELL_JWT_ISSUER"))
+	if issuerName == "" {
+		return "", fmt.Errorf("GOCELL_JWT_ISSUER must be set")
+	}
+	audience := strings.TrimSpace(os.Getenv("GOCELL_JWT_AUDIENCE"))
+	if audience == "" {
+		return "", fmt.Errorf("GOCELL_JWT_AUDIENCE must be set")
+	}
+	keySet, err := auth.LoadKeySetFromEnv()
+	if err != nil {
+		return "", fmt.Errorf("load JWT key set from environment: %w", err)
+	}
+	issuer, err := auth.NewJWTIssuer(keySet, issuerName, ttl,
+		auth.WithIssuerAudiencesFromSlice([]string{audience}))
+	if err != nil {
+		return "", fmt.Errorf("create JWT issuer: %w", err)
+	}
+	return issuer.Issue(auth.TokenIntentAccess, subject, auth.IssueOptions{
+		Roles:    parseRoles(rolesCSV),
+		Audience: []string{audience},
+	})
+}
+
+func parseRoles(raw string) []string {
+	parts := strings.Split(raw, ",")
+	roles := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if role := strings.TrimSpace(part); role != "" {
+			roles = append(roles, role)
+		}
+	}
+	return roles
+}

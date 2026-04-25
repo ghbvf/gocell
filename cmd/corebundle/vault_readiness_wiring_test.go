@@ -95,7 +95,7 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 		return nil, err
 	}
 
-	consumerBase, err := buildConsumerBase()
+	consumerBase, err := buildConsumerBase(shared)
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +105,7 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 		return nil, err
 	}
 
-	adapterInfo := shared.Topology.AdapterInfo()
+	adapterInfo := adapterInfoForSharedDeps(shared)
 	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
 	opts = append(opts, bootstrap.WithListener(

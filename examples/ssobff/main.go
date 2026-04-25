@@ -44,6 +44,12 @@ func main() {
 	}))
 	slog.SetDefault(logger)
 
+	internalAuthChain, err := newInternalAuthChainFromEnv()
+	if err != nil {
+		logger.Error("failed to configure internal listener auth", slog.Any("error", err))
+		os.Exit(1)
+	}
+
 	// In-memory event bus (publisher + subscriber).
 	// Production RabbitMQ wiring: see P3-DEFER-03 (blocked on Batch 5: WM-17 + ER-ARCH-02).
 	eb := eventbus.New()
@@ -160,7 +166,7 @@ func main() {
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithListener(cell.PrimaryListener, ":8081", []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
-		bootstrap.WithListener(cell.InternalListener, ":9081", nil),
+		bootstrap.WithListener(cell.InternalListener, ":9081", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
 	)

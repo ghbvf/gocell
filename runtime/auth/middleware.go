@@ -81,15 +81,15 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 		// infra errors (key load failure, verifier init error) → Error.
 		if errcode.IsExpected4xx(err) {
 			cfg.logger.Warn("token verification failed",
-				"error", err,
-				"path", r.URL.Path,
-				"remote_addr", r.RemoteAddr,
+				slog.Any("error", err),
+				slog.String("path", r.URL.Path),
+				slog.String("remote_addr", r.RemoteAddr),
 			)
 		} else {
 			cfg.logger.Error("token verification failed",
-				"error", err,
-				"path", r.URL.Path,
-				"remote_addr", r.RemoteAddr,
+				slog.Any("error", err),
+				slog.String("path", r.URL.Path),
+				slog.String("remote_addr", r.RemoteAddr),
 			)
 		}
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED", "invalid token")
@@ -105,9 +105,9 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	// is wired, the gate rejects every request — fail-closed default.
 	if claims.PasswordResetRequired && !isPasswordResetExempt(cfg, r.Method, r.URL.Path) {
 		cfg.logger.Info("auth: password reset required gate blocked request",
-			"subject", claims.Subject,
-			"path", r.URL.Path,
-			"method", r.Method,
+			slog.String("subject", claims.Subject),
+			slog.String("path", r.URL.Path),
+			slog.String("method", r.Method),
 		)
 		hint := ""
 		if cfg.passwordResetChangeEndpointHint != nil {
@@ -244,8 +244,8 @@ func handleRequireRole(authorizer Authorizer, roles []string, roleSet map[string
 		allowed, err := checkAuthorizer(authorizer, r, p.Subject, roles)
 		if err != nil {
 			loggerFrom(r.Context()).Error("authorization check failed",
-				"error", err,
-				"subject", p.Subject,
+				slog.Any("error", err),
+				slog.String("subject", p.Subject),
 			)
 			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
 			return

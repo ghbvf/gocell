@@ -129,6 +129,12 @@ func TestPoolStats_NilInner(t *testing.T) {
 	assert.Equal(t, PoolStats{}, stats)
 }
 
+func TestPool_Stats_NotInitialized(t *testing.T) {
+	var nilPool *Pool
+	assert.Equal(t, "pool not initialized", nilPool.Stats())
+	assert.Equal(t, "pool not initialized", (&Pool{}).Stats())
+}
+
 func TestNewPool_UnreachableHost(t *testing.T) {
 	if os.Getenv("PG_INTEGRATION") == "" {
 		t.Skip("skipping integration test; set PG_INTEGRATION=1 to run")

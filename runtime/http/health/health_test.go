@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -329,6 +330,34 @@ func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
 	require.True(t, ok, "verbose readyz output must contain adapters")
 	assert.Equal(t, "in-memory", adapters["mode"])
 	assert.Equal(t, "in-memory", adapters["storage"])
+}
+
+func TestReadyzHandler_VerboseOutput_UsesAdapterInfoSnapshot(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-adapter-snapshot", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	h.SetVerboseToken(testVerboseToken)
+	info := map[string]string{
+		"mode":    "in-memory",
+		"storage": "postgres",
+	}
+	h.SetAdapterInfo(info)
+	info["storage"] = "mutated-before-read"
+
+	result := h.computeReadyz(true)
+	info["mode"] = "mutated"
+	h.SetAdapterInfo(map[string]string{"mode": "new-map"})
+
+	rec := httptest.NewRecorder()
+	result.writeTo(rec)
+
+	data := dataBody(t, rec)
+	adapters, ok := data["adapters"].(map[string]any)
+	require.True(t, ok, "verbose readyz output must contain adapters")
+	assert.Equal(t, "in-memory", adapters["mode"])
+	assert.Equal(t, "postgres", adapters["storage"])
 }
 
 func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
@@ -808,13 +837,6 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 }
 
 // TestTruncateErrMsg verifies the truncateErrMsg helper across boundary cases.
-//
-// Known limitation: truncation is byte-based (msg[:max]), not rune-based.
-// A multi-byte UTF-8 sequence that straddles the 512-byte boundary will be
-// split mid-rune, producing an invalid UTF-8 suffix before "...". This is
-// an accepted trade-off (bounds response size without extra allocation) and
-// is documented here rather than fixed, since the use-site is diagnostic
-// output in /readyz?verbose where operators can tolerate mojibake in edge cases.
 func TestTruncateErrMsg(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -860,6 +882,12 @@ func TestTruncateErrMsg(t *testing.T) {
 			want:  "abcde...",
 		},
 		{
+			name:  "zero max emits ellipsis",
+			input: "abcdefghij",
+			max:   0,
+			want:  "...",
+		},
+		{
 			name: "multi-byte UTF-8 within limit — no truncation",
 			// "日本語" is 9 bytes (3 bytes per rune); 9 < 512 so no truncation.
 			input: "日本語",
@@ -867,13 +895,16 @@ func TestTruncateErrMsg(t *testing.T) {
 			want:  "日本語",
 		},
 		{
-			name: "multi-byte UTF-8 split at byte boundary — known limitation",
-			// 4-byte rune: U+1F600 (😀) = 0xF0 0x9F 0x98 0x80
-			// max=3 splits the rune, producing invalid UTF-8 + "..."
-			// We only assert the suffix and length, not valid UTF-8.
-			input:   "😀extra",
-			max:     3,
-			wantLen: 6, // 3 bytes from the rune + 3 bytes "..."
+			name:  "multi-byte UTF-8 truncated at rune boundary",
+			input: "😀extra",
+			max:   3,
+			want:  "😀ex...",
+		},
+		{
+			name:  "multi-byte UTF-8 max counts runes",
+			input: "日本語abc",
+			max:   4,
+			want:  "日本語a...",
 		},
 	}
 
@@ -892,10 +923,11 @@ func TestTruncateErrMsg(t *testing.T) {
 					"expected len=%d, got len=%d (value=%q)", tt.wantLen, len(got), got)
 			}
 			// Truncated results must end with "..."
-			if len(tt.input) > tt.max {
-				assert.True(t, len(got) > 3 && got[len(got)-3:] == "...",
+			if len([]rune(tt.input)) > tt.max {
+				assert.True(t, len(got) >= 3 && got[len(got)-3:] == "...",
 					"truncated result must end with '...'; got %q", got)
 			}
+			assert.True(t, utf8.ValidString(got), "truncated result must remain valid UTF-8")
 		})
 	}
 }

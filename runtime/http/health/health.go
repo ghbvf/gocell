@@ -193,7 +193,7 @@ func (h *Handler) SetVerboseToken(token string) {
 func (h *Handler) SetAdapterInfo(info map[string]string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	h.adapterInfo = info
+	h.adapterInfo = cloneAdapterInfo(info)
 }
 
 // SetShuttingDown marks the handler as shutting down. Once called,
@@ -325,7 +325,7 @@ func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	}
 	var adapters map[string]string
 	if verbose {
-		adapters = h.adapterInfo // SetAdapterInfo swaps the map ref under the same mu, never mutates
+		adapters = cloneAdapterInfo(h.adapterInfo)
 	}
 	h.mu.RUnlock()
 
@@ -341,6 +341,17 @@ func (h *Handler) computeReadyz(verbose bool) readyzResult {
 		dependencies: dependencies,
 		adapters:     adapters,
 	}
+}
+
+func cloneAdapterInfo(src map[string]string) map[string]string {
+	if src == nil {
+		return nil
+	}
+	dst := make(map[string]string, len(src))
+	for k, v := range src {
+		dst[k] = v
+	}
+	return dst
 }
 
 // aggregateCellHealth computes cell readiness and optionally builds the verbose
@@ -583,10 +594,20 @@ func readyzVerbose(r *http.Request) bool {
 // Used to bound error strings written into /readyz?verbose output so that
 // a single verbose entry cannot carry unbounded diagnostic text.
 func truncateErrMsg(msg string, max int) string {
-	if len(msg) <= max {
-		return msg
+	if msg == "" {
+		return ""
 	}
-	return msg[:max] + "..."
+	if max <= 0 {
+		return "..."
+	}
+	runes := 0
+	for idx := range msg {
+		if runes == max {
+			return msg[:idx] + "..."
+		}
+		runes++
+	}
+	return msg
 }
 
 // envelopeData wraps a success payload in the project-standard
