@@ -659,6 +659,47 @@ func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	assert.True(t, repo.updInTx, "Lock.Update must run inside the same tx")
 }
 
+// TestService_Update_GetByIDAndUpdateInsideTx asserts Update's read-modify-
+// write chain runs inside a single RunInTx, closing the same TOCTOU window
+// pattern as Lock/Unlock (audit S-3 same-pattern, reviewer F7). Pre-fix
+// Update had no tx wrapping; post-fix both repo calls observe inTx=true.
+func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
+	svc, repo, runner := newAtomicitySvc(t)
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "update-atomic", Email: "u@p.t", Password: "hash",
+	})
+	require.NoError(t, err)
+	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
+
+	newEmail := "new@p.t"
+	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Email: &newEmail})
+	require.NoError(t, err)
+	assert.Equal(t, "new@p.t", updated.Email)
+	assert.Equal(t, 1, runner.runs, "Update must run inside exactly one tx")
+	assert.True(t, repo.getInTx, "Update.GetByID must be observed inside RunInTx (no TOCTOU window)")
+	assert.True(t, repo.updInTx, "Update.Update must run inside the same tx")
+}
+
+// TestService_Update_InvalidStatusFailsBeforeTx asserts that the cheap
+// status string validation rejects invalid values before opening a tx —
+// invalid input is not a database concern.
+func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
+	svc, repo, runner := newAtomicitySvc(t)
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "upd-bad-status", Email: "b@s.t", Password: "hash",
+	})
+	require.NoError(t, err)
+	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
+
+	bad := "deleted"
+	_, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &bad})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+	assert.Equal(t, 0, runner.runs, "invalid status must be rejected before opening a tx")
+}
+
 // TestService_Unlock_GetByIDAndUpdateInsideTx asserts Unlock now runs the
 // read-modify-write chain in a single RunInTx. Pre-fix, Unlock had no tx
 // wrapping at all; post-fix both repo calls observe inTx=true (audit S-3).

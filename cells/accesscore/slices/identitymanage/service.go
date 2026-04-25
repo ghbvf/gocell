@@ -192,46 +192,69 @@ type UpdateInput struct {
 
 // Update modifies user attributes using JSON merge patch semantics:
 // only non-nil fields are applied; missing fields are left unchanged.
+//
+// Read-modify-write atomicity: GetByID, the in-place field application and
+// Update share a single RunInTx closure, mirroring Lock/Unlock — a concurrent
+// transaction mutating the user between the read and the write would otherwise
+// be silently lost (audit S-3 same-pattern, reviewer F7).
+//
+// The status string is validated before opening the tx: it is a pure input
+// check and rejecting invalid values upfront avoids opening a tx that will
+// only roll back.
 func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, error) {
 	if err := validation.RequireNotBlank(errcode.ErrAuthIdentityInvalidInput,
 		validation.F("id", input.ID),
 	); err != nil {
 		return nil, err
 	}
-
-	user, err := s.repo.GetByID(ctx, input.ID)
-	if err != nil {
-		return nil, fmt.Errorf("identity-manage: update: %w", err)
+	if input.Status != nil &&
+		*input.Status != string(domain.StatusActive) &&
+		*input.Status != string(domain.StatusSuspended) {
+		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
 	}
 
-	if input.Name != nil {
-		user.Username = *input.Name
-	}
-	if input.Email != nil {
-		user.Email = *input.Email
-	}
-	if input.Status != nil {
-		status := domain.UserStatus(*input.Status)
-		if *input.Status != string(domain.StatusActive) && *input.Status != string(domain.StatusSuspended) {
-			return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
+	var user *domain.User
+	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
+		u, err := s.repo.GetByID(txCtx, input.ID)
+		if err != nil {
+			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-		user.Status = status
-	}
-	if input.RequirePasswordReset != nil {
-		if *input.RequirePasswordReset {
-			user.MarkPasswordResetRequired()
-		} else {
-			user.ClearPasswordResetRequired()
+		applyUpdateFields(u, input)
+		if err := s.repo.Update(txCtx, u); err != nil {
+			return fmt.Errorf("identity-manage: update: %w", err)
 		}
-	}
-	user.UpdatedAt = time.Now()
-
-	if err := s.repo.Update(ctx, user); err != nil {
-		return nil, fmt.Errorf("identity-manage: update: %w", err)
+		user = u
+		return nil
+	}); err != nil {
+		return nil, err
 	}
 
 	s.logger.Info("user updated", slog.String("user_id", user.ID))
 	return user, nil
+}
+
+// applyUpdateFields applies JSON-merge-patch semantics in-place on u: every
+// non-nil field in input overwrites the corresponding field on u. Pure
+// function — extracted from Update to keep that method's cognitive complexity
+// inside the 15-line CLAUDE.md budget once the RunInTx closure was added.
+func applyUpdateFields(u *domain.User, input UpdateInput) {
+	if input.Name != nil {
+		u.Username = *input.Name
+	}
+	if input.Email != nil {
+		u.Email = *input.Email
+	}
+	if input.Status != nil {
+		u.Status = domain.UserStatus(*input.Status)
+	}
+	if input.RequirePasswordReset != nil {
+		if *input.RequirePasswordReset {
+			u.MarkPasswordResetRequired()
+		} else {
+			u.ClearPasswordResetRequired()
+		}
+	}
+	u.UpdatedAt = time.Now()
 }
 
 // Delete removes a user. Before the user row is deleted, all sessions and
