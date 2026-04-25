@@ -32,6 +32,7 @@ require (
 	golang.org/x/crypto v0.49.0
 	golang.org/x/oauth2 v0.36.0
 	golang.org/x/time v0.15.0
+	golang.org/x/tools v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 	nhooyr.io/websocket v1.8.17
 )
@@ -134,7 +135,20 @@ require (
 	go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp v0.65.0 // indirect
 	go.opentelemetry.io/otel/metric v1.41.0
 	go.uber.org/atomic v1.11.0 // indirect
+	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/sync v0.20.0
 	golang.org/x/sys v0.42.0
 	golang.org/x/text v0.35.0 // indirect
+)
+
+// Pin golang.org/x/tools, golang.org/x/telemetry, and golang.org/x/mod to
+// versions available in the local module cache. The production build of gocell
+// does not import telemetry; it appears in the graph only as a transitive test
+// dependency of golang.org/x/tools (via golang.org/x/text's go.mod). The
+// replace directives let `go mod tidy` and `packages.Load` resolve the
+// dependency graph without network access.
+replace (
+	golang.org/x/mod => golang.org/x/mod v0.32.0
+	golang.org/x/telemetry => golang.org/x/telemetry v0.0.0-20251111182119-bc8e575c7b54
+	golang.org/x/tools => golang.org/x/tools v0.39.1-0.20260109155911-b69ac100ecb7
 )
