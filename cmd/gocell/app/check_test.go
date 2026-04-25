@@ -268,30 +268,46 @@ func TestValidateContractHealth(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			issues := validateContractHealth(tt.contracts)
-			if tt.wantErr {
-				require.NotEmpty(t, issues, "expected validation issues")
-				found := false
-				for _, issue := range issues {
-					if strings.Contains(issue.Message, tt.wantMsg) ||
-						strings.Contains(issue.Field, tt.wantMsg) {
-						found = true
-						break
-					}
-				}
-				assert.True(t, found, "expected issue containing %q, got: %v", tt.wantMsg, issues)
-				// Every contract-health finding must be CI-blocking and tagged
-				// with a CH-* code so JSON / SARIF consumers can route on it.
-				for _, issue := range issues {
-					assert.Equal(t, governance.SeverityError, issue.Severity,
-						"contract-health findings must be SeverityError")
-					assert.Contains(t, []string{"CH-01", "CH-02", "CH-03"}, issue.Code,
-						"contract-health code must be CH-* family")
-				}
-			} else {
-				assert.Empty(t, issues, "expected no validation issues")
-			}
+			assertContractHealthIssues(t, issues, tt.wantErr, tt.wantMsg)
 		})
 	}
+}
+
+// assertContractHealthIssues centralises the per-case assertion logic so
+// TestValidateContractHealth's body stays under the cognitive complexity
+// budget. Two-arm shape:
+//   - wantErr=false: issues must be empty.
+//   - wantErr=true:  at least one issue must mention wantMsg in its
+//     message or field path; every issue must be SeverityError and
+//     carry a CH-* code so JSON/SARIF consumers can route on it.
+func assertContractHealthIssues(t *testing.T, issues []governance.ValidationResult, wantErr bool, wantMsg string) {
+	t.Helper()
+	if !wantErr {
+		assert.Empty(t, issues, "expected no validation issues")
+		return
+	}
+	require.NotEmpty(t, issues, "expected validation issues")
+	assert.True(t, hasIssueMatching(issues, wantMsg),
+		"expected issue containing %q, got: %v", wantMsg, issues)
+	for _, issue := range issues {
+		assert.Equal(t, governance.SeverityError, issue.Severity,
+			"contract-health findings must be SeverityError")
+		assert.Contains(t, []string{"CH-01", "CH-02", "CH-03"}, issue.Code,
+			"contract-health code must be CH-* family")
+	}
+}
+
+// hasIssueMatching reports whether any finding mentions needle in its
+// message or field path. Pulled out so the substring search isn't
+// inlined into the assertion helper.
+func hasIssueMatching(issues []governance.ValidationResult, needle string) bool {
+	for _, issue := range issues {
+		if strings.Contains(issue.Message, needle) ||
+			strings.Contains(issue.Field, needle) {
+			return true
+		}
+	}
+	return false
 }
 
 func TestCheckContractHealthCI(t *testing.T) {

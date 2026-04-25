@@ -119,11 +119,13 @@ func printContractHealthTable(contracts []*metadata.ContractMeta) {
 		return
 	}
 
+	// Single format string drives header, separator, and every data row so
+	// column widths stay aligned in one place.
+	const rowFormat = "  %-40s %-12s %-12s %-22s %-7s %s\n"
+
 	fmt.Printf("Contract Health (%d contracts):\n\n", len(contracts))
-	fmt.Printf("  %-40s %-12s %-12s %-22s %-7s %s\n",
-		"ID", "KIND", "LIFECYCLE", "OWNER", "METHOD", "PATH")
-	fmt.Printf("  %-40s %-12s %-12s %-22s %-7s %s\n",
-		"---", "----", "---------", "-----", "------", "----")
+	fmt.Printf(rowFormat, "ID", "KIND", "LIFECYCLE", "OWNER", "METHOD", "PATH")
+	fmt.Printf(rowFormat, "---", "----", "---------", "-----", "------", "----")
 
 	for _, c := range contracts {
 		lifecycle := c.Lifecycle
@@ -131,8 +133,7 @@ func printContractHealthTable(contracts []*metadata.ContractMeta) {
 			lifecycle = "(unset)"
 		}
 		method, path := httpTransportColumns(c)
-		fmt.Printf("  %-40s %-12s %-12s %-22s %-7s %s\n",
-			c.ID, c.Kind, lifecycle, c.OwnerCell, method, path)
+		fmt.Printf(rowFormat, c.ID, c.Kind, lifecycle, c.OwnerCell, method, path)
 	}
 }
 
