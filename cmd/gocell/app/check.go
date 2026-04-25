@@ -29,7 +29,9 @@ const (
 	cmdL0Imports          = "l0-imports"
 	errCannotFindRoot     = "cannot find project root: %w"
 	errMetadataParse      = "metadata parse: %w"
+	errEmitResults        = "emit results: %w"
 	flagFormatDescription = "output format: text|json|sarif"
+	flagSetCheckPrefix    = "check "
 )
 
 // runCheck implements:
@@ -109,7 +111,7 @@ func checkContractHealth(args []string) error {
 	results := validator.CheckContractHealth(contracts)
 
 	if err := printer.Print(results); err != nil {
-		return fmt.Errorf("emit results: %w", err)
+		return fmt.Errorf(errEmitResults, err)
 	}
 
 	if errCount := countContractHealthErrors(results); errCount > 0 {
@@ -184,7 +186,7 @@ func countContractHealthErrors(results []governance.ValidationResult) int {
 //
 // Flags: --cell=<cellID> (empty = all cells), --format=<text|json|sarif>
 func checkSliceCoverage(args []string) error {
-	fs := flag.NewFlagSet("check "+cmdSliceCoverage, flag.ContinueOnError)
+	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdSliceCoverage, flag.ContinueOnError)
 	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all cells)")
 	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
 	if err := fs.Parse(args); err != nil {
@@ -376,7 +378,7 @@ func checkAssemblyCompleteness(args []string) error {
 //
 // Flags: --journey=<journeyID> (empty = all journeys)
 func checkJourneyReadiness(args []string) error {
-	fs := flag.NewFlagSet("check "+cmdJourneyReadiness, flag.ContinueOnError)
+	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdJourneyReadiness, flag.ContinueOnError)
 	journeyID := fs.String("journey", "", "restrict check to this journey ID (empty = all)")
 	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
 	if err := fs.Parse(args); err != nil {
@@ -498,7 +500,7 @@ func journeyCellCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMeta) [
 //
 // Flags: --cell=<cellID> (empty = all L0 cells)
 func checkL0Imports(args []string) error {
-	fs := flag.NewFlagSet("check "+cmdL0Imports, flag.ContinueOnError)
+	fs := flag.NewFlagSet(flagSetCheckPrefix+cmdL0Imports, flag.ContinueOnError)
 	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all L0 cells)")
 	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
 	if err := fs.Parse(args); err != nil {
@@ -718,7 +720,7 @@ func printAndCheck(format string, results []governance.ValidationResult, checkNa
 		return err
 	}
 	if err := printer.Print(results); err != nil {
-		return fmt.Errorf("emit results: %w", err)
+		return fmt.Errorf(errEmitResults, err)
 	}
 	if n := countErrors(results); n > 0 {
 		return fmt.Errorf("%s: %d issue(s) found", checkName, n)
@@ -778,7 +780,7 @@ func checkUnconditionalSkip(args []string) error {
 	}
 
 	if err := printer.Print(results); err != nil {
-		return fmt.Errorf("emit results: %w", err)
+		return fmt.Errorf(errEmitResults, err)
 	}
 
 	errCount := countContractHealthErrors(results)

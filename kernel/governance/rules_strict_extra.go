@@ -242,7 +242,7 @@ var validStatusBoardStates = map[string]bool{
 }
 
 // validateStatusBoardStateEnum01 checks that every status-board entry has a
-// state from the allowed set {todo, doing, done}.
+// state value present in validStatusBoardStates (defined above).
 //
 // Severity: Error, IssueInvalid.
 func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
