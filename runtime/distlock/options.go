@@ -63,12 +63,10 @@ func WithDriftFactor(f float64) Option {
 // duration rather than leaking indefinitely.
 //
 // Default: 5s (conservative; tune down for low-latency backends or up for
-// high-latency ones). Must be > 0.
+// high-latency ones). Must be > 0; New() panics if the final value is ≤ 0.
 func WithReleaseTimeout(d time.Duration) Option {
 	return func(c *config) {
-		if d > 0 {
-			c.releaseTimeout = d
-		}
+		c.releaseTimeout = d
 	}
 }
 
