@@ -71,8 +71,12 @@ func (fc *FakeClock) NewTimerAt(deadline time.Time) distlock.Timer {
 }
 
 // Advance moves the clock forward by d and fires all timers whose deadline
-// has passed. Timers are fired in deadline order (earliest first).
-// Returns after all due timers' channels have been written.
+// has passed. Returns after all due timers' channels have been written.
+//
+// Timers use independent buffered channels, so callers should not rely on
+// observing any cross-timer delivery order when one Advance makes multiple
+// timers due at once. If a future caller needs ordered callbacks or a unified
+// event stream, add explicit ordered dispatch semantics and tests together.
 func (fc *FakeClock) Advance(d time.Duration) {
 	fc.mu.Lock()
 	fc.now = fc.now.Add(d)
