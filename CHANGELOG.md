@@ -279,3 +279,5 @@ app := bootstrap.New(
 ```
 
 For tests, inject a pre-bound listener via `bootstrap.WithListenerNet(ln)` as a `WithListener` option.
+
+<!-- PR-A39 round-3: 6 coverage tests added (eventbus releaseReceipt, consumer_base leaseRenewalLoop, rabbitmq drainChannelPool/nackPermanent/processDelivery/dispatchDisposition) — see refactor/pr-a39-housekeeping-sweep commits f3468b57, bade9be5, 6a0161b5, 164781e9 -->
