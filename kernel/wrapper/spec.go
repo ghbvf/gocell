@@ -106,11 +106,15 @@ func (s ContractSpec) validateEvent() error {
 // Note for governance: FMT-18 (PR-A11 round-4 + PR246-FU1) parses both
 // wrapper.ContractSpec{...} composite literals AND wrapper.EventSpec(...)
 // call expressions via go/parser, so specs built via EventSpec are still
-// cross-checked against contracts/**/contract.yaml. The id argument must
-// be a string literal (or a constant whose value the AST can resolve);
-// otherwise FMT-18 emits a WARNING and asks the author to inline the
-// literal. Prefer EventSpec when the id==topic identity is genuine and
-// stable; the literal form remains valid when Topic must diverge from ID.
+// cross-checked against contracts/**/contract.yaml. FMT-18 is strict-only
+// — it runs under `gocell validate --strict` (and CI's strict job); a
+// plain `gocell validate` does not exercise the cross-check. The id
+// argument must be a string literal (or a constant whose value the AST
+// can resolve) so the validator can look up `contracts/**/contract.yaml`
+// by id and verify Kind / Method / Path agreement; otherwise FMT-18 emits
+// a WARNING and asks the author to inline the literal. Prefer EventSpec
+// when the id==topic identity is genuine and stable; the literal form
+// remains valid when Topic must diverge from ID.
 func EventSpec(id, transport string) ContractSpec {
 	return ContractSpec{
 		ID:        id,

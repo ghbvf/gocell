@@ -65,10 +65,12 @@ func TestRegisterSubscriptions(t *testing.T) {
 }
 
 func TestInit_DurableMode_MissingOutboxWriter(t *testing.T) {
+	// durableTxRunner is a non-Noop runner so the durable-mode CheckNotNoop
+	// passes and we reach the actual missing-outboxWriter assertion.
 	c := NewAccessCore(
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(durableTxRunner{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable}
 	err := c.Init(context.Background(), deps)
@@ -99,7 +101,7 @@ func TestInit_DurableMode_RejectsNoopWriter(t *testing.T) {
 func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	c := NewAccessCore(
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	err := c.Init(context.Background(), deps)

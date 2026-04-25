@@ -31,9 +31,9 @@ func (f *failingOutboxWriter) Write(_ context.Context, _ outbox.Entry) error { r
 
 type stubTxRunner struct{ calls int }
 
-func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+func (s *stubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	s.calls++
-	return fn(context.Background())
+	return fn(ctx)
 }
 
 type failingTxRunner struct{ err error }

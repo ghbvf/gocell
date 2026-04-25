@@ -21,16 +21,19 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// noopTxRunner is a test double that executes fn directly without a real transaction.
-type noopTxRunner struct{}
+var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
 
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
+// durableTxRunner is a TxRunner that does NOT advertise Noop(); auditcore's
+// durable-mode init check rejects persistence.NoopTxRunner and accepts this.
+// Used by tests that exercise durable-mode behaviour without spinning up a
+// real database.
+type durableTxRunner struct{}
+
+func (durableTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
 }
 
-var _ persistence.TxRunner = noopTxRunner{}
-
-var testHMACKey = []byte("test-hmac-key-32bytes-long!!!!!!!")
+var _ persistence.TxRunner = durableTxRunner{}
 
 // mustNewCodec constructs a CursorCodec with the given key or fails the test.
 func mustNewCodec(t *testing.T, key []byte) *query.CursorCodec {
@@ -47,7 +50,7 @@ func newTestCell() *AuditCore {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -118,7 +121,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
@@ -152,7 +155,7 @@ func TestInit_DemoMode_TxWithoutOutbox_Fails(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 		// outboxWriter intentionally omitted
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
@@ -260,7 +263,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 		WithHMACKey(testHMACKey),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	err = c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDurable})
 	require.Error(t, err)
@@ -357,7 +360,7 @@ func TestInit_DurableMode_RejectsMissingCursorCodec(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, &recordingWriter{}), // non-Nooper; durable-gated CheckNotNoop passes
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(durableTxRunner{}),        // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.Dependencies{
@@ -393,14 +396,14 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			name:       "durable refuses stale cursor",
 			mode:       cell.DurabilityDurable,
 			outbox:     &recordingWriter{},
-			tx:         noopTxRunner{},
+			tx:         durableTxRunner{},
 			wantStatus: http.StatusBadRequest,
 		},
 		{
 			name:       "demo returns first page",
 			mode:       cell.DurabilityDemo,
 			outbox:     outbox.NoopWriter{},
-			tx:         noopTxRunner{},
+			tx:         persistence.NoopTxRunner{},
 			wantStatus: http.StatusOK,
 		},
 	}
