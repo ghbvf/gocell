@@ -40,7 +40,7 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 			}))
 		}
 		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, c.logger, repoOpts...)
-		c.flagRepo = cellpg.NewFlagRepository(session, c.logger)
+		c.flagRepo = cellpg.NewFlagRepository(session)
 	}
 
 	// deriveModes' PublishFailureMode return is retained for TestConfigCore_DeriveModes

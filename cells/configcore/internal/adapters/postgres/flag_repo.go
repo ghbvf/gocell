@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
@@ -36,24 +35,17 @@ const flagColumns = "id, key, enabled, rollout_percentage, description, version,
 type FlagRepository struct {
 	db      DBTX     // test-only: set by newFlagRepositoryFromDBTX
 	session *Session // production path: resolves ambient tx via persistence.TxCtxKey
-	logger  *slog.Logger
 }
 
 // NewFlagRepository creates a FlagRepository that resolves the ambient
-// pgx.Tx from the context on each write call. If logger is nil, slog.Default()
-// is used; the logger is consumed only by the ctx-cancel detection branch
-// to surface client disconnects in the operator audit channel at slog.Warn
-// (see wrapCtxCancel).
+// pgx.Tx from the context on each write call.
 //
 // Requires migrations 008 (table) and 009 (concurrent index) to be applied.
 // The adapterpg schema guard (VerifyExpectedVersion) enforces the actual
 // current expected version at startup; this comment is documentation-only
 // and deliberately does not duplicate that check.
-func NewFlagRepository(s *Session, logger *slog.Logger) *FlagRepository {
-	if logger == nil {
-		logger = slog.Default()
-	}
-	return &FlagRepository{session: s, logger: logger}
+func NewFlagRepository(s *Session) *FlagRepository {
+	return &FlagRepository{session: s}
 }
 
 func (r *FlagRepository) resolveDB(ctx context.Context) DBTX {
@@ -71,25 +63,24 @@ func (r *FlagRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 }
 
 // wrapCtxCancel detects whether err is a context cancellation and, if so,
-// emits a slog.Warn for the operator audit channel and returns a structured
-// *errcode.Error carrying ErrClientCanceled (mapped to HTTP 499 + slog.Warn
-// at the response boundary). Returns nil when err is not a cancellation,
-// signalling the caller to fall through to the generic infra-error mapping.
+// returns a structured *errcode.Error carrying ErrClientCanceled (mapped
+// to HTTP 499 + slog.Warn at the response boundary). Returns nil when err
+// is not a cancellation, signalling the caller to fall through to the
+// generic infra-error mapping.
 //
-// `op` is a PascalCase operation label (e.g. "List", "Update"); `key` is
-// recorded only in InternalMessage to avoid leaking flag-name context to
-// clients.
+// `op` is a PascalCase operation label (e.g. "List", "Update");
+// `identifier` is a caller-formatted resource locator (e.g. "key=foo").
+// Both are recorded only in InternalMessage and never in the public
+// Message, preventing flag-name leakage to clients.
+//
+// No slog.Warn is emitted here: the HTTP boundary's log4xx already records
+// a Warn entry with code/status/InternalMessage/correlation IDs, so emitting
+// a second Warn at the repository layer produces duplicate observability
+// noise without adding new context.
 //
 // ref: pkg/persistence/ctxcancel.Wrap — canonical helper.
-func (r *FlagRepository) wrapCtxCancel(ctx context.Context, op, key string, err error) *errcode.Error {
-	cancelErr := ctxcancel.Wrap(err, op, "key="+key)
-	if cancelErr == nil {
-		return nil
-	}
-	r.logger.WarnContext(ctx, "flag repo: request context canceled",
-		slog.String("op", op),
-		slog.String("cause", err.Error()))
-	return cancelErr
+func (r *FlagRepository) wrapCtxCancel(_ context.Context, op, identifier string, err error) *errcode.Error {
+	return ctxcancel.Wrap(err, op, identifier)
 }
 
 // scanFlagOrMapError runs scanFlagRow and translates the three known failure
@@ -105,12 +96,12 @@ func (r *FlagRepository) wrapCtxCancel(ctx context.Context, op, key string, err 
 //
 // op is the method name (e.g. "Update") used only in InternalMessage for
 // operator-side debugging; key is the lookup key surfaced the same way.
-func (r *FlagRepository) scanFlagOrMapError(ctx context.Context, row pgx.Row, op, key string) (*domain.FeatureFlag, error) {
+func (r *FlagRepository) scanFlagOrMapError(ctx context.Context, row Row, op, key string) (*domain.FeatureFlag, error) {
 	flag, err := scanFlagRow(row)
 	if err == nil {
 		return flag, nil
 	}
-	if cancelErr := r.wrapCtxCancel(ctx, op, key, err); cancelErr != nil {
+	if cancelErr := r.wrapCtxCancel(ctx, op, "key="+key, err); cancelErr != nil {
 		return nil, cancelErr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -133,8 +124,10 @@ func (r *FlagRepository) scanFlagOrMapError(ctx context.Context, row pgx.Row, op
 
 // scanFlagRow scans a single row (order matches flagColumns) into a
 // domain.FeatureFlag. Called by GetByKey/Update/Delete/Toggle so the field
-// order stays in sync with the SELECT/RETURNING projections.
-func scanFlagRow(row pgx.Row) (*domain.FeatureFlag, error) {
+// order stays in sync with the SELECT/RETURNING projections. Accepts the
+// local Row interface (matches both DBTX.QueryRow output and Rows during
+// iteration), keeping pgx as an internal adapter detail.
+func scanFlagRow(row Row) (*domain.FeatureFlag, error) {
 	var f domain.FeatureFlag
 	if err := row.Scan(
 		&f.ID, &f.Key, &f.Enabled, &f.RolloutPercentage,
@@ -147,11 +140,12 @@ func scanFlagRow(row pgx.Row) (*domain.FeatureFlag, error) {
 
 // wrapNonScanQueryErr is the analogue of wrapCtxCancel for failures returned
 // by Exec/Query (i.e. before any row scan) — it short-circuits ctx cancel
-// to ErrClientCanceled, otherwise falls back to ErrFlagRepoQuery. msg is
-// used for InternalMessage on the non-cancel branch (preserves the prior
-// "flag repo: %s failed" diagnostic style).
-func (r *FlagRepository) wrapNonScanQueryErr(ctx context.Context, op, key, msg string, err error) error {
-	if cancelErr := r.wrapCtxCancel(ctx, op, key, err); cancelErr != nil {
+// to ErrClientCanceled, otherwise falls back to ErrFlagRepoQuery. `msg`
+// preserves the prior "flag repo: %s failed" diagnostic for the non-cancel
+// branch; `identifier` is a caller-formatted resource locator (e.g.
+// "key=foo") recorded only in the cancel-branch InternalMessage.
+func (r *FlagRepository) wrapNonScanQueryErr(ctx context.Context, op, identifier, msg string, err error) error {
+	if cancelErr := r.wrapCtxCancel(ctx, op, identifier, err); cancelErr != nil {
 		return cancelErr
 	}
 	return errcode.Wrap(errcode.ErrFlagRepoQuery, msg, err)
@@ -182,7 +176,7 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 		flag.ID, flag.Key, flag.Enabled, flag.RolloutPercentage,
 		flag.Description, flag.Version, flag.CreatedAt, flag.UpdatedAt,
 	); err != nil {
-		return r.wrapNonScanQueryErr(ctx, "Create", flag.Key,
+		return r.wrapNonScanQueryErr(ctx, "Create", "key="+flag.Key,
 			fmt.Sprintf("flag repo: create failed for key %s", flag.Key), err)
 	}
 	return nil

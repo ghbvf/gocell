@@ -34,12 +34,17 @@ func Detect(err error) bool {
 //   - op: PascalCase operation label (e.g. "Insert", "ScanRow"); recorded in
 //     InternalMessage for operator triage.
 //   - identifier: caller-redacted resource locator (e.g. "key=foo",
-//     "configID=…"); recorded in InternalMessage only — never the public
-//     Message — to prevent sensitive-name leakage to clients.
+//     "configID=…"); recorded in InternalMessage only.
 //
 // Public Message is the constant "request canceled". The wrapped err is
 // preserved as Cause so errors.Is(returned, context.Canceled) still works
 // for callers that need to detect cancellation up the stack.
+//
+// Privacy contract: pkg/httputil.writeErrcodeError consumes the public
+// Message for the HTTP response body and routes InternalMessage to the
+// log4xx slog.Warn record only. InternalMessage MUST NOT be written to
+// the HTTP response, so identifier may safely contain operator-grade
+// detail (key names, config IDs) without leaking to clients.
 func Wrap(err error, op, identifier string) *errcode.Error {
 	if !Detect(err) {
 		return nil

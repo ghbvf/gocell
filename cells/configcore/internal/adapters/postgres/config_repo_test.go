@@ -190,6 +190,26 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 			_, err := repo.Delete(context.Background(), "k")
 			assertCtxCancelErr(t, err)
 		})
+		t.Run("List/QueryErr/"+tc.name, func(t *testing.T) {
+			db := &mockDB{queryErr: tc.scanErr}
+			repo := newConfigRepositoryFromDBTX(db)
+			_, err := repo.List(context.Background(), query.ListParams{
+				Sort: []query.SortColumn{{Name: "key", Direction: query.SortASC}},
+			})
+			assertCtxCancelErr(t, err)
+		})
+		t.Run("PublishVersion/"+tc.name, func(t *testing.T) {
+			db := &mockDB{execErr: tc.scanErr}
+			repo := newConfigRepositoryFromDBTX(db)
+			err := repo.PublishVersion(context.Background(), &domain.ConfigVersion{
+				ID:        "v-1",
+				ConfigID:  "cfg-1",
+				Version:   1,
+				Value:     "x",
+				Sensitive: false,
+			})
+			assertCtxCancelErr(t, err)
+		})
 	}
 }
 

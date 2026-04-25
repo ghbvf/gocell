@@ -2,7 +2,6 @@ package postgres
 
 import (
 	"context"
-	"log/slog"
 	"sync"
 	"testing"
 	"time"
@@ -16,12 +15,9 @@ import (
 )
 
 // newFlagRepositoryFromDBTX is a test-only constructor that bypasses the
-// Session layer, allowing unit tests to inject a mockDB directly. Logger
-// defaults to slog.Default() to mirror NewFlagRepository's nil-logger
-// fallback so unit tests don't have to plumb their own logger for the
-// rare ctx-cancel branches that emit slog.Warn.
+// Session layer, allowing unit tests to inject a mockDB directly.
 func newFlagRepositoryFromDBTX(db DBTX) *FlagRepository {
-	return &FlagRepository{db: db, logger: slog.Default()}
+	return &FlagRepository{db: db}
 }
 
 // TestFlagRepo_Create_GetByKey_Update_Delete exercises the CRUD round-trip
@@ -313,7 +309,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 	session := NewSession(nil)
 
 	t.Run("Create", func(t *testing.T) {
-		repo := NewFlagRepository(session, slog.Default())
+		repo := NewFlagRepository(session)
 		err := repo.Create(context.Background(), &domain.FeatureFlag{Key: "k"})
 		require.Error(t, err)
 		var ec *errcode.Error
@@ -322,7 +318,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 	})
 
 	t.Run("Update", func(t *testing.T) {
-		repo := NewFlagRepository(session, slog.Default())
+		repo := NewFlagRepository(session)
 		_, err := repo.Update(context.Background(), "k", false, 0, "")
 		require.Error(t, err)
 		var ec *errcode.Error
@@ -331,7 +327,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 	})
 
 	t.Run("Delete", func(t *testing.T) {
-		repo := NewFlagRepository(session, slog.Default())
+		repo := NewFlagRepository(session)
 		_, err := repo.Delete(context.Background(), "k")
 		require.Error(t, err)
 		var ec *errcode.Error
@@ -340,7 +336,7 @@ func TestFlagRepo_WithoutTx_WritePathsRequireTx(t *testing.T) {
 	})
 
 	t.Run("Toggle", func(t *testing.T) {
-		repo := NewFlagRepository(session, slog.Default())
+		repo := NewFlagRepository(session)
 		_, err := repo.Toggle(context.Background(), "k", true)
 		require.Error(t, err)
 		var ec *errcode.Error

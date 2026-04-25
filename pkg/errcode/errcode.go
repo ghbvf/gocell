@@ -363,9 +363,9 @@ const (
 	// "Client Closed Request"); operators should treat as a client-direction
 	// signal, not a server fault, so it never pollutes 5xx error-rate SLOs.
 	//
-	// pkg/persistence/ctxcancel.Wrap is the canonical constructor for this
-	// code at IO boundaries; HTTP layer maps to 499 + slog.Warn via the
-	// existing 4xx response writer path.
+	// IO-boundary helpers should wrap context cancellation errors with this
+	// code so the HTTP layer routes the response to 499 + slog.Warn via the
+	// 4xx response writer path.
 	//
 	// ref: nginx ngx_http_special_response.c — 499 emitted on client disconnect
 	// ref: OTel semantic conventions http-spans.md — 4xx server spans Unset;
