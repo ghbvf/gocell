@@ -52,6 +52,10 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	c.MustRejectRequest(t, []byte(`{"username":"","email":"root@local","password":"p"}`))
 	// Password too short → reject (minLength:8)
 	c.MustRejectRequest(t, []byte(`{"username":"u","email":"u@x","password":"short"}`))
+	// Schema upper bounds must reject oversized public setup requests.
+	c.MustRejectRequest(t, []byte(`{"username":"`+strings.Repeat("u", 129)+`","email":"root@local","password":"SecretPass!23"}`))
+	c.MustRejectRequest(t, []byte(`{"username":"root","email":"`+strings.Repeat("e", 257)+`","password":"SecretPass!23"}`))
+	c.MustRejectRequest(t, []byte(`{"username":"root","email":"root@local","password":"`+strings.Repeat("p", 73)+`"}`))
 
 	// Real-handler produced 201 payload must satisfy the response schema.
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
@@ -63,6 +67,22 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 	h.HandleCreateAdmin(rec, req)
 	require.Equal(t, http.StatusCreated, rec.Code)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	// Real-handler negative contract checks: requests rejected by the schema
+	// must be rejected by the public endpoint before persistence.
+	for _, badBody := range []string{
+		`{"username":"` + strings.Repeat("u", 129) + `","email":"root@local","password":"SecretPass!23"}`,
+		`{"username":"root","email":"` + strings.Repeat("e", 257) + `","password":"SecretPass!23"}`,
+		`{"username":"root","email":"root@local","password":"` + strings.Repeat("p", 73) + `"}`,
+	} {
+		svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
+		h := setup.NewHandler(svc)
+		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(badBody))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.HandleCreateAdmin(rec, req)
+		require.Equal(t, http.StatusBadRequest, rec.Code)
+	}
 }
 
 // TestEventUserCreatedV1Publish_FromSetup closes the slice.yaml

@@ -320,9 +320,10 @@ func TestBootstrap_CredFileFailureCompensatesUserAndRole(t *testing.T) {
 //
 //  1. detect UserRepo.Create returning ErrAuthUserDuplicate and recount==0
 //  2. look up the orphan user by username
-//  3. rewrite its password hash + re-mark PasswordResetRequired
-//  4. resume AssignToUser on that existing ID
-//  5. finish bootstrap successfully (credfile written, admin role assigned)
+//  3. verify same-source pending provisioning provenance
+//  4. rewrite its password hash + re-mark PasswordResetRequired
+//  5. resume AssignToUser on that existing ID
+//  6. finish bootstrap successfully (credfile written, admin role assigned)
 //
 // Without this logic, the old handleUserCreateError returned an error in the
 // recount==0 branch, which on PG would wedge every subsequent startup on
@@ -340,6 +341,7 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	orphan, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$orphanedhashFromPrevRun")
 	require.NoError(t, err)
 	orphan.ID = "usr-bootstrap-crashed-run"
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
 	orphan.MarkPasswordResetRequired()
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 	count, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
@@ -369,6 +371,8 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	// PasswordResetRequired must still be set — first login flow stays enforced.
 	assert.True(t, recovered.PasswordResetRequired,
 		"orphan recovery must re-assert PasswordResetRequired")
+	assert.Equal(t, domain.UserSourceBootstrap, recovered.CreationSource)
+	assert.Equal(t, domain.ProvisionStateComplete, recovered.ProvisionState)
 
 	// Admin role must now be assigned to the recovered user.
 	roles, err := roleRepo.GetByUserID(context.Background(), recovered.ID)

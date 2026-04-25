@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -28,6 +30,13 @@ import (
 // to the HTTP endpoint. This removes the "double-owner" ambiguity where both
 // were wired simultaneously and whichever raced first won.
 const AdminProvisionModeEnv = "GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE"
+
+type adminProvisionMode string
+
+const (
+	adminProvisionModeInteractive adminProvisionMode = "interactive"
+	adminProvisionModeBootstrap   adminProvisionMode = "bootstrap"
+)
 
 // AccessCoreModule wires accesscore: JWT issuer/verifier + EventBus + cursor
 // codec, and conditionally the initial-admin bootstrap Lifecycle when the
@@ -59,6 +68,11 @@ func (AccessCoreModule) ID() string { return "accesscore" }
 // Reads GOCELL_ACCESSCORE_CURSOR_KEY and GOCELL_ACCESSCORE_CURSOR_PREVIOUS_KEY
 // from the environment.
 func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
+	mode, err := resolveAdminProvisionMode(os.Getenv(AdminProvisionModeEnv), m.ForceBootstrap)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
 	// Cursor codec for accesscore: read env via LoadCursorKeys then build.
 	accessPrimary, accessPrevious := LoadCursorKeys("ACCESSCORE")
 	cursorCodec, err := buildCursorCodec(cursorCodecConfig{
@@ -85,7 +99,7 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		accesscore.WithRefreshMetricsProvider(shared.PromStack.metricProvider),
 		accesscore.WithRefreshGC(time.Hour, 24*time.Hour),
 	}
-	if m.ForceBootstrap || os.Getenv(AdminProvisionModeEnv) == "bootstrap" {
+	if mode == adminProvisionModeBootstrap {
 		accessOpts = append(accessOpts, accesscore.WithInitialAdminBootstrap(m.InitialAdminOpts...))
 	}
 	c := accesscore.NewAccessCore(accessOpts...)
@@ -94,3 +108,18 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 }
 
 var _ CellModule = AccessCoreModule{}
+
+func resolveAdminProvisionMode(raw string, forceBootstrap bool) (adminProvisionMode, error) {
+	switch strings.TrimSpace(raw) {
+	case "", string(adminProvisionModeInteractive):
+		if forceBootstrap {
+			return adminProvisionModeBootstrap, nil
+		}
+		return adminProvisionModeInteractive, nil
+	case string(adminProvisionModeBootstrap):
+		return adminProvisionModeBootstrap, nil
+	default:
+		return "", errcode.NewInfra(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("%s must be one of: interactive, bootstrap; got %q", AdminProvisionModeEnv, raw))
+	}
+}

@@ -5,7 +5,7 @@
   "properties": {
     "username": { "type": "string", "minLength": 1, "maxLength": 128 },
     "email": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "password": { "type": "string", "minLength": 8, "maxLength": 128 }
+    "password": { "type": "string", "minLength": 8, "maxLength": 72 }
   },
   "required": ["username", "email", "password"],
   "additionalProperties": false

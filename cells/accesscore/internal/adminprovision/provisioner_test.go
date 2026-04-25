@@ -38,6 +38,7 @@ func stdInput() adminprovision.ProvisionInput {
 		PasswordHash: []byte("$2a$10$stubhash0000000000000000000000000000000000000000"),
 		RequireReset: true,
 		IDPrefix:     "usr-bootstrap-",
+		Source:       domain.UserSourceBootstrap,
 	}
 }
 
@@ -105,6 +106,8 @@ func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 	require.NotNil(t, user)
 	assert.Equal(t, "usr-bootstrap-aaaa-1111", user.ID)
 	assert.True(t, user.PasswordResetRequired)
+	assert.Equal(t, domain.UserSourceBootstrap, user.CreationSource)
+	assert.Equal(t, domain.ProvisionStateComplete, user.ProvisionState)
 	// Role assigned
 	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
 	require.NoError(t, err)
@@ -147,7 +150,8 @@ func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
 	// exists but no admin role assigned.
 	orphan, err := domain.NewUser("admin", "admin@local", "$2a$10$oldhash000000000000000000000000000000000000000000000")
 	require.NoError(t, err)
-	orphan.ID = "usr-orphan-prior"
+	orphan.ID = "usr-bootstrap-orphan-prior"
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
 	roleRepo := mem.NewRoleRepository()
@@ -157,22 +161,89 @@ func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeOrphanRecovered, outcome)
 	require.NotNil(t, user)
-	assert.Equal(t, "usr-orphan-prior", user.ID, "orphan ID preserved")
+	assert.Equal(t, "usr-bootstrap-orphan-prior", user.ID, "orphan ID preserved")
 	// Hash was rewritten to the new caller-supplied hash
-	refreshed, err := userRepo.GetByID(context.Background(), "usr-orphan-prior")
+	refreshed, err := userRepo.GetByID(context.Background(), "usr-bootstrap-orphan-prior")
 	require.NoError(t, err)
 	assert.Equal(t, string(stdInput().PasswordHash), refreshed.PasswordHash)
+	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
+	assert.Equal(t, domain.ProvisionStateComplete, refreshed.ProvisionState)
 	// Role now assigned
 	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
 	require.NoError(t, err)
 	assert.Equal(t, 1, cnt)
 }
 
+func TestProvisioner_Ensure_DuplicateIdentityUser_ReturnsConflictWithoutTakeover(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$existinghash000000000000000000000000000000000000000")
+	require.NoError(t, err)
+	existing.ID = "usr-existing-identity"
+	require.NoError(t, userRepo.Create(context.Background(), existing))
+
+	roleRepo := mem.NewRoleRepository()
+	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
+
+	user, outcome, err := p.Ensure(context.Background(), stdInput())
+	require.Error(t, err)
+	assert.Nil(t, user)
+	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
+
+	refreshed, err := userRepo.GetByID(context.Background(), "usr-existing-identity")
+	require.NoError(t, err)
+	assert.Equal(t, "$2a$10$existinghash000000000000000000000000000000000000000", refreshed.PasswordHash)
+	assert.False(t, refreshed.PasswordResetRequired)
+	assert.Equal(t, domain.UserSourceIdentity, refreshed.CreationSource)
+	assert.Equal(t, domain.ProvisionStateNone, refreshed.ProvisionState)
+	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cnt, "duplicate identity user must not be promoted")
+}
+
+func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeover(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$bootstraphash00000000000000000000000000000000000000")
+	require.NoError(t, err)
+	existing.ID = "usr-bootstrap-pending"
+	existing.MarkProvisionPending(domain.UserSourceBootstrap)
+	existing.MarkPasswordResetRequired()
+	require.NoError(t, userRepo.Create(context.Background(), existing))
+
+	roleRepo := mem.NewRoleRepository()
+	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
+
+	in := stdInput()
+	in.Source = domain.UserSourceSetup
+	in.IDPrefix = "usr-"
+	in.RequireReset = false
+	user, outcome, err := p.Ensure(context.Background(), in)
+	require.Error(t, err)
+	assert.Nil(t, user)
+	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
+
+	refreshed, err := userRepo.GetByID(context.Background(), "usr-bootstrap-pending")
+	require.NoError(t, err)
+	assert.Equal(t, "$2a$10$bootstraphash00000000000000000000000000000000000000", refreshed.PasswordHash)
+	assert.True(t, refreshed.PasswordResetRequired)
+	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
+	assert.Equal(t, domain.ProvisionStatePending, refreshed.ProvisionState)
+	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)
+	require.NoError(t, err)
+	assert.Equal(t, 0, cnt, "different-source pending row must not be promoted")
+}
+
 func TestProvisioner_Ensure_OrphanUpdateFails_Surfaced(t *testing.T) {
 	// Orphan path reached, but UserRepo.Update fails when rewriting the hash.
 	inner := mem.NewUserRepository()
 	orphan, _ := domain.NewUser("admin", "admin@local", "$2a$10$orphanold")
-	orphan.ID = "usr-orphan-pre"
+	orphan.ID = "usr-bootstrap-orphan-pre"
+	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
 	require.NoError(t, inner.Create(context.Background(), orphan))
 	userRepo := &updateFailUserRepo{inner: inner, updateErr: errors.New("update failed")}
 
@@ -263,6 +334,7 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 	}{
 		{"missing prefix", adminprovision.ProvisionInput{Username: "u", Email: "u@x", PasswordHash: []byte("h")}},
 		{"missing hash", adminprovision.ProvisionInput{Username: "u", Email: "u@x", IDPrefix: "usr-"}},
+		{"missing source", adminprovision.ProvisionInput{Username: "u", Email: "u@x", PasswordHash: []byte("h"), IDPrefix: "usr-"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

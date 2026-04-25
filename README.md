@@ -209,7 +209,10 @@ curl http://localhost:8080/api/v1/hello
 The `ssobff` example uses the initial admin bootstrap feature. On first run it writes a
 temporary credential file whose location depends on the OS (Linux: `/run/gocell/`, macOS:
 `~/Library/Application Support/gocell/run/`, Windows: `%LOCALAPPDATA%\gocell\run\`). Override
-with `GOCELL_STATE_DIR`. See `docs/operations/first-run-setup.md` for details.
+with `GOCELL_STATE_DIR`. `cmd/corebundle` defaults to interactive first-run setup; set
+`GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE=bootstrap` for headless bootstrap, or leave it empty /
+`interactive` to use `POST /api/v1/access/setup/admin`. Unknown mode values fail fast at startup.
+See `docs/operations/first-run-setup.md` for details.
 
 ## Runtime Modes
 
