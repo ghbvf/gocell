@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"go/ast"
 	"go/parser"
 	"go/token"
 	"os"
@@ -42,19 +43,35 @@ func TestAuthAuthtestBoundary(t *testing.T) {
 	require.NoError(t, err, "failed to collect .go files")
 	require.NotEmpty(t, allGoFiles, "no .go files found — module root may be wrong")
 
-	// AUTH-AUTHTEST-A: ban "auth.Authenticated()" literal in all .go files.
-	// Exclude tools/archtest itself (this file references the string in comments
-	// and test names) and runtime/auth/authtest (the replacement package whose
-	// doc comment necessarily references the deleted function by name).
+	// AUTH-AUTHTEST-A: ban auth.Authenticated() *call expressions* in all .go
+	// files. Detection is AST-based (go/parser → ast.Walk → ast.CallExpr with
+	// SelectorExpr Fun X.auth, Sel.Authenticated) so that comments, doc strings,
+	// commit-message-style log messages, and unrelated identical strings inside
+	// string literals are not misclassified as violations. Exclude tools/archtest
+	// itself (this file references the symbol in test names and probe content)
+	// and runtime/auth/authtest (the replacement package's doc comment names the
+	// deleted function — comments are AST-stripped so this is precaution only).
 	t.Run("AUTH-AUTHTEST-A_no_auth_Authenticated_call", func(t *testing.T) {
-		hits := grepInDir(t, root, "auth.Authenticated()", "tools/archtest", "runtime/auth/authtest")
+		var hits []string
+		for _, f := range allGoFiles {
+			rel, _ := filepath.Rel(root, f)
+			rel = filepath.ToSlash(rel)
+			if strings.HasPrefix(rel, "tools/archtest/") || strings.HasPrefix(rel, "runtime/auth/authtest/") {
+				continue
+			}
+			callHits, err := findCallExpr(f, "auth", "Authenticated")
+			require.NoErrorf(t, err, "failed to AST-scan %s", f)
+			for _, line := range callHits {
+				hits = append(hits, fmt.Sprintf("%s:%d", rel, line))
+			}
+		}
 		if len(hits) > 0 {
 			for _, h := range hits {
-				t.Logf("AUTH-AUTHTEST-A violation: %s", h)
+				t.Logf("AUTH-AUTHTEST-A violation (real call expression): %s", h)
 			}
 		}
 		assert.Empty(t, hits,
-			"auth.Authenticated() must not appear anywhere in the codebase; "+
+			"auth.Authenticated() must not be called anywhere in the codebase; "+
 				"the function has been deleted — use auth.AnyRole(...) in production, "+
 				"authtest.RequireAuthenticated() in runtime _test.go files")
 	})
@@ -183,6 +200,46 @@ func parseImports(path string) ([]string, error) {
 	return imports, nil
 }
 
+// findCallExpr parses path with full AST and returns the line numbers of every
+// call expression of the form "<pkg>.<sel>(...)" where the receiver matches
+// pkgIdent and the selector matches selName. Comments and string literals do
+// not match because they are not represented as ast.CallExpr nodes — the entire
+// point of moving rule A from text grep to AST detection is to avoid those
+// false positives. On parse failure the file is skipped (returns nil, nil) —
+// AST cannot reason about a malformed file, and the parser failure itself is
+// surfaced by go vet / build steps.
+func findCallExpr(path, pkgIdent, selName string) ([]int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, nil
+	}
+	var lines []int
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok {
+			return true
+		}
+		ident, ok := sel.X.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		if ident.Name == pkgIdent && sel.Sel.Name == selName {
+			lines = append(lines, fset.Position(call.Lparen).Line)
+		}
+		return true
+	})
+	return lines, nil
+}
+
 // rawScanImports is a line-scanner fallback used when go/parser fails (e.g.
 // build-tag-only files). It extracts quoted import paths from import blocks.
 func rawScanImports(data []byte, _ string) []string {
@@ -219,16 +276,40 @@ func TestAuthAuthtestBoundary_NegativeProbes(t *testing.T) {
 	const modPath = "github.com/ghbvf/gocell"
 	authtestImport := modPath + "/runtime/auth/authtest"
 
-	// Probe A: grepInDir must detect "auth.Authenticated()" literal in a temp file.
-	t.Run("A_detects_auth_Authenticated_call", func(t *testing.T) {
+	// Probe A1: findCallExpr must detect a real auth.Authenticated() call site.
+	t.Run("A1_findCallExpr_detects_real_call", func(t *testing.T) {
 		t.Parallel()
 		tmp := t.TempDir()
 		bogus := filepath.Join(tmp, "bogus_test.go")
+		// Real call expression — must be detected.
 		if err := os.WriteFile(bogus, []byte("package x\nvar _ = auth.Authenticated()\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		hits := grepInDir(t, tmp, "auth.Authenticated()")
-		assert.NotEmpty(t, hits, "negative probe: grepInDir must detect auth.Authenticated() literal in temp file")
+		hits, err := findCallExpr(bogus, "auth", "Authenticated")
+		require.NoError(t, err)
+		assert.NotEmpty(t, hits,
+			"negative probe A1: findCallExpr must detect real auth.Authenticated() call expression")
+	})
+
+	// Probe A2: findCallExpr must IGNORE the literal text inside string constants
+	// and comments (the headline reason rule A was upgraded from grepInDir to
+	// AST). Without this guarantee, doc strings or audit-message templates that
+	// happen to mention auth.Authenticated() would noise CI red.
+	t.Run("A2_findCallExpr_ignores_strings_and_comments", func(t *testing.T) {
+		t.Parallel()
+		tmp := t.TempDir()
+		decoy := filepath.Join(tmp, "decoy_test.go")
+		const decoyContent = `package x
+// auth.Authenticated() — historical reference in a comment, must not match.
+var msg = "auth.Authenticated() — string literal mentioning the symbol, must not match."
+`
+		if err := os.WriteFile(decoy, []byte(decoyContent), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		hits, err := findCallExpr(decoy, "auth", "Authenticated")
+		require.NoError(t, err)
+		assert.Empty(t, hits,
+			"negative probe A2: findCallExpr must NOT match auth.Authenticated() inside comments or string literals")
 	})
 
 	// Probe B: a cells/ file importing authtest must be caught.

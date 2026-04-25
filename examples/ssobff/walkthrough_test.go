@@ -630,7 +630,9 @@ func TestWalkthrough(t *testing.T) {
 	})
 
 	// Steps 8-11: configcore CRUD + feature flags.
-	// Write ops require admin role; read ops are open (no auth required).
+	// PR-CFG-C: ALL config + flags HTTP routes (read and write) require RoleAdmin —
+	// even GET endpoints, because key names + the sensitive flag are themselves a
+	// recon surface. Authenticated non-admin callers (e.g. alice) receive 403.
 
 	t.Run("admin can update a config entry (PUT /api/v1/config/site.title)", func(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(),
@@ -659,7 +661,7 @@ func TestWalkthrough(t *testing.T) {
 			"update response must reflect the new value")
 	})
 
-	t.Run("config entry is readable with valid JWT (GET /api/v1/config/site.title)", func(t *testing.T) {
+	t.Run("config entry is readable with admin role (GET /api/v1/config/site.title)", func(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(),
 			http.MethodGet,
 			base+"/api/v1/config/site.title",
@@ -672,7 +674,7 @@ func TestWalkthrough(t *testing.T) {
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"GET /config/site.title with valid JWT must return 200 OK")
+			"GET /config/site.title with admin token must return 200 OK")
 
 		var envelope struct {
 			Data struct {
@@ -686,7 +688,33 @@ func TestWalkthrough(t *testing.T) {
 			"GET must reflect the value written by PUT")
 	})
 
-	t.Run("feature flags list is accessible with valid JWT (GET /api/v1/flags)", func(t *testing.T) {
+	// PR-CFG-C negative regression: alice is authenticated but holds no admin
+	// role, so config/flags read endpoints must return 403, not 200.
+	t.Run("non-admin reader is forbidden on /api/v1/config and /api/v1/flags", func(t *testing.T) {
+		require.NotEmpty(t, accessToken,
+			"alice's accessToken must be set; this guard catches walkthrough refactors that drop alice login")
+
+		paths := []string{
+			"/api/v1/config/",
+			"/api/v1/config/site.title",
+			"/api/v1/flags/",
+		}
+		for _, p := range paths {
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, base+p, http.NoBody)
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer "+accessToken)
+
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+
+			assert.Equalf(t, http.StatusForbidden, resp.StatusCode,
+				"GET %s with non-admin token must return 403 Forbidden, body=%s", p, body)
+		}
+	})
+
+	t.Run("feature flags list is accessible with admin role (GET /api/v1/flags)", func(t *testing.T) {
 		req, err := http.NewRequestWithContext(context.Background(),
 			http.MethodGet,
 			base+"/api/v1/flags/",
@@ -699,7 +727,7 @@ func TestWalkthrough(t *testing.T) {
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"GET /flags/ with valid JWT must return 200 OK")
+			"GET /flags/ with admin token must return 200 OK")
 
 		// Response shape: {"data":[...],"nextCursor":"...","hasMore":false}
 		var envelope struct {

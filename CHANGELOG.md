@@ -6,6 +6,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Changed (Breaking) — PR-CFG-C CONTRACT-AS-AUTH-TRUTH
+
+- **`runtime/auth.Authenticated()` is removed.** Routes that previously mounted
+  the bare `auth.Authenticated()` policy as the default RBAC must now declare an
+  explicit policy via `auth.AnyRole(...)` / `auth.SelfOr(...)`, or set
+  `auth.Route.Public: true` for unauthenticated endpoints. Test code that needs
+  the historical "any-authenticated-principal" behaviour can use
+  `runtime/auth/authtest.RequireAuthenticated()` (also rejects PrincipalAnonymous
+  / empty-subject PrincipalUser as defence-in-depth).
+- **`contracts/http/config/{get,list}/v1/response.schema.json`** add
+  `sensitive` to the `required` array. Per CLAUDE.md ("Review 和重构时不考虑
+  向后兼容——当前只有 gocell 自身，没有外部调用方") and `.claude/rules/gocell/
+  api-versioning.md` "v1 响应只增不删" — exempt: `sensitive` was already shipping
+  in every internal `ToConfigEntryResponse` implementation; promoting it to
+  `required` is a contract-truth alignment, not a payload addition. External
+  callers (none today) would need to read the `sensitive` flag before applying
+  the value (`******` placeholder for `sensitive=true` entries).
+- **`cells/configcore` admin gate.** All five `GET` config / flag read routes
+  (`/api/v1/config/`, `/api/v1/config/{key}`, `/api/v1/flags/`, `/api/v1/flags/{key}`,
+  `POST /api/v1/flags/{key}/evaluate`) now require `RoleAdmin`. Previously any
+  authenticated user could enumerate keys + read sensitive metadata — this was
+  the leak that motivated PR-CFG-C.
+
 ### Changed (Breaking) — PR-A35 READYZ-POLISH
 
 - **`GOCELL_READYZ_VERBOSE_TOKEN` is now required in every adapter mode.**

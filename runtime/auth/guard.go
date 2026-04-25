@@ -19,6 +19,10 @@ type Policy func(r *http.Request) error
 
 // AnyRole returns a Policy that requires the subject to hold at least one of
 // the given roles. Wraps RequireAnyRole.
+//
+// Footgun: calling AnyRole() with zero roles produces a Policy that always
+// returns ErrAuthForbidden (no role can match). Pass at least one named role,
+// or use Public:true on the auth.Route if the endpoint should be unauthenticated.
 func AnyRole(roles ...string) Policy {
 	return func(r *http.Request) error {
 		return RequireAnyRole(r.Context(), roles...)

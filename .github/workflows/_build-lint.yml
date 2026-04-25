@@ -52,7 +52,13 @@ jobs:
       matrix:
         include:
           - shard: kernel
-            pkgs: ./kernel/...
+            # archtest lives under tools/ and is the only enforcement path for
+            # cross-layer guards (LAYER-*, AUTH-AUTHTEST-A/B/C, etc.). Folding
+            # ./tools/... into the kernel shard wires those tests into the same
+            # required check that runs build/vet/lint/validate, so a regression
+            # in those guards fails CI rather than only failing on a developer's
+            # local `go test ./tools/...` run.
+            pkgs: ./kernel/... ./tools/...
             race: true
             static_checks: true
           - shard: runtime

@@ -47,10 +47,28 @@ Docker mode here only starts surrounding infrastructure. The example still runs 
 
 ## API
 
+### Authentication (demo mode)
+
+PR-CFG-C made `RoleCustomer` mandatory for every `/api/v1/orders/*` route, so
+the example installs a tiny `demoTokenVerifier` in `main.go` that accepts a
+single hard-coded bearer token. Export it once and reuse it in every curl
+invocation below:
+
+```bash
+export TODOORDER_TOKEN=todoorder-customer-demo-token
+```
+
+Anonymous calls (no `Authorization: Bearer ...` header) receive `401 Unauthorized`;
+calls with a different token receive `401`; valid tokens missing `role:customer`
+would receive `403 Forbidden`. The demo verifier always issues the customer
+role — to exercise the 403 path, replace the verifier or strip
+`ordercell.RoleCustomer` from the issued claims.
+
 ### Create an order
 
 ```bash
 curl -X POST http://localhost:8082/api/v1/orders/ \
+  -H "Authorization: Bearer $TODOORDER_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"item":"test"}'
 ```
@@ -64,7 +82,8 @@ Response (201):
 ### List all orders
 
 ```bash
-curl http://localhost:8082/api/v1/orders/
+curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
+  http://localhost:8082/api/v1/orders/
 ```
 
 Response (200):
@@ -78,7 +97,8 @@ When another page exists, `nextCursor` contains the opaque token for the next re
 ### Get order by ID
 
 ```bash
-curl http://localhost:8082/api/v1/orders/{id}
+curl -H "Authorization: Bearer $TODOORDER_TOKEN" \
+  http://localhost:8082/api/v1/orders/{id}
 ```
 
 Response (200):

@@ -18,6 +18,12 @@ func TestHttpConfigGetV1Serve(t *testing.T) {
 	assert.Equal(t, "GET", c.HTTP.Method)
 	assert.Equal(t, "/api/v1/config/{key}", c.HTTP.Path)
 
+	// PR-CFG-C contract-as-auth-truth: route is admin-gated, so 403 must be a
+	// first-class declared response, not just a runtime artefact.
+	_, has403 := c.HTTP.Responses[403]
+	assert.True(t, has403, "http.config.get.v1 must declare 403 (route is RoleAdmin-gated)")
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
+
 	// Non-sensitive entry: sensitive=false, value is the real value.
 	c.ValidateResponse(t, []byte(`{"data":{"id":"c-1","key":"app.name","value":"myapp","sensitive":false,"version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}}`))
 	// Sensitive entry: sensitive=true, value must be redacted.
@@ -37,6 +43,11 @@ func TestHttpConfigListV1Serve(t *testing.T) {
 	require.NotNil(t, c.HTTP, "http.config.list.v1 must declare endpoints.http")
 	assert.Equal(t, "GET", c.HTTP.Method)
 	assert.Equal(t, "/api/v1/config/", c.HTTP.Path)
+
+	// PR-CFG-C contract-as-auth-truth: list endpoint is admin-gated.
+	_, has403 := c.HTTP.Responses[403]
+	assert.True(t, has403, "http.config.list.v1 must declare 403 (route is RoleAdmin-gated)")
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
 
 	// Non-sensitive entry: sensitive=false.
 	c.ValidateResponse(t, []byte(`{"data":[{"id":"c-1","key":"app.name","value":"myapp","sensitive":false,"version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))

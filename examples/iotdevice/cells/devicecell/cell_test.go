@@ -258,6 +258,26 @@ func TestDeviceCell_RouteListDevices_Authz(t *testing.T) {
 
 		assert.Equal(t, http.StatusForbidden, rec.Code)
 	})
+
+	// Confirms list endpoint is admin-only: operator and device roles are
+	// allowed on enqueue/dequeue but must not enumerate the device fleet.
+	t.Run("403 operator", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/", nil)
+		req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
+
+	t.Run("403 device", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/devices/", nil)
+		req = req.WithContext(auth.TestContext("device-1", []string{dto.RoleDevice}))
+		r.ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusForbidden, rec.Code)
+	})
 }
 
 func TestDeviceCell_RouteGetStatus(t *testing.T) {

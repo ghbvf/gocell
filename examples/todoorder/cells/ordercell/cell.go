@@ -23,6 +23,13 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+// Role constants re-exported from internal/dto for use by the assembly root
+// (main.go). The internal package is not importable from outside the
+// examples/todoorder/cells/ordercell subtree per Go's internal package rule.
+const (
+	RoleCustomer = dto.RoleCustomer
+)
+
 // Compile-time interface checks.
 var (
 	_ cell.Cell                  = (*OrderCell)(nil)
