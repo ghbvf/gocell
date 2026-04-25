@@ -173,11 +173,11 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 		v := ap.TokenVerifier()
 		if v == nil {
 			return nil, fmt.Errorf(
-				"bootstrap: cell %q implements cell.AuthProvider but TokenVerifier() returned nil", id)
+				"bootstrap: cell %q implements authProvider (cell.AuthProvider) but TokenVerifier() returned nil", id)
 		}
 		if found != nil {
 			return nil, fmt.Errorf(
-				"bootstrap: multiple cell.AuthProvider cells discovered: %q and %q; "+
+				"bootstrap: multiple authProvider cells discovered: %q and %q; "+
 					"keep only one or supply the verifier explicitly via cell.NewAuthJWT(verifier)",
 				foundID, id)
 		}
@@ -186,8 +186,8 @@ func discoverAuthVerifierFromAssembly(asm cell.AssemblyRef) (auth.IntentTokenVer
 	}
 	if found == nil {
 		return nil, fmt.Errorf(
-			"bootstrap: AuthJWTFromAssembly found no cell.AuthProvider cell in the assembly; " +
-				"register a cell whose TokenVerifier() returns a non-nil auth.IntentTokenVerifier, " +
+			"bootstrap: AuthJWTFromAssembly found no authProvider cell in the assembly; " +
+				"register a cell implementing cell.AuthProvider whose TokenVerifier() returns a non-nil auth.IntentTokenVerifier, " +
 				"or wire the verifier explicitly via cell.NewAuthJWT(verifier)")
 	}
 	return found, nil

@@ -449,7 +449,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "no cell.AuthProvider")
+		assert.Contains(t, err.Error(), "authProvider cell")
 	})
 
 	t.Run("multiple_providers_returns_error", func(t *testing.T) {
@@ -467,7 +467,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
-		assert.Contains(t, err.Error(), "multiple cell.AuthProvider")
+		assert.Contains(t, err.Error(), "multiple authProvider cells")
 	})
 
 	t.Run("nil_verifier_returns_error", func(t *testing.T) {
