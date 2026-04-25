@@ -138,9 +138,6 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
 	}
-	if b.relayHealthNil {
-		return fmt.Errorf("bootstrap: relay must not be nil in WithRelayHealth")
-	}
 	if b.managedResourceNil {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}

@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
@@ -109,6 +110,7 @@ func newTestCellWithBootstrap(
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
+		WithRefreshMetricsProvider(metrics.NopProvider{}),
 	}
 	if len(bootstrapOpts) > 0 {
 		opts = append(opts, WithInitialAdminBootstrap(bootstrapOpts...))
@@ -173,6 +175,7 @@ func TestInit_BootstrapDefaultBehaviorIsNoop(t *testing.T) {
 		WithJWTIssuer(testIssuer),
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
+		WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, ac.Init(context.Background(), testDeps()))
 
@@ -218,6 +221,7 @@ func TestInit_BootstrapAlreadyHasAdmin_NilCleaner(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
+		WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, ac.Init(context.Background(), testDeps()))
 
@@ -272,6 +276,7 @@ func TestInit_BootstrapAdminExists_FreshOrphanFile_SweepCleanerRegistered(t *tes
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
+		WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, ac.Init(context.Background(), testDeps()))
 
@@ -326,6 +331,7 @@ func TestInit_BootstrapUser_HasPasswordResetRequired(t *testing.T) {
 		WithJWTVerifier(testVerifier),
 		WithRefreshStore(newTestRefreshStore()),
 		WithInitialAdminBootstrap(bootstrapOpts...),
+		WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 	require.NoError(t, ac.Init(context.Background(), testDeps()))
 

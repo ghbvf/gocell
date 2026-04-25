@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"reflect"
 
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
@@ -60,23 +61,39 @@ var _ Emitter = (*WriterEmitter)(nil)
 // DirectEmitter emits by wrapping entries in the v1 wire envelope and calling
 // Publisher.Publish directly.
 type DirectEmitter struct {
-	publisher Publisher
-	mode      DirectPublishFailureMode
-	logger    *slog.Logger
+	publisher         Publisher
+	mode              DirectPublishFailureMode
+	logger            *slog.Logger
+	failOpenDroppedCv metrics.CounterVec
 }
 
 // NewDirectEmitter adapts a Publisher into an Emitter that publishes v1 wire
-// envelopes. A nil logger uses slog.Default().
-func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, loggers ...*slog.Logger) (*DirectEmitter, error) {
+// envelopes. mp is a required metrics.Provider used to register the
+// gocell_outbox_emit_failopen_dropped_total counter; pass metrics.NopProvider{}
+// in tests or demos where no backend is wired. A nil mp returns an errcode
+// error. A nil logger uses slog.Default().
+func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, loggers ...*slog.Logger) (*DirectEmitter, error) {
 	if isNilEmitterDependency(p) {
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")
+	}
+	if mp == nil {
+		return nil, errcode.New(errcode.ErrCellMissingOutbox,
+			"outbox: nil metrics provider for DirectEmitter")
+	}
+	cv, err := mp.CounterVec(metrics.CounterOpts{
+		Name:       "gocell_outbox_emit_failopen_dropped_total",
+		Help:       "Total number of outbox entries dropped by the fail-open emitter path.",
+		LabelNames: []string{"cell", "topic"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("outbox: register failopen_dropped counter: %w", err)
 	}
 	logger := slog.Default()
 	if len(loggers) > 0 && loggers[0] != nil {
 		logger = loggers[0]
 	}
-	return &DirectEmitter{publisher: p, mode: mode, logger: logger}, nil
+	return &DirectEmitter{publisher: p, mode: mode, logger: logger, failOpenDroppedCv: cv}, nil
 }
 
 func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
@@ -105,6 +122,10 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 				slog.String("entry_id", entry.ID),
 				slog.String("event_type", entry.EventType),
 				slog.String("error", err.Error()))
+			e.failOpenDroppedCv.With(metrics.Labels{
+				"cell":  entry.AggregateType,
+				"topic": topic,
+			}).Inc()
 			return nil
 		}
 		return fmt.Errorf("outbox: direct publish failed for topic %s: %w", topic, err)

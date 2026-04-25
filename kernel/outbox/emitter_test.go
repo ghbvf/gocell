@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,14 +33,14 @@ func TestWriterEmitter_EmitDelegatesToWriter(t *testing.T) {
 }
 
 func TestDirectEmitter_ConstructRejectsNilPublisher(t *testing.T) {
-	_, err := NewDirectEmitter(nil, DirectPublishFailClosed)
+	_, err := NewDirectEmitter(nil, DirectPublishFailClosed, metrics.NopProvider{})
 
 	assert.Error(t, err)
 }
 
 func TestDirectEmitter_EmitWrapsV1EnvelopeAndPublishes(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{})
 	require.NoError(t, err)
 
 	entry := validEntry("direct-emitter")
@@ -63,7 +64,7 @@ func TestDirectEmitter_EmitWrapsV1EnvelopeAndPublishes(t *testing.T) {
 func TestDirectEmitter_FailClosedReturnsPublishError(t *testing.T) {
 	want := errors.New("broker down")
 	publisher := &recordingEmitterPublisher{err: want}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailClosed, metrics.NopProvider{})
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), validEntry("direct-fail-closed"))
@@ -74,7 +75,7 @@ func TestDirectEmitter_FailClosedReturnsPublishError(t *testing.T) {
 func TestDirectEmitter_FailOpenSwallowsPublishError(t *testing.T) {
 	want := errors.New("broker down")
 	publisher := &recordingEmitterPublisher{err: want}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{})
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), validEntry("direct-fail-open"))
@@ -85,7 +86,7 @@ func TestDirectEmitter_FailOpenSwallowsPublishError(t *testing.T) {
 
 func TestDirectEmitter_InvalidEntryFailsBeforePublish(t *testing.T) {
 	publisher := &recordingEmitterPublisher{}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{})
 	require.NoError(t, err)
 
 	got := emitter.Emit(context.Background(), Entry{})
@@ -145,7 +146,7 @@ func TestWriterEmitter_Durable(t *testing.T) {
 
 // TestDirectEmitter_Durable: DirectEmitter is always non-durable by design.
 func TestDirectEmitter_Durable(t *testing.T) {
-	e, err := NewDirectEmitter(&recordingEmitterPublisher{}, DirectPublishFailOpen)
+	e, err := NewDirectEmitter(&recordingEmitterPublisher{}, DirectPublishFailOpen, metrics.NopProvider{})
 	require.NoError(t, err)
 	assert.False(t, e.Durable())
 	assert.False(t, ReportDurable(e))
@@ -188,7 +189,7 @@ func TestDirectEmitter_EntryFailurePolicyOverridesCtorDefault(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
-			emitter, err := NewDirectEmitter(publisher, tc.ctorMode)
+			emitter, err := NewDirectEmitter(publisher, tc.ctorMode, metrics.NopProvider{})
 			require.NoError(t, err)
 
 			entry := validEntry("policy-test-" + tc.name)
@@ -223,3 +224,80 @@ func TestFailurePolicy_Resolve(t *testing.T) {
 			"policy=%v default=%v", tc.policy, tc.ctorDefault)
 	}
 }
+
+// TM5: TestDirectEmitter_FailOpenCounterIncrement verifies that the
+// gocell_outbox_emit_failopen_dropped_total counter increments on each
+// fail-open dropped event.
+func TestDirectEmitter_FailOpenCounterIncrement(t *testing.T) {
+	spy := &spyMetricsProvider{}
+	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
+
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, spy)
+	require.NoError(t, err)
+
+	entry := validEntry("counter-test")
+	entry.Topic = "test.topic.v1"
+
+	require.NoError(t, emitter.Emit(context.Background(), entry))
+	require.NoError(t, emitter.Emit(context.Background(), entry))
+	require.NoError(t, emitter.Emit(context.Background(), entry))
+
+	assert.Equal(t, 3, spy.counter.count, "failopen_dropped counter must increment on each dropped event")
+}
+
+// TM7: TestNewDirectEmitter_NilProvider verifies that passing a nil
+// metrics.Provider returns an errcode error (fail-fast, not nil-propagation).
+func TestNewDirectEmitter_NilProvider(t *testing.T) {
+	publisher := &recordingEmitterPublisher{}
+	_, err := NewDirectEmitter(publisher, DirectPublishFailClosed, nil)
+	require.Error(t, err)
+	// errcode error — not a raw errors.New value
+	assert.NotNil(t, err, "nil provider must be rejected at construction time")
+}
+
+// ---------------------------------------------------------------------------
+// spy metrics helpers (test-only, same package)
+// ---------------------------------------------------------------------------
+
+type spyCounter struct{ count int }
+
+func (c *spyCounter) Inc()          { c.count++ }
+func (c *spyCounter) Add(d float64) { c.count += int(d) }
+
+type spyCounterVec struct {
+	counter *spyCounter
+	labels  []string
+}
+
+func (v *spyCounterVec) Registered() bool { return true }
+func (v *spyCounterVec) With(l metrics.Labels) metrics.Counter {
+	metrics.MustValidateLabels(v.labels, l)
+	return v.counter
+}
+
+type spyHistogramVec struct{ labels []string }
+
+func (v *spyHistogramVec) Registered() bool { return true }
+func (v *spyHistogramVec) With(l metrics.Labels) metrics.Histogram {
+	metrics.MustValidateLabels(v.labels, l)
+	return spyHistogram{}
+}
+
+type spyHistogram struct{}
+
+func (spyHistogram) Observe(_ float64) {}
+
+type spyMetricsProvider struct {
+	counter *spyCounter
+}
+
+func (p *spyMetricsProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
+	p.counter = &spyCounter{}
+	return &spyCounterVec{counter: p.counter, labels: opts.LabelNames}, nil
+}
+
+func (p *spyMetricsProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
+	return &spyHistogramVec{labels: opts.LabelNames}, nil
+}
+
+func (p *spyMetricsProvider) Unregister(_ metrics.Collector) error { return nil }

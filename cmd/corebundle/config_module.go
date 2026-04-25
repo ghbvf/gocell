@@ -77,7 +77,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configcore pg config: %w", err)
 	}
-	pgRes, cellOpts, err := buildConfigCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus, shared.PromStack.metricProvider, vt)
+	pgRes, cellOpts, relayOpts, err := buildConfigCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus, shared.PromStack.metricProvider, vt)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -97,6 +97,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		// the transactional writer; memory adapter passes writer=nil).
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithOnStaleCipherMetric(staleCipherCounter),
+		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
 	}
 	if vt != nil {
 		baseOpts = append(baseOpts, configcore.WithValueTransformer(vt))
@@ -114,6 +115,9 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		opts = append(opts, bootstrap.WithManagedResource(pgRes))
 		provisional = append(provisional, pgRes)
 	}
+	// Relay opts: in postgres mode, relayOpts contains WithManagedResource(relay)
+	// so the relay worker is independently managed by bootstrap (Worker/Close/Checkers).
+	opts = append(opts, relayOpts...)
 	// A19: when the KeyProvider opts into lifecycle.ManagedResource (today:
 	// vault-transit via TransitKeyProvider.Checkers()["vault_transit_ready"]),
 	// register it with bootstrap so its probes flow into /readyz. Local-aes

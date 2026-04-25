@@ -112,16 +112,16 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
-	pgRes, cellAdapterOpts, err := buildConfigCoreOpts(ctx,
+	pgRes, cellAdapterOpts, relayBootstrapOpts, err := buildConfigCoreOpts(ctx,
 		bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
 		adapterpg.Config{DSN: pgConnStr},
 		eb, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
 	require.NotNil(t, pgRes,
 		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil ManagedResource in PG mode")
-	relayWorker := pgRes.Worker()
-	require.NotNil(t, relayWorker,
-		"A11 regression guard: ManagedResource MUST carry a non-nil relay worker in PG mode")
+	// Relay is now registered via independent bootstrap opts, not via PGResource.Worker().
+	require.NotEmpty(t, relayBootstrapOpts,
+		"A11 regression guard: bootstrapOpts MUST carry relay ManagedResource in PG mode")
 	t.Cleanup(func() { _ = pgRes.Close(context.Background()) })
 
 	// --- Step 4: Subscribe on the same eb BEFORE starting the bundle ---
@@ -190,12 +190,14 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithRefreshMetricsProvider(kernelmetrics.NopProvider{}),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
 		auditcore.WithOutboxDeps(eb, nil),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
 	)
 
 	asm := assembly.New(assembly.Config{ID: "e2e-test", DurabilityMode: cell.DurabilityDemo})
@@ -207,20 +209,20 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app := bootstrap.New(
+	baseOpts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), bootstrap.PolicyJWTFromAssembly(asm), bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithShutdownTimeout(3*time.Second),
+		bootstrap.WithShutdownTimeout(3 * time.Second),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
 		// (change-password, logout) are declared via auth.Mount inside accesscore's
 		// RegisterRoutes. PolicyJWTFromAssembly discovers the verifier lazily.
-		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
-		// not from a manual adapterpg.NewOutboxRelay call. If the production
-		// wiring stops producing a relay worker, require.NotNil above fires.
-		bootstrap.WithWorkers(relayWorker),
-	)
+	}
+	// A11 regression guard: relay is registered via relayBootstrapOpts from
+	// buildConfigCoreOpts so its Worker/Close/Checkers lifecycle is independently
+	// managed by bootstrap — not carried inside PGResource.Worker().
+	app := bootstrap.New(append(baseOpts, relayBootstrapOpts...)...)
 
 	appErrCh := make(chan error, 1)
 	appCtx, appCancel := context.WithCancel(ctx)

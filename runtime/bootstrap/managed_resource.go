@@ -20,9 +20,9 @@ import (
 // (last registered is first closed), mirroring fx hook order.
 //
 // Both bare-nil and typed-nil (non-nil interface holding a nil pointer) are
-// rejected at phase0 with a fatal error, mirroring WithCircuitBreaker /
-// WithRelayHealth fail-fast pattern. This prevents a silent wiring bug from
-// panicking at Checkers()/Worker()/Close() call time.
+// rejected at phase0 with a fatal error, mirroring the WithCircuitBreaker
+// fail-fast pattern. This prevents a silent wiring bug from panicking at
+// Checkers()/Worker()/Close() call time.
 //
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — hook registration

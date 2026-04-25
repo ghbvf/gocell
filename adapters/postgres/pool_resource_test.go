@@ -7,15 +7,8 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/lifecycle"
-	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
-
-// stubWorker is a minimal kernel worker stub for unit tests.
-type stubWorker struct{}
-
-func (s *stubWorker) Start(_ context.Context) error { return nil }
-func (s *stubWorker) Stop(_ context.Context) error  { return nil }
 
 // stubPool creates a minimal *Pool for unit tests without a real DB.
 // We build the Pool struct directly via package-internal access since tests
@@ -27,16 +20,13 @@ func newStubPool() *Pool {
 // TestNewPGResource_Fields verifies construction and default name.
 func TestNewPGResource_Fields(t *testing.T) {
 	pool := newStubPool()
-	res, err := NewPGResource(pool, nil)
+	res, err := NewPGResource(pool)
 	if err != nil {
 		t.Fatalf("NewPGResource returned error: %v", err)
 	}
 
 	if res.pool != pool {
 		t.Error("pool field not set correctly")
-	}
-	if res.relay != nil {
-		t.Error("relay should be nil when not supplied")
 	}
 	if res.name != "postgres" {
 		t.Errorf("expected name 'postgres', got %q", res.name)
@@ -47,7 +37,7 @@ func TestNewPGResource_Fields(t *testing.T) {
 // pool would nil-deref at Checkers() or Close() time (the worst moments to
 // discover it). The constructor must surface this at wiring time instead.
 func TestNewPGResource_RejectsNilPool(t *testing.T) {
-	res, err := NewPGResource(nil, nil)
+	res, err := NewPGResource(nil)
 	if err == nil {
 		t.Fatal("expected error for nil pool, got nil")
 	}
@@ -65,9 +55,9 @@ func TestNewPGResource_RejectsNilPool(t *testing.T) {
 
 // mustNewPGResource builds a PGResource for tests; fatals on error so test
 // bodies stay focused on the assertion under test.
-func mustNewPGResource(t *testing.T, pool *Pool, relay kworker.Worker) *PGResource {
+func mustNewPGResource(t *testing.T, pool *Pool) *PGResource {
 	t.Helper()
-	res, err := NewPGResource(pool, relay)
+	res, err := NewPGResource(pool)
 	if err != nil {
 		t.Fatalf("NewPGResource: %v", err)
 	}
@@ -78,7 +68,7 @@ func mustNewPGResource(t *testing.T, pool *Pool, relay kworker.Worker) *PGResour
 // key. The actual health call requires a real PG pool, so we only check the map
 // structure here.
 func TestPGResource_CheckersReturnsNamed(t *testing.T) {
-	res := mustNewPGResource(t, newStubPool(), nil)
+	res := mustNewPGResource(t, newStubPool())
 	checkers := res.Checkers()
 	if len(checkers) != 1 {
 		t.Fatalf("expected 1 checker, got %d", len(checkers))
@@ -92,24 +82,12 @@ func TestPGResource_CheckersReturnsNamed(t *testing.T) {
 	}
 }
 
-// TestPGResource_WorkerNil verifies nil relay propagates.
-func TestPGResource_WorkerNil(t *testing.T) {
-	res := mustNewPGResource(t, newStubPool(), nil)
+// TestPGResource_WorkerAlwaysNil verifies that PGResource.Worker() always
+// returns nil — the relay is registered as a separate ManagedResource.
+func TestPGResource_WorkerAlwaysNil(t *testing.T) {
+	res := mustNewPGResource(t, newStubPool())
 	if res.Worker() != nil {
-		t.Error("expected nil worker")
-	}
-}
-
-// TestPGResource_WorkerNonNil verifies a supplied relay is returned.
-func TestPGResource_WorkerNonNil(t *testing.T) {
-	sw := &stubWorker{}
-	res := mustNewPGResource(t, newStubPool(), sw)
-	if res.Worker() == nil {
-		t.Error("expected non-nil worker")
-	}
-	// Should be the same instance.
-	if res.Worker() != kworker.Worker(sw) {
-		t.Error("returned worker is not the supplied stub")
+		t.Error("expected nil worker: relay is registered independently via bootstrap.WithManagedResource")
 	}
 }
 

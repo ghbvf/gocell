@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
@@ -25,7 +26,7 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 
 func newDirectTestEmitter(t *testing.T, pub outbox.Publisher, mode outbox.DirectPublishFailureMode) outbox.Emitter {
 	t.Helper()
-	emitter, err := outbox.NewDirectEmitter(pub, mode, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(pub, mode, metrics.NopProvider{}, slog.Default())
 	require.NoError(t, err)
 	return emitter
 }

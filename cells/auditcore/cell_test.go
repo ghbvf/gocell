@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/auditcore/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -47,6 +48,7 @@ func newTestCell() *AuditCore {
 		WithHMACKey(testHMACKey),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
 
@@ -117,6 +119,7 @@ func TestAuditCore_HMACKeyFromConfig(t *testing.T) {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	ctx := context.Background()
 	deps := cell.Dependencies{
@@ -194,6 +197,7 @@ func TestInit_DemoMode_WithPublisher_Succeeds(t *testing.T) {
 		WithArchiveStore(mem.NewArchiveStore()),
 		WithOutboxDeps(eventbus.New(), nil),
 		WithHMACKey(testHMACKey),
+		WithMetricsProvider(metrics.NopProvider{}),
 		// No outboxWriter, no txRunner — demo mode with publisher.
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: map[string]any{}, DurabilityMode: cell.DurabilityDemo})
@@ -412,6 +416,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 				WithOutboxDeps(nil, tc.outbox),
 				WithTxManager(tc.tx),
 				WithCursorCodec(mustNewCodec(t, productionKey)),
+				WithMetricsProvider(metrics.NopProvider{}),
 			)
 			require.NoError(t, c.Init(context.Background(), cell.Dependencies{
 				Config:         map[string]any{},

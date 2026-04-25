@@ -16,6 +16,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -73,12 +74,14 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -86,6 +89,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 		auditcore.WithHMACKey([]byte("test-hmac-key-32-bytes-long!!!!")),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	asm := assembly.New(assembly.Config{ID: "auth-test", DurabilityMode: cell.DurabilityDemo})
@@ -280,12 +284,14 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -293,6 +299,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 		auditcore.WithHMACKey([]byte("guard-test-hmac-key-32-bytes!!!!!")),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	asm := assembly.New(assembly.Config{ID: "guard-test", DurabilityMode: cell.DurabilityDemo})
@@ -495,12 +502,14 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		accesscore.WithJWTIssuer(jwtIssuer),
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
+		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
 	)
 	cc := configcore.NewConfigCore(
 		configcore.WithInMemoryDefaults(),
 		configcore.WithOutboxDeps(eb, nw),
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
+		configcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 	auc := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -508,6 +517,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		auditcore.WithHMACKey([]byte("health-test-hmac-key-32-bytes!!")),
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}),
 	)
 
 	asm := assembly.New(assembly.Config{ID: "health-listener-test", DurabilityMode: cell.DurabilityDemo})

@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -41,6 +42,7 @@ func newTestCell() *ConfigCore {
 		WithOutboxDeps(eventbus.New(), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
 		WithTxManager(noopTxRunner{}),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
 
@@ -152,6 +154,7 @@ func TestConfigCore_InitDemoMode_WithPublisher_Succeeds(t *testing.T) {
 	c := NewConfigCore(
 		WithInMemoryDefaults(),
 		WithOutboxDeps(eventbus.New(), nil),
+		WithMetricsProvider(metrics.NopProvider{}),
 	)
 	err := c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, err)

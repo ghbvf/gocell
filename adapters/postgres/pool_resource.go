@@ -16,11 +16,12 @@ type poolCloser interface {
 	Close(ctx context.Context) error
 }
 
-// PGResource wraps a Pool (and an optional relay worker) as a
-// lifecycle.ManagedResource. Bootstrap uses it to:
+// PGResource wraps a Pool as a lifecycle.ManagedResource. Bootstrap uses it to:
 //   - Register the pool health probe in /readyz under the "postgres" name.
-//   - Start/stop the relay worker through the bootstrap WorkerGroup.
 //   - Close the pool during LIFO shutdown.
+//
+// The outbox relay is registered independently via bootstrap.WithManagedResource
+// so that its worker lifecycle is managed separately from the pool.
 //
 // Construct via NewPGResource; do not create the zero value directly.
 //
@@ -28,7 +29,6 @@ type poolCloser interface {
 // by Hook registration; GoCell converges this into a single ManagedResource.
 type PGResource struct {
 	pool          *Pool
-	relay         kworker.Worker                  // optional; nil = no relay worker
 	name          string                          // health checker name; default "postgres"
 	closeOverride poolCloser                      // non-nil only in tests; replaces pool for Close()
 	healthFunc    func(ctx context.Context) error // non-nil only in tests; replaces pool.Health
@@ -39,20 +39,18 @@ type PGResource struct {
 // pool at runtime — a silent nil would produce a panic during /readyz
 // probe or shutdown, both of which are the worst times to discover it.
 //
-// relay may be nil when no relay worker is needed (e.g. in-memory outbox
-// mode). name is always "postgres".
+// name is always "postgres".
 //
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — resource
 // registration does no nil-substitution; bad inputs surface immediately.
-func NewPGResource(pool *Pool, relay kworker.Worker) (*PGResource, error) {
+func NewPGResource(pool *Pool) (*PGResource, error) {
 	if pool == nil {
 		return nil, errcode.New(errcode.ErrValidationFailed,
 			"NewPGResource: pool must not be nil (Checkers() and Close() dereference pool)")
 	}
 	return &PGResource{
-		pool:  pool,
-		relay: relay,
-		name:  "postgres",
+		pool: pool,
+		name: "postgres",
 	}, nil
 }
 
@@ -82,9 +80,11 @@ func (r *PGResource) Checkers() map[string]func(context.Context) error {
 	}
 }
 
-// Worker returns the relay worker (may be nil).
+// Worker returns nil — PGResource wraps only the pool and has no background
+// worker. The outbox relay is registered as a separate ManagedResource via
+// bootstrap.WithManagedResource so its lifecycle is independently managed.
 func (r *PGResource) Worker() kworker.Worker {
-	return r.relay
+	return nil
 }
 
 // Close shuts down the pool, bounded by ctx. Delegates to Pool.Close(ctx)

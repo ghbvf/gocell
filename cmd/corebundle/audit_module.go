@@ -60,6 +60,7 @@ func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell
 		auditcore.WithOutboxDeps(shared.EventBus, nil),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(cursorCodec),
+		auditcore.WithMetricsProvider(shared.PromStack.metricProvider),
 	)
 	return c, nil, nil, nil
 }

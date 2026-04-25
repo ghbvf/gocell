@@ -2,17 +2,25 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
+	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
+	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
+	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // fakeResource is a test implementation of ManagedResource.
@@ -359,6 +367,271 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 		if !strings.Contains(runErr.Error(), "simulated close failure") {
 			t.Errorf("Run error %q must contain %q", runErr.Error(), "simulated close failure")
 		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Relay-as-ManagedResource tests (TM2/TM3/TM4)
+// Migrated from bootstrap_test.go TestWithRelayHealth_* equivalents.
+// These tests use WithManagedResource(relay) instead of the deleted WithRelayHealth.
+// ---------------------------------------------------------------------------
+
+// newManagedResourceTestRelay creates a Relay with all three failure budgets enabled,
+// suitable for ManagedResource integration tests.
+func newManagedResourceTestRelay() *runtimeoutbox.Relay {
+	cfg := runtimeoutbox.RelayConfig{
+		PollInterval:         5 * time.Millisecond,
+		ReclaimInterval:      10 * time.Millisecond,
+		BatchSize:            10,
+		MaxAttempts:          3,
+		BaseRetryDelay:       1 * time.Millisecond,
+		MaxRetryDelay:        10 * time.Millisecond,
+		ClaimTTL:             100 * time.Millisecond,
+		RetentionPeriod:      1 * time.Hour,
+		DeadRetentionPeriod:  24 * time.Hour,
+		CleanupWaitFloor:     5 * time.Millisecond,
+		PollFailureBudget:    3,
+		ReclaimFailureBudget: 3,
+		CleanupFailureBudget: 3,
+	}
+	return runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &koutbox.DiscardPublisher{}, cfg)
+}
+
+// managedResourceFailingStore wraps FakeStore to inject controllable ClaimPending errors.
+type managedResourceFailingStore struct {
+	*outboxtest.FakeStore
+	mu       sync.Mutex
+	claimErr error
+}
+
+func (s *managedResourceFailingStore) setClaimErr(err error) {
+	s.mu.Lock()
+	s.claimErr = err
+	s.mu.Unlock()
+}
+
+func (s *managedResourceFailingStore) ClaimPending(ctx context.Context, batchSize int) ([]runtimeoutbox.ClaimedEntry, error) {
+	s.mu.Lock()
+	err := s.claimErr
+	s.mu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return s.FakeStore.ClaimPending(ctx, batchSize)
+}
+
+// TestRelay_AsManagedResource_RegistersCheckers verifies that a Relay registered
+// via WithManagedResource contributes its three health checkers to /readyz?verbose.
+// Migrated from TestWithRelayHealth_RegistersCheckers.
+func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
+	ln := newLocalListener(t)
+
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-checkers", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	relay := newManagedResourceTestRelay()
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithShutdownTimeout(2*time.Second),
+		WithManagedResource(relay),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// GET /readyz?verbose — all three relay checkers must appear.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+
+	assert.Contains(t, deps, "outbox-relay-poll", "poll checker must be in /readyz?verbose")
+	assert.Contains(t, deps, "outbox-relay-reclaim", "reclaim checker must be in /readyz?verbose")
+	assert.Contains(t, deps, "outbox-relay-cleanup", "cleanup checker must be in /readyz?verbose")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// TestRelay_AsManagedResource_TrippedBudget_Returns503 verifies the P1-15 core contract:
+// poll budget trip → /readyz returns 503; store recovery → /readyz returns 200.
+// Migrated from TestWithRelayHealth_TrippedBudget_Returns503.
+func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
+	ln := newLocalListener(t)
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-trip", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	store := &managedResourceFailingStore{FakeStore: outboxtest.NewFakeStore()}
+	store.setClaimErr(errors.New("db down"))
+
+	cfg := runtimeoutbox.RelayConfig{
+		PollInterval:         5 * time.Millisecond,
+		ReclaimInterval:      10 * time.Millisecond,
+		BatchSize:            10,
+		MaxAttempts:          3,
+		BaseRetryDelay:       1 * time.Millisecond,
+		MaxRetryDelay:        10 * time.Millisecond,
+		ClaimTTL:             100 * time.Millisecond,
+		RetentionPeriod:      1 * time.Hour,
+		DeadRetentionPeriod:  24 * time.Hour,
+		CleanupWaitFloor:     5 * time.Millisecond,
+		PollFailureBudget:    3,
+		ReclaimFailureBudget: 3,
+		CleanupFailureBudget: 3,
+	}
+	relay := runtimeoutbox.NewRelay(store, &koutbox.DiscardPublisher{}, cfg)
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithShutdownTimeout(2*time.Second),
+		WithManagedResource(relay),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+	defer func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("bootstrap did not shut down in time")
+		}
+	}()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	// Start the relay so its poll loop drives the failure budget.
+	// WithManagedResource registers the relay worker in bootstrap; we also start
+	// it directly here to exercise the budget trip path independently of the
+	// bootstrap worker lifecycle (bootstrap starts workers asynchronously).
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	relayDone := make(chan error, 1)
+	go func() { relayDone <- relay.Start(relayCtx) }()
+	defer func() {
+		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer stopCancel()
+		_ = relay.Stop(stopCtx)
+		relayCancel()
+		<-relayDone
+	}()
+
+	// Phase 1: store failing — budget trips — /readyz must return 503.
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusServiceUnavailable
+	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 503 after poll budget trips")
+
+	// Verify verbose output contains the unhealthy checker name.
+	verboseResp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	require.NoError(t, err)
+	defer verboseResp.Body.Close()
+	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
+	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map")
+	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
+	pollProbe, ok := deps["outbox-relay-poll"].(map[string]any)
+	require.True(t, ok, "outbox-relay-poll must be a structured ProbeResult")
+	assert.Equal(t, "unhealthy", pollProbe["status"], "outbox-relay-poll: status must be unhealthy")
+
+	// Phase 2: store recovers — budget resets — /readyz must return 200.
+	store.setClaimErr(nil)
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 200 after store recovers")
+}
+
+// TestRelay_AsManagedResource_DisabledBudget_SkipsChecker verifies that a relay with
+// poll budget disabled (threshold=0) does not register the outbox-relay-poll checker.
+// Migrated from TestWithRelayHealth_DisabledBudget_SkipsChecker.
+func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
+	ln := newLocalListener(t)
+	asm := assembly.New(assembly.Config{ID: "test-relay-mr-disabled", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+
+	// Poll budget disabled (=0), others enabled.
+	cfg := runtimeoutbox.RelayConfig{
+		PollInterval:         5 * time.Millisecond,
+		ReclaimInterval:      10 * time.Millisecond,
+		BatchSize:            10,
+		MaxAttempts:          3,
+		BaseRetryDelay:       1 * time.Millisecond,
+		MaxRetryDelay:        10 * time.Millisecond,
+		ClaimTTL:             100 * time.Millisecond,
+		RetentionPeriod:      1 * time.Hour,
+		DeadRetentionPeriod:  24 * time.Hour,
+		CleanupWaitFloor:     5 * time.Millisecond,
+		PollFailureBudget:    0, // disabled
+		ReclaimFailureBudget: 3,
+		CleanupFailureBudget: 3,
+	}
+	relay := runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &koutbox.DiscardPublisher{}, cfg)
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithShutdownTimeout(2*time.Second),
+		WithManagedResource(relay),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	addr := ln.Addr().String()
+	waitForHealthy(t, addr)
+
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	require.NoError(t, err)
+	defer resp.Body.Close()
+
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	deps, _ := readyzPayload(t, body)["dependencies"].(map[string]any)
+
+	assert.NotContains(t, deps, "outbox-relay-poll",
+		"disabled poll budget must not register a checker")
+	assert.Contains(t, deps, "outbox-relay-reclaim")
+	assert.Contains(t, deps, "outbox-relay-cleanup")
+
+	cancel()
+	select {
+	case runErr := <-done:
+		assert.NoError(t, runErr)
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
 	}

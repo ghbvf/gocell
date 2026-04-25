@@ -7,7 +7,6 @@ import (
 
 	gcprom "github.com/ghbvf/gocell/adapters/prometheus"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/errcode"
 	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -74,19 +73,27 @@ func TestMetricProvider_HistogramObserve(t *testing.T) {
 	}
 }
 
-func TestMetricProvider_RegisterDuplicateReturnsError(t *testing.T) {
-	p, _ := newTestProvider(t)
+func TestMetricProvider_RegisterDuplicateReturnsExisting(t *testing.T) {
+	// CounterVec is idempotent: a second registration with the same name
+	// returns the existing collector rather than an error. This lets multiple
+	// cells share a single MetricProvider and register the same outbox counter
+	// without failing init (e.g. accesscore + auditcore in one assembly).
+	p, reg := newTestProvider(t)
 	opts := metrics.CounterOpts{Name: "dup_total", Help: "h", LabelNames: []string{"a"}}
-	if _, err := p.CounterVec(opts); err != nil {
+	cv1, err := p.CounterVec(opts)
+	if err != nil {
 		t.Fatalf("first register: %v", err)
 	}
-	_, err := p.CounterVec(opts)
-	if err == nil {
-		t.Fatal("duplicate register must fail")
+	cv2, err := p.CounterVec(opts)
+	if err != nil {
+		t.Fatalf("duplicate register must succeed (return existing), got error: %v", err)
 	}
-	var ec *errcode.Error
-	if !errors.As(err, &ec) || ec.Code != gcprom.ErrAdapterPromRegister {
-		t.Fatalf("expected code %s, got %v", gcprom.ErrAdapterPromRegister, err)
+	// Both vecs must be functional and share the same underlying collector.
+	cv1.With(metrics.Labels{"a": "x"}).Inc()
+	cv2.With(metrics.Labels{"a": "x"}).Inc()
+	// The shared collector should report 2 increments.
+	if v := testutil.ToFloat64(collect(t, reg, "gocelltest_dup_total", prom.Labels{"a": "x"})); v != 2 {
+		t.Fatalf("shared counter = %v, want 2", v)
 	}
 }
 
@@ -143,14 +150,14 @@ func TestMetricProvider_Unregister_RemovesAndAllowsReregister(t *testing.T) {
 		t.Fatalf("CounterVec: %v", err)
 	}
 
-	// Registering the same name again must fail — baseline for the rollback
-	// contract (without Unregister, rollback would be useless).
+	// Registering the same name again returns the existing collector (idempotent),
+	// not an error. This is by design — see TestMetricProvider_RegisterDuplicateReturnsExisting.
 	if _, err := p.CounterVec(metrics.CounterOpts{
 		Name:       "unreg_demo_total",
 		Help:       "demo",
 		LabelNames: []string{"label"},
-	}); err == nil {
-		t.Fatal("duplicate CounterVec without Unregister should fail")
+	}); err != nil {
+		t.Fatalf("duplicate CounterVec should return existing collector, got error: %v", err)
 	}
 
 	// Unregister the first vec. Same name must now be re-registrable.

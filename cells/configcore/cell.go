@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/slices/flagwrite"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -85,6 +86,13 @@ func WithLogger(l *slog.Logger) Option {
 // WithTxManager sets the TxRunner for transactional guarantees (L2 atomicity).
 func WithTxManager(tx persistence.TxRunner) Option {
 	return func(c *ConfigCore) { c.txRunner = tx }
+}
+
+// WithMetricsProvider sets the metrics provider used by the DirectEmitter in
+// demo mode. Required when WithOutboxDeps sets a publisher without a real
+// outboxWriter. Pass metrics.NopProvider{} explicitly in tests.
+func WithMetricsProvider(p metrics.Provider) Option {
+	return func(c *ConfigCore) { c.metricsProvider = p }
 }
 
 // WithCursorCodec sets the cursor codec for pagination.
@@ -167,6 +175,7 @@ type ConfigCore struct {
 	txRunner           persistence.TxRunner
 	cursorCodec        *query.CursorCodec
 	logger             *slog.Logger
+	metricsProvider    metrics.Provider
 	keyProvider        kcrypto.KeyProvider
 	valueTransformer   kcrypto.ValueTransformer
 	pgPool             *pgxpool.Pool // stored by WithPostgresPool for deferred Init()

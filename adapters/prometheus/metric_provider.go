@@ -1,6 +1,7 @@
 package prometheus
 
 import (
+	"errors"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -55,8 +56,10 @@ func NewMetricProvider(cfg MetricProviderConfig) (*MetricProvider, error) {
 }
 
 // CounterVec registers and returns a CounterVec bound to the provider's
-// registry. A duplicate Name (after namespace prefixing) results in
-// ErrAdapterPromRegister.
+// registry. If the same metric name has already been registered (e.g. when
+// multiple cells share a single MetricProvider), the existing collector is
+// returned — matching the standard prometheus AlreadyRegisteredError pattern.
+// Any other registration error surfaces as ErrAdapterPromRegister.
 func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVec, error) {
 	cv := prom.NewCounterVec(prom.CounterOpts{
 		Namespace: p.cfg.Namespace,
@@ -64,6 +67,18 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 		Help:      opts.Help,
 	}, opts.LabelNames)
 	if err := p.cfg.Registry.Register(cv); err != nil {
+		var are prom.AlreadyRegisteredError
+		if ok := errors.As(err, &are); ok {
+			// Return the previously registered collector so callers sharing a
+			// provider (e.g. accesscore + auditcore in the same assembly) get
+			// back a valid CounterVec without failing init.
+			existing, castOK := are.ExistingCollector.(*prom.CounterVec)
+			if !castOK {
+				return nil, errcode.Wrap(ErrAdapterPromRegister,
+					"prometheus metric provider: existing collector type mismatch for counter "+opts.Name, err)
+			}
+			return &promCounterVec{inner: existing, labels: append([]string(nil), opts.LabelNames...)}, nil
+		}
 		return nil, errcode.Wrap(ErrAdapterPromRegister,
 			"prometheus metric provider: register counter "+opts.Name, err)
 	}
@@ -75,7 +90,9 @@ func (p *MetricProvider) CounterVec(opts metrics.CounterOpts) (metrics.CounterVe
 }
 
 // HistogramVec registers and returns a HistogramVec bound to the provider's
-// registry. Empty Buckets uses Prometheus default (DefBuckets).
+// registry. Empty Buckets uses Prometheus default (DefBuckets). If the same
+// metric name has already been registered, the existing collector is returned
+// (same AlreadyRegisteredError pattern as CounterVec).
 func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.HistogramVec, error) {
 	hv := prom.NewHistogramVec(prom.HistogramOpts{
 		Namespace: p.cfg.Namespace,
@@ -84,6 +101,15 @@ func (p *MetricProvider) HistogramVec(opts metrics.HistogramOpts) (metrics.Histo
 		Buckets:   opts.Buckets,
 	}, opts.LabelNames)
 	if err := p.cfg.Registry.Register(hv); err != nil {
+		var are prom.AlreadyRegisteredError
+		if ok := errors.As(err, &are); ok {
+			existing, castOK := are.ExistingCollector.(*prom.HistogramVec)
+			if !castOK {
+				return nil, errcode.Wrap(ErrAdapterPromRegister,
+					"prometheus metric provider: existing collector type mismatch for histogram "+opts.Name, err)
+			}
+			return &promHistogramVec{inner: existing, labels: append([]string(nil), opts.LabelNames...)}, nil
+		}
 		return nil, errcode.Wrap(ErrAdapterPromRegister,
 			"prometheus metric provider: register histogram "+opts.Name, err)
 	}

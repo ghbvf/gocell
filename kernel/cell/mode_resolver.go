@@ -3,6 +3,7 @@ package cell
 import (
 	"log/slog"
 
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -15,6 +16,9 @@ import (
 // when they want a unified code path; ResolveEmitter itself accepts nil TxRunner
 // and treats it as absent (no pairing with a real writer is possible).
 //
+// MetricsProvider is required for DirectEmitter resolution paths. Pass
+// metrics.NopProvider{} explicitly in tests.
+//
 // ref: kernel/cell.CheckNotNoop — sibling durability guard.
 type EmitterConfig struct {
 	CellID            string
@@ -24,6 +28,8 @@ type EmitterConfig struct {
 	TxRunner          persistence.TxRunner
 	Logger            *slog.Logger
 	DirectPublishMode outbox.DirectPublishFailureMode
+	// MetricsProvider is REQUIRED when DurabilityDemo mode resolves to a DirectEmitter.
+	MetricsProvider metrics.Provider
 }
 
 // EmitterOutcome reports the resolved emitter and whether it is durable
@@ -97,7 +103,11 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 
 	// Publisher-preferred path: publisher present and writer absent or noop.
 	if cfg.Publisher != nil && (cfg.OutboxWriter == nil || isNooperDep(cfg.OutboxWriter)) {
-		emitter, err := outbox.NewDirectEmitter(cfg.Publisher, cfg.DirectPublishMode, logger)
+		if cfg.MetricsProvider == nil {
+			return EmitterOutcome{}, errcode.New(errcode.ErrValidationFailed,
+				cfg.CellID+" demo mode with direct publisher requires MetricsProvider; pass kernel/observability/metrics.NopProvider{} explicitly in tests")
+		}
+		emitter, err := outbox.NewDirectEmitter(cfg.Publisher, cfg.DirectPublishMode, cfg.MetricsProvider, logger)
 		if err != nil {
 			return EmitterOutcome{}, err
 		}

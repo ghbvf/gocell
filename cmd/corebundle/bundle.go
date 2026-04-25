@@ -218,17 +218,21 @@ func keyProviderToTransformer(kp kcrypto.KeyProvider) kcrypto.ValueTransformer {
 }
 
 // buildConfigCoreOpts selects storage-adapter options for configcore based on
-// the already-resolved Topology. Returns a ManagedResource (non-nil iff
-// postgres mode) and cell options to pass to configcore.NewConfigCore.
+// the already-resolved Topology. Returns:
+//   - pgRes: ManagedResource for the PG pool (non-nil iff postgres mode)
+//   - cellOpts: configcore.Option slice to pass to configcore.NewConfigCore
+//   - bootstrapOpts: bootstrap.Option slice — in postgres mode carries
+//     WithManagedResource(relay) so the relay worker is independently managed
+//   - error: fail-fast on misconfiguration
 //
 // pgCfg must be built by the caller (via LoadPGConfig) and passed explicitly;
 // buildConfigCoreOpts no longer reads environment variables directly.
 // In postgres mode, pgCfg.DSN must be non-empty; an empty DSN causes a
 // fail-fast error with a message naming GOCELL_CONFIGCORE_DATABASE_URL.
 //
-// Signature reduced from 5 return values (mode, opts, pool, relay, err) to
-// 3 (ManagedResource, opts, err). pool + relay lifecycle are now owned by
-// *adapterpg.PGResource which satisfies lifecycle.ManagedResource (kernel/lifecycle).
+// Relay worker is registered via bootstrapOpts independently of PGResource:
+// PGResource owns the pool health probe and pool shutdown (no background worker);
+// the relay is a separate ManagedResource with its own Worker/Close/Checkers.
 //
 // ref: go-zero core/conf/config.go — validate once, pass through; never
 // re-read config downstream of the validation boundary.
@@ -237,20 +241,20 @@ func keyProviderToTransformer(kp kcrypto.KeyProvider) kcrypto.ValueTransformer {
 // object, not raw env.
 // ref: Kratos wire — adapter selected at assembly init time, not run time.
 // ref: uber-go/fx lifecycle — external resources hook via ManagedResource.
-func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg adapterpg.Config, pub outbox.Publisher, metricsProvider metrics.Provider, vt kcrypto.ValueTransformer) (kernellifecycle.ManagedResource, []configcore.Option, error) {
+func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg adapterpg.Config, pub outbox.Publisher, metricsProvider metrics.Provider, vt kcrypto.ValueTransformer) (kernellifecycle.ManagedResource, []configcore.Option, []bootstrap.Option, error) {
 	switch topo.StorageBackend {
 	case "postgres":
 		if pgCfg.DSN == "" {
-			return nil, nil, fmt.Errorf("configcore postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
+			return nil, nil, nil, fmt.Errorf("configcore postgres mode requires GOCELL_CONFIGCORE_DATABASE_URL")
 		}
 		pool, err := adapterpg.NewPool(ctx, pgCfg)
 		if err != nil {
-			return nil, nil, fmt.Errorf("configcore PG pool: %w", err)
+			return nil, nil, nil, fmt.Errorf("configcore PG pool: %w", err)
 		}
 		// A12: fail-fast on schema version mismatch.
 		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, adapterpg.MigrationsFS()); schemaErr != nil {
 			_ = pool.Close(ctx)
-			return nil, nil, fmt.Errorf("configcore PG schema guard: %w", schemaErr)
+			return nil, nil, nil, fmt.Errorf("configcore PG schema guard: %w", schemaErr)
 		}
 		// A4: warn on INVALID indexes (non-fatal).
 		if invalid, detectErr := adapterpg.DetectInvalidIndexes(ctx, pool); detectErr != nil {
@@ -267,19 +271,19 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg ada
 		relayMetrics, rmErr := outbox.NewProviderRelayCollector(metricsProvider, "configcore")
 		if rmErr != nil {
 			_ = pool.Close(ctx)
-			return nil, nil, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
+			return nil, nil, nil, fmt.Errorf("configcore outbox relay metrics: %w", rmErr)
 		}
 		relayCfg.Metrics = relayMetrics
 		pgStore := adapterpg.NewOutboxStore(pool.DB())
 		relayWorker := outboxruntime.NewRelay(pgStore, pub, relayCfg)
 
-		pgRes, resErr := adapterpg.NewPGResource(pool, relayWorker)
+		pgRes, resErr := adapterpg.NewPGResource(pool)
 		if resErr != nil {
 			_ = pool.Close(ctx)
-			return nil, nil, fmt.Errorf("configcore PG resource: %w", resErr)
+			return nil, nil, nil, fmt.Errorf("configcore PG resource: %w", resErr)
 		}
 		slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", topo.StorageBackend))
-		opts := []configcore.Option{
+		cellOpts := []configcore.Option{
 			configcore.WithPostgresPool(pool.DB()),
 			// PG adapter path: publisher + real outbox.Writer compose a
 			// WriterEmitter at Cell boundary; L2 transactional atomicity applies.
@@ -287,7 +291,10 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg ada
 			configcore.WithTxManager(txMgr),
 			configcore.WithValueTransformer(vt),
 		}
-		return pgRes, opts, nil
+		// Relay is registered independently via bootstrap so its Worker()/Close()
+		// lifecycle is managed separately from the pool (PGResource.Worker() == nil).
+		bootstrapOpts := []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)}
+		return pgRes, cellOpts, bootstrapOpts, nil
 
 	case "memory":
 		slog.Info("configcore: using in-memory storage", slog.String("cell_adapter_mode", topo.StorageBackend))
@@ -295,12 +302,12 @@ func buildConfigCoreOpts(ctx context.Context, topo bootstrap.Topology, pgCfg ada
 			configcore.WithInMemoryDefaults(),
 			// Memory adapter path: publisher only, writer=nil → DirectEmitter.
 			configcore.WithOutboxDeps(pub, nil),
-		}, nil
+		}, nil, nil
 
 	default:
 		// Unreachable: TopologyFromEnv validation already rejects unknown
 		// StorageBackend values. Keep as defence-in-depth only.
-		return nil, nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, nil, nil, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", topo.StorageBackend))
 	}
 }

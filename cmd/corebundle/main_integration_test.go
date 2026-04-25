@@ -70,12 +70,14 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMatched(t *testing.T) {
 	// Pass the DSN directly; buildConfigCoreOpts no longer reads env vars.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
-	res, opts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, adapterpg.Config{DSN: dsn}, discardPublisher{}, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
+	res, cellOpts, bootstrapOpts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, adapterpg.Config{DSN: dsn}, discardPublisher{}, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.NoError(t, err, "buildConfigCoreOpts must succeed with a fully migrated DB")
 	require.NotNil(t, res, "ManagedResource must be non-nil on success")
-	assert.NotNil(t, opts, "opts must be non-nil")
-	require.NotNil(t, res.Worker(), "relay worker must be non-nil on success (A11 wire guard)")
+	assert.NotNil(t, cellOpts, "cellOpts must be non-nil")
+	// Relay is now registered independently via bootstrap opts, not via PGResource.Worker().
+	assert.NotEmpty(t, bootstrapOpts, "bootstrapOpts must carry relay ManagedResource (A11 wire guard)")
+	assert.Nil(t, res.Worker(), "PGResource.Worker() must be nil; relay is registered via bootstrapOpts")
 
 	// Close pool via ManagedResource so pool.Close(ctx) is called correctly.
 	require.NoError(t, res.Close(ctx))
@@ -109,12 +111,13 @@ func TestBuildConfigCoreOpts_Postgres_SchemaMismatch(t *testing.T) {
 	// Pass the DSN directly; buildConfigCoreOpts no longer reads env vars.
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
-	res, opts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, adapterpg.Config{DSN: dsn}, discardPublisher{}, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
+	res, cellOpts, bootstrapOpts, err := buildConfigCoreOpts(ctx, bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}, adapterpg.Config{DSN: dsn}, discardPublisher{}, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
 
 	require.Error(t, err, "buildConfigCoreOpts must return error when schema is lagged")
 	assert.Contains(t, err.Error(), "schema guard",
 		"error must mention schema guard")
-	assert.Nil(t, opts, "opts must be nil on schema mismatch")
+	assert.Nil(t, cellOpts, "cellOpts must be nil on schema mismatch")
+	assert.Nil(t, bootstrapOpts, "bootstrapOpts must be nil on schema mismatch")
 	// ManagedResource must be nil — pool was closed inside buildConfigCoreOpts before returning error.
 	assert.Nil(t, res, "ManagedResource must be nil on schema mismatch (error path, pool was closed)")
 }
