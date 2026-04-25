@@ -138,13 +138,26 @@ func main() {
 	// Public routes and password-reset-exempt routes are declared by the
 	// accesscore Cell itself via auth.Mount. Bootstrap only needs the
 	// opt-in signal that the assembly expects an auth provider cell.
-	app := bootstrap.New(
+	// PR-A35: /readyz?verbose is token-gated in every mode. The ssobff demo
+	// honours GOCELL_READYZ_VERBOSE_TOKEN if the operator sets one; otherwise
+	// it explicitly waives the verbose endpoint so this demo keeps running
+	// out of the box without exposing internal topology anonymously.
+	readyzOpts := []bootstrap.Option{}
+	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
+		readyzOpts = append(readyzOpts, bootstrap.WithVerboseToken(tok))
+	} else {
+		readyzOpts = append(readyzOpts, bootstrap.WithVerboseDisabled())
+	}
+
+	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithHTTPPrimaryAddr(":8081"), bootstrap.WithHTTPInternalAddr(":9081"),
 		bootstrap.WithAuthDiscovery(),
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
-	)
+	}
+	opts = append(opts, readyzOpts...)
+	app := bootstrap.New(opts...)
 
 	// Pass "" so per-OS platform defaults in ResolveBootstrapCredentialPath kick in.
 	// Override with GOCELL_STATE_DIR to redirect to a custom directory.

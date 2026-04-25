@@ -125,6 +125,10 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 // ref: readiness review 2026-04-20 P1 finding (missing bootstrap wiring)
 func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	shared := buildTestSharedDeps(t)
+	// Override the canonical test fixture: this test hits /readyz?verbose to
+	// inspect dependency probe names, so we need verbose output + a token.
+	shared.VerboseDisabled = false
+	shared.VerboseToken = "test-verbose-token"
 	kp := &fakeKeyProvider{probeErr: errors.New("vault unreachable (test)")}
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -158,20 +162,30 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 
 	// /readyz?verbose must list the fake probe by name as unhealthy (proves the
 	// aggregation step preserved the named checker, not just a boolean signal).
-	verboseResp, err := http.Get("http://" + addr + "/readyz?verbose") //nolint:noctx
+	// PR-A35: verbose now requires the X-Readyz-Token header to match the
+	// configured token set via shared.VerboseToken above.
+	verboseReq, err := http.NewRequestWithContext(context.Background(),
+		http.MethodGet, "http://"+addr+"/readyz?verbose", nil)
+	require.NoError(t, err)
+	verboseReq.Header.Set("X-Readyz-Token", shared.VerboseToken)
+	verboseResp, err := http.DefaultClient.Do(verboseReq)
 	require.NoError(t, err)
 	defer verboseResp.Body.Close()
 
-	// /readyz?verbose returns structured dependency probe results
-	// (ProbeResult schema: status + duration_ms + optional error).
-	var body struct {
-		Status       string                    `json:"status"`
-		Dependencies map[string]map[string]any `json:"dependencies"`
+	// PR-A35 envelope: 503 /readyz responses carry the dependency breakdown
+	// inside {"error": {"code":"ERR_READYZ_UNHEALTHY", "details": {...}}}.
+	var envelope struct {
+		Error struct {
+			Code    string `json:"code"`
+			Details struct {
+				Dependencies map[string]map[string]any `json:"dependencies"`
+			} `json:"details"`
+		} `json:"error"`
 	}
-	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
-	assert.Equal(t, "unhealthy", body.Status)
-	probe, ok := body.Dependencies["fake_key_provider_ready"]
-	require.True(t, ok, "fake_key_provider_ready must appear in /readyz?verbose")
+	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&envelope))
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", envelope.Error.Code)
+	probe, ok := envelope.Error.Details.Dependencies["fake_key_provider_ready"]
+	require.True(t, ok, "fake_key_provider_ready must appear in /readyz?verbose error details")
 	assert.Equal(t, "unhealthy", probe["status"],
 		"fake_key_provider_ready must appear in /readyz?verbose as unhealthy")
 

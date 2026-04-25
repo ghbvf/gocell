@@ -124,7 +124,8 @@ Both addresses must be non-empty and distinct; startup fails fast otherwise. The
 | Variable | Purpose | Default | Required |
 |---|---|---|---|
 | `GOCELL_METRICS_TOKEN` | Bearer token for `/metrics` scraper authentication (`X-Metrics-Token` header) | — | **Real mode** |
-| `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `/readyz?verbose` (exposes internal topology) | — | **Real mode** |
+| `GOCELL_READYZ_VERBOSE_TOKEN` | Bearer token for `/readyz?verbose` (exposes internal topology). After PR-A35 required in every mode unless `GOCELL_READYZ_VERBOSE_DISABLED=1` is set; verbose requests without a matching token return 401 `ERR_READYZ_VERBOSE_DENIED`. See `docs/ops/readyz.md`. | — | **All modes** |
+| `GOCELL_READYZ_VERBOSE_DISABLED` | Set to `1` to waive the `/readyz?verbose` endpoint entirely. Lets ephemeral deployments (test harnesses, single-node demos) satisfy the PR-A35 invariant without minting a token. Rejected when `GOCELL_ADAPTER_MODE=real`. | `0` | Optional |
 
 ## Adapter Mode
 

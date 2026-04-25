@@ -38,12 +38,12 @@
 | Endpoint           | Method | Expected Response    | Meaning                          |
 |--------------------|--------|----------------------|----------------------------------|
 | `/healthz`         | GET    | `200 OK`             | Process is alive                 |
-| `/readyz`          | GET    | `200 OK`             | Ready to accept traffic; aggregate status only |
-| `/readyz?verbose`  | GET    | `200` + JSON details | Cell and dependency breakdown    |
+| `/readyz`          | GET    | `200 OK` / `503`     | Ready to accept traffic; aggregate status only |
+| `/readyz?verbose`  | GET    | `200` / `401` / `503` + JSON details | Cell and dependency breakdown; requires `X-Readyz-Token` |
 
 `/readyz` is the safe default probe for load balancers and orchestrators. Use `/readyz?verbose` only when an operator needs cell and dependency breakdown.
 
-> **Security**: `?verbose` exposes internal cell names and dependency names (topology information). When the health port is publicly reachable, restrict `?verbose` at the ingress layer (e.g., IP allowlist or path-based rule). A future `WithVerboseToken` bootstrap option may provide application-level protection.
+> **Security (PR-A35)**: `?verbose` is token-gated. Set `GOCELL_READYZ_VERBOSE_TOKEN` to a high-entropy secret; requests must carry a matching `X-Readyz-Token: ...` header or receive `401 ERR_READYZ_VERBOSE_DENIED`. Waive the endpoint explicitly with `GOCELL_READYZ_VERBOSE_DISABLED=1` (refused in `GOCELL_ADAPTER_MODE=real`). See `docs/ops/readyz.md` for the full contract, response envelope, and the Kubernetes probe recipe that avoids sending `?verbose` from kubelet.
 
 ### Health Check Verification
 
@@ -51,23 +51,65 @@
 # Quick health check
 curl -sf http://{host}:{port}/healthz
 
-# Detailed readiness check
-curl -sf http://{host}:{port}/readyz?verbose | jq .
+# Aggregate readiness (safe for kubelet / LBs)
+curl -sf http://{host}:{port}/readyz
+
+# Detailed readiness check (operator / on-call only)
+curl -sf -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
+  "http://{host}:{port}/readyz?verbose" | jq .
 ```
 
-Example verbose response:
+Example verbose response (`200 OK` — every probe healthy):
 
 ```json
 {
-   "status": "healthy",
-   "cells": {
+  "data": {
+    "status": "healthy",
+    "cells": {
       "accesscore": "healthy"
-   },
-   "dependencies": {
-      "config-watcher": "healthy"
-   }
+    },
+    "dependencies": {
+      "config-watcher": { "status": "healthy", "duration_ms": 2 },
+      "postgres-ping":  { "status": "healthy", "duration_ms": 4 }
+    },
+    "adapters": {
+      "storage": "postgres",
+      "eventbus": "rabbitmq"
+    }
+  }
 }
 ```
+
+Example verbose response (`503 Service Unavailable` — at least one probe failing):
+
+```json
+{
+  "error": {
+    "code": "ERR_READYZ_UNHEALTHY",
+    "message": "readiness checks failed",
+    "details": {
+      "cells": {
+        "accesscore": "healthy"
+      },
+      "dependencies": {
+        "config-watcher": { "status": "healthy",   "duration_ms": 2 },
+        "postgres-ping":  { "status": "unhealthy", "duration_ms": 11,
+                             "error": "connection refused" }
+      },
+      "adapters": {
+        "storage": "postgres",
+        "eventbus": "rabbitmq"
+      }
+    }
+  }
+}
+```
+
+PR-A35 envelope: success bodies live under `data.*`, failure bodies under
+`error.details.*`. On-call scripts that walked the pre-PR-A35 bare
+`{status,cells,dependencies}` shape must be updated to that one consistent
+path. Probe entries are structured `ProbeResult` maps (`status` +
+`duration_ms` + optional `error`), not bare strings.
 
 ---
 

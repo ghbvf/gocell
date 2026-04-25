@@ -416,11 +416,26 @@ func WithAdapterInfo(info map[string]string) Option {
 }
 
 // WithVerboseToken sets a token that must be provided via the X-Readyz-Token
-// header to access /readyz?verbose output. When not set, verbose mode is
-// unrestricted (backward compatible).
+// header to access /readyz?verbose output. After PR-A35 verbose requests
+// without a matching token receive 401 rather than the previous silent
+// downgrade to a plain 200. Operators who deliberately do not want the
+// verbose endpoint should use WithVerboseDisabled instead of leaving this
+// unset.
 func WithVerboseToken(token string) Option {
 	return func(b *Bootstrap) {
 		b.verboseToken = token
+	}
+}
+
+// WithVerboseDisabled declares that /readyz?verbose must never be served on
+// this deployment. Any ?verbose request is answered with the plain aggregate
+// body — the token gate and 401 path are inert. Use this for ephemeral
+// deployments (test harnesses, single-node demos) that waive the verbose
+// debug channel; production deployments should configure a verbose token
+// instead so operators retain a gated diagnostic path.
+func WithVerboseDisabled() Option {
+	return func(b *Bootstrap) {
+		b.verboseDisabled = true
 	}
 }
 
@@ -610,6 +625,7 @@ type Bootstrap struct {
 	healthCheckers              []namedChecker
 	adapterInfo                 map[string]string // static adapter metadata for /readyz verbose
 	verboseToken                string            // token for /readyz?verbose access control
+	verboseDisabled             bool              // PR-A35: suppress /readyz?verbose entirely (used when operator waives the debug channel)
 	closers                     []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
 	disableObservabilityRestore bool
 	eventRouterReadyTimeout     time.Duration

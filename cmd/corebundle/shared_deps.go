@@ -60,14 +60,33 @@ type SharedDeps struct {
 	// topology; may be empty in dev mode.
 	MetricsToken string
 
-	// VerboseToken is the token guarding /readyz?verbose. Required in
-	// production topology; may be empty in dev mode.
+	// VerboseToken is the token guarding /readyz?verbose. After PR-A35
+	// Validate() requires a non-empty token in every adapter mode unless
+	// VerboseDisabled is true — the previous "empty in dev mode = open
+	// verbose" backward-compat path was removed so that an unset environment
+	// variable never silently exposes internal topology.
 	VerboseToken string
+
+	// VerboseDisabled declares that /readyz?verbose must not be served on
+	// this deployment. When true, Validate() no longer requires VerboseToken
+	// and Bootstrap is wired with WithVerboseDisabled so the handler answers
+	// every ?verbose request with the plain aggregate body. Set it via
+	// GOCELL_READYZ_VERBOSE_DISABLED=1 for ephemeral deployments that waive
+	// the debug channel.
+	VerboseDisabled bool
 
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
 }
+
+// SampleVerboseToken is the literal placeholder shipped in .env.example so
+// `cp .env.example .env && go run ./cmd/corebundle` works without first
+// minting a secret. validateControlPlane rejects this exact value in
+// adapter mode "real" — production deployments must mint their own
+// high-entropy token. Exposed (capitalised) so example/test code and the
+// regression test in shared_deps_test.go reference one source of truth.
+const SampleVerboseToken = "dev-readyz-verbose-token-change-me"
 
 // Validate is the startup invariant check for all cross-cutting dependencies.
 // Storage-specific invariants (PGResource, cursor codecs, HMAC key) are checked
@@ -80,8 +99,36 @@ func (d *SharedDeps) Validate() error {
 		return errcode.New(errcode.ErrValidationFailed, "SharedDeps: nil receiver")
 	}
 	errs := d.validateCore()
+	errs = append(errs, d.validateVerboseEndpoint()...)
 	errs = append(errs, d.validateControlPlane()...)
 	return errors.Join(errs...)
+}
+
+// validateVerboseEndpoint enforces that every adapter mode either configures
+// a verbose token or explicitly waives the endpoint. The previous dev-mode
+// fallback (unset env var => verbose open) was removed in PR-A35 so a
+// forgotten GOCELL_READYZ_VERBOSE_TOKEN in dev cannot silently expose cell
+// topology to anyone who can reach the port.
+func (d *SharedDeps) validateVerboseEndpoint() []error {
+	if d.VerboseDisabled {
+		// Both set is not a hard validation failure — VerboseDisabled
+		// wins, Handler will serve the plain aggregate body regardless of
+		// the token. But it is almost certainly a misconfiguration: the
+		// operator either wanted token-gated access (drop the DISABLED
+		// flag) or wanted to waive verbose entirely (unset the TOKEN).
+		// Surface it as a Warn so operators can spot it in startup logs.
+		if d.VerboseToken != "" {
+			slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN is set but GOCELL_READYZ_VERBOSE_DISABLED=1 overrides it; " +
+				"the token will not be enforced. Drop one of the two env vars to remove the ambiguity.")
+		}
+		return nil
+	}
+	if d.VerboseToken != "" {
+		return nil
+	}
+	return []error{errcode.New(errcode.ErrControlplaneVerboseTokenMissing,
+		"GOCELL_READYZ_VERBOSE_TOKEN must be set (or GOCELL_READYZ_VERBOSE_DISABLED=1 "+
+			"to waive the verbose endpoint) so /readyz?verbose is never anonymous")}
 }
 
 // validateCore collects missing-field errors for dependencies required in
@@ -120,10 +167,24 @@ func (d *SharedDeps) validateControlPlane() []error {
 		return nil
 	}
 	var errs []error
-	if d.VerboseToken == "" {
-		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
-			"GOCELL_READYZ_VERBOSE_TOKEN must be set in adapter mode \"real\" "+
-				"to prevent anonymous topology exposure via /readyz?verbose"))
+	// The unconditional /readyz?verbose invariant is now enforced by
+	// validateVerboseEndpoint in every mode. Production additionally forbids
+	// waiving the endpoint: a "real" deployment that still sets
+	// GOCELL_READYZ_VERBOSE_DISABLED=1 is almost certainly a misconfiguration
+	// and would leave operators without a token-gated diagnostic path.
+	if d.VerboseDisabled {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneVerboseTokenMissing,
+			"GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed in adapter mode \"real\"; "+
+				"production must keep the token-gated verbose endpoint available for "+
+				"on-call diagnostics"))
+	}
+	if d.VerboseToken == SampleVerboseToken {
+		errs = append(errs, errcode.New(errcode.ErrControlplaneVerboseTokenSample,
+			"GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder ("+
+				SampleVerboseToken+"); a production deploy must mint its own "+
+				"high-entropy secret. This exact value is publicly known via the repo "+
+				"sample and would expose /readyz?verbose topology to anyone who has "+
+				"read the source tree."))
 	}
 	if d.MetricsToken == "" {
 		errs = append(errs, errcode.New(errcode.ErrValidationFailed,
@@ -183,9 +244,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 
 	verboseToken := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN")
-	if verboseToken == "" && !topo.RequireProductionControlPlane() {
-		slog.Warn("GOCELL_READYZ_VERBOSE_TOKEN not set; /readyz?verbose exposes internal topology without authentication (dev mode only)")
-	}
+	verboseDisabled := os.Getenv("GOCELL_READYZ_VERBOSE_DISABLED") == "1"
 
 	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
 	metricsHandler, err := buildMetricsHandler(metricsToken, ps.registry)
@@ -232,6 +291,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		InternalHTTPAddr: internalAddr,
 		MetricsToken:     metricsToken,
 		VerboseToken:     verboseToken,
+		VerboseDisabled:  verboseDisabled,
 		metricsHandler:   metricsHandler,
 	}
 

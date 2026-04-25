@@ -69,7 +69,7 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 	res := &fakeResource{name: "fake-pg", checkErr: nil}
 
 	ln := newLocalListener(t)
-	app := New(
+	app := newTestBootstrap(
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res),
@@ -109,7 +109,7 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 	res := &fakeResource{name: "worker-res", worker: fw}
 
 	ln := newLocalListener(t)
-	app := New(
+	app := newTestBootstrap(
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res),
@@ -219,7 +219,7 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 	res := &fakeResource{name: "no-worker-res", worker: nil}
 
 	ln := newLocalListener(t)
-	app := New(
+	app := newTestBootstrap(
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res),
@@ -336,7 +336,7 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 	res := &fakeResource{name: "bad-res", closeErr: closeErr}
 
 	ln := newLocalListener(t)
-	app := New(
+	app := newTestBootstrap(
 		WithPrimaryListener(ln),
 		WithInternalListener(newLocalListener(t)),
 		WithManagedResource(res),

@@ -507,6 +507,9 @@ func (b *Bootstrap) phase5BuildHTTPRouter(s *phaseState) error {
 	if b.readyzDeadline > 0 {
 		hhOpts = append(hhOpts, health.WithDeadline(b.readyzDeadline))
 	}
+	if b.verboseDisabled {
+		hhOpts = append(hhOpts, health.WithVerboseDisabled())
+	}
 	hh := health.New(s.asm, hhOpts...)
 	if b.adapterInfo != nil {
 		hh.SetAdapterInfo(b.adapterInfo)

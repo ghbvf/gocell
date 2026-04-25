@@ -2,12 +2,26 @@
 // endpoints. /readyz returns aggregate readiness by default and only exposes
 // detailed cell and dependency breakdown in verbose mode.
 //
+// PR-A35 made two structural guarantees:
+//   - RegisterChecker wraps every checker with wrapCtxSafe so that the outer
+//     Checker always returns as soon as ctx is cancelled, regardless of whether
+//     the inner function cooperates. This removes the "uncooperative probe
+//     leaks a goroutine past ReadyzHandler's return" trade-off that previously
+//     sat at the aggregator level — the aggregator itself is now insulated
+//     from inner-fn behaviour.
+//   - /readyz requests are deduplicated via singleflight so that a burst of
+//     concurrent probes shares one probe execution. This replaces the prior
+//     plan of a fixed "max concurrent probes" semaphore (which required
+//     picking a magic number) with a purely structural guard.
+//
 // ref: k8s.io/apiserver/pkg/server/healthz — readyz deadline + named probes.
 // ref: uber-go/fx internal/lifecycle/lifecycle.go — ctx-aware lifecycle hooks.
+// ref: golang.org/x/sync/singleflight — dedup concurrent duplicate calls.
 package health
 
 import (
 	"context"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
@@ -19,7 +33,11 @@ import (
 	"sync/atomic"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // maxVerboseErrLen is the maximum length of a probe error string included in
@@ -28,9 +46,21 @@ import (
 // long, potentially sensitive diagnostic messages.
 const maxVerboseErrLen = 512
 
+// singleflight keys for the two response shapes. Verbose and non-verbose
+// results are not interchangeable (different body fields), so each shape gets
+// its own key; concurrent requests of the same shape share one probe pass.
+const (
+	sfKeyAggregate = "readyz:aggregate"
+	sfKeyVerbose   = "readyz:verbose"
+)
+
 // Checker is a named readiness probe. Returning a non-nil error marks the
 // check as unhealthy. The context carries the deadline set on the Handler
 // (default 5 s, matching Kubernetes readiness probe convention).
+//
+// RegisterChecker wraps supplied functions with wrapCtxSafe, so the effective
+// Checker stored inside Handler honours ctx.Done regardless of the inner
+// implementation's cooperativeness. See wrapCtxSafe for the full contract.
 //
 // ref: k8s.io/apiserver/pkg/server/healthz — HealthChecker interface with ctx.
 type Checker = func(context.Context) error
@@ -64,8 +94,22 @@ func WithDeadline(d time.Duration) Option {
 	}
 }
 
+// WithVerboseDisabled declares that this Handler must never serve verbose
+// output. Any request carrying ?verbose (with or without a token) is answered
+// with the plain aggregate body — the verbose body and its token gate are
+// inert. Intended for test harnesses and minimal assemblies that waive the
+// verbose debug channel; production deployments should configure a verbose
+// token instead so that operators can still reach verbose diagnostics.
+func WithVerboseDisabled() Option {
+	return func(h *Handler) {
+		h.verboseDisabled = true
+	}
+}
+
 // VerboseTokenHeader is the HTTP header used to authenticate /readyz?verbose
-// requests when a verbose token is configured via SetVerboseToken.
+// requests. Verbose access always requires both a matching header and a
+// pre-configured token (see SetVerboseToken); PR-A35 removed the prior
+// "unconfigured = unrestricted" fallback.
 const VerboseTokenHeader = "X-Readyz-Token"
 
 // Handler exposes /healthz and /readyz endpoints.
@@ -78,11 +122,18 @@ type Handler struct {
 	// in-flight probes.
 	deadline time.Duration
 
-	mu           sync.RWMutex
-	checkers     map[string]Checker
-	adapterInfo  map[string]string // static adapter metadata for verbose output
-	verboseToken string            // if non-empty, require this token for verbose output
-	shuttingDown atomic.Bool
+	// sf deduplicates concurrent /readyz executions so that a burst of
+	// probes (e.g. kubelet + load balancer + manual curl) shares one probe
+	// pass. This replaces a fixed semaphore: callers never see 503 "too many
+	// probes" and there is no magic-number concurrency bound to tune.
+	sf singleflight.Group
+
+	mu              sync.RWMutex
+	checkers        map[string]Checker
+	adapterInfo     map[string]string // static adapter metadata for verbose output
+	verboseToken    string            // required match for the X-Readyz-Token header; empty means verbose is denied
+	verboseDisabled bool              // if true, /readyz?verbose is answered with the plain aggregate body
+	shuttingDown    atomic.Bool
 }
 
 // New creates a Handler backed by the given CoreAssembly.
@@ -101,23 +152,36 @@ func New(asm *assembly.CoreAssembly, opts ...Option) *Handler {
 
 // RegisterChecker adds a named readiness checker. It panics if a checker with
 // the same name is already registered (fail-fast at startup, matching Go
-// convention for registration functions like http.HandleFunc).
+// convention for registration functions like http.HandleFunc). Passing a nil
+// fn also panics for the same reason.
+//
+// The supplied function is wrapped with wrapCtxSafe before being stored, so
+// the effective Checker honours ctx.Done regardless of the inner
+// implementation's cooperativeness. See wrapCtxSafe for the full contract.
 func (h *Handler) RegisterChecker(name string, fn Checker) {
+	if fn == nil {
+		panic(fmt.Sprintf("health: nil checker for %q", name))
+	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, exists := h.checkers[name]; exists {
 		panic(fmt.Sprintf("health: duplicate checker name %q", name))
 	}
-	h.checkers[name] = fn
+	h.checkers[name] = wrapCtxSafe(fn)
 }
 
 // SetVerboseToken sets a bearer token that must be provided via the
-// X-Readyz-Token header to access /readyz?verbose output. When empty (default),
-// verbose mode is unrestricted for backward compatibility.
+// X-Readyz-Token header to access /readyz?verbose output. After PR-A35 the
+// token gate is no longer optional: requests that carry ?verbose but do not
+// match receive 401, and requests that carry ?verbose while no token is
+// configured also receive 401. Operators who deliberately do not want the
+// verbose endpoint must use WithVerboseDisabled instead of relying on an
+// absent token.
 //
 // ref: Kubernetes withholds error reasons in verbose output but exposes check
 // names. GoCell goes further: the entire verbose block (cell names, dependency
-// names) is gated behind a token when configured.
+// names) is gated behind a token, and the plain /readyz endpoint remains
+// reachable without any gate for Kubernetes readiness probes.
 func (h *Handler) SetVerboseToken(token string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -144,13 +208,27 @@ func (h *Handler) SetShuttingDown() {
 
 // LivezHandler returns an http.HandlerFunc for the /healthz liveness endpoint.
 // Liveness is process-level: if the handler can serve a response, the process
-// is alive. Readiness details belong to /readyz.
+// is alive. Readiness details belong to /readyz. The body uses the
+// project-standard {"data": {...}} envelope so machine consumers treat
+// infrastructure and business responses uniformly (PR-A35 alignment).
 func (h *Handler) LivezHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]any{
+		writeJSON(w, http.StatusOK, envelopeData(map[string]any{
 			"status": "healthy",
-		})
+		}))
 	}
+}
+
+// readyzResult bundles everything a /readyz response needs. Computed once
+// per singleflight pass and shared by every concurrent request that joined
+// the same key. The struct owns its data — adapter info is snapshotted
+// under Handler.mu inside computeReadyz so writeTo runs lock-free.
+type readyzResult struct {
+	allHealthy   bool
+	verbose      bool
+	cells        map[string]string         // nil when !verbose
+	dependencies map[string]map[string]any // nil when !verbose
+	adapters     map[string]string         // nil when !verbose or no adapter info registered
 }
 
 // ReadyzHandler returns an http.HandlerFunc for the /readyz readiness endpoint.
@@ -160,40 +238,108 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 // probes.
 //
 // By default it returns only aggregate readiness status. Detailed cell and
-// dependency breakdown is returned only when the request enables verbose mode.
+// dependency breakdown is returned only when the request enables verbose mode
+// AND carries a matching X-Readyz-Token. Verbose requests without a valid
+// token receive 401 — prior behaviour was a silent downgrade to 200.
 //
-// Security: verbose=true exposes internal topology (cell names, dependency
-// names). Use SetVerboseToken to require an X-Readyz-Token header for verbose
-// access, or restrict ?verbose at the ingress layer.
+// Concurrent /readyz calls share one probe execution via singleflight; there
+// is no fixed concurrency ceiling.
 //
 // ref: k8s.io/apiserver/pkg/server/healthz — server-side deadline, probe
 // independence from request lifecycle.
 func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.shuttingDown.Load() {
-			writeJSON(w, http.StatusServiceUnavailable, map[string]any{
-				"status": "shutting_down",
-			})
+			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
+				errcode.ErrReadyzShuttingDown,
+				"HTTP server is draining for graceful shutdown",
+				nil,
+			))
 			return
 		}
-		verbose := h.verboseAllowed(r)
-
-		allHealthy, cells := h.aggregateCellHealth(verbose)
-
-		h.mu.RLock()
-		checkersCopy := make(map[string]Checker, len(h.checkers))
-		for k, v := range h.checkers {
-			checkersCopy[k] = v
-		}
-		h.mu.RUnlock()
-
-		results := h.runProbesParallel(checkersCopy)
-		probeHealthy, dependencies := h.aggregateProbeResults(results, verbose)
-		if !probeHealthy {
-			allHealthy = false
+		verbose, denied := h.verboseDecision(r)
+		if denied {
+			h.sendVerboseDenied(w, r)
+			return
 		}
 
-		writeReadyzResponse(w, h, allHealthy, verbose, cells, dependencies)
+		key := sfKeyAggregate
+		if verbose {
+			key = sfKeyVerbose
+		}
+		// computeReadyzSafe wraps aggregateCellHealth/runProbesParallel with
+		// a recover fence so a panic in any helper does not propagate to
+		// every sharer blocked on singleflight.Do (per-probe panics are
+		// already caught by runOneProbe — this layer covers the rarer
+		// "assembly helper panic" class).
+		shared, _, _ := h.sf.Do(key, func() (any, error) {
+			return h.computeReadyzSafe(verbose), nil
+		})
+		result, ok := shared.(readyzResult)
+		if !ok {
+			slog.Error("readyz: singleflight returned unexpected payload; failing closed",
+				slog.Any("value", shared))
+			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
+				errcode.ErrReadyzUnhealthy,
+				"readiness computation failed",
+				nil,
+			))
+			return
+		}
+		result.writeTo(w)
+	}
+}
+
+// computeReadyzSafe wraps computeReadyz with a recover fence so that a
+// panic in aggregateCellHealth, h.assembly.Health(), or any future helper
+// does not propagate out of singleflight.Do — which would otherwise surface
+// the panic to every concurrent sharer. On recover we fail closed with a
+// plain unhealthy result (no cells / dependencies) and log the event.
+// Per-probe panics are caught separately inside runOneProbe.
+func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("readyz: recovered panic during readiness computation",
+				slog.Any("panic", r))
+			result = readyzResult{allHealthy: false}
+		}
+	}()
+	return h.computeReadyz(verbose)
+}
+
+// computeReadyz runs the cell health snapshot + all readiness probes and
+// returns a readyzResult. Invoked inside singleflight.Do; constructs a fresh
+// result on each invocation. Callers must go through computeReadyzSafe so
+// that panics do not escape the singleflight boundary.
+//
+// adapter info is captured under Handler.mu alongside the checkers map so
+// the result is fully self-contained — writeTo can serialise it without
+// touching Handler state.
+func (h *Handler) computeReadyz(verbose bool) readyzResult {
+	allHealthy, cells := h.aggregateCellHealth(verbose)
+
+	h.mu.RLock()
+	checkersCopy := make(map[string]Checker, len(h.checkers))
+	for k, v := range h.checkers {
+		checkersCopy[k] = v
+	}
+	var adapters map[string]string
+	if verbose {
+		adapters = h.adapterInfo // SetAdapterInfo swaps the map ref under the same mu, never mutates
+	}
+	h.mu.RUnlock()
+
+	results := h.runProbesParallel(checkersCopy)
+	probeHealthy, dependencies := h.aggregateProbeResults(results, verbose)
+	if !probeHealthy {
+		allHealthy = false
+	}
+	return readyzResult{
+		allHealthy:   allHealthy,
+		verbose:      verbose,
+		cells:        cells,
+		dependencies: dependencies,
+		adapters:     adapters,
 	}
 }
 
@@ -243,44 +389,50 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 	return allHealthy, dependencies
 }
 
-// writeReadyzResponse serialises and sends the /readyz HTTP response.
-func writeReadyzResponse(
-	w http.ResponseWriter,
-	h *Handler,
-	allHealthy, verbose bool,
-	cells map[string]string,
-	dependencies map[string]map[string]any,
-) {
-	status := "healthy"
-	httpStatus := http.StatusOK
-	if !allHealthy {
-		status = "unhealthy"
-		httpStatus = http.StatusServiceUnavailable
+// writeTo serialises the readyz result through the project-standard envelope:
+//
+//	200 → {"data":  {"status":"healthy", ...verbose fields}}
+//	503 → {"error": {"code":"ERR_READYZ_UNHEALTHY", "message":"...",
+//	                  "details": {...verbose fields}}}
+//
+// Verbose fields (cells, dependencies, adapters) live under data or details
+// so consumers walk one consistent path regardless of status. Adapters are
+// omitted when no adapter info has been registered.
+func (r readyzResult) writeTo(w http.ResponseWriter) {
+	body := r.verboseFields()
+	if r.allHealthy {
+		body["status"] = "healthy"
+		writeJSON(w, http.StatusOK, envelopeData(body))
+		return
 	}
-
-	response := map[string]any{
-		"status": status,
-	}
-	if verbose {
-		response["cells"] = cells
-		response["dependencies"] = dependencies
-		h.mu.RLock()
-		if h.adapterInfo != nil {
-			response["adapters"] = h.adapterInfo
-		}
-		h.mu.RUnlock()
-	}
-
-	writeJSON(w, httpStatus, response)
+	writeJSON(w, http.StatusServiceUnavailable, envelopeError(
+		errcode.ErrReadyzUnhealthy,
+		"readiness checks failed",
+		body,
+	))
 }
 
-// runProbesParallel executes all checkers in parallel, bounded by h.deadline
-// at the aggregator level. When the deadline fires, probes that have not yet
-// returned are marked with Status="timeout" and the function returns
-// immediately — their goroutines leak until the underlying probe naturally
-// exits. This is an intentional trade-off: bounding /readyz response time
-// (operational priority) over bounding goroutine lifetime. Probes MUST
-// honour ctx.Done to avoid leaks; probes that ignore ctx will leak.
+// verboseFields returns the cells / dependencies / adapters payload (or an
+// empty map when the request was non-verbose). Caller adds the per-status
+// fields (e.g. "status":"healthy" for the 200 path).
+func (r readyzResult) verboseFields() map[string]any {
+	body := map[string]any{}
+	if !r.verbose {
+		return body
+	}
+	body["cells"] = r.cells
+	body["dependencies"] = r.dependencies
+	if r.adapters != nil {
+		body["adapters"] = r.adapters
+	}
+	return body
+}
+
+// runProbesParallel executes all checkers in parallel bounded by h.deadline.
+// Because RegisterChecker wraps every fn with wrapCtxSafe, each goroutine
+// returns promptly when the aggregate deadline fires — the pre-PR-A35
+// "goroutine leak past handler return" trade-off no longer applies at this
+// layer.
 //
 // The probe ctx is derived from context.Background() so that request-level
 // cancellation (kubelet disconnect) does not cancel probes.
@@ -292,74 +444,40 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 		return results
 	}
 
-	// Derive a deadline context from Background — independent of the HTTP
-	// request context so kubelet/LB disconnects do not cancel probes.
 	ctx, cancel := context.WithTimeout(context.Background(), h.deadline)
 	defer cancel()
 
 	var mu sync.Mutex
-
-	// Start one goroutine per probe; each writes its ProbeResult into
-	// results only if the deadline branch hasn't already filled that slot.
-	// NOTE: An uncooperative probe (one that ignores ctx) will leak its
-	// goroutine past this function's return — its goroutine continues
-	// running until the probe naturally exits. This is the known trade-off
-	// of hard deadline + cooperative ctx: we choose to bound /readyz
-	// response time (operational priority) over bounding goroutine
-	// lifetime. Operators SHOULD make probes honour ctx.Done.
 	var wg sync.WaitGroup
 	wg.Add(len(checkers))
 	for name, fn := range checkers {
-		name, fn := name, fn // capture loop vars
+		name, fn := name, fn
 		go func() {
 			defer wg.Done()
-			pr := runOneProbe(ctx, fn)
+			pr := runOneProbe(ctx, fn, h.deadline)
 			mu.Lock()
-			if _, filled := results[name]; !filled {
-				results[name] = pr
-			}
+			results[name] = pr
 			mu.Unlock()
 		}()
 	}
-
-	done := make(chan struct{})
-	go func() { wg.Wait(); close(done) }()
-
-	select {
-	case <-done:
-		// All probes completed before deadline.
-	case <-ctx.Done():
-		// Deadline exceeded; fill every unfilled slot with "timeout".
-		// Late-arriving probes (see goroutine above) will see their slot
-		// already filled and skip the write.
-		mu.Lock()
-		for name := range checkers {
-			if _, ok := results[name]; !ok {
-				results[name] = ProbeResult{
-					Status:   "timeout",
-					Duration: h.deadline,
-					Err: fmt.Errorf("probe %q did not return within deadline %s (ctx: %w)",
-						name, h.deadline, ctx.Err()),
-				}
-			}
-		}
-		mu.Unlock()
-	}
-
-	// Snapshot results under lock to insulate caller from late-arriving
-	// probe goroutines that may still mutate the map.
-	mu.Lock()
-	snap := make(map[string]ProbeResult, len(results))
-	for k, v := range results {
-		snap[k] = v
-	}
-	mu.Unlock()
-	return snap
+	wg.Wait()
+	return results
 }
 
 // runOneProbe executes a single Checker inside a recover fence and returns a
-// ProbeResult. A panicking probe is caught and reported as unhealthy.
-func runOneProbe(ctx context.Context, fn Checker) (pr ProbeResult) {
+// ProbeResult. A panicking probe is caught and reported as unhealthy. The
+// deadline value is included verbatim in the timeout error string so verbose
+// 503 consumers see the exact budget without having to consult runtime
+// configuration.
+//
+// Timeout vs unhealthy classification matches DeadlineExceeded explicitly
+// rather than "any non-nil ctx.Err()". The probe ctx is derived from
+// context.WithTimeout(Background, deadline), so the only ctx.Err() value
+// that can arise here is DeadlineExceeded — but the explicit match guards
+// against a future ctx-parent change silently routing Canceled into the
+// timeout bucket. context.Canceled wrapped by client libraries (pgx /
+// go-redis on failed I/O) is a genuine unhealthy signal, not a timeout.
+func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration) (pr ProbeResult) {
 	start := time.Now()
 	defer func() {
 		pr.Duration = time.Since(start)
@@ -370,52 +488,76 @@ func runOneProbe(ctx context.Context, fn Checker) (pr ProbeResult) {
 	}()
 
 	err := fn(ctx)
-	pr.Duration = time.Since(start) // updated again by defer, but set here for clarity
-	if err == nil {
+	switch {
+	case err == nil:
 		pr.Status = "healthy"
-		return pr
-	}
-	if isDeadlineError(ctx, err) {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
 		pr.Status = "timeout"
-	} else {
+		pr.Err = fmt.Errorf("probe did not return within deadline %s (ctx: %w)", deadline, err)
+	default:
 		pr.Status = "unhealthy"
+		pr.Err = err
 	}
-	pr.Err = err
 	return pr
 }
 
-// isDeadlineError reports whether the probe timed out due to the probe ctx
-// deadline. It checks both ctx.Err() (context was cancelled/timed-out) and
-// whether the returned error wraps context.DeadlineExceeded.
-func isDeadlineError(ctx context.Context, err error) bool {
-	if ctx.Err() == context.DeadlineExceeded {
-		return true
-	}
-	return errors.Is(err, context.DeadlineExceeded)
-}
-
-// verboseAllowed returns true when the request is allowed to see verbose output.
-// When a verbose token is configured, the request must include a matching
-// X-Readyz-Token header in addition to the ?verbose query parameter.
-func (h *Handler) verboseAllowed(r *http.Request) bool {
+// verboseDecision routes a /readyz request into one of three branches:
+//
+//	(verbose=false, denied=false) — non-verbose, or WithVerboseDisabled set
+//	(verbose=true,  denied=false) — verbose authorised
+//	(_,             denied=true)  — verbose requested but token mismatch → 401
+//
+// See docs/ops/readyz.md "Strict 401 semantics" for the full state table
+// (which is the source of truth — do not duplicate here).
+func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	if !readyzVerbose(r) {
-		return false
+		return false, false
 	}
 	h.mu.RLock()
 	token := h.verboseToken
+	disabled := h.verboseDisabled
 	h.mu.RUnlock()
+	if disabled {
+		// Operators who set WithVerboseDisabled have explicitly waived the
+		// verbose endpoint; ?verbose gets the plain body. Debug-level log
+		// so the path is visible for diagnostics without spamming prod.
+		slog.Debug("readyz: verbose requested but endpoint is disabled; serving plain aggregate",
+			slog.String("remote_addr", r.RemoteAddr))
+		return false, false
+	}
 	if token == "" {
-		return true // no token configured — backward compatible
+		slog.Warn("readyz: verbose requested but no token configured; denying",
+			slog.String("remote_addr", r.RemoteAddr))
+		return false, true
 	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get(VerboseTokenHeader)), []byte(token)) == 1 {
-		return true
+	// Compare SHA-256 digests rather than the raw byte slices so a caller
+	// cannot learn the configured token length via timing: subtle.Compare
+	// short-circuits on length mismatch, which turns the bare-bytes variant
+	// into a length oracle. Hashing both sides normalises to a fixed 32
+	// bytes regardless of input length.
+	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseTokenHeader)))
+	configured := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(submitted[:], configured[:]) == 1 {
+		return true, false
 	}
-	// Token configured but request missing/mismatched. Warn so probing
-	// attempts are observable; don't Error since the request still succeeds
-	// (just without verbose output) and the endpoint is operating as designed.
-	slog.Warn("readyz: verbose token mismatch; suppressing verbose output",
+	slog.Warn("readyz: verbose token mismatch; denying",
 		slog.String("remote_addr", r.RemoteAddr))
-	return false
+	return false, true
+}
+
+// sendVerboseDenied writes the 401 response for a rejected verbose request.
+// Uses httputil.WritePublicError so the response carries request_id (when
+// set by middleware) in the canonical envelope shape shared with business
+// 4xx responses. Machine-side monitoring can therefore correlate denied
+// verbose probes with other request-level signals via the same field.
+func (h *Handler) sendVerboseDenied(w http.ResponseWriter, r *http.Request) {
+	httputil.WritePublicError(
+		r.Context(),
+		w,
+		http.StatusUnauthorized,
+		string(errcode.ErrReadyzVerboseDenied),
+		"verbose output requires a matching X-Readyz-Token header",
+	)
 }
 
 // readyzVerbose returns true when the request opts in to detailed output.
@@ -446,6 +588,31 @@ func truncateErrMsg(msg string, max int) string {
 		return msg
 	}
 	return msg[:max] + "..."
+}
+
+// envelopeData wraps a success payload in the project-standard
+// `{"data": ...}` envelope (see .claude/rules/gocell/api-versioning.md).
+// Infrastructure endpoints (/healthz, /readyz) align with the same shape as
+// business /api/v1/* responses so consumers can parse both uniformly.
+func envelopeData(payload map[string]any) map[string]any {
+	return map[string]any{"data": payload}
+}
+
+// envelopeError wraps an error in the project-standard
+// `{"error": {"code":..., "message":..., "details":...}}` envelope (see
+// .claude/rules/gocell/error-handling.md). details is normalised to an
+// empty map when nil so consumers can always walk the nested path.
+func envelopeError(code errcode.Code, message string, details map[string]any) map[string]any {
+	if details == nil {
+		details = map[string]any{}
+	}
+	return map[string]any{
+		"error": map[string]any{
+			"code":    string(code),
+			"message": message,
+			"details": details,
+		},
+	}
 }
 
 func writeJSON(w http.ResponseWriter, statusCode int, v any) {

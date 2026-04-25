@@ -93,6 +93,9 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE are required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	// PR-A35: verbose endpoint is now gated in every mode; this dev-mode
+	// smoke test explicitly waives the verbose debug channel.
+	t.Setenv("GOCELL_READYZ_VERBOSE_DISABLED", "1")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — run() should exit cleanly
@@ -362,6 +365,9 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	// GOCELL_JWT_ISSUER and GOCELL_JWT_AUDIENCE required in all modes (C5).
 	t.Setenv("GOCELL_JWT_ISSUER", "gocell-dev-test")
 	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	// PR-A35: verbose endpoint is now gated in every mode; this smoke test
+	// does not exercise /readyz?verbose so it explicitly waives the endpoint.
+	t.Setenv("GOCELL_READYZ_VERBOSE_DISABLED", "1")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — we only need Init(), not server start
