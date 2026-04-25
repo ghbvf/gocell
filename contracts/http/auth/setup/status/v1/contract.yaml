@@ -12,5 +12,9 @@ endpoints:
     path: /api/v1/access/setup/status
     successStatus: 200
     noContent: false
+    responses:
+      500:
+        description: "Internal — provisioner status check failed (e.g. database unreachable). Body is the standard error envelope; the underlying cause is logged at slog.Error and not exposed on the wire (PR-A42 N5)."
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

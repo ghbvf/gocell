@@ -441,6 +441,38 @@ func TestService_CreateAdmin_ControlCharInField_Returns400(t *testing.T) {
 	}
 }
 
+// TestService_RetiredError_DetailsOnlyNextAction pins the wire-shape contract
+// of the 410 response: details carry a semantic next-action only — no HTTP
+// path literal. Clients resolve the login endpoint via OpenAPI / contract
+// registry; embedding the path here would create a second source of truth
+// (PR-A42 N4).
+func TestService_RetiredError_DetailsOnlyNextAction(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	seedAdmin(t, userRepo, roleRepo)
+	svc := newService(t, userRepo, roleRepo, &stubWriter{})
+
+	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code)
+
+	require.Len(t, ec.Details, 1, "details must carry exactly one key — semantic action only")
+	assert.Equal(t, "login", ec.Details["nextAction"])
+
+	rendered, err := json.Marshal(ec.Details)
+	require.NoError(t, err)
+	assert.NotContains(t, string(rendered), "/api/",
+		"details must not leak HTTP path literals; resolve via OpenAPI")
+	assert.NotContains(t, string(rendered), "loginEndpoint",
+		"loginEndpoint key was retired by PR-A42 — keep details minimal")
+}
+
 // --- helpers --------------------------------------------------------------
 
 func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleRepository) {

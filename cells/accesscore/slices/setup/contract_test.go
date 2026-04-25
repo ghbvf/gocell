@@ -3,6 +3,7 @@ package setup_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,6 +39,23 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleStatus(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	t.Run("500 provisioner failure response satisfies contract", func(t *testing.T) {
+		// PR-A42 N5: status endpoint contract.yaml previously declared no
+		// responses[5xx]; this case pins the handler's actual 500 path through
+		// the contract envelope so future drift surfaces in CI.
+		userRepo := mem.NewUserRepository()
+		roleRepo := &countErrRoleRepo{err: errors.New("provisioner status: pg unreachable")}
+		svc := newService(t, userRepo, roleRepo, nil)
+		h := setup.NewHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
+		rec := httptest.NewRecorder()
+		h.HandleStatus(rec, req)
+
+		require.Equal(t, http.StatusInternalServerError, rec.Code)
+		c.ValidateErrorResponse(t, http.StatusInternalServerError, rec.Body.Bytes())
+	})
 }
 
 func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
@@ -125,6 +143,31 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		require.Equal(t, http.StatusConflict, rec.Code)
 		c.ValidateErrorResponse(t, http.StatusConflict, rec.Body.Bytes())
 		requireErrorCode(t, rec.Body.Bytes(), errcode.ErrAuthUserDuplicate)
+	})
+
+	t.Run("410 retired endpoint response satisfies contract", func(t *testing.T) {
+		// PR-A42 N5 / N4: pin the retired-endpoint envelope through the contract
+		// validator and assert the wire shape carries semantic next-action only —
+		// no HTTP path literal (clients resolve via OpenAPI).
+		userRepo := mem.NewUserRepository()
+		roleRepo := mem.NewRoleRepository()
+		seedAdmin(t, userRepo, roleRepo)
+		svc := newService(t, userRepo, roleRepo, &stubWriter{})
+		h := setup.NewHandler(svc)
+
+		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.HandleCreateAdmin(rec, req)
+
+		require.Equal(t, http.StatusGone, rec.Code)
+		c.ValidateErrorResponse(t, http.StatusGone, rec.Body.Bytes())
+		requireErrorCode(t, rec.Body.Bytes(), errcode.ErrSetupAlreadyInitialized)
+
+		bodyStr := rec.Body.String()
+		assert.Contains(t, bodyStr, `"nextAction":"login"`)
+		assert.NotContains(t, bodyStr, "/api/", "410 wire shape must not leak path literals")
+		assert.NotContains(t, bodyStr, "loginEndpoint", "loginEndpoint key retired by PR-A42")
 	})
 }
 
