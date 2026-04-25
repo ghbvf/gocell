@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -273,10 +274,10 @@ func TestDeviceCell_RouteGetStatus(t *testing.T) {
 	data := extractData(t, rec.Body.Bytes())
 	deviceID := data["id"].(string)
 
-	// Now get status. Status requires an authenticated principal (Policy: auth.Authenticated()).
+	// Now get status. Status requires RoleOperator or RoleDevice (Policy: auth.AnyRole(dto.RoleOperator, dto.RoleDevice)).
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/devices/"+deviceID+"/status", nil)
-	req = req.WithContext(auth.TestContext(deviceID, nil))
+	req = req.WithContext(auth.TestContext(deviceID, []string{dto.RoleDevice}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)

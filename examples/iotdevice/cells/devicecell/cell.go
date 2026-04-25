@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
@@ -268,11 +269,11 @@ func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 						Handler:  http.HandlerFunc(c.listHandler.HandleList),
 						Policy:   auth.AnyRole("admin"),
 					})
-					// Device status is queried by authenticated operators/devices.
+					// Device status is queried by operators or by the device itself.
 					auth.Mount(devices, auth.Route{
 						Contract: specDeviceStatus,
 						Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleOperator, dto.RoleDevice),
 					})
 					// device-command public routes (enqueue, dequeue, report, ack,
 					// extend-lease) live under /api/v1/devices/{id}/commands.

@@ -11,6 +11,7 @@ import (
 
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -64,7 +65,7 @@ func TestAuthDeclare_NestedRoute_ForwardsWithPrefix(t *testing.T) {
 		v1.Route("/access", func(a kcell.RouteMux) {
 			a.Route("/sessions", func(s kcell.RouteMux) {
 				auth.Mount(s, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
-				auth.Mount(s, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
+				auth.Mount(s, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: authtest.RequireAuthenticated(), PasswordResetExempt: true})
 			})
 		})
 	})
@@ -214,7 +215,7 @@ func TestFinalizeAuth_PublicMeta_BypassesAuth(t *testing.T) {
 
 	// Use auth.Mount so every registered route has a corresponding auth declaration.
 	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/public"), Handler: okHandler, Public: true})
-	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/protected"), Handler: okHandler, Policy: auth.Authenticated()})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/protected"), Handler: okHandler, Policy: authtest.RequireAuthenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Public route: no token → 200
@@ -243,7 +244,7 @@ func TestFinalizeAuth_PasswordResetExempt_Meta(t *testing.T) {
 
 	// Use auth.Mount so every registered route has a corresponding auth declaration.
 	auth.Mount(r, auth.Route{Contract: testHTTPContract("POST", "/exempt"), Handler: okHandler, PasswordResetExempt: true})
-	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/blocked"), Handler: okHandler, Policy: auth.Authenticated()})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/blocked"), Handler: okHandler, Policy: authtest.RequireAuthenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	// Exempt route with password-reset token → 200
@@ -318,7 +319,7 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use auth.Mount so every registered route has a corresponding auth declaration.
-	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/blocked"), Handler: okHandler, Policy: auth.Authenticated()})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/blocked"), Handler: okHandler, Policy: authtest.RequireAuthenticated()})
 	// POST + PasswordResetExempt meta should derive hint.
 	auth.Mount(r, auth.Route{Contract: testHTTPContract("POST", "/change-password"), Handler: okHandler, PasswordResetExempt: true})
 	require.NoError(t, r.FinalizeAuth())
@@ -352,7 +353,7 @@ func TestFinalizeAuth_MultipleDeclaredPublic_ORMerged(t *testing.T) {
 	// Use auth.Mount so every registered route has a corresponding auth declaration.
 	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/declared-public-a"), Handler: okHandler, Public: true})
 	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/declared-public-b"), Handler: okHandler, Public: true})
-	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/protected"), Handler: okHandler, Policy: auth.Authenticated()})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/protected"), Handler: okHandler, Policy: authtest.RequireAuthenticated()})
 	require.NoError(t, r.FinalizeAuth())
 
 	// First declared public route: no token → 200
@@ -457,7 +458,7 @@ func TestFinalizeAuth_PolicyCoverage_DetectsMissingPolicy(t *testing.T) {
 	r.Handle("GET /unguarded", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
 
 	// /guarded is registered via auth.Mount — covered.
-	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/guarded"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}), Policy: auth.Authenticated()})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/guarded"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}), Policy: authtest.RequireAuthenticated()})
 
 	err = r.FinalizeAuth()
 	require.Error(t, err)
@@ -470,7 +471,7 @@ func TestFinalizeAuth_PolicyCoverage_AllDeclaredOK(t *testing.T) {
 	r, err := NewE(WithAuthMiddleware(&authMetaVerifier{err: assert.AnError}))
 	require.NoError(t, err)
 
-	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/api/v1/items"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}), Policy: auth.Authenticated()})
+	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/api/v1/items"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}), Policy: authtest.RequireAuthenticated()})
 	auth.Mount(r, auth.Route{Contract: testHTTPContract("POST", "/api/v1/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}), Public: true})
 
 	err = r.FinalizeAuth()

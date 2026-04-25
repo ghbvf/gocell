@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
@@ -277,7 +278,7 @@ func TestOrderCell_RouteCreateOrder(t *testing.T) {
 	body := `{"item":"test-widget"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(body))
-	req = req.WithContext(auth.TestContext("usr-1", nil))
+	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(rec, req)
 
@@ -294,7 +295,7 @@ func TestOrderCell_RouteListOrders(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/", nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil))
+	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
@@ -308,7 +309,7 @@ func TestOrderCell_RouteGetOrder(t *testing.T) {
 	body := `{"item":"queryable"}`
 	createRec := httptest.NewRecorder()
 	createReq := httptest.NewRequest(http.MethodPost, "/api/v1/orders/", strings.NewReader(body))
-	createReq = createReq.WithContext(auth.TestContext("usr-1", nil))
+	createReq = createReq.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
 	createReq.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(createRec, createReq)
 	require.Equal(t, http.StatusCreated, createRec.Code)
@@ -326,7 +327,7 @@ func TestOrderCell_RouteGetOrder(t *testing.T) {
 	// GET the created order by its actual ID.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/"+orderID, nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil))
+	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code,
@@ -338,7 +339,7 @@ func TestOrderCell_RouteGetOrder_NotFound(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/orders/nonexistent", nil)
-	req = req.WithContext(auth.TestContext("usr-1", nil))
+	req = req.WithContext(auth.TestContext("usr-1", []string{dto.RoleCustomer}))
 	r.ServeHTTP(rec, req)
 
 	// 404 is the correct domain response for a nonexistent order.

@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 )
 
 func TestTestMux_HandleGroupAndWith(t *testing.T) {
@@ -170,7 +171,7 @@ func TestTestMux_Route_ComposesPrefix(t *testing.T) {
 				// auth.Mount strips the nested mux prefix to derive the
 				// chi-relative registration path.
 				auth.Mount(sess, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
-				auth.Mount(sess, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
+				auth.Mount(sess, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: authtest.RequireAuthenticated(), PasswordResetExempt: true})
 			})
 		})
 	})

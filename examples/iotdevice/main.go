@@ -39,7 +39,7 @@ func (demoTokenVerifier) VerifyIntent(_ context.Context, token string, expected 
 		Audience:  []string{"gocell"},
 		IssuedAt:  now,
 		ExpiresAt: now.Add(8 * time.Hour),
-		Roles:     []string{"admin", "operator"},
+		Roles:     []string{"admin", "role:operator", "role:device"},
 		TokenUse:  auth.TokenIntentAccess,
 	}, nil
 }

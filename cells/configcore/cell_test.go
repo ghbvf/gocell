@@ -428,10 +428,10 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	}
 
 	// Get config-read page with limit=1 to obtain a cursor.
-	// config-read declares auth.Authenticated() so a principal is required.
+	// config-read declares auth.AnyRole(dto.RoleAdmin) so an admin principal is required.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/config/?limit=1", nil)
-	req = req.WithContext(auth.TestContext("tester", nil))
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -444,11 +444,11 @@ func TestConfigCore_CrossSliceCursorRejection(t *testing.T) {
 	require.NotEmpty(t, configPage.NextCursor)
 
 	// Use config-read cursor on feature-flag list endpoint — must be rejected.
-	// feature-flag also declares auth.Authenticated() so supply a principal.
+	// feature-flag also declares auth.AnyRole(dto.RoleAdmin) so supply an admin principal.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/flags/?cursor="+configPage.NextCursor, nil)
-	req = req.WithContext(auth.TestContext("tester", nil))
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,
@@ -483,10 +483,10 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	}
 
 	// Get flag page with limit=1 to obtain a cursor.
-	// feature-flag declares auth.Authenticated() so a principal is required.
+	// feature-flag declares auth.AnyRole(dto.RoleAdmin) so an admin principal is required.
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/flags/?limit=1", nil)
-	req = req.WithContext(auth.TestContext("tester", nil))
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 	require.Equal(t, http.StatusOK, rec.Code)
 
@@ -498,11 +498,11 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	require.True(t, flagPage.HasMore, "need hasMore to get a flag cursor")
 
 	// Use flag cursor on config-read endpoint — must be rejected.
-	// config-read also declares auth.Authenticated() so supply a principal.
+	// config-read also declares auth.AnyRole(dto.RoleAdmin) so supply an admin principal.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet,
 		"/api/v1/config/?cursor="+flagPage.NextCursor, nil)
-	req = req.WithContext(auth.TestContext("tester", nil))
+	req = req.WithContext(auth.TestContext("tester", []string{"admin"}))
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusBadRequest, rec.Code,

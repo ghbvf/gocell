@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	ordercreate "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/ordercreate"
 	orderquery "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderquery"
@@ -203,17 +204,17 @@ func (c *OrderCell) RouteGroups() []cell.RouteGroup {
 					auth.Mount(orders, auth.Route{
 						Contract: specOrderCreate,
 						Handler:  http.HandlerFunc(c.createHandler.HandleCreate),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleCustomer),
 					})
 					auth.Mount(orders, auth.Route{
 						Contract: specOrderList,
 						Handler:  http.HandlerFunc(c.queryHandler.HandleList),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleCustomer),
 					})
 					auth.Mount(orders, auth.Route{
 						Contract: specOrderGet,
 						Handler:  http.HandlerFunc(c.queryHandler.HandleGet),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleCustomer),
 					})
 				})
 			},

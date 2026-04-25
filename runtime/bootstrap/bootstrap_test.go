@@ -25,6 +25,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
@@ -2388,7 +2389,7 @@ func (c *httpCell) RouteGroups() []cell.RouteGroup {
 			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":"ok"}`))
-			}), Policy: auth.Authenticated()})
+			}), Policy: authtest.RequireAuthenticated()})
 			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
@@ -2871,7 +2872,7 @@ func (c *authProviderCell) RouteGroups() []cell.RouteGroup {
 			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":"ok"}`))
-			}), Policy: auth.Authenticated()})
+			}), Policy: authtest.RequireAuthenticated()})
 			// F3: login is declared as a public route so auth discovery tests can verify
 			// that no-token requests bypass JWT checks on this endpoint.
 			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -3442,7 +3443,7 @@ func (c *traceCapturingCell) RouteGroups() []cell.RouteGroup {
 				tid, _ := ctxkeys.TraceIDFrom(r.Context())
 				c.gotProtected <- tid
 				w.WriteHeader(http.StatusOK)
-			}), Policy: auth.Authenticated()})
+			}), Policy: authtest.RequireAuthenticated()})
 		},
 	}}
 }
@@ -4087,7 +4088,7 @@ func (c *protectedAuthCell) RouteGroups() []cell.RouteGroup {
 		Register: func(mux cell.RouteMux) {
 			auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/protected"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
-			}), Policy: auth.Authenticated()})
+			}), Policy: authtest.RequireAuthenticated()})
 		},
 	}}
 }
