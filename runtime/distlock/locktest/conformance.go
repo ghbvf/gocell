@@ -27,6 +27,14 @@ import (
 	"github.com/ghbvf/gocell/runtime/distlock"
 )
 
+// Literal constants for repeated token/key strings used in conformance tests.
+// Per CLAUDE.md: strings repeated ≥3 times must be extracted as constants.
+const (
+	tokenA = "token-A"
+	tokenB = "token-B"
+	c3Key  = "c3-key"
+)
+
 // DriverFactory returns a fresh Driver and its initial clock for each test sub-case.
 // For real backends the factory should set up a clean namespace/key prefix.
 type DriverFactory func(t *testing.T) distlock.Driver
@@ -68,7 +76,7 @@ func conformC1(t *testing.T, factory DriverFactory) {
 	ctx := context.Background()
 	ttl := time.Minute
 
-	ok, err := drv.SetNX(ctx, "c1-key", "token-A", ttl)
+	ok, err := drv.SetNX(ctx, "c1-key", tokenA, ttl)
 	if err != nil {
 		t.Fatalf("C1 first SetNX: %v", err)
 	}
@@ -76,7 +84,7 @@ func conformC1(t *testing.T, factory DriverFactory) {
 		t.Fatal("C1: first SetNX should return true")
 	}
 
-	ok2, err2 := drv.SetNX(ctx, "c1-key", "token-B", ttl)
+	ok2, err2 := drv.SetNX(ctx, "c1-key", tokenB, ttl)
 	if err2 != nil {
 		t.Fatalf("C1 second SetNX: %v", err2)
 	}
@@ -93,13 +101,13 @@ func conformC2(t *testing.T, factory DriverFactory) {
 	ttl := time.Minute
 
 	// Holder A acquires.
-	ok, err := drv.SetNX(ctx, "c2-key", "token-A", ttl)
+	ok, err := drv.SetNX(ctx, "c2-key", tokenA, ttl)
 	if err != nil || !ok {
 		t.Fatalf("C2 SetNX: ok=%v err=%v", ok, err)
 	}
 
 	// Holder B tries to renew — should fail gracefully.
-	held, err := drv.Renew(ctx, "c2-key", "token-B", ttl)
+	held, err := drv.Renew(ctx, "c2-key", tokenB, ttl)
 	if err != nil {
 		t.Fatalf("C2 Renew wrong token: unexpected error %v", err)
 	}
@@ -115,7 +123,7 @@ func conformC3(t *testing.T, factory DriverFactory) {
 	ctx := context.Background()
 	ttl := time.Minute
 
-	ok, err := drv.SetNX(ctx, "c3-key", "token-A", ttl)
+	ok, err := drv.SetNX(ctx, c3Key, tokenA, ttl)
 	if err != nil {
 		t.Fatalf("C3 setup SetNX: %v", err)
 	}
@@ -124,12 +132,12 @@ func conformC3(t *testing.T, factory DriverFactory) {
 	}
 
 	// Wrong holder tries to release.
-	if err := drv.Release(ctx, "c3-key", "token-B"); err != nil {
+	if err := drv.Release(ctx, c3Key, tokenB); err != nil {
 		t.Fatalf("C3 Release wrong token: unexpected error %v", err)
 	}
 
 	// token-A can still renew.
-	held, err := drv.Renew(ctx, "c3-key", "token-A", ttl)
+	held, err := drv.Renew(ctx, c3Key, tokenA, ttl)
 	if err != nil {
 		t.Fatalf("C3 Renew after wrong release: %v", err)
 	}
@@ -185,7 +193,7 @@ func conformC5(t *testing.T, factory DriverFactory) {
 	ctx := context.Background()
 	ttl := time.Millisecond
 
-	ok, err := drv.SetNX(ctx, "c5-key", "token-A", ttl)
+	ok, err := drv.SetNX(ctx, "c5-key", tokenA, ttl)
 	if err != nil || !ok {
 		t.Fatalf("C5 initial SetNX: ok=%v err=%v", ok, err)
 	}
@@ -193,7 +201,7 @@ func conformC5(t *testing.T, factory DriverFactory) {
 	// Wait past TTL — real sleep because we are testing real-clock TTL expiry.
 	time.Sleep(5 * time.Millisecond)
 
-	ok2, err2 := drv.SetNX(ctx, "c5-key", "token-B", ttl)
+	ok2, err2 := drv.SetNX(ctx, "c5-key", tokenB, ttl)
 	if err2 != nil {
 		t.Fatalf("C5 second SetNX after TTL: %v", err2)
 	}
@@ -210,7 +218,7 @@ func conformC6(t *testing.T, factory DriverFactory) {
 	ctx := context.Background()
 	ttl := time.Millisecond
 
-	ok, err := drv.SetNX(ctx, "c6-key", "token-A", ttl)
+	ok, err := drv.SetNX(ctx, "c6-key", tokenA, ttl)
 	if err != nil || !ok {
 		t.Fatalf("C6 SetNX: ok=%v err=%v", ok, err)
 	}
@@ -218,7 +226,7 @@ func conformC6(t *testing.T, factory DriverFactory) {
 	// Wait past TTL — real sleep.
 	time.Sleep(5 * time.Millisecond)
 
-	held, err := drv.Renew(ctx, "c6-key", "token-A", ttl)
+	held, err := drv.Renew(ctx, "c6-key", tokenA, ttl)
 	if err != nil {
 		t.Fatalf("C6 Renew after expiry: unexpected error %v", err)
 	}
@@ -241,11 +249,11 @@ func conformC7(t *testing.T, factory DriverFactory) {
 	if fd, ok := drv.(*FakeDriver); ok {
 		fd.SetNextRenewError(ErrDriverIO)
 		// SetNX with a valid context so the key is actually held.
-		setOK, setErr := drv.SetNX(ctx, "c7-key2", "token-A", time.Minute)
+		setOK, setErr := drv.SetNX(ctx, "c7-key2", tokenA, time.Minute)
 		if setErr != nil || !setOK {
 			t.Fatalf("C7 FakeDriver setup SetNX: ok=%v err=%v", setOK, setErr)
 		}
-		_, renewErr := drv.Renew(ctx, "c7-key2", "token-A", time.Minute)
+		_, renewErr := drv.Renew(ctx, "c7-key2", tokenA, time.Minute)
 		if renewErr == nil {
 			t.Fatal("C7: FakeDriver injected error should propagate from Renew")
 		}
@@ -254,7 +262,7 @@ func conformC7(t *testing.T, factory DriverFactory) {
 		// This validates that the driver faithfully propagates ctx errors.
 		alreadyExpiredCtx, cancel := context.WithDeadline(ctx, time.Now().Add(-1*time.Hour))
 		defer cancel()
-		_, err := drv.SetNX(alreadyExpiredCtx, "c7-key", "token-A", time.Minute)
+		_, err := drv.SetNX(alreadyExpiredCtx, "c7-key", tokenA, time.Minute)
 		if err == nil {
 			t.Errorf("C7: real driver SetNX with already-past-deadline ctx should return an error")
 		}
