@@ -83,11 +83,22 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start ssobff: %v", err)
 	}
+	// `waited` is closed by whichever path reaches Wait first (the SIGTERM
+	// goroutine on the happy path, the cleanup on early failures). The
+	// cleanup checks it before issuing its own Wait so we never call
+	// cmd.Wait twice — `exec.Cmd.Wait` documents "Callers may call Wait at
+	// most once" and a second call races on Cmd.ProcessState under -race.
+	waited := make(chan struct{})
 	t.Cleanup(func() {
 		if cmd.Process != nil {
 			_ = cmd.Process.Signal(syscall.SIGKILL)
 		}
-		_ = cmd.Wait()
+		select {
+		case <-waited:
+			// happy path Wait already ran
+		default:
+			_ = cmd.Wait()
+		}
 	})
 
 	readyCtx, cancelReady := context.WithTimeout(context.Background(), 5*time.Second)
@@ -101,7 +112,10 @@ func TestSSOBFFStartupSmoke(t *testing.T) {
 	}
 
 	done := make(chan error, 1)
-	go func() { done <- cmd.Wait() }()
+	go func() {
+		done <- cmd.Wait()
+		close(waited)
+	}()
 	select {
 	case err := <-done:
 		if err != nil {

@@ -255,10 +255,11 @@ func writeKebabAssemblyID(t *testing.T) string {
 
 // TestRunValidate_Strict_DetectsKebabCellID locks in FMT-C1 in strict full
 // mode: a kebab-case cell id is rejected only by ValidateStrict(true). The
-// fixture also has a kebab directory (necessary because REF-04 enforces
-// id ↔ dir match, so an id-only kebab is impossible to construct without
-// a base error pre-empting strict). The assertion focuses on FMT-C1
-// presence, not FMT-16's absence.
+// fixture has a kebab directory (necessary because REF-04 enforces id ↔
+// dir match, so an id-only kebab is impossible to construct without a
+// base error pre-empting strict), so FMT-16 fires alongside FMT-C1 — that
+// is the defence-in-depth pair the rule was designed for, and the
+// assertion below verifies both rules light up.
 func TestRunValidate_Strict_DetectsKebabCellID(t *testing.T) {
 	dir := writeKebabCellID(t)
 
@@ -268,6 +269,7 @@ func TestRunValidate_Strict_DetectsKebabCellID(t *testing.T) {
 	})
 	require.Error(t, gotErr, "strict must return error when FMT-C1 fires on kebab cell id")
 	assert.Contains(t, out, "FMT-C1", "full-mode output must report FMT-C1 code")
+	assert.Contains(t, out, "FMT-16", "FMT-16 must also fire — kebab dir is the natural co-trigger")
 }
 
 // TestRunValidate_Strict_DetectsAllowedFilesMismatch locks in FMT-17: a

@@ -197,12 +197,15 @@ func main() {
 	credPath, err := accesscore.ResolveBootstrapCredentialPath(os.Getenv("GOCELL_STATE_DIR"))
 	if err != nil {
 		logger.Warn("ssobff: failed to resolve bootstrap credential path",
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		credPath = "<unresolved>"
 	}
-	logger.Info("ssobff: starting on :8081; if first run, initial admin credentials are written to the path below",
+	logger.Info("ssobff: starting; if first run, initial admin credentials are written to cred_path",
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
+		slog.String("primary_addr", primaryAddr),
+		slog.String("internal_addr", internalAddr),
+		slog.String("health_addr", healthAddr),
 		slog.String("cred_path", credPath),
 	)
 	if err := app.Run(ctx); err != nil {
