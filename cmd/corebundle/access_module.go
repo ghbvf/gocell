@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 	"time"
@@ -72,6 +73,9 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	slog.Info("accesscore: admin provision mode resolved",
+		slog.String("mode", string(mode)),
+		slog.Bool("force_bootstrap", m.ForceBootstrap))
 
 	// Cursor codec for accesscore: read env via LoadCursorKeys then build.
 	accessPrimary, accessPrevious := LoadCursorKeys("ACCESSCORE")

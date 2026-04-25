@@ -14,6 +14,9 @@ GoCell 支持两种 first-run admin 模式：
 `interactive`、`bootstrap`；其他值会启动失败，避免拼写错误把 headless 部署意外暴露给
 public interactive setup endpoint。
 
+`POST /api/v1/access/setup/admin` 的交互式密码必须是 8-72 个可打印 ASCII 字节。
+这个限制与 bcrypt 的 72-byte 输入上限一致，并且让公开 contract schema 与服务端校验使用同一语义。
+
 对标：GitLab `/etc/gitlab/initial_root_password` + Keycloak v26 `kc.sh bootstrap-admin`。
 
 设计决策详见 `docs/architecture/202604181900-adr-auth-setup-first-run.md`。

@@ -215,6 +215,7 @@ func TestService_CreateAdmin_PasswordLengthOutOfRange_Returns400(t *testing.T) {
 	}{
 		{"too short (7 chars)", "abc1234"},
 		{"too long for bcrypt (73 bytes)", strings.Repeat("x", 73)},
+		{"non-ASCII password would make schema chars drift from bcrypt bytes", strings.Repeat("界", 8)},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

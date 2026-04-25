@@ -33,14 +33,14 @@ import (
 // audit logs ("usr-" vs. "usr-bootstrap-").
 const UserIDPrefix = "usr-"
 
-// Password length bounds for the setup endpoint:
-//   - MinPasswordLen mirrors the schema's minLength:8 and is low enough to not
-//     surprise first-run operators on low-entropy test setups.
+// Password bounds for the setup endpoint:
+//   - Password bytes must be printable ASCII so JSON Schema maxLength and
+//     bcrypt's byte-counted input limit have the same semantics.
 //   - MaxPasswordBytes matches golang.org/x/crypto/bcrypt's hard input limit.
 const (
 	MaxUsernameLen   = 128
 	MaxEmailLen      = 256
-	MinPasswordLen   = 8
+	MinPasswordBytes = 8
 	MaxPasswordBytes = 72
 )
 
@@ -200,16 +200,30 @@ func validateCreateAdminInput(in CreateAdminInput) error {
 		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
 			fmt.Sprintf("email length must be at most %d characters", MaxEmailLen))
 	}
-	if utf8.RuneCountInString(in.Password) < MinPasswordLen || len([]byte(in.Password)) > MaxPasswordBytes {
+	passwordBytes := len(in.Password)
+	if passwordBytes < MinPasswordBytes || passwordBytes > MaxPasswordBytes {
 		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
-			fmt.Sprintf("password length must be at least %d characters and at most %d bytes",
-				MinPasswordLen, MaxPasswordBytes))
+			fmt.Sprintf("password length must be %d to %d printable ASCII bytes",
+				MinPasswordBytes, MaxPasswordBytes))
+	}
+	if !isPrintableASCII(in.Password) {
+		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
+			"password must contain only printable ASCII characters")
 	}
 	if strings.ContainsAny(in.Email, "\r\n\t\x00") || strings.ContainsAny(in.Username, "\r\n\t\x00") {
 		return errcode.New(errcode.ErrAuthIdentityInvalidInput,
 			"username and email must not contain control characters")
 	}
 	return nil
+}
+
+func isPrintableASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] > 0x7e {
+			return false
+		}
+	}
+	return true
 }
 
 // provisionAndMaybeEmit runs adminprovision.Ensure inside the caller-provided

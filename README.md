@@ -211,8 +211,9 @@ temporary credential file whose location depends on the OS (Linux: `/run/gocell/
 `~/Library/Application Support/gocell/run/`, Windows: `%LOCALAPPDATA%\gocell\run\`). Override
 with `GOCELL_STATE_DIR`. `cmd/corebundle` defaults to interactive first-run setup; set
 `GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE=bootstrap` for headless bootstrap, or leave it empty /
-`interactive` to use `POST /api/v1/access/setup/admin`. Unknown mode values fail fast at startup.
-See `docs/operations/first-run-setup.md` for details.
+`interactive` to use `POST /api/v1/access/setup/admin`. Interactive setup passwords are 8-72
+printable ASCII bytes. Unknown mode values fail fast at startup. See
+`docs/operations/first-run-setup.md` for details.
 
 ## Runtime Modes
 

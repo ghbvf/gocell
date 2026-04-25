@@ -5,7 +5,13 @@
   "properties": {
     "username": { "type": "string", "minLength": 1, "maxLength": 128 },
     "email": { "type": "string", "minLength": 1, "maxLength": 256 },
-    "password": { "type": "string", "minLength": 8, "maxLength": 72 }
+    "password": {
+      "type": "string",
+      "description": "8 to 72 printable ASCII bytes. The ASCII restriction keeps JSON Schema maxLength aligned with bcrypt's 72-byte input limit.",
+      "minLength": 8,
+      "maxLength": 72,
+      "pattern": "^[ -~]+$"
+    }
   },
   "required": ["username", "email", "password"],
   "additionalProperties": false
