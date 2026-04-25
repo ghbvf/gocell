@@ -68,9 +68,11 @@ func TestFakeClock_Advance_DoesNotFireFutureTimers(t *testing.T) {
 	timer.Stop()
 }
 
-// TestFakeClock_Advance_PreservesOrder verifies that timers fire in deadline
-// order (earliest first) when multiple timers have different deadlines.
-func TestFakeClock_Advance_PreservesOrder(t *testing.T) {
+// TestFakeClock_Advance_FiresAllDueTimersFromOneAdvance verifies that all
+// timers due at or before the new fake time fire, even when they were
+// registered out of deadline order. Cross-timer delivery order is not part of
+// FakeClock's observable contract because each timer has its own channel.
+func TestFakeClock_Advance_FiresAllDueTimersFromOneAdvance(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
 
 	// Create timers in reverse order of deadlines.
@@ -82,7 +84,8 @@ func TestFakeClock_Advance_PreservesOrder(t *testing.T) {
 	fired := make([]int, 0, 3)
 	fc.Advance(4 * time.Second)
 
-	// All three should have fired. Drain channels.
+	// All three should have fired. Drain by timer identity; this intentionally
+	// does not assert cross-channel delivery order.
 	for _, pair := range []struct {
 		timer distlockTimer
 		idx   int
@@ -102,7 +105,7 @@ func TestFakeClock_Advance_PreservesOrder(t *testing.T) {
 }
 
 // distlockTimer is a local alias for the Timer interface returned by FakeClock.
-// Used in TestFakeClock_Advance_PreservesOrder to hold heterogeneous timers.
+// Used by fake clock tests to hold heterogeneous timers.
 type distlockTimer interface {
 	C() <-chan time.Time
 	Stop() bool
