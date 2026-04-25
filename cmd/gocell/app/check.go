@@ -11,16 +11,6 @@ import (
 	"github.com/ghbvf/gocell/kernel/registry"
 )
 
-// Contract-health rule codes. Kept distinct from the FMT/REF/TOPO families
-// in kernel/governance so it's clear at a glance whether a finding came
-// from `gocell validate` (governance rules) or `gocell check
-// contract-health` (CI-blocking contract metadata invariants).
-const (
-	codeContractHealthOwner     = "CH-01" // ownerCell missing
-	codeContractHealthLifecycle = "CH-02" // lifecycle missing
-	codeContractHealthSchema    = "CH-03" // HTTP schemaRefs incomplete or invalid
-)
-
 // runCheck implements:
 //
 //	gocell check contract-health [--format text|json|sarif]
@@ -91,7 +81,8 @@ func checkContractHealth(args []string) error {
 		printContractHealthTable(contracts)
 	}
 
-	results := validateContractHealth(contracts)
+	validator := governance.NewValidator(project, root)
+	results := validator.CheckContractHealth(contracts)
 
 	if err := printer.Print(results); err != nil {
 		return fmt.Errorf("emit results: %w", err)
@@ -154,107 +145,6 @@ func httpTransportColumns(c *metadata.ContractMeta) (method, path string) {
 		path = "-"
 	}
 	return method, path
-}
-
-// validateContractHealth checks contracts for CI-blocking issues:
-//   - ownerCell must be set
-//   - lifecycle must be set
-//   - HTTP contracts must have schemaRefs (request + response unless noContent)
-//
-// Returns governance.ValidationResult so the same Printer infrastructure
-// renders these findings as text/json/sarif. File is set to the
-// contract.yaml path (relative to project root) when known so SARIF and
-// IDE click-to-open work.
-func validateContractHealth(contracts []*metadata.ContractMeta) []governance.ValidationResult {
-	var results []governance.ValidationResult
-
-	for _, c := range contracts {
-		if c.OwnerCell == "" {
-			results = append(results, contractHealthResult(c,
-				codeContractHealthOwner, governance.IssueRequired,
-				"ownerCell",
-				fmt.Sprintf("%s: missing ownerCell", c.ID)))
-		}
-		if c.Lifecycle == "" {
-			results = append(results, contractHealthResult(c,
-				codeContractHealthLifecycle, governance.IssueRequired,
-				"lifecycle",
-				fmt.Sprintf("%s: missing lifecycle", c.ID)))
-		}
-		if c.Kind == "http" {
-			results = append(results, validateHTTPSchemaRefs(c)...)
-		}
-	}
-
-	return results
-}
-
-// validateHTTPSchemaRefs checks that an HTTP contract has the required
-// schema references. Logic: noContent endpoints (typically DELETE/204) may
-// omit response schema; all other endpoints need a response schema;
-// PUT/PATCH always need a request schema.
-func validateHTTPSchemaRefs(c *metadata.ContractMeta) []governance.ValidationResult {
-	noContent := c.Endpoints.HTTP != nil && c.Endpoints.HTTP.NoContent
-
-	if noContent {
-		return nil
-	}
-
-	var results []governance.ValidationResult
-
-	// Non-noContent endpoints must have at least one schema reference.
-	if c.SchemaRefs.Request == "" && c.SchemaRefs.Response == "" {
-		return []governance.ValidationResult{contractHealthResult(c,
-			codeContractHealthSchema, governance.IssueRequired,
-			"schemaRefs",
-			fmt.Sprintf("%s: HTTP contract missing schemaRefs", c.ID))}
-	}
-
-	if c.SchemaRefs.Response == "" {
-		results = append(results, contractHealthResult(c,
-			codeContractHealthSchema, governance.IssueRequired,
-			"schemaRefs.response",
-			fmt.Sprintf("%s: HTTP contract missing response schemaRefs", c.ID)))
-	}
-
-	if c.Endpoints.HTTP != nil {
-		method := c.Endpoints.HTTP.Method
-		if (method == "PUT" || method == "PATCH") && c.SchemaRefs.Request == "" {
-			results = append(results, contractHealthResult(c,
-				codeContractHealthSchema, governance.IssueRequired,
-				"schemaRefs.request",
-				fmt.Sprintf("%s: %s contract missing request schemaRefs", c.ID, method)))
-		}
-
-		// Structural check: every declared responses[N] entry must have a
-		// non-empty schemaRef. Whether that file actually exists on disk
-		// is validated by REF-12 in the governance layer; this check
-		// ensures the declaration itself is complete.
-		for status, resp := range c.Endpoints.HTTP.Responses {
-			if resp.SchemaRef == "" {
-				results = append(results, contractHealthResult(c,
-					codeContractHealthSchema, governance.IssueRequired,
-					fmt.Sprintf("endpoints.http.responses[%d].schemaRef", status),
-					fmt.Sprintf("%s: responses[%d] declared but missing schemaRef", c.ID, status)))
-			}
-		}
-	}
-
-	return results
-}
-
-// contractHealthResult builds a ValidationResult for a contract-health
-// finding. All of these are SeverityError (CI-blocking); File is sourced
-// from the contract metadata so json/sarif consumers get a working anchor.
-func contractHealthResult(c *metadata.ContractMeta, code string, issueType governance.IssueType, field, message string) governance.ValidationResult {
-	return governance.ValidationResult{
-		Code:      code,
-		Severity:  governance.SeverityError,
-		IssueType: issueType,
-		File:      c.File,
-		Field:     field,
-		Message:   message,
-	}
 }
 
 // countContractHealthErrors counts SeverityError findings — currently every
