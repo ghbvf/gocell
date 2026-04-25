@@ -70,24 +70,24 @@ func assertErrorBody(t *testing.T, body []byte, code, message string) {
 	assert.NotNil(t, resp.Error.Details)
 }
 
-func TestToTokenPairResponse_NilInput(t *testing.T) {
-	var got dto.TokenPairResponse
-	assert.NotPanics(t, func() { got = toTokenPairResponse(nil) })
-	assert.Empty(t, got.AccessToken)
-}
-
 func TestTokenPairResponse_Fields(t *testing.T) {
 	now := time.Now()
-	pair := &TokenPair{
-		AccessToken:  "access-tok-1",
-		RefreshToken: "refresh-tok-1",
-		ExpiresAt:    now,
+	pair := dto.TokenPair{
+		AccessToken:           "access-tok-1",
+		RefreshToken:          "refresh-tok-1",
+		ExpiresAt:             now,
+		SessionID:             "sess-1",
+		UserID:                "usr-1",
+		PasswordResetRequired: true,
 	}
-	resp := toTokenPairResponse(pair)
+	resp := dto.ToTokenPairResponse(pair)
 
 	assert.Equal(t, "access-tok-1", resp.AccessToken)
 	assert.Equal(t, "refresh-tok-1", resp.RefreshToken)
 	assert.Equal(t, now, resp.ExpiresAt)
+	assert.Equal(t, "sess-1", resp.SessionID)
+	assert.Equal(t, "usr-1", resp.UserID)
+	assert.True(t, resp.PasswordResetRequired)
 
 	// Verify JSON key casing via serialization.
 	b, err := json.Marshal(resp)
@@ -96,6 +96,9 @@ func TestTokenPairResponse_Fields(t *testing.T) {
 	assert.Contains(t, s, `"accessToken"`)
 	assert.Contains(t, s, `"refreshToken"`)
 	assert.Contains(t, s, `"expiresAt"`)
+	assert.Contains(t, s, `"sessionId"`)
+	assert.Contains(t, s, `"userId"`)
+	assert.Contains(t, s, `"passwordResetRequired"`)
 }
 
 func TestHandleRefresh(t *testing.T) {
@@ -114,15 +117,21 @@ func TestHandleRefresh(t *testing.T) {
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
 					Data struct {
-						AccessToken  string `json:"accessToken"`
-						RefreshToken string `json:"refreshToken"`
-						ExpiresAt    string `json:"expiresAt"`
+						AccessToken           string `json:"accessToken"`
+						RefreshToken          string `json:"refreshToken"`
+						ExpiresAt             string `json:"expiresAt"`
+						SessionID             string `json:"sessionId"`
+						UserID                string `json:"userId"`
+						PasswordResetRequired bool   `json:"passwordResetRequired"`
 					} `json:"data"`
 				}
 				require.NoError(t, json.Unmarshal(body, &resp))
 				assert.NotEmpty(t, resp.Data.AccessToken)
 				assert.NotEmpty(t, resp.Data.RefreshToken)
 				assert.NotEmpty(t, resp.Data.ExpiresAt)
+				assert.NotEmpty(t, resp.Data.SessionID)
+				assert.NotEmpty(t, resp.Data.UserID)
+				assert.False(t, resp.Data.PasswordResetRequired)
 
 				// Verify camelCase JSON keys (#27n).
 				var raw map[string]json.RawMessage
@@ -132,6 +141,9 @@ func TestHandleRefresh(t *testing.T) {
 				assert.Contains(t, dataMap, "accessToken", "key must be camelCase")
 				assert.Contains(t, dataMap, "refreshToken", "key must be camelCase")
 				assert.Contains(t, dataMap, "expiresAt", "key must be camelCase")
+				assert.Contains(t, dataMap, "sessionId", "key must be camelCase")
+				assert.Contains(t, dataMap, "userId", "key must be camelCase")
+				assert.Contains(t, dataMap, "passwordResetRequired", "key must be camelCase")
 			},
 		},
 		{

@@ -19,6 +19,9 @@ endpoints:
       401:
         description: Refresh token rejected.
         schemaRef: ../../../../shared/errors/error-response-v1.schema.json
+      403:
+        description: "ERR_AUTH_PASSWORD_RESET_REQUIRED — token carries password_reset_required=true; client must call change-password before accessing protected endpoints."
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
       503:
         description: Refresh store unavailable.
         schemaRef: ../../../../shared/errors/error-response-v1.schema.json

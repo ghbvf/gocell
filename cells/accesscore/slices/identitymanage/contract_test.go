@@ -349,6 +349,8 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 		AccessToken:  "new-at",
 		RefreshToken: "new-rt",
 		ExpiresAt:    time.Now().Add(time.Hour),
+		SessionID:    "sess-contract-1",
+		UserID:       "usr-contract-1",
 	}}
 	handler, _ := setupContractHandlerWithIssuer(t, stubIssuer)
 
@@ -374,6 +376,26 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 
 	// Verify response schema rejection.
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+
+	// Negative cases: required fields missing from response must be rejected.
+	for _, tc := range []struct {
+		name string
+		body []byte
+	}{
+		{
+			"missing sessionId",
+			[]byte(`{"data":{"accessToken":"x","refreshToken":"y","expiresAt":"2026-01-01T00:00:00Z","userId":"u","passwordResetRequired":false}}`),
+		},
+		{
+			"missing userId",
+			[]byte(`{"data":{"accessToken":"x","refreshToken":"y","expiresAt":"2026-01-01T00:00:00Z","sessionId":"s","passwordResetRequired":false}}`),
+		},
+	} {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			c.MustRejectResponse(t, tc.body)
+		})
+	}
 }
 
 func TestHttpAuthUserCreateV1_RequirePasswordResetField(t *testing.T) {

@@ -60,27 +60,17 @@ password is changed. Follow these steps:
 INIT_PASS=$(grep '^password=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
 ADMIN_USER=$(grep '^username=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
 
-# 2. Login (passwordResetRequired=true in response)
+# 2. Login (passwordResetRequired=true in response) — userId is in the response directly.
 TOKEN_RESP=$(curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${INIT_PASS}\"}")
 echo "$TOKEN_RESP" | jq .
-# {"data":{"accessToken":"...","passwordResetRequired":true,...}}
+# {"data":{"accessToken":"...","userId":"...","passwordResetRequired":true,...}}
 
 BOOTSTRAP_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
+USER_ID=$(echo "$TOKEN_RESP"        | jq -r '.data.userId')
 
-# 3. Extract user ID from the JWT sub claim.
-# JWT uses base64url (RFC 4648 §5) WITHOUT padding, but `base64 -d` on
-# Linux/macOS expects padded input — restore padding before decoding,
-# otherwise base64 -d errors silently and USER_ID ends up empty.
-USER_ID=$(echo "$BOOTSTRAP_TOKEN" \
-  | cut -d. -f2 \
-  | tr '_-' '/+' \
-  | awk '{ pad = (4 - length($0) % 4) % 4; while (pad-- > 0) $0 = $0 "="; print }' \
-  | base64 -d \
-  | jq -r '.sub')
-
-# 4. Change password (returns new token with passwordResetRequired=false)
+# 3. Change password (returns new token with passwordResetRequired=false)
 NEW_TOKEN_RESP=$(curl -s -X POST "http://localhost:8081/api/v1/access/users/${USER_ID}/password" \
   -H "Authorization: Bearer $BOOTSTRAP_TOKEN" \
   -H 'Content-Type: application/json' \
