@@ -73,7 +73,11 @@ func (fc *FakeClock) Advance(d time.Duration) {
 	fc.now = fc.now.Add(d)
 	now := fc.now
 
-	// Collect due timers.
+	// Collect due timers and mark them fired atomically under fc.mu.
+	// Marking fired here (under fc.mu) prevents a data race with Stop(), which
+	// reads ft.fired under fc.mu. Due timers are removed from fc.timers so
+	// Stop() will not find them in the list, but it may still read ft.fired
+	// when iterating; the write must therefore also be under fc.mu.
 	var due []*FakeTimer
 	var remaining []*FakeTimer
 	for _, t := range fc.timers {
@@ -81,6 +85,7 @@ func (fc *FakeClock) Advance(d time.Duration) {
 			continue
 		}
 		if !t.fired && !now.Before(t.deadline) {
+			t.fired = true // mark under fc.mu to avoid race with Stop
 			due = append(due, t)
 		} else {
 			remaining = append(remaining, t)
@@ -89,19 +94,15 @@ func (fc *FakeClock) Advance(d time.Duration) {
 	fc.timers = remaining
 	fc.mu.Unlock()
 
-	// Fire outside the lock to avoid deadlock when timer receivers call back
-	// into the clock (e.g. FakeClock.Now()).
+	// Send to channels outside the lock to avoid deadlock when timer receivers
+	// call back into the clock (e.g. FakeClock.Now()). fired is already true so
+	// no guard check is needed here.
 	for _, t := range due {
-		t.mu.Lock()
-		if !t.stopped && !t.fired {
-			t.fired = true
-			// Non-blocking send — channel is buffered (cap 1).
-			select {
-			case t.ch <- now:
-			default:
-			}
+		// Non-blocking send — channel is buffered (cap 1).
+		select {
+		case t.ch <- now:
+		default:
 		}
-		t.mu.Unlock()
 	}
 }
 
@@ -120,31 +121,13 @@ func (fc *FakeClock) PendingTimers() int {
 	return count
 }
 
-// removeTimer removes a timer from the pending list (called by Stop/Reset).
-// Caller must NOT hold fc.mu.
-func (fc *FakeClock) removeTimer(ft *FakeTimer) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-	filtered := fc.timers[:0]
-	for _, t := range fc.timers {
-		if t != ft {
-			filtered = append(filtered, t)
-		}
-	}
-	fc.timers = filtered
-}
-
-// addTimer re-registers a timer (called by Reset).
-// Caller must NOT hold fc.mu.
-func (fc *FakeClock) addTimer(ft *FakeTimer) {
-	fc.mu.Lock()
-	defer fc.mu.Unlock()
-	fc.timers = append(fc.timers, ft)
-}
-
 // FakeTimer is a single-fire timer controlled by FakeClock.
+//
+// All mutable fields (stopped, fired, deadline) are protected by the parent
+// FakeClock's mu, not by a per-timer lock. This is necessary because
+// PendingTimers(), Advance(), Stop(), and Reset() all need to read/write these
+// fields atomically relative to the clock's timer list.
 type FakeTimer struct {
-	mu       sync.Mutex
 	deadline time.Time
 	ch       chan time.Time
 	clock    *FakeClock
@@ -184,33 +167,46 @@ func (ft *FakeTimer) Stop() bool {
 }
 
 // Reset implements distlock.Timer. It re-arms the timer to fire after d.
+//
+// All reads and writes to stopped/fired are performed under fc.mu to avoid
+// races with Stop(), PendingTimers(), and Advance(), which all use fc.mu.
 func (ft *FakeTimer) Reset(d time.Duration) bool {
-	ft.clock.removeTimer(ft)
+	fc := ft.clock
 
-	ft.mu.Lock()
+	// Remove from pending list and snapshot wasActive under fc.mu.
+	fc.mu.Lock()
 	wasActive := !ft.stopped && !ft.fired
 	ft.stopped = false
 	ft.fired = false
-	// Drain the channel if there's a stale value.
+	now := fc.now
+	ft.deadline = now.Add(d)
+	// Remove from timer list (was removed by Stop if already stopped, but
+	// removeTimer is idempotent).
+	filtered := fc.timers[:0]
+	for _, t := range fc.timers {
+		if t != ft {
+			filtered = append(filtered, t)
+		}
+	}
+	fc.timers = filtered
+
+	if d <= 0 {
+		ft.fired = true
+	} else {
+		fc.timers = append(fc.timers, ft)
+	}
+	fc.mu.Unlock()
+
+	// Drain any stale value and optionally send immediate fire — outside lock.
 	select {
 	case <-ft.ch:
 	default:
 	}
-	fc := ft.clock
-	now := fc.Now()
-	ft.deadline = now.Add(d)
-	ft.mu.Unlock()
-
 	if d <= 0 {
-		ft.mu.Lock()
-		ft.fired = true
-		ft.mu.Unlock()
 		select {
 		case ft.ch <- now:
 		default:
 		}
-	} else {
-		ft.clock.addTimer(ft)
 	}
 	return wasActive
 }
