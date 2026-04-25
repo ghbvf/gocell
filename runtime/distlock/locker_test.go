@@ -772,7 +772,11 @@ func TestLocker_New_PanicsOnNonPositiveReleaseTimeout(t *testing.T) {
 }
 
 // TestLocker_Acquire_RejectsZeroTTL verifies that Acquire returns an error (not panic)
-// when TTL is zero or negative — runtime input validation.
+// when TTL is zero, negative, or sub-millisecond — runtime input validation.
+//
+// Sub-millisecond TTLs would truncate to 0 milliseconds when passed to Redis
+// SetNX/PEXPIRE, which go-redis v9 documents as "no expiration" — creating a
+// permanent lock that survives process death. Reject at the contract boundary.
 func TestLocker_Acquire_RejectsZeroTTL(t *testing.T) {
 	tests := []struct {
 		name string
@@ -780,6 +784,8 @@ func TestLocker_Acquire_RejectsZeroTTL(t *testing.T) {
 	}{
 		{"zero", 0},
 		{"negative", -1 * time.Second},
+		{"sub-millisecond/microsecond", 500 * time.Microsecond},
+		{"sub-millisecond/nanosecond", 999_999 * time.Nanosecond},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

@@ -142,9 +142,13 @@ func (l *lockerImpl) Acquire(ctx context.Context, key string, ttl time.Duration)
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
-	if ttl <= 0 {
-		return nil, nil, errcode.New(ErrLockTimeout,
-			"distlock: ttl must be > 0")
+	// Redis SetNX/PEXPIRE take TTL in integer milliseconds; sub-millisecond
+	// values truncate to 0, which go-redis v9 documents as "no expiration"
+	// (string_commands.go SetNX). Enforce a 1ms minimum so a misconfigured
+	// caller cannot create a permanent lock that survives process death.
+	if ttl < time.Millisecond {
+		return nil, nil, errcode.New(errcode.ErrValidationFailed,
+			fmt.Sprintf("distlock: ttl must be ≥ 1ms (got %s); sub-millisecond TTLs would truncate to 0 in Redis and create a permanent lock", ttl))
 	}
 
 	token, err := randomToken()
