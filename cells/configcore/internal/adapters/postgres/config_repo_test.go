@@ -210,17 +210,35 @@ func TestConfigRepo_CtxCanceled_ReturnsClientCanceled(t *testing.T) {
 			})
 			assertCtxCancelErr(t, err)
 		})
+		t.Run("Create/"+tc.name, func(t *testing.T) {
+			db := &mockDB{execErr: tc.scanErr}
+			repo := newConfigRepositoryFromDBTX(db)
+			err := repo.Create(context.Background(), &domain.ConfigEntry{
+				ID:        "cfg-1",
+				Key:       "k",
+				Value:     "v",
+				Sensitive: false,
+			})
+			assertCtxCancelErr(t, err)
+		})
 	}
 }
 
-// TestConfigRepo_CryptoOpError_CategoryAuth verifies that encrypt / decrypt
-// errors carry CategoryAuth so dashboards distinguish KMS authorisation
-// failures (key missing / access denied / keyID mismatch) from generic
-// CategoryInfra signals (DB / network outages). The HTTP status mapping is
-// unchanged (ErrConfigDecryptFailed / ErrConfigRepoQuery → 500); only the
-// in-process classifier semantics shift (PR238-FU1 follow-up).
-func TestConfigRepo_CryptoOpError_CategoryAuth(t *testing.T) {
-	tests := []struct {
+// TestConfigRepo_CryptoOpError_CauseAwareClassification verifies that
+// cryptoOpError fans out by cause class (PR-A50+A51 + #271 review P2):
+//   - context cancel cause → ErrClientCanceled (HTTP 499 + Warn), preserves
+//     IsInfraError=true (driven by stdlib sentinel detection in classify.go)
+//   - ErrKeyProviderTransient cause → preserves CategoryInfra (Vault outage
+//     must remain in infra bucket so existing alerts still fire)
+//   - other cause (auth / tamper) → CategoryAuth (distinguishes KMS auth
+//     from generic infra outages on dashboards)
+//
+// The HTTP status mapping for the non-cancel branches is unchanged
+// (ErrConfigDecryptFailed / ErrConfigRepoQuery → 500); only the in-process
+// classifier shifts.
+func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
+	repo := newConfigRepositoryFromDBTX(&mockDB{})
+	ops := []struct {
 		name string
 		code errcode.Code
 		op   string
@@ -230,19 +248,51 @@ func TestConfigRepo_CryptoOpError_CategoryAuth(t *testing.T) {
 		{"encrypt version", errcode.ErrConfigRepoQuery, "EncryptVersion"},
 		{"decrypt version", errcode.ErrConfigDecryptFailed, "DecryptVersion"},
 	}
-	repo := newConfigRepositoryFromDBTX(&mockDB{})
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", assert.AnError)
-			require.NotNil(t, ec)
-			assert.Equal(t, errcode.CategoryAuth, ec.Category,
-				"crypto op errors must classify as CategoryAuth (KMS authorisation signal)")
-			assert.False(t, errcode.IsInfraError(ec),
-				"CategoryAuth must NOT match IsInfraError (separates KMS auth from infra)")
-			assert.Contains(t, ec.InternalMessage, tc.op,
-				"InternalMessage must carry the PascalCase op label for operator triage")
-		})
-	}
+
+	t.Run("ctx cancel cause routes to ErrClientCanceled", func(t *testing.T) {
+		for _, tc := range ops {
+			t.Run(tc.name, func(t *testing.T) {
+				ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", context.Canceled)
+				require.NotNil(t, ec)
+				assert.Equal(t, errcode.ErrClientCanceled, ec.Code,
+					"ctx cancel via crypto boundary must route to ErrClientCanceled (HTTP 499)")
+				assert.True(t, errcode.IsExpected4xx(ec),
+					"ErrClientCanceled must hit log4xx → slog.Warn path")
+			})
+		}
+	})
+
+	t.Run("transient KeyProvider cause preserves CategoryInfra", func(t *testing.T) {
+		transient := errcode.NewInfra(errcode.ErrKeyProviderTransient, "vault sealed")
+		for _, tc := range ops {
+			t.Run(tc.name, func(t *testing.T) {
+				ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", transient)
+				require.NotNil(t, ec)
+				assert.Equal(t, tc.code, ec.Code,
+					"transient cause must NOT rewrite to ErrClientCanceled")
+				assert.Equal(t, errcode.CategoryInfra, ec.Category,
+					"transient KeyProvider faults must remain CategoryInfra (Vault outage signal)")
+				assert.True(t, errcode.IsInfraError(ec),
+					"IsInfraError must stay true so existing infra alerts fire")
+			})
+		}
+	})
+
+	t.Run("opaque cause classified as CategoryAuth", func(t *testing.T) {
+		for _, tc := range ops {
+			t.Run(tc.name, func(t *testing.T) {
+				ec := repo.cryptoOpError(tc.code, tc.op, "key=foo", assert.AnError)
+				require.NotNil(t, ec)
+				assert.Equal(t, tc.code, ec.Code)
+				assert.Equal(t, errcode.CategoryAuth, ec.Category,
+					"unclassified KMS / tamper failures must be CategoryAuth")
+				assert.False(t, errcode.IsInfraError(ec),
+					"CategoryAuth must NOT match IsInfraError (separates KMS auth from infra)")
+				assert.Contains(t, ec.InternalMessage, tc.op,
+					"InternalMessage must carry the PascalCase op label for operator triage")
+			})
+		}
+	})
 }
 
 // TestConfigRepository_GetByKey_NotFound is a legacy name kept for backward

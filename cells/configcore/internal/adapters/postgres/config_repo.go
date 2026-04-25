@@ -47,30 +47,46 @@ func (r *ConfigRepository) wrapCtxCancel(_ context.Context, op, identifier strin
 }
 
 // cryptoOpError constructs a uniform *errcode.Error for encrypt/decrypt
-// operation failures. Message carries a generic descriptor for the public
-// error channel; InternalMessage embeds the identifier (config key or
-// configID) for internal triage. Both encryptValue/decryptValue and their
-// version-scoped variants funnel through this factory to eliminate
-// asymmetry and prevent key-name leakage into the public Message.
+// operation failures, classifying the cause to preserve dashboards' ability
+// to distinguish three signal sources that the ValueTransformer chain may
+// surface (in order of detection):
 //
-// Category: CategoryAuth — encryption / decryption failures originate from
-// the KeyProvider boundary (KMS access denied, key rotation race, ciphertext
-// keyID mismatch). Categorising these as Auth rather than Infra prevents
-// IsInfraError fall-through from conflating KMS authorisation failures with
-// database / network outages in dashboards. The HTTP status mapping is
-// driven independently by codeToStatus (ErrConfigDecryptFailed → 500,
-// ErrConfigRepoQuery → 500); only the in-process classifier semantics shift.
+//  1. Context cancellation (`context.Canceled` / `DeadlineExceeded`) →
+//     ErrClientCanceled (HTTP 499 + slog.Warn). Routed via the canonical
+//     ctxcancel helper so client-direction signals never pollute 5xx SLOs,
+//     even when surfaced through the crypto boundary.
+//  2. Transient KeyProvider faults (`ErrKeyProviderTransient`: Vault sealed,
+//     rate-limited, request timeout) → preserve CategoryInfra. These are
+//     real infrastructure outages and must remain in the infra bucket so
+//     `IsInfraError` predicates and Vault-outage alerts still fire.
+//  3. Default → CategoryAuth. The remaining cases are KeyProvider
+//     authorisation failures (KMS access denied, key rotation race,
+//     ciphertext keyID mismatch) and AES-GCM tamper detection — distinct
+//     from infra so dashboards can route KMS-auth alerts separately.
+//
+// Public Message stays a generic descriptor; InternalMessage embeds the
+// identifier (config key or configID) for internal triage only. The HTTP
+// status mapping is driven independently by codeToStatus
+// (ErrConfigDecryptFailed → 500, ErrConfigRepoQuery → 500,
+// ErrClientCanceled → 499); only the in-process classifier shifts.
 //
 // ref: google/tink aead/subtle/aes_gcm.go — symmetric crypto errors do not
 // carry key identifiers in Error() strings.
 // ref: FiloSottile/age age.go — encrypt errors use recipient index, not key.
 func (r *ConfigRepository) cryptoOpError(code errcode.Code, op, identifier string, cause error) *errcode.Error {
+	if cancelErr := ctxcancel.Wrap(cause, op, identifier); cancelErr != nil {
+		return cancelErr
+	}
+	category := errcode.CategoryAuth
+	if errcode.IsTransient(cause) {
+		category = errcode.CategoryInfra
+	}
 	return &errcode.Error{
 		Code:            code,
 		Message:         fmt.Sprintf("config repo: %s failed", op),
 		InternalMessage: fmt.Sprintf("config repo: %s failed (%s)", op, identifier),
 		Cause:           cause,
-		Category:        errcode.CategoryAuth,
+		Category:        category,
 	}
 }
 
@@ -284,6 +300,9 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		)
 	}
 	if err != nil {
+		if cancelErr := r.wrapCtxCancel(ctx, "Create", "key="+entry.Key, err); cancelErr != nil {
+			return cancelErr
+		}
 		return errcode.WrapInfra(errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: create failed for key %s", entry.Key), err)
 	}
