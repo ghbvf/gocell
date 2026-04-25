@@ -267,8 +267,8 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 // temporarily conflicting, it is permanently retired for the lifetime of this
 // deployment. The details payload carries a semantic next-action only; the
 // login endpoint path is resolved by clients via OpenAPI / contract registry,
-// not embedded on the wire (PR-A42 N4: contract is the single source of truth
-// for endpoint paths).
+// not embedded on the wire — contract is the single source of truth for
+// endpoint paths.
 func setupRetiredError() error {
 	return errcode.WithDetails(
 		errcode.New(errcode.ErrSetupAlreadyInitialized,

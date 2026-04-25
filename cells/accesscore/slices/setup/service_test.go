@@ -441,12 +441,12 @@ func TestService_CreateAdmin_ControlCharInField_Returns400(t *testing.T) {
 	}
 }
 
-// TestService_RetiredError_DetailsOnlyNextAction pins the wire-shape contract
-// of the 410 response: details carry a semantic next-action only — no HTTP
-// path literal. Clients resolve the login endpoint via OpenAPI / contract
-// registry; embedding the path here would create a second source of truth
-// (PR-A42 N4).
-func TestService_RetiredError_DetailsOnlyNextAction(t *testing.T) {
+// TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction pins the
+// wire-shape contract of the 410 response: details carry a semantic
+// next-action only — no HTTP path literal. Clients resolve the login endpoint
+// via OpenAPI / contract registry; embedding the path here would create a
+// second source of truth.
+func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
@@ -508,4 +508,13 @@ func (r *countErrRoleRepo) GetByID(_ context.Context, _ string) (*domain.Role, e
 }
 func (r *countErrRoleRepo) ListByUserID(_ context.Context, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
+}
+
+// newServiceWithProvisionerError builds a Service whose provisioner status
+// check fails with the supplied error. Shared by service_test.go (white-box)
+// and contract_test.go (envelope coverage) so the contract layer does not
+// need to know which repo produces the failure.
+func newServiceWithProvisionerError(t *testing.T, err error) *setup.Service {
+	t.Helper()
+	return newService(t, mem.NewUserRepository(), &countErrRoleRepo{err: err}, nil)
 }

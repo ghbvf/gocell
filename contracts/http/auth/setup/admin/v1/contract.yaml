@@ -20,7 +20,7 @@ endpoints:
         description: "Conflict — requested first-admin username already belongs to a non-recoverable user or provisioning attempt"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       410:
-        description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details carry nextAction=\"login\" only; clients resolve the login endpoint via OpenAPI / contract registry (PR-A42 N4)."
+        description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details carry nextAction=\"login\" only; clients resolve the login endpoint via OpenAPI / contract registry. See docs/architecture/202604181900-adr-auth-setup-first-run.md."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

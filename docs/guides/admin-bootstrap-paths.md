@@ -38,6 +38,8 @@
 | **成功后 setup 端点状态** | 410 Gone（永久） | 410 Gone（永久；从启动那一刻开始就是 410） |
 | **推荐场景** | 内部工具、开发环境、需要明确署名首位 admin 时 | 生产 K8s / Docker、CI sandbox、希望部署即就绪时 |
 
+> ⚠️ **多副本部署的 interactive 模式当前不安全**：`adminprovision` 仅用 `sync.Mutex` 保护单进程内竞争，跨进程锁（backlog `ADMINPROVISION-DIST-LOCK-01` / 026 plan PR-A56）尚未落地。当 deployment replicas ≥ 2 时，并发的 `POST /setup/admin` 可能在两个 pod 各自 `Status()` 看到 `hasAdmin=false` 后双双进入 `Ensure()` 并各创建一份 admin。**replicas ≥ 2 部署请使用 bootstrap 模式**，待 PG advisory lock 落地后再启用 interactive。
+
 > 已经决定哪条路径后，运维侧细节请跳转 [`docs/operations/first-run-setup.md`](../operations/first-run-setup.md)。
 
 ---
@@ -65,6 +67,8 @@
 - `GET /status` 仅作 hint；并发 setup 时仍由 410 断言一次性
 - 创建成功后 setup 端点对**该部署生命周期内的所有后续请求**都返回 410（不是临时冲突 409）
 - 客户端不应把 410 当作 retry 信号；进入 login 流即可
+- `GET /status` 在 provisioner 故障时返回 500：这是 infra 故障类，客户端按自身 HTTP retry middleware 处理（沿用应用全局退避策略；若响应携带 `Retry-After` header 则遵循其值），不需要为 setup 端点单独写一份 retry 表
+- `/setup/status` 是业务端点，**不是** liveness / readiness probe — K8s probe 应指向 `/healthz` / `/readyz`，那两条路径独立于业务故障域
 
 ---
 
@@ -129,6 +133,8 @@ setup 端点退休后，所有 `POST /api/v1/access/setup/admin` 请求得到统
 
 ### 6.1 curl 示意
 
+> curl 块为人工调试用途；**生产客户端请参考 §6.2 Go 伪代码** — 通过 contract registry 解析 path，不要把 curl 字面量复制到代码中（与 §5 设计原则一致）。
+
 ```bash
 # 1. 尝试 setup（部署后任何时刻都可能拿到 410）
 $ curl -sS -X POST https://gocell.example/api/v1/access/setup/admin \
@@ -156,7 +162,12 @@ type errEnvelope struct {
 
 func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
     resp, err := c.Post(ctx, "http.auth.setup.admin.v1", in)
-    if err == nil && resp.StatusCode == http.StatusCreated {
+    if err != nil {
+        return fmt.Errorf("setup: post admin: %w", err)
+    }
+    defer resp.Body.Close()
+
+    if resp.StatusCode == http.StatusCreated {
         return nil // 我们就是首位 admin
     }
     if resp.StatusCode != http.StatusGone {
@@ -164,7 +175,9 @@ func provisionOrLogin(ctx context.Context, c *Client, in AdminSeed) error {
     }
 
     var env errEnvelope
-    _ = json.NewDecoder(resp.Body).Decode(&env)
+    if err := json.NewDecoder(resp.Body).Decode(&env); err != nil {
+        return fmt.Errorf("setup: decode 410 envelope: %w", err)
+    }
     if env.Error.Details["nextAction"] != "login" {
         return fmt.Errorf("setup: 410 with unexpected nextAction %v", env.Error.Details)
     }
