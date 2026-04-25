@@ -85,7 +85,7 @@ func main() {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithTxManager(noopTxRunner{}),
 		accesscore.WithLogger(logger),
-		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
+		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production
 	)
 
 	// --- auditcore (L3): tamper-evident audit log ---
@@ -103,7 +103,7 @@ func main() {
 		auditcore.WithTxManager(noopTxRunner{}),
 		auditcore.WithCursorCodec(auditCursorCodec),
 		auditcore.WithLogger(logger),
-		auditcore.WithMetricsProvider(metrics.NopProvider{}),
+		auditcore.WithMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production
 	)
 
 	// --- configcore (L2): configuration + feature flags ---
@@ -118,7 +118,7 @@ func main() {
 		configcore.WithTxManager(noopTxRunner{}),
 		configcore.WithCursorCodec(configCursorCodec),
 		configcore.WithLogger(logger),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
+		configcore.WithMetricsProvider(metrics.NopProvider{}), // dev only — replace with Prometheus-backed Provider in production
 	)
 
 	// Build assembly and register all three Cells.

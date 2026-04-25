@@ -26,7 +26,7 @@ func newTestService() (*Service, *mem.ConfigRepository) {
 
 func newDirectTestEmitter(t *testing.T, pub outbox.Publisher, mode outbox.DirectPublishFailureMode) outbox.Emitter {
 	t.Helper()
-	emitter, err := outbox.NewDirectEmitter(pub, mode, metrics.NopProvider{}, slog.Default())
+	emitter, err := outbox.NewDirectEmitter(pub, mode, metrics.NopProvider{}, "configcore", slog.Default())
 	require.NoError(t, err)
 	return emitter
 }

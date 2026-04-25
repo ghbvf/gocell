@@ -57,6 +57,13 @@ func (s *typeMethodSet) has(typeName, methodName string) bool {
 
 // collectTypeMethods walks all .go files under root (skipping *_test.go) and
 // collects (receiver-type, method-name) pairs for exported types.
+//
+// Known limitation: promoted methods from embedded fields are NOT detected.
+// For example, if TypeA embeds TypeB and TypeB has Close(), the AST walk
+// records Close() on TypeB but not on TypeA. Enforcement therefore relies on
+// direct method declarations. Types that satisfy ManagedResource solely via
+// embedding must declare a thin delegation method in their own source file to
+// be detected. This is an accepted limitation for the current pure-AST approach.
 func collectTypeMethods(t *testing.T, root string) *typeMethodSet {
 	t.Helper()
 	s := newTypeMethodSet()
@@ -134,6 +141,12 @@ func isManagedResource(s *typeMethodSet, typeName string) bool {
 
 // exposesHealthCheckerMethod returns true if the type has Checkers() or
 // HealthCheckers() — the two spellings that signal health-checking intent.
+//
+// Note: "Health(ctx)" (e.g. adapters/postgres.Pool.Health) is intentionally
+// NOT included in this word list. Pool.Health is a DB connectivity probe with
+// different semantics; Pool is wrapped by adapters/postgres.PGResource which
+// implements the full ManagedResource contract. Adding "Health" to this list
+// would incorrectly flag Pool as needing Worker/Close.
 func exposesHealthCheckerMethod(s *typeMethodSet, typeName string) bool {
 	return s.has(typeName, "Checkers") || s.has(typeName, "HealthCheckers")
 }

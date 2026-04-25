@@ -322,6 +322,44 @@ func TestRelay_StopBeforeStart_IsNoop(t *testing.T) {
 	assert.NoError(t, err, "Stop on never-started relay must be a no-op")
 }
 
+// TestRelay_Stop_Idempotent verifies that calling Stop twice on a running relay
+// is fully idempotent: both calls return nil. This ensures the double-stop path
+// (bootstrap WorkerGroup.Stop + LIFO ManagedResource.Close) does not error.
+func TestRelay_Stop_Idempotent(t *testing.T) {
+	store := outboxtest.NewFakeStore()
+	relay := outbox.NewRelay(store, newFakePublisher(), fastCfg())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- relay.Start(ctx) }()
+
+	// Wait for relay to reach running state.
+	select {
+	case <-relay.Ready():
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay did not become ready in time")
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stopCancel()
+
+	// First Stop — should succeed.
+	err := relay.Stop(stopCtx)
+	assert.NoError(t, err, "first Stop must return nil")
+
+	// Second Stop — must also return nil (idempotent).
+	err = relay.Stop(stopCtx)
+	assert.NoError(t, err, "second Stop must return nil (idempotent)")
+
+	cancel()
+	select {
+	case runErr := <-errCh:
+		assert.NoError(t, runErr)
+	case <-time.After(2 * time.Second):
+		t.Fatal("relay did not shut down in time")
+	}
+}
+
 func TestRelay_DoubleStart_Error(t *testing.T) {
 	store := outboxtest.NewFakeStore()
 	relay := outbox.NewRelay(store, newFakePublisher(), fastCfg())

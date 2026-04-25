@@ -227,16 +227,21 @@ func (r *Relay) Start(ctx context.Context) error {
 // Stop signals the relay to shut down gracefully and waits for goroutines.
 // It respects the caller's context deadline: if ctx expires before goroutines
 // finish, Stop returns an error instead of blocking indefinitely.
+// Stop is fully idempotent: calling it multiple times (e.g. via both
+// ManagedResource.Close and WorkerGroup.Stop) is safe and returns nil on every
+// call after the relay is already stopping or stopped.
 func (r *Relay) Stop(ctx context.Context) error {
-	// If never started (or already stopped), no-op (consistent with worker.Worker
-	// contract).  We detect this by checking cancel under mu: cancel is only set
-	// during an active Start() call and cleared by the Start() defer on shutdown.
+	// If never started, already stopped, or already stopping — no-op.
+	// cancel is only set during an active Start() call and cleared by the
+	// Start() defer on shutdown.
 	r.mu.Lock()
-	notStarted := r.cancel == nil && relayState(r.state.Load()) == relayStopped
+	state := relayState(r.state.Load())
+	notStarted := r.cancel == nil && state == relayStopped
+	alreadyStopping := state == relayStopping
 	ready := r.readyCh
 	r.mu.Unlock()
 
-	if notStarted {
+	if notStarted || alreadyStopping {
 		return nil
 	}
 

@@ -63,16 +63,19 @@ var _ Emitter = (*WriterEmitter)(nil)
 type DirectEmitter struct {
 	publisher         Publisher
 	mode              DirectPublishFailureMode
+	cellID            string
 	logger            *slog.Logger
 	failOpenDroppedCv metrics.CounterVec
 }
 
 // NewDirectEmitter adapts a Publisher into an Emitter that publishes v1 wire
-// envelopes. mp is a required metrics.Provider used to register the
-// gocell_outbox_emit_failopen_dropped_total counter; pass metrics.NopProvider{}
-// in tests or demos where no backend is wired. A nil mp returns an errcode
-// error. A nil logger uses slog.Default().
-func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, loggers ...*slog.Logger) (*DirectEmitter, error) {
+// envelopes. cellID is the owning Cell's ID and is used as the "cell" label on
+// the fail-open dropped counter; it must be non-empty (empty string returns
+// errcode.ErrValidationFailed). mp is a required metrics.Provider used to
+// register the gocell_outbox_emit_failopen_dropped_total counter; pass
+// metrics.NopProvider{} in tests or demos where no backend is wired. A nil mp
+// returns an errcode error. A nil logger uses slog.Default().
+func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, cellID string, loggers ...*slog.Logger) (*DirectEmitter, error) {
 	if isNilEmitterDependency(p) {
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")
@@ -81,9 +84,13 @@ func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Pro
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
 			"outbox: nil metrics provider for DirectEmitter")
 	}
+	if cellID == "" {
+		return nil, errcode.New(errcode.ErrValidationFailed,
+			"outbox: cellID must not be empty for DirectEmitter")
+	}
 	cv, err := mp.CounterVec(metrics.CounterOpts{
 		Name:       "gocell_outbox_emit_failopen_dropped_total",
-		Help:       "Total number of outbox entries dropped by the fail-open emitter path.",
+		Help:       "Total outbox entries dropped in fail-open mode. cell=Cell ID; topic=routing topic.",
 		LabelNames: []string{"cell", "topic"},
 	})
 	if err != nil {
@@ -93,7 +100,7 @@ func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Pro
 	if len(loggers) > 0 && loggers[0] != nil {
 		logger = loggers[0]
 	}
-	return &DirectEmitter{publisher: p, mode: mode, logger: logger, failOpenDroppedCv: cv}, nil
+	return &DirectEmitter{publisher: p, mode: mode, cellID: cellID, logger: logger, failOpenDroppedCv: cv}, nil
 }
 
 func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
@@ -123,7 +130,7 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 				slog.String("event_type", entry.EventType),
 				slog.String("error", err.Error()))
 			e.failOpenDroppedCv.With(metrics.Labels{
-				"cell":  entry.AggregateType,
+				"cell":  e.cellID,
 				"topic": topic,
 			}).Inc()
 			return nil

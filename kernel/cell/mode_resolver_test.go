@@ -56,11 +56,12 @@ func TestResolveEmitter(t *testing.T) {
 			// A: durable + full real deps → WriterEmitter, durable=true
 			name: "A_durable_full",
 			cfg: cell.EmitterConfig{
-				CellID:       "testcell",
-				Mode:         cell.DurabilityDurable,
-				Publisher:    realPub,
-				OutboxWriter: realW,
-				TxRunner:     realTx,
+				CellID:          "testcell",
+				Mode:            cell.DurabilityDurable,
+				Publisher:       realPub,
+				OutboxWriter:    realW,
+				TxRunner:        realTx,
+				MetricsProvider: metrics.NopProvider{},
 			},
 			wantDurable: true,
 		},
@@ -68,11 +69,12 @@ func TestResolveEmitter(t *testing.T) {
 			// B: durable + missing writer → error (ErrCellMissingOutbox)
 			name: "B_durable_missing_writer",
 			cfg: cell.EmitterConfig{
-				CellID:       "testcell",
-				Mode:         cell.DurabilityDurable,
-				Publisher:    realPub,
-				OutboxWriter: nil,
-				TxRunner:     realTx,
+				CellID:          "testcell",
+				Mode:            cell.DurabilityDurable,
+				Publisher:       realPub,
+				OutboxWriter:    nil,
+				TxRunner:        realTx,
+				MetricsProvider: metrics.NopProvider{},
 			},
 			wantErr: true,
 		},
@@ -80,11 +82,12 @@ func TestResolveEmitter(t *testing.T) {
 			// C: durable + noop writer → CheckNotNoop rejects
 			name: "C_durable_noop_writer",
 			cfg: cell.EmitterConfig{
-				CellID:       "testcell",
-				Mode:         cell.DurabilityDurable,
-				Publisher:    realPub,
-				OutboxWriter: noopWriter,
-				TxRunner:     realTx,
+				CellID:          "testcell",
+				Mode:            cell.DurabilityDurable,
+				Publisher:       realPub,
+				OutboxWriter:    noopWriter,
+				TxRunner:        realTx,
+				MetricsProvider: metrics.NopProvider{},
 			},
 			wantErr: true,
 		},
@@ -120,11 +123,12 @@ func TestResolveEmitter(t *testing.T) {
 			// F: demo + real writer + real tx (no pub) → WriterEmitter, durable=true
 			name: "F_demo_writer_with_tx",
 			cfg: cell.EmitterConfig{
-				CellID:       "testcell",
-				Mode:         cell.DurabilityDemo,
-				Publisher:    nil,
-				OutboxWriter: realW,
-				TxRunner:     realTx,
+				CellID:          "testcell",
+				Mode:            cell.DurabilityDemo,
+				Publisher:       nil,
+				OutboxWriter:    realW,
+				TxRunner:        realTx,
+				MetricsProvider: metrics.NopProvider{},
 			},
 			wantDurable: true,
 		},
@@ -132,11 +136,12 @@ func TestResolveEmitter(t *testing.T) {
 			// G: demo + real writer but no tx → pairing invariant error
 			name: "G_demo_writer_without_tx",
 			cfg: cell.EmitterConfig{
-				CellID:       "testcell",
-				Mode:         cell.DurabilityDemo,
-				Publisher:    nil,
-				OutboxWriter: realW,
-				TxRunner:     nil,
+				CellID:          "testcell",
+				Mode:            cell.DurabilityDemo,
+				Publisher:       nil,
+				OutboxWriter:    realW,
+				TxRunner:        nil,
+				MetricsProvider: metrics.NopProvider{},
 			},
 			wantErr: true,
 		},
@@ -144,11 +149,12 @@ func TestResolveEmitter(t *testing.T) {
 			// H: demo + all nil → no sink error
 			name: "H_demo_all_nil",
 			cfg: cell.EmitterConfig{
-				CellID:       "testcell",
-				Mode:         cell.DurabilityDemo,
-				Publisher:    nil,
-				OutboxWriter: nil,
-				TxRunner:     nil,
+				CellID:          "testcell",
+				Mode:            cell.DurabilityDemo,
+				Publisher:       nil,
+				OutboxWriter:    nil,
+				TxRunner:        nil,
+				MetricsProvider: metrics.NopProvider{},
 			},
 			wantErr: true,
 		},
@@ -394,7 +400,7 @@ func TestResolveCellEmitter(t *testing.T) {
 
 // TestResolveEmitter_DemoMode_NilMetricsProvider_ReturnsError asserts that
 // demo mode with a direct publisher and nil MetricsProvider returns
-// ErrValidationFailed (fail-fast; callers must pass metrics.NopProvider{}
+// ErrCellMissingOutbox (fail-fast; callers must pass metrics.NopProvider{}
 // explicitly in tests instead of relying on a silent fallback).
 func TestResolveEmitter_DemoMode_NilMetricsProvider_ReturnsError(t *testing.T) {
 	t.Parallel()
@@ -409,14 +415,14 @@ func TestResolveEmitter_DemoMode_NilMetricsProvider_ReturnsError(t *testing.T) {
 		MetricsProvider:   nil, // intentionally nil — must fail
 	})
 	if err == nil {
-		t.Fatal("expected ErrValidationFailed for nil MetricsProvider, got nil")
+		t.Fatal("expected ErrCellMissingOutbox for nil MetricsProvider, got nil")
 	}
 	var ce *errcode.Error
 	if !errors.As(err, &ce) {
 		t.Fatalf("expected errcode.Error, got %T: %v", err, err)
 	}
-	if ce.Code != errcode.ErrValidationFailed {
-		t.Fatalf("expected ErrValidationFailed, got code=%s msg=%s", ce.Code, ce.Message)
+	if ce.Code != errcode.ErrCellMissingOutbox {
+		t.Fatalf("expected ErrCellMissingOutbox, got code=%s msg=%s", ce.Code, ce.Message)
 	}
 	if !strings.Contains(err.Error(), "MetricsProvider") {
 		t.Fatalf("error message should mention MetricsProvider, got: %v", err)

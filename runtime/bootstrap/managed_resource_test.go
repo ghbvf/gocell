@@ -422,7 +422,7 @@ func (s *managedResourceFailingStore) ClaimPending(ctx context.Context, batchSiz
 	return s.FakeStore.ClaimPending(ctx, batchSize)
 }
 
-// TestRelay_AsManagedResource_RegistersCheckers verifies that a Relay registered
+// TM2: TestRelay_AsManagedResource_RegistersCheckers verifies that a Relay registered
 // via WithManagedResource contributes its three health checkers to /readyz?verbose.
 // Migrated from TestWithRelayHealth_RegistersCheckers.
 func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
@@ -472,7 +472,7 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 	}
 }
 
-// TestRelay_AsManagedResource_TrippedBudget_Returns503 verifies the P1-15 core contract:
+// TM3: TestRelay_AsManagedResource_TrippedBudget_Returns503 verifies the P1-15 core contract:
 // poll budget trip → /readyz returns 503; store recovery → /readyz returns 200.
 // Migrated from TestWithRelayHealth_TrippedBudget_Returns503.
 func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
@@ -523,20 +523,13 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	addr := ln.Addr().String()
 	waitForHealthy(t, addr)
 
-	// Start the relay so its poll loop drives the failure budget.
-	// WithManagedResource registers the relay worker in bootstrap; we also start
-	// it directly here to exercise the budget trip path independently of the
-	// bootstrap worker lifecycle (bootstrap starts workers asynchronously).
-	relayCtx, relayCancel := context.WithCancel(ctx)
-	relayDone := make(chan error, 1)
-	go func() { relayDone <- relay.Start(relayCtx) }()
-	defer func() {
-		stopCtx, stopCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer stopCancel()
-		_ = relay.Stop(stopCtx)
-		relayCancel()
-		<-relayDone
-	}()
+	// TM3: bootstrap WorkerGroup is the single startup path for the relay.
+	// Wait for the relay to reach the running state before asserting poll-budget behaviour.
+	select {
+	case <-relay.Ready():
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for relay to become ready via bootstrap WorkerGroup")
+	}
 
 	// Phase 1: store failing — budget trips — /readyz must return 503.
 	require.Eventually(t, func() bool {
@@ -574,7 +567,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 200 after store recovers")
 }
 
-// TestRelay_AsManagedResource_DisabledBudget_SkipsChecker verifies that a relay with
+// TM4: TestRelay_AsManagedResource_DisabledBudget_SkipsChecker verifies that a relay with
 // poll budget disabled (threshold=0) does not register the outbox-relay-poll checker.
 // Migrated from TestWithRelayHealth_DisabledBudget_SkipsChecker.
 func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
