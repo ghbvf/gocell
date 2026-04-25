@@ -124,29 +124,45 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 	next.ServeHTTP(w, r.WithContext(ctx))
 }
 
+// passwordResetDetails is the typed shape of the details object returned in
+// 403 ERR_AUTH_PASSWORD_RESET_REQUIRED responses.
+//
+// Only changePasswordEndpoint is carried; the blocked request's method and
+// path are emitted via slog.Info on the auth logger and are intentionally
+// not returned to the client (info-exposure boundary; see go-kratos/kratos
+// errors and k8s api-machinery details guidance — rich request context belongs
+// in logs/metrics, not in the response body).
+type passwordResetDetails struct {
+	ChangePasswordEndpoint string `json:"changePasswordEndpoint,omitempty"`
+}
+
 // writePasswordResetRequired writes a 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response. When changeEndpointHint is non-empty, it is emitted as
-// details.change_password_endpoint so clients can navigate to the correct
-// endpoint; when empty, the details map is omitted — runtime/auth itself
-// carries no knowledge of any specific business path.
+// response. changeEndpointHint is emitted as details.changePasswordEndpoint
+// when non-empty.
+//
+// The blocked request's method and path are logged by the call site via
+// slog.Info — they are intentionally absent from the response body to avoid
+// leaking internal routing information to clients.
 //
 // The hint is derived by Router.FinalizeAuth from the first declared
 // PasswordResetExempt=true + Method=POST AuthRouteMeta, or set directly via
 // auth.WithPasswordResetChangeEndpointHintFn. Empty string omits the
-// details.change_password_endpoint field entirely.
+// details.changePasswordEndpoint field (omitempty).
+//
+// ref: go-kratos/kratos transport/http/binding — typed details, never map[string]any on the wire
 func writePasswordResetRequired(w http.ResponseWriter, changeEndpointHint string) {
-	errBody := map[string]any{
-		"code":    string(errcode.ErrAuthPasswordResetRequired),
-		"message": "password reset required before accessing this endpoint",
-	}
-	if changeEndpointHint != "" {
-		errBody["details"] = map[string]any{
-			"change_password_endpoint": changeEndpointHint,
-		}
+	body := map[string]any{
+		"error": map[string]any{
+			"code":    string(errcode.ErrAuthPasswordResetRequired),
+			"message": "password reset required before accessing this endpoint",
+			"details": passwordResetDetails{
+				ChangePasswordEndpoint: changeEndpointHint,
+			},
+		},
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusForbidden)
-	if err := json.NewEncoder(w).Encode(map[string]any{"error": errBody}); err != nil {
+	if err := json.NewEncoder(w).Encode(body); err != nil {
 		slog.Error("auth middleware: encode password-reset-required response",
 			slog.Any("error", err))
 	}

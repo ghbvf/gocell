@@ -403,7 +403,7 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, code, errObj["code"])
-	// ERR_AUTH_PASSWORD_RESET_REQUIRED carries a change_password_endpoint hint
+	// ERR_AUTH_PASSWORD_RESET_REQUIRED carries a changePasswordEndpoint hint
 	// in details (P2-10 fix). All other codes must have an empty details object.
 	if code != "ERR_AUTH_PASSWORD_RESET_REQUIRED" {
 		assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
@@ -411,8 +411,10 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 }
 
 // assertPasswordResetErrorWithHint asserts 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response and verifies the change_password_endpoint hint is present (P2-10).
-func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder) {
+// response and verifies the changePasswordEndpoint hint is present. The blocked
+// request's method and path are intentionally absent from the response body —
+// they are emitted via slog.Info on the auth logger (info-exposure boundary).
+func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder, _ string) {
 	t.Helper()
 	var body map[string]any
 	err := json.NewDecoder(rec.Body).Decode(&body)
@@ -421,8 +423,12 @@ func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecord
 	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
 	details, ok := errObj["details"].(map[string]any)
 	require.True(t, ok, "details must be a map")
-	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["change_password_endpoint"],
-		"403 password-reset response must include change_password_endpoint hint (P2-10)")
+	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["changePasswordEndpoint"],
+		"403 password-reset response must include changePasswordEndpoint hint (P2-10)")
+	// Only changePasswordEndpoint should be present in details; no path/method keys
+	// (the blocked request's context is emitted via slog.Info on the auth logger only —
+	// info-exposure boundary).
+	assert.Len(t, details, 1, "details must have exactly one key: changePasswordEndpoint")
 }
 
 // testExemptMatcher returns the canonical (method, path) matcher used by the
@@ -488,7 +494,7 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksBusinessRoute(t *testing.T) 
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assertPasswordResetErrorWithHint(t, rec)
+	assertPasswordResetErrorWithHint(t, rec, "/api/v1/configs")
 }
 
 // TestAuthMiddleware_PasswordResetRequired_AllowsChangePassword_PathTemplate verifies
@@ -595,19 +601,21 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusForbidden, rec.Code)
-	assertPasswordResetErrorWithHint(t, rec)
+	assertPasswordResetErrorWithHint(t, rec, "/api/v1/access/users/usr-1/password")
 }
 
 // TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured verifies
-// the runtime/auth default: without WithPasswordResetChangeEndpointHintFn, the
-// 403 response body has NO details.change_password_endpoint — runtime/auth
-// carries no business path knowledge, and the composition root opts in to
-// any hint explicitly.
+// that without WithPasswordResetChangeEndpointHintFn, the 403 response body
+// carries an empty details object. The blocked request's method and path are
+// observable via slog.Info only — runtime/auth carries no business path
+// knowledge and never echoes request context back to the client.
 func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *testing.T) {
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 	verifier := &mockVerifier{
 		claims: Claims{Subject: "usr-bootstrap", PasswordResetRequired: true},
 	}
-	handler := AuthMiddleware(verifier)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := AuthMiddleware(verifier, WithLogger(logger))(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("should not reach handler")
 	}))
 
@@ -621,9 +629,19 @@ func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *test
 	require.NoError(t, json.NewDecoder(rec.Body).Decode(&body))
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
-	_, hasDetails := errObj["details"]
-	assert.False(t, hasDetails,
-		"without WithPasswordResetChangeEndpointHintFn, the response must carry no details map")
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "details must always be present (typed struct)")
+	_, hasHint := details["changePasswordEndpoint"]
+	assert.False(t, hasHint,
+		"without WithPasswordResetChangeEndpointHintFn, changePasswordEndpoint must be absent (omitempty)")
+	// Without a hint, details must be empty — no path/method or other fields
+	// (the blocked request's context is emitted via slog.Info on the auth logger only —
+	// info-exposure boundary).
+	assert.Empty(t, details, "details must be empty when no hint is configured")
+	// The path and method must be observable via slog.Info on the auth logger.
+	logOut := logBuf.String()
+	assert.Contains(t, logOut, "/api/v1/configs", "blocked path must appear in slog output")
+	assert.Contains(t, logOut, "GET", "blocked method must appear in slog output")
 }
 
 // TestAuthMiddleware_NoResetClaim_PassesThrough verifies that a regular token

@@ -55,9 +55,19 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		return err
 	}
 
-	metadata, err := json.Marshal(outbox.MergeObservabilityMetadata(ctx, entry.Metadata))
+	// Inject observability from context right before persistence so the entry
+	// carries the originating request's trace/request/correlation identity
+	// across the async boundary.
+	entry.InjectObservabilityFromContext(ctx)
+
+	metadata, err := json.Marshal(entry.Metadata)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGMarshal, "outbox: failed to marshal metadata", err)
+	}
+
+	observabilityJSON, err := marshalObservability(entry.Observability)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterPGMarshal, "outbox: failed to marshal observability", err)
 	}
 
 	createdAt := entry.CreatedAt
@@ -66,8 +76,8 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 	}
 
 	const query = `INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '` + statusPending + `')`
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '` + statusPending + `', $9)`
 
 	_, err = tx.Exec(ctx, query,
 		entry.ID,
@@ -78,6 +88,7 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 		entry.Payload,
 		metadata,
 		createdAt,
+		observabilityJSON,
 	)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterPGQuery,
@@ -88,9 +99,10 @@ func (w *OutboxWriter) Write(ctx context.Context, entry outbox.Entry) error {
 }
 
 // writeBatchChunkSize is the maximum number of entries per INSERT statement.
-// PostgreSQL supports at most 65535 bind parameters; each entry uses 9 columns,
-// so the theoretical max is 65535/9 = 7281. We use 7000 as a safe margin.
-const writeBatchChunkSize = 7000
+// PostgreSQL supports at most 65535 bind parameters; each entry uses 10 columns
+// (added observability column), so the theoretical max is 65535/10 = 6553.
+// We use 6500 as a safe margin.
+const writeBatchChunkSize = 6500
 
 // WriteBatch inserts multiple outbox entries within the caller's transaction.
 // All entries are validated upfront (ID format + Entry.Validate); if any entry
@@ -142,22 +154,31 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 // writeBatchChunk inserts a single chunk of entries via multi-row INSERT.
 // globalOffset is the index of the first entry in the original slice (for error messages).
 func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries []outbox.Entry, globalOffset int) error {
-	const cols = 9 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status
+	const cols = 10 // id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability
 	var sb strings.Builder
 	// Pre-allocate buffer to avoid reallocations during string building.
-	// Approximate size: 150 bytes for header + (entries * ~54 bytes per value tuple).
-	sb.Grow(150 + len(entries)*(cols*6+3))
+	// Approximate size: 170 bytes for header + (entries * ~60 bytes per value tuple).
+	sb.Grow(170 + len(entries)*(cols*6+3))
 	sb.WriteString(`INSERT INTO outbox_entries
-		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status)
+		(id, aggregate_id, aggregate_type, event_type, topic, payload, metadata, created_at, status, observability)
 		VALUES `)
 
 	var numBuf [32]byte
 	args := make([]any, 0, len(entries)*cols)
 	for i, e := range entries {
-		metadata, err := json.Marshal(outbox.MergeObservabilityMetadata(ctx, e.Metadata))
+		// Inject observability from context right before persistence.
+		e.InjectObservabilityFromContext(ctx)
+
+		metadata, err := json.Marshal(e.Metadata)
 		if err != nil {
 			return errcode.Wrap(ErrAdapterPGMarshal,
 				fmt.Sprintf("outbox entry[%d]: failed to marshal metadata", globalOffset+i), err)
+		}
+
+		observabilityJSON, err := marshalObservability(e.Observability)
+		if err != nil {
+			return errcode.Wrap(ErrAdapterPGMarshal,
+				fmt.Sprintf("outbox entry[%d]: failed to marshal observability", globalOffset+i), err)
 		}
 
 		createdAt := e.CreatedAt
@@ -181,7 +202,7 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 		sb.WriteString(")")
 
 		args = append(args, e.ID, e.AggregateID, e.AggregateType,
-			e.EventType, e.Topic, e.Payload, metadata, createdAt, statusPending)
+			e.EventType, e.Topic, e.Payload, metadata, createdAt, statusPending, observabilityJSON)
 	}
 
 	_, err := tx.Exec(ctx, sb.String(), args...)
@@ -190,4 +211,14 @@ func (w *OutboxWriter) writeBatchChunk(ctx context.Context, tx pgx.Tx, entries [
 			fmt.Sprintf("outbox: failed to batch insert %d entries", len(entries)), err)
 	}
 	return nil
+}
+
+// marshalObservability serialises ObservabilityMetadata to JSON.
+// Returns nil (SQL NULL) when the struct is zero to avoid storing empty
+// JSON objects in the observability column.
+func marshalObservability(o outbox.ObservabilityMetadata) ([]byte, error) {
+	if o.IsZero() {
+		return nil, nil
+	}
+	return json.Marshal(o)
 }

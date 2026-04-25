@@ -50,3 +50,87 @@ func TestSharedDeps_Validate_NilReceiver_Errors(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil receiver")
 }
+
+// TestSharedDeps_Validate_VerboseEndpoint is a focused table-driven test for
+// PR-A35's new invariant — `validateVerboseEndpoint` must reject any
+// SharedDeps that has no verbose token and has not explicitly waived the
+// endpoint. The prod-mode-disabled path is also asserted here so the
+// security contract is covered end-to-end outside the broader
+// TestSharedDeps_Validate helper.
+func TestSharedDeps_Validate_VerboseEndpoint(t *testing.T) {
+	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
+	devTopo := bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}
+
+	tests := []struct {
+		name       string
+		topo       bootstrap.Topology
+		mutate     func(d *SharedDeps) // applied on top of newValidatedSharedDeps baseline
+		wantErr    bool
+		wantSubstr string
+	}{
+		{
+			name:    "dev mode with token is valid",
+			topo:    devTopo,
+			mutate:  func(d *SharedDeps) { d.VerboseToken = "unit-test-verbose"; d.VerboseDisabled = false },
+			wantErr: false,
+		},
+		{
+			name:    "dev mode with VerboseDisabled is valid",
+			topo:    devTopo,
+			mutate:  func(d *SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = true },
+			wantErr: false,
+		},
+		{
+			name:       "dev mode with neither token nor disabled is rejected",
+			topo:       devTopo,
+			mutate:     func(d *SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = false },
+			wantErr:    true,
+			wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN must be set",
+		},
+		{
+			name:    "prod mode with token is valid",
+			topo:    prodTopo,
+			mutate:  func(d *SharedDeps) { d.VerboseToken = "unit-test-verbose"; d.VerboseDisabled = false },
+			wantErr: false,
+		},
+		{
+			name:       "prod mode cannot waive verbose via VerboseDisabled",
+			topo:       prodTopo,
+			mutate:     func(d *SharedDeps) { d.VerboseToken = ""; d.VerboseDisabled = true },
+			wantErr:    true,
+			wantSubstr: "GOCELL_READYZ_VERBOSE_DISABLED=1 is not allowed",
+		},
+		{
+			// Regression for the PR-A35 review-3 P1: `cp .env.example .env`
+			// + `s/POSTGRES_PASSWORD/.../` left the public sample verbose
+			// token in place; without this guard a real-mode deploy that
+			// rotated only the database secrets would still ship with a
+			// repo-known token gating /readyz?verbose.
+			name:       "prod mode rejects the .env.example sample verbose token",
+			topo:       prodTopo,
+			mutate:     func(d *SharedDeps) { d.VerboseToken = SampleVerboseToken; d.VerboseDisabled = false },
+			wantErr:    true,
+			wantSubstr: "GOCELL_READYZ_VERBOSE_TOKEN is set to the .env.example placeholder",
+		},
+		{
+			name:    "dev mode permits the sample verbose token (out-of-the-box demo path)",
+			topo:    devTopo,
+			mutate:  func(d *SharedDeps) { d.VerboseToken = SampleVerboseToken; d.VerboseDisabled = false },
+			wantErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newValidatedSharedDeps(t, tc.topo)
+			tc.mutate(deps)
+			err := deps.Validate()
+			if !tc.wantErr {
+				assert.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantSubstr)
+		})
+	}
+}

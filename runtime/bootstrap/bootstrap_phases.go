@@ -564,6 +564,12 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	if b.readyzDeadline > 0 {
 		hhOpts = append(hhOpts, health.WithDeadline(b.readyzDeadline))
 	}
+	// PR-A35 + PR-A14b round-3: WithReadyzVerboseDisabled is a
+	// HealthRouteGroupOption (no longer a bootstrap-level Option) — peek
+	// at the resolved cfg to thread the health.Option to the handler.
+	if b.resolveHealthRouteGroupCfg().verboseDisabled {
+		hhOpts = append(hhOpts, health.WithVerboseDisabled())
+	}
 	hh := health.New(s.asm, hhOpts...)
 	if b.adapterInfo != nil {
 		hh.SetAdapterInfo(b.adapterInfo)
@@ -974,11 +980,13 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		return b.checkNoEventRegistrars(s.asm)
 	}
 
-	var mws []outbox.SubscriptionMiddleware
-	if !b.disableObservabilityRestore {
-		mws = append(mws, outbox.ObservabilityContextMiddleware())
+	// Observability context restoration is the OUTERMOST step inside
+	// SubscriberWithMiddleware.Subscribe — built-in invariant, not a
+	// middleware here. ContractTracingMiddleware therefore observes a
+	// ctx already populated with entry.Observability fields.
+	mws := []outbox.SubscriptionMiddleware{
+		eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor),
 	}
-	mws = append(mws, eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor))
 	mws = append(mws, b.consumerMiddleware...)
 
 	var evtRouterOpts []eventrouter.Option

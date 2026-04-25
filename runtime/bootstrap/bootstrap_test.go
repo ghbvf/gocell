@@ -11,10 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"reflect"
-	"runtime"
 	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -27,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/ghbvf/gocell/runtime/observability/tracing"
@@ -43,9 +41,80 @@ import (
 // Value: 2× the fsnotify eventSeparator pattern (50ms) + CI margin.
 const fsnotifySettleDelay = 200 * time.Millisecond
 
+// testVerboseToken is the canonical token wired by test bootstraps via
+// WithVerboseToken so that /readyz?verbose responses are served to
+// assertions. PR-A35 removed the prior "no token = open verbose" path:
+// every verbose request must now carry a matching X-Readyz-Token header.
+const testVerboseToken = "bootstrap-test-verbose"
+
+// autoVerboseTokenTransport injects X-Readyz-Token on every outbound
+// request so tests do not have to thread the header through each GET call.
+// Tests that specifically want to exercise token failure paths must
+// construct their own http.Client (or use http.DefaultClient) and send
+// requests without this transport.
+type autoVerboseTokenTransport struct{ base http.RoundTripper }
+
+func (t *autoVerboseTokenTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if req.Header.Get(health.VerboseTokenHeader) == "" {
+		req = req.Clone(req.Context())
+		req.Header.Set(health.VerboseTokenHeader, testVerboseToken)
+	}
+	base := t.base
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	return base.RoundTrip(req)
+}
+
 // testHTTPClient is used in place of http.DefaultClient to prevent test
-// hangs on stalled connections (e.g., during shutdown races).
-var testHTTPClient = &http.Client{Timeout: 2 * time.Second}
+// hangs on stalled connections (e.g., during shutdown races). The
+// autoVerboseTokenTransport transparently attaches the PR-A35 verbose
+// token header so existing /readyz?verbose calls keep working.
+var testHTTPClient = &http.Client{
+	Timeout:   2 * time.Second,
+	Transport: &autoVerboseTokenTransport{},
+}
+
+// newTestBootstrap is the canonical constructor for tests in this file.
+// It wires WithVerboseToken(testVerboseToken) so that /readyz?verbose
+// requests accompanied by testHTTPClient (which auto-attaches the header)
+// are served the verbose body. Tests covering the token gate itself must
+// still call New() directly to exercise the missing/mismatched paths.
+func newTestBootstrap(opts ...Option) *Bootstrap {
+	return New(append([]Option{WithVerboseToken(testVerboseToken)}, opts...)...)
+}
+
+// decodeSuccessBody reads a `{"data": {...}}` envelope from an http.Response
+// and returns the inner map. PR-A35 aligned /readyz to the same envelope
+// used by business endpoints so every 200 response in this test file goes
+// through one helper instead of hand-rolling `body["data"].(map)` at every
+// call site.
+func decodeSuccessBody(t *testing.T, resp *http.Response) map[string]any {
+	t.Helper()
+	var envelope map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	data, ok := envelope["data"].(map[string]any)
+	require.True(t, ok, "response must carry data envelope; got %v", envelope)
+	return data
+}
+
+// decodeErrorDetails reads an `{"error": {"code":..., "details":{...}}}`
+// envelope and returns the details map alongside the code. Used by tests
+// that assert a 503 /readyz response surfaces the expected probe-level
+// breakdown inside details.
+func decodeErrorDetails(t *testing.T, resp *http.Response) (code string, details map[string]any) {
+	t.Helper()
+	var envelope map[string]any
+	require.NoError(t, json.NewDecoder(resp.Body).Decode(&envelope))
+	errObj, ok := envelope["error"].(map[string]any)
+	require.True(t, ok, "response must carry error envelope; got %v", envelope)
+	codeStr, _ := errObj["code"].(string)
+	det, _ := errObj["details"].(map[string]any)
+	if det == nil {
+		det = map[string]any{}
+	}
+	return codeStr, det
+}
 
 // newLocalListener creates a TCP listener on a random port, suitable for tests.
 func newLocalListener(t *testing.T) net.Listener {
@@ -55,32 +124,7 @@ func newLocalListener(t *testing.T) net.Listener {
 	return ln
 }
 
-// testListeners holds the three pre-bound listeners for a standard bootstrap test.
-type testListeners struct {
-	primary  net.Listener
-	internal net.Listener
-	health   net.Listener
-}
-
-// newTestListeners creates three pre-bound listeners and returns bootstrap.Option
-// values wiring them to PrimaryListener, InternalListener, HealthListener.
-func newTestListeners(t *testing.T) (testListeners, []Option) {
-	t.Helper()
-	tl := testListeners{
-		primary:  newLocalListener(t),
-		internal: newLocalListener(t),
-		health:   newLocalListener(t),
-	}
-	opts := []Option{
-		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), cell.Policy{}, WithListenerNet(tl.primary)),
-		WithListener(cell.InternalListener, tl.internal.Addr().String(), cell.Policy{}, WithListenerNet(tl.internal)),
-		WithListener(cell.HealthListener, tl.health.Addr().String(), cell.Policy{}, WithListenerNet(tl.health)),
-	}
-	return tl, opts
-}
-
-// waitForHealthy polls /healthz on the health listener until it returns 200.
-// In the PR-A14b model, /healthz lives on the HealthListener, not the primary.
+// waitForHealthy polls /healthz until it returns 200 or the timeout expires.
 func waitForHealthy(t *testing.T, addr string) {
 	t.Helper()
 	require.Eventually(t, func() bool {
@@ -109,8 +153,7 @@ func newTestCell(id string) *testCell {
 
 func TestNew_Defaults(t *testing.T) {
 	b := New()
-	// PR-A14b: no default listeners; callers must declare via WithListener.
-	assert.Nil(t, b.listenerConfigs)
+	assert.Equal(t, ":8080", b.primaryAddr)
 	assert.Nil(t, b.assembly)
 	assert.Nil(t, b.publisher)
 	assert.Nil(t, b.subscriber)
@@ -120,71 +163,69 @@ func TestNew_WithOptions(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	eb := eventbus.New()
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
-		WithListener(cell.PrimaryListener, ":9090", cell.Policy{}),
+		WithHTTPPrimaryAddr(":9090"),
 		WithShutdownTimeout(5*time.Second),
 	)
 
-	// PR-A14b: listener addr lives in listenerConfigs, not primaryAddr.
-	cfg, ok := b.listenerConfigs[cell.PrimaryListener]
-	require.True(t, ok, "PrimaryListener config must be registered")
-	assert.Equal(t, ":9090", cfg.addr)
+	assert.Equal(t, ":9090", b.primaryAddr)
 	assert.Equal(t, asm, b.assembly)
 	assert.Equal(t, eb, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
 	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
 }
 
-// Verbose-token gating is now a regular cell.Policy (PolicyVerboseToken)
-// attached to the readyz route group by the composition root. The handler
-// itself owns no verbose-token state. Coverage:
-//   - PolicyVerboseToken middleware: runtime/bootstrap/policy_test.go
-//   - probequery.Verbose query parsing: runtime/http/health/probequery/verbose_test.go
-
-// optionOriginName returns the name of the function that produced a
-// router.Option closure. router.WithTracer(...) returns a func(*Router) created
-// by the WithTracer constructor; FuncForPC reports its name as
-// ".../router.WithTracer.func1", letting tests assert on the constructor's
-// identity instead of relying on a fragile len(routerOpts) count (R2-05).
-func optionOriginName(opt router.Option) string {
-	pc := reflect.ValueOf(opt).Pointer()
-	fn := runtime.FuncForPC(pc)
-	if fn == nil {
-		return ""
+// TestNew_VerboseConfig is the single source of truth for how /readyz
+// verbose options propagate from constructor into the Bootstrap struct.
+// Runtime behaviour (200/401/503 + envelope shape) is exercised end-to-end
+// by runtime/http/health.TestReadyz_VerboseToken_StrictDeny — there is no
+// reason to repeat that table here.
+func TestNew_VerboseConfig(t *testing.T) {
+	tests := []struct {
+		name         string
+		opts         []Option
+		wantToken    string
+		wantDisabled bool
+	}{
+		{
+			name:         "default",
+			opts:         nil,
+			wantToken:    "",
+			wantDisabled: false,
+		},
+		{
+			name:      "WithVerboseToken populates verboseToken",
+			opts:      []Option{WithVerboseToken("secret-123")},
+			wantToken: "secret-123",
+		},
+		{
+			name:         "WithVerboseDisabled flips verboseDisabled",
+			opts:         []Option{WithVerboseDisabled()},
+			wantDisabled: true,
+		},
+		{
+			name:         "both options coexist (DISABLED wins at request time)",
+			opts:         []Option{WithVerboseToken("secret-123"), WithVerboseDisabled()},
+			wantToken:    "secret-123",
+			wantDisabled: true,
+		},
 	}
-	return fn.Name()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New(tt.opts...)
+			assert.Equal(t, tt.wantToken, b.verboseToken)
+			assert.Equal(t, tt.wantDisabled, b.verboseDisabled)
+		})
+	}
 }
 
 func TestNew_WithTracer(t *testing.T) {
 	tracer := tracing.NewTracer("bootstrap-test")
 	b := New(WithTracer(tracer))
-	// WithTracer forwards two router options: router.WithTracer (the tracer
-	// itself) and router.WithTracingOptions(WithProbeFilter(DefaultProbeFilter))
-	// so /healthz, /readyz, /metrics skip span creation on the per-listener
-	// HealthListener router (the pre-PR-A14b outer-mux bypass is gone).
-	require.Len(t, b.routerOpts, 2,
-		"WithTracer must forward two router options (WithTracer + WithTracingOptions)")
-
-	origins := make([]string, len(b.routerOpts))
-	for i, opt := range b.routerOpts {
-		origins[i] = optionOriginName(opt)
-	}
-
-	var sawTracer, sawTracingOpts bool
-	for _, name := range origins {
-		switch {
-		case strings.Contains(name, "/router.WithTracer."):
-			sawTracer = true
-		case strings.Contains(name, "/router.WithTracingOptions."):
-			sawTracingOpts = true
-		}
-	}
-	assert.True(t, sawTracer,
-		"first router option must come from router.WithTracer (constructor identity check); origins=%v", origins)
-	assert.True(t, sawTracingOpts,
-		"second router option must come from router.WithTracingOptions (probe-filter wiring); origins=%v", origins)
+	// WithTracer forwards to router options, so routerOpts should contain one entry.
+	assert.Len(t, b.routerOpts, 1)
 }
 
 func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
@@ -193,9 +234,8 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-proxy-err", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
 		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
 	)
 
@@ -224,10 +264,7 @@ func TestNew_WithConfig(t *testing.T) {
 }
 
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
-	b := New(
-		WithConfig("/nonexistent/config.yaml", "APP"),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-	)
+	b := New(WithConfig("/nonexistent/config.yaml", "APP"))
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 
@@ -386,12 +423,12 @@ func TestBootstrap_MissingSubscriber_WithEventRegistrar_Fails(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New()
-	_, lnOpts := newTestListeners(t)
-	b := New(append([]Option{
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPublisher(eb),
 		// WithSubscriber intentionally omitted.
-	}, lnOpts...)...)
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
+	)
 
 	err := b.Run(context.Background())
 	require.Error(t, err)
@@ -407,10 +444,10 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -434,12 +471,12 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 	require.NoError(t, asm.Register(ec))
 
 	eb := eventbus.New()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithSubscriber(eb),
 		WithPublisher(eb),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -478,18 +515,18 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	sub := &invokeOnceSubscriber{entry: outbox.Entry{
 		ID:        "evt-context-1",
 		EventType: "test.context",
-		Metadata: map[string]string{
-			"request_id":     "req-ctx-1",
-			"correlation_id": "corr-ctx-1",
-			"trace_id":       "trace-ctx-1",
+		Observability: outbox.ObservabilityMetadata{
+			RequestID:     "req-ctx-1",
+			CorrelationID: "corr-ctx-1",
+			TraceID:       "trace-ctx-1",
 		},
 	}}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithSubscriber(sub),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -525,69 +562,6 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	}
 }
 
-func TestBootstrap_EventSubscriptions_DisableObservabilityRestore(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	asm := assembly.New(assembly.Config{ID: "test-kill-switch", DurabilityMode: cell.DurabilityDemo})
-	got := make(chan map[string]string, 1)
-	require.NoError(t, asm.Register(newContextCaptureCell("capture-cell", got)))
-
-	sub := &invokeOnceSubscriber{entry: outbox.Entry{
-		ID:        "evt-no-restore-1",
-		EventType: "test.context",
-		Metadata: map[string]string{
-			"request_id":     "req-should-not-restore",
-			"correlation_id": "corr-should-not-restore",
-			"trace_id":       "trace-should-not-restore",
-		},
-	}}
-
-	b := New(
-		WithAssembly(asm),
-		WithSubscriber(sub),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
-		WithDisableObservabilityRestore(),
-	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-
-	select {
-	case observed := <-got:
-		assert.Empty(t, observed["request_id"],
-			"kill switch should prevent request_id restoration")
-		assert.Empty(t, observed["correlation_id"],
-			"kill switch should prevent correlation_id restoration")
-		assert.Empty(t, observed["trace_id"],
-			"kill switch should prevent trace_id restoration")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for consumer context")
-	}
-
-	// Wait for bootstrap to finish startup (event router 500ms timeout + HTTP server).
-	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
-
-	cancel()
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("bootstrap did not shut down in time")
-	}
-}
-
 func TestBootstrap_RunContextCancel(t *testing.T) {
 	// Test that Run returns when context is cancelled immediately,
 	// even though it will fail at listen (sandbox restriction).
@@ -595,7 +569,7 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	cancel() // Cancel immediately.
 
 	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithHTTPPrimaryAddr("127.0.0.1:0"),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -610,7 +584,7 @@ func TestBootstrap_DoubleRun_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so first Run exits quickly
 
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
+	b := New(WithHTTPPrimaryAddr("127.0.0.1:0"))
 	_ = b.Run(ctx) // first call — may error due to cancelled ctx or sandbox
 
 	err := b.Run(ctx) // second call — must be rejected
@@ -625,10 +599,10 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-hc-healthy", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 	)
@@ -655,8 +629,7 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
@@ -679,10 +652,10 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-hc-unhealthy", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			return fmt.Errorf("connection closed")
@@ -711,10 +684,10 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	code, details := decodeErrorDetails(t, resp)
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", code)
+	deps, ok := details["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map in error details")
 	rabbitmq, ok := deps["rabbitmq"].(map[string]any)
 	require.True(t, ok, "rabbitmq entry must be a map")
 	assert.Equal(t, "unhealthy", rabbitmq["status"])
@@ -735,10 +708,10 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-adapter-info", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithAdapterInfo(map[string]string{
 			"mode":    "in-memory",
@@ -764,8 +737,7 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	adapters, ok := body["adapters"].(map[string]any)
 	require.True(t, ok, "verbose readyz must contain adapters map")
 	assert.Equal(t, "in-memory", adapters["mode"])
@@ -811,10 +783,10 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 	})
 	require.NoError(t, asm.Register(hcc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -838,8 +810,7 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	sessionStore, ok := deps["session-store"].(map[string]any)
@@ -869,10 +840,10 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 		"session-store": func(_ context.Context) error { return nil },
 	})))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -958,10 +929,10 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-multi-hc", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 		WithHealthChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }),
@@ -989,17 +960,17 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
 		"any unhealthy dependency must cause 503")
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	code, details := decodeErrorDetails(t, resp)
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", code,
+		"overall status must surface the unhealthy errcode")
+	deps, ok := details["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map in error details")
 	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
 	require.True(t, ok, "rabbitmq entry must be a map")
 	assert.Equal(t, "healthy", rabbitmqEntry["status"], "rabbitmq checker should be healthy")
 	postgresEntry, ok := deps["postgres"].(map[string]any)
 	require.True(t, ok, "postgres entry must be a map")
 	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
-	assert.Equal(t, "unhealthy", body["status"], "overall status must be unhealthy")
 
 	cancel()
 	select {
@@ -1020,10 +991,10 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 	// Atomic flag to simulate connection health transitions at runtime.
 	var unhealthy atomic.Bool
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			if unhealthy.Load() {
@@ -1090,11 +1061,11 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-watcher-readyz", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1121,11 +1092,15 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			return false
 		}
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		var envelope map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		data, ok := envelope["data"].(map[string]any)
+		if !ok {
+			return false
+		}
+		deps, ok := data["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1156,11 +1131,11 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-drift-no-drift", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1178,11 +1153,15 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 		if resp.StatusCode != http.StatusOK {
 			return false
 		}
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		var envelope map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		data, ok := envelope["data"].(map[string]any)
+		if !ok {
+			return false
+		}
+		deps, ok := data["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1287,11 +1266,11 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-drift-http-503", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(failCell))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1324,11 +1303,19 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			return false
 		}
-		var body map[string]any
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		var envelope map[string]any
+		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 			return false
 		}
-		deps, ok := body["dependencies"].(map[string]any)
+		errObj, ok := envelope["error"].(map[string]any)
+		if !ok {
+			return false
+		}
+		details, ok := errObj["details"].(map[string]any)
+		if !ok {
+			return false
+		}
+		deps, ok := details["dependencies"].(map[string]any)
 		if !ok {
 			return false
 		}
@@ -1356,10 +1343,9 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-config-watcher-fail-fast", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
 		WithShutdownTimeout(time.Second),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
@@ -1381,10 +1367,9 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 	asm := assembly.New(assembly.Config{ID: "test-reserved-health-checker", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
 		WithHealthChecker("config-watcher", func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(time.Second),
 	)
@@ -1405,12 +1390,12 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 	require.NoError(t, asm.Register(newEventCell("ok-cell", nil)))
 
 	eb := eventbus.New()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithPublisher(eb),
 		WithSubscriber(eb),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1434,8 +1419,7 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
 	erProbe, ok := deps["eventrouter"].(map[string]any)
@@ -1616,11 +1600,11 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	slow := newSlowReloaderCell("slow-cell", 300*time.Millisecond)
 	require.NoError(t, asm.Register(slow))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(5*time.Second),
 	)
 
@@ -1674,11 +1658,11 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	rc := newReloaderCell("auth-core")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1734,11 +1718,11 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	rc.err = errors.New("reload callback failed")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1788,11 +1772,11 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	rc.doPanic = true
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1846,11 +1830,11 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 		require.NoError(t, asm.Register(cells[i]))
 	}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1903,11 +1887,11 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	require.NoError(t, asm.Register(plain))
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1959,11 +1943,11 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	rc := newReloaderCell("noop-cell")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2055,11 +2039,11 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	require.NoError(t, asm.Register(mutator))
 	require.NoError(t, asm.Register(observer))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2116,11 +2100,11 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	rc := newReloaderCell("shutdown-race-cell")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2177,11 +2161,11 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	require.NoError(t, asm.Register(rc))
 
 	blocker := newBlockingStopWorker()
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithWorkers(blocker),
 	)
@@ -2241,11 +2225,11 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	rc := newReloaderCell("gen-cell")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2332,7 +2316,7 @@ func TestCloneMap_DeepIsolation_NestedMap(t *testing.T) {
 
 // --- Auth middleware wiring via bootstrap ---
 
-// httpCell is a test Cell that registers business routes via RouteGroups.
+// httpCell is a test Cell that implements HTTPRegistrar to register a business route.
 type httpCell struct {
 	*cell.BaseCell
 }
@@ -2343,21 +2327,15 @@ func newHTTPCell(id string) *httpCell {
 	}
 }
 
-func (c *httpCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":"ok"}`))
-			}), Policy: auth.Authenticated()})
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
-			}), Public: true})
-		},
-	}}
+func (c *httpCell) RegisterRoutes(mux cell.RouteMux) {
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"ok"}`))
+	}), Policy: auth.Authenticated()})
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+	}), Public: true})
 }
 
 // bootstrapTestVerifier is a minimal IntentTokenVerifier for bootstrap tests.
@@ -2389,10 +2367,10 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithAuthMiddleware(verifier),
 	)
@@ -2433,7 +2411,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	}
 }
 
-// publicHTTPCell registers routes as public via auth.Mount(Public:true),
+// publicHTTPCell registers the login route as public via auth.Mount(Public:true),
 // following the F3 pattern where cells own their auth declarations.
 type publicHTTPCell struct {
 	*cell.BaseCell
@@ -2445,21 +2423,15 @@ func newPublicHTTPCell(id string) *publicHTTPCell {
 	}
 }
 
-func (c *publicHTTPCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":"ok"}`))
-			}), Public: true})
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
-			}), Public: true})
-		},
-	}}
+func (c *publicHTTPCell) RegisterRoutes(mux cell.RouteMux) {
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"ok"}`))
+	}), Public: true})
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
+	}), Public: true})
 }
 
 func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
@@ -2475,10 +2447,10 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 		err: fmt.Errorf("should not verify for public route"),
 	}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithAuthMiddleware(verifier),
 	)
@@ -2522,22 +2494,26 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 // --- Framework capability protection (BOOT-OPTION-01) ---
 
 func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
-	// PR-A14b: health endpoints are now registered by bootstrap via HealthRouteGroups
-	// on the health listener (or primary as fallback). There is no router.WithHealthHandler
-	// option — health is always wired by the framework, not configurable by callers.
-	// This test verifies that /readyz returns 200 (healthy) because the framework-managed
-	// health handler is backed by the started assembly.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
 	asm := assembly.New(assembly.Config{ID: "test-health-override", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	b := New(
+	// Create a custom health handler backed by an un-started assembly (unhealthy).
+	// If the user's handler wins, /readyz would return 503 because the custom
+	// assembly was never started.
+	customAsm := assembly.New(assembly.Config{ID: "custom-unstartled", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, customAsm.Register(newTestCell("custom-cell")))
+	customHandler := health.New(customAsm) // un-started → always unhealthy
+
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
+		// User attempts to override with custom health handler.
+		WithRouterOptions(router.WithHealthHandler(customHandler)),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2547,12 +2523,14 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 	addr := ln.Addr().String()
 	waitForHealthy(t, addr)
 
-	// The framework-managed handler (backed by started asm) responds with 200.
+	// The framework-managed handler (backed by started asm) should respond,
+	// not the custom un-started one. Started assembly → healthy → 200.
 	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
-		"framework health handler must return 200 for a started assembly")
+		"framework health handler must win over user-supplied one; "+
+			"user handler would return 503 (un-started assembly)")
 
 	cancel()
 	select {
@@ -2571,7 +2549,10 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	b := New(WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)))
+	b := New(
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
+	)
 	go func() { errCh <- b.Run(ctx) }()
 
 	// Wait for server to be ready.
@@ -2609,7 +2590,7 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 
 // --- Bootstrap tracing E2E ---
 
-// tracingTestCell is a test Cell that registers routes via RouteGroups with a
+// tracingTestCell is a test Cell that implements HTTPRegistrar with a
 // caller-supplied route registration function, used by tracing E2E tests.
 type tracingTestCell struct {
 	*cell.BaseCell
@@ -2626,15 +2607,10 @@ func newTracingTestCell(id string, fn func(mux cell.RouteMux)) *tracingTestCell 
 	}
 }
 
-func (c *tracingTestCell) RouteGroups() []cell.RouteGroup {
-	if c.registerFn == nil {
-		return nil
+func (c *tracingTestCell) RegisterRoutes(mux cell.RouteMux) {
+	if c.registerFn != nil {
+		c.registerFn(mux)
 	}
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: c.registerFn,
-	}}
 }
 
 func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
@@ -2656,10 +2632,10 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2698,10 +2674,10 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2742,10 +2718,10 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	require.NoError(t, asm.Register(tc))
 
 	ctx, cancel := context.WithCancel(context.Background())
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2783,8 +2759,8 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithTracer(tracer),
 	)
 
@@ -2811,7 +2787,7 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 // --- Auth Provider discovery (post-Init cell discovery) ---
 
-// authProviderCell implements RouteGroupContributor and exposes an IntentTokenVerifier.
+// authProviderCell implements HTTPRegistrar and exposes an IntentTokenVerifier.
 type authProviderCell struct {
 	*cell.BaseCell
 	verifier auth.IntentTokenVerifier
@@ -2828,23 +2804,17 @@ func (c *authProviderCell) TokenVerifier() auth.IntentTokenVerifier {
 	return c.verifier
 }
 
-func (c *authProviderCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":"ok"}`))
-			}), Policy: auth.Authenticated()})
-			// F3: login is declared as a public route so auth discovery tests can verify
-			// that no-token requests bypass JWT checks on this endpoint.
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-				_, _ = w.Write([]byte(`{"data":"login-ok"}`))
-			}), Public: true})
-		},
-	}}
+func (c *authProviderCell) RegisterRoutes(mux cell.RouteMux) {
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"ok"}`))
+	}), Policy: auth.Authenticated()})
+	// F3: login is declared as a public route so auth discovery tests can verify
+	// that no-token requests bypass JWT checks on this endpoint.
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":"login-ok"}`))
+	}), Public: true})
 }
 
 func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
@@ -2858,12 +2828,12 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
-		PolicyJWTFromAssembly(asm),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2906,13 +2876,13 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		// F3: public routes are declared via auth.Mount(Public:true) in the cell.
-		PolicyJWTFromAssembly(asm),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -2970,10 +2940,10 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 		claims: auth.Claims{Subject: "explicit-user", Roles: []string{"admin"}},
 	}
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithAuthMiddleware(explicitVerifier),
 	)
@@ -3019,12 +2989,12 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 	hc := newHTTPCell("plain-cell")
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
-		PolicyJWTFromAssembly(asm),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3052,12 +3022,12 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 	require.NoError(t, asm.Register(newAuthProviderCell("accesscore", verifier1)))
 	require.NoError(t, asm.Register(newAuthProviderCell("identity-core", verifier2)))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
-		PolicyJWTFromAssembly(asm),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3086,13 +3056,13 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 	hc := newAuthProviderCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		// F3: public routes declared via auth.Mount(Public:true) in authProviderCell.
-		PolicyJWTFromAssembly(asm),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3154,10 +3124,10 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 	tc := newTestCell("hsts-cell")
 	require.NoError(t, asm.Register(tc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithSecurityHeadersOptions(
 			middleware.WithHSTSIncludeSubDomains(),
@@ -3235,11 +3205,11 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
 	require.NoError(t, asm.Register(kfc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3284,11 +3254,11 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	kfc := newKeyFilterReloaderCell("server-cell", []string{"server."})
 	require.NoError(t, asm.Register(kfc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3340,11 +3310,11 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 	rc := newReloaderCell("plain-reloader")
 	require.NoError(t, asm.Register(rc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3397,25 +3367,19 @@ func (c *traceCapturingCell) TokenVerifier() auth.IntentTokenVerifier {
 	return c.verifier
 }
 
-func (c *traceCapturingCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			// F3: public/ping is declared public so it creates new trace roots and
-			// rejects client-supplied request IDs.
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				tid, _ := ctxkeys.TraceIDFrom(r.Context())
-				c.gotPublic <- tid
-				w.WriteHeader(http.StatusOK)
-			}), Public: true})
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/protected/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				tid, _ := ctxkeys.TraceIDFrom(r.Context())
-				c.gotProtected <- tid
-				w.WriteHeader(http.StatusOK)
-			}), Policy: auth.Authenticated()})
-		},
-	}}
+func (c *traceCapturingCell) RegisterRoutes(mux cell.RouteMux) {
+	// F3: public/ping is declared public so it creates new trace roots and
+	// rejects client-supplied request IDs.
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, _ := ctxkeys.TraceIDFrom(r.Context())
+		c.gotPublic <- tid
+		w.WriteHeader(http.StatusOK)
+	}), Public: true})
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/protected/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tid, _ := ctxkeys.TraceIDFrom(r.Context())
+		c.gotProtected <- tid
+		w.WriteHeader(http.StatusOK)
+	}), Policy: auth.Authenticated()})
 }
 
 // TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored verifies the
@@ -3434,14 +3398,14 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 	asm := assembly.New(assembly.Config{ID: "test-traceparent-boundary", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(tc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithTracer(tracer),
 		WithShutdownTimeout(2*time.Second),
 		// F3: /api/v1/public/ping is declared public by traceCapturingCell.
-		PolicyJWTFromAssembly(asm),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3521,21 +3485,21 @@ func TestBootstrap_ConflictingAuthOptions_ReturnsError(t *testing.T) {
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
 
-	t.Run("WithAuthMiddleware then PolicyJWTFromAssembly", func(t *testing.T) {
+	t.Run("WithAuthMiddleware then WithAuthDiscovery", func(t *testing.T) {
 		b := New(
 			WithAssembly(asm),
 			WithAuthMiddleware(verifier),
-			PolicyJWTFromAssembly(asm),
+			WithAuthDiscovery(),
 		)
 		err := b.Run(context.Background())
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "mutually exclusive")
 	})
 
-	t.Run("PolicyJWTFromAssembly then WithAuthMiddleware", func(t *testing.T) {
+	t.Run("WithAuthDiscovery then WithAuthMiddleware", func(t *testing.T) {
 		b := New(
 			WithAssembly(asm),
-			PolicyJWTFromAssembly(asm),
+			WithAuthDiscovery(),
 			WithAuthMiddleware(verifier),
 		)
 		err := b.Run(context.Background())
@@ -3553,7 +3517,7 @@ func TestBootstrap_WithCircuitBreaker_Nil_ReturnsError(t *testing.T) {
 	tc := newTestCell("cb-nil-cell")
 	require.NoError(t, asm.Register(tc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
 		WithCircuitBreaker(nil),
 	)
@@ -3578,15 +3542,9 @@ func newPublicPingAuthCell(id string, verifier auth.IntentTokenVerifier) *public
 
 func (c *publicPingAuthCell) TokenVerifier() auth.IntentTokenVerifier { return c.verifier }
 
-func (c *publicPingAuthCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
-		},
-	}}
+func (c *publicPingAuthCell) RegisterRoutes(mux cell.RouteMux) {
+	// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 }
 
 // TestBootstrap_HEADAlias_BypassesAuth tests I-17: GET public endpoint
@@ -3603,12 +3561,12 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 	hc := newPublicPingAuthCell("accesscore", verifier)
 	require.NoError(t, asm.Register(hc))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
-		PolicyJWTFromAssembly(asm),
+		WithAuthDiscovery(),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3672,10 +3630,10 @@ func TestWithRelayHealth_RegistersCheckers(t *testing.T) {
 
 	relay := newTestRelay()
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithRelayHealth(relay),
 	)
@@ -3693,8 +3651,7 @@ func TestWithRelayHealth_RegistersCheckers(t *testing.T) {
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, ok := body["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 
@@ -3715,10 +3672,9 @@ func TestWithRelayHealth_NilRelay_FailsFast(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-relay-nil", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newTestCell("cell-1")))
 
-	ln := newLocalListener(t)
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithPrimaryListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithRelayHealth(nil),
 	)
@@ -3782,10 +3738,10 @@ func TestWithRelayHealth_TrippedBudget_Returns503(t *testing.T) {
 	}
 	relay := runtimeoutbox.NewRelay(store, &outbox.DiscardPublisher{}, cfg)
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithRelayHealth(relay),
 	)
@@ -3832,10 +3788,10 @@ func TestWithRelayHealth_TrippedBudget_Returns503(t *testing.T) {
 	require.NoError(t, err)
 	defer verboseResp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
-	deps, ok := body["dependencies"].(map[string]any)
-	require.True(t, ok, "response must contain dependencies map")
+	code, details := decodeErrorDetails(t, verboseResp)
+	assert.Equal(t, "ERR_READYZ_UNHEALTHY", code)
+	deps, ok := details["dependencies"].(map[string]any)
+	require.True(t, ok, "response must contain dependencies map in error details")
 	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
 	pollProbe, ok := deps["outbox-relay-poll"].(map[string]any)
 	require.True(t, ok, "outbox-relay-poll must be a structured ProbeResult")
@@ -3876,10 +3832,10 @@ func TestWithRelayHealth_DisabledBudget_SkipsChecker(t *testing.T) {
 	}
 	relay := runtimeoutbox.NewRelay(outboxtest.NewFakeStore(), &outbox.DiscardPublisher{}, cfg)
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithRelayHealth(relay),
 	)
@@ -3895,8 +3851,7 @@ func TestWithRelayHealth_DisabledBudget_SkipsChecker(t *testing.T) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
-	var body map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
+	body := decodeSuccessBody(t, resp)
 	deps, _ := body["dependencies"].(map[string]any)
 
 	assert.NotContains(t, deps, "outbox-relay-poll",
@@ -3922,10 +3877,10 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 	ln := newLocalListener(t)
 	addr := ln.Addr().String()
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -3963,10 +3918,10 @@ func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 
 	ln := newLocalListener(t)
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -4012,10 +3967,10 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithPrimaryListener(ln),
+		WithInternalListener(newLocalListener(t)),
 		WithShutdownTimeout(2*time.Second),
 		WithManagedCloser(resource),
 	)
@@ -4056,19 +4011,13 @@ func newDuplicateAuthCell(id string) *duplicateAuthCell {
 	}
 }
 
-func (c *duplicateAuthCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			})
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
-			// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
-		},
-	}}
+func (c *duplicateAuthCell) RegisterRoutes(mux cell.RouteMux) {
+	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
+	// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
 }
 
 type protectedAuthCell struct {
@@ -4084,25 +4033,18 @@ func newProtectedAuthCell(id string) *protectedAuthCell {
 	}
 }
 
-func (c *protectedAuthCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.PrimaryListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/protected"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-				w.WriteHeader(http.StatusOK)
-			}), Policy: auth.Authenticated()})
-		},
-	}}
+func (c *protectedAuthCell) RegisterRoutes(mux cell.RouteMux) {
+	auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/protected"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), Policy: auth.Authenticated()})
 }
 
 func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-protected-auth", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newProtectedAuthCell("protected-auth-cell")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -4113,7 +4055,8 @@ func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 	require.Error(t, err, "Bootstrap.Run must reject protected route declarations without an auth verifier")
 	assert.Contains(t, err.Error(), "auth verifier required")
 	assert.Contains(t, err.Error(), "GET /api/v1/protected")
-	assert.Contains(t, err.Error(), "PolicyJWTFromAssembly")
+	assert.Contains(t, err.Error(), "WithAuthMiddleware")
+	assert.Contains(t, err.Error(), "WithAuthDiscovery")
 }
 
 func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
@@ -4123,11 +4066,10 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-dup-auth", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-cell")))
 
-	b := New(
+	b := newTestBootstrap(
 		WithAssembly(asm),
-		// PR-A14b: phase0 now requires at least one listener. Phase5 errors
-		// before the listener is actually bound, so no connection is ever served.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		// No WithListener: if phase5 errors correctly the listener is never reached.
+		// Use a short timeout so the test exits fast if something hangs.
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -4145,247 +4087,4 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 		assert.Equal(t, "unhealthy", status.Status,
 			"cell %s must be unhealthy after rollback", id)
 	}
-}
-
-// TestBootstrap_DuplicateListenerRef_FailsFast verifies CORR-02: declaring the
-// same ListenerRef twice must cause phase0 to return an error before any side
-// effects (no assembly init, no socket bind).
-func TestBootstrap_DuplicateListenerRef_FailsFast(t *testing.T) {
-	ln := newLocalListener(t)
-	b := New(
-		// Two declarations for PrimaryListener — second one is the duplicate.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithShutdownTimeout(time.Second),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := b.Run(ctx)
-	require.Error(t, err, "duplicate listener ref must cause Run to fail")
-	assert.Contains(t, err.Error(), "duplicate WithListener", "error must identify the duplicate ref")
-	assert.Contains(t, err.Error(), "primary", "error must name the duplicate listener ref")
-}
-
-// TestBootstrap_DuplicateRouteGroup_FailsFast verifies that a cell that
-// declares two RouteGroups with the same (listener, prefix) combination causes
-// FinalizeAuth or phase5 to fail with an actionable error.
-// Note: duplicate route declarations on different prefixes are allowed;
-// duplicate (method, path) within the same prefix is caught by FinalizeAuth.
-func TestBootstrap_DuplicateRouteGroup_FailsFast(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-dup-rg", DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, asm.Register(newDuplicateAuthCell("dup-rg-cell")))
-
-	ln := newLocalListener(t)
-	b := New(
-		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithShutdownTimeout(time.Second),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := b.Run(ctx)
-	require.Error(t, err, "duplicate auth declaration must cause Run to fail")
-	assert.Contains(t, err.Error(), "duplicate auth declaration")
-}
-
-// ---------------------------------------------------------------------------
-// B6 — FinalizeAuth failure on InternalListener / HealthListener
-// ---------------------------------------------------------------------------
-
-// duplicateInternalCell declares the same (method, path) twice on InternalListener,
-// triggering FinalizeAuth failure on the internal router.
-type duplicateInternalCell struct {
-	*cell.BaseCell
-}
-
-func newDuplicateInternalCell(id string) *duplicateInternalCell {
-	return &duplicateInternalCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
-			ID:   id,
-			Type: cell.CellTypeCore,
-		}),
-	}
-}
-
-func (c *duplicateInternalCell) RouteGroups() []cell.RouteGroup {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	return []cell.RouteGroup{{
-		Listener: cell.InternalListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{
-				Contract:  testHTTPContract("POST", "/internal/v1/dup-internal"),
-				Handler:   handler,
-				Delegated: true,
-			})
-			// Duplicate declaration — must trigger FinalizeAuth error.
-			auth.Mount(mux, auth.Route{
-				Contract:  testHTTPContract("POST", "/internal/v1/dup-internal"),
-				Handler:   handler,
-				Delegated: true,
-			})
-		},
-	}}
-}
-
-// TestBootstrap_Phase5_FinalizeFailure_OnInternalListener verifies that a
-// FinalizeAuth failure on the InternalListener is propagated as a Bootstrap.Run
-// error and triggers assembly rollback, matching the same behaviour as a
-// PrimaryListener FinalizeAuth failure (TEST-10).
-func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-dup-internal", DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, asm.Register(newDuplicateInternalCell("dup-internal-cell")))
-
-	b := New(
-		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}),
-		WithShutdownTimeout(time.Second),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := b.Run(ctx)
-	require.Error(t, err, "Bootstrap.Run must return error when InternalListener FinalizeAuth fails")
-	assert.Contains(t, err.Error(), "duplicate auth declaration",
-		"error must identify the duplicate declaration")
-
-	// After rollback, cells must be stopped.
-	h := asm.Health()
-	for id, status := range h {
-		assert.Equal(t, "unhealthy", status.Status,
-			"cell %s must be unhealthy after rollback", id)
-	}
-}
-
-// duplicateHealthCell declares the same (method, path) twice on HealthListener,
-// triggering FinalizeAuth failure on the health router.
-// Note: health routes are usually registered by the framework, not by cells —
-// but a cell can still target HealthListener via RouteGroups().
-type duplicateHealthCell struct {
-	*cell.BaseCell
-}
-
-func newDuplicateHealthCell(id string) *duplicateHealthCell {
-	return &duplicateHealthCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
-			ID:   id,
-			Type: cell.CellTypeCore,
-		}),
-	}
-}
-
-func (c *duplicateHealthCell) RouteGroups() []cell.RouteGroup {
-	handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	})
-	return []cell.RouteGroup{{
-		Listener: cell.HealthListener,
-		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{
-				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
-				Handler:  handler,
-				Public:   true,
-			})
-			// Duplicate declaration — must trigger FinalizeAuth error.
-			auth.Mount(mux, auth.Route{
-				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
-				Handler:  handler,
-				Public:   true,
-			})
-		},
-	}}
-}
-
-// TestBootstrap_Phase5_FinalizeFailure_OnHealthListener verifies that a
-// FinalizeAuth failure on the HealthListener is propagated as a Bootstrap.Run
-// error and triggers assembly rollback (TEST-13).
-func TestBootstrap_Phase5_FinalizeFailure_OnHealthListener(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "test-dup-health", DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, asm.Register(newDuplicateHealthCell("dup-health-cell")))
-
-	b := New(
-		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.HealthListener, "127.0.0.1:0", cell.Policy{}),
-		WithShutdownTimeout(time.Second),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := b.Run(ctx)
-	require.Error(t, err, "Bootstrap.Run must return error when HealthListener FinalizeAuth fails")
-	assert.Contains(t, err.Error(), "duplicate auth declaration",
-		"error must identify the duplicate declaration")
-
-	// After rollback, cells must be stopped.
-	h := asm.Health()
-	for id, status := range h {
-		assert.Equal(t, "unhealthy", status.Status,
-			"cell %s must be unhealthy after rollback", id)
-	}
-}
-
-// unknownListenerCell declares a RouteGroup on an undeclared (zero-value) ListenerRef
-// to trigger the phase5 "references undeclared listener" error (TEST-03).
-type unknownListenerCell struct {
-	*cell.BaseCell
-}
-
-func newUnknownListenerCell() *unknownListenerCell {
-	return &unknownListenerCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{
-			ID:   "unknown-listener-cell",
-			Type: cell.CellTypeCore,
-		}),
-	}
-}
-
-func (c *unknownListenerCell) RouteGroups() []cell.RouteGroup {
-	// Zero-value ListenerRef — not registered with any WithListener call.
-	return []cell.RouteGroup{
-		{
-			Listener: cell.ListenerRef{}, // zero value — undeclared
-			Prefix:   "/api/v1/unknown",
-			Register: func(mux cell.RouteMux) {
-				auth.Mount(mux, auth.Route{
-					Contract: testHTTPContract(http.MethodGet, "/api/v1/unknown/ping"),
-					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
-					Public:   true,
-				})
-			},
-		},
-	}
-}
-
-// TestBootstrap_UnknownListenerRef_FailsFast verifies that a RouteGroup
-// referencing a ListenerRef that was not declared via WithListener causes
-// phase5 to return an error before any HTTP server starts (TEST-03).
-func TestBootstrap_UnknownListenerRef_FailsFast(t *testing.T) {
-	asm := assembly.New(assembly.Config{ID: "unknown-ln-test", DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, asm.Register(newUnknownListenerCell()))
-
-	b := New(
-		WithAssembly(asm),
-		// Only PrimaryListener declared; cell uses zero-value ref.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithShutdownTimeout(time.Second),
-	)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	err := b.Run(ctx)
-	require.Error(t, err, "undeclared listener ref must cause Run to fail fast")
-	assert.Contains(t, err.Error(), "undeclared listener",
-		"error must mention 'undeclared listener'")
 }

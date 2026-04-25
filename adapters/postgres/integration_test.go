@@ -216,6 +216,14 @@ func TestIntegration_Migrator(t *testing.T) {
 	})
 
 	t.Run("down", func(t *testing.T) {
+		// Two-phase Down: 013 (add observability column) is a non-destructive
+		// column drop and is unguarded — first Down rolls it back successfully.
+		// 012 (refresh_tokens_rebuild) is the destructive PR-A29 migration
+		// that the hard-gate guards; the second Down must surface its
+		// RAISE EXCEPTION error.
+		require.NoError(t, migrator.Down(ctx),
+			"migration 013 (observability column) down should succeed — non-destructive column drop")
+
 		dErr := migrator.Down(ctx)
 		require.Error(t, dErr, "migration 012 down must be hard-gated by default")
 		assert.Contains(t, dErr.Error(), "gocell.allow_destructive_refresh_tokens_down")
@@ -229,8 +237,12 @@ func TestIntegration_Migrator(t *testing.T) {
 
 		statuses, sErr := migrator.Status(ctx)
 		require.NoError(t, sErr)
-		require.NotEmpty(t, statuses)
-		assert.True(t, statuses[len(statuses)-1].Applied, "latest migration should remain applied after refused rollback")
+		require.GreaterOrEqual(t, len(statuses), 2, "expect 012 + 013 in status list")
+		// 013 was rolled back successfully; 012 must remain applied (gate refused).
+		assert.False(t, statuses[len(statuses)-1].Applied,
+			"latest migration (013) should be rolled back after first Down")
+		assert.True(t, statuses[len(statuses)-2].Applied,
+			"012 should remain applied after refused rollback")
 	})
 }
 
@@ -262,8 +274,11 @@ func TestIntegration_OutboxWriter(t *testing.T) {
 			AggregateType: "test_aggregate",
 			EventType:     "test.created",
 			Payload:       []byte(`{"key":"value"}`),
-			Metadata:      map[string]string{"trace_id": "abc-123"},
-			CreatedAt:     time.Now(),
+			// Producer-owned domain metadata only. Observability IDs (trace_id,
+			// request_id, ...) belong in Entry.Observability — Entry.Validate
+			// rejects ReservedMetadataKeys to keep the namespace boundary honest.
+			Metadata:  map[string]string{"source": "integration-test"},
+			CreatedAt: time.Now(),
 		}
 
 		err := txm.RunInTx(ctx, func(txCtx context.Context) error {

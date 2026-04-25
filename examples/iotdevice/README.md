@@ -154,10 +154,10 @@ Response (200):
 ```bash
 curl http://localhost:8083/healthz
 curl http://localhost:8083/readyz
-curl http://localhost:8083/readyz?verbose
+curl -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" 'http://localhost:8083/readyz?verbose'
 ```
 
-`/healthz` is liveness-only. Use `/readyz?verbose` for the detailed readiness breakdown.
+`/healthz` is liveness-only. Use `/readyz?verbose` for the detailed readiness breakdown — PR-A35 requires `GOCELL_READYZ_VERBOSE_TOKEN` to be set and the matching `X-Readyz-Token` header on the request.
 
 ## Full Walkthrough
 

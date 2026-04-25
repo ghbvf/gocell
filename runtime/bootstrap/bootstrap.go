@@ -406,27 +406,27 @@ func WithAdapterInfo(info map[string]string) Option {
 //	bootstrap.WithHealthRoutes(bootstrap.WithMetricsHandler(promHandler))
 //	bootstrap.WithHealthRoutes(bootstrap.WithReadyzPolicy(
 //	    bootstrap.PolicyVerboseToken("X-Readyz-Token", token)))
+//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled())
 //
 // Multiple WithHealthRoutes calls accumulate; later options for the same
-// concern (metrics handler, livez/readyz/metrics policy) overwrite earlier
-// ones in the order they were appended. Pass nil-valued options at your
-// peril — they overwrite any previously-set value with the zero value.
+// concern (metrics handler, livez/readyz/metrics policy, verbose disabled)
+// overwrite earlier ones in the order they were appended. Pass nil-valued
+// options at your peril — they overwrite any previously-set value with the
+// zero value.
+//
+// PR-A35 strict semantics: a request with ?verbose= but no matching readyz
+// policy / disabled flag yields 401 (or the configured policy's response),
+// never a silent downgrade to plain 200.
 func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 	return func(b *Bootstrap) {
 		b.healthRouteGroupOpts = append(b.healthRouteGroupOpts, opts...)
 	}
 }
 
-// WithDisableObservabilityRestore prevents the bootstrap from registering
-// ObservabilityContextMiddleware on the event subscriber. When set, consumer
-// handlers will not have request_id/correlation_id/trace_id restored from
-// entry metadata into the handler context. This is the canonical kill switch
-// for the consume-side observability bridge.
-func WithDisableObservabilityRestore() Option {
-	return func(b *Bootstrap) {
-		b.disableObservabilityRestore = true
-	}
-}
+// PR-A35's bootstrap-level WithVerboseDisabled has been removed (PR-A14b
+// round-3 F3 collapse): use WithHealthRoutes(WithReadyzVerboseDisabled()).
+// The single-mechanism rule applies — verbose-mode configuration lives on
+// the readyz route group exclusively.
 
 // WithEventRouterReadyTimeout overrides the EventRouter Phase-3 ready-wait
 // budget. A non-positive value disables the bound (router waits indefinitely
@@ -464,10 +464,10 @@ func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
 //
 // Typical use: inject ConsumerBase.AsMiddleware so every consumer inherits
 // two-phase Claimer idempotency, backoff retry, and DLX routing without each
-// slice wiring it individually. Bootstrap always prepends
-// ObservabilityContextMiddleware (unless disabled via
-// WithDisableObservabilityRestore) so trace_id/request_id restoration runs
-// before any middleware registered here.
+// slice wiring it individually. Observability context restoration
+// (entry.Observability → ctx) is the outermost step inside
+// outbox.SubscriberWithMiddleware.Subscribe, so middleware registered here
+// always sees a context populated with trace_id/request_id/correlation_id.
 //
 // ref: ThreeDotsLabs/watermill message/router.go — AddMiddleware wraps handlers
 // at router level; MassTransit UseMessageRetry — pipeline middleware at

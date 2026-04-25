@@ -6,10 +6,12 @@ import (
 )
 
 // ContractTracingMiddleware wraps contract-bound subscriptions with
-// wrapper.WrapConsumer. It is intended to sit after
-// outbox.ObservabilityContextMiddleware and before ConsumerBase so the span
-// sees restored trace/request metadata and covers idempotency, retries,
-// skips, and final disposition downgrades.
+// wrapper.WrapConsumer. SubscriberWithMiddleware.Subscribe restores
+// entry.Observability into ctx as the OUTERMOST step before any user
+// middleware runs, so this middleware's span sees the originating
+// trace/request metadata. ContractTracingMiddleware sits before
+// ConsumerBase and covers idempotency, retries, skips, and final
+// disposition downgrades.
 //
 // Router.AddContractHandler is the only registration entry point, and it
 // validates the ContractSpec at registration time — no subscription reaches

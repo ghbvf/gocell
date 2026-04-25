@@ -12,6 +12,7 @@ import (
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionvalidate"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -178,7 +179,7 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "Refresh must fail when role fetch fails")
-	assert.Nil(t, pair, "no token pair on failure")
+	assert.Empty(t, pair.AccessToken, "no token on failure")
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -239,11 +240,13 @@ func TestService_Refresh(t *testing.T) {
 			pair, err := svc.Refresh(context.Background(), wireToken)
 			if tt.wantErr {
 				assert.Error(t, err)
-				assert.Nil(t, pair)
 			} else {
 				require.NoError(t, err)
 				assert.NotEmpty(t, pair.AccessToken)
 				assert.NotEmpty(t, pair.RefreshToken)
+				// TDD: Refresh must populate UserID and SessionID.
+				assert.NotEmpty(t, pair.UserID, "Refresh must return a non-empty UserID")
+				assert.NotEmpty(t, pair.SessionID, "Refresh must return a non-empty SessionID")
 			}
 		})
 	}
@@ -289,8 +292,8 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 
 	const goroutines = 5
 	type result struct {
-		pair *TokenPair
-		err  error
+		refreshToken string
+		err          error
 	}
 	results := make(chan result, goroutines)
 
@@ -300,7 +303,7 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			p, refreshErr := svc.Refresh(context.Background(), wireToken)
-			results <- result{p, refreshErr}
+			results <- result{p.RefreshToken, refreshErr}
 		}()
 	}
 	wg.Wait()
@@ -317,8 +320,8 @@ func TestService_Refresh_ConcurrentRefresh(t *testing.T) {
 			continue
 		}
 		successes++
-		if r.pair != nil {
-			distinct[r.pair.RefreshToken] = struct{}{}
+		if r.refreshToken != "" {
+			distinct[r.refreshToken] = struct{}{}
 		}
 	}
 
@@ -435,7 +438,7 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "fail-closed: refresh must error when user is unavailable")
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 }
 
 // TestRefresh_FlagPropagatesFromCurrentUser_AfterClear ensures that after a
@@ -528,7 +531,7 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "infra error must cause Refresh to fail")
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
@@ -591,7 +594,7 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "session-not-found must cause Refresh to fail")
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	assert.Contains(t, err.Error(), "ERR_AUTH_REFRESH_FAILED")
 
 	spy.mu.Lock()
@@ -615,7 +618,7 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
@@ -653,7 +656,7 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
@@ -686,7 +689,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
@@ -757,7 +760,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			svc, wireToken := tc.build(t)
 			pair, err := svc.Refresh(context.Background(), wireToken)
 			require.Error(t, err)
-			assert.Nil(t, pair)
+			assert.Empty(t, pair.AccessToken)
 			var ec *errcode.Error
 			require.ErrorAs(t, err, &ec)
 			assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
@@ -816,7 +819,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 
 			pair, err := svc.Refresh(context.Background(), wireToken)
 			require.Error(t, err)
-			assert.Nil(t, pair)
+			assert.Empty(t, pair.AccessToken)
 
 			entry := sloghelper.FindLogEntry(logs.String(), "cascade revoked refresh chain")
 			require.NotNil(t, entry)
@@ -834,4 +837,138 @@ type sessionNotFoundRepo struct {
 
 func (r *sessionNotFoundRepo) GetByID(_ context.Context, _ string) (*domain.Session, error) {
 	return nil, r.notFoundErr
+}
+
+// rotateFailingRefreshStore wraps a real refresh.Store and overrides Rotate to
+// return a configurable error so the post-Rotate error path can be exercised.
+type rotateFailingRefreshStore struct {
+	refresh.Store
+	err error
+}
+
+func (s rotateFailingRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
+	return "", nil, s.err
+}
+
+// rotateMismatchRefreshStore wraps a real refresh.Store and overrides Rotate to
+// return a Token with deliberately mismatched SessionID / SubjectID so the
+// rotated-subject-mismatch branch is exercised.
+type rotateMismatchRefreshStore struct {
+	refresh.Store
+	rotatedSessionID string
+	rotatedSubjectID string
+}
+
+func (s rotateMismatchRefreshStore) Rotate(_ context.Context, _ string) (string, *refresh.Token, error) {
+	return "dummy-wire", &refresh.Token{SessionID: s.rotatedSessionID, SubjectID: s.rotatedSubjectID}, nil
+}
+
+// TestRefresh_RotateFailure_ReturnsRefreshUnavailable verifies that when
+// refreshStore.Rotate returns a non-rejected infra error, Refresh returns
+// ErrAuthRefreshUnavailable (not ErrAuthRefreshFailed) so clients can
+// distinguish an outage from invalid credentials.
+func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
+	_, sessionRepo, innerStore := newTestServiceWithRefreshStore("usr-rotate-fail")
+
+	sess, err := domain.NewSession("usr-rotate-fail", "at", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-rotate-fail"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-rotate-fail", "usr-rotate-fail")
+	require.NoError(t, err)
+
+	// Replace refreshStore with one that fails on Rotate.
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	u, _ := domain.NewUser("usr-rotate-fail", "rotate-fail@test.local", "hash")
+	u.ID = "usr-rotate-fail"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	failStore := rotateFailingRefreshStore{
+		Store: innerStore,
+		err:   errcode.NewInfra(errcode.ErrInternal, "rotate store down"),
+	}
+	svc2 := NewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default())
+
+	pair, err := svc2.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Equal(t, dto.TokenPair{}, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
+}
+
+// TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected verifies that when
+// Rotate returns a token with a SessionID or SubjectID that does not match the
+// validated session, Refresh cascade-revokes and returns ErrAuthRefreshFailed.
+func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
+	_, sessionRepo, innerStore := newTestServiceWithRefreshStore("usr-mismatch")
+
+	sess, err := domain.NewSession("usr-mismatch", "at", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-mismatch"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-mismatch", "usr-mismatch")
+	require.NoError(t, err)
+
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	u, _ := domain.NewUser("usr-mismatch", "mismatch@test.local", "hash")
+	u.ID = "usr-mismatch"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	spy := &spyRefreshStore{Store: innerStore}
+	// Override Rotate to return a token with wrong SessionID.
+	mismatchStore := rotateMismatchRefreshStore{Store: spy, rotatedSessionID: "wrong-session", rotatedSubjectID: "usr-mismatch"}
+	svc2 := NewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
+
+	pair, err := svc2.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Equal(t, dto.TokenPair{}, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshFailed, ec.Code)
+	assert.Equal(t, "invalid refresh token", ec.Message)
+}
+
+// TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr verifies that when
+// Rotate returns a mismatched token AND cascadeRevoke (RevokeSession) fails,
+// the infra error is propagated rather than swallowed.
+func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
+	_, sessionRepo, innerStore := newTestServiceWithRefreshStore("usr-mismatch-revoke-fail")
+
+	sess, err := domain.NewSession("usr-mismatch-revoke-fail", "at", time.Now().Add(time.Hour))
+	require.NoError(t, err)
+	sess.ID = "sess-mismatch-revoke-fail"
+	require.NoError(t, sessionRepo.Create(context.Background(), sess))
+
+	wireToken, _, err := innerStore.Issue(context.Background(), "sess-mismatch-revoke-fail", "usr-mismatch-revoke-fail")
+	require.NoError(t, err)
+
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	u, _ := domain.NewUser("usr-mismatch-revoke-fail", "mmrf@test.local", "hash")
+	u.ID = "usr-mismatch-revoke-fail"
+	require.NoError(t, userRepo.Create(context.Background(), u))
+
+	// revokeFailingRefreshStore already covers RevokeSession failure; wrap it
+	// with rotateMismatchRefreshStore on top so Rotate returns mismatch and then
+	// cascadeRevoke calls through to a RevokeSession that errors.
+	revokeErrStore := revokeFailingRefreshStore{
+		Store: innerStore,
+		err:   errcode.NewInfra(errcode.ErrInternal, "revoke store down"),
+	}
+	// rotateMismatchRefreshStore wraps revokeErrStore so Rotate returns mismatch
+	// but RevokeSession delegates to revokeErrStore and fails.
+	mismatchStore := rotateMismatchRefreshStore{Store: revokeErrStore, rotatedSessionID: "tampered-session", rotatedSubjectID: "usr-mismatch-revoke-fail"}
+	svc := NewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
+
+	pair, err := svc.Refresh(context.Background(), wireToken)
+	require.Error(t, err)
+	assert.Equal(t, dto.TokenPair{}, pair)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
 }

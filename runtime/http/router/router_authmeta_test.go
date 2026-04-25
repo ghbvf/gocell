@@ -56,12 +56,15 @@ func TestAuthDeclare_NestedRoute_ForwardsWithPrefix(t *testing.T) {
 	//       a.Route("/sessions", func(s) { auth.Mount(s, Route{...}) })
 	//   })})
 	// The adapter chain must compose the mount prefixes so the declared
-	// meta reaches the Router with the full path.
+	// meta reaches the Router with the full path. Production convention:
+	// Contract.Path is fully qualified (matches contracts/http/**/v1/
+	// contract.yaml), and auth.Mount strips the nested mux prefix to
+	// derive the chi-relative registration path.
 	r.Route("/api/v1", func(v1 kcell.RouteMux) {
 		v1.Route("/access", func(a kcell.RouteMux) {
 			a.Route("/sessions", func(s kcell.RouteMux) {
-				auth.Mount(s, auth.Route{Contract: testHTTPContract("POST", "/login"), Handler: okHandler, Public: true})
-				auth.Mount(s, auth.Route{Contract: testHTTPContract("DELETE", "/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
+				auth.Mount(s, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
+				auth.Mount(s, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
 			})
 		})
 	})
@@ -261,7 +264,7 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	auth.Mount(r, auth.Route{Contract: testHTTPContract("POST", "/change-password"), Handler: okHandler, PasswordResetExempt: true})
 	require.NoError(t, r.FinalizeAuth())
 
-	// Non-exempt route → 403 with change_password_endpoint hint
+	// Non-exempt route → 403 with changePasswordEndpoint hint
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/blocked", nil)
 	req.Header.Set("Authorization", "Bearer any-token")
@@ -273,7 +276,7 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	errObj := body["error"].(map[string]any)
 	details, ok := errObj["details"].(map[string]any)
 	require.True(t, ok, "details must be present when hint is derived")
-	assert.Equal(t, "POST /change-password", details["change_password_endpoint"])
+	assert.Equal(t, "POST /change-password", details["changePasswordEndpoint"])
 }
 
 // ---------------------------------------------------------------------------

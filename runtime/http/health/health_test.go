@@ -11,6 +11,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -27,6 +28,43 @@ func newStubCell(id string) *stubCell {
 			Type: cell.CellTypeCore,
 		}),
 	}
+}
+
+// testVerboseToken is the canonical token used across tests that exercise
+// /readyz?verbose. PR-A35 requires a matching token for every verbose
+// request, so the old "no SetVerboseToken call" shorthand now produces 401.
+const testVerboseToken = "unit-test-token"
+
+// newVerboseRequest builds an *http.Request for the verbose endpoint with
+// the canonical test token wired into the header. Tests using verbose
+// output should also call h.SetVerboseToken(testVerboseToken).
+func newVerboseRequest(url string) *http.Request {
+	req := httptest.NewRequest(http.MethodGet, url, nil)
+	req.Header.Set(VerboseTokenHeader, testVerboseToken)
+	return req
+}
+
+// dataBody unwraps a success envelope `{"data": {...}}` and returns the
+// inner payload. Asserts on t rather than returning an error so call sites
+// stay short.
+func dataBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "response body must be valid JSON")
+	data, ok := body["data"].(map[string]any)
+	require.True(t, ok, "success response must carry {\"data\":...} envelope; got %s", rec.Body.String())
+	return data
+}
+
+// errorBody unwraps an error envelope `{"error": {"code":..., ...}}` and
+// returns the inner object.
+func errorBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
+	t.Helper()
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body), "response body must be valid JSON")
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok, "error response must carry {\"error\":...} envelope; got %s", rec.Body.String())
+	return errObj
 }
 
 func TestLivezHandler(t *testing.T) {
@@ -68,10 +106,9 @@ func TestLivezHandler(t *testing.T) {
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-			assert.Equal(t, tt.wantBody, body["status"])
-			_, hasChecks := body["checks"]
+			data := dataBody(t, rec)
+			assert.Equal(t, tt.wantBody, data["status"])
+			_, hasChecks := data["checks"]
 			assert.False(t, hasChecks, "/healthz must not expose readiness details")
 		})
 	}
@@ -120,25 +157,36 @@ func TestReadyzHandler(t *testing.T) {
 			}
 
 			h := New(asm)
+			h.SetVerboseToken(testVerboseToken)
 			h.RegisterChecker("db", func(_ context.Context) error { return tt.checkerErr })
 
 			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+			req := newVerboseRequest("/readyz?verbose=true")
 			h.ReadyzHandler().ServeHTTP(rec, req)
 
 			assert.Equal(t, tt.wantStatus, rec.Code)
 
-			var body map[string]any
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-			assert.Equal(t, tt.wantBodyStat, body["status"])
+			// PR-A35 envelope: success lives under data.*, failure under
+			// error.details.* so both branches share a consistent shape.
+			var payload map[string]any
+			if tt.wantBodyStat == "healthy" {
+				payload = dataBody(t, rec)
+				assert.Equal(t, tt.wantBodyStat, payload["status"])
+			} else {
+				errObj := errorBody(t, rec)
+				assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+				var ok bool
+				payload, ok = errObj["details"].(map[string]any)
+				require.True(t, ok, "unhealthy response must carry details map")
+			}
 
 			// Verify namespace separation: cells and dependencies are in distinct maps.
-			cells, ok := body["cells"].(map[string]any)
+			cells, ok := payload["cells"].(map[string]any)
 			require.True(t, ok, "response must contain cells map")
 			_, hasCellCheck := cells["cell-1"]
 			assert.True(t, hasCellCheck, "should include cell-1 in cells")
 
-			deps, ok := body["dependencies"].(map[string]any)
+			deps, ok := payload["dependencies"].(map[string]any)
 			require.True(t, ok, "response must contain dependencies map")
 			_, hasDBCheck := deps["db"]
 			assert.True(t, hasDBCheck, "should include db in dependencies")
@@ -154,20 +202,22 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
+	h.SetVerboseToken(testVerboseToken)
 	h.RegisterChecker("rabbitmq", func(_ context.Context) error { return nil })
 	h.RegisterChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") })
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose", nil)
+	req := newVerboseRequest("/readyz?verbose")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body["status"])
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map")
 
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	// Dependencies are now map[string]map[string]any
 	rabbitmqEntry, ok := deps["rabbitmq"].(map[string]any)
@@ -191,14 +241,13 @@ func TestLivezHandler_IsProcessLivenessOnly(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
-	_, hasChecks := body["checks"]
+	data := dataBody(t, rec)
+	assert.Equal(t, "healthy", data["status"])
+	_, hasChecks := data["checks"]
 	assert.False(t, hasChecks, "/healthz must not expose readiness details")
-	_, hasCells := body["cells"]
+	_, hasCells := data["cells"]
 	assert.False(t, hasCells, "/healthz must not expose cell readiness details")
-	_, hasDependencies := body["dependencies"]
+	_, hasDependencies := data["dependencies"]
 	assert.False(t, hasDependencies, "/healthz must not expose dependency readiness details")
 }
 
@@ -218,12 +267,11 @@ func TestReadyzHandler_DefaultOutputIsAggregateOnly(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
-	_, hasCells := body["cells"]
+	data := dataBody(t, rec)
+	assert.Equal(t, "healthy", data["status"])
+	_, hasCells := data["cells"]
 	assert.False(t, hasCells, "default /readyz output must not expose cells")
-	_, hasDependencies := body["dependencies"]
+	_, hasDependencies := data["dependencies"]
 	assert.False(t, hasDependencies, "default /readyz output must not expose dependencies")
 }
 
@@ -235,21 +283,21 @@ func TestReadyzHandler_VerboseOutputIncludesDetails(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
+	h.SetVerboseToken(testVerboseToken)
 	h.RegisterChecker("db", func(_ context.Context) error { return nil })
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
-	cells, ok := body["cells"].(map[string]any)
+	data := dataBody(t, rec)
+	assert.Equal(t, "healthy", data["status"])
+	cells, ok := data["cells"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain cells")
 	assert.Equal(t, "healthy", cells["cell-1"])
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := data["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain dependencies")
 	dbEntry, ok := deps["db"].(map[string]any)
 	require.True(t, ok, "db dependency must be a map")
@@ -264,20 +312,20 @@ func TestReadyzHandler_VerboseOutput_IncludesAdapterInfo(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
+	h.SetVerboseToken(testVerboseToken)
 	h.SetAdapterInfo(map[string]string{
 		"mode":    "in-memory",
 		"storage": "in-memory",
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	adapters, ok := body["adapters"].(map[string]any)
+	data := dataBody(t, rec)
+	adapters, ok := data["adapters"].(map[string]any)
 	require.True(t, ok, "verbose readyz output must contain adapters")
 	assert.Equal(t, "in-memory", adapters["mode"])
 	assert.Equal(t, "in-memory", adapters["storage"])
@@ -291,15 +339,15 @@ func TestReadyzHandler_VerboseOutput_OmitsAdapterInfo_WhenNotSet(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
+	h.SetVerboseToken(testVerboseToken)
 	// No SetAdapterInfo call.
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	_, hasAdapters := body["adapters"]
+	data := dataBody(t, rec)
+	_, hasAdapters := data["adapters"]
 	assert.False(t, hasAdapters, "verbose readyz output should not contain adapters when not set")
 }
 
@@ -319,17 +367,42 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body["status"])
-	_, hasCells := body["cells"]
-	assert.False(t, hasCells, "non-verbose unhealthy /readyz must not expose cells")
-	_, hasDependencies := body["dependencies"]
-	assert.False(t, hasDependencies, "non-verbose unhealthy /readyz must not expose dependencies")
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map (may be empty)")
+	_, hasCells := details["cells"]
+	assert.False(t, hasCells, "non-verbose unhealthy /readyz must not expose cells in details")
+	_, hasDependencies := details["dependencies"]
+	assert.False(t, hasDependencies, "non-verbose unhealthy /readyz must not expose dependencies in details")
 }
 
-// ?verbose query parameter parsing is exercised via probequery.Verbose; see
-// runtime/http/health/probequery/verbose_test.go for the canonical table-test.
+func TestReadyzVerboseQueryParsing(t *testing.T) {
+	tests := []struct {
+		name    string
+		url     string
+		wantVal bool
+	}{
+		{name: "absent", url: "/readyz", wantVal: false},
+		{name: "bare flag", url: "/readyz?verbose", wantVal: true},
+		{name: "empty value", url: "/readyz?verbose=", wantVal: true},
+		{name: "one", url: "/readyz?verbose=1", wantVal: true},
+		{name: "true", url: "/readyz?verbose=true", wantVal: true},
+		{name: "TRUE mixed case", url: "/readyz?verbose=TRUE", wantVal: true},
+		{name: "false", url: "/readyz?verbose=false", wantVal: false},
+		{name: "zero", url: "/readyz?verbose=0", wantVal: false},
+		{name: "two", url: "/readyz?verbose=2", wantVal: false},
+		{name: "yes not supported", url: "/readyz?verbose=yes", wantVal: false},
+		{name: "unknown not supported", url: "/readyz?verbose=debug", wantVal: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodGet, tt.url, nil)
+			assert.Equal(t, tt.wantVal, readyzVerbose(req))
+		})
+	}
+}
 
 func TestRegisterChecker_DuplicatePanics(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
@@ -357,12 +430,14 @@ func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 	// Mark shutting down.
 	h.SetShuttingDown()
 
-	// After shutdown: should be 503.
+	// After shutdown: should be 503 with the dedicated errcode.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	h.ReadyzHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
-	assert.Contains(t, rec.Body.String(), "shutting_down")
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzShuttingDown), errObj["code"],
+		"shutdown path must carry the ERR_READYZ_SHUTTING_DOWN code so operators distinguish drain from probe failure")
 }
 
 func TestSetShuttingDown_Idempotent(t *testing.T) {
@@ -394,37 +469,150 @@ func newStartedHandler(t *testing.T) *Handler {
 	return h
 }
 
-// Verbose-mode access control (token gating) lives in
-// runtime/bootstrap.PolicyVerboseToken, attached as middleware to the readyz
-// cell.RouteGroup. The handler itself only honours the ?verbose query param;
-// see TestReadyz_VerboseQueryParam* below for query-parsing coverage.
-
-func TestReadyz_VerboseQueryParam_RendersVerboseBody(t *testing.T) {
+// TestReadyz_VerboseToken_CorrectHeader is kept as a minimal sanity check
+// distinct from the table-driven TestReadyz_VerboseToken_StrictDeny — it
+// double-confirms the happy path uses the same VerboseTokenHeader constant.
+func TestReadyz_VerboseToken_CorrectHeader(t *testing.T) {
 	h := newStartedHandler(t)
+	h.SetVerboseToken("secret-token")
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req.Header.Set(VerboseTokenHeader, "secret-token")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	_, hasCells := body["cells"]
-	assert.True(t, hasCells, "verbose=true must render the verbose cells block")
+	data := dataBody(t, rec)
+	_, hasCells := data["cells"]
+	assert.True(t, hasCells, "correct token should expose verbose details")
 }
 
-func TestReadyz_VerboseQueryParam_AbsentHidesVerboseBody(t *testing.T) {
-	h := newStartedHandler(t)
+// TestReadyz_VerboseToken_StrictDeny covers PR-A35's strict-401 semantics.
+// The previous "silent downgrade to 200" behaviour is gone: any ?verbose
+// request that does not carry a matching token is answered with 401 and an
+// errcode-shaped body. A bare /readyz request (no ?verbose) is always
+// answered with the plain aggregate 200 regardless of token state — this
+// protects Kubernetes readinessProbes, which never pass ?verbose.
+func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
+	const configured = "secret-token"
+	tests := []struct {
+		name            string
+		tokenConfigured string // passed to SetVerboseToken before the request
+		verboseDisabled bool   // applied via WithVerboseDisabled option
+		sendVerbose     bool   // attach ?verbose=true query
+		sendHeader      string // value for X-Readyz-Token; empty means omit
+		wantStatus      int
+		wantVerboseBody bool // verbose payload present (cells + dependencies)
+		wantDeniedBody  bool // errcode-shaped denial payload
+	}{
+		{
+			name:            "correct token returns verbose",
+			tokenConfigured: configured,
+			sendVerbose:     true,
+			sendHeader:      configured,
+			wantStatus:      http.StatusOK,
+			wantVerboseBody: true,
+		},
+		{
+			name:            "wrong token returns 401",
+			tokenConfigured: configured,
+			sendVerbose:     true,
+			sendHeader:      "wrong",
+			wantStatus:      http.StatusUnauthorized,
+			wantDeniedBody:  true,
+		},
+		{
+			name:            "missing header returns 401",
+			tokenConfigured: configured,
+			sendVerbose:     true,
+			sendHeader:      "",
+			wantStatus:      http.StatusUnauthorized,
+			wantDeniedBody:  true,
+		},
+		{
+			name:            "no token configured returns 401 for verbose",
+			tokenConfigured: "",
+			sendVerbose:     true,
+			wantStatus:      http.StatusUnauthorized,
+			wantDeniedBody:  true,
+		},
+		{
+			name:            "bare readyz stays 200 even with verbose disabled via missing token",
+			tokenConfigured: "",
+			sendVerbose:     false,
+			wantStatus:      http.StatusOK,
+			wantVerboseBody: false,
+		},
+		{
+			name:            "bare readyz stays 200 when token configured",
+			tokenConfigured: configured,
+			sendVerbose:     false,
+			wantStatus:      http.StatusOK,
+			wantVerboseBody: false,
+		},
+		{
+			name:            "WithVerboseDisabled answers verbose with plain 200",
+			tokenConfigured: configured,
+			verboseDisabled: true,
+			sendVerbose:     true,
+			sendHeader:      "anything",
+			wantStatus:      http.StatusOK,
+			wantVerboseBody: false,
+		},
+	}
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	h.ReadyzHandler().ServeHTTP(rec, req)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			asm := assembly.New(assembly.Config{ID: "test-verbose-deny", DurabilityMode: cell.DurabilityDemo})
+			c := newStubCell("cell-1")
+			require.NoError(t, asm.Register(c))
+			require.NoError(t, asm.Start(context.Background()))
+			t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
-	assert.Equal(t, http.StatusOK, rec.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	_, hasCells := body["cells"]
-	assert.False(t, hasCells, "no ?verbose query must hide the verbose cells block")
+			var opts []Option
+			if tt.verboseDisabled {
+				opts = append(opts, WithVerboseDisabled())
+			}
+			h := New(asm, opts...)
+			h.RegisterChecker("db", func(_ context.Context) error { return nil })
+			if tt.tokenConfigured != "" {
+				h.SetVerboseToken(tt.tokenConfigured)
+			}
+
+			url := "/readyz"
+			if tt.sendVerbose {
+				url = "/readyz?verbose=true"
+			}
+			req := httptest.NewRequest(http.MethodGet, url, nil)
+			if tt.sendHeader != "" {
+				req.Header.Set(VerboseTokenHeader, tt.sendHeader)
+			}
+			rec := httptest.NewRecorder()
+			h.ReadyzHandler().ServeHTTP(rec, req)
+
+			assert.Equal(t, tt.wantStatus, rec.Code)
+
+			if tt.wantDeniedBody {
+				errField := errorBody(t, rec)
+				assert.Equal(t, string(errcode.ErrReadyzVerboseDenied), errField["code"])
+				assert.Contains(t, errField["message"].(string), "X-Readyz-Token")
+				_, hasDetails := errField["details"].(map[string]any)
+				assert.True(t, hasDetails,
+					"denied envelope must include the standard details map (may be empty)")
+				return
+			}
+
+			// Non-denied paths always come back as 200 under the data envelope.
+			data := dataBody(t, rec)
+			if tt.wantVerboseBody {
+				_, hasCells := data["cells"]
+				assert.True(t, hasCells, "verbose response must include cells under data")
+			} else {
+				_, hasCells := data["cells"]
+				assert.False(t, hasCells, "non-verbose response must not include cells under data")
+			}
+		})
+	}
 }
 
 func TestEmptyAssembly(t *testing.T) {
@@ -436,9 +624,8 @@ func TestEmptyAssembly(t *testing.T) {
 	h.LivezHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "healthy", body["status"])
+	data := dataBody(t, rec)
+	assert.Equal(t, "healthy", data["status"])
 }
 
 // --- New parallel / deadline / panic tests (PR-A4 phase 5a) ---
@@ -503,6 +690,7 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm, WithDeadline(50*time.Millisecond))
+	h.SetVerboseToken(testVerboseToken)
 	h.RegisterChecker("slow", func(ctx context.Context) error {
 		select {
 		case <-time.After(500 * time.Millisecond):
@@ -513,16 +701,17 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body["status"])
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map")
 
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
 	slowEntry, ok := deps["slow"].(map[string]any)
 	require.True(t, ok, "slow entry must be a map")
@@ -584,12 +773,13 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm, WithDeadline(2*time.Second))
+	h.SetVerboseToken(testVerboseToken)
 	h.RegisterChecker("panicking", func(_ context.Context) error {
 		panic("something went very wrong")
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req := newVerboseRequest("/readyz?verbose=true")
 
 	// Must not crash the process.
 	require.NotPanics(t, func() {
@@ -598,11 +788,12 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body["status"])
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map")
 
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
 	panicEntry, ok := deps["panicking"].(map[string]any)
 	require.True(t, ok, "panicking entry must be present")
@@ -682,8 +873,11 @@ func TestTruncateErrMsg(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := truncateErrMsg(tt.input, tt.max)
-			if tt.want != "" || (tt.want == "" && tt.wantLen == 0 && tt.input == "") {
-				// Exact match cases
+			// Exact-match cases are those that set `want` or use the
+			// empty-in / empty-out identity; length-based cases use
+			// `wantLen`. Either side may be set; they are mutually
+			// exclusive per fixture definition above.
+			if tt.want != "" || tt.input == "" {
 				assert.Equal(t, tt.want, got)
 			}
 			if tt.wantLen > 0 {
@@ -716,20 +910,23 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 	longMsg = fmt.Sprintf("%0600d", 0) // 600 ASCII digits
 
 	h := New(asm)
+	h.SetVerboseToken(testVerboseToken)
 	h.RegisterChecker("noisy", func(_ context.Context) error {
 		return fmt.Errorf("%s", longMsg)
 	})
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy response must carry details map")
 
-	deps, ok := body["dependencies"].(map[string]any)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
 	noisyEntry, ok := deps["noisy"].(map[string]any)
 	require.True(t, ok, "noisy entry must be present")
@@ -744,20 +941,22 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 		"truncated error must end with '...'; got %q", errField)
 }
 
-// TestReadyz_UncooperativeChecker_StillReturnsWithinDeadline covers the
-// aggregator-level hard deadline: a probe that ignores ctx.Done must NOT
-// block /readyz beyond h.deadline. The probe's goroutine continues running
-// in the background (known trade-off, documented in runProbesParallel).
-func TestReadyz_UncooperativeChecker_StillReturnsWithinDeadline(t *testing.T) {
+// TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline verifies the
+// PR-A35 structural guarantee: wrapCtxSafe in RegisterChecker ensures the
+// outer Checker returns as soon as the aggregator's deadline fires, even if
+// the inner probe ignores ctx. The inner goroutine continues running in the
+// background; the aggregator is no longer entangled with its lifetime.
+func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-uncooperative", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
 	defer func() { _ = asm.Stop(context.Background()) }()
 
-	h := New(asm, WithDeadline(80*time.Millisecond))
+	h := New(asm, WithVerboseDisabled(), WithDeadline(80*time.Millisecond))
 
-	// Checker that blocks indefinitely while completely ignoring ctx.
-	// The cleanup closes the channel so the leaked goroutine can exit when
-	// the test ends, avoiding goroutine leaks across test runs.
+	// Uncooperative probe: blocks on a channel that only the test closes on
+	// cleanup. Without wrapCtxSafe this would hold runProbesParallel open
+	// past h.deadline; with the wrapper the outer Checker returns on
+	// ctx.Done while the inner fn keeps running until the test ends.
 	unblock := make(chan struct{})
 	t.Cleanup(func() { close(unblock) })
 	h.RegisterChecker("stuck", func(_ context.Context) error {
@@ -776,15 +975,58 @@ func TestReadyz_UncooperativeChecker_StillReturnsWithinDeadline(t *testing.T) {
 		"handler must return within ~deadline (80ms) even with uncooperative probe; got %v", elapsed)
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 
-	var body struct {
-		Status       string                    `json:"status"`
-		Dependencies map[string]map[string]any `json:"dependencies"`
-	}
-	require.NoError(t, json.Unmarshal(rr.Body.Bytes(), &body))
-	assert.Equal(t, "unhealthy", body.Status)
-	stuck, ok := body.Dependencies["stuck"]
-	require.True(t, ok, "stuck probe must appear in verbose output")
-	assert.Equal(t, "timeout", stuck["status"])
+	// WithVerboseDisabled answers verbose requests with the plain aggregate
+	// body (no dependencies map); we only assert the aggregate status here.
+	errObj := errorBody(t, rr)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+}
+
+// TestReadyz_UncooperativeChecker_VerboseReportsTimeout covers the verbose
+// branch of the uncooperative-probe contract. When wrapCtxSafe's outer
+// Checker returns ctx.Err() (DeadlineExceeded) the probe result must be
+// tagged "timeout" in the verbose body so dashboards can distinguish
+// "probe overran" from domain-level "probe failed". Regression guard for
+// F4 — the previous sweep lost this coverage when the earlier test was
+// flipped to WithVerboseDisabled.
+func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-uncooperative-verbose", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm, WithDeadline(80*time.Millisecond))
+	h.SetVerboseToken(testVerboseToken)
+
+	unblock := make(chan struct{})
+	t.Cleanup(func() { close(unblock) })
+	h.RegisterChecker("stuck", func(_ context.Context) error {
+		<-unblock
+		return nil
+	})
+
+	rr := httptest.NewRecorder()
+	req := newVerboseRequest("/readyz?verbose=true")
+	start := time.Now()
+	h.ReadyzHandler()(rr, req)
+	elapsed := time.Since(start)
+
+	assert.Less(t, elapsed, 200*time.Millisecond,
+		"handler must return within ~deadline even with uncooperative probe; got %v", elapsed)
+	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
+
+	errObj := errorBody(t, rr)
+	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "unhealthy verbose response must include details")
+	deps, ok := details["dependencies"].(map[string]any)
+	require.True(t, ok, "verbose details must carry dependencies map")
+	stuck, ok := deps["stuck"].(map[string]any)
+	require.True(t, ok, "stuck probe must be present in verbose dependencies")
+	assert.Equal(t, "timeout", stuck["status"],
+		"uncooperative probe must be surfaced as status=timeout (not unhealthy)")
+	errStr, hasErr := stuck["error"].(string)
+	require.True(t, hasErr, "timeout probe must include error string")
+	assert.Contains(t, errStr, "deadline",
+		"timeout probe error must mention deadline; got %q", errStr)
 }
 
 // TestReadyz_VerboseDependencies_StructuredOutput verifies the new structured
@@ -796,17 +1038,21 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	h := New(asm)
+	h.SetVerboseToken(testVerboseToken)
 	h.RegisterChecker("ok-probe", func(_ context.Context) error { return nil })
 	h.RegisterChecker("fail-probe", func(_ context.Context) error { return fmt.Errorf("disk full") })
 
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
 
-	var body map[string]any
-	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
-
-	deps, ok := body["dependencies"].(map[string]any)
+	// One probe is unhealthy → 503 envelope places verbose breakdown under
+	// error.details.dependencies.
+	errObj := errorBody(t, rec)
+	require.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok)
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok)
 
 	okEntry, ok := deps["ok-probe"].(map[string]any)

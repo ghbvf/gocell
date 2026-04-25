@@ -60,27 +60,17 @@ password is changed. Follow these steps:
 INIT_PASS=$(grep '^password=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
 ADMIN_USER=$(grep '^username=' $TMPDIR/gocell/initial_admin_password | cut -d= -f2)
 
-# 2. Login (passwordResetRequired=true in response)
+# 2. Login (passwordResetRequired=true in response) — userId is in the response directly.
 TOKEN_RESP=$(curl -s -X POST http://localhost:8081/api/v1/access/sessions/login \
   -H 'Content-Type: application/json' \
   -d "{\"username\":\"${ADMIN_USER}\",\"password\":\"${INIT_PASS}\"}")
 echo "$TOKEN_RESP" | jq .
-# {"data":{"accessToken":"...","passwordResetRequired":true,...}}
+# {"data":{"accessToken":"...","userId":"...","passwordResetRequired":true,...}}
 
 BOOTSTRAP_TOKEN=$(echo "$TOKEN_RESP" | jq -r '.data.accessToken')
+USER_ID=$(echo "$TOKEN_RESP"        | jq -r '.data.userId')
 
-# 3. Extract user ID from the JWT sub claim.
-# JWT uses base64url (RFC 4648 §5) WITHOUT padding, but `base64 -d` on
-# Linux/macOS expects padded input — restore padding before decoding,
-# otherwise base64 -d errors silently and USER_ID ends up empty.
-USER_ID=$(echo "$BOOTSTRAP_TOKEN" \
-  | cut -d. -f2 \
-  | tr '_-' '/+' \
-  | awk '{ pad = (4 - length($0) % 4) % 4; while (pad-- > 0) $0 = $0 "="; print }' \
-  | base64 -d \
-  | jq -r '.sub')
-
-# 4. Change password (returns new token with passwordResetRequired=false)
+# 3. Change password (returns new token with passwordResetRequired=false)
 NEW_TOKEN_RESP=$(curl -s -X POST "http://localhost:8081/api/v1/access/users/${USER_ID}/password" \
   -H "Authorization: Bearer $BOOTSTRAP_TOKEN" \
   -H 'Content-Type: application/json' \
@@ -216,10 +206,15 @@ curl -s http://localhost:8081/api/v1/flags \
 ```bash
 curl -s http://localhost:8081/healthz | jq
 curl -s http://localhost:8081/readyz  | jq
-curl -s http://localhost:8081/readyz?verbose | jq
+curl -s -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
+  'http://localhost:8081/readyz?verbose' | jq
 ```
 
-`/healthz` is liveness-only. Use `/readyz?verbose` when you need the detailed cell and dependency breakdown.
+Responses use the project-wide envelope (PR-A35): success bodies are
+`{"data": {"status": "healthy", ...}}`; 503 / 401 bodies are
+`{"error": {"code": "ERR_READYZ_...", "message": "...", "details": {...}}}`.
+
+`/healthz` is liveness-only. Use `/readyz?verbose` when you need the detailed cell and dependency breakdown — PR-A35 requires `GOCELL_READYZ_VERBOSE_TOKEN` to be set and the request to carry the matching `X-Readyz-Token` header (or set `GOCELL_READYZ_VERBOSE_DISABLED=1` to waive the endpoint).
 
 ## BFF Cookie Session Mode (Planned)
 

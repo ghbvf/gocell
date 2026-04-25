@@ -46,10 +46,11 @@ var (
 type HealthRouteGroupOption func(*healthRouteGroupCfg)
 
 type healthRouteGroupCfg struct {
-	metricsHandler http.Handler
-	livezPolicy    cell.Policy
-	readyzPolicy   cell.Policy
-	metricsPolicy  cell.Policy
+	metricsHandler  http.Handler
+	livezPolicy     cell.Policy
+	readyzPolicy    cell.Policy
+	metricsPolicy   cell.Policy
+	verboseDisabled bool // PR-A35: when true, /readyz?verbose is answered with the plain aggregate body (no internal topology disclosed)
 }
 
 // applyHealthRouteGroupOpts evaluates a slice of HealthRouteGroupOption against
@@ -95,6 +96,20 @@ func WithReadyzPolicy(p cell.Policy) HealthRouteGroupOption {
 // Zero value (cell.Policy{}) means inherit the listener default policy.
 func WithMetricsPolicy(p cell.Policy) HealthRouteGroupOption {
 	return func(c *healthRouteGroupCfg) { c.metricsPolicy = p }
+}
+
+// WithReadyzVerboseDisabled suppresses the /readyz?verbose body entirely.
+// The endpoint still answers, but the aggregate body is returned regardless
+// of the ?verbose query parameter — internal topology (cell names, dependency
+// names) is never disclosed.
+//
+// Use this for ephemeral deployments (test harnesses, single-node demos)
+// that waive the verbose debug channel. Production deployments should attach
+// PolicyVerboseToken instead so operators retain a token-gated diagnostic
+// path. Equivalent to PR-A35's bootstrap.WithVerboseDisabled, threaded
+// through the WithHealthRoutes option pattern.
+func WithReadyzVerboseDisabled() HealthRouteGroupOption {
+	return func(c *healthRouteGroupCfg) { c.verboseDisabled = true }
 }
 
 // HealthRouteGroups returns one RouteGroup per framework-owned health route

@@ -93,7 +93,7 @@ func TestOutboxWriter_Write_WithTopic(t *testing.T) {
 	assert.Equal(t, "custom.topic.v1", call.args[4]) // topic column
 }
 
-func TestOutboxWriter_Write_InjectsObservabilityMetadataFromContext(t *testing.T) {
+func TestOutboxWriter_Write_InjectsObservabilityFromContext(t *testing.T) {
 	w := NewOutboxWriter()
 	tx := &mockOutboxTx{}
 
@@ -114,15 +114,23 @@ func TestOutboxWriter_Write_InjectsObservabilityMetadataFromContext(t *testing.T
 	require.NoError(t, err)
 	require.Len(t, tx.execCalls, 1)
 
+	// Business metadata (arg index 6): only business keys, NO reserved obs keys.
 	metaJSON, ok := tx.execCalls[0].args[6].([]byte)
 	require.True(t, ok)
-
 	var meta map[string]string
 	require.NoError(t, json.Unmarshal(metaJSON, &meta))
 	assert.Equal(t, "handler", meta["source"])
-	assert.Equal(t, "req-123", meta["request_id"])
-	assert.Equal(t, "corr-123", meta["correlation_id"])
-	assert.Equal(t, "trace-123", meta["trace_id"])
+	_, hasReqID := meta["request_id"]
+	assert.False(t, hasReqID, "request_id must not be in business metadata column — it belongs in observability column")
+
+	// Observability column (arg index 8): carries trace context from ctx.
+	obsJSON, obsOK := tx.execCalls[0].args[8].([]byte)
+	require.True(t, obsOK)
+	var obs outbox.ObservabilityMetadata
+	require.NoError(t, json.Unmarshal(obsJSON, &obs))
+	assert.Equal(t, "req-123", obs.RequestID)
+	assert.Equal(t, "corr-123", obs.CorrelationID)
+	assert.Equal(t, "trace-123", obs.TraceID)
 }
 
 func TestOutboxWriter_Write_ZeroCreatedAt(t *testing.T) {
@@ -346,13 +354,13 @@ func TestOutboxWriter_WriteBatch_Success(t *testing.T) {
 
 	call := tx.execCalls[0]
 	assert.Contains(t, call.sql, "INSERT INTO outbox_entries")
-	// 2 entries × 9 cols = 18 args
-	assert.Len(t, call.args, 18)
+	// 2 entries × 10 cols = 20 args (added observability column)
+	assert.Len(t, call.args, 20)
 	assert.Equal(t, "a1b2c3d4-e5f6-7890-abcd-ef1234567890", call.args[0])
-	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[9])
+	assert.Equal(t, "b2c3d4e5-f6a7-8901-bcde-f12345678901", call.args[10])
 }
 
-func TestOutboxWriter_WriteBatch_InjectsObservabilityMetadataFromContext(t *testing.T) {
+func TestOutboxWriter_WriteBatch_InjectsObservabilityFromContext(t *testing.T) {
 	w := NewOutboxWriter()
 	tx := &mockOutboxTx{}
 
@@ -367,15 +375,14 @@ func TestOutboxWriter_WriteBatch_InjectsObservabilityMetadataFromContext(t *test
 			Topic:     "orders.v1",
 			Payload:   []byte(`{"idx":1}`),
 			CreatedAt: time.Now(),
+			Metadata:  map[string]string{"source": "business"},
 		},
 		{
 			ID:        "batch-ctx-0002",
 			Topic:     "orders.v1",
 			Payload:   []byte(`{"idx":2}`),
 			CreatedAt: time.Now(),
-			Metadata: map[string]string{
-				"request_id": "req-explicit",
-			},
+			// No explicit metadata: observability still comes from ctx.
 		},
 	}
 
@@ -383,21 +390,34 @@ func TestOutboxWriter_WriteBatch_InjectsObservabilityMetadataFromContext(t *test
 	require.NoError(t, err)
 	require.Len(t, tx.execCalls, 1)
 
+	// 2 entries × 10 cols = 20 args
+	require.Len(t, tx.execCalls[0].args, 20)
+
+	// First entry: business metadata preserved, observability from ctx.
 	firstMetaJSON, ok := tx.execCalls[0].args[6].([]byte)
 	require.True(t, ok)
 	var firstMeta map[string]string
 	require.NoError(t, json.Unmarshal(firstMetaJSON, &firstMeta))
-	assert.Equal(t, "req-batch", firstMeta["request_id"])
-	assert.Equal(t, "corr-batch", firstMeta["correlation_id"])
-	assert.Equal(t, "trace-batch", firstMeta["trace_id"])
+	assert.Equal(t, "business", firstMeta["source"])
+	_, hasReqID := firstMeta["request_id"]
+	assert.False(t, hasReqID, "request_id must not be in business metadata — it belongs in observability column")
 
-	secondMetaJSON, ok := tx.execCalls[0].args[15].([]byte)
+	firstObsJSON, ok := tx.execCalls[0].args[9].([]byte)
 	require.True(t, ok)
-	var secondMeta map[string]string
-	require.NoError(t, json.Unmarshal(secondMetaJSON, &secondMeta))
-	assert.Equal(t, "req-explicit", secondMeta["request_id"])
-	assert.Equal(t, "corr-batch", secondMeta["correlation_id"])
-	assert.Equal(t, "trace-batch", secondMeta["trace_id"])
+	var firstObs outbox.ObservabilityMetadata
+	require.NoError(t, json.Unmarshal(firstObsJSON, &firstObs))
+	assert.Equal(t, "req-batch", firstObs.RequestID)
+	assert.Equal(t, "corr-batch", firstObs.CorrelationID)
+	assert.Equal(t, "trace-batch", firstObs.TraceID)
+
+	// Second entry: observability also from ctx.
+	secondObsJSON, ok := tx.execCalls[0].args[19].([]byte)
+	require.True(t, ok)
+	var secondObs outbox.ObservabilityMetadata
+	require.NoError(t, json.Unmarshal(secondObsJSON, &secondObs))
+	assert.Equal(t, "req-batch", secondObs.RequestID)
+	assert.Equal(t, "corr-batch", secondObs.CorrelationID)
+	assert.Equal(t, "trace-batch", secondObs.TraceID)
 }
 
 func TestOutboxWriter_WriteBatch_InvalidEntry(t *testing.T) {
@@ -466,8 +486,8 @@ func TestOutboxWriter_WriteBatch_ChunksLargeBatch(t *testing.T) {
 	err := w.WriteBatch(ctx, entries)
 	require.NoError(t, err)
 	require.Len(t, tx.execCalls, 2, "should split into 2 chunks")
-	assert.Len(t, tx.execCalls[0].args, writeBatchChunkSize*9)
-	assert.Len(t, tx.execCalls[1].args, 1*9)
+	assert.Len(t, tx.execCalls[0].args, writeBatchChunkSize*10)
+	assert.Len(t, tx.execCalls[1].args, 1*10)
 }
 
 // mockOutboxTx records exec calls for assertion.

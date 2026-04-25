@@ -7,19 +7,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
-func toTokenPairResponse(p *TokenPair) dto.TokenPairResponse {
-	if p == nil {
-		return dto.TokenPairResponse{}
-	}
-	return dto.TokenPairResponse{
-		AccessToken:           p.AccessToken,
-		RefreshToken:          p.RefreshToken,
-		ExpiresAt:             p.ExpiresAt,
-		SessionID:             p.SessionID,
-		PasswordResetRequired: p.PasswordResetRequired,
-	}
-}
-
 // Handler provides HTTP endpoints for session login.
 type Handler struct {
 	svc *Service
@@ -49,5 +36,5 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toTokenPairResponse(pair)})
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": dto.ToTokenPairResponse(pair)})
 }

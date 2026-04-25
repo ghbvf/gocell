@@ -10,11 +10,13 @@
         "refreshToken": { "type": "string" },
         "expiresAt": { "type": "string", "format": "date-time" },
         "sessionId": { "type": "string" },
+        "userId": { "type": "string" },
         "passwordResetRequired": { "type": "boolean" }
       },
-      "required": ["accessToken", "refreshToken", "expiresAt", "passwordResetRequired"],
+      "required": ["accessToken", "refreshToken", "expiresAt", "sessionId", "userId", "passwordResetRequired"],
       "additionalProperties": false
     }
   },
-  "required": ["data"]
+  "required": ["data"],
+  "additionalProperties": false
 }

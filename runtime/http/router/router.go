@@ -680,7 +680,10 @@ func (r *Router) mergeExemptMatcher(entries []string) error {
 }
 
 // deriveHint sets r.derivedHint to the first declared POST+PasswordResetExempt
-// meta's METHOD+path.
+// meta's METHOD+path (e.g. "POST /api/v1/access/users/{id}/password").
+// The hint is served at request time via WithPasswordResetChangeEndpointHintFn.
+// The "METHOD /path" format matches the wire contract documented in
+// docs/operations/first-run-setup.md (changePasswordEndpoint field).
 func (r *Router) deriveHint() {
 	for _, m := range r.declaredAuthMetas {
 		if m.Method == "POST" && m.PasswordResetExempt {

@@ -166,8 +166,11 @@ func TestTestMux_Route_ComposesPrefix(t *testing.T) {
 	root.Route("/api/v1", func(v1 cell.RouteMux) {
 		v1.Route("/access", func(acc cell.RouteMux) {
 			acc.Route("/sessions", func(sess cell.RouteMux) {
-				auth.Mount(sess, auth.Route{Contract: testHTTPContract("POST", "/login"), Handler: okHandler, Public: true})
-				auth.Mount(sess, auth.Route{Contract: testHTTPContract("DELETE", "/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
+				// Contract.Path is fully qualified per production convention;
+				// auth.Mount strips the nested mux prefix to derive the
+				// chi-relative registration path.
+				auth.Mount(sess, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
+				auth.Mount(sess, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
 			})
 		})
 	})

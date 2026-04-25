@@ -158,12 +158,17 @@ func TestService_Login(t *testing.T) {
 			pair, err := svc.Login(context.Background(), tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
-				assert.Nil(t, pair)
 			} else {
 				require.NoError(t, err)
 				assert.NotEmpty(t, pair.AccessToken)
 				assert.NotEmpty(t, pair.RefreshToken)
 				assert.False(t, pair.ExpiresAt.IsZero())
+				// TDD: Login must populate UserID from the authenticated user.
+				assert.NotEmpty(t, pair.UserID, "Login must return a non-empty UserID")
+				// Verify UserID matches the seeded user ID.
+				u, err := userRepo.GetByUsername(context.Background(), tt.input.Username)
+				require.NoError(t, err)
+				assert.Equal(t, u.ID, pair.UserID, "Login UserID must match the authenticated user's ID")
 			}
 		})
 	}
@@ -179,7 +184,7 @@ func TestService_Login_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
 	require.Error(t, err)
-	assert.Nil(t, pair)
+	assert.Empty(t, pair.AccessToken)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthRefreshUnavailable, ec.Code)
@@ -409,7 +414,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
 	require.Error(t, err, "Login must fail when role fetch fails")
-	assert.Nil(t, pair, "no token pair on failure")
+	assert.Empty(t, pair.AccessToken, "no token on failure")
 
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -441,6 +446,20 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	assert.Equal(t, errcode.ErrAuthRoleFetchFailed, ec.Code)
 
 	assert.Equal(t, 0, sessionRepo.creates, "no session must be persisted on fail-closed")
+}
+
+// TestService_IssueForUser_GetByIDError verifies that when userRepo.GetByID
+// returns an error (e.g. user not found), IssueForUser wraps and propagates the
+// error with "IssueForUser get user" context rather than panicking or returning
+// an empty pair silently.
+func TestService_IssueForUser_GetByIDError(t *testing.T) {
+	svc, _ := newTestService() // userRepo is empty — GetByID will return not-found
+
+	pair, err := svc.IssueForUser(context.Background(), "nonexistent-user-id")
+	require.Error(t, err, "IssueForUser must fail when user does not exist")
+	assert.Empty(t, pair.AccessToken, "no token on GetByID failure")
+	assert.Contains(t, err.Error(), "IssueForUser get user",
+		"error must be wrapped with IssueForUser get user context")
 }
 
 func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {

@@ -50,7 +50,37 @@ const (
 	MaxMetadataTotalSize = 65536
 )
 
-// validateMetadata checks metadata map against size limits.
+// ReservedMetadataKeys lists keys that the kernel observability bridge owns
+// exclusively. Producers writing these into Entry.Metadata is a programming
+// error: the typed Entry.Observability field is the canonical home for
+// trace/request/correlation identity, and Entry.Validate rejects entries
+// that try to forge them via the producer-owned Metadata namespace.
+//
+// The list is exhaustive — these are the only keys the kernel bridge maps
+// in either direction. Adding a new bridge field requires extending this
+// list (caught by reservedMetadataKeyMembership invariant test).
+var ReservedMetadataKeys = []string{
+	"trace_id",
+	"traceparent",
+	"trace_state",
+	"tracestate",
+	"span_id",
+	"request_id",
+	"correlation_id",
+}
+
+// reservedMetadataKeySet is the membership-test view of ReservedMetadataKeys.
+// Built once at package init; lookup is O(1).
+var reservedMetadataKeySet = func() map[string]struct{} {
+	s := make(map[string]struct{}, len(ReservedMetadataKeys))
+	for _, k := range ReservedMetadataKeys {
+		s[k] = struct{}{}
+	}
+	return s
+}()
+
+// validateMetadata checks metadata map against size limits and rejects any
+// keys claimed by the kernel observability bridge (ReservedMetadataKeys).
 // nil or empty metadata is valid (no checks needed).
 func validateMetadata(m map[string]string) error {
 	if len(m) == 0 {
@@ -62,6 +92,10 @@ func validateMetadata(m map[string]string) error {
 	}
 	var total int
 	for k, v := range m {
+		if _, reserved := reservedMetadataKeySet[k]; reserved {
+			return errcode.New(errcode.ErrValidationFailed,
+				fmt.Sprintf("outbox: metadata key %q is reserved for the observability bridge — use Entry.Observability instead", k))
+		}
 		if len(k) > MaxMetadataKeyLen {
 			return errcode.New(errcode.ErrValidationFailed,
 				fmt.Sprintf("outbox: metadata key length %d exceeds max %d (key=%q)", len(k), MaxMetadataKeyLen, truncate(k, 64)))
@@ -102,17 +136,28 @@ type Entry struct {
 	Topic         string // broker routing key; falls back to EventType if empty
 	Payload       []byte
 	CreatedAt     time.Time
-	// Metadata carries optional message metadata (ref: Watermill Message.Metadata).
-	//
-	// Reserved observability keys:
-	//   - trace_id
-	//   - request_id
-	//   - correlation_id
-	//
-	// Writer-side bridges may fill missing reserved keys from context before
-	// persistence. Consumer-side middleware may restore those keys back into
-	// handler context. Explicit non-empty metadata values win over bridge values.
+	// Metadata carries optional business metadata (ref: Watermill Message.Metadata).
+	// Producers may freely read and write this map for domain-specific key-value
+	// pairs. Observability IDs (trace_id, request_id, etc.) must NOT be written
+	// here — use the typed Observability field instead.
 	Metadata map[string]string
+
+	// Observability carries cross-async tracing context managed exclusively by
+	// the gocell observability bridge. Producers MUST NOT populate this field
+	// directly — (e *Entry).InjectObservabilityFromContext fills it from the
+	// originating request context at write time. SubscriberWithMiddleware
+	// (the canonical consumer wrapper) restores it into the handler context
+	// before any user middleware as an OUTERMOST built-in step — there is no
+	// separate middleware to install or to forget.
+	//
+	// The typed field prevents producers from forging observability IDs via
+	// entry.Metadata["trace_id"] = "evil" — the two namespaces are now physically
+	// separate, and Entry.Validate rejects ReservedMetadataKeys to keep producers
+	// honest at write time.
+	//
+	// ref: OpenTelemetry SpanContext — typed carrier of trace identity, distinct
+	// from application attributes (Baggage).
+	Observability ObservabilityMetadata
 
 	// FailurePolicy controls how an Emitter handles publisher-side failures
 	// for this specific entry. Zero value (FailurePolicyDefault) falls
@@ -171,8 +216,10 @@ func (e Entry) RoutingTopic() string {
 }
 
 // Validate checks that required fields (ID, Topic or EventType, and Payload)
-// are present and metadata is within size limits. Writers SHOULD call Validate
-// before persisting. (F-OB-03, META-SIZE-01)
+// are present, that Metadata is within size limits and free of reserved
+// keys, and that Observability fields are well-formed. Writers MUST call
+// Validate before persisting (every Writer.Write impl threads through this).
+// (F-OB-03, META-SIZE-01, PR246-FU1 reserved-key invariant)
 func (e Entry) Validate() error {
 	if e.ID == "" {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing ID")
@@ -184,6 +231,9 @@ func (e Entry) Validate() error {
 		return errcode.New(errcode.ErrValidationFailed, "outbox: entry missing payload")
 	}
 	if err := validateMetadata(e.Metadata); err != nil {
+		return err
+	}
+	if err := e.Observability.Validate(); err != nil {
 		return err
 	}
 	return nil
@@ -591,7 +641,7 @@ type SubscriberInitializer interface {
 }
 
 // TopicHandlerMiddleware is kept for backward compatibility with existing code
-// that uses ObservabilityContextMiddleware and bootstrap wiring.
+// that uses bootstrap wiring.
 //
 // Deprecated: new code should use SubscriptionMiddleware (subscription.go)
 // which carries the full Subscription identity.
@@ -600,6 +650,17 @@ type TopicHandlerMiddleware func(topic string, next EntryHandler) EntryHandler
 // SubscriberWithMiddleware wraps a Subscriber so that every handler passed to
 // Subscribe is first wrapped by the SubscriptionMiddleware chain.
 // Middleware is applied in order: [0] is outermost, [len-1] is innermost.
+//
+// Observability context restoration (entry.Observability →
+// ctxkeys.Trace*/Request*/CorrelationID) is built into Subscribe as the
+// OUTERMOST wrapper — it always runs before any user middleware so the
+// rest of the chain sees a context populated with the originating
+// trace/request identity. There is no kill-switch: the producer-side
+// Entry.InjectObservabilityFromContext and the consumer-side restoration
+// here are paired invariants. If a caller intentionally needs raw delivery
+// without restore (rare, integration testing only), they construct
+// SubscriberWithMiddleware directly is not the right tool — they should
+// invoke Subscriber.Subscribe on the inner subscriber.
 type SubscriberWithMiddleware struct {
 	Inner      Subscriber
 	Middleware []SubscriptionMiddleware
@@ -618,14 +679,21 @@ func (s *SubscriberWithMiddleware) Ready(sub Subscription) <-chan struct{} {
 	return s.Inner.Ready(sub)
 }
 
-// Subscribe wraps the handler with the middleware chain, passing the full
-// Subscription to each middleware, then delegates to Inner.
+// Subscribe wraps the handler with the middleware chain (Subscription is
+// passed to each middleware), then delegates to Inner. Observability
+// context restoration is the OUTERMOST wrapper — entry.Observability is
+// applied to ctx before any user middleware sees it. Restoration is
+// idempotent (existing non-empty ctx values win) and zero-struct safe
+// (no fields set ⇒ no-op).
 func (s *SubscriberWithMiddleware) Subscribe(ctx context.Context, sub Subscription, handler EntryHandler) error {
 	wrapped := handler
 	for i := len(s.Middleware) - 1; i >= 0; i-- {
 		wrapped = s.Middleware[i](sub, wrapped)
 	}
-	return s.Inner.Subscribe(ctx, sub, wrapped)
+	withRestore := func(reqCtx context.Context, entry Entry) HandleResult {
+		return wrapped(entry.Observability.RestoreToContext(reqCtx), entry)
+	}
+	return s.Inner.Subscribe(ctx, sub, withRestore)
 }
 
 // InitializeSubscription implements SubscriberInitializer for backward
