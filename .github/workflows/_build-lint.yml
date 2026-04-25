@@ -140,6 +140,13 @@ jobs:
       # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
       # The main `gocell validate` step above already covers it.
 
+      # Compile-verify e2e package even when integration-test job is skipped.
+      # The e2e build tag gates runtime behaviour; this step ensures type/import
+      # correctness is always checked on the kernel shard (static_checks gate).
+      - name: Vet e2e package (compile verification)
+        if: matrix.static_checks
+        run: go vet -tags=e2e ./tests/e2e/...
+
       - name: Check layering — examples no internal imports
         if: matrix.static_checks
         run: |
@@ -224,7 +231,12 @@ jobs:
         # -coverpkg removed to match per-shard unit test profile semantics —
         # each run only reports coverage for the packages it tested, avoiding
         # per-file dilution in the merged Sonar view.
-        run: go test -tags=integration -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+        # tests/e2e/... is included here with -tags=integration,e2e so the e2e
+        # package is compiled and any infrastructure-conditional tests run.
+        # When docker compose is absent, require.Docker / require.PG / require.RMQ
+        # skip those tests automatically; the build tag ensures the package is at
+        # least compiled, catching type/import regressions in CI.
+        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/e2e/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
