@@ -103,7 +103,7 @@ func findCellFiles(root string) ([]string, error) {
 		}
 		if d.IsDir() {
 			switch d.Name() {
-			case "vendor", ".git", "slices", "internal":
+			case "vendor", "worktrees", "testdata", ".git", "slices", "internal":
 				return filepath.SkipDir
 			}
 			return nil

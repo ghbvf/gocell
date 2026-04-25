@@ -75,7 +75,8 @@ func collectTypeMethods(t *testing.T, root string) *typeMethodSet {
 		}
 		// Skip test files and vendor.
 		if d.IsDir() {
-			if d.Name() == "vendor" || d.Name() == "testdata" {
+			switch d.Name() {
+			case "vendor", "worktrees", "testdata", "generated":
 				return filepath.SkipDir
 			}
 			return nil

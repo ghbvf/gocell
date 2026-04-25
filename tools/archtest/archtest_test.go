@@ -3,16 +3,16 @@ package archtest
 import (
 	"bufio"
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
 )
 
 // readModulePath parses go.mod to extract the module path (e.g. "github.com/ghbvf/gocell").
@@ -243,27 +243,35 @@ func findModuleRoot(t *testing.T) string {
 	}
 }
 
-// loadPackages runs `go list -json -e ./...` and parses the concatenated JSON output.
-// The -e flag tolerates packages with errors (e.g. Go's internal/ visibility rejection),
-// so LAYER-05 violations can be surfaced as rule-specific failures instead of a generic
-// command failure that masks other violations.
+// loadPackages loads all packages under root using golang.org/x/tools/go/packages.
+// The -tags=integration build flag is applied so that integration-tagged files
+// participate in the layering analysis. Errors in individual packages (e.g. Go's
+// internal/ visibility rejection) are tolerated: packages with errors are still
+// included so LAYER-05 violations surface as rule-specific failures rather than
+// a generic command failure that masks other violations.
 func loadPackages(t *testing.T, root string) []pkgInfo {
 	t.Helper()
-	cmd := exec.Command("go", "list", "-json", "-e", "./...")
-	cmd.Dir = root
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	out, err := cmd.Output()
-	require.NoError(t, err, "go list -json -e ./... failed: %s", stderr.String())
-
-	var pkgs []pkgInfo
-	dec := json.NewDecoder(bytes.NewReader(out))
-	for dec.More() {
-		var p pkgInfo
-		require.NoError(t, dec.Decode(&p))
-		pkgs = append(pkgs, p)
+	cfg := &packages.Config{
+		Mode:       packages.NeedName | packages.NeedImports,
+		Dir:        root,
+		BuildFlags: []string{"-tags=integration"},
 	}
-	return pkgs
+	pkgs, err := packages.Load(cfg, "./...")
+	require.NoError(t, err, "packages.Load failed")
+
+	var out []pkgInfo
+	for _, p := range pkgs {
+		imports := make([]string, 0, len(p.Imports))
+		for path := range p.Imports {
+			imports = append(imports, path)
+		}
+		sort.Strings(imports)
+		out = append(out, pkgInfo{
+			ImportPath: p.PkgPath,
+			Imports:    imports,
+		})
+	}
+	return out
 }
 
 // --- integration test (real go list data) ---
