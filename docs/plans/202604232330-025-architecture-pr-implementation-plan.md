@@ -595,7 +595,7 @@
 
 **搭车理由**：
 - `RunnerOrNoop`（PR-A5a 落地）是 tx 维度的 Cell 边界收口；本 PR 是 outbox 维度的对称推广——让 service 层只依赖 `persistence.TxRunner` + `outbox.Emitter` 两个稳定抽象
-- envelope 下沉 kernel 与 PR-A19 AL-01（relay → runtime）正交：契约属 kernel，运行时属 runtime，分层更清晰
+- envelope 下沉 kernel 与 ~~PR-A19~~ ✅ PR#177 AL-01（relay → runtime）正交：契约属 kernel，运行时属 runtime，分层更清晰
 - 三 cell 同批迁移避免 configcore/auditcore 各自开 PR 时重复讨论同一抽象
 
 **ADR 前置**（开工前必须通过）：
@@ -790,27 +790,46 @@
 
 ## Wave 4 — P3 长期架构演进（~2-3 周）
 
-### PR-A19 AL-01 Outbox Relay → runtime（~1-1.5d）
+### ~~PR-A19 AL-01 Outbox Relay → runtime~~ ✅ PR#177（S30 搭车）
 
-**主线**：
-- **AL-01 OUTBOX-RELAY-RUNTIME-MIGRATE-01** `adapters/postgres/outbox_relay.go` 轮询调度 → `runtime/outbox/relay.go`；Adapter 仅留 Store API
-
-**搭车**：无（纯分层重整，独立）
-
-**文件面**：`adapters/postgres/outbox_relay.go` + `runtime/outbox/`（新）
-
-**风险**：中；依赖注入链会变，需 integration test。
+**已完工（commit 4cee1f19，S30 搭车）**：AL-01 OUTBOX-RELAY-RUNTIME-MIGRATE-01 已在 PR#177 落地。`adapters/postgres/outbox_relay.go` 已删除，轮询调度循环整体迁移至 `runtime/outbox/relay.go`，relay 生命周期由 runtime 层管理；Adapter 侧仅保留 Store API（SQL 存取原语），分层边界完全收口。无遗留工作项。
 
 ---
 
-### PR-A20 AL-02 DistLock → runtime 抽象（~1d）
+### PR-A20 AL-02 DistLock → runtime 抽象（~2d）🔨 in flight (refactor/531)
 
 **主线**：
-- **AL-02 DISTLOCK-RUNTIME-ABSTRACT-01** 续期 goroutine + TTL 刷新 → 通用 DistLock 接口；Redis 仅留 NX/Eval 原语
+- **AL-02 DISTLOCK-RUNTIME-ABSTRACT-01** 上下文驱动锁生命周期重设计——破坏性 API 变更，但零生产 caller，迁移成本为零
+
+**新设计要点**：
+- **Lock-as-Context**：`Acquire` 返回 `(context.Context, func(), error)`，镜像 `context.WithCancelCause`——锁到期时 ctx 自动取消，调用方通过 `ctx.Err()` 感知
+- **单共享 manager goroutine + min-heap**：替代旧方案的每锁一 goroutine；heap 按续期截止时间排序，单 goroutine 驱动全部续期调度，大幅降低 goroutine 数量
+- **Driver 三原语**：`SetNX(ctx, key, token, ttl) error` / `Renew(ctx, key, token, ttl) error` / `Release(ctx, key, token) error`；不暴露 Lua/Eval 抽象，语义原语化
+- **时间纪律**：禁止字面量 `sleep`/`timer`/`time.Floor`，全部走注入式 `Clock` 接口，测试可完全控制时钟
 
 **搭车**：无
 
-**文件面**：`adapters/redis/distlock.go` + `runtime/distlock/`（新）
+**文件面**：
+- `runtime/distlock/driver.go`（Driver 接口 + 三原语）
+- `runtime/distlock/manager.go`（单共享 manager goroutine + min-heap）
+- `runtime/distlock/locker.go`（Locker + Lock-as-Context Acquire 实现）
+- `runtime/distlock/options.go`（TTL / drift / retry 配置）
+- `runtime/distlock/clock.go`（Clock 接口 + realClock 实现）
+- `runtime/distlock/token.go`（随机 token 生成）
+- `runtime/distlock/errors.go`（ErrLockNotHeld / ErrLockLost 等）
+- `runtime/distlock/doc.go`（包级 godoc）
+- `runtime/distlock/locktest/fake_driver.go`（FakeDriver 测试后端）
+- `runtime/distlock/locktest/fake_clock.go`（FakeClock 可注入时钟）
+- `runtime/distlock/locktest/conformance.go`（Driver 契约一致性测试套件）
+- `adapters/redis/distlock.go`（重写为 RedisDriver，实现 Driver 三原语）
+
+**风险**：高（破坏性 API 变更；但当前零生产 caller，迁移成本零）
+
+**对标**：
+- `ref: kubernetes/client-go tools/leaderelection/resourcelock/interface.go` — runtime / adapter 拆分（storage primitives only on adapter, lifecycle on runtime）
+- `ref: golang stdlib context.WithCancelCause` — Lock-as-Context API 形态
+- `ref: go-redsync/redsync redsync.go driftFactor=0.01` — 时钟偏差容忍（drift factor）
+- `ref: PR#177 (S30) 镜像拆分` — adapter 只暴露 Store/Driver 原语，runtime 管理生命周期，与 AL-01 同一拆分模式
 
 ---
 
@@ -926,8 +945,8 @@ Wave 3：
   PR-A36 HTTP-METRICS-LABEL-REALIGN（🟠 多 cell assembly 前触发）
 
 Wave 4 (v1.1+)：
-  PR-A19 AL-01 Outbox → runtime
-  PR-A20 AL-02 DistLock → runtime
+  ~~PR-A19 AL-01 Outbox → runtime~~ ✅ PR#177 (S30 搭车)
+  PR-A20 AL-02 DistLock → runtime 🔨 in flight (refactor/531)
   PR-A21 AL-04 Auth JWT 评估
   PR-A22 Cell ISP 拆分
   PR-A23 ER-ARCH-01 Subscriber Setup/Run
@@ -984,7 +1003,7 @@ Wave 4 (v1.1+)：
 
 **Week 6-8**（Wave 3，可与问题/功能层并行，~8-9d 净）：PR-A14b INTERNAL-LISTENER-FULL → PR-A32 SELECTOR-CLOSURE → PR-A15 webhook → PR-A16 reconcile → PR-A17 scheduler → PR-A18
 
-**v1.1+**（Wave 4，~10d 净）：长期债 PR-A19 ~ PR-A24 + PR-A33 refresh polish，按季度排
+**v1.1+**（Wave 4，~10d 净）：长期债 ~~PR-A19~~ ✅ PR#177 / PR-A20 ~ PR-A24 + PR-A33 refresh polish，按季度排
 
 ---
 
@@ -1050,7 +1069,7 @@ Wave 4 (v1.1+)：
 | Lane | 任务链 |
 |---|---|
 | Governance / Contract | PR-A1 ✅ → PR-A13 ✅ → PR-A9 ✅ → PR-A11 🔨（PR #246 open） → PR-A10 → PR-A24 |
-| Outbox / Event | PR #224 ✅ → PR-A5c ✅（主线 PR #224 + 全量收口 PR #245：F2/F3+F7/F4/F5/F6 六批 Cell Option 去原生 publisher/writer） → PR-A6 🟡（主线已入 PR#224；S4/S41 残余） → PR-A19 → PR-A23 |
+| Outbox / Event | PR #224 ✅ → PR-A5c ✅（主线 PR #224 + 全量收口 PR #245：F2/F3+F7/F4/F5/F6 六批 Cell Option 去原生 publisher/writer） → PR-A6 🟡（主线已入 PR#224；S4/S41 残余） → ~~PR-A19~~ ✅ PR#177 → PR-A23 |
 | Entry / Bootstrap | PR-A3 ✅ → PR-A14a ✅ → PR-A25 ✅（PR #244：S-nonce + S32） → PR-A14b → ~~PR-A32~~（已吸收进 PR-A14a） |
 | Health / Base Runtime | PR-A4 ✅（并入 Entry / Bootstrap lane） |
 | Access / Auth | PR-A5a ✅ → PR-A7 ✅ → PR-A26 ✅（PR #247：setup slice + adminprovision） → PR-A29 🔴 下一批 → PR-A31 → PR-A30 → PR-A33 |
@@ -1061,7 +1080,7 @@ Wave 4 (v1.1+)：
 1. **PR-A3 永远放在 PR #224 后面处理**，作为 stacked / rebased 分支合入。
 2. **PR-A5a / PR-A5b 只能做 stacked，不开 sibling PR。**
 3. **PR-A27 不复用旧分支**；等 PR-A5b 后重起。
-4. **PR-A6 / PR-A5c / PR-A19 / PR-A23 共用 outbox/event 热区，一次只开一个主 PR。**
+4. **PR-A6 / PR-A5c / ~~PR-A19~~ ✅ PR#177 / PR-A23 共用 outbox/event 热区，一次只开一个主 PR。**
 5. **PR-A14a / PR-A25 / PR-A14b / PR-A32 共用 bootstrap/cmd 热区，一次只开一个主 PR。**
 6. **PR-A29 开始后，auth lane 的其它改动必须围着 PR-A29 排。**
 
@@ -1075,7 +1094,7 @@ Wave 4 (v1.1+)：
 - PR-A14a
 - PR-A14b
 - PR-A15
-- PR-A19
+- ~~PR-A19~~ ✅ PR#177
 - PR-A22
 - PR-A23
 - PR-A24

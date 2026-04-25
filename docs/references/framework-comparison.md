@@ -111,6 +111,29 @@ secondary: micro/go-micro          → 多 Store/Broker/Registry 后端
 goal:      First-class（PG/Redis/OIDC）+ Family（RabbitMQ/WebSocket）+ Optional 三层
 ```
 
+### runtime/distlock/ — 分布式锁运行时
+
+```
+primary:   kubernetes/client-go    → tools/leaderelection/resourcelock/interface.go
+           runtime / adapter 拆分：storage primitives（SetNX/Renew/Release）仅在 adapter，
+           锁生命周期（续期调度、ctx 取消传播）由 runtime 层管理
+
+secondary: go-redsync/redsync      → redis/redis.go（Driver 接口形态；NX/Eval 三原语）
+           go-redsync/redsync      → redsync.go（driftFactor=0.01 时钟偏差容忍）
+
+influence: golang stdlib context   → context.WithCancelCause（Lock-as-Context API 形态；
+           Acquire 返回 (context.Context, func(), error)，锁到期时 ctx 自动取消）
+
+deviations:
+  - per-lock goroutine → 单共享 manager goroutine + min-heap（续期截止时间排序）
+  - Lock interface（Lost/Key/Release(ctx)）→ (context.Context, func()) 二元组
+  - 通用 Lua/Eval → 三语义原语 SetNX/Renew/Release（不暴露脚本层）
+  - 注入式 Clock 接口（禁字面量 sleep/timer），测试可完全控制时钟
+
+ref PR: PR-A20（AL-02 DISTLOCK-RUNTIME-ABSTRACT-01，refactor/531）；
+        镜像 PR#177 (S30) AL-01 的 adapter-only-store 拆分模式
+```
+
 ## Go 标准库参考（问题修复用）
 
 | 领域 | 标准库参考 | 关注点 |
