@@ -79,8 +79,8 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), cell.Policy{}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), cell.Policy{}, WithListenerNet(internalLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -183,8 +183,8 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), cell.Policy{}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), cell.Policy{}, WithListenerNet(internalLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -242,8 +242,8 @@ func TestDualListener_EqualAddrsBindFails(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), cell.Policy{}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, collidingAddr, cell.Policy{}), // collides with primary
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, collidingAddr, nil), // collides with primary
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -260,8 +260,8 @@ func TestDualListener_Phase0RejectsEmptyAddr(t *testing.T) {
 		name string
 		opts []Option
 	}{
-		{"empty_primary", []Option{WithListener(cell.PrimaryListener, "", cell.Policy{})}},
-		{"empty_internal", []Option{WithListener(cell.InternalListener, "", cell.Policy{})}},
+		{"empty_primary", []Option{WithListener(cell.PrimaryListener, "", nil)}},
+		{"empty_internal", []Option{WithListener(cell.InternalListener, "", nil)}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -299,8 +299,8 @@ func TestDualListener_InternalBindFailure_ClosesOwnedPrimary(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, callerLn.Addr().String(), cell.Policy{}, WithListenerNet(callerLn)),
-		WithListener(cell.InternalListener, collidingAddr, cell.Policy{}), // guaranteed to collide
+		WithListener(cell.PrimaryListener, callerLn.Addr().String(), nil, WithListenerNet(callerLn)),
+		WithListener(cell.InternalListener, collidingAddr, nil), // guaranteed to collide
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -345,8 +345,8 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), cell.Policy{}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), cell.Policy{}, WithListenerNet(internalLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -406,9 +406,9 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), cell.Policy{}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), cell.Policy{}, WithListenerNet(internalLn)),
-		WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, WithListenerNet(healthLn)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
+		WithListener(cell.HealthListener, healthLn.Addr().String(), nil, WithListenerNet(healthLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -461,10 +461,10 @@ func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		// Primary and internal: bootstrap-owned sockets on :0 → will succeed.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil),
 		// Health: colliding address → EADDRINUSE.
-		WithListener(cell.HealthListener, collidingAddr, cell.Policy{}),
+		WithListener(cell.HealthListener, collidingAddr, nil),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -501,9 +501,9 @@ func TestDualListener_BootstrapOwnedPrimary_InternalBindFails(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		// Primary: bootstrap-owned socket (no WithListenerNet); will bind :0 → success.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		// Internal: same colliding address → EADDRINUSE.
-		WithListener(cell.InternalListener, collidingAddr, cell.Policy{}),
+		WithListener(cell.InternalListener, collidingAddr, nil),
 		WithShutdownTimeout(2*time.Second),
 	)
 

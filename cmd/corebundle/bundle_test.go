@@ -41,25 +41,25 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 }
 
 // ---------------------------------------------------------------------------
-// buildInternalPolicy coverage
+// buildInternalAuthChain coverage
 // ---------------------------------------------------------------------------
 
-// TestBuildInternalPolicy_NilGuard_ReturnsPolicyNone verifies the nil-guard
-// branch of buildInternalPolicy (dev mode where no service secret is set).
-// PolicyNone has Name "none"; any non-empty Name indicates authentication.
-func TestBuildInternalPolicy_NilGuard_ReturnsPolicyNone(t *testing.T) {
-	p := buildInternalPolicy(nil)
-	// PolicyNone returns Name "none" — no authentication middleware is added.
-	assert.Equal(t, "none", p.Name, "nil guard must produce PolicyNone (Name==\"none\")")
+// TestBuildInternalAuthChain_NilGuard_ReturnsNil verifies the nil-guard
+// branch of buildInternalAuthChain (dev mode where no service secret is set).
+// A nil chain means no authentication middleware on the internal listener.
+func TestBuildInternalAuthChain_NilGuard_ReturnsNil(t *testing.T) {
+	chain := buildInternalAuthChain(nil)
+	assert.Nil(t, chain, "nil guard must produce a nil auth chain (no auth middleware)")
 }
 
-// TestBuildInternalPolicy_NonNilGuard_ReturnsPolicyServiceToken verifies that
-// a real guard produces the service-token policy (Name != "none").
-func TestBuildInternalPolicy_NonNilGuard_ReturnsPolicyServiceToken(t *testing.T) {
+// TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken verifies that
+// a real guard produces an AuthServiceToken plan in the chain.
+func TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken(t *testing.T) {
 	guard := newTestInternalGuard(t)
-	p := buildInternalPolicy(guard)
-	assert.NotEqual(t, "none", p.Name, "non-nil guard must produce a service-token policy")
-	assert.NotEqual(t, "", p.Name, "non-nil guard must produce a named policy (PolicyServiceToken)")
+	chain := buildInternalAuthChain(guard)
+	require.Len(t, chain, 1, "non-nil guard must produce a 1-plan chain")
+	_, ok := chain[0].(cell.AuthServiceToken)
+	assert.True(t, ok, "plan must be cell.AuthServiceToken; got %T", chain[0])
 }
 
 // ---------------------------------------------------------------------------
@@ -331,7 +331,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Li
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
 		primaryLn.Addr().String(),
-		bootstrap.PolicyJWTFromAssembly(asm),
+		[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)},
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)
@@ -499,8 +499,8 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), nil, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -551,8 +551,8 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), nil, bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithManagedResource(fakePG),
 	)
 	require.NoError(t, err)
@@ -587,8 +587,8 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), nil, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())

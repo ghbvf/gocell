@@ -6,14 +6,12 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
-	"net/http"
 	"testing"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/health"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -43,7 +41,7 @@ func buildPhase5State(t *testing.T) *phaseState {
 // real router map to iterate.
 func buildRouter(t *testing.T, ref cell.ListenerRef) *router.Router {
 	t.Helper()
-	r, err := router.NewForListener(ref, cell.Policy{})
+	r, err := router.NewForListener(ref)
 	require.NoError(t, err)
 	return r
 }
@@ -89,7 +87,7 @@ func TestPhase5CollectRouteGroups_HealthListenerPresent_PreservesHealthListener(
 // --- phase0ValidateOptions tests ---
 
 func TestPhase0_AcceptsValidOptions(t *testing.T) {
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
 	require.NoError(t, b.phase0ValidateOptions())
 }
 
@@ -118,53 +116,59 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 
 // TestPhase0_RejectsMutuallyExclusiveAuthOptions was removed in F3 round-3:
 // WithAuthMiddleware and the standalone PolicyJWTFromAssembly Option are gone,
-// so phase0 has nothing to reject. JWT auth flows through cell.Policy on the
-// listener exclusively.
+// so phase0 has nothing to reject. JWT auth flows through []cell.ListenerAuth
+// authChain passed to WithListener.
 
-// Round-3 finding #10: PolicyJWTFromAssembly must capture the same assembly
+// Round-3 finding #10: AuthJWTFromAssembly must capture the same assembly
 // instance as WithAssembly. A mismatch would silently discover the verifier
-// in the policy's asm while the rest of Bootstrap runs against b.assembly.
-func TestPhase0_RejectsPolicyJWTFromAssemblyMismatch(t *testing.T) {
+// in the plan's asm while the rest of Bootstrap runs against b.assembly.
+func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: cell.DurabilityDemo})
 	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asmA),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", PolicyJWTFromAssembly(asmB)),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0",
+			[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asmB)}),
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "PolicyJWTFromAssembly received a different assembly")
+	assert.Contains(t, err.Error(), "AuthJWTFromAssembly carries assembly")
+	assert.Contains(t, err.Error(), "asm-a")
+	assert.Contains(t, err.Error(), "asm-b")
 }
 
-func TestPhase0_AcceptsPolicyJWTFromAssemblyMatch(t *testing.T) {
+func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "asm-match", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", PolicyJWTFromAssembly(asm)),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0",
+			[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
 
-// Round-3 finding #11: PolicyMTLS without WithListenerTLS configuring
+// Round-3 finding #11: AuthMTLS without WithListenerTLS configuring
 // ClientAuth + ClientCAs is a programmer error — the handshake-layer chain
 // check would not run. Bootstrap.phase0 must reject the listener config.
-func TestPhase0_RejectsPolicyMTLSWithoutTLS(t *testing.T) {
+func TestPhase0_RejectsAuthMTLSWithoutTLS(t *testing.T) {
 	b := New(
-		WithListener(cell.InternalListener, "127.0.0.1:0", PolicyMTLS()),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]cell.ListenerAuth{cell.AuthMTLS{}}),
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "PolicyMTLS without WithListenerTLS")
+	assert.Contains(t, err.Error(), "AuthMTLS without WithListenerTLS")
 }
 
-func TestPhase0_RejectsPolicyMTLSWithLooseClientAuth(t *testing.T) {
+func TestPhase0_RejectsAuthMTLSWithLooseClientAuth(t *testing.T) {
 	pool := x509.NewCertPool()
 	cfg := &tls.Config{
 		ClientAuth: tls.RequestClientCert, // < VerifyClientCertIfGiven
 		ClientCAs:  pool,
 	}
 	b := New(
-		WithListener(cell.InternalListener, "127.0.0.1:0", PolicyMTLS(),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]cell.ListenerAuth{cell.AuthMTLS{}},
 			WithListenerTLS(cfg)),
 	)
 	err := b.phase0ValidateOptions()
@@ -172,13 +176,14 @@ func TestPhase0_RejectsPolicyMTLSWithLooseClientAuth(t *testing.T) {
 	assert.Contains(t, err.Error(), "ClientAuth")
 }
 
-func TestPhase0_RejectsPolicyMTLSWithoutClientCAs(t *testing.T) {
+func TestPhase0_RejectsAuthMTLSWithoutClientCAs(t *testing.T) {
 	cfg := &tls.Config{
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		// ClientCAs: nil — handshake has no CA pool to validate against
 	}
 	b := New(
-		WithListener(cell.InternalListener, "127.0.0.1:0", PolicyMTLS(),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]cell.ListenerAuth{cell.AuthMTLS{}},
 			WithListenerTLS(cfg)),
 	)
 	err := b.phase0ValidateOptions()
@@ -186,159 +191,83 @@ func TestPhase0_RejectsPolicyMTLSWithoutClientCAs(t *testing.T) {
 	assert.Contains(t, err.Error(), "ClientCAs is nil")
 }
 
-func TestPhase0_AcceptsPolicyMTLSWithProperTLS(t *testing.T) {
+func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
 	pool := x509.NewCertPool()
 	cfg := &tls.Config{
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		ClientCAs:  pool,
 	}
 	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.InternalListener, "127.0.0.1:0", PolicyMTLS(),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]cell.ListenerAuth{cell.AuthMTLS{}},
 			WithListenerTLS(cfg)),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
 
-func TestIsAuthFlavoredPolicy_RejectsJWTInsidePolicyStack(t *testing.T) {
+func TestChainProtectsRoutes(t *testing.T) {
+	stubVerifier := &stubIntentTokenVerifier{}
 	tests := []struct {
-		name string
-		p    cell.Policy
-		want bool
+		name  string
+		chain []cell.ListenerAuth
+		want  bool
 	}{
 		{
-			name: "direct_jwt_supported",
-			p:    cell.Policy{Name: "jwt"},
-			want: true,
+			name:  "nil_chain_not_protected",
+			chain: nil,
+			want:  false,
 		},
 		{
-			name: "jwt_stack_not_supported",
-			p:    cell.Policy{Name: "stack[jwt, verbose-token]"},
-			want: false,
+			name:  "empty_chain_not_protected",
+			chain: []cell.ListenerAuth{},
+			want:  false,
 		},
 		{
-			name: "mtls_stack_supported",
-			p:    cell.Policy{Name: "stack[mtls, verbose-token]"},
-			want: true,
+			name:  "auth_none_not_protected",
+			chain: []cell.ListenerAuth{cell.AuthNone{}},
+			want:  false,
 		},
 		{
-			name: "service_token_stack_supported",
-			p:    cell.Policy{Name: "stack[service-token, verbose-token]"},
-			want: true,
+			name:  "auth_jwt_protected",
+			chain: []cell.ListenerAuth{cell.NewAuthJWT(stubVerifier)},
+			want:  true,
+		},
+		{
+			name:  "auth_mtls_protected",
+			chain: []cell.ListenerAuth{cell.AuthMTLS{}},
+			want:  true,
+		},
+		{
+			name:  "auth_service_token_protected",
+			chain: []cell.ListenerAuth{cell.NewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			want:  true,
+		},
+		{
+			// AuthNone before a protective plan must not short-circuit to false.
+			name:  "mixed_none_then_mtls_protected",
+			chain: []cell.ListenerAuth{cell.AuthNone{}, cell.AuthMTLS{}},
+			want:  true,
+		},
+		{
+			// Multi-protective chain (mTLS outer + HMAC inner) is the
+			// canonical InternalListener configuration.
+			name:  "mixed_mtls_plus_service_token_protected",
+			chain: []cell.ListenerAuth{cell.AuthMTLS{}, cell.NewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			want:  true,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, isAuthFlavoredPolicy(tc.p))
+			assert.Equal(t, tc.want, chainProtectsRoutes(tc.chain))
 		})
 	}
 }
 
-type mtlsRouteGroupPolicyCell struct {
-	*cell.BaseCell
-	policy cell.Policy
-}
-
-func newMTLSRouteGroupPolicyCell(id string, policy cell.Policy) *mtlsRouteGroupPolicyCell {
-	return &mtlsRouteGroupPolicyCell{
-		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: id, Type: cell.CellTypeCore}),
-		policy:   policy,
-	}
-}
-
-func (c *mtlsRouteGroupPolicyCell) RouteGroups() []cell.RouteGroup {
-	return []cell.RouteGroup{{
-		Listener: cell.InternalListener,
-		Prefix:   "",
-		Policy:   c.policy,
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{
-				Contract:  testHTTPContract(http.MethodPost, "/internal/v1/mtls/ping"),
-				Handler:   http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
-				Delegated: true,
-			})
-		},
-	}}
-}
-
-func buildPhase5MTLSRouteGroupBootstrap(t *testing.T, tlsCfg *tls.Config) (*Bootstrap, *phaseState) {
-	t.Helper()
-
-	asm := assembly.New(assembly.Config{ID: "phase5-mtls-routegroup", DurabilityMode: cell.DurabilityDemo})
-	require.NoError(t, asm.Register(newMTLSRouteGroupPolicyCell("mtls-routegroup-cell", PolicyMTLS())))
-	require.NoError(t, asm.Start(context.Background()))
-	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
-
-	_, s := newPhaseState()
-	s.asm = asm
-
-	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerTLS(tlsCfg)),
-	)
-	return b, s
-}
-
-func TestPhase5_RejectsRouteGroupPolicyMTLSWithInvalidTLS(t *testing.T) {
-	pool := x509.NewCertPool()
-	tests := []struct {
-		name         string
-		tlsCfg       *tls.Config
-		wantContains string
-	}{
-		{
-			name:         "without_tls",
-			tlsCfg:       nil,
-			wantContains: "without WithListenerTLS",
-		},
-		{
-			name: "request_client_cert",
-			tlsCfg: &tls.Config{
-				ClientAuth: tls.RequestClientCert,
-				ClientCAs:  pool,
-			},
-			wantContains: "ClientAuth",
-		},
-		{
-			name: "require_any_client_cert",
-			tlsCfg: &tls.Config{
-				ClientAuth: tls.RequireAnyClientCert, // cert is required but not verified
-				ClientCAs:  pool,
-			},
-			wantContains: "ClientAuth",
-		},
-		{
-			name: "without_client_cas",
-			tlsCfg: &tls.Config{
-				ClientAuth: tls.RequireAndVerifyClientCert,
-			},
-			wantContains: "ClientCAs is nil",
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			b, s := buildPhase5MTLSRouteGroupBootstrap(t, tc.tlsCfg)
-
-			err := b.phase5BuildRouters(s)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), "RouteGroup")
-			assert.Contains(t, err.Error(), "PolicyMTLS")
-			assert.Contains(t, err.Error(), tc.wantContains)
-		})
-	}
-}
-
-func TestPhase5_AcceptsRouteGroupPolicyMTLSWithProperTLS(t *testing.T) {
-	pool := x509.NewCertPool()
-	b, s := buildPhase5MTLSRouteGroupBootstrap(t, &tls.Config{
-		ClientAuth: tls.RequireAndVerifyClientCert,
-		ClientCAs:  pool,
-	})
-
-	require.NoError(t, b.phase5BuildRouters(s))
-}
+// PR269 round-3: TestPhase5_*RouteGroupPolicyMTLS* tests removed along with
+// cell.RouteGroup.Auth — RouteGroup-level mTLS no longer exists. Listener-level
+// AuthMTLS validation is covered by auth_plan_validate_test.go.
 
 // TestPhase0_ValidatesInternalMiddleware was removed in PR-A14b because
 // WithInternalMiddleware and the internalMiddlewares field are deleted.
@@ -1004,3 +933,32 @@ func TestBootstrapTeardown_LIFOOrder(t *testing.T) {
 
 	assert.Equal(t, []int{2, 1, 0}, order, "teardowns must run in LIFO order")
 }
+
+// ---------------------------------------------------------------------------
+// Stub types for TestChainProtectsRoutes
+// ---------------------------------------------------------------------------
+
+type stubIntentTokenVerifier struct{}
+
+func (s *stubIntentTokenVerifier) VerifyIntent(_ context.Context, _ string, _ cell.TokenIntent) (cell.Claims, error) {
+	return cell.Claims{}, nil
+}
+
+type stubNonceStore struct{}
+
+func (s *stubNonceStore) CheckAndMark(_ context.Context, _ string) error {
+	return nil
+}
+
+func (s *stubNonceStore) Kind() cell.NonceStoreKind {
+	return cell.NonceStoreKindNoop
+}
+
+type stubHMACKeyring struct{}
+
+// Current/Secrets must return >= cell.MinHMACKeyBytes (32 bytes) — short keys
+// panic at NewAuthServiceToken construction (PR269 round-3 F5).
+func (s *stubHMACKeyring) Current() []byte {
+	return []byte("test-secret-32-bytes-padding----")
+}
+func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }

@@ -299,6 +299,29 @@ func TestServiceTokenMiddleware_NilRing(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+// shortKeyringStub returns a sub-MinHMACKeyBytes secret to exercise the
+// defense-in-depth strength check inside ServiceTokenMiddleware (PR269 round-3
+// F5). cell.NewAuthServiceToken would normally reject this at construction
+// time; this test bypasses that path by calling ServiceTokenMiddleware directly,
+// which is the threat model the wiring-time check defends against.
+type shortKeyringStub struct{}
+
+func (*shortKeyringStub) Current() []byte   { return []byte("short") } // 5 bytes
+func (*shortKeyringStub) Secrets() [][]byte { return [][]byte{(&shortKeyringStub{}).Current()} }
+
+func TestServiceTokenMiddleware_ShortKeyReturnsErrorMiddleware(t *testing.T) {
+	handler := ServiceTokenMiddleware(&shortKeyringStub{})(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("handler must not be reached when ring secret is below MinHMACKeyBytes")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/health", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code,
+		"sub-strength HMAC ring must yield 500 from the wiring-time guard")
+}
+
 func TestServiceTokenMiddleware_ExpiredTimestamp(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()

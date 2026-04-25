@@ -117,9 +117,9 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // via auth.Mount with Public:true inside cell RouteGroups bypass JWT
 // verification; FinalizeAuth compiles them into the router's auth predicates.
 //
-// In the new per-listener model this option is most commonly used for the
-// PrimaryListener router. InternalListener routers use PolicyServiceToken or
-// PolicyMTLS at the listener level, not this option.
+// In the per-listener model this option is most commonly used for the
+// PrimaryListener router. InternalListener routers use cell.NewAuthServiceToken
+// or cell.AuthMTLS{} at the listener level, not this option.
 //
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
@@ -224,12 +224,25 @@ func WithEarlyResponder(predicate func(*http.Request) bool, handler http.Handler
 // Intended for routers that intentionally serve auth-declared routes without
 // a JWT verifier — typically the HealthListener (whose framework probes use
 // auth.Mount with Public:true) and the InternalListener (which gates traffic
-// with mTLS or PolicyServiceToken instead of JWT). Without this opt-out the
+// with cell.AuthMTLS{} or cell.NewAuthServiceToken instead of JWT). Without this opt-out the
 // router emits a Warn at every production startup, drowning operators in
 // alert noise. R2-11.
 func WithSuppressNoAuthVerifierWarn() Option {
 	return func(r *Router) {
 		r.suppressNoVerifierWarn = true
+	}
+}
+
+// WithDefaultMiddleware appends middleware functions to the router's default
+// middleware chain. These are installed AFTER the early-responder layer and
+// BEFORE the per-router protections (rate-limiter, circuit-breaker, auth).
+//
+// Bootstrap uses this to install the listener-level auth middleware derived
+// from the ListenerAuth chain (e.g. mTLS peer-cert check, ServiceToken HMAC
+// guard). Multiple calls append in order.
+func WithDefaultMiddleware(mws ...func(http.Handler) http.Handler) Option {
+	return func(r *Router) {
+		r.defaultMiddleware = append(r.defaultMiddleware, mws...)
 	}
 }
 
@@ -246,7 +259,7 @@ func WithSuppressNoAuthVerifierWarn() Option {
 // ref: go-chi/chi mux.go — one chi.Mux root per listener
 type Router struct {
 	ref kcell.ListenerRef // which listener this router serves
-	mux *chi.Mux          // single chi.Mux root; observability + policy already applied
+	mux *chi.Mux          // single chi.Mux root; observability + auth already applied
 
 	// configuration fields (read during build)
 	metricsCollector    metrics.Collector
@@ -261,6 +274,11 @@ type Router struct {
 	securityHeadersOpts []middleware.SecurityHeadersOption
 	bodyLimit           int64
 	trustedProxies      []string
+	// defaultMiddleware are installed AFTER early-responders and BEFORE
+	// rate-limiter / circuit-breaker / auth. Bootstrap populates this by
+	// converting the listener's AuthPlan chain (mTLS, ServiceToken, etc.)
+	// via applyListenerAuthChain then passing them with WithDefaultMiddleware.
+	defaultMiddleware []func(http.Handler) http.Handler
 
 	// FinalizeAuth state
 	authPublicMatcher func(*http.Request) bool
@@ -340,23 +358,26 @@ func New(opts ...Option) *Router {
 // ref: gin-gonic/gin — SetTrustedProxies returns error at config time
 // ref: uber-go/fx — startup failures return error, trigger rollback
 func NewE(opts ...Option) (*Router, error) {
-	return NewForListener(kcell.ListenerRef{}, kcell.Policy{}, opts...)
+	return NewForListener(kcell.ListenerRef{}, opts...)
 }
 
-// NewForListener builds a Router for a specific listener. defaultPolicy is
-// applied to the mux root (via its middleware) after the observability chain
-// is installed but before any routes are registered. A zero-value Policy is
-// treated as PolicyNone (no policy middleware; observability only).
+// NewForListener builds a Router for a specific listener. Listener-level
+// authentication middleware (mTLS, ServiceToken, etc.) is injected by
+// Bootstrap via WithDefaultMiddleware(mws...) after applyListenerAuthChain
+// converts the ListenerAuth chain; there is no longer a separate defaultPolicy
+// parameter. JWT auth is wired via WithAuthMiddleware (a separate Option) so
+// the router-aware Public/PasswordResetExempt matchers are available.
 //
-// The observability chain is:
+// The middleware chain is:
 //
 //	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
-//	→ Recovery → SecurityHeaders → [policy middleware] → [RL/CB/Auth/BodyLimit] → handlers
+//	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
+//	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 //
 // ref: go-kratos/kratos app.go WithServer + errgroup (adopted)
 // ref: go-chi/chi mux.go (one chi.Mux per listener)
 // ref: kubernetes/kubernetes apiserver/server/genericapiserver.go (rejected single-listener)
-func NewForListener(ref kcell.ListenerRef, defaultPolicy kcell.Policy, opts ...Option) (*Router, error) {
+func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 	r := &Router{
 		ref:       ref,
 		mux:       chi.NewRouter(),
@@ -377,7 +398,7 @@ func NewForListener(ref kcell.ListenerRef, defaultPolicy kcell.Policy, opts ...O
 		return nil, err
 	}
 
-	r.buildMux(realIPMW, defaultPolicy)
+	r.buildMux(realIPMW)
 	return r, nil
 }
 
@@ -410,15 +431,16 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 }
 
 // buildMux wires the full middleware chain onto r.mux. Observability is baked
-// in first; then the policy (if any) is applied; then the protection chain
-// (RL/CB/Auth/BodyLimit) wraps the handlers.
+// in first; then defaultMiddleware (from WithDefaultMiddleware, e.g. mTLS /
+// ServiceToken guards derived from the ListenerAuth chain) is applied; then
+// the protection chain (RL/CB/Auth/BodyLimit) wraps the handlers.
 //
 // Chain order (outer to inner):
 //
 //	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
-//	→ Recovery → SecurityHeaders → [policy] → [RateLimit] → [CircuitBreaker]
-//	→ [Auth] → BodyLimit → handlers
-func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler, defaultPolicy kcell.Policy) {
+//	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
+//	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
+func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) {
 	// Lazy public predicate so Tracing/RequestID honour public routes declared
 	// later via auth.Mount / FinalizeAuth.
 	lazyPublic := func(req *http.Request) bool {
@@ -465,11 +487,13 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler, defaultPolic
 		r.mux.Use(earlyResponderMiddleware(er))
 	}
 
-	// --- Policy layer (listener-default policy) ---
-	// Apply the policy middleware AFTER observability so all requests are
-	// observable regardless of whether they pass the policy gate.
-	if !defaultPolicy.IsZero() {
-		applyPolicyToMux(defaultPolicy, r.mux)
+	// --- Default middleware layer (listener-level auth guards from AuthPlan chain) ---
+	// Bootstrap populates r.defaultMiddleware via WithDefaultMiddleware after
+	// converting the ListenerAuth chain (mTLS, ServiceToken, etc.) through
+	// applyListenerAuthChain. Applied AFTER early-responders so framework
+	// isolation contracts fire before the auth gate.
+	if len(r.defaultMiddleware) > 0 {
+		r.mux.Use(r.defaultMiddleware...)
 	}
 
 	// --- Protection chain (per-router options) ---
@@ -483,17 +507,6 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler, defaultPolic
 		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
-}
-
-// applyPolicyToMux installs the policy's middleware on mux. If p.Middleware is
-// nil (PolicyNone / zero Policy) the function is a no-op.
-//
-// B1 simplification: cell.Policy is now a value struct, not an interface, so
-// no type-assertion is needed — middleware is accessed directly.
-func applyPolicyToMux(p kcell.Policy, mux *chi.Mux) {
-	if p.Middleware != nil {
-		mux.Use(p.Middleware)
-	}
 }
 
 // buildAuthOpts constructs the AuthOption slice for the auth middleware.
@@ -647,7 +660,7 @@ func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	if len(p.publicEntries) > 0 {
 		slog.Warn("router: Public:true routes declared on a listener with no JWT middleware; "+
 			"Public:true is a JWT exemption flag and has no effect without an auth verifier — "+
-			"use PolicyJWTFromAssembly(asm) or WithAuthMiddleware(verifier) to install JWT auth",
+			"use cell.NewAuthJWTFromAssembly(asm) as authChain in bootstrap.WithListener to install JWT auth",
 			slog.Int("public_routes", len(p.publicEntries)))
 	}
 }

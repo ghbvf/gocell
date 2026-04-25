@@ -2,12 +2,13 @@ package bootstrap
 
 // health.go — HealthRouteGroups factory for the PR-A14b per-listener model.
 //
-// /healthz, /readyz, and /metrics no longer live on the primary listener's
-// outer mux. They are registered as framework-owned RouteGroups on the
+// /healthz, /readyz, and /metrics live as framework-owned RouteGroups on the
 // HealthListener (with phase5 fall-back to PrimaryListener when no
 // HealthListener is declared — see docs/ops/listener-topology.md). Each
-// route lives in its own RouteGroup so callers can attach independent
-// per-route policies (typically PolicyVerboseToken on /readyz).
+// route inherits its listener's auth chain — there is no per-route auth
+// plan (PR269 round-3: auth scheme is a listener-scope concern; verbose-mode
+// disclosure on /readyz is a separate concern handled by the health handler
+// via WithReadyzVerboseToken).
 //
 // ref: go-kratos/kratos transport/http/server.go — infra endpoints on separate server.
 // ref: kubernetes/apiserver pkg/server/healthz — health endpoints isolated from API.
@@ -41,17 +42,14 @@ var (
 )
 
 // HealthRouteGroupOption customises the route groups returned by
-// HealthRouteGroups. Use WithMetricsHandler / WithReadyzPolicy / WithLivezPolicy
-// / WithMetricsPolicy.
+// HealthRouteGroups. Use WithMetricsHandler / WithReadyzVerboseToken /
+// WithReadyzVerboseDisabled.
 type HealthRouteGroupOption func(*healthRouteGroupCfg)
 
 type healthRouteGroupCfg struct {
 	metricsHandler  http.Handler
-	livezPolicy     cell.Policy
-	readyzPolicy    cell.Policy
-	metricsPolicy   cell.Policy
 	verboseDisabled bool   // PR-A35: when true, /readyz?verbose is answered with the plain aggregate body (no internal topology disclosed)
-	verboseToken    string // PR-A35 defense-in-depth: handler-level X-Readyz-Token strict gate (in addition to PolicyVerboseToken middleware)
+	verboseToken    string // handler-level X-Readyz-Token strict gate (PR-A35 + PR269 round-3: now the single source of verbose-token configuration)
 }
 
 // applyHealthRouteGroupOpts evaluates a slice of HealthRouteGroupOption against
@@ -79,35 +77,18 @@ func WithMetricsHandler(h http.Handler) HealthRouteGroupOption {
 	return func(c *healthRouteGroupCfg) { c.metricsHandler = h }
 }
 
-// WithLivezPolicy attaches a cell.Policy to the /healthz RouteGroup.
-// Zero value (cell.Policy{}) means inherit the listener default policy.
-func WithLivezPolicy(p cell.Policy) HealthRouteGroupOption {
-	return func(c *healthRouteGroupCfg) { c.livezPolicy = p }
-}
-
-// WithReadyzPolicy attaches a cell.Policy to the /readyz RouteGroup. The
-// canonical use is bootstrap.PolicyVerboseToken to gate ?verbose access with
-// a bearer token; any cell.Policy is accepted.
-// Zero value (cell.Policy{}) means inherit the listener default policy.
-func WithReadyzPolicy(p cell.Policy) HealthRouteGroupOption {
-	return func(c *healthRouteGroupCfg) { c.readyzPolicy = p }
-}
-
-// WithMetricsPolicy attaches a cell.Policy to the /metrics RouteGroup.
-// Zero value (cell.Policy{}) means inherit the listener default policy.
-func WithMetricsPolicy(p cell.Policy) HealthRouteGroupOption {
-	return func(c *healthRouteGroupCfg) { c.metricsPolicy = p }
-}
-
-// WithReadyzVerboseToken plumbs a verbose-token to the health.Handler's
-// strict-gate path (PR-A35 defense-in-depth). Set this alongside
-// WithReadyzPolicy(PolicyVerboseToken(..., token)) so that both layers see
-// the same secret: the policy middleware 401's at the route group, and the
-// handler 401's defensively if a future misconfiguration drops the policy.
+// WithReadyzVerboseToken plumbs a verbose-mode disclosure token to the
+// health.Handler's strict-gate path. Requests with ?verbose=true must carry a
+// matching X-Readyz-Token header; mismatches receive 401 ErrReadyzVerboseDenied
+// from health.Handler.SetVerboseToken / sendVerboseDenied (canonical envelope
+// via httputil.WritePublicError).
 //
-// Empty token leaves the handler-level gate disabled — verbose requests
-// then rely solely on the route-group PolicyVerboseToken (or render plain
-// body when no policy is wired and WithReadyzVerboseDisabled is set).
+// Note: verbose-token is a disclosure gate, not an authentication scheme — it
+// only controls whether the verbose body is rendered. Listener-level auth
+// (cell.NewAuthJWTFromAssembly, cell.NewAuthServiceToken, etc.) is orthogonal.
+//
+// Empty token leaves the gate disabled — verbose requests then render plain
+// body unless WithReadyzVerboseDisabled is set.
 func WithReadyzVerboseToken(token string) HealthRouteGroupOption {
 	return func(c *healthRouteGroupCfg) { c.verboseToken = token }
 }
@@ -127,9 +108,10 @@ func WithReadyzVerboseDisabled() HealthRouteGroupOption {
 }
 
 // HealthRouteGroups returns one RouteGroup per framework-owned health route
-// (/healthz, /readyz, optional /metrics) on the HealthListener. Each group
-// can carry its own Policy via the option helpers above; callers wanting a
-// verbose-token gate on /readyz attach PolicyVerboseToken via WithReadyzPolicy.
+// (/healthz, /readyz, optional /metrics) on the HealthListener. The HealthListener
+// is wired with no listener auth (cmd/corebundle pattern), so health probes are
+// reachable without a token; the verbose disclosure on /readyz is gated by
+// WithReadyzVerboseToken at the handler layer.
 //
 // A nil/zero metrics handler omits the /metrics route entirely.
 func HealthRouteGroups(h *health.Handler, opts ...HealthRouteGroupOption) []cell.RouteGroup {
@@ -137,11 +119,6 @@ func HealthRouteGroups(h *health.Handler, opts ...HealthRouteGroupOption) []cell
 	groups := []cell.RouteGroup{
 		{
 			Listener: cell.HealthListener,
-			Policy:   cfg.livezPolicy,
-			// auth.Mount with Public:true means the auth middleware (when the
-			// group falls back to PrimaryListener and JWT runs there) treats
-			// /healthz as a public probe. On the HealthListener (no JWT) it
-			// is a no-op annotation.
 			Register: func(mux cell.RouteMux) {
 				auth.Mount(mux, auth.Route{
 					Contract: specHealthLivez,
@@ -152,7 +129,6 @@ func HealthRouteGroups(h *health.Handler, opts ...HealthRouteGroupOption) []cell
 		},
 		{
 			Listener: cell.HealthListener,
-			Policy:   cfg.readyzPolicy,
 			Register: func(mux cell.RouteMux) {
 				auth.Mount(mux, auth.Route{
 					Contract: specHealthReadyz,
@@ -166,7 +142,6 @@ func HealthRouteGroups(h *health.Handler, opts ...HealthRouteGroupOption) []cell
 		mh := cfg.metricsHandler
 		groups = append(groups, cell.RouteGroup{
 			Listener: cell.HealthListener,
-			Policy:   cfg.metricsPolicy,
 			Register: func(mux cell.RouteMux) {
 				auth.Mount(mux, auth.Route{
 					Contract: specHealthMetrics,

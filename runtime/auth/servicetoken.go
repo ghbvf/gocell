@@ -15,11 +15,18 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
-const msgInvalidServiceTokenFormat = "invalid service token format"
+const (
+	msgInvalidServiceTokenFormat = "invalid service token format"
+	// msgInternalServerError is the canonical client-visible 5xx message, kept
+	// in lockstep with httputil.WriteError's 5xx mask so probes/tests assert
+	// against a single string.
+	msgInternalServerError = "internal server error"
+)
 
 // WithServiceTokenLogger sets the logger for ServiceTokenMiddleware.
 func WithServiceTokenLogger(l *slog.Logger) ServiceTokenOption {
@@ -34,9 +41,11 @@ func WithServiceTokenLogger(l *slog.Logger) ServiceTokenOption {
 // rejected. Tokens with timestamps at or beyond this window are refused.
 const ServiceTokenMaxAge = 5 * time.Minute
 
-// MinHMACKeyBytes is the minimum HMAC secret length. NIST recommends 256-bit
-// (32-byte) keys for HMAC-SHA256; this constant enforces that minimum.
-const MinHMACKeyBytes = 32
+// MinHMACKeyBytes aliases cell.MinHMACKeyBytes so runtime/auth and kernel/cell
+// share a single canonical strength threshold (NIST SP 800-107: HMAC-SHA-256
+// requires ≥256-bit keys). Kept as a const for callers that reference the
+// runtime/auth namespace; the source of truth lives in kernel/cell.
+const MinHMACKeyBytes = cell.MinHMACKeyBytes
 
 // serviceTokenConfig holds per-middleware options.
 type serviceTokenConfig struct {
@@ -176,7 +185,10 @@ func LoadHMACKeyRingFromEnv() (*HMACKeyRing, error) {
 //
 // Principal construction is fully delegated to NewServiceTokenAuthenticator
 // so that the service identity shape is defined in a single place.
-func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
+//
+// ring accepts cell.HMACKeyring (the kernel interface); *HMACKeyRing satisfies
+// it structurally and remains the canonical production implementation.
+func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) func(http.Handler) http.Handler {
 	cfg := serviceTokenConfig{
 		now:        time.Now,
 		logger:     slog.Default(),
@@ -191,7 +203,25 @@ func ServiceTokenMiddleware(ring *HMACKeyRing, opts ...ServiceTokenOption) func(
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				cfg.metrics.recordServiceVerify("failure", "internal")
 				cfg.logger.Error("service token middleware called with nil key ring")
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
+			})
+		}
+	}
+
+	// Defense-in-depth strength check (PR269 round-3 F5): cell.NewAuthServiceToken
+	// already enforces MinHMACKeyBytes at construction time, but ServiceTokenMiddleware
+	// is also reachable via direct call paths (tests, custom wiring) that bypass
+	// the kernel constructor. Reject sub-strength rings here so no path leaks a
+	// short HMAC secret into hmac.New.
+	if got := len(ring.Current()); got < MinHMACKeyBytes {
+		shortLen := got
+		return func(next http.Handler) http.Handler {
+			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				cfg.metrics.recordServiceVerify("failure", "internal")
+				cfg.logger.Error("service token middleware: HMAC ring secret shorter than minimum",
+					slog.Int("got_bytes", shortLen),
+					slog.Int("min_bytes", MinHMACKeyBytes))
+				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
 			})
 		}
 	}
@@ -277,7 +307,7 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 	if errors.As(err, &ec) && ec.Cause != nil {
 		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
 		cfg.logger.Error("nonce store check failed", slog.Any("error", ec.Cause))
-		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
 		return
 	}
 
@@ -317,7 +347,7 @@ func classifyServiceTokenVerifyError(err error) string {
 
 // verifyServiceTokenMAC checks whether the provided MAC is valid for message
 // under any of the secrets in the key ring.
-func verifyServiceTokenMAC(ring *HMACKeyRing, message string, providedMAC []byte) bool {
+func verifyServiceTokenMAC(ring cell.HMACKeyring, message string, providedMAC []byte) bool {
 	for _, secret := range ring.Secrets() {
 		mac := hmac.New(sha256.New, secret)
 		_, _ = mac.Write([]byte(message))

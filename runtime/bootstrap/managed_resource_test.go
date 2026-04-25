@@ -79,8 +79,8 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -119,8 +119,8 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -170,8 +170,8 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 		WithManagedResource(res3),
@@ -229,8 +229,8 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -261,8 +261,8 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 	)
@@ -346,8 +346,8 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -435,8 +435,8 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithManagedResource(relay),
 	)
@@ -502,8 +502,8 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithManagedResource(relay),
 	)
@@ -595,8 +595,8 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithManagedResource(relay),
 	)

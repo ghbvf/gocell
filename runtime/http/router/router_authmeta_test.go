@@ -126,7 +126,7 @@ func captureSlogWarn(t *testing.T) (*bytes.Buffer, func()) {
 // ---------------------------------------------------------------------------
 
 func TestFinalizeAuth_DelegatedOnPrimary_Rejected(t *testing.T) {
-	r, err := NewForListener(kcell.PrimaryListener, kcell.Policy{})
+	r, err := NewForListener(kcell.PrimaryListener)
 	require.NoError(t, err)
 	auth.Mount(r, auth.Route{
 		Contract:  testHTTPContract("POST", "/internal/v1/devices/cmd"),
@@ -140,7 +140,7 @@ func TestFinalizeAuth_DelegatedOnPrimary_Rejected(t *testing.T) {
 }
 
 func TestFinalizeAuth_DelegatedOnHealth_Rejected(t *testing.T) {
-	r, err := NewForListener(kcell.HealthListener, kcell.Policy{})
+	r, err := NewForListener(kcell.HealthListener)
 	require.NoError(t, err)
 	auth.Mount(r, auth.Route{
 		Contract:  testHTTPContract("GET", "/internal/v1/probe"),
@@ -153,7 +153,7 @@ func TestFinalizeAuth_DelegatedOnHealth_Rejected(t *testing.T) {
 }
 
 func TestFinalizeAuth_DelegatedOnInternal_Accepted(t *testing.T) {
-	r, err := NewForListener(kcell.InternalListener, kcell.Policy{})
+	r, err := NewForListener(kcell.InternalListener)
 	require.NoError(t, err)
 	auth.Mount(r, auth.Route{
 		Contract:  testHTTPContract("GET", "/internal/v1/probe"),

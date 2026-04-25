@@ -21,7 +21,7 @@ func TestWithListener_AppendsToListenerConfigs(t *testing.T) {
 	t.Parallel()
 
 	b := bootstrap.New(
-		bootstrap.WithListener(cell.PrimaryListener, ":8080", bootstrap.PolicyNone()),
+		bootstrap.WithListener(cell.PrimaryListener, ":8080", nil),
 	)
 	// Confirm the Bootstrap was built without panic — listenerConfigs populated.
 	// We cannot inspect b.listenerConfigs directly (unexported), but we can
@@ -37,9 +37,9 @@ func TestWithListener_MultipleListeners(t *testing.T) {
 	t.Parallel()
 
 	b := bootstrap.New(
-		bootstrap.WithListener(cell.PrimaryListener, ":8080", bootstrap.PolicyNone()),
-		bootstrap.WithListener(cell.InternalListener, ":9090", bootstrap.PolicyNone()),
-		bootstrap.WithListener(cell.HealthListener, ":9091", bootstrap.PolicyNone()),
+		bootstrap.WithListener(cell.PrimaryListener, ":8080", nil),
+		bootstrap.WithListener(cell.InternalListener, ":9090", nil),
+		bootstrap.WithListener(cell.HealthListener, ":9091", nil),
 	)
 	if b == nil {
 		t.Fatal("Bootstrap.New returned nil")
@@ -81,7 +81,7 @@ func TestWithListenerOptions(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := bootstrap.New(
-				bootstrap.WithListener(cell.PrimaryListener, ":8080", bootstrap.PolicyNone(), tc.opts...),
+				bootstrap.WithListener(cell.PrimaryListener, ":8080", nil, tc.opts...),
 			)
 			if b == nil {
 				t.Fatal("Bootstrap.New returned nil")
@@ -102,7 +102,7 @@ func TestWithListenerNet_RealListener(t *testing.T) {
 
 	b := bootstrap.New(
 		bootstrap.WithListener(
-			cell.PrimaryListener, ln.Addr().String(), bootstrap.PolicyNone(),
+			cell.PrimaryListener, ln.Addr().String(), nil,
 			bootstrap.WithListenerNet(ln),
 		),
 	)
@@ -117,7 +117,7 @@ func TestWithListenerShutdownGrace_ZeroValue(t *testing.T) {
 
 	b := bootstrap.New(
 		bootstrap.WithListener(
-			cell.HealthListener, ":9091", bootstrap.PolicyNone(),
+			cell.HealthListener, ":9091", nil,
 			bootstrap.WithListenerShutdownGrace(0),
 		),
 	)
@@ -134,7 +134,7 @@ func TestWithListenerShutdownGrace_NegativeRejectsAtPhase0(t *testing.T) {
 
 	b := bootstrap.New(
 		bootstrap.WithListener(
-			cell.PrimaryListener, ":9090", bootstrap.PolicyNone(),
+			cell.PrimaryListener, ":9090", nil,
 			bootstrap.WithListenerShutdownGrace(-1*time.Second),
 		),
 	)

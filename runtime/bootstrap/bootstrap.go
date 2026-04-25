@@ -209,15 +209,15 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 	}
 }
 
-// JWT authentication is wired exclusively through cell.Policy values mounted
+// JWT authentication is wired through a typed []cell.ListenerAuth chain mounted
 // on a listener via WithListener:
 //
-//	bootstrap.WithListener(cell.PrimaryListener, addr, bootstrap.PolicyJWT(verifier))
-//	bootstrap.WithListener(cell.PrimaryListener, addr, bootstrap.PolicyJWTFromAssembly(asm))
+//	bootstrap.WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.NewAuthJWT(verifier)})
+//	bootstrap.WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)})
 //
 // The previous bootstrap.WithAuthMiddleware / WithAuthDiscovery options have
 // been removed (PR-A14b round-3 F3): one mechanism, one source of truth. The
-// listener's policy carries the verifier; Bootstrap installs the router-aware
+// listener's auth chain carries the verifier; Bootstrap installs the router-aware
 // AuthMiddleware at phase5 so Public / PasswordResetExempt route bypass works
 // for free.
 
@@ -337,19 +337,18 @@ func WithAdapterInfo(info map[string]string) Option {
 // canonical use cases are:
 //
 //	bootstrap.WithHealthRoutes(bootstrap.WithMetricsHandler(promHandler))
-//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzPolicy(
-//	    bootstrap.PolicyVerboseToken("X-Readyz-Token", token)))
+//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseToken(token))
 //	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled())
 //
 // Multiple WithHealthRoutes calls accumulate; later options for the same
-// concern (metrics handler, livez/readyz/metrics policy, verbose disabled)
-// overwrite earlier ones in the order they were appended. Pass nil-valued
-// options at your peril — they overwrite any previously-set value with the
-// zero value.
+// concern (metrics handler, verbose-token, verbose-disabled) overwrite earlier
+// ones in the order they were appended. Pass nil-valued options at your peril —
+// they overwrite any previously-set value with the zero value.
 //
-// PR-A35 strict semantics: a request with ?verbose= but no matching readyz
-// policy / disabled flag yields 401 (or the configured policy's response),
-// never a silent downgrade to plain 200.
+// PR-A35 / PR269 round-3 strict semantics: a request with ?verbose= but no
+// matching readyz verbose-token / disabled flag yields 401
+// ErrReadyzVerboseDenied at the health handler layer, never a silent
+// downgrade to plain 200.
 func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 	return func(b *Bootstrap) {
 		b.healthRouteGroupOpts = append(b.healthRouteGroupOpts, opts...)

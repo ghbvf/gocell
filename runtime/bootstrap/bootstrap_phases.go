@@ -141,10 +141,13 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.managedResourceNil {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}
-	if err := b.validateListenerPolicyAssemblyMatch(); err != nil {
+	if err := b.validateAuthPlanAssemblyMatch(); err != nil {
 		return err
 	}
-	if err := b.validateListenerPolicyMTLSBinding(); err != nil {
+	if err := b.validateAuthPlanMTLSBindings(); err != nil {
+		return err
+	}
+	if err := b.validateAuthChainJWTSingleton(); err != nil {
 		return err
 	}
 	// PR-A14b: validate declarative listener configs last — other option
@@ -154,96 +157,6 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 		return err
 	}
 	return nil
-}
-
-// validateListenerPolicyAssemblyMatch enforces the single-assembly invariant
-// for PolicyJWTFromAssembly: the assembly captured by the policy must be the
-// same instance passed to WithAssembly. Round-3 finding #10. Without this
-// check, WithListener(..., PolicyJWTFromAssembly(asmA)) + WithAssembly(asmB)
-// would silently discover the verifier in asmA while the rest of Bootstrap
-// runs against asmB — the kind of mismatch that fails closed at request
-// time but is invisible at startup.
-func (b *Bootstrap) validateListenerPolicyAssemblyMatch() error {
-	if b.assembly == nil {
-		return nil
-	}
-	for ref, cfg := range b.listenerConfigs {
-		marker, ok := cfg.policy.Extension.(*jwtFromAssemblyMarker)
-		if !ok {
-			continue
-		}
-		if marker.asm != b.assembly {
-			return fmt.Errorf(
-				"bootstrap: listener %q PolicyJWTFromAssembly received a different assembly than WithAssembly; "+
-					"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
-				ref.String())
-		}
-	}
-	return nil
-}
-
-// validateListenerPolicyMTLSBinding enforces that any listener using
-// PolicyMTLS also configures a *tls.Config with ClientAuth >=
-// VerifyClientCertIfGiven AND a non-nil ClientCAs pool. Round-3 finding #11.
-//
-// PolicyMTLS deliberately performs no app-layer chain verification (see
-// policy_mtls.go); chain validation is delegated to crypto/tls's handshake
-// path. If the operator forgets to configure ClientAuth + ClientCAs, the
-// peer-cert-presence check would silently accept any client cert (or none).
-// fail-fast at phase0 keeps the contract honest: PolicyMTLS without proper
-// TLS wiring is a programmer error, not a runtime acceptance.
-func (b *Bootstrap) validateListenerPolicyMTLSBinding() error {
-	for ref, cfg := range b.listenerConfigs {
-		source := fmt.Sprintf("listener %q", ref.String())
-		if err := validatePolicyMTLSBinding(source, cfg.policy, cfg.tls); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func validatePolicyMTLSBinding(source string, p cell.Policy, tlsCfg *tls.Config) error {
-	if !mtlsPolicyApplies(p) {
-		return nil
-	}
-	if tlsCfg == nil {
-		return fmt.Errorf(
-			"bootstrap: %s uses PolicyMTLS without WithListenerTLS; "+
-				"set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> "+
-				"so the handshake layer enforces the chain",
-			source)
-	}
-	if tlsCfg.ClientAuth < tls.VerifyClientCertIfGiven {
-		return fmt.Errorf(
-			"bootstrap: %s uses PolicyMTLS but tls.Config.ClientAuth=%v; "+
-				"set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
-			source, tlsCfg.ClientAuth)
-	}
-	if tlsCfg.ClientCAs == nil {
-		return fmt.Errorf(
-			"bootstrap: %s uses PolicyMTLS but tls.Config.ClientCAs is nil; "+
-				"set ClientCAs to the CA pool the handshake should accept",
-			source)
-	}
-	return nil
-}
-
-// mtlsPolicyApplies reports whether p is PolicyMTLS or a PolicyStack
-// containing PolicyMTLS. PolicyStack name format is "stack[a, b, c]".
-func mtlsPolicyApplies(p cell.Policy) bool {
-	if p.Name == "mtls" {
-		return true
-	}
-	const stackPrefix = "stack["
-	if strings.HasPrefix(p.Name, stackPrefix) && strings.HasSuffix(p.Name, "]") {
-		inner := strings.TrimSuffix(strings.TrimPrefix(p.Name, stackPrefix), "]")
-		for _, name := range strings.Split(inner, ", ") {
-			if strings.TrimSpace(name) == "mtls" {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 // validateHealthCheckers ensures every caller-registered checker has a non-
@@ -391,38 +304,14 @@ func (b *Bootstrap) phase3InitAssembly(ctx context.Context, s *phaseState) error
 	return nil
 }
 
-// phase4WireAuthAndWatcher invokes Policy.Validate hooks (which discover
-// dependencies — e.g. PolicyJWTFromAssembly resolving its IntentTokenVerifier
-// from an authProvider cell) and binds the config-watcher OnChange callback,
-// then starts the watcher.
+// phase4WireAuthAndWatcher discovers JWT verifiers from authProvider cells for
+// any AuthJWTFromAssembly plan (writes the resolved verifier into the plan's
+// atomic.Pointer), then binds the config-watcher OnChange callback.
 func (b *Bootstrap) phase4WireAuthAndWatcher(s *phaseState) error {
-	if err := b.validateListenerPolicies(); err != nil {
+	if err := b.runAuthPlanValidateHooks(); err != nil {
 		return err
 	}
 	b.bindConfigWatcher(s)
-	return nil
-}
-
-// validateListenerPolicies invokes the Validate hook on every listener's
-// policy in deterministic order. Policies that resolve dependencies lazily
-// (e.g. PolicyJWTFromAssembly) use this hook so the failure mode is "Run
-// returns at phase4" rather than "first request returns 500".
-func (b *Bootstrap) validateListenerPolicies() error {
-	refs := make([]cell.ListenerRef, 0, len(b.listenerConfigs))
-	for ref := range b.listenerConfigs {
-		refs = append(refs, ref)
-	}
-	sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
-	for _, ref := range refs {
-		cfg := b.listenerConfigs[ref]
-		if cfg.policy.Validate == nil {
-			continue
-		}
-		if err := cfg.policy.Validate(); err != nil {
-			return fmt.Errorf("bootstrap: listener %q policy %q: %w",
-				ref.String(), cfg.policy.Name, err)
-		}
-	}
 	return nil
 }
 
@@ -604,7 +493,7 @@ func (b *Bootstrap) phase5BuildRouters(s *phaseState) error {
 		return err
 	}
 	groups := b.phase5CollectRouteGroups(s, routers)
-	if err := b.validateRouteGroupPolicyMTLSBindings(groups); err != nil {
+	if err := b.validateAuthPlanMTLSBindings(); err != nil {
 		return err
 	}
 	if err := b.phase5MountRouteGroups(routers, groups); err != nil {
@@ -659,7 +548,7 @@ func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.Liste
 		if err != nil {
 			return nil, err
 		}
-		rtr, err := router.NewForListener(ref, cfg.policy, rtrOpts...)
+		rtr, err := router.NewForListener(ref, rtrOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("bootstrap: build router for listener %q: %w", ref.String(), err)
 		}
@@ -702,37 +591,6 @@ func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.Lis
 	return groups
 }
 
-// validateRouteGroupPolicyMTLSBindings applies the same mTLS/TLS binding
-// invariant to RouteGroup.Policy as phase0 applies to listener default
-// policies. RouteGroups are only known after assembly discovery, so this runs
-// in phase5 before mounting routes or binding sockets.
-func (b *Bootstrap) validateRouteGroupPolicyMTLSBindings(groups []cell.RouteGroup) error {
-	for i, rg := range groups {
-		if !mtlsPolicyApplies(rg.Policy) {
-			continue
-		}
-		cfg, ok := b.listenerConfigs[rg.Listener]
-		if !ok {
-			return fmt.Errorf(
-				"bootstrap: %s references undeclared listener %q; add WithListener(%s,...) to bootstrap options",
-				routeGroupPolicySource(i, rg), rg.Listener.String(), rg.Listener.String())
-		}
-		if err := validatePolicyMTLSBinding(routeGroupPolicySource(i, rg), rg.Policy, cfg.tls); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func routeGroupPolicySource(i int, rg cell.RouteGroup) string {
-	cellID := rg.CellID
-	if cellID == "" {
-		cellID = "<framework>"
-	}
-	return fmt.Sprintf("RouteGroup %d (cell=%s, listener=%s, prefix=%q)",
-		i, cellID, rg.Listener.String(), rg.Prefix)
-}
-
 // phase5MountRouteGroups mounts each RouteGroup on its listener's router.
 // OPS-02: wraps registration errors with cell ID, group index, listener, and prefix context.
 func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.Router, groups []cell.RouteGroup) error {
@@ -757,24 +615,19 @@ func (b *Bootstrap) phase5MountRouteGroups(routers map[cell.ListenerRef]*router.
 	return nil
 }
 
-// mountOneRouteGroup mounts a single RouteGroup on its router and applies the
-// group's Policy middleware (if any) so it scopes only to the routes mounted
-// by rg.Register. The pattern mirrors go-kratos/kratos transport/http/router.go
-// FilterChain(r.filters...)(next): per-group middleware is installed at
-// registration time on the sub-mux, not at the listener level — registering
-// without the wrap is impossible because there is no codepath that calls
-// rg.Register without first wiring the policy. F1 round-3 fix.
+// mountOneRouteGroup mounts a single RouteGroup on its router and applies any
+// non-auth Middleware in declaration order. PR269 round-3: group-level auth is
+// gone — auth scheme is a listener concern (cells that need a different scheme
+// declare their routes on a different listener). Listener-level authChain is
+// already installed by router.WithDefaultMiddleware; group Middleware runs
+// after that chain at request time (chi sub-mux With order).
 func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _ int) error {
 	register := rg.Register
-	if rg.Policy.Middleware != nil {
-		// Wrap rg.Register so every route it registers is created via
-		// sub.With(policyMW) — chi's "inline mux" pattern: inline routes still
-		// land on the parent tree but inherit the additional middleware.
-		// Sibling RouteGroups on the same listener stay unaffected.
-		policyMW := rg.Policy.Middleware
-		inner := rg.Register
+	if len(rg.Middleware) > 0 {
+		mws := rg.Middleware
+		inner := register
 		register = func(sub cell.RouteMux) {
-			inner(sub.With(policyMW))
+			inner(sub.With(mws...))
 		}
 	}
 	if rg.Prefix != "" {
@@ -826,22 +679,16 @@ func (b *Bootstrap) phase5FinalizeAllRouters(routers map[cell.ListenerRef]*route
 }
 
 // validateAuthVerifierForDeclaredRoutes ensures protected routes mounted on a
-// listener are actually gated by an auth-flavoured policy. The acceptable
-// policies are PolicyJWT / PolicyJWTFromAssembly (Name="jwt"), PolicyMTLS
-// (Name="mtls"), PolicyServiceToken (Name="service-token"), or any
-// PolicyStack containing PolicyMTLS or PolicyServiceToken by name. JWT inside
-// PolicyStack is intentionally not accepted because PolicyJWT carries its
-// verifier in Extension and Bootstrap only installs router-aware JWT
-// middleware for a direct listener default policy. Listeners with PolicyNone
-// or no policy at all that still declare protected routes (non-Public,
+// listener are actually gated by an auth-flavoured plan chain. The acceptable
+// plans are AuthJWT / AuthJWTFromAssembly, AuthMTLS, or AuthServiceToken (or
+// any combination). AuthNone chains with protected routes (non-Public,
 // non-Delegated) cause Run() to fail-closed at phase5.
 //
-// F3 round-3: the previous check looked at b.authVerifier; that field is gone
-// because JWT now flows through cfg.policy. The router-level check replaces
-// it.
+// Uses chainProtectsRoutes (from auth_plan_describe.go) for the typed check,
+// replacing the old string-based isAuthFlavoredPolicy check.
 func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, rtr *router.Router) error {
 	cfg := b.listenerConfigs[ref]
-	if isAuthFlavoredPolicy(cfg.policy) {
+	if chainProtectsRoutes(cfg.authChain) {
 		return nil
 	}
 	var protected []string
@@ -856,64 +703,20 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 	}
 	sort.Strings(protected)
 	return fmt.Errorf(
-		"bootstrap: listener %q has %d protected route(s) declared without an auth policy: [%s]; "+
-			"set the listener's default policy to PolicyJWT(verifier), PolicyJWTFromAssembly(asm), "+
-			"PolicyMTLS(...), or PolicyServiceToken(...), or mark the route Public/Delegated",
+		"bootstrap: listener %q has %d protected route(s) declared without an auth plan: [%s]; "+
+			"set the listener's auth chain to cell.NewAuthJWT(verifier), cell.NewAuthJWTFromAssembly(asm), "+
+			"cell.AuthMTLS{}, or cell.NewAuthServiceToken(...), or mark the route Public/Delegated",
 		ref.String(), len(protected), strings.Join(protected, ", "),
 	)
 }
 
-// isAuthFlavoredPolicy reports whether p is one of the auth-flavoured policies
-// (or a PolicyStack containing one). The check is performed on Name strings
-// so the kernel/cell layer remains agnostic of runtime/auth.
-//
-// PolicyStack names follow the format "stack[a, b, c]" (see PolicyStack in
-// policy.go). Match only stackable auth components. JWT is deliberately
-// excluded inside stacks because the JWT verifier would otherwise be dropped.
-func isAuthFlavoredPolicy(p cell.Policy) bool {
-	if isAuthFlavoredName(p.Name) {
-		return true
-	}
-	const stackPrefix = "stack["
-	if strings.HasPrefix(p.Name, stackPrefix) && strings.HasSuffix(p.Name, "]") {
-		inner := strings.TrimSuffix(strings.TrimPrefix(p.Name, stackPrefix), "]")
-		for _, name := range strings.Split(inner, ", ") {
-			if isStackableAuthFlavoredName(strings.TrimSpace(name)) {
-				return true
-			}
-		}
-	}
-	return false
-}
-
-// isAuthFlavoredName matches a single policy name (no PolicyStack wrapping)
-// against the auth-flavoured allow list.
-func isAuthFlavoredName(name string) bool {
-	switch name {
-	case "jwt", "mtls", "service-token":
-		return true
-	}
-	return false
-}
-
-// isStackableAuthFlavoredName matches auth policies whose enforcement survives
-// PolicyStack's middleware-only composition. JWT is excluded because its
-// verifier lives in Extension, not Middleware.
-func isStackableAuthFlavoredName(name string) bool {
-	switch name {
-	case "mtls", "service-token":
-		return true
-	}
-	return false
-}
-
 // buildListenerRouterOpts assembles the router.Option slice for a single
-// listener's router. JWT auth flows through the listener's cell.Policy:
-// when cfg.policy.Name=="jwt", Bootstrap extracts the verifier from
-// policy.Extension and installs router.WithAuthMiddleware so the router can
-// build matcher-aware AuthMiddleware after FinalizeAuth.
+// listener's router. JWT auth flows through the listener's authChain:
+// applyListenerAuthChain extracts verifier options and non-JWT middleware;
+// the JWT verifier is installed via router.WithAuthMiddleware so the router
+// can build matcher-aware AuthMiddleware after FinalizeAuth.
 func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
-	opts := make([]router.Option, 0, len(b.routerOpts)+4)
+	opts := make([]router.Option, 0, len(b.routerOpts)+6)
 	opts = append(opts, b.routerOpts...)
 
 	// R2: auto-wire HTTP metrics collector when a Provider is configured.
@@ -926,51 +729,31 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 	// Primary listener: install the /internal/v1/* 404 isolation as an
 	// early-responder middleware so the contract runs BEFORE auth and does
 	// NOT require a JWT public-matcher exemption nor a policy-coverage
-	// whitelist. PR-258 RES-5 narrowing: replaces WithPolicyCoverageWhitelist
-	// + WithPublicPathPrefix + chi-route 404 with a single predicate.
+	// whitelist. PR-258 RES-5 narrowing.
 	if ref == cell.PrimaryListener {
 		opts = append(opts, router.InternalPrefixIsolationResponder())
 	}
 
-	// F3 round-3: extract the verifier from the listener's policy and wire
-	// router.WithAuthMiddleware so the JWT chain sees the router's compiled
-	// Public / PasswordResetExempt matchers. Bypasses the listener-level
-	// mux.Use chain because that wouldn't be matcher-aware.
-	if v := jwtVerifierFromPolicy(cfg.policy); v != nil {
-		authOpts, err := b.buildAuthRouterOptions(v)
-		if err != nil {
-			return nil, err
+	// Apply the listener's AuthPlan chain: extract non-JWT middleware and
+	// JWT router options. applyListenerAuthChain handles all typed plan variants.
+	if len(cfg.authChain) > 0 {
+		mws, routerAuthOpts, _, aerr := b.applyListenerAuthChain(ref, cfg.authChain)
+		if aerr != nil {
+			return nil, aerr
 		}
-		opts = append(opts, authOpts...)
+		if len(mws) > 0 {
+			opts = append(opts, router.WithDefaultMiddleware(mws...))
+		}
+		opts = append(opts, routerAuthOpts...)
 	}
 
 	// R2-11: Health and Internal listeners intentionally run without a JWT
-	// verifier — health endpoints are framework-owned probes, internal traffic
-	// is gated by mTLS / PolicyServiceToken. Without this opt-out, the router's
-	// FinalizeAuth would emit a Warn at every production startup because both
-	// listeners declare auth.Mount(Public:true) routes with no AuthMiddleware
-	// installed. Suppress the false alarm.
+	// verifier. Suppress the FinalizeAuth Warn for these listeners.
 	if ref == cell.HealthListener || ref == cell.InternalListener {
 		opts = append(opts, router.WithSuppressNoAuthVerifierWarn())
 	}
 
 	return opts, nil
-}
-
-// jwtVerifierFromPolicy extracts a resolved IntentTokenVerifier from a
-// cell.Policy whose Name is "jwt". Returns nil for any other policy name or
-// for a "jwt" policy whose Extension does not implement jwtVerifierGetter
-// (signals a programmer error: the kernel layer accepts an opaque Extension
-// but only PolicyJWT / PolicyJWTFromAssembly are supported producers).
-func jwtVerifierFromPolicy(p cell.Policy) auth.IntentTokenVerifier {
-	if p.Name != "jwt" {
-		return nil
-	}
-	getter, ok := p.Extension.(jwtVerifierGetter)
-	if !ok {
-		return nil
-	}
-	return getter.verifier()
 }
 
 // registerAllHealthCheckers registers option-supplied, cell-discovered, watcher,
@@ -1301,6 +1084,7 @@ type boundServer struct {
 	ln        net.Listener
 	owned     bool          // true when bootstrap bound the socket (not caller-injected)
 	shutGrace time.Duration // 0 means inherit the global shutdownTimeout
+	authDesc  string        // OPS-09: auth chain description for startup log
 }
 
 func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
@@ -1328,8 +1112,8 @@ func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
 // and log lines appear in a consistent order for operators.
 // SEC-11: http.Server is constructed with ReadTimeout, WriteTimeout, and
 // IdleTimeout to prevent Slowloris / slow-write DoS attacks.
-// OPS-06: emit slog.Info after each successful bind (listener + addr + policy).
-// OPS-07: emit slog.Warn when a non-loopback listener binds with PolicyNone.
+// OPS-06: emit slog.Info after each successful bind (listener + addr + auth).
+// OPS-07: emit slog.Warn when a non-loopback listener binds with AuthNone or empty auth chain.
 func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 	// Collect and sort refs for deterministic iteration order.
 	refs := make([]cell.ListenerRef, 0, len(b.listenerConfigs))
@@ -1355,27 +1139,25 @@ func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 			return nil, fmt.Errorf("bootstrap: listen %s %s: %w", ref.String(), cfg.addr, err)
 		}
 
-		policyDesc := "none"
-		if !cfg.policy.IsZero() {
-			policyDesc = cfg.policy.Name
-		}
+		authDesc := describeAuthChain(cfg.authChain)
 		slog.Info("bootstrap: HTTP listener bound",
 			slog.String("listener", ref.String()),
 			slog.String("addr", ln.Addr().String()),
-			slog.String("policy", policyDesc))
+			slog.String("auth", authDesc))
 
 		// OPS-07 / F7 round-3: warn when a non-loopback address is served with
-		// PolicyNone. The dangerous case is the wildcard bind (0.0.0.0 / ::):
-		// the listener is reachable on every interface, including externally
-		// routable addresses, but ServeHTTP runs without an auth gate. Pre-F7
-		// this branch silenced wildcards by `&& !IsUnspecified()` — the exact
-		// inverse of the deployment we want operators to see at startup.
-		if policyDesc == "none" {
+		// AuthNone or an empty auth chain. The dangerous case is the wildcard bind
+		// (0.0.0.0 / ::): the listener is reachable on every interface, including
+		// externally routable addresses, but ServeHTTP runs without an auth gate.
+		// explicit_auth_none=true means the caller deliberately passed AuthNone{};
+		// false means the chain was nil/empty (possibly an omission).
+		if authDesc == "none" || authDesc == "" {
 			if tcpAddr, ok2 := ln.Addr().(*net.TCPAddr); ok2 && !tcpAddr.IP.IsLoopback() {
-				slog.Warn("bootstrap: listener bound to non-loopback address with PolicyNone; ensure network-level isolation",
+				slog.Warn("bootstrap: listener bound to non-loopback address without auth; ensure network-level isolation",
 					slog.String("listener", ref.String()),
 					slog.String("addr", ln.Addr().String()),
-					slog.Bool("wildcard_bind", tcpAddr.IP.IsUnspecified()))
+					slog.Bool("wildcard_bind", tcpAddr.IP.IsUnspecified()),
+					slog.Bool("explicit_auth_none", explicitAuthNone(cfg.authChain)))
 			}
 		}
 
@@ -1391,6 +1173,7 @@ func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 			ln:        ln,
 			owned:     owned,
 			shutGrace: cfg.shutGrace,
+			authDesc:  authDesc, // OPS-09: passed to phase7ServeAll startup log
 		})
 	}
 	return servers, nil
@@ -1416,7 +1199,8 @@ func (b *Bootstrap) phase7ServeAll(servers []boundServer) chan error {
 		go func() {
 			slog.Info("bootstrap: HTTP server starting",
 				slog.String("listener", bs.name),
-				slog.String("addr", bs.ln.Addr().String()))
+				slog.String("addr", bs.ln.Addr().String()),
+				slog.String("auth", bs.authDesc))
 			err := bs.srv.Serve(bs.ln)
 			if err != nil && !errors.Is(err, http.ErrServerClosed) {
 				httpErrCh <- fmt.Errorf("%s listener: %w", bs.name, err)

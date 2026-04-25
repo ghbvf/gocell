@@ -71,9 +71,9 @@ func newTestListeners(t *testing.T) (testListeners, []Option) {
 		health:   newLocalListener(t),
 	}
 	opts := []Option{
-		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), cell.Policy{}, WithListenerNet(tl.primary)),
-		WithListener(cell.InternalListener, tl.internal.Addr().String(), cell.Policy{}, WithListenerNet(tl.internal)),
-		WithListener(cell.HealthListener, tl.health.Addr().String(), cell.Policy{}, WithListenerNet(tl.health)),
+		WithListener(cell.PrimaryListener, tl.primary.Addr().String(), nil, WithListenerNet(tl.primary)),
+		WithListener(cell.InternalListener, tl.internal.Addr().String(), nil, WithListenerNet(tl.internal)),
+		WithListener(cell.HealthListener, tl.health.Addr().String(), nil, WithListenerNet(tl.health)),
 	}
 	return tl, opts
 }
@@ -98,11 +98,12 @@ func waitForHealthy(t *testing.T, addr string) {
 // (status, cells, dependencies, adapters). The helper lets a single
 // assertion path work whether the response was 200 or 503.
 //
-// PolicyVerboseToken middleware 401 responses use a flatter envelope —
-// {"error":{"code":"...","message":"..."}} with no "details" — so the
-// helper falls back to the bare error object when "details" is absent.
-// Callers asserting on dependencies/cells must check the response status
-// code first; this helper only normalises the body shape.
+// All 401 responses on /readyz?verbose now share the canonical envelope shape
+// emitted by httputil.WritePublicError — {"error":{"code":"ERR_READYZ_VERBOSE_DENIED",
+// "message":"...","details":{},"request_id":"..."}} — regardless of which layer
+// rejected (route-group middleware or handler-layer gate). Callers asserting on
+// dependencies/cells must check the response status code first; this helper
+// only normalises the body shape.
 func readyzPayload(t *testing.T, body map[string]any) map[string]any {
 	t.Helper()
 	if data, ok := body["data"].(map[string]any); ok {
@@ -112,10 +113,7 @@ func readyzPayload(t *testing.T, body map[string]any) map[string]any {
 		if details, ok := errObj["details"].(map[string]any); ok {
 			return details
 		}
-		// 401 / 4xx envelopes (e.g. ERR_AUTH_VERBOSE_TOKEN) have no
-		// `details` field — return the error object so callers can still
-		// inspect code/message via readyzPayload(...)[
-		// "code" | "message"].
+		// Legacy fallback: pre-PR269 envelopes had no `details` field.
 		return errObj
 	}
 	t.Fatalf("readyz body has neither data nor error envelope: %#v", body)
@@ -152,7 +150,7 @@ func TestNew_WithOptions(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
-		WithListener(cell.PrimaryListener, ":9090", cell.Policy{}),
+		WithListener(cell.PrimaryListener, ":9090", nil),
 		WithShutdownTimeout(5*time.Second),
 	)
 
@@ -224,7 +222,7 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		WithRouterOptions(router.WithTrustedProxies([]string{"not-valid"})),
 	)
 
@@ -255,7 +253,7 @@ func TestNew_WithConfig(t *testing.T) {
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
 	b := New(
 		WithConfig("/nonexistent/config.yaml", "APP"),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -439,7 +437,7 @@ func TestBootstrap_SubscriptionFailure_TriggersRollback(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -467,8 +465,8 @@ func TestBootstrap_EventRouter_HappyPath(t *testing.T) {
 		WithAssembly(asm),
 		WithSubscriber(eb),
 		WithPublisher(eb),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -520,8 +518,8 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 	b := New(
 		WithAssembly(asm),
 		WithSubscriber(sub),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -578,8 +576,8 @@ func TestBootstrap_EventSubscriptions_DisableObservabilityRestore(t *testing.T) 
 	b := New(
 		WithAssembly(asm),
 		WithSubscriber(sub),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithDisableObservabilityRestore(),
 	)
@@ -627,7 +625,7 @@ func TestBootstrap_RunContextCancel(t *testing.T) {
 	cancel() // Cancel immediately.
 
 	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -642,7 +640,7 @@ func TestBootstrap_DoubleRun_ReturnsError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately so first Run exits quickly
 
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
 	_ = b.Run(ctx) // first call — may error due to cancelled ctx or sandbox
 
 	err := b.Run(ctx) // second call — must be rejected
@@ -659,8 +657,8 @@ func TestBootstrap_WithHealthChecker_Healthy(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 	)
@@ -713,8 +711,8 @@ func TestBootstrap_WithHealthChecker_Unhealthy(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			return fmt.Errorf("connection closed")
@@ -769,8 +767,8 @@ func TestBootstrap_WithAdapterInfo_AppearsInReadyz(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithAdapterInfo(map[string]string{
 			"mode":    "in-memory",
@@ -845,8 +843,8 @@ func TestBootstrap_HealthContributor_Discovery_AppearsInReadyz(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -903,8 +901,8 @@ func TestBootstrap_HealthContributor_DuplicateName_FailsFast(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -992,8 +990,8 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error { return nil }),
 		WithHealthChecker("postgres", func(_ context.Context) error { return fmt.Errorf("connection refused") }),
@@ -1058,8 +1056,8 @@ func TestBootstrap_WithHealthChecker_DynamicStateTransition(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithHealthChecker("rabbitmq", func(_ context.Context) error {
 			if unhealthy.Load() {
@@ -1129,8 +1127,8 @@ func TestBootstrap_ConfigWatcher_ReadyzVerboseIncludesWatcher(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1195,8 +1193,8 @@ func TestBootstrap_ConfigDriftReadyz_NoDrift(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1326,8 +1324,8 @@ func TestBootstrap_ConfigDriftReadyz_HTTP503OnDrift(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1395,7 +1393,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		WithShutdownTimeout(time.Second),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
@@ -1420,7 +1418,7 @@ func TestBootstrap_WithHealthChecker_ReservedNameConflict_ReturnsError(t *testin
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		WithHealthChecker("config-watcher", func(_ context.Context) error { return nil }),
 		WithShutdownTimeout(time.Second),
 	)
@@ -1445,8 +1443,8 @@ func TestBootstrap_EventRouter_ReadyzVerboseIncludesEventRouter(t *testing.T) {
 		WithAssembly(asm),
 		WithPublisher(eb),
 		WithSubscriber(eb),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1655,8 +1653,8 @@ func TestBootstrap_ShutdownDrainsInflightReload(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(5*time.Second),
 	)
 
@@ -1713,8 +1711,8 @@ func TestBootstrap_ConfigReload_NotifiesCells(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1773,8 +1771,8 @@ func TestBootstrap_ConfigReload_ErrorDoesNotCrash(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1827,8 +1825,8 @@ func TestBootstrap_ConfigReload_PanicDoesNotCrash(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1885,8 +1883,8 @@ func TestBootstrap_ConfigReload_FIFO(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1942,8 +1940,8 @@ func TestBootstrap_ConfigReload_NonReloaderSkipped(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -1998,8 +1996,8 @@ func TestBootstrap_ConfigReload_NoChangeNoCallback(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2094,8 +2092,8 @@ func TestBootstrap_ConfigReload_EventIsolation(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2155,8 +2153,8 @@ func TestBootstrap_ShutdownNoPostStopReload(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2216,8 +2214,8 @@ func TestBootstrap_ShutdownRejectsReloadDuringDrain(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithWorkers(blocker),
 	)
@@ -2280,8 +2278,8 @@ func TestBootstrap_ConfigReload_GenerationTracking(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2427,8 +2425,8 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWT(verifier), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWT(verifier)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2512,8 +2510,8 @@ func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWT(verifier), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWT(verifier)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2569,8 +2567,8 @@ func TestBootstrap_UserRouterOpts_CannotOverrideFrameworkHealth(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2605,7 +2603,7 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
-	b := New(WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)))
+	b := New(WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)))
 	go func() { errCh <- b.Run(ctx) }()
 
 	// Wait for server to be ready.
@@ -2692,8 +2690,8 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2734,8 +2732,8 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2778,8 +2776,8 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
 		WithRouterOptions(router.WithPolicyCoverageWhitelist([]string{"/api/v1/*"})),
 	)
@@ -2817,8 +2815,8 @@ func TestBootstrap_TracingE2E_InfraEndpoints(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	b := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
 	)
 
@@ -2894,8 +2892,8 @@ func TestBootstrap_AuthDiscovery_ProtectedRoute_Returns401(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWTFromAssembly(asm), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -2941,8 +2939,8 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWTFromAssembly(asm), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		// F3: public routes are declared via auth.Mount(Public:true) in the cell.
 	)
@@ -3004,8 +3002,8 @@ func TestBootstrap_WithAuthMiddleware_Precedence(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWT(explicitVerifier), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWT(explicitVerifier)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3052,8 +3050,8 @@ func TestBootstrap_AuthDiscovery_NoProvider_FailsClosed(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWTFromAssembly(asm), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3084,8 +3082,8 @@ func TestBootstrap_AuthDiscovery_MultipleProviders_FailsFast(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWTFromAssembly(asm), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3117,8 +3115,8 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWTFromAssembly(asm), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		// F3: public routes declared via auth.Mount(Public:true) in authProviderCell.
 	)
@@ -3184,8 +3182,8 @@ func TestBootstrap_WithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithSecurityHeadersOptions(
 			middleware.WithHSTSIncludeSubDomains(),
@@ -3266,8 +3264,8 @@ func TestBootstrap_ConfigReload_KeyFilter_SkipsUnmatched(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3315,8 +3313,8 @@ func TestBootstrap_ConfigReload_KeyFilter_NotifiesMatched(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3371,8 +3369,8 @@ func TestBootstrap_ConfigReload_NoKeyFilter_ReceivesAll(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithConfig(cfgFile, ""),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3464,8 +3462,8 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_TraceparentIgnored(t *testing.T)
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWTFromAssembly(asm), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithTracer(tracer),
 		WithShutdownTimeout(2*time.Second),
 		// F3: /api/v1/public/ping is declared public by traceCapturingCell.
@@ -3601,8 +3599,8 @@ func TestBootstrap_HEADAlias_BypassesAuth(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), PolicyJWTFromAssembly(asm), WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -3647,8 +3645,8 @@ func TestBootstrap_WithLifecycleHook_RunsDuringStart(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -3688,8 +3686,8 @@ func TestBootstrap_WithLifecycleHook_StartFailureHaltsRun(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -3737,8 +3735,8 @@ func TestBootstrap_WithManagedCloser_RegistersAsTeardown(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithManagedCloser(resource),
 	)
@@ -3825,7 +3823,7 @@ func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -3833,10 +3831,10 @@ func TestBootstrap_Phase5_ProtectedRoutesWithoutVerifierFailFast(t *testing.T) {
 	defer cancel()
 
 	err := b.Run(ctx)
-	require.Error(t, err, "Bootstrap.Run must reject protected route declarations without an auth policy")
-	assert.Contains(t, err.Error(), "without an auth policy")
+	require.Error(t, err, "Bootstrap.Run must reject protected route declarations without an auth plan")
+	assert.Contains(t, err.Error(), "without an auth plan")
 	assert.Contains(t, err.Error(), "GET /api/v1/protected")
-	assert.Contains(t, err.Error(), "PolicyJWTFromAssembly")
+	assert.Contains(t, err.Error(), "NewAuthJWTFromAssembly")
 }
 
 func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
@@ -3850,7 +3848,7 @@ func TestBootstrap_Phase5_FinalizeAuthError_PropagatesRollback(t *testing.T) {
 		WithAssembly(asm),
 		// PR-A14b: phase0 now requires at least one listener. Phase5 errors
 		// before the listener is actually bound, so no connection is ever served.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -3877,8 +3875,8 @@ func TestBootstrap_DuplicateListenerRef_FailsFast(t *testing.T) {
 	ln := newLocalListener(t)
 	b := New(
 		// Two declarations for PrimaryListener — second one is the duplicate.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -3903,7 +3901,7 @@ func TestBootstrap_DuplicateRouteGroup_FailsFast(t *testing.T) {
 	ln := newLocalListener(t)
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -3967,8 +3965,8 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -4037,8 +4035,8 @@ func TestBootstrap_Phase5_FinalizeFailure_OnHealthListener(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
-		WithListener(cell.HealthListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		WithListener(cell.HealthListener, "127.0.0.1:0", nil),
 		WithShutdownTimeout(time.Second),
 	)
 
@@ -4100,7 +4098,7 @@ func TestBootstrap_UnknownListenerRef_FailsFast(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		// Only PrimaryListener declared; cell uses zero-value ref.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
 		WithShutdownTimeout(time.Second),
 	)
 
