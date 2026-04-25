@@ -1,4 +1,5 @@
 id: event.flag.changed.v1
+description: "Retired same-PR as deprecation per CLAUDE.md no-backward-compat rule (gocell-internal only, no external consumers)"
 kind: event
 ownerCell: configcore
 consistencyLevel: L2
@@ -6,7 +7,7 @@ lifecycle: deprecated
 endpoints:
   publisher: configcore
   subscribers: []
-  # deprecated 2026-04-25: dead event since v1.0; never had subscriber, retired by PR-CFG-B
+  # deprecated 2026-04-25: dead event since v1.0; never had subscriber, retired by PR #266
 schemaRefs:
   headers: headers.schema.json
   payload: payload.schema.json

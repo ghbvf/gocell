@@ -41,6 +41,7 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 		{"invalid json", []byte("not-json{"), "unmarshal"},
 		{"missing key", []byte(`{"version":1}`), "missing key"},
 		{"empty key", []byte(`{"key":"","version":1}`), "missing key"},
+		{"blank key whitespace", []byte(`{"key":"   ","version":1}`), "missing key"},
 		{"missing version", []byte(`{"key":"jwt.ttl"}`), "invalid version"},
 		{"invalid version zero", []byte(`{"key":"jwt.ttl","version":0}`), "invalid version"},
 		// value field is rejected — payload must be metadata-only

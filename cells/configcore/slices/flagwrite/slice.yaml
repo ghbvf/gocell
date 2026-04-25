@@ -1,5 +1,7 @@
 id: flagwrite
 belongsToCell: configcore
+# consistencyLevel: L1 — explicitly L1 LocalTx (not L2); slice.yaml inherits cell.yaml L2 by default
+# but flag-write dropped outbox emission (event.flag.changed.v1 retired by PR #266)
 contractUsages:
   - contract: http.config.flags.create.v1
     role: serve

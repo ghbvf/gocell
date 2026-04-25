@@ -55,3 +55,15 @@ h.ServeHTTP(rec, req)
 c.ValidateHTTPResponseRecorder(t, rec)
 c.ValidatePayload(t, pub.calls[0].payload)
 ```
+
+## ADV-05 治理规则：active event 必须有 subscriber
+
+`kernel/governance` ADV-05 在 `gocell validate` 阶段对每个 `kind: event` 的 contract 强制：
+- 若 `lifecycle: active`（或 `lifecycle: draft`）且 `endpoints.subscribers` 为空（nil 或 []），SeverityError 阻断 CI
+- `lifecycle: deprecated` 给豁免（dead event 标记为 deprecated 即可）
+- subscribers 可以是 cell ID 或 actor ID（actors.yaml 注册的 external 系统）
+
+典型修复路径：
+- 真死事件 → `lifecycle: deprecated`
+- 内部 fan-out 但还没 consumer → 添加占位 cell consumer（注释说明意图）
+- 对外 fan-out 给 SIEM/外部平台 → actors.yaml 注册 actor + subscribers 引用 actor ID

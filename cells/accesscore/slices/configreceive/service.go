@@ -21,6 +21,11 @@ const (
 
 // Service consumes config change events for accesscore.
 //
+// NOTE: HandleEntryUpserted/HandleEntryDeleted are currently observability-only
+// (logs only). Real consumers (JWT TTL refresh, key rotation interval) will land
+// in a follow-up; the current subscription is a placeholder per ADV-05
+// (active event must have subscribers).
+//
 // Consumer: cg-accesscore-config-events
 // Idempotency: log-only (no side effects), inherently idempotent
 // Disposition: Ack on success / Reject on permanent unmarshal or semantic error

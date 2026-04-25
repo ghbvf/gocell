@@ -12,20 +12,14 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
-// Re-exported from domain so external callers / tests can refer to the topic
-// without importing internal/domain directly.
-const (
-	TopicConfigEntryUpserted = domain.TopicConfigEntryUpserted
-	TopicConfigEntryDeleted  = domain.TopicConfigEntryDeleted
-)
-
 // Cache tracks the latest known version for each config key observed from events.
 // It does NOT store values — subscribers must refetch via GET /api/v1/config/{key}.
+//
+// versions only, no cached values; subscribers MUST refetch via GET for the actual value.
 type Cache struct {
 	mu       sync.RWMutex
 	versions map[string]int
@@ -69,6 +63,9 @@ func (s *Service) Cache() *Cache {
 // Records the known version for the key; does not store a value.
 // Callers wanting the current value must refetch via GET /api/v1/config/{key}.
 //
+// Version monotonicity: events with a version <= the known version for the key
+// are silently dropped (stale or replayed entry).
+//
 // Consumer: cg-configcore-entry-upserted
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
@@ -82,6 +79,15 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 	}
 
 	s.cache.mu.Lock()
+	known := s.cache.versions[event.Key]
+	if event.Version <= known {
+		s.cache.mu.Unlock()
+		s.logger.Debug("config-subscribe: stale or replayed entry-upserted ignored",
+			slog.String("key", event.Key),
+			slog.Int("incoming_version", event.Version),
+			slog.Int("known_version", known))
+		return nil
+	}
 	s.cache.versions[event.Key] = event.Version
 	s.cache.mu.Unlock()
 	s.logger.Info("config-subscribe: cache updated",
@@ -100,9 +106,16 @@ func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) erro
 	}
 
 	s.cache.mu.Lock()
+	_, existed := s.cache.versions[event.Key]
 	delete(s.cache.versions, event.Key)
 	s.cache.mu.Unlock()
-	s.logger.Info("config-subscribe: key deleted from cache",
-		slog.String("key", event.Key))
+
+	if existed {
+		s.logger.Info("config-subscribe: key deleted from cache",
+			slog.String("key", event.Key))
+	} else {
+		s.logger.Debug("config-subscribe: delete event for unknown key (idempotent)",
+			slog.String("key", event.Key))
+	}
 	return nil
 }

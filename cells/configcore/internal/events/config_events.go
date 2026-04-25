@@ -7,6 +7,8 @@
 // ref: NATS subject+bytes / Watermill payload-bytes boundary — event carries
 // metadata only (key + version). Subscribers MUST refetch via
 // GET /api/v1/config/{key} to obtain the current value.
+//
+// Internal slices of configcore may import this package directly (it's the canonical decoder for the producer cell).
 package events
 
 import (

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"reflect"
 	"testing"
 	"time"
 
@@ -167,4 +168,39 @@ func TestFlagWrite_Create_BlankKey(t *testing.T) {
 	svc, _ := newTestService(t)
 	_, err := svc.Create(context.Background(), CreateInput{Key: ""})
 	require.Error(t, err)
+}
+
+// TestFlagWrite_NoOutboxEmit_AfterDowngrade is a regression lock that guards
+// against accidental re-introduction of an outbox emitter in the flag-write
+// Service after the PR-CFG-B downgrade from L2 to L1.
+//
+// event.flag.changed.v1 was retired (lifecycle: deprecated) because it never
+// had a subscriber. This test ensures flag-write remains emitter-free even if
+// future refactors add outbox.Emitter-typed fields to the struct.
+func TestFlagWrite_NoOutboxEmit_AfterDowngrade(t *testing.T) {
+	// Structural assertion: Service must not contain an "emitter" field.
+	svcType := reflect.TypeOf(Service{})
+	for i := 0; i < svcType.NumField(); i++ {
+		field := svcType.Field(i)
+		assert.NotEqual(t, "emitter", field.Name,
+			"Service must not have an emitter field after L2→L1 downgrade (event.flag.changed.v1 retired)")
+	}
+
+	// Behavioural assertion: Create/Update/Toggle/Delete must succeed without
+	// any outbox writer being injected, confirming no emit attempt is made.
+	repo := mem.NewFlagRepository()
+	svc, err := NewService(repo, slog.Default(), WithTxManager(&testutil.NoopTxRunner{}))
+	require.NoError(t, err)
+
+	_, createErr := svc.Create(context.Background(), CreateInput{Key: "flag-no-emit", Description: "test"})
+	require.NoError(t, createErr, "Create must succeed without emitter (L1 only)")
+
+	_, updateErr := svc.Update(context.Background(), UpdateInput{Key: "flag-no-emit", Description: "updated"})
+	require.NoError(t, updateErr, "Update must succeed without emitter (L1 only)")
+
+	_, toggleErr := svc.Toggle(context.Background(), "flag-no-emit", true)
+	require.NoError(t, toggleErr, "Toggle must succeed without emitter (L1 only)")
+
+	deleteErr := svc.Delete(context.Background(), "flag-no-emit")
+	require.NoError(t, deleteErr, "Delete must succeed without emitter (L1 only)")
 }

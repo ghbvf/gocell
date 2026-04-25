@@ -88,7 +88,7 @@ func (v *Validator) validateADV05() []ValidationResult {
 				"ADV-05", SeverityError, IssueForbidden,
 				contractFile(c.ID),
 				"endpoints.subscribers",
-				fmt.Sprintf("event contract %q is active but has no subscribers; mark lifecycle: deprecated or add a subscriber", c.ID),
+				fmt.Sprintf("event contract %q is active but has no subscribers; mark lifecycle: deprecated or add at least one cell or actor to endpoints.subscribers in the contract.yaml", c.ID),
 			))
 		}
 	}

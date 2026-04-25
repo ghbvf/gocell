@@ -55,28 +55,33 @@ func TestDecodeEntryUpsertedRejectsInvalidPayload(t *testing.T) {
 }
 
 func TestDecodeEntryDeleted(t *testing.T) {
-	got, err := DecodeEntryDeleted([]byte(`{"key":"jwt.ttl"}`))
-	require.NoError(t, err)
-	assert.Equal(t, "jwt.ttl", got.Key)
-}
-
-func TestDecodeEntryDeletedRejectsInvalidPayload(t *testing.T) {
 	tests := []struct {
-		name    string
-		payload []byte
-		wantErr string
+		name        string
+		payload     []byte
+		wantErr     bool
+		wantKey     string
+		errContains string
 	}{
-		{"invalid json", []byte("not-json"), "invalid"},
-		{"missing key", []byte(`{}`), "missing key"},
-		{"blank key", []byte(`{"key":"  "}`), "missing key"},
-		{"unknown field", []byte(`{"key":"jwt.ttl","value":"old"}`), "unknown field"},
+		{"valid", []byte(`{"key":"jwt.ttl"}`), false, "jwt.ttl", ""},
+		{"missing key", []byte(`{}`), true, "", "missing key"},
+		{"blank key", []byte(`{"key":"  "}`), true, "", "missing key"},
+		{"unknown field", []byte(`{"key":"jwt.ttl","value":"old"}`), true, "", "unknown field"},
+		{"multiple json values", []byte(`{"key":"jwt.ttl"}{}`), true, "", "multiple JSON values"},
+		{"invalid json", []byte("not-json"), true, "", "invalid"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			_, err := DecodeEntryDeleted(tt.payload)
-			require.Error(t, err)
-			assert.Contains(t, err.Error(), tt.wantErr)
+			got, err := DecodeEntryDeleted(tt.payload)
+			if tt.wantErr {
+				require.Error(t, err)
+				if tt.errContains != "" {
+					assert.Contains(t, err.Error(), tt.errContains)
+				}
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.wantKey, got.Key)
 		})
 	}
 }

@@ -1,3 +1,8 @@
+# External actors registered for ADV-05 satisfaction:
+# - external-audit-sink: real external SIEM/audit-collector consuming auditcore L2 events
+# - example-iot-platform: example external IoT platform for examples/iotdevice walkthrough
+# - example-order-platform: example external order processor for examples/todoorder walkthrough
+# If you add a new external actor, also add a comment line here describing its role.
 - id: edge-bff
   type: external
   maxConsistencyLevel: L4

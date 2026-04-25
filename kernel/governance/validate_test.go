@@ -2564,6 +2564,41 @@ func TestADV05(t *testing.T) {
 			},
 			wantCount: 0,
 		},
+		{
+			name: "draft lifecycle empty subscribers should error (draft not exempt)",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.draft.nosubscribers.v1"] = &metadata.ContractMeta{
+					ID:               "event.draft.nosubscribers.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "draft",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{},
+					},
+				}
+			},
+			wantCount: 1,
+			wantSev:   SeverityError,
+		},
+		{
+			name: "draft lifecycle with subscribers → 0 findings",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["event.draft.withsubs.v1"] = &metadata.ContractMeta{
+					ID:               "event.draft.withsubs.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "draft",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{"auditcore"},
+					},
+				}
+			},
+			wantCount: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2575,7 +2610,7 @@ func TestADV05(t *testing.T) {
 			for _, r := range got {
 				assert.Equal(t, tt.wantSev, r.Severity)
 				assert.Equal(t, IssueForbidden, r.IssueType)
-				assert.Contains(t, r.Message, "active but has no subscribers")
+				assert.Contains(t, r.Message, "is active but has no subscribers")
 			}
 		})
 	}
