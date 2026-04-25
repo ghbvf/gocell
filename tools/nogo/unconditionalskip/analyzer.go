@@ -69,7 +69,7 @@ func isTestOrBenchmark(fn *ast.FuncDecl, pass *analysis.Pass) bool {
 }
 
 func hasTestPrefix(name string) bool {
-	return len(name) > 4 && (name[:4] == "Test" || (len(name) > 9 && name[:9] == "Benchmark"))
+	return len(name) >= 4 && (name[:4] == "Test" || (len(name) >= 9 && name[:9] == "Benchmark"))
 }
 
 // isTestingTorB reports whether the expression is *testing.T or *testing.B.

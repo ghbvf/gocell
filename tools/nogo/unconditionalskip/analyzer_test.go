@@ -23,6 +23,7 @@ import (
 //	case 6: TestMain(m *testing.M) → NO REPORT
 //	case 7: helper fn with t.Skip but not Test prefix → NO REPORT
 //	case 8: Skip not first statement → NO REPORT
+//	case 9: exact name "Test" (len==4) first stmt t.Skip → REPORT (pins >= boundary)
 func TestAnalyzer(t *testing.T) {
 	analysistest.Run(t, analysistest.TestData(), unconditionalskip.Analyzer, "a")
 }

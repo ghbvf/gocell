@@ -1,0 +1,2 @@
+# analysistest fixtures must be tracked; override root src/ exclusion rule.
+!src/

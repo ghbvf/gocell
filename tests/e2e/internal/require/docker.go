@@ -15,6 +15,11 @@ import (
 // DOCKER_HOST env var first, then the default /var/run/docker.sock unix
 // socket (1-second timeout). Set GOCELL_E2E_DOCKER_AVAILABLE=1 in CI to
 // bypass the probe and trust that docker compose is already running.
+//
+// Analyzer false-positive risk: the skip call inside testutil.RequireDocker is
+// already guarded by an if-conditional (if dockerAvailable()), so it is never
+// an unconditional first statement at the call site. The unconditionalskip
+// analyzer will not flag this function.
 func Docker(t *testing.T) {
 	t.Helper()
 	if os.Getenv("GOCELL_E2E_DOCKER_AVAILABLE") == "1" {

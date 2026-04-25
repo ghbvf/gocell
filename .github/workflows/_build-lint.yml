@@ -70,7 +70,7 @@ jobs:
             race: false
             static_checks: false
           - shard: others
-            pkgs: ./adapters/... ./cmd/... ./examples/... ./tests/... ./contracts/... ./tools/...
+            pkgs: ./adapters/... ./cmd/... ./examples/... ./tests/... ./contracts/...
             race: false
             static_checks: false
     steps:

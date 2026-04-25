@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/checker"
@@ -221,8 +222,16 @@ func checkUnconditionalSkip(args []string) error {
 	if err != nil {
 		return fmt.Errorf("load packages: %w", err)
 	}
-	if packages.PrintErrors(pkgs) > 0 {
-		return fmt.Errorf("package load errors (see above)")
+	var pkgErrs []packages.Error
+	for _, p := range pkgs {
+		pkgErrs = append(pkgErrs, p.Errors...)
+	}
+	if len(pkgErrs) > 0 {
+		var b strings.Builder
+		for _, e := range pkgErrs {
+			fmt.Fprintf(&b, "  %s\n", e.Error())
+		}
+		return fmt.Errorf("package load errors:\n%s", b.String())
 	}
 
 	graph, err := checker.Analyze(
