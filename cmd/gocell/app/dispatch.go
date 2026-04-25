@@ -72,7 +72,7 @@ func PrintUsage() {
 	fmt.Println("  validate    Validate all metadata (blocking)         [--root, --fail-fast, --strict, --format]")
 	fmt.Println("  scaffold    Generate new cell/slice/contract/journey [--dry-run]")
 	fmt.Println("  generate    Generate assembly code and derived files [--id, --module]")
-	fmt.Println("  check       Run targeted architecture analysis        [contract-health (--format), slice-coverage, ...]")
+	fmt.Println("  check       Run targeted architecture analysis        [contract-health (--format), slice-coverage, unconditional-skip, ...]")
 	fmt.Println("  verify      Run tests (slice/cell/journey)           [--id, --files]")
 	fmt.Println()
 	fmt.Println("Run 'gocell <command> -h' for full flag help on a sub-command.")

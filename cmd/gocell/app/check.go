@@ -5,10 +5,15 @@ import (
 	"fmt"
 	"os"
 
+	"golang.org/x/tools/go/analysis"
+	"golang.org/x/tools/go/analysis/checker"
+	"golang.org/x/tools/go/packages"
+
 	"github.com/ghbvf/gocell/cmd/gocell/app/printers"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/registry"
+	"github.com/ghbvf/gocell/tools/nogo/unconditionalskip"
 )
 
 // runCheck implements:
@@ -18,9 +23,10 @@ import (
 //	gocell check assembly-completeness --id=<assemblyID>
 //	gocell check journey-readiness --journey=<journeyID>
 //	gocell check l0-imports --cell=<cellID>
+//	gocell check unconditional-skip [--format text|json|sarif]
 func runCheck(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell check <contract-health|slice-coverage|assembly-completeness|journey-readiness|l0-imports> [flags]")
+		return fmt.Errorf("usage: gocell check <contract-health|slice-coverage|assembly-completeness|journey-readiness|l0-imports|unconditional-skip> [flags]")
 	}
 
 	subtype := args[0]
@@ -37,6 +43,8 @@ func runCheck(args []string) error {
 		return checkPlaceholder("journey-readiness", subArgs)
 	case "l0-imports":
 		return checkPlaceholder("l0-imports", subArgs)
+	case "unconditional-skip":
+		return checkUnconditionalSkip(subArgs)
 	default:
 		return fmt.Errorf("unknown check type: %s", subtype)
 	}
@@ -171,4 +179,87 @@ func checkPlaceholder(name string, args []string) error {
 	}
 
 	return fmt.Errorf("not implemented: gocell check %s", name)
+}
+
+// checkUnconditionalSkip implements `gocell check unconditional-skip`.
+//
+// It loads packages matching the given patterns (default: "./..."), runs the
+// unconditionalskip analyzer over them, and renders the diagnostics as
+// governance.ValidationResult entries using the configured output format.
+//
+// Exit behaviour mirrors checkContractHealth: a non-zero error is returned
+// when one or more SeverityError findings are emitted, so CI callers can
+// gate on the exit code without parsing the output format.
+func checkUnconditionalSkip(args []string) error {
+	const defaultPattern = "./..."
+	fs := flag.NewFlagSet("check unconditional-skip", flag.ContinueOnError)
+	format := fs.String("format", string(printers.FormatText),
+		"output format: text (default) | json | sarif")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	patterns := fs.Args()
+	if len(patterns) == 0 {
+		patterns = []string{defaultPattern}
+	}
+
+	printer, err := printers.New(*format, os.Stdout, toolVersion())
+	if err != nil {
+		return err
+	}
+
+	// Load packages with full type information required by the analyzer.
+	// packages.LoadAllSyntax is the minimum mode required by checker.Analyze:
+	// it loads type-annotated syntax for the initial packages and all their
+	// transitive dependencies so that the inspector can walk the full AST.
+	cfg := &packages.Config{
+		Mode:  packages.LoadAllSyntax,
+		Tests: true,
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		return fmt.Errorf("load packages: %w", err)
+	}
+	if packages.PrintErrors(pkgs) > 0 {
+		return fmt.Errorf("package load errors (see above)")
+	}
+
+	graph, err := checker.Analyze(
+		[]*analysis.Analyzer{unconditionalskip.Analyzer},
+		pkgs,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("run analyzer: %w", err)
+	}
+
+	var results []governance.ValidationResult
+	for act := range graph.All() {
+		for _, diag := range act.Diagnostics {
+			pos := act.Package.Fset.Position(diag.Pos)
+			results = append(results, governance.ValidationResult{
+				Code:      "UNCONDITIONAL-SKIP-01",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueForbidden,
+				File:      pos.Filename,
+				Line:      pos.Line,
+				Column:    pos.Column,
+				Message:   diag.Message,
+			})
+		}
+	}
+
+	if err := printer.Print(results); err != nil {
+		return fmt.Errorf("emit results: %w", err)
+	}
+
+	errCount := countContractHealthErrors(results)
+	if errCount > 0 {
+		return fmt.Errorf("unconditional-skip: %d issue(s) found", errCount)
+	}
+	if *format == string(printers.FormatText) {
+		fmt.Println("\nPASS: no unconditional skips found")
+	}
+	return nil
 }
