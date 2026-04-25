@@ -222,41 +222,6 @@ func toInt64(v any) (int64, bool) {
 // errMock is a sentinel error used in tests.
 var errMock = errors.New("mock error")
 
-// recordingCmdable wraps mockCmdable and records the context passed to each
-// Eval call. Used by deadline-shape tests that need to inspect the deadline
-// the production code computes. Reuses the embedded *mockCmdable's mutex so
-// evalContexts and evalCallCount live in one lock domain, preventing data
-// races under -race when tests read both fields.
-type recordingCmdable struct {
-	*mockCmdable
-	evalContexts []context.Context // guarded by embedded *mockCmdable.mu
-}
-
-func newRecordingCmdable() *recordingCmdable {
-	return &recordingCmdable{
-		mockCmdable: newMockCmdable(),
-	}
-}
-
-func (r *recordingCmdable) Eval(ctx context.Context, script string, keys []string, args ...any) *goredis.Cmd {
-	// Record the ctx under the embedded mock's mu so subsequent
-	// evalCallCount reads (which also live under that mu) see a coherent
-	// view from test code that reads both fields together.
-	r.mu.Lock()
-	r.evalContexts = append(r.evalContexts, ctx)
-	r.mu.Unlock()
-	return r.mockCmdable.Eval(ctx, script, keys, args...)
-}
-
-func (r *recordingCmdable) lastEvalCtx() context.Context {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.evalContexts) == 0 {
-		return nil
-	}
-	return r.evalContexts[len(r.evalContexts)-1]
-}
-
 // mockPoolStatsProvider implements poolStatsProvider for testing.
 type mockPoolStatsProvider struct {
 	stats *goredis.PoolStats
