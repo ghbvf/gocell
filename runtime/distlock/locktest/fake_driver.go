@@ -5,6 +5,14 @@
 // for unit tests of the distlock manager. RunDriverConformance verifies
 // that any Driver implementation behaves identically for token ownership
 // semantics.
+//
+// # Clock injection warning
+//
+// NewFakeDriver uses real time.Now for TTL expiry checks by default. When
+// testing alongside FakeClock for the manager, you MUST call
+// NewFakeDriverWithClock(fc.Now) (or fd.WithClock(fc.Now)) on the FakeDriver
+// as well — otherwise the manager's logical clock and the driver's TTL clock
+// will diverge, causing intermittent test failures.
 package locktest
 
 import (
@@ -34,6 +42,9 @@ type fakeEntry struct {
 //   - NextRenewError:  if non-nil, the next Renew call returns (false, err)
 //   - NextRenewHeld:   if set to false, the next Renew returns (false, nil) — simulates ownership lost
 //   - ErrIO:           if non-nil, injected as the error for SetNX/Renew/Release calls
+//
+// Use NewFakeDriverWithClock when pairing with FakeClock to ensure the driver's
+// TTL expiry logic uses the same logical time as the manager.
 type FakeDriver struct {
 	mu    sync.Mutex
 	keys  map[string]*fakeEntry
@@ -46,9 +57,22 @@ type FakeDriver struct {
 
 	// clock for TTL expiry checks (defaults to real time.Now).
 	clock func() time.Time
+
+	// lastRenewDeadline records the deadline of the context passed to the most
+	// recent Renew call. Used by TestLocker_TC12_DriftFactor to verify the
+	// drift-factor contract: deadline ≈ clock.Now() + ttl − drift.
+	// Zero if no Renew has been called or if the ctx had no deadline.
+	lastRenewDeadline time.Time
 }
 
 // NewFakeDriver creates a new FakeDriver using real-time clock.
+//
+// Default uses real time.Now for TTL expiry checks. When testing alongside
+// FakeClock for the manager, you MUST call WithClock(fc.Now) on the FakeDriver
+// as well — otherwise the manager's logical clock and the driver's TTL clock
+// will diverge, causing intermittent test failures.
+//
+// Use NewFakeDriverWithClock for a one-step constructor that wires the clock.
 func NewFakeDriver() *FakeDriver {
 	fd := &FakeDriver{
 		keys:  make(map[string]*fakeEntry),
@@ -58,6 +82,17 @@ func NewFakeDriver() *FakeDriver {
 	for _, m := range []string{"SetNX", "Renew", "Release"} {
 		fd.calls[m] = &atomic.Int64{}
 	}
+	return fd
+}
+
+// NewFakeDriverWithClock creates a new FakeDriver using the provided clock
+// function for TTL expiry checks. Use this when pairing with FakeClock:
+//
+//	fc := locktest.NewFakeClock(time.Time{})
+//	fd := locktest.NewFakeDriverWithClock(fc.Now)
+func NewFakeDriverWithClock(now func() time.Time) *FakeDriver {
+	fd := NewFakeDriver()
+	fd.clock = now
 	return fd
 }
 
@@ -109,6 +144,20 @@ func (fd *FakeDriver) ResetCalls() {
 	}
 }
 
+// LastRenewDeadline returns the deadline extracted from the context passed to
+// the most recent Renew call. Returns the zero time if no Renew has been called
+// or if the context carried no deadline.
+//
+// Used by TestLocker_TC12_DriftFactor to assert that the Renew RPC context
+// deadline reflects the configured drift factor:
+//
+//	deadline ≈ clock.Now() + ttl − drift
+func (fd *FakeDriver) LastRenewDeadline() time.Time {
+	fd.mu.Lock()
+	defer fd.mu.Unlock()
+	return fd.lastRenewDeadline
+}
+
 // SetNX implements distlock.Driver.
 func (fd *FakeDriver) SetNX(_ context.Context, key, token string, ttl time.Duration) (bool, error) {
 	fd.calls["SetNX"].Add(1)
@@ -143,11 +192,17 @@ func (fd *FakeDriver) SetNX(_ context.Context, key, token string, ttl time.Durat
 }
 
 // Renew implements distlock.Driver.
-func (fd *FakeDriver) Renew(_ context.Context, key, token string, ttl time.Duration) (bool, error) {
+// Records the deadline from ctx for test introspection via LastRenewDeadline.
+func (fd *FakeDriver) Renew(ctx context.Context, key, token string, ttl time.Duration) (bool, error) {
 	fd.calls["Renew"].Add(1)
 
 	fd.mu.Lock()
 	defer fd.mu.Unlock()
+
+	// Record the ctx deadline for TC-12 drift-factor validation.
+	if dl, ok := ctx.Deadline(); ok {
+		fd.lastRenewDeadline = dl
+	}
 
 	// Consume injected error.
 	if fd.nextRenewError != nil {

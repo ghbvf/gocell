@@ -34,7 +34,7 @@ func waitForRenewM(t *testing.T, m *distlock.Manager, fd *locktest.FakeDriver, w
 			t.Fatalf("waitForRenewM: timed out waiting for %d Renew calls (got %d)", want, fd.Calls("Renew"))
 		}
 		select {
-		case <-m.RenewNotify:
+		case <-m.RenewNotify():
 		case <-time.After(totalTimeout):
 			t.Fatalf("waitForRenewM: RenewNotify timed out (want %d, got %d)", want, fd.Calls("Renew"))
 		}

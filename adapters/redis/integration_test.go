@@ -5,6 +5,7 @@ package redis
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -209,11 +210,11 @@ func TestRedisDriver_Conformance(t *testing.T) {
 	client, cleanup := startRedis(t)
 	defer cleanup()
 
-	var counter int
+	var counter atomic.Int64
 	factory := func(t *testing.T) distlock.Driver {
 		t.Helper()
-		counter++
-		prefix := fmt.Sprintf("conformance:%s:%d:", t.Name(), counter)
+		n := counter.Add(1)
+		prefix := fmt.Sprintf("conformance:%s:%d:", t.Name(), n)
 		return &prefixedRedisDriver{
 			RedisDriver: NewRedisDriver(client.cmdable()),
 			prefix:      prefix,
@@ -221,6 +222,7 @@ func TestRedisDriver_Conformance(t *testing.T) {
 	}
 
 	locktest.RunDriverConformance(t, factory)
+	locktest.RunDriverTTLConformance(t, factory)
 }
 
 // prefixedRedisDriver wraps RedisDriver and prepends a prefix to every key.

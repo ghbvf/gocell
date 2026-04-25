@@ -12,7 +12,7 @@ import (
 //
 // ref: adapters/redis/distlock.go randomToken — identical algorithm, hoisted up
 func randomToken() (string, error) {
-	b := make([]byte, 16)
+	b := make([]byte, 32)
 	if _, err := rand.Read(b); err != nil {
 		return "", fmt.Errorf("distlock: random token generation failed: %w", err)
 	}

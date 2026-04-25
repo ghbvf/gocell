@@ -105,9 +105,6 @@ func (fc *FakeClock) Advance(d time.Duration) {
 	}
 }
 
-// NowTime is a convenience accessor returning the current fake time.
-func (fc *FakeClock) NowTime() time.Time { return fc.Now() }
-
 // PendingTimers returns the number of active (non-stopped, non-fired) timers
 // currently registered with this clock. Useful in tests to wait until the
 // manager goroutine has re-registered a timer after a renew.
@@ -159,14 +156,30 @@ type FakeTimer struct {
 func (ft *FakeTimer) C() <-chan time.Time { return ft.ch }
 
 // Stop implements distlock.Timer.
+// Returns true if the timer was stopped before firing; false if it had already
+// fired or been stopped.
+//
+// Both stopped and fired are read by PendingTimers/Advance under fc.mu, so
+// Stop must also hold fc.mu when modifying stopped to avoid a data race.
+// The removal from fc.timers and the stopped flag update are done atomically
+// under fc.mu so Advance cannot observe a partially-stopped timer.
 func (ft *FakeTimer) Stop() bool {
-	ft.clock.removeTimer(ft)
-	ft.mu.Lock()
-	defer ft.mu.Unlock()
+	fc := ft.clock
+	fc.mu.Lock()
 	if ft.stopped || ft.fired {
+		fc.mu.Unlock()
 		return false
 	}
 	ft.stopped = true
+	// Remove from the pending list atomically within the same lock.
+	filtered := fc.timers[:0]
+	for _, t := range fc.timers {
+		if t != ft {
+			filtered = append(filtered, t)
+		}
+	}
+	fc.timers = filtered
+	fc.mu.Unlock()
 	return true
 }
 

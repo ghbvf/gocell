@@ -1,7 +1,25 @@
+// Package locktest provides a controllable in-memory Driver implementation
+// and a conformance test suite for use in unit tests.
+//
+// # Conformance suites
+//
+// Two suites are provided to separate concerns:
+//
+//   - RunDriverConformance: semantic correctness (C-1..C-4, C-7). Runs against
+//     any Driver, including FakeDriver. No real-time waits; safe for -race.
+//
+//   - RunDriverTTLConformance: TTL physics (C-5, C-6). Uses real time.Sleep
+//     because it is testing real-clock TTL expiry on backends. Intended for
+//     integration tests (e.g., adapters/redis/integration_test.go) where
+//     wall-clock waits are acceptable.
+//
+// FakeDriver conformance tests (conformance_test.go) call only
+// RunDriverConformance. Redis integration tests call both.
 package locktest
 
 import (
 	"context"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -13,9 +31,11 @@ import (
 // For real backends the factory should set up a clean namespace/key prefix.
 type DriverFactory func(t *testing.T) distlock.Driver
 
-// RunDriverConformance runs the full Driver conformance suite (C-1..C-7) against
-// the supplied factory. Both FakeDriver (locktest) and RedisDriver (adapters/redis)
-// must pass this suite.
+// RunDriverConformance runs the semantic correctness conformance suite
+// (C-1..C-4, C-7) against the supplied factory. Both FakeDriver (locktest)
+// and RedisDriver (adapters/redis) must pass this suite.
+//
+// This suite makes no real-time waits and is safe to run with -race.
 //
 // Mirrors the outboxtest.RunStoreConformanceSuite pattern.
 func RunDriverConformance(t *testing.T, factory DriverFactory) {
@@ -24,9 +44,21 @@ func RunDriverConformance(t *testing.T, factory DriverFactory) {
 	t.Run("C2_Renew_WrongToken_ReturnsFalse", func(t *testing.T) { conformC2(t, factory) })
 	t.Run("C3_Release_WrongToken_NoDelete", func(t *testing.T) { conformC3(t, factory) })
 	t.Run("C4_Concurrent_SetNX_ExactlyOneTrue", func(t *testing.T) { conformC4(t, factory) })
+	t.Run("C7_DriverIOError_Propagated", func(t *testing.T) { conformC7(t, factory) })
+}
+
+// RunDriverTTLConformance runs the TTL physics conformance suite (C-5, C-6)
+// against the supplied factory. These tests use real time.Sleep because they
+// are validating actual backend TTL expiry.
+//
+// Call this from integration tests where wall-clock waits are acceptable
+// (e.g., adapters/redis/integration_test.go). Do NOT call it for FakeDriver
+// conformance — FakeDriver's TTL expiry is clock-injected and tested via
+// the manager's FakeClock-driven renew cycles instead.
+func RunDriverTTLConformance(t *testing.T, factory DriverFactory) {
+	t.Helper()
 	t.Run("C5_TTLExpiry_SetNX_Succeeds", func(t *testing.T) { conformC5(t, factory) })
 	t.Run("C6_Renew_AfterExpiry_ReturnsFalse", func(t *testing.T) { conformC6(t, factory) })
-	t.Run("C7_DriverIOError_Propagated", func(t *testing.T) { conformC7(t, factory) })
 }
 
 // conformC1: SetNX first call returns true; second call with different token returns false.
@@ -83,7 +115,13 @@ func conformC3(t *testing.T, factory DriverFactory) {
 	ctx := context.Background()
 	ttl := time.Minute
 
-	_, _ = drv.SetNX(ctx, "c3-key", "token-A", ttl)
+	ok, err := drv.SetNX(ctx, "c3-key", "token-A", ttl)
+	if err != nil {
+		t.Fatalf("C3 setup SetNX: %v", err)
+	}
+	if !ok {
+		t.Fatal("C3 setup: SetNX should succeed on fresh key")
+	}
 
 	// Wrong holder tries to release.
 	if err := drv.Release(ctx, "c3-key", "token-B"); err != nil {
@@ -139,7 +177,8 @@ func conformC4(t *testing.T, factory DriverFactory) {
 }
 
 // conformC5: After TTL expiry, SetNX on same key succeeds.
-// Uses FakeDriver's clock injection for non-integration drivers.
+// Uses real time.Sleep — only call via RunDriverTTLConformance for backends
+// that enforce physical TTL (e.g. Redis). Do not call for FakeDriver tests.
 func conformC5(t *testing.T, factory DriverFactory) {
 	t.Helper()
 	drv := factory(t)
@@ -151,8 +190,7 @@ func conformC5(t *testing.T, factory DriverFactory) {
 		t.Fatalf("C5 initial SetNX: ok=%v err=%v", ok, err)
 	}
 
-	// Wait past TTL — for real drivers this is a real sleep; for FakeDriver
-	// the factory must set a sufficiently small TTL so this is fast.
+	// Wait past TTL — real sleep because we are testing real-clock TTL expiry.
 	time.Sleep(5 * time.Millisecond)
 
 	ok2, err2 := drv.SetNX(ctx, "c5-key", "token-B", ttl)
@@ -165,6 +203,7 @@ func conformC5(t *testing.T, factory DriverFactory) {
 }
 
 // conformC6: Renew on an expired key returns (false, nil).
+// Uses real time.Sleep — only call via RunDriverTTLConformance.
 func conformC6(t *testing.T, factory DriverFactory) {
 	t.Helper()
 	drv := factory(t)
@@ -176,7 +215,7 @@ func conformC6(t *testing.T, factory DriverFactory) {
 		t.Fatalf("C6 SetNX: ok=%v err=%v", ok, err)
 	}
 
-	// Wait past TTL.
+	// Wait past TTL — real sleep.
 	time.Sleep(5 * time.Millisecond)
 
 	held, err := drv.Renew(ctx, "c6-key", "token-A", ttl)
@@ -189,53 +228,40 @@ func conformC6(t *testing.T, factory DriverFactory) {
 }
 
 // conformC7: Driver I/O errors propagate (not swallowed).
-// For FakeDriver we inject via SetNextRenewError; for real drivers this is
-// a smoke test using a context already canceled.
+// For FakeDriver we inject via SetNextRenewError; for real drivers we use an
+// already-past-deadline context to guarantee an error path on the SetNX call.
 func conformC7(t *testing.T, factory DriverFactory) {
 	t.Helper()
 	drv := factory(t)
 	ctx := context.Background()
 
-	// Use a pre-canceled context to trigger a backend error on most real drivers.
-	canceledCtx, cancel := context.WithCancel(ctx)
-	cancel()
-
-	// SetNX with a canceled context — most drivers return an error.
-	// We accept either an error or (false, nil) since FakeDriver ignores ctx.
-	_, _ = drv.SetNX(canceledCtx, "c7-key", "token-A", time.Minute) //nolint:errcheck
-
-	// For FakeDriver: inject an explicit error on Renew.
+	// For FakeDriver: inject an explicit error on Renew to verify propagation.
+	// FakeDriver ignores ctx for in-memory ops (acceptable); we test error
+	// propagation explicitly via SetNextRenewError.
 	if fd, ok := drv.(*FakeDriver); ok {
 		fd.SetNextRenewError(ErrDriverIO)
-		_, _ = drv.SetNX(ctx, "c7-key2", "token-A", time.Minute) //nolint:errcheck
-		_, err := drv.Renew(ctx, "c7-key2", "token-A", time.Minute)
-		if err == nil {
+		// SetNX with a valid context so the key is actually held.
+		setOK, setErr := drv.SetNX(ctx, "c7-key2", "token-A", time.Minute)
+		if setErr != nil || !setOK {
+			t.Fatalf("C7 FakeDriver setup SetNX: ok=%v err=%v", setOK, setErr)
+		}
+		_, renewErr := drv.Renew(ctx, "c7-key2", "token-A", time.Minute)
+		if renewErr == nil {
 			t.Fatal("C7: FakeDriver injected error should propagate from Renew")
+		}
+	} else {
+		// For real drivers: use an already-past-deadline context to force an error.
+		// This validates that the driver faithfully propagates ctx errors.
+		alreadyExpiredCtx, cancel := context.WithDeadline(ctx, time.Now().Add(-1*time.Hour))
+		defer cancel()
+		_, err := drv.SetNX(alreadyExpiredCtx, "c7-key", "token-A", time.Minute)
+		if err == nil {
+			t.Errorf("C7: real driver SetNX with already-past-deadline ctx should return an error")
 		}
 	}
 }
 
 // tokenFor generates a deterministic token for goroutine i.
 func tokenFor(i int) string {
-	return "token-" + ExportItoa(i)
-}
-
-// ExportItoa converts int to decimal string without importing strconv.
-// Exported so locker_test.go can use it for key generation.
-func ExportItoa(n int) string {
-	return itoa(n)
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	buf := [20]byte{}
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	return string(buf[pos:])
+	return "token-" + strconv.Itoa(i)
 }

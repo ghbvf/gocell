@@ -22,7 +22,8 @@ var (
 	ErrLockReleased = errors.New("distlock: lock released")
 )
 
-// ErrLockTimeout is returned by Acquire when the key is already held by
-// another holder and the lock cannot be granted.
-// Uses errcode so it can be matched at HTTP handler boundaries.
-const ErrLockTimeout errcode.Code = "ERR_DISTLOCK_TIMEOUT"
+// ErrLockTimeout is a package-level alias for errcode.ErrDistlockTimeout.
+// It is returned by Acquire when the key is already held by another holder.
+// The canonical definition lives in pkg/errcode for cross-package matching at
+// HTTP handler boundaries; this alias keeps call sites within distlock concise.
+const ErrLockTimeout = errcode.ErrDistlockTimeout

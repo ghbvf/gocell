@@ -350,6 +350,12 @@ const (
 	// ErrControlplaneVerboseTokenMissing so dashboards and runbooks can
 	// distinguish "forgot to configure" from "configured with the sample".
 	ErrControlplaneVerboseTokenSample Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE"
+
+	// ErrDistlockTimeout is returned by Locker.Acquire when the requested key is
+	// already held by another holder and the lock cannot be granted immediately.
+	// Maps to HTTP 409 Conflict at the API boundary.
+	// runtime/distlock aliases this as ErrLockTimeout for ergonomic local use.
+	ErrDistlockTimeout Code = "ERR_DISTLOCK_TIMEOUT"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

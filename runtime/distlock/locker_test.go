@@ -3,6 +3,7 @@ package distlock_test
 import (
 	"context"
 	"runtime"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +11,11 @@ import (
 	"github.com/ghbvf/gocell/runtime/distlock"
 	"github.com/ghbvf/gocell/runtime/distlock/locktest"
 )
+
+// testTimeout is the default guard timeout used in select statements across
+// locker tests. It applies only as a hard deadline to prevent test hangs —
+// it does not assert anything about real execution time.
+const testTimeout = 10 * time.Second
 
 // mgr returns the internal Manager via type assertion.
 // lockerImpl exposes Manager() returning *Manager.
@@ -62,7 +68,7 @@ func TestLocker_TC1_HappyPath(t *testing.T) {
 
 	select {
 	case <-lockCtx.Done():
-	case <-time.After(10 * time.Second):
+	case <-time.After(testTimeout):
 		t.Fatal("TC-1: lockCtx should be Done after release()")
 	}
 
@@ -107,8 +113,8 @@ func TestLocker_TC2_RenewIntervalPrecision(t *testing.T) {
 }
 
 // TC-3: NextRenewError → lockCtx canceled with ErrLockLost.
-// Single lock: inject error, verify lost. Uses separate locker so no
-// second-lock ordering ambiguity.
+// Also verifies sibling-lock isolation: after key3a is lost, key3b continues
+// to be renewed independently (the renew error only affects the lock it targets).
 func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
 	fd := locktest.NewFakeDriver()
@@ -122,19 +128,41 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	}
 	defer release1()
 
+	// Acquire key3b before advancing so both locks are in the manager heap.
+	_, release2, err := l.Acquire(context.Background(), "key3b", ttl)
+	if err != nil {
+		t.Fatalf("TC-3 Acquire key3b: %v", err)
+	}
+	defer release2()
+
 	<-mgr(l).Started()
+
+	// Wait until the manager has registered at least one timer (earliest heap entry).
 	waitPendingTimers(t, fc, 1)
 
-	// Inject error — will fire on the first Renew call.
+	// Wait for both locks to appear in the snapshot before injecting the error.
+	snapshotDeadline := time.Now().Add(testTimeout)
+	for mgr(l).Snapshot().Locks < 2 {
+		if time.Now().After(snapshotDeadline) {
+			t.Fatal("TC-3: timed out waiting for both locks to appear in manager")
+		}
+		runtime.Gosched()
+	}
+
+	// Record the Renew count before injecting the error; key3b's renew will
+	// increment this counter after key3a is lost.
+	renewBefore := fd.Calls("Renew")
+
+	// Inject error — fires on the next Renew call (key3a has the earlier deadline).
 	fd.SetNextRenewError(locktest.ErrDriverIO)
 
-	// Advance to trigger the renew.
+	// Advance to trigger the first renew (key3a, earlier in heap).
 	fc.Advance(time.Duration(float64(ttl) * 0.5))
 
 	// lockCtx1 should be canceled with ErrLockLost.
 	select {
 	case <-lockCtx1.Done():
-	case <-time.After(10 * time.Second):
+	case <-time.After(testTimeout):
 		t.Fatal("TC-3: lockCtx1 should be Done after renew error")
 	}
 
@@ -143,27 +171,19 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 		t.Errorf("TC-3: Cause = %v, want ErrLockLost", cause)
 	}
 
-	// Acquire a second separate lock to verify manager handles new locks
-	// independently after one fails.
-	_, release2, err2 := l.Acquire(context.Background(), "key3b", ttl)
-	if err2 != nil {
-		t.Fatalf("TC-3 second Acquire key3b: %v", err2)
-	}
-	defer release2()
+	// Sibling isolation: advance past key3b's next renewal window and verify
+	// that the manager still renews key3b (no error was injected for it).
+	waitPendingTimers(t, fc, 1) // key3b's timer should be registered
+	fc.Advance(time.Duration(float64(ttl) * 0.5))
 
-	// Wait for the manager to process the eventAdd for key3b.
-	// snapshotLocks is updated in handleAdd which runs in the manager goroutine.
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		snap := mgr(l).Snapshot()
-		if snap.Locks >= 1 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Errorf("TC-3: second lock should be in manager, got %d", snap.Locks)
-			break
-		}
-		runtime.Gosched()
+	// Wait for at least one more Renew call (key3b's renewal).
+	// renewBefore+1 was key3a's failed renew; renewBefore+2 is key3b's renew.
+	waitForRenewOnMgr(t, mgr(l), fd, renewBefore+2)
+
+	renewAfter := fd.Calls("Renew")
+	if renewAfter <= renewBefore+1 {
+		t.Errorf("TC-3: key3b Renew not observed after key3a loss; total calls before=%d after=%d",
+			renewBefore, renewAfter)
 	}
 }
 
@@ -190,7 +210,7 @@ func TestLocker_TC4_RenewNotHeld_LockLost(t *testing.T) {
 
 	select {
 	case <-lockCtx.Done():
-	case <-time.After(10 * time.Second):
+	case <-time.After(testTimeout):
 		t.Fatal("TC-4: lockCtx should be Done when held=false")
 	}
 
@@ -228,7 +248,7 @@ func TestLocker_TC5_ParentCancel(t *testing.T) {
 
 	select {
 	case <-lockCtx.Done():
-	case <-time.After(10 * time.Second):
+	case <-time.After(testTimeout):
 		t.Fatal("TC-5: lockCtx should be Done after parent cancel")
 	}
 
@@ -267,7 +287,7 @@ func TestLocker_TC6_DoubleRelease(t *testing.T) {
 	// Wait for manager to drain.
 	select {
 	case <-mgr(l).Drained():
-	case <-time.After(10 * time.Second):
+	case <-time.After(testTimeout):
 		t.Fatal("TC-6: manager should drain after release")
 	}
 
@@ -319,7 +339,12 @@ func TestLocker_TC8_PreCanceledCtx(t *testing.T) {
 	}
 }
 
-// TC-9: 100 concurrent Acquire → exactly 1 manager goroutine above baseline.
+// TC-9: 100 concurrent Acquire → goroutine count ≤ n + 1 + 2 above baseline.
+//
+// Resource model: 1 manager goroutine + 1 ctx-watcher goroutine per held lock
+// + small slack for runtime jitter. A per-lock goroutine model would add n
+// extra goroutines on top (2n instead of n+1), so exceeding n+3 is a
+// regression indicator.
 func TestLocker_TC9_GoroutineCount(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
 	fd := locktest.NewFakeDriver()
@@ -342,7 +367,7 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			key := "key9-" + locktest.ExportItoa(i)
+			key := "key9-" + strconv.Itoa(i)
 			lCtx, release, err := l.Acquire(context.Background(), key, ttl)
 			if err != nil {
 				t.Errorf("TC-9 goroutine %d Acquire: %v", i, err)
@@ -357,16 +382,17 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 
 	<-mgr(l).Started()
 
-	// Manager + 1 watcher goroutine per lock + baseline.
-	// The constraint: exactly 1 manager goroutine (not N per-lock goroutines).
-	// We allow n watcher goroutines (1 per lock for parent-ctx propagation).
+	// Expected goroutine count above baseline:
+	//   1 manager goroutine + n ctx-watcher goroutines (1 per held lock) + 2 slack for runtime jitter.
+	// A per-lock goroutine model would add n more (total 2n+1), so n+3 is the
+	// tightest bound that still tolerates minor scheduler non-determinism.
 	after := runtime.NumGoroutine()
 	managerGoroutines := after - baseline
-	// Should be: 1 manager + n watchers.
-	// A per-lock goroutine model would add n more goroutines on top.
-	if managerGoroutines > n+5 { // 5 slack
-		t.Errorf("TC-9: goroutine count jumped by %d (baseline %d → %d); expected at most %d (manager + watcher per lock)",
-			managerGoroutines, baseline, after, n+5)
+	const maxExpected = n + 1 + 2 // 1 manager + n ctx-watchers + 2 slack
+	if managerGoroutines > maxExpected {
+		t.Errorf("TC-9: goroutine count jumped by %d (baseline %d → %d); expected at most %d "+
+			"(1 manager + %d ctx-watchers + 2 slack)",
+			managerGoroutines, baseline, after, maxExpected, n)
 	}
 
 	// Release all.
@@ -374,11 +400,28 @@ func TestLocker_TC9_GoroutineCount(t *testing.T) {
 		r.release()
 	}
 
-	// Wait for drain.
+	// Wait for drain, then do a bounded retry to confirm watcher goroutines
+	// have also fully exited (they may still be exiting when Drained closes).
 	select {
 	case <-mgr(l).Drained():
 	case <-time.After(30 * time.Second):
 		t.Fatal("TC-9: manager should drain after all releases")
+	}
+
+	// Bounded goroutine-count check after drain (F29).
+	drainDeadline := time.Now().Add(5 * time.Second)
+	for {
+		current := runtime.NumGoroutine()
+		if current <= baseline+2 { // 2 slack for any test-framework goroutines
+			break
+		}
+		if time.Now().After(drainDeadline) {
+			// Not a hard failure — signals a potential watcher leak.
+			t.Logf("TC-9: goroutines after drain: %d (baseline %d); possible watcher leak",
+				current, baseline)
+			break
+		}
+		runtime.Gosched()
 	}
 }
 
@@ -400,7 +443,7 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 	release()
 	select {
 	case <-mgr(l).Drained():
-	case <-time.After(10 * time.Second):
+	case <-time.After(testTimeout):
 		t.Fatal("TC-10: Drained should close after release")
 	}
 
@@ -413,19 +456,25 @@ func TestLocker_TC10_LazyLifecycle(t *testing.T) {
 
 	select {
 	case <-mgr(l).Started():
-	case <-time.After(10 * time.Second):
+	case <-time.After(testTimeout):
 		t.Fatal("TC-10: manager should restart on second Acquire")
 	}
 }
 
-// TC-11: TTL = 1µs edge case — no spin-loop (Advance triggers exactly one renew).
-// FakeDriver must share the FakeClock so TTL expiry is consistent with time
-// advances made in the test.
-func TestLocker_TC11_TinyTTL(t *testing.T) {
+// TestLocker_TC11_SmallTTLNoSpinLoop verifies that a small (but realistic) TTL
+// produces exactly one renew per FakeClock advance — no spin-loop behaviour.
+//
+// We use 500ms (not 1µs) because 1µs TTL is impractical under -race: the
+// FakeDriver's scheduler overhead alone exceeds 1µs, causing spurious expiries.
+// Per plan note: "extreme TTL is caller responsibility" — the manager's design
+// is correct for any positive TTL; this test validates the absence of
+// spin-loop by checking the delta is exactly 1 per Advance cycle.
+//
+// FakeDriver shares FakeClock so TTL expiry logic is coherent with the
+// manager's virtual time.
+func TestLocker_TC11_SmallTTLNoSpinLoop(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
-	fd := locktest.NewFakeDriver()
-	// Share the fake clock with the driver so TTL expiry logic is coherent.
-	fd.WithClock(fc.Now)
+	fd := locktest.NewFakeDriverWithClock(fc.Now)
 	l := newTestLocker(fc, fd)
 
 	ttl := 500 * time.Millisecond // small TTL; large enough for race-detector scheduling overhead (renew timeout = 495ms)
@@ -457,13 +506,17 @@ func TestLocker_TC11_TinyTTL(t *testing.T) {
 }
 
 // TC-12: Drift factor is correctly applied to the renew operation's deadline.
-// drift = ttl * driftFactor; renew context deadline = clock.Now() + ttl - drift.
-// We verify by checking that the renew succeeds (FakeDriver checks TTL expiry
-// using FakeClock), and the drift math produces the expected value.
+//
+// The manager sets the Renew RPC context deadline to:
+//
+//	deadline = clock.Now() + ttl - drift   where drift = ttl * driftFactor
+//
+// We verify this by recording the ctx deadline inside FakeDriver.Renew via
+// LastRenewDeadline() and asserting it falls within a small tolerance of the
+// expected value.
 func TestLocker_TC12_DriftFactor(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
-	fd := locktest.NewFakeDriver()
-	fd.WithClock(fc.Now) // share FakeClock so TTL checks are coherent
+	fd := locktest.NewFakeDriverWithClock(fc.Now)
 
 	const driftFactor = 0.01
 	const renewFraction = 0.5
@@ -492,15 +545,40 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 		t.Errorf("TC-12: drift = %v, want 100ms (ttl=10s, driftFactor=0.01)", drift)
 	}
 
+	// Record fake clock time just before advancing so we know what clock.Now()
+	// the manager will observe during handleRenew.
+	fakeTimeBefore := fc.Now()
+
 	// Advance to trigger first renew.
 	fc.Advance(time.Duration(float64(ttl) * renewFraction))
 	waitForRenewL(t, l, fd, 1)
 
+	// The manager computes the Renew context deadline as:
+	//   deadline = clock.Now() + ttl - drift
+	// where clock.Now() is the FakeClock value after the Advance.
+	// After Advance, fc.Now() = fakeTimeBefore + ttl*renewFraction.
+	fakeTimeAtRenew := fakeTimeBefore.Add(time.Duration(float64(ttl) * renewFraction))
+	renewTimeout := ttl - drift
+	expectedDeadline := fakeTimeAtRenew.Add(renewTimeout)
+
+	recorded := fd.LastRenewDeadline()
+	if recorded.IsZero() {
+		t.Fatal("TC-12: LastRenewDeadline is zero — FakeDriver did not record the ctx deadline")
+	}
+
+	// Allow 10ms tolerance for scheduling jitter between clock.Now() reads.
+	const tolerance = 10 * time.Millisecond
+	diff := recorded.Sub(expectedDeadline)
+	if diff < -tolerance || diff > tolerance {
+		t.Errorf("TC-12: Renew ctx deadline = %v, expected ≈ %v (diff %v, tolerance ±%v); "+
+			"driftFactor=%v drift=%v renewTimeout=%v",
+			recorded, expectedDeadline, diff, tolerance, driftFactor, drift, renewTimeout)
+	}
+
 	// Wait for manager to re-register the timer after the first renew.
 	waitPendingTimers(t, fc, 1)
 
-	// After renew, manager re-queues at now + ttl * renewFraction (5s).
-	// Advancing 5s again should trigger the second renew.
+	// Advancing again should trigger the second renew.
 	fc.Advance(time.Duration(float64(ttl) * renewFraction))
 	waitForRenewL(t, l, fd, 2)
 
@@ -510,25 +588,24 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 }
 
 // waitForRenewOnMgr waits for Renew count using a Manager's RenewNotify channel.
-// If mgr is non-nil, uses mgr.RenewNotify for reliable synchronization;
-// otherwise falls back to Gosched spinning.
+// Calls t.Fatal if manager is nil to surface API misuse instead of silently
+// spinning.
 func waitForRenewOnMgr(t *testing.T, m *distlock.Manager, fd *locktest.FakeDriver, want int) {
 	t.Helper()
+	if m == nil {
+		t.Fatal("waitForRenewOnMgr: manager is nil")
+	}
 	const totalTimeout = 30 * time.Second
 	deadline := time.Now().Add(totalTimeout)
 	for fd.Calls("Renew") < want {
 		if time.Now().After(deadline) {
 			t.Fatalf("timed out waiting for %d Renew calls (got %d)", want, fd.Calls("Renew"))
 		}
-		if m != nil {
-			select {
-			case <-m.RenewNotify:
-				// Received a renew notification; loop to recheck the count.
-			case <-time.After(totalTimeout):
-				t.Fatalf("RenewNotify: timed out waiting for renew signal (want %d, got %d)", want, fd.Calls("Renew"))
-			}
-		} else {
-			runtime.Gosched()
+		select {
+		case <-m.RenewNotify():
+			// Received a renew notification; loop to recheck the count.
+		case <-time.After(totalTimeout):
+			t.Fatalf("RenewNotify: timed out waiting for renew signal (want %d, got %d)", want, fd.Calls("Renew"))
 		}
 	}
 }
