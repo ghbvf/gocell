@@ -1188,6 +1188,65 @@ func TestInMemoryEventBus_StopIntake_NoOp(t *testing.T) {
 	}
 }
 
+// TestReleaseReceipt_FailedRelease_LogsError covers the slog.Any("error", err)
+// branch inside releaseReceipt (eventbus.go:556-560). The branch fires when
+// receipt.Release returns a non-nil error. We trigger it via DispositionReject
+// with a receipt whose Release always fails. The message must still reach dead
+// letter — the Release error must not swallow the Reject outcome.
+func TestReleaseReceipt_FailedRelease_LogsError(t *testing.T) {
+	bus := New(WithBufferSize(16))
+	defer func() { _ = bus.Close(context.Background()) }()
+
+	releaseErr := errors.New("release: backend unavailable")
+	receipt := &failingReleaseReceipt{err: releaseErr}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		done <- bus.Subscribe(ctx, outbox.Subscription{Topic: "release.fail"}, func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{
+				Disposition: outbox.DispositionReject,
+				Err:         errors.New("permanent handler error"),
+				Receipt:     receipt,
+			}
+		})
+	}()
+
+	<-bus.Ready(outbox.Subscription{Topic: "release.fail"})
+
+	err := bus.Publish(context.Background(), "release.fail", makeSimpleEnvelope(t, "release.fail"))
+	require.NoError(t, err)
+
+	// The message must land in dead letter despite the Release failure.
+	assert.Eventually(t, func() bool {
+		return bus.DeadLetterLen() == 1
+	}, time.Second, 10*time.Millisecond, "rejected message must reach dead letter even when Release fails")
+
+	// Release was called (confirming the branch was reached).
+	assert.True(t, receipt.releaseCalled.Load(), "Release must be called on DispositionReject")
+
+	dl := bus.DrainDeadLetters()
+	require.Len(t, dl, 1)
+	assert.Equal(t, "release.fail", dl[0].Topic)
+
+	cancel()
+	<-done
+}
+
+// failingReleaseReceipt is a Receipt whose Release always returns an error,
+// exercising the error-log branch in releaseReceipt.
+type failingReleaseReceipt struct {
+	err           error
+	releaseCalled atomic.Bool
+}
+
+func (r *failingReleaseReceipt) Commit(_ context.Context) error { return nil }
+func (r *failingReleaseReceipt) Release(_ context.Context) error {
+	r.releaseCalled.Store(true)
+	return r.err
+}
+func (r *failingReleaseReceipt) Extend(_ context.Context, _ time.Duration) error { return nil }
+
 // Verify interface compliance at compile time.
 var (
 	_ outbox.Publisher               = (*InMemoryEventBus)(nil)
