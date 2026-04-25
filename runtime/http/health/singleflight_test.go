@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -77,10 +78,19 @@ func TestReadyz_Singleflight_DedupsConcurrentRequests(t *testing.T) {
 	}
 	readyWG.Wait() // every goroutine parked at the barrier
 	close(release) // fire them all at once — maximises the dedup window
-	// Let the first-in-goroutine enter singleflight and hold the slot for the
-	// rest of the burst. The probe blocks on probeRelease, so once we unblock
-	// it every in-flight caller's shared result is ready to return.
-	time.Sleep(20 * time.Millisecond)
+
+	// Wait for the leader to enter the probe (callCount == 1) using a
+	// happens-before signal rather than a fixed-time sleep. Once the leader
+	// is parked on probeRelease, every subsequent caller into singleflight
+	// joins the in-flight slot deterministically. Bound the spin so a stuck
+	// scheduler still fails the test instead of hanging.
+	deadline := time.Now().Add(2 * time.Second)
+	for callCount.Load() == 0 {
+		if time.Now().After(deadline) {
+			t.Fatalf("leader probe never started (callCount=%d)", callCount.Load())
+		}
+		runtime.Gosched()
+	}
 	close(probeRelease)
 	doneWG.Wait()
 

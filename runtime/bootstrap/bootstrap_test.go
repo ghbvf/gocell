@@ -177,28 +177,48 @@ func TestNew_WithOptions(t *testing.T) {
 	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
 }
 
-func TestNew_WithVerboseToken(t *testing.T) {
-	b := New(WithVerboseToken("secret-123"))
-	assert.Equal(t, "secret-123", b.verboseToken,
-		"WithVerboseToken must populate Bootstrap.verboseToken for health handler wiring")
-}
-
-func TestNew_WithVerboseToken_Empty_DeniesVerbose(t *testing.T) {
-	// After PR-A35 a missing token no longer means "verbose is open": the
-	// handler denies verbose requests with 401 regardless of configuration.
-	// This test documents the expected default: verboseToken empty and
-	// verboseDisabled false, so any ?verbose request will receive 401.
-	b := New() // no WithVerboseToken, no WithVerboseDisabled
-	assert.Empty(t, b.verboseToken,
-		"default verboseToken must be empty")
-	assert.False(t, b.verboseDisabled,
-		"default must leave verboseDisabled false; operators opt in explicitly when they waive the endpoint")
-}
-
-func TestNew_WithVerboseDisabled(t *testing.T) {
-	b := New(WithVerboseDisabled())
-	assert.True(t, b.verboseDisabled,
-		"WithVerboseDisabled must flip the verboseDisabled flag so phase5 passes it to the health handler")
+// TestNew_VerboseConfig is the single source of truth for how /readyz
+// verbose options propagate from constructor into the Bootstrap struct.
+// Runtime behaviour (200/401/503 + envelope shape) is exercised end-to-end
+// by runtime/http/health.TestReadyz_VerboseToken_StrictDeny — there is no
+// reason to repeat that table here.
+func TestNew_VerboseConfig(t *testing.T) {
+	tests := []struct {
+		name         string
+		opts         []Option
+		wantToken    string
+		wantDisabled bool
+	}{
+		{
+			name:         "default",
+			opts:         nil,
+			wantToken:    "",
+			wantDisabled: false,
+		},
+		{
+			name:      "WithVerboseToken populates verboseToken",
+			opts:      []Option{WithVerboseToken("secret-123")},
+			wantToken: "secret-123",
+		},
+		{
+			name:         "WithVerboseDisabled flips verboseDisabled",
+			opts:         []Option{WithVerboseDisabled()},
+			wantDisabled: true,
+		},
+		{
+			name:         "both options coexist (DISABLED wins at request time)",
+			opts:         []Option{WithVerboseToken("secret-123"), WithVerboseDisabled()},
+			wantToken:    "secret-123",
+			wantDisabled: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := New(tt.opts...)
+			assert.Equal(t, tt.wantToken, b.verboseToken)
+			assert.Equal(t, tt.wantDisabled, b.verboseDisabled)
+		})
+	}
 }
 
 func TestNew_WithTracer(t *testing.T) {

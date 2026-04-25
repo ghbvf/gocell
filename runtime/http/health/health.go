@@ -219,12 +219,16 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 	}
 }
 
-// readyzResult bundles everything a ReadyzHandler needs to produce a response.
-// Captured inside singleflight.Do so concurrent requests share one probe pass.
+// readyzResult bundles everything a /readyz response needs. Computed once
+// per singleflight pass and shared by every concurrent request that joined
+// the same key. The struct owns its data — adapter info is snapshotted
+// under Handler.mu inside computeReadyz so writeTo runs lock-free.
 type readyzResult struct {
 	allHealthy   bool
-	cells        map[string]string
-	dependencies map[string]map[string]any
+	verbose      bool
+	cells        map[string]string         // nil when !verbose
+	dependencies map[string]map[string]any // nil when !verbose
+	adapters     map[string]string         // nil when !verbose or no adapter info registered
 }
 
 // ReadyzHandler returns an http.HandlerFunc for the /readyz readiness endpoint.
@@ -282,7 +286,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			))
 			return
 		}
-		writeReadyzResponse(w, h, result.allHealthy, verbose, result.cells, result.dependencies)
+		result.writeTo(w)
 	}
 }
 
@@ -307,6 +311,10 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 // returns a readyzResult. Invoked inside singleflight.Do; constructs a fresh
 // result on each invocation. Callers must go through computeReadyzSafe so
 // that panics do not escape the singleflight boundary.
+//
+// adapter info is captured under Handler.mu alongside the checkers map so
+// the result is fully self-contained — writeTo can serialise it without
+// touching Handler state.
 func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	allHealthy, cells := h.aggregateCellHealth(verbose)
 
@@ -315,6 +323,10 @@ func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	for k, v := range h.checkers {
 		checkersCopy[k] = v
 	}
+	var adapters map[string]string
+	if verbose {
+		adapters = h.adapterInfo // SetAdapterInfo swaps the map ref under the same mu, never mutates
+	}
 	h.mu.RUnlock()
 
 	results := h.runProbesParallel(checkersCopy)
@@ -322,7 +334,13 @@ func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	if !probeHealthy {
 		allHealthy = false
 	}
-	return readyzResult{allHealthy: allHealthy, cells: cells, dependencies: dependencies}
+	return readyzResult{
+		allHealthy:   allHealthy,
+		verbose:      verbose,
+		cells:        cells,
+		dependencies: dependencies,
+		adapters:     adapters,
+	}
 }
 
 // aggregateCellHealth computes cell readiness and optionally builds the verbose
@@ -371,60 +389,43 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 	return allHealthy, dependencies
 }
 
-// writeReadyzResponse serialises and sends the /readyz HTTP response using
-// the project-standard envelope:
+// writeTo serialises the readyz result through the project-standard envelope:
 //
-//	200 → {"data": {"status":"healthy", ...verbose fields when verbose}}
-//	503 → {"error": {"code":"ERR_READYZ_UNHEALTHY",
-//	                  "message":"...",
-//	                  "details": {...verbose fields when verbose}}}
+//	200 → {"data":  {"status":"healthy", ...verbose fields}}
+//	503 → {"error": {"code":"ERR_READYZ_UNHEALTHY", "message":"...",
+//	                  "details": {...verbose fields}}}
 //
-// Verbose fields (cells, dependencies, adapters) are placed inside data or
-// details so callers can walk the envelope with one consistent path
-// regardless of status. The adapters map is omitted when no adapter info
-// has been registered.
-func writeReadyzResponse(
-	w http.ResponseWriter,
-	h *Handler,
-	allHealthy, verbose bool,
-	cells map[string]string,
-	dependencies map[string]map[string]any,
-) {
-	if allHealthy {
-		data := map[string]any{"status": "healthy"}
-		populateVerbose(data, h, verbose, cells, dependencies)
-		writeJSON(w, http.StatusOK, envelopeData(data))
+// Verbose fields (cells, dependencies, adapters) live under data or details
+// so consumers walk one consistent path regardless of status. Adapters are
+// omitted when no adapter info has been registered.
+func (r readyzResult) writeTo(w http.ResponseWriter) {
+	body := r.verboseFields()
+	if r.allHealthy {
+		body["status"] = "healthy"
+		writeJSON(w, http.StatusOK, envelopeData(body))
 		return
 	}
-	details := map[string]any{}
-	populateVerbose(details, h, verbose, cells, dependencies)
 	writeJSON(w, http.StatusServiceUnavailable, envelopeError(
 		errcode.ErrReadyzUnhealthy,
 		"readiness checks failed",
-		details,
+		body,
 	))
 }
 
-// populateVerbose adds cells / dependencies / adapters to dst when verbose
-// is true. Called for both the data and error details branches of the
-// envelope so the verbose payload lives in a single, consistent location.
-func populateVerbose(
-	dst map[string]any,
-	h *Handler,
-	verbose bool,
-	cells map[string]string,
-	dependencies map[string]map[string]any,
-) {
-	if !verbose {
-		return
+// verboseFields returns the cells / dependencies / adapters payload (or an
+// empty map when the request was non-verbose). Caller adds the per-status
+// fields (e.g. "status":"healthy" for the 200 path).
+func (r readyzResult) verboseFields() map[string]any {
+	body := map[string]any{}
+	if !r.verbose {
+		return body
 	}
-	dst["cells"] = cells
-	dst["dependencies"] = dependencies
-	h.mu.RLock()
-	if h.adapterInfo != nil {
-		dst["adapters"] = h.adapterInfo
+	body["cells"] = r.cells
+	body["dependencies"] = r.dependencies
+	if r.adapters != nil {
+		body["adapters"] = r.adapters
 	}
-	h.mu.RUnlock()
+	return body
 }
 
 // runProbesParallel executes all checkers in parallel bounded by h.deadline.
@@ -453,7 +454,7 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 		name, fn := name, fn
 		go func() {
 			defer wg.Done()
-			pr := runOneProbe(ctx, fn)
+			pr := runOneProbe(ctx, fn, h.deadline)
 			mu.Lock()
 			results[name] = pr
 			mu.Unlock()
@@ -464,10 +465,19 @@ func (h *Handler) runProbesParallel(checkers map[string]Checker) map[string]Prob
 }
 
 // runOneProbe executes a single Checker inside a recover fence and returns a
-// ProbeResult. A panicking probe is caught and reported as unhealthy.
-// pr.Duration is written by the defer so it covers both the happy path and
-// the panic path in one place.
-func runOneProbe(ctx context.Context, fn Checker) (pr ProbeResult) {
+// ProbeResult. A panicking probe is caught and reported as unhealthy. The
+// deadline value is included verbatim in the timeout error string so verbose
+// 503 consumers see the exact budget without having to consult runtime
+// configuration.
+//
+// Timeout vs unhealthy classification matches DeadlineExceeded explicitly
+// rather than "any non-nil ctx.Err()". The probe ctx is derived from
+// context.WithTimeout(Background, deadline), so the only ctx.Err() value
+// that can arise here is DeadlineExceeded — but the explicit match guards
+// against a future ctx-parent change silently routing Canceled into the
+// timeout bucket. context.Canceled wrapped by client libraries (pgx /
+// go-redis on failed I/O) is a genuine unhealthy signal, not a timeout.
+func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration) (pr ProbeResult) {
 	start := time.Now()
 	defer func() {
 		pr.Duration = time.Since(start)
@@ -478,46 +488,27 @@ func runOneProbe(ctx context.Context, fn Checker) (pr ProbeResult) {
 	}()
 
 	err := fn(ctx)
-	if err == nil {
+	switch {
+	case err == nil:
 		pr.Status = "healthy"
-		return pr
-	}
-	if isDeadlineError(ctx, err) {
+	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
 		pr.Status = "timeout"
-		pr.Err = fmt.Errorf("probe did not return within deadline (ctx: %w)", err)
-		return pr
+		pr.Err = fmt.Errorf("probe did not return within deadline %s (ctx: %w)", deadline, err)
+	default:
+		pr.Status = "unhealthy"
+		pr.Err = err
 	}
-	pr.Status = "unhealthy"
-	pr.Err = err
 	return pr
 }
 
-// isDeadlineError reports whether the probe ended because the aggregator's
-// deadline expired (versus a domain-level failure).
+// verboseDecision routes a /readyz request into one of three branches:
 //
-// The probe ctx is derived from `context.WithTimeout(context.Background(),
-// h.deadline)`, so ctx.Err() is DeadlineExceeded on timeout — never
-// Canceled. wrapCtxSafe forwards ctx.Err() when ctx triggers first, again
-// DeadlineExceeded. That leaves `errors.Is(err, context.Canceled)` to
-// match only client-library internal wrapping (pgx/go-redis etc. in the
-// middle of a failed I/O), which is a genuine unhealthy signal, not a
-// timeout. Matching Canceled here would route real unhealthy probes into
-// the "timeout" status bucket and pollute dashboards / alert rules.
-func isDeadlineError(ctx context.Context, err error) bool {
-	if ctx.Err() != nil {
-		return true
-	}
-	return errors.Is(err, context.DeadlineExceeded)
-}
-
-// verboseDecision inspects the request and returns:
-//   - (false, false) — request did not ask for verbose → serve plain aggregate
-//   - (true, false)  — request asked for verbose and is authorised → serve verbose
-//   - (_, true)      — request asked for verbose but is denied → 401 response
+//	(verbose=false, denied=false) — non-verbose, or WithVerboseDisabled set
+//	(verbose=true,  denied=false) — verbose authorised
+//	(_,             denied=true)  — verbose requested but token mismatch → 401
 //
-// PR-A35: denial no longer silently downgrades to 200. This makes
-// misconfigured operators (wrong header, forgotten token) visible without
-// impacting Kubernetes readinessProbes, which must not pass ?verbose.
+// See docs/ops/readyz.md "Strict 401 semantics" for the full state table
+// (which is the source of truth — do not duplicate here).
 func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	if !readyzVerbose(r) {
 		return false, false
