@@ -23,30 +23,34 @@ type authProvider interface {
 //
 //	bootstrap.WithListener(cell.PrimaryListener, ":8080", bootstrap.PolicyJWTFromAssembly(asm))
 //
-// Fail-fast: a nil assembly panics with "bootstrap: PolicyJWTFromAssembly
-// assembly must not be nil". If zero or multiple authProvider cells exist
-// at phase4 the validation step returns an error and Bootstrap.Run exits
-// before the listener binds — same fail-closed semantics as the prior
-// WithAuthDiscovery option.
-//
-// The supplied assembly should be the same instance passed to WithAssembly.
-// Bootstrap does not re-check the identity (the assembly only owns cells
-// once registered, so a mismatch surfaces as "no provider found" at Validate
-// time, fail-closed).
+// Fail-fast:
+//   - a nil assembly panics with "bootstrap: PolicyJWTFromAssembly assembly
+//     must not be nil".
+//   - the assembly passed here MUST be the same instance passed to
+//     WithAssembly. Bootstrap.phase0 compares identities and returns an error
+//     if they differ — the composition root single-assembly invariant cannot
+//     be silently bypassed by handing PolicyJWTFromAssembly a sibling
+//     assembly. Round-3 finding #10 hardening.
+//   - if zero or multiple authProvider cells exist at phase4 the validation
+//     step returns an error and Bootstrap.Run exits before the listener binds.
 func PolicyJWTFromAssembly(asm *assembly.CoreAssembly) cell.Policy {
 	if asm == nil {
 		panic("bootstrap: PolicyJWTFromAssembly assembly must not be nil")
 	}
 	holder := &atomic.Pointer[auth.IntentTokenVerifier]{}
-	return cell.Policy{
-		Name: "jwt",
-		Extension: jwtVerifierGetterFn(func() auth.IntentTokenVerifier {
+	marker := &jwtFromAssemblyMarker{
+		asm: asm,
+		getter: func() auth.IntentTokenVerifier {
 			vp := holder.Load()
 			if vp == nil {
 				return nil
 			}
 			return *vp
-		}),
+		},
+	}
+	return cell.Policy{
+		Name:      "jwt",
+		Extension: marker,
 		Validate: func() error {
 			v, err := discoverAuthVerifierFromAssembly(asm)
 			if err != nil {
@@ -57,6 +61,18 @@ func PolicyJWTFromAssembly(asm *assembly.CoreAssembly) cell.Policy {
 		},
 	}
 }
+
+// jwtFromAssemblyMarker carries the assembly reference + lazy verifier
+// getter so Bootstrap.phase0 can verify the assembly identity matches
+// WithAssembly (round-3 finding #10) and phase5 can extract the verifier
+// after Validate has resolved it. Implements jwtVerifierGetter for the
+// existing single-source-of-truth extraction path.
+type jwtFromAssemblyMarker struct {
+	asm    *assembly.CoreAssembly
+	getter func() auth.IntentTokenVerifier
+}
+
+func (m *jwtFromAssemblyMarker) verifier() auth.IntentTokenVerifier { return m.getter() }
 
 // discoverAuthVerifierFromAssembly walks the assembly's cells in deterministic
 // order and returns the unique IntentTokenVerifier exposed by an authProvider

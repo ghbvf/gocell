@@ -2,6 +2,8 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"testing"
@@ -124,6 +126,85 @@ func TestPhase0_RejectsNilRelayHealth(t *testing.T) {
 // WithAuthMiddleware and the standalone PolicyJWTFromAssembly Option are gone,
 // so phase0 has nothing to reject. JWT auth flows through cell.Policy on the
 // listener exclusively.
+
+// Round-3 finding #10: PolicyJWTFromAssembly must capture the same assembly
+// instance as WithAssembly. A mismatch would silently discover the verifier
+// in the policy's asm while the rest of Bootstrap runs against b.assembly.
+func TestPhase0_RejectsPolicyJWTFromAssemblyMismatch(t *testing.T) {
+	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: cell.DurabilityDemo})
+	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: cell.DurabilityDemo})
+	b := New(
+		WithAssembly(asmA),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", PolicyJWTFromAssembly(asmB)),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "PolicyJWTFromAssembly received a different assembly")
+}
+
+func TestPhase0_AcceptsPolicyJWTFromAssemblyMatch(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "asm-match", DurabilityMode: cell.DurabilityDemo})
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", PolicyJWTFromAssembly(asm)),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}
+
+// Round-3 finding #11: PolicyMTLS without WithListenerTLS configuring
+// ClientAuth + ClientCAs is a programmer error — the handshake-layer chain
+// check would not run. Bootstrap.phase0 must reject the listener config.
+func TestPhase0_RejectsPolicyMTLSWithoutTLS(t *testing.T) {
+	b := New(
+		WithListener(cell.InternalListener, "127.0.0.1:0", PolicyMTLS()),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "PolicyMTLS without WithListenerTLS")
+}
+
+func TestPhase0_RejectsPolicyMTLSWithLooseClientAuth(t *testing.T) {
+	pool := x509.NewCertPool()
+	cfg := &tls.Config{
+		ClientAuth: tls.RequestClientCert, // < VerifyClientCertIfGiven
+		ClientCAs:  pool,
+	}
+	b := New(
+		WithListener(cell.InternalListener, "127.0.0.1:0", PolicyMTLS(),
+			WithListenerTLS(cfg)),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ClientAuth")
+}
+
+func TestPhase0_RejectsPolicyMTLSWithoutClientCAs(t *testing.T) {
+	cfg := &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		// ClientCAs: nil — handshake has no CA pool to validate against
+	}
+	b := New(
+		WithListener(cell.InternalListener, "127.0.0.1:0", PolicyMTLS(),
+			WithListenerTLS(cfg)),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "ClientCAs is nil")
+}
+
+func TestPhase0_AcceptsPolicyMTLSWithProperTLS(t *testing.T) {
+	pool := x509.NewCertPool()
+	cfg := &tls.Config{
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  pool,
+	}
+	b := New(
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}),
+		WithListener(cell.InternalListener, "127.0.0.1:0", PolicyMTLS(),
+			WithListenerTLS(cfg)),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}
 
 // TestPhase0_ValidatesInternalMiddleware was removed in PR-A14b because
 // WithInternalMiddleware and the internalMiddlewares field are deleted.

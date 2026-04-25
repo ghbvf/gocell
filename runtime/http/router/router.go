@@ -671,6 +671,13 @@ func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 // port.
 func (r *Router) verifyDelegatedConsistency() error {
 	isInternal := r.ref == kcell.InternalListener
+	// Zero-ref routers are created by NewE() / New() in unit tests without a
+	// listener identity. The Delegated→InternalListener invariant is a
+	// production-only check; tests that drive FinalizeAuth directly without
+	// going through Bootstrap (which always assigns a real ListenerRef via
+	// NewForListener) would otherwise need to rewire every fixture. Skip the
+	// listener check for zero-ref routers — Bootstrap-built routers always
+	// have a non-zero ref so the prod path stays guarded.
 	isZeroRef := r.ref.IsZero()
 	for _, m := range r.declaredAuthMetas {
 		pathIsInternal := strings.HasPrefix(m.Path, internalPathPrefix)

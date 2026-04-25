@@ -14,6 +14,7 @@ package bootstrap
 // all endpoints share the verbose-token guard semantics.
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
@@ -43,6 +44,13 @@ func mustEncodeVerboseTokenError() []byte {
 // verboseTokenMiddleware creates an HTTP middleware that guards ?verbose mode
 // with a shared secret supplied in a request header.
 func verboseTokenMiddleware(headerName, token string) func(http.Handler) http.Handler {
+	// Hash the configured token once so each request only needs to hash the
+	// submitted header. Comparing fixed-length 32-byte digests via
+	// subtle.ConstantTimeCompare avoids the length-oracle that bare-bytes
+	// ConstantTimeCompare exhibits (it short-circuits on length mismatch,
+	// leaking the configured token's length via timing). Same model as
+	// runtime/http/health.verboseDecision and cmd/corebundle/metrics.go.
+	configuredHash := sha256.Sum256([]byte(token))
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// SEC-06: only enforce when ?verbose is semantically "on" — same
@@ -53,10 +61,8 @@ func verboseTokenMiddleware(headerName, token string) func(http.Handler) http.Ha
 				next.ServeHTTP(w, r)
 				return
 			}
-			// ?verbose present — require matching header.
-			// SEC-02: use constant-time comparison to prevent timing oracle attacks.
-			got := r.Header.Get(headerName)
-			if subtle.ConstantTimeCompare([]byte(got), []byte(token)) != 1 {
+			submittedHash := sha256.Sum256([]byte(r.Header.Get(headerName)))
+			if subtle.ConstantTimeCompare(submittedHash[:], configuredHash[:]) != 1 {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write(verboseTokenErrorBody)

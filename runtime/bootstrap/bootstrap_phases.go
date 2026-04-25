@@ -144,6 +144,12 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.managedResourceNil {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}
+	if err := b.validateListenerPolicyAssemblyMatch(); err != nil {
+		return err
+	}
+	if err := b.validateListenerPolicyMTLSBinding(); err != nil {
+		return err
+	}
 	// PR-A14b: validate declarative listener configs last — other option
 	// errors (nil checkers, nil resources, mutual exclusion) are option-level
 	// mistakes and should surface before HTTP-layout errors.
@@ -151,6 +157,88 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 		return err
 	}
 	return nil
+}
+
+// validateListenerPolicyAssemblyMatch enforces the single-assembly invariant
+// for PolicyJWTFromAssembly: the assembly captured by the policy must be the
+// same instance passed to WithAssembly. Round-3 finding #10. Without this
+// check, WithListener(..., PolicyJWTFromAssembly(asmA)) + WithAssembly(asmB)
+// would silently discover the verifier in asmA while the rest of Bootstrap
+// runs against asmB — the kind of mismatch that fails closed at request
+// time but is invisible at startup.
+func (b *Bootstrap) validateListenerPolicyAssemblyMatch() error {
+	if b.assembly == nil {
+		return nil
+	}
+	for ref, cfg := range b.listenerConfigs {
+		marker, ok := cfg.policy.Extension.(*jwtFromAssemblyMarker)
+		if !ok {
+			continue
+		}
+		if marker.asm != b.assembly {
+			return fmt.Errorf(
+				"bootstrap: listener %q PolicyJWTFromAssembly received a different assembly than WithAssembly; "+
+					"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
+				ref.String())
+		}
+	}
+	return nil
+}
+
+// validateListenerPolicyMTLSBinding enforces that any listener using
+// PolicyMTLS also configures a *tls.Config with ClientAuth >=
+// VerifyClientCertIfGiven AND a non-nil ClientCAs pool. Round-3 finding #11.
+//
+// PolicyMTLS deliberately performs no app-layer chain verification (see
+// policy_mtls.go); chain validation is delegated to crypto/tls's handshake
+// path. If the operator forgets to configure ClientAuth + ClientCAs, the
+// peer-cert-presence check would silently accept any client cert (or none).
+// fail-fast at phase0 keeps the contract honest: PolicyMTLS without proper
+// TLS wiring is a programmer error, not a runtime acceptance.
+func (b *Bootstrap) validateListenerPolicyMTLSBinding() error {
+	for ref, cfg := range b.listenerConfigs {
+		if !mtlsPolicyApplies(cfg.policy) {
+			continue
+		}
+		if cfg.tls == nil {
+			return fmt.Errorf(
+				"bootstrap: listener %q uses PolicyMTLS without WithListenerTLS; "+
+					"set tls.Config.ClientAuth=RequireAndVerifyClientCert and ClientCAs=<pool> "+
+					"so the handshake layer enforces the chain",
+				ref.String())
+		}
+		if cfg.tls.ClientAuth < tls.VerifyClientCertIfGiven {
+			return fmt.Errorf(
+				"bootstrap: listener %q uses PolicyMTLS but tls.Config.ClientAuth=%v; "+
+					"set ClientAuth >= tls.VerifyClientCertIfGiven (RequireAndVerifyClientCert recommended)",
+				ref.String(), cfg.tls.ClientAuth)
+		}
+		if cfg.tls.ClientCAs == nil {
+			return fmt.Errorf(
+				"bootstrap: listener %q uses PolicyMTLS but tls.Config.ClientCAs is nil; "+
+					"set ClientCAs to the CA pool the handshake should accept",
+				ref.String())
+		}
+	}
+	return nil
+}
+
+// mtlsPolicyApplies reports whether p is PolicyMTLS or a PolicyStack
+// containing PolicyMTLS. PolicyStack name format is "stack[a, b, c]".
+func mtlsPolicyApplies(p cell.Policy) bool {
+	if p.Name == "mtls" {
+		return true
+	}
+	const stackPrefix = "stack["
+	if strings.HasPrefix(p.Name, stackPrefix) && strings.HasSuffix(p.Name, "]") {
+		inner := strings.TrimSuffix(strings.TrimPrefix(p.Name, stackPrefix), "]")
+		for _, name := range strings.Split(inner, ", ") {
+			if strings.TrimSpace(name) == "mtls" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // validateHealthCheckers ensures every caller-registered checker has a non-
@@ -736,19 +824,31 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 // isAuthFlavoredPolicy reports whether p is one of the auth-flavoured policies
 // (or a PolicyStack containing one). The check is performed on Name strings
 // so the kernel/cell layer remains agnostic of runtime/auth.
+//
+// PolicyStack names follow the format "stack[a, b, c]" (see PolicyStack in
+// policy.go). Match any inner component that is auth-flavoured.
 func isAuthFlavoredPolicy(p cell.Policy) bool {
-	switch p.Name {
-	case "jwt", "mtls", "service-token":
+	if isAuthFlavoredName(p.Name) {
 		return true
 	}
-	// PolicyStack policies append component names with " + ", so a stack
-	// containing a JWT policy looks like "jwt + verbose-token". Match any
-	// component that is auth-flavoured.
-	for _, name := range strings.Split(p.Name, " + ") {
-		switch strings.TrimSpace(name) {
-		case "jwt", "mtls", "service-token":
-			return true
+	const stackPrefix = "stack["
+	if strings.HasPrefix(p.Name, stackPrefix) && strings.HasSuffix(p.Name, "]") {
+		inner := strings.TrimSuffix(strings.TrimPrefix(p.Name, stackPrefix), "]")
+		for _, name := range strings.Split(inner, ", ") {
+			if isAuthFlavoredName(strings.TrimSpace(name)) {
+				return true
+			}
 		}
+	}
+	return false
+}
+
+// isAuthFlavoredName matches a single policy name (no PolicyStack wrapping)
+// against the auth-flavoured allow list.
+func isAuthFlavoredName(name string) bool {
+	switch name {
+	case "jwt", "mtls", "service-token":
+		return true
 	}
 	return false
 }
