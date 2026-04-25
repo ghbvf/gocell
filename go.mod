@@ -140,15 +140,3 @@ require (
 	golang.org/x/sys v0.42.0
 	golang.org/x/text v0.35.0 // indirect
 )
-
-// Pin golang.org/x/tools, golang.org/x/telemetry, and golang.org/x/mod to
-// versions available in the local module cache. The production build of gocell
-// does not import telemetry; it appears in the graph only as a transitive test
-// dependency of golang.org/x/tools (via golang.org/x/text's go.mod). The
-// replace directives let `go mod tidy` and `packages.Load` resolve the
-// dependency graph without network access.
-replace (
-	golang.org/x/mod => golang.org/x/mod v0.32.0
-	golang.org/x/telemetry => golang.org/x/telemetry v0.0.0-20251111182119-bc8e575c7b54
-	golang.org/x/tools => golang.org/x/tools v0.39.1-0.20260109155911-b69ac100ecb7
-)
