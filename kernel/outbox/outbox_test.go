@@ -980,8 +980,9 @@ func TestDiscardPublisher_ZeroValue_Safe(t *testing.T) {
 
 // TestSubscriberWithMiddleware_PassesFullSubscription asserts that when Subscribe
 // is called with a Subscription, the middleware receives the *full* Subscription
-// (both Topic and ConsumerGroup), not only the topic string.
-// This test will fail until SubscriptionMiddleware replaces TopicHandlerMiddleware.
+// (both Topic and ConsumerGroup), not only the topic string. Locks the post-PR-A39
+// invariant that SubscriptionMiddleware is the only middleware shape (the
+// topic-only TopicHandlerMiddleware was deleted with the PR-A39 deprecated nuke).
 func TestSubscriberWithMiddleware_PassesFullSubscription(t *testing.T) {
 	inner := &recordingSubscriberFull{}
 

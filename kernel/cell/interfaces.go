@@ -89,13 +89,22 @@ type Cell interface {
 	// ConsistencyLevel reports the cell's declared consistency tier (L0–L4).
 	ConsistencyLevel() Level
 	// Init wires injected dependencies; called once before Start. Init failure
-	// aborts assembly start without invoking Stop.
+	// aborts assembly start without invoking Stop, so implementations must NOT
+	// acquire resources that require explicit release (open connections, spawn
+	// goroutines, lease distributed locks). Defer such acquisition to Start so
+	// Start/Stop remain symmetric. Init may validate config, build in-memory
+	// state, and register slices.
 	Init(ctx context.Context, deps Dependencies) error
 	// Start brings the cell to a running state. Returns nil only when the cell
 	// is fully ready to serve traffic. Cancelling ctx must abort startup.
+	// Resources acquired here must be released by the matching Stop call.
 	Start(ctx context.Context) error
-	// Stop performs graceful shutdown. Implementations must respect ctx
-	// deadlines and return promptly when ctx is cancelled.
+	// Stop performs graceful shutdown. The assembly invokes Stop with the
+	// caller-supplied ctx; no per-cell stop timeout is enforced by the kernel,
+	// so implementations are solely responsible for honouring ctx deadlines
+	// and returning promptly when ctx is cancelled. Stop must release every
+	// resource Start acquired (connections drained, goroutines joined, leases
+	// surrendered) and must be idempotent against repeated invocation.
 	Stop(ctx context.Context) error
 	// Health returns the current health snapshot for diagnostic surfaces.
 	Health() HealthStatus
