@@ -101,6 +101,9 @@ func TestMapCodeToStatus_ExplicitMapping(t *testing.T) {
 		// One-shot lifecycle retired -> 410
 		{errcode.ErrSetupAlreadyInitialized, http.StatusGone},
 
+		// 499 Client Closed Request (nginx-style — client cancellation)
+		{errcode.ErrClientCanceled, StatusClientClosedRequest},
+
 		// Verify/kernel codes
 		{errcode.ErrCheckRefInvalid, http.StatusBadRequest},
 		{errcode.ErrZeroTestMatch, http.StatusNotFound},
@@ -918,6 +921,43 @@ func TestWriteDomainError_4xx_LogsWarn_NoCorrelation(t *testing.T) {
 
 	_, hasSpanID := attrValue(*warnRec, "span_id")
 	assert.False(t, hasSpanID, "log record must NOT contain 'span_id' attr when not set in ctx")
+}
+
+// TestWriteDomainError_499_LogsWarn locks the PR-A50+A51 contract:
+// ErrClientCanceled (HTTP 499 client closed request) must route through the
+// 4xx writer path — message preserved (4xx does not mask), slog level Warn
+// (so 5xx Error rate SLOs stay clean), and code surfaced verbatim.
+func TestWriteDomainError_499_LogsWarn(t *testing.T) {
+	handler := &captureHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	ctx := context.Background()
+	ctx = ctxkeys.WithRequestID(ctx, "req-499")
+
+	rec := httptest.NewRecorder()
+	WriteDomainError(ctx, rec,
+		errcode.NewInfra(errcode.ErrClientCanceled, "request canceled"))
+
+	assert.Equal(t, StatusClientClosedRequest, rec.Code,
+		"ctx-cancel must produce HTTP 499")
+
+	var body map[string]any
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
+	errObj := body["error"].(map[string]any)
+	assert.Equal(t, "ERR_CLIENT_CANCELED", errObj["code"])
+	assert.Equal(t, "request canceled", errObj["message"],
+		"4xx response must NOT mask message — 5xx-only safety guard does not apply")
+
+	warnRec := findWarnRecord(handler)
+	require.NotNil(t, warnRec, "499 must emit slog.Warn (not Error)")
+	for i := range handler.records {
+		assert.NotEqual(t, slog.LevelError, handler.records[i].Level,
+			"499 must NOT emit any slog.Error record (would pollute 5xx SLO)")
+	}
+	assertStringAttr(t, *warnRec, "code", "ERR_CLIENT_CANCELED")
+	assertStringAttr(t, *warnRec, "request_id", "req-499")
 }
 
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,

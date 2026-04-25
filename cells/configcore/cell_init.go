@@ -39,8 +39,8 @@ func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 				c.staleCipherCounter.Inc()
 			}))
 		}
-		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, nil, repoOpts...)
-		c.flagRepo = cellpg.NewFlagRepository(session)
+		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, c.logger, repoOpts...)
+		c.flagRepo = cellpg.NewFlagRepository(session, c.logger)
 	}
 
 	// deriveModes' PublishFailureMode return is retained for TestConfigCore_DeriveModes

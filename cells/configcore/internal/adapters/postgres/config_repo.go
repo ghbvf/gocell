@@ -15,35 +15,35 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/ports"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/persistence/ctxcancel"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/jackc/pgx/v5"
 )
 
-// ctxCanceledError returns an infra-category errcode for context.Canceled /
-// context.DeadlineExceeded errors surfaced during a scan. Emits a slog.Warn
-// at the point of detection (inside this method, not at the callers) so
-// operators can distinguish client cancellation from real DB outages (both
-// map to HTTP 500) in log aggregators even when the response write fails due
-// to the same cancellation.
-// The receiver r is used only to access r.logger for the Warn side-effect.
-// Attrs intentionally omit `key`: config key names can leak sensitive-data
-// location (e.g. "db.password" implies encrypted secret exists). The key is
-// preserved in InternalMessage for internal triage only.
-// ref: FiloSottile/age — error paths do not expose identity of attempted keys.
-func (r *ConfigRepository) ctxCanceledError(ctx context.Context, op, key string, err error) *errcode.Error {
-	if !errors.Is(err, context.Canceled) && !errors.Is(err, context.DeadlineExceeded) {
+// wrapCtxCancel detects whether err is a context cancellation and, if so,
+// emits a slog.Warn for the operator audit channel and returns a structured
+// *errcode.Error carrying ErrClientCanceled (mapped to HTTP 499 by
+// pkg/httputil + slog.Warn by writeErrcodeError → log4xx). Returns nil when
+// err is not a cancellation, signalling the caller to fall through to the
+// generic infra-error mapping.
+//
+// `op` is a PascalCase operation label (e.g. "Insert", "Update"); `key` is
+// the config key being operated on. Both are recorded only in
+// InternalMessage to prevent sensitive-data-location leakage to clients —
+// the public Message stays the constant "request canceled". This mirrors
+// the FiloSottile/age principle that error paths must not expose the
+// identity of attempted keys.
+//
+// ref: pkg/persistence/ctxcancel.Wrap — canonical helper.
+func (r *ConfigRepository) wrapCtxCancel(ctx context.Context, op, key string, err error) *errcode.Error {
+	cancelErr := ctxcancel.Wrap(err, op, "key="+key)
+	if cancelErr == nil {
 		return nil
 	}
-	r.logger.WarnContext(ctx, "config repo: request context canceled during scan",
+	r.logger.WarnContext(ctx, "config repo: request context canceled",
 		slog.String("op", op),
 		slog.String("cause", err.Error()))
-	return &errcode.Error{
-		Code:            errcode.ErrConfigRepoQuery,
-		Message:         "config repo query failed",
-		InternalMessage: fmt.Sprintf("config repo: %s ctx canceled key=%s", op, key),
-		Cause:           err,
-		Category:        errcode.CategoryInfra,
-	}
+	return cancelErr
 }
 
 // cryptoOpError constructs a uniform *errcode.Error for encrypt/decrypt
@@ -52,6 +52,14 @@ func (r *ConfigRepository) ctxCanceledError(ctx context.Context, op, key string,
 // configID) for internal triage. Both encryptValue/decryptValue and their
 // version-scoped variants funnel through this factory to eliminate
 // asymmetry and prevent key-name leakage into the public Message.
+//
+// Category: CategoryAuth — encryption / decryption failures originate from
+// the KeyProvider boundary (KMS access denied, key rotation race, ciphertext
+// keyID mismatch). Categorising these as Auth rather than Infra prevents
+// IsInfraError fall-through from conflating KMS authorisation failures with
+// database / network outages in dashboards. The HTTP status mapping is
+// driven independently by codeToStatus (ErrConfigDecryptFailed → 500,
+// ErrConfigRepoQuery → 500); only the in-process classifier semantics shift.
 //
 // ref: google/tink aead/subtle/aes_gcm.go — symmetric crypto errors do not
 // carry key identifiers in Error() strings.
@@ -62,7 +70,7 @@ func (r *ConfigRepository) cryptoOpError(code errcode.Code, op, identifier strin
 		Message:         fmt.Sprintf("config repo: %s failed", op),
 		InternalMessage: fmt.Sprintf("config repo: %s failed (%s)", op, identifier),
 		Cause:           cause,
-		Category:        errcode.CategoryInfra,
+		Category:        errcode.CategoryAuth,
 	}
 }
 
@@ -180,7 +188,7 @@ func (r *ConfigRepository) encryptValue(ctx context.Context, key, value string) 
 	aad := configcrypto.AADForConfig(cellID, key)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
-		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigRepoQuery, "encrypt", "key="+key, err)
+		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigRepoQuery, "Encrypt", "key="+key, err)
 	}
 	return ct, keyID, nonce, edk, nil
 }
@@ -195,7 +203,7 @@ func (r *ConfigRepository) decryptValue(ctx context.Context, key string, ct []by
 	aad := configcrypto.AADForConfig(cellID, key)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
-		return "", r.cryptoOpError(errcode.ErrConfigDecryptFailed, "decrypt", "key="+key, err)
+		return "", r.cryptoOpError(errcode.ErrConfigDecryptFailed, "Decrypt", "key="+key, err)
 	}
 	return string(pt), nil
 }
@@ -212,7 +220,7 @@ func (r *ConfigRepository) encryptVersionValue(ctx context.Context, configID, va
 	aad := configcrypto.AADForVersion(cellID, configID)
 	ct, keyID, nonce, edk, err = r.transformer.Encrypt(ctx, []byte(value), aad)
 	if err != nil {
-		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigRepoQuery, "encrypt version", "config_id="+configID, err)
+		return nil, "", nil, nil, r.cryptoOpError(errcode.ErrConfigRepoQuery, "EncryptVersion", "config_id="+configID, err)
 	}
 	return ct, keyID, nonce, edk, nil
 }
@@ -228,7 +236,7 @@ func (r *ConfigRepository) decryptVersionValue(ctx context.Context, configID str
 	aad := configcrypto.AADForVersion(cellID, configID)
 	pt, err := r.transformer.Decrypt(ctx, ct, keyID, nonce, edk, aad)
 	if err != nil {
-		return "", r.cryptoOpError(errcode.ErrConfigDecryptFailed, "decrypt version", "config_id="+configID, err)
+		return "", r.cryptoOpError(errcode.ErrConfigDecryptFailed, "DecryptVersion", "config_id="+configID, err)
 	}
 	return string(pt), nil
 }
@@ -308,27 +316,29 @@ func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKey
 	return &entry, valueCipher, valueKeyID, valueEDK, valueNonce, nil
 }
 
-// scanConfigOrMapError calls scanConfigRow and translates the two known failure
-// modes into GoCell errcode.Error values:
+// scanConfigOrMapError calls scanConfigRow and translates the three known
+// failure modes into GoCell errcode.Error values:
 //
-//   - context.Canceled / context.DeadlineExceeded → ErrConfigRepoQuery (infra).
+//   - context.Canceled / context.DeadlineExceeded → ErrClientCanceled (HTTP 499 + slog.Warn).
 //   - pgx.ErrNoRows  → ErrConfigRepoNotFound (domain not-found; maps to 404).
 //   - anything else  → ErrConfigRepoQuery (infra failure; maps to 500).
 //
 // The ctx.Canceled guard is checked first (before pgx.ErrNoRows) to prevent
-// context cancellation from being misclassified as a domain not-found condition
-// (S15 ctx-cancel classification fix).
+// context cancellation from being misclassified as a domain not-found
+// condition (S15 ctx-cancel classification fix). Client cancellation now
+// routes via pkg/persistence/ctxcancel → 499 + slog.Warn, distinct from 5xx
+// infrastructure failures so 5xx error-rate SLOs stay clean.
 //
-// op is the method name used only in InternalMessage for operator debugging;
-// key is the lookup key surfaced the same way.
-// Uses r.ctxCanceledError for the ctx-cancel branch (see that method for the
+// op is the method name used only in InternalMessage for operator
+// debugging; key is the lookup key surfaced the same way. Uses
+// r.wrapCtxCancel for the ctx-cancel branch (see that method for the
 // logger side-effect rationale).
 func (r *ConfigRepository) scanConfigOrMapError(ctx context.Context, row Row, op, key string) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
 	e, ct, keyID, edk, nonce, err := scanConfigRow(row)
 	if err == nil {
 		return e, ct, keyID, edk, nonce, nil
 	}
-	if infraErr := r.ctxCanceledError(ctx, op, key, err); infraErr != nil {
+	if infraErr := r.wrapCtxCancel(ctx, op, key, err); infraErr != nil {
 		return nil, nil, nil, nil, nil, infraErr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -440,7 +450,7 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 	var sensitive bool
 	selectRow := db.QueryRow(ctx, selectQ, key)
 	if scanErr := selectRow.Scan(&sensitive); scanErr != nil {
-		if infraErr := r.ctxCanceledError(ctx, "Update", key, scanErr); infraErr != nil {
+		if infraErr := r.wrapCtxCancel(ctx, "Update", key, scanErr); infraErr != nil {
 			return nil, infraErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
@@ -680,7 +690,7 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 		&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.Sensitive, &v.PublishedAt,
 		&valueCipher, &valueKeyID, &valueEDK, &valueNonce,
 	); err != nil {
-		if infraErr := r.ctxCanceledError(ctx, "GetVersion", configID, err); infraErr != nil {
+		if infraErr := r.wrapCtxCancel(ctx, "GetVersion", configID, err); infraErr != nil {
 			return nil, infraErr
 		}
 		if errors.Is(err, pgx.ErrNoRows) {
