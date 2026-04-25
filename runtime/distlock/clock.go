@@ -11,9 +11,19 @@ import "time"
 type Clock interface {
 	// Now returns the current time.
 	Now() time.Time
-	// NewTimer creates a timer that fires after duration d.
-	// If d <= 0 the timer fires immediately.
-	NewTimer(d time.Duration) Timer
+	// NewTimerAt creates a timer that fires when the clock reaches the given
+	// absolute deadline. If deadline is at or before Now(), the timer fires
+	// immediately.
+	//
+	// Absolute-deadline (rather than duration) eliminates a read-then-act gap
+	// in callers that derive the deadline from heap state ahead of time: the
+	// renewal heap stores absolute nextRenew times, so a deadline-based API
+	// lets the caller pass the value through unchanged. With a duration API,
+	// the caller would compute d = deadline - clock.Now() and then pass d to
+	// NewTimer(d); under FakeClock, an Advance() interleaving between the
+	// two non-atomic calls would re-baseline the timer to deadline + advance
+	// delta — the root cause of the TC-3 flake.
+	NewTimerAt(deadline time.Time) Timer
 	// Since returns the elapsed time since t, equivalent to Now().Sub(t).
 	Since(t time.Time) time.Duration
 }
@@ -43,7 +53,11 @@ type realClock struct{}
 
 func (realClock) Now() time.Time                  { return time.Now() }
 func (realClock) Since(t time.Time) time.Duration { return time.Since(t) }
-func (realClock) NewTimer(d time.Duration) Timer  { return &realTimer{t: time.NewTimer(d)} }
+func (realClock) NewTimerAt(deadline time.Time) Timer {
+	// time.NewTimer normalizes negative durations to fire-immediately, so we
+	// can pass time.Until(deadline) without a guard.
+	return &realTimer{t: time.NewTimer(time.Until(deadline))}
+}
 
 // realTimer wraps *time.Timer to satisfy the Timer interface.
 type realTimer struct {
