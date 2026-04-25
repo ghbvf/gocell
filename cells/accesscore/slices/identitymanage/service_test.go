@@ -754,6 +754,33 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 	assert.Equal(t, 0, runner.runs)
 }
 
+// TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode covers the
+// third RequireNotBlank field. Pre-fix this path was already wired
+// (password was the sole field), so the case is a regression guard ensuring
+// the error code stays bound to the service boundary
+// (ErrAuthIdentityInvalidInput) and never leaks domain.NewUser's
+// ErrAuthInvalidInput.
+func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.T) {
+	runner := &recordingTxRunner{}
+	repo := &observingUserRepo{UserRepository: mem.NewUserRepository(), runner: runner}
+	svc, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithTokenIssuer(minimalStubIssuer),
+		WithTxManager(runner))
+	require.NoError(t, err)
+
+	user, err := svc.Create(context.Background(), CreateInput{
+		Username: "ok", Email: "ok@e.t", Password: "",
+	})
+	require.Error(t, err)
+	assert.Nil(t, user)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthIdentityInvalidInput, ec.Code)
+	assert.Contains(t, err.Error(), "password is required")
+	assert.Equal(t, 0, repo.createCalls)
+	assert.Equal(t, 0, runner.runs)
+}
+
 // TestService_Create_RequireNotBlankShortCircuitsOnFirstField asserts the
 // validator returns on the FIRST blank field in declaration order
 // (username → email → password), matching setup.CreateAdmin's order so the
