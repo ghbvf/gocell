@@ -10,6 +10,7 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	ordercreate "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/ordercreate"
 	orderquery "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/slices/orderquery"
@@ -20,6 +21,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// Role constants re-exported from internal/dto for use by the assembly root
+// (main.go). The internal package is not importable from outside the
+// examples/todoorder/cells/ordercell subtree per Go's internal package rule.
+const (
+	RoleCustomer = dto.RoleCustomer
 )
 
 // Compile-time interface checks.
@@ -203,17 +211,17 @@ func (c *OrderCell) RouteGroups() []cell.RouteGroup {
 					auth.Mount(orders, auth.Route{
 						Contract: specOrderCreate,
 						Handler:  http.HandlerFunc(c.createHandler.HandleCreate),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleCustomer),
 					})
 					auth.Mount(orders, auth.Route{
 						Contract: specOrderList,
 						Handler:  http.HandlerFunc(c.queryHandler.HandleList),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleCustomer),
 					})
 					auth.Mount(orders, auth.Route{
 						Contract: specOrderGet,
 						Handler:  http.HandlerFunc(c.queryHandler.HandleGet),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleCustomer),
 					})
 				})
 			},

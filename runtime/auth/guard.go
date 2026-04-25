@@ -2,8 +2,6 @@ package auth
 
 import (
 	"net/http"
-
-	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Policy evaluates an HTTP request for authorization. A nil return permits
@@ -19,29 +17,12 @@ import (
 // pattern where auth is declared at registration time, not inside handler body.
 type Policy func(r *http.Request) error
 
-// Authenticated returns a Policy that requires an authenticated Principal in
-// context. Use for endpoints that only need to verify a user is logged in,
-// regardless of role. Returns ErrAuthUnauthorized when no Principal is present
-// or when the Principal is a PrincipalUser with an empty Subject (defence-in-depth
-// against malformed JWT tokens that slip past the primary authenticator).
-func Authenticated() Policy {
-	return func(r *http.Request) error {
-		p, ok := FromContext(r.Context())
-		if !ok {
-			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
-		}
-		// G1.B: Defence-in-depth. PrincipalUser must always carry a non-empty
-		// Subject. PrincipalService is always ServiceNameInternal (non-empty);
-		// PrincipalAnonymous Subject is intentionally empty by design.
-		if p.Kind == PrincipalUser && p.Subject == "" {
-			return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
-		}
-		return nil
-	}
-}
-
 // AnyRole returns a Policy that requires the subject to hold at least one of
 // the given roles. Wraps RequireAnyRole.
+//
+// Footgun: calling AnyRole() with zero roles produces a Policy that always
+// returns ErrAuthForbidden (no role can match). Pass at least one named role,
+// or use Public:true on the auth.Route if the endpoint should be unauthenticated.
 func AnyRole(roles ...string) Policy {
 	return func(r *http.Request) error {
 		return RequireAnyRole(r.Context(), roles...)

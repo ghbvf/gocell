@@ -124,7 +124,7 @@ func TestMount_PanicsPublicWithPolicy(t *testing.T) {
 		Contract: loginContractSpec(),
 		Handler:  noopHandler,
 		Public:   true,
-		Policy:   Authenticated(),
+		Policy:   requireAuthenticatedPolicy(),
 	})
 }
 

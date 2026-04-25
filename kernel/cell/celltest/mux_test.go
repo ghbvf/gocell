@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -160,6 +161,27 @@ func TestTestMux_Route_DuplicateMethodPatternPanics(t *testing.T) {
 	})
 }
 
+// kernelLocalRequireAuthenticated is a kernel/-local replica of the
+// runtime/auth/authtest.RequireAuthenticated() policy. The tests in this
+// package cannot import runtime/auth/authtest because kernel/ must not
+// depend on runtime/ (CLAUDE.md "kernel/ 不依赖 runtime/"); the archtest
+// AUTH-AUTHTEST-B rule pins this layering. Defined as a package-level
+// helper so its branching does not inflate the cognitive complexity of
+// the table-driven test that uses it.
+func kernelLocalRequireAuthenticated(r *http.Request) error {
+	p, ok := auth.FromContext(r.Context())
+	if !ok {
+		return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+	}
+	switch {
+	case p.Kind == auth.PrincipalAnonymous:
+		return errcode.New(errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
+	case p.Kind == auth.PrincipalUser && p.Subject == "":
+		return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
+	}
+	return nil
+}
+
 func TestTestMux_Route_ComposesPrefix(t *testing.T) {
 	root := NewTestMux()
 
@@ -170,7 +192,12 @@ func TestTestMux_Route_ComposesPrefix(t *testing.T) {
 				// auth.Mount strips the nested mux prefix to derive the
 				// chi-relative registration path.
 				auth.Mount(sess, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/sessions/login"), Handler: okHandler, Public: true})
-				auth.Mount(sess, auth.Route{Contract: testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"), Handler: okHandler, Policy: auth.Authenticated(), PasswordResetExempt: true})
+				auth.Mount(sess, auth.Route{
+					Contract:            testHTTPContract("DELETE", "/api/v1/access/sessions/{id}"),
+					Handler:             okHandler,
+					Policy:              kernelLocalRequireAuthenticated,
+					PasswordResetExempt: true,
+				})
 			})
 		})
 	})

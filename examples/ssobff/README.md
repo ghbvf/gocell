@@ -187,18 +187,27 @@ curl -s -X PUT http://localhost:8081/api/v1/config/site.title \
   -d '{"value":"SSO Portal v2"}' | jq
 ```
 
-### 10. Read a config entry
+### 10. Read a config entry (admin-only)
+
+PR-CFG-C tightened all `GET /api/v1/config/*` and `GET /api/v1/flags/*`
+endpoints to `RoleAdmin` because key names + the `sensitive` flag are
+themselves a recon surface — even though sensitive values are redacted,
+enumerating "which secrets exist" leaks attack-surface information. Use the
+admin token here, not alice's `$ACCESS_TOKEN`. Calling with a non-admin token
+returns `403 Forbidden`.
 
 ```bash
 curl -s http://localhost:8081/api/v1/config/site.title \
-  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
 
-### 11. List feature flags
+### 11. List feature flags (admin-only)
+
+Same admin gate as config read.
 
 ```bash
-curl -s http://localhost:8081/api/v1/flags \
-  -H "Authorization: Bearer $ACCESS_TOKEN" | jq
+curl -s http://localhost:8081/api/v1/flags/ \
+  -H "Authorization: Bearer $ADMIN_TOKEN" | jq
 ```
 
 ### 12. Health checks

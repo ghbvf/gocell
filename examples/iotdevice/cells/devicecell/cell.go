@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	devicecommand "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicecommand"
 	devicelist "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/slices/devicelist"
@@ -25,6 +26,15 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
+)
+
+// Role constants re-exported from internal/dto for use by the assembly root
+// (main.go). The internal package is not importable from outside the
+// examples/iotdevice/cells/devicecell subtree per Go's internal package rule.
+const (
+	RoleAdmin    = dto.RoleAdmin
+	RoleOperator = dto.RoleOperator
+	RoleDevice   = dto.RoleDevice
 )
 
 // Compile-time interface checks.
@@ -266,13 +276,13 @@ func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 					auth.Mount(devices, auth.Route{
 						Contract: specDeviceList,
 						Handler:  http.HandlerFunc(c.listHandler.HandleList),
-						Policy:   auth.AnyRole("admin"),
+						Policy:   auth.AnyRole(dto.RoleAdmin),
 					})
-					// Device status is queried by authenticated operators/devices.
+					// Device status is queried by operators or by the device itself.
 					auth.Mount(devices, auth.Route{
 						Contract: specDeviceStatus,
 						Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
-						Policy:   auth.Authenticated(),
+						Policy:   auth.AnyRole(dto.RoleOperator, dto.RoleDevice),
 					})
 					// device-command public routes (enqueue, dequeue, report, ack,
 					// extend-lease) live under /api/v1/devices/{id}/commands.

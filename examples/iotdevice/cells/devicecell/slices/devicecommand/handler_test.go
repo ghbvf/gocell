@@ -15,6 +15,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -130,7 +131,7 @@ func TestHandleEnqueue(t *testing.T) {
 			req := httptest.NewRequest(http.MethodPost, "/api/v1/devices/"+tc.deviceID+"/commands", strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			req.SetPathValue("id", tc.deviceID)
-			req = req.WithContext(auth.TestContext("operator-1", []string{"operator"}))
+			req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 			h.HandleEnqueue(w, req)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -157,7 +158,7 @@ func TestHandleEnqueue_RoutePolicy(t *testing.T) {
 		{
 			name:       "operator allowed",
 			subject:    "op-1",
-			roles:      []string{"operator"},
+			roles:      []string{dto.RoleOperator},
 			wantStatus: http.StatusCreated,
 		},
 		{

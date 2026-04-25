@@ -13,6 +13,27 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// requireAuthenticatedPolicy mirrors authtest.RequireAuthenticated() inside
+// package auth to avoid an import cycle (auth → authtest → auth). It is
+// strictly for white-box tests in this package; never copy it into cells/* or
+// examples/* — those should use auth.AnyRole(...) with a named role and
+// auth.TestContext(...) for principal injection.
+func requireAuthenticatedPolicy() Policy {
+	return func(r *http.Request) error {
+		p, ok := FromContext(r.Context())
+		if !ok {
+			return errcode.New(errcode.ErrAuthUnauthorized, "authentication required")
+		}
+		if p.Kind == PrincipalAnonymous {
+			return errcode.New(errcode.ErrAuthUnauthorized, "anonymous principal not permitted")
+		}
+		if p.Kind == PrincipalUser && p.Subject == "" {
+			return errcode.New(errcode.ErrAuthUnauthorized, "principal subject missing")
+		}
+		return nil
+	}
+}
+
 // buildRequest returns a GET / request carrying the given context.
 func buildRequest(ctx context.Context) *http.Request {
 	return httptest.NewRequest(http.MethodGet, "/", nil).WithContext(ctx)
@@ -131,7 +152,7 @@ func TestAuthenticated(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			r := buildRequest(tc.ctx)
-			err := Authenticated()(r)
+			err := requireAuthenticatedPolicy()(r)
 
 			if !tc.wantErr {
 				assert.NoError(t, err)

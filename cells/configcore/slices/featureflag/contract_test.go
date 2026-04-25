@@ -4,11 +4,17 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestHttpConfigFlagsListV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.flags.list.v1")
+
+	// PR-CFG-C contract-as-auth-truth: route is admin-gated.
+	_, has403 := c.HTTP.Responses[403]
+	assert.True(t, has403, "http.config.flags.list.v1 must declare 403 (route is RoleAdmin-gated)")
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
 
 	c.ValidateResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}],"nextCursor":"","hasMore":false}`))
 	c.MustRejectResponse(t, []byte(`{"data":"not-array","hasMore":false}`))
@@ -18,6 +24,10 @@ func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.flags.get.v1")
 
+	_, has403 := c.HTTP.Responses[403]
+	assert.True(t, has403, "http.config.flags.get.v1 must declare 403 (route is RoleAdmin-gated)")
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
+
 	c.ValidateResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}}`))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
@@ -25,6 +35,10 @@ func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
 func TestHttpConfigFlagsEvaluateV1Serve(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.config.flags.evaluate.v1")
+
+	_, has403 := c.HTTP.Responses[403]
+	assert.True(t, has403, "http.config.flags.evaluate.v1 must declare 403 (route is RoleAdmin-gated)")
+	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
 
 	c.ValidateRequest(t, []byte(`{"subject":"user-123"}`))
 	c.ValidateResponse(t, []byte(`{"data":{"key":"dark-mode","enabled":true}}`))

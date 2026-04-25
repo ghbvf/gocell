@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	dto "github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/command"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -88,7 +89,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 	auth.Mount(mux, auth.Route{
 		Contract: specCommandEnqueue,
 		Handler:  http.HandlerFunc(h.HandleEnqueue),
-		Policy:   auth.AnyRole("admin", "operator"),
+		Policy:   auth.AnyRole(dto.RoleAdmin, dto.RoleOperator),
 	})
 	auth.Mount(mux, auth.Route{
 		Contract: specCommandDequeue,

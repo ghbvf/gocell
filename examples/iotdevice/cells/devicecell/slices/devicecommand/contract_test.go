@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/dto"
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
@@ -60,7 +61,7 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 	path := strings.Replace(c.HTTP.Path, "{id}", "dev-1", 1)
 	req := httptest.NewRequest(c.HTTP.Method, path, strings.NewReader(`{"payload":"reboot"}`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("operator-1", []string{"operator"}))
+	req = req.WithContext(auth.TestContext("operator-1", []string{dto.RoleOperator}))
 	handler.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
