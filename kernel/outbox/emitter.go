@@ -48,6 +48,10 @@ func NewNoopEmitter() Emitter {
 	return &WriterEmitter{writer: NoopWriter{}}
 }
 
+// Emit writes the entry to the underlying transactional outbox. The relay
+// then publishes it asynchronously, so durability is decoupled from the
+// caller's success path. Returns ErrCellMissingOutbox when the writer is
+// nil — a programmer error that should surface at construction time.
 func (e *WriterEmitter) Emit(ctx context.Context, entry Entry) error {
 	if e == nil || isNilEmitterDependency(e.writer) {
 		return errcode.New(errcode.ErrCellMissingOutbox,
@@ -104,6 +108,12 @@ func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Pro
 	return &DirectEmitter{publisher: p, mode: mode, cellID: cellID, logger: logger, failOpenDroppedCv: cv}, nil
 }
 
+// Emit validates the entry, injects observability metadata from ctx, marshals
+// the v1 wire envelope, and publishes synchronously. When publish fails, the
+// per-entry FailurePolicy (or the construction-time default) decides between
+// fail-closed (return the wrapped error) and fail-open (log + increment the
+// gocell_outbox_emit_failopen_dropped_total counter and return nil so the
+// caller's request path is not blocked on broker availability).
 func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 	if e == nil || isNilEmitterDependency(e.publisher) {
 		return errcode.New(errcode.ErrCellMissingOutbox,
