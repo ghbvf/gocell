@@ -123,3 +123,34 @@ func reasonOf(err error) string {
 	}
 	return ReasonCanceled
 }
+
+// ReasonFromDetails extracts and canonicalizes the reason value from an
+// *errcode.Error.Details map, returning the empty string when no recognised
+// reason is present. Callers (HTTP boundary, log4xx, tracing middleware)
+// MUST go through this helper instead of doing a raw type-assert on
+// d[DetailsKeyReason].(string), so the low-cardinality enum contract holds
+// even when a non-canonical producer (third-party code, future Wrap variants
+// that haven't migrated yet, malicious upstream) attaches an arbitrary
+// string to Details.
+//
+// Fail-closed semantics: any value that is not exactly ReasonCanceled or
+// ReasonDeadlineExceeded yields "" (treat as "unknown / instrumentation
+// gap"). This prevents user-derived strings from polluting span attribute
+// cardinality (Tempo/Jaeger backends are extremely sensitive to high
+// cardinality on a single attribute) and from leaking arbitrary content
+// into structured logs.
+func ReasonFromDetails(d map[string]any) string {
+	if d == nil {
+		return ""
+	}
+	s, ok := d[DetailsKeyReason].(string)
+	if !ok {
+		return ""
+	}
+	switch s {
+	case ReasonCanceled, ReasonDeadlineExceeded:
+		return s
+	default:
+		return ""
+	}
+}

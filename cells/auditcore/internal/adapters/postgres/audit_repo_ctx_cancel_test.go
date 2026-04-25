@@ -168,8 +168,10 @@ func TestAuditRepository_CtxCancel_AllIOBoundaries(t *testing.T) {
 					"ctx-cancel must surface as *errcode.Error, not raw context.* sentinel")
 
 				expectedCode := errcode.ErrClientCanceled
+				expectedReason := ctxcancel.ReasonCanceled
 				if errors.Is(c.cause, context.DeadlineExceeded) {
 					expectedCode = errcode.ErrServerTimeout
+					expectedReason = ctxcancel.ReasonDeadlineExceeded
 				}
 				assert.Equal(t, expectedCode, ec.Code,
 					"Canceled→ErrClientCanceled (499) / DeadlineExceeded→ErrServerTimeout (504); "+
@@ -177,6 +179,12 @@ func TestAuditRepository_CtxCancel_AllIOBoundaries(t *testing.T) {
 						"with client-direction noise or hide real timeouts")
 				assert.True(t, ctxcancel.Detect(err),
 					"ctxcancel.Detect must traverse the Cause chain back to context.* sentinel")
+				// PR275 P2-2: pin Details["reason"] alongside Code so a regression
+				// in reasonOf() (e.g. always returning the same constant) cannot
+				// pass the test by status alone.
+				assert.Equal(t, expectedReason, ctxcancel.ReasonFromDetails(ec.Details),
+					"Details[reason] must mirror the originating ctx error variant — "+
+						"the canonical low-cardinality observation field for dashboards")
 			})
 		}
 	}

@@ -163,7 +163,7 @@ func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int)
 		logAttrs = append(logAttrs, slog.String("internal", ecErr.InternalMessage))
 	}
 	if status == StatusClientClosedRequest {
-		if reason, ok := ecErr.Details[ctxcancel.DetailsKeyReason].(string); ok && reason != "" {
+		if reason := ctxcancel.ReasonFromDetails(ecErr.Details); reason != "" {
 			logAttrs = append(logAttrs, slog.String("cancel_reason", reason))
 		}
 	}
@@ -221,7 +221,7 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	// a no-op when no slot was installed (e.g. unit tests writing a 499
 	// directly), preserving the legacy "context_canceled" fallback.
 	if status == StatusClientClosedRequest {
-		if reason, ok := details[ctxcancel.DetailsKeyReason].(string); ok {
+		if reason := ctxcancel.ReasonFromDetails(details); reason != "" {
 			setCancelReason(ctx, reason)
 		}
 	}

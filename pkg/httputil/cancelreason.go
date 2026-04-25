@@ -3,6 +3,8 @@ package httputil
 import (
 	"context"
 	"sync"
+
+	"github.com/ghbvf/gocell/pkg/ctxcancel"
 )
 
 // cancelReasonKey is an unexported context key for the writable cancel-reason
@@ -49,8 +51,21 @@ func CancelReason(ctx context.Context) string {
 // setCancelReason records a 499 reason on the slot installed in ctx (no-op
 // when no slot is present). Called from writeErrcodeError when emitting an
 // ErrClientCanceled response.
+//
+// Defence-in-depth: this slot setter enforces the same low-cardinality enum
+// whitelist (ctxcancel.ReasonCanceled / ReasonDeadlineExceeded) as
+// ctxcancel.ReasonFromDetails. writeErrcodeError already filters at the
+// Details read site, so the inner guard is mostly belt-and-suspenders — but
+// guarantees the slot contract holds even if a future caller bypasses
+// ReasonFromDetails (e.g. by reading the value out of a header). Unknown
+// values fall through to the legacy "context_canceled" tracing fallback,
+// which dashboards already recognize as "instrumentation gap, fix the
+// upstream".
 func setCancelReason(ctx context.Context, reason string) {
-	if reason == "" {
+	switch reason {
+	case ctxcancel.ReasonCanceled, ctxcancel.ReasonDeadlineExceeded:
+		// accepted — fall through to slot write
+	default:
 		return
 	}
 	slot, ok := ctx.Value(cancelReasonKey{}).(*cancelReasonSlot)

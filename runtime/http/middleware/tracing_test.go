@@ -401,6 +401,34 @@ func TestTracing_504_FromDeadline(t *testing.T) {
 			"signal in its status code and must not piggyback on the 499 attribute")
 }
 
+// TestTracing_499_ReasonViaWriteDecodeError pins the slot transit through
+// the WriteDecodeError path (PR275 P2-2). WriteDecodeError shares the same
+// writeErrcodeError pipeline as WriteDomainError, so in principle the slot
+// flows through automatically — but without a test, a future split where
+// WriteDecodeError takes a fast path could silently drop reason without
+// breaking anything else. This test forces the contract: any 499 emitted
+// via writeErrcodeError surface (WriteDomainError, WriteDecodeError, or
+// future writers) must populate the slot.
+func TestTracing_499_ReasonViaWriteDecodeError(t *testing.T) {
+	spy := &spyTracer{}
+
+	handler := Tracing(spy)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ecErr := ctxcancel.Wrap(context.Canceled, "Decode", "id=x")
+		require.NotNil(t, ecErr)
+		httputil.WriteDecodeError(r.Context(), w, ecErr)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/decode-canceled", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	require.Equal(t, httputil.StatusClientClosedRequest, rec.Code)
+	spans := spy.Spans()
+	require.Len(t, spans, 1)
+	assert.Equal(t, "canceled", spans[0].Attr("client.cancel.reason"),
+		"WriteDecodeError must transit reason through the same slot as WriteDomainError")
+}
+
 // TestTracing_4xxNoErrorSpanStatus_NoCancelAttr ensures plain 4xx (e.g.
 // validation 400) leaves span.Status Unset (already covered by current
 // behaviour) AND does NOT spuriously add the client.cancel.reason
