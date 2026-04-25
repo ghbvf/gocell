@@ -254,9 +254,9 @@ func TestConfigRepo_CryptoOpError_CauseAwareClassification(t *testing.T) {
 		code errcode.Code
 		op   string
 	}{
-		{"encrypt", errcode.ErrConfigRepoQuery, "Encrypt"},
+		{"encrypt", errcode.ErrConfigEncryptFailed, "Encrypt"},
 		{"decrypt", errcode.ErrConfigDecryptFailed, "Decrypt"},
-		{"encrypt version", errcode.ErrConfigRepoQuery, "EncryptVersion"},
+		{"encrypt version", errcode.ErrConfigEncryptFailed, "EncryptVersion"},
 		{"decrypt version", errcode.ErrConfigDecryptFailed, "DecryptVersion"},
 	}
 

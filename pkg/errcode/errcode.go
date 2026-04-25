@@ -241,6 +241,12 @@ const (
 	// ErrConfigDecryptFailed signals that a sensitive config value could not be
 	// decrypted at the repository boundary. Maps to HTTP 500 (internal error).
 	ErrConfigDecryptFailed Code = "ERR_CONFIG_DECRYPT_FAILED"
+	// ErrConfigEncryptFailed signals that a sensitive config value could not be
+	// encrypted at the repository boundary (Encrypt/EncryptVersion). Maps to
+	// HTTP 500 (internal error). Symmetric with ErrConfigDecryptFailed so
+	// alerting systems can filter all crypto failures via a single code prefix
+	// and distinguish them from generic ErrConfigRepoQuery DB failures.
+	ErrConfigEncryptFailed Code = "ERR_CONFIG_ENCRYPT_FAILED"
 	// ErrConfigKeyMissing signals that a required encryption key (e.g. GOCELL_CONFIGCORE_MASTER_KEY
 	// or vault token) is absent at startup. Triggers fail-fast in postgres mode.
 	ErrConfigKeyMissing Code = "ERR_CONFIG_KEY_MISSING"

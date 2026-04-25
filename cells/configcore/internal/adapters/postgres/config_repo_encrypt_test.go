@@ -45,6 +45,7 @@ import (
 type fakeValueTransformer struct {
 	currentKeyID string
 	failDecrypt  bool
+	failEncrypt  bool
 }
 
 // CurrentKeyID implements crypto.CurrentKeyIDProvider — the optional
@@ -57,6 +58,9 @@ func (f *fakeValueTransformer) CurrentKeyID(_ context.Context) (string, error) {
 const fakeNonce = "FAKENC123456" // 12 bytes
 
 func (f *fakeValueTransformer) Encrypt(_ context.Context, plaintext, aad []byte) ([]byte, string, []byte, []byte, error) {
+	if f.failEncrypt {
+		return nil, "", nil, nil, errcode.New(errcode.ErrKeyProviderTransient, "fake: forced encrypt failure")
+	}
 	// Fake cipher: XOR each byte with 0x55.
 	ct := make([]byte, len(plaintext))
 	for i, b := range plaintext {
@@ -847,6 +851,96 @@ func TestWithOnStaleCipher_Option(t *testing.T) {
 	assert.Equal(t, "opt_key", got[0].key)
 	assert.Equal(t, storedKeyID, got[0].storedID)
 	assert.Equal(t, "local-aes-v2", got[0].currentID)
+}
+
+// TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed verifies that when
+// transformer.Encrypt returns an error, the repo returns ErrConfigEncryptFailed
+// (not ErrConfigRepoQuery) for all encrypt paths. The cause is a transient
+// ErrKeyProviderTransient error (e.g. Vault sealed / rate-limited) which must
+// preserve CategoryInfra so alerting can distinguish crypto failures from DB failures.
+func TestEncrypt_FailEncrypt_RoutesToErrConfigEncryptFailed(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("Create sensitive entry", func(t *testing.T) {
+		db := &mockDB{}
+		tr := &fakeValueTransformer{currentKeyID: "local-aes-v1", failEncrypt: true}
+		repo := newEncryptedRepoFromDBTX(db, tr)
+
+		entry := &domain.ConfigEntry{
+			ID:        "cfg-enc-1",
+			Key:       "db_password",
+			Value:     "s3cr3t",
+			Sensitive: true,
+		}
+		err := repo.Create(ctx, entry)
+		require.Error(t, err)
+
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+		assert.Equal(t, errcode.ErrConfigEncryptFailed, ec.Code,
+			"encrypt failure on Create must route to ErrConfigEncryptFailed, not ErrConfigRepoQuery")
+		assert.True(t, errcode.IsInfraError(ec),
+			"CategoryInfra must propagate from ErrKeyProviderTransient cause so Vault-outage alerts fire")
+	})
+
+	t.Run("UpdateForRollback sensitive entry", func(t *testing.T) {
+		db := &mockDB{
+			// QueryRow returns a scan error to avoid the RETURNING scan path;
+			// the encrypt failure happens before any DB call, so this row is
+			// never actually reached, but we need a non-nil mockRow to avoid
+			// a nil-pointer dereference in resolveWriteDB (test path uses db directly).
+			queryRowResult: &mockRow{scanErr: assert.AnError},
+		}
+		tr := &fakeValueTransformer{currentKeyID: "local-aes-v1", failEncrypt: true}
+		repo := newEncryptedRepoFromDBTX(db, tr)
+
+		_, err := repo.UpdateForRollback(ctx, "api_key", "new-secret", true)
+		require.Error(t, err)
+
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+		assert.Equal(t, errcode.ErrConfigEncryptFailed, ec.Code,
+			"encrypt failure on UpdateForRollback must route to ErrConfigEncryptFailed")
+		assert.True(t, errcode.IsInfraError(ec),
+			"CategoryInfra must propagate from ErrKeyProviderTransient cause")
+	})
+
+	t.Run("PublishVersion sensitive version", func(t *testing.T) {
+		db := &mockDB{}
+		tr := &fakeValueTransformer{currentKeyID: "local-aes-v1", failEncrypt: true}
+		repo := newEncryptedRepoFromDBTX(db, tr)
+
+		now := time.Now()
+		version := &domain.ConfigVersion{
+			ID:          "cv-enc-1",
+			ConfigID:    "cfg-1",
+			Version:     1,
+			Value:       "secret-value",
+			Sensitive:   true,
+			PublishedAt: &now,
+		}
+		err := repo.PublishVersion(ctx, version)
+		require.Error(t, err)
+
+		var ec *errcode.Error
+		require.True(t, errors.As(err, &ec), "error must be *errcode.Error")
+		assert.Equal(t, errcode.ErrConfigEncryptFailed, ec.Code,
+			"encrypt failure on PublishVersion must route to ErrConfigEncryptFailed")
+		assert.True(t, errcode.IsInfraError(ec),
+			"CategoryInfra must propagate from ErrKeyProviderTransient cause")
+	})
+
+	t.Run("cryptoOpError direct — ErrConfigEncryptFailed transient", func(t *testing.T) {
+		repo := newConfigRepositoryFromDBTX(&mockDB{})
+		transient := errcode.NewInfra(errcode.ErrKeyProviderTransient, "vault sealed")
+		ec := repo.cryptoOpError(errcode.ErrConfigEncryptFailed, "Encrypt", "key=foo", transient)
+		require.NotNil(t, ec)
+		assert.Equal(t, errcode.ErrConfigEncryptFailed, ec.Code)
+		assert.True(t, errcode.IsInfraError(ec),
+			"transient cause must preserve CategoryInfra")
+		assert.Contains(t, ec.InternalMessage, "Encrypt",
+			"InternalMessage must carry the PascalCase op label")
+	})
 }
 
 // TestGetByKey_FreshKey_OnStaleCipherCallback_NotCalled verifies that the

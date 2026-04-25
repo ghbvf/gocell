@@ -697,6 +697,7 @@ func TestMapCodeToStatus_EncryptionCodes(t *testing.T) {
 		{"KeyProviderDecryptFailed", errcode.ErrKeyProviderDecryptFailed, http.StatusInternalServerError},
 		{"KeyProviderRotateFailed", errcode.ErrKeyProviderRotateFailed, http.StatusInternalServerError},
 		{"ConfigDecryptFailed", errcode.ErrConfigDecryptFailed, http.StatusInternalServerError},
+		{"ConfigEncryptFailed", errcode.ErrConfigEncryptFailed, http.StatusInternalServerError},
 		{"ConfigKeyMissing", errcode.ErrConfigKeyMissing, http.StatusInternalServerError},
 	}
 	for _, tc := range tests {

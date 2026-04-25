@@ -141,14 +141,23 @@ func scanFlagRow(row Row) (*domain.FeatureFlag, error) {
 // wrapNonScanQueryErr is the analogue of wrapCtxCancel for failures returned
 // by Exec/Query (i.e. before any row scan) — it short-circuits ctx cancel
 // to ErrClientCanceled, otherwise falls back to ErrFlagRepoQuery. `msg`
-// preserves the prior "flag repo: %s failed" diagnostic for the non-cancel
-// branch; `identifier` is a caller-formatted resource locator (e.g.
-// "key=foo") recorded only in the cancel-branch InternalMessage.
+// is the generic public Message returned to API consumers; `identifier` is
+// a caller-formatted resource locator (e.g. "key=foo") recorded only in
+// InternalMessage to prevent user-input echo in public error responses.
 func (r *FlagRepository) wrapNonScanQueryErr(ctx context.Context, op, identifier, msg string, err error) error {
 	if cancelErr := r.wrapCtxCancel(ctx, op, identifier, err); cancelErr != nil {
 		return cancelErr
 	}
-	return errcode.Wrap(errcode.ErrFlagRepoQuery, msg, err)
+	internal := fmt.Sprintf("flag repo: %s failed", op)
+	if identifier != "" {
+		internal = fmt.Sprintf("flag repo: %s failed (%s)", op, identifier)
+	}
+	return &errcode.Error{
+		Code:            errcode.ErrFlagRepoQuery,
+		Message:         msg,
+		InternalMessage: internal,
+		Cause:           err,
+	}
 }
 
 // Create inserts a new feature flag. All 8 columns are written.
@@ -177,7 +186,7 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 		flag.Description, flag.Version, flag.CreatedAt, flag.UpdatedAt,
 	); err != nil {
 		return r.wrapNonScanQueryErr(ctx, "Create", "key="+flag.Key,
-			fmt.Sprintf("flag repo: create failed for key %s", flag.Key), err)
+			"flag repo: create failed", err)
 	}
 	return nil
 }
