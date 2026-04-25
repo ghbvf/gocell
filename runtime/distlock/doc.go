@@ -8,6 +8,18 @@
 // Locker / Lock interfaces must live here rather than in adapters/redis.
 // The shape follows PR#177's runtime/outbox.Store precedent exactly.
 //
+// # Resource model
+//
+// Each call to New() creates one Manager. The Manager's resource footprint per
+// active lock set is:
+//   - 1 manager goroutine: owns the renewal min-heap and all Driver I/O calls
+//   - 0 per-lock goroutines: lockCtx is derived from the caller's ctx, so parent
+//     cancellation (including custom causes set via context.WithCancelCause),
+//     values, and deadlines propagate automatically via Go's context machinery.
+//     No watcher goroutine is needed.
+//
+// N active locks = 1 manager goroutine + O(N) heap. One goroutine for N locks.
+//
 // # Non-goals
 //
 // This is an efficiency lock, NOT a correctness lock. It is suitable for

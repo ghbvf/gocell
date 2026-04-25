@@ -151,7 +151,7 @@ func (m *mockCmdable) SetNX(_ context.Context, key string, value any, expiration
 	return cmd
 }
 
-func (m *mockCmdable) Eval(_ context.Context, _ string, keys []string, args ...any) *goredis.Cmd {
+func (m *mockCmdable) Eval(_ context.Context, script string, keys []string, args ...any) *goredis.Cmd {
 	cmd := goredis.NewCmd(context.Background())
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -160,15 +160,17 @@ func (m *mockCmdable) Eval(_ context.Context, _ string, keys []string, args ...a
 		cmd.SetErr(m.evalErr)
 		return cmd
 	}
-	cmd.SetVal(m.simulateScript(keys, args))
+	cmd.SetVal(m.simulateScript(script, keys, args))
 	return cmd
 }
 
 // simulateScript simulates the release-lock and renew-lock Lua scripts used
 // by DistLock. Both scripts check "GET key == expected value" before acting;
-// the scripts are distinguished by argument count (release=1, renew=2).
+// scripts are distinguished by matching the script string against the known
+// constants (releaseLockScript, renewLockScript), not by argument count.
+// This catches edits to the Lua scripts at unit-test time.
 // Caller MUST hold m.mu.
-func (m *mockCmdable) simulateScript(keys []string, args []any) int64 {
+func (m *mockCmdable) simulateScript(script string, keys []string, args []any) int64 {
 	if len(keys) != 1 || len(args) < 1 {
 		return 0
 	}
@@ -178,19 +180,27 @@ func (m *mockCmdable) simulateScript(keys []string, args []any) int64 {
 	if !ok || entry.value != expectedValue {
 		return 0
 	}
-	if len(args) == 1 {
+	switch script {
+	case releaseLockScript:
 		// Release script: delete the key.
 		delete(m.store, key)
 		return 1
+	case renewLockScript:
+		// Renew script: allow override for ownership-loss simulation.
+		if m.evalRenewResult != nil {
+			return *m.evalRenewResult
+		}
+		if len(args) < 2 {
+			return 0
+		}
+		ttlMs, _ := toInt64(args[1])
+		entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
+		m.store[key] = entry
+		return 1
+	default:
+		// Unknown script — return 0 to surface accidental misrouting.
+		return 0
 	}
-	// Renew script: allow override for ownership-loss simulation.
-	if m.evalRenewResult != nil {
-		return *m.evalRenewResult
-	}
-	ttlMs, _ := toInt64(args[1])
-	entry.expiry = time.Now().Add(time.Duration(ttlMs) * time.Millisecond)
-	m.store[key] = entry
-	return 1
 }
 
 // toString converts various types to string for mock storage.
@@ -221,41 +231,6 @@ func toInt64(v any) (int64, bool) {
 
 // errMock is a sentinel error used in tests.
 var errMock = errors.New("mock error")
-
-// recordingCmdable wraps mockCmdable and records the context passed to each
-// Eval call. Used by deadline-shape tests that need to inspect the deadline
-// the production code computes. Reuses the embedded *mockCmdable's mutex so
-// evalContexts and evalCallCount live in one lock domain, preventing data
-// races under -race when tests read both fields.
-type recordingCmdable struct {
-	*mockCmdable
-	evalContexts []context.Context // guarded by embedded *mockCmdable.mu
-}
-
-func newRecordingCmdable() *recordingCmdable {
-	return &recordingCmdable{
-		mockCmdable: newMockCmdable(),
-	}
-}
-
-func (r *recordingCmdable) Eval(ctx context.Context, script string, keys []string, args ...any) *goredis.Cmd {
-	// Record the ctx under the embedded mock's mu so subsequent
-	// evalCallCount reads (which also live under that mu) see a coherent
-	// view from test code that reads both fields together.
-	r.mu.Lock()
-	r.evalContexts = append(r.evalContexts, ctx)
-	r.mu.Unlock()
-	return r.mockCmdable.Eval(ctx, script, keys, args...)
-}
-
-func (r *recordingCmdable) lastEvalCtx() context.Context {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if len(r.evalContexts) == 0 {
-		return nil
-	}
-	return r.evalContexts[len(r.evalContexts)-1]
-}
 
 // mockPoolStatsProvider implements poolStatsProvider for testing.
 type mockPoolStatsProvider struct {

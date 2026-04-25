@@ -294,6 +294,10 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrConfigDuplicate:     http.StatusConflict,
 	errcode.ErrConfigRepoDuplicate: http.StatusConflict,
 	errcode.ErrFlagDuplicate:       http.StatusConflict,
+	// ErrDistlockTimeout: the requested lock key is currently held by another
+	// holder. The caller should retry (409 rather than 503: the conflict is a
+	// business-level contention, not an infra outage).
+	errcode.ErrDistlockTimeout: http.StatusConflict,
 
 	// --- 410 Gone ---
 	// Setup is a one-shot lifecycle endpoint: once the first admin exists, the
