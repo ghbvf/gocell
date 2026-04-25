@@ -62,24 +62,25 @@ func main() {
 	ctx, stop := shutdown.NotifyContext(context.Background())
 	defer stop()
 
-	// PR-A35: /readyz?verbose is token-gated in every mode. Honour
-	// GOCELL_READYZ_VERBOSE_TOKEN if the operator sets one (matches the
-	// curl example in README.md); otherwise waive the verbose endpoint so
-	// the demo binary keeps starting out of the box without exposing
-	// internal topology anonymously.
-	readyzOpts := []bootstrap.Option{}
+	// PR-A35 + PR-A14b: /readyz?verbose is policy-gated. When the operator
+	// sets GOCELL_READYZ_VERBOSE_TOKEN, attach PolicyVerboseToken to the
+	// readyz route group; otherwise waive the verbose endpoint via
+	// WithReadyzVerboseDisabled so the demo binary keeps starting out of the
+	// box without exposing internal topology anonymously.
+	healthOpts := []bootstrap.HealthRouteGroupOption{}
 	if tok := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN"); tok != "" {
-		readyzOpts = append(readyzOpts, bootstrap.WithVerboseToken(tok))
+		healthOpts = append(healthOpts, bootstrap.WithReadyzPolicy(
+			bootstrap.PolicyVerboseToken("X-Readyz-Token", tok)))
 	} else {
-		readyzOpts = append(readyzOpts, bootstrap.WithVerboseDisabled())
+		healthOpts = append(healthOpts, bootstrap.WithReadyzVerboseDisabled())
 	}
 
-	opts := []bootstrap.Option{
+	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithHTTPPrimaryAddr(":8082"), bootstrap.WithHTTPInternalAddr(":9082"),
-	}
-	opts = append(opts, readyzOpts...)
-	app := bootstrap.New(opts...)
+		bootstrap.WithListener(cell.PrimaryListener, ":8082", cell.Policy{}),
+		bootstrap.WithListener(cell.InternalListener, ":9082", cell.Policy{}),
+		bootstrap.WithHealthRoutes(healthOpts...),
+	)
 
 	logger.Info("todoorder: starting on :8082")
 	if err := app.Run(ctx); err != nil {

@@ -127,8 +127,8 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 		WithSubscriber(bus),
 		WithPublisher(bus),
 		WithAssembly(asm),
-		WithPrimaryListener(primaryLn),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), cell.Policy{}, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithTracer(spyTracer),
 	)
 

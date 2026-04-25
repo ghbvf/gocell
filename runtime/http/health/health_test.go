@@ -530,11 +530,18 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 			wantDeniedBody:  true,
 		},
 		{
-			name:            "no token configured returns 401 for verbose",
+			// PR-258 R2-01 round-3 re-collapse: handler is permissive when no
+			// token is configured. Verbose-mode gating is the route group's
+			// PolicyVerboseToken middleware (single source of truth);
+			// SetVerboseToken at the handler is opt-in defense-in-depth only.
+			// With no handler-level token configured, ?verbose renders the
+			// verbose body — the route group must add PolicyVerboseToken to
+			// gate it.
+			name:            "no token configured renders verbose (handler permissive)",
 			tokenConfigured: "",
 			sendVerbose:     true,
-			wantStatus:      http.StatusUnauthorized,
-			wantDeniedBody:  true,
+			wantStatus:      http.StatusOK,
+			wantVerboseBody: true,
 		},
 		{
 			name:            "bare readyz stays 200 even with verbose disabled via missing token",

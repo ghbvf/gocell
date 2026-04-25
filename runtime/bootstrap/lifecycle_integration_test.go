@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -61,8 +62,8 @@ func TestLifecycleIntegration_HookStartStop_Ordering(t *testing.T) {
 	var onStartCalled bool
 
 	b := New(
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newIntegrationListener(t))),
 		WithShutdownTimeout(3*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			_ = lc.Append(Hook{
@@ -136,7 +137,12 @@ func TestLifecycleIntegration_HookPartialFailure_PreciseRollback(t *testing.T) {
 
 	boomErr := errors.New("boom")
 
+	// PR-A14b: phase0 requires a primary listener declaration even for pure
+	// lifecycle tests; inject an ephemeral listener so validation passes and
+	// Run proceeds to the lifecycle.Start phase.
+	integLn := newIntegrationListener(t)
 	b := New(
+		WithListener(cell.PrimaryListener, integLn.Addr().String(), cell.Policy{}, WithListenerNet(integLn)),
 		WithShutdownTimeout(3*time.Second),
 		WithLifecycle(func(lc Lifecycle) {
 			// Hook A: succeeds; its OnStop must run during rollback.

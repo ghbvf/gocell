@@ -5,7 +5,6 @@ import (
 	"context"
 	"log/slog"
 	"net"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -96,8 +95,8 @@ func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
 		WithAssembly(asm),
 		WithHookObserver(bootstrapObs), // must be ignored
 		WithHookTimeout(time.Second),   // must be ignored
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithPublisher(eb),
 		WithSubscriber(eb),
 		WithShutdownTimeout(2*time.Second),
@@ -108,14 +107,7 @@ func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	// Wait for server to become ready.
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + ln.Addr().String() + "/healthz")
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	waitForHealthy(t, ln.Addr().String())
 
 	cancel()
 	select {

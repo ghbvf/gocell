@@ -9,9 +9,9 @@ import (
 )
 
 // DiscoverQueueRegistrars injects q into every cell that implements
-// kernel/command.QueueRegistrar. It mirrors bootstrap's HTTPRegistrar and
-// LifecycleContributor discovery style while keeping command queue ownership in
-// the composition root.
+// kernel/command.QueueRegistrar. It mirrors bootstrap's RouteGroupContributor
+// and LifecycleContributor discovery style while keeping command queue
+// ownership in the composition root.
 func DiscoverQueueRegistrars(cells []cell.Cell, q kcommand.Queue) (int, error) {
 	if q == nil {
 		return 0, fmt.Errorf("runtime/command: queue must not be nil")

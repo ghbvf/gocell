@@ -183,10 +183,13 @@ func TestDurabilityModeForTopology_UsesStorageBackend(t *testing.T) {
 }
 
 // buildBootstrapFromShared is the test-path assembly helper, equivalent to the
-// production run() flow but accepts extra bootstrap.Options (e.g. WithListener).
-// Uses memory topology (modules' Provide path) and AccessCoreModule with a
-// fast-bcrypt option.
-func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+// production run() flow. It owns the PrimaryListener registration so the JWT
+// policy (PolicyJWTFromAssembly) is wired with the assembly that BuildApp
+// constructs internally. Tests supply the primary net.Listener and any extra
+// options (typically WithListener for InternalListener/HealthListener,
+// WithManagedResource, etc.). Uses memory topology and AccessCoreModule with
+// a fast-bcrypt option.
+func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Listener, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -217,6 +220,15 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, extra ...bootstr
 	adapterInfo := shared.Topology.AdapterInfo()
 	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
+	// Primary listener carries the JWT policy resolved from the assembly. F3
+	// round-3: this is the single source of truth for JWT auth — there is no
+	// longer a standalone bootstrap.PolicyJWTFromAssembly Option.
+	opts = append(opts, bootstrap.WithListener(
+		cell.PrimaryListener,
+		primaryLn.Addr().String(),
+		bootstrap.PolicyJWTFromAssembly(asm),
+		bootstrap.WithListenerNet(primaryLn),
+	))
 	opts = append(opts, extra...)
 	return bootstrap.New(opts...), nil
 }
@@ -379,8 +391,11 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
-	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
+	app, err := buildBootstrapFromShared(t, shared, ln,
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -388,18 +403,11 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "memory bootstrap must become healthy")
+	healthAddr := healthLn.Addr().String()
+	waitForHealthy(t, healthAddr)
 
 	// /readyz must be healthy (no PG checker to fail).
-	resp, err := http.Get("http://" + addr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -435,9 +443,11 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
-	app, err := buildBootstrapFromShared(t, shared,
-		bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)),
+	app, err := buildBootstrapFromShared(t, shared, ln,
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithManagedResource(fakePG),
 	)
 	require.NoError(t, err)
@@ -446,15 +456,8 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "bootstrap with fake PG must become healthy")
+	healthAddr := healthLn.Addr().String()
+	waitForHealthy(t, healthAddr)
 
 	cancel()
 	select {
@@ -476,26 +479,22 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	healthLn := newCorebundleLocalListener(t)
 
-	app, err := buildBootstrapFromShared(t, shared, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
+	app, err := buildBootstrapFromShared(t, shared, ln,
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "full assembly must become healthy")
+	healthAddr := healthLn.Addr().String()
+	waitForHealthy(t, healthAddr)
 
 	// /readyz confirms all three cells started and registered their probes.
-	resp, err := http.Get("http://" + addr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,

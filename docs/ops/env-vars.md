@@ -105,19 +105,23 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 
 > Migration note: pre-PR-A18 deployments granted `transit/encrypt/<keyname>` instead of `transit/datakey/plaintext/<keyname>`. The legacy `encrypt` path is no longer used; the new policy above replaces it.
 
-## HTTP Listener (PR-A14a dual-listener)
+## HTTP Listeners (PR-A14b three-listener topology)
 
-`cmd/corebundle` binds two HTTP servers:
+> **Breaking change (PR-A14b):** `/healthz`、`/readyz`、`/metrics` 从 primary 端口迁到 health listener，更新 k8s probe + Prometheus 配置。详见 [listener-topology](listener-topology.md)。
 
-- **primary** — `/api/v1/*`, public business routes, and infra endpoints (`/healthz`, `/readyz`, `/metrics`). Exposed to the public / edge network.
-- **internal** — `/internal/v1/*` control-plane routes only. Must be bound to an internal network segment; service-token / mTLS middleware is the sole authentication layer. Requests to non-`/internal/v1/*` paths return 404.
+`cmd/corebundle` binds three HTTP servers. See `docs/ops/listener-topology.md` for the full topology diagram and k8s probe migration notes.
+
+- **primary** — `/api/v1/*` public business routes. Exposed to the public / edge network. JWT authentication middleware runs here. Explicitly 404s `/internal/v1/*` so the internal prefix never leaks to the public network.
+- **internal** — `/internal/v1/*` control-plane routes only. Must be bound to an internal network segment; service-token / mTLS middleware is the sole authentication layer.
+- **health** — `/healthz`, `/readyz`, `/metrics` only. Dedicated listener so infra endpoints are never mixed with business traffic. Bind to loopback or an internal segment and point k8s probes here.
 
 | Variable | Purpose | Default | Accepted Values |
 |---|---|---|---|
 | `GOCELL_HTTP_PRIMARY_ADDR` | Primary listener bind address (public / API) | `:8080` | Any `host:port` accepted by `net.Listen("tcp", …)`. Use `0.0.0.0:8080` or a specific interface in production. |
 | `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `127.0.0.1:9090` | Same format as primary. **Default is loopback** so a dev deployment without a service-token guard is not trivially reachable across the network. Production deployments binding to an internal VPC interface (e.g. `10.0.0.10:9090`) must set this variable explicitly so service-token / mTLS enforcement is the primary defence. |
+| `GOCELL_HTTP_HEALTH_ADDR` | Health listener bind address (`/healthz`, `/readyz`, `/metrics`) | `127.0.0.1:9091` | Same format as primary. Point k8s liveness/readiness probes to this address. **Not exposed** to external traffic by default. |
 
-Both addresses must be non-empty and distinct; startup fails fast otherwise. The primary listener also explicitly 404s `/internal/v1/*` paths so the internal prefix never leaks to the public network.
+All three addresses must be non-empty and distinct; startup fails fast otherwise.
 
 ## Observability / Monitoring
 

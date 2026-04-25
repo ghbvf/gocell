@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
 )
@@ -69,9 +70,9 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 	res := &fakeResource{name: "fake-pg", checkErr: nil}
 
 	ln := newLocalListener(t)
-	app := newTestBootstrap(
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+	app := New(
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -109,9 +110,9 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 	res := &fakeResource{name: "worker-res", worker: fw}
 
 	ln := newLocalListener(t)
-	app := newTestBootstrap(
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+	app := New(
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -161,8 +162,8 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 		WithManagedResource(res3),
@@ -219,9 +220,9 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 	res := &fakeResource{name: "no-worker-res", worker: nil}
 
 	ln := newLocalListener(t)
-	app := newTestBootstrap(
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+	app := New(
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -252,8 +253,8 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 	)
@@ -336,9 +337,9 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 	res := &fakeResource{name: "bad-res", closeErr: closeErr}
 
 	ln := newLocalListener(t)
-	app := newTestBootstrap(
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+	app := New(
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -76,7 +77,7 @@ var (
 // buildBootstrapWithFakeKeyProvider is the test harness for A19. It mirrors
 // buildBootstrapFromShared but injects ConfigCoreModule{KeyProviderOverride}
 // so the readiness wiring can be exercised without GOCELL_CONFIGCORE_KEY_PROVIDER / Vault.
-func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
+func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcrypto.KeyProvider, primaryLn net.Listener, extra ...bootstrap.Option) (*bootstrap.Bootstrap, error) {
 	t.Helper()
 	ctx := context.Background()
 
@@ -107,6 +108,12 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 	adapterInfo := shared.Topology.AdapterInfo()
 	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
+	opts = append(opts, bootstrap.WithListener(
+		cell.PrimaryListener,
+		primaryLn.Addr().String(),
+		bootstrap.PolicyJWTFromAssembly(asm),
+		bootstrap.WithListenerNet(primaryLn),
+	))
 	opts = append(opts, extra...)
 	return bootstrap.New(opts...), nil
 }
@@ -134,7 +141,10 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
+	healthLn := newCorebundleLocalListener(t)
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 
@@ -142,18 +152,11 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "bootstrap must become live")
+	healthAddr := healthLn.Addr().String()
+	waitForHealthy(t, healthAddr)
 
 	// /readyz must reflect the failing fake probe → 503.
-	resp, err := http.Get("http://" + addr + "/readyz") //nolint:noctx
+	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, resp.StatusCode,
@@ -162,10 +165,10 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 
 	// /readyz?verbose must list the fake probe by name as unhealthy (proves the
 	// aggregation step preserved the named checker, not just a boolean signal).
-	// PR-A35: verbose now requires the X-Readyz-Token header to match the
-	// configured token set via shared.VerboseToken above.
+	// PR-A35: verbose is gated by PolicyVerboseToken on the readyz route group;
+	// PR-A14b round-2 puts it on the dedicated HealthListener (healthAddr).
 	verboseReq, err := http.NewRequestWithContext(context.Background(),
-		http.MethodGet, "http://"+addr+"/readyz?verbose", nil)
+		http.MethodGet, "http://"+healthAddr+"/readyz?verbose", nil)
 	require.NoError(t, err)
 	verboseReq.Header.Set("X-Readyz-Token", shared.VerboseToken)
 	verboseResp, err := http.DefaultClient.Do(verboseReq)
@@ -209,16 +212,19 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
-	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)))
+	healthLn2 := newCorebundleLocalListener(t)
+	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn2.Addr().String(), cell.Policy{}, bootstrap.WithListenerNet(healthLn2)))
 	require.NoError(t, err)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	errCh := make(chan error, 1)
 	go func() { errCh <- app.Run(ctx) }()
 
-	addr := ln.Addr().String()
+	healthAddr2 := healthLn2.Addr().String()
 	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + addr + "/readyz") //nolint:noctx
+		resp, err := http.Get("http://" + healthAddr2 + "/readyz") //nolint:noctx
 		if err != nil {
 			return false
 		}

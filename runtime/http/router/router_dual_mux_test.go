@@ -1,3 +1,7 @@
+// Package router — per-listener router tests (PR-A14b).
+// Replaces the old dual-mux tests (PR-A14a) with per-listener Router semantics.
+// Each Router now wraps a SINGLE chi.Mux root for ONE listener; bootstrap
+// builds one Router per declared listener and applies its default Policy.
 package router
 
 import (
@@ -14,9 +18,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// mockIntentVerifier is reused across dual-mux tests. Duplicated here rather
-// than shared to keep each _test.go file self-contained under its top-of-file
-// narrative; the tiny type is cheap to repeat.
+// dualMuxMockVerifier implements auth.IntentTokenVerifier for per-listener tests.
 type dualMuxMockVerifier struct {
 	claims auth.Claims
 	err    error
@@ -38,60 +40,33 @@ func countingMW(counter *atomic.Int64) func(http.Handler) http.Handler {
 	}
 }
 
-// TestDualMux_PublicHandler_Returns404_ForInternalPrefix is the core assertion
-// for PR-A14a: the primary (public) handler must NOT have /internal/v1/* routes
-// mounted on it. Even if a Cell accidentally tries to register such a route,
-// it must land on the internal mux — so probing the public handler with an
-// /internal/v1/* URL yields 404, not 401 (which would signal the guard ran
-// on the primary listener, defeating the isolation).
-func TestDualMux_PublicHandler_Returns404_ForInternalPrefix(t *testing.T) {
-	rtr, err := NewE()
+// TestPerListener_PrimaryRouter_Returns404_ForUnregisteredPaths verifies that
+// the primary listener router (built via NewForListener) returns 404 for any
+// path not registered, including /internal/v1/* and /healthz.
+func TestPerListener_PrimaryRouter_Returns404_ForUnregisteredPaths(t *testing.T) {
+	rtr, err := NewForListener(kcell.PrimaryListener, kcell.Policy{})
 	require.NoError(t, err)
 
-	// Register a handler via Route("/internal/v1/...") — it must land on
-	// internalMux, NOT publicMux. PublicHandler must return 404 for such paths.
-	rtr.Route("/internal/v1/foo", func(sub kcell.RouteMux) {
-		sub.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-	})
-
-	req := httptest.NewRequest(http.MethodGet, "/internal/v1/foo/", nil)
-	rec := httptest.NewRecorder()
-	rtr.PublicHandler().ServeHTTP(rec, req)
-
-	assert.Equal(t, http.StatusNotFound, rec.Code,
-		"public handler must 404 on /internal/v1/* — physical listener isolation")
-}
-
-// TestDualMux_InternalHandler_Returns404_ForPublicPrefix verifies the mirror:
-// the internal handler must not route /api/v1/*, /healthz, or any non-internal path.
-func TestDualMux_InternalHandler_Returns404_ForPublicPrefix(t *testing.T) {
-	rtr, err := NewE()
-	require.NoError(t, err)
-
-	// Register a business route on the public mux via Route("/api/v1/...").
-	rtr.Route("/api/v1/foo", func(sub kcell.RouteMux) {
-		sub.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-	})
-
-	cases := []string{"/api/v1/foo/", "/healthz", "/metrics", "/readyz", "/"}
-	for _, path := range cases {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
+	cases := []string{
+		"/internal/v1/foo",
+		"/internal/v1/",
+		"/healthz",
+		"/readyz",
+		"/metrics",
+	}
+	for _, p := range cases {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
 		rec := httptest.NewRecorder()
-		rtr.InternalHandler().ServeHTTP(rec, req)
+		rtr.Handler().ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusNotFound, rec.Code,
-			"internal handler must 404 on non-/internal/v1/* path %q", path)
+			"primary listener router must 404 on %q — routes only what cells register", p)
 	}
 }
 
-// TestDualMux_InternalHandler_RoutesInternalPrefix verifies that a route
-// registered via mux.Route("/internal/v1/...") is reachable through the
-// internal handler (and ONLY through it).
-func TestDualMux_InternalHandler_RoutesInternalPrefix(t *testing.T) {
-	rtr, err := NewE()
+// TestPerListener_InternalRouter_RoutesInternalPrefix verifies that a route
+// registered on an InternalListener router is reachable through that router.
+func TestPerListener_InternalRouter_RoutesInternalPrefix(t *testing.T) {
+	rtr, err := NewForListener(kcell.InternalListener, kcell.Policy{})
 	require.NoError(t, err)
 
 	var hit atomic.Int64
@@ -104,65 +79,60 @@ func TestDualMux_InternalHandler_RoutesInternalPrefix(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/access/roles", nil)
 	rec := httptest.NewRecorder()
-	rtr.InternalHandler().ServeHTTP(rec, req)
+	rtr.Handler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Equal(t, int64(1), hit.Load())
 }
 
-// TestDualMux_InternalMiddleware_AppliedToInternalMuxOnly verifies that
-// middleware installed via WithInternalMiddleware is invoked for /internal/v1/*
-// paths on the internal handler and NOT invoked for any path on the public
-// handler.
-func TestDualMux_InternalMiddleware_AppliedToInternalMuxOnly(t *testing.T) {
+// TestPerListener_HealthRouter_RoutesHealthPrefix verifies a health-listener
+// router serves health paths.
+func TestPerListener_HealthRouter_RoutesHealthPrefix(t *testing.T) {
+	rtr, err := NewForListener(kcell.HealthListener, kcell.Policy{})
+	require.NoError(t, err)
+
+	var hit atomic.Int64
+	rtr.Handle("/healthz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hit.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	rec := httptest.NewRecorder()
+	rtr.Handler().ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, int64(1), hit.Load())
+}
+
+// TestPerListener_Middleware_AppliedToSingleMux verifies that middleware added
+// via With() is invoked for routes on that router's single mux.
+func TestPerListener_Middleware_AppliedToSingleMux(t *testing.T) {
 	var guardCount atomic.Int64
 	guard := countingMW(&guardCount)
 
-	rtr, err := NewE(WithInternalMiddleware(guard))
+	rtr, err := NewForListener(kcell.InternalListener, kcell.Policy{})
 	require.NoError(t, err)
 
-	// Register an internal route so the internal mux can dispatch.
 	rtr.Route("/internal/v1/access", func(sub kcell.RouteMux) {
-		sub.Handle("/roles", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			w.WriteHeader(http.StatusOK)
-		}))
-	})
-	// Register a public route for control.
-	rtr.Route("/api/v1/foo", func(sub kcell.RouteMux) {
-		sub.Handle("/", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		protected := sub.With(guard)
+		protected.Handle("/roles", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		}))
 	})
 
-	// Hit internal → guard runs.
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/access/roles", nil)
 	rec := httptest.NewRecorder()
-	rtr.InternalHandler().ServeHTTP(rec,
-		httptest.NewRequest(http.MethodGet, "/internal/v1/access/roles", nil))
-	assert.Equal(t, int64(1), guardCount.Load(), "internal middleware must run for /internal/v1/*")
-
-	// Hit public /api/v1/foo → guard must NOT run.
-	rec = httptest.NewRecorder()
-	rtr.PublicHandler().ServeHTTP(rec,
-		httptest.NewRequest(http.MethodGet, "/api/v1/foo/", nil))
-	assert.Equal(t, int64(1), guardCount.Load(), "internal middleware must NOT run for /api/v1/*")
-
-	// Hit public /healthz-ish path → guard must NOT run.
-	rec = httptest.NewRecorder()
-	rtr.PublicHandler().ServeHTTP(rec,
-		httptest.NewRequest(http.MethodGet, "/healthz", nil))
-	assert.Equal(t, int64(1), guardCount.Load(), "internal middleware must NOT run for /healthz")
+	rtr.Handler().ServeHTTP(rec, req)
+	assert.Equal(t, int64(1), guardCount.Load(), "middleware must fire for registered route")
 }
 
-// TestDualMux_InternalRoutes_NeverReachJWTMiddleware is the replacement for
-// the deleted WithInternalPathPrefixGuard auto-delegation test: the new
-// design guarantees /internal/v1/* is physically mounted on internalMux, which
-// has NO JWT middleware installed. So a request to an internal route without
-// an Authorization header reaches the handler (or the internal middleware if
-// configured) — the JWT verifier is never called.
-func TestDualMux_InternalRoutes_NeverReachJWTMiddleware(t *testing.T) {
-	verifier := &dualMuxMockVerifier{err: errors.New("JWT must not run for internal mux")}
-
-	rtr, err := NewE(WithAuthMiddleware(verifier))
+// TestPerListener_InternalRoutes_WithAuthMiddleware_Enforces verifies that JWT
+// auth is NOT installed on an InternalListener router unless WithAuthMiddleware
+// is explicitly passed. Policy enforcement is at the listener level via
+// PolicyServiceToken / PolicyMTLS, not via WithAuthMiddleware.
+func TestPerListener_InternalRoutes_NoDefaultAuth(t *testing.T) {
+	rtr, err := NewForListener(kcell.InternalListener, kcell.Policy{}) // no policy, no auth middleware
 	require.NoError(t, err)
 
 	var reached atomic.Int64
@@ -175,21 +145,23 @@ func TestDualMux_InternalRoutes_NeverReachJWTMiddleware(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodPost, "/internal/v1/x/", nil)
 	rec := httptest.NewRecorder()
-	rtr.InternalHandler().ServeHTTP(rec, req)
+	rtr.Handler().ServeHTTP(rec, req)
 
-	assert.Equal(t, int64(0), verifier.called.Load(),
-		"JWT verifier must NOT be called for internal mux requests")
-	assert.Equal(t, int64(1), reached.Load(), "handler must be reached")
+	assert.Equal(t, int64(1), reached.Load(), "handler must be reached on internal router without auth")
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-// TestDualMux_PublicRoutes_StillEnforceJWT verifies that public-mux paths
-// still go through JWT authentication: a /api/v1/* request without a token
-// receives 401 from AuthMiddleware.
-func TestDualMux_PublicRoutes_StillEnforceJWT(t *testing.T) {
-	verifier := &dualMuxMockVerifier{err: errors.New("JWT enforced")}
+// TestPerListener_PrimaryRouter_WithAuthMiddleware_Enforces verifies JWT auth
+// on a primary listener router.
+func TestPerListener_PrimaryRouter_WithAuthMiddleware_Enforces(t *testing.T) {
+	verifier := &dualMuxMockVerifier{err: errors.New("no token provided")}
 
-	rtr, err := NewE(WithAuthMiddleware(verifier))
+	rtr, err := NewForListener(kcell.PrimaryListener, kcell.Policy{},
+		WithAuthMiddleware(verifier),
+		// Whitelist the test path from policy coverage; this test validates JWT
+		// enforcement, not auth.Declare coverage.
+		WithPolicyCoverageWhitelist([]string{"/api/v1/foo/*"}),
+	)
 	require.NoError(t, err)
 
 	rtr.Route("/api/v1/foo", func(sub kcell.RouteMux) {
@@ -197,31 +169,23 @@ func TestDualMux_PublicRoutes_StillEnforceJWT(t *testing.T) {
 			w.WriteHeader(http.StatusOK)
 		}))
 	})
+	require.NoError(t, rtr.FinalizeAuth())
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/foo/", nil)
 	rec := httptest.NewRecorder()
-	rtr.PublicHandler().ServeHTTP(rec, req)
+	rtr.Handler().ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
-		"/api/v1/* without JWT must still return 401 from public mux AuthMiddleware")
+		"/api/v1/* without JWT must return 401 on PrimaryListener router")
 }
 
-// TestDualMux_WithInternalMiddleware_NilMiddleware_FailsFast ensures NewE
-// rejects nil middleware entries to prevent silent mis-wiring.
-func TestDualMux_WithInternalMiddleware_NilMiddleware_FailsFast(t *testing.T) {
-	_, err := NewE(WithInternalMiddleware(nil))
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nil")
-}
-
-// TestDualMux_FinalizeAuth_RejectsDelegatedOnPublicPath verifies the
+// TestPerListener_FinalizeAuth_RejectsDelegatedOnPublicPath verifies the
 // consistency assertion: Delegated=true declared on a non-/internal/v1 path
 // must fail FinalizeAuth.
 func TestDualMux_FinalizeAuth_RejectsDelegatedOnPublicPath(t *testing.T) {
 	rtr, err := NewE()
 	require.NoError(t, err)
 
-	// Simulate a Cell declaring Delegated:true on an /api/v1/* path.
 	rtr.DeclareAuthMeta(kcell.AuthRouteMeta{
 		Method: http.MethodPost, Path: "/api/v1/foo", Delegated: true,
 	})
@@ -249,77 +213,9 @@ func TestDualMux_FinalizeAuth_RejectsInternalPathWithoutDelegated(t *testing.T) 
 	assert.Contains(t, err.Error(), "/internal/v1/")
 }
 
-// TestDualMux_PrimaryHandler_NoTrailingSlashInternalPath_404 covers a gap in
-// chi wildcard routing: `/internal/v1/*` matches only paths that have at
-// least the prefix + slash. The bare `/internal/v1` form (no trailing slash)
-// would fall through to publicMux and receive 401 from AuthMiddleware —
-// leaking that the internal prefix exists. Router installs an explicit
-// non-wildcard 404 handler to plug the gap.
-func TestDualMux_PrimaryHandler_NoTrailingSlashInternalPath_404(t *testing.T) {
-	rtr, err := NewE()
-	require.NoError(t, err)
-
-	for _, path := range []string{"/internal/v1", "/internal/v1/", "/internal/v1/anything"} {
-		req := httptest.NewRequest(http.MethodGet, path, nil)
-		rec := httptest.NewRecorder()
-		rtr.PublicHandler().ServeHTTP(rec, req)
-		assert.Equal(t, http.StatusNotFound, rec.Code,
-			"primary handler must 404 on %q (PR-A14a isolation)", path)
-	}
-}
-
-// TestPathPartStartsWithInternalPrefix covers both pattern forms consumed by
-// chi and Go 1.22 ServeMux dispatch.
-func TestPathPartStartsWithInternalPrefix(t *testing.T) {
-	cases := []struct {
-		pattern string
-		want    bool
-	}{
-		{"/internal/v1/foo", true},
-		{"/internal/v1/", true},
-		{"GET /internal/v1/foo", true},
-		{"POST /internal/v1/access/roles/assign", true},
-		{"/api/v1/foo", false},
-		{"GET /api/v1/foo", false},
-		{"/internal/v2/foo", false},
-		{"/", false},
-		{"", false},
-	}
-	for _, tc := range cases {
-		got := pathPartStartsWithInternalPrefix(tc.pattern)
-		assert.Equal(t, tc.want, got, "pattern=%q", tc.pattern)
-	}
-}
-
-// TestDualMux_NestedAdapter_InternalRegistration_Panics verifies the adapter
-// guard from PR-A14a: a Cell must not register /internal/v1/* through a
-// nested Route/Group/With sub-scope (the adapter would silently land the
-// route on publicMux, bypassing physical isolation).
-func TestDualMux_NestedAdapter_InternalRegistration_Panics(t *testing.T) {
-	rtr, err := NewE()
-	require.NoError(t, err)
-
-	t.Run("via_Group", func(t *testing.T) {
-		assert.Panics(t, func() {
-			rtr.Group(func(sub kcell.RouteMux) {
-				sub.Route("/internal/v1/foo", func(s kcell.RouteMux) {
-					s.Handle("/", http.NotFoundHandler())
-				})
-			})
-		})
-	})
-
-	t.Run("via_With", func(t *testing.T) {
-		assert.Panics(t, func() {
-			rtr.With().Handle("/internal/v1/bar", http.NotFoundHandler())
-		})
-	})
-}
-
 // TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations confirms the happy
 // path: Delegated:true on /internal/v1/* and Delegated:false on /api/v1/*
-// both pass. Routes are registered with a policy coverage whitelist rather
-// than real handlers so the test focuses on the Delegated consistency rule.
+// both pass.
 func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
 	rtr, err := NewE(WithPolicyCoverageWhitelist([]string{
 		"/internal/v1/*",
@@ -336,4 +232,22 @@ func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
 
 	err = rtr.FinalizeAuth()
 	assert.NoError(t, err)
+}
+
+// TestInternalPrefixIsolationResponder verifies the early-responder
+// middleware 404's /internal/v1/* on a PrimaryListener router BEFORE any
+// auth or policy runs (PR-258 RES-5 narrowing — replaces the prior chi-
+// route + public-matcher-prefix + policy-coverage-whitelist mechanism).
+func TestInternalPrefixIsolationResponder(t *testing.T) {
+	rtr, err := NewForListener(kcell.PrimaryListener, kcell.Policy{},
+		InternalPrefixIsolationResponder())
+	require.NoError(t, err)
+
+	for _, p := range []string{"/internal/v1", "/internal/v1/", "/internal/v1/anything"} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		rec := httptest.NewRecorder()
+		rtr.Handler().ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusNotFound, rec.Code,
+			"primary handler must 404 on %q (PR-A14b isolation, RES-5 middleware-based)", p)
+	}
 }

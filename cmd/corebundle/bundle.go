@@ -21,7 +21,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
-	"github.com/ghbvf/gocell/runtime/http/router"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 )
 
@@ -64,37 +63,82 @@ func defaultRuntimeOptions(
 	metricsHandler http.Handler,
 	adapterInfo map[string]string,
 ) []bootstrap.Option {
+	// PR-A14b: three-listener topology — primary (business routes + JWT auth),
+	// internal (/internal/v1/* + service-token auth), health (/healthz /readyz
+	// /metrics on a dedicated port).
+	//
+	// Primary listener: PolicyJWTFromAssembly discovers IntentTokenVerifier from
+	// accesscore post-Init (lazy on first request, fail-closed).
+	// Internal listener: PolicyServiceToken from InternalGuard (nil → PolicyNone
+	// in dev mode where GOCELL_SERVICE_SECRET is unset).
+	// Health listener: framework-owned /healthz, /readyz, /metrics route groups;
+	// when shared.VerboseToken is set, PolicyVerboseToken is attached to the
+	// /readyz group so verbose responses require a bearer token.
+	//
+	// ref: go-kratos/kratos app.go — per-server option pattern.
+	internalPolicy := buildInternalPolicy(shared.InternalGuard)
+
+	healthRouteOpts := []bootstrap.HealthRouteGroupOption{
+		bootstrap.WithMetricsHandler(metricsHandler),
+	}
+	if shared.VerboseToken != "" {
+		// Two layers consulting the same token (PR-A35 defense-in-depth +
+		// PR-A14b R2-01 single-config-source):
+		//  - WithReadyzPolicy: PolicyVerboseToken middleware on the route
+		//    group 401's at the listener layer.
+		//  - WithReadyzVerboseToken: health.Handler's strict gate 401's at
+		//    the handler layer.
+		healthRouteOpts = append(healthRouteOpts,
+			bootstrap.WithReadyzPolicy(
+				bootstrap.PolicyVerboseToken("X-Readyz-Token", shared.VerboseToken),
+			),
+			bootstrap.WithReadyzVerboseToken(shared.VerboseToken),
+		)
+	}
+	if shared.VerboseDisabled {
+		healthRouteOpts = append(healthRouteOpts, bootstrap.WithReadyzVerboseDisabled())
+	}
+
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
-		// PR-A14a: dual listener — primary (public/api, infra endpoints) +
-		// internal (/internal/v1/* control-plane). Defaults align with
-		// docs/ops/env-vars.md and examples/*/docker-compose.yml.
-		bootstrap.WithHTTPPrimaryAddr(shared.PrimaryHTTPAddr),
-		bootstrap.WithHTTPInternalAddr(shared.InternalHTTPAddr),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
-		// Public routes and password-reset-exempt routes are declared by the
-		// owning Cells via auth.Mount (see cells/accesscore/cell.go and
-		// cells/accesscore/slices/identitymanage/handler.go). Bootstrap only
-		// needs the opt-in signal that an auth provider cell will be wired.
-		bootstrap.WithAuthDiscovery(),
 		bootstrap.WithAdapterInfo(adapterInfo),
-		bootstrap.WithRouterOptions(router.WithMetricsHandler(metricsHandler)),
+		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
 	}
-	if shared.VerboseToken != "" {
-		opts = append(opts, bootstrap.WithVerboseToken(shared.VerboseToken))
+	// Primary listener carries the JWT auth policy. PolicyJWTFromAssembly
+	// resolves an IntentTokenVerifier from an authProvider cell during phase4
+	// (Validate hook). Tests that pre-bind their own listener still go through
+	// this path — they inject the same listener via extra bootstrap.WithListener
+	// options downstream.
+	if shared.PrimaryHTTPAddr != "" {
+		opts = append(opts, bootstrap.WithListener(
+			cell.PrimaryListener, shared.PrimaryHTTPAddr,
+			bootstrap.PolicyJWTFromAssembly(asm),
+		))
 	}
-	if shared.VerboseDisabled {
-		opts = append(opts, bootstrap.WithVerboseDisabled())
+	if shared.InternalHTTPAddr != "" {
+		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalPolicy))
 	}
-	if shared.InternalGuard != nil {
-		// PR-A14a: InternalGuard attaches to the internal listener's mux chain
-		// as the sole authentication layer for /internal/v1/*.
-		opts = append(opts, bootstrap.WithInternalMiddleware(shared.InternalGuard.Middleware()))
+	// B2: HealthListener is required when a metrics handler is configured.
+	// Production deployments always set GOCELL_HTTP_HEALTH_ADDR.
+	// Tests inject their own HealthListener via extra bootstrap.WithListener options.
+	if shared.HealthHTTPAddr != "" {
+		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, cell.Policy{}))
 	}
 	return opts
+}
+
+// buildInternalPolicy constructs the policy for the internal listener.
+// In dev mode (InternalGuard == nil) PolicyNone is used; in production the
+// InternalGuard's store and ring are promoted to PolicyServiceToken.
+func buildInternalPolicy(guard *internalGuard) cell.Policy {
+	if guard == nil {
+		return bootstrap.PolicyNone()
+	}
+	return bootstrap.PolicyServiceToken(guard.NonceStore(), guard.ring)
 }
 
 // buildKeyProvider constructs the KeyProvider from the supplied providerName,

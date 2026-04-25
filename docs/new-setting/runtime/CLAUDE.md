@@ -74,17 +74,22 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 
 ## Composition Root（Bootstrap）
 
+JWT auth 通过 listener 的 `cell.Policy` 装配 —— **没有** `WithAuthDiscovery` / `WithAuthMiddleware` 等顶层 Bootstrap Option（PR-258 F3 round-3 elegant collapse）。
+
 ```go
 bootstrap.New(
     bootstrap.WithAssembly(asm),
-    bootstrap.WithAuthDiscovery(),     // 从 Cell 发现 IntentTokenVerifier
-    // 或 bootstrap.WithAuthMiddleware(verifier) 直接注入（测试用）
+    bootstrap.WithListener(cell.PrimaryListener, ":8080",
+        bootstrap.PolicyJWTFromAssembly(asm)),  // phase4 自动从 authProvider Cell 发现 verifier
+    bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
+        bootstrap.PolicyServiceToken(store, ring)),
+    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", cell.Policy{}),
 )
 ```
 
-- `WithAuthDiscovery()` 用于生产：自动从注册的 Cell 发现 verifier
-- `WithAuthMiddleware(verifier)` 用于测试：直接注入 mock verifier
-- 两者互斥，composition root 只选其一
+- `PolicyJWTFromAssembly(asm)` 用于生产：phase4 通过 `cell.Policy.Validate` 钩子从 `authProvider` Cell 发现 verifier
+- `PolicyJWT(verifier)` 用于测试或非 assembly-discovery 场景：直接注入
+- 单一路径：verifier 经 `cell.Policy.Extension` 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher
 
 ## EventRouter 订阅注册
 

@@ -17,8 +17,8 @@ import (
 // roots (cmd/*/bundle.go, cmd/*/main.go, examples/*/main.go) must not
 // hard-code cell-owned business paths like "POST /api/v1/access/sessions/login".
 // Each route's Public / PasswordResetExempt / Delegated attributes are owned
-// by the declaring Cell via auth.Mount; the composition root only supplies
-// the auth-provider opt-in (bootstrap.WithAuthDiscovery).
+// by the declaring Cell via auth.Mount; the composition root only wires the
+// listener policy (PolicyJWTFromAssembly on PrimaryListener post-F3 round-3).
 //
 // Using filepath.Glob to discover files means new cmd/ or examples/ composition
 // roots are automatically covered without editing this test.

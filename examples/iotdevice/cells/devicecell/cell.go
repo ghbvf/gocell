@@ -29,10 +29,10 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell                 = (*DeviceCell)(nil)
-	_ cell.HTTPRegistrar        = (*DeviceCell)(nil)
-	_ cell.LifecycleContributor = (*DeviceCell)(nil)
-	_ kcommand.QueueRegistrar   = (*DeviceCell)(nil)
+	_ cell.Cell                  = (*DeviceCell)(nil)
+	_ cell.RouteGroupContributor = (*DeviceCell)(nil)
+	_ cell.LifecycleContributor  = (*DeviceCell)(nil)
+	_ kcommand.QueueRegistrar    = (*DeviceCell)(nil)
 )
 
 type commandQueueStore interface {
@@ -235,31 +235,57 @@ var (
 	}
 )
 
-// RegisterRoutes registers HTTP routes for devicecell.
-func (c *DeviceCell) RegisterRoutes(mux cell.RouteMux) {
-	mux.Route("/api/v1", func(v1 cell.RouteMux) {
-		v1.Route("/devices", func(devices cell.RouteMux) {
-			// Device self-registration is a public endpoint: devices bootstrap
-			// without a user JWT; the caller identifies itself in the request body.
-			auth.Mount(devices, auth.Route{
-				Contract: specDeviceRegister,
-				Handler:  http.HandlerFunc(c.registerHandler.HandleRegister),
-				Public:   true,
-			})
-			// Device list: paginated listing at /api/v1/devices/.
-			auth.Mount(devices, auth.Route{
-				Contract: specDeviceList,
-				Handler:  http.HandlerFunc(c.listHandler.HandleList),
-				Policy:   auth.AnyRole("admin"),
-			})
-			// Device status is queried by authenticated operators/devices.
-			auth.Mount(devices, auth.Route{
-				Contract: specDeviceStatus,
-				Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
-				Policy:   auth.Authenticated(),
-			})
-			c.commandHandler.RegisterRoutes(devices)
-		})
-	})
-	c.commandHandler.RegisterInternalRoutes(mux)
+// RouteGroups declares devicecell's HTTP route groups: the public
+// /api/v1/devices/* tree on the PrimaryListener and the internal
+// /internal/v1/devicecommands ops route on the InternalListener.
+//
+// F5 round-3: the InternalListener group restores RegisterInternalRoutes
+// which the PR-A14b RouteGroups migration accidentally dropped. The
+// commandHandler.HandleScanActive endpoint is required by the
+// http.device.command.scan-active.v1 contract.
+//
+// ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
+func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			// Empty prefix: contract specs already carry absolute /api/v1/...
+			// paths, so we mount auth.Mount routes directly on the root mux
+			// without an outer Route("/api/v1") wrapper that would double-prefix.
+			Prefix: "",
+			Register: func(mux cell.RouteMux) {
+				mux.Route("/api/v1/devices", func(devices cell.RouteMux) {
+					// Device self-registration is a public endpoint: devices bootstrap
+					// without a user JWT; the caller identifies itself in the request body.
+					auth.Mount(devices, auth.Route{
+						Contract: specDeviceRegister,
+						Handler:  http.HandlerFunc(c.registerHandler.HandleRegister),
+						Public:   true,
+					})
+					// Device list: paginated listing of all devices at /api/v1/devices/.
+					auth.Mount(devices, auth.Route{
+						Contract: specDeviceList,
+						Handler:  http.HandlerFunc(c.listHandler.HandleList),
+						Policy:   auth.AnyRole("admin"),
+					})
+					// Device status is queried by authenticated operators/devices.
+					auth.Mount(devices, auth.Route{
+						Contract: specDeviceStatus,
+						Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
+						Policy:   auth.Authenticated(),
+					})
+					// device-command public routes (enqueue, dequeue, report, ack,
+					// extend-lease) live under /api/v1/devices/{id}/commands.
+					c.commandHandler.RegisterRoutes(devices)
+				})
+			},
+		},
+		{
+			Listener: cell.InternalListener,
+			Prefix:   "",
+			Register: func(mux cell.RouteMux) {
+				c.commandHandler.RegisterInternalRoutes(mux)
+			},
+		},
+	}
 }

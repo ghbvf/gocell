@@ -5,7 +5,7 @@ package cell
 // Status: Accepted
 //
 // Decision: kernel/cell uses net/http types (http.Handler, http.ResponseWriter,
-// http.Request) in the RouteMux and HTTPRegistrar interfaces.
+// http.Request) in the RouteMux interface.
 //
 // Rationale: net/http is part of the Go standard library. The project's
 // layering rules (CLAUDE.md) state "kernel/ only depends on stdlib + pkg/",
@@ -19,10 +19,10 @@ package cell
 //     conversions, adapter layers) for no practical benefit, since net/http
 //     is guaranteed stable by the Go compatibility promise.
 //
-// Consequences: Any Cell implementing HTTPRegistrar receives an http.Handler-
-// compatible interface. Concrete routers (chi, gorilla) are provided by
-// runtime/ or adapters/ and implement RouteMux, keeping kernel free of
-// third-party dependencies.
+// Consequences: Cells implementing RouteGroupContributor receive an http.Handler-
+// compatible interface via the RouteMux in RouteGroup.Register closures.
+// Concrete routers (chi, gorilla) are provided by runtime/ or adapters/ and
+// implement RouteMux, keeping kernel free of third-party dependencies.
 
 import (
 	"context"
@@ -39,8 +39,8 @@ import (
 // These interfaces are optionally implemented by Cells. During bootstrap,
 // the Assembly (or any orchestrator) discovers them via type assertion:
 //
-//	if r, ok := cell.(HTTPRegistrar); ok {
-//	    r.RegisterRoutes(mux)
+//	if rgc, ok := cell.(RouteGroupContributor); ok {
+//	    groups = append(groups, rgc.RouteGroups()...)
 //	}
 //
 // This keeps the core Cell interface slim while allowing Cells to opt-in to
@@ -85,11 +85,6 @@ type RouteMux interface {
 	//
 	// ref: go-chi/chi Mux.With — returns an inline router sharing the parent tree.
 	With(mw ...func(http.Handler) http.Handler) RouteMux
-}
-
-// HTTPRegistrar is optionally implemented by Cells that expose HTTP endpoints.
-type HTTPRegistrar interface {
-	RegisterRoutes(mux RouteMux)
 }
 
 // RouteHandler is the minimum route-registration surface shared by both the

@@ -24,8 +24,8 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell          = (*OrderCell)(nil)
-	_ cell.HTTPRegistrar = (*OrderCell)(nil)
+	_ cell.Cell                  = (*OrderCell)(nil)
+	_ cell.RouteGroupContributor = (*OrderCell)(nil)
 )
 
 // WithCursorCodec sets the cursor codec for pagination.
@@ -190,25 +190,33 @@ var (
 	}
 )
 
-// RegisterRoutes registers HTTP routes for ordercell.
-func (c *OrderCell) RegisterRoutes(mux cell.RouteMux) {
-	mux.Route("/api/v1", func(v1 cell.RouteMux) {
-		v1.Route("/orders", func(orders cell.RouteMux) {
-			auth.Mount(orders, auth.Route{
-				Contract: specOrderCreate,
-				Handler:  http.HandlerFunc(c.createHandler.HandleCreate),
-				Policy:   auth.Authenticated(),
-			})
-			auth.Mount(orders, auth.Route{
-				Contract: specOrderList,
-				Handler:  http.HandlerFunc(c.queryHandler.HandleList),
-				Policy:   auth.Authenticated(),
-			})
-			auth.Mount(orders, auth.Route{
-				Contract: specOrderGet,
-				Handler:  http.HandlerFunc(c.queryHandler.HandleGet),
-				Policy:   auth.Authenticated(),
-			})
-		})
-	})
+// RouteGroups declares ordercell's HTTP route groups on the PrimaryListener.
+//
+// ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
+func (c *OrderCell) RouteGroups() []cell.RouteGroup {
+	return []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "/api/v1",
+			Register: func(mux cell.RouteMux) {
+				mux.Route("/orders", func(orders cell.RouteMux) {
+					auth.Mount(orders, auth.Route{
+						Contract: specOrderCreate,
+						Handler:  http.HandlerFunc(c.createHandler.HandleCreate),
+						Policy:   auth.Authenticated(),
+					})
+					auth.Mount(orders, auth.Route{
+						Contract: specOrderList,
+						Handler:  http.HandlerFunc(c.queryHandler.HandleList),
+						Policy:   auth.Authenticated(),
+					})
+					auth.Mount(orders, auth.Route{
+						Contract: specOrderGet,
+						Handler:  http.HandlerFunc(c.queryHandler.HandleGet),
+						Policy:   auth.Authenticated(),
+					})
+				})
+			},
+		},
+	}
 }

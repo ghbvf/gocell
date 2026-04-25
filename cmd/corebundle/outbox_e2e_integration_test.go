@@ -209,13 +209,13 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithPrimaryListener(ln), bootstrap.WithInternalListener(newCorebundleLocalListener(t)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), bootstrap.PolicyJWTFromAssembly(asm), bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(3*time.Second),
 		// F3: public routes (login, refresh) and PasswordResetExempt routes
 		// (change-password, logout) are declared via auth.Mount inside accesscore's
-		// RegisterRoutes. WithAuthDiscovery discovers the verifier from accesscore.
-		bootstrap.WithAuthDiscovery(),
+		// RegisterRoutes. PolicyJWTFromAssembly discovers the verifier lazily.
 		// A11 regression guard: relayWorker came from buildConfigCoreOpts above —
 		// not from a manual adapterpg.NewOutboxRelay call. If the production
 		// wiring stops producing a relay worker, require.NotNil above fires.
@@ -229,14 +229,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	addr := ln.Addr().String()
 	baseURL := "http://" + addr
 
-	require.Eventually(t, func() bool {
-		resp, err := http.Get(fmt.Sprintf("%s/healthz", baseURL))
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 10*time.Second, 100*time.Millisecond, "HTTP server must become ready")
+	waitForHealthy(t, addr)
 
 	// --- Step 7: Drive HTTP requests ---
 	// Read bootstrap credentials from the credential file, then change password

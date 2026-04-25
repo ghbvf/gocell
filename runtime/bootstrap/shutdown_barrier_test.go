@@ -44,8 +44,8 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-pre-delay", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithPreShutdownDelay(preDelay),
 	)
@@ -154,8 +154,8 @@ func TestShutdown_RunCtxIndependentOfExternalCtx(t *testing.T) {
 	const assertionDelay = 150 * time.Millisecond
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithPreShutdownDelay(assertionDelay),
 		WithWorkers(trackWorker),
@@ -215,8 +215,8 @@ func TestShutdown_WorkerErrorTriggersOrchestration(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-worker-err", DurabilityMode: cell.DurabilityDemo})
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithWorkers(errorWorker),
 	)
@@ -241,8 +241,8 @@ func TestShutdown_TotalBudgetRespected(t *testing.T) {
 	eb := eventbus.New()
 	b := New(
 		WithAssembly(asm),
-		WithPrimaryListener(ln),
-		WithInternalListener(newLocalListener(t)),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), cell.Policy{}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", cell.Policy{}, WithListenerNet(newLocalListener(t))),
 		WithPublisher(eb),
 		WithSubscriber(eb),
 		WithShutdownTimeout(shutdownTimeout),

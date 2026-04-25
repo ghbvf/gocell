@@ -10,16 +10,82 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
+	"github.com/ghbvf/gocell/runtime/http/health"
+	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+// --- phase5CollectRouteGroups: HealthListener fallback tests (R2-07) ---
+
+// buildPhase5State constructs a minimal phaseState ready for
+// phase5CollectRouteGroups: it has an asm, a hh, and the registeredCheckers
+// map. The asm is started so health.Handler.aggregateCellHealth works.
+func buildPhase5State(t *testing.T) *phaseState {
+	t.Helper()
+	asm := assembly.New(assembly.Config{ID: "phase5-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(newTestCell("cell-1")))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	_, s := newPhaseState()
+	s.asm = asm
+	s.hh = health.New(asm)
+	return s
+}
+
+// buildRouter creates a NewForListener router for the given ref so phase5 has a
+// real router map to iterate.
+func buildRouter(t *testing.T, ref cell.ListenerRef) *router.Router {
+	t.Helper()
+	r, err := router.NewForListener(ref, cell.Policy{})
+	require.NoError(t, err)
+	return r
+}
+
+func TestPhase5CollectRouteGroups_NoHealthListener_RemapsHealthGroupsToPrimary(t *testing.T) {
+	t.Parallel()
+	b := New()
+	s := buildPhase5State(t)
+
+	routers := map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
+	}
+
+	groups := b.phase5CollectRouteGroups(s, routers)
+
+	require.NotEmpty(t, groups, "phase5 must always produce framework health groups")
+
+	for i, rg := range groups {
+		assert.Equal(t, cell.PrimaryListener, rg.Listener,
+			"group[%d]: with no HealthListener, every framework health group must be remapped to PrimaryListener", i)
+	}
+}
+
+func TestPhase5CollectRouteGroups_HealthListenerPresent_PreservesHealthListener(t *testing.T) {
+	t.Parallel()
+	b := New()
+	s := buildPhase5State(t)
+
+	routers := map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
+		cell.HealthListener:  buildRouter(t, cell.HealthListener),
+	}
+
+	groups := b.phase5CollectRouteGroups(s, routers)
+
+	require.NotEmpty(t, groups)
+	for i, rg := range groups {
+		assert.Equal(t, cell.HealthListener, rg.Listener,
+			"group[%d]: with HealthListener declared, framework health groups must stay on HealthListener (no fallback remap)", i)
+	}
+}
+
 // --- phase0ValidateOptions tests ---
 
 func TestPhase0_AcceptsValidOptions(t *testing.T) {
-	b := New()
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
 	require.NoError(t, b.phase0ValidateOptions())
 }
 
@@ -47,31 +113,22 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 }
 
 func TestPhase0_RejectsNilRelayHealth(t *testing.T) {
-	b := New()
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", cell.Policy{}))
 	b.relayHealthNil = true
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "relay must not be nil")
 }
 
-func TestPhase0_RejectsMutuallyExclusiveAuthOptions(t *testing.T) {
-	b := New()
-	b.authVerifier = &phaseTestVerifier{}
-	b.authDiscovery = true
-	err := b.phase0ValidateOptions()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "mutually exclusive")
-}
+// TestPhase0_RejectsMutuallyExclusiveAuthOptions was removed in F3 round-3:
+// WithAuthMiddleware and the standalone PolicyJWTFromAssembly Option are gone,
+// so phase0 has nothing to reject. JWT auth flows through cell.Policy on the
+// listener exclusively.
 
-func TestPhase0_ValidatesInternalMiddleware(t *testing.T) {
-	// PR-A14a: nil middleware in the internal-mux chain is rejected at phase 0
-	// so the authoritative auth layer cannot be silently disabled.
-	b := New()
-	b.internalMiddlewares = append(b.internalMiddlewares, nil)
-	err := b.phase0ValidateOptions()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "nil")
-}
+// TestPhase0_ValidatesInternalMiddleware was removed in PR-A14b because
+// WithInternalMiddleware and the internalMiddlewares field are deleted.
+// Internal listener authentication is now handled via cell.Policy on the
+// InternalListener declaration (WithListener(InternalListener, addr, policy)).
 
 // --- phase1LoadConfig tests ---
 
@@ -254,11 +311,14 @@ func TestShutdownReason_Values(t *testing.T) {
 // --- phase10 unit tests ---
 
 func TestPhase10ReadinessFlip_SetsShuttingDown(t *testing.T) {
+	// PR-A14b: phase5BuildHTTPRouter is replaced by phase5BuildRouters.
+	// phase10ReadinessFlip only requires s.hh (may be nil) and s.reloads.
+	// Setting up a full router is no longer needed to test the readiness flip.
 	b := New()
 	_, s := newPhaseState()
 	s.cfg = config.NewFromMap(make(map[string]any))
 	require.NoError(t, b.phase3InitAssembly(context.Background(), s))
-	require.NoError(t, b.phase5BuildHTTPRouter(s))
+	// s.hh is nil — phase10ReadinessFlip guards against nil hh.
 
 	shutCtx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
@@ -568,13 +628,6 @@ func (w *watcherCloserSpy) Close(ctx context.Context) error {
 }
 
 // --- Helpers / stubs (existing) ---
-
-// phaseTestVerifier satisfies auth.IntentTokenVerifier for phase0 tests.
-type phaseTestVerifier struct{}
-
-func (v *phaseTestVerifier) VerifyIntent(_ context.Context, _ string, _ auth.TokenIntent) (auth.Claims, error) {
-	return auth.Claims{}, nil
-}
 
 // phaseTestPublisher is a no-op outbox.Publisher for phase tests.
 type phaseTestPublisher struct{}

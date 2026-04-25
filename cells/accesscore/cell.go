@@ -44,11 +44,11 @@ func (realClock) Now() time.Time { return time.Now() }
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell                 = (*AccessCore)(nil)
-	_ cell.HTTPRegistrar        = (*AccessCore)(nil)
-	_ cell.HealthContributor    = (*AccessCore)(nil)
-	_ cell.EventRegistrar       = (*AccessCore)(nil)
-	_ cell.LifecycleContributor = (*AccessCore)(nil)
+	_ cell.Cell                  = (*AccessCore)(nil)
+	_ cell.RouteGroupContributor = (*AccessCore)(nil)
+	_ cell.HealthContributor     = (*AccessCore)(nil)
+	_ cell.EventRegistrar        = (*AccessCore)(nil)
+	_ cell.LifecycleContributor  = (*AccessCore)(nil)
 )
 
 // Option configures an AccessCore Cell.

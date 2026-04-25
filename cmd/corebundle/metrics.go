@@ -2,6 +2,7 @@
 package main
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"fmt"
 	"log/slog"
@@ -19,12 +20,20 @@ import (
 const metricsTokenHeader = "X-Metrics-Token"
 
 // withMetricsTokenGuard wraps h so requests without a matching
-// X-Metrics-Token header are rejected with 401 Unauthorized. Uses
-// crypto/subtle.ConstantTimeCompare to avoid timing side channels on
-// token comparison.
+// X-Metrics-Token header are rejected with 401 Unauthorized.
+//
+// PR-258 RES-6: compares SHA-256 digests rather than the raw byte slices so
+// a caller cannot learn the configured token length via timing. subtle.
+// ConstantTimeCompare short-circuits on length mismatch, which turns the
+// bare-bytes form into a length oracle even though byte comparison itself
+// is constant-time. Hashing both sides normalises to a fixed 32 bytes
+// regardless of input length — same model as runtime/http/health.go's
+// /readyz?verbose token gate.
 func withMetricsTokenGuard(token string, h http.Handler) http.Handler {
+	configured := sha256.Sum256([]byte(token))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if subtle.ConstantTimeCompare([]byte(r.Header.Get(metricsTokenHeader)), []byte(token)) != 1 {
+		submitted := sha256.Sum256([]byte(r.Header.Get(metricsTokenHeader)))
+		if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}

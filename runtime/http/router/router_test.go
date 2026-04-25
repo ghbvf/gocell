@@ -56,6 +56,8 @@ func TestRouterImplementsRouteMux(t *testing.T) {
 }
 
 func TestHealthEndpoints(t *testing.T) {
+	// PR-A14b: health endpoints live on a dedicated HealthListener router.
+	// They are registered directly on the router, not via WithHealthHandler.
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
@@ -63,12 +65,15 @@ func TestHealthEndpoints(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	hh := health.New(asm)
-	r := New(WithHealthHandler(hh))
+	r, err := NewForListener(cell.HealthListener, cell.Policy{})
+	require.NoError(t, err)
+	r.Handle("/healthz", hh.LivezHandler())
+	r.Handle("/readyz", hh.ReadyzHandler())
 
 	// Test /healthz
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	r.ServeHTTP(rec, req)
+	r.Handler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 
 	var envelope map[string]any
@@ -80,20 +85,23 @@ func TestHealthEndpoints(t *testing.T) {
 	// Test /readyz
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	r.ServeHTTP(rec, req)
+	r.Handler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
 func TestMetricsEndpoint(t *testing.T) {
+	// PR-A14b: /metrics lives on the HealthListener router, not the PrimaryListener.
+	// Metrics collection is still wired via WithMetricsCollector on the primary router
+	// for middleware instrumentation; the /metrics scrape endpoint is a separate handler
+	// registered on the HealthListener router by bootstrap.
 	mc := metrics.NewInMemoryCollector()
-	r := New(
-		WithMetricsCollector(mc),
-		WithMetricsHandler(mc.Handler()),
-	)
+	healthRtr, err := NewForListener(cell.HealthListener, cell.Policy{})
+	require.NoError(t, err)
+	healthRtr.Handle("/metrics", mc.Handler())
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	r.ServeHTTP(rec, req)
+	healthRtr.Handler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.Contains(t, rec.Header().Get("Content-Type"), "application/json")
 }
@@ -363,7 +371,7 @@ func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/rbac/check", nil)
-	r.InternalHandler().ServeHTTP(rec, req)
+	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNoContent, rec.Code)
 	span := tracer.only(t)
@@ -677,6 +685,9 @@ func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
 // --- Infra endpoints bypass RL/CB ---
 
 func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
+	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
+	// no rate limiter configured. Physical isolation guarantees bypass — the primary
+	// router (with the rejecting rate limiter) never even sees /healthz requests.
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
@@ -684,19 +695,35 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	hh := health.New(asm)
-	limiter := &routerTestLimiter{allow: false} // reject ALL business traffic
-	r := New(WithHealthHandler(hh), WithRateLimiter(limiter))
+	// Primary router rejects ALL traffic via rate limiter.
+	primaryRtr := New(WithRateLimiter(&routerTestLimiter{allow: false}))
+	primaryRtr.Handle("/api/v1/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("should be rate-limited")
+	}))
 
-	// /healthz must bypass rate limiter and return 200.
+	// Health router has no rate limiter — /healthz always reachable.
+	healthRtr, err := NewForListener(cell.HealthListener, cell.Policy{})
+	require.NoError(t, err)
+	healthRtr.Handle("/healthz", hh.LivezHandler())
+
+	// Business route is rate-limited on primary router.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	r.ServeHTTP(rec, req)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/biz", nil)
+	primaryRtr.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusTooManyRequests, rec.Code)
 
+	// /healthz is reachable on the health router (no rate limiter).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	healthRtr.Handler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code,
-		"/healthz must be reachable even when rate limiter rejects all traffic")
+		"/healthz must be reachable on HealthListener router even when primary router has rejecting rate limiter")
 }
 
 func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
+	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
+	// no circuit breaker configured. Physical isolation guarantees bypass — the
+	// primary router (with the open circuit breaker) never sees /readyz requests.
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
@@ -704,15 +731,29 @@ func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	hh := health.New(asm)
-	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")} // reject ALL
-	r := New(WithHealthHandler(hh), WithCircuitBreaker(breaker))
+	// Primary router rejects ALL traffic via open circuit breaker.
+	primaryRtr := New(WithCircuitBreaker(&routerTestBreaker{allowErr: fmt.Errorf("open")}))
+	primaryRtr.Handle("/api/v1/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Fatal("should be circuit-broken")
+	}))
 
+	// Health router has no circuit breaker — /readyz always reachable.
+	healthRtr, err := NewForListener(cell.HealthListener, cell.Policy{})
+	require.NoError(t, err)
+	healthRtr.Handle("/readyz", hh.ReadyzHandler())
+
+	// Business route is circuit-broken on primary router.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
-	r.ServeHTTP(rec, req)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/biz", nil)
+	primaryRtr.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
+	// /readyz is reachable on the health router (no circuit breaker).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	healthRtr.Handler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code,
-		"/readyz must be reachable even when circuit breaker is open")
+		"/readyz must be reachable on HealthListener router even when primary router has open circuit breaker")
 }
 
 func TestMetrics_Records429And503(t *testing.T) {
@@ -837,8 +878,9 @@ func TestWithAuthMiddleware_PublicEndpoint_SkipsAuth(t *testing.T) {
 }
 
 func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
-	// Auth middleware is on mux (business routes). Infra endpoints (/healthz, /readyz)
-	// are on outerMux and naturally bypass mux-level auth.
+	// PR-A14b: health endpoints live on a dedicated HealthListener router that has
+	// no auth middleware. Physical isolation guarantees bypass — the primary router
+	// (with auth middleware that would reject all requests) never sees /healthz.
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	c := newStubCell("cell-1")
 	require.NoError(t, asm.Register(c))
@@ -847,16 +889,31 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 
 	hh := health.New(asm)
 	verifier := &routerTestVerifier{
-		err: fmt.Errorf("should not be called for infra"),
+		err: fmt.Errorf("all tokens rejected"),
 	}
-	r := New(WithHealthHandler(hh), WithAuthMiddleware(verifier))
+	// Primary router has auth that rejects everything.
+	primaryRtr := New(WithAuthMiddleware(verifier))
+	primaryRtr.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
 
+	// Health router has no auth — /healthz always reachable.
+	healthRtr, err := NewForListener(cell.HealthListener, cell.Policy{})
+	require.NoError(t, err)
+	healthRtr.Handle("/healthz", hh.LivezHandler())
+
+	// /api/v1/data requires auth on primary router.
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
-	r.ServeHTTP(rec, req)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/data", nil)
+	primaryRtr.ServeHTTP(rec, req)
+	assert.Equal(t, http.StatusUnauthorized, rec.Code)
 
+	// /healthz is reachable on the health router (no auth middleware).
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	healthRtr.Handler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusOK, rec.Code,
-		"/healthz must be reachable without auth token (infra on outerMux)")
+		"/healthz must be reachable on HealthListener router without auth (physical isolation)")
 }
 
 func TestWithAuthMiddleware_ChainOrder_RateLimitBeforeAuth(t *testing.T) {

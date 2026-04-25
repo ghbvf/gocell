@@ -116,7 +116,7 @@ func TestDeviceCell_InitNoPublisher(t *testing.T) {
 	assert.Contains(t, err.Error(), "DiscardPublisher")
 }
 
-func TestDeviceCell_RegisterRoutes(t *testing.T) {
+func TestDeviceCell_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
@@ -126,7 +126,15 @@ func TestDeviceCell_RegisterRoutes(t *testing.T) {
 	require.NoError(t, c.Init(ctx, deps))
 
 	mux := celltest.NewTestMux()
-	c.RegisterRoutes(mux)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			if rg.Prefix != "" {
+				mux.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			} else {
+				rg.Register(mux)
+			}
+		}
+	}
 	metas := mux.DeclaredAuthMetas()
 	require.Contains(t, metas, cell.AuthRouteMeta{
 		Method: http.MethodGet,
@@ -201,7 +209,15 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	require.NoError(t, c.Init(ctx, deps))
 
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		if rg.Listener == cell.PrimaryListener {
+			if rg.Prefix != "" {
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			} else {
+				rg.Register(r)
+			}
+		}
+	}
 	require.NoError(t, r.FinalizeAuth())
 	return r
 }

@@ -263,7 +263,7 @@ func TestAuditInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) {
 	assert.Contains(t, err.Error(), "durable")
 }
 
-func TestAuditCore_RegisterRoutes(t *testing.T) {
+func TestAuditCore_RouteGroups(t *testing.T) {
 	c := newTestCell()
 	ctx := context.Background()
 	deps := cell.Dependencies{
@@ -272,8 +272,14 @@ func TestAuditCore_RegisterRoutes(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
+	groups := c.RouteGroups()
+	require.Len(t, groups, 1, "auditcore should declare 1 route group")
+	assert.Equal(t, cell.PrimaryListener, groups[0].Listener)
+	assert.Equal(t, "/api/v1/audit", groups[0].Prefix)
+	assert.NotNil(t, groups[0].Register)
+
 	mux := &stubMux{}
-	c.RegisterRoutes(mux)
+	groups[0].Register(mux)
 	assert.GreaterOrEqual(t, mux.handleCount, 1, "should register at least 1 route pattern")
 }
 
@@ -320,7 +326,9 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	require.NoError(t, c.Init(ctx, deps))
 
 	r := router.New()
-	c.RegisterRoutes(r)
+	for _, rg := range c.RouteGroups() {
+		r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+	}
 	require.NoError(t, r.FinalizeAuth())
 
 	rec := httptest.NewRecorder()
@@ -411,7 +419,9 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 			}))
 
 			r := router.New()
-			c.RegisterRoutes(r)
+			for _, rg := range c.RouteGroups() {
+				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+			}
 			require.NoError(t, r.FinalizeAuth())
 
 			rec := httptest.NewRecorder()

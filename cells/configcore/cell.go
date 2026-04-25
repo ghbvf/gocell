@@ -25,9 +25,9 @@ import (
 
 // Compile-time interface checks.
 var (
-	_ cell.Cell           = (*ConfigCore)(nil)
-	_ cell.HTTPRegistrar  = (*ConfigCore)(nil)
-	_ cell.EventRegistrar = (*ConfigCore)(nil)
+	_ cell.Cell                  = (*ConfigCore)(nil)
+	_ cell.RouteGroupContributor = (*ConfigCore)(nil)
+	_ cell.EventRegistrar        = (*ConfigCore)(nil)
 )
 
 // Option configures a ConfigCore Cell.
