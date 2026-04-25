@@ -23,6 +23,15 @@ import (
 // Format args: (cellID, consistencyLevel).
 const checkL0NonL0SkipMsg = "cell %q is %s (not L0); l0-imports check skipped"
 
+const (
+	cmdSliceCoverage      = "slice-coverage"
+	cmdJourneyReadiness   = "journey-readiness"
+	cmdL0Imports          = "l0-imports"
+	errCannotFindRoot     = "cannot find project root: %w"
+	errMetadataParse      = "metadata parse: %w"
+	flagFormatDescription = "output format: text|json|sarif"
+)
+
 // runCheck implements:
 //
 //	gocell check contract-health [--format text|json|sarif]
@@ -42,13 +51,13 @@ func runCheck(args []string) error {
 	switch subtype {
 	case "contract-health":
 		return checkContractHealth(subArgs)
-	case "slice-coverage":
+	case cmdSliceCoverage:
 		return checkSliceCoverage(subArgs)
 	case "assembly-completeness":
 		return checkAssemblyCompleteness(subArgs)
-	case "journey-readiness":
+	case cmdJourneyReadiness:
 		return checkJourneyReadiness(subArgs)
-	case "l0-imports":
+	case cmdL0Imports:
 		return checkL0Imports(subArgs)
 	case "unconditional-skip":
 		return checkUnconditionalSkip(subArgs)
@@ -67,13 +76,13 @@ func checkContractHealth(args []string) error {
 
 	root, err := findRoot()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
 	parser := metadata.NewParser(root)
 	project, err := parser.Parse()
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf(errMetadataParse, err)
 	}
 
 	reg := registry.NewContractRegistry(project)
@@ -165,14 +174,9 @@ func httpTransportColumns(c *metadata.ContractMeta) (method, path string) {
 // countContractHealthErrors counts SeverityError findings — currently every
 // contract-health rule emits an error, but the helper keeps us safe if we
 // later add advisory warnings.
+// Delegates to countErrors to avoid duplicate logic.
 func countContractHealthErrors(results []governance.ValidationResult) int {
-	n := 0
-	for i := range results {
-		if results[i].Severity == governance.SeverityError {
-			n++
-		}
-	}
-	return n
+	return countErrors(results)
 }
 
 // checkSliceCoverage checks that every slices/ subdirectory has a slice.yaml
@@ -180,22 +184,22 @@ func countContractHealthErrors(results []governance.ValidationResult) int {
 //
 // Flags: --cell=<cellID> (empty = all cells), --format=<text|json|sarif>
 func checkSliceCoverage(args []string) error {
-	fs := flag.NewFlagSet("check slice-coverage", flag.ContinueOnError)
+	fs := flag.NewFlagSet("check "+cmdSliceCoverage, flag.ContinueOnError)
 	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all cells)")
-	format := fs.String("format", string(printers.FormatText), "output format: text|json|sarif")
+	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	root, err := findRoot()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
 	parser := metadata.NewParser(root)
 	project, err := parser.Parse()
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf(errMetadataParse, err)
 	}
 
 	var results []governance.ValidationResult
@@ -218,7 +222,7 @@ func checkSliceCoverage(args []string) error {
 		}
 	}
 
-	return printAndCheck(*format, results, "slice-coverage",
+	return printAndCheck(*format, results, cmdSliceCoverage,
 		fmt.Sprintf("PASS: slice coverage OK (checked %d slices across %d cells)", sliceCount, cellCount))
 }
 
@@ -249,7 +253,7 @@ func sliceDirCheck(root, cid string) []governance.ValidationResult {
 				Code:      "CHECK-SLICE-EMPTY-DIR",
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRequired,
-				Scope:     "slice-coverage",
+				Scope:     cmdSliceCoverage,
 				Message:   fmt.Sprintf("cell %q: slices/%s has no slice.yaml", cid, e.Name()),
 			})
 		}
@@ -304,7 +308,7 @@ func sliceMetaCheck(project *metadata.ProjectMeta, cid string) []governance.Vali
 func checkAssemblyCompleteness(args []string) error {
 	fs := flag.NewFlagSet("check assembly-completeness", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
-	format := fs.String("format", string(printers.FormatText), "output format: text|json|sarif")
+	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -314,13 +318,13 @@ func checkAssemblyCompleteness(args []string) error {
 
 	root, err := findRoot()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
 	parser := metadata.NewParser(root)
 	project, err := parser.Parse()
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf(errMetadataParse, err)
 	}
 
 	asm, ok := project.Assemblies[*id]
@@ -363,22 +367,22 @@ func checkAssemblyCompleteness(args []string) error {
 //
 // Flags: --journey=<journeyID> (empty = all journeys)
 func checkJourneyReadiness(args []string) error {
-	fs := flag.NewFlagSet("check journey-readiness", flag.ContinueOnError)
+	fs := flag.NewFlagSet("check "+cmdJourneyReadiness, flag.ContinueOnError)
 	journeyID := fs.String("journey", "", "restrict check to this journey ID (empty = all)")
-	format := fs.String("format", string(printers.FormatText), "output format: text|json|sarif")
+	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	root, err := findRoot()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
 	parser := metadata.NewParser(root)
 	project, err := parser.Parse()
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf(errMetadataParse, err)
 	}
 
 	statusCount := buildStatusCount(project)
@@ -399,7 +403,7 @@ func checkJourneyReadiness(args []string) error {
 		}
 	}
 
-	return printAndCheck(*format, results, "journey-readiness",
+	return printAndCheck(*format, results, cmdJourneyReadiness,
 		fmt.Sprintf("PASS: journey readiness OK (checked %d journeys)", journeyCount))
 }
 
@@ -439,7 +443,7 @@ func journeyStatusCheck(jm *metadata.JourneyMeta, statusCount map[string]int) []
 			Code:      "CHECK-JOURNEY-DUP-STATUS-ENTRY",
 			Severity:  governance.SeverityError,
 			IssueType: governance.IssueDuplicate,
-			Scope:     "journey-readiness",
+			Scope:     cmdJourneyReadiness,
 			Message:   fmt.Sprintf("journey %q has %d entries in status-board.yaml (expected 1)", jm.ID, count),
 		}}
 	}
@@ -485,22 +489,22 @@ func journeyCellCheck(jm *metadata.JourneyMeta, project *metadata.ProjectMeta) [
 //
 // Flags: --cell=<cellID> (empty = all L0 cells)
 func checkL0Imports(args []string) error {
-	fs := flag.NewFlagSet("check l0-imports", flag.ContinueOnError)
+	fs := flag.NewFlagSet("check "+cmdL0Imports, flag.ContinueOnError)
 	cellID := fs.String("cell", "", "restrict check to this cell ID (empty = all L0 cells)")
-	format := fs.String("format", string(printers.FormatText), "output format: text|json|sarif")
+	format := fs.String("format", string(printers.FormatText), flagFormatDescription)
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 
 	root, err := findRoot()
 	if err != nil {
-		return fmt.Errorf("cannot find project root: %w", err)
+		return fmt.Errorf(errCannotFindRoot, err)
 	}
 
 	parser := metadata.NewParser(root)
 	project, err := parser.Parse()
 	if err != nil {
-		return fmt.Errorf("metadata parse: %w", err)
+		return fmt.Errorf(errMetadataParse, err)
 	}
 
 	if *cellID != "" {
@@ -522,7 +526,7 @@ func checkL0ImportsForSingleCell(root string, project *metadata.ProjectMeta, cel
 		return nil
 	}
 	results := l0ImportsForCell(root, cm)
-	return printAndCheck(format, results, "l0-imports", "PASS: L0 import declarations OK (checked 1 L0 cells)")
+	return printAndCheck(format, results, cmdL0Imports, "PASS: L0 import declarations OK (checked 1 L0 cells)")
 }
 
 // checkL0ImportsForAllCells runs l0-imports across all L0 cells in the project.
@@ -541,7 +545,7 @@ func checkL0ImportsForAllCells(root string, project *metadata.ProjectMeta, forma
 		}
 		return nil
 	}
-	return printAndCheck(format, results, "l0-imports",
+	return printAndCheck(format, results, cmdL0Imports,
 		fmt.Sprintf("PASS: L0 import declarations OK (checked %d L0 cells)", l0Count))
 }
 
@@ -602,7 +606,7 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 			Code:      "CHECK-L0-LOAD-ERROR",
 			Severity:  governance.SeverityWarning,
 			IssueType: governance.IssueInvalid,
-			Scope:     "l0-imports",
+			Scope:     cmdL0Imports,
 			Message:   fmt.Sprintf("L0 cell %q: package load error: %v", cm.ID, err),
 		}}, true
 	}
@@ -616,7 +620,7 @@ func loadCellImports(root string, cm *metadata.CellMeta) (map[string]bool, []gov
 					Code:      "CHECK-L0-LOAD-ERROR",
 					Severity:  governance.SeverityWarning,
 					IssueType: governance.IssueInvalid,
-					Scope:     "l0-imports",
+					Scope:     cmdL0Imports,
 					Message:   fmt.Sprintf("L0 cell %q: package %q load error: %v", cm.ID, pkg.PkgPath, pe),
 				})
 			}

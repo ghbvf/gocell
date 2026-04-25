@@ -326,6 +326,66 @@ func TestGenerateBoundary_NotFoundAssembly(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// sourceDateEpochOrNow tests
+// ---------------------------------------------------------------------------
+
+// TestSourceDateEpochOrNow_SourceDateEpochSet verifies that when SOURCE_DATE_EPOCH
+// is set to a valid Unix timestamp, sourceDateEpochOrNow returns a deterministic
+// RFC3339 timestamp corresponding to that epoch.
+func TestSourceDateEpochOrNow_SourceDateEpochSet(t *testing.T) {
+	t.Setenv("SOURCE_DATE_EPOCH", "0") // Unix epoch → 1970-01-01T00:00:00Z
+	result := sourceDateEpochOrNow()
+	assert.Equal(t, "1970-01-01T00:00:00Z", result,
+		"SOURCE_DATE_EPOCH=0 must produce the Unix epoch timestamp")
+}
+
+// TestSourceDateEpochOrNow_InvalidSourceDateEpoch verifies that an invalid
+// SOURCE_DATE_EPOCH value falls back to time.Now().
+func TestSourceDateEpochOrNow_InvalidSourceDateEpoch(t *testing.T) {
+	t.Setenv("SOURCE_DATE_EPOCH", "not-a-number")
+	result := sourceDateEpochOrNow()
+	// Should be a parseable RFC3339 string (time.Now fallback).
+	assert.NotEmpty(t, result)
+	assert.Contains(t, result, "T", "fallback must be an RFC3339 timestamp")
+}
+
+// TestSourceDateEpochOrNow_Unset verifies that without SOURCE_DATE_EPOCH the
+// function returns a non-empty RFC3339 timestamp (time.Now).
+func TestSourceDateEpochOrNow_Unset(t *testing.T) {
+	t.Setenv("SOURCE_DATE_EPOCH", "")
+	result := sourceDateEpochOrNow()
+	assert.NotEmpty(t, result)
+}
+
+// ---------------------------------------------------------------------------
+// sourceFingerprint with nil assembly (edge case)
+// ---------------------------------------------------------------------------
+
+// TestSourceFingerprint_NilAssembly verifies that sourceFingerprint returns ""
+// when the assembly ID is not found in the project.
+func TestSourceFingerprint_NilAssembly(t *testing.T) {
+	project := buildTestProject()
+	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	fp := gen.sourceFingerprint("does-not-exist", nil, nil)
+	assert.Empty(t, fp, "sourceFingerprint must return empty string for unknown assembly")
+}
+
+// TestSourceFingerprint_MissingCellInAssembly verifies that sourceFingerprint
+// handles assemblies that reference cells not in the project (missing cell path).
+func TestSourceFingerprint_MissingCellInAssembly(t *testing.T) {
+	project := buildTestProject()
+	// Add an assembly that references a cell not in project.Cells.
+	project.Assemblies["ghost-bundle"] = &metadata.AssemblyMeta{
+		ID:    "ghost-bundle",
+		Cells: []string{"ghost-cell"},
+	}
+	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	fp := gen.sourceFingerprint("ghost-bundle", nil, nil)
+	// Must return a non-empty fingerprint (missing cell falls back to "cell:<id>:missing").
+	assert.NotEmpty(t, fp, "sourceFingerprint must return a fingerprint even with missing cells")
+}
+
+// ---------------------------------------------------------------------------
 // Empty assembly tests
 // ---------------------------------------------------------------------------
 

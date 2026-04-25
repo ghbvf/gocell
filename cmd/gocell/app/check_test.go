@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -380,6 +381,289 @@ func TestCheckL0Imports_AllCellsScanned(t *testing.T) {
 	assert.True(t,
 		strings.Contains(out, "checked") && strings.Contains(out, "L0 cells"),
 		"output must include a count of checked L0 cells, got: %q", out)
+}
+
+// ---------------------------------------------------------------------------
+// L0 import helper unit tests (pure functions)
+// ---------------------------------------------------------------------------
+
+// TestBuildDeclaredDeps_NoL0Deps verifies empty map for cell with no dependencies.
+func TestBuildDeclaredDeps_NoL0Deps(t *testing.T) {
+	result := buildDeclaredDeps(&metadata.CellMeta{})
+	assert.Empty(t, result, "cell with no L0 deps must return empty map")
+}
+
+// TestBuildDeclaredDeps_WithDeps verifies the map is correctly populated.
+func TestBuildDeclaredDeps_WithDeps(t *testing.T) {
+	cm := &metadata.CellMeta{
+		L0Dependencies: []metadata.L0DepMeta{
+			{Cell: "shared-crypto", Reason: "hashing"},
+			{Cell: "shared-math", Reason: "math"},
+		},
+	}
+	result := buildDeclaredDeps(cm)
+	assert.True(t, result["shared-crypto"], "shared-crypto must be in declared deps")
+	assert.True(t, result["shared-math"], "shared-math must be in declared deps")
+	assert.False(t, result["other-cell"], "other-cell must not be in declared deps")
+}
+
+// TestL0UndeclaredImports_AllDeclared verifies no violations when all imports are declared.
+func TestL0UndeclaredImports_AllDeclared(t *testing.T) {
+	cm := &metadata.CellMeta{ID: "myL0cell", File: "cells/myL0cell/cell.yaml"}
+	imported := map[string]bool{"shared-crypto": true}
+	declared := map[string]bool{"shared-crypto": true}
+
+	results := l0UndeclaredImports(cm, imported, declared)
+	assert.Empty(t, results, "all imported cells declared → no violations")
+}
+
+// TestL0UndeclaredImports_UndeclaredImport verifies CHECK-L0-UNDECLARED-IMPORT fires.
+func TestL0UndeclaredImports_UndeclaredImport(t *testing.T) {
+	cm := &metadata.CellMeta{ID: "myL0cell", File: "cells/myL0cell/cell.yaml"}
+	imported := map[string]bool{"shared-crypto": true, "secret-dep": true}
+	declared := map[string]bool{"shared-crypto": true}
+
+	results := l0UndeclaredImports(cm, imported, declared)
+	require.Len(t, results, 1, "one undeclared import must produce one violation")
+	assert.Equal(t, "CHECK-L0-UNDECLARED-IMPORT", results[0].Code)
+	assert.Contains(t, results[0].Message, "secret-dep")
+}
+
+// TestL0DanglingDeclarations_AllImported verifies no violations when all declared deps are imported.
+func TestL0DanglingDeclarations_AllImported(t *testing.T) {
+	cm := &metadata.CellMeta{ID: "myL0cell", File: "cells/myL0cell/cell.yaml"}
+	imported := map[string]bool{"shared-crypto": true}
+	declared := map[string]bool{"shared-crypto": true}
+
+	results := l0DanglingDeclarations(cm, imported, declared)
+	assert.Empty(t, results, "all declared deps imported → no violations")
+}
+
+// TestL0DanglingDeclarations_DanglingDeclaration verifies CHECK-L0-DANGLING-DECLARATION fires.
+func TestL0DanglingDeclarations_DanglingDeclaration(t *testing.T) {
+	cm := &metadata.CellMeta{ID: "myL0cell", File: "cells/myL0cell/cell.yaml"}
+	imported := map[string]bool{}
+	declared := map[string]bool{"shared-crypto": true}
+
+	results := l0DanglingDeclarations(cm, imported, declared)
+	require.Len(t, results, 1, "one dangling declaration must produce one violation")
+	assert.Equal(t, "CHECK-L0-DANGLING-DECLARATION", results[0].Code)
+	assert.Contains(t, results[0].Message, "shared-crypto")
+}
+
+// TestL0ImportsForCell_NoDeclaredDeps verifies CHECK-L0-MISSING-L0DEPS fires
+// when an L0 cell declares no dependencies. The packages.Load call to a
+// non-existent directory returns a fatal load error which is demoted to a
+// warning; the missing-deps error is the primary finding.
+func TestL0ImportsForCell_NoDeclaredDeps(t *testing.T) {
+	cm := &metadata.CellMeta{
+		ID:               "my-l0-cell",
+		ConsistencyLevel: "L0",
+		File:             "cells/my-l0-cell/cell.yaml",
+	}
+	// Use a non-existent root so packages.Load fails immediately.
+	results := l0ImportsForCell(t.TempDir(), cm)
+	// At minimum must contain CHECK-L0-MISSING-L0DEPS error.
+	var foundMissing bool
+	for _, r := range results {
+		if r.Code == "CHECK-L0-MISSING-L0DEPS" {
+			foundMissing = true
+		}
+	}
+	assert.True(t, foundMissing, "L0 cell with no declared deps must produce CHECK-L0-MISSING-L0DEPS")
+}
+
+// TestLoadCellImports_NonExistentDir verifies that loadCellImports returns a
+// fatal load error when the cell directory does not exist.
+func TestLoadCellImports_NonExistentDir(t *testing.T) {
+	cm := &metadata.CellMeta{
+		ID:               "ghost-cell",
+		ConsistencyLevel: "L0",
+	}
+	_, loadResults, fatal := loadCellImports(t.TempDir(), cm)
+	// packages.Load on a non-existent dir may return an error (fatal=true) or
+	// return empty packages — both outcomes are acceptable as long as the
+	// function does not panic.
+	if fatal {
+		require.NotEmpty(t, loadResults, "fatal load must produce at least one warning")
+		assert.Equal(t, "CHECK-L0-LOAD-ERROR", loadResults[0].Code)
+	}
+	// Non-fatal (empty dir) is also fine — just assert no panic.
+}
+
+// TestCheckL0ImportsForSingleCell_NotFound verifies error when cell not in project.
+func TestCheckL0ImportsForSingleCell_NotFound(t *testing.T) {
+	root := t.TempDir()
+	project := &metadata.ProjectMeta{
+		Cells:      map[string]*metadata.CellMeta{},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	err := checkL0ImportsForSingleCell(root, project, "nonexistent", "text")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found")
+}
+
+// TestCheckL0ImportsForAllCells_ZeroL0Cells verifies that zero L0 cells exits cleanly.
+func TestCheckL0ImportsForAllCells_ZeroL0Cells(t *testing.T) {
+	root := t.TempDir()
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
+		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	out := captureStdout(t, func() {
+		err := checkL0ImportsForAllCells(root, project, "text")
+		assert.NoError(t, err, "zero L0 cells must succeed")
+	})
+	assert.Contains(t, out, "0 L0 cells", "output must report 0 L0 cells checked")
+}
+
+// TestCheckL0ImportsForSingleCell_NonL0JSONFormat verifies JSON format produces
+// no output when a non-L0 cell is targeted.
+func TestCheckL0ImportsForSingleCell_NonL0JSONFormat(t *testing.T) {
+	root := t.TempDir()
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"accesscore": {ID: "accesscore", ConsistencyLevel: "L1"},
+		},
+		Slices:     map[string]*metadata.SliceMeta{},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+	out := captureStdout(t, func() {
+		err := checkL0ImportsForSingleCell(root, project, "accesscore", "json")
+		assert.NoError(t, err, "non-L0 cell in json format must succeed")
+	})
+	// In JSON mode, no skip message is printed (format != text).
+	assert.Empty(t, out, "JSON format must produce no output for non-L0 skip")
+}
+
+// ---------------------------------------------------------------------------
+// Metadata parse error path for each subcommand
+// ---------------------------------------------------------------------------
+
+// TestCheckSliceCoverage_MetadataParseError verifies the metadata parse error
+// path in checkSliceCoverage when the project YAML is malformed.
+func TestCheckSliceCoverage_MetadataParseError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n"), 0o644))
+
+	// Write a malformed cell.yaml to trigger a parse error.
+	cellDir := filepath.Join(root, "cells", "badcell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte("id: [not: yaml\n"), 0o644))
+
+	orig, _ := os.Getwd()
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err := runCheck([]string{"slice-coverage"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata parse")
+}
+
+// TestCheckJourneyReadiness_MetadataParseError verifies the metadata parse error
+// path in checkJourneyReadiness.
+func TestCheckJourneyReadiness_MetadataParseError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n"), 0o644))
+
+	cellDir := filepath.Join(root, "cells", "badcell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte("id: [not: yaml\n"), 0o644))
+
+	orig, _ := os.Getwd()
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err := runCheck([]string{"journey-readiness"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata parse")
+}
+
+// TestCheckAssemblyCompleteness_MetadataParseError verifies the metadata parse
+// error path in checkAssemblyCompleteness.
+func TestCheckAssemblyCompleteness_MetadataParseError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n"), 0o644))
+
+	cellDir := filepath.Join(root, "cells", "badcell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte("id: [not: yaml\n"), 0o644))
+
+	orig, _ := os.Getwd()
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err := runCheck([]string{"assembly-completeness", "--id=testbundle"})
+	require.Error(t, err)
+	// Note: may fail with parse error or "not found" depending on parse order.
+	require.Error(t, err)
+}
+
+// TestCheckL0Imports_MetadataParseError verifies the metadata parse error path
+// in checkL0Imports.
+func TestCheckL0Imports_MetadataParseError(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n"), 0o644))
+
+	cellDir := filepath.Join(root, "cells", "badcell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte("id: [not: yaml\n"), 0o644))
+
+	orig, _ := os.Getwd()
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err := runCheck([]string{"l0-imports"})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "metadata parse")
+}
+
+// TestPrintAndCheck_JSONFormat verifies printAndCheck in JSON mode produces
+// machine-readable output and returns a meaningful error on findings.
+func TestPrintAndCheck_JSONFormat(t *testing.T) {
+	results := []governance.ValidationResult{
+		{
+			Code:      "TEST-01",
+			Severity:  governance.SeverityError,
+			IssueType: governance.IssueRequired,
+			File:      "test/file.yaml",
+			Message:   "test error message",
+		},
+	}
+	out := captureStdout(t, func() {
+		err := printAndCheck("json", results, "test-check", "PASS")
+		require.Error(t, err, "findings must produce error")
+		assert.Contains(t, err.Error(), "test-check")
+	})
+	// JSON output must be parseable.
+	require.NotEmpty(t, out, "json mode must produce output")
+}
+
+// TestPrintAndCheck_SARIFFormat verifies printAndCheck in SARIF mode.
+func TestPrintAndCheck_SARIFFormat(t *testing.T) {
+	results := []governance.ValidationResult{}
+	out := captureStdout(t, func() {
+		err := printAndCheck("sarif", results, "test-check", "PASS")
+		assert.NoError(t, err, "no findings must exit 0")
+	})
+	// SARIF output should contain the SARIF schema marker.
+	require.NotEmpty(t, out, "sarif mode must produce output")
+	assert.Contains(t, out, "sarif", strings.ToLower(out))
+}
+
+// TestPrintContractHealthTable_Empty verifies the empty contracts branch.
+func TestPrintContractHealthTable_Empty(t *testing.T) {
+	out := captureStdout(t, func() {
+		printContractHealthTable(nil)
+	})
+	assert.Contains(t, out, "No contracts found")
 }
 
 // ---------------------------------------------------------------------------

@@ -121,15 +121,18 @@ func assemblyFile(a *metadata.AssemblyMeta) string {
 // the ID is a dangling reference). Use contractFile(c) when the entity exists;
 // the two may differ for example projects where contracts live under
 // examples/<X>/contracts/.
+// The returned path always uses forward slashes so error messages are
+// cross-platform consistent (Windows filepath.Join would produce backslashes).
 func contractFileFromID(id string) string {
-	return filepath.Join(contractDirFromID(id), "contract.yaml")
+	return filepath.ToSlash(filepath.Join(contractDirFromID(id), "contract.yaml"))
 }
 
 // contractDirFromID converts a contract ID to its directory path.
 // "http.auth.login.v1" -> "contracts/http/auth/login/v1"
+// The returned path always uses forward slashes (cross-platform safe).
 func contractDirFromID(id string) string {
 	segments := strings.Split(id, ".")
-	return filepath.Join("contracts", filepath.Join(segments...))
+	return filepath.ToSlash(filepath.Join("contracts", filepath.Join(segments...)))
 }
 
 func contractDirFromMeta(c *metadata.ContractMeta) string {

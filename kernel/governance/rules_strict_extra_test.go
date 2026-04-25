@@ -581,6 +581,117 @@ func TestFMT23_DeprecatedCleanup_BoundaryCheck(t *testing.T) {
 
 // --- scanSchemaForStrictMissing helper (unit) ---
 
+// TestScanSchemaForStrictMissing_FileNotFound verifies that a non-existent schema
+// path returns an error from scanSchemaForStrictMissing.
+func TestScanSchemaForStrictMissing_FileNotFound(t *testing.T) {
+	_, err := scanSchemaForStrictMissing("/nonexistent/path/schema.json")
+	require.Error(t, err, "missing file must return an error")
+}
+
+// TestScanSchemaForStrictMissing_InvalidJSON verifies that malformed JSON content
+// returns an error from scanSchemaForStrictMissing.
+func TestScanSchemaForStrictMissing_InvalidJSON(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "bad-*.json")
+	require.NoError(t, err)
+	_, err = f.Write([]byte("not valid json {{{"))
+	require.NoError(t, err)
+	require.NoError(t, f.Close())
+
+	_, err = scanSchemaForStrictMissing(f.Name())
+	require.Error(t, err, "malformed JSON must return an error")
+	assert.Contains(t, err.Error(), "invalid JSON schema")
+}
+
+// TestWalkSchemaObjectDepth_DepthGuard verifies that walkSchemaObjectDepth
+// terminates cleanly at depth > 32 and does not recurse indefinitely.
+func TestWalkSchemaObjectDepth_DepthGuard(t *testing.T) {
+	// Build a deeply nested schema (34 levels) that would recurse infinitely
+	// without the depth guard. Each level wraps the next in a "nested" property.
+	buildNested := func(depth int) map[string]any {
+		inner := map[string]any{
+			"type": "object",
+			// No additionalProperties — would be a violation at every level.
+		}
+		current := inner
+		for i := 0; i < depth; i++ {
+			next := map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"nested": current,
+				},
+			}
+			current = next
+		}
+		return current
+	}
+
+	deepSchema := buildNested(35)
+	var missing []string
+	// Should not panic or run forever; returns after the depth guard fires.
+	walkSchemaObject(deepSchema, "$", &missing)
+	// Some violations found (top levels) but the guard stops infinite recursion.
+	assert.NotPanics(t, func() {
+		walkSchemaObject(deepSchema, "$", &missing)
+	})
+}
+
+// TestCheckAdditionalProperties_ObjectValueTreatedAsMissing verifies that
+// additionalProperties set to an object (not bool false) is treated as a violation.
+func TestCheckAdditionalProperties_ObjectValueTreatedAsMissing(t *testing.T) {
+	node := map[string]any{
+		"type": "object",
+		// additionalProperties is a schema object, not bool false — counts as missing.
+		"additionalProperties": map[string]any{"type": "string"},
+	}
+	var missing []string
+	checkAdditionalProperties(node, "$", &missing)
+	assert.Equal(t, []string{"$"}, missing,
+		"additionalProperties as object value must be treated as missing")
+}
+
+// TestCheckAdditionalProperties_TrueValueTreatedAsMissing verifies that
+// additionalProperties: true also triggers a violation (only false is accepted).
+func TestCheckAdditionalProperties_TrueValueTreatedAsMissing(t *testing.T) {
+	node := map[string]any{
+		"type":                 "object",
+		"additionalProperties": true,
+	}
+	var missing []string
+	checkAdditionalProperties(node, "$", &missing)
+	assert.Equal(t, []string{"$"}, missing,
+		"additionalProperties:true must be treated as missing (only false is accepted)")
+}
+
+// TestFMT20_MissingSchemaFileSkipped verifies that FMT-20 silently skips contracts
+// whose schema files don't exist (those are caught by FMT-09 / REF rules).
+func TestFMT20_MissingSchemaFileSkipped(t *testing.T) {
+	pm := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.missing.schema.v1": {
+				ID:        "http.missing.schema.v1",
+				Kind:      "http",
+				OwnerCell: "testcell",
+				Lifecycle: "active",
+				SchemaRefs: metadata.SchemaRefsMeta{
+					Response: "nonexistent.schema.json",
+				},
+				Dir:  "contracts/http/missing/schema/v1",
+				File: "contracts/http/missing/schema/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	// root points to a temp dir — the schema file won't exist there.
+	v := NewValidator(pm, t.TempDir())
+	results := v.Validate()
+	matches := findByCode(results, "FMT-20")
+	assert.Empty(t, matches, "missing schema file must produce no FMT-20 (handled by REF rules)")
+}
+
 // TestScanSchemaForStrictMissing_Basic verifies the helper returns correct
 // JSON-pointer paths for missing additionalProperties.
 func TestScanSchemaForStrictMissing_Basic(t *testing.T) {

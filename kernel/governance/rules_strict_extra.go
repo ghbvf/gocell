@@ -11,6 +11,16 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
+// Rule ID constants for FMT-20..FMT-23. Extracted so that each rule ID string
+// is declared in exactly one place; Sonar code-smell rule S1192 (duplicate
+// string literals) no longer fires for these identifiers.
+const (
+	ruleFMT20 = "FMT-20"
+	ruleFMT21 = "FMT-21"
+	ruleFMT22 = "FMT-22"
+	ruleFMT23 = "FMT-23"
+)
+
 // --- FMT-20 (formerly FMT-RESPONSE-STRICT-01) ---
 
 // validateFMTResponseStrict01 scans every HTTP-kind contract's request/response
@@ -35,7 +45,7 @@ func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
 			}
 			for _, loc := range missing {
 				results = append(results, v.newResult(
-					"FMT-20", SeverityError, IssueRequired,
+					ruleFMT20, SeverityError, IssueRequired,
 					schemaRef, loc,
 					fmt.Sprintf("contract %q schema must declare additionalProperties:false at %s", c.ID, loc),
 				))
@@ -173,7 +183,7 @@ func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
 		if lastIdx < 0 {
 			// No "contracts" segment anywhere → definite mismatch.
 			results = append(results, v.newResult(
-				"FMT-21", SeverityError, IssueMismatch,
+				ruleFMT21, SeverityError, IssueMismatch,
 				contractFile(c), "id",
 				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
 			))
@@ -182,7 +192,7 @@ func (v *Validator) validateFMTContractDirIDMatch01() []ValidationResult {
 		actualSuffix := filepath.Join(parts[lastIdx:]...) // "contracts/http/auth/login/v1"
 		if actualSuffix != derived {
 			results = append(results, v.newResult(
-				"FMT-21", SeverityError, IssueMismatch,
+				ruleFMT21, SeverityError, IssueMismatch,
 				contractFile(c), "id",
 				fmt.Sprintf("contract %q dir %q does not match derived %q", c.ID, c.Dir, derived),
 			))
@@ -209,7 +219,7 @@ func (v *Validator) validateStatusBoardStateEnum01() []ValidationResult {
 	for i, e := range v.project.StatusBoard {
 		if !validStatusBoardStates[e.State] {
 			results = append(results, v.newResult(
-				"FMT-22", SeverityError, IssueInvalid,
+				ruleFMT22, SeverityError, IssueInvalid,
 				"journeys/status-board.yaml",
 				fmt.Sprintf("[%d].state", i),
 				fmt.Sprintf(
@@ -240,7 +250,7 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 		}
 		if c.DeprecatedAt == "" {
 			results = append(results, v.newResult(
-				"FMT-23", SeverityError, IssueRequired,
+				ruleFMT23, SeverityError, IssueRequired,
 				contractFile(c), "deprecatedAt",
 				fmt.Sprintf("contract %q is deprecated but missing deprecatedAt", c.ID),
 			))
@@ -249,7 +259,7 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 		ts, err := time.ParseInLocation("2006-01-02", c.DeprecatedAt, time.UTC)
 		if err != nil {
 			results = append(results, v.newResult(
-				"FMT-23", SeverityError, IssueInvalid,
+				ruleFMT23, SeverityError, IssueInvalid,
 				contractFile(c), "deprecatedAt",
 				fmt.Sprintf("contract %q deprecatedAt %q is not YYYY-MM-DD", c.ID, c.DeprecatedAt),
 			))
@@ -257,7 +267,7 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 		}
 		if now.UTC().Sub(ts) > 90*24*time.Hour {
 			results = append(results, v.newResult(
-				"FMT-23", SeverityWarning, IssueForbidden,
+				ruleFMT23, SeverityWarning, IssueForbidden,
 				contractFile(c), "lifecycle",
 				fmt.Sprintf(
 					"contract %q has been deprecated for >90d (since %s); remove or extend",
