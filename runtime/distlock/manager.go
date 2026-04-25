@@ -224,15 +224,18 @@ func (m *Manager) run() {
 
 // nextTimer returns a Timer (and its channel) for the earliest heap item,
 // or nil/nil if the heap is empty.
+//
+// Uses the absolute-deadline NewTimerAt API (rather than deriving a duration
+// off clock.Now() and calling NewTimer(d)) so that an interleaving
+// FakeClock.Advance between Now() and timer creation cannot re-baseline the
+// timer to a later deadline. Production realClock behaves identically either
+// way; the discipline is required by FakeClock for deterministic tests and
+// was the root cause of the TC-3 flake.
 func (m *Manager) nextTimer(h *renewHeap) (Timer, <-chan time.Time) {
 	if h.Len() == 0 {
 		return nil, nil
 	}
-	d := h.Peek().nextRenew.Sub(m.cfg.clock.Now())
-	if d < 0 {
-		d = 0
-	}
-	t := m.cfg.clock.NewTimer(d)
+	t := m.cfg.clock.NewTimerAt(h.Peek().nextRenew)
 	return t, t.C()
 }
 

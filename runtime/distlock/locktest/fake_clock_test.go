@@ -23,8 +23,8 @@ func TestFakeClock_Advance_FiresDueTimers(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
 
 	// Timer at +1s and +2s.
-	t1 := fc.NewTimer(1 * time.Second)
-	t2 := fc.NewTimer(2 * time.Second)
+	t1 := fc.NewTimerAt(epoch.Add(1 * time.Second))
+	t2 := fc.NewTimerAt(epoch.Add(2 * time.Second))
 
 	// Advance 1.5s — only t1 should fire.
 	fc.Advance(1500 * time.Millisecond)
@@ -53,7 +53,7 @@ func TestFakeClock_Advance_FiresDueTimers(t *testing.T) {
 // future deadlines do not fire prematurely.
 func TestFakeClock_Advance_DoesNotFireFutureTimers(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimer(10 * time.Second)
+	timer := fc.NewTimerAt(epoch.Add(10 * time.Second))
 
 	// Advance less than the timer deadline.
 	fc.Advance(5 * time.Second)
@@ -74,9 +74,9 @@ func TestFakeClock_Advance_PreservesOrder(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
 
 	// Create timers in reverse order of deadlines.
-	t3 := fc.NewTimer(3 * time.Second)
-	t1 := fc.NewTimer(1 * time.Second)
-	t2 := fc.NewTimer(2 * time.Second)
+	t3 := fc.NewTimerAt(epoch.Add(3 * time.Second))
+	t1 := fc.NewTimerAt(epoch.Add(1 * time.Second))
+	t2 := fc.NewTimerAt(epoch.Add(2 * time.Second))
 
 	// Advance past all deadlines in one step.
 	fired := make([]int, 0, 3)
@@ -113,7 +113,7 @@ type distlockTimer interface {
 // prevents the timer from firing.
 func TestFakeClock_Timer_Stop_BeforeFire(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimer(5 * time.Second)
+	timer := fc.NewTimerAt(epoch.Add(5 * time.Second))
 
 	if !timer.Stop() {
 		t.Error("Stop() before fire should return true")
@@ -138,7 +138,7 @@ func TestFakeClock_Timer_Stop_BeforeFire(t *testing.T) {
 // the timer has already fired.
 func TestFakeClock_Timer_Stop_AfterFire(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimer(1 * time.Second)
+	timer := fc.NewTimerAt(epoch.Add(1 * time.Second))
 
 	// Fire the timer by advancing.
 	fc.Advance(2 * time.Second)
@@ -160,7 +160,7 @@ func TestFakeClock_Timer_Stop_AfterFire(t *testing.T) {
 // is safe (second call returns false).
 func TestFakeClock_Timer_Stop_TwiceIdempotent(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimer(5 * time.Second)
+	timer := fc.NewTimerAt(epoch.Add(5 * time.Second))
 
 	if !timer.Stop() {
 		t.Error("first Stop() should return true")
@@ -174,7 +174,7 @@ func TestFakeClock_Timer_Stop_TwiceIdempotent(t *testing.T) {
 // timer to a future deadline.
 func TestFakeClock_Timer_Reset_ToFutureDeadline(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimer(1 * time.Second)
+	timer := fc.NewTimerAt(epoch.Add(1 * time.Second))
 
 	// Stop and reset to 5s.
 	timer.Stop()
@@ -202,7 +202,7 @@ func TestFakeClock_Timer_Reset_ToFutureDeadline(t *testing.T) {
 // Reset(<=0) marks the timer as fired and sends on the channel.
 func TestFakeClock_Timer_Reset_ToPastDeadline_FiresOnNextAdvance(t *testing.T) {
 	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimer(10 * time.Second)
+	timer := fc.NewTimerAt(epoch.Add(10 * time.Second))
 
 	// Reset to 0 — should fire immediately.
 	timer.Reset(0)
@@ -229,37 +229,6 @@ func TestFakeClock_Since(t *testing.T) {
 	}
 }
 
-// TestFakeClock_NewTimer_ZeroDuration verifies that NewTimer(0) fires immediately
-// (the channel already has a value, no Advance needed).
-func TestFakeClock_NewTimer_ZeroDuration(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimer(0)
-
-	select {
-	case <-timer.C():
-		// Good — fired immediately.
-	default:
-		t.Error("NewTimer(0) should fire immediately")
-	}
-	// PendingTimers should be 0 (fired timers are not counted).
-	if n := fc.PendingTimers(); n != 0 {
-		t.Errorf("PendingTimers = %d after immediate timer, want 0", n)
-	}
-}
-
-// TestFakeClock_NewTimer_NegativeDuration verifies that NewTimer(<0) fires immediately.
-func TestFakeClock_NewTimer_NegativeDuration(t *testing.T) {
-	fc := locktest.NewFakeClock(epoch)
-	timer := fc.NewTimer(-1 * time.Second)
-
-	select {
-	case <-timer.C():
-		// Good — fired immediately.
-	default:
-		t.Error("NewTimer(-1s) should fire immediately")
-	}
-}
-
 // TestFakeClock_PendingTimers_CountsOnlyArmed verifies that PendingTimers()
 // counts only non-stopped, non-fired timers.
 func TestFakeClock_PendingTimers_CountsOnlyArmed(t *testing.T) {
@@ -269,9 +238,9 @@ func TestFakeClock_PendingTimers_CountsOnlyArmed(t *testing.T) {
 		t.Errorf("initial PendingTimers = %d, want 0", fc.PendingTimers())
 	}
 
-	t1 := fc.NewTimer(1 * time.Second)
-	t2 := fc.NewTimer(2 * time.Second)
-	t3 := fc.NewTimer(3 * time.Second)
+	t1 := fc.NewTimerAt(epoch.Add(1 * time.Second))
+	t2 := fc.NewTimerAt(epoch.Add(2 * time.Second))
+	t3 := fc.NewTimerAt(epoch.Add(3 * time.Second))
 
 	if fc.PendingTimers() != 3 {
 		t.Errorf("PendingTimers = %d, want 3 after creating 3 timers", fc.PendingTimers())

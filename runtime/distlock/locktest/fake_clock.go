@@ -45,18 +45,23 @@ func (fc *FakeClock) Since(t time.Time) time.Duration {
 	return fc.Now().Sub(t)
 }
 
-// NewTimer implements distlock.Clock.
-// The returned FakeTimer fires when Advance moves past its deadline.
-func (fc *FakeClock) NewTimer(d time.Duration) distlock.Timer {
+// NewTimerAt implements distlock.Clock.
+// The returned FakeTimer fires when Advance moves fc.now to or past deadline.
+//
+// The deadline write and timer registration happen under a single fc.mu hold,
+// which is what makes the API race-free against concurrent Advance calls — a
+// duration-based API would require two non-atomic clock interactions. See
+// clock.go Clock.NewTimerAt for the design rationale.
+func (fc *FakeClock) NewTimerAt(deadline time.Time) distlock.Timer {
 	fc.mu.Lock()
 	defer fc.mu.Unlock()
 	ft := &FakeTimer{
-		deadline: fc.now.Add(d),
+		deadline: deadline,
 		ch:       make(chan time.Time, 1),
 		clock:    fc,
 	}
-	// If d <= 0 fire immediately.
-	if d <= 0 {
+	// Deadline already reached → fire immediately, do not enqueue.
+	if !fc.now.Before(deadline) {
 		ft.ch <- fc.now
 		ft.fired = true
 	} else {
