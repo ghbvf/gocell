@@ -77,10 +77,19 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configcore pg config: %w", err)
 	}
-	pgRes, cellOpts, relayOpts, err := buildConfigCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus, shared.PromStack.metricProvider, vt)
+	modResult, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         shared.Topology,
+		PGConfig:         pgCfg,
+		Publisher:        shared.EventBus,
+		MetricsProvider:  shared.PromStack.metricProvider,
+		ValueTransformer: vt,
+	})
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	pgRes := modResult.PGResource
+	cellOpts := modResult.CellOptions
+	relayOpts := modResult.BootstrapOpts
 
 	// Register the stale-cipher counter against the isolated per-run registry.
 	// Use Register (not MustRegister) so that repeated Provide calls in the

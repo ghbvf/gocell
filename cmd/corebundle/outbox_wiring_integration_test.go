@@ -31,18 +31,24 @@ func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
 	ctx := context.Background()
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
 	pgCfg := adapterpg.Config{DSN: pgDSN}
-	res, cellOpts, bootstrapOpts, err := buildConfigCoreOpts(ctx, topo, pgCfg, discardPublisher{}, metrics.NopProvider{}, crypto.NoopTransformer{})
+	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         topo,
+		PGConfig:         pgCfg,
+		Publisher:        discardPublisher{},
+		MetricsProvider:  metrics.NopProvider{},
+		ValueTransformer: crypto.NoopTransformer{},
+	})
 
 	require.NoError(t, err, "postgres mode must not error when DSN is valid")
-	require.NotNil(t, res, "postgres mode must return a non-nil ManagedResource (pool)")
-	assert.NotEmpty(t, cellOpts, "postgres mode must return cell options")
+	require.NotNil(t, result.PGResource, "postgres mode must return a non-nil ManagedResource (pool)")
+	assert.NotEmpty(t, result.CellOptions, "postgres mode must return cell options")
 
 	// PGResource.Worker() must be nil — pool has no background worker.
-	assert.Nil(t, res.Worker(), "PGResource must not carry a relay worker; relay is registered via bootstrapOpts")
+	assert.Nil(t, result.PGResource.Worker(), "PGResource must not carry a relay worker; relay is registered via bootstrapOpts")
 
 	// The relay is independently registered via bootstrap opts (A11 fix).
-	assert.NotEmpty(t, bootstrapOpts, "postgres mode must return bootstrap opts carrying relay ManagedResource")
+	assert.NotEmpty(t, result.BootstrapOpts, "postgres mode must return bootstrap opts carrying relay ManagedResource")
 
 	// Close the pool via ManagedResource.Close(ctx) so pool.Close(ctx) is called.
-	require.NoError(t, res.Close(context.Background()))
+	require.NoError(t, result.PGResource.Close(context.Background()))
 }

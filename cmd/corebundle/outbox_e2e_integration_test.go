@@ -112,11 +112,17 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
 
-	pgRes, cellAdapterOpts, relayBootstrapOpts, err := buildConfigCoreOpts(ctx,
-		bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
-		adapterpg.Config{DSN: pgConnStr},
-		eb, kernelmetrics.NopProvider{}, crypto.NoopTransformer{})
+	modResult, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		PGConfig:         adapterpg.Config{DSN: pgConnStr},
+		Publisher:        eb,
+		MetricsProvider:  kernelmetrics.NopProvider{},
+		ValueTransformer: crypto.NoopTransformer{},
+	})
 	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
+	pgRes := modResult.PGResource
+	cellAdapterOpts := modResult.CellOptions
+	relayBootstrapOpts := modResult.BootstrapOpts
 	require.NotNil(t, pgRes,
 		"A11 regression guard: buildConfigCoreOpts MUST return a non-nil ManagedResource in PG mode")
 	// Relay is now registered via independent bootstrap opts, not via PGResource.Worker().
