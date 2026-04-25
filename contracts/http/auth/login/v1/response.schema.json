@@ -17,5 +17,6 @@
       "additionalProperties": false
     }
   },
-  "required": ["data"]
+  "required": ["data"],
+  "additionalProperties": false
 }

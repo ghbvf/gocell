@@ -387,11 +387,16 @@ func TestWalkthrough(t *testing.T) {
 				AccessToken           string `json:"accessToken"`
 				RefreshToken          string `json:"refreshToken"`
 				ExpiresAt             string `json:"expiresAt"`
+				SessionID             string `json:"sessionId"`
+				UserID                string `json:"userId"`
 				PasswordResetRequired bool   `json:"passwordResetRequired"`
 			} `json:"data"`
 		}
 		require.NoError(t, json.Unmarshal(bodyBytes, &envelope))
 		assert.NotEmpty(t, envelope.Data.AccessToken, "response must include new accessToken")
+		assert.NotEmpty(t, envelope.Data.RefreshToken, "response must include new refreshToken")
+		assert.NotEmpty(t, envelope.Data.SessionID, "response must include sessionId")
+		assert.NotEmpty(t, envelope.Data.UserID, "response must include userId")
 		assert.False(t, envelope.Data.PasswordResetRequired,
 			"new token must have passwordResetRequired=false after change-password")
 
@@ -682,7 +687,6 @@ func TestWalkthrough(t *testing.T) {
 			"flags list response must contain a 'data' array (may be empty)")
 	})
 }
-
 
 // fetchAuditEntries queries GET /audit/entries with the given bearer token and
 // returns the data array. Returns (nil, false) on any error or empty result.

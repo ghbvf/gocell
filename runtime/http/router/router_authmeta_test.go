@@ -221,7 +221,7 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	auth.Mount(r, auth.Route{Contract: testHTTPContract("POST", "/change-password"), Handler: okHandler, PasswordResetExempt: true})
 	require.NoError(t, r.FinalizeAuth())
 
-	// Non-exempt route → 403 with change_password_endpoint hint
+	// Non-exempt route → 403 with changePasswordEndpoint hint
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/blocked", nil)
 	req.Header.Set("Authorization", "Bearer any-token")
@@ -233,7 +233,7 @@ func TestFinalizeAuth_HintDerivedFromPostExemptMeta(t *testing.T) {
 	errObj := body["error"].(map[string]any)
 	details, ok := errObj["details"].(map[string]any)
 	require.True(t, ok, "details must be present when hint is derived")
-	assert.Equal(t, "POST /change-password", details["change_password_endpoint"])
+	assert.Equal(t, "POST /change-password", details["changePasswordEndpoint"])
 }
 
 // ---------------------------------------------------------------------------

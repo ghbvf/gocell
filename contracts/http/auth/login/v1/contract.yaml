@@ -12,6 +12,16 @@ endpoints:
     path: /api/v1/access/sessions/login
     successStatus: 201
     noContent: false
+    responses:
+      400:
+        description: Invalid login request.
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
+      401:
+        description: Invalid credentials.
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
+      403:
+        description: "ERR_AUTH_PASSWORD_RESET_REQUIRED — token carries password_reset_required=true; client must call change-password before accessing protected endpoints."
+        schemaRef: ../../../../shared/errors/error-response-v1.schema.json
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

@@ -403,7 +403,7 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
 	assert.Equal(t, code, errObj["code"])
-	// ERR_AUTH_PASSWORD_RESET_REQUIRED carries a change_password_endpoint hint
+	// ERR_AUTH_PASSWORD_RESET_REQUIRED carries a changePasswordEndpoint hint
 	// in details (P2-10 fix). All other codes must have an empty details object.
 	if code != "ERR_AUTH_PASSWORD_RESET_REQUIRED" {
 		assert.Equal(t, map[string]any{}, errObj["details"], "canonical envelope must include empty details object")
@@ -411,7 +411,7 @@ func assertErrorCode(t *testing.T, rec *httptest.ResponseRecorder, code string) 
 }
 
 // assertPasswordResetErrorWithHint asserts 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response and verifies the change_password_endpoint hint and resolved_path are present.
+// response and verifies the changePasswordEndpoint hint and resolvedPath are present.
 // expectedPath is the URL path of the request that was blocked (always populated).
 func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecorder, expectedPath string) {
 	t.Helper()
@@ -422,11 +422,11 @@ func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecord
 	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
 	details, ok := errObj["details"].(map[string]any)
 	require.True(t, ok, "details must be a map")
-	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["change_password_endpoint"],
-		"403 password-reset response must include change_password_endpoint hint (P2-10)")
-	// TDD: resolved_path must always be present and echo the blocked request's URL path.
-	assert.Equal(t, expectedPath, details["resolved_path"],
-		"403 password-reset response must include resolved_path echoing the blocked endpoint")
+	assert.Equal(t, "POST /api/v1/access/users/{id}/password", details["changePasswordEndpoint"],
+		"403 password-reset response must include changePasswordEndpoint hint (P2-10)")
+	// TDD: resolvedPath must always be present and echo the blocked request's URL path.
+	assert.Equal(t, expectedPath, details["resolvedPath"],
+		"403 password-reset response must include resolvedPath echoing the blocked endpoint")
 }
 
 // testExemptMatcher returns the canonical (method, path) matcher used by the
@@ -604,7 +604,7 @@ func TestAuthMiddleware_PasswordResetRequired_BlocksWrongMethodOnExempt(t *testi
 
 // TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured verifies
 // that without WithPasswordResetChangeEndpointHintFn, the 403 response body
-// carries details.resolved_path but NO details.change_password_endpoint —
+// carries details.resolvedPath but NO details.changePasswordEndpoint —
 // runtime/auth carries no business path knowledge.
 func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *testing.T) {
 	verifier := &mockVerifier{
@@ -626,11 +626,11 @@ func TestAuthMiddleware_PasswordResetRequired_OmitsHintWhenNotConfigured(t *test
 	assert.Equal(t, "ERR_AUTH_PASSWORD_RESET_REQUIRED", errObj["code"])
 	details, ok := errObj["details"].(map[string]any)
 	require.True(t, ok, "details must always be present (typed struct)")
-	_, hasHint := details["change_password_endpoint"]
+	_, hasHint := details["changePasswordEndpoint"]
 	assert.False(t, hasHint,
-		"without WithPasswordResetChangeEndpointHintFn, change_password_endpoint must be absent (omitempty)")
-	assert.Equal(t, "/api/v1/configs", details["resolved_path"],
-		"resolved_path must always echo the blocked request path")
+		"without WithPasswordResetChangeEndpointHintFn, changePasswordEndpoint must be absent (omitempty)")
+	assert.Equal(t, "/api/v1/configs", details["resolvedPath"],
+		"resolvedPath must always echo the blocked request path")
 }
 
 // TestAuthMiddleware_NoResetClaim_PassesThrough verifies that a regular token

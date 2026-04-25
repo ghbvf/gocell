@@ -49,7 +49,7 @@ func WithPasswordResetExemptMatcher(fn func(method, urlPath string) bool) AuthOp
 }
 
 // WithPasswordResetChangeEndpointHintFn sets a getter closure that is called
-// at request time to obtain the change_password_endpoint hint. Use this when
+// at request time to obtain the changePasswordEndpoint hint. Use this when
 // the hint value is not known at middleware install time (e.g. it is derived
 // by FinalizeAuth after RegisterRoutes completes).
 //

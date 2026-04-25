@@ -125,16 +125,16 @@ func handleAuthRequest(w http.ResponseWriter, r *http.Request, next http.Handler
 }
 
 // passwordResetDetails is the typed shape of the details object returned in
-// 403 ERR_AUTH_PASSWORD_RESET_REQUIRED responses. resolved_path is always
-// populated; change_password_endpoint is omitted when the composition root
+// 403 ERR_AUTH_PASSWORD_RESET_REQUIRED responses. resolvedPath is always
+// populated; changePasswordEndpoint is omitted when the composition root
 // has not wired a hint (fail-closed default).
 type passwordResetDetails struct {
-	ChangePasswordEndpoint string `json:"change_password_endpoint,omitempty"`
-	ResolvedPath           string `json:"resolved_path"`
+	ChangePasswordEndpoint string `json:"changePasswordEndpoint,omitempty"`
+	ResolvedPath           string `json:"resolvedPath"`
 }
 
 // writePasswordResetRequired writes a 403 ERR_AUTH_PASSWORD_RESET_REQUIRED
-// response. changeEndpointHint is emitted as details.change_password_endpoint
+// response. changeEndpointHint is emitted as details.changePasswordEndpoint
 // when non-empty; resolvedPath echoes the URL path of the blocked request and
 // is always present so clients can log "blocked at /api/v1/X" without parsing
 // their own request.
@@ -142,7 +142,7 @@ type passwordResetDetails struct {
 // The hint is derived by Router.FinalizeAuth from the first declared
 // PasswordResetExempt=true + Method=POST AuthRouteMeta, or set directly via
 // auth.WithPasswordResetChangeEndpointHintFn. Empty string omits the
-// details.change_password_endpoint field (omitempty).
+// details.changePasswordEndpoint field (omitempty).
 //
 // ref: go-kratos/kratos transport/http/binding — typed details, never map[string]any on the wire
 func writePasswordResetRequired(w http.ResponseWriter, changeEndpointHint, resolvedPath string) {

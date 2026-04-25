@@ -203,7 +203,7 @@ USER_ID=$(echo "$ACCESS_TOKEN" \
 curl -i -X GET http://localhost:8080/api/v1/access/roles/admin \
   -H "Authorization: Bearer $ACCESS_TOKEN"
 # HTTP/1.1 403 Forbidden
-# {"error":{"code":"ERR_AUTH_PASSWORD_RESET_REQUIRED","message":"password reset required before accessing this endpoint","details":{"change_password_endpoint":"POST /api/v1/access/users/{id}/password"}}}
+# {"error":{"code":"ERR_AUTH_PASSWORD_RESET_REQUIRED","message":"password reset required before accessing this endpoint","details":{"changePasswordEndpoint":"POST /api/v1/access/users/{id}/password"}}}
 
 # 5. 改密（同步拿到新 TokenPair，自动脱困）
 NEW_TOKEN_RESP=$(curl -s -X POST "http://localhost:8080/api/v1/access/users/${USER_ID}/password" \
