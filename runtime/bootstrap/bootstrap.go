@@ -210,15 +210,15 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 	}
 }
 
-// JWT authentication is wired exclusively through cell.Policy values mounted
+// JWT authentication is wired through a typed []cell.ListenerAuth chain mounted
 // on a listener via WithListener:
 //
-//	bootstrap.WithListener(cell.PrimaryListener, addr, bootstrap.PolicyJWT(verifier))
-//	bootstrap.WithListener(cell.PrimaryListener, addr, bootstrap.PolicyJWTFromAssembly(asm))
+//	bootstrap.WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.NewAuthJWT(verifier)})
+//	bootstrap.WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)})
 //
 // The previous bootstrap.WithAuthMiddleware / WithAuthDiscovery options have
 // been removed (PR-A14b round-3 F3): one mechanism, one source of truth. The
-// listener's policy carries the verifier; Bootstrap installs the router-aware
+// listener's auth chain carries the verifier; Bootstrap installs the router-aware
 // AuthMiddleware at phase5 so Public / PasswordResetExempt route bypass works
 // for free.
 
@@ -373,12 +373,12 @@ func WithAdapterInfo(info map[string]string) Option {
 // canonical use cases are:
 //
 //	bootstrap.WithHealthRoutes(bootstrap.WithMetricsHandler(promHandler))
-//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzPolicy(
-//	    bootstrap.PolicyVerboseToken("X-Readyz-Token", token)))
+//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzAuth(
+//	    cell.NewAuthVerboseToken("X-Readyz-Token", token)))
 //	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled())
 //
 // Multiple WithHealthRoutes calls accumulate; later options for the same
-// concern (metrics handler, livez/readyz/metrics policy, verbose disabled)
+// concern (metrics handler, livez/readyz/metrics auth, verbose disabled)
 // overwrite earlier ones in the order they were appended. Pass nil-valued
 // options at your peril — they overwrite any previously-set value with the
 // zero value.

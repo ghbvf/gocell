@@ -19,10 +19,10 @@ import (
 type listenerConfig struct {
 	ref       cell.ListenerRef
 	addr      string
-	policy    cell.Policy
-	net       net.Listener  // optional: pre-bound listener for tests
-	tls       *tls.Config   // optional: TLS termination config
-	shutGrace time.Duration // optional: overrides global shutdownTimeout
+	authChain []cell.ListenerAuth // authentication plan chain; nil means no auth (AuthNone behaviour)
+	net       net.Listener        // optional: pre-bound listener for tests
+	tls       *tls.Config         // optional: TLS termination config
+	shutGrace time.Duration       // optional: overrides global shutdownTimeout
 }
 
 // ListenerOption configures a single listener within WithListener.
@@ -59,13 +59,15 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 // Bootstrap's listenerConfigs map. Registering the same ref twice is a
 // phase0 error (duplicate listener declaration).
 //
-// defaultPolicy is the policy applied to the listener's root mux. Individual
-// RouteGroups may override this with a group-level Policy. A zero-value Policy
-// (cell.Policy{}) means no listener-level auth middleware; each route must then
-// declare its own policy via auth.Mount.
+// authChain is the ordered slice of ListenerAuth plans applied to the
+// listener's root mux. Individual RouteGroups may override this with a
+// group-level Auth plan. A nil or empty chain means no listener-level auth
+// middleware; each route must then declare its own auth via auth.Mount.
+// Pass cell.AuthNone{} for an explicit no-auth declaration (e.g. HealthListener
+// behind a Kubernetes probe path).
 //
 // ref: go-kratos/kratos transport/http/server.go — options applied before server start.
-func WithListener(ref cell.ListenerRef, addr string, defaultPolicy cell.Policy, opts ...ListenerOption) Option {
+func WithListener(ref cell.ListenerRef, addr string, authChain []cell.ListenerAuth, opts ...ListenerOption) Option {
 	return func(b *Bootstrap) {
 		if b.listenerConfigs == nil {
 			b.listenerConfigs = make(map[cell.ListenerRef]listenerConfig)
@@ -75,9 +77,9 @@ func WithListener(ref cell.ListenerRef, addr string, defaultPolicy cell.Policy, 
 			b.duplicateListenerRefs = append(b.duplicateListenerRefs, ref)
 		}
 		cfg := listenerConfig{
-			ref:    ref,
-			addr:   addr,
-			policy: defaultPolicy,
+			ref:       ref,
+			addr:      addr,
+			authChain: authChain,
 		}
 		for _, o := range opts {
 			o(&cfg)

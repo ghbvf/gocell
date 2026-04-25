@@ -65,7 +65,7 @@ func TestHealthEndpoints(t *testing.T) {
 	defer func() { _ = asm.Stop(context.Background()) }()
 
 	hh := health.New(asm)
-	r, err := NewForListener(cell.HealthListener, cell.Policy{})
+	r, err := NewForListener(cell.HealthListener)
 	require.NoError(t, err)
 	r.Handle("/healthz", hh.LivezHandler())
 	r.Handle("/readyz", hh.ReadyzHandler())
@@ -95,7 +95,7 @@ func TestMetricsEndpoint(t *testing.T) {
 	// for middleware instrumentation; the /metrics scrape endpoint is a separate handler
 	// registered on the HealthListener router by bootstrap.
 	mc := metrics.NewInMemoryCollector()
-	healthRtr, err := NewForListener(cell.HealthListener, cell.Policy{})
+	healthRtr, err := NewForListener(cell.HealthListener)
 	require.NoError(t, err)
 	healthRtr.Handle("/metrics", mc.Handler())
 
@@ -702,7 +702,7 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 	}))
 
 	// Health router has no rate limiter — /healthz always reachable.
-	healthRtr, err := NewForListener(cell.HealthListener, cell.Policy{})
+	healthRtr, err := NewForListener(cell.HealthListener)
 	require.NoError(t, err)
 	healthRtr.Handle("/healthz", hh.LivezHandler())
 
@@ -738,7 +738,7 @@ func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
 	}))
 
 	// Health router has no circuit breaker — /readyz always reachable.
-	healthRtr, err := NewForListener(cell.HealthListener, cell.Policy{})
+	healthRtr, err := NewForListener(cell.HealthListener)
 	require.NoError(t, err)
 	healthRtr.Handle("/readyz", hh.ReadyzHandler())
 
@@ -898,7 +898,7 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 	}))
 
 	// Health router has no auth — /healthz always reachable.
-	healthRtr, err := NewForListener(cell.HealthListener, cell.Policy{})
+	healthRtr, err := NewForListener(cell.HealthListener)
 	require.NoError(t, err)
 	healthRtr.Handle("/healthz", hh.LivezHandler())
 
