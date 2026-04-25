@@ -102,6 +102,46 @@ func TestFinalizeAuth_EmptyDeclaration_NoOp(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
+// R2-11: WithSuppressNoAuthVerifierWarn silences the FinalizeAuth Warn that
+// fires when auth metas are declared on a router with no AuthMiddleware.
+// HealthListener and InternalListener routers must use this opt-out.
+// ---------------------------------------------------------------------------
+
+func captureSlogWarn(t *testing.T) (*bytes.Buffer, func()) {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	return &buf, func() { slog.SetDefault(prev) }
+}
+
+func TestFinalizeAuth_NoVerifier_EmitsWarn_ByDefault(t *testing.T) {
+	buf, restore := captureSlogWarn(t)
+	defer restore()
+
+	r := New() // no AuthMiddleware, no suppression
+	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/healthz"), Handler: okHandler, Public: true})
+	require.NoError(t, r.FinalizeAuth())
+
+	assert.Contains(t, buf.String(), "AuthMiddleware is not installed",
+		"FinalizeAuth must warn when authVerifier is nil and metas are declared (R2-11 baseline)")
+}
+
+func TestFinalizeAuth_NoVerifier_SuppressedWarn_NoOutput(t *testing.T) {
+	buf, restore := captureSlogWarn(t)
+	defer restore()
+
+	// Mirrors how bootstrap wires HealthListener routers post-R2-11.
+	r, err := NewE(WithSuppressNoAuthVerifierWarn())
+	require.NoError(t, err)
+	auth.Mount(r, auth.Route{Contract: testHTTPContract("GET", "/healthz"), Handler: okHandler, Public: true})
+	require.NoError(t, r.FinalizeAuth())
+
+	assert.NotContains(t, buf.String(), "AuthMiddleware is not installed",
+		"WithSuppressNoAuthVerifierWarn must silence the no-verifier Warn at FinalizeAuth (R2-11)")
+}
+
+// ---------------------------------------------------------------------------
 // FinalizeAuth compiles Public metas into authPublicMatcher
 // ---------------------------------------------------------------------------
 

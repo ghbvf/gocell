@@ -11,7 +11,10 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -134,16 +137,24 @@ func TestNew_WithOptions(t *testing.T) {
 	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
 }
 
-func TestNew_WithVerboseToken(t *testing.T) {
-	b := New(WithVerboseToken("secret-123"))
-	assert.Equal(t, "secret-123", b.verboseToken,
-		"WithVerboseToken must populate Bootstrap.verboseToken for health handler wiring")
-}
+// Verbose-token gating is now a regular cell.Policy (PolicyVerboseToken)
+// attached to the readyz route group by the composition root. The handler
+// itself owns no verbose-token state. Coverage:
+//   - PolicyVerboseToken middleware: runtime/bootstrap/policy_test.go
+//   - probequery.Verbose query parsing: runtime/http/health/probequery/verbose_test.go
 
-func TestNew_WithVerboseToken_Empty_DefaultBackwardCompat(t *testing.T) {
-	b := New() // no WithVerboseToken
-	assert.Empty(t, b.verboseToken,
-		"default verboseToken must be empty (backward-compatible: verbose stays open)")
+// optionOriginName returns the name of the function that produced a
+// router.Option closure. router.WithTracer(...) returns a func(*Router) created
+// by the WithTracer constructor; FuncForPC reports its name as
+// ".../router.WithTracer.func1", letting tests assert on the constructor's
+// identity instead of relying on a fragile len(routerOpts) count (R2-05).
+func optionOriginName(opt router.Option) string {
+	pc := reflect.ValueOf(opt).Pointer()
+	fn := runtime.FuncForPC(pc)
+	if fn == nil {
+		return ""
+	}
+	return fn.Name()
 }
 
 func TestNew_WithTracer(t *testing.T) {
@@ -153,7 +164,27 @@ func TestNew_WithTracer(t *testing.T) {
 	// itself) and router.WithTracingOptions(WithProbeFilter(DefaultProbeFilter))
 	// so /healthz, /readyz, /metrics skip span creation on the per-listener
 	// HealthListener router (the pre-PR-A14b outer-mux bypass is gone).
-	assert.Len(t, b.routerOpts, 2)
+	require.Len(t, b.routerOpts, 2,
+		"WithTracer must forward two router options (WithTracer + WithTracingOptions)")
+
+	origins := make([]string, len(b.routerOpts))
+	for i, opt := range b.routerOpts {
+		origins[i] = optionOriginName(opt)
+	}
+
+	var sawTracer, sawTracingOpts bool
+	for _, name := range origins {
+		switch {
+		case strings.Contains(name, "/router.WithTracer."):
+			sawTracer = true
+		case strings.Contains(name, "/router.WithTracingOptions."):
+			sawTracingOpts = true
+		}
+	}
+	assert.True(t, sawTracer,
+		"first router option must come from router.WithTracer (constructor identity check); origins=%v", origins)
+	assert.True(t, sawTracingOpts,
+		"second router option must come from router.WithTracingOptions (probe-filter wiring); origins=%v", origins)
 }
 
 func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {

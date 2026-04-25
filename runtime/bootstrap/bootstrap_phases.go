@@ -66,7 +66,7 @@ type phaseState struct {
 
 	// set by phase5
 	hh                   *health.Handler
-	healthMetricsHandler http.Handler                        // optional /metrics handler for the HealthListener
+	healthRouteGroupOpts []HealthRouteGroupOption            // resolved HealthRouteGroupOption stack (from WithHealthRoutes)
 	rtr                  *router.Router                      // primary listener's router (may be nil when no primary)
 	routers              map[cell.ListenerRef]*router.Router // all per-listener routers
 
@@ -568,11 +568,8 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	if b.adapterInfo != nil {
 		hh.SetAdapterInfo(b.adapterInfo)
 	}
-	if b.verboseToken != "" {
-		hh.SetVerboseToken(b.verboseToken)
-	}
 	s.hh = hh
-	s.healthMetricsHandler = b.healthMetricsHandler
+	s.healthRouteGroupOpts = b.healthRouteGroupOpts
 	return b.registerAllHealthCheckers(s)
 }
 
@@ -603,7 +600,7 @@ func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.Liste
 // handler is configured (phase0 rejects that combination at startup).
 func (b *Bootstrap) phase5CollectRouteGroups(s *phaseState, routers map[cell.ListenerRef]*router.Router) []cell.RouteGroup {
 	_, hasHealthListener := routers[cell.HealthListener]
-	groups := HealthRouteGroups(s.hh, s.healthMetricsHandler)
+	groups := HealthRouteGroups(s.hh, s.healthRouteGroupOpts...)
 	if !hasHealthListener {
 		// Remap livez/readyz health groups to PrimaryListener so /healthz and /readyz
 		// are served even when no dedicated HealthListener was declared.
@@ -752,6 +749,17 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 			opts = append(opts, authOpts...)
 		}
 	}
+
+	// R2-11: Health and Internal listeners intentionally run without a JWT
+	// verifier — health endpoints are framework-owned probes, internal traffic
+	// is gated by mTLS / PolicyServiceToken. Without this opt-out, the router's
+	// FinalizeAuth would emit a Warn at every production startup because both
+	// listeners declare auth.Mount(Public:true) routes with no AuthMiddleware
+	// installed. Suppress the false alarm.
+	if ref == cell.HealthListener || ref == cell.InternalListener {
+		opts = append(opts, router.WithSuppressNoAuthVerifierWarn())
+	}
+
 	return opts, nil
 }
 
@@ -1052,6 +1060,23 @@ func (b *Bootstrap) checkNoEventRegistrars(asm *assembly.CoreAssembly) error {
 //
 // ref: go-kratos/kratos app.go@main L95-122 — per-server goroutine pair.
 // ref: kubernetes/apiserver pkg/server/secure_serving.go — pre-bind listener.
+// shutdownCtxFor derives the per-server shutdown context from the parent ctx
+// and the listener's shutGrace setting.
+//
+//   - shutGrace > 0 wraps the parent with context.WithTimeout(parent, shutGrace).
+//     context.WithTimeout already bounds the resulting deadline to whichever of
+//     parent.Deadline() and (now + shutGrace) comes first, so the global
+//     shutdownTimeout always wins when shutGrace exceeds it (R2-03).
+//   - shutGrace == 0 returns the parent unchanged (no per-listener override; the
+//     server inherits the global shutdownTimeout). The returned cancel is a
+//     no-op so callers can defer it unconditionally.
+func shutdownCtxFor(parent context.Context, shutGrace time.Duration) (context.Context, context.CancelFunc) {
+	if shutGrace > 0 {
+		return context.WithTimeout(parent, shutGrace)
+	}
+	return parent, func() {}
+}
+
 // boundServer holds a resolved HTTP server and its associated listener.
 type boundServer struct {
 	name      string
@@ -1205,15 +1230,20 @@ func resolveListener(cfg listenerConfig) (ln net.Listener, owned bool, err error
 
 // shutdownAllServers drains all servers in parallel. Each server uses a
 // per-server context derived from the parent ctx:
-//   - when shutGrace > 0 (set via WithListenerShutdownGrace), a fresh
-//     context.WithTimeout(Background, shutGrace) is used — the server gets its
-//     own private drain budget independent of the global shutdownTimeout.
-//   - when shutGrace == 0, the shared ctx is passed through (existing behaviour).
+//   - when shutGrace > 0 (set via WithListenerShutdownGrace), the parent ctx
+//     is wrapped with context.WithTimeout(ctx, shutGrace) so shutGrace is an
+//     upper bound *within* the global shutdownTimeout budget — never a parallel
+//     budget that can outlive global shutdown.
+//   - when shutGrace == 0, the shared ctx is passed through unchanged (server
+//     inherits the global shutdownTimeout deadline).
 //
 // Errors are aggregated via errors.Join so operators see every failure.
 //
 // OPS-01: accepts []boundServer so each shutdown log line carries the listener
 // name instead of an opaque numeric index.
+//
+// R2-03: parent ctx (not context.Background) is the timeout parent so the
+// global shutdownTimeout always bounds per-listener drains.
 func shutdownAllServers(ctx context.Context, servers []boundServer) error {
 	slog.Info("bootstrap: draining HTTP servers")
 	type drainResult struct {
@@ -1223,12 +1253,8 @@ func shutdownAllServers(ctx context.Context, servers []boundServer) error {
 	for _, bs := range servers {
 		bs := bs // capture
 		go func() {
-			shutCtx := ctx
-			var cancel context.CancelFunc
-			if bs.shutGrace > 0 {
-				shutCtx, cancel = context.WithTimeout(context.Background(), bs.shutGrace)
-				defer cancel()
-			}
+			shutCtx, cancel := shutdownCtxFor(ctx, bs.shutGrace)
+			defer cancel()
 			err := bs.srv.Shutdown(shutCtx)
 			if err != nil {
 				slog.Error("bootstrap: HTTP server drain failed",

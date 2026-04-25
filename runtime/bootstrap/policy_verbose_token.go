@@ -17,29 +17,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"net/http"
-	"strings"
 
 	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/http/health/probequery"
 )
-
-// policyVerboseActive reports whether the request has opted into verbose mode.
-// Mirrors the semantics of health.readyzVerbose so that the policy and handler
-// agree on when verbose mode is active (SEC-06).
-// Accepted forms: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
-// Rejected: ?verbose=false, ?verbose=0, ?verbose=anything-else.
-func policyVerboseActive(r *http.Request) bool {
-	values, ok := r.URL.Query()["verbose"]
-	if !ok {
-		return false
-	}
-	for _, v := range values {
-		switch strings.TrimSpace(strings.ToLower(v)) {
-		case "", "1", "true":
-			return true
-		}
-	}
-	return false
-}
 
 // verboseTokenErrorBody is the canonical 401 response body for a token mismatch.
 // Pre-encoded once to avoid per-request JSON marshalling overhead.
@@ -65,10 +46,10 @@ func verboseTokenMiddleware(headerName, token string) func(http.Handler) http.Ha
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// SEC-06: only enforce when ?verbose is semantically "on" — same
-			// logic as health.readyzVerbose to prevent false 401s when
-			// ?verbose=false is passed (e.g. by k8s probes).
-			// Accepted: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
-			if !policyVerboseActive(r) {
+			// parser as the health handler so policy and handler agree on what
+			// counts as verbose. (?verbose=false / ?verbose=0 must not 401, e.g.
+			// kubelet probes that pass them through.)
+			if !probequery.Verbose(r) {
 				next.ServeHTTP(w, r)
 				return
 			}

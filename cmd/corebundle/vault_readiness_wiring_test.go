@@ -144,14 +144,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	go func() { errCh <- app.Run(ctx) }()
 
 	healthAddr := healthLn.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "bootstrap must become live")
+	waitForHealthy(t, healthAddr)
 
 	// /readyz must reflect the failing fake probe → 503.
 	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx

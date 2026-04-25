@@ -372,14 +372,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	go func() { errCh <- app.Run(ctx) }()
 
 	healthAddr := healthLn.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "memory bootstrap must become healthy")
+	waitForHealthy(t, healthAddr)
 
 	// /readyz must be healthy (no PG checker to fail).
 	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
@@ -433,14 +426,7 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	go func() { errCh <- app.Run(ctx) }()
 
 	healthAddr := healthLn.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "bootstrap with fake PG must become healthy")
+	waitForHealthy(t, healthAddr)
 
 	cancel()
 	select {
@@ -475,14 +461,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	go func() { errCh <- app.Run(ctx) }()
 
 	healthAddr := healthLn.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "full assembly must become healthy")
+	waitForHealthy(t, healthAddr)
 
 	// /readyz confirms all three cells started and registered their probes.
 	resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx

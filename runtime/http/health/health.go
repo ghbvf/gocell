@@ -8,18 +8,17 @@ package health
 
 import (
 	"context"
-	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/runtime/http/health/probequery"
 )
 
 // maxVerboseErrLen is the maximum length of a probe error string included in
@@ -64,11 +63,14 @@ func WithDeadline(d time.Duration) Option {
 	}
 }
 
-// VerboseTokenHeader is the HTTP header used to authenticate /readyz?verbose
-// requests when a verbose token is configured via SetVerboseToken.
-const VerboseTokenHeader = "X-Readyz-Token"
-
 // Handler exposes /healthz and /readyz endpoints.
+//
+// Verbose-mode access control is *not* this package's concern. The handler
+// emits the verbose body whenever the request opts in via the ?verbose query
+// parameter (parsed by probequery.Verbose). Bearer-token gating, IP allow-
+// listing, or any other access-control policy must be installed by the
+// caller as HTTP middleware ahead of the handler — typically by attaching
+// bootstrap.PolicyVerboseToken to the readyz cell.RouteGroup.
 type Handler struct {
 	assembly *assembly.CoreAssembly
 
@@ -81,7 +83,6 @@ type Handler struct {
 	mu           sync.RWMutex
 	checkers     map[string]Checker
 	adapterInfo  map[string]string // static adapter metadata for verbose output
-	verboseToken string            // if non-empty, require this token for verbose output
 	shuttingDown atomic.Bool
 }
 
@@ -109,19 +110,6 @@ func (h *Handler) RegisterChecker(name string, fn Checker) {
 		panic(fmt.Sprintf("health: duplicate checker name %q", name))
 	}
 	h.checkers[name] = fn
-}
-
-// SetVerboseToken sets a bearer token that must be provided via the
-// X-Readyz-Token header to access /readyz?verbose output. When empty (default),
-// verbose mode is unrestricted for backward compatibility.
-//
-// ref: Kubernetes withholds error reasons in verbose output but exposes check
-// names. GoCell goes further: the entire verbose block (cell names, dependency
-// names) is gated behind a token when configured.
-func (h *Handler) SetVerboseToken(token string) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.verboseToken = token
 }
 
 // SetAdapterInfo sets static adapter metadata that is included in /readyz
@@ -163,8 +151,9 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 // dependency breakdown is returned only when the request enables verbose mode.
 //
 // Security: verbose=true exposes internal topology (cell names, dependency
-// names). Use SetVerboseToken to require an X-Readyz-Token header for verbose
-// access, or restrict ?verbose at the ingress layer.
+// names). Gate verbose access at the HTTP middleware layer — typically by
+// attaching bootstrap.PolicyVerboseToken to the readyz cell.RouteGroup so
+// the policy 401's the request before it reaches this handler.
 //
 // ref: k8s.io/apiserver/pkg/server/healthz — server-side deadline, probe
 // independence from request lifecycle.
@@ -176,7 +165,7 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 			})
 			return
 		}
-		verbose := h.verboseAllowed(r)
+		verbose := probequery.Verbose(r)
 
 		allHealthy, cells := h.aggregateCellHealth(verbose)
 
@@ -392,50 +381,6 @@ func isDeadlineError(ctx context.Context, err error) bool {
 		return true
 	}
 	return errors.Is(err, context.DeadlineExceeded)
-}
-
-// verboseAllowed returns true when the request is allowed to see verbose output.
-// When a verbose token is configured, the request must include a matching
-// X-Readyz-Token header in addition to the ?verbose query parameter.
-func (h *Handler) verboseAllowed(r *http.Request) bool {
-	if !readyzVerbose(r) {
-		return false
-	}
-	h.mu.RLock()
-	token := h.verboseToken
-	h.mu.RUnlock()
-	if token == "" {
-		return true // no token configured — backward compatible
-	}
-	if subtle.ConstantTimeCompare([]byte(r.Header.Get(VerboseTokenHeader)), []byte(token)) == 1 {
-		return true
-	}
-	// Token configured but request missing/mismatched. Warn so probing
-	// attempts are observable; don't Error since the request still succeeds
-	// (just without verbose output) and the endpoint is operating as designed.
-	slog.Warn("readyz: verbose token mismatch; suppressing verbose output",
-		slog.String("remote_addr", r.RemoteAddr))
-	return false
-}
-
-// readyzVerbose returns true when the request opts in to detailed output.
-// Accepted forms: ?verbose, ?verbose=, ?verbose=1, ?verbose=true.
-// All other values (false, yes, debug, …) are treated as non-verbose.
-func readyzVerbose(r *http.Request) bool {
-	values, ok := r.URL.Query()["verbose"]
-	if !ok {
-		return false
-	}
-	// url.ParseQuery always yields at least [""] when the key is present,
-	// so we iterate values directly without a separate len==0 guard.
-	for _, value := range values {
-		normalized := strings.TrimSpace(strings.ToLower(value))
-		switch normalized {
-		case "", "1", "true":
-			return true
-		}
-	}
-	return false
 }
 
 // truncateErrMsg limits msg to max runes, appending "..." when truncated.

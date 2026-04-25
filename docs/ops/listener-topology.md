@@ -35,6 +35,24 @@ k8s Kubelet / Prometheus│              health  127.0.0.1:9091       │
 
 For full variable reference see `docs/ops/env-vars.md`.
 
+## Health-listener fallback (test/dev convenience)
+
+When no `cell.HealthListener` is declared via `WithListener`,
+`phase5CollectRouteGroups` automatically remaps the framework-owned health
+groups (`/healthz`, `/readyz`, `/metrics`) onto `cell.PrimaryListener` so
+single-listener bootstraps still expose health endpoints. This is intended
+for tests, examples, and one-port dev runs only.
+
+**Production deployments must declare an explicit `HealthListener`** — the
+fallback path collapses port-level isolation between business traffic and
+infra probes, and exposes `/metrics` on the public port. Kubernetes liveness
+/ readiness probes and Prometheus scrape targets must point at the dedicated
+health port (`127.0.0.1:9091` by default).
+
+The fallback is a structural convenience, not a deployment mode. There is no
+flag to opt out; declaring `WithListener(cell.HealthListener, ...)` simply
+disables the remap.
+
 ## k8s Liveness / Readiness Probe Migration
 
 **Breaking change from PR-A14a**: `/healthz`, `/readyz`, and `/metrics` are no

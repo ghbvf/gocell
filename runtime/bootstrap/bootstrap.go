@@ -13,7 +13,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"sort"
 	"strings"
 	"sync"
@@ -361,10 +360,10 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 	}
 	// B2: when a metrics handler is configured, a dedicated HealthListener must
 	// be declared so /metrics is isolated from the public primary listener.
-	if b.healthMetricsHandler != nil {
+	if b.resolveHealthRouteGroupCfg().metricsHandler != nil {
 		if _, ok := b.listenerConfigs[cell.HealthListener]; !ok {
 			return fmt.Errorf(
-				"bootstrap: WithHealthMetricsHandler requires a dedicated HealthListener; " +
+				"bootstrap: WithHealthRoutes(WithMetricsHandler(...)) requires a dedicated HealthListener; " +
 					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener")
 		}
 	}
@@ -400,24 +399,21 @@ func WithAdapterInfo(info map[string]string) Option {
 	}
 }
 
-// WithVerboseToken sets a token that must be provided via the X-Readyz-Token
-// header to access /readyz?verbose output. When not set, verbose mode is
-// unrestricted (backward compatible).
-func WithVerboseToken(token string) Option {
-	return func(b *Bootstrap) {
-		b.verboseToken = token
-	}
-}
-
-// WithHealthMetricsHandler registers an http.Handler for the /metrics endpoint
-// on the HealthListener. During phase5 the handler is threaded into
-// HealthRouteGroups so it is mounted on the correct listener.
+// WithHealthRoutes accumulates HealthRouteGroupOption values that customise
+// the framework-owned /healthz, /readyz, and /metrics route groups. The
+// canonical use cases are:
 //
-// A nil handler is silently ignored — /metrics is simply not registered.
-// This replaces the deleted router.WithMetricsHandler option.
-func WithHealthMetricsHandler(h http.Handler) Option {
+//	bootstrap.WithHealthRoutes(bootstrap.WithMetricsHandler(promHandler))
+//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzPolicy(
+//	    bootstrap.PolicyVerboseToken("X-Readyz-Token", token)))
+//
+// Multiple WithHealthRoutes calls accumulate; later options for the same
+// concern (metrics handler, livez/readyz/metrics policy) overwrite earlier
+// ones in the order they were appended. Pass nil-valued options at your
+// peril — they overwrite any previously-set value with the zero value.
+func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 	return func(b *Bootstrap) {
-		b.healthMetricsHandler = h
+		b.healthRouteGroupOpts = append(b.healthRouteGroupOpts, opts...)
 	}
 }
 
@@ -569,42 +565,66 @@ type namedChecker struct {
 }
 
 // Bootstrap orchestrates the GoCell application lifecycle.
+//
+// Fields are organised by concern; the dividers below are not load-bearing
+// (Go has no notion of struct sub-groups) but reading and reviewing this 45-
+// field struct is materially easier when related fields sit together.
 type Bootstrap struct {
-	configPath    string
-	envPrefix     string
-	assembly      *assembly.CoreAssembly
-	workers       []worker.Worker
-	publisher     outbox.Publisher
-	subscriber    outbox.Subscriber
+	// --- assembly + config ---
+	configPath string
+	envPrefix  string
+	assembly   *assembly.CoreAssembly
+
+	// --- workers + outbox pubsub ---
+	workers    []worker.Worker
+	publisher  outbox.Publisher
+	subscriber outbox.Subscriber
+
+	// --- auth (verifier discovery + double-JWT guard) ---
 	routerOpts    []router.Option
 	authVerifier  auth.IntentTokenVerifier
 	authDiscovery bool // true when WithAuthDiscovery or PolicyJWTFromAssembly was called
 	// policyJWTFromAssemblyMismatch is set when PolicyJWTFromAssembly receives a
 	// different *assembly.CoreAssembly than WithAssembly. Surfaced by phase0.
 	policyJWTFromAssemblyMismatch error
-	shutdownTimeout               time.Duration
-	preShutdownDelay              time.Duration
-	healthCheckers                []namedChecker
-	adapterInfo                   map[string]string // static adapter metadata for /readyz verbose
-	verboseToken                  string            // token for /readyz?verbose access control
-	closers                       []any             // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
-	disableObservabilityRestore   bool
-	eventRouterReadyTimeout       time.Duration
-	eventRouterReadyTimeoutSet    bool
-	consumerMiddleware            []outbox.SubscriptionMiddleware
-	hookTimeout                   time.Duration // applied when assembly not pre-built
-	hookTimeoutSet                bool          // distinguishes zero-value "unset" from explicit zero
-	hookObserver                  cell.LifecycleHookObserver
-	metricsProvider               kernelmetrics.Provider
-	httpCollector                 metricsmiddleware.Collector // cached auto-wired HTTP collector (created once, shared across listeners)
-	shutdownMet                   *shutdownMetrics            // nil only when provider is nil
-	shutdownMetricsErr            error                       // non-nil when metric registration failed in New
-	runOnce                       sync.Once
+
+	// --- shutdown + draining budgets ---
+	shutdownTimeout  time.Duration
+	preShutdownDelay time.Duration
+
+	// --- health probes + adapter metadata ---
+	healthCheckers []namedChecker
+	adapterInfo    map[string]string // static adapter metadata for /readyz verbose
+
+	// --- closers + observability lifecycle ---
+	closers                     []any // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
+	disableObservabilityRestore bool
+
+	// --- consumer / event-router wiring ---
+	eventRouterReadyTimeout    time.Duration
+	eventRouterReadyTimeoutSet bool
+	consumerMiddleware         []outbox.SubscriptionMiddleware
+
+	// --- lifecycle hooks (assembly-level start/stop callbacks) ---
+	hookTimeout    time.Duration // applied when assembly not pre-built
+	hookTimeoutSet bool          // distinguishes zero-value "unset" from explicit zero
+	hookObserver   cell.LifecycleHookObserver
+
+	// --- metrics provider + auto-wired HTTP collector ---
+	metricsProvider    kernelmetrics.Provider
+	httpCollector      metricsmiddleware.Collector // cached auto-wired HTTP collector (created once, shared across listeners)
+	shutdownMet        *shutdownMetrics            // nil only when provider is nil
+	shutdownMetricsErr error                       // non-nil when metric registration failed in New
+
+	// --- run state ---
+	runOnce sync.Once
 
 	// configWatcherFactory creates a config watcher. Defaults to
 	// config.NewWatcher. Override per-instance in tests to inject failures
 	// without mutating package-level state (safe for parallel tests).
 	configWatcherFactory func(string, ...config.WatcherOption) (*config.Watcher, error)
+
+	// --- option-validation flags (fail-fast in phase0) ---
 
 	// circuitBreakerNil is set by WithCircuitBreaker when a nil Allower is
 	// passed. Checked at Run() to fail-fast instead of silently skipping CB.
@@ -622,11 +642,15 @@ type Bootstrap struct {
 	// auto-wired metrics collector. Defaults to "default" when empty.
 	assemblyID string
 
+	// --- kernel/cell Lifecycle (uber/fx-style start/stop) ---
+
 	// lifecycle fields wired by WithLifecycle* options.
 	lifecycle                    Lifecycle
 	lifecycleDefaultStartTimeout time.Duration
 	lifecycleDefaultStopTimeout  time.Duration
 	lifecycleRegistrars          []func(Lifecycle) // accumulated by WithLifecycle
+
+	// --- managed resources (LIFO teardown) ---
 
 	// managedResources holds resources registered via WithManagedResource.
 	// Each resource is expanded into health checkers, workers, and LIFO teardowns
@@ -645,6 +669,8 @@ type Bootstrap struct {
 	// resource registration.
 	managedResourceNil bool
 
+	// --- declarative listeners + route groups (PR-A14b) ---
+
 	// listenerConfigs holds the PR-A14b declarative listener registrations.
 	// Keyed by ListenerRef to deduplicate declarations.
 	// Initialized lazily by the first WithListener option.
@@ -655,9 +681,11 @@ type Bootstrap struct {
 	// CORR-02: doc says "duplicate ref is a phase0 error" — now enforced.
 	duplicateListenerRefs []cell.ListenerRef
 
-	// healthMetricsHandler is an optional http.Handler to mount at /metrics
-	// on the HealthListener. Set via WithHealthMetricsHandler.
-	healthMetricsHandler http.Handler
+	// healthRouteGroupOpts accumulates HealthRouteGroupOption values from
+	// WithHealthRoutes calls. phase5 passes them straight to HealthRouteGroups.
+	healthRouteGroupOpts []HealthRouteGroupOption
+
+	// --- tracing + error redaction ---
 
 	// wrapperTracer is the Tracer supplied via WithTracer. It is threaded into
 	// router.WithTracer (HTTP) and ContractTracingMiddleware (consumer) at

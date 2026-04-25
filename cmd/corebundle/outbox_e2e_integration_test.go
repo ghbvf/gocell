@@ -230,14 +230,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 	addr := ln.Addr().String()
 	baseURL := "http://" + addr
 
-	require.Eventually(t, func() bool {
-		resp, err := http.Get(fmt.Sprintf("%s/healthz", baseURL))
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 10*time.Second, 100*time.Millisecond, "HTTP server must become ready")
+	waitForHealthy(t, addr)
 
 	// --- Step 7: Drive HTTP requests ---
 	// Read bootstrap credentials from the credential file, then change password

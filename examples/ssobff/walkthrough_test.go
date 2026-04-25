@@ -148,6 +148,27 @@ func credentialFromFile(path string) (username, password string, err error) {
 //
 // The capturing slog handler is threaded through so the test can assert that
 // no plaintext password appears in any log record (PR#172 F1 regression gate).
+// mountAllRouteGroups walks each cell's RouteGroups and mounts them on the
+// test router. The walkthrough server uses a single Router (one process,
+// httptest.NewServer) regardless of the production three-listener split, so
+// RouteGroups targeting any listener are flattened onto the same router.
+type routeGroupContributor interface {
+	RouteGroups() []cell.RouteGroup
+}
+
+func mountAllRouteGroups(r *router.Router, contribs ...routeGroupContributor) {
+	for _, c := range contribs {
+		for _, rg := range c.RouteGroups() {
+			rg := rg
+			if rg.Prefix == "" {
+				rg.Register(r)
+				continue
+			}
+			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
+		}
+	}
+}
+
 func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturingHandler) (*httptest.Server, func()) {
 	t.Helper()
 
@@ -228,15 +249,18 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 		}
 	}
 
-	// F3: public routes (login, refresh) and PasswordResetExempt routes
-	// (change-password, logout) are declared via auth.Mount inside accesscore's
-	// RegisterRoutes. FinalizeAuth compiles them into the router's auth predicates.
+	// PR-A14b: public routes (login, refresh) and PasswordResetExempt routes
+	// (change-password, logout) are declared via auth.Mount inside each cell's
+	// RouteGroups callback. FinalizeAuth compiles them into the router's auth
+	// predicates. The walkthrough uses a single test router (httptest.NewServer
+	// is one process), so RouteGroups intended for InternalListener are mounted
+	// here too — auth.Mount(Public:true) on /internal paths still works because
+	// the matcher fires before AuthMiddleware and the test never exercises a
+	// JWT-only internal route.
 	r := router.New(
 		router.WithAuthMiddleware(ac.TokenVerifier()),
 	)
-	ac.RegisterRoutes(r)
-	auc.RegisterRoutes(r)
-	cc.RegisterRoutes(r)
+	mountAllRouteGroups(r, ac, auc, cc)
 	if err := r.FinalizeAuth(); err != nil {
 		panic(err)
 	}

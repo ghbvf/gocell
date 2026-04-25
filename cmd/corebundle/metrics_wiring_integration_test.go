@@ -62,14 +62,7 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 	healthAddr := healthLn.Addr().String()
 
 	// Wait until the health listener is healthy before firing measurement requests.
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + healthAddr + "/healthz") //nolint:noctx
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 5*time.Second, 50*time.Millisecond, "bootstrap must become healthy before R2 assertions")
+	waitForHealthy(t, healthAddr)
 
 	// Fire a request to the primary listener — this traverses outerMux which
 	// includes the Metrics middleware wired by autoWireHTTPMetricsCollector. The

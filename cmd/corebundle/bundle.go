@@ -71,12 +71,23 @@ func defaultRuntimeOptions(
 	// accesscore post-Init (lazy on first request, fail-closed).
 	// Internal listener: PolicyServiceToken from InternalGuard (nil → PolicyNone
 	// in dev mode where GOCELL_SERVICE_SECRET is unset).
-	// Health listener: metricsHandler registered via HealthRouteGroups variadic;
-	// no auth on /healthz and /readyz; /metrics left open (HealthRouteGroups
-	// uses Public:true which is a no-op on the HealthListener's mux).
+	// Health listener: framework-owned /healthz, /readyz, /metrics route groups;
+	// when shared.VerboseToken is set, PolicyVerboseToken is attached to the
+	// /readyz group so verbose responses require a bearer token.
 	//
 	// ref: go-kratos/kratos app.go — per-server option pattern.
 	internalPolicy := buildInternalPolicy(shared.InternalGuard)
+
+	healthRouteOpts := []bootstrap.HealthRouteGroupOption{
+		bootstrap.WithMetricsHandler(metricsHandler),
+	}
+	if shared.VerboseToken != "" {
+		healthRouteOpts = append(healthRouteOpts,
+			bootstrap.WithReadyzPolicy(
+				bootstrap.PolicyVerboseToken("X-Readyz-Token", shared.VerboseToken),
+			),
+		)
+	}
 
 	opts := []bootstrap.Option{
 		bootstrap.WithAssembly(asm),
@@ -84,7 +95,7 @@ func defaultRuntimeOptions(
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
 		bootstrap.WithAdapterInfo(adapterInfo),
-		bootstrap.WithHealthMetricsHandler(metricsHandler),
+		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
 		// Discover JWT verifier from the assembly. This option sets authDiscovery=true
 		// so the primary listener's JWT auth middleware is wired via
@@ -108,9 +119,6 @@ func defaultRuntimeOptions(
 	// Tests inject their own HealthListener via extra bootstrap.WithListener options.
 	if shared.HealthHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, cell.Policy{}))
-	}
-	if shared.VerboseToken != "" {
-		opts = append(opts, bootstrap.WithVerboseToken(shared.VerboseToken))
 	}
 	return opts
 }

@@ -187,6 +187,22 @@ func WithPublicPathPrefix(prefix string) Option {
 	}
 }
 
+// WithSuppressNoAuthVerifierWarn silences the FinalizeAuth slog.Warn that
+// fires when auth route metas are declared on a router with no AuthMiddleware
+// installed.
+//
+// Intended for routers that intentionally serve auth-declared routes without
+// a JWT verifier — typically the HealthListener (whose framework probes use
+// auth.Mount with Public:true) and the InternalListener (which gates traffic
+// with mTLS or PolicyServiceToken instead of JWT). Without this opt-out the
+// router emits a Warn at every production startup, drowning operators in
+// alert noise. R2-11.
+func WithSuppressNoAuthVerifierWarn() Option {
+	return func(r *Router) {
+		r.suppressNoVerifierWarn = true
+	}
+}
+
 // Router wraps a single chi.Mux root for ONE physical listener.
 // The observability middleware chain is baked in at construction time, and
 // the listener's default Policy is applied as an inner layer before any
@@ -228,6 +244,14 @@ type Router struct {
 	derivedHint                string
 
 	policyCoverageWhitelist []string
+
+	// suppressNoVerifierWarn silences the FinalizeAuth slog.Warn that fires when
+	// auth route metas are declared on a router with no AuthMiddleware installed.
+	// Set by SuppressNoAuthVerifierWarn for routers that intentionally run
+	// without a JWT verifier (HealthListener, InternalListener with mTLS or
+	// service-token gates) so their startup does not produce false alarms.
+	// R2-11 ops noise fix.
+	suppressNoVerifierWarn bool
 }
 
 // internalPathPrefix marks URL paths that belong on the internal listener.
@@ -533,7 +557,7 @@ func (r *Router) FinalizeAuth() error {
 		}
 		r.deriveHint()
 
-		if r.authVerifier == nil {
+		if r.authVerifier == nil && !r.suppressNoVerifierWarn {
 			r.warnNoAuthVerifier(partitioned)
 		}
 	}

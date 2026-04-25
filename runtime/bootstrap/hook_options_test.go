@@ -5,7 +5,6 @@ import (
 	"context"
 	"log/slog"
 	"net"
-	"net/http"
 	"strings"
 	"testing"
 	"time"
@@ -108,14 +107,7 @@ func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	// Wait for server to become ready.
-	require.Eventually(t, func() bool {
-		resp, err := http.Get("http://" + ln.Addr().String() + "/healthz")
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond)
+	waitForHealthy(t, ln.Addr().String())
 
 	cancel()
 	select {
