@@ -59,10 +59,12 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 // Bootstrap's listenerConfigs map. Registering the same ref twice is a
 // phase0 error (duplicate listener declaration).
 //
-// authChain is the ordered slice of ListenerAuth plans applied to the
-// listener's root mux. Individual RouteGroups may override this with a
-// group-level Auth plan. A nil or empty chain means no listener-level auth
-// middleware; each route must then declare its own auth via auth.Mount.
+// authChain is the ordered slice of ListenerAuth plans applied uniformly to
+// every route mounted on this listener. RouteGroups inherit this chain — there
+// is no group-level override (PR269 round-3: cells needing a different scheme
+// must declare their routes on a different listener). A nil or empty chain
+// means no listener-level auth middleware; each route must then declare its
+// own auth-related guards via auth.Mount (Public, PasswordResetExempt, etc.).
 // Pass cell.AuthNone{} for an explicit no-auth declaration (e.g. HealthListener
 // behind a Kubernetes probe path).
 //

@@ -8,9 +8,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ### Changed (Breaking) — PR269 round-3 AUTH-POLICY-PLAN-CONSOLIDATE
 
-Auth scheme is exclusively a **listener-scope** concern. The PR262 dual-承载点
-model (listener `authChain` + RouteGroup `Auth`) has been removed in favour of a
-single承载点 — listener — eliminating four review findings (F4 ambiguous
+Auth scheme is exclusively a **listener-scope** concern. The PR262 dual-anchor
+model (listener `authChain` + RouteGroup `Auth`) has been removed in favour of
+a single anchor — the listener — eliminating four review findings (F4 ambiguous
 override semantics, F5 HMAC key strength bypass, F6 inverted middleware order,
 S1 group Auth invisible to phase5 validation) at their root cause.
 

@@ -20,7 +20,13 @@ import (
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
-const msgInvalidServiceTokenFormat = "invalid service token format"
+const (
+	msgInvalidServiceTokenFormat = "invalid service token format"
+	// msgInternalServerError is the canonical client-visible 5xx message, kept
+	// in lockstep with httputil.WriteError's 5xx mask so probes/tests assert
+	// against a single string.
+	msgInternalServerError = "internal server error"
+)
 
 // WithServiceTokenLogger sets the logger for ServiceTokenMiddleware.
 func WithServiceTokenLogger(l *slog.Logger) ServiceTokenOption {
@@ -197,7 +203,7 @@ func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) f
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				cfg.metrics.recordServiceVerify("failure", "internal")
 				cfg.logger.Error("service token middleware called with nil key ring")
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
 			})
 		}
 	}
@@ -215,7 +221,7 @@ func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) f
 				cfg.logger.Error("service token middleware: HMAC ring secret shorter than minimum",
 					slog.Int("got_bytes", shortLen),
 					slog.Int("min_bytes", MinHMACKeyBytes))
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+				httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
 			})
 		}
 	}
@@ -301,7 +307,7 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 	if errors.As(err, &ec) && ec.Cause != nil {
 		cfg.metrics.recordServiceVerify("failure", "nonce_store_error")
 		cfg.logger.Error("nonce store check failed", slog.Any("error", ec.Cause))
-		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", "internal server error")
+		httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
 		return
 	}
 

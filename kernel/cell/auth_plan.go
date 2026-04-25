@@ -77,7 +77,11 @@ type AuthNone struct{}
 
 func (AuthNone) authPlanKind() AuthKind { return AuthKindNone }
 func (AuthNone) Describe() string       { return "none" }
-func (AuthNone) listenerAuthOK()        {}
+
+// listenerAuthOK is the empty seal marker — its mere presence makes AuthNone
+// satisfy ListenerAuth at compile time. The unexported method prevents external
+// packages from implementing ListenerAuth, closing the enumeration.
+func (AuthNone) listenerAuthOK() {}
 
 // Compile-time assertion.
 var _ ListenerAuth = AuthNone{}
@@ -107,7 +111,9 @@ func NewAuthJWT(v IntentTokenVerifier) AuthJWT {
 
 func (AuthJWT) authPlanKind() AuthKind { return AuthKindJWT }
 func (AuthJWT) Describe() string       { return "jwt" }
-func (AuthJWT) listenerAuthOK()        {}
+
+// listenerAuthOK seals the ListenerAuth interface (see AuthNone.listenerAuthOK).
+func (AuthJWT) listenerAuthOK() {}
 
 // Compile-time assertion.
 var _ ListenerAuth = AuthJWT{}
@@ -165,7 +171,9 @@ func (AuthJWTFromAssembly) authPlanKind() AuthKind { return AuthKindJWTFromAssem
 // filter on auth=jwt match both AuthJWT and AuthJWTFromAssembly paths
 // consistently. Both ultimately install the same JWT verifier mechanism.
 func (AuthJWTFromAssembly) Describe() string { return "jwt" }
-func (AuthJWTFromAssembly) listenerAuthOK()  {}
+
+// listenerAuthOK seals the ListenerAuth interface (see AuthNone.listenerAuthOK).
+func (AuthJWTFromAssembly) listenerAuthOK() {}
 
 // ResolvedVerifier returns the verifier once it has been discovered by phase4.
 // Returns nil before SetResolved has been called.
@@ -213,7 +221,9 @@ type AuthMTLS struct{}
 
 func (AuthMTLS) authPlanKind() AuthKind { return AuthKindMTLS }
 func (AuthMTLS) Describe() string       { return "mtls" }
-func (AuthMTLS) listenerAuthOK()        {}
+
+// listenerAuthOK seals the ListenerAuth interface (see AuthNone.listenerAuthOK).
+func (AuthMTLS) listenerAuthOK() {}
 
 // Compile-time assertion.
 var _ ListenerAuth = AuthMTLS{}
@@ -252,7 +262,9 @@ func NewAuthServiceToken(store NonceStore, ring HMACKeyring) AuthServiceToken {
 
 func (AuthServiceToken) authPlanKind() AuthKind { return AuthKindServiceToken }
 func (AuthServiceToken) Describe() string       { return "service-token" }
-func (AuthServiceToken) listenerAuthOK()        {}
+
+// listenerAuthOK seals the ListenerAuth interface (see AuthNone.listenerAuthOK).
+func (AuthServiceToken) listenerAuthOK() {}
 
 // Compile-time assertion.
 var _ ListenerAuth = AuthServiceToken{}

@@ -243,6 +243,19 @@ func TestChainProtectsRoutes(t *testing.T) {
 			chain: []cell.ListenerAuth{cell.NewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
 			want:  true,
 		},
+		{
+			// AuthNone before a protective plan must not short-circuit to false.
+			name:  "mixed_none_then_mtls_protected",
+			chain: []cell.ListenerAuth{cell.AuthNone{}, cell.AuthMTLS{}},
+			want:  true,
+		},
+		{
+			// Multi-protective chain (mTLS outer + HMAC inner) is the
+			// canonical InternalListener configuration.
+			name:  "mixed_mtls_plus_service_token_protected",
+			chain: []cell.ListenerAuth{cell.AuthMTLS{}, cell.NewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			want:  true,
+		},
 	}
 
 	for _, tc := range tests {

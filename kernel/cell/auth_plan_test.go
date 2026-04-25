@@ -86,7 +86,7 @@ func TestAuthPlan_AuthKind(t *testing.T) {
 func TestNewAuthJWT_NilPanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("expected panic for nil verifier, got none")
 		}
 	}()
@@ -96,7 +96,7 @@ func TestNewAuthJWT_NilPanics(t *testing.T) {
 func TestNewAuthJWTFromAssembly_NilPanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("expected panic for nil assembly, got none")
 		}
 	}()
@@ -106,7 +106,7 @@ func TestNewAuthJWTFromAssembly_NilPanics(t *testing.T) {
 func TestNewAuthServiceToken_NilStorePanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("expected panic for nil store, got none")
 		}
 	}()
@@ -116,7 +116,7 @@ func TestNewAuthServiceToken_NilStorePanics(t *testing.T) {
 func TestNewAuthServiceToken_NilRingPanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
-		if r := recover(); r == nil {
+		if recover() == nil {
 			t.Error("expected panic for nil ring, got none")
 		}
 	}()
@@ -141,8 +141,10 @@ func TestNewAuthServiceToken_RejectsShortKey(t *testing.T) {
 		if !ok {
 			t.Fatalf("panic value is not string: %T %v", r, r)
 		}
-		if !strings.Contains(msg, "MinHMACKeyBytes") && !strings.Contains(msg, "minimum is 32") {
-			t.Errorf("panic message must mention MinHMACKeyBytes / minimum=32: %q", msg)
+		// Panic message format (auth_plan.go::NewAuthServiceToken):
+		//   "cell: NewAuthServiceToken HMAC ring.Current() returned 31 bytes, minimum is 32 (NIST SP 800-107)"
+		if !strings.Contains(msg, "minimum is 32") {
+			t.Errorf("panic message must mention 'minimum is 32': %q", msg)
 		}
 	}()
 	// Pre-condition: stub returns 31 bytes (one short of MinHMACKeyBytes=32).

@@ -103,12 +103,13 @@ func (b *Bootstrap) runAuthPlanValidateHooks() error {
 			if err != nil {
 				return fmt.Errorf("bootstrap: listener %q: %w", ref.String(), err)
 			}
-			// Write back the resolved verifier into the chain element's atomic.Pointer.
-			// p was already extracted via type assertion above; SetResolved writes
-			// through the internal atomic.Pointer which is shared with the original.
+			// SetResolved writes through the plan's internal *atomic.Pointer,
+			// which is shared by every value-copy of this AuthJWTFromAssembly
+			// (the pointer is set once at NewAuthJWTFromAssembly time). All
+			// later reads via plan.ResolvedVerifier() — including from inside
+			// applyListenerAuthChain — observe the new value without any
+			// listenerConfigs map write-back.
 			p.SetResolved(v)
-			// Also update cfg so subsequent reads see the resolved verifier.
-			b.listenerConfigs[ref] = cfg
 		}
 	}
 	return nil
