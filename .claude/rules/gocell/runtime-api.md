@@ -85,7 +85,24 @@ bootstrap.New(
 | `cell.NewAuthJWTFromAssembly(asm)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
 | `cell.NewAuthServiceToken(store, ring)` | HMAC-SHA256 service token | InternalListener |
 | `cell.AuthMTLS{}` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
-| `nil` | 无验证 | HealthListener（loopback 隔离） |
+| `nil` | 无验证（等同于 `cell.AuthNone{}`；推荐 nil 减少样板） | HealthListener（loopback 隔离） |
+
+**多 plan chain 示例**：
+
+```go
+// mTLS + service-token 双层守护（外层 transport 证书验证 + 内层 HMAC token 防重放）
+bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
+    []cell.ListenerAuth{
+        cell.AuthMTLS{},                                // 外层：peer cert presence check
+        cell.NewAuthServiceToken(nonceStore, ring),     // 内层：HMAC-SHA256 + replay guard
+    },
+    bootstrap.WithListenerTLS(tlsCfg), // ClientAuth=RequireAndVerifyClientCert + ClientCAs required
+)
+```
+
+**chain 顺序语义**：当 chain 中同时包含 AuthJWT 和非 JWT plan 时，AuthJWT 必须在第 0 位（phase0 校验）。
+运行时执行顺序是非 JWT guard（mTLS / ServiceToken）先作为外层运行，然后 JWT 作为最内层 auth 检查。
+声明顺序与运行时执行顺序相反；这是有意为之 — 外层 transport guard 在 JWT 密码学校验之前运行。
 
 `cell.AuthVerboseToken` 仅实现 `GroupAuth`（非 `ListenerAuth`），用于 RouteGroup 级别：
 

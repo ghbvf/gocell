@@ -66,6 +66,13 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 // Pass cell.AuthNone{} for an explicit no-auth declaration (e.g. HealthListener
 // behind a Kubernetes probe path).
 //
+// authChain semantics: when chain contains both AuthJWT and non-JWT plans,
+// AuthJWT must be at position 0 (validated at phase0). Runtime execution
+// order is non-JWT guards (mTLS / ServiceToken) first as outer layer, then
+// JWT as the innermost auth check. Declared order is opposite to runtime
+// execution order; this is intentional — outer transport guards run before
+// the JWT cryptographic check.
+//
 // ref: go-kratos/kratos transport/http/server.go — options applied before server start.
 func WithListener(ref cell.ListenerRef, addr string, authChain []cell.ListenerAuth, opts ...ListenerOption) Option {
 	return func(b *Bootstrap) {

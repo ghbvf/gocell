@@ -30,6 +30,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 - Hard break: no migration shim, no deprecated aliases.
   `tools/archtest/auth_plan_test.go` (AUTH-PLAN-01..04) guards against regression.
 
+- **BREAKING (logging)**: startup log field renamed from `"policy"` to `"auth"` on
+  `bootstrap: HTTP listener bound`. Update your dashboard / alert rules that
+  filter on `policy=jwt|mtls|...` to filter on `auth=jwt|mtls|...` instead.
+  Multi-plan chains render as "+"-joined kinds (e.g. `"mtls+service-token"`).
+  `AuthJWTFromAssembly.Describe()` now returns `"jwt"` (same as `AuthJWT`) so
+  both paths appear under `auth=jwt` in observability.
+
 ### Changed (Breaking) — PR-A35 READYZ-POLISH
 
 - **`GOCELL_READYZ_VERBOSE_TOKEN` is now required in every adapter mode.**

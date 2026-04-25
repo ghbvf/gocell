@@ -191,7 +191,7 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
                 auth.Mount(mux, auth.Route{
                     Contract: specGetResource, // wrapper.ContractSpec — Method+Path+Kind=http
                     Handler:  http.HandlerFunc(c.handleGet),
-                    Policy:   auth.Authenticated(),
+                    Policy:   auth.Authenticated(), // route-level auth.Policy — distinct from listener-level cell.ListenerAuth
                 })
             },
         },
