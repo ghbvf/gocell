@@ -28,6 +28,8 @@ import (
 // ASCII-identifier scope).
 var pathPlaceholderRe = regexp.MustCompile(`\{([A-Za-z_][A-Za-z0-9_]*)\}`)
 
+const codeFMT24 = "FMT-24"
+
 // Package-level lookup maps for validation rules, avoiding per-call allocation.
 var (
 	validLifecycles = map[string]bool{
@@ -102,7 +104,7 @@ func (v *Validator) validateFMT24() []ValidationResult {
 				message = fmt.Sprintf("journey %q lifecycle is required (must be active or experimental)", j.ID)
 			}
 			results = append(results, v.newResult(
-				"FMT-24", SeverityError, issueType,
+				codeFMT24, SeverityError, issueType,
 				file,
 				"lifecycle",
 				message,
@@ -125,7 +127,7 @@ func (v *Validator) validatePassCriterionFMT24(
 	modeField := fmt.Sprintf("passCriteria[%d].mode", i)
 	if !validPassCriterionModes[pc.Mode] {
 		return []ValidationResult{v.newResult(
-			"FMT-24", SeverityError, IssueInvalid,
+			codeFMT24, SeverityError, IssueInvalid,
 			file,
 			modeField,
 			fmt.Sprintf("journey %q passCriteria[%d].mode %q is not valid (must be auto or manual)", j.ID, i, pc.Mode),
@@ -133,7 +135,7 @@ func (v *Validator) validatePassCriterionFMT24(
 	}
 	if pc.Mode == "auto" && strings.TrimSpace(pc.CheckRef) == "" {
 		return []ValidationResult{v.newResult(
-			"FMT-24", SeverityError, IssueRequired,
+			codeFMT24, SeverityError, IssueRequired,
 			file,
 			fmt.Sprintf("passCriteria[%d].checkRef", i),
 			fmt.Sprintf("journey %q auto passCriteria[%d] requires checkRef", j.ID, i),
@@ -141,7 +143,7 @@ func (v *Validator) validatePassCriterionFMT24(
 	}
 	if pc.Mode == "manual" && strings.TrimSpace(pc.CheckRef) != "" {
 		return []ValidationResult{v.newResult(
-			"FMT-24", SeverityError, IssueForbidden,
+			codeFMT24, SeverityError, IssueForbidden,
 			file,
 			fmt.Sprintf("passCriteria[%d].checkRef", i),
 			fmt.Sprintf("journey %q manual passCriteria[%d] must not declare checkRef", j.ID, i),
