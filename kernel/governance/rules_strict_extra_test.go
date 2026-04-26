@@ -839,12 +839,12 @@ func TestScanSchemaForStrictMissing_Basic(t *testing.T) {
 	assert.Equal(t, []string{"$"}, paths)
 }
 
-// --- FMT-24 (HTTP input constraint: minLength/maxLength on strings, minimum/maximum on integers) ---
+// --- FMT-25 (HTTP input constraint: minLength/maxLength on strings, minimum/maximum on integers) ---
 
-// fmt24WriteSchema is a test helper that writes a JSON schema string to a
+// fmt25WriteSchema is a test helper that writes a JSON schema string to a
 // contract directory and returns the absolute schema path. Encapsulates the
-// repeated TempDir + MkdirAll + WriteFile dance used across FMT-24 tests.
-func fmt24WriteSchema(t *testing.T, dir, contractRel, body string) string {
+// repeated TempDir + MkdirAll + WriteFile dance used across FMT-25 tests.
+func fmt25WriteSchema(t *testing.T, dir, contractRel, body string) string {
 	t.Helper()
 	full := filepath.Join(dir, contractRel)
 	require.NoError(t, os.MkdirAll(full, 0o755))
@@ -853,10 +853,10 @@ func fmt24WriteSchema(t *testing.T, dir, contractRel, body string) string {
 	return p
 }
 
-// fmt24Project builds a ProjectMeta containing one HTTP contract with the
+// fmt25Project builds a ProjectMeta containing one HTTP contract with the
 // given request schema reference. queryParams / pathParams are optional —
-// pass nil to omit. Used by every FMT-24 schema-driven test below.
-func fmt24Project(contractID, contractDir string, queryParams, pathParams map[string]contracts.ParamSchema) *metadata.ProjectMeta {
+// pass nil to omit. Used by every FMT-25 schema-driven test below.
+func fmt25Project(contractID, contractDir string, queryParams, pathParams map[string]contracts.ParamSchema) *metadata.ProjectMeta {
 	cm := &metadata.ContractMeta{
 		ID:        contractID,
 		Kind:      "http",
@@ -869,10 +869,14 @@ func fmt24Project(contractID, contractDir string, queryParams, pathParams map[st
 		File: contractDir + "/contract.yaml",
 	}
 	if queryParams != nil || pathParams != nil {
+		path := "/x"
+		for _, name := range sortedParamKeys(pathParams) {
+			path += "/{" + name + "}"
+		}
 		cm.Endpoints = metadata.EndpointsMeta{
 			HTTP: &metadata.HTTPTransportMeta{
 				Method:        "GET",
-				Path:          "/x",
+				Path:          path,
 				PathParams:    pathParams,
 				QueryParams:   queryParams,
 				SuccessStatus: 200,
@@ -889,9 +893,9 @@ func fmt24Project(contractID, contractDir string, queryParams, pathParams map[st
 	}
 }
 
-// TestFMT24_RequestStringMissingMinLength verifies a violation fires when a
+// TestFMT25_RequestStringMissingMinLength verifies a violation fires when a
 // string field in request.schema.json lacks minLength.
-func TestFMT24_RequestStringMissingMinLength(t *testing.T) {
+func TestFMT25_RequestStringMissingMinLength(t *testing.T) {
 	dir := t.TempDir()
 	body := `{
 		"type": "object",
@@ -900,21 +904,21 @@ func TestFMT24_RequestStringMissingMinLength(t *testing.T) {
 			"username": {"type": "string", "maxLength": 128}
 		}
 	}`
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
 
 	v := NewValidator(pm, dir)
 	results := v.Validate()
-	matches := findByCode(results, "FMT-24")
+	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1, "expected 1 violation for username missing minLength, got %d: %v", len(matches), matches)
 	assert.Equal(t, "$.username", matches[0].Field)
 	assert.Equal(t, SeverityError, matches[0].Severity)
 	assert.Contains(t, matches[0].Message, "minLength")
 }
 
-// TestFMT24_RequestStringMissingMaxLength verifies a violation fires when a
+// TestFMT25_RequestStringMissingMaxLength verifies a violation fires when a
 // string field lacks maxLength (even if minLength is set).
-func TestFMT24_RequestStringMissingMaxLength(t *testing.T) {
+func TestFMT25_RequestStringMissingMaxLength(t *testing.T) {
 	dir := t.TempDir()
 	body := `{
 		"type": "object",
@@ -923,18 +927,18 @@ func TestFMT24_RequestStringMissingMaxLength(t *testing.T) {
 			"username": {"type": "string", "minLength": 1}
 		}
 	}`
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
+	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 1, "expected 1 violation for username missing maxLength")
 	assert.Contains(t, matches[0].Message, "maxLength")
 }
 
-// TestFMT24_RequestIntegerMissingMinimumMaximum verifies violations fire when
+// TestFMT25_RequestIntegerMissingMinimumMaximum verifies violations fire when
 // integer fields lack minimum or maximum.
-func TestFMT24_RequestIntegerMissingMinimumMaximum(t *testing.T) {
+func TestFMT25_RequestIntegerMissingMinimumMaximum(t *testing.T) {
 	dir := t.TempDir()
 	body := `{
 		"type": "object",
@@ -944,19 +948,19 @@ func TestFMT24_RequestIntegerMissingMinimumMaximum(t *testing.T) {
 			"page":    {"type": "integer"}
 		}
 	}`
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
+	matches := findByCode(results, "FMT-25")
 	// version: missing maximum (1 violation)
 	// page:    missing minimum + missing maximum (2 violations)
 	require.Len(t, matches, 3, "expected 3 violations, got %d: %v", len(matches), matches)
 }
 
-// TestFMT24_RequestNestedObjectStringConstraints verifies the walker recurses
+// TestFMT25_RequestNestedObjectStringConstraints verifies the walker recurses
 // into nested objects.
-func TestFMT24_RequestNestedObjectStringConstraints(t *testing.T) {
+func TestFMT25_RequestNestedObjectStringConstraints(t *testing.T) {
 	dir := t.TempDir()
 	body := `{
 		"type": "object",
@@ -971,11 +975,11 @@ func TestFMT24_RequestNestedObjectStringConstraints(t *testing.T) {
 			}
 		}
 	}`
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
+	matches := findByCode(results, "FMT-25")
 	// user.name missing both → 2 violations (one per missing facet)
 	require.Len(t, matches, 2)
 	for _, m := range matches {
@@ -983,9 +987,9 @@ func TestFMT24_RequestNestedObjectStringConstraints(t *testing.T) {
 	}
 }
 
-// TestFMT24_RequestArrayItemsStringConstraints verifies the walker recurses
+// TestFMT25_RequestArrayItemsStringConstraints verifies the walker recurses
 // into items of array properties.
-func TestFMT24_RequestArrayItemsStringConstraints(t *testing.T) {
+func TestFMT25_RequestArrayItemsStringConstraints(t *testing.T) {
 	dir := t.TempDir()
 	body := `{
 		"type": "object",
@@ -997,11 +1001,11 @@ func TestFMT24_RequestArrayItemsStringConstraints(t *testing.T) {
 			}
 		}
 	}`
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1", body)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
+	matches := findByCode(results, "FMT-25")
 	// tags.items missing minLength + maxLength → 2 violations at $.tags.items
 	require.Len(t, matches, 2)
 	for _, m := range matches {
@@ -1009,84 +1013,193 @@ func TestFMT24_RequestArrayItemsStringConstraints(t *testing.T) {
 	}
 }
 
-// TestFMT24_QueryParamsStringMissingConstraints verifies that
+// TestFMT25_RequestLocalRefStringConstraints verifies local $ref targets are
+// resolved at the referring field path.
+func TestFMT25_RequestLocalRefStringConstraints(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"name": {"$ref": "#/$defs/name"}
+		},
+		"$defs": {
+			"name": {"type": "string"}
+		}
+	}`
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 2)
+	for _, m := range matches {
+		assert.Equal(t, "$.name", m.Field)
+	}
+}
+
+// TestFMT25_RequestCombinatorStringConstraints verifies common composition
+// keywords are traversed instead of hiding unconstrained inputs.
+func TestFMT25_RequestCombinatorStringConstraints(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"name": {
+				"allOf": [
+					{"type": "string", "minLength": 1}
+				]
+			}
+		}
+	}`
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1)
+	assert.Equal(t, "$.name.allOf[0]", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "maxLength")
+}
+
+// TestFMT25_QueryParamsStringMissingConstraints verifies that
 // contract.yaml.queryParams string fields are also checked.
-func TestFMT24_QueryParamsStringMissingConstraints(t *testing.T) {
+func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
 	dir := t.TempDir()
 	// Provide a clean request schema so only the queryParams violation fires.
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1",
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
 		map[string]contracts.ParamSchema{
 			"cursor": {Type: "string"}, // missing minLength + maxLength
 		}, nil)
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
+	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2, "expected 2 violations for cursor missing both, got %d: %v", len(matches), matches)
-	for _, m := range matches {
-		assert.Contains(t, m.Field, "queryParams.cursor")
-	}
+	assert.Equal(t, "endpoints.http.queryParams.cursor.minLength", matches[0].Field)
+	assert.Equal(t, "endpoints.http.queryParams.cursor.maxLength", matches[1].Field)
 }
 
-// TestFMT24_QueryParamsIntegerMissingConstraints verifies that integer
+// TestFMT25_QueryParamsIntegerMissingConstraints verifies that integer
 // queryParams (e.g. limit) without minimum/maximum trigger violations.
-func TestFMT24_QueryParamsIntegerMissingConstraints(t *testing.T) {
+func TestFMT25_QueryParamsIntegerMissingConstraints(t *testing.T) {
 	dir := t.TempDir()
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1",
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
 		map[string]contracts.ParamSchema{
 			"limit": {Type: "integer"}, // missing minimum + maximum
 		}, nil)
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
+	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2)
-	for _, m := range matches {
-		assert.Contains(t, m.Field, "queryParams.limit")
-	}
+	assert.Equal(t, "endpoints.http.queryParams.limit.minimum", matches[0].Field)
+	assert.Equal(t, "endpoints.http.queryParams.limit.maximum", matches[1].Field)
 }
 
-// TestFMT24_PathParamsStringMissingConstraints verifies pathParams plain
+// TestFMT25_PathParamsStringMissingConstraints verifies pathParams plain
 // strings are checked.
-func TestFMT24_PathParamsStringMissingConstraints(t *testing.T) {
+func TestFMT25_PathParamsStringMissingConstraints(t *testing.T) {
 	dir := t.TempDir()
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1", nil,
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil,
 		map[string]contracts.ParamSchema{
 			"key": {Type: "string"}, // plain string, no format → must be checked
 		})
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
+	matches := findByCode(results, "FMT-25")
 	require.Len(t, matches, 2)
-	for _, m := range matches {
-		assert.Contains(t, m.Field, "pathParams.key")
-	}
+	assert.Equal(t, "endpoints.http.pathParams.key.minLength", matches[0].Field)
+	assert.Equal(t, "endpoints.http.pathParams.key.maxLength", matches[1].Field)
 }
 
-// TestFMT24_PathParamsUUIDFormatExempt verifies that pathParams with
+// TestFMT25_ParamFindingsUseLocatableMetadataPaths verifies param-side
+// findings use full YAML paths so CLI output can include line/column anchors.
+func TestFMT25_ParamFindingsUseLocatableMetadataPaths(t *testing.T) {
+	dir := t.TempDir()
+	contractRel := "contracts/http/test/v1"
+	fmt25WriteSchema(t, dir, contractRel, `{"type": "object", "additionalProperties": false}`)
+	require.NoError(t, os.WriteFile(filepath.Join(dir, contractRel, "contract.yaml"), []byte(`id: http.test.v1
+kind: http
+ownerCell: testcell
+consistencyLevel: L1
+lifecycle: active
+endpoints:
+  server: testcell
+  clients: []
+  http:
+    method: GET
+    path: /api/v1/test/{key}
+    pathParams:
+      key:
+        type: string
+    queryParams:
+      cursor:
+        type: string
+        required: false
+    successStatus: 200
+    noContent: false
+schemaRefs:
+  request: request.schema.json
+`), 0o644))
+	pm, err := metadata.NewParser(dir).Parse()
+	require.NoError(t, err)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 4)
+	for _, m := range matches {
+		assert.NotZero(t, m.Line, "field %s should locate a YAML line", m.Field)
+		assert.NotZero(t, m.Column, "field %s should locate a YAML column", m.Field)
+	}
+	assert.Equal(t, "endpoints.http.queryParams.cursor.minLength", matches[0].Field)
+	assert.Equal(t, "endpoints.http.queryParams.cursor.maxLength", matches[1].Field)
+	assert.Equal(t, "endpoints.http.pathParams.key.minLength", matches[2].Field)
+	assert.Equal(t, "endpoints.http.pathParams.key.maxLength", matches[3].Field)
+}
+
+// TestFMT25_SkipsInvalidPathParams verifies FMT-25 does not add follow-on
+// facet noise for pathParams that FMT-13 already rejected.
+func TestFMT25_SkipsInvalidPathParams(t *testing.T) {
+	dir := t.TempDir()
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+		`{"type": "object", "additionalProperties": false}`)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil,
+		map[string]contracts.ParamSchema{
+			"ghost": {Type: "string"}, // no {ghost} placeholder in path
+		})
+	pm.Contracts["http.test.v1"].Endpoints.HTTP.Path = "/x"
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	assert.Empty(t, matches)
+}
+
+// TestFMT25_PathParamsUUIDFormatExempt verifies that pathParams with
 // format:"uuid" are exempted from minLength/maxLength enforcement (RFC 4122
 // fixes UUIDs at 36 characters; schema-level constraints would be redundant).
-func TestFMT24_PathParamsUUIDFormatExempt(t *testing.T) {
+func TestFMT25_PathParamsUUIDFormatExempt(t *testing.T) {
 	dir := t.TempDir()
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1",
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1", nil,
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil,
 		map[string]contracts.ParamSchema{
 			"id": {Type: "string", Format: "uuid"}, // exempt
 		})
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
-	assert.Empty(t, matches, "format:uuid pathParams must be exempt from FMT-24, got: %v", matches)
+	matches := findByCode(results, "FMT-25")
+	assert.Empty(t, matches, "format:uuid pathParams must be exempt from FMT-25, got: %v", matches)
 }
 
-// TestFMT24_CleanSchemaProducesNoViolations verifies that a fully-constrained
-// schema and a fully-constrained set of params produce zero FMT-24 violations.
-func TestFMT24_CleanSchemaProducesNoViolations(t *testing.T) {
+// TestFMT25_CleanSchemaProducesNoViolations verifies that a fully-constrained
+// schema and a fully-constrained set of params produce zero FMT-25 violations.
+func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 	dir := t.TempDir()
 	body := `{
 		"type": "object",
@@ -1096,11 +1209,11 @@ func TestFMT24_CleanSchemaProducesNoViolations(t *testing.T) {
 			"limit": {"type": "integer", "minimum": 1, "maximum": 500}
 		}
 	}`
-	fmt24WriteSchema(t, dir, "contracts/http/test/v1", body)
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
 	one := 1
 	twoFiftySix := 256
 	fiveHundred := 500
-	pm := fmt24Project("http.test.v1", "contracts/http/test/v1",
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
 		map[string]contracts.ParamSchema{
 			"cursor": {Type: "string", MinLength: &one, MaxLength: &twoFiftySix},
 			"limit":  {Type: "integer", Minimum: &one, Maximum: &fiveHundred},
@@ -1111,13 +1224,13 @@ func TestFMT24_CleanSchemaProducesNoViolations(t *testing.T) {
 		})
 
 	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-24")
-	assert.Empty(t, matches, "fully-constrained schema/params must produce no FMT-24, got: %v", matches)
+	matches := findByCode(results, "FMT-25")
+	assert.Empty(t, matches, "fully-constrained schema/params must produce no FMT-25, got: %v", matches)
 }
 
-// TestFMT24_NonHTTPContractIgnored verifies that non-HTTP contracts (event,
-// command, projection) are not scanned by FMT-24.
-func TestFMT24_NonHTTPContractIgnored(t *testing.T) {
+// TestFMT25_NonHTTPContractIgnored verifies that non-HTTP contracts (event,
+// command, projection) are not scanned by FMT-25.
+func TestFMT25_NonHTTPContractIgnored(t *testing.T) {
 	dir := t.TempDir()
 	pm := &metadata.ProjectMeta{
 		Cells:  map[string]*metadata.CellMeta{},
@@ -1141,6 +1254,6 @@ func TestFMT24_NonHTTPContractIgnored(t *testing.T) {
 
 	v := NewValidator(pm, dir)
 	results := v.Validate()
-	matches := findByCode(results, "FMT-24")
-	assert.Empty(t, matches, "non-HTTP contract must not be scanned by FMT-24")
+	matches := findByCode(results, "FMT-25")
+	assert.Empty(t, matches, "non-HTTP contract must not be scanned by FMT-25")
 }

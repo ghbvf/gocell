@@ -13,7 +13,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
-// Rule ID constants for FMT-20..FMT-24. Extracted so that each rule ID string
+// Rule ID constants for FMT-20..FMT-25. Extracted so that each rule ID string
 // is declared in exactly one place; Sonar code-smell rule S1192 (duplicate
 // string literals) no longer fires for these identifiers.
 const (
@@ -21,7 +21,7 @@ const (
 	ruleFMT21 = "FMT-21"
 	ruleFMT22 = "FMT-22"
 	ruleFMT23 = "FMT-23"
-	ruleFMT24 = "FMT-24"
+	ruleFMT25 = "FMT-25"
 )
 
 // --- FMT-20 (formerly FMT-RESPONSE-STRICT-01) ---
@@ -126,28 +126,116 @@ func walkSchemaObject(node map[string]any, path string, missing *[]string) {
 }
 
 // walkSchemaTreeDepth is the shared depth-guarded JSON-schema visitor used by
-// FMT-20 (additionalProperties) and FMT-24 (input constraints). It applies
-// `visit` at every node, then recurses into properties (for objects) and
-// items (for arrays). depth > 32 causes early return to prevent unbounded
-// recursion on pathological schemas.
+// FMT-20 (additionalProperties) and FMT-25 (input constraints). It applies
+// `visit` at every node, resolves local $ref targets, then recurses through
+// object properties, array items, patternProperties, and common composition
+// keywords. depth > 32 causes early return to prevent unbounded recursion on
+// pathological schemas.
 //
 // Note: visit is called at every node — branch on node["type"] inside visit
 // if a check applies only to objects/strings/integers etc.
 func walkSchemaTreeDepth(node map[string]any, path string, depth int, visit func(node map[string]any, path string)) {
+	walkSchemaTreeDepthRoot(node, node, path, depth, map[string]bool{}, visit)
+}
+
+func walkSchemaTreeDepthRoot(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
 	if depth > 32 {
 		return
 	}
 	visit(node, path)
-	if props, ok := node["properties"].(map[string]any); ok {
-		for key, val := range props {
-			if child, ok := val.(map[string]any); ok {
-				walkSchemaTreeDepth(child, path+"."+key, depth+1, visit)
+	if ref, ok := node["$ref"].(string); ok && !seenRefs[ref] {
+		if target, ok := resolveLocalSchemaRef(root, ref); ok {
+			seenRefs[ref] = true
+			walkSchemaTreeDepthRoot(root, target, path, depth+1, seenRefs, visit)
+			delete(seenRefs, ref)
+		}
+	}
+	walkSchemaNamedMapChildren(root, node, path, depth, seenRefs, visit)
+	walkSchemaNamedObjectChildren(root, node, path, depth, seenRefs, visit)
+	walkSchemaNamedArrayChildren(root, node, path, depth, seenRefs, visit)
+}
+
+func walkSchemaNamedMapChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+	for _, keyword := range []string{"properties", "patternProperties", "dependentSchemas"} {
+		children, ok := node[keyword].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range sortedAnyMapKeys(children) {
+			if child, ok := children[key].(map[string]any); ok {
+				childPath := path + "." + key
+				if keyword != "properties" {
+					childPath = path + "." + keyword + "." + key
+				}
+				walkSchemaTreeDepthRoot(root, child, childPath, depth+1, seenRefs, visit)
 			}
 		}
 	}
-	if items, ok := node["items"].(map[string]any); ok {
-		walkSchemaTreeDepth(items, path+".items", depth+1, visit)
+}
+
+func walkSchemaNamedObjectChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+	for _, keyword := range []string{
+		"items",
+		"additionalProperties",
+		"contains",
+		"propertyNames",
+		"not",
+		"if",
+		"then",
+		"else",
+		"unevaluatedProperties",
+	} {
+		if child, ok := node[keyword].(map[string]any); ok {
+			walkSchemaTreeDepthRoot(root, child, path+"."+keyword, depth+1, seenRefs, visit)
+		}
 	}
+}
+
+func walkSchemaNamedArrayChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+	for _, keyword := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
+		children, ok := node[keyword].([]any)
+		if !ok {
+			continue
+		}
+		for i, val := range children {
+			if child, ok := val.(map[string]any); ok {
+				walkSchemaTreeDepthRoot(root, child, fmt.Sprintf("%s.%s[%d]", path, keyword, i), depth+1, seenRefs, visit)
+			}
+		}
+	}
+}
+
+func sortedAnyMapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func resolveLocalSchemaRef(root map[string]any, ref string) (map[string]any, bool) {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil, false
+	}
+	var cur any = root
+	for _, part := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = obj[decodeJSONPointerToken(part)]
+		if !ok {
+			return nil, false
+		}
+	}
+	target, ok := cur.(map[string]any)
+	return target, ok
+}
+
+func decodeJSONPointerToken(s string) string {
+	s = strings.ReplaceAll(s, "~1", "/")
+	return strings.ReplaceAll(s, "~0", "~")
 }
 
 // checkAdditionalProperties emits a violation when the node has no
@@ -301,13 +389,14 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 	return results
 }
 
-// --- FMT-24 (input constraint enforcement) ---
+// --- FMT-25 (input constraint enforcement) ---
 
 // inputConstraintViolation captures a single missing-constraint finding from
 // either a request schema (path = JSON-pointer) or a contract.yaml param
-// (path = "queryParams.<name>" / "pathParams.<name>").
+// (path = "endpoints.http.queryParams.<name>.<facet>" /
+// "endpoints.http.pathParams.<name>.<facet>").
 type inputConstraintViolation struct {
-	location string // JSON pointer or "<paramKind>.<paramName>"
+	location string // JSON pointer or full metadata field path.
 	missing  string // "minLength" | "maxLength" | "minimum" | "maximum"
 }
 
@@ -323,7 +412,7 @@ type inputConstraintViolation struct {
 // Severity: Error, IssueRequired (missing facets fail the build; existing
 // declarations of explicit zero are accepted).
 //
-// Rule ID: FMT-24.
+// Rule ID: FMT-25.
 //
 // ref: OWASP API Security Top 10 — API4:2019 Lack of Resources & Rate Limiting
 // (input size bounds defend against DoS and overlong-payload attacks).
@@ -331,41 +420,66 @@ type inputConstraintViolation struct {
 func (v *Validator) validateFMTInputConstraint01() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if c.Kind != "http" {
-			continue
-		}
-		// Part A: request.schema.json (top-level only — response/error schemas
-		// are out of scope per parent plan §3 PR-V1-EVOLVE-ADR).
-		if c.SchemaRefs.Request != "" {
-			absPath := filepath.Join(v.root, c.Dir, c.SchemaRefs.Request)
-			missing, err := scanSchemaForInputConstraints(absPath)
-			if err != nil && !os.IsNotExist(err) {
-				// Parse/IO errors are definitive violations (fail-closed).
-				results = append(results, v.newResult(
-					ruleFMT24, SeverityError, IssueInvalid,
-					filepath.Join(c.Dir, c.SchemaRefs.Request), "$",
-					fmt.Sprintf("contract %q request schema %q failed to parse: %v",
-						c.ID, c.SchemaRefs.Request, err),
-				))
-			}
-			for _, viol := range missing {
-				results = append(results, v.newResult(
-					ruleFMT24, SeverityError, IssueRequired,
-					filepath.Join(c.Dir, c.SchemaRefs.Request), viol.location,
-					fmt.Sprintf("contract %q request schema field %s missing %s",
-						c.ID, viol.location, viol.missing),
-				))
-			}
-		}
-		// Part B + C: contract.yaml queryParams + pathParams.
-		if c.Endpoints.HTTP != nil {
-			results = append(results,
-				v.checkParamSchemaConstraints(c, c.Endpoints.HTTP.QueryParams, "queryParams")...)
-			results = append(results,
-				v.checkParamSchemaConstraints(c, c.Endpoints.HTTP.PathParams, "pathParams")...)
-		}
+		results = append(results, v.validateContractInputConstraints(c)...)
 	}
 	return results
+}
+
+func (v *Validator) validateContractInputConstraints(c *metadata.ContractMeta) []ValidationResult {
+	if c.Kind != "http" {
+		return nil
+	}
+	var results []ValidationResult
+	results = append(results, v.validateRequestSchemaInputConstraints(c)...)
+	results = append(results, v.validateParamInputConstraints(c)...)
+	return results
+}
+
+func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMeta) []ValidationResult {
+	if c.SchemaRefs.Request == "" {
+		return nil
+	}
+	schemaFile := filepath.Join(c.Dir, c.SchemaRefs.Request)
+	absPath := filepath.Join(v.root, schemaFile)
+	missing, err := scanSchemaForInputConstraints(absPath)
+	if err != nil && !os.IsNotExist(err) {
+		return []ValidationResult{v.newResult(
+			ruleFMT25, SeverityError, IssueInvalid,
+			schemaFile, "$",
+			fmt.Sprintf("contract %q request schema %q failed to parse: %v",
+				c.ID, c.SchemaRefs.Request, err),
+		)}
+	}
+	var results []ValidationResult
+	for _, viol := range missing {
+		results = append(results, v.newResult(
+			ruleFMT25, SeverityError, IssueRequired,
+			schemaFile, viol.location,
+			fmt.Sprintf("contract %q request schema field %s missing %s",
+				c.ID, viol.location, viol.missing),
+		))
+	}
+	return results
+}
+
+func (v *Validator) validateParamInputConstraints(c *metadata.ContractMeta) []ValidationResult {
+	if c.Endpoints.HTTP == nil {
+		return nil
+	}
+	h := c.Endpoints.HTTP
+	results := v.checkParamSchemaConstraints(c, h.QueryParams, "queryParams")
+	if v.pathParamsReadyForInputConstraints(c, h) {
+		results = append(results, v.checkParamSchemaConstraints(c, h.PathParams, "pathParams")...)
+	}
+	return results
+}
+
+func (v *Validator) pathParamsReadyForInputConstraints(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) bool {
+	file := contractFile(c)
+	if len(v.validateFMT13Path(c, h, file)) > 0 {
+		return false
+	}
+	return len(v.validateFMT13PathParams(c, h, file)) == 0
 }
 
 // scanSchemaForInputConstraints reads a JSON schema file and walks every node,
@@ -440,7 +554,8 @@ func (v *Validator) checkParamSchemaConstraints(c *metadata.ContractMeta, params
 
 	var results []ValidationResult
 	for _, name := range names {
-		results = append(results, v.checkSingleParamConstraints(c, params[name], paramKind+"."+name)...)
+		fieldBase := fmt.Sprintf("endpoints.http.%s.%s", paramKind, name)
+		results = append(results, v.checkSingleParamConstraints(c, params[name], fieldBase)...)
 	}
 	return results
 }
@@ -475,16 +590,17 @@ type missingFacet struct {
 }
 
 // emitMissingFacets returns one ValidationResult per missing facet.
-func (v *Validator) emitMissingFacets(c *metadata.ContractMeta, field string, facets []missingFacet) []ValidationResult {
+func (v *Validator) emitMissingFacets(c *metadata.ContractMeta, fieldBase string, facets []missingFacet) []ValidationResult {
 	var results []ValidationResult
 	for _, f := range facets {
 		if !f.missing {
 			continue
 		}
+		field := fieldBase + "." + f.name
 		results = append(results, v.newResult(
-			ruleFMT24, SeverityError, IssueRequired,
+			ruleFMT25, SeverityError, IssueRequired,
 			contractFile(c), field,
-			fmt.Sprintf("contract %q %s missing %s", c.ID, field, f.name),
+			fmt.Sprintf("contract %q %s missing %s", c.ID, fieldBase, f.name),
 		))
 	}
 	return results

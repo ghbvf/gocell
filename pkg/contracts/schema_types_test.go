@@ -157,7 +157,7 @@ func TestParamSchemaRequiredThreeStates(t *testing.T) {
 // TestParamSchemaConstraintsRoundTrip locks in YAML round-trip semantics for
 // the four new constraint fields (MinLength, MaxLength, Minimum, Maximum).
 // They are *int so omitted/zero/non-zero are three distinct states, mirroring
-// the three-state Required pattern (FMT-24 governance rule depends on the
+// the three-state Required pattern (FMT-25 governance rule depends on the
 // distinction between "no declaration" and "declared as zero").
 func TestParamSchemaConstraintsRoundTrip(t *testing.T) {
 	zero := 0

@@ -436,7 +436,7 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 	}}
 	handler, _ := setupContractHandlerWithIssuer(t, stubIssuer)
 
-	// Validate request schema. Passwords must satisfy minLength:8 / maxLength:72 (FMT-24 + bcrypt).
+	// Validate request schema. Passwords must satisfy minLength:8 / maxLength:72 (FMT-25 + bcrypt).
 	c.ValidateRequest(t, []byte(`{"oldPassword":"oldP@ss12","newPassword":"newP@ss12"}`))
 	c.MustRejectRequest(t, []byte(`{"oldPassword":"oldP@ss12"}`))                                   // missing newPassword
 	c.MustRejectRequest(t, []byte(`{"oldPassword":"old12345","newPassword":"new12345","extra":1}`)) // additionalProperties
@@ -484,7 +484,7 @@ func TestHttpAuthUserCreateV1_RequirePasswordResetField(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 
-	// requirePasswordReset is optional — should be accepted (password ≥ 8 chars per FMT-24).
+	// requirePasswordReset is optional — should be accepted (password ≥ 8 chars per FMT-25).
 	c.ValidateRequest(t, []byte(`{"username":"u","email":"u@u.com","password":"p1234567","requirePasswordReset":true}`))
 	// Without the optional field — also valid.
 	c.ValidateRequest(t, []byte(`{"username":"u","email":"u@u.com","password":"p1234567"}`))
