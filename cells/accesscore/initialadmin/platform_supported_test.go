@@ -1,4 +1,4 @@
-//go:build unix || windows
+//go:build linux || darwin || windows
 
 package initialadmin
 
@@ -10,5 +10,5 @@ import (
 
 func TestPlatformSupported_ReturnsNil(t *testing.T) {
 	assert.NoError(t, PlatformSupported(),
-		"unix/windows build must report platform supported (nil error)")
+		"linux/darwin/windows build must report platform supported (nil error)")
 }

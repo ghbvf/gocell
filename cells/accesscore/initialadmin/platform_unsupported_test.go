@@ -1,4 +1,4 @@
-//go:build !unix && !windows
+//go:build !linux && !darwin && !windows
 
 package initialadmin
 
@@ -14,7 +14,7 @@ import (
 
 func TestPlatformSupported_ReturnsErrcode(t *testing.T) {
 	err := PlatformSupported()
-	require.Error(t, err, "non-unix non-windows build must report platform unsupported")
+	require.Error(t, err, "non-linux non-darwin non-windows build must report platform unsupported")
 
 	var ec *errcode.Error
 	require.True(t, errors.As(err, &ec), "error must be *errcode.Error; got %T", err)

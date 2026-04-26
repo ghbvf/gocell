@@ -307,7 +307,7 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 		cfg.metrics.recordServiceVerify("failure", "nonce_store_full")
 		cfg.logger.Error("nonce store full; rejecting request",
 			slog.String("path", r.URL.Path))
-		httputil.WriteError(r.Context(), w, http.StatusServiceUnavailable, "ERR_INTERNAL", "service temporarily unavailable")
+		httputil.WriteError(r.Context(), w, http.StatusServiceUnavailable, string(errcode.ErrNonceStoreFull), "service temporarily unavailable")
 		return
 	}
 
