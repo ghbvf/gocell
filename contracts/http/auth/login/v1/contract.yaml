@@ -1,8 +1,10 @@
 id: http.auth.login.v1
 kind: http
 ownerCell: accesscore
-consistencyLevel: L1
+consistencyLevel: L2
 lifecycle: active
+triggers:
+  - event.session.created.v1
 endpoints:
   server: accesscore
   clients:

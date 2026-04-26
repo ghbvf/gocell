@@ -1,8 +1,10 @@
 id: http.auth.session.delete.v1
 kind: http
 ownerCell: accesscore
-consistencyLevel: L1
+consistencyLevel: L2
 lifecycle: active
+triggers:
+  - event.session.revoked.v1
 endpoints:
   server: accesscore
   clients:

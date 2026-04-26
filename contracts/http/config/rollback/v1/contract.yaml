@@ -3,6 +3,8 @@ kind: http
 ownerCell: configcore
 consistencyLevel: L2
 lifecycle: active
+triggers:
+  - event.config.rollback.v1
 endpoints:
   server: configcore
   clients:

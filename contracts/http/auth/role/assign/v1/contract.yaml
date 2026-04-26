@@ -1,8 +1,10 @@
 id: http.auth.role.assign.v1
 kind: http
 ownerCell: accesscore
-consistencyLevel: L0
+consistencyLevel: L2
 lifecycle: active
+triggers:
+  - event.role.assigned.v1
 endpoints:
   server: accesscore
   clients:

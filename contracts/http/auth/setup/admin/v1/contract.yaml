@@ -3,6 +3,8 @@ kind: http
 ownerCell: accesscore
 consistencyLevel: L2
 lifecycle: active
+triggers:
+  - event.user.created.v1
 endpoints:
   server: accesscore
   clients:

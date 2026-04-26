@@ -1,7 +1,7 @@
 id: http.audit.list.v1
 kind: http
 ownerCell: auditcore
-consistencyLevel: L2
+consistencyLevel: L0
 lifecycle: active
 endpoints:
   server: auditcore

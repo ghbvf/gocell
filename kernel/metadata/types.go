@@ -98,6 +98,7 @@ type ContractMeta struct {
 	OwnerCell         string         `yaml:"ownerCell"`
 	ConsistencyLevel  string         `yaml:"consistencyLevel"`
 	Lifecycle         string         `yaml:"lifecycle"` // draft|active|deprecated
+	Triggers          []string       `yaml:"triggers,omitempty"` // event topics emitted by this contract's handler (L2+)
 	Endpoints         EndpointsMeta  `yaml:"endpoints"`
 	SchemaRefs        SchemaRefsMeta `yaml:"schemaRefs,omitempty"`
 	Replayable        *bool          `yaml:"replayable,omitempty"`
