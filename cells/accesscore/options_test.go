@@ -7,9 +7,11 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/eventbus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -108,4 +110,40 @@ func TestInit_MissingJWTIssuerAndVerifier(t *testing.T) {
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "WithJWTIssuer")
 	assert.Contains(t, err.Error(), "WithJWTVerifier")
+}
+
+// TestHealthCheckers_WithDirectEmitter verifies that after Init with a
+// DirectEmitter-backed publisher, HealthCheckers returns both the
+// session-store checker and the outbox-failopen-rate checker.
+func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
+	c := NewAccessCore(
+		WithInMemoryDefaults(),
+		WithJWTIssuer(testIssuer),
+		WithJWTVerifier(testVerifier),
+		WithOutboxDeps(eventbus.New(), nil),
+		WithRefreshMetricsProvider(metrics.NopProvider{}),
+	)
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	require.NoError(t, c.Init(context.Background(), deps))
+
+	checkers := c.HealthCheckers()
+	require.Contains(t, checkers, "session-store", "session-store checker must be present")
+	const emitterKey = "outbox-failopen-rate.accesscore"
+	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
+}
+
+// TestHealthCheckers_WithNoopEmitter verifies that when the emitter does not
+// implement cell.HealthContributor (e.g. DiscardPublisher-backed emitter
+// after Init in demo mode with no metrics), only cell-owned checkers appear.
+func TestHealthCheckers_NoEmitterChecker(t *testing.T) {
+	// WithEmitter(nil) → emitter field stays nil → no HealthContributor
+	c := NewAccessCore(WithInMemoryDefaults())
+	// Do NOT Init — emitter is nil pre-Init; HealthCheckers must handle that.
+	checkers := c.HealthCheckers()
+	assert.Contains(t, checkers, "session-store", "session-store must still be present")
+	for k := range checkers {
+		assert.NotContains(t, k, "outbox-failopen-rate",
+			"nil emitter must not produce outbox checker: key=%s", k)
+	}
 }

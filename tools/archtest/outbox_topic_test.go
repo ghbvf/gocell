@@ -3,18 +3,15 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
-	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
 )
 
 const (
@@ -33,7 +30,7 @@ const (
 //
 // ref: kubernetes apiserver/pkg/audit — audit events default to Fail policy;
 // operators opt into Ignore per backend, not per event type.
-var outboxSecurityTopicPattern = regexp.MustCompile(`^(session|user|role|audit)\.`)
+var outboxSecurityTopicPattern = regexp.MustCompile(`^(event\.)?(session|user|role|audit)\.`)
 
 type outboxTopicViolation struct {
 	Rule    string
@@ -47,24 +44,24 @@ func (v outboxTopicViolation) String() string {
 }
 
 // TestSecurityTopicsDoNotOptInFailOpen enforces OUTBOX-TOPIC-FAILOPEN-01:
-// an outbox.Entry composite literal whose Topic or EventType string literal
+// an outbox.Entry composite literal whose Topic or EventType string constant
 // matches one of the security-sensitive prefixes (session.*, user.*, role.*,
-// audit.*) must not set FailurePolicy: outbox.FailurePolicyFailOpen.
+// audit.* and their event.* contract forms) must not set FailurePolicy:
+// outbox.FailurePolicyFailOpen.
 //
-// This guards the F9 per-entry failure policy contract: Cells default to
-// DirectPublishFailClosed; individual entries opt into FailOpen for
-// observational sinks. Security / audit-chain events must not opt in —
-// dropping them silently loses the audit invariant.
+// The scanner uses go/types TypesInfo to evaluate Topic/EventType field
+// expressions, covering BasicLit, same-package const Idents, and cross-package
+// SelectorExprs (e.g. dto.TopicSessionCreated). go/types' built-in constant
+// folding provides full intra-module const propagation without manual SSA.
 //
-// Scope: scans all non-test .go files under cells/** (both Cell top-level
-// packages and slices/internal service packages). Excludes _test.go files
-// so fixtures can exercise the negative path without tripping the rule.
+// Scope: scans all non-test .go files under cells/** via packages.Load.
 //
 // ref: kubernetes apiserver/pkg/audit Backend.FailurePolicy (Ignore/Fail)
-// — failure policy is per-event category, not per-sink.
-// ref: ThreeDotsLabs/watermill message/router/middleware/retry.go —
-// per-message disposition rather than publisher-level switch.
+// ref: ThreeDotsLabs/watermill message/router/middleware/retry.go
 func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode (loads ./cells/... module-wide, ~5-10s)")
+	}
 	root := findModuleRoot(t)
 
 	violations, err := checkOutboxTopicFailOpenRule(root)
@@ -78,78 +75,58 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 	}
 
 	assert.Empty(t, violations,
-		"security-sensitive topics (session.*, user.*, role.*, audit.*) must not "+
-			"set FailurePolicy: outbox.FailurePolicyFailOpen on the outbox.Entry "+
+		"security-sensitive topics (session.*, user.*, role.*, audit.*, event.* security contracts) "+
+			"must not set FailurePolicy: outbox.FailurePolicyFailOpen on the outbox.Entry "+
 			"literal; drop silently = lose audit invariant. Leave FailurePolicy "+
 			"unset (= Default, falls through to Cell ctor default = FailClosed).")
 }
 
+// checkOutboxTopicFailOpenRule loads all cells/ packages with full type info
+// and scans every non-test Go file for OUTBOX-TOPIC-FAILOPEN-01 violations.
 func checkOutboxTopicFailOpenRule(root string) ([]outboxTopicViolation, error) {
-	files, err := findCellProductionGoFiles(root)
+	r, err := CellsTopicResolver(root)
 	if err != nil {
 		return nil, err
 	}
 	var violations []outboxTopicViolation
-	for _, file := range files {
-		fileViolations, err := scanOutboxTopicFailOpen(root, file)
+	for _, p := range r.pkgs {
+		pkgViolations, err := scanPackage(root, p, r)
 		if err != nil {
 			return nil, err
 		}
-		violations = append(violations, fileViolations...)
+		violations = append(violations, pkgViolations...)
 	}
 	return violations, nil
 }
 
-// findCellProductionGoFiles walks cells/** for production .go files
-// (excluding _test.go + vendor + .git).
-func findCellProductionGoFiles(root string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(filepath.Join(root, "cells"), func(path string, d os.DirEntry, err error) error {
+// scanPackage scans all non-test Go files in a loaded package for violations.
+// packages.Package.Syntax is aligned with GoFiles via Fset.Position.
+func scanPackage(root string, p *packages.Package, r *topicConstResolver) ([]outboxTopicViolation, error) {
+	var violations []outboxTopicViolation
+	for _, file := range p.Syntax {
+		absPath := p.Fset.Position(file.Pos()).Filename
+		if strings.HasSuffix(absPath, "_test.go") {
+			continue
+		}
+		rel, err := filepath.Rel(root, absPath)
 		if err != nil {
-			return err
+			return nil, fmt.Errorf("filepath.Rel: %w", err)
 		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", "worktrees", "testdata", "generated", ".git":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
-	sort.Strings(files)
-	return files, err
+		rel = filepath.ToSlash(rel)
+		violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, r, p)...)
+	}
+	return violations, nil
 }
 
-// scanOutboxTopicFailOpen parses a single .go file and returns any
-// composite-literal violations of OUTBOX-TOPIC-FAILOPEN-01.
-func scanOutboxTopicFailOpen(root, path string) ([]outboxTopicViolation, error) {
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
-	if err != nil {
-		return nil, err
-	}
-	rel, err := filepath.Rel(root, path)
-	if err != nil {
-		return nil, err
-	}
-	rel = filepath.ToSlash(rel)
-	return scanOutboxTopicFailOpenAST(fset, file, rel), nil
-}
-
-// scanOutboxTopicFailOpenAST is the core AST-matching routine shared by the
-// production file scanner (scanOutboxTopicFailOpen) and the regression
-// fixture test. Given a parsed file + fileset, it returns every
-// outbox.Entry composite literal that opts into FailurePolicyFailOpen with
-// a Topic or EventType matching the security-sensitive prefix regex.
-func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string) []outboxTopicViolation {
+// scanOutboxTopicFailOpenAST is the core AST-matching routine. Given a parsed
+// file, fileset, resolver, and the owning package (for TypesInfo lookup), it
+// returns every outbox.Entry composite literal that opts into
+// FailurePolicyFailOpen with a Topic or EventType matching the
+// security-sensitive prefix regex.
+//
+// Topic/EventType field values are evaluated via topicConstResolver.ResolveString,
+// covering BasicLit, same-package const Ident, and cross-package SelectorExpr.
+func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, r *topicConstResolver, pkg *packages.Package) []outboxTopicViolation {
 	var violations []outboxTopicViolation
 	ast.Inspect(file, func(n ast.Node) bool {
 		lit, ok := n.(*ast.CompositeLit)
@@ -159,8 +136,8 @@ func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel s
 		if !isOutboxEntryLiteral(lit) {
 			return true
 		}
-		topic, topicOK := extractStringField(lit, outboxTopicEntryField)
-		eventType, eventTypeOK := extractStringField(lit, outboxTopicEventTypeField)
+		topic, topicOK := extractStringField(r, pkg, lit, outboxTopicEntryField)
+		eventType, eventTypeOK := extractStringField(r, pkg, lit, outboxTopicEventTypeField)
 
 		var matched string
 		switch {
@@ -211,10 +188,11 @@ func isOutboxEntryLiteral(lit *ast.CompositeLit) bool {
 	return false
 }
 
-// extractStringField returns the constant-string value for the named field
-// of a composite literal, if present. Returns ok=false when the field is
-// missing or its value is not a string literal.
-func extractStringField(lit *ast.CompositeLit, fieldName string) (string, bool) {
+// extractStringField returns the resolved constant-string value for the named
+// field of a composite literal, if present. Uses topicConstResolver to evaluate
+// BasicLit, same-package const Ident, and cross-package SelectorExpr uniformly.
+// Returns ok=false when the field is missing or its value is not a constant string.
+func extractStringField(r *topicConstResolver, pkg *packages.Package, lit *ast.CompositeLit, fieldName string) (string, bool) {
 	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -224,96 +202,64 @@ func extractStringField(lit *ast.CompositeLit, fieldName string) (string, bool) 
 		if !ok || key.Name != fieldName {
 			continue
 		}
-		bl, ok := kv.Value.(*ast.BasicLit)
-		if !ok || bl.Kind != token.STRING {
-			return "", false
-		}
-		unquoted, err := strconv.Unquote(bl.Value)
-		if err != nil {
-			return "", false
-		}
-		return unquoted, true
+		return r.ResolveString(pkg, kv.Value)
 	}
 	return "", false
 }
 
-// TestSecurityTopicsDoNotOptInFailOpen_RegressionFixture asserts that the
-// scanner actually flags a bad pattern. This complements the repo-wide
-// scan (which reports zero violations today) by proving the rule retains
-// teeth — a silent 0-violation run on an empty ruleset would pass too.
-func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixture(t *testing.T) {
-	fixtures := map[string]struct {
-		src       string
+// TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures asserts that the
+// scanner correctly flags (or passes) each fixture scenario. The fixture set
+// uses real Go packages under testdata/topic_const_fixtures/ loaded via
+// packages.Load to exercise the full type-checking path.
+//
+// Cases:
+//   - basicliteral: BasicLit "session.created.v1" + FailOpen -> flagged
+//   - eventprefixed: BasicLit "event.session.created.v1" + FailOpen -> flagged
+//   - samepackage_const: Ident sessionTopic (= "session.created.v1") + FailOpen -> flagged
+//   - crosspackage_dto: SelectorExpr dto.TopicSessionCreated + FailOpen -> flagged
+//   - crosspackage_event_dto: SelectorExpr dto.TopicSessionCreated + event. prefix + FailOpen -> flagged
+//   - samepackage_failclosed: same-package const + FailClosed → not flagged
+//   - nonsecurity_metric: non-security topic + FailOpen -> not flagged
+func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
+	fixturesRoot := filepath.Join(findArchTestDir(t), "testdata", "topic_const_fixtures")
+
+	cases := []struct {
+		pattern   string
 		wantMatch bool
 	}{
-		"session_with_failopen_is_flagged": {
-			src: `package fixture
-import "github.com/ghbvf/gocell/kernel/outbox"
-var _ = outbox.Entry{
-	Topic:         "session.created.v1",
-	EventType:     "session.created.v1",
-	ID:            "x",
-	FailurePolicy: outbox.FailurePolicyFailOpen,
-}
-`,
-			wantMatch: true,
-		},
-		"audit_event_type_with_failopen_flagged": {
-			src: `package fixture
-import "github.com/ghbvf/gocell/kernel/outbox"
-var _ = outbox.Entry{
-	EventType:     "audit.appended.v1",
-	ID:            "x",
-	FailurePolicy: outbox.FailurePolicyFailOpen,
-}
-`,
-			wantMatch: true,
-		},
-		"session_with_failclosed_passes": {
-			src: `package fixture
-import "github.com/ghbvf/gocell/kernel/outbox"
-var _ = outbox.Entry{
-	Topic:         "session.created.v1",
-	ID:            "x",
-	FailurePolicy: outbox.FailurePolicyFailClosed,
-}
-`,
-			wantMatch: false,
-		},
-		"session_with_default_policy_passes": {
-			src: `package fixture
-import "github.com/ghbvf/gocell/kernel/outbox"
-var _ = outbox.Entry{
-	Topic: "session.created.v1",
-	ID:    "x",
-}
-`,
-			wantMatch: false,
-		},
-		"non_security_topic_with_failopen_passes": {
-			src: `package fixture
-import "github.com/ghbvf/gocell/kernel/outbox"
-var _ = outbox.Entry{
-	Topic:         "metric.recorded.v1",
-	ID:            "x",
-	FailurePolicy: outbox.FailurePolicyFailOpen,
-}
-`,
-			wantMatch: false,
-		},
+		{"./basicliteral_session_failopen", true},
+		{"./basicliteral_event_session_failopen", true},
+		{"./samepackage_const_session_failopen", true},
+		{"./crosspackage_dto_session_failopen/consumer", true},
+		{"./crosspackage_event_dto_session_failopen/consumer", true},
+		{"./samepackage_const_session_failclosed", false},
+		{"./nonsecurity_metric_failopen_passes", false},
 	}
 
-	for name, tc := range fixtures {
-		tc := tc
-		t.Run(name, func(t *testing.T) {
-			fset := token.NewFileSet()
-			file, err := parser.ParseFile(fset, name+".go", tc.src, parser.SkipObjectResolution)
-			require.NoError(t, err)
-			violations := scanOutboxTopicFailOpenAST(fset, file, name+".go")
-			if tc.wantMatch {
-				assert.NotEmpty(t, violations, "fixture %q should have triggered the rule", name)
+	for _, c := range cases {
+		c := c
+		t.Run(c.pattern, func(t *testing.T) {
+			r, err := newTopicConstResolver(fixturesRoot, c.pattern)
+			require.NoError(t, err, "load fixture package %s", c.pattern)
+
+			var violations []outboxTopicViolation
+			for _, p := range r.pkgs {
+				for _, file := range p.Syntax {
+					absPath := p.Fset.Position(file.Pos()).Filename
+					if strings.HasSuffix(absPath, "_test.go") {
+						continue
+					}
+					rel, err := filepath.Rel(fixturesRoot, absPath)
+					require.NoError(t, err)
+					rel = filepath.ToSlash(rel)
+					violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, r, p)...)
+				}
+			}
+
+			if c.wantMatch {
+				assert.NotEmpty(t, violations, "fixture %q should trigger OUTBOX-TOPIC-FAILOPEN-01", c.pattern)
 			} else {
-				assert.Empty(t, violations, "fixture %q should not have triggered the rule, got: %v", name, violations)
+				assert.Empty(t, violations, "fixture %q should not trigger rule, got: %v", c.pattern, violations)
 			}
 		})
 	}
@@ -343,4 +289,12 @@ func entryHasFailOpenPolicy(lit *ast.CompositeLit) bool {
 		}
 	}
 	return false
+}
+
+// findArchTestDir returns the absolute path of the tools/archtest directory,
+// used to locate testdata fixtures at test runtime.
+func findArchTestDir(t *testing.T) string {
+	t.Helper()
+	root := findModuleRoot(t)
+	return filepath.Join(root, "tools", "archtest")
 }

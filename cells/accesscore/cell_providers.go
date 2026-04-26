@@ -14,8 +14,10 @@ package accesscore
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -27,11 +29,30 @@ import (
 // ports.HealthCheckable. Both in-memory and real adapters implement
 // HealthCheckable, so the probe is present in all modes. Returns an
 // empty map only when sessionRepo is nil (no repo injected at all).
+//
+// The emitter checker (outbox-failopen-rate.accesscore) is enabled by default
+// at a 5% threshold; it returns cell.ErrDegraded when the fail-open drop ratio
+// sustained between two /readyz probes exceeds that threshold. Disable via
+// outbox.WithFailOpenRateThreshold(0) when constructing the emitter.
 func (c *AccessCore) HealthCheckers() map[string]func(context.Context) error {
 	checkers := make(map[string]func(context.Context) error)
 	if hc, ok := c.sessionRepo.(ports.HealthCheckable); ok {
 		checkers["session-store"] = func(ctx context.Context) error {
 			return hc.Health(ctx)
+		}
+	}
+	// PR-A49: aggregate emitter (DirectEmitter) HealthContributor checkers.
+	// The /readyz aggregator surfaces fail-open drop ratio degraded signals
+	// via cell.ErrDegraded → HTTP 200 + status="degraded".
+	if hc, ok := c.emitter.(cell.HealthContributor); ok {
+		for k, v := range hc.HealthCheckers() {
+			if _, dup := checkers[k]; dup {
+				slog.Error("accesscore: duplicate health checker name; emitter checker dropped",
+					slog.String("checker", k),
+					slog.String("source", "outbox-emitter"))
+				continue
+			}
+			checkers[k] = v
 		}
 	}
 	return checkers

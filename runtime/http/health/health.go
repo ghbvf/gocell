@@ -36,6 +36,7 @@ import (
 	"golang.org/x/sync/singleflight"
 
 	"github.com/ghbvf/gocell/kernel/assembly"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 )
@@ -67,7 +68,7 @@ type Checker = func(context.Context) error
 
 // ProbeResult captures the outcome of a single readiness probe execution.
 type ProbeResult struct {
-	Status   string        // "healthy" | "unhealthy" | "timeout"
+	Status   string        // "healthy" | "degraded" | "unhealthy" | "timeout"
 	Duration time.Duration // wall-clock time spent inside the probe
 	// Err is exposed in /readyz?verbose output (truncated to maxVerboseErrLen).
 	// Probe implementations MUST NOT include connection strings, tokens, or
@@ -224,7 +225,7 @@ func (h *Handler) LivezHandler() http.HandlerFunc {
 // the same key. The struct owns its data — adapter info is snapshotted
 // under Handler.mu inside computeReadyz so writeTo runs lock-free.
 type readyzResult struct {
-	allHealthy   bool
+	overall      string // "healthy" | "degraded" | "unhealthy"
 	verbose      bool
 	cells        map[string]string         // nil when !verbose
 	dependencies map[string]map[string]any // nil when !verbose
@@ -301,7 +302,7 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 		if r := recover(); r != nil {
 			slog.Error("readyz: recovered panic during readiness computation",
 				slog.Any("panic", r))
-			result = readyzResult{allHealthy: false}
+			result = readyzResult{overall: "unhealthy"}
 		}
 	}()
 	return h.computeReadyz(verbose)
@@ -316,7 +317,7 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 // the result is fully self-contained — writeTo can serialise it without
 // touching Handler state.
 func (h *Handler) computeReadyz(verbose bool) readyzResult {
-	allHealthy, cells := h.aggregateCellHealth(verbose)
+	cellOverall, cells := h.aggregateCellHealth(verbose)
 
 	h.mu.RLock()
 	checkersCopy := make(map[string]Checker, len(h.checkers))
@@ -330,12 +331,13 @@ func (h *Handler) computeReadyz(verbose bool) readyzResult {
 	h.mu.RUnlock()
 
 	results := h.runProbesParallel(checkersCopy)
-	probeHealthy, dependencies := h.aggregateProbeResults(results, verbose)
-	if !probeHealthy {
-		allHealthy = false
+	probeOverall, dependencies := h.aggregateProbeResults(results, verbose)
+	worst := rankStatus(cellOverall)
+	if r := rankStatus(probeOverall); r > worst {
+		worst = r
 	}
 	return readyzResult{
-		allHealthy:   allHealthy,
+		overall:      statusFromRank(worst),
 		verbose:      verbose,
 		cells:        cells,
 		dependencies: dependencies,
@@ -355,36 +357,39 @@ func cloneAdapterInfo(src map[string]string) map[string]string {
 }
 
 // aggregateCellHealth computes cell readiness and optionally builds the verbose
-// cells map. Returns (allHealthy, cells).
-func (h *Handler) aggregateCellHealth(verbose bool) (bool, map[string]string) {
+// cells map. Returns (overall, cells) where overall is the worst-case status
+// across all cells: healthy(0) < degraded(1) < unhealthy(2).
+func (h *Handler) aggregateCellHealth(verbose bool) (string, map[string]string) {
 	cellHealth := h.assembly.Health()
 	var cells map[string]string
 	if verbose {
 		cells = make(map[string]string, len(cellHealth))
 	}
-	allHealthy := true
+	worst := 0 // healthy
 	for id, hs := range cellHealth {
 		if verbose {
 			cells[id] = hs.Status
 		}
-		if hs.Status != "healthy" {
-			allHealthy = false
+		if r := rankStatus(hs.Status); r > worst {
+			worst = r
 		}
 	}
-	return allHealthy, cells
+	return statusFromRank(worst), cells
 }
 
 // aggregateProbeResults converts ProbeResult map to verbose dependency output.
-// Returns (allHealthy, dependencies). dependencies is nil when verbose is false.
-func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose bool) (bool, map[string]map[string]any) {
+// Returns (overall, dependencies) where overall is the worst-case status
+// across all probe results: healthy(0) < degraded(1) < unhealthy(2).
+// dependencies is nil when verbose is false.
+func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose bool) (string, map[string]map[string]any) {
 	var dependencies map[string]map[string]any
 	if verbose {
 		dependencies = make(map[string]map[string]any, len(results))
 	}
-	allHealthy := true
+	worst := 0 // healthy
 	for name, pr := range results {
-		if pr.Status != "healthy" {
-			allHealthy = false
+		if r := rankStatus(pr.Status); r > worst {
+			worst = r
 		}
 		if verbose {
 			entry := map[string]any{
@@ -397,30 +402,37 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 			dependencies[name] = entry
 		}
 	}
-	return allHealthy, dependencies
+	return statusFromRank(worst), dependencies
 }
 
 // writeTo serialises the readyz result through the project-standard envelope:
 //
-//	200 → {"data":  {"status":"healthy", ...verbose fields}}
+//	200 → {"data":  {"status":"healthy"|"degraded", ...verbose fields}}
 //	503 → {"error": {"code":"ERR_READYZ_UNHEALTHY", "message":"...",
 //	                  "details": {...verbose fields}}}
+//
+// degraded maps to HTTP 200 — a degraded service (fail-open) should NOT
+// trigger pod eviction; operators monitor degraded via the response body
+// status field or the underlying Prometheus counter.
+// ref: envoyproxy/envoy admin /ready — DEGRADED returns 200.
 //
 // Verbose fields (cells, dependencies, adapters) live under data or details
 // so consumers walk one consistent path regardless of status. Adapters are
 // omitted when no adapter info has been registered.
 func (r readyzResult) writeTo(w http.ResponseWriter) {
 	body := r.verboseFields()
-	if r.allHealthy {
-		body["status"] = "healthy"
+	body["status"] = r.overall
+	switch r.overall {
+	case "healthy", "degraded":
+		// HTTP 200 — degraded does NOT trigger pod eviction.
 		writeJSON(w, http.StatusOK, envelopeData(body))
-		return
+	default: // "unhealthy"
+		writeJSON(w, http.StatusServiceUnavailable, envelopeError(
+			errcode.ErrReadyzUnhealthy,
+			"readiness checks failed",
+			body,
+		))
 	}
-	writeJSON(w, http.StatusServiceUnavailable, envelopeError(
-		errcode.ErrReadyzUnhealthy,
-		"readiness checks failed",
-		body,
-	))
 }
 
 // verboseFields returns the cells / dependencies / adapters payload (or an
@@ -505,6 +517,9 @@ func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration) (pr Pr
 	case errors.Is(ctx.Err(), context.DeadlineExceeded), errors.Is(err, context.DeadlineExceeded):
 		pr.Status = "timeout"
 		pr.Err = fmt.Errorf("probe did not return within deadline %s (ctx: %w)", deadline, err)
+	case errors.Is(err, cell.ErrDegraded):
+		pr.Status = "degraded"
+		pr.Err = err
 	default:
 		pr.Status = "unhealthy"
 		pr.Err = err
@@ -632,6 +647,32 @@ func envelopeError(code errcode.Code, message string, details map[string]any) ma
 			"message": message,
 			"details": details,
 		},
+	}
+}
+
+// rankStatus encodes severity ordering for aggregation:
+// healthy(0) < degraded(1) < unhealthy(2). timeout maps to unhealthy(2).
+// Used by aggregators: result = max(per-source ranks).
+func rankStatus(s string) int {
+	switch s {
+	case "healthy":
+		return 0
+	case "degraded":
+		return 1
+	default: // unhealthy, timeout, anything else
+		return 2
+	}
+}
+
+// statusFromRank converts a rank value back to a canonical status string.
+func statusFromRank(r int) string {
+	switch r {
+	case 0:
+		return "healthy"
+	case 1:
+		return "degraded"
+	default:
+		return "unhealthy"
 	}
 }
 

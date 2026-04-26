@@ -470,3 +470,25 @@ func TestDeviceCell_DemoMode_RegisterPublishFailureReturnsCreated(t *testing.T) 
 	assert.Equal(t, http.StatusCreated, rec.Code,
 		"demo mode keeps direct publish fail-open behavior")
 }
+
+// TestDeviceCell_HealthCheckers_WithDirectEmitter verifies that after Init
+// with a DirectEmitter-backed publisher, HealthCheckers returns the
+// outbox-failopen-rate checker scoped to "devicecell".
+func TestDeviceCell_HealthCheckers_WithDirectEmitter(t *testing.T) {
+	c := newTestCell()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	require.NoError(t, c.Init(context.Background(), deps))
+
+	checkers := c.HealthCheckers()
+	const emitterKey = "outbox-failopen-rate.devicecell"
+	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
+}
+
+// TestDeviceCell_HealthCheckers_BeforeInit verifies that HealthCheckers
+// returns an empty map before Init (emitter field is nil).
+func TestDeviceCell_HealthCheckers_BeforeInit(t *testing.T) {
+	c := newTestCell() // emitter not set until Init
+	checkers := c.HealthCheckers()
+	assert.Empty(t, checkers, "pre-Init emitter field is nil; no health checkers expected")
+}

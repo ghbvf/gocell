@@ -451,3 +451,25 @@ func (w *recordingWriter) Write(_ context.Context, entry outbox.Entry) error {
 	w.entries = append(w.entries, entry)
 	return nil
 }
+
+// TestAuditCore_HealthCheckers_WithDirectEmitter verifies that after Init with
+// a DirectEmitter-backed publisher, HealthCheckers returns the
+// outbox-failopen-rate checker scoped to "auditcore".
+func TestAuditCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
+	c := newTestCell()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	require.NoError(t, c.Init(context.Background(), deps))
+
+	checkers := c.HealthCheckers()
+	const emitterKey = "outbox-failopen-rate.auditcore"
+	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
+}
+
+// TestAuditCore_HealthCheckers_NilEmitter verifies that HealthCheckers returns
+// an empty map when the emitter does not implement cell.HealthContributor.
+func TestAuditCore_HealthCheckers_NilEmitter(t *testing.T) {
+	c := NewAuditCore() // no emitter set
+	checkers := c.HealthCheckers()
+	assert.Empty(t, checkers, "nil emitter must produce empty health checkers map")
+}

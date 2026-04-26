@@ -3,6 +3,7 @@ package outbox
 import (
 	"context"
 	"errors"
+	"io"
 	"log/slog"
 	"testing"
 
@@ -403,13 +404,12 @@ func TestNewDirectEmitter_CounterVecRegistrationFailure(t *testing.T) {
 	assert.Contains(t, err.Error(), "failopen_dropped counter")
 }
 
-// TestNewDirectEmitter_WithLogger verifies that the optional variadic logger
-// parameter is accepted and wired into the emitter (covers the logger-injection
-// branch in NewDirectEmitter).
+// TestNewDirectEmitter_WithLogger verifies that WithLogger option is accepted
+// and wired into the emitter (covers the logger-injection branch in NewDirectEmitter).
 func TestNewDirectEmitter_WithLogger(t *testing.T) {
 	logger := slog.Default()
 	publisher := &recordingEmitterPublisher{err: errors.New("broker down")}
-	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell", logger)
+	emitter, err := NewDirectEmitter(publisher, DirectPublishFailOpen, metrics.NopProvider{}, "testcell", WithLogger(logger))
 	require.NoError(t, err)
 	require.NotNil(t, emitter)
 	// Confirm emitter works — fail-open path must not error.
@@ -421,6 +421,87 @@ func TestNewDirectEmitter_WithLogger(t *testing.T) {
 func TestWriterEmitter_Durable_NilReceiver(t *testing.T) {
 	var e *WriterEmitter
 	assert.False(t, e.Durable())
+}
+
+// ---------------------------------------------------------------------------
+// HealthCheckers tests
+// ---------------------------------------------------------------------------
+
+// TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio verifies that after
+// all publishes fail (fail-open), the HealthCheckers checker reports ErrDegraded.
+func TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio(t *testing.T) {
+	fp := &recordingEmitterPublisher{err: errors.New("broker down")}
+	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	entry := validEntry("health-degrade")
+	for i := 0; i < 10; i++ {
+		require.NoError(t, e.Emit(ctx, entry)) // fail-open does not return err
+	}
+
+	checkers := e.HealthCheckers()
+	require.Contains(t, checkers, "outbox-failopen-rate.testcell")
+
+	// 10 drops / 10 total = 100% > 5% default threshold → Tripped
+	checkErr := checkers["outbox-failopen-rate.testcell"](ctx)
+	require.Error(t, checkErr)
+	assert.ErrorIs(t, checkErr, ErrDegraded)
+}
+
+// TestDirectEmitter_HealthCheckers_HealthyOnLowDropRatio verifies that when
+// all publishes succeed (zero drops), the HealthCheckers checker returns nil.
+func TestDirectEmitter_HealthCheckers_HealthyOnLowDropRatio(t *testing.T) {
+	pub := &recordingEmitterPublisher{} // no error → success path
+	e, err := NewDirectEmitter(pub, DirectPublishFailOpen, metrics.NopProvider{}, "testcell")
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	entry := validEntry("health-ok")
+	for i := 0; i < 10; i++ {
+		require.NoError(t, e.Emit(ctx, entry))
+	}
+
+	checkers := e.HealthCheckers()
+	require.Contains(t, checkers, "outbox-failopen-rate.testcell")
+
+	// 0 drops / 10 total = 0% < 5% threshold → not tripped
+	checkErr := checkers["outbox-failopen-rate.testcell"](ctx)
+	assert.NoError(t, checkErr)
+}
+
+// TestNewDirectEmitter_WithLoggerOption verifies that WithLogger injects a custom
+// logger and that the fail-open Warn is written through it (not slog.Default()).
+func TestNewDirectEmitter_WithLoggerOption(t *testing.T) {
+	customLogger := slog.New(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	fp := &recordingEmitterPublisher{err: errors.New("broker down")}
+	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, "testcell",
+		WithLogger(customLogger))
+	require.NoError(t, err)
+	require.NotNil(t, e)
+
+	// Trigger fail-open path; must not error even though publish fails.
+	require.NoError(t, e.Emit(context.Background(), validEntry("log-opt")))
+}
+
+// TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables verifies that
+// WithFailOpenRateThreshold(0) disables the degraded check (checker always nil).
+func TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables(t *testing.T) {
+	fp := &recordingEmitterPublisher{err: errors.New("broker down")}
+	e, err := NewDirectEmitter(fp, DirectPublishFailOpen, metrics.NopProvider{}, "testcell",
+		WithFailOpenRateThreshold(0))
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	entry := validEntry("thresh-zero")
+	for i := 0; i < 100; i++ {
+		require.NoError(t, e.Emit(ctx, entry))
+	}
+
+	// threshold 0 → Tripped always false
+	checkErr := e.HealthCheckers()["outbox-failopen-rate.testcell"](ctx)
+	assert.NoError(t, checkErr)
 }
 
 // TestDirectEmitter_InjectsObservabilityFromContext verifies that DirectEmitter.Emit
@@ -455,3 +536,20 @@ func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
 	assert.Equal(t, wantTraceID, got.Observability.TraceID,
 		"DirectEmitter must inject trace_id from ctx into entry.Observability")
 }
+
+// TestNewDirectEmitter_WithLoggerNilFallsBackToDefault verifies that
+// WithLogger(nil) falls back to slog.Default() in NewDirectEmitter
+// (defensive — protects against accidental nil logger from caller).
+func TestNewDirectEmitter_WithLoggerNilFallsBackToDefault(t *testing.T) {
+	e, err := NewDirectEmitter(noopPub{}, DirectPublishFailClosed, metrics.NopProvider{}, "test-cell",
+		WithLogger(nil))
+	require.NoError(t, err)
+	require.NotNil(t, e)
+	// Trigger Emit path, confirm no panic.
+	require.NoError(t, e.Emit(context.Background(), validEntry("logger-nil-test")))
+}
+
+type noopPub struct{}
+
+func (noopPub) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (noopPub) Close(_ context.Context) error                       { return nil }
