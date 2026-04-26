@@ -30,16 +30,19 @@ import (
 // runtime/http/middleware.Tracing (span status = error + RecordError on
 // the outer span).
 //
-// spec is validated at call time; invalid specs or nil handlers panic
-// (fail-fast at registration time beats a silent miss at request time).
+// spec is validated at call time; invalid specs or nil handlers cause a
+// non-nil error to be returned so the caller can choose between fail-fast
+// (use MustHTTPHandler) and graceful refusal at composition time.
 //
 // ref: go-kratos/kratos middleware/tracing/tracing.go — the middleware is
 // the single HTTP server span owner; handlers contribute attributes, not
 // spans.
 // ref: open-telemetry/opentelemetry-go-contrib otelhttp — "one middleware,
 // one span" invariant; late-binding route metadata via chi RouteContext.
-func HTTPHandler(spec ContractSpec, next http.Handler) http.Handler {
-	validateHTTPHandlerArgs(spec, next)
+func HTTPHandler(spec ContractSpec, next http.Handler) (http.Handler, error) {
+	if err := validateHTTPHandlerArgs(spec, next); err != nil {
+		return nil, err
+	}
 	baseAttrs := httpBaseAttrs(spec)
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,19 +51,32 @@ func HTTPHandler(spec ContractSpec, next http.Handler) http.Handler {
 			carrier.Attrs = append(carrier.Attrs, baseAttrs...)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
-	})
+	}), nil
 }
 
-func validateHTTPHandlerArgs(spec ContractSpec, next http.Handler) {
-	if next == nil {
-		panic("wrapper.HTTPHandler: next handler must not be nil")
-	}
-	if spec.Kind != "http" {
-		panic(fmt.Sprintf("wrapper.HTTPHandler: spec.Kind %q must be \"http\"", spec.Kind))
-	}
-	if err := spec.Validate(); err != nil {
+// MustHTTPHandler is the composition-root fail-fast variant of HTTPHandler.
+// It panics when HTTPHandler returns an error. Suitable for static wiring
+// where the spec is a build-time literal; use HTTPHandler directly when the
+// spec is data-driven.
+func MustHTTPHandler(spec ContractSpec, next http.Handler) http.Handler {
+	h, err := HTTPHandler(spec, next)
+	if err != nil {
 		panic(err.Error())
 	}
+	return h
+}
+
+func validateHTTPHandlerArgs(spec ContractSpec, next http.Handler) error {
+	if next == nil {
+		return fmt.Errorf("wrapper.HTTPHandler: next handler must not be nil")
+	}
+	if spec.Kind != "http" {
+		return fmt.Errorf("wrapper.HTTPHandler: spec.Kind %q must be \"http\"", spec.Kind)
+	}
+	if err := spec.Validate(); err != nil {
+		return fmt.Errorf("wrapper.HTTPHandler: %w", err)
+	}
+	return nil
 }
 
 func httpBaseAttrs(spec ContractSpec) []Attr {

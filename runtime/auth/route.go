@@ -96,7 +96,7 @@ func Mount(mux cell.RouteHandler, r Route) {
 	// wrapper.HTTPHandler is a pure ctx contributor (round-4) — it writes
 	// ContractID + contract attrs into ctx so the outer middleware.Tracing
 	// span late-binds them. No inner span is created.
-	handler = wrapper.HTTPHandler(r.Contract, handler)
+	handler = wrapper.MustHTTPHandler(r.Contract, handler)
 
 	cleanedRel := path.Clean(relPath)
 	mux.Handle(r.Contract.Method+" "+cleanedRel, handler)

@@ -23,7 +23,7 @@ func TestWrapConsumer_PassesAckResultThrough(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{EventType: "session.revoked.v1"})
 	if res.Disposition != outbox.DispositionAck {
 		t.Errorf("want Ack, got %v", res.Disposition)
@@ -55,7 +55,7 @@ func TestWrapConsumer_MarksErrorOnRequeue(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: transient}
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	if res.Disposition != outbox.DispositionRequeue {
@@ -75,7 +75,7 @@ func TestWrapConsumer_RedactsDispositionErrors(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: errors.New("raw token")}
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner, wrapper.WithConsumerErrorRedactor(func(error) error {
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner, wrapper.WithConsumerErrorRedactor(func(error) error {
 		return errors.New("redacted")
 	}))
 	res := w(context.Background(), outbox.Entry{})
@@ -94,7 +94,7 @@ func TestWrapConsumer_RedactsMissingDispositionErrorFallback(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionReject}
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner, wrapper.WithConsumerErrorRedactor(func(err error) error {
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner, wrapper.WithConsumerErrorRedactor(func(err error) error {
 		return errors.New("safe: " + err.Error())
 	}))
 	_ = w(context.Background(), outbox.Entry{})
@@ -111,7 +111,7 @@ func TestWrapConsumer_MarksErrorOnReject(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: permanent}
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	if res.Disposition != outbox.DispositionReject {
@@ -123,26 +123,32 @@ func TestWrapConsumer_MarksErrorOnReject(t *testing.T) {
 	}
 }
 
-func TestWrapConsumer_PanicsOnNonEventSpec(t *testing.T) {
+func TestWrapConsumer_ReturnsErrorOnNonEventSpec(t *testing.T) {
 	t.Parallel()
-	defer func() {
-		if recover() == nil {
-			t.Fatal("expected panic on http spec")
-		}
-	}()
-	_ = wrapper.WrapConsumer(wrapper.NoopTracer{}, loginSpec(), func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
+	_, err := wrapper.WrapConsumer(wrapper.NoopTracer{}, loginSpec(), func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
+	if err == nil {
+		t.Fatal("expected error on http spec")
+	}
 }
 
-func TestWrapConsumer_PanicsOnNilFn(t *testing.T) {
+func TestWrapConsumer_ReturnsErrorOnNilFn(t *testing.T) {
+	t.Parallel()
+	_, err := wrapper.WrapConsumer(wrapper.NoopTracer{}, eventSpec(), nil)
+	if err == nil {
+		t.Fatal("expected error on nil fn")
+	}
+}
+
+func TestMustWrapConsumer_PanicsOnNilFn(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		if recover() == nil {
 			t.Fatal("expected panic on nil fn")
 		}
 	}()
-	_ = wrapper.WrapConsumer(wrapper.NoopTracer{}, eventSpec(), nil)
+	_ = wrapper.MustWrapConsumer(wrapper.NoopTracer{}, eventSpec(), nil)
 }
 
 func TestWrapConsumer_PutsContractIDInContext(t *testing.T) {
@@ -152,7 +158,7 @@ func TestWrapConsumer_PutsContractIDInContext(t *testing.T) {
 		seen = wrapper.ContractIDFromContext(ctx)
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
-	w := wrapper.WrapConsumer(wrapper.NoopTracer{}, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(wrapper.NoopTracer{}, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
 	if seen != "event.session.revoked.v1" {
 		t.Errorf("ContractID missing from ctx; got %q", seen)
@@ -167,7 +173,7 @@ func TestWrapConsumer_NilTracer_FallsBackToNoop(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}
-	w := wrapper.WrapConsumer(nil, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(nil, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 	if res.Disposition != outbox.DispositionAck {
 		t.Errorf("want Ack with nil tracer, got %v", res.Disposition)
@@ -182,7 +188,7 @@ func TestWrapConsumer_PanicInHandler(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		panic(boom)
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 
 	defer func() {
 		r := recover()
@@ -213,7 +219,7 @@ func TestWrapConsumer_PanicNonError(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		panic("string panic value")
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 
 	defer func() {
 		_ = recover()
@@ -239,7 +245,7 @@ func TestWrapConsumer_InvalidDispositionRecordsError(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{} // zero value: Disposition is invalid
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	res := w(context.Background(), outbox.Entry{})
 
 	// Result is passed through untouched — downstream decides downgrade.
@@ -267,7 +273,7 @@ func TestWrapConsumer_InvalidDispositionWithExplicitError(t *testing.T) {
 	inner := func(ctx context.Context, e outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.Disposition(99), Err: explicit}
 	}
-	w := wrapper.WrapConsumer(tr, eventSpec(), inner)
+	w := wrapper.MustWrapConsumer(tr, eventSpec(), inner)
 	_ = w(context.Background(), outbox.Entry{})
 	span := tr.only(t)
 	if len(span.errs) != 1 || !errors.Is(span.errs[0], explicit) {
