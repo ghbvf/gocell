@@ -300,7 +300,7 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	repo := mem.NewConfigRepository()
 	fp := testutil.FailingPublisher{Err: errors.New("broker unavailable")}
-	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "configcore", slog.Default())
+	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "configcore", outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 
