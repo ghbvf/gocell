@@ -44,7 +44,9 @@ func (l *Lifecycle) Bind(_ BootstrapDeps, _ *slog.Logger) {}
 func (l *Lifecycle) Hook() cell.LifecycleHook {
 	return cell.LifecycleHook{
 		Name:    "accesscore.initial-admin-bootstrap",
+		// errUnsupportedPlatform is defined in bootstrap_unsupported.go (same build tag).
 		OnStart: func(_ context.Context) error { return errUnsupportedPlatform },
-		OnStop:  func(_ context.Context) error { return nil },
+		// OnStop is a no-op: OnStart already fails; a successful Start cannot occur on this platform.
+		OnStop: func(_ context.Context) error { return nil },
 	}
 }
