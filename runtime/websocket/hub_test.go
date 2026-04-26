@@ -378,6 +378,20 @@ func TestHub_RegisterOnStoppedHub(t *testing.T) {
 	assert.True(t, conn.isClosed())
 }
 
+func TestHub_RegisterWithoutRunContextRejected(t *testing.T) {
+	hub := NewHub(DefaultHubConfig(), nil)
+	hub.state.Store(stateRunning)
+
+	conn := newFakeConn("missing-runctx")
+	err := hub.Register(conn)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not running")
+	assert.True(t, conn.isClosed())
+
+	hub.state.Store(stateStopped)
+	close(hub.shutdownDone)
+}
+
 func TestHub_Unregister(t *testing.T) {
 	hub := startHub(t, DefaultHubConfig(), nil)
 
@@ -702,6 +716,22 @@ func TestDefaultHubConfig(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.PingTimeout)
 	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
 	assert.Equal(t, 2, cfg.PingMissMax)
+}
+
+func TestNewHub_PreservesExplicitConfig(t *testing.T) {
+	cfg := HubConfig{
+		PingInterval:   time.Second,
+		PingTimeout:    250 * time.Millisecond,
+		ReadLimit:      1024,
+		PingMissMax:    5,
+		MaxConnections: 9,
+	}
+	handler := func(context.Context, string, []byte) {}
+
+	hub := NewHub(cfg, handler)
+
+	assert.Equal(t, cfg, hub.Config())
+	assert.NotNil(t, hub.handler)
 }
 
 func TestHub_IsRunning(t *testing.T) {

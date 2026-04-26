@@ -24,18 +24,17 @@ The server starts three listeners following `docs/ops/listener-topology.md`:
 
 Each address is overridable via environment variable (see [Environment Variables](#environment-variables)).
 
-## Docker Mode
+## Docker Infrastructure
 
-Start infrastructure services, then run the application:
+Infrastructure services are available for future adapter-based mode. The
+current `ssobff` example still uses in-memory dependencies, so starting these
+containers is optional and does not change runtime storage or event delivery.
 
 ```bash
 cd examples/ssobff
 export GOCELL_EXAMPLE_POSTGRES_PASSWORD="$(openssl rand -base64 24)"
 export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
-cd ../..
-export GOCELL_SSOBFF_SERVICE_SECRET="$(openssl rand -base64 32)"
-go run ./examples/ssobff
 ```
 
 ## Seed User
