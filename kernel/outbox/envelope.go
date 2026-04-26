@@ -55,13 +55,18 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 	return b, nil
 }
 
-// MarshalDirectEnvelope builds a v1 wire envelope for direct-publish paths.
-func MarshalDirectEnvelope(topic, eventType, id string, payload []byte) []byte {
+// MustMarshalDirectEnvelope builds a v1 wire envelope for direct-publish
+// paths. Panics on missing required fields (id/eventType) or json.Marshal
+// failure — these are internal invariants violated only by writer-side
+// programming errors, not user input. The Must prefix marks the panic
+// semantics explicitly; callers that need a recoverable error path should
+// use MarshalEnvelope directly.
+func MustMarshalDirectEnvelope(topic, eventType, id string, payload []byte) []byte {
 	if id == "" {
-		panic("outbox.MarshalDirectEnvelope: empty id")
+		panic("outbox.MustMarshalDirectEnvelope: empty id")
 	}
 	if eventType == "" {
-		panic("outbox.MarshalDirectEnvelope: empty eventType")
+		panic("outbox.MustMarshalDirectEnvelope: empty eventType")
 	}
 	raw, err := MarshalEnvelope(Entry{
 		ID:        id,
@@ -71,7 +76,7 @@ func MarshalDirectEnvelope(topic, eventType, id string, payload []byte) []byte {
 		CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		panic("outbox.MarshalDirectEnvelope: json.Marshal unexpectedly failed: " + err.Error())
+		panic("outbox.MustMarshalDirectEnvelope: json.Marshal unexpectedly failed: " + err.Error())
 	}
 	return raw
 }

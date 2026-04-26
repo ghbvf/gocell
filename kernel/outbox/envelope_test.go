@@ -110,7 +110,7 @@ func TestMarshalDirectEnvelope_ProducesV1(t *testing.T) {
 	id := "direct-id-1"
 	payload := []byte(`{"sessionId":"s-1","userId":"u-42"}`)
 
-	raw := MarshalDirectEnvelope(topic, topic, id, payload)
+	raw := MustMarshalDirectEnvelope(topic, topic, id, payload)
 
 	got, err := UnmarshalEnvelope(topic, raw)
 	require.NoError(t, err)
@@ -167,7 +167,7 @@ func TestMarshalDirectEnvelope_PanicsOnEmptyRequiredFields(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			assert.Panics(t, func() {
-				_ = MarshalDirectEnvelope(tt.topic, tt.eventType, tt.id, []byte(`{}`))
+				_ = MustMarshalDirectEnvelope(tt.topic, tt.eventType, tt.id, []byte(`{}`))
 			})
 		})
 	}

@@ -520,7 +520,7 @@ func TestSubscriberWithMiddleware_RestoreIsOutermost(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestEntryID_RoundTrip_InjectAndRestore(t *testing.T) {
-	entryID := NewEntryID()
+	entryID := MustNewEntryID()
 	ctx := ctxkeys.WithRequestID(context.Background(), entryID)
 
 	e := Entry{ID: "e1", EventType: "test.v1", Payload: []byte(`{}`)}

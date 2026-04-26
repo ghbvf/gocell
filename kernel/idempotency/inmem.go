@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 )
@@ -64,7 +65,10 @@ func (c *InMemClaimer) Claim(_ context.Context, key string, leaseTTL, doneTTL ti
 		delete(c.entries, key)
 	}
 
-	token := newToken()
+	token, err := newToken()
+	if err != nil {
+		return ClaimAcquired, nil, err
+	}
 	c.entries[key] = &inMemEntry{
 		state:     ClaimAcquired,
 		token:     token,
@@ -136,13 +140,12 @@ func (r *inMemReceipt) Extend(_ context.Context, ttl time.Duration) error {
 
 var errStaleReceipt = errors.New("idempotency: receipt is stale (claim was released or expired)")
 
-func newToken() string {
+func newToken() (string, error) {
 	var b [8]byte
 	if _, err := rand.Read(b[:]); err != nil {
-		// Entropy failure is non-recoverable; match stdlib uuid panic behaviour.
-		panic("idempotency: crypto/rand.Read failed: " + err.Error())
+		return "", fmt.Errorf("idempotency: crypto/rand.Read failed: %w", err)
 	}
-	return hex.EncodeToString(b[:])
+	return hex.EncodeToString(b[:]), nil
 }
 
 // Compile-time check that InMemClaimer satisfies Claimer.

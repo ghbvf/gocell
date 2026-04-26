@@ -529,7 +529,7 @@ func (s *Service) publish(ctx context.Context, topic string, payload any) error 
 		return fmt.Errorf("identity-manage: marshal event payload: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        outbox.NewEntryID(),
+		ID:        outbox.MustNewEntryID(),
 		EventType: topic,
 		Payload:   data,
 	}

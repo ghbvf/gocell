@@ -32,7 +32,7 @@ func Emit[T any](ctx context.Context, emitter Emitter, topic string, payload T) 
 		return fmt.Errorf("outbox.Emit(%s): marshal payload: %w", topic, err)
 	}
 	entry := Entry{
-		ID:        NewEntryID(),
+		ID:        MustNewEntryID(),
 		EventType: topic,
 		Payload:   data,
 	}
