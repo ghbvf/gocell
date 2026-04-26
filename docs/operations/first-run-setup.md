@@ -1,5 +1,8 @@
 # GoCell First-Run Admin Bootstrap
 
+> 本文档专注**运维侧部署细节**：凭据文件路径、Docker / Kubernetes / macOS / Windows 配置、密码重置流程。
+> 选型决策（何时选 interactive vs bootstrap）、`410 Gone` 客户端处理、`400` / `409` / `410` 区分见 [`docs/guides/admin-bootstrap-paths.md`](../guides/admin-bootstrap-paths.md)。
+
 ## 概览
 
 GoCell 支持两种 first-run admin 模式：

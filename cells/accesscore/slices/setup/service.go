@@ -265,16 +265,15 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 // setupRetiredError is returned when the first-run admin already exists. It
 // maps to HTTP 410 Gone (see pkg/httputil) — the endpoint is not just
 // temporarily conflicting, it is permanently retired for the lifetime of this
-// deployment. Machine-readable next-action lives in details so clients do not
-// need to parse the message.
+// deployment. The details payload carries a semantic next-action only; the
+// login endpoint path is resolved by clients via OpenAPI / contract registry,
+// not embedded on the wire — contract is the single source of truth for
+// endpoint paths.
 func setupRetiredError() error {
 	return errcode.WithDetails(
 		errcode.New(errcode.ErrSetupAlreadyInitialized,
 			"first-run admin already provisioned; this endpoint is retired"),
-		map[string]any{
-			"nextAction":    "login",
-			"loginEndpoint": "/api/v1/access/sessions/login",
-		},
+		map[string]any{"nextAction": "login"},
 	)
 }
 

@@ -164,7 +164,7 @@ func TestService_CreateAdmin_OrphanRecovered_ReturnsUser_EmitsEvent(t *testing.T
 	assert.Equal(t, 1, cnt)
 }
 
-func TestService_CreateAdmin_AlreadyExists_Returns409_NoEmit(t *testing.T) {
+func TestService_CreateAdmin_AlreadyExists_Returns410_NoEmit(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
@@ -182,7 +182,7 @@ func TestService_CreateAdmin_AlreadyExists_Returns409_NoEmit(t *testing.T) {
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code)
-	assert.Empty(t, w.entries, "no event on 409 path")
+	assert.Empty(t, w.entries, "no event on 410 path")
 }
 
 func TestService_CreateAdmin_BlankField_Returns400(t *testing.T) {
@@ -441,6 +441,38 @@ func TestService_CreateAdmin_ControlCharInField_Returns400(t *testing.T) {
 	}
 }
 
+// TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction pins the
+// wire-shape contract of the 410 response: details carry a semantic
+// next-action only — no HTTP path literal. Clients resolve the login endpoint
+// via OpenAPI / contract registry; embedding the path here would create a
+// second source of truth.
+func TestService_CreateAdmin_AlreadyExists_DetailsContainOnlyNextAction(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	roleRepo := mem.NewRoleRepository()
+	seedAdmin(t, userRepo, roleRepo)
+	svc := newService(t, userRepo, roleRepo, &stubWriter{})
+
+	_, err := svc.CreateAdmin(context.Background(), setup.CreateAdminInput{
+		Username: "root",
+		Email:    "root@local",
+		Password: "SecretPass!23",
+	})
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrSetupAlreadyInitialized, ec.Code)
+
+	require.Len(t, ec.Details, 1, "details must carry exactly one key — semantic action only")
+	assert.Equal(t, "login", ec.Details["nextAction"])
+
+	rendered, err := json.Marshal(ec.Details)
+	require.NoError(t, err)
+	assert.NotContains(t, string(rendered), "/api/",
+		"details must not leak HTTP path literals; resolve via OpenAPI")
+	assert.NotContains(t, string(rendered), "loginEndpoint",
+		"loginEndpoint key was retired by PR-A42 — keep details minimal")
+}
+
 // --- helpers --------------------------------------------------------------
 
 func seedAdmin(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleRepository) {
@@ -476,4 +508,13 @@ func (r *countErrRoleRepo) GetByID(_ context.Context, _ string) (*domain.Role, e
 }
 func (r *countErrRoleRepo) ListByUserID(_ context.Context, _ string, _ query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
+}
+
+// newServiceWithProvisionerError builds a Service whose provisioner status
+// check fails with the supplied error. Shared by service_test.go (white-box)
+// and contract_test.go (envelope coverage) so the contract layer does not
+// need to know which repo produces the failure.
+func newServiceWithProvisionerError(t *testing.T, err error) *setup.Service {
+	t.Helper()
+	return newService(t, mem.NewUserRepository(), &countErrRoleRepo{err: err}, nil)
 }

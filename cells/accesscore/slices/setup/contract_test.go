@@ -3,6 +3,7 @@ package setup_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -38,6 +39,32 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	h.HandleStatus(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
+
+	t.Run("500 provisioner failure response satisfies contract", func(t *testing.T) {
+		// status endpoint 5xx contract envelope 校验：handler 在 provisioner
+		// 故障时返回 500，body 走标准 error envelope。同步断言 5xx body 不泄漏
+		// 内部细节（pkg/httputil 的 5xx 路径会清空 details — 本断言把这条不变量
+		// 沉淀为防退化测试）。Service 构造细节封装在 newServiceWithProvisionerError
+		// (service_test.go)，避免 contract 层依赖 service-internal 的 repo 选型。
+		svc := newServiceWithProvisionerError(t,
+			errors.New("provisioner status: pg unreachable"))
+		h := setup.NewHandler(svc)
+
+		req := httptest.NewRequest(http.MethodGet, c.HTTP.Path, nil)
+		rec := httptest.NewRecorder()
+		h.HandleStatus(rec, req)
+
+		require.Equal(t, http.StatusInternalServerError, rec.Code)
+		c.ValidateErrorResponse(t, http.StatusInternalServerError, rec.Body.Bytes())
+
+		bodyStr := rec.Body.String()
+		assert.NotContains(t, bodyStr, "pg unreachable",
+			"5xx body must not leak underlying infra error message")
+		assert.NotContains(t, bodyStr, "loginEndpoint",
+			"5xx body must not carry retired loginEndpoint key")
+		assert.Contains(t, bodyStr, `"details":{}`,
+			"5xx envelope must clear details — pkg/httputil pins this invariant")
+	})
 }
 
 func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
@@ -125,6 +152,31 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 		require.Equal(t, http.StatusConflict, rec.Code)
 		c.ValidateErrorResponse(t, http.StatusConflict, rec.Body.Bytes())
 		requireErrorCode(t, rec.Body.Bytes(), errcode.ErrAuthUserDuplicate)
+	})
+
+	t.Run("410 retired endpoint response satisfies contract", func(t *testing.T) {
+		// PR-A42 N5 / N4: pin the retired-endpoint envelope through the contract
+		// validator and assert the wire shape carries semantic next-action only —
+		// no HTTP path literal (clients resolve via OpenAPI).
+		userRepo := mem.NewUserRepository()
+		roleRepo := mem.NewRoleRepository()
+		seedAdmin(t, userRepo, roleRepo)
+		svc := newService(t, userRepo, roleRepo, &stubWriter{})
+		h := setup.NewHandler(svc)
+
+		req := httptest.NewRequest(c.HTTP.Method, c.HTTP.Path, strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		rec := httptest.NewRecorder()
+		h.HandleCreateAdmin(rec, req)
+
+		require.Equal(t, http.StatusGone, rec.Code)
+		c.ValidateErrorResponse(t, http.StatusGone, rec.Body.Bytes())
+		requireErrorCode(t, rec.Body.Bytes(), errcode.ErrSetupAlreadyInitialized)
+
+		bodyStr := rec.Body.String()
+		assert.Contains(t, bodyStr, `"nextAction":"login"`)
+		assert.NotContains(t, bodyStr, "/api/", "410 wire shape must not leak path literals")
+		assert.NotContains(t, bodyStr, "loginEndpoint", "loginEndpoint key retired by PR-A42")
 	})
 }
 
