@@ -1,0 +1,44 @@
+# Multi-stage build of cmd/corebundle for the e2e docker-compose harness.
+# Build context is the gocell repo root; the repo-root .dockerignore narrows
+# it. Final image runs corebundle as a non-root user; JWT RSA keys are
+# generated at container start (not at image build), so the image layer
+# never carries secret material — see start-corebundle.sh below. Keys live
+# in /run/gocell, which is tmpfs-backed and disappears when the container
+# stops, matching the per-instance ephemeral nature of e2e harnesses.
+
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+RUN apk add --no-cache git
+COPY go.mod go.sum ./
+RUN go mod download
+# Recursive COPY is intentional and bounded by the repo-root .dockerignore
+# (.git, .claude, docs/, worktrees/, bak/, *.env, coverage*.out filtered).
+# Multi-stage isolation: the build stage filesystem is discarded after
+# `go build`; only /out/corebundle crosses into the runtime image.
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates curl openssl \
+    && adduser -D -H -u 10001 gocell \
+    && mkdir -p /run/gocell \
+    && chown gocell:gocell /run/gocell \
+    && printf '%s\n' \
+        '#!/bin/sh' \
+        'set -eu' \
+        '# Generate RSA JWT keys per container instance — never baked into' \
+        '# the image layer. /run/gocell is tmpfs-backed in compose, so the' \
+        '# keys disappear when the container stops.' \
+        'openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /run/gocell/jwt-private.pem 2>/dev/null' \
+        'openssl rsa -in /run/gocell/jwt-private.pem -pubout -out /run/gocell/jwt-public.pem 2>/dev/null' \
+        'chmod 600 /run/gocell/jwt-private.pem' \
+        'GOCELL_JWT_PRIVATE_KEY="$(cat /run/gocell/jwt-private.pem)"' \
+        'GOCELL_JWT_PUBLIC_KEY="$(cat /run/gocell/jwt-public.pem)"' \
+        'export GOCELL_JWT_PRIVATE_KEY GOCELL_JWT_PUBLIC_KEY' \
+        'exec /usr/local/bin/corebundle "$@"' \
+        > /usr/local/bin/start-corebundle.sh \
+    && chmod +x /usr/local/bin/start-corebundle.sh
+COPY --from=build /out/corebundle /usr/local/bin/corebundle
+USER gocell
+EXPOSE 8080 9090 9091
+ENTRYPOINT ["/usr/local/bin/start-corebundle.sh"]

@@ -244,12 +244,17 @@ jobs:
         # -coverpkg removed to match per-shard unit test profile semantics —
         # each run only reports coverage for the packages it tested, avoiding
         # per-file dilution in the merged Sonar view.
-        # tests/e2e/... is included here with -tags=integration,e2e so the e2e
-        # package is compiled and any infrastructure-conditional tests run.
-        # When docker compose is absent, require.Docker / require.PG / require.RMQ
-        # skip those tests automatically; the build tag ensures the package is at
-        # least compiled, catching type/import regressions in CI.
-        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/e2e/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+        # tests/e2e/internal/... covers the require+clients helpers (pure
+        # unit tests); the smoke and encryption sub-packages are owned by
+        # the dedicated `e2e` job which runs the docker-compose harness.
+        # Earlier this scope used the broader ./tests/e2e/... — but
+        # require.Docker only skips when no docker socket is reachable, and
+        # GitHub runners always expose one for testcontainers, so smoke
+        # tests under ./tests/e2e ran here and blocked on a corebundle
+        # that never started in this job. Compile-time tag regressions
+        # for the smoke / encryption packages remain covered by the e2e
+        # job's `go test -tags=e2e ./tests/e2e/...`.
+        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -257,6 +262,68 @@ jobs:
           name: coverage-integration-profile
           path: coverage-integration.out
           retention-days: 1
+
+  e2e:
+    # PR-CFG-J: real-execution gate for tests/e2e. Runs corebundle in a
+    # docker-compose harness (postgres + redis + corebundle) and pipes
+    # `go test -json` through tools/e2egate, which fails the job when
+    # zero tests executed or any package declared tests but had them all
+    # skipped (require.Docker / require.PG gate not opened).
+    #
+    # Independent of integration-test on purpose: testcontainers and
+    # docker-compose are different infra strategies, and a failure in
+    # either should not blame the other.
+    if: ${{ inputs.run-integration }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      - name: Build e2egate
+        run: go build -o "$RUNNER_TEMP/e2egate" ./tools/e2egate/cmd/e2egate
+      - name: Start docker-compose harness
+        working-directory: tests/e2e
+        run: docker compose -f docker-compose.e2e.yaml up -d --wait
+      - name: Run e2e tests with execution gate
+        env:
+          GOCELL_E2E_DOCKER_AVAILABLE: "1"
+          # PG/RMQ stay 0 in the demo+memory harness; encryption-tagged
+          # tests skip via require.PG until PR-CFG-G wires accesscore
+          # with a real outboxWriter (corebundle currently can't run
+          # accesscore in DurabilityDurable mode).
+          GOCELL_E2E_PG_AVAILABLE: "0"
+          GOCELL_E2E_RMQ_AVAILABLE: "0"
+        # No -coverprofile here: Go's coverage instruments only the test
+        # process, but the SUT (corebundle) runs as a separate container
+        # process — Go can't observe it. The integration-test job already
+        # covers ./tests/e2e/... + corebundle code paths under -tags=
+        # integration,e2e via testcontainers; adding a profile here would
+        # only re-record the HTTP client lines and dilute Sonar's view.
+        run: |
+          set -o pipefail
+          go test -tags=e2e -json -count=1 -timeout=120s ./tests/e2e/... \
+            | tee "$RUNNER_TEMP/e2e.json" \
+            | "$RUNNER_TEMP/e2egate"
+      - name: Capture compose logs
+        if: always()
+        working-directory: tests/e2e
+        run: docker compose -f docker-compose.e2e.yaml logs --no-color > "$RUNNER_TEMP/compose.log" 2>&1 || true
+      - name: Teardown
+        if: always()
+        working-directory: tests/e2e
+        run: docker compose -f docker-compose.e2e.yaml down -v
+      - name: Upload e2e diagnostics on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-diagnostics
+          path: |
+            ${{ runner.temp }}/e2e.json
+            ${{ runner.temp }}/compose.log
+          retention-days: 7
 
   os-smoke:
     if: ${{ inputs.run-os-smoke }}

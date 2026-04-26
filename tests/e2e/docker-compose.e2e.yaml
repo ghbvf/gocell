@@ -1,0 +1,37 @@
+# docker-compose for the PR-CFG-J e2e harness.
+#
+# Single corebundle service in demo + in-memory mode. The harness runs
+# corebundle through its real bootstrap path (phase0..N + healthz/readyz)
+# so e2egate can see real test execution; it does NOT run real PG yet
+# because corebundle's accesscore module currently provides a nil
+# outboxWriter, which incompatible with the assembly's DurabilityDurable
+# mode triggered by GOCELL_CELL_ADAPTER_MODE=postgres. Wiring a real
+# outbox writer for accesscore is a corebundle-level change scheduled
+# for PR-CFG-G; once landed, this compose can be expanded to
+# postgres + redis + migrate one-shot.
+
+services:
+  corebundle:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.corebundle
+    environment:
+      # GOCELL_ADAPTER_MODE unset → demo. Storage stays in-memory so
+      # accesscore's demo-mode wiring is consistent with the assembly.
+      GOCELL_JWT_ISSUER: gocell-e2e
+      GOCELL_JWT_AUDIENCE: gocell-e2e-clients
+      GOCELL_HTTP_PRIMARY_ADDR: ":8080"
+      GOCELL_HTTP_INTERNAL_ADDR: "127.0.0.1:9090"
+      GOCELL_HTTP_HEALTH_ADDR: ":9091"
+      GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE: interactive
+      # Demo mode waives the /readyz?verbose token guard (real mode forbids
+      # this; demo mode allows it for ephemeral test setups).
+      GOCELL_READYZ_VERBOSE_DISABLED: "1"
+    ports:
+      - "8080:8080"
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9091/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 60
