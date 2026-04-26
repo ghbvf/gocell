@@ -16,6 +16,7 @@ import (
 	"context"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
@@ -32,6 +33,17 @@ func (c *AccessCore) HealthCheckers() map[string]func(context.Context) error {
 	if hc, ok := c.sessionRepo.(ports.HealthCheckable); ok {
 		checkers["session-store"] = func(ctx context.Context) error {
 			return hc.Health(ctx)
+		}
+	}
+	// PR-A49: aggregate emitter (DirectEmitter) HealthContributor checkers.
+	// The /readyz aggregator surfaces fail-open drop ratio degraded signals
+	// via cell.ErrDegraded → HTTP 200 + status="degraded".
+	if hc, ok := c.emitter.(cell.HealthContributor); ok {
+		for k, v := range hc.HealthCheckers() {
+			if _, dup := checkers[k]; dup {
+				continue // checker name collision — emitter checker name is cellID-scoped, so this is unexpected; skip silently to preserve startup
+			}
+			checkers[k] = v
 		}
 	}
 	return checkers
