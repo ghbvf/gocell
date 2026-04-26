@@ -269,7 +269,7 @@ func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) 
 		// Without this sleep, a Vault deployment that accepts Login but rejects
 		// NewLifetimeWatcher would spin the CPU at 100%.
 		w.logger.WarnContext(ctx, "vault-transit: buildWatcher failed after re-auth; retrying",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 			slog.Duration("backoff", watcherBackoff))
 		select {
 		case <-ctx.Done():
@@ -323,7 +323,7 @@ func (w *tokenRenewalWorker) handleDoneCh(ctx context.Context, err error, ok boo
 	}
 	if err != nil {
 		w.logger.WarnContext(ctx, "vault-transit: token renewal watcher stopped with error; will re-authenticate",
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 	} else {
 		w.logger.WarnContext(ctx, "vault-transit: token is no longer renewable; will re-authenticate")
 	}
@@ -373,7 +373,7 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 		w.logger.WarnContext(ctx, "vault-transit: re-authentication failed; will retry",
 			slog.String("method", methodStr),
 			slog.String("reason", reason),
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 			slog.Duration("backoff", backoff))
 
 		select {

@@ -99,7 +99,7 @@ func (p *Publisher) Publish(ctx context.Context, topic string, payload []byte) e
 	defer func() {
 		if closeErr := ch.Close(); closeErr != nil {
 			slog.Debug("rabbitmq: error closing publish channel",
-				slog.String("error", closeErr.Error()))
+				slog.Any("error", closeErr))
 		}
 	}()
 

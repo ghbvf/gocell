@@ -266,7 +266,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandle
 					slog.String(logKeyEventID, entry.ID),
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyConsumerGroup, consumerGroup),
-					slog.String("error", err.Error()))
+					slog.Any("error", err))
 				return cb.retryLoop(ctx, topic, entry, handler, nil)
 			}
 			return cb.handleClaimState(ctx, topic, entry, handler, state, receipt)
@@ -280,7 +280,7 @@ func (cb *ConsumerBase) Wrap(sub Subscription, handler EntryHandler) EntryHandle
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyConsumerGroup, consumerGroup),
 				slog.Int("claim_retry_count", cb.config.ClaimRetryCount),
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
 			return HandleResult{Disposition: DispositionRequeue, Err: err}
 		}
 		return cb.handleClaimState(ctx, topic, entry, handler, state, receipt)
@@ -335,7 +335,7 @@ func (cb *ConsumerBase) claimWithRetry(
 				slog.Int("attempt", attempt+1),
 				slog.Int("max_retries", cb.config.ClaimRetryCount),
 				slog.Duration("backoff", delay),
-				slog.String("error", err.Error()))
+				slog.Any("error", err))
 			select {
 			case <-time.After(delay):
 			case <-ctx.Done():
@@ -581,7 +581,7 @@ func (cb *ConsumerBase) leaseRenewalLoop(
 				logWithContext(ctx, slog.LevelWarn, "outbox: lease extend failed (transient), will retry",
 					slog.String(logKeyEventID, entry.ID),
 					slog.String(logKeyTopic, topic),
-					slog.String("error", err.Error()))
+					slog.Any("error", err))
 			}
 		}
 	}

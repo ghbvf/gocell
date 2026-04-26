@@ -170,15 +170,22 @@ Passes the AAD bytes directly as the AES-GCM additional authenticated data param
 AES-GCM authentication fails with a non-nil error if the AAD does not match.
 
 ### VaultTransitKeyProvider
-Passes the AAD as the `context` field (base64-encoded) in the Vault Transit encrypt/decrypt
+
+> **STALE (2026-04, superseded by PR#205 + PR-A18 envelope rework):** the description below
+> reflects the *initial* design where AAD was forwarded to Vault Transit's `context` field.
+> Current code uses Transit only to wrap a per-row DEK; AAD binding is performed locally
+> by AES-GCM `Open(ct, nonce, DEK, aad)` against the unwrapped DEK. Vault never receives
+> the AAD bytes. Kept for historical context; do not implement based on this section.
+
+~~Passes the AAD as the `context` field (base64-encoded) in the Vault Transit encrypt/decrypt
 API call. Vault uses this context for HMAC binding — the decrypt call fails if the context
-does not match what was provided during encryption.
+does not match what was provided during encryption.~~
 
 Both providers therefore provide equivalent cross-row replay prevention:
 - AAD = `cell:configcore/key:{configKey}` (constructed by `crypto.AADForConfig`)
 - Mismatched AAD (e.g. transplanted ciphertext from key "db_password" to "api_key") → decrypt error → `ErrConfigDecryptFailed`
 
-ref: hashicorp/vault builtin/logical/transit/path_encrypt.go — "context" field semantics
+ref: hashicorp/vault builtin/logical/transit/path_encrypt.go — "context" field semantics (no longer used; envelope DEK path replaces in-Vault AAD binding)
 
 ---
 

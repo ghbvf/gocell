@@ -35,9 +35,9 @@ func (s *stubOutboxWriter) Write(_ context.Context, e outbox.Entry) error {
 
 type stubTxRunner struct{ calls int }
 
-func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+func (s *stubTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	s.calls++
-	return fn(context.Background())
+	return fn(ctx)
 }
 
 // withAdmin injects an admin context into a request for tests that exercise

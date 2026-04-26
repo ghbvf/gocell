@@ -141,7 +141,9 @@ func (m *mockPublisher) Close(_ context.Context) error                          
 
 var _ Publisher = (*mockPublisher)(nil)
 
-// plainSubscriber implements Subscriber but NOT SubscriberInitializer.
+// plainSubscriber implements Subscriber with no-op methods. Used to test
+// that optional capability interfaces (e.g. SubscriberIntakeStopper) are
+// detected via type assertion rather than mandatory implementation.
 type plainSubscriber struct{}
 
 func (m *plainSubscriber) Setup(_ context.Context, _ Subscription) error { return nil }
@@ -154,14 +156,6 @@ func (m *plainSubscriber) Subscribe(_ context.Context, _ Subscription, _ EntryHa
 	return nil
 }
 func (m *plainSubscriber) Close(_ context.Context) error { return nil }
-
-func TestSubscriberInitializer_IsOptional(t *testing.T) {
-	// SubscriberInitializer is deprecated; all Subscribers now implement Setup.
-	// plainSubscriber does not separately implement the deprecated interface.
-	var sub Subscriber = &plainSubscriber{}
-	_, ok := sub.(SubscriberInitializer)
-	assert.False(t, ok, "plainSubscriber should not separately implement deprecated SubscriberInitializer")
-}
 
 func TestNoopWriter_Write(t *testing.T) {
 	writer := NoopWriter{}
@@ -437,7 +431,7 @@ func TestSubscriberWithMiddleware_MiddlewareCanShortCircuit(t *testing.T) {
 	assert.False(t, handlerCalled)
 }
 
-// --- SubscriberWithMiddleware backward-compat InitializeSubscription (F1-1) ---
+// --- SubscriberWithMiddleware Setup delegation ---
 
 // setupSubscriber tracks Setup calls for tests.
 type setupSubscriber struct {
@@ -453,40 +447,24 @@ func (s *setupSubscriber) Setup(_ context.Context, sub Subscription) error {
 	return s.setupErr
 }
 
-func TestSubscriberWithMiddleware_ForwardsSubscriberInitializer(t *testing.T) {
+func TestSubscriberWithMiddleware_Setup_DelegatesToInner(t *testing.T) {
 	inner := &setupSubscriber{}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
-	// SubscriberWithMiddleware must implement SubscriberInitializer for backward compat.
-	init, ok := Subscriber(sub).(SubscriberInitializer)
-	assert.True(t, ok, "SubscriberWithMiddleware should implement SubscriberInitializer")
-
-	// InitializeSubscription delegates to Inner.Setup.
-	err := init.InitializeSubscription(context.Background(), "test.topic", "cg-1")
+	err := sub.Setup(context.Background(), Subscription{Topic: "test.topic", ConsumerGroup: "cg-1"})
 	assert.NoError(t, err)
 	assert.True(t, inner.setupCalled)
 	assert.Equal(t, "test.topic", inner.setupSub.Topic)
 	assert.Equal(t, "cg-1", inner.setupSub.ConsumerGroup)
 }
 
-func TestSubscriberWithMiddleware_InitializeSubscription_PropagatesError(t *testing.T) {
+func TestSubscriberWithMiddleware_Setup_PropagatesError(t *testing.T) {
 	inner := &setupSubscriber{setupErr: errors.New("init failed")}
 	sub := &SubscriberWithMiddleware{Inner: inner}
 
-	err := sub.InitializeSubscription(context.Background(), "t", "g")
+	err := sub.Setup(context.Background(), Subscription{Topic: "t", ConsumerGroup: "g"})
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "init failed")
-}
-
-func TestSubscriberWithMiddleware_InitializeSubscription_InnerNotInitializer(t *testing.T) {
-	// All Subscribers now implement Setup, so InitializeSubscription always delegates
-	// to Setup. ErrInitializerNotSupported is no longer returned.
-	inner := &recordingSubscriber{}
-	sub := &SubscriberWithMiddleware{Inner: inner}
-
-	err := sub.InitializeSubscription(context.Background(), "t", "g")
-	assert.NoError(t, err,
-		"InitializeSubscription must delegate to Setup which returns nil for recordingSubscriber")
 }
 
 func TestEntry_RoutingTopic(t *testing.T) {
@@ -1002,8 +980,9 @@ func TestDiscardPublisher_ZeroValue_Safe(t *testing.T) {
 
 // TestSubscriberWithMiddleware_PassesFullSubscription asserts that when Subscribe
 // is called with a Subscription, the middleware receives the *full* Subscription
-// (both Topic and ConsumerGroup), not only the topic string.
-// This test will fail until SubscriptionMiddleware replaces TopicHandlerMiddleware.
+// (both Topic and ConsumerGroup), not only the topic string. Locks the post-PR-A39
+// invariant that SubscriptionMiddleware is the only middleware shape (the
+// topic-only TopicHandlerMiddleware was deleted with the PR-A39 deprecated nuke).
 func TestSubscriberWithMiddleware_PassesFullSubscription(t *testing.T) {
 	inner := &recordingSubscriberFull{}
 

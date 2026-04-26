@@ -58,8 +58,6 @@ func isRecoverableAMQPError(err error) bool {
 var (
 	_ outbox.Subscriber              = (*Subscriber)(nil)
 	_ outbox.SubscriberIntakeStopper = (*Subscriber)(nil)
-	//nolint:staticcheck // SubscriberInitializer is deprecated but Subscriber implements it for backward compat.
-	_ outbox.SubscriberInitializer = (*Subscriber)(nil)
 )
 
 // SubscriberConfig configures how a Subscriber consumes messages.
@@ -180,8 +178,8 @@ func (s *Subscriber) resolveQueueName(topic, consumerGroup string) string {
 // channel. All operations are idempotent — safe to call multiple times.
 //
 // Precondition: s.config.DLXExchange must be non-empty. Both call sites
-// (Subscribe, InitializeSubscription) validate this, but the guard here
-// prevents accidental misuse from future code paths.
+// (Subscribe, Setup) validate this, but the guard here prevents accidental
+// misuse from future code paths.
 func (s *Subscriber) declareTopology(ch AMQPChannel, topic, queueName string) error {
 	if s.config.DLXExchange == "" {
 		return fmt.Errorf("rabbitmq: declareTopology: DLXExchange must not be empty")
@@ -248,14 +246,6 @@ func (s *Subscriber) Ready(_ outbox.Subscription) <-chan struct{} {
 	ch := make(chan struct{})
 	close(ch)
 	return ch
-}
-
-// InitializeSubscription implements outbox.SubscriberInitializer for backward
-// compatibility. Delegates to Setup.
-//
-// Deprecated: callers should use Setup directly.
-func (s *Subscriber) InitializeSubscription(ctx context.Context, topic, consumerGroup string) error {
-	return s.Setup(ctx, outbox.Subscription{Topic: topic, ConsumerGroup: consumerGroup})
 }
 
 // Subscribe registers a handler for the given subscription and blocks until ctx
@@ -346,7 +336,7 @@ func (s *Subscriber) awaitReconnect(ctx context.Context, topic, queueName string
 	slog.Warn("rabbitmq: subscription lost, waiting for reconnect",
 		slog.String(logKeyTopic, topic),
 		slog.String("queue", queueName),
-		slog.String("error", lostErr.Error()))
+		slog.Any("error", lostErr))
 
 	if waitErr := s.conn.WaitConnected(ctx); waitErr != nil {
 		// Terminal connection error — propagate so EventRouter/Bootstrap can handle.
@@ -392,7 +382,7 @@ func (s *Subscriber) subscribeOnce(
 	cleanupChannelDirect := func() {
 		if closeErr := ch.Close(); closeErr != nil {
 			slog.Debug("rabbitmq: error closing channel during cleanup",
-				slog.String("error", closeErr.Error()))
+				slog.Any("error", closeErr))
 		}
 	}
 	setupErr := func(msg string, code errcode.Code, err error) error {
@@ -667,7 +657,7 @@ func (s *Subscriber) nackPermanent(ch AMQPChannel, tag uint64, topic string) {
 	if err := ch.Nack(tag, false, false); err != nil {
 		slog.Error("rabbitmq: nack failed",
 			slog.String(logKeyTopic, topic),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 	}
 }
 
@@ -691,7 +681,7 @@ func (s *Subscriber) processDelivery(
 		slog.Error("rabbitmq: unmarshal delivery failed, nacking without requeue",
 			slog.String(logKeyTopic, topic),
 			slog.Uint64("delivery_tag", delivery.DeliveryTag),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		s.nackPermanent(ch, delivery.DeliveryTag, topic)
 		return
 	}
@@ -716,7 +706,7 @@ func (s *Subscriber) processDelivery(
 		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: invalid entry, nacking without requeue",
 			slog.String(logKeyTopic, topic),
 			slog.Uint64("delivery_tag", delivery.DeliveryTag),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		s.nackPermanent(ch, delivery.DeliveryTag, topic)
 		return
 	}
@@ -742,7 +732,7 @@ func (s *Subscriber) processDelivery(
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, entry.ID),
 			slog.String("disposition", res.Disposition.String()),
-			slog.String("error", res.Err.Error()))
+			slog.Any("error", res.Err))
 	}
 
 	s.dispatchDisposition(deliveryCtx, ch, delivery.DeliveryTag, res, topic, entry.ID)
@@ -775,7 +765,7 @@ func (s *Subscriber) dispatchDisposition(
 			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(reject) failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
-				slog.String("error", nackErr.Error()))
+				slog.Any("error", nackErr))
 		}
 		releaseReceipt(ctx, res.Receipt, topic, eventID, "reject")
 	case outbox.DispositionRequeue:
@@ -783,7 +773,7 @@ func (s *Subscriber) dispatchDisposition(
 			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
-				slog.String("error", nackErr.Error()))
+				slog.Any("error", nackErr))
 		}
 		releaseReceipt(ctx, res.Receipt, topic, eventID, "requeue")
 	default:
@@ -795,7 +785,7 @@ func (s *Subscriber) dispatchDisposition(
 			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed for unknown disposition",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
-				slog.String("error", nackErr.Error()))
+				slog.Any("error", nackErr))
 		}
 		releaseReceipt(ctx, res.Receipt, topic, eventID, "unknown")
 	}
@@ -818,12 +808,12 @@ func (s *Subscriber) dispatchAck(
 			slog.LogAttrs(ctx, slog.LevelWarn, "rabbitmq: receipt commit failed (lease may have expired); requeuing instead of acking",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
-				slog.String("error", commitErr.Error()))
+				slog.Any("error", commitErr))
 			if nackErr := ch.Nack(tag, false, true); nackErr != nil {
 				slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed after commit failure",
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyEventID, eventID),
-					slog.String("error", nackErr.Error()))
+					slog.Any("error", nackErr))
 			}
 			return
 		}
@@ -832,7 +822,7 @@ func (s *Subscriber) dispatchAck(
 		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: ack failed",
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, eventID),
-			slog.String("error", ackErr.Error()))
+			slog.Any("error", ackErr))
 		// Receipt already committed; broker ack failure means the message will
 		// be redelivered, but the idempotency key (ClaimDone) prevents double
 		// processing on the next delivery.
@@ -853,7 +843,7 @@ func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID,
 			slog.String(logKeyTopic, topic),
 			slog.String(logKeyEventID, eventID),
 			slog.String("reason", reason),
-			slog.String("error", relErr.Error()))
+			slog.Any("error", relErr))
 	}
 }
 

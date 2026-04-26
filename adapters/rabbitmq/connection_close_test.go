@@ -10,6 +10,7 @@ package rabbitmq
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -163,6 +164,41 @@ func TestConnection_Close_RespectsCtxDeadline(t *testing.T) {
 	case <-released:
 	case <-time.After(2 * time.Second):
 		t.Error("background Close goroutine did not exit after gate released")
+	}
+}
+
+// TestDrainChannelPool_CloseError_LogsDebug covers the slog.Any("error", err)
+// branch inside drainChannelPool (connection.go:530-533). The branch fires when
+// a pooled channel's Close() returns an error. Drain must continue emptying the
+// pool rather than aborting on the first close failure.
+func TestDrainChannelPool_CloseError_LogsDebug(t *testing.T) {
+	conn, _ := newTestConnection(t)
+
+	// Inject two channels into the pool: both configured to return an error on
+	// Close() so the error-log branch is exercised for each drain iteration.
+	errClose := errors.New("channel already closed")
+	ch1 := newMockChannel()
+	ch1.closeErr = errClose
+	ch2 := newMockChannel()
+	ch2.closeErr = errClose
+
+	conn.channelPool <- ch1
+	conn.channelPool <- ch2
+
+	// drainChannelPool is an unexported method; calling it directly is
+	// possible because the test is in the same package (rabbitmq).
+	conn.drainChannelPool()
+
+	// Both channels must have had Close() called despite the error.
+	assert.True(t, ch1.closeCalled, "drainChannelPool must call Close on pooled channels")
+	assert.True(t, ch2.closeCalled, "drainChannelPool must call Close on all pooled channels")
+
+	// The pool must be empty after drain.
+	select {
+	case <-conn.channelPool:
+		t.Fatal("channelPool must be empty after drainChannelPool")
+	default:
+		// expected — pool is empty
 	}
 }
 

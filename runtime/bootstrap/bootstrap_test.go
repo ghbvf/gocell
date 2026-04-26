@@ -150,14 +150,16 @@ func TestNew_WithOptions(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithPublisher(eb), WithSubscriber(eb),
-		WithListener(cell.PrimaryListener, ":9090", nil),
+		WithListener(cell.PrimaryListener, ":7070", nil),
 		WithShutdownTimeout(5*time.Second),
 	)
 
 	// PR-A14b: listener addr lives in listenerConfigs, not primaryAddr.
+	// Use :7070 (not :9090) to avoid visual collision with the InternalListener
+	// default (127.0.0.1:9090) when scanning the assertion at a glance.
 	cfg, ok := b.listenerConfigs[cell.PrimaryListener]
 	require.True(t, ok, "PrimaryListener config must be registered")
-	assert.Equal(t, ":9090", cfg.addr)
+	assert.Equal(t, ":7070", cfg.addr)
 	assert.Equal(t, asm, b.assembly)
 	assert.Equal(t, eb, b.publisher)
 	assert.Equal(t, eb, b.subscriber)

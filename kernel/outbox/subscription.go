@@ -62,9 +62,9 @@ func (s Subscription) ObservabilityID() string {
 	return s.ConsumerGroup
 }
 
-// SubscriptionMiddleware is the event-consumer middleware type that carries
-// the full Subscription identity. It replaces TopicHandlerMiddleware, which
-// only passed the topic string and lost ConsumerGroup at middleware boundaries.
+// SubscriptionMiddleware is the event-consumer middleware type. It carries
+// the full Subscription identity (Topic + ConsumerGroup + CellID), so middleware
+// can route, log, and observe per-subscription rather than per-topic.
 //
 // Apply in order: [0] is outermost, [len-1] is innermost.
 type SubscriptionMiddleware func(sub Subscription, next EntryHandler) EntryHandler

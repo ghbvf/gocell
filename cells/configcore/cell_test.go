@@ -26,22 +26,13 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// noopTxRunner is a test double that executes fn directly without a real transaction.
-type noopTxRunner struct{}
-
-func (noopTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
-	return fn(context.Background())
-}
-
-var _ persistence.TxRunner = noopTxRunner{}
-
 func newTestCell() *ConfigCore {
 	return NewConfigCore(
 		WithConfigRepository(mem.NewConfigRepository()),
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithOutboxDeps(eventbus.New(), nil),
 		WithOutboxDeps(nil, outbox.NoopWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 		WithMetricsProvider(metrics.NopProvider{}),
 	)
 }
@@ -109,7 +100,7 @@ func TestConfigCore_InitDemoMode_RejectsHalfConfiguredPath(t *testing.T) {
 			opts: []Option{
 				WithInMemoryDefaults(),
 				WithOutboxDeps(eventbus.New(), nil),
-				WithTxManager(noopTxRunner{}),
+				WithTxManager(persistence.NoopTxRunner{}),
 			},
 		},
 	}
@@ -207,7 +198,7 @@ func TestConfigCoreInit_WithEmitter_DurableRequiresDurableEmitter(t *testing.T) 
 		WithInMemoryDefaults(),
 		WithCursorCodec(cursorCodec),
 		WithEmitter(outbox.NewNoopEmitter()), // non-durable
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(persistence.NoopTxRunner{}),
 	)
 	err = c.Init(context.Background(), cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDurable})
 	require.Error(t, err)
@@ -532,7 +523,7 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithOutboxDeps(eventbus.New(), nil),
 		WithOutboxDeps(nil, &recordingConfigWriter{}),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
 		// No WithCursorCodec — durable mode must refuse the demo fallback.
 	)
 	err := c.Init(context.Background(), cell.Dependencies{
@@ -545,6 +536,18 @@ func TestConfigCore_InitDurable_RejectsMissingCursorCodec(t *testing.T) {
 	assert.Equal(t, errcode.ErrCellMissingCodec, ecErr.Code)
 	assert.Contains(t, err.Error(), "cursor codec")
 }
+
+// durableTxRunner is a TxRunner that does NOT advertise Noop(); configcore's
+// durable-mode init check rejects persistence.NoopTxRunner and accepts this.
+// Used by tests that exercise durable-mode behaviour without spinning up a
+// real database.
+type durableTxRunner struct{}
+
+func (durableTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
+	return fn(ctx)
+}
+
+var _ persistence.TxRunner = durableTxRunner{}
 
 // recordingConfigWriter is a minimal outbox.Writer test double that is not a
 // Nooper — durable mode requires a non-noop writer.
@@ -575,7 +578,7 @@ func TestWithPostgresPool_NilPool_SetsPoolAndDeferred(t *testing.T) {
 		WithPostgresPool(nil),                           // nil pool: deferred construction skipped in Init
 		WithConfigRepository(mem.NewConfigRepository()), // inject repo directly to satisfy Init
 		WithFlagRepository(mem.NewFlagRepository()),
-		WithTxManager(noopTxRunner{}),
+		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
 		WithOutboxDeps(eventbus.New(), writer),
 		WithCursorCodec(mustNewCfgCodec(t, []byte("wiring-test-cfg-cursor-key-32b!!"))),
 	)

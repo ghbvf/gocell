@@ -21,9 +21,9 @@ import (
 // change but tx commits fail.
 type failingTxRunner struct{ failErr error }
 
-func (f *failingTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
+func (f *failingTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error) error {
 	// Execute fn; the transaction will be rolled back regardless.
-	_ = fn(context.Background())
+	_ = fn(ctx)
 	return f.failErr
 }
 

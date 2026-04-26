@@ -823,6 +823,57 @@ func TestWrap_LeaseRenewal_HandlerComplete_StopsGoroutine(t *testing.T) {
 	// goleak.VerifyNone(t) at defer will catch any leaked goroutines.
 }
 
+// TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues covers
+// the slog.Any("error", err) branch inside leaseRenewalLoop (consumer_base.go:581-584).
+// The branch fires when Extend returns a non-ErrLeaseExpired (transient) error.
+// The renewal loop must log the warning and continue ticking rather than
+// cancelling the handler context.
+func TestWrap_LeaseRenewalLoop_TransientExtendError_LogsWarnAndContinues(t *testing.T) {
+	defer goleak.VerifyNone(t)
+
+	interval := 20 * time.Millisecond
+	transientErr := errors.New("extend: redis timeout")
+
+	// fakeReceipt with extendErr set returns the transient error on every
+	// Extend call. This is NOT ErrLeaseExpired, so the renewal loop must
+	// stay alive and NOT cancel the handler context.
+	receipt := &fakeReceipt{extendErr: transientErr}
+	claimer := &fakeClaimer{state: idempotency.ClaimAcquired, receipt: receipt}
+
+	cb, err := NewConsumerBase(claimer, ConsumerBaseConfig{
+		LeaseTTL:             200 * time.Millisecond,
+		LeaseRenewalInterval: interval,
+		RetryCount:           1,
+		RetryBaseDelay:       time.Millisecond,
+	})
+	require.NoError(t, err)
+
+	// handlerDone is closed when the handler returns so the test can assert
+	// that the handler ran to completion (ctx was NOT cancelled).
+	handlerDone := make(chan struct{})
+	handler := cb.Wrap(Subscription{Topic: "topic", ConsumerGroup: "cg"}, func(ctx context.Context, _ Entry) HandleResult {
+		// Block for 3 intervals so renewal fires at least twice with the
+		// transient error; verify ctx stays live throughout.
+		select {
+		case <-time.After(3 * interval):
+			// normal exit — ctx was NOT cancelled by transient extend error
+		case <-ctx.Done():
+			t.Error("handler context was cancelled on transient extend error — must not happen")
+		}
+		close(handlerDone)
+		return HandleResult{Disposition: DispositionAck}
+	})
+
+	res := handler(context.Background(), Entry{ID: "evt-transient-extend"})
+	<-handlerDone
+
+	// Handler must complete with Ack — transient extend failure must not affect outcome.
+	assert.Equal(t, DispositionAck, res.Disposition)
+	// Extend must have been called at least once (hitting the warn branch).
+	assert.GreaterOrEqual(t, int(receipt.extendCalls.Load()), 1,
+		"Extend must be called at least once to exercise the transient warn branch")
+}
+
 // TestWrap_LeaseRenewal_DisabledWhenIntervalNegative verifies that setting
 // LeaseRenewalInterval to a negative value disables the renewal goroutine:
 // Receipt.Extend is never called, no goroutines are leaked, and the handler

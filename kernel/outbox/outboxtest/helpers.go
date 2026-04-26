@@ -143,8 +143,7 @@ func CollectN(
 		_ = sub.Subscribe(subCtx, outbox.Subscription{Topic: topic}, handler)
 	}()
 
-	// Wait for subscription to register. Uses SubscriberInitializer if available,
-	// otherwise falls back to a brief sleep.
+	// Wait for the subscriber to declare topology via Setup, then Ready closes.
 	waitForSubscription(t, ctx, sub, topic, "")
 
 	select {
@@ -218,9 +217,8 @@ func startCollecting(t *testing.T, ctx context.Context, sub outbox.Subscriber, t
 		}
 	}()
 	<-ready
-	// Wait for subscription to register. Uses SubscriberInitializer if available,
-	// otherwise falls back to a brief sleep to cover the window between goroutine
-	// start and Subscribe's internal registration.
+	// Wait for the subscriber to declare topology via Setup; for in-memory
+	// implementations Ready closes once Subscribe registers internally.
 	waitForSubscription(t, ctx, sub, topic, "")
 	return c
 }

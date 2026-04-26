@@ -26,7 +26,7 @@ func TestRabbitMQ_Conformance(t *testing.T) {
 	// receives its own independent Connection. This prevents a prior subtest's
 	// teardown (e.g. SubscribeBlocksUntilCancel) from leaving the shared
 	// Connection in a reconnecting state that causes the next subtest's
-	// InitializeSubscription → acquireChannel call to fail with
+	// Setup → acquireChannel call to fail with
 	// ERR_ADAPTER_AMQP_CONNECT "connection not available".
 	brokerURL, containerCleanup := startRabbitMQBroker(t)
 	t.Cleanup(containerCleanup)

@@ -1068,6 +1068,39 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 		"timeout probe error must mention deadline; got %q", errStr)
 }
 
+// TestWriteJSON_WriteError verifies that writeJSON logs an slog.Error when the
+// ResponseWriter.Write call fails (e.g. because the connection was reset).
+// This covers the slog.Any("error", err) branch on line 621 of health.go.
+func TestWriteJSON_WriteError(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-write-err", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+
+	// failWriter returns an error from every Write call so json.Encoder.Encode
+	// surfaces the error into the slog.Error branch.
+	fw := &failWriter{
+		header: make(http.Header),
+	}
+	req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+
+	// ServeHTTP must not panic even though Write fails.
+	require.NotPanics(t, func() {
+		h.LivezHandler().ServeHTTP(fw, req)
+	})
+}
+
+// failWriter is an http.ResponseWriter whose Write always returns an error.
+type failWriter struct {
+	header http.Header
+	code   int
+}
+
+func (f *failWriter) Header() http.Header         { return f.header }
+func (f *failWriter) WriteHeader(code int)        { f.code = code }
+func (f *failWriter) Write(_ []byte) (int, error) { return 0, fmt.Errorf("simulated write failure") }
+
 // TestReadyz_VerboseDependencies_StructuredOutput verifies the new structured
 // dependency format: each entry is a map with "status", "duration_ms" fields
 // (and optionally "error" for non-healthy probes).

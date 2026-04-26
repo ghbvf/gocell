@@ -184,12 +184,13 @@ var _ cell.EventRegistrar = (*MyCell)(nil)
 // 业务 handler 只需返回 outbox.HandleResult{Disposition: Ack/Requeue/Reject}。
 func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
     handler := outbox.WrapLegacyHandler(c.svc.HandleEvent) // 旧签名 → EntryHandler
-    r.AddContractHandler(wrapper.ContractSpec{
-        ID:        "event.my.topic.v1",
-        Kind:      "event",
-        Transport: "amqp",
-        Topic:     "my.topic.v1",
-    }, handler, c.ID())
+    // EventSpec(id, transport) helper for the common case Topic == ID.
+    // FMT-18 cross-checks both ContractSpec{} literals and EventSpec(...) calls
+    // against contracts/**/contract.yaml — strict-only: the check fires under
+    // `gocell validate --strict` (and the strict CI job), not plain `validate`.
+    // The id argument must be a string literal so the AST can resolve it;
+    // computed ids surface as a FMT-18 WARNING.
+    r.AddContractHandler(wrapper.EventSpec("event.my.topic.v1", "amqp"), handler, c.ID())
     return nil
 }
 ```

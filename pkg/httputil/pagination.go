@@ -14,7 +14,7 @@ func ParsePageParamsOrWrite(w http.ResponseWriter, r *http.Request) (query.PageP
 	params, err := ParsePageParams(r)
 	if err != nil {
 		slog.Warn("pagination: request validation failed",
-			slog.String("error", err.Error()),
+			slog.Any("error", err),
 			slog.String("path", r.URL.Path),
 		)
 		WriteDomainError(r.Context(), w, err)

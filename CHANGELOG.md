@@ -6,6 +6,36 @@ Format follows [Keep a Changelog](https://keepachangelog.com/).
 
 ## [Unreleased]
 
+### Removed (Breaking) — PR-A39 deprecated subscriber compat surface
+
+Three deprecated symbols and their backward-compat plumbing are deleted
+from `kernel/outbox`. `SubscriberInitializer` was already eclipsed by
+`Subscriber.Setup`; `TopicHandlerMiddleware` was eclipsed by
+`SubscriptionMiddleware` which carries the full subscription identity
+(Topic + ConsumerGroup + CellID) instead of just the topic string. With
+no external consumers yet (CLAUDE.md "Review 和重构时不考虑向后兼容"), the
+shims are removed outright rather than aliased.
+
+**Removed (deletions, no aliases):**
+
+- `outbox.SubscriberInitializer` interface — implement `Subscriber.Setup`.
+- `outbox.ErrInitializerNotSupported` var — no longer reachable; the
+  capability-detection path it sentinelised is gone.
+- `outbox.TopicHandlerMiddleware` type — use `outbox.SubscriptionMiddleware`.
+- `outbox.SubscriberWithMiddleware.InitializeSubscription` method — call
+  `Setup(ctx, outbox.Subscription{Topic, ConsumerGroup})` directly.
+- `adapters/rabbitmq/Subscriber.InitializeSubscription` method (and the
+  matching `SubscriberInitializer` interface-assertion shim) — call
+  `Setup(ctx, outbox.Subscription{...})` directly.
+
+**Migration:**
+
+| Before | After |
+|--------|-------|
+| `sub.InitializeSubscription(ctx, topic, group)` | `sub.Setup(ctx, outbox.Subscription{Topic: topic, ConsumerGroup: group})` |
+| `func(topic string, next outbox.EntryHandler) outbox.EntryHandler` (TopicHandlerMiddleware) | `func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler` (SubscriptionMiddleware) — same shape, full Subscription instead of bare topic |
+| `var _ outbox.SubscriberInitializer = (*MySub)(nil)` | delete the assertion; `Subscriber.Setup` is mandatory and the interface assertion `_ outbox.Subscriber = (*MySub)(nil)` already covers it |
+
 ### Changed (Breaking) — PR269 round-3 AUTH-POLICY-PLAN-CONSOLIDATE
 
 Auth scheme is exclusively a **listener-scope** concern. The PR262 dual-anchor
@@ -249,3 +279,5 @@ app := bootstrap.New(
 ```
 
 For tests, inject a pre-bound listener via `bootstrap.WithListenerNet(ln)` as a `WithListener` option.
+
+<!-- PR-A39 round-3: 6 coverage tests added (eventbus releaseReceipt, consumer_base leaseRenewalLoop, rabbitmq drainChannelPool/nackPermanent/processDelivery/dispatchDisposition) — see refactor/pr-a39-housekeeping-sweep commits f3468b57, bade9be5, 6a0161b5, 164781e9 -->
