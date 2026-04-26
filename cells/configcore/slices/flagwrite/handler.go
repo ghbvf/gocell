@@ -222,22 +222,22 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 // argument is cell.RouteHandler so production wiring (cell.RouteMux) and
 // contract tests (*http.ServeMux) share the same declarations.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specFlagsCreate,
 		Handler:  http.HandlerFunc(h.HandleCreate),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specFlagsUpdate,
 		Handler:  http.HandlerFunc(h.HandleUpdate),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specFlagsToggle,
 		Handler:  http.HandlerFunc(h.HandleToggle),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specFlagsDelete,
 		Handler:  http.HandlerFunc(h.HandleDelete),
 		Policy:   auth.AnyRole(dto.RoleAdmin),

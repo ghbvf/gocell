@@ -96,17 +96,17 @@ func (h *Handler) HandleDelete(w http.ResponseWriter, r *http.Request) {
 // sub-router adapter) so production wiring, contract tests, and cell-level
 // integration tests share the same auth.Mount declarations.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specConfigWrite,
 		Handler:  http.HandlerFunc(h.HandleCreate),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specConfigUpdate,
 		Handler:  http.HandlerFunc(h.HandleUpdate),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specConfigDelete,
 		Handler:  http.HandlerFunc(h.HandleDelete),
 		Policy:   auth.AnyRole(dto.RoleAdmin),

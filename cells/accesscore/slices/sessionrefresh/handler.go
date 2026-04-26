@@ -32,7 +32,7 @@ func NewHandler(svc *Service) *Handler {
 // Refresh is a public endpoint: callers supply a refresh token in the request
 // body; no JWT is required.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specRefresh,
 		Handler:  http.HandlerFunc(h.HandleRefresh),
 		Public:   true,

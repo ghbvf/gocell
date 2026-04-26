@@ -63,10 +63,16 @@ type Route struct {
 //     path before handing off to the top-level Router's declaration
 //     table).
 //
-// Mount panics on invalid configurations (fail-fast at startup is
-// preferred over silent runtime drift).
-func Mount(mux cell.RouteHandler, r Route) {
-	r.validateOrPanic()
+// Mount returns a non-nil error on invalid configurations so callers
+// (cell.RouteGroup.Register) can propagate the failure to bootstrap phase5
+// without aborting the program. Composition-root call sites that want
+// fail-fast wiring can wrap the error in a panic at the top of the call
+// chain; cells that consult runtime config should propagate the error
+// instead.
+func Mount(mux cell.RouteHandler, r Route) error {
+	if err := r.validate(); err != nil {
+		return err
+	}
 
 	prefix := ""
 	if p, ok := mux.(cell.Prefixer); ok {
@@ -80,12 +86,12 @@ func Mount(mux cell.RouteHandler, r Route) {
 		prefix = ""
 	}
 	if prefix != "" && !isPathSegmentPrefix(r.Contract.Path, prefix) {
-		panic(fmt.Sprintf(
+		return fmt.Errorf(
 			"auth.Mount %s %s: Contract.Path does not extend mux mount prefix %q — "+
 				"sub-routers must declare a Contract.Path that begins with the prefix "+
 				"on a path-segment boundary. Fix the Contract.Path or the Route()/Mount() "+
-				"the caller used to scope the sub-router.",
-			r.Contract.Method, r.Contract.Path, prefix))
+				"the caller used to scope the sub-router",
+			r.Contract.Method, r.Contract.Path, prefix)
 	}
 	relPath := stripMountPrefix(r.Contract.Path, prefix)
 
@@ -96,7 +102,11 @@ func Mount(mux cell.RouteHandler, r Route) {
 	// wrapper.HTTPHandler is a pure ctx contributor (round-4) — it writes
 	// ContractID + contract attrs into ctx so the outer middleware.Tracing
 	// span late-binds them. No inner span is created.
-	handler = wrapper.MustHTTPHandler(r.Contract, handler)
+	wrapped, err := wrapper.HTTPHandler(r.Contract, handler)
+	if err != nil {
+		return fmt.Errorf("auth.Mount: %w", err)
+	}
+	handler = wrapped
 
 	cleanedRel := path.Clean(relPath)
 	mux.Handle(r.Contract.Method+" "+cleanedRel, handler)
@@ -114,6 +124,17 @@ func Mount(mux cell.RouteHandler, r Route) {
 	}
 	if declarer, ok := mux.(cell.HTTPContractDeclarer); ok {
 		declarer.DeclareHTTPContract(r.Contract)
+	}
+	return nil
+}
+
+// MustMount is the composition-root fail-fast variant of Mount. It panics
+// when Mount returns an error. Suitable for top-level wiring where the
+// caller has no error-return path; cells should use Mount inside their
+// RouteGroup.Register closure and propagate the error.
+func MustMount(mux cell.RouteHandler, r Route) {
+	if err := Mount(mux, r); err != nil {
+		panic(err.Error())
 	}
 }
 
@@ -163,51 +184,55 @@ func stripMountPrefix(fullPath, prefix string) string {
 	return stripped
 }
 
-func (r Route) validateOrPanic() {
+func (r Route) validate() error {
 	if r.Handler == nil {
-		panic("auth.Mount: Handler must not be nil")
+		return fmt.Errorf("auth.Mount: Handler must not be nil")
 	}
 	if r.Contract.ID == "" {
-		panic("auth.Mount: Route.Contract.ID must be set — round-4 dropped the " +
+		return fmt.Errorf("auth.Mount: Route.Contract.ID must be set — round-4 dropped the " +
 			"untraced legacy registration shape; every Mount call must bind a " +
 			"wrapper.ContractSpec literal. If the contract has no YAML yet, " +
-			"author one in contracts/ first.")
+			"author one in contracts/ first")
 	}
-	r.validateContractShape()
-	r.validateBypassCompatibility()
+	if err := r.validateContractShape(); err != nil {
+		return err
+	}
+	return r.validateBypassCompatibility()
 }
 
 // validateContractShape verifies the Contract shape at registration time
 // so startup fails fast on structural mistakes.
-func (r Route) validateContractShape() {
+func (r Route) validateContractShape() error {
 	if r.Contract.Kind != "http" {
-		panic(fmt.Sprintf("auth.Mount: Contract.Kind %q must be \"http\"", r.Contract.Kind))
+		return fmt.Errorf("auth.Mount: Contract.Kind %q must be \"http\"", r.Contract.Kind)
 	}
 	if r.Contract.Method == "" {
-		panic("auth.Mount: Contract.Method must not be empty")
+		return fmt.Errorf("auth.Mount: Contract.Method must not be empty")
 	}
 	if r.Contract.Method != strings.ToUpper(strings.TrimSpace(r.Contract.Method)) {
-		panic(fmt.Sprintf("auth.Mount: Contract.Method %q must be upper-case", r.Contract.Method))
+		return fmt.Errorf("auth.Mount: Contract.Method %q must be upper-case", r.Contract.Method)
 	}
 	if !validRouteMethods[r.Contract.Method] {
-		panic(fmt.Sprintf(
+		return fmt.Errorf(
 			"auth.Mount: Contract.Method %q not recognised (GET/HEAD/POST/PUT/PATCH/DELETE/OPTIONS/CONNECT/TRACE)",
-			r.Contract.Method))
+			r.Contract.Method)
 	}
 	if r.Contract.Path == "" || r.Contract.Path[0] != '/' {
-		panic(fmt.Sprintf("auth.Mount: Contract.Path %q must start with '/'", r.Contract.Path))
+		return fmt.Errorf("auth.Mount: Contract.Path %q must start with '/'", r.Contract.Path)
 	}
+	return nil
 }
 
-func (r Route) validateBypassCompatibility() {
+func (r Route) validateBypassCompatibility() error {
 	if r.Public && r.Policy != nil {
-		panic(fmt.Sprintf(
+		return fmt.Errorf(
 			"auth.Mount %s %s: Public=true conflicts with non-nil Policy (public routes have no server-side authorization)",
-			r.Contract.Method, r.Contract.Path))
+			r.Contract.Method, r.Contract.Path)
 	}
 	if r.Public && r.PasswordResetExempt {
-		panic(fmt.Sprintf(
+		return fmt.Errorf(
 			"auth.Mount %s %s: Public=true conflicts with PasswordResetExempt=true (gate runs only for authenticated tokens)",
-			r.Contract.Method, r.Contract.Path))
+			r.Contract.Method, r.Contract.Path)
 	}
+	return nil
 }

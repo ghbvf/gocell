@@ -37,7 +37,7 @@ func NewHandler(svc *Service) *Handler {
 // route reachable while the caller still owes a password reset (standard
 // user-self-recovery flow).
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract:            specSessionDelete,
 		Handler:             http.HandlerFunc(h.HandleLogout),
 		PasswordResetExempt: true,

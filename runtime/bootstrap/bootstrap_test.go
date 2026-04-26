@@ -2383,15 +2383,16 @@ func (c *httpCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":"ok"}`))
 			}), Policy: authtest.RequireAuthenticated()})
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
 			}), Public: true})
+			return nil
 		},
 	}}
 }
@@ -2468,7 +2469,7 @@ func TestBootstrap_WithAuthMiddleware_ProtectedRoute_Returns401(t *testing.T) {
 	}
 }
 
-// publicHTTPCell registers routes as public via auth.Mount(Public:true),
+// publicHTTPCell registers routes as public via auth.MustMount(Public:true),
 // following the F3 pattern where cells own their auth declarations.
 type publicHTTPCell struct {
 	*cell.BaseCell
@@ -2484,21 +2485,22 @@ func (c *publicHTTPCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":"ok"}`))
 			}), Public: true})
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":{"token":"test"}}`))
 			}), Public: true})
+			return nil
 		},
 	}}
 }
 
 func TestBootstrap_WithAuthMiddleware_PublicRoute_Passes(t *testing.T) {
-	// F3: public routes are declared via auth.Mount(Public:true) inside the cell.
+	// F3: public routes are declared via auth.MustMount(Public:true) inside the cell.
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 
@@ -2647,10 +2649,10 @@ func TestGracefulShutdown_ReadyzUnhealthyBeforeHTTPStop(t *testing.T) {
 // caller-supplied route registration function, used by tracing E2E tests.
 type tracingTestCell struct {
 	*cell.BaseCell
-	registerFn func(mux cell.RouteMux)
+	registerFn func(mux cell.RouteMux) error
 }
 
-func newTracingTestCell(id string, fn func(mux cell.RouteMux)) *tracingTestCell {
+func newTracingTestCell(id string, fn func(mux cell.RouteMux) error) *tracingTestCell {
 	return &tracingTestCell{
 		BaseCell: cell.NewBaseCell(cell.CellMetadata{
 			ID:   id,
@@ -2679,11 +2681,12 @@ func TestBootstrap_TracingE2E_BusinessRoute(t *testing.T) {
 	// PR-A14a: register via raw mux.Handle + coverage whitelist so the route
 	// is neither Public (which starts a new trace root) nor policy-guarded
 	// (which would 401 without a verifier). Handler runs, tracing works.
-	tc := newTracingTestCell("trace-biz", func(mux cell.RouteMux) {
+	tc := newTracingTestCell("trace-biz", func(mux cell.RouteMux) error {
 		mux.Handle("GET /api/v1/trace-test", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
 			w.WriteHeader(http.StatusOK)
 		}))
+		return nil
 	})
 
 	asm := assembly.New(assembly.Config{ID: "trace-e2e", DurabilityMode: cell.DurabilityDemo})
@@ -2721,11 +2724,12 @@ func TestBootstrap_TracingE2E_UpstreamPropagation(t *testing.T) {
 	var gotTraceID string
 	// PR-A14a: see TestBootstrap_TracingE2E_BusinessRoute rationale for the
 	// raw-Handle + whitelist pattern.
-	tc := newTracingTestCell("trace-upstream", func(mux cell.RouteMux) {
+	tc := newTracingTestCell("trace-upstream", func(mux cell.RouteMux) error {
 		mux.Handle("GET /api/v1/propagate", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			gotTraceID, _ = ctxkeys.TraceIDFrom(r.Context())
 			w.WriteHeader(http.StatusOK)
 		}))
+		return nil
 	})
 
 	asm := assembly.New(assembly.Config{ID: "trace-upstream", DurabilityMode: cell.DurabilityDemo})
@@ -2766,10 +2770,11 @@ func TestBootstrap_TracingE2E_PanicRoute(t *testing.T) {
 	ln := newLocalListener(t)
 	tracer := tracing.NewTracer("bootstrap-panic-e2e")
 
-	tc := newTracingTestCell("trace-panic", func(mux cell.RouteMux) {
+	tc := newTracingTestCell("trace-panic", func(mux cell.RouteMux) error {
 		mux.Handle("GET /api/v1/boom", http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
 			panic("boom for tracing test")
 		}))
+		return nil
 	})
 
 	asm := assembly.New(assembly.Config{ID: "trace-panic", DurabilityMode: cell.DurabilityDemo})
@@ -2866,17 +2871,18 @@ func (c *authProviderCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/data"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":"ok"}`))
 			}), Policy: authtest.RequireAuthenticated()})
 			// F3: login is declared as a public route so auth discovery tests can verify
 			// that no-token requests bypass JWT checks on this endpoint.
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/access/sessions/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write([]byte(`{"data":"login-ok"}`))
 			}), Public: true})
+			return nil
 		},
 	}}
 }
@@ -2944,7 +2950,7 @@ func TestBootstrap_AuthDiscovery_PublicRoute_Passes(t *testing.T) {
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
-		// F3: public routes are declared via auth.Mount(Public:true) in the cell.
+		// F3: public routes are declared via auth.MustMount(Public:true) in the cell.
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3120,7 +3126,7 @@ func TestBootstrap_TrustBoundary_PublicEndpoint_IgnoresClientIDs(t *testing.T) {
 		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, WithListenerNet(ln)),
 		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
-		// F3: public routes declared via auth.Mount(Public:true) in authProviderCell.
+		// F3: public routes declared via auth.MustMount(Public:true) in authProviderCell.
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -3429,19 +3435,20 @@ func (c *traceCapturingCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
+		Register: func(mux cell.RouteMux) error {
 			// F3: public/ping is declared public so it creates new trace roots and
 			// rejects client-supplied request IDs.
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				tid, _ := ctxkeys.TraceIDFrom(r.Context())
 				c.gotPublic <- tid
 				w.WriteHeader(http.StatusOK)
 			}), Public: true})
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/protected/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/protected/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				tid, _ := ctxkeys.TraceIDFrom(r.Context())
 				c.gotProtected <- tid
 				w.WriteHeader(http.StatusOK)
 			}), Policy: authtest.RequireAuthenticated()})
+			return nil
 		},
 	}}
 }
@@ -3578,9 +3585,10 @@ func (c *publicPingAuthCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
+		Register: func(mux cell.RouteMux) error {
 			// F3: GET /api/v1/public/ping is declared public; HEAD alias is automatic.
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/public/ping"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
+			return nil
 		},
 	}}
 }
@@ -3783,13 +3791,14 @@ func (c *duplicateAuthCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
+		Register: func(mux cell.RouteMux) error {
 			handler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			})
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
 			// Declare the same (method, path) a second time — must trigger FinalizeAuth error.
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/dup"), Handler: handler, Public: true})
+			return nil
 		},
 	}}
 }
@@ -3811,10 +3820,11 @@ func (c *protectedAuthCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.PrimaryListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/protected"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/protected"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
 			}), Policy: authtest.RequireAuthenticated()})
+			return nil
 		},
 	}}
 }
@@ -3941,16 +3951,17 @@ func (c *duplicateInternalCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.InternalListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{
 				Contract: testHTTPContract("POST", "/internal/v1/dup-internal"),
 				Handler:  handler,
 			})
 			// Duplicate declaration — must trigger FinalizeAuth error.
-			auth.Mount(mux, auth.Route{
+			auth.MustMount(mux, auth.Route{
 				Contract: testHTTPContract("POST", "/internal/v1/dup-internal"),
 				Handler:  handler,
 			})
+			return nil
 		},
 	}}
 }
@@ -4010,18 +4021,19 @@ func (c *duplicateHealthCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{{
 		Listener: cell.HealthListener,
 		Prefix:   "",
-		Register: func(mux cell.RouteMux) {
-			auth.Mount(mux, auth.Route{
+		Register: func(mux cell.RouteMux) error {
+			auth.MustMount(mux, auth.Route{
 				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
 				Handler:  handler,
 				Public:   true,
 			})
 			// Duplicate declaration — must trigger FinalizeAuth error.
-			auth.Mount(mux, auth.Route{
+			auth.MustMount(mux, auth.Route{
 				Contract: testHTTPContract("GET", "/api/v1/health-dup"),
 				Handler:  handler,
 				Public:   true,
 			})
+			return nil
 		},
 	}}
 }
@@ -4077,12 +4089,13 @@ func (c *unknownListenerCell) RouteGroups() []cell.RouteGroup {
 		{
 			Listener: cell.ListenerRef{}, // zero value — undeclared
 			Prefix:   "/api/v1/unknown",
-			Register: func(mux cell.RouteMux) {
-				auth.Mount(mux, auth.Route{
+			Register: func(mux cell.RouteMux) error {
+				auth.MustMount(mux, auth.Route{
 					Contract: testHTTPContract(http.MethodGet, "/api/v1/unknown/ping"),
 					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}),
 					Public:   true,
 				})
+				return nil
 			},
 		},
 	}

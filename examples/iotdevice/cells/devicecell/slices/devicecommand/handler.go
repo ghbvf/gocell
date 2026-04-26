@@ -86,27 +86,27 @@ func NewHandler(svc *Service) *Handler {
 
 // RegisterRoutes registers device-command routes on the given mux.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specCommandEnqueue,
 		Handler:  http.HandlerFunc(h.HandleEnqueue),
 		Policy:   auth.AnyRole(dto.RoleAdmin, dto.RoleOperator),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specCommandDequeue,
 		Handler:  http.HandlerFunc(h.HandleDequeue),
 		Policy:   auth.SelfOr("id", "admin"),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specCommandReport,
 		Handler:  http.HandlerFunc(h.HandleReport),
 		Policy:   auth.SelfOr("id", "admin"),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specCommandAck,
 		Handler:  http.HandlerFunc(h.HandleAck),
 		Policy:   auth.SelfOr("id", "admin"),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specCommandExtendLease,
 		Handler:  http.HandlerFunc(h.HandleExtendLease),
 		Policy:   auth.SelfOr("id", "admin"),
@@ -117,7 +117,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 // listener. The bootstrap internal middleware authenticates service tokens;
 // the route policy then requires the built-in internal admin role.
 func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specInternalCommandScanActive,
 		Handler:  http.HandlerFunc(h.HandleScanActive),
 		Policy:   auth.AnyRole(auth.RoleInternalAdmin),

@@ -78,7 +78,7 @@ func auditQueryPolicy(r *http.Request) error {
 // RegisterRoutes registers auditquery routes with the audit-query policy
 // via auth.Mount so every request emits a contract-tagged span.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specAuditList,
 		Handler:  http.HandlerFunc(h.HandleQuery),
 		Policy:   auditQueryPolicy,

@@ -65,12 +65,12 @@ func NewHandler(svc *Service) *Handler {
 // RegisterRoutes registers configpublish routes with admin-only policies
 // via auth.Mount so every request emits a contract-tagged span.
 func (h *Handler) RegisterRoutes(mux cell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specConfigPublish,
 		Handler:  http.HandlerFunc(h.HandlePublish),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specConfigRollback,
 		Handler:  http.HandlerFunc(h.HandleRollback),
 		Policy:   auth.AnyRole(dto.RoleAdmin),

@@ -191,11 +191,12 @@ func (c *OrderCell) RouteGroups() []cell.RouteGroup {
 		{
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
 				mux.Route("/orders", func(orders cell.RouteMux) {
 					c.createHandler.RegisterRoutes(orders)
 					c.queryHandler.RegisterRoutes(orders)
 				})
+				return nil
 			},
 		},
 	}

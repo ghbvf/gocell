@@ -65,12 +65,12 @@ func NewHandler(svc *Service) *Handler {
 // so every request emits a contract-tagged span. Policy is declared at
 // registration time; handler bodies contain only business logic.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specRoleList,
 		Handler:  http.HandlerFunc(h.handleListRoles),
 		Policy:   auth.SelfOr("userID", "admin"),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specRoleCheck,
 		Handler:  http.HandlerFunc(h.handleHasRole),
 		Policy:   auth.SelfOr("userID", "admin"),

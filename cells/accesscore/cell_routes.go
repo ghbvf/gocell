@@ -47,7 +47,7 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 		{
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1/access",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
 				mux.Route("/setup", func(s cell.RouteMux) {
 					c.setupHandler.RegisterRoutes(s)
 				})
@@ -58,13 +58,15 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 					c.logoutHandler.RegisterRoutes(s)
 				})
 				mux.Route("/roles", c.rbacHandler.RegisterRoutes)
+				return nil
 			},
 		},
 		{
 			Listener: cell.InternalListener,
 			Prefix:   "/internal/v1/access",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
 				mux.Route("/roles", c.rbacAssignHandler.RegisterRoutes)
+				return nil
 			},
 		},
 	}

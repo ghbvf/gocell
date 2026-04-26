@@ -47,12 +47,12 @@ func NewHandler(svc *Service) *Handler {
 // Both routes are admin-gated (auth.AnyRole(RoleAdmin)). Mounted on
 // PrimaryListener for /api/v1/config/* by ConfigCore.RouteGroups.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specConfigList,
 		Handler:  http.HandlerFunc(h.HandleList),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specConfigGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
@@ -68,7 +68,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 // redacted "******" placeholder) applies on both listeners; consumers must
 // not log Value for sensitive entries (see configport.go ConfigEntry doc).
 func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specConfigInternalGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
 		Policy:   auth.AnyRole(auth.RoleInternalAdmin),

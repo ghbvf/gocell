@@ -369,8 +369,9 @@ func (c *AuditCore) RouteGroups() []cell.RouteGroup {
 		{
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1/audit",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
 				c.queryHandler.RegisterRoutes(mux)
+				return nil
 			},
 		},
 	}

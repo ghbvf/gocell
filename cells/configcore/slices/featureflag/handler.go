@@ -84,17 +84,17 @@ func NewHandler(svc *Service) *Handler {
 // CH-04/CH-05 governance can correlate contracts to handler functions.
 // All routes are admin-gated (auth.AnyRole(RoleAdmin)).
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specFlagsList,
 		Handler:  http.HandlerFunc(h.HandleList),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specFlagsGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specFlagsEvaluate,
 		Handler:  http.HandlerFunc(h.HandleEvaluate),
 		Policy:   auth.AnyRole(dto.RoleAdmin),

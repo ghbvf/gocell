@@ -286,7 +286,7 @@ func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 			// paths, so we mount routes directly on the root mux without an
 			// outer Route("/api/v1") wrapper that would double-prefix.
 			Prefix: "",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
 				mux.Route("/api/v1/devices", func(devices cell.RouteMux) {
 					c.registerHandler.RegisterRoutes(devices)
 					c.listHandler.RegisterRoutes(devices)
@@ -295,13 +295,15 @@ func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 					// extend-lease) live under /api/v1/devices/{id}/commands.
 					c.commandHandler.RegisterRoutes(devices)
 				})
+				return nil
 			},
 		},
 		{
 			Listener: cell.InternalListener,
 			Prefix:   "",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
 				c.commandHandler.RegisterInternalRoutes(mux)
+				return nil
 			},
 		},
 	}

@@ -50,7 +50,7 @@ func NewHandler(svc *Service) *Handler {
 // CH-04/CH-05 governance can correlate this contract to HandleRegister.
 // Device registration is a public endpoint: devices bootstrap without a user JWT.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specDeviceRegister,
 		Handler:  http.HandlerFunc(h.HandleRegister),
 		Public:   true,

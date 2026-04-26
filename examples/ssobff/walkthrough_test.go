@@ -257,7 +257,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	// RouteGroups callback. FinalizeAuth compiles them into the router's auth
 	// predicates. The walkthrough uses a single test router (httptest.NewServer
 	// is one process), so RouteGroups intended for InternalListener are mounted
-	// here too — auth.Mount(Public:true) on /internal paths still works because
+	// here too — auth.MustMount(Public:true) on /internal paths still works because
 	// the matcher fires before AuthMiddleware and the test never exercises a
 	// JWT-only internal route.
 	r := router.New(

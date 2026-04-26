@@ -54,7 +54,7 @@ func NewHandler(svc *Service) *Handler {
 // CH-04/CH-05 governance can correlate this contract to HandleGetStatus.
 // Device status is queried by operators or by the device itself.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specDeviceStatus,
 		Handler:  http.HandlerFunc(h.HandleGetStatus),
 		Policy:   auth.AnyRole(dto.RoleOperator, dto.RoleDevice),

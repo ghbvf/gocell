@@ -40,7 +40,7 @@ func (c *ConfigCore) RouteGroups() []cell.RouteGroup {
 		{
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
 				mux.Route("/config", func(cfg cell.RouteMux) {
 					c.readHandler.RegisterRoutes(cfg)
 					c.writeHandler.RegisterRoutes(cfg)
@@ -50,6 +50,7 @@ func (c *ConfigCore) RouteGroups() []cell.RouteGroup {
 					c.flagHandler.RegisterRoutes(f)
 					c.flagWriteHandler.RegisterRoutes(f)
 				})
+				return nil
 			},
 		},
 		{
@@ -60,10 +61,11 @@ func (c *ConfigCore) RouteGroups() []cell.RouteGroup {
 			// fetch the current value after receiving an entry-upserted event.
 			Listener: cell.InternalListener,
 			Prefix:   "/internal/v1",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
 				mux.Route("/config", func(cfg cell.RouteMux) {
 					c.readHandler.RegisterInternalRoutes(cfg)
 				})
+				return nil
 			},
 		},
 	}

@@ -109,37 +109,37 @@ func NewHandler(svc *Service) *Handler {
 // auth.Mount so every request emits a contract-tagged span. Policy is
 // declared at registration time; handler bodies contain only business logic.
 func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specUserCreate,
 		Handler:  http.HandlerFunc(h.handleCreate),
 		Policy:   auth.AnyRole(domain.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specUserGet,
 		Handler:  http.HandlerFunc(h.handleGet),
 		Policy:   auth.SelfOr("id", domain.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specUserUpdate,
 		Handler:  http.HandlerFunc(h.handleUpdate),
 		Policy:   auth.SelfOr("id", domain.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specUserPatch,
 		Handler:  http.HandlerFunc(h.handlePatch),
 		Policy:   auth.SelfOr("id", domain.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specUserDelete,
 		Handler:  http.HandlerFunc(h.handleDelete),
 		Policy:   auth.AnyRole(domain.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specUserLock,
 		Handler:  http.HandlerFunc(h.handleLock),
 		Policy:   auth.AnyRole(domain.RoleAdmin),
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specUserUnlock,
 		Handler:  http.HandlerFunc(h.handleUnlock),
 		Policy:   auth.AnyRole(domain.RoleAdmin),
@@ -148,7 +148,7 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
 	// token carries password_reset_required=true can still reach this endpoint
 	// to satisfy the reset requirement. Router.FinalizeAuth aggregates this
 	// declaration alongside all other Cell declarations at Bootstrap phase 5.
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract:            specUserChangePassword,
 		Handler:             http.HandlerFunc(h.handleChangePassword),
 		Policy:              auth.SelfOr("id", domain.RoleAdmin),

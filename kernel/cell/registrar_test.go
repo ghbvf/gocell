@@ -120,7 +120,7 @@ func TestRouteGroupContributor_TypeAssertion(t *testing.T) {
 			{
 				Listener: ref,
 				Prefix:   "/api/v1/sessions",
-				Register: func(mux RouteMux) { mux.Handle("/login", http.NotFoundHandler()) },
+				Register: func(mux RouteMux) error { mux.Handle("/login", http.NotFoundHandler()); return nil },
 			},
 		},
 	}
@@ -187,7 +187,7 @@ func TestDualRouteGroupEventCell_BothInterfaces(t *testing.T) {
 			{
 				Listener: ref,
 				Prefix:   "/api/v1/devices",
-				Register: func(mux RouteMux) { mux.Handle("/", http.NotFoundHandler()) },
+				Register: func(mux RouteMux) error { mux.Handle("/", http.NotFoundHandler()); return nil },
 			},
 		},
 	}
@@ -284,7 +284,7 @@ func TestConfigReloader_DualRouteGroupAndReloader(t *testing.T) {
 			{
 				Listener: ref,
 				Prefix:   "/api/v1/keys",
-				Register: func(mux RouteMux) { mux.Handle("/", http.NotFoundHandler()) },
+				Register: func(mux RouteMux) error { mux.Handle("/", http.NotFoundHandler()); return nil },
 			},
 		},
 	}

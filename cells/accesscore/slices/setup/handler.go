@@ -43,12 +43,12 @@ func NewHandler(svc *Service) *Handler {
 // /acl/bootstrap convention rather than Vault's top-level /sys/init) so the
 // path matches Cell ownership.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specSetupStatus,
 		Handler:  http.HandlerFunc(h.HandleStatus),
 		Public:   true,
 	})
-	auth.Mount(mux, auth.Route{
+	auth.MustMount(mux, auth.Route{
 		Contract: specSetupAdmin,
 		Handler:  http.HandlerFunc(h.HandleCreateAdmin),
 		Public:   true,

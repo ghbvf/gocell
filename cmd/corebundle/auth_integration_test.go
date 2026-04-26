@@ -99,7 +99,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	require.NoError(t, asm.Register(cc))
 	require.NoError(t, asm.Register(auc))
 
-	// F3: public routes (login, refresh) are declared via auth.Mount(Public:true)
+	// F3: public routes (login, refresh) are declared via auth.MustMount(Public:true)
 	// inside accesscore's RegisterRoutes. PolicyJWTFromAssembly is now a
 	// cell.Policy (round-3 collapse): its Validate hook resolves the verifier
 	// from accesscore's authProvider during phase4.
@@ -313,7 +313,7 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// listener. JWT AuthMiddleware is never installed on the internal mux —
 	// PolicyServiceToken is the sole authentication layer for the control plane.
 	// F3: public routes (login, refresh) are declared by accesscore via
-	// auth.Mount(Public:true); PolicyJWTFromAssembly is the PrimaryListener's
+	// auth.MustMount(Public:true); PolicyJWTFromAssembly is the PrimaryListener's
 	// cell.Policy (round-3 collapse) and resolves the verifier lazily at phase4.
 	_ = guard // guard is superseded by PolicyServiceToken below
 	internalLn := newCorebundleLocalListener(t)
