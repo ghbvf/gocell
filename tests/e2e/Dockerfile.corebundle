@@ -1,9 +1,10 @@
 # Multi-stage build of cmd/corebundle for the e2e docker-compose harness.
-# Build context is the gocell repo root (compose: build.context = "../..").
+# Build context is the gocell repo root; tests/e2e/.dockerignore narrows it.
 #
 # JWT RSA keys are generated at image build time and exposed via env vars by
 # the entrypoint wrapper; this keeps test keys out of the repo and out of the
-# compose YAML, while remaining deterministic per image build.
+# compose YAML, while remaining deterministic per image build. Final image
+# runs corebundle as a non-root user (e2e isolation, not a hardening claim).
 
 FROM golang:1.25-alpine AS build
 WORKDIR /src
@@ -11,18 +12,18 @@ RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle \
-    && CGO_ENABLED=0 go build -o /out/pg-migrate ./tools/pg-migrate
+RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle
 
 FROM alpine:3.20
-RUN apk add --no-cache ca-certificates curl openssl
+RUN apk add --no-cache ca-certificates curl openssl \
+    && adduser -D -H -u 10001 gocell
 RUN mkdir -p /etc/gocell \
     && openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /etc/gocell/jwt-private.pem 2>/dev/null \
     && openssl rsa -in /etc/gocell/jwt-private.pem -pubout -out /etc/gocell/jwt-public.pem 2>/dev/null \
     && chmod 600 /etc/gocell/jwt-private.pem \
-    && chmod 644 /etc/gocell/jwt-public.pem
+    && chmod 644 /etc/gocell/jwt-public.pem \
+    && chown gocell:gocell /etc/gocell/jwt-private.pem /etc/gocell/jwt-public.pem
 COPY --from=build /out/corebundle /usr/local/bin/corebundle
-COPY --from=build /out/pg-migrate /usr/local/bin/pg-migrate
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \
@@ -32,5 +33,6 @@ RUN printf '%s\n' \
     'exec /usr/local/bin/corebundle "$@"' \
     > /usr/local/bin/start-corebundle.sh \
     && chmod +x /usr/local/bin/start-corebundle.sh
+USER gocell
 EXPOSE 8080 9090 9091
 ENTRYPOINT ["/usr/local/bin/start-corebundle.sh"]

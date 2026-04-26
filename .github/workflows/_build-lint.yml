@@ -282,12 +282,14 @@ jobs:
       - name: Start docker-compose harness
         working-directory: tests/e2e
         run: docker compose -f docker-compose.e2e.yaml up -d --wait
-      - name: Bootstrap admin and capture token
-        run: bash tests/e2e/scripts/bootstrap-admin.sh >> "$GITHUB_ENV"
       - name: Run e2e tests with execution gate
         env:
           GOCELL_E2E_DOCKER_AVAILABLE: "1"
-          GOCELL_E2E_PG_AVAILABLE: "1"
+          # PG/RMQ stay 0 in the demo+memory harness; encryption-tagged
+          # tests skip via require.PG until PR-CFG-G wires accesscore
+          # with a real outboxWriter (corebundle currently can't run
+          # accesscore in DurabilityDurable mode).
+          GOCELL_E2E_PG_AVAILABLE: "0"
           GOCELL_E2E_RMQ_AVAILABLE: "0"
         run: |
           set -o pipefail

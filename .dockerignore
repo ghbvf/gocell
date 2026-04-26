@@ -1,0 +1,19 @@
+# Build context is the repo root (../.. relative to this file); narrow it
+# to keep image build deterministic and prevent accidental sensitive-file
+# inclusion. The Dockerfile only needs go.mod/go.sum + Go source under
+# cmd/, kernel/, runtime/, adapters/, cells/, pkg/, contracts/, examples/,
+# tools/.
+.git
+.github
+.claude
+docs
+node_modules
+worktrees
+bak
+generated/contracts/
+*.log
+*.env
+*.env.*
+.env
+**/.DS_Store
+coverage*.out

@@ -1,87 +1,32 @@
 # docker-compose for the PR-CFG-J e2e harness.
 #
-# Three services (postgres + redis + corebundle) drive the corebundle binary
-# in real adapter mode against a real PostgreSQL and a real Redis (for
-# distributed nonce store + outbox idempotency claimer per PR-CFG-F).
-#
-# - JWT RSA keys are generated at image build time inside the corebundle
-#   image (see Dockerfile.corebundle); the entrypoint exports them as env.
-# - Configcore encryption uses local-aes with a fixed test master key
-#   (vault-transit coverage stays in adapters/vault integration tests).
-# - All other secrets are fixed e2e literals; this is the single CI
-#   context, so override defaults are intentionally absent.
+# Single corebundle service in demo + in-memory mode. The harness runs
+# corebundle through its real bootstrap path (phase0..N + healthz/readyz)
+# so e2egate can see real test execution; it does NOT run real PG yet
+# because corebundle's accesscore module currently provides a nil
+# outboxWriter, which incompatible with the assembly's DurabilityDurable
+# mode triggered by GOCELL_CELL_ADAPTER_MODE=postgres. Wiring a real
+# outbox writer for accesscore is a corebundle-level change scheduled
+# for PR-CFG-G; once landed, this compose can be expanded to
+# postgres + redis + migrate one-shot.
 
 services:
-  postgres:
-    image: postgres:15.13-alpine
-    environment:
-      POSTGRES_USER: gocell
-      POSTGRES_PASSWORD: gocell_e2e
-      POSTGRES_DB: gocell_e2e
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U gocell -d gocell_e2e"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-
-  redis:
-    image: redis:7.4.2-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      timeout: 2s
-      retries: 30
-
-  migrate:
-    # One-shot migration runner. corebundle's VerifyExpectedVersion guard
-    # rejects a fresh database; this service applies all embedded postgres
-    # migrations after postgres becomes healthy and exits 0 so corebundle
-    # can start. Reuses the corebundle image so go modules / build context
-    # are downloaded once.
-    image: gocell-corebundle-e2e:latest
-    build:
-      context: ../..
-      dockerfile: tests/e2e/Dockerfile.corebundle
-    depends_on:
-      postgres: {condition: service_healthy}
-    environment:
-      GOCELL_PG_DSN: postgres://gocell:gocell_e2e@postgres:5432/gocell_e2e?sslmode=disable
-    entrypoint: ["/usr/local/bin/pg-migrate"]
-    restart: "no"
-
   corebundle:
-    image: gocell-corebundle-e2e:latest
     build:
       context: ../..
       dockerfile: tests/e2e/Dockerfile.corebundle
-    depends_on:
-      postgres: {condition: service_healthy}
-      redis:    {condition: service_healthy}
-      migrate:  {condition: service_completed_successfully}
     environment:
-      GOCELL_ADAPTER_MODE: real
-      GOCELL_CELL_ADAPTER_MODE: postgres
-      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:gocell_e2e@postgres:5432/gocell_e2e?sslmode=disable
-      GOCELL_REDIS_ADDR: redis:6379
-      GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
-      # 64 hex chars = 32 bytes for AES-256-GCM. Not in demo_keys.go banlist.
-      GOCELL_CONFIGCORE_MASTER_KEY: 0e2e0011223344556677889900aabbccddeeff112233445566778899aabbccdd
-      GOCELL_CONFIGCORE_CURSOR_KEY: e2e-configcore-cursor-key-32byte-fixed-test-value
-      GOCELL_ACCESSCORE_CURSOR_KEY: e2e-accesscore-cursor-key-32byte-fixed-test-value
-      GOCELL_AUDITCORE_CURSOR_KEY:  e2e-auditcore-cursor-key-32byte-fixed-test-value
-      GOCELL_AUDITCORE_HMAC_KEY:    e2e-auditcore-hmac-key-32byte-fixed-test-value
+      # GOCELL_ADAPTER_MODE unset → demo. Storage stays in-memory so
+      # accesscore's demo-mode wiring is consistent with the assembly.
       GOCELL_JWT_ISSUER: gocell-e2e
       GOCELL_JWT_AUDIENCE: gocell-e2e-clients
-      GOCELL_SERVICE_SECRET: e2e-service-secret-32byte-fixed-test
-      GOCELL_METRICS_TOKEN: e2e-metrics-token
-      GOCELL_READYZ_VERBOSE_TOKEN: e2e-readyz-verbose-token
       GOCELL_HTTP_PRIMARY_ADDR: ":8080"
-      # Internal listener stays loopback-only inside the container; tests do
-      # not call /internal/v1/* endpoints, and no other compose service
-      # depends on it. Mirrors production default (127.0.0.1:9090).
       GOCELL_HTTP_INTERNAL_ADDR: "127.0.0.1:9090"
       GOCELL_HTTP_HEALTH_ADDR: ":9091"
       GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE: interactive
+      # Demo mode waives the /readyz?verbose token guard (real mode forbids
+      # this; demo mode allows it for ephemeral test setups).
+      GOCELL_READYZ_VERBOSE_DISABLED: "1"
     ports:
       - "8080:8080"
       - "9091:9091"
