@@ -7,9 +7,15 @@ WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
+# Recursive COPY is intentional and bounded by the repo-root .dockerignore
+# (.git, .claude, docs/, worktrees/, bak/, *.env, coverage*.out filtered).
+# Multi-stage isolation: the build stage filesystem is discarded after
+# `go build`; only /out/pg-migrate crosses into the runtime image.
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/pg-migrate ./tools/pg-migrate
 
 FROM alpine:3.20
+RUN adduser -D -H -u 10001 gocell
 COPY --from=build /out/pg-migrate /usr/local/bin/pg-migrate
+USER gocell
 ENTRYPOINT ["/usr/local/bin/pg-migrate"]
