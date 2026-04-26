@@ -1,4 +1,16 @@
-// Package testutil provides shared test helpers for the accesscore cell.
+// Package testutil provides shared test fixtures for cells/accesscore tests.
+//
+// IMPORTANT: This package MUST NOT be imported by production code. It is
+// scoped under internal/ so only cells/accesscore/** can reach it; archtest
+// rule LAYER-TESTUTIL further enforces the rule.
+//
+// Why a non-_test.go file: the helpers are needed across multiple sibling
+// packages (cells/accesscore/slices/{identitymanage,sessionlogout,rbaccheck}/...);
+// _test.go visibility cannot cross package boundaries.
+//
+// Verified: no production (non-_test.go) file imports this package
+// (confirmed by `git grep -l "cells/accesscore/internal/testutil" -- '*.go' ':!*_test.go'`
+// returning empty output).
 package testutil
 
 import "github.com/google/uuid"

@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/google/uuid"
 )
 
 // RequireSelfOrRole checks that the authenticated subject matches targetID
@@ -38,7 +39,19 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 			"subject", p.Subject)
 	}
 
-	if targetID != "" && p.Subject == targetID {
+	// B4: Normalize both sides so canonical/non-canonical UUID variants match.
+	// The handler edge already produces canonical lowercase via ParseUUIDPathParam;
+	// p.Subject may originate from an external IdP or pre-normalization data.
+	subject := p.Subject
+	if parsed, err := uuid.Parse(subject); err == nil {
+		subject = parsed.String()
+	}
+	target := targetID
+	if parsed, err := uuid.Parse(target); err == nil {
+		target = parsed.String()
+	}
+
+	if target != "" && subject == target {
 		return nil
 	}
 

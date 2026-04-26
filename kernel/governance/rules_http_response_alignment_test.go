@@ -251,6 +251,21 @@ func h(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// TestErrcodeNameToStatus_AllPairsResolve guards against silent drift between
+// the hand-curated `errcodeNameToStatus` table and pkg/errcode/codeToStatus.
+// Every entry MUST resolve to a status code >= 400 (else CH-04 silently skips
+// it at runtime and slog.Warn fires at init time, hidden in normal CI output).
+func TestErrcodeNameToStatus_AllPairsResolve(t *testing.T) {
+	for name, status := range errcodeNameToStatus {
+		if status < 400 {
+			t.Errorf("errcodeNameToStatus[%q] = %d, expected >= 400 (CH-04 only validates 4xx/5xx)", name, status)
+		}
+	}
+	if len(errcodeNameToStatus) == 0 {
+		t.Fatal("errcodeNameToStatus is empty — table population failed")
+	}
+}
+
 // TestCheckHTTPResponseAlignment_HelperWriteStatuses verifies Finding 10:
 // CH-04 must detect 4xx/5xx status codes written internally by pkg/httputil
 // helpers (ParseUUIDPathParam, WriteDecodeError, ParsePageParamsOrWrite).
