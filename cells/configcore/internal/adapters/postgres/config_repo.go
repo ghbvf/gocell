@@ -20,32 +20,6 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// wrapCtxCancel detects whether err is a context cancellation and, if so,
-// returns a structured *errcode.Error carrying ErrClientCanceled (mapped to
-// HTTP 499 by pkg/httputil + slog.Warn by writeErrcodeError → log4xx).
-// Returns nil when err is not a cancellation, signalling the caller to
-// fall through to the generic infra-error mapping.
-//
-// `op` is a PascalCase operation label (e.g. "Insert", "Update");
-// `identifier` is a caller-formatted resource locator (e.g. "key=foo",
-// "configID=cfg-1"). Both are recorded only in InternalMessage and never
-// in the public Message, mirroring the FiloSottile/age principle that
-// error paths must not expose the identity of attempted keys.
-//
-// No slog.Warn is emitted here: the HTTP boundary's log4xx already records
-// a Warn entry with code/status/InternalMessage/correlation IDs, so emitting
-// a second Warn at the repository layer produces duplicate observability
-// noise without adding new context.
-//
-// ref: pkg/ctxcancel.Wrap — canonical helper.
-//
-// ctx is accepted for callsite ergonomics (every IO callsite already has
-// a ctx in scope); it is currently unused but reserved for future
-// observability hooks (e.g. trace span attachment).
-func (r *ConfigRepository) wrapCtxCancel(_ context.Context, op, identifier string, err error) *errcode.Error {
-	return ctxcancel.Wrap(err, op, identifier)
-}
-
 // cryptoOpError constructs a uniform *errcode.Error for encrypt/decrypt
 // operation failures, classifying the cause to preserve dashboards' ability
 // to distinguish three signal sources that the ValueTransformer chain may
@@ -300,7 +274,7 @@ func (r *ConfigRepository) Create(ctx context.Context, entry *domain.ConfigEntry
 		)
 	}
 	if err != nil {
-		if cancelErr := r.wrapCtxCancel(ctx, "Create", "key="+entry.Key, err); cancelErr != nil {
+		if cancelErr := ctxcancel.Wrap(err, "Create", "key="+entry.Key); cancelErr != nil {
 			return cancelErr
 		}
 		return &errcode.Error{
@@ -355,14 +329,14 @@ func scanConfigRow(row Row) (e *domain.ConfigEntry, valueCipher []byte, valueKey
 //
 // op is the method name used only in InternalMessage for operator
 // debugging; key is the lookup key surfaced the same way. Uses
-// r.wrapCtxCancel for the ctx-cancel branch (see that method for the
-// logger side-effect rationale).
+// pkg/ctxcancel.Wrap for the ctx-cancel branch — the canonical helper
+// already handles 499 vs 504 split and slog routing.
 func (r *ConfigRepository) scanConfigOrMapError(ctx context.Context, row Row, op, key string) (*domain.ConfigEntry, []byte, *string, []byte, []byte, error) {
 	e, ct, keyID, edk, nonce, err := scanConfigRow(row)
 	if err == nil {
 		return e, ct, keyID, edk, nonce, nil
 	}
-	if infraErr := r.wrapCtxCancel(ctx, op, "key="+key, err); infraErr != nil {
+	if infraErr := ctxcancel.Wrap(err, op, "key="+key); infraErr != nil {
 		return nil, nil, nil, nil, nil, infraErr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -429,14 +403,15 @@ func (r *ConfigRepository) GetByKey(ctx context.Context, key string) (*domain.Co
 	return e, nil
 }
 
-// observeStaleCipher emits a slog.Warn and invokes the optional onStaleCipher
-// callback when a sensitive config value is found to be encrypted with a stale
-// (non-current) key. This is the single observability point for M3.
+// observeStaleCipher fans a stale-cipher signal out to the log and metric
+// planes with strict redaction asymmetry: the slog.Warn carries only the
+// business key name (operators can correlate by domain identity), while the
+// stored/current key IDs flow exclusively to the onStaleCipher callback that
+// caller-wired Prometheus counters consume as bounded-cardinality labels.
+// Cryptographic identifiers must not appear on the log plane.
 func (r *ConfigRepository) observeStaleCipher(ctx context.Context, key, storedKeyID, currentKeyID string) {
 	r.logger.WarnContext(ctx, "config value encrypted with stale key",
 		slog.String("key", key),
-		slog.String("stored_key_id", storedKeyID),
-		slog.String("current_key_id", currentKeyID),
 	)
 	if r.onStaleCipher != nil {
 		r.onStaleCipher(key, storedKeyID, currentKeyID)
@@ -474,7 +449,7 @@ func (r *ConfigRepository) Update(ctx context.Context, key string, value string)
 	var sensitive bool
 	selectRow := db.QueryRow(ctx, selectQ, key)
 	if scanErr := selectRow.Scan(&sensitive); scanErr != nil {
-		if infraErr := r.wrapCtxCancel(ctx, "Update", "key="+key, scanErr); infraErr != nil {
+		if infraErr := ctxcancel.Wrap(scanErr, "Update", "key="+key); infraErr != nil {
 			return nil, infraErr
 		}
 		if errors.Is(scanErr, pgx.ErrNoRows) {
@@ -594,9 +569,12 @@ func (r *ConfigRepository) applySensitiveListSentinel(ctx context.Context, e *do
 		}
 		if !staleLogged[*valueKeyID] {
 			staleLogged[*valueKeyID] = true
+			// Dedup is keyed on the stale keyID (one warn per distinct keyID per
+			// page) so the metric callback above continues to count every entry.
+			// The log line itself surfaces the business key of the first occurrence
+			// so operators can correlate without us emitting the keyID.
 			r.logger.WarnContext(ctx, "config values encrypted with stale key (first occurrence in this List page)",
-				slog.String("stored_key_id", *valueKeyID),
-				slog.String("current_key_id", currentID),
+				slog.String("key", e.Key),
 			)
 		}
 	}
@@ -629,10 +607,8 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 	sql, args := b.Build()
 	rows, err := r.resolveDB(ctx).Query(ctx, sql, args...)
 	if err != nil {
-		if cancelErr := r.wrapCtxCancel(ctx, "List", "", err); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.WrapInfra(errcode.ErrConfigRepoQuery, "config repo: list failed", err)
+		return nil, ctxcancel.WrapOrInfra(err, "List", "",
+			errcode.ErrConfigRepoQuery, "config repo: list failed")
 	}
 	defer rows.Close()
 
@@ -645,10 +621,8 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 			valueKeyID *string
 		)
 		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt, &valueKeyID); err != nil {
-			if cancelErr := r.wrapCtxCancel(ctx, "List", "", err); cancelErr != nil {
-				return nil, cancelErr
-			}
-			return nil, errcode.WrapInfra(errcode.ErrConfigRepoQuery, "config repo: scan failed", err)
+			return nil, ctxcancel.WrapOrInfra(err, "List", "",
+				errcode.ErrConfigRepoQuery, "config repo: scan failed")
 		}
 		if e.Sensitive {
 			r.applySensitiveListSentinel(ctx, &e, valueKeyID, currentID, staleLogged)
@@ -656,10 +630,8 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 		entries = append(entries, &e)
 	}
 	if err := rows.Err(); err != nil {
-		if cancelErr := r.wrapCtxCancel(ctx, "List", "", err); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.WrapInfra(errcode.ErrConfigRepoQuery, "config repo: rows error", err)
+		return nil, ctxcancel.WrapOrInfra(err, "List", "",
+			errcode.ErrConfigRepoQuery, "config repo: rows error")
 	}
 
 	return entries, nil
@@ -697,12 +669,10 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 		)
 	}
 	if err != nil {
-		if cancelErr := r.wrapCtxCancel(ctx, "PublishVersion", "configID="+version.ConfigID, err); cancelErr != nil {
-			return cancelErr
-		}
-		return errcode.WrapInfra(errcode.ErrConfigRepoQuery,
+		return ctxcancel.WrapOrInfra(err, "PublishVersion", "configID="+version.ConfigID,
+			errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: publish version failed for config %s v%d",
-				version.ConfigID, version.Version), err)
+				version.ConfigID, version.Version))
 	}
 	return nil
 }
@@ -726,7 +696,7 @@ func (r *ConfigRepository) GetVersion(ctx context.Context, configID string, vers
 		&v.ID, &v.ConfigID, &v.Version, &v.Value, &v.Sensitive, &v.PublishedAt,
 		&valueCipher, &valueKeyID, &valueEDK, &valueNonce,
 	); err != nil {
-		if infraErr := r.wrapCtxCancel(ctx, "GetVersion", "configID="+configID, err); infraErr != nil {
+		if infraErr := ctxcancel.Wrap(err, "GetVersion", "configID="+configID); infraErr != nil {
 			return nil, infraErr
 		}
 		if errors.Is(err, pgx.ErrNoRows) {

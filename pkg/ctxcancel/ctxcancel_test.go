@@ -148,3 +148,75 @@ func TestWrap_ReasonInDetails(t *testing.T) {
 		})
 	}
 }
+
+// TestWrapOrInfra covers the convenience helper for the IO boundary pattern
+// "ctx-cancel detection + infra-category errcode fallback". The three branches
+// are: ctx.Canceled → ErrClientCanceled (499), ctx.DeadlineExceeded →
+// ErrServerTimeout (504), any other error → fallbackCode with Category=Infra
+// and the original err preserved as Cause.
+func TestWrapOrInfra(t *testing.T) {
+	const (
+		fallbackCode errcode.Code = "ERR_REPO_QUERY"
+		fallbackMsg  string       = "repo: query failed"
+	)
+	dbErr := errors.New("connection refused")
+
+	tests := []struct {
+		name       string
+		err        error
+		wantCode   errcode.Code
+		wantCat    errcode.Category
+		wantCause  error
+		wantPubMsg string
+	}{
+		{
+			name:       "ctx.Canceled routes to ErrClientCanceled",
+			err:        context.Canceled,
+			wantCode:   errcode.ErrClientCanceled,
+			wantCat:    errcode.CategoryInfra,
+			wantCause:  context.Canceled,
+			wantPubMsg: "request canceled",
+		},
+		{
+			name:       "ctx.DeadlineExceeded routes to ErrServerTimeout",
+			err:        context.DeadlineExceeded,
+			wantCode:   errcode.ErrServerTimeout,
+			wantCat:    errcode.CategoryInfra,
+			wantCause:  context.DeadlineExceeded,
+			wantPubMsg: "request timed out",
+		},
+		{
+			name:       "wrapped ctx.Canceled still routes to 499",
+			err:        fmt.Errorf("scan: %w", context.Canceled),
+			wantCode:   errcode.ErrClientCanceled,
+			wantCat:    errcode.CategoryInfra,
+			wantCause:  context.Canceled,
+			wantPubMsg: "request canceled",
+		},
+		{
+			name:       "non-ctx-cancel falls back to fallbackCode + Infra",
+			err:        dbErr,
+			wantCode:   fallbackCode,
+			wantCat:    errcode.CategoryInfra,
+			wantCause:  dbErr,
+			wantPubMsg: fallbackMsg,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := WrapOrInfra(tt.err, "List", "key=foo", fallbackCode, fallbackMsg)
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, tt.wantCode, ec.Code)
+			assert.Equal(t, tt.wantCat, ec.Category, "Category must be Infra in both branches")
+			assert.Equal(t, tt.wantPubMsg, ec.Message)
+			assert.True(t, errors.Is(err, tt.wantCause), "Cause chain must preserve original err")
+			// IsInfraError must hold in every branch — both ctx-cancel
+			// (CategoryInfra by ctxcancel.Wrap design) and fallback
+			// (CategoryInfra by errcode.WrapInfra) feed the 5xx alerting /
+			// retry classification path.
+			assert.True(t, errcode.IsInfraError(err))
+		})
+	}
+}

@@ -328,7 +328,7 @@ func TestFlagRepo_Create_PublicMessageDoesNotLeakKey(t *testing.T) {
 	assert.Contains(t, ec.InternalMessage, "key=user_secret_flag_key",
 		"InternalMessage must carry the key for operator triage")
 	assert.True(t, errcode.IsInfraError(ec),
-		"wrapNonScanQueryErr must preserve CategoryInfra so DB-failure alerts fire")
+		"Create non-scan error path must preserve CategoryInfra so DB-failure alerts fire")
 }
 
 // TestFlagRepo_WithoutTx_WritePathsRequireTx verifies session-based repo

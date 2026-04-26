@@ -101,6 +101,31 @@ func Wrap(err error, op, identifier string) *errcode.Error {
 	}
 }
 
+// WrapOrInfra is the canonical convenience for the IO-boundary pattern:
+//
+//	if cancelErr := ctxcancel.Wrap(err, op, id); cancelErr != nil {
+//	    return cancelErr
+//	}
+//	return errcode.WrapInfra(fallbackCode, fallbackMsg, err)
+//
+// One call replaces both branches: a context cancellation surfaces as the
+// canonical 499/504 split (Canceled→ErrClientCanceled, DeadlineExceeded→
+// ErrServerTimeout) while every other error gets uniformly mapped to the
+// caller-supplied infra-category errcode with err preserved as Cause.
+//
+// Use at repository / RPC client / message-bus call sites where the only
+// branching needed is ctx-cancel vs generic infra failure. When the fallback
+// path needs *additional* differentiation (a domain not-found branch, a
+// PascalCase InternalMessage template, a non-Infra Category), keep the
+// inline pattern — this helper deliberately omits those degrees of freedom
+// to avoid a six-parameter signature.
+func WrapOrInfra(err error, op, identifier string, fallbackCode errcode.Code, fallbackMsg string) error {
+	if cancelErr := Wrap(err, op, identifier); cancelErr != nil {
+		return cancelErr
+	}
+	return errcode.WrapInfra(fallbackCode, fallbackMsg, err)
+}
+
 // classify resolves all per-variant attributes (errcode, public message,
 // observation reason) in a single errors.Is traversal of the cause chain.
 // Centralising the dispatch here avoids walking the chain twice (once per
