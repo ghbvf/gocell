@@ -3,7 +3,7 @@
   "title": "http.config.flags.evaluate.v1.request",
   "type": "object",
   "properties": {
-    "subject": { "type": "string" }
+    "subject": { "type": "string", "minLength": 1, "maxLength": 256 }
   },
   "required": ["subject"],
   "additionalProperties": false

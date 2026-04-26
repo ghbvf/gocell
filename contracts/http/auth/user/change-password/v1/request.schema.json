@@ -4,10 +4,14 @@
   "type": "object",
   "properties": {
     "oldPassword": {
-      "type": "string"
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 72
     },
     "newPassword": {
-      "type": "string"
+      "type": "string",
+      "minLength": 8,
+      "maxLength": 72
     }
   },
   "required": ["oldPassword", "newPassword"],

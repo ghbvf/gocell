@@ -4,13 +4,19 @@
   "type": "object",
   "properties": {
     "name": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
     },
     "email": {
-      "type": "string"
+      "type": "string",
+      "minLength": 3,
+      "maxLength": 320
     },
     "status": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32
     },
     "requirePasswordReset": {
       "type": "boolean"

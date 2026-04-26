@@ -3,8 +3,8 @@
   "title": "http.config.write.v1.request",
   "type": "object",
   "properties": {
-    "key": { "type": "string" },
-    "value": { "type": "string" },
+    "key": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "value": { "type": "string", "minLength": 0, "maxLength": 4096 },
     "sensitive": { "type": "boolean" }
   },
   "required": ["key", "value"],
