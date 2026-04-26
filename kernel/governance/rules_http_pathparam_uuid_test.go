@@ -11,12 +11,29 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// writeUUIDHandlerFile writes a minimal Go source file (valid package + import)
-// to dir/handler.go and returns the full path.
-func writeUUIDHandlerFile(t *testing.T, dir, src string) string {
+// writeUUIDHandlerFile writes a minimal Go source file (valid package + imports)
+// to dir/handler.go and returns the full path. The source must define a
+// function named "h" as the handler. An auth.Mount call is added to correlate
+// contractID → h, satisfying fail-closed CH-05.
+func writeUUIDHandlerFile(t *testing.T, dir, contractID, src string) string {
 	t.Helper()
 	path := filepath.Join(dir, "handler.go")
-	content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/httputil\"\n\n" + src
+	content := `package x
+
+import (
+	"net/http"
+	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+var spec = wrapper.ContractSpec{ID: "` + contractID + `"}
+
+func setup(mux http.Handler) {
+	auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h)})
+}
+
+` + src
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
 }
@@ -46,11 +63,12 @@ func makeUUIDContract(id, contractFile string, uuidParams []string) *metadata.Co
 
 func TestCheckHTTPPathParamUUID(t *testing.T) {
 	tests := []struct {
-		name       string
-		handlerSrc string
-		uuidParams []string // path param names with format:uuid in contract
-		wantErrors []string // expected CH-05 error message substrings
-		noHandler  bool     // suppress handler file creation
+		name        string
+		handlerSrc  string
+		uuidParams  []string // path param names with format:uuid in contract
+		wantErrors  []string // expected CH-05 error message substrings
+		noHandler   bool     // suppress handler file creation
+		noAuthMount bool     // write handler src without auth.Mount boilerplate
 	}{
 		{
 			name: "happy_path: uuid param declared and ParseUUIDPathParam called",
@@ -123,6 +141,19 @@ func h(w http.ResponseWriter, r *http.Request) {
 			uuidParams: []string{"id"},
 			noHandler:  true,
 		},
+		{
+			name: "fail-closed: contract with format=uuid but no auth.Mount in handler file",
+			handlerSrc: `
+func handleSomething(w http.ResponseWriter, r *http.Request) {
+	id, _ := httputil.ParseUUIDPathParam(w, r, "id")
+	_ = id
+}
+`,
+			uuidParams: []string{"id"},
+			// File-wide scan would have passed; function-level cannot resolve → fail-closed.
+			wantErrors:  []string{"auth.Mount correlation failed"},
+			noAuthMount: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -134,7 +165,14 @@ func h(w http.ResponseWriter, r *http.Request) {
 			sliceAbsDir := filepath.Join(root, sliceRelDir)
 			require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
 			if !tc.noHandler && tc.handlerSrc != "" {
-				writeUUIDHandlerFile(t, sliceAbsDir, tc.handlerSrc)
+				if tc.noAuthMount {
+					// Write handler src without auth.Mount boilerplate to test fail-closed.
+					path := filepath.Join(sliceAbsDir, "handler.go")
+					content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/httputil\"\n\n" + tc.handlerSrc
+					require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+				} else {
+					writeUUIDHandlerFile(t, sliceAbsDir, contractID, tc.handlerSrc)
+				}
 			}
 
 			project := makeProject(contractID, sliceRelDir)

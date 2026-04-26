@@ -12,19 +12,54 @@ import (
 )
 
 // writeHandlerFile writes Go source as handler.go inside dir and returns the
-// full path. The source is wrapped in a minimal valid package declaration.
-func writeHandlerFile(t *testing.T, dir, src string) string {
+// full path. The source must define a function named "h" as the handler. The
+// file is wrapped with a minimal valid package declaration that includes an
+// auth.Mount call correlating contractID → h, satisfying fail-closed CH-04/05.
+func writeHandlerFile(t *testing.T, dir, contractID, src string) string {
 	t.Helper()
 	path := filepath.Join(dir, "handler.go")
-	require.NoError(t, os.WriteFile(path, []byte("package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\n\n"+src), 0o644))
+	content := `package x
+
+import (
+	"net/http"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+var spec = wrapper.ContractSpec{ID: "` + contractID + `"}
+
+func setup(mux http.Handler) {
+	auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h)})
+}
+
+` + src
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
 }
 
 // writeHandlerFileWithHTTPUtil writes Go source as handler.go with httputil imported.
-func writeHandlerFileWithHTTPUtil(t *testing.T, dir, src string) string {
+// The source must define a function named "h" as the handler.
+func writeHandlerFileWithHTTPUtil(t *testing.T, dir, contractID, src string) string {
 	t.Helper()
 	path := filepath.Join(dir, "handler.go")
-	content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\nimport \"github.com/ghbvf/gocell/pkg/httputil\"\n\n" + src
+	content := `package x
+
+import (
+	"net/http"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+var spec = wrapper.ContractSpec{ID: "` + contractID + `"}
+
+func setup(mux http.Handler) {
+	auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h)})
+}
+
+` + src
 	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
 	return path
 }
@@ -74,11 +109,12 @@ func makeProject(contractID, sliceDir string) *metadata.ProjectMeta {
 
 func TestCheckHTTPResponseAlignment(t *testing.T) {
 	tests := []struct {
-		name       string
-		handlerSrc string
-		responses  map[int]contracts.HTTPResponse
-		wantErrors []string // substrings of SeverityError messages
-		noHandler  bool     // skip handler file creation → no findings expected
+		name        string
+		handlerSrc  string
+		responses   map[int]contracts.HTTPResponse
+		wantErrors  []string // substrings of SeverityError messages
+		noHandler   bool     // skip handler file creation → no findings expected
+		noAuthMount bool     // write handler src without auth.Mount boilerplate
 	}{
 		{
 			name: "happy_path: handler returns 400 and 404 both declared",
@@ -196,6 +232,23 @@ func h(w http.ResponseWriter, r *http.Request) {
 			},
 			wantErrors: []string{"handler returns 404 but contract does not declare it"},
 		},
+		{
+			name: "fail-closed: contract has no auth.Mount correlation in handler file",
+			handlerSrc: `
+func handleSomething(w http.ResponseWriter, r *http.Request) {
+	w.WriteHeader(http.StatusBadRequest)
+}
+`,
+			responses: map[int]contracts.HTTPResponse{
+				400: {Description: "bad request", SchemaRef: "err.json"},
+			},
+			// No auth.Mount for the test contractID → correlation fails → fail-closed error.
+			wantErrors: []string{"auth.Mount correlation failed"},
+			// The handler source above does not declare auth.Mount for the
+			// contractID under test, so writeHandlerFile must NOT add the
+			// standard auth.Mount boilerplate. We use a dedicated flag below.
+			noAuthMount: true,
+		},
 	}
 
 	for _, tc := range tests {
@@ -208,7 +261,14 @@ func h(w http.ResponseWriter, r *http.Request) {
 			sliceAbsDir := filepath.Join(root, sliceRelDir)
 			require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
 			if !tc.noHandler && tc.handlerSrc != "" {
-				writeHandlerFile(t, sliceAbsDir, tc.handlerSrc)
+				if tc.noAuthMount {
+					// Write handler src without auth.Mount boilerplate to test fail-closed.
+					path := filepath.Join(sliceAbsDir, "handler.go")
+					content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\n\n" + tc.handlerSrc
+					require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+				} else {
+					writeHandlerFile(t, sliceAbsDir, contractID, tc.handlerSrc)
+				}
 			}
 
 			project := makeProject(contractID, sliceRelDir)
@@ -336,7 +396,7 @@ func h(w http.ResponseWriter, r *http.Request) {
 
 			sliceAbsDir := filepath.Join(root, sliceRelDir)
 			require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
-			writeHandlerFileWithHTTPUtil(t, sliceAbsDir, tc.handlerSrc)
+			writeHandlerFileWithHTTPUtil(t, sliceAbsDir, contractID, tc.handlerSrc)
 
 			project := makeProject(contractID, sliceRelDir)
 			c := makeContract(contractID, "contracts/http/test/helpers/v1/contract.yaml", tc.responses)

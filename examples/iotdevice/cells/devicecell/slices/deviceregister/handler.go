@@ -4,7 +4,10 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // DeviceRegisterResponse is the public DTO for the device registration response.
@@ -25,6 +28,14 @@ func toDeviceRegisterResponse(d *domain.Device) DeviceRegisterResponse {
 	}
 }
 
+// specDeviceRegister declares the contract for the device-register endpoint.
+// FMT-18 exempts examples/**, but keeping the ID aligned with
+// examples/iotdevice/contracts/http/device/register/v1/contract.yaml.
+var specDeviceRegister = wrapper.ContractSpec{
+	ID: "http.device.register.v1", Kind: "http", Transport: "http",
+	Method: "POST", Path: "/api/v1/devices",
+}
+
 // Handler provides HTTP endpoints for device registration.
 type Handler struct {
 	svc *Service
@@ -33,6 +44,17 @@ type Handler struct {
 // NewHandler creates a device-register Handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// RegisterRoutes registers the device-register route on mux via auth.Mount so
+// CH-04/CH-05 governance can correlate this contract to HandleRegister.
+// Device registration is a public endpoint: devices bootstrap without a user JWT.
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
+	auth.Mount(mux, auth.Route{
+		Contract: specDeviceRegister,
+		Handler:  http.HandlerFunc(h.HandleRegister),
+		Public:   true,
+	})
 }
 
 // registerRequest is the JSON body for POST /api/v1/devices.

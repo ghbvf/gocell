@@ -3,10 +3,19 @@ package sessionlogout
 import (
 	"net/http"
 
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
+
+// specSessionDelete declares the contract for the session-delete endpoint,
+// cross-checked against contracts/http/auth/session/delete/v1/contract.yaml by FMT-18.
+var specSessionDelete = wrapper.ContractSpec{
+	ID: "http.auth.session.delete.v1", Kind: "http", Transport: "http",
+	Method: "DELETE", Path: "/api/v1/access/sessions/{id}",
+}
 
 // Handler provides HTTP endpoints for session logout.
 type Handler struct {
@@ -16,6 +25,18 @@ type Handler struct {
 // NewHandler creates a session-logout Handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// RegisterRoutes registers the session-delete route on mux via auth.Mount so
+// CH-04/CH-05 governance can correlate this contract to HandleLogout.
+// PasswordResetExempt: a token carrying password_reset_required=true can still
+// reach this endpoint so a locked-out user can revoke their own session.
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
+	auth.Mount(mux, auth.Route{
+		Contract:            specSessionDelete,
+		Handler:             http.HandlerFunc(h.HandleLogout),
+		PasswordResetExempt: true,
+	})
 }
 
 // HandleLogout handles DELETE /api/v1/access/sessions/{id}.

@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"log/slog"
 	"sort"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -21,8 +20,8 @@ const CodeContractHealthPathParamUUID = "CH-05" // SeverityError
 // CH-05 reuses the same parsedHandlerFile cache and contractToFuncs mapping
 // from CH-04 (rules_http_response_alignment.go) to narrow the walk to the
 // specific handler function linked to each contract via auth.Mount. When no
-// auth.Mount correlation is found the rule falls back to whole-file scanning
-// and emits a SeverityWarn note.
+// auth.Mount correlation is found the rule emits a SeverityError finding
+// (fail-closed) rather than falling back to whole-file scanning.
 func (v *Validator) CheckHTTPPathParamUUID(contracts []*metadata.ContractMeta, projectRoot string) []ValidationResult {
 	// Share the same parse cache across all contracts in one call; avoids
 	// re-parsing the same handler.go for every contract it serves.
@@ -45,45 +44,34 @@ func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, proj
 
 	handlerFile := findHandlerFile(v.project, c.ID, projectRoot)
 	if handlerFile == "" {
-		slog.Debug("CH-05: no handler file found for contract, skipping",
-			slog.String("contract", c.ID))
 		return nil
 	}
 
 	ph, err := parseHandlerFile(handlerFile, cache)
 	if err != nil {
-		slog.Debug("CH-05: failed to parse handler AST",
-			slog.String("contract", c.ID),
-			slog.String("file", handlerFile),
-			slog.Any("error", err))
 		return nil
 	}
 
-	// Narrow to the specific handler function when auth.Mount correlation is
-	// available; fall back to whole-file scan with a Warn note otherwise.
-	var searchNode ast.Node
-	narrowed := false
-	if fnName, ok := ph.contractToFuncs[c.ID]; ok {
-		if body, ok := ph.funcBodies[fnName]; ok {
-			searchNode = body
-			narrowed = true
-		}
+	fnName, ok := ph.contractToFuncs[c.ID]
+	if !ok {
+		return []ValidationResult{v.newResult(
+			CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
+			c.File, "endpoints.http.path",
+			fmt.Sprintf("CH-05: contract %s with `pathParams.{name}.format: uuid` — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function. Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern.", c.ID),
+		)}
 	}
 
-	var results []ValidationResult
-	if !narrowed {
-		// No auth.Mount correlation — walk entire file. Emit a Warn so that
-		// developers know the check is less precise than usual.
-		slog.Warn("CH-05: no auth.Mount correlation found, falling back to file-wide scan",
-			slog.String("contract", c.ID),
-			slog.String("file", handlerFile))
-		// Collect from allCodes equivalent: scan all function bodies.
-		parsed := collectParsedUUIDParamNamesFromNode(ph.funcBodies)
-		return buildPathParamFindings(v, c, uuidParams, parsed)
+	body, ok := ph.funcBodies[fnName]
+	if !ok {
+		return []ValidationResult{v.newResult(
+			CodeContractHealthPathParamUUID, SeverityError, IssueRequired,
+			c.File, "endpoints.http.path",
+			fmt.Sprintf("CH-05: contract %s with `pathParams.{name}.format: uuid` — auth.Mount correlation failed; cannot verify ParseUUIDPathParam call within handler function. Required: handler must use `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern.", c.ID),
+		)}
 	}
 
-	parsed := collectParsedUUIDParamNamesFromAST(searchNode)
-	return append(results, buildPathParamFindings(v, c, uuidParams, parsed)...)
+	parsed := collectParsedUUIDParamNamesFromAST(body)
+	return buildPathParamFindings(v, c, uuidParams, parsed)
 }
 
 // buildPathParamFindings compares required UUID params vs parsed call sites.
@@ -131,23 +119,6 @@ func collectParsedUUIDParamNamesFromAST(node ast.Node) map[string]struct{} {
 		collectParseUUIDCallName(call, found)
 		return true
 	})
-	return found
-}
-
-// collectParsedUUIDParamNamesFromNode walks all function bodies in the map
-// (used for the fallback whole-file scan path).
-func collectParsedUUIDParamNamesFromNode(funcBodies map[string]ast.Node) map[string]struct{} {
-	found := make(map[string]struct{})
-	for _, body := range funcBodies {
-		ast.Inspect(body, func(n ast.Node) bool {
-			call, ok := n.(*ast.CallExpr)
-			if !ok {
-				return true
-			}
-			collectParseUUIDCallName(call, found)
-			return true
-		})
-	}
 	return found
 }
 

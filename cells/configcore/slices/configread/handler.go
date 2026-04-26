@@ -4,8 +4,24 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+
+// spec vars for configread routes, cross-checked against
+// contracts/http/config/{get,list}/v1/contract.yaml by FMT-18.
+var (
+	specConfigList = wrapper.ContractSpec{
+		ID: "http.config.list.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/config/",
+	}
+	specConfigGet = wrapper.ContractSpec{
+		ID: "http.config.get.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/config/{key}",
+	}
 )
 
 // Handler provides HTTP endpoints for config read operations.
@@ -16,6 +32,22 @@ type Handler struct {
 // NewHandler creates a config-read Handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// RegisterRoutes registers config-read routes on mux via auth.Mount so
+// CH-04/CH-05 governance can correlate contracts to handler functions.
+// Both routes are admin-gated (auth.AnyRole(RoleAdmin)).
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
+	auth.Mount(mux, auth.Route{
+		Contract: specConfigList,
+		Handler:  http.HandlerFunc(h.HandleList),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Mount(mux, auth.Route{
+		Contract: specConfigGet,
+		Handler:  http.HandlerFunc(h.HandleGet),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
+	})
 }
 
 // HandleGet handles GET /{key} — returns a single config entry.

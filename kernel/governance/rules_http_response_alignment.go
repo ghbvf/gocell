@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"errors"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -14,6 +15,12 @@ import (
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+// errCorrelationMissing is returned by extractHandlerStatusCodesForContract
+// when no auth.Mount call in the handler file maps the given contractID to a
+// handler function. Callers that receive this error must emit a fail-closed
+// finding rather than silently skipping the contract.
+var errCorrelationMissing = errors.New("auth.Mount correlation missing")
 
 // CodeContractHealthResponseAlignment is the rule code for CH-04 — emitted as
 // SeverityError when a handler returns a 4xx/5xx status code that the contract
@@ -220,6 +227,13 @@ func (v *Validator) checkResponseAlignmentForContract(c *metadata.ContractMeta, 
 
 	handlerCodes, err := extractHandlerStatusCodesForContract(handlerFile, c.ID, cache)
 	if err != nil {
+		if errors.Is(err, errCorrelationMissing) {
+			return []ValidationResult{v.newResult(
+				CodeContractHealthResponseAlignment, SeverityError, IssueRequired,
+				c.File, "endpoints.http.path",
+				fmt.Sprintf("CH-04: contract %s served by handler file %s — auth.Mount correlation failed; cannot reliably extract handler status codes. Required: handler file must register routes via `auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(h.handleX)})` pattern with a resolvable spec var or inline ContractSpec literal.", c.ID, handlerFile),
+			)}
+		}
 		slog.Debug("CH-04: failed to parse handler AST",
 			slog.String("contract", c.ID),
 			slog.String("file", handlerFile),
@@ -306,14 +320,17 @@ type parsedHandlerFile struct {
 	contractToFuncs map[string]string
 	// funcBodies maps top-level function/method name to its ast.BlockStmt body.
 	funcBodies map[string]ast.Node
-	// allCodes is the union of all ≥400 status codes in the file, used as
-	// fallback when no contract-to-function mapping is available.
+	// allCodes is the union of all ≥400 status codes in the file. Retained
+	// for potential future diagnostic use; not used for rule enforcement
+	// (correlation is now required via auth.Mount).
 	allCodes map[int]struct{}
 }
 
 // extractHandlerStatusCodesForContract returns the ≥400 status codes that the
-// handler file can return for contractID. Uses function-level narrowing when an
-// auth.Mount correlation is found; falls back to whole-file scanning.
+// handler file can return for contractID. Uses function-level narrowing via
+// auth.Mount correlation. Returns errCorrelationMissing when no auth.Mount
+// call in the file maps contractID to a handler function — callers must treat
+// this as a fail-closed condition and emit an error finding.
 func extractHandlerStatusCodesForContract(filename, contractID string, cache map[string]*parsedHandlerFile) (map[int]struct{}, error) {
 	ph, err := parseHandlerFile(filename, cache)
 	if err != nil {
@@ -327,7 +344,7 @@ func extractHandlerStatusCodesForContract(filename, contractID string, cache map
 			return codes, nil
 		}
 	}
-	return ph.allCodes, nil
+	return nil, errCorrelationMissing
 }
 
 // parseHandlerFile parses filename and extracts the per-contract function

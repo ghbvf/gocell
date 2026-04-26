@@ -5,8 +5,12 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
+	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // OrderResponse is the public DTO for Order, isolating the API contract from
@@ -27,6 +31,19 @@ func toOrderResponse(o *domain.Order) OrderResponse {
 	}
 }
 
+// spec vars for orderquery routes. FMT-18 exempts examples/**, but keeping IDs
+// aligned with examples/todoorder/contracts/http/order/*/v1/contract.yaml.
+var (
+	specOrderGet = wrapper.ContractSpec{
+		ID: "http.order.get.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/orders/{id}",
+	}
+	specOrderList = wrapper.ContractSpec{
+		ID: "http.order.list.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/orders/",
+	}
+)
+
 // Handler provides HTTP endpoints for order queries.
 type Handler struct {
 	svc *Service
@@ -35,6 +52,21 @@ type Handler struct {
 // NewHandler creates an order-query Handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// RegisterRoutes registers order-query routes on mux via auth.Mount so
+// CH-04/CH-05 governance can correlate contracts to handler functions.
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
+	auth.Mount(mux, auth.Route{
+		Contract: specOrderGet,
+		Handler:  http.HandlerFunc(h.HandleGet),
+		Policy:   auth.AnyRole(dto.RoleCustomer),
+	})
+	auth.Mount(mux, auth.Route{
+		Contract: specOrderList,
+		Handler:  http.HandlerFunc(h.HandleList),
+		Policy:   auth.AnyRole(dto.RoleCustomer),
+	})
 }
 
 // HandleGet handles GET /api/v1/orders/{id}.
