@@ -53,6 +53,8 @@ Start infrastructure services, then run the application:
 
 ```bash
 cd examples/todoorder
+export GOCELL_EXAMPLE_POSTGRES_PASSWORD="$(openssl rand -base64 24)"
+export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
 cd ../..
 # Export the JWT and GOCELL_TODOORDER_SERVICE_SECRET variables from Quick Start first.

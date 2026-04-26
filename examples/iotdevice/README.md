@@ -57,6 +57,7 @@ Start infrastructure services, then run the application:
 
 ```bash
 cd examples/iotdevice
+export GOCELL_EXAMPLE_POSTGRES_PASSWORD="$(openssl rand -base64 24)"
 docker compose up -d
 cd ../..
 # Export the JWT and GOCELL_IOTDEVICE_SERVICE_SECRET variables from Quick Start first.

@@ -2,7 +2,7 @@ package archtest
 
 // security_defaults_test.go — static archtest rules for PR-MODE-1 SEC-FAIL-CLOSED.
 //
-// Four sub-tests mirror the SEC-FAIL-CLOSED-01..04 rule IDs:
+// Five sub-tests mirror the SEC-FAIL-CLOSED-01..05 rule IDs:
 //
 //   01  addr-driven gate: bundle.go must not wrap WithListener in IfStmt guarded
 //       by PrimaryHTTPAddr / InternalHTTPAddr / HealthHTTPAddr != "".
@@ -12,6 +12,8 @@ package archtest
 //       and call secutil.ValidateTLSEndpoint.
 //   04  websocket origins: no file in adapters/websocket may assign
 //       opts.InsecureSkipVerify = true.
+//   05  example docker compose credentials must come from environment
+//       interpolation, not committed literal values.
 //
 // ref: tools/archtest/auth_authtest_boundary_test.go — 4 sub-test pattern
 
@@ -34,6 +36,7 @@ const (
 	secFailClosed02 = "SEC-FAIL-CLOSED-02"
 	secFailClosed03 = "SEC-FAIL-CLOSED-03"
 	secFailClosed04 = "SEC-FAIL-CLOSED-04"
+	secFailClosed05 = "SEC-FAIL-CLOSED-05"
 )
 
 func TestSecurityDefaults(t *testing.T) {
@@ -53,6 +56,10 @@ func TestSecurityDefaults(t *testing.T) {
 
 	t.Run(secFailClosed04+"_websocket_must_not_skip_origin_verify", func(t *testing.T) {
 		testSEC04WebSocketOriginVerify(t, root)
+	})
+
+	t.Run(secFailClosed05+"_example_compose_credentials_from_env", func(t *testing.T) {
+		testSEC05ExampleComposeCredentialsFromEnv(t, root)
 	})
 }
 
@@ -309,4 +316,49 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 		return true
 	})
 	return lines, nil
+}
+
+func testSEC05ExampleComposeCredentialsFromEnv(t *testing.T, root string) {
+	t.Helper()
+
+	files := []string{
+		filepath.Join(root, "examples", "iotdevice", "docker-compose.yml"),
+		filepath.Join(root, "examples", "ssobff", "docker-compose.yml"),
+		filepath.Join(root, "examples", "todoorder", "docker-compose.yml"),
+	}
+	keys := []string{
+		"POSTGRES_PASSWORD:",
+		"RABBITMQ_DEFAULT_PASS:",
+	}
+
+	var violations []string
+	for _, f := range files {
+		data, err := os.ReadFile(f)
+		require.NoErrorf(t, err, "reading %s", f)
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+
+		for i, line := range strings.Split(string(data), "\n") {
+			trimmed := strings.TrimSpace(line)
+			for _, key := range keys {
+				if !strings.HasPrefix(trimmed, key) {
+					continue
+				}
+				value := strings.TrimSpace(strings.TrimPrefix(trimmed, key))
+				if !strings.HasPrefix(value, "${") {
+					violations = append(violations,
+						fmt.Sprintf("%s:%d: %s must be sourced from environment interpolation (%s)",
+							rel, i+1, strings.TrimSuffix(key, ":"), secFailClosed05))
+				}
+			}
+		}
+	}
+
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed05, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"example docker compose credential values must use ${VAR:?required} instead of committed literals")
 }

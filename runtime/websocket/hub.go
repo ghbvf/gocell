@@ -95,8 +95,9 @@ type Hub struct {
 	conns  map[string]*connEntry
 	wg     sync.WaitGroup // tracks readLoop + pingLoop goroutines
 
-	// cancelMu protects runCancel from concurrent Start/Stop access.
+	// cancelMu protects runCtx/runCancel from concurrent Start/Stop access.
 	cancelMu  sync.Mutex
+	runCtx    context.Context
 	runCancel context.CancelFunc
 
 	// shutdownDone is closed when shutdown completes. Lets concurrent
@@ -153,6 +154,7 @@ func (h *Hub) Start(ctx context.Context) error {
 		return errcode.New(ErrWSAlreadyStopped, "websocket: hub already stopped")
 	}
 	h.runCancel = cancel
+	h.runCtx = runCtx
 	h.wg.Add(1)
 	h.cancelMu.Unlock()
 
@@ -177,7 +179,7 @@ func (h *Hub) Start(ctx context.Context) error {
 
 	// External cancellation: run the single shutdown path ourselves.
 	shutdownCtx, shutdownCancel := context.WithTimeout(
-		context.Background(), defaultShutdownTimeout,
+		context.WithoutCancel(ctx), defaultShutdownTimeout,
 	)
 	defer shutdownCancel()
 	_ = h.shutdown(shutdownCtx)
@@ -223,6 +225,8 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	// Cancel run context: stops pingLoop, unblocks Start if still blocking.
 	h.cancelMu.Lock()
 	cancel := h.runCancel
+	h.runCancel = nil
+	h.runCtx = nil
 	h.cancelMu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -284,6 +288,10 @@ func (h *Hub) shutdown(ctx context.Context) error {
 // The Hub must be in the running state (Start called). Register on an
 // idle, stopping, or stopped Hub returns an error and closes the conn.
 func (h *Hub) Register(conn Conn) error {
+	h.cancelMu.Lock()
+	runCtx := h.runCtx
+	h.cancelMu.Unlock()
+
 	h.connMu.Lock()
 	s := h.state.Load()
 	if s == stateStopping {
@@ -302,6 +310,11 @@ func (h *Hub) Register(conn Conn) error {
 		_ = conn.Close()
 		return errcode.New(ErrWSMaxConns, "websocket: max connections reached")
 	}
+	if runCtx == nil {
+		h.connMu.Unlock()
+		_ = conn.Close()
+		return errcode.New(ErrWSHubNotRunning, "websocket: hub is not running, connection rejected")
+	}
 
 	// Evict existing entry with same ID to prevent context leak.
 	var evicted *connEntry
@@ -310,7 +323,7 @@ func (h *Hub) Register(conn Conn) error {
 		evicted = old
 	}
 
-	connCtx, cancel := context.WithCancel(context.Background())
+	connCtx, cancel := context.WithCancel(runCtx)
 	entry := &connEntry{conn: conn, cancel: cancel}
 	h.conns[conn.ID()] = entry
 	h.wg.Add(1)

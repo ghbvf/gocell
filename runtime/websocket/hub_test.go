@@ -306,6 +306,42 @@ func TestHub_RegisterAndReadLoop(t *testing.T) {
 	mu.Unlock()
 }
 
+func TestHub_RegisterUsesStartContextValues(t *testing.T) {
+	type ctxKey string
+
+	const want = "trace-123"
+	got := make(chan any, 1)
+	ctx := context.WithValue(context.Background(), ctxKey("trace-id"), want)
+	hub := NewHub(DefaultHubConfig(), func(ctx context.Context, _ string, _ []byte) {
+		got <- ctx.Value(ctxKey("trace-id"))
+	})
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(ctx) }()
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = hub.Stop(stopCtx)
+		<-startErr
+	})
+
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, time.Second, time.Millisecond)
+
+	conn := newFakeConn("context-values")
+	require.NoError(t, hub.Register(conn))
+	<-conn.readyCh
+
+	conn.readCh <- []byte("hello")
+	select {
+	case value := <-got:
+		assert.Equal(t, want, value)
+	case <-time.After(time.Second):
+		t.Fatal("handler did not receive message")
+	}
+}
+
 func TestHub_RegisterDuringStop(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
