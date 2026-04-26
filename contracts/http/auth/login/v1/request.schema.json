@@ -3,8 +3,8 @@
   "title": "http.auth.login.v1.request",
   "type": "object",
   "properties": {
-    "username": { "type": "string" },
-    "password": { "type": "string" }
+    "username": { "type": "string", "minLength": 1, "maxLength": 128 },
+    "password": { "type": "string", "minLength": 8, "maxLength": 72 }
   },
   "required": ["username", "password"],
   "additionalProperties": false

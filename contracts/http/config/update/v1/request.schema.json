@@ -3,7 +3,7 @@
   "title": "http.config.update.v1.request",
   "type": "object",
   "properties": {
-    "value": { "type": "string" }
+    "value": { "type": "string", "minLength": 0, "maxLength": 4096 }
   },
   "required": ["value"],
   "additionalProperties": false

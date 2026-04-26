@@ -3,8 +3,8 @@
   "title": "http.device.command.enqueue.v1.request",
   "type": "object",
   "properties": {
-    "commandType": { "type": "string" },
-    "payload": { "type": "string" }
+    "commandType": { "type": "string", "minLength": 1, "maxLength": 64 },
+    "payload": { "type": "string", "minLength": 0, "maxLength": 4096 }
   },
   "required": ["payload"],
   "additionalProperties": false

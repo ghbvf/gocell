@@ -3,7 +3,7 @@
   "title": "http.config.rollback.v1.request",
   "type": "object",
   "properties": {
-    "version": { "type": "integer", "minimum": 1 }
+    "version": { "type": "integer", "minimum": 1, "maximum": 99999 }
   },
   "required": ["version"],
   "additionalProperties": false

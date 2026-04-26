@@ -436,10 +436,10 @@ func TestHttpAuthUserChangePasswordV1Serve(t *testing.T) {
 	}}
 	handler, _ := setupContractHandlerWithIssuer(t, stubIssuer)
 
-	// Validate request schema.
-	c.ValidateRequest(t, []byte(`{"oldPassword":"oldP@ss","newPassword":"newP@ss"}`))
-	c.MustRejectRequest(t, []byte(`{"oldPassword":"oldP@ss"}`))                           // missing newPassword
-	c.MustRejectRequest(t, []byte(`{"oldPassword":"old","newPassword":"new","extra":1}`)) // additionalProperties
+	// Validate request schema. Passwords must satisfy minLength:8 / maxLength:72 (FMT-25 + bcrypt).
+	c.ValidateRequest(t, []byte(`{"oldPassword":"oldP@ss12","newPassword":"newP@ss12"}`))
+	c.MustRejectRequest(t, []byte(`{"oldPassword":"oldP@ss12"}`))                                   // missing newPassword
+	c.MustRejectRequest(t, []byte(`{"oldPassword":"old12345","newPassword":"new12345","extra":1}`)) // additionalProperties
 
 	// Create a user to change password on.
 	userID := createUserForContractTest(t, handler, createContract)
@@ -484,10 +484,10 @@ func TestHttpAuthUserCreateV1_RequirePasswordResetField(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
 
-	// requirePasswordReset is optional — should be accepted.
-	c.ValidateRequest(t, []byte(`{"username":"u","email":"u@u.com","password":"p","requirePasswordReset":true}`))
+	// requirePasswordReset is optional — should be accepted (password ≥ 8 chars per FMT-25).
+	c.ValidateRequest(t, []byte(`{"username":"u","email":"u@u.com","password":"p1234567","requirePasswordReset":true}`))
 	// Without the optional field — also valid.
-	c.ValidateRequest(t, []byte(`{"username":"u","email":"u@u.com","password":"p"}`))
+	c.ValidateRequest(t, []byte(`{"username":"u","email":"u@u.com","password":"p1234567"}`))
 }
 
 func TestHttpAuthUserPatchV1_RequirePasswordResetField(t *testing.T) {

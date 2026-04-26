@@ -3,7 +3,7 @@
   "title": "http.auth.refresh.v1.request",
   "type": "object",
   "properties": {
-    "refreshToken": { "type": "string" }
+    "refreshToken": { "type": "string", "minLength": 20, "maxLength": 4096 }
   },
   "required": ["refreshToken"],
   "additionalProperties": false

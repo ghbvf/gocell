@@ -13,6 +13,8 @@ endpoints:
     pathParams:
       id:
         type: string
+        minLength: 1
+        maxLength: 256
     successStatus: 200
     noContent: false
     responses:

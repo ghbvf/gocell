@@ -4,10 +4,10 @@
   "type": "object",
   "required": ["key"],
   "properties": {
-    "key": { "type": "string", "minLength": 1 },
+    "key": { "type": "string", "minLength": 1, "maxLength": 128 },
     "enabled": { "type": "boolean" },
     "rolloutPercentage": { "type": "integer", "minimum": 0, "maximum": 100 },
-    "description": { "type": "string" }
+    "description": { "type": "string", "minLength": 0, "maxLength": 1024 }
   },
   "additionalProperties": false
 }

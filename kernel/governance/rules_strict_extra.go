@@ -10,9 +10,10 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/pkg/contracts"
 )
 
-// Rule ID constants for FMT-20..FMT-23. Extracted so that each rule ID string
+// Rule ID constants for FMT-20..FMT-25. Extracted so that each rule ID string
 // is declared in exactly one place; Sonar code-smell rule S1192 (duplicate
 // string literals) no longer fires for these identifiers.
 const (
@@ -20,6 +21,7 @@ const (
 	ruleFMT21 = "FMT-21"
 	ruleFMT22 = "FMT-22"
 	ruleFMT23 = "FMT-23"
+	ruleFMT25 = "FMT-25"
 )
 
 // --- FMT-20 (formerly FMT-RESPONSE-STRICT-01) ---
@@ -112,30 +114,128 @@ func scanSchemaForStrictMissing(absPath string) ([]string, error) {
 	return missing, nil
 }
 
-// walkSchemaObject recursively walks a schema node. When the node is an object
-// type (map with "type":"object"), it checks for an explicit additionalProperties
-// declaration (true or false) and recurses into "properties" and "items".
+// walkSchemaObject recursively walks a schema node and applies
+// checkAdditionalProperties at each "type":"object" node. Implemented via the
+// shared walkSchemaTreeDepth framework.
 func walkSchemaObject(node map[string]any, path string, missing *[]string) {
-	walkSchemaObjectDepth(node, path, missing, 0)
+	walkSchemaTreeDepth(node, path, 0, func(n map[string]any, p string) {
+		if t, _ := n["type"].(string); t == "object" {
+			checkAdditionalProperties(n, p, missing)
+		}
+	})
 }
 
-// walkSchemaObjectDepth is the depth-guarded implementation of walkSchemaObject.
-// depth > 32 causes early return to prevent unbounded recursion on pathological schemas.
+// walkSchemaTreeDepth is the shared depth-guarded JSON-schema visitor used by
+// FMT-20 (additionalProperties) and FMT-25 (input constraints). It applies
+// `visit` at every node, resolves local $ref targets, then recurses through
+// object properties, array items, patternProperties, and common composition
+// keywords. depth > 32 causes early return to prevent unbounded recursion on
+// pathological schemas.
 //
-// For "type":"object" nodes: checks additionalProperties and recurses into properties.
-// For any node with an "items" sub-schema (including "type":"array" nodes): recurses
-// into items so that array-typed properties with object items are also validated.
-func walkSchemaObjectDepth(node map[string]any, path string, missing *[]string, depth int) {
+// Note: visit is called at every node — branch on node["type"] inside visit
+// if a check applies only to objects/strings/integers etc.
+func walkSchemaTreeDepth(node map[string]any, path string, depth int, visit func(node map[string]any, path string)) {
+	walkSchemaTreeDepthRoot(node, node, path, depth, map[string]bool{}, visit)
+}
+
+func walkSchemaTreeDepthRoot(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
 	if depth > 32 {
 		return
 	}
-	typVal, _ := node["type"].(string)
-	if typVal == "object" {
-		checkAdditionalProperties(node, path, missing)
-		walkSchemaPropertiesDepth(node, path, missing, depth+1)
+	visit(node, path)
+	if ref, ok := node["$ref"].(string); ok && !seenRefs[ref] {
+		if target, ok := resolveLocalSchemaRef(root, ref); ok {
+			seenRefs[ref] = true
+			walkSchemaTreeDepthRoot(root, target, path, depth+1, seenRefs, visit)
+			delete(seenRefs, ref)
+		}
 	}
-	// Always recurse into items (covers "type":"array" nodes whose items is an object).
-	walkSchemaItemsDepth(node, path, missing, depth+1)
+	walkSchemaNamedMapChildren(root, node, path, depth, seenRefs, visit)
+	walkSchemaNamedObjectChildren(root, node, path, depth, seenRefs, visit)
+	walkSchemaNamedArrayChildren(root, node, path, depth, seenRefs, visit)
+}
+
+func walkSchemaNamedMapChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+	for _, keyword := range []string{"properties", "patternProperties", "dependentSchemas"} {
+		children, ok := node[keyword].(map[string]any)
+		if !ok {
+			continue
+		}
+		for _, key := range sortedAnyMapKeys(children) {
+			if child, ok := children[key].(map[string]any); ok {
+				childPath := path + "." + key
+				if keyword != "properties" {
+					childPath = path + "." + keyword + "." + key
+				}
+				walkSchemaTreeDepthRoot(root, child, childPath, depth+1, seenRefs, visit)
+			}
+		}
+	}
+}
+
+func walkSchemaNamedObjectChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+	for _, keyword := range []string{
+		"items",
+		"additionalProperties",
+		"contains",
+		"propertyNames",
+		"not",
+		"if",
+		"then",
+		"else",
+		"unevaluatedProperties",
+	} {
+		if child, ok := node[keyword].(map[string]any); ok {
+			walkSchemaTreeDepthRoot(root, child, path+"."+keyword, depth+1, seenRefs, visit)
+		}
+	}
+}
+
+func walkSchemaNamedArrayChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) {
+	for _, keyword := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
+		children, ok := node[keyword].([]any)
+		if !ok {
+			continue
+		}
+		for i, val := range children {
+			if child, ok := val.(map[string]any); ok {
+				walkSchemaTreeDepthRoot(root, child, fmt.Sprintf("%s.%s[%d]", path, keyword, i), depth+1, seenRefs, visit)
+			}
+		}
+	}
+}
+
+func sortedAnyMapKeys(m map[string]any) []string {
+	keys := make([]string, 0, len(m))
+	for key := range m {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func resolveLocalSchemaRef(root map[string]any, ref string) (map[string]any, bool) {
+	if !strings.HasPrefix(ref, "#/") {
+		return nil, false
+	}
+	var cur any = root
+	for _, part := range strings.Split(strings.TrimPrefix(ref, "#/"), "/") {
+		obj, ok := cur.(map[string]any)
+		if !ok {
+			return nil, false
+		}
+		cur, ok = obj[decodeJSONPointerToken(part)]
+		if !ok {
+			return nil, false
+		}
+	}
+	target, ok := cur.(map[string]any)
+	return target, ok
+}
+
+func decodeJSONPointerToken(s string) string {
+	s = strings.ReplaceAll(s, "~1", "/")
+	return strings.ReplaceAll(s, "~0", "~")
 }
 
 // checkAdditionalProperties emits a violation when the node has no
@@ -156,27 +256,6 @@ func checkAdditionalProperties(node map[string]any, path string, missing *[]stri
 	}
 	// Object value (schema form) is not a deliberate open/closed declaration.
 	*missing = append(*missing, path)
-}
-
-// walkSchemaPropertiesDepth is the depth-guarded implementation for recursing into properties.
-func walkSchemaPropertiesDepth(node map[string]any, path string, missing *[]string, depth int) {
-	props, ok := node["properties"].(map[string]any)
-	if !ok {
-		return
-	}
-	for key, val := range props {
-		if child, ok := val.(map[string]any); ok {
-			walkSchemaObjectDepth(child, path+"."+key, missing, depth)
-		}
-	}
-}
-
-// walkSchemaItemsDepth is the depth-guarded implementation for recursing into items.
-func walkSchemaItemsDepth(node map[string]any, path string, missing *[]string, depth int) {
-	items, ok := node["items"].(map[string]any)
-	if ok {
-		walkSchemaObjectDepth(items, path+".items", missing, depth)
-	}
 }
 
 // --- FMT-21 (formerly FMT-CONTRACT-DIR-ID-MATCH-01) ---
@@ -306,6 +385,223 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 				),
 			))
 		}
+	}
+	return results
+}
+
+// --- FMT-25 (input constraint enforcement) ---
+
+// inputConstraintViolation captures a single missing-constraint finding from
+// either a request schema (path = JSON-pointer) or a contract.yaml param
+// (path = "endpoints.http.queryParams.<name>.<facet>" /
+// "endpoints.http.pathParams.<name>.<facet>").
+type inputConstraintViolation struct {
+	location string // JSON pointer or full metadata field path.
+	missing  string // "minLength" | "maxLength" | "minimum" | "maximum"
+}
+
+// validateFMTInputConstraint01 enforces input-side schema constraints on
+// HTTP-kind contracts:
+//   - request.schema.json: every "type":"string" leaf must declare both
+//     minLength and maxLength; every "type":"integer" leaf must declare both
+//     minimum and maximum.
+//   - contract.yaml.queryParams / pathParams: same rules apply to each
+//     ParamSchema, with one exemption: Format == "uuid" skips minLength /
+//     maxLength enforcement (RFC 4122 fixes UUIDs at 36 chars).
+//
+// Severity: Error, IssueRequired (missing facets fail the build; existing
+// declarations of explicit zero are accepted).
+//
+// Rule ID: FMT-25.
+//
+// ref: OWASP API Security Top 10 — API4:2019 Lack of Resources & Rate Limiting
+// (input size bounds defend against DoS and overlong-payload attacks).
+// ref: JSON Schema Draft 2020-12 string/numeric validation vocabulary.
+func (v *Validator) validateFMTInputConstraint01() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		results = append(results, v.validateContractInputConstraints(c)...)
+	}
+	return results
+}
+
+func (v *Validator) validateContractInputConstraints(c *metadata.ContractMeta) []ValidationResult {
+	if c.Kind != "http" {
+		return nil
+	}
+	var results []ValidationResult
+	results = append(results, v.validateRequestSchemaInputConstraints(c)...)
+	results = append(results, v.validateParamInputConstraints(c)...)
+	return results
+}
+
+func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMeta) []ValidationResult {
+	if c.SchemaRefs.Request == "" {
+		return nil
+	}
+	schemaFile := filepath.Join(c.Dir, c.SchemaRefs.Request)
+	absPath := filepath.Join(v.root, schemaFile)
+	missing, err := scanSchemaForInputConstraints(absPath)
+	if err != nil && !os.IsNotExist(err) {
+		return []ValidationResult{v.newResult(
+			ruleFMT25, SeverityError, IssueInvalid,
+			schemaFile, "$",
+			fmt.Sprintf("contract %q request schema %q failed to parse: %v",
+				c.ID, c.SchemaRefs.Request, err),
+		)}
+	}
+	var results []ValidationResult
+	for _, viol := range missing {
+		results = append(results, v.newResult(
+			ruleFMT25, SeverityError, IssueRequired,
+			schemaFile, viol.location,
+			fmt.Sprintf("contract %q request schema field %s missing %s",
+				c.ID, viol.location, viol.missing),
+		))
+	}
+	return results
+}
+
+func (v *Validator) validateParamInputConstraints(c *metadata.ContractMeta) []ValidationResult {
+	if c.Endpoints.HTTP == nil {
+		return nil
+	}
+	h := c.Endpoints.HTTP
+	results := v.checkParamSchemaConstraints(c, h.QueryParams, "queryParams")
+	if v.pathParamsReadyForInputConstraints(c, h) {
+		results = append(results, v.checkParamSchemaConstraints(c, h.PathParams, "pathParams")...)
+	}
+	return results
+}
+
+func (v *Validator) pathParamsReadyForInputConstraints(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) bool {
+	file := contractFile(c)
+	if len(v.validateFMT13Path(c, h, file)) > 0 {
+		return false
+	}
+	return len(v.validateFMT13PathParams(c, h, file)) == 0
+}
+
+// scanSchemaForInputConstraints reads a JSON schema file and walks every node,
+// emitting a violation for each missing minLength/maxLength on strings and
+// minimum/maximum on integers. Paths use the same JSON-pointer style as
+// scanSchemaForStrictMissing (e.g. "$", "$.user.name", "$.tags.items").
+func scanSchemaForInputConstraints(absPath string) ([]inputConstraintViolation, error) {
+	raw, err := os.ReadFile(absPath)
+	if err != nil {
+		return nil, err
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		return nil, fmt.Errorf("invalid JSON schema %s: %w", absPath, err)
+	}
+	var missing []inputConstraintViolation
+	walkSchemaTreeDepth(schema, "$", 0, func(n map[string]any, p string) {
+		checkInputConstraints(n, p, &missing)
+	})
+	// Sort for deterministic output across runs (map iteration is unordered).
+	sort.Slice(missing, func(i, j int) bool {
+		if missing[i].location != missing[j].location {
+			return missing[i].location < missing[j].location
+		}
+		return missing[i].missing < missing[j].missing
+	})
+	return missing, nil
+}
+
+// checkInputConstraints branches on node["type"] and records missing facets.
+// Strings missing minLength or maxLength → violations.
+// Integers missing minimum or maximum → violations.
+// Other types (boolean, number, object, array) are unaffected.
+func checkInputConstraints(node map[string]any, path string, missing *[]inputConstraintViolation) {
+	typVal, _ := node["type"].(string)
+	switch typVal {
+	case "string":
+		if _, ok := node["minLength"]; !ok {
+			*missing = append(*missing, inputConstraintViolation{location: path, missing: "minLength"})
+		}
+		if _, ok := node["maxLength"]; !ok {
+			*missing = append(*missing, inputConstraintViolation{location: path, missing: "maxLength"})
+		}
+	case "integer":
+		if _, ok := node["minimum"]; !ok {
+			*missing = append(*missing, inputConstraintViolation{location: path, missing: "minimum"})
+		}
+		if _, ok := node["maximum"]; !ok {
+			*missing = append(*missing, inputConstraintViolation{location: path, missing: "maximum"})
+		}
+	}
+}
+
+// checkParamSchemaConstraints scans a map of ParamSchema (queryParams or
+// pathParams) and emits violations for missing constraints. paramKind is the
+// label used in the error message ("queryParams" or "pathParams").
+//
+// String params with Format == "uuid" are exempt from minLength / maxLength
+// enforcement: RFC 4122 fixes UUIDs at 36 characters, so schema-level length
+// constraints are redundant. The exemption applies only to length checks;
+// integer constraints still apply unconditionally.
+func (v *Validator) checkParamSchemaConstraints(c *metadata.ContractMeta, params map[string]contracts.ParamSchema, paramKind string) []ValidationResult {
+	if len(params) == 0 {
+		return nil
+	}
+	// Stable iteration order for deterministic output.
+	names := make([]string, 0, len(params))
+	for name := range params {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var results []ValidationResult
+	for _, name := range names {
+		fieldBase := fmt.Sprintf("endpoints.http.%s.%s", paramKind, name)
+		results = append(results, v.checkSingleParamConstraints(c, params[name], fieldBase)...)
+	}
+	return results
+}
+
+// checkSingleParamConstraints checks one ParamSchema for missing min/max
+// declarations. Branches on Type (string vs integer); other types are
+// untouched. Format == "uuid" exempts string params from length checks.
+func (v *Validator) checkSingleParamConstraints(c *metadata.ContractMeta, p contracts.ParamSchema, field string) []ValidationResult {
+	switch p.Type {
+	case "string":
+		if p.Format == "uuid" {
+			return nil // RFC 4122 fixes length; schema-level constraint is redundant.
+		}
+		return v.emitMissingFacets(c, field, []missingFacet{
+			{p.MinLength == nil, "minLength"},
+			{p.MaxLength == nil, "maxLength"},
+		})
+	case "integer":
+		return v.emitMissingFacets(c, field, []missingFacet{
+			{p.Minimum == nil, "minimum"},
+			{p.Maximum == nil, "maximum"},
+		})
+	}
+	return nil
+}
+
+// missingFacet describes a single facet check: when present is false, emit a
+// violation naming the facet (e.g. "minLength").
+type missingFacet struct {
+	missing bool
+	name    string
+}
+
+// emitMissingFacets returns one ValidationResult per missing facet.
+func (v *Validator) emitMissingFacets(c *metadata.ContractMeta, fieldBase string, facets []missingFacet) []ValidationResult {
+	var results []ValidationResult
+	for _, f := range facets {
+		if !f.missing {
+			continue
+		}
+		field := fieldBase + "." + f.name
+		results = append(results, v.newResult(
+			ruleFMT25, SeverityError, IssueRequired,
+			contractFile(c), field,
+			fmt.Sprintf("contract %q %s missing %s", c.ID, fieldBase, f.name),
+		))
 	}
 	return results
 }

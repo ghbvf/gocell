@@ -84,6 +84,24 @@
         "format": {
           "type": "string",
           "description": "Optional format hint (e.g. uuid, date-time, int64)."
+        },
+        "minLength": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Minimum string length accepted for this parameter. Required by FMT-25 for non-uuid string path/query params."
+        },
+        "maxLength": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum string length accepted for this parameter. Required by FMT-25 for non-uuid string path/query params."
+        },
+        "minimum": {
+          "type": "integer",
+          "description": "Minimum integer value accepted for this parameter. Required by FMT-25 for integer path/query params."
+        },
+        "maximum": {
+          "type": "integer",
+          "description": "Maximum integer value accepted for this parameter. Required by FMT-25 for integer path/query params."
         }
       }
     }

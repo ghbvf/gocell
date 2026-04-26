@@ -14,9 +14,13 @@ endpoints:
       cursor:
         type: string
         required: false
+        minLength: 0
+        maxLength: 256
       limit:
         type: integer
         required: false
+        minimum: 1
+        maximum: 500
     successStatus: 200
     noContent: false
     responses:
