@@ -43,8 +43,8 @@ type config struct {
 // OnStart returns promptly after launching the cleaner in a background
 // goroutine: cleaner.Start blocks on ctx.Done() waiting for TTL expiry,
 // which exceeds bootstrap.Hook.StartTimeout (30s default). The goroutine
-// uses an internal runCtx derived from context.Background; OnStop cancels
-// it to drain the goroutine and then calls cleaner.Stop for explicit
+// uses an internal runCtx derived from context.WithoutCancel(ctx); OnStop
+// cancels it to drain the goroutine and then calls cleaner.Stop for explicit
 // timer cancellation.
 type Lifecycle struct {
 	cfg       config
@@ -198,15 +198,15 @@ func (l *Lifecycle) start(ctx context.Context) error {
 		return nil // admin exists + no orphan → no cleanup needed
 	}
 
-	// Derive a long-lived runCtx from background so cleaner.Start (which blocks
-	// on <-ctx.Done()) is not killed by bootstrap.Hook.StartTimeout (30s). OnStop
-	// cancels runCtx to drain the goroutine.
+	// Derive a long-lived runCtx that preserves caller values but is not killed
+	// by bootstrap.Hook.StartTimeout (30s). OnStop cancels runCtx to drain the
+	// goroutine.
 	//
 	// A concurrent stop() racing with start() is handled by stopped=true: if
 	// stop ran first, we cancel runCtx immediately and do not spawn the
 	// cleaner goroutine (calling cleaner.Start on a stopped cleaner is an error
 	// per the cleaner contract).
-	runCtx, cancel := context.WithCancel(context.Background())
+	runCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	l.mu.Lock()
 	if l.stopped {
 		l.mu.Unlock()

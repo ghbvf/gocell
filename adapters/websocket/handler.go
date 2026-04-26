@@ -67,7 +67,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 		connID := "ws-" + uuid.NewString()
 		conn := NewConn(connID, wsConn)
 
-		if regErr := hub.Register(conn); regErr != nil {
+		if regErr := hub.Register(r.Context(), conn); regErr != nil {
 			_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
 			slog.Warn("websocket: register rejected",
 				slog.Any("error", regErr),

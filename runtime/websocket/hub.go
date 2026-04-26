@@ -177,7 +177,7 @@ func (h *Hub) Start(ctx context.Context) error {
 
 	// External cancellation: run the single shutdown path ourselves.
 	shutdownCtx, shutdownCancel := context.WithTimeout(
-		context.Background(), defaultShutdownTimeout,
+		context.WithoutCancel(ctx), defaultShutdownTimeout,
 	)
 	defer shutdownCancel()
 	_ = h.shutdown(shutdownCtx)
@@ -223,6 +223,7 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	// Cancel run context: stops pingLoop, unblocks Start if still blocking.
 	h.cancelMu.Lock()
 	cancel := h.runCancel
+	h.runCancel = nil
 	h.cancelMu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -277,13 +278,16 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	return err
 }
 
-// Register adds a connection to the Hub and starts reading from it.
+// Register adds a connection to the Hub and starts reading from it. ctx is used
+// as the parent for per-connection values; cancellation is controlled by the
+// Hub so request-scope cancellation does not immediately tear down accepted
+// WebSocket connections after the HTTP handler returns.
 // The read loop uses a per-connection context that is cancelled when the
 // connection is unregistered or the Hub shuts down.
 //
 // The Hub must be in the running state (Start called). Register on an
 // idle, stopping, or stopped Hub returns an error and closes the conn.
-func (h *Hub) Register(conn Conn) error {
+func (h *Hub) Register(ctx context.Context, conn Conn) error {
 	h.connMu.Lock()
 	s := h.state.Load()
 	if s == stateStopping {
@@ -310,7 +314,7 @@ func (h *Hub) Register(conn Conn) error {
 		evicted = old
 	}
 
-	connCtx, cancel := context.WithCancel(context.Background())
+	connCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	entry := &connEntry{conn: conn, cancel: cancel}
 	h.conns[conn.ID()] = entry
 	h.wg.Add(1)

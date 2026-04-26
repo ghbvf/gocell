@@ -215,7 +215,7 @@ func TestHub_StopTimeout(t *testing.T) {
 
 	// Register a conn whose Close is a no-op (readLoop never exits).
 	stuck := &stuckConn{id: "stuck", closeCh: make(chan struct{})}
-	require.NoError(t, hub.Register(stuck))
+	require.NoError(t, hub.Register(context.Background(), stuck))
 
 	// Stop with very short timeout.
 	stopCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -242,7 +242,7 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 
 	// Register a conn before cancel.
 	conn := newFakeConn("pre-cancel")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	cancel()
@@ -260,7 +260,7 @@ func TestHub_ExternalContextCancel(t *testing.T) {
 
 	// Register must be rejected.
 	lateConn := newFakeConn("post-cancel")
-	err := hub.Register(lateConn)
+	err := hub.Register(context.Background(), lateConn)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not running")
 
@@ -289,7 +289,7 @@ func TestHub_RegisterAndReadLoop(t *testing.T) {
 	hub := startHub(t, DefaultHubConfig(), handler)
 
 	conn := newFakeConn("sender")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	conn.readCh <- []byte("hello server")
@@ -306,6 +306,42 @@ func TestHub_RegisterAndReadLoop(t *testing.T) {
 	mu.Unlock()
 }
 
+func TestHub_RegisterUsesContextValues(t *testing.T) {
+	type ctxKey string
+
+	const want = "trace-123"
+	got := make(chan any, 1)
+	registerCtx := context.WithValue(context.Background(), ctxKey("trace-id"), want)
+	hub := NewHub(DefaultHubConfig(), func(ctx context.Context, _ string, _ []byte) {
+		got <- ctx.Value(ctxKey("trace-id"))
+	})
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		_ = hub.Stop(stopCtx)
+		<-startErr
+	})
+
+	require.Eventually(t, func() bool {
+		return hub.state.Load() == stateRunning
+	}, time.Second, time.Millisecond)
+
+	conn := newFakeConn("context-values")
+	require.NoError(t, hub.Register(registerCtx, conn))
+	<-conn.readyCh
+
+	conn.readCh <- []byte("hello")
+	select {
+	case value := <-got:
+		assert.Equal(t, want, value)
+	case <-time.After(time.Second):
+		t.Fatal("handler did not receive message")
+	}
+}
+
 func TestHub_RegisterDuringStop(t *testing.T) {
 	hub := NewHub(DefaultHubConfig(), nil)
 	startErr := make(chan error, 1)
@@ -318,7 +354,7 @@ func TestHub_RegisterDuringStop(t *testing.T) {
 	hub.state.Store(stateStopping)
 
 	conn := newFakeConn("rejected")
-	err := hub.Register(conn)
+	err := hub.Register(context.Background(), conn)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "stopping")
 	assert.True(t, conn.isClosed())
@@ -336,7 +372,7 @@ func TestHub_RegisterOnStoppedHub(t *testing.T) {
 	_ = hub.Stop(context.Background())
 
 	conn := newFakeConn("late")
-	err := hub.Register(conn)
+	err := hub.Register(context.Background(), conn)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not running")
 	assert.True(t, conn.isClosed())
@@ -346,7 +382,7 @@ func TestHub_Unregister(t *testing.T) {
 	hub := startHub(t, DefaultHubConfig(), nil)
 
 	conn := newFakeConn("c1")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	assert.Equal(t, 1, hub.ConnCount())
@@ -362,7 +398,7 @@ func TestHub_UnregisterIdempotent(t *testing.T) {
 	hub := startHub(t, DefaultHubConfig(), nil)
 
 	conn := newFakeConn("c1")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	hub.Unregister("c1")
@@ -377,13 +413,13 @@ func TestHub_RegisterDuplicateID(t *testing.T) {
 	hub := startHub(t, DefaultHubConfig(), nil)
 
 	connA := newFakeConn("dup")
-	require.NoError(t, hub.Register(connA))
+	require.NoError(t, hub.Register(context.Background(), connA))
 	<-connA.readyCh
 	assert.Equal(t, 1, hub.ConnCount())
 
 	// Register with same ID — old conn should be evicted.
 	connB := newFakeConn("dup")
-	require.NoError(t, hub.Register(connB))
+	require.NoError(t, hub.Register(context.Background(), connB))
 	<-connB.readyCh
 
 	assert.Equal(t, 1, hub.ConnCount(), "map should have exactly 1 entry")
@@ -402,15 +438,15 @@ func TestHub_MaxConnections(t *testing.T) {
 
 	c1 := newFakeConn("c1")
 	c2 := newFakeConn("c2")
-	require.NoError(t, hub.Register(c1))
-	require.NoError(t, hub.Register(c2))
+	require.NoError(t, hub.Register(context.Background(), c1))
+	require.NoError(t, hub.Register(context.Background(), c2))
 	<-c1.readyCh
 	<-c2.readyCh
 	assert.Equal(t, 2, hub.ConnCount())
 
 	// Third connection should be rejected.
 	c3 := newFakeConn("c3")
-	err := hub.Register(c3)
+	err := hub.Register(context.Background(), c3)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "max connections")
 	assert.True(t, c3.isClosed(), "rejected conn should be closed")
@@ -437,7 +473,7 @@ func TestHub_RegisterStopRace(t *testing.T) {
 		go func(idx int) {
 			defer registerWg.Done()
 			c := newFakeConn(fmt.Sprintf("race-%d", idx))
-			_ = hub.Register(c)
+			_ = hub.Register(context.Background(), c)
 		}(i)
 	}
 
@@ -458,7 +494,7 @@ func TestHub_ConcurrentBroadcast(t *testing.T) {
 	for i := range conns {
 		c := newFakeConn("bc" + string(rune('0'+i)))
 		conns[i] = c
-		require.NoError(t, hub.Register(c))
+		require.NoError(t, hub.Register(context.Background(), c))
 		<-c.readyCh
 	}
 
@@ -486,8 +522,8 @@ func TestHub_Broadcast(t *testing.T) {
 
 	c1 := newFakeConn("c1")
 	c2 := newFakeConn("c2")
-	require.NoError(t, hub.Register(c1))
-	require.NoError(t, hub.Register(c2))
+	require.NoError(t, hub.Register(context.Background(), c1))
+	require.NoError(t, hub.Register(context.Background(), c2))
 	<-c1.readyCh
 	<-c2.readyCh
 
@@ -504,8 +540,8 @@ func TestHub_BroadcastSlowConn(t *testing.T) {
 	slow := newFakeConn("slow")
 	slow.writeDelay = 200 * time.Millisecond
 
-	require.NoError(t, hub.Register(fast))
-	require.NoError(t, hub.Register(slow))
+	require.NoError(t, hub.Register(context.Background(), fast))
+	require.NoError(t, hub.Register(context.Background(), slow))
 	<-fast.readyCh
 	<-slow.readyCh
 
@@ -522,7 +558,7 @@ func TestHub_Send(t *testing.T) {
 	hub := startHub(t, DefaultHubConfig(), nil)
 
 	conn := newFakeConn("target")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	require.NoError(t, hub.Send(context.Background(), "target", []byte("direct")))
@@ -555,7 +591,7 @@ func TestHub_MessageHandler(t *testing.T) {
 	hub := startHub(t, DefaultHubConfig(), handler)
 
 	conn := newFakeConn("h1")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	conn.readCh <- []byte("payload")
@@ -587,7 +623,7 @@ func TestHub_PingMissThreshold(t *testing.T) {
 
 	conn := newFakeConn("pinger")
 	conn.pingErr = errors.New("timeout")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	require.Eventually(t, func() bool {
@@ -605,7 +641,7 @@ func TestHub_PingMissReset(t *testing.T) {
 
 	conn := newFakeConn("resilient")
 	conn.pingErr = errors.New("fail")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	// Let 2 ping misses accumulate (below threshold).
@@ -648,7 +684,7 @@ func TestHub_PingLoopRunsOnInterval(t *testing.T) {
 	hub := startHub(t, cfg, nil)
 
 	conn := newFakeConn("counter")
-	require.NoError(t, hub.Register(conn))
+	require.NoError(t, hub.Register(context.Background(), conn))
 	<-conn.readyCh
 
 	// Wait long enough for multiple pings, verify conn is still alive.
@@ -666,6 +702,22 @@ func TestDefaultHubConfig(t *testing.T) {
 	assert.Equal(t, 5*time.Second, cfg.PingTimeout)
 	assert.Equal(t, int64(64*1024), cfg.ReadLimit)
 	assert.Equal(t, 2, cfg.PingMissMax)
+}
+
+func TestNewHub_PreservesExplicitConfig(t *testing.T) {
+	cfg := HubConfig{
+		PingInterval:   time.Second,
+		PingTimeout:    250 * time.Millisecond,
+		ReadLimit:      1024,
+		PingMissMax:    5,
+		MaxConnections: 9,
+	}
+	handler := func(context.Context, string, []byte) {}
+
+	hub := NewHub(cfg, handler)
+
+	assert.Equal(t, cfg, hub.Config())
+	assert.NotNil(t, hub.handler)
 }
 
 func TestHub_IsRunning(t *testing.T) {
@@ -693,7 +745,7 @@ func TestHub_StopDeadlineHonored(t *testing.T) {
 
 	// Register a stuck conn that blocks Close.
 	stuck := &stuckConn{id: "blocker", closeCh: make(chan struct{})}
-	require.NoError(t, hub.Register(stuck))
+	require.NoError(t, hub.Register(context.Background(), stuck))
 
 	// Stop with 100ms deadline — must return within ~200ms regardless of
 	// stuck conn.
@@ -769,7 +821,7 @@ func TestHub_StateMachine(t *testing.T) {
 		return h.Stop(context.Background())
 	}, ""}
 	registerAction := action{"Register", func(h *Hub) error {
-		return h.Register(newFakeConn("sm"))
+		return h.Register(context.Background(), newFakeConn("sm"))
 	}, ""}
 
 	tests := []struct {

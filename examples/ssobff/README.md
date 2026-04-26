@@ -24,6 +24,19 @@ The server starts three listeners following `docs/ops/listener-topology.md`:
 
 Each address is overridable via environment variable (see [Environment Variables](#environment-variables)).
 
+## Docker Infrastructure
+
+Infrastructure services are available for future adapter-based mode. The
+current `ssobff` example still uses in-memory dependencies, so starting these
+containers is optional and does not change runtime storage or event delivery.
+
+```bash
+cd examples/ssobff
+export GOCELL_EXAMPLE_POSTGRES_PASSWORD="$(openssl rand -base64 24)"
+export GOCELL_EXAMPLE_RABBITMQ_PASSWORD="$(openssl rand -base64 24)"
+docker compose up -d
+```
+
 ## Seed User
 
 On first startup, when no admin user exists, the bootstrap process creates
@@ -298,16 +311,4 @@ go run ./examples/ssobff
 # /readyz probe + SIGTERM graceful shutdown). Mirrors the CI examples-
 # smoke job. Required before pushing main.go / option-wiring changes.
 make test-examples-smoke
-```
-
-## Docker Mode (Future)
-
-Infrastructure services are provided for future adapter-based mode:
-
-```bash
-cd examples/ssobff
-docker compose up -d
-cd ../..
-# Export GOCELL_SSOBFF_SERVICE_SECRET and the JWT variables from Quick Start first.
-go run ./examples/ssobff
 ```

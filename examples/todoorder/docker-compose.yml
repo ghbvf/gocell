@@ -4,9 +4,7 @@ services:
     environment:
       POSTGRES_DB: todo_order
       POSTGRES_USER: gocell
-      # Demo credential for local `docker compose up`; DO NOT USE IN PRODUCTION.
-      # nosemgrep: generic.secrets.security.detected-generic-secret
-      POSTGRES_PASSWORD: gocell
+      POSTGRES_PASSWORD: ${GOCELL_EXAMPLE_POSTGRES_PASSWORD:?set GOCELL_EXAMPLE_POSTGRES_PASSWORD for local demo infrastructure}
     ports:
       - "5432:5432"
     volumes:
@@ -34,7 +32,7 @@ services:
       - "15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: gocell
-      RABBITMQ_DEFAULT_PASS: gocell
+      RABBITMQ_DEFAULT_PASS: ${GOCELL_EXAMPLE_RABBITMQ_PASSWORD:?set GOCELL_EXAMPLE_RABBITMQ_PASSWORD for local demo infrastructure}
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 10s

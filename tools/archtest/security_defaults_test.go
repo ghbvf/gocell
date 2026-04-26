@@ -2,7 +2,7 @@ package archtest
 
 // security_defaults_test.go — static archtest rules for PR-MODE-1 SEC-FAIL-CLOSED.
 //
-// Four sub-tests mirror the SEC-FAIL-CLOSED-01..04 rule IDs:
+// Five sub-tests mirror the SEC-FAIL-CLOSED-01..05 rule IDs:
 //
 //   01  addr-driven gate: bundle.go must not wrap WithListener in IfStmt guarded
 //       by PrimaryHTTPAddr / InternalHTTPAddr / HealthHTTPAddr != "".
@@ -12,6 +12,8 @@ package archtest
 //       and call secutil.ValidateTLSEndpoint.
 //   04  websocket origins: no file in adapters/websocket may assign
 //       opts.InsecureSkipVerify = true.
+//   05  example docker compose credentials must come from environment
+//       interpolation, not committed literal values.
 //
 // ref: tools/archtest/auth_authtest_boundary_test.go — 4 sub-test pattern
 
@@ -34,6 +36,7 @@ const (
 	secFailClosed02 = "SEC-FAIL-CLOSED-02"
 	secFailClosed03 = "SEC-FAIL-CLOSED-03"
 	secFailClosed04 = "SEC-FAIL-CLOSED-04"
+	secFailClosed05 = "SEC-FAIL-CLOSED-05"
 )
 
 func TestSecurityDefaults(t *testing.T) {
@@ -53,6 +56,10 @@ func TestSecurityDefaults(t *testing.T) {
 
 	t.Run(secFailClosed04+"_websocket_must_not_skip_origin_verify", func(t *testing.T) {
 		testSEC04WebSocketOriginVerify(t, root)
+	})
+
+	t.Run(secFailClosed05+"_example_compose_credentials_from_env", func(t *testing.T) {
+		testSEC05ExampleComposeCredentialsFromEnv(t, root)
 	})
 }
 
@@ -309,4 +316,117 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 		return true
 	})
 	return lines, nil
+}
+
+func testSEC05ExampleComposeCredentialsFromEnv(t *testing.T, root string) {
+	t.Helper()
+
+	violations, err := findExampleComposeCredentialViolations(root)
+	require.NoError(t, err)
+
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed05, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"example docker compose credential values must use ${VAR:?required} instead of committed literals")
+}
+
+func TestSEC05ExampleComposeCredentialsRejectsFallbacksInFutureExamples(t *testing.T) {
+	root := t.TempDir()
+	exampleDir := filepath.Join(root, "examples", "futuredevice")
+	require.NoError(t, os.MkdirAll(exampleDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(exampleDir, "docker-compose.yml"), []byte(`
+services:
+  postgres:
+    environment:
+      POSTGRES_PASSWORD: ${FUTURE_POSTGRES_PASSWORD:-gocell}
+  rabbitmq:
+    environment:
+      RABBITMQ_DEFAULT_PASS: ${FUTURE_RABBITMQ_PASSWORD:?required}
+`), 0o644))
+
+	violations, err := findExampleComposeCredentialViolations(root)
+	require.NoError(t, err)
+	require.Len(t, violations, 1)
+	assert.Contains(t, violations[0], "examples/futuredevice/docker-compose.yml:5")
+	assert.Contains(t, violations[0], "POSTGRES_PASSWORD")
+}
+
+func findExampleComposeCredentialViolations(root string) ([]string, error) {
+	var violations []string
+	examplesDir := filepath.Join(root, "examples")
+	err := filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		if filepath.Base(path) != "docker-compose.yml" {
+			return nil
+		}
+		fileViolations, err := findComposeCredentialViolations(root, path)
+		if err != nil {
+			return err
+		}
+		violations = append(violations, fileViolations...)
+		return nil
+	})
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return violations, err
+}
+
+func findComposeCredentialViolations(root, path string) ([]string, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	rel, _ := filepath.Rel(root, path)
+	rel = filepath.ToSlash(rel)
+
+	var violations []string
+	for i, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		key, value, ok := strings.Cut(trimmed, ":")
+		if !ok || !isComposeCredentialKey(key) {
+			continue
+		}
+		if !isRequiredComposeEnvInterpolation(value) {
+			violations = append(violations,
+				fmt.Sprintf("%s:%d: %s must use required environment interpolation ${VAR:?message} (%s)",
+					rel, i+1, key, secFailClosed05))
+		}
+	}
+	return violations, nil
+}
+
+func isComposeCredentialKey(key string) bool {
+	return strings.Contains(key, "PASSWORD") || strings.HasSuffix(key, "_PASS")
+}
+
+func isRequiredComposeEnvInterpolation(value string) bool {
+	value = strings.TrimSpace(value)
+	value = strings.Trim(value, `"'`)
+	if !strings.HasPrefix(value, "${") || !strings.HasSuffix(value, "}") {
+		return false
+	}
+	inner := strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+	name, message, ok := strings.Cut(inner, ":?")
+	if !ok || name == "" || message == "" {
+		return false
+	}
+	for i, r := range name {
+		switch {
+		case r == '_':
+		case r >= 'A' && r <= 'Z':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
