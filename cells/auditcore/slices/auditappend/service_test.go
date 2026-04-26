@@ -167,15 +167,15 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			wantActorID: "usr-cam",
 		},
 		{
-			name:        "snake_case user_id (user.created, transitional)",
-			eventType:   "event.user.created.v1",
-			payload:     map[string]any{"user_id": "usr-snk", "username": "alice"},
-			wantActorID: "usr-snk",
+			name:        "actorId field (user.locked, PR-CFG-G1)",
+			eventType:   "event.user.locked.v1",
+			payload:     map[string]any{"actorId": "adm-1", "userId": "usr-snk"},
+			wantActorID: "adm-1",
 		},
 		{
 			name:        "no actor field (config.entry-upserted) → system",
 			eventType:   "event.config.entry-upserted.v1",
-			payload:     map[string]any{"key": "k", "value": "v", "version": 1},
+			payload:     map[string]any{"key": "k", "version": 1},
 			wantActorID: "system",
 		},
 	}

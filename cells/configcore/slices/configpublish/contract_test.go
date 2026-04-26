@@ -83,7 +83,7 @@ func TestHttpConfigRollbackV1Serve(t *testing.T) {
 	seedContractEntry(repo, "app.name", "value")
 
 	// Publish first to create version 1 so rollback target exists.
-	_, err := svc.Publish(context.Background(), "app.name")
+	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")
 	require.NoError(t, err)
 
 	mux := newContractMux(svc)
@@ -206,7 +206,7 @@ func TestEventConfigVersionPublishedV1Publish(t *testing.T) {
 	svc, repo, writer := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
 
-	_, err := svc.Publish(context.Background(), "app.name")
+	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Publish must emit one outbox entry")
@@ -227,11 +227,11 @@ func TestEventConfigRollbackV1Publish_RollbackEmitsStateThenAudit(t *testing.T) 
 	seedContractEntry(repo, "app.name", "v1")
 
 	// Publish first to create a version, then rollback
-	_, err := svc.Publish(context.Background(), "app.name")
+	_, err := svc.Publish(auth.TestContext("contract-admin", []string{"admin"}), "app.name")
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	_, err = svc.Rollback(context.Background(), "app.name", 1)
+	_, err = svc.Rollback(auth.TestContext("contract-admin", []string{"admin"}), "app.name", 1)
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 2, "Rollback must emit state-sync then audit outbox entries")

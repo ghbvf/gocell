@@ -23,6 +23,9 @@ import (
 var Topics = []string{
 	"event.user.created.v1",
 	"event.user.locked.v1",
+	"event.user.updated.v1",
+	"event.user.deleted.v1",
+	"event.user.unlocked.v1",
 	"event.session.created.v1",
 	"event.session.revoked.v1",
 	"event.config.entry-upserted.v1",
@@ -90,25 +93,32 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Extract userId from payload when present. PR-A6 migrated session/config
-	// events to camelCase `userId`; event.user.created.v1 / event.user.locked.v1
-	// still publish snake_case `user_id` (out of PR-A6 scope — trailing sweep).
-	// Accept either key so actor attribution stays correct across the mix; once
-	// user events also migrate, the snake_case alias can be dropped.
-	var payload struct {
-		UserIDCamel string `json:"userId"`
-		UserIDSnake string `json:"user_id"`
-	}
-	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+	// Extract actorId from payload. All events emitted by PR-CFG-G1 commit 2
+	// carry an `actorId` field (camelCase). Falls back to `userId` for events
+	// (e.g. event.user.created.v1) that still use the userId field name.
+	// Defaults to "system" when neither field is present.
+	var actorID string
+	if !json.Valid(entry.Payload) {
 		s.logger.Warn("audit-append: failed to extract actor from payload",
-			slog.Any("error", err),
+			slog.String("error", "invalid JSON"),
 			slog.String("event_id", entry.ID),
 			slog.String("event_type", entry.EventType))
-	}
-
-	actorID := payload.UserIDCamel
-	if actorID == "" {
-		actorID = payload.UserIDSnake
+	} else {
+		var payload struct {
+			ActorID string `json:"actorId"`
+			UserID  string `json:"userId"`
+		}
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			s.logger.Warn("audit-append: failed to extract actor from payload",
+				slog.Any("error", err),
+				slog.String("event_id", entry.ID),
+				slog.String("event_type", entry.EventType))
+		} else {
+			actorID = payload.ActorID
+			if actorID == "" {
+				actorID = payload.UserID
+			}
+		}
 	}
 	if actorID == "" {
 		actorID = "system"

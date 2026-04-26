@@ -14,9 +14,15 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// adminSvcCtx returns a context with an admin principal for direct service calls.
+func adminSvcCtx() context.Context {
+	return auth.TestContext("test-admin", []string{"admin"})
+}
 
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
@@ -59,7 +65,7 @@ func TestService_Create(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, _ := newTestService()
-			entry, err := svc.Create(context.Background(), tt.input)
+			entry, err := svc.Create(adminSvcCtx(), tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
 				assert.Nil(t, entry)
@@ -75,10 +81,10 @@ func TestService_Create(t *testing.T) {
 
 func TestService_CreateDuplicate(t *testing.T) {
 	svc, _ := newTestService()
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v1"})
+	_, err := svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
 
-	_, err = svc.Create(context.Background(), CreateInput{Key: "k", Value: "v2"})
+	_, err = svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v2"})
 	assert.Error(t, err)
 }
 
@@ -93,7 +99,7 @@ func TestService_Update(t *testing.T) {
 		{
 			name: "valid update",
 			setup: func(svc *Service) {
-				_, _ = svc.Create(context.Background(), CreateInput{Key: "k", Value: "v1"})
+				_, _ = svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 			},
 			input:   UpdateInput{Key: "k", Value: "v2"},
 			wantErr: false,
@@ -117,7 +123,7 @@ func TestService_Update(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, _ := newTestService()
 			tt.setup(svc)
-			entry, err := svc.Update(context.Background(), tt.input)
+			entry, err := svc.Update(adminSvcCtx(), tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -139,7 +145,7 @@ func TestService_Delete(t *testing.T) {
 		{
 			name: "valid delete",
 			setup: func(svc *Service) {
-				_, _ = svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
+				_, _ = svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v"})
 			},
 			key:     "k",
 			wantErr: false,
@@ -162,7 +168,7 @@ func TestService_Delete(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			svc, _ := newTestService()
 			tt.setup(svc)
-			err := svc.Delete(context.Background(), tt.key)
+			err := svc.Delete(adminSvcCtx(), tt.key)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -180,7 +186,7 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 	svc := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
+	_, err := svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v"})
 	require.Error(t, err, "Create must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -190,14 +196,14 @@ func TestService_Update_OutboxWriteError(t *testing.T) {
 	goodWriter := &testutil.RecordingWriter{}
 	svcGood := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(&testutil.NoopTxRunner{}))
-	_, err := svcGood.Create(context.Background(), CreateInput{Key: "k", Value: "v1"})
+	_, err := svcGood.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
 
 	failWriter := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
 	svc := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 
-	_, err = svc.Update(context.Background(), UpdateInput{Key: "k", Value: "v2"})
+	_, err = svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2"})
 	require.Error(t, err, "Update must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -207,14 +213,14 @@ func TestService_Delete_OutboxWriteError(t *testing.T) {
 	goodWriter := &testutil.RecordingWriter{}
 	svcGood := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(&testutil.NoopTxRunner{}))
-	_, err := svcGood.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
+	_, err := svcGood.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
 
 	failWriter := &testutil.RecordingWriter{Err: errors.New("outbox unavailable")}
 	svc := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(&testutil.NoopTxRunner{}))
 
-	err = svc.Delete(context.Background(), "k")
+	err = svc.Delete(adminSvcCtx(), "k")
 	require.Error(t, err, "Delete must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -222,7 +228,7 @@ func TestService_Delete_OutboxWriteError(t *testing.T) {
 func TestService_Create_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	svc, _, writer := newDurableTestService(t)
 
-	entry, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
+	entry, err := svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
 	assert.Equal(t, "k", entry.Key)
 	require.Len(t, writer.Entries, 1)
@@ -248,7 +254,7 @@ func TestCreate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 	svc := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
+	_, err := svc.Create(adminSvcCtx(), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.Calls, "Create must call RunInTx exactly once")
 	assert.Len(t, writer.Entries, 1, "outbox entry must be written inside the tx")
@@ -265,10 +271,10 @@ func TestUpdate_CallsTxRunnerRunInTxOnce(t *testing.T) {
 
 	// Seed via direct repo insert (bypasses service tx counter).
 	_, _ = NewService(repo, slog.Default()).Create(
-		context.Background(), CreateInput{Key: "k", Value: "v1"})
+		adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 
 	tx.Calls = 0 // reset counter after seed
-	_, err := svc.Update(context.Background(), UpdateInput{Key: "k", Value: "v2"})
+	_, err := svc.Update(adminSvcCtx(), UpdateInput{Key: "k", Value: "v2"})
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.Calls, "Update must call RunInTx exactly once")
 }
@@ -285,10 +291,10 @@ func TestDelete_CallsTxRunnerRunInTxOnce(t *testing.T) {
 
 	// Seed via direct repo insert (bypasses service tx counter).
 	_, _ = NewService(repo, slog.Default()).Create(
-		context.Background(), CreateInput{Key: "k", Value: "v1"})
+		adminSvcCtx(), CreateInput{Key: "k", Value: "v1"})
 
 	tx.Calls = 0 // reset counter after seed
-	err := svc.Delete(context.Background(), "k")
+	err := svc.Delete(adminSvcCtx(), "k")
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.Calls, "Delete must call RunInTx exactly once")
 }
@@ -304,7 +310,7 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 	require.NoError(t, err)
 	svc := NewService(repo, slog.Default(), WithEmitter(emitter))
 
-	entry, err := svc.Create(context.Background(), CreateInput{Key: "pub-err", Value: "v"})
+	entry, err := svc.Create(adminSvcCtx(), CreateInput{Key: "pub-err", Value: "v"})
 	require.NoError(t, err, "publish failure in demo mode must not fail Create")
 	assert.Equal(t, "pub-err", entry.Key)
 }

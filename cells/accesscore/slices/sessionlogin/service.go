@@ -146,7 +146,7 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 	}
 	session.ID = sessionID
 
-	refreshWire, err := s.persistSessionWithRefresh(ctx, session, user.ID, true)
+	refreshWire, err := s.persistSessionWithRefresh(ctx, session, user.ID)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}
@@ -164,10 +164,14 @@ func (s *Service) Login(ctx context.Context, input LoginInput) (dto.TokenPair, e
 }
 
 // persistSessionWithRefresh writes the session, issues the refresh root, and
-// emits the outbox entry inside the same transaction boundary when a durable
-// TxRunner is configured. In demo mode it compensates the already-created
-// session if refresh issuance fails.
-func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID string, emitCreated bool) (string, error) {
+// emits the session.created outbox entry inside the same transaction boundary
+// when a durable TxRunner is configured. In demo mode it compensates the
+// already-created session if refresh issuance fails.
+//
+// Always emits event.session.created.v1 — both Login and IssueForUser paths
+// must record session creation for audit trail (no emitCreated flag: removed
+// per PR-CFG-G1 commit 2).
+func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain.Session, userID string) (string, error) {
 	var refreshWire string
 	do := func(txCtx context.Context) error {
 		if err := s.sessionRepo.Create(txCtx, session); err != nil {
@@ -181,9 +185,6 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain
 			return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 		}
 		refreshWire = wire
-		if !emitCreated {
-			return nil
-		}
 		if err := outbox.Emit(txCtx, s.emitter, dto.TopicSessionCreated, dto.SessionCreatedEvent{
 			SessionID: session.ID,
 			UserID:    userID,
@@ -251,7 +252,7 @@ func (s *Service) IssueForUser(ctx context.Context, userID string) (dto.TokenPai
 		return dto.TokenPair{}, fmt.Errorf("session-login: IssueForUser create session: %w", err)
 	}
 	session.ID = sessionID
-	refreshWire, err := s.persistSessionWithRefresh(ctx, session, userID, false)
+	refreshWire, err := s.persistSessionWithRefresh(ctx, session, userID)
 	if err != nil {
 		return dto.TokenPair{}, err
 	}

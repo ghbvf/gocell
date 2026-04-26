@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/google/uuid"
 )
@@ -36,9 +37,23 @@ type TokenIssuer interface {
 // with the setup slice without either slice importing the other. These locals
 // preserve the existing TestXxx(TopicUserCreated...) style in the test suite.
 const (
-	TopicUserCreated = dto.TopicUserCreated
-	TopicUserLocked  = dto.TopicUserLocked
+	TopicUserCreated  = dto.TopicUserCreated
+	TopicUserLocked   = dto.TopicUserLocked
+	TopicUserUpdated  = dto.TopicUserUpdated
+	TopicUserDeleted  = dto.TopicUserDeleted
+	TopicUserUnlocked = dto.TopicUserUnlocked
 )
+
+// actorFromContext extracts the authenticated subject from the request context.
+// Admin write paths must have a non-empty Subject; if it is empty this returns
+// ErrAuthUnauthorized so downstream emit does not record a blank actor.
+func actorFromContext(ctx context.Context) (string, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Subject == "" {
+		return "", errcode.New(errcode.ErrAuthUnauthorized, "identity-manage: actor required — admin auth must be present")
+	}
+	return p.Subject, nil
+}
 
 // Option configures an identity-manage Service.
 type Option func(*Service)
@@ -213,6 +228,11 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 		return nil, errcode.New(errcode.ErrAuthIdentityInvalidInput, "status must be 'active' or 'suspended'")
 	}
 
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	var user *domain.User
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		u, err := s.repo.GetByID(txCtx, input.ID)
@@ -224,6 +244,9 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.User, 
 			return fmt.Errorf("identity-manage: update: %w", err)
 		}
 		user = u
+		if err := s.publish(txCtx, TopicUserUpdated, dto.UserUpdatedEvent{UserID: u.ID, ActorID: actor}); err != nil {
+			return err
+		}
 		return nil
 	}); err != nil {
 		return nil, err
@@ -267,6 +290,11 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		return err
 	}
 
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return err
+	}
+
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.sessionRepo.RevokeByUserID(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: delete revoke sessions: %w", err)
@@ -276,6 +304,9 @@ func (s *Service) Delete(ctx context.Context, id string) error {
 		}
 		if err := s.repo.Delete(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: delete: %w", err)
+		}
+		if err := s.publish(txCtx, TopicUserDeleted, dto.UserDeletedEvent{UserID: id, ActorID: actor}); err != nil {
+			return err
 		}
 		return nil
 	}); err != nil {
@@ -303,14 +334,18 @@ func (s *Service) Lock(ctx context.Context, id string) error {
 	); err != nil {
 		return err
 	}
-	if err := s.lockUserAndRevokeSessions(ctx, id); err != nil {
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return err
+	}
+	if err := s.lockUserAndRevokeSessions(ctx, id, actor); err != nil {
 		return err
 	}
 	s.logger.Info("user locked", slog.String("user_id", id))
 	return nil
 }
 
-func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id string) error {
+func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id, actor string) error {
 	return s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		user, err := s.repo.GetByID(txCtx, id)
 		if err != nil {
@@ -331,7 +366,7 @@ func (s *Service) lockUserAndRevokeSessions(ctx context.Context, id string) erro
 		if err := s.refreshStore.RevokeUser(txCtx, id); err != nil {
 			return fmt.Errorf("identity-manage: lock revoke refresh chains: %w", err)
 		}
-		if err := s.publish(txCtx, TopicUserLocked, map[string]any{"user_id": id}); err != nil {
+		if err := s.publish(txCtx, TopicUserLocked, dto.UserLockedEvent{UserID: id, ActorID: actor}); err != nil {
 			return err
 		}
 		return nil
@@ -350,6 +385,11 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		return err
 	}
 
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return err
+	}
+
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		user, err := s.repo.GetByID(txCtx, id)
 		if err != nil {
@@ -358,6 +398,9 @@ func (s *Service) Unlock(ctx context.Context, id string) error {
 		user.Unlock()
 		if err := s.repo.Update(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: unlock: %w", err)
+		}
+		if err := s.publish(txCtx, TopicUserUnlocked, dto.UserUnlockedEvent{UserID: id, ActorID: actor}); err != nil {
+			return err
 		}
 		return nil
 	}); err != nil {

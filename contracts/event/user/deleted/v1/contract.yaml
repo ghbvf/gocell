@@ -2,7 +2,7 @@ id: event.user.deleted.v1
 kind: event
 ownerCell: accesscore
 consistencyLevel: L2
-lifecycle: draft
+lifecycle: active
 endpoints:
   publisher: accesscore
   subscribers:

@@ -16,9 +16,15 @@ import (
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// adminSvcCtx returns a context with an admin principal for direct service calls.
+func adminSvcCtx() context.Context {
+	return auth.TestContext("test-admin", []string{"admin"})
+}
 
 func newTestService() (*Service, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
@@ -74,7 +80,7 @@ func TestService_Publish(t *testing.T) {
 				seedEntry(t, repo, tt.key, "value")
 			}
 
-			ver, err := svc.Publish(context.Background(), tt.key)
+			ver, err := svc.Publish(adminSvcCtx(), tt.key)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -98,7 +104,7 @@ func TestService_Rollback(t *testing.T) {
 			name: "valid rollback",
 			setup: func(svc *Service, repo *mem.ConfigRepository) {
 				mustSeedEntry(repo, "app.name", "v1")
-				_, _ = svc.Publish(context.Background(), "app.name")
+				_, _ = svc.Publish(adminSvcCtx(), "app.name")
 			},
 			key: "app.name", version: 1, wantErr: false,
 		},
@@ -132,7 +138,7 @@ func TestService_Rollback(t *testing.T) {
 				tt.setup(svc, repo)
 			}
 
-			entry, err := svc.Rollback(context.Background(), tt.key, tt.version)
+			entry, err := svc.Rollback(adminSvcCtx(), tt.key, tt.version)
 			if tt.wantErr {
 				assert.Error(t, err)
 				var ec *errcode.Error
@@ -162,7 +168,7 @@ func TestService_Publish_PublisherError_Propagates(t *testing.T) {
 		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed)))
 
 	mustSeedEntry(repo, "k", "v1")
-	_, err := svc.Publish(context.Background(), "k")
+	_, err := svc.Publish(adminSvcCtx(), "k")
 	require.Error(t, err, "publisher failure must propagate")
 	assert.Contains(t, err.Error(), "broker unavailable")
 }
@@ -176,7 +182,7 @@ func TestService_Publish_OutboxWriteError(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(&testutil.NoopTxRunner{}))
 	mustSeedEntry(repo, "app.name", "value")
 
-	_, err := svc.Publish(context.Background(), "app.name")
+	_, err := svc.Publish(adminSvcCtx(), "app.name")
 	require.Error(t, err, "Publish must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -191,10 +197,10 @@ func TestService_Rollback_OutboxWriteError(t *testing.T) {
 	goodWriter := &testutil.RecordingWriter{}
 	svcGood := NewService(repo, slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, goodWriter)), WithTxManager(&testutil.NoopTxRunner{}))
-	_, err := svcGood.Publish(context.Background(), "app.name")
+	_, err := svcGood.Publish(adminSvcCtx(), "app.name")
 	require.NoError(t, err)
 
-	_, err = svc.Rollback(context.Background(), "app.name", 1)
+	_, err = svc.Rollback(adminSvcCtx(), "app.name", 1)
 	require.Error(t, err, "Rollback must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
@@ -203,7 +209,7 @@ func TestService_Publish_DurableMode_CapturesOutboxEntry(t *testing.T) {
 	svc, repo, writer := newDurableTestService(t)
 	mustSeedEntry(repo, "app.name", "value")
 
-	ver, err := svc.Publish(context.Background(), "app.name")
+	ver, err := svc.Publish(adminSvcCtx(), "app.name")
 	require.NoError(t, err)
 	assert.Equal(t, 1, ver.Version)
 	require.Len(t, writer.Entries, 1)
@@ -221,7 +227,7 @@ func TestPublishVersion_CallsTxRunnerRunInTxOnce(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(tx))
 
 	mustSeedEntry(repo, "app.name", "value")
-	_, err := svc.Publish(context.Background(), "app.name")
+	_, err := svc.Publish(adminSvcCtx(), "app.name")
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.Calls, "Publish must call RunInTx exactly once")
 	assert.Len(t, writer.Entries, 1, "outbox entry must be written inside the tx")
@@ -238,7 +244,7 @@ func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
 		Version: 1, CreatedAt: now, UpdatedAt: now,
 	}))
 
-	ver, err := svc.Publish(context.Background(), "db.password")
+	ver, err := svc.Publish(adminSvcCtx(), "db.password")
 	require.NoError(t, err)
 	assert.True(t, ver.Sensitive, "snapshot must inherit the source entry's Sensitive flag")
 	assert.Equal(t, "s3cret!", ver.Value, "domain snapshot keeps the raw value; redaction is a DTO concern")
@@ -248,7 +254,7 @@ func TestService_Publish_SensitiveEntry_VersionCarriesFlag(t *testing.T) {
 // Asserts the typed error code so handler→HTTP status mapping cannot drift.
 func TestService_Rollback_KeyNotFound(t *testing.T) {
 	svc, _ := newTestService()
-	_, err := svc.Rollback(context.Background(), "missing-key", 1)
+	_, err := svc.Rollback(adminSvcCtx(), "missing-key", 1)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -261,7 +267,7 @@ func TestService_Rollback_VersionNotFound(t *testing.T) {
 	svc, repo := newTestService()
 	mustSeedEntry(repo, "app.name", "v1") // entry exists; no version published
 
-	_, err := svc.Rollback(context.Background(), "app.name", 99)
+	_, err := svc.Rollback(adminSvcCtx(), "app.name", 99)
 	require.Error(t, err)
 
 	var ec *errcode.Error
@@ -275,7 +281,7 @@ func TestService_Publish_NonSensitiveEntry_VersionFlagFalse(t *testing.T) {
 	svc := NewService(repo, slog.Default())
 	mustSeedEntry(repo, "app.name", "gocell")
 
-	ver, err := svc.Publish(context.Background(), "app.name")
+	ver, err := svc.Publish(adminSvcCtx(), "app.name")
 	require.NoError(t, err)
 	assert.False(t, ver.Sensitive)
 }
@@ -306,7 +312,7 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 				Version: 1, CreatedAt: now, UpdatedAt: now,
 			}))
 			// Snapshot v1 with the seeded sensitivity.
-			_, err := svc.Publish(context.Background(), "app.x")
+			_, err := svc.Publish(adminSvcCtx(), "app.x")
 			require.NoError(t, err)
 
 			// Optionally flip the live entry's sensitivity to differ from the snapshot.
@@ -317,7 +323,7 @@ func TestService_Rollback_RestoresSnapshotSensitivity(t *testing.T) {
 				require.NoError(t, err)
 			}
 
-			rolled, err := svc.Rollback(context.Background(), "app.x", 1)
+			rolled, err := svc.Rollback(adminSvcCtx(), "app.x", 1)
 			require.NoError(t, err)
 			assert.Equal(t, tt.wantSensitive, rolled.Sensitive,
 				"rollback must inherit the snapshot's Sensitive flag, not the live entry's")
@@ -337,7 +343,7 @@ func TestService_Publish_FailClosed_PublisherError(t *testing.T) {
 		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailClosed)))
 
 	mustSeedEntry(repo, "app.timeout", "30s")
-	_, err := svc.Publish(context.Background(), "app.timeout")
+	_, err := svc.Publish(adminSvcCtx(), "app.timeout")
 	require.Error(t, err, "FailClosed: publisher failure must propagate")
 	assert.Contains(t, err.Error(), "broker down")
 }
@@ -352,7 +358,7 @@ func TestService_Publish_FailOpen_PublisherError(t *testing.T) {
 		WithEmitter(newDirectTestEmitter(t, pub, outbox.DirectPublishFailOpen)))
 
 	mustSeedEntry(repo, "app.timeout", "30s")
-	ver, err := svc.Publish(context.Background(), "app.timeout")
+	ver, err := svc.Publish(adminSvcCtx(), "app.timeout")
 	require.NoError(t, err, "FailOpen: publisher failure must be swallowed")
 	assert.Equal(t, 1, ver.Version)
 }
@@ -367,10 +373,10 @@ func TestService_Rollback_FailClosed_PublisherError(t *testing.T) {
 
 	mustSeedEntry(repo, "app.x", "v1")
 	svcOK := NewService(repo, slog.Default())
-	_, err := svcOK.Publish(context.Background(), "app.x")
+	_, err := svcOK.Publish(adminSvcCtx(), "app.x")
 	require.NoError(t, err)
 
-	_, err = svc.Rollback(context.Background(), "app.x", 1)
+	_, err = svc.Rollback(adminSvcCtx(), "app.x", 1)
 	require.Error(t, err, "FailClosed: publisher failure must propagate on rollback")
 	assert.Contains(t, err.Error(), "broker down")
 }
@@ -385,10 +391,10 @@ func TestService_Rollback_FailOpen_PublisherError(t *testing.T) {
 
 	mustSeedEntry(repo, "app.x", "v1")
 	svcOK := NewService(repo, slog.Default())
-	_, err := svcOK.Publish(context.Background(), "app.x")
+	_, err := svcOK.Publish(adminSvcCtx(), "app.x")
 	require.NoError(t, err)
 
-	rolled, err := svc.Rollback(context.Background(), "app.x", 1)
+	rolled, err := svc.Rollback(adminSvcCtx(), "app.x", 1)
 	require.NoError(t, err, "FailOpen: publisher failure must be swallowed on rollback")
 	assert.Equal(t, "v1", rolled.Value)
 }
@@ -402,12 +408,12 @@ func TestRollback_DurableMode_UpsertedPayloadIsMetadataOnly(t *testing.T) {
 	mustSeedEntry(repo, "app.name", "v1")
 
 	// Publish first to create a version snapshot.
-	_, err := svc.Publish(context.Background(), "app.name")
+	_, err := svc.Publish(adminSvcCtx(), "app.name")
 	require.NoError(t, err)
 	writer.Entries = writer.Entries[:0] // reset writer after publish
 
 	// Rollback to version 1.
-	_, err = svc.Rollback(context.Background(), "app.name", 1)
+	_, err = svc.Rollback(adminSvcCtx(), "app.name", 1)
 	require.NoError(t, err)
 
 	// Rollback emits two entries: [0]=entry-upserted, [1]=config-rollback.

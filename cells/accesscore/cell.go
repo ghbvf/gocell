@@ -191,6 +191,14 @@ func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
 	return func(c *AccessCore) { c.initialAdmin = initialadmin.NewLifecycle(opts...) }
 }
 
+// WithConfigClient injects the ConfigClient used by the configreceive slice to
+// fetch the current config entry value from configcore after an upsert event
+// (contract: http.config.internal.get.v1). When not set the slice operates in
+// log-only mode — no cross-cell HTTP call is made.
+func WithConfigClient(c ports.ConfigClient) Option {
+	return func(ac *AccessCore) { ac.configClient = c }
+}
+
 // AccessCore is the accesscore Cell implementation.
 type AccessCore struct {
 	*cell.BaseCell
@@ -226,6 +234,10 @@ type AccessCore struct {
 	// initialAdmin wires first-run admin bootstrap via LifecycleContributor;
 	// nil means the feature is disabled.
 	initialAdmin *initialadmin.Lifecycle
+
+	// configClient is used by the configreceive slice to fetch config entry
+	// values from configcore after an upsert event. nil = log-only mode.
+	configClient ports.ConfigClient
 
 	// Slice handlers.
 	identityHandler *identitymanage.Handler

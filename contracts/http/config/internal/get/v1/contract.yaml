@@ -2,7 +2,7 @@ id: http.config.internal.get.v1
 kind: http
 ownerCell: configcore
 consistencyLevel: L1
-lifecycle: draft
+lifecycle: active
 endpoints:
   server: configcore
   clients:

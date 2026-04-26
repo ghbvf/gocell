@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/google/uuid"
 )
 
@@ -62,12 +63,27 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, opts ...Option
 	return s
 }
 
+// actorFromContext extracts the admin actor from the request context.
+// Config publish paths are admin-only; an empty Subject is a wiring error.
+func actorFromContext(ctx context.Context) (string, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Subject == "" {
+		return "", errcode.New(errcode.ErrAuthUnauthorized, "config-publish: actor required — admin auth must be present")
+	}
+	return p.Subject, nil
+}
+
 // Publish creates a versioned snapshot of a config entry.
 // All reads happen inside runInTx so the snapshot is consistent with the write.
 func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersion, error) {
 	if err := validation.RequireNotBlank(errcode.ErrConfigPublishInvalidInput,
 		validation.F("key", key),
 	); err != nil {
+		return nil, err
+	}
+
+	actor, err := actorFromContext(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -95,6 +111,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 			Key:      key,
 			ConfigID: entry.ID,
 			Version:  version.Version,
+			ActorID:  actor,
 		})
 	}); err != nil {
 		return nil, err
@@ -118,6 +135,11 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 	if targetVersion < 1 {
 		return nil, errcode.New(errcode.ErrConfigPublishInvalidInput,
 			"rollback target version must be >= 1")
+	}
+
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
 	}
 
 	var updated *domain.ConfigEntry
@@ -145,6 +167,7 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 		if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
 			Key:     key,
 			Version: updated.Version,
+			ActorID: actor,
 		}); err != nil {
 			return err
 		}
@@ -153,6 +176,7 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 			Key:           key,
 			TargetVersion: targetVersion,
 			NewVersion:    updated.Version,
+			ActorID:       actor,
 		})
 	}); err != nil {
 		return nil, err

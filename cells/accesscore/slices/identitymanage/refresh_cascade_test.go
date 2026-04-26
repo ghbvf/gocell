@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -28,7 +29,7 @@ func newCascadeStore(t *testing.T) (refresh.Store, *storetest.FakeClock) {
 }
 
 func TestService_Lock_RevokesRefreshChain(t *testing.T) {
-	ctx := context.Background()
+	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	refreshStore, _ := newCascadeStore(t)
@@ -47,7 +48,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-lock", "other-user-lock")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Lock(ctx, user.ID))
+	require.NoError(t, svc.Lock(auth.TestContext("test-admin", []string{"admin"}), user.ID))
 
 	// Rotating the pre-lock refresh token must be rejected.
 	_, _, err = refreshStore.Rotate(ctx, wire)
@@ -98,7 +99,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 }
 
 func TestService_Delete_RevokesRefreshChain(t *testing.T) {
-	ctx := context.Background()
+	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	refreshStore, _ := newCascadeStore(t)

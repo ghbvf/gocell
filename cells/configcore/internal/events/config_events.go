@@ -24,6 +24,7 @@ import (
 type EntryUpserted struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	ActorID string `json:"actorId"`
 }
 
 // EntryDeleted is the metadata-only payload for event.config.entry-deleted.v1.
@@ -33,6 +34,7 @@ type EntryUpserted struct {
 type EntryDeleted struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	ActorID string `json:"actorId"`
 }
 
 // DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.

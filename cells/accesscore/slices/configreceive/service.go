@@ -9,6 +9,7 @@ import (
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 )
 
@@ -31,16 +32,35 @@ const (
 // Disposition: Ack on success / Reject on permanent unmarshal or semantic error
 // DLX: broker-native via DispositionReject → Nack(requeue=false)
 type Service struct {
-	logger *slog.Logger
+	logger       *slog.Logger
+	configClient ports.ConfigClient // optional; nil disables GetEntry fetch
+}
+
+// Option configures a configreceive Service.
+type Option func(*Service)
+
+// WithConfigClient injects the ConfigClient used to fetch the current config
+// entry value after an upsert event. When nil or not provided the service
+// operates in log-only mode (no cross-cell HTTP call is made).
+func WithConfigClient(c ports.ConfigClient) Option {
+	return func(s *Service) { s.configClient = c }
 }
 
 // NewService creates a config-receive Service.
-func NewService(logger *slog.Logger) *Service {
-	return &Service{logger: logger}
+func NewService(logger *slog.Logger, opts ...Option) *Service {
+	s := &Service{logger: logger}
+	for _, o := range opts {
+		o(s)
+	}
+	return s
 }
 
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
-func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
+// When a ConfigClient is configured it fetches the current entry value from
+// configcore (contract: http.config.internal.get.v1) and logs it. Fetch
+// failures are non-fatal (warn + continue) so a transient configcore outage
+// does not poison the consumer pipeline.
+func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) error {
 	event, err := dto.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-upserted event, routing to dead letter",
@@ -51,6 +71,22 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 	s.logger.Debug("config-receive: config upserted",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
+
+	if s.configClient != nil {
+		cfg, fetchErr := s.configClient.GetEntry(ctx, event.Key)
+		if fetchErr != nil {
+			s.logger.Warn("config-receive: failed to fetch config entry after upsert",
+				slog.Any("error", fetchErr),
+				slog.String("key", event.Key),
+				slog.Int("version", event.Version))
+		} else {
+			s.logger.Info("config-receive: fetched config entry",
+				slog.String("key", cfg.Key),
+				slog.Int("version", cfg.Version),
+				slog.Bool("sensitive", cfg.Sensitive))
+		}
+	}
+
 	return nil
 }
 

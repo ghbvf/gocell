@@ -215,15 +215,22 @@ func TestConfigCore_RouteGroups(t *testing.T) {
 	require.NoError(t, c.Init(ctx, deps))
 
 	groups := c.RouteGroups()
-	require.Len(t, groups, 1, "configcore should declare 1 route group")
+	require.Len(t, groups, 2, "configcore should declare 2 route groups (primary + internal)")
 	assert.Equal(t, cell.PrimaryListener, groups[0].Listener)
 	assert.Equal(t, "/api/v1", groups[0].Prefix)
 	assert.NotNil(t, groups[0].Register)
+	assert.Equal(t, cell.InternalListener, groups[1].Listener)
+	assert.Equal(t, "/internal/v1", groups[1].Prefix)
+	assert.NotNil(t, groups[1].Register)
 
 	// Verify the register function actually mounts routes.
 	mux := &stubMux{}
 	groups[0].Register(mux)
 	assert.GreaterOrEqual(t, mux.handleCount, 2, "should register at least 2 route patterns")
+
+	internalMux := &stubMux{}
+	groups[1].Register(internalMux)
+	assert.GreaterOrEqual(t, internalMux.handleCount, 1, "internal group should register at least 1 route pattern")
 }
 
 func TestConfigCore_RegisterSubscriptions(t *testing.T) {

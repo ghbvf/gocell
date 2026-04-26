@@ -189,7 +189,8 @@ func (c *AccessCore) initSlices() error {
 	c.rbacSessionConsumer = sessionlogout.NewConsumer(c.sessionRepo, c.logger)
 
 	// config-receive: subscribes to config state-sync events from configcore.
-	c.configReceiveSvc = configreceive.NewService(c.logger)
+	// WithConfigClient is optional — nil disables the cross-cell GetEntry fetch.
+	c.configReceiveSvc = configreceive.NewService(c.logger, configreceive.WithConfigClient(c.configClient))
 	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cell.L3))
 
 	// setup: interactive first-run admin provisioning (Public HTTP endpoints).

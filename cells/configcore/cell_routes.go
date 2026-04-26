@@ -21,11 +21,12 @@ var (
 	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
 )
 
-// RouteGroups declares configcore's HTTP route groups on the PrimaryListener.
+// RouteGroups declares configcore's HTTP route groups across listeners.
 // Each slice owns its own ContractSpec literals + auth.Route declarations
-// (admin policy included) in its handler.go's RegisterRoutes. cell_routes.go
-// is pure wiring: it picks the listener + URL prefix and delegates to
-// slice.RegisterRoutes. This keeps a single source of truth per endpoint.
+// (admin / service-token policy included) in its handler.go's
+// RegisterRoutes / RegisterInternalRoutes. cell_routes.go is pure wiring:
+// it picks the listener + URL prefix and delegates to slice methods.
+// This keeps a single source of truth per endpoint.
 //
 // ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
 // resource owns its own route + authz declaration.
@@ -46,6 +47,20 @@ func (c *ConfigCore) RouteGroups() []cell.RouteGroup {
 				mux.Route("/flags", func(f cell.RouteMux) {
 					c.flagHandler.RegisterRoutes(f)
 					c.flagWriteHandler.RegisterRoutes(f)
+				})
+			},
+		},
+		{
+			// InternalListener: service-token authentication is enforced by the
+			// listener chain (cell.NewAuthServiceToken). Per-route Policy further
+			// requires the principal's RoleInternalAdmin (injected by
+			// ServiceTokenMiddleware). PR-CFG-G1: refetch endpoint lets accesscore
+			// fetch the current value after receiving an entry-upserted event.
+			Listener: cell.InternalListener,
+			Prefix:   "/internal/v1",
+			Register: func(mux cell.RouteMux) {
+				mux.Route("/config", func(cfg cell.RouteMux) {
+					c.readHandler.RegisterInternalRoutes(cfg)
 				})
 			},
 		},

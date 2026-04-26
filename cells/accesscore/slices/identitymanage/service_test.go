@@ -18,10 +18,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// adminCtxForService returns a context with an admin principal for service-layer tests.
+// All write paths (Lock, Unlock, Update, Delete) require a non-empty subject.
+func adminCtxForService() context.Context {
+	return auth.TestContext("test-admin", []string{"admin"})
+}
 
 // minimalStubIssuer is a zero-config TokenIssuer stub used by tests that only
 // exercise non-ChangePassword paths (Create, Update, Lock, etc.) and do not
@@ -94,12 +101,12 @@ func TestService_LockUnlock(t *testing.T) {
 	require.NoError(t, err)
 
 	// Lock
-	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 	locked, _ := svc.GetByID(context.Background(), user.ID)
 	assert.True(t, locked.IsLocked())
 
 	// Unlock
-	require.NoError(t, svc.Unlock(context.Background(), user.ID))
+	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
 	unlocked, _ := svc.GetByID(context.Background(), user.ID)
 	assert.False(t, unlocked.IsLocked())
 }
@@ -126,7 +133,7 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 	require.NoError(t, sessionRepo.Create(context.Background(), session))
 
 	// Lock the user — sessions should be revoked.
-	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 
 	// Verify session was revoked.
 	got, err := sessionRepo.GetByID(context.Background(), "sess-carol")
@@ -140,7 +147,7 @@ func TestService_Delete(t *testing.T) {
 		Username: "del", Email: "d@e.f", Password: "hash",
 	})
 
-	require.NoError(t, svc.Delete(context.Background(), user.ID))
+	require.NoError(t, svc.Delete(adminCtxForService(), user.ID))
 	_, err := svc.GetByID(context.Background(), user.ID)
 	assert.Error(t, err)
 }
@@ -152,7 +159,7 @@ func TestService_Update(t *testing.T) {
 	})
 
 	newEmail := "new@e.f"
-	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Email: &newEmail})
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 	assert.Equal(t, "new@e.f", updated.Email)
 }
@@ -191,20 +198,20 @@ func TestService_Update_PatchSemantics(t *testing.T) {
 
 	// Update only name, email should stay unchanged.
 	newName := "patchedName"
-	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Name: &newName})
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Name: &newName})
 	require.NoError(t, err)
 	assert.Equal(t, "patchedName", updated.Username)
 	assert.Equal(t, "p@e.f", updated.Email)
 
 	// Update status to suspended.
 	suspended := "suspended"
-	updated, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &suspended})
+	updated, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &suspended})
 	require.NoError(t, err)
 	assert.Equal(t, "suspended", string(updated.Status))
 
 	// Invalid status should fail.
 	badStatus := "deleted"
-	_, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &badStatus})
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &badStatus})
 	assert.Error(t, err)
 }
 
@@ -504,7 +511,7 @@ func TestService_Update_SetRequirePasswordResetTrue(t *testing.T) {
 	seedUserWithHash(t, repo, "upd-flag-true", "pass", false)
 
 	flagTrue := true
-	updated, err := svc.Update(context.Background(), UpdateInput{
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
 		ID:                   "usr-upd-flag-true",
 		RequirePasswordReset: &flagTrue,
 	})
@@ -517,7 +524,7 @@ func TestService_Update_ClearRequirePasswordReset(t *testing.T) {
 	seedUserWithHash(t, repo, "upd-flag-clear", "pass", true) // starts with flag=true
 
 	flagFalse := false
-	updated, err := svc.Update(context.Background(), UpdateInput{
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
 		ID:                   "usr-upd-flag-clear",
 		RequirePasswordReset: &flagFalse,
 	})
@@ -531,7 +538,7 @@ func TestService_Update_OmittedFieldNoChange(t *testing.T) {
 
 	// Update only email, leave RequirePasswordReset nil → no change.
 	newEmail := "new@omit.com"
-	updated, err := svc.Update(context.Background(), UpdateInput{
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
 		ID:    "usr-upd-flag-omit",
 		Email: &newEmail,
 	})
@@ -656,7 +663,7 @@ func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	// (Create itself runs inside RunInTx and would otherwise be conflated).
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
-	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 	assert.Equal(t, 1, runner.runs, "Lock must run inside exactly one tx")
 	assert.True(t, repo.getInTx, "Lock.GetByID must be observed inside RunInTx (no TOCTOU window)")
 	assert.True(t, repo.updInTx, "Lock.Update must run inside the same tx")
@@ -675,7 +682,7 @@ func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
 	newEmail := "new@p.t"
-	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Email: &newEmail})
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 	assert.Equal(t, "new@p.t", updated.Email)
 	assert.Equal(t, 1, runner.runs, "Update must run inside exactly one tx")
@@ -695,7 +702,7 @@ func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
 	bad := "deleted"
-	_, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &bad})
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &bad})
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -712,10 +719,10 @@ func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 		Username: "unlock-atomic", Email: "u@a.t", Password: "hash",
 	})
 	require.NoError(t, err)
-	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
-	require.NoError(t, svc.Unlock(context.Background(), user.ID))
+	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
 	assert.Equal(t, 1, runner.runs, "Unlock must run inside exactly one tx")
 	assert.True(t, repo.getInTx, "Unlock.GetByID must be observed inside RunInTx (no TOCTOU window)")
 	assert.True(t, repo.updInTx, "Unlock.Update must run inside the same tx")
@@ -740,7 +747,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 		WithTxManager(runner))
 	require.NoError(t, err)
 
-	err = svc.Unlock(context.Background(), "usr-rb")
+	err = svc.Unlock(adminCtxForService(), "usr-rb")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "identity-manage: unlock:",
 		"error must wrap with the unlock call-site prefix")
@@ -902,7 +909,7 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	err = svc.Lock(context.Background(), "usr-rf-fail")
+	err = svc.Lock(adminCtxForService(), "usr-rf-fail")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "lock revoke refresh chains",
 		"error must wrap the refresh-revoke call-site prefix")
@@ -933,7 +940,7 @@ func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	err = svc.Lock(context.Background(), "usr-pub-fail")
+	err = svc.Lock(adminCtxForService(), "usr-pub-fail")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "broker unavailable", "underlying publish error must be unwrapable")
 	assert.Equal(t, 1, emitter.calls, "publish was attempted exactly once for TopicUserLocked")

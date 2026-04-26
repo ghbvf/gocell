@@ -278,7 +278,7 @@ func TestService_Create_SensitiveEventPayloadMetadataOnly(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
-	_, err := svc.Create(context.Background(), CreateInput{
+	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{
 		Key: "db.password", Value: "s3cret!", Sensitive: true,
 	})
 	require.NoError(t, err)
@@ -299,7 +299,7 @@ func TestService_WithEmitter(t *testing.T) {
 	ow := &stubOutboxWriter{}
 	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k1", Value: "v1"})
+	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1, "outbox writer should receive one entry")
@@ -311,7 +311,7 @@ func TestService_WithTxManager(t *testing.T) {
 	tx := &stubTxRunner{}
 	svc := NewService(repo, slog.Default(), WithTxManager(tx))
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k1", Value: "v1"})
+	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, tx.calls, "tx runner should be called once")
@@ -325,15 +325,15 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 
 	// Create
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k1", Value: "v1"})
+	_, err := svc.Create(auth.TestContext("test-admin", []string{"admin"}), CreateInput{Key: "k1", Value: "v1"})
 	require.NoError(t, err)
 
 	// Update
-	_, err = svc.Update(context.Background(), UpdateInput{Key: "k1", Value: "v2"})
+	_, err = svc.Update(auth.TestContext("test-admin", []string{"admin"}), UpdateInput{Key: "k1", Value: "v2"})
 	require.NoError(t, err)
 
 	// Delete
-	err = svc.Delete(context.Background(), "k1")
+	err = svc.Delete(auth.TestContext("test-admin", []string{"admin"}), "k1")
 	require.NoError(t, err)
 
 	assert.Equal(t, 3, tx.calls, "each op should use tx")

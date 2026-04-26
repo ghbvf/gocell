@@ -1,7 +1,6 @@
 package configwrite
 
 import (
-	"context"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -116,7 +115,7 @@ func TestEventConfigEntryUpsertedV1Publish_Create(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	svc, _, writer := newContractService(t)
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "app.name", Value: "myapp"})
+	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "app.name", Value: "myapp"})
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Create must emit one outbox entry")
@@ -140,11 +139,11 @@ func TestEventConfigEntryUpsertedV1Publish_Update(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	svc, _, writer := newContractService(t)
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v1"})
+	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "k", Value: "v1"})
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	_, err = svc.Update(context.Background(), UpdateInput{Key: "k", Value: "v2"})
+	_, err = svc.Update(auth.TestContext("contract-admin", []string{"admin"}), UpdateInput{Key: "k", Value: "v2"})
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Update must emit one outbox entry")
@@ -159,11 +158,11 @@ func TestEventConfigEntryDeletedV1Publish_Delete(t *testing.T) {
 	c := contracttest.LoadByID(t, root, "event.config.entry-deleted.v1")
 	svc, _, writer := newContractService(t)
 
-	_, err := svc.Create(context.Background(), CreateInput{Key: "k", Value: "v"})
+	_, err := svc.Create(auth.TestContext("contract-admin", []string{"admin"}), CreateInput{Key: "k", Value: "v"})
 	require.NoError(t, err)
 	writer.Entries = nil // reset
 
-	err = svc.Delete(context.Background(), "k")
+	err = svc.Delete(auth.TestContext("contract-admin", []string{"admin"}), "k")
 	require.NoError(t, err)
 
 	require.Len(t, writer.Entries, 1, "Delete must emit one outbox entry")

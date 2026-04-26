@@ -2,13 +2,25 @@ package configreceive
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// stubConfigClient is a test double for ports.ConfigClient.
+type stubConfigClient struct {
+	entry ports.ConfigEntry
+	err   error
+}
+
+func (s *stubConfigClient) GetEntry(_ context.Context, _ string) (ports.ConfigEntry, error) {
+	return s.entry, s.err
+}
 
 func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
 	tests := []struct {
@@ -156,4 +168,48 @@ func TestWrapLegacyHandler_EntryUpserted_ValueField_Reject(t *testing.T) {
 
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
 	assert.Error(t, result.Err)
+}
+
+func TestHandleEntryUpserted_WithConfigClient_FetchOK(t *testing.T) {
+	stub := &stubConfigClient{
+		entry: ports.ConfigEntry{Key: "jwt.ttl", Value: "30m", Version: 2},
+	}
+	svc := NewService(slog.Default(), WithConfigClient(stub))
+
+	entry := outbox.Entry{
+		ID:      "evt-cfg-1",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":2,"actorId":"adm-1"}`),
+	}
+	err := svc.HandleEntryUpserted(context.Background(), entry)
+	require.NoError(t, err)
+}
+
+func TestHandleEntryUpserted_WithConfigClient_FetchError_NonFatal(t *testing.T) {
+	stub := &stubConfigClient{
+		err: errors.New("configcore unavailable"),
+	}
+	svc := NewService(slog.Default(), WithConfigClient(stub))
+
+	entry := outbox.Entry{
+		ID:      "evt-cfg-2",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+	}
+	// Fetch failure must NOT return an error — the consumer pipeline must not be poisoned.
+	err := svc.HandleEntryUpserted(context.Background(), entry)
+	require.NoError(t, err)
+}
+
+func TestHandleEntryUpserted_WithoutConfigClient_NoFetch(t *testing.T) {
+	// Nil configClient — service must function correctly in log-only mode.
+	svc := NewService(slog.Default())
+
+	entry := outbox.Entry{
+		ID:      "evt-cfg-3",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+	}
+	err := svc.HandleEntryUpserted(context.Background(), entry)
+	require.NoError(t, err)
 }

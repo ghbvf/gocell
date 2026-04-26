@@ -255,7 +255,7 @@ func TestHandler_HandleRollback_OK(t *testing.T) {
 	seedForPublish(t, repo, "app.name", "v1")
 	// Publish first to create a version.
 	svc := NewService(repo, slog.Default())
-	_, err := svc.Publish(context.Background(), "app.name")
+	_, err := svc.Publish(adminCtx(), "app.name")
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -315,7 +315,7 @@ func TestHandler_HandleRollback_SensitiveRedacted(t *testing.T) {
 	}))
 	// Publish v1 carries Sensitive=true into the snapshot.
 	svc := NewService(repo, slog.Default())
-	_, err := svc.Publish(context.Background(), "db.password")
+	_, err := svc.Publish(adminCtx(), "db.password")
 	require.NoError(t, err)
 
 	w := httptest.NewRecorder()
@@ -394,7 +394,7 @@ func TestService_WithEmitter(t *testing.T) {
 	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedForService(repo, "k1", "v1")
-	_, err := svc.Publish(context.Background(), "k1")
+	_, err := svc.Publish(adminCtx(), "k1")
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 1)
@@ -407,7 +407,7 @@ func TestService_WithTxManager(t *testing.T) {
 	svc := NewService(repo, slog.Default(), WithTxManager(tx))
 
 	seedForService(repo, "k2", "v2")
-	_, err := svc.Publish(context.Background(), "k2")
+	_, err := svc.Publish(adminCtx(), "k2")
 	require.NoError(t, err)
 
 	assert.Equal(t, 1, tx.calls)
@@ -419,10 +419,10 @@ func TestService_Rollback_WithOutbox(t *testing.T) {
 	svc := NewService(repo, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedForService(repo, "k3", "v3")
-	_, err := svc.Publish(context.Background(), "k3")
+	_, err := svc.Publish(adminCtx(), "k3")
 	require.NoError(t, err)
 
-	_, err = svc.Rollback(context.Background(), "k3", 1)
+	_, err = svc.Rollback(adminCtx(), "k3", 1)
 	require.NoError(t, err)
 
 	assert.Len(t, ow.entries, 3, "publish writes version-published; rollback writes state-sync then audit")
