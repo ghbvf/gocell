@@ -599,6 +599,19 @@ func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testin
 			name:   "nil shared",
 			shared: nil,
 		},
+		{
+			// InternalGuard is non-nil but nonceStore is nil (e.g. guard built
+			// before a store is wired). Exercises the ns == nil branch in
+			// logSinglePodNonceStoreAcknowledgement (main.go) — must stay silent.
+			name: "non-nil guard with nil nonce store",
+			shared: &SharedDeps{
+				Topology: bootstrap.Topology{
+					AdapterMode:               "real",
+					SinglePodReplayProtection: true,
+				},
+				InternalGuard: guardWithStore(t, nil),
+			},
+		},
 	}
 
 	for _, tc := range cases {
