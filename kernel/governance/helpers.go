@@ -165,6 +165,35 @@ func containsString(ss []string, target string) bool {
 	return false
 }
 
+// --- consumer membership helpers ---
+
+// wildcardConsumer marks a consumer endpoint that accepts any cell. Treated
+// as a routing-level wildcard by membership checks (TOPO-03 / ADV-06) and
+// skipped by per-actor checks (REF-14 / TOPO-07 maxConsistencyLevel) since
+// "*" is not a real actor ID.
+const wildcardConsumer = "*"
+
+// cellMatchesConsumer reports whether cellID is included in the consumers list,
+// honoring the wildcardConsumer ("*") which matches any cell. Used by every
+// rule that compares a slice's owning cell against a contract's consumer
+// endpoint (clients/subscribers/invokers/readers).
+//
+// All governance rules that perform consumer membership checks must use this
+// helper so the wildcard semantics stay aligned across TOPO-03, ADV-06, and
+// any future consumer-direction rule. Divergence here causes the same metadata
+// to be accepted by one rule and rejected by another, leading to contradictory
+// findings on the same project.
+func cellMatchesConsumer(consumers []string, cellID string) bool {
+	return containsString(consumers, wildcardConsumer) || containsString(consumers, cellID)
+}
+
+// isWildcardConsumer reports whether the consumer entry is the wildcard "*".
+// Used by per-actor checks (REF-14 existence, TOPO-07 maxConsistencyLevel) to
+// skip the wildcard entry, which is a routing marker rather than an actor ID.
+func isWildcardConsumer(actor string) bool {
+	return actor == wildcardConsumer
+}
+
 // --- path helpers ---
 
 // repositoryRoot returns the absolute repository root from the project root.

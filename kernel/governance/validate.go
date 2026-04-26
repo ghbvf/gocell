@@ -151,6 +151,7 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateFMT09, v.validateFMT10, v.validateFMT11, v.validateFMT12,
 		v.validateFMT13, v.validateFMT14, v.validateFMT15,
 		v.validateADV01, v.validateADV03, v.validateADV04, v.validateADV05,
+		v.validateADV06,
 		v.validateOUTGUARD01,
 		v.validateSliceConsistency,
 		v.validateFMTResponseStrict01,

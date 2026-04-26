@@ -382,3 +382,17 @@ waivers:
 - `cell.type` ∈ {core, edge, support}
 - 交付动态字段不得出现在非 status-board 文件中
 - 已弃用契约不得被新引用（除非有 `migrations` 声明）
+
+### Advisory 规则（ADV-*）
+
+以下规则在 `gocell validate` 默认运行（不依赖 `--strict`，`--strict` 只控
+FMT-* 子集）。`error` 级违反让 CLI 退出非 0、阻断 CI；`warning` 级仅打印，
+除非 CI 另行配置 warnings-as-errors。
+
+| 规则 | 级别 | 说明 |
+|------|------|------|
+| ADV-01 | warning | journey 在 status-board.yaml 中无对应条目 |
+| ADV-03 | warning | waiver 引用的 contract 不在 slice 的 contractUsages 中 |
+| ADV-04 | warning | status-board 条目引用不存在的 journey |
+| ADV-05 | error | active 事件契约无任何 subscriber（死事件检测）|
+| ADV-06 | error | subscribers ↔ contractUsages 双向漂移检测 |

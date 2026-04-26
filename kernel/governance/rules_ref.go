@@ -347,7 +347,7 @@ func (v *Validator) validateREF14() []ValidationResult {
 	for _, c := range v.project.Contracts {
 		consumers := contractConsumers(c)
 		for i, actor := range consumers {
-			if actor == "*" {
+			if isWildcardConsumer(actor) {
 				continue
 			}
 			if !v.actorExists(actor) {
