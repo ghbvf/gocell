@@ -4,7 +4,7 @@
   "title": "GoCell Journey Descriptor",
   "description": "Defines a Journey, the acceptance truth. A Journey specifies what 'done' means for a user-facing capability. It is not a dependency truth.",
   "type": "object",
-  "required": ["id", "goal", "owner", "cells", "passCriteria"],
+  "required": ["id", "goal", "lifecycle", "owner", "cells", "passCriteria"],
   "additionalProperties": false,
   "properties": {
     "id": {
@@ -15,6 +15,11 @@
     "goal": {
       "type": "string",
       "description": "Human-readable goal describing what the journey achieves."
+    },
+    "lifecycle": {
+      "type": "string",
+      "description": "Journey lifecycle. Active journeys participate in strict automated verification; experimental journeys may be manual-only.",
+      "enum": ["active", "experimental"]
     },
     "owner": {
       "type": "object",
@@ -77,7 +82,26 @@
           "required": ["checkRef"]
         }
       },
-      "minItems": 1
+      "minItems": 0
+    }
+  },
+  "if": {
+    "properties": { "lifecycle": { "const": "active" } },
+    "required": ["lifecycle"]
+  },
+  "then": {
+    "properties": {
+      "passCriteria": {
+        "contains": {
+          "type": "object",
+          "required": ["mode", "checkRef"],
+          "properties": {
+            "mode": { "const": "auto" },
+            "checkRef": { "type": "string", "minLength": 1 }
+          }
+        },
+        "minContains": 1
+      }
     }
   }
 }

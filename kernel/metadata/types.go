@@ -167,6 +167,7 @@ type SchemaRefsMeta = contracts.SchemaRefs
 type JourneyMeta struct {
 	ID           string          `yaml:"id"`
 	Goal         string          `yaml:"goal"`
+	Lifecycle    string          `yaml:"lifecycle"` // "active"|"experimental"
 	Owner        OwnerMeta       `yaml:"owner"`
 	Cells        []string        `yaml:"cells"`
 	Contracts    []string        `yaml:"contracts"`

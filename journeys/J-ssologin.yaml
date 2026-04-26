@@ -1,5 +1,6 @@
 id: J-ssologin
 goal: 用户完成 SSO 登录并获得有效 session
+lifecycle: active
 owner:
   team: platform
   role: journey-owner

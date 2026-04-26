@@ -35,6 +35,14 @@ var (
 		string(cell.LifecycleActive):     true,
 		string(cell.LifecycleDeprecated): true,
 	}
+	validJourneyLifecycles = map[string]bool{
+		"active":       true,
+		"experimental": true,
+	}
+	validPassCriterionModes = map[string]bool{
+		"auto":   true,
+		"manual": true,
+	}
 	validCellTypes = map[string]bool{
 		string(cell.CellTypeCore):    true,
 		string(cell.CellTypeEdge):    true,
@@ -76,6 +84,50 @@ func (v *Validator) validateFMT01() []ValidationResult {
 				"lifecycle",
 				fmt.Sprintf("contract %q lifecycle %q is not valid (must be draft, active, or deprecated)", c.ID, c.Lifecycle),
 			))
+		}
+	}
+	return results
+}
+
+// validateFMT24 checks journey lifecycle and passCriteria structural validity.
+func (v *Validator) validateFMT24() []ValidationResult {
+	var results []ValidationResult
+	for _, j := range v.project.Journeys {
+		file := journeyFile(j)
+		if !validJourneyLifecycles[j.Lifecycle] {
+			issueType := IssueInvalid
+			message := fmt.Sprintf("journey %q lifecycle %q is not valid (must be active or experimental)", j.ID, j.Lifecycle)
+			if j.Lifecycle == "" {
+				issueType = IssueRequired
+				message = fmt.Sprintf("journey %q lifecycle is required (must be active or experimental)", j.ID)
+			}
+			results = append(results, v.newResult(
+				"FMT-24", SeverityError, issueType,
+				file,
+				"lifecycle",
+				message,
+			))
+		}
+
+		for i, pc := range j.PassCriteria {
+			modeField := fmt.Sprintf("passCriteria[%d].mode", i)
+			if !validPassCriterionModes[pc.Mode] {
+				results = append(results, v.newResult(
+					"FMT-24", SeverityError, IssueInvalid,
+					file,
+					modeField,
+					fmt.Sprintf("journey %q passCriteria[%d].mode %q is not valid (must be auto or manual)", j.ID, i, pc.Mode),
+				))
+				continue
+			}
+			if pc.Mode == "auto" && strings.TrimSpace(pc.CheckRef) == "" {
+				results = append(results, v.newResult(
+					"FMT-24", SeverityError, IssueRequired,
+					file,
+					fmt.Sprintf("passCriteria[%d].checkRef", i),
+					fmt.Sprintf("journey %q auto passCriteria[%d] requires checkRef", j.ID, i),
+				))
+			}
 		}
 	}
 	return results

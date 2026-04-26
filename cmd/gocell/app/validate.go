@@ -35,7 +35,7 @@ func runValidate(args []string) error {
 	failFast := fs.Bool("fail-fast", false,
 		"stop at the first error and skip remaining rules; trims output to that error (CI-friendly)")
 	strict := fs.Bool("strict", false,
-		"enforce no-dash naming and allowedFiles-mismatch rules (FMT-16 slice/cell/assembly dirs, FMT-17 allowedFiles, FMT-C1 cell id, FMT-A1 assembly id); strict-only, silent without this flag")
+		"enforce strict-only governance rules (VERIFY-06 journey auto checks, FMT-16 slice/cell/assembly dirs, FMT-17 allowedFiles, FMT-C1 cell id, FMT-A1 assembly id)")
 	format := fs.String("format", string(printers.FormatText),
 		"output format: text (non-stable, default) | json | sarif")
 	if err := fs.Parse(args); err != nil {

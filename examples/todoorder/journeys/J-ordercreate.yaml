@@ -1,5 +1,6 @@
 id: J-ordercreate
 goal: "Create an order over HTTP and emit order-created through the configured runtime path"
+lifecycle: active
 owner:
   team: examples
   role: order-owner

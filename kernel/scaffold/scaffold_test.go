@@ -456,6 +456,7 @@ func TestCreateJourney(t *testing.T) {
 	assert.Contains(t, content, `goal: "User completes SSO login and obtains a valid session"`)
 	assert.Contains(t, content, "team: platform")
 	assert.Contains(t, content, "role: journey-owner")
+	assert.Contains(t, content, "lifecycle: experimental")
 	assert.Contains(t, content, "- accesscore")
 	assert.Contains(t, content, "- auditcore")
 	assert.Contains(t, content, "contracts: []")

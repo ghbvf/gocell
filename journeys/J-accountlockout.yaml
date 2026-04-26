@@ -1,5 +1,6 @@
 id: J-accountlockout
 goal: 多次登录失败后账户自动锁定，管理员可手动解锁
+lifecycle: active
 owner:
   team: platform
   role: journey-owner

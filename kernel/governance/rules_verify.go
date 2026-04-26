@@ -317,3 +317,36 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 
 	return results
 }
+
+// validateVERIFY06 checks that strict-mode active journeys have at least one
+// runnable automated pass criterion.
+func (v *Validator) validateVERIFY06(strict bool) []ValidationResult {
+	if !strict {
+		return nil
+	}
+	var results []ValidationResult
+	for _, j := range v.project.Journeys {
+		if j.Lifecycle != "active" {
+			continue
+		}
+		if journeyHasRunnableAutoCheck(j) {
+			continue
+		}
+		results = append(results, v.newResult(
+			"VERIFY-06", SeverityError, IssueRequired,
+			journeyFile(j),
+			"passCriteria",
+			fmt.Sprintf("active journey %q must declare at least one auto passCriteria entry with checkRef", j.ID),
+		))
+	}
+	return results
+}
+
+func journeyHasRunnableAutoCheck(j *metadata.JourneyMeta) bool {
+	for _, pc := range j.PassCriteria {
+		if pc.Mode == "auto" && strings.TrimSpace(pc.CheckRef) != "" {
+			return true
+		}
+	}
+	return false
+}

@@ -178,6 +178,7 @@ Projection 额外必填：`replayable`。
 # journeys/J-ssologin.yaml
 id: J-ssologin
 goal: 用户完成 SSO 登录并获得有效 session
+lifecycle: active                  # active | experimental
 owner:
   team: platform
   role: journey-owner
@@ -199,7 +200,7 @@ passCriteria:
     mode: manual
 ```
 
-`cells` 是路由锚点，不是完备参与方集合。`contracts` 是验收策展，不是完整依赖图。需要完整依赖图时，从 `slice.contractUsages` 聚合。
+`lifecycle: active` 表示该 Journey 已进入 strict 验收门禁，必须至少有 1 条 `mode: auto` 且带 `checkRef` 的 passCriteria；`experimental` 可用于脚手架或探索阶段，允许 manual-only。`cells` 是路由锚点，不是完备参与方集合。`contracts` 是验收策展，不是完整依赖图。需要完整依赖图时，从 `slice.contractUsages` 聚合。
 
 ### Status Board
 
@@ -375,10 +376,12 @@ waivers:
 - 每个 contractUsage 条目必须有 verify.contract 或 waiver（C19）
 - verify 标识符必须遵循前缀分发格式
 - L0 依赖必须在 `l0Dependencies` 中声明（C20）
+- active journey 必须至少有 1 条可自动执行的 passCriteria（`mode: auto` + `checkRef`）
 
 ### 格式合规
 
-- `lifecycle` ∈ {draft, active, deprecated}
+- `contract.lifecycle` ∈ {draft, active, deprecated}
+- `journey.lifecycle` ∈ {active, experimental}
 - `cell.type` ∈ {core, edge, support}
 - 交付动态字段不得出现在非 status-board 文件中
 - 已弃用契约不得被新引用（除非有 `migrations` 声明）

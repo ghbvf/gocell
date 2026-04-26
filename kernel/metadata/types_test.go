@@ -1,8 +1,10 @@
 package metadata
 
 import (
+	"encoding/json"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/metadata/schemas"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -226,10 +228,11 @@ func TestContractMetaNilReplayable(t *testing.T) {
 
 func TestJourneyMetaRoundTrip(t *testing.T) {
 	orig := JourneyMeta{
-		ID:    "J-ssologin",
-		Goal:  "User completes SSO login",
-		Owner: OwnerMeta{Team: "platform", Role: "journey-owner"},
-		Cells: []string{"accesscore", "auditcore"},
+		ID:        "J-ssologin",
+		Goal:      "User completes SSO login",
+		Lifecycle: "active",
+		Owner:     OwnerMeta{Team: "platform", Role: "journey-owner"},
+		Cells:     []string{"accesscore", "auditcore"},
 		Contracts: []string{
 			"http.auth.login.v1",
 			"event.session.created.v1",
@@ -241,6 +244,7 @@ func TestJourneyMetaRoundTrip(t *testing.T) {
 	}
 	data, got := roundTrip(t, orig)
 	assert.Equal(t, orig, got)
+	assert.Contains(t, string(data), "lifecycle: active")
 
 	// Manual criterion should not have checkRef in output
 	assert.Contains(t, string(data), "mode: manual")
@@ -251,6 +255,23 @@ func TestPassCriterionOmitEmptyCheckRef(t *testing.T) {
 	data, got := roundTrip(t, orig)
 	assert.Equal(t, orig, got)
 	assert.NotContains(t, string(data), "checkRef")
+}
+
+func TestJourneySchemaRequiresLifecycle(t *testing.T) {
+	data, err := schemas.FS.ReadFile("journey.schema.json")
+	require.NoError(t, err)
+
+	var doc map[string]any
+	require.NoError(t, json.Unmarshal(data, &doc))
+	required, ok := doc["required"].([]any)
+	require.True(t, ok)
+	assert.Contains(t, required, "lifecycle")
+
+	properties, ok := doc["properties"].(map[string]any)
+	require.True(t, ok)
+	lifecycle, ok := properties["lifecycle"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, []any{"active", "experimental"}, lifecycle["enum"])
 }
 
 func TestAssemblyMetaRoundTrip(t *testing.T) {

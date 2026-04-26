@@ -1,5 +1,6 @@
 id: J-sessionrefresh
 goal: 用户使用 refresh token 刷新 session 并获得新的 access token
+lifecycle: active
 owner:
   team: platform
   role: journey-owner
