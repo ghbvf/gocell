@@ -3,7 +3,7 @@
   "title": "http.order.create.v1.request",
   "type": "object",
   "properties": {
-    "item": { "type": "string" }
+    "item": { "type": "string", "minLength": 1, "maxLength": 256 }
   },
   "required": ["item"],
   "additionalProperties": false
