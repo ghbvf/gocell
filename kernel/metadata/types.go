@@ -97,7 +97,7 @@ type ContractMeta struct {
 	Kind              string         `yaml:"kind"` // http|event|command|projection
 	OwnerCell         string         `yaml:"ownerCell"`
 	ConsistencyLevel  string         `yaml:"consistencyLevel"`
-	Lifecycle         string         `yaml:"lifecycle"` // draft|active|deprecated
+	Lifecycle         string         `yaml:"lifecycle"`          // draft|active|deprecated
 	Triggers          []string       `yaml:"triggers,omitempty"` // event topics emitted by this contract's handler (L2+)
 	Endpoints         EndpointsMeta  `yaml:"endpoints"`
 	SchemaRefs        SchemaRefsMeta `yaml:"schemaRefs,omitempty"`
