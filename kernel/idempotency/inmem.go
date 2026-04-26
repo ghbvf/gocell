@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"sync"
 	"time"
 )
@@ -29,6 +30,10 @@ type InMemClaimer struct {
 	entries map[string]*inMemEntry
 	// now is indirected for tests; production uses time.Now.
 	now func() time.Time
+	// rand is the entropy source for token generation. Indirected for tests
+	// that need to exercise the crypto/rand.Read failure path; production
+	// uses crypto/rand.Reader.
+	rand io.Reader
 }
 
 type inMemEntry struct {
@@ -40,11 +45,13 @@ type inMemEntry struct {
 	expiresAt time.Time
 }
 
-// NewInMemClaimer creates a new in-memory Claimer with default wall-clock.
+// NewInMemClaimer creates a new in-memory Claimer with default wall-clock
+// and the OS entropy source (crypto/rand.Reader).
 func NewInMemClaimer() *InMemClaimer {
 	return &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
 		now:     time.Now,
+		rand:    rand.Reader,
 	}
 }
 
@@ -65,9 +72,15 @@ func (c *InMemClaimer) Claim(_ context.Context, key string, leaseTTL, doneTTL ti
 		delete(c.entries, key)
 	}
 
-	token, err := newToken()
+	token, err := newToken(c.rand)
 	if err != nil {
-		return ClaimAcquired, nil, err
+		// Honour the Claimer contract documented in idempotency.go (`(_, nil, err)`):
+		// state must NOT be ClaimAcquired when receipt is nil, otherwise callers
+		// that branch on `state == ClaimAcquired` and use the receipt would
+		// dereference nil. ClaimBusy signals "another consumer is processing"
+		// which is the closest-equivalent caller-action (requeue) for an
+		// infrastructure-level entropy failure.
+		return ClaimBusy, nil, err
 	}
 	c.entries[key] = &inMemEntry{
 		state:     ClaimAcquired,
@@ -140,10 +153,10 @@ func (r *inMemReceipt) Extend(_ context.Context, ttl time.Duration) error {
 
 var errStaleReceipt = errors.New("idempotency: receipt is stale (claim was released or expired)")
 
-func newToken() (string, error) {
+func newToken(r io.Reader) (string, error) {
 	var b [8]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		return "", fmt.Errorf("idempotency: crypto/rand.Read failed: %w", err)
+	if _, err := io.ReadFull(r, b[:]); err != nil {
+		return "", fmt.Errorf("idempotency: rand source read failed: %w", err)
 	}
 	return hex.EncodeToString(b[:]), nil
 }

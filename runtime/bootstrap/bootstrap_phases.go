@@ -646,7 +646,9 @@ func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _
 	if rg.Prefix != "" {
 		// rtr.Route signature is from cell.RouteMux which still takes a no-error
 		// closure; capture the Register error via the outer variable so it
-		// surfaces to the phase5 walker.
+		// surfaces to the phase5 walker. rtr.Route is synchronous (chi.Mux
+		// builds the sub-tree before returning) so registerErr is read after
+		// the closure exits — no data race on the outer variable.
 		rtr.Route(rg.Prefix, func(sub cell.RouteMux) {
 			if err := register(sub); err != nil {
 				registerErr = err

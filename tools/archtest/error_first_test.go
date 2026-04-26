@@ -11,11 +11,13 @@ package archtest
 //   - `func init()` (init cannot return error; package-level invariant violations
 //     are by definition fatal)
 //
-// File-level whitelist (architectural panic permitted):
-//   - kernel/wrapper/lifecycle.go — `recoverAndFinishWithRedactor` is the
-//     middle of a `defer recover()` chain that re-panics so the outer
-//     Recovery middleware can record + serialize the panic. Refactoring
-//     it to error would dismantle the entire recover propagation idiom.
+// Function-level whitelist (architectural panic permitted):
+//   - kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor — middle
+//     of a `defer recover()` chain that re-panics so the outer Recovery
+//     middleware can record + serialize the panic. Refactoring it to
+//     error would dismantle the entire recover propagation idiom. Any
+//     OTHER error-less function in lifecycle.go that contains panic() is
+//     still reported as a violation.
 //
 // Enforced file scope (PR-MODE-6):
 //   - kernel/wrapper/handler.go, consumer.go, spec.go, lifecycle.go (whitelisted)
@@ -47,7 +49,7 @@ const ruleErrorFirstAPI01 = "ERROR-FIRST-API-01"
 
 // errorFirstEnforcedFiles are the relative paths (from module root) of files
 // whose declarations must satisfy ERROR-FIRST-API-01. Slash-separated for
-// portability; convertedwith filepath.FromSlash before stat.
+// portability; converted with filepath.FromSlash before stat.
 var errorFirstEnforcedFiles = []string{
 	"kernel/wrapper/handler.go",
 	"kernel/wrapper/consumer.go",
@@ -59,16 +61,19 @@ var errorFirstEnforcedFiles = []string{
 	"kernel/idempotency/inmem.go",
 	"kernel/worker/worker.go",
 	"runtime/eventrouter/router.go",
+	"runtime/eventrouter/contract_middleware.go",
 	"runtime/auth/route.go",
 	"runtime/worker/worker.go",
 	"adapters/postgres/refresh_store.go",
 }
 
-// errorFirstWhitelistedFiles are slash-separated paths that the rule scans but
-// allows panic(s) in error-less functions. ADR-pinned (≤ 5 entries):
-// docs/architecture/202604270030-architectural-panic-whitelist.md
-var errorFirstWhitelistedFiles = map[string]string{
-	"kernel/wrapper/lifecycle.go": "recoverAndFinishWithRedactor re-panics from defer recover",
+// errorFirstWhitelistedFunctions maps "<rel-path>::<funcName>" to a
+// justification. The rule SCANS the file but skips only the listed function;
+// any other error-less function in the same file that contains panic() is
+// still reported as a violation. ADR-pinned in
+// docs/architecture/202604270030-architectural-panic-whitelist.md (§4).
+var errorFirstWhitelistedFunctions = map[string]string{
+	"kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor": "re-panics from defer recover so outer Recovery middleware can serialize the panic",
 }
 
 // errorFirstViolation describes a single ERROR-FIRST-API-01 violation.
@@ -86,9 +91,6 @@ func TestErrorFirstAPI01(t *testing.T) {
 
 	var violations []errorFirstViolation
 	for _, rel := range errorFirstEnforcedFiles {
-		if _, whitelisted := errorFirstWhitelistedFiles[rel]; whitelisted {
-			continue
-		}
 		abs := filepath.Join(root, filepath.FromSlash(rel))
 		v := scanFileForErrorFirstViolations(t, abs, rel)
 		violations = append(violations, v...)
@@ -129,6 +131,10 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 			continue
 		}
 		if signatureReturnsError(fd.Type.Results) {
+			continue
+		}
+		whitelistKey := rel + "::" + fd.Name.Name
+		if _, whitelisted := errorFirstWhitelistedFunctions[whitelistKey]; whitelisted {
 			continue
 		}
 		findPanicCalls(fd.Body, func(callPos token.Pos) {

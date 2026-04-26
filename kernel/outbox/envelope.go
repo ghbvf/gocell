@@ -56,17 +56,14 @@ func MarshalEnvelope(entry Entry) ([]byte, error) {
 }
 
 // MustMarshalDirectEnvelope builds a v1 wire envelope for direct-publish
-// paths. Panics on missing required fields (id/eventType) or json.Marshal
-// failure — these are internal invariants violated only by writer-side
-// programming errors, not user input. The Must prefix marks the panic
-// semantics explicitly; callers that need a recoverable error path should
-// use MarshalEnvelope directly.
+// paths. Panics with errcode-tagged messages on missing required fields
+// (id/eventType) or json.Marshal failure — these are internal invariants
+// violated only by writer-side programming errors, not user input. The
+// Must prefix marks the panic semantics explicitly; callers that need a
+// recoverable error path should use MarshalEnvelope directly.
 func MustMarshalDirectEnvelope(topic, eventType, id string, payload []byte) []byte {
-	if id == "" {
-		panic("outbox.MustMarshalDirectEnvelope: empty id")
-	}
-	if eventType == "" {
-		panic("outbox.MustMarshalDirectEnvelope: empty eventType")
+	if err := validateDirectEnvelopeArgs(id, eventType); err != nil {
+		panic(err.Error())
 	}
 	raw, err := MarshalEnvelope(Entry{
 		ID:        id,
@@ -76,9 +73,26 @@ func MustMarshalDirectEnvelope(topic, eventType, id string, payload []byte) []by
 		CreatedAt: time.Now().UTC(),
 	})
 	if err != nil {
-		panic("outbox.MustMarshalDirectEnvelope: json.Marshal unexpectedly failed: " + err.Error())
+		panic(errcode.Wrap(errcode.ErrEnvelopeSchema,
+			"outbox.MustMarshalDirectEnvelope: json.Marshal unexpectedly failed", err).Error())
 	}
 	return raw
+}
+
+// validateDirectEnvelopeArgs returns a non-nil errcode error when id or
+// eventType are empty. Shared with MustMarshalDirectEnvelope so the
+// validation messages stay consistent with the rest of kernel/outbox's
+// errcode-tagged error surface.
+func validateDirectEnvelopeArgs(id, eventType string) error {
+	if id == "" {
+		return errcode.New(errcode.ErrEnvelopeSchema,
+			"outbox.MustMarshalDirectEnvelope: empty id")
+	}
+	if eventType == "" {
+		return errcode.New(errcode.ErrEnvelopeSchema,
+			"outbox.MustMarshalDirectEnvelope: empty eventType")
+	}
+	return nil
 }
 
 // UnmarshalEnvelope decodes a v1 wire envelope into an Entry.

@@ -9,6 +9,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -89,7 +90,9 @@ func (g *WorkerGroup) Start(ctx context.Context) error {
 			if err == nil {
 				return
 			}
-			slog.Error("worker exited with error", slog.Any("error", err))
+			slog.Error("worker exited with error",
+				slog.String("worker_type", fmt.Sprintf("%T", w)),
+				slog.Any("error", err))
 			errOnce.Do(func() { firstErr = err })
 			cancel() // cancel sibling workers
 		}(w)

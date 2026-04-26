@@ -181,9 +181,15 @@ its own refactor + propagation pass):
 - `runtime/http/middleware/circuit_breaker.go` — Allower nil check + re-panic.
 - `runtime/http/health/health.go::Register` — nil-checker / duplicate-name
   panics.
-- `runtime/http/router/router.go` — state-machine post-conditions (5 sites);
-  largest scope; either whitelist-as-architectural or major refactor of
-  `FinalizeAuth`.
+- `runtime/http/router/router.go` — state-machine post-conditions (5 sites:
+  lines 128/345/415/581/593). **Decision pending PR-MODE-6.1**: the most
+  likely outcome is to whitelist as architectural (these are internal
+  invariants validated upstream by `auth.Mount`, not caller-facing
+  preconditions), bringing the whitelist count from 1 → 2. Alternative is
+  a `FinalizeAuth` API refactor that bubbles the invariant errors to
+  bootstrap; rejected for this PR because the panic semantics already
+  match `auth.Mount`'s contract (startup-fatal). Track via PR-MODE-6.1
+  scope expansion, not as ad-hoc backlog.
 - `cells/accesscore/slices/sessionlogin/service.go::NewService` — 7 nil-check
   panics; the cells-layer first foothold for the rule.
 
