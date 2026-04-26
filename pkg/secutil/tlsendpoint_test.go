@@ -120,21 +120,30 @@ func TestValidateTLSEndpoint(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			err := secutil.ValidateTLSEndpoint(tc.input)
-			if tc.wantErr {
-				if err == nil {
-					t.Errorf("ValidateTLSEndpoint(%q): want error, got nil", tc.input)
-					return
-				}
-				var ec *errcode.Error
-				if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
-					t.Errorf("ValidateTLSEndpoint(%q): error %q does not have code ErrAdapterEndpointNotTLS",
-						tc.input, err.Error())
-				}
-			} else {
-				if err != nil {
-					t.Errorf("ValidateTLSEndpoint(%q): want nil, got %v", tc.input, err)
-				}
-			}
+			assertTLSEndpointResult(t, tc.input, err, tc.wantErr)
 		})
+	}
+}
+
+// assertTLSEndpointResult checks that err matches expectations for input. When
+// wantErr is true the error must be a *errcode.Error tagged ErrAdapterEndpointNotTLS;
+// otherwise err must be nil. Extracted to keep TestValidateTLSEndpoint's loop
+// body within the cognitive-complexity budget.
+func assertTLSEndpointResult(t *testing.T, input string, err error, wantErr bool) {
+	t.Helper()
+	if !wantErr {
+		if err != nil {
+			t.Errorf("ValidateTLSEndpoint(%q): want nil, got %v", input, err)
+		}
+		return
+	}
+	if err == nil {
+		t.Errorf("ValidateTLSEndpoint(%q): want error, got nil", input)
+		return
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
+		t.Errorf("ValidateTLSEndpoint(%q): error %q does not have code ErrAdapterEndpointNotTLS",
+			input, err.Error())
 	}
 }

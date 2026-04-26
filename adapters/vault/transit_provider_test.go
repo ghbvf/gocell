@@ -23,6 +23,7 @@ package vault
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1708,35 +1709,36 @@ func TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr(t *testing.T) {
 			t.Setenv("VAULT_AUTH_METHOD", "") // unset to ensure auth setup fails fast
 
 			_, err := NewTransitKeyProviderFromEnv(false)
-			if tc.wantTLSErr {
-				// Phase-1: the stub does NOT reject http://remote → error is from missing
-				// VAULT_AUTH_METHOD, not TLS. Test will FAIL because error lacks TLS hint.
-				// Phase-2: ValidateTLSEndpoint rejects before auth setup → error has TLS hint.
-				if err == nil {
-					t.Errorf("NewTransitKeyProviderFromEnv(%q): expected TLS error, got nil", tc.addr)
-					return
-				}
-				// TODO(phase2): tighten to errors.Is(err, errcode.ErrAdapterEndpointNotTLS)
-				if !errContains(err, "TLS") && !errContains(err, "tls") && !errContains(err, "http://") {
-					t.Errorf("NewTransitKeyProviderFromEnv(%q): error %q does not indicate TLS rejection",
-						tc.addr, err.Error())
-				}
-			} else {
-				// For ok cases: TLS validation must not produce a TLS-specific error.
-				// The function will error at auth setup (missing VAULT_AUTH_METHOD) — that
-				// is acceptable. Fail only if a TLS validation error is produced.
-				if err != nil && (errContains(err, "TLS") || errContains(err, "not tls")) {
-					t.Errorf("NewTransitKeyProviderFromEnv(%q): got unexpected TLS error: %v", tc.addr, err)
-				}
-			}
+			assertVaultTLSResult(t, tc.addr, err, tc.wantTLSErr)
 		})
 	}
 }
 
-// errContains reports whether err.Error() contains sub.
-func errContains(err error, sub string) bool {
-	if err == nil {
-		return false
+// assertVaultTLSResult checks NewTransitKeyProviderFromEnv's error against the
+// expected TLS validation outcome. When wantTLSErr is true the error must
+// chain to ErrAdapterEndpointNotTLS; otherwise the function may still error at
+// auth setup (missing VAULT_AUTH_METHOD) but must not produce a TLS validation
+// error. Extracted to keep TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr's
+// loop body within the cognitive-complexity budget.
+func assertVaultTLSResult(t *testing.T, addr string, err error, wantTLSErr bool) {
+	t.Helper()
+	if !wantTLSErr {
+		if err == nil {
+			return
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrAdapterEndpointNotTLS {
+			t.Errorf("NewTransitKeyProviderFromEnv(%q): got unexpected TLS error: %v", addr, err)
+		}
+		return
 	}
-	return strings.Contains(err.Error(), sub)
+	if err == nil {
+		t.Errorf("NewTransitKeyProviderFromEnv(%q): expected TLS error, got nil", addr)
+		return
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
+		t.Errorf("NewTransitKeyProviderFromEnv(%q): error %q is not errcode.ErrAdapterEndpointNotTLS",
+			addr, err.Error())
+	}
 }

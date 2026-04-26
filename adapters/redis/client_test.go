@@ -289,25 +289,35 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := NewClient(context.Background(), tc.cfg)
-			if tc.wantTLSErr {
-				require.Error(t, err,
-					"NewClient(%+v): expected TLS validation error, got nil", tc.cfg)
-				var ec *errcode.Error
-				if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
-					t.Errorf("NewClient(%+v): error %q is not errcode.ErrAdapterEndpointNotTLS",
-						tc.cfg, err.Error())
-				}
-			} else {
-				// Loopback / TLS scheme: must not produce a TLS validation error.
-				// Connection refused is acceptable (no real Redis server running).
-				if err != nil {
-					var ec *errcode.Error
-					if errors.As(err, &ec) && ec.Code == errcode.ErrAdapterEndpointNotTLS {
-						t.Errorf("NewClient(%+v): unexpected TLS validation error: %v", tc.cfg, err)
-					}
-				}
-			}
+			assertNewClientTLSResult(t, tc.cfg, err, tc.wantTLSErr)
 		})
+	}
+}
+
+// assertNewClientTLSResult checks NewClient's error against the expected TLS
+// validation outcome. When wantTLSErr is true the error must be a
+// *errcode.Error tagged ErrAdapterEndpointNotTLS; for accepted endpoints the
+// error (if any) may be a connection failure but must not be a TLS validation
+// error. Extracted to keep TestConfigValidate_RejectNonTLSRemote's loop body
+// within the cognitive-complexity budget.
+func assertNewClientTLSResult(t *testing.T, cfg Config, err error, wantTLSErr bool) {
+	t.Helper()
+	if !wantTLSErr {
+		if err == nil {
+			return
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrAdapterEndpointNotTLS {
+			t.Errorf("NewClient(%+v): unexpected TLS validation error: %v", cfg, err)
+		}
+		return
+	}
+	require.Error(t, err,
+		"NewClient(%+v): expected TLS validation error, got nil", cfg)
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
+		t.Errorf("NewClient(%+v): error %q is not errcode.ErrAdapterEndpointNotTLS",
+			cfg, err.Error())
 	}
 }
 
