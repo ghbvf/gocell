@@ -14,18 +14,19 @@ import (
 )
 
 // makeEntryUpserted builds a metadata-only outbox.Entry for entry-upserted.
-// The payload carries only key+version — no value field.
+// The payload carries only key+version+actorId — no value field.
 func makeEntryUpserted(key string, version int) outbox.Entry {
 	payload, _ := json.Marshal(configevents.EntryUpserted{
 		Key:     key,
 		Version: version,
+		ActorID: "admin-test",
 	})
 	return outbox.Entry{ID: "test-upsert", Topic: domain.TopicConfigEntryUpserted, Payload: payload}
 }
 
 // makeEntryDeleted builds an outbox.Entry for entry-deleted with the given version.
 func makeEntryDeleted(key string, version int) outbox.Entry {
-	payload, _ := json.Marshal(configevents.EntryDeleted{Key: key, Version: version})
+	payload, _ := json.Marshal(configevents.EntryDeleted{Key: key, Version: version, ActorID: "admin-test"})
 	return outbox.Entry{ID: "test-delete", Topic: domain.TopicConfigEntryDeleted, Payload: payload}
 }
 
@@ -211,12 +212,14 @@ func TestService_HandleEntryUpserted_InvalidPayload(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json"), "unmarshal"},
-		{"missing key", []byte(`{"version":1}`), "missing key"},
+		{"missing key", []byte(`{"version":1,"actorId":"a"}`), "missing key"},
 		// value field must now be rejected (metadata-only schema)
-		{"value field present", []byte(`{"key":"k","value":"v","version":1}`), "unknown field"},
-		{"invalid version zero", []byte(`{"key":"k","version":0}`), "invalid version"},
-		{"extra sensitive field", []byte(`{"key":"k","version":1,"sensitive":false}`), "unknown field"},
-		{"old action field", []byte(`{"action":"updated","key":"k","version":1}`), "unknown field"},
+		{"value field present", []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`), "unknown field"},
+		{"invalid version zero", []byte(`{"key":"k","version":0,"actorId":"a"}`), "invalid version"},
+		{"missing actorId", []byte(`{"key":"k","version":1}`), "missing actorId"},
+		{"empty actorId", []byte(`{"key":"k","version":1,"actorId":""}`), "missing actorId"},
+		{"extra sensitive field", []byte(`{"key":"k","version":1,"actorId":"a","sensitive":false}`), "unknown field"},
+		{"old action field", []byte(`{"action":"updated","key":"k","version":1,"actorId":"a"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -242,10 +245,11 @@ func TestService_HandleEntryDeleted_InvalidPayload(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json"), "unmarshal"},
-		{"missing key", []byte(`{"version":1}`), "missing key"},
-		{"missing version", []byte(`{"key":"existing.key"}`), "invalid version"},
-		{"version zero", []byte(`{"key":"existing.key","version":0}`), "invalid version"},
-		{"extra value field", []byte(`{"key":"existing.key","value":"old","version":1}`), "unknown field"},
+		{"missing key", []byte(`{"version":1,"actorId":"a"}`), "missing key"},
+		{"missing version", []byte(`{"key":"existing.key","actorId":"a"}`), "invalid version"},
+		{"version zero", []byte(`{"key":"existing.key","version":0,"actorId":"a"}`), "invalid version"},
+		{"missing actorId", []byte(`{"key":"existing.key","version":1}`), "missing actorId"},
+		{"extra value field", []byte(`{"key":"existing.key","value":"old","version":1,"actorId":"a"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {

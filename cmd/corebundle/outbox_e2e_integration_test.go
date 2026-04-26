@@ -494,15 +494,28 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// --- Step 4: Stub internal server —
 	// Simulates GET /internal/v1/config/{key} — the endpoint that
 	// accesscore.configreceive calls after receiving an upsert event.
-	// Records path; responds 200 with a minimal {data:{...}} envelope.
-	type refetchCall struct{ path string }
+	// Records: path, method, Authorization header — assertions verify the
+	// refetch HTTP call uses correct verb + carries a service-token (the
+	// real listener auth chain rejects unauthenticated callers).
+	type refetchCall struct {
+		path       string
+		method     string
+		authHeader string
+	}
 	refetchCh := make(chan refetchCall, 8)
 	internalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		refetchCh <- refetchCall{path: r.URL.Path}
+		refetchCh <- refetchCall{
+			path:       r.URL.Path,
+			method:     r.Method,
+			authHeader: r.Header.Get("Authorization"),
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		// Minimal config entry response matching configEntryDataResponse shape.
-		_, _ = w.Write([]byte(`{"data":{"key":"refetch.test.key","value":"refetch-value","sensitive":false,"version":1}}`))
+		// Response matches contracts/http/config/internal/get/v1 response
+		// schema: {data: {id, key, value, sensitive, version, createdAt, updatedAt}}.
+		// Asserting the refetch consumer can decode the full contract payload
+		// guards against stub/contract drift.
+		_, _ = w.Write([]byte(`{"data":{"id":"cfg-refetch-test","key":"refetch.test.key","value":"refetch-value","sensitive":false,"version":1,"createdAt":"2026-04-26T00:00:00Z","updatedAt":"2026-04-26T00:00:00Z"}}`))
 	}))
 	t.Cleanup(internalSrv.Close)
 
@@ -549,7 +562,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithRefreshMetricsProvider(kernelmetrics.NopProvider{}),
-		accesscore.WithHTTPConfigClient(internalSrv.URL, testRing),
+		accesscore.WithConfigClientHTTP(internalSrv.URL, testRing),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -609,19 +622,36 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	// The relay delivers the entry-upserted event → configreceive calls
 	// HTTPConfigClient.GetEntry → stub server records the request.
 	//
-	// Expect a GET /internal/v1/config/refetch.test.key request within 15s.
+	// Captures the first call matching the expected path; subsequent
+	// asserts validate semantics (method + auth header). Eventually waits
+	// up to 15s for the relay→eventbus→configreceive→ConfigClient pipeline.
+	var captured refetchCall
 	require.Eventually(t, func() bool {
 		select {
 		case call := <-refetchCh:
-			return call.path == "/internal/v1/config/"+refetchKey
+			if call.path == "/internal/v1/config/"+refetchKey {
+				captured = call
+				return true
+			}
 		default:
-			return false
 		}
+		return false
 	}, 15*time.Second, 100*time.Millisecond,
 		"refetch closed loop: accesscore.configreceive must call GET /internal/v1/config/%s "+
 			"within 15s of publish; missing call indicates relay→eventbus→configreceive→ConfigClient "+
 			"pipeline is broken (PR-CFG-G1 refetch loop guard)",
 		refetchKey)
+	// Method must be GET (HTTPConfigClient.GetEntry uses http.MethodGet).
+	assert.Equal(t, http.MethodGet, captured.method,
+		"refetch must use GET — wrong method indicates HTTPConfigClient regression")
+	// Authorization header must carry a ServiceToken — the real internal
+	// listener auth chain rejects requests without a service-token; the stub
+	// does not verify the signature but asserting the header prefix catches
+	// auth-chain regressions (e.g. ring not wired, token never minted).
+	assert.True(t, strings.HasPrefix(captured.authHeader, "ServiceToken "),
+		"refetch Authorization header must start with \"ServiceToken \"; got %q — "+
+			"indicates HTTPConfigClient is not signing requests with the configured ring",
+		captured.authHeader)
 
 	// --- Teardown ---
 	appCancel()

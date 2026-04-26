@@ -222,6 +222,13 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 // this step, sessionvalidate.enforceSessionState fails with "not found" → 401
 // on the very next authenticated request (root cause of PR#183 round-2 CI failure).
 //
+// IMPORTANT (PR-CFG-G1): IssueForUser ALWAYS emits event.session.created.v1
+// — every successful call produces a session event with the new session ID.
+// Callers that do not want a session-creation event must avoid this method.
+// Refresh-token rotation (sessionrefresh.Refresh) does NOT call IssueForUser;
+// it reuses the existing session record and updates only AccessToken/ExpiresAt,
+// so refresh flows do not double-emit.
+//
 // Returns dto.TokenPair (internal/dto, value not pointer) so this method
 // implements the identitymanage.TokenIssuer interface without a cross-slice
 // import (F-ARCH-1). Value type makes (nil, nil) unrepresentable.

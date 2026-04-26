@@ -9,6 +9,13 @@
 # /setup/status because every CI run starts from a fresh `down -v` volume.
 #
 # Requires jq for token extraction (preinstalled on ubuntu-latest runners).
+#
+# !!! THE DEFAULT PASSWORD IS A CI/E2E FIXTURE — NOT A PRODUCTION SECRET !!!
+# `E2E-Bootstrap-Pwd-1!` is hardcoded only as a fallback for the throwaway
+# corebundle container brought up by docker-compose.e2e.yaml. The container
+# (and its postgres volume) are destroyed by `docker compose down -v` after
+# each run; the password is never reused across runs or environments.
+# Override via $E2E_ADMIN_PASSWORD if you need a different value.
 set -euo pipefail
 
 base="${BASE_URL:-http://localhost:8080}"

@@ -128,7 +128,7 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
 		if shared.InternalGuard != nil {
 			accessOpts = append(accessOpts,
-				accesscore.WithHTTPConfigClient(internalBaseURL, shared.InternalGuard.ring),
+				accesscore.WithConfigClientHTTP(internalBaseURL, shared.InternalGuard.ring),
 			)
 		}
 	}

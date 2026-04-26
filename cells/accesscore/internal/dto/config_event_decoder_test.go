@@ -18,14 +18,15 @@ func TestDecodeEntryUpserted(t *testing.T) {
 		wantVer int
 	}{
 		{"valid with actorId", `{"key":"k1","version":2,"actorId":"admin-1"}`, false, "k1", 2},
-		{"valid without actorId (transitional)", `{"key":"k1","version":2}`, false, "k1", 2},
-		{"value-field-rejected (metadata-only)", `{"key":"k1","value":"v","version":2}`, true, "", 0},
-		{"missing-key", `{"version":2}`, true, "", 0},
-		{"empty-key", `{"key":"","version":2}`, true, "", 0},
-		{"missing-version", `{"key":"k1"}`, true, "", 0},
-		{"invalid-version-zero", `{"key":"k1","version":0}`, true, "", 0},
-		{"unknown-field", `{"key":"k1","version":2,"extra":1}`, true, "", 0},
-		{"multiple-json-values", `{"key":"k1","version":1}{"key":"k2","version":2}`, true, "", 0},
+		{"missing-actorId-rejected", `{"key":"k1","version":2}`, true, "", 0},
+		{"empty-actorId-rejected", `{"key":"k1","version":2,"actorId":""}`, true, "", 0},
+		{"value-field-rejected (metadata-only)", `{"key":"k1","value":"v","version":2,"actorId":"admin-1"}`, true, "", 0},
+		{"missing-key", `{"version":2,"actorId":"admin-1"}`, true, "", 0},
+		{"empty-key", `{"key":"","version":2,"actorId":"admin-1"}`, true, "", 0},
+		{"missing-version", `{"key":"k1","actorId":"admin-1"}`, true, "", 0},
+		{"invalid-version-zero", `{"key":"k1","version":0,"actorId":"admin-1"}`, true, "", 0},
+		{"unknown-field", `{"key":"k1","version":2,"actorId":"admin-1","extra":1}`, true, "", 0},
+		{"multiple-json-values", `{"key":"k1","version":1,"actorId":"admin-1"}{"key":"k2","version":2,"actorId":"admin-1"}`, true, "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -88,15 +89,16 @@ func TestDecodeEntryDeleted(t *testing.T) {
 		wantVer int
 	}{
 		{"valid v1 with actorId", `{"key":"k1","version":1,"actorId":"admin-1"}`, false, "k1", 1},
-		{"valid v1 without actorId (transitional)", `{"key":"k1","version":1}`, false, "k1", 1},
+		{"missing-actorId-rejected", `{"key":"k1","version":1}`, true, "", 0},
+		{"empty-actorId-rejected", `{"key":"k1","version":1,"actorId":""}`, true, "", 0},
 		{"valid v42", `{"key":"k1","version":42,"actorId":"admin-1"}`, false, "k1", 42},
-		{"missing-key", `{"version":1}`, true, "", 0},
-		{"empty-key", `{"key":"","version":1}`, true, "", 0},
-		{"missing-version", `{"key":"k1"}`, true, "", 0},
-		{"version-zero", `{"key":"k1","version":0}`, true, "", 0},
-		{"version-negative", `{"key":"k1","version":-1}`, true, "", 0},
-		{"unknown-field", `{"key":"k1","version":1,"extra":"x"}`, true, "", 0},
-		{"multiple-json-values", `{"key":"k1","version":1}{"key":"k2","version":2}`, true, "", 0},
+		{"missing-key", `{"version":1,"actorId":"admin-1"}`, true, "", 0},
+		{"empty-key", `{"key":"","version":1,"actorId":"admin-1"}`, true, "", 0},
+		{"missing-version", `{"key":"k1","actorId":"admin-1"}`, true, "", 0},
+		{"version-zero", `{"key":"k1","version":0,"actorId":"admin-1"}`, true, "", 0},
+		{"version-negative", `{"key":"k1","version":-1,"actorId":"admin-1"}`, true, "", 0},
+		{"unknown-field", `{"key":"k1","version":1,"actorId":"admin-1","extra":"x"}`, true, "", 0},
+		{"multiple-json-values", `{"key":"k1","version":1,"actorId":"admin-1"}{"key":"k2","version":2,"actorId":"admin-1"}`, true, "", 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

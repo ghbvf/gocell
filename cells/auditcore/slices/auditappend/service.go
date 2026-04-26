@@ -103,10 +103,13 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 			entry.ID, entry.EventType))
 	}
 
-	// Extract actorId from payload. All events emitted by PR-CFG-G1 commit 2
-	// carry an `actorId` field (camelCase). Falls back to `userId` for events
-	// (e.g. event.user.created.v1) that still use the userId field name.
-	// Defaults to "system" when neither field is present.
+	// Extract actorId from payload. PR-CFG-G1 G.2 made actorId required for all
+	// admin-write events (config + user.{deleted,updated,unlocked,locked,created}).
+	// session.* events use userId (no actorId — system action attributed to the
+	// session owner). Producer-side decoders (configcore/internal/events,
+	// accesscore/internal/dto) reject empty actorId, so reaching the "system"
+	// fallback here means the producer bypassed validation — record at Error
+	// level so data-quality dashboards surface the regression.
 	var actorID string
 	{
 		var payload struct {
@@ -126,6 +129,11 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 		}
 	}
 	if actorID == "" {
+		s.logger.Error("audit-append: actor extraction fell back to \"system\" — "+
+			"event payload contained neither actorId nor userId; producer-side "+
+			"validation regression suspected",
+			slog.String("event_id", entry.ID),
+			slog.String("event_type", entry.EventType))
 		actorID = "system"
 	}
 

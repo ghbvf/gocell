@@ -7,6 +7,16 @@
 # (committed in PR-CFG-G1 commits 1-3), so DurabilityDurable mode works
 # end-to-end. The 4 TestE2E_ConfigEncryption_* tests are unskipped by setting
 # GOCELL_E2E_PG_AVAILABLE=1 in the CI workflow.
+#
+# !!! ALL VALUES IN THIS FILE ARE EPHEMERAL CI/E2E FIXTURES !!!
+# Every secret-shaped string below (POSTGRES_PASSWORD, GOCELL_*_KEY,
+# GOCELL_SERVICE_SECRET, GOCELL_METRICS_TOKEN, GOCELL_READYZ_VERBOSE_TOKEN, …)
+# is a placeholder used only by the docker-compose harness during one
+# CI run. They are NOT production secrets, NOT shared with any deployed
+# environment, and the postgres volume is destroyed by `docker compose
+# down -v` after each run. Production deployments inject all of these
+# via secret managers (Vault, GH Secrets, etc.) — never reuse these
+# values outside the e2e harness.
 
 services:
   postgres:
@@ -71,9 +81,10 @@ services:
       # Production control-plane tokens (e2e-only values; not secret material).
       GOCELL_SERVICE_SECRET: e2e-service-secret-32-bytes-xxxxx!
       GOCELL_METRICS_TOKEN: e2e-metrics-token
-      # Verbose endpoint is disabled for the e2e harness; on-call diagnostics
-      # are not needed in ephemeral CI containers.
-      GOCELL_READYZ_VERBOSE_DISABLED: "1"
+      # Verbose readyz token — required in real-adapter mode (validateControlPlane
+      # rejects GOCELL_READYZ_VERBOSE_DISABLED=1 on real). Token-gated /readyz?verbose
+      # stays available for on-call diagnostics; tests do not exercise it.
+      GOCELL_READYZ_VERBOSE_TOKEN: e2e-readyz-verbose-token-32-bytes!
 
       # JWT identity and audience.
       GOCELL_JWT_ISSUER: gocell-e2e

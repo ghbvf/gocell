@@ -30,8 +30,8 @@ func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
 		name    string
 		payload []byte
 	}{
-		{"metadata-only key+version", []byte(`{"key":"jwt.ttl","version":1}`)},
-		{"higher version", []byte(`{"key":"jwt.ttl","version":42}`)},
+		{"metadata-only key+version+actorId", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1"}`)},
+		{"higher version", []byte(`{"key":"jwt.ttl","version":42,"actorId":"admin-1"}`)},
 	}
 
 	for _, tt := range tests {
@@ -54,15 +54,17 @@ func TestHandleEntryUpserted_InvalidPayload_PermanentError(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json{"), "unmarshal"},
-		{"missing key", []byte(`{"version":1}`), "missing key"},
-		{"empty key", []byte(`{"key":"","version":1}`), "missing key"},
-		{"blank key whitespace", []byte(`{"key":"   ","version":1}`), "missing key"},
-		{"missing version", []byte(`{"key":"jwt.ttl"}`), "invalid version"},
-		{"invalid version zero", []byte(`{"key":"jwt.ttl","version":0}`), "invalid version"},
+		{"missing key", []byte(`{"version":1,"actorId":"admin-1"}`), "missing key"},
+		{"empty key", []byte(`{"key":"","version":1,"actorId":"admin-1"}`), "missing key"},
+		{"blank key whitespace", []byte(`{"key":"   ","version":1,"actorId":"admin-1"}`), "missing key"},
+		{"missing version", []byte(`{"key":"jwt.ttl","actorId":"admin-1"}`), "invalid version"},
+		{"invalid version zero", []byte(`{"key":"jwt.ttl","version":0,"actorId":"admin-1"}`), "invalid version"},
+		{"missing actorId", []byte(`{"key":"jwt.ttl","version":1}`), "missing actorId"},
+		{"empty actorId", []byte(`{"key":"jwt.ttl","version":1,"actorId":""}`), "missing actorId"},
 		// value field is rejected — payload must be metadata-only
-		{"value field present", []byte(`{"key":"jwt.ttl","value":"30m","version":1}`), "unknown field"},
-		{"extra sensitive field", []byte(`{"key":"jwt.ttl","version":1,"sensitive":false}`), "unknown field"},
-		{"old action field", []byte(`{"action":"updated","key":"jwt.ttl","version":1}`), "unknown field"},
+		{"value field present", []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"admin-1"}`), "unknown field"},
+		{"extra sensitive field", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","sensitive":false}`), "unknown field"},
+		{"old action field", []byte(`{"action":"updated","key":"jwt.ttl","version":1,"actorId":"admin-1"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -89,7 +91,7 @@ func TestHandleEntryDeleted_ValidPayload(t *testing.T) {
 	entry := outbox.Entry{
 		ID:      "evt-del-1",
 		Topic:   TopicConfigEntryDeleted,
-		Payload: []byte(`{"key":"jwt.ttl","version":3}`),
+		Payload: []byte(`{"key":"jwt.ttl","version":3,"actorId":"admin-1"}`),
 	}
 	assert.NoError(t, svc.HandleEntryDeleted(context.Background(), entry))
 }
@@ -101,10 +103,12 @@ func TestHandleEntryDeleted_InvalidPayload_PermanentError(t *testing.T) {
 		wantErr string
 	}{
 		{"invalid json", []byte("not-json{"), "unmarshal"},
-		{"missing key", []byte(`{"version":1}`), "missing key"},
-		{"missing version", []byte(`{"key":"jwt.ttl"}`), "invalid version"},
-		{"version zero", []byte(`{"key":"jwt.ttl","version":0}`), "invalid version"},
-		{"extra value field", []byte(`{"key":"jwt.ttl","version":1,"value":"old"}`), "unknown field"},
+		{"missing key", []byte(`{"version":1,"actorId":"admin-1"}`), "missing key"},
+		{"missing version", []byte(`{"key":"jwt.ttl","actorId":"admin-1"}`), "invalid version"},
+		{"version zero", []byte(`{"key":"jwt.ttl","version":0,"actorId":"admin-1"}`), "invalid version"},
+		{"missing actorId", []byte(`{"key":"jwt.ttl","version":1}`), "missing actorId"},
+		{"empty actorId", []byte(`{"key":"jwt.ttl","version":1,"actorId":""}`), "missing actorId"},
+		{"extra value field", []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1","value":"old"}`), "unknown field"},
 	}
 
 	for _, tt := range tests {
@@ -138,7 +142,7 @@ func TestWrapLegacyHandler_EntryUpserted_ValidPayload_Ack(t *testing.T) {
 	entry := outbox.Entry{
 		ID:      "evt-wrap-1",
 		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","version":1}`),
+		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"admin-1"}`),
 	}
 	result := handler(context.Background(), entry)
 
@@ -165,7 +169,7 @@ func TestWrapLegacyHandler_EntryUpserted_ValueField_Reject(t *testing.T) {
 	entry := outbox.Entry{
 		ID:      "evt-wrap-3",
 		Topic:   TopicConfigEntryUpserted,
-		Payload: []byte(`{"key":"jwt.ttl","value":"30m","version":1}`),
+		Payload: []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"admin-1"}`),
 	}
 	result := handler(context.Background(), entry)
 

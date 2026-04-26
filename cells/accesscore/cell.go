@@ -196,20 +196,28 @@ func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
 // fetch the current config entry value from configcore after an upsert event
 // (contract: http.config.internal.get.v1). When not set the slice operates in
 // log-only mode — no cross-cell HTTP call is made.
+//
+// Tests should prefer this option with a stub implementation. Production
+// composition roots that cannot import cells/accesscore/internal/adapters/http
+// (e.g. cmd/corebundle) use WithConfigClientHTTP instead.
 func WithConfigClient(c ports.ConfigClient) Option {
 	return func(ac *AccessCore) { ac.configClient = c }
 }
 
-// WithHTTPConfigClient constructs a new HTTPConfigClient from the given base URL
-// and HMAC key ring and injects it as the ConfigClient.
+// WithConfigClientHTTP constructs a new HTTP-backed ConfigClient from the
+// given base URL and HMAC key ring and injects it.
 //
 // This public factory is the composition-root entrypoint for cmd/corebundle
 // and similar callers that cannot import cells/accesscore/internal/adapters/http
 // directly. It is equivalent to calling WithConfigClient(NewHTTPConfigClient(baseURL, ring)).
 //
+// The ring parameter is *auth.HMACKeyRing (concrete type) because outbound
+// service-token signing relies on its Current() method; tests that don't need
+// real signing should use WithConfigClient(stub) instead.
+//
 // contract: http.config.internal.get.v1
 // ref: go-micro config/source/remote — polling + on-change patterns.
-func WithHTTPConfigClient(baseURL string, ring *auth.HMACKeyRing) Option {
+func WithConfigClientHTTP(baseURL string, ring *auth.HMACKeyRing) Option {
 	return WithConfigClient(accesshttp.NewHTTPConfigClient(baseURL, ring))
 }
 
