@@ -8,10 +8,12 @@
 package governance
 
 import (
+	"context"
 	"os"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/verify"
 )
 
 // Severity of a validation result.
@@ -67,11 +69,16 @@ type ValidationResult struct {
 // the project field so existing rule code keeps using v.project.* directly.
 type Validator struct {
 	locator
-	root       string                            // project root for file existence checks
-	now        func() time.Time                  // clock function (injectable for tests)
-	fileExists func(path string) bool            // file existence check (injectable for tests)
-	readFile   func(path string) ([]byte, error) // file reader (injectable for tests)
-	actorSet   map[string]bool                   // pre-built set of external actor IDs from actors.yaml (membership = external)
+	root             string                            // project root for file existence checks
+	now              func() time.Time                  // clock function (injectable for tests)
+	fileExists       func(path string) bool            // file existence check (injectable for tests)
+	readFile         func(path string) ([]byte, error) // file reader (injectable for tests)
+	actorSet         map[string]bool                   // pre-built set of external actor IDs from actors.yaml (membership = external)
+	verifyJourneyRef func(
+		ctx context.Context,
+		j *metadata.JourneyMeta,
+		ref string,
+	) (verify.TestResult, []error)
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -90,7 +97,7 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 	for _, a := range project.Actors {
 		actorSet[a.ID] = true
 	}
-	return &Validator{
+	validator := &Validator{
 		locator: locator{project: project},
 		root:    root,
 		now:     time.Now,
@@ -101,6 +108,11 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 		readFile: os.ReadFile,
 		actorSet: actorSet,
 	}
+	if root != "" {
+		runner := verify.NewRunner(project, root)
+		validator.verifyJourneyRef = runner.RunJourneyCheckRef
+	}
+	return validator
 }
 
 // Validate runs all rules and returns all findings.
@@ -149,7 +161,7 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateFMT01, v.validateFMT02, v.validateFMT03, v.validateFMT04,
 		v.validateFMT05, v.validateFMT06, v.validateFMT07, v.validateFMT08,
 		v.validateFMT09, v.validateFMT10, v.validateFMT11, v.validateFMT12,
-		v.validateFMT13, v.validateFMT14, v.validateFMT15,
+		v.validateFMT13, v.validateFMT14, v.validateFMT15, v.validateFMT24,
 		v.validateADV01, v.validateADV03, v.validateADV04, v.validateADV05,
 		v.validateADV06,
 		v.validateOUTGUARD01,

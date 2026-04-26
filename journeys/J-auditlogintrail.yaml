@@ -1,5 +1,6 @@
 id: J-auditlogintrail
 goal: 登录事件跨 cell 传播并写入审计 hash chain，完整性可验证
+lifecycle: experimental
 owner:
   team: platform
   role: journey-owner

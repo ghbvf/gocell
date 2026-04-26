@@ -90,6 +90,7 @@ deliverySemantics: at-least-once
 		// --- journeys ---
 		"journeys/J-ssologin.yaml": &fstest.MapFile{Data: []byte(`id: J-ssologin
 goal: User completes SSO login
+lifecycle: active
 owner:
   team: platform
   role: journey-owner
@@ -263,6 +264,7 @@ func TestParseFS_FullProject(t *testing.T) {
 	assert.Contains(t, pm.Journeys, "J-ssologin")
 	j := pm.Journeys["J-ssologin"]
 	assert.Equal(t, "User completes SSO login", j.Goal)
+	assert.Equal(t, "active", j.Lifecycle)
 	assert.Equal(t, []string{"accesscore", "auditcore"}, j.Cells)
 	assert.Len(t, j.PassCriteria, 2)
 	assert.Equal(t, "auto", j.PassCriteria[0].Mode)

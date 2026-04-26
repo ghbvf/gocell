@@ -1,5 +1,6 @@
 id: {{.ID}}
 goal: "{{.Goal}}"
+lifecycle: experimental
 owner:
   team: {{.OwnerTeam}}
   role: journey-owner

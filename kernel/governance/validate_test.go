@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/verify"
 	"github.com/ghbvf/gocell/pkg/contracts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -156,10 +158,11 @@ func validProject() *metadata.ProjectMeta {
 		},
 		Journeys: map[string]*metadata.JourneyMeta{
 			"J-ssologin": {
-				ID:    "J-ssologin",
-				Goal:  "User completes SSO login",
-				Owner: metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
-				Cells: []string{"accesscore", "auditcore"},
+				ID:        "J-ssologin",
+				Goal:      "User completes SSO login",
+				Lifecycle: "active",
+				Owner:     metadata.OwnerMeta{Team: "platform", Role: "journey-owner"},
+				Cells:     []string{"accesscore", "auditcore"},
 				Contracts: []string{
 					"http.auth.login.v1",
 					"event.session.created.v1",
@@ -191,6 +194,14 @@ func validProject() *metadata.ProjectMeta {
 			{ID: "edge-bff", MaxConsistencyLevel: "L1"},
 		},
 	}
+}
+
+func verifiedJourneyRefVerifier(
+	_ context.Context,
+	_ *metadata.JourneyMeta,
+	ref string,
+) (verify.TestResult, []error) {
+	return verify.TestResult{Name: ref, Passed: true}, nil
 }
 
 // findByCode returns all results matching the given code.
@@ -1371,6 +1382,83 @@ func TestVERIFY05(t *testing.T) {
 	}
 }
 
+func TestVERIFY06(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		verifier  func(context.Context, *metadata.JourneyMeta, string) (verify.TestResult, []error)
+		wantCount int
+	}{
+		{
+			name:      "active journey with auto check passes",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "active journey with stale auto check fails strict",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "stale check", Mode: "auto", CheckRef: "journey.J-ssologin.missing"},
+				}
+			},
+			verifier: func(_ context.Context, _ *metadata.JourneyMeta, ref string) (verify.TestResult, []error) {
+				return verify.TestResult{Name: ref, Passed: false, ZeroMatch: true}, nil
+			},
+			wantCount: 1,
+		},
+		{
+			name: "active journey with only manual criteria fails strict",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "security signoff", Mode: "manual"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "active journey auto criterion without checkRef does not count",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "unwired check", Mode: "auto"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "active journey cannot borrow another journey checkRef",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "other journey check", Mode: "auto", CheckRef: "journey.J-other.session-db"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "experimental journey with only manual criteria passes",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].Lifecycle = "experimental"
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "explore user flow", Mode: "manual"},
+				}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, ".")
+			val.verifyJourneyRef = verifiedJourneyRefVerifier
+			if tt.verifier != nil {
+				val.verifyJourneyRef = tt.verifier
+			}
+			got := findByCode(val.validateVERIFY06(true), "VERIFY-06")
+			assert.Len(t, got, tt.wantCount)
+		})
+	}
+}
+
 // --- FMT rules ---
 
 func TestFMT01(t *testing.T) {
@@ -1405,6 +1493,70 @@ func TestFMT01(t *testing.T) {
 			tt.setup(pm)
 			val := NewValidator(pm, ".")
 			got := findByCode(val.validateFMT01(), "FMT-01")
+			assert.Len(t, got, tt.wantCount)
+		})
+	}
+}
+
+func TestFMT24(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "valid active journey",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "missing journey lifecycle",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].Lifecycle = ""
+			},
+			wantCount: 1,
+		},
+		{
+			name: "invalid journey lifecycle",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].Lifecycle = "deprecated"
+			},
+			wantCount: 1,
+		},
+		{
+			name: "invalid pass criterion mode",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "broken", Mode: "sometimes", CheckRef: "journey.J-ssologin.broken"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "auto criterion requires checkRef",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "unwired", Mode: "auto"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "manual criterion must not carry checkRef",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "manual signoff", Mode: "manual", CheckRef: "journey.J-ssologin.signoff"},
+				}
+			},
+			wantCount: 1,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, ".")
+			got := findByCode(val.validateFMT24(), "FMT-24")
 			assert.Len(t, got, tt.wantCount)
 		})
 	}

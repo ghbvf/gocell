@@ -89,6 +89,7 @@ build:
 // minimalJourneyYAML is the smallest valid journey YAML content.
 const minimalJourneyYAML = `id: J-test
 goal: test journey
+lifecycle: experimental
 owner:
   team: test
   role: journey-owner

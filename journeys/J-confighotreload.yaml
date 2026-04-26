@@ -1,5 +1,6 @@
 id: J-confighotreload
 goal: 配置变更后所有订阅 cell 热更新生效，服务保持健康
+lifecycle: experimental
 owner:
   team: platform
   role: journey-owner

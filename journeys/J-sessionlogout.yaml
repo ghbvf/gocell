@@ -1,5 +1,6 @@
 id: J-sessionlogout
 goal: 用户主动登出并吊销 session，审计事件正确记录
+lifecycle: experimental
 owner:
   team: platform
   role: journey-owner

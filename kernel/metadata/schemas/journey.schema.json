@@ -4,7 +4,7 @@
   "title": "GoCell Journey Descriptor",
   "description": "Defines a Journey, the acceptance truth. A Journey specifies what 'done' means for a user-facing capability. It is not a dependency truth.",
   "type": "object",
-  "required": ["id", "goal", "owner", "cells", "passCriteria"],
+  "required": ["id", "goal", "lifecycle", "owner", "cells", "passCriteria"],
   "additionalProperties": false,
   "properties": {
     "id": {
@@ -15,6 +15,11 @@
     "goal": {
       "type": "string",
       "description": "Human-readable goal describing what the journey achieves."
+    },
+    "lifecycle": {
+      "type": "string",
+      "description": "Journey lifecycle. Active journeys participate in strict automated verification; experimental journeys may be manual-only.",
+      "enum": ["active", "experimental"]
     },
     "owner": {
       "type": "object",
@@ -64,20 +69,33 @@
             "description": "Whether this criterion is verified automatically or manually.",
             "enum": ["auto", "manual"]
           },
-          "checkRef": {
-            "type": "string",
-            "description": "Reference to an automated check. Required when mode is 'auto'."
+	      "checkRef": {
+	        "type": "string",
+	        "description": "Reference to an automated check. Required when mode is 'auto' and forbidden when mode is 'manual'."
+	      }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "mode": { "const": "auto" } },
+              "required": ["mode"]
+            },
+            "then": {
+              "required": ["checkRef"]
+            }
+          },
+          {
+            "if": {
+              "properties": { "mode": { "const": "manual" } },
+              "required": ["mode"]
+            },
+            "then": {
+              "not": { "required": ["checkRef"] }
+            }
           }
-        },
-        "if": {
-          "properties": { "mode": { "const": "auto" } },
-          "required": ["mode"]
-        },
-        "then": {
-          "required": ["checkRef"]
-        }
+        ]
       },
-      "minItems": 1
+      "minItems": 0
     }
   }
 }

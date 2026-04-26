@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -14,10 +15,11 @@ import (
 
 // TestResult represents the outcome of a single test target.
 type TestResult struct {
-	Name      string
-	Passed    bool
-	Output    string
-	ZeroMatch bool // true when -run pattern matched no tests
+	Name        string
+	Passed      bool
+	Output      string
+	ZeroMatch   bool // true when -run pattern matched no tests
+	SkippedOnly bool // true when matched tests all skipped
 }
 
 // VerifyResult represents the outcome of verifying a slice, cell, or journey.
@@ -169,19 +171,99 @@ func (r *Runner) RunJourney(ctx context.Context, journeyID string) (*VerifyResul
 	}
 
 	for _, ref := range autoRefs {
-		resolved, err := resolveRef(ref)
+		tr, errs := r.RunJourneyCheckRef(ctx, j, ref)
+		result.Results = append(result.Results, tr)
+		result.Errors = append(result.Errors, errs...)
+		if !tr.Passed || len(errs) > 0 {
+			result.Passed = false
+		}
+	}
+	return result, nil
+}
+
+// RunActiveJourneys runs every active journey in the parsed project.
+func (r *Runner) RunActiveJourneys(ctx context.Context) (*VerifyResult, error) {
+	result := &VerifyResult{TargetID: "active journeys", Passed: true}
+	if r.project == nil {
+		return result, nil
+	}
+	for _, id := range sortedJourneyIDs(r.project.Journeys) {
+		j := r.project.Journeys[id]
+		if j.Lifecycle != "active" {
+			continue
+		}
+		jr, err := r.RunJourney(ctx, j.ID)
 		if err != nil {
 			result.Errors = append(result.Errors, err)
-			result.Results = append(result.Results, TestResult{Name: ref, Passed: false})
+			result.Results = append(result.Results, TestResult{Name: j.ID, Passed: false})
 			result.Passed = false
 			continue
 		}
-		pkg, extraArgs := r.resolveJourneyPkg(j, resolved)
-		args := append([]string{pkg, "-v", "-run", resolved.RunPattern}, extraArgs...)
-		res := runGoTest(ctx, r.root, args)
-		recordResult(result, ref, res, pkg, resolved.RunPattern)
+		result.Results = append(result.Results, jr.Results...)
+		result.Errors = append(result.Errors, jr.Errors...)
+		result.ManualPending = append(result.ManualPending, jr.ManualPending...)
+		if !hasAutoCheckRef(j) {
+			result.Results = append(result.Results, TestResult{
+				Name:   j.ID,
+				Passed: false,
+				Output: "active journey has no auto checkRef — automated verification required",
+			})
+			result.Passed = false
+		}
+		if !jr.Passed || len(jr.Errors) > 0 {
+			result.Passed = false
+		}
 	}
 	return result, nil
+}
+
+func hasAutoCheckRef(j *metadata.JourneyMeta) bool {
+	for _, pc := range j.PassCriteria {
+		if pc.Mode == ModeAuto && strings.TrimSpace(pc.CheckRef) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedJourneyIDs(journeys map[string]*metadata.JourneyMeta) []string {
+	ids := make([]string, 0, len(journeys))
+	for id := range journeys {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return ids
+}
+
+// RunJourneyCheckRef executes one journey checkRef using the same resolver as
+// RunJourney. Governance strict mode calls this so promotion gates and runtime
+// verification share the exact same target binding.
+func (r *Runner) RunJourneyCheckRef(ctx context.Context, j *metadata.JourneyMeta, ref string) (TestResult, []error) {
+	targetID := ref
+	if j != nil {
+		targetID = j.ID
+	}
+	result := &VerifyResult{TargetID: targetID, Passed: true}
+	resolved, err := resolveRef(ref)
+	if err != nil {
+		return TestResult{Name: ref, Passed: false}, []error{err}
+	}
+	if resolved.Kind != PrefixJourney {
+		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.ErrCheckRefInvalid,
+			fmt.Sprintf("journey checkRef %q must use journey prefix", ref))}
+	}
+	if j != nil && resolved.Scope != j.ID {
+		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.ErrCheckRefInvalid,
+			fmt.Sprintf("journey checkRef %q belongs to journey %q, not %q", ref, resolved.Scope, j.ID))}
+	}
+	pkg, extraArgs := r.resolveJourneyPkg(j, resolved)
+	args := append([]string{pkg, "-v", "-run", resolved.RunPattern}, extraArgs...)
+	res := runGoTest(ctx, r.root, args)
+	recordResult(result, ref, res, pkg, resolved.RunPattern)
+	if len(result.Results) == 0 {
+		return TestResult{Name: ref, Passed: false}, result.Errors
+	}
+	return result.Results[0], result.Errors
 }
 
 // runRefs resolves each ref independently and runs go test per-ref.
@@ -209,16 +291,25 @@ func (r *Runner) runRefs(ctx context.Context, result *VerifyResult, fallbackPkg 
 // and error propagation in a single place.
 func recordResult(result *VerifyResult, name string, res goTestResult, pkg, pattern string) {
 	tr := TestResult{
-		Name:      name,
-		Passed:    res.Passed,
-		Output:    res.Output,
-		ZeroMatch: res.ZeroMatch,
+		Name:        name,
+		Passed:      res.Passed,
+		Output:      res.Output,
+		ZeroMatch:   res.ZeroMatch,
+		SkippedOnly: res.SkippedOnly,
 	}
 	if res.ZeroMatch {
 		tr.Passed = false
 		msg := fmt.Sprintf("matched no tests in %s", pkg)
 		if pattern != "" {
 			msg = fmt.Sprintf("pattern %q %s — check your YAML ref", pattern, msg)
+		}
+		result.Errors = append(result.Errors, errcode.New(errcode.ErrZeroTestMatch, msg))
+	}
+	if res.SkippedOnly {
+		tr.Passed = false
+		msg := fmt.Sprintf("matched only skipped tests in %s", pkg)
+		if pattern != "" {
+			msg = fmt.Sprintf("pattern %q %s — replace stubs with executable checks", pattern, msg)
 		}
 		result.Errors = append(result.Errors, errcode.New(errcode.ErrZeroTestMatch, msg))
 	}

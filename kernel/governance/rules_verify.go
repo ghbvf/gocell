@@ -1,12 +1,19 @@
 package governance
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/verify"
+)
+
+const (
+	codeVERIFY06                  = "VERIFY-06"
+	fieldPassCriteriaCheckRefTmpl = "passCriteria[%d].checkRef"
 )
 
 // validateVERIFY01 checks that every contractUsage has a matching
@@ -310,10 +317,78 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 			if pc.CheckRef == "" {
 				continue
 			}
-			field := fmt.Sprintf("passCriteria[%d].checkRef", i)
+			field := fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i)
 			results = append(results, v.validateVerifyRef(pc.CheckRef, file, field)...)
 		}
 	}
 
 	return results
+}
+
+// validateVERIFY06 checks that strict-mode active journeys have executable
+// automated acceptance checks. A non-empty checkRef is only a declaration; the
+// gate is the actual test target resolving and running without zero-match or
+// skip-only results.
+func (v *Validator) validateVERIFY06(strict bool) []ValidationResult {
+	if !strict {
+		return nil
+	}
+	var results []ValidationResult
+	for _, j := range v.project.Journeys {
+		results = append(results, v.validateVERIFY06Journey(j)...)
+	}
+	return results
+}
+
+func (v *Validator) validateVERIFY06Journey(j *metadata.JourneyMeta) []ValidationResult {
+	if j.Lifecycle != "active" {
+		return nil
+	}
+	var results []ValidationResult
+	autoCount := 0
+	for i, pc := range j.PassCriteria {
+		if pc.Mode != "auto" || strings.TrimSpace(pc.CheckRef) == "" {
+			continue
+		}
+		autoCount++
+		results = append(results, v.validateVERIFY06CheckRef(j, i, pc)...)
+	}
+	if autoCount == 0 {
+		results = append(results, v.newResult(
+			codeVERIFY06, SeverityError, IssueRequired,
+			journeyFile(j),
+			"passCriteria",
+			fmt.Sprintf("active journey %q must declare at least one auto passCriteria entry with checkRef", j.ID),
+		))
+	}
+	return results
+}
+
+func (v *Validator) validateVERIFY06CheckRef(
+	j *metadata.JourneyMeta,
+	i int,
+	pc metadata.PassCriterion,
+) []ValidationResult {
+	scope, err := verify.JourneyRefScope(pc.CheckRef)
+	if err != nil || scope != j.ID {
+		return []ValidationResult{v.newResult(
+			codeVERIFY06, SeverityError, IssueMismatch,
+			journeyFile(j),
+			fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i),
+			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey", j.ID, pc.CheckRef),
+		)}
+	}
+	if v.verifyJourneyRef == nil {
+		return nil
+	}
+	tr, errs := v.verifyJourneyRef(context.Background(), j, pc.CheckRef)
+	if tr.Passed && len(errs) == 0 && !tr.ZeroMatch && !tr.SkippedOnly {
+		return nil
+	}
+	return []ValidationResult{v.newResult(
+		codeVERIFY06, SeverityError, IssueRefNotFound,
+		journeyFile(j),
+		fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i),
+		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target", j.ID, pc.CheckRef),
+	)}
 }

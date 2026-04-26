@@ -135,12 +135,13 @@ jobs:
 
       - name: Validate metadata
         if: matrix.static_checks
-        # --strict gates FMT-16/17 (no-dash dirs, allowedFiles match) + FMT-C1/A1
-        # (cell/assembly id no-dash). Mirrors governance.yml's required check —
-        # keeping both wired keeps strict-mode regressions visible on the kernel
-        # shard even if the governance workflow is skipped (fork PR / matrix
-        # rerun edge cases).
+        # --strict gates metadata promotion rules, including active journey
+        # checkRefs resolving to real executable tests.
         run: go run ./cmd/gocell validate --strict
+
+      - name: Verify active journeys
+        if: matrix.static_checks
+        run: go run ./cmd/gocell verify journey --active
 
       - name: Check contract health
         if: matrix.static_checks

@@ -12,6 +12,7 @@ import (
 //   - FMT-17: slice.yaml allowedFiles first entry does not match the slice directory
 //   - FMT-18: wrapper.ContractSpec literals in cells/** disagree with contracts/**/contract.yaml
 //   - FMT-19: kernel/wrapper/*.go contains forbidden mutable package-level state
+//   - VERIFY-06: active journeys have at least one auto passCriteria checkRef
 //   - FMT-C1: cell.yaml id contains '-' (kebab-case cell id disallowed)
 //   - FMT-A1: assembly.yaml id contains '-' (kebab-case assembly id disallowed)
 //   - DOC-NAME-01: active docs contain a forbidden legacy naming literal
@@ -21,6 +22,7 @@ import (
 // severity to "upgrade" from).
 func (v *Validator) ValidateStrict(strict bool) []ValidationResult {
 	results := v.Validate()
+	results = append(results, v.validateVERIFY06(strict)...)
 	results = append(results, v.validateFMT16(strict)...)
 	results = append(results, v.validateFMT17(strict)...)
 	results = append(results, v.validateFMT18(strict)...)
@@ -39,6 +41,10 @@ func (v *Validator) ValidateStrict(strict bool) []ValidationResult {
 // stops, matching --strict --fail-fast's single-error semantics.
 func (v *Validator) ValidateStrictFailFast() []ValidationResult {
 	results := v.ValidateFailFast()
+	if HasErrors(results) {
+		return results
+	}
+	results = append(results, v.validateVERIFY06(true)...)
 	if HasErrors(results) {
 		return results
 	}

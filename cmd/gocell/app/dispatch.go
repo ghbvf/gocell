@@ -79,7 +79,7 @@ func PrintUsage() {
 	fmt.Println("    journey-readiness --journey=<journeyID>")
 	fmt.Println("    l0-imports --cell=<cellID>")
 	fmt.Println("    unconditional-skip [--format text|json|sarif]")
-	fmt.Println("  verify      Run tests (slice/cell/journey)           [--id, --files]")
+	fmt.Println("  verify      Run tests (slice/cell/journey)           [--id, --active, --files]")
 	fmt.Println()
 	fmt.Println("Run 'gocell <command> -h' for full flag help on a sub-command.")
 }

@@ -59,6 +59,20 @@ func TestPass(t *testing.T) {}
 	assert.True(t, res.ZeroMatch, "should detect zero match")
 }
 
+func TestRunGoTest_SkipOnlyReal(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "skip_test.go"), []byte(`package testmod
+import "testing"
+func TestOnlySkip(t *testing.T) { t.Skip("stub") }
+`), 0o644))
+
+	res := runGoTest(context.Background(), dir, []string{"./...", "-v", "-run", "^TestOnlySkip$"})
+	require.NoError(t, res.Err)
+	assert.True(t, res.Passed, "go test exits 0 for skipped tests")
+	assert.True(t, res.SkippedOnly, "stub-only tests must not count as verified")
+}
+
 func TestRunGoTest_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

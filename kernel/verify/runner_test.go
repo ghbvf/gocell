@@ -131,6 +131,117 @@ func TestRunJourney_InvalidRef(t *testing.T) {
 	assert.Contains(t, result.Errors[0].Error(), "ERR_CHECKREF_INVALID")
 }
 
+func TestRunActiveJourneys_ManualOnlyActiveFails(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-test": {
+				ID:        "J-test",
+				Lifecycle: "active",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: "manual", Text: "Security signoff"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "active journeys need at least one auto checkRef")
+	require.NotEmpty(t, result.Results)
+	assert.Contains(t, result.Results[len(result.Results)-1].Output, "active journey has no auto checkRef")
+}
+
+func TestRunActiveJourneys_NilProjectPasses(t *testing.T) {
+	r := NewRunner(nil, t.TempDir())
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Passed)
+	assert.Empty(t, result.Results)
+}
+
+func TestRunActiveJourneys_SkipsInactiveJourneys(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-draft": {
+				ID:        "J-draft",
+				Lifecycle: "experimental",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: "manual", Text: "Explore manually"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Passed)
+	assert.Empty(t, result.Results)
+}
+
+func TestRunActiveJourneys_AutoCheckRefPasses(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "journey_test.go"), []byte(`package journeys
+import "testing"
+func TestJActiveHappyPath(t *testing.T) {}
+`), 0o644))
+
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-active": {
+				ID:        "J-active",
+				Lifecycle: "active",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: "auto", Text: "Happy path", CheckRef: "journey.J-active.happy-path"},
+				},
+			},
+		},
+	}, dir)
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.True(t, result.Passed)
+	require.Len(t, result.Results, 1)
+	assert.Equal(t, "journey.J-active.happy-path", result.Results[0].Name)
+}
+
+func TestRunJourneyCheckRef_RejectsMismatchedJourneyScope(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "journey_test.go"), []byte(`package journeys
+import "testing"
+func TestJOtherHappyPath(t *testing.T) {}
+`), 0o644))
+
+	r := NewRunner(&metadata.ProjectMeta{}, dir)
+	tr, errs := r.RunJourneyCheckRef(
+		context.Background(),
+		&metadata.JourneyMeta{ID: "J-current"},
+		"journey.J-other.happy-path",
+	)
+
+	assert.False(t, tr.Passed, "a journey must not borrow another journey's passing test")
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Error(), `belongs to journey "J-other"`)
+}
+
+func TestRunJourneyCheckRef_RejectsNonJourneyRef(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{}, t.TempDir())
+
+	tr, errs := r.RunJourneyCheckRef(
+		context.Background(),
+		&metadata.JourneyMeta{ID: "J-current"},
+		"smoke.accesscore.startup",
+	)
+
+	assert.False(t, tr.Passed)
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Error(), "must use journey prefix")
+}
+
 func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))
@@ -205,7 +316,14 @@ func TestIsZeroMatch(t *testing.T) {
 	assert.True(t, isZeroMatch("testing: warning: no tests to run\nPASS"))
 	assert.True(t, isZeroMatch("?   \tpkg\t[no test files]"))
 	assert.False(t, isZeroMatch("--- PASS: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isZeroMatch("testing: warning: no tests to run\n--- SKIP: TestFoo (0.00s)\nPASS"))
 	assert.False(t, isZeroMatch(""))
+}
+
+func TestIsSkipOnly(t *testing.T) {
+	assert.True(t, isSkipOnly("=== RUN   TestFoo\n--- SKIP: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isSkipOnly("=== RUN   TestFoo\n--- PASS: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isSkipOnly(""))
 }
 
 func TestVerifyCell_NoSmoke(t *testing.T) {
@@ -248,4 +366,13 @@ func TestRecordResult_ZeroMatchMessage(t *testing.T) {
 	assert.False(t, result.Passed)
 	require.Len(t, result.Errors, 1)
 	assert.Contains(t, result.Errors[0].Error(), "check your YAML ref")
+}
+
+func TestRecordResult_SkipOnlyFails(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "--- SKIP: TestFoo (0.00s)\nPASS", Passed: true, SkippedOnly: true}
+	recordResult(result, "ref", res, "./pkg/...", "^TestFoo$")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Error(), "only skipped tests")
 }

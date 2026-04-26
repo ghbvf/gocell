@@ -131,6 +131,48 @@ func TestStrictValidator_AllowedFilesMismatch(t *testing.T) {
 	}
 }
 
+func TestValidateStrict_IncludesVERIFY06OnlyWhenStrict(t *testing.T) {
+	project := validProject()
+	project.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+		{Text: "manual signoff", Mode: "manual"},
+	}
+
+	v := NewValidator(project, "")
+	for _, r := range v.ValidateStrict(false) {
+		if r.Code == "VERIFY-06" {
+			t.Fatalf("non-strict validation must not produce VERIFY-06: %s", r.Message)
+		}
+	}
+
+	results := v.ValidateStrict(true)
+	found := false
+	for _, r := range results {
+		if r.Code == "VERIFY-06" && r.Severity == SeverityError {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("strict validation must include VERIFY-06 for active manual-only journey")
+	}
+}
+
+func TestValidateStrictFailFast_IncludesVERIFY06WhenBaseClean(t *testing.T) {
+	project := validProject()
+	project.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+		{Text: "manual signoff", Mode: "manual"},
+	}
+
+	results := NewValidator(project, "").ValidateStrictFailFast()
+	if len(results) == 0 {
+		t.Fatal("expected VERIFY-06 from strict fail-fast")
+	}
+	last := results[len(results)-1]
+	if last.Code != "VERIFY-06" || last.Severity != SeverityError {
+		t.Fatalf("expected fail-fast to stop on VERIFY-06, got %#v", last)
+	}
+}
+
 // TestValidateStrictFailFast_ShortCircuitsOnBaseError verifies that when the
 // base ValidateFailFast finds an error, ValidateStrictFailFast returns
 // immediately without appending FMT-16 or FMT-17 results.
