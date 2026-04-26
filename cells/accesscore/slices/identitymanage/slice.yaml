@@ -5,6 +5,12 @@ contractUsages:
     role: publish
   - contract: event.user.locked.v1
     role: publish
+  - contract: event.user.deleted.v1
+    role: publish
+  - contract: event.user.updated.v1
+    role: publish
+  - contract: event.user.unlocked.v1
+    role: publish
   - contract: http.auth.user.create.v1
     role: serve
   - contract: http.auth.user.get.v1
@@ -27,6 +33,9 @@ verify:
   contract:
     - contract.event.user.created.v1.publish
     - contract.event.user.locked.v1.publish
+    - contract.event.user.deleted.v1.publish
+    - contract.event.user.updated.v1.publish
+    - contract.event.user.unlocked.v1.publish
     - contract.http.auth.user.create.v1.serve
     - contract.http.auth.user.get.v1.serve
     - contract.http.auth.user.update.v1.serve

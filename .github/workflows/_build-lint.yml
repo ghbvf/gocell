@@ -264,11 +264,17 @@ jobs:
           retention-days: 1
 
   e2e:
-    # PR-CFG-J: real-execution gate for tests/e2e. Runs corebundle in a
-    # docker-compose harness (postgres + redis + corebundle) and pipes
-    # `go test -json` through tools/e2egate, which fails the job when
-    # zero tests executed or any package declared tests but had them all
-    # skipped (require.Docker / require.PG gate not opened).
+    # PR-CFG-G1: real-execution gate for tests/e2e. Runs corebundle in a
+    # 4-service docker-compose harness (postgres + redis + migrate + corebundle)
+    # in real adapter + postgres cell mode, then pipes `go test -json` through
+    # tools/e2egate. Fails the job when zero tests executed or any package
+    # declared tests but had them all skipped.
+    #
+    # PR-CFG-G1 promotion from PR-CFG-J: harness now uses a real PG backend
+    # (GOCELL_CELL_ADAPTER_MODE=postgres). accesscore and auditcore are wired
+    # with real outbox writers via the shared PG pool (commits 1-3), so
+    # DurabilityDurable mode works end-to-end and the 4 ConfigEncryption tests
+    # are unskipped via GOCELL_E2E_PG_AVAILABLE=1.
     #
     # Independent of integration-test on purpose: testcontainers and
     # docker-compose are different infra strategies, and a failure in
@@ -276,6 +282,12 @@ jobs:
     if: ${{ inputs.run-integration }}
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # E2E_PG_PASSWORD is injected here (not committed in docker-compose.e2e.yaml
+    # which uses ${E2E_PG_PASSWORD:?...} with no software fallback). Sonar's
+    # Vulnerability blocker on hardcoded credentials is satisfied by externalizing
+    # the value to this CI job env. Local devs use tests/e2e/.env.e2e.example.
+    env:
+      E2E_PG_PASSWORD: gocell-e2e-ci-pwd
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -284,17 +296,28 @@ jobs:
           cache-dependency-path: go.sum
       - name: Build e2egate
         run: go build -o "$RUNNER_TEMP/e2egate" ./tools/e2egate/cmd/e2egate
-      - name: Start docker-compose harness
+      - name: Start dependencies (postgres + redis)
         working-directory: tests/e2e
-        run: docker compose -f docker-compose.e2e.yaml up -d --wait
+        run: docker compose -f docker-compose.e2e.yaml up -d --wait postgres redis
+      - name: Run migrations to completion
+        working-directory: tests/e2e
+        # `up --wait` errors on one-shot services because they exit instead of
+        # becoming healthy. Run migrate foreground via --exit-code-from so the
+        # step status mirrors the migrator's exit code (0 ok, !=0 fails).
+        run: docker compose -f docker-compose.e2e.yaml up --exit-code-from migrate migrate
+      - name: Start corebundle
+        working-directory: tests/e2e
+        run: docker compose -f docker-compose.e2e.yaml up -d --wait corebundle
+      - name: Bootstrap admin token
+        run: |
+          set -o pipefail
+          bash tests/e2e/scripts/bootstrap-admin.sh >> "$GITHUB_ENV"
       - name: Run e2e tests with execution gate
         env:
           GOCELL_E2E_DOCKER_AVAILABLE: "1"
-          # PG/RMQ stay 0 in the demo+memory harness; encryption-tagged
-          # tests skip via require.PG until PR-CFG-G wires accesscore
-          # with a real outboxWriter (corebundle currently can't run
-          # accesscore in DurabilityDurable mode).
-          GOCELL_E2E_PG_AVAILABLE: "0"
+          # Real-PG harness: unskips the 4 TestE2E_ConfigEncryption_* tests
+          # that require a live PG backend (guarded by e2erequire.PG).
+          GOCELL_E2E_PG_AVAILABLE: "1"
           GOCELL_E2E_RMQ_AVAILABLE: "0"
         # No -coverprofile here: Go's coverage instruments only the test
         # process, but the SUT (corebundle) runs as a separate container
@@ -310,7 +333,9 @@ jobs:
       - name: Capture compose logs
         if: always()
         working-directory: tests/e2e
-        run: docker compose -f docker-compose.e2e.yaml logs --no-color > "$RUNNER_TEMP/compose.log" 2>&1 || true
+        run: |
+          docker compose -f docker-compose.e2e.yaml logs --no-color > "$RUNNER_TEMP/compose.log" 2>&1 || true
+          docker compose -f docker-compose.e2e.yaml logs migrate --no-color >> "$RUNNER_TEMP/compose.log" 2>&1 || true
       - name: Teardown
         if: always()
         working-directory: tests/e2e

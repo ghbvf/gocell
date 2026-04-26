@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	cctestutil "github.com/ghbvf/gocell/cells/configcore/internal/testutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -21,6 +22,12 @@ import (
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
+
+// adminIntegCtx returns a context carrying an admin principal for integration
+// service-method calls.
+func adminIntegCtx() context.Context {
+	return auth.TestContext("test-admin", []string{"admin"})
+}
 
 // writeBundle exposes the pool so tests can assert raw outbox_entries state
 // — the L2 co-commit invariant can only be verified by querying outbox_entries
@@ -98,7 +105,7 @@ func TestCreate_AtomicWithOutbox(t *testing.T) {
 	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted)
 	require.Equal(t, 0, before, "baseline outbox count must be 0")
 
-	entry, err := bundle.svc.Create(context.Background(), CreateInput{
+	entry, err := bundle.svc.Create(adminIntegCtx(), CreateInput{
 		Key:   "integration.atomic.write",
 		Value: "hello",
 	})
@@ -120,7 +127,7 @@ func TestUpdate_AtomicWithOutbox(t *testing.T) {
 	defer cleanup()
 
 	// Seed an entry via Create (which itself commits atomically).
-	_, err := bundle.svc.Create(context.Background(), CreateInput{
+	_, err := bundle.svc.Create(adminIntegCtx(), CreateInput{
 		Key:   "integration.atomic.update",
 		Value: "initial",
 	})
@@ -129,7 +136,7 @@ func TestUpdate_AtomicWithOutbox(t *testing.T) {
 	// Baseline: 1 outbox row from Create above.
 	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryUpserted)
 
-	updated, err := bundle.svc.Update(context.Background(), UpdateInput{
+	updated, err := bundle.svc.Update(adminIntegCtx(), UpdateInput{
 		Key:   "integration.atomic.update",
 		Value: "updated-value",
 	})
@@ -150,7 +157,7 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 	defer cleanup()
 
 	// Seed an entry via Create.
-	_, err := bundle.svc.Create(context.Background(), CreateInput{
+	_, err := bundle.svc.Create(adminIntegCtx(), CreateInput{
 		Key:   "integration.atomic.delete",
 		Value: "to-be-deleted",
 	})
@@ -159,7 +166,7 @@ func TestDelete_AtomicWithOutbox(t *testing.T) {
 	// Baseline: 1 outbox row from Create above.
 	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigEntryDeleted)
 
-	err = bundle.svc.Delete(context.Background(), "integration.atomic.delete")
+	err = bundle.svc.Delete(adminIntegCtx(), "integration.atomic.delete")
 	require.NoError(t, err)
 
 	// Outbox-side: Delete's L2 co-commit must have added exactly one outbox row.
@@ -219,7 +226,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 		WithTxManager(txMgr),
 	)
 
-	_, err = svc.Create(ctx, CreateInput{Key: "rollback.test", Value: "v"})
+	_, err = svc.Create(adminIntegCtx(), CreateInput{Key: "rollback.test", Value: "v"})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outbox")
 

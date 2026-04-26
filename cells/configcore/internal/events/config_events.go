@@ -24,6 +24,7 @@ import (
 type EntryUpserted struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	ActorID string `json:"actorId"`
 }
 
 // EntryDeleted is the metadata-only payload for event.config.entry-deleted.v1.
@@ -33,10 +34,13 @@ type EntryUpserted struct {
 type EntryDeleted struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	ActorID string `json:"actorId"`
 }
 
 // DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.
 // The payload must not contain a "value" field — this decoder rejects unknown fields.
+// ActorID is required (PR-CFG-G1 G.2): producer must populate it from the
+// authenticated principal; an empty actorId indicates a contract violation.
 func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 	var event EntryUpserted
 	if err := decodeStrict(data, &event); err != nil {
@@ -48,10 +52,14 @@ func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 	if event.Version < 1 {
 		return EntryUpserted{}, fmt.Errorf("entry-upserted invalid version %d for key %q", event.Version, event.Key)
 	}
+	if strings.TrimSpace(event.ActorID) == "" {
+		return EntryUpserted{}, fmt.Errorf("entry-upserted missing actorId for key %q", event.Key)
+	}
 	return event, nil
 }
 
 // DecodeEntryDeleted strictly decodes and validates event.config.entry-deleted.v1.
+// ActorID required — see DecodeEntryUpserted.
 func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	var event EntryDeleted
 	if err := decodeStrict(data, &event); err != nil {
@@ -62,6 +70,9 @@ func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	}
 	if event.Version < 1 {
 		return EntryDeleted{}, fmt.Errorf("entry-deleted invalid version %d for key %q", event.Version, event.Key)
+	}
+	if strings.TrimSpace(event.ActorID) == "" {
+		return EntryDeleted{}, fmt.Errorf("entry-deleted missing actorId for key %q", event.Key)
 	}
 	return event, nil
 }

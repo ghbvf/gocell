@@ -6,8 +6,9 @@
   "properties": {
     "key": { "type": "string" },
     "configId": { "type": "string" },
-    "version": { "type": "integer" }
+    "version": { "type": "integer" },
+    "actorId": { "type": "string" }
   },
-  "required": ["key", "configId", "version"],
+  "required": ["key", "configId", "version", "actorId"],
   "additionalProperties": false
 }

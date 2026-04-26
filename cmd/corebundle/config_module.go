@@ -90,6 +90,11 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	pgRes := modResult.PGResource
 	cellOpts := modResult.CellOptions
 	relayOpts := modResult.BootstrapOpts
+	// Expose the pool through SharedDeps so AccessCoreModule + AuditCoreModule
+	// can wire their own outbox.Writer + TxManager from the same pool in
+	// postgres mode. In memory mode modResult.PGPool is nil — SharedPGPool
+	// stays nil and the downstream modules skip the postgres outbox path.
+	shared.SharedPGPool = modResult.PGPool
 
 	// Register the stale-cipher counter against the isolated per-run registry.
 	// Use Register (not MustRegister) so that repeated Provide calls in the

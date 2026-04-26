@@ -24,6 +24,7 @@ import (
 type EntryUpserted struct {
 	Key     string
 	Version int
+	ActorID string
 }
 
 // EntryDeleted is accesscore's local typed view of event.config.entry-deleted.v1.
@@ -33,21 +34,25 @@ type EntryUpserted struct {
 type EntryDeleted struct {
 	Key     string
 	Version int
+	ActorID string
 }
 
 // internal wire structs; not exported
 type entryUpsertedWire struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	ActorID string `json:"actorId"`
 }
 
 type entryDeletedWire struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	ActorID string `json:"actorId"`
 }
 
 // DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.
-// Rejects unknown fields (including legacy "value") and enforces non-empty key + version >= 1.
+// Rejects unknown fields (including legacy "value") and enforces non-empty key,
+// version >= 1, and non-empty actorId (PR-CFG-G1 G.2 contract requirement).
 func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 	var wire entryUpsertedWire
 	if err := decodeStrict(data, &wire); err != nil {
@@ -59,11 +64,14 @@ func DecodeEntryUpserted(data []byte) (EntryUpserted, error) {
 	if wire.Version < 1 {
 		return EntryUpserted{}, fmt.Errorf("entry-upserted invalid version %d for key %q", wire.Version, wire.Key)
 	}
+	if strings.TrimSpace(wire.ActorID) == "" {
+		return EntryUpserted{}, fmt.Errorf("entry-upserted missing actorId for key %q", wire.Key)
+	}
 	return EntryUpserted(wire), nil
 }
 
 // DecodeEntryDeleted strictly decodes and validates event.config.entry-deleted.v1.
-// Rejects unknown fields and enforces non-empty key and version >= 1.
+// Same validation as DecodeEntryUpserted: key + version >= 1 + non-empty actorId.
 func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	var wire entryDeletedWire
 	if err := decodeStrict(data, &wire); err != nil {
@@ -74,6 +82,9 @@ func DecodeEntryDeleted(data []byte) (EntryDeleted, error) {
 	}
 	if wire.Version < 1 {
 		return EntryDeleted{}, fmt.Errorf("entry-deleted invalid version %d for key %q", wire.Version, wire.Key)
+	}
+	if strings.TrimSpace(wire.ActorID) == "" {
+		return EntryDeleted{}, fmt.Errorf("entry-deleted missing actorId for key %q", wire.Key)
 	}
 	return EntryDeleted(wire), nil
 }

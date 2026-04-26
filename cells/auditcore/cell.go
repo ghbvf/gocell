@@ -29,6 +29,9 @@ import (
 const (
 	topicUserCreated     = "event.user.created.v1"
 	topicUserLocked      = "event.user.locked.v1"
+	topicUserUpdated     = "event.user.updated.v1"
+	topicUserDeleted     = "event.user.deleted.v1"
+	topicUserUnlocked    = "event.user.unlocked.v1"
 	topicSessionCreated  = "event.session.created.v1"
 	topicSessionRevoked  = "event.session.revoked.v1"
 	topicConfigUpserted  = "event.config.entry-upserted.v1"
@@ -49,6 +52,9 @@ const (
 var auditAppendSpecs = map[string]wrapper.ContractSpec{
 	topicUserCreated:     wrapper.EventSpec(topicUserCreated, "amqp"),
 	topicUserLocked:      wrapper.EventSpec(topicUserLocked, "amqp"),
+	topicUserUpdated:     wrapper.EventSpec(topicUserUpdated, "amqp"),
+	topicUserDeleted:     wrapper.EventSpec(topicUserDeleted, "amqp"),
+	topicUserUnlocked:    wrapper.EventSpec(topicUserUnlocked, "amqp"),
 	topicSessionCreated:  wrapper.EventSpec(topicSessionCreated, "amqp"),
 	topicSessionRevoked:  wrapper.EventSpec(topicSessionRevoked, "amqp"),
 	topicConfigUpserted:  wrapper.EventSpec(topicConfigUpserted, "amqp"),

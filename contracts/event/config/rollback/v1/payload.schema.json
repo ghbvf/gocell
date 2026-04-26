@@ -6,8 +6,9 @@
   "properties": {
     "key": { "type": "string" },
     "targetVersion": { "type": "integer" },
-    "newVersion": { "type": "integer" }
+    "newVersion": { "type": "integer" },
+    "actorId": { "type": "string" }
   },
-  "required": ["key", "targetVersion", "newVersion"],
+  "required": ["key", "targetVersion", "newVersion", "actorId"],
   "additionalProperties": false
 }

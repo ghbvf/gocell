@@ -2,6 +2,11 @@ id: configcore
 type: core
 consistencyLevel: L2
 durabilityMode: durable
+# Listeners: cell.PrimaryListener (/api/v1/config/*) + cell.InternalListener
+# (/internal/v1/config/{key} refetch endpoint, PR-CFG-G1). Listener-level wiring
+# happens in cmd/corebundle composition root via bootstrap.WithListener;
+# cell.yaml does not declare listener metadata directly. See cell_routes.go
+# RouteGroups() for the route group declarations.
 owner:
   team: platform
   role: cell-owner

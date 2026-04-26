@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/google/uuid"
 )
 
@@ -62,12 +63,27 @@ func NewService(repo ports.ConfigRepository, logger *slog.Logger, opts ...Option
 	return s
 }
 
+// actorFromContext extracts the admin actor from the request context.
+// Config publish paths are admin-only; an empty Subject is a wiring error.
+func actorFromContext(ctx context.Context) (string, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Subject == "" {
+		return "", errcode.New(errcode.ErrAuthUnauthorized, "config-publish: actor required — admin auth must be present")
+	}
+	return p.Subject, nil
+}
+
 // Publish creates a versioned snapshot of a config entry.
 // All reads happen inside runInTx so the snapshot is consistent with the write.
 func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersion, error) {
 	if err := validation.RequireNotBlank(errcode.ErrConfigPublishInvalidInput,
 		validation.F("key", key),
 	); err != nil {
+		return nil, err
+	}
+
+	actor, err := actorFromContext(ctx)
+	if err != nil {
 		return nil, err
 	}
 
@@ -95,6 +111,7 @@ func (s *Service) Publish(ctx context.Context, key string) (*domain.ConfigVersio
 			Key:      key,
 			ConfigID: entry.ID,
 			Version:  version.Version,
+			ActorID:  actor,
 		})
 	}); err != nil {
 		return nil, err
@@ -120,46 +137,65 @@ func (s *Service) Rollback(ctx context.Context, key string, targetVersion int) (
 			"rollback target version must be >= 1")
 	}
 
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
-		entry, err := s.repo.GetByKey(txCtx, key)
-		if err != nil {
-			return fmt.Errorf("config-publish: rollback: %w", err)
-		}
-
-		ver, err := s.repo.GetVersion(txCtx, entry.ID, targetVersion)
-		if err != nil {
-			return fmt.Errorf("config-publish: rollback: version not found: %w", err)
-		}
-
-		// Atomic UPDATE...RETURNING restores the snapshot's value and sensitivity.
-		// The repo handles version=version+1 and updated_at=now() internally.
-		updated, err = s.repo.UpdateForRollback(txCtx, key, ver.Value, ver.Sensitive)
-		if err != nil {
-			return fmt.Errorf("config-publish: rollback update: %w", err)
-		}
-
-		// Metadata-only: event carries key+version only.
-		// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
-		// ref: NATS subject+bytes / Watermill payload-bytes boundary.
-		if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
-			Key:     key,
-			Version: updated.Version,
-		}); err != nil {
-			return err
-		}
-
-		return outbox.Emit(txCtx, s.emitter, domain.TopicConfigRollback, domain.ConfigRollbackEvent{
-			Key:           key,
-			TargetVersion: targetVersion,
-			NewVersion:    updated.Version,
-		})
+		var err error
+		updated, err = s.rollbackInTx(txCtx, key, targetVersion, actor)
+		return err
 	}); err != nil {
 		return nil, err
 	}
 
 	s.logger.Info("config rolled back",
 		slog.String("key", key), slog.Int("target_version", targetVersion))
+	return updated, nil
+}
+
+// rollbackInTx executes the rollback steps inside an active transaction:
+// resolve current entry, fetch target version snapshot, atomic UPDATE...RETURNING,
+// dual emit (entry-upserted + rollback). Caller MUST invoke inside runInTx.
+func (s *Service) rollbackInTx(txCtx context.Context, key string, targetVersion int, actor string) (*domain.ConfigEntry, error) {
+	entry, err := s.repo.GetByKey(txCtx, key)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: rollback: %w", err)
+	}
+
+	ver, err := s.repo.GetVersion(txCtx, entry.ID, targetVersion)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: rollback: version not found: %w", err)
+	}
+
+	// Atomic UPDATE...RETURNING restores the snapshot's value and sensitivity.
+	// The repo handles version=version+1 and updated_at=now() internally.
+	updated, err := s.repo.UpdateForRollback(txCtx, key, ver.Value, ver.Sensitive)
+	if err != nil {
+		return nil, fmt.Errorf("config-publish: rollback update: %w", err)
+	}
+
+	// Metadata-only: event carries key+version only.
+	// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
+	// ref: NATS subject+bytes / Watermill payload-bytes boundary.
+	if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
+		Key:     key,
+		Version: updated.Version,
+		ActorID: actor,
+	}); err != nil {
+		return nil, err
+	}
+
+	if err := outbox.Emit(txCtx, s.emitter, domain.TopicConfigRollback, domain.ConfigRollbackEvent{
+		Key:           key,
+		TargetVersion: targetVersion,
+		NewVersion:    updated.Version,
+		ActorID:       actor,
+	}); err != nil {
+		return nil, err
+	}
 	return updated, nil
 }
 

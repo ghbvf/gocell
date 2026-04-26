@@ -5,6 +5,7 @@ package auditappend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -23,6 +24,9 @@ import (
 var Topics = []string{
 	"event.user.created.v1",
 	"event.user.locked.v1",
+	"event.user.updated.v1",
+	"event.user.deleted.v1",
+	"event.user.unlocked.v1",
 	"event.session.created.v1",
 	"event.session.revoked.v1",
 	"event.config.entry-upserted.v1",
@@ -90,27 +94,46 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	// Extract userId from payload when present. PR-A6 migrated session/config
-	// events to camelCase `userId`; event.user.created.v1 / event.user.locked.v1
-	// still publish snake_case `user_id` (out of PR-A6 scope — trailing sweep).
-	// Accept either key so actor attribution stays correct across the mix; once
-	// user events also migrate, the snake_case alias can be dropped.
-	var payload struct {
-		UserIDCamel string `json:"userId"`
-		UserIDSnake string `json:"user_id"`
-	}
-	if err := json.Unmarshal(entry.Payload, &payload); err != nil {
-		s.logger.Warn("audit-append: failed to extract actor from payload",
-			slog.Any("error", err),
-			slog.String("event_id", entry.ID),
-			slog.String("event_type", entry.EventType))
+	// Reject invalid JSON payloads immediately — an unparseable payload can
+	// never be audited correctly and retrying will not fix it. Route to DLX
+	// via PermanentError so operators can inspect the dead letter.
+	if !json.Valid(entry.Payload) {
+		return outbox.NewPermanentError(fmt.Errorf(
+			"audit-append: invalid JSON payload event=%s type=%s",
+			entry.ID, entry.EventType))
 	}
 
-	actorID := payload.UserIDCamel
-	if actorID == "" {
-		actorID = payload.UserIDSnake
+	// Extract actorId from payload. PR-CFG-G1 G.2 made actorId required for all
+	// admin-write events (config + user.{deleted,updated,unlocked,locked,created}).
+	// session.* events use userId (no actorId — system action attributed to the
+	// session owner). Producer-side decoders (configcore/internal/events,
+	// accesscore/internal/dto) reject empty actorId, so reaching the "system"
+	// fallback here means the producer bypassed validation — record at Error
+	// level so data-quality dashboards surface the regression.
+	var actorID string
+	{
+		var payload struct {
+			ActorID string `json:"actorId"`
+			UserID  string `json:"userId"`
+		}
+		if err := json.Unmarshal(entry.Payload, &payload); err != nil {
+			s.logger.Warn("audit-append: failed to extract actor from payload",
+				slog.Any("error", err),
+				slog.String("event_id", entry.ID),
+				slog.String("event_type", entry.EventType))
+		} else {
+			actorID = payload.ActorID
+			if actorID == "" {
+				actorID = payload.UserID
+			}
+		}
 	}
 	if actorID == "" {
+		s.logger.Error("audit-append: actor extraction fell back to \"system\" — "+
+			"event payload contained neither actorId nor userId; producer-side "+
+			"validation regression suspected",
+			slog.String("event_id", entry.ID),
+			slog.String("event_type", entry.EventType))
 		actorID = "system"
 	}
 

@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
@@ -22,6 +23,12 @@ import (
 	"github.com/stretchr/testify/require"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 )
+
+// adminIntegCtx returns a context carrying an admin principal for integration
+// service-method calls. Repository calls don't need auth context.
+func adminIntegCtx() context.Context {
+	return auth.TestContext("test-admin", []string{"admin"})
+}
 
 // publishServiceBundle groups the PG-backed components for integration tests.
 // pool and txMgr are exposed so tests can seed rows inside a tx (write path
@@ -123,7 +130,8 @@ func countOutboxRowsByEventType(t *testing.T, pool *pgxpool.Pool, eventType stri
 func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 	bundle, cleanup := setupPublishBundle(t)
 	defer cleanup()
-	ctx := context.Background()
+	repoCtx := context.Background()
+	svcCtx := adminIntegCtx()
 
 	entry := seedConfigEntry(t, bundle, "integration.publish.key", "publish-value")
 
@@ -133,13 +141,13 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 	before := countOutboxRowsByEventType(t, bundle.pool, domain.TopicConfigVersionPublished)
 	require.Equal(t, 0, before, "seed must not write to outbox_entries")
 
-	ver, err := bundle.svc.Publish(ctx, "integration.publish.key")
+	ver, err := bundle.svc.Publish(svcCtx, "integration.publish.key")
 	require.NoError(t, err)
 	assert.Equal(t, 1, ver.Version)
 	assert.NotNil(t, ver.PublishedAt)
 
 	// Domain-side: the persisted version row confirms the repo write committed.
-	got, err := bundle.repo.GetVersion(ctx, entry.ID, 1)
+	got, err := bundle.repo.GetVersion(repoCtx, entry.ID, 1)
 	require.NoError(t, err)
 	assert.Equal(t, ver.ID, got.ID)
 	assert.Equal(t, "publish-value", got.Value)
@@ -157,13 +165,13 @@ func TestPublishVersion_AtomicWithOutbox(t *testing.T) {
 func TestRollback_AtomicWithOutbox(t *testing.T) {
 	bundle, cleanup := setupPublishBundle(t)
 	defer cleanup()
-	ctx := context.Background()
+	svcCtx := adminIntegCtx()
 
 	// Seed an entry and publish a version so Rollback has a target.
 	seedConfigEntry(t, bundle, "integration.rollback.key", "rollback-value")
 
 	// Publish v1 to create a config_versions row to roll back to.
-	ver, err := bundle.svc.Publish(ctx, "integration.rollback.key")
+	ver, err := bundle.svc.Publish(svcCtx, "integration.rollback.key")
 	require.NoError(t, err)
 	assert.Equal(t, 1, ver.Version)
 
@@ -175,7 +183,7 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 	require.Equal(t, 0, beforeAudit, "no rollback outbox rows should exist before Rollback call")
 
 	// Rollback to version 1.
-	rolled, err := bundle.svc.Rollback(ctx, "integration.rollback.key", 1)
+	rolled, err := bundle.svc.Rollback(svcCtx, "integration.rollback.key", 1)
 	require.NoError(t, err)
 	assert.Equal(t, 2, rolled.Version,
 		"Rollback must increment the config_entries version (UPDATE...RETURNING)")
@@ -197,6 +205,7 @@ func TestRollback_AtomicWithOutbox(t *testing.T) {
 func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 	testutil.RequireDocker(t)
 	ctx := context.Background()
+	svcCtx := adminIntegCtx()
 
 	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
 		tcpostgres.WithDatabase("test"),
@@ -235,7 +244,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 
 	b := publishServiceBundle{svc: svcGood, repo: repo, pool: pool.DB(), txMgr: txMgr}
 	seedConfigEntry(t, b, "rollback.failure.key", "initial-value")
-	_, err = svcGood.Publish(ctx, "rollback.failure.key")
+	_, err = svcGood.Publish(svcCtx, "rollback.failure.key")
 	require.NoError(t, err)
 
 	// Capture the config_entries version before the failing Rollback.
@@ -258,7 +267,7 @@ func TestRollback_AtomicWithOutbox_FailureRollsBackBoth(t *testing.T) {
 		WithTxManager(txMgr),
 	)
 
-	_, err = svcFail.Rollback(ctx, "rollback.failure.key", 1)
+	_, err = svcFail.Rollback(svcCtx, "rollback.failure.key", 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "outbox")
 

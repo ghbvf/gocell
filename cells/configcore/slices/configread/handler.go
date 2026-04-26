@@ -12,7 +12,7 @@ import (
 )
 
 // spec vars for configread routes, cross-checked against
-// contracts/http/config/{get,list}/v1/contract.yaml by FMT-18.
+// contracts/http/config/{get,list,internal/get}/v1/contract.yaml by FMT-18.
 var (
 	specConfigList = wrapper.ContractSpec{
 		ID: "http.config.list.v1", Kind: "http", Transport: "http",
@@ -21,6 +21,14 @@ var (
 	specConfigGet = wrapper.ContractSpec{
 		ID: "http.config.get.v1", Kind: "http", Transport: "http",
 		Method: "GET", Path: "/api/v1/config/{key}",
+	}
+	// Internal control-plane endpoint: service-token-authenticated GET that
+	// lets accesscore configreceive fetch the current value after receiving
+	// an entry-upserted event. Mounted on InternalListener via
+	// RegisterInternalRoutes; service-token auth is on the listener chain.
+	specConfigInternalGet = wrapper.ContractSpec{
+		ID: "http.config.internal.get.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/internal/v1/config/{key}",
 	}
 )
 
@@ -36,7 +44,8 @@ func NewHandler(svc *Service) *Handler {
 
 // RegisterRoutes registers config-read routes on mux via auth.Mount so
 // CH-04/CH-05 governance can correlate contracts to handler functions.
-// Both routes are admin-gated (auth.AnyRole(RoleAdmin)).
+// Both routes are admin-gated (auth.AnyRole(RoleAdmin)). Mounted on
+// PrimaryListener for /api/v1/config/* by ConfigCore.RouteGroups.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 	auth.Mount(mux, auth.Route{
 		Contract: specConfigList,
@@ -47,6 +56,22 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 		Contract: specConfigGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
+	})
+}
+
+// RegisterInternalRoutes registers the internal control-plane GET that
+// accesscore configreceive calls (via service-token) after an upsert event,
+// returning the current value. Mounted on InternalListener for
+// /internal/v1/config/* by ConfigCore.RouteGroups.
+//
+// Reuses HandleGet — the same response shape (sensitive=true returns the
+// redacted "******" placeholder) applies on both listeners; consumers must
+// not log Value for sensitive entries (see configport.go ConfigEntry doc).
+func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) {
+	auth.Mount(mux, auth.Route{
+		Contract: specConfigInternalGet,
+		Handler:  http.HandlerFunc(h.HandleGet),
+		Policy:   auth.AnyRole(auth.RoleInternalAdmin),
 	})
 }
 

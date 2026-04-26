@@ -301,6 +301,88 @@ func TestEventUserLockedV1Publish(t *testing.T) {
 	c.MustRejectHeaders(t, []byte(`{}`))
 }
 
+func TestEventUserUpdatedV1Publish(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
+	updateContract := contracttest.LoadByID(t, root, "http.auth.user.update.v1")
+	c := contracttest.LoadByID(t, root, "event.user.updated.v1")
+	handler, writer := setupContractHandlerWithOutbox(t)
+
+	userID := createUserForContractTest(t, handler, createContract)
+	writer.entries = nil // reset after create event
+
+	path := strings.Replace(updateContract.HTTP.Path, "{id}", userID, 1)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(updateContract.HTTP.Method, path, strings.NewReader(`{"email":"updated@b.com"}`))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	handler.ServeHTTP(rec, req)
+	updateContract.ValidateHTTPResponseRecorder(t, rec)
+
+	require.Len(t, writer.entries, 1, "Update must emit one outbox entry")
+	entry := writer.entries[0]
+	c.ValidatePayload(t, entry.Payload)
+	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.MustRejectPayload(t, []byte(`{}`))
+}
+
+func TestEventUserDeletedV1Publish(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
+	deleteContract := contracttest.LoadByID(t, root, "http.auth.user.delete.v1")
+	c := contracttest.LoadByID(t, root, "event.user.deleted.v1")
+	handler, writer := setupContractHandlerWithOutbox(t)
+
+	userID := createUserForContractTest(t, handler, createContract)
+	writer.entries = nil // reset after create event
+
+	deletePath := strings.Replace(deleteContract.HTTP.Path, "{id}", userID, 1)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(deleteContract.HTTP.Method, deletePath, nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	handler.ServeHTTP(rec, req)
+	deleteContract.ValidateHTTPResponseRecorder(t, rec)
+
+	require.Len(t, writer.entries, 1, "Delete must emit one outbox entry")
+	entry := writer.entries[0]
+	c.ValidatePayload(t, entry.Payload)
+	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.MustRejectPayload(t, []byte(`{}`))
+}
+
+func TestEventUserUnlockedV1Publish(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	createContract := contracttest.LoadByID(t, root, "http.auth.user.create.v1")
+	lockContract := contracttest.LoadByID(t, root, "http.auth.user.lock.v1")
+	unlockContract := contracttest.LoadByID(t, root, "http.auth.user.unlock.v1")
+	c := contracttest.LoadByID(t, root, "event.user.unlocked.v1")
+	handler, writer := setupContractHandlerWithOutbox(t)
+
+	userID := createUserForContractTest(t, handler, createContract)
+	writer.entries = nil
+
+	// Lock first
+	lockPath := strings.Replace(lockContract.HTTP.Path, "{id}", userID, 1)
+	lockReq := httptest.NewRequest(lockContract.HTTP.Method, lockPath, nil)
+	lockReq = lockReq.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	handler.ServeHTTP(httptest.NewRecorder(), lockReq)
+	writer.entries = nil // reset after lock event
+
+	// Unlock
+	unlockPath := strings.Replace(unlockContract.HTTP.Path, "{id}", userID, 1)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(unlockContract.HTTP.Method, unlockPath, nil)
+	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
+	handler.ServeHTTP(rec, req)
+	unlockContract.ValidateHTTPResponseRecorder(t, rec)
+
+	require.Len(t, writer.entries, 1, "Unlock must emit one outbox entry")
+	entry := writer.entries[0]
+	c.ValidatePayload(t, entry.Payload)
+	c.ValidateHeaders(t, []byte(`{"event_id":"`+entry.ID+`"}`))
+	c.MustRejectPayload(t, []byte(`{}`))
+}
+
 // --- #22 DELETE-NOCONTENT-01: 204 semantic negative test ---
 
 func TestHttpAuthUserDeleteV1Serve_RejectsBodyOn204(t *testing.T) {

@@ -3,8 +3,9 @@
   "title": "event.user.locked.v1.payload",
   "type": "object",
   "properties": {
-    "user_id": { "type": "string" }
+    "userId": { "type": "string" },
+    "actorId": { "type": "string" }
   },
-  "required": ["user_id"],
+  "required": ["userId", "actorId"],
   "additionalProperties": false
 }

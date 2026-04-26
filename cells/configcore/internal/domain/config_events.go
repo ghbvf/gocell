@@ -16,6 +16,7 @@ type ConfigVersionPublishedEvent struct {
 	Key      string `json:"key"`
 	ConfigID string `json:"configId"`
 	Version  int    `json:"version"`
+	ActorID  string `json:"actorId"`
 }
 
 // ConfigRollbackEvent is the payload for event.config.rollback.v1.
@@ -25,4 +26,5 @@ type ConfigRollbackEvent struct {
 	Key           string `json:"key"`
 	TargetVersion int    `json:"targetVersion"`
 	NewVersion    int    `json:"newVersion"`
+	ActorID       string `json:"actorId"`
 }

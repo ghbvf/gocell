@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -28,7 +29,7 @@ func newCascadeStore(t *testing.T) (refresh.Store, *storetest.FakeClock) {
 }
 
 func TestService_Lock_RevokesRefreshChain(t *testing.T) {
-	ctx := context.Background()
+	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	refreshStore, _ := newCascadeStore(t)
@@ -37,7 +38,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 		WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	user, err := svc.Create(ctx, CreateInput{Username: "dave", Email: "d@e.f", Password: "hash"})
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "dave", Email: "d@e.f", Password: "hash"})
 	require.NoError(t, err)
 
 	wire, _, err := refreshStore.Issue(ctx, "sess-dave", user.ID)
@@ -47,7 +48,7 @@ func TestService_Lock_RevokesRefreshChain(t *testing.T) {
 	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-lock", "other-user-lock")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Lock(ctx, user.ID))
+	require.NoError(t, svc.Lock(auth.TestContext("test-admin", []string{"admin"}), user.ID))
 
 	// Rotating the pre-lock refresh token must be rejected.
 	_, _, err = refreshStore.Rotate(ctx, wire)
@@ -70,7 +71,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 	require.NoError(t, err)
 
 	// Use the service to create so it hashes the password for us.
-	user, err := svc.Create(ctx, CreateInput{Username: "eve", Email: "e@f.g", Password: "old-P@ssw0rd!"})
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "eve", Email: "e@f.g", Password: "old-P@ssw0rd!"})
 	require.NoError(t, err)
 
 	wire, _, err := refreshStore.Issue(ctx, "sess-eve", user.ID)
@@ -98,7 +99,7 @@ func TestService_ChangePassword_RevokesRefreshChain(t *testing.T) {
 }
 
 func TestService_Delete_RevokesRefreshChain(t *testing.T) {
-	ctx := context.Background()
+	ctx := auth.TestContext("test-admin", []string{"admin"})
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	refreshStore, _ := newCascadeStore(t)
@@ -107,7 +108,7 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 		WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	user, err := svc.Create(ctx, CreateInput{Username: "frank", Email: "f@g.h", Password: "pwd"})
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "frank", Email: "f@g.h", Password: "pwd"})
 	require.NoError(t, err)
 
 	wire, _, err := refreshStore.Issue(ctx, "sess-frank", user.ID)
@@ -117,7 +118,7 @@ func TestService_Delete_RevokesRefreshChain(t *testing.T) {
 	otherWire, _, err := refreshStore.Issue(ctx, "sess-other-del", "other-user-del")
 	require.NoError(t, err)
 
-	require.NoError(t, svc.Delete(ctx, user.ID))
+	require.NoError(t, svc.Delete(adminCtxForService(), user.ID))
 
 	_, _, err = refreshStore.Rotate(ctx, wire)
 	require.Error(t, err)

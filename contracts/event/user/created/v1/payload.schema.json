@@ -3,9 +3,10 @@
   "title": "event.user.created.v1.payload",
   "type": "object",
   "properties": {
-    "user_id": { "type": "string" },
-    "username": { "type": "string" }
+    "userId": { "type": "string" },
+    "username": { "type": "string" },
+    "actorId": { "type": "string" }
   },
-  "required": ["user_id", "username"],
+  "required": ["userId", "username", "actorId"],
   "additionalProperties": false
 }

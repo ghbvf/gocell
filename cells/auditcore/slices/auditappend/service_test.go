@@ -1,7 +1,6 @@
 package auditappend
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -99,11 +98,12 @@ func TestService_HandleEvent_ChainGrows(t *testing.T) {
 	assert.Equal(t, 5, repo.Len())
 }
 
-func TestService_HandleEvent_InvalidPayload_LogsWarning(t *testing.T) {
+// TestService_HandleEvent_InvalidPayload_PermanentError asserts that an invalid
+// JSON payload causes HandleEvent to return a PermanentError, routing the event
+// to the DLX instead of silently appending it with a fallback "system" actor.
+func TestService_HandleEvent_InvalidPayload_PermanentError(t *testing.T) {
 	repo := mem.NewAuditRepository()
-	var logBuf bytes.Buffer
-	logger := slog.New(slog.NewJSONHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelWarn}))
-	svc := NewService(repo, testHMACKey, logger)
+	svc := NewService(repo, testHMACKey, slog.Default())
 
 	entry := outbox.Entry{
 		ID:        "evt-bad-json",
@@ -112,18 +112,15 @@ func TestService_HandleEvent_InvalidPayload_LogsWarning(t *testing.T) {
 	}
 
 	err := svc.HandleEvent(context.Background(), entry)
-	require.NoError(t, err, "invalid payload should not cause HandleEvent to fail")
+	require.Error(t, err, "invalid JSON payload must cause HandleEvent to fail (route to DLX)")
 
-	// Verify audit entry was created with fallback actorID.
-	entries, getErr := repo.GetRange(context.Background(), 0, 1)
-	require.NoError(t, getErr)
-	require.Len(t, entries, 1)
-	assert.Equal(t, "system", entries[0].ActorID, "should fallback to system actor")
+	var permErr *outbox.PermanentError
+	require.ErrorAs(t, err, &permErr, "error must be a PermanentError so legacy handler wrapper routes to DLX")
+	assert.Contains(t, err.Error(), "evt-bad-json", "error message must contain event ID")
 
-	// Verify warning was logged.
-	logOutput := logBuf.String()
-	assert.Contains(t, logOutput, "failed to extract actor from payload")
-	assert.Contains(t, logOutput, "evt-bad-json")
+	// Verify the chain was NOT appended — invalid payload must not pollute the audit chain.
+	assert.Equal(t, 0, svc.ChainLen(), "invalid payload must not be appended to the audit chain")
+	assert.Equal(t, 0, repo.Len(), "invalid payload must not be persisted")
 }
 
 type failingPublisher struct{ err error }
@@ -148,11 +145,10 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 	assert.Equal(t, 1, svc.ChainLen(), "entry should still be appended to chain")
 }
 
-// TestService_HandleEvent_ActorExtraction covers the snake_case + camelCase
-// fallback in the actor-id extractor. Regression guard from PR-A6 review:
-// event.user.created.v1 still publishes user_id (snake), while session/config
-// events publish userId (camel). auditappend must attribute both correctly
-// instead of silently falling back to "system".
+// TestService_HandleEvent_ActorExtraction covers the actor-id extractor's
+// priority: actorId (preferred) > userId (fallback) > "system" (default).
+// G.6 migrated user events from snake_case user_id to camelCase userId; G.2
+// added required actorId to all admin-write events.
 func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -167,15 +163,21 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			wantActorID: "usr-cam",
 		},
 		{
-			name:        "snake_case user_id (user.created, transitional)",
-			eventType:   "event.user.created.v1",
-			payload:     map[string]any{"user_id": "usr-snk", "username": "alice"},
-			wantActorID: "usr-snk",
+			name:        "actorId field (user.locked, PR-CFG-G1)",
+			eventType:   "event.user.locked.v1",
+			payload:     map[string]any{"actorId": "adm-1", "userId": "usr-snk"},
+			wantActorID: "adm-1",
 		},
 		{
-			name:        "no actor field (config.entry-upserted) → system",
+			name:        "actorId field (config.entry-upserted, PR-CFG-G1) — production path",
 			eventType:   "event.config.entry-upserted.v1",
-			payload:     map[string]any{"key": "k", "value": "v", "version": 1},
+			payload:     map[string]any{"key": "k", "version": 1, "actorId": "adm-99"},
+			wantActorID: "adm-99",
+		},
+		{
+			name:        "no actor field (legacy config event) → system fallback",
+			eventType:   "event.config.entry-upserted.v1",
+			payload:     map[string]any{"key": "k", "version": 1},
 			wantActorID: "system",
 		},
 	}

@@ -1,37 +1,118 @@
-# docker-compose for the PR-CFG-J e2e harness.
+# 4-service real-PG e2e harness for PR-CFG-G1+ era.
+# postgres + redis + migrate (one-shot) + corebundle (real adapter mode).
+# corebundle waits on migrate completion + redis readiness.
 #
-# Single corebundle service in demo + in-memory mode. The harness runs
-# corebundle through its real bootstrap path (phase0..N + healthz/readyz)
-# so e2egate can see real test execution; it does NOT run real PG yet
-# because corebundle's accesscore module currently provides a nil
-# outboxWriter, which incompatible with the assembly's DurabilityDurable
-# mode triggered by GOCELL_CELL_ADAPTER_MODE=postgres. Wiring a real
-# outbox writer for accesscore is a corebundle-level change scheduled
-# for PR-CFG-G; once landed, this compose can be expanded to
-# postgres + redis + migrate one-shot.
+# PR-CFG-G1: replaces the demo+memory single-service harness. accesscore and
+# auditcore are now wired with real outbox writers via the shared PG pool
+# (committed in PR-CFG-G1 commits 1-3), so DurabilityDurable mode works
+# end-to-end. The 4 TestE2E_ConfigEncryption_* tests are unskipped by setting
+# GOCELL_E2E_PG_AVAILABLE=1 in the CI workflow.
+#
+# !!! ALL VALUES IN THIS FILE ARE EPHEMERAL CI/E2E FIXTURES !!!
+# Every secret-shaped string below (POSTGRES_PASSWORD, GOCELL_*_KEY,
+# GOCELL_SERVICE_SECRET, GOCELL_METRICS_TOKEN, GOCELL_READYZ_VERBOSE_TOKEN, …)
+# is a placeholder used only by the docker-compose harness during one
+# CI run. They are NOT production secrets, NOT shared with any deployed
+# environment, and the postgres volume is destroyed by `docker compose
+# down -v` after each run. Production deployments inject all of these
+# via secret managers (Vault, GH Secrets, etc.) — never reuse these
+# values outside the e2e harness.
 
 services:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: gocell
+      # Required env: caller MUST export E2E_PG_PASSWORD before `docker compose up`.
+      # No default — software-fallback would re-introduce a hardcoded credential.
+      # CI workflow declares it (.github/workflows/_build-lint.yml::e2e env block);
+      # local devs use tests/e2e/.env.e2e.example as a starting point.
+      POSTGRES_PASSWORD: ${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}
+      POSTGRES_DB: gocell
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gocell -d gocell"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.migrate
+    environment:
+      GOCELL_PG_DSN: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@postgres:5432/gocell?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   corebundle:
     build:
       context: ../..
       dockerfile: tests/e2e/Dockerfile.corebundle
     environment:
-      # GOCELL_ADAPTER_MODE unset → demo. Storage stays in-memory so
-      # accesscore's demo-mode wiring is consistent with the assembly.
+      # Topology: real adapter mode + postgres storage backend.
+      GOCELL_ADAPTER_MODE: real
+      GOCELL_CELL_ADAPTER_MODE: postgres
+      # Single-pod deployment: in-memory nonce store is sufficient.
+      GOCELL_SINGLE_POD: "1"
+
+      # configcore cell: PG DSN + AES-256 envelope encryption.
+      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@postgres:5432/gocell?sslmode=disable
+      GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
+      # 64-hex-char = 32 bytes. E2e-only; never reuse in production.
+      GOCELL_CONFIGCORE_MASTER_KEY: aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899
+      GOCELL_CONFIGCORE_CURSOR_KEY: config-cursor-key-32b-e2e-padded!
+
+      # auditcore cell: HMAC + cursor keys.
+      GOCELL_AUDITCORE_HMAC_KEY: audit-hmac-key-e2e-replace-32b!!!
+      GOCELL_AUDITCORE_CURSOR_KEY: audit-cursor-key-32b-e2e-padded!
+
+      # accesscore cell: cursor key.
+      GOCELL_ACCESSCORE_CURSOR_KEY: access-cursor-key-32b-e2e-padx!!
+
+      # Redis for distributed replay protection and outbox claimer.
+      GOCELL_REDIS_ADDR: redis:6379
+
+      # Production control-plane tokens (e2e-only values; not secret material).
+      GOCELL_SERVICE_SECRET: e2e-service-secret-32-bytes-xxxxx!
+      GOCELL_METRICS_TOKEN: e2e-metrics-token
+      # Verbose readyz token — required in real-adapter mode (validateControlPlane
+      # rejects GOCELL_READYZ_VERBOSE_DISABLED=1 on real). Token-gated /readyz?verbose
+      # stays available for on-call diagnostics; tests do not exercise it.
+      GOCELL_READYZ_VERBOSE_TOKEN: e2e-readyz-verbose-token-32-bytes!
+
+      # JWT identity and audience.
       GOCELL_JWT_ISSUER: gocell-e2e
       GOCELL_JWT_AUDIENCE: gocell-e2e-clients
-      GOCELL_HTTP_PRIMARY_ADDR: ":8080"
+
+      # HTTP listener addresses — corebundle container.
+      GOCELL_HTTP_PRIMARY_ADDR: "0.0.0.0:8080"
       GOCELL_HTTP_INTERNAL_ADDR: "127.0.0.1:9090"
-      GOCELL_HTTP_HEALTH_ADDR: ":9091"
+      GOCELL_HTTP_HEALTH_ADDR: "0.0.0.0:9091"
+
+      # Admin provisioning: interactive (operator calls POST /setup/admin).
+      # The bootstrap-admin.sh step calls that endpoint immediately after
+      # corebundle's healthcheck passes.
       GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE: interactive
-      # Demo mode waives the /readyz?verbose token guard (real mode forbids
-      # this; demo mode allows it for ephemeral test setups).
-      GOCELL_READYZ_VERBOSE_DISABLED: "1"
     ports:
       - "8080:8080"
       - "9091:9091"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:9091/readyz"]
-      interval: 3s
+      test: ["CMD", "wget", "-qO-", "http://localhost:9091/readyz"]
+      interval: 2s
       timeout: 3s
       retries: 60

@@ -15,6 +15,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/validation"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/google/uuid"
 )
 
@@ -72,6 +73,11 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		return nil, err
 	}
 
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	now := time.Now()
 	entry := &domain.ConfigEntry{
 		ID:        "cfg" + "-" + uuid.NewString(),
@@ -87,7 +93,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.Config
 		if err := s.repo.Create(txCtx, entry); err != nil {
 			return fmt.Errorf("config-write: create: %w", err)
 		}
-		return s.publishUpserted(txCtx, entry)
+		return s.publishUpserted(txCtx, entry, actor)
 	}); err != nil {
 		return nil, err
 	}
@@ -113,6 +119,11 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 		return nil, err
 	}
 
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	var updated *domain.ConfigEntry
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		var err error
@@ -120,7 +131,7 @@ func (s *Service) Update(ctx context.Context, input UpdateInput) (*domain.Config
 		if err != nil {
 			return fmt.Errorf("config-write: update: %w", err)
 		}
-		return s.publishUpserted(txCtx, updated)
+		return s.publishUpserted(txCtx, updated, actor)
 	}); err != nil {
 		return nil, err
 	}
@@ -137,12 +148,17 @@ func (s *Service) Delete(ctx context.Context, key string) error {
 		return err
 	}
 
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return err
+	}
+
 	if err := s.runInTx(ctx, func(txCtx context.Context) error {
 		deleted, err := s.repo.Delete(txCtx, key)
 		if err != nil {
 			return fmt.Errorf("config-write: delete: %w", err)
 		}
-		return s.publishDeleted(txCtx, deleted)
+		return s.publishDeleted(txCtx, deleted, actor)
 	}); err != nil {
 		return err
 	}
@@ -155,21 +171,33 @@ func (s *Service) runInTx(ctx context.Context, fn func(ctx context.Context) erro
 	return s.txRunner.RunInTx(ctx, fn)
 }
 
-func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry) error {
+// actorFromContext extracts the admin actor from the request context.
+// Config write paths are admin-only; an empty Subject is a wiring error.
+func actorFromContext(ctx context.Context) (string, error) {
+	p, ok := auth.FromContext(ctx)
+	if !ok || p.Subject == "" {
+		return "", errcode.New(errcode.ErrAuthUnauthorized, "config-write: actor required — admin auth must be present")
+	}
+	return p.Subject, nil
+}
+
+func (s *Service) publishUpserted(ctx context.Context, entry *domain.ConfigEntry, actor string) error {
 	// Metadata-only: event carries key+version only.
 	// Subscribers MUST refetch via GET /api/v1/config/{key} to obtain the value.
 	// ref: NATS subject+bytes / Watermill payload-bytes boundary.
 	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryUpserted, configevents.EntryUpserted{
 		Key:     entry.Key,
 		Version: entry.Version,
+		ActorID: actor,
 	})
 }
 
-func (s *Service) publishDeleted(ctx context.Context, entry *domain.ConfigEntry) error {
+func (s *Service) publishDeleted(ctx context.Context, entry *domain.ConfigEntry, actor string) error {
 	// Metadata-only: event carries key+version of the deleted entry.
 	// Subscribers use version for monotonic tombstone protection against stale upsert replays.
 	return outbox.Emit(ctx, s.emitter, domain.TopicConfigEntryDeleted, configevents.EntryDeleted{
 		Key:     entry.Key,
 		Version: entry.Version,
+		ActorID: actor,
 	})
 }

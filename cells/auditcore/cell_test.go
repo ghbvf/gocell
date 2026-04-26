@@ -301,8 +301,11 @@ func TestAuditCore_RegisterSubscriptions(t *testing.T) {
 
 	r := &celltest.StubEventRouter{}
 	require.NoError(t, c.RegisterSubscriptions(r))
-	assert.Equal(t, 10, r.HandlerCount(),
-		"auditcore registers 10 topic handlers (4 lifecycle + 4 config [entry-upserted, entry-deleted, version-published, rollback] + 2 role events)")
+	assert.Equal(t, 13, r.HandlerCount(),
+		"auditcore registers 13 topic handlers (5 user lifecycle + 2 session + 4 config + 2 role events)")
+	assert.Contains(t, r.Topics, "event.user.updated.v1")
+	assert.Contains(t, r.Topics, "event.user.deleted.v1")
+	assert.Contains(t, r.Topics, "event.user.unlocked.v1")
 	assert.Contains(t, r.Topics, "event.config.entry-upserted.v1")
 	assert.Contains(t, r.Topics, "event.config.entry-deleted.v1")
 	assert.Contains(t, r.Topics, "event.config.version-published.v1")

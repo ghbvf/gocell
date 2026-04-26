@@ -1,0 +1,11 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "event.user.unlocked.v1.payload",
+  "type": "object",
+  "properties": {
+    "userId": { "type": "string" },
+    "actorId": { "type": "string" }
+  },
+  "required": ["userId", "actorId"],
+  "additionalProperties": false
+}

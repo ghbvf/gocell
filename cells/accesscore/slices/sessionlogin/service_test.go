@@ -479,3 +479,24 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	require.NoError(t, err, "publish failure in demo mode should not fail login")
 	assert.NotEmpty(t, pair.AccessToken)
 }
+
+// TestService_IssueForUser_EmitsSessionCreated locks in the always-emit contract:
+// IssueForUser must emit exactly one event.session.created.v1 regardless of
+// whether it is called from the Login or ChangePassword path.
+func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	seedUser(userRepo, "emit-user", "pass123")
+	u, err := userRepo.GetByUsername(context.Background(), "emit-user")
+	require.NoError(t, err)
+
+	emitter := &countingEmitter{}
+	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
+
+	pair, err := svc.IssueForUser(context.Background(), u.ID)
+	require.NoError(t, err)
+	assert.NotEmpty(t, pair.AccessToken)
+	assert.Equal(t, 1, emitter.count,
+		"IssueForUser must emit exactly one event.session.created.v1 (always-emit contract)")
+}

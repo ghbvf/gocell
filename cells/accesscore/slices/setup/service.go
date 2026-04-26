@@ -273,9 +273,13 @@ func setupRetiredError() error {
 }
 
 func (s *Service) publishUserCreated(ctx context.Context, user *domain.User) error {
+	// First-run admin bootstrap has no caller principal yet — by definition
+	// this is the very first admin. Audit chain attributes the action to the
+	// sentinel actor "system".
 	payload, err := json.Marshal(dto.UserCreatedEvent{
 		UserID:   user.ID,
 		Username: user.Username,
+		ActorID:  "system",
 	})
 	if err != nil {
 		return fmt.Errorf("setup: marshal user.created payload: %w", err)

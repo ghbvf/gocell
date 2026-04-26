@@ -3,6 +3,7 @@ package identitymanage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
@@ -18,10 +19,17 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/testutil/sloghelper"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// adminCtxForService returns a context with an admin principal for service-layer tests.
+// All write paths (Lock, Unlock, Update, Delete) require a non-empty subject.
+func adminCtxForService() context.Context {
+	return auth.TestContext("test-admin", []string{"admin"})
+}
 
 // minimalStubIssuer is a zero-config TokenIssuer stub used by tests that only
 // exercise non-ChangePassword paths (Create, Update, Lock, etc.) and do not
@@ -74,7 +82,7 @@ func TestService_Create(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newTestService()
-			user, err := svc.Create(context.Background(), tt.input)
+			user, err := svc.Create(adminCtxForService(), tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -88,18 +96,18 @@ func TestService_Create(t *testing.T) {
 
 func TestService_LockUnlock(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
 	})
 	require.NoError(t, err)
 
 	// Lock
-	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 	locked, _ := svc.GetByID(context.Background(), user.ID)
 	assert.True(t, locked.IsLocked())
 
 	// Unlock
-	require.NoError(t, svc.Unlock(context.Background(), user.ID))
+	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
 	unlocked, _ := svc.GetByID(context.Background(), user.ID)
 	assert.False(t, unlocked.IsLocked())
 }
@@ -110,7 +118,7 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 		WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "carol", Email: "c@d.e", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -126,7 +134,7 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 	require.NoError(t, sessionRepo.Create(context.Background(), session))
 
 	// Lock the user — sessions should be revoked.
-	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 
 	// Verify session was revoked.
 	got, err := sessionRepo.GetByID(context.Background(), "sess-carol")
@@ -136,23 +144,23 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 
 func TestService_Delete(t *testing.T) {
 	svc := newTestService()
-	user, _ := svc.Create(context.Background(), CreateInput{
+	user, _ := svc.Create(adminCtxForService(), CreateInput{
 		Username: "del", Email: "d@e.f", Password: "hash",
 	})
 
-	require.NoError(t, svc.Delete(context.Background(), user.ID))
+	require.NoError(t, svc.Delete(adminCtxForService(), user.ID))
 	_, err := svc.GetByID(context.Background(), user.ID)
 	assert.Error(t, err)
 }
 
 func TestService_Update(t *testing.T) {
 	svc := newTestService()
-	user, _ := svc.Create(context.Background(), CreateInput{
+	user, _ := svc.Create(adminCtxForService(), CreateInput{
 		Username: "upd", Email: "old@e.f", Password: "hash",
 	})
 
 	newEmail := "new@e.f"
-	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Email: &newEmail})
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 	assert.Equal(t, "new@e.f", updated.Email)
 }
@@ -184,27 +192,27 @@ func seedUserWithHash(t *testing.T, repo *mem.UserRepository, username, password
 
 func TestService_Update_PatchSemantics(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "patch", Email: "p@e.f", Password: "hash",
 	})
 	require.NoError(t, err)
 
 	// Update only name, email should stay unchanged.
 	newName := "patchedName"
-	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Name: &newName})
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Name: &newName})
 	require.NoError(t, err)
 	assert.Equal(t, "patchedName", updated.Username)
 	assert.Equal(t, "p@e.f", updated.Email)
 
 	// Update status to suspended.
 	suspended := "suspended"
-	updated, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &suspended})
+	updated, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &suspended})
 	require.NoError(t, err)
 	assert.Equal(t, "suspended", string(updated.Status))
 
 	// Invalid status should fail.
 	badStatus := "deleted"
-	_, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &badStatus})
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &badStatus})
 	assert.Error(t, err)
 }
 
@@ -474,7 +482,7 @@ func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) 
 
 func TestService_Create_RequirePasswordResetTrue_UserMarked(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username:             "req-reset",
 		Email:                "r@r.com",
 		Password:             "pass",
@@ -486,7 +494,7 @@ func TestService_Create_RequirePasswordResetTrue_UserMarked(t *testing.T) {
 
 func TestService_Create_DefaultFalse(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "no-reset",
 		Email:    "n@n.com",
 		Password: "pass",
@@ -504,7 +512,7 @@ func TestService_Update_SetRequirePasswordResetTrue(t *testing.T) {
 	seedUserWithHash(t, repo, "upd-flag-true", "pass", false)
 
 	flagTrue := true
-	updated, err := svc.Update(context.Background(), UpdateInput{
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
 		ID:                   "usr-upd-flag-true",
 		RequirePasswordReset: &flagTrue,
 	})
@@ -517,7 +525,7 @@ func TestService_Update_ClearRequirePasswordReset(t *testing.T) {
 	seedUserWithHash(t, repo, "upd-flag-clear", "pass", true) // starts with flag=true
 
 	flagFalse := false
-	updated, err := svc.Update(context.Background(), UpdateInput{
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
 		ID:                   "usr-upd-flag-clear",
 		RequirePasswordReset: &flagFalse,
 	})
@@ -531,7 +539,7 @@ func TestService_Update_OmittedFieldNoChange(t *testing.T) {
 
 	// Update only email, leave RequirePasswordReset nil → no change.
 	newEmail := "new@omit.com"
-	updated, err := svc.Update(context.Background(), UpdateInput{
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{
 		ID:    "usr-upd-flag-omit",
 		Email: &newEmail,
 	})
@@ -561,7 +569,7 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 		WithEmitter(emitter), WithTokenIssuer(&stubTokenIssuer{}))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "pub-err-user", Email: "pub@err.com", Password: "hash",
 	})
 	require.NoError(t, err, "publish failure in demo mode must not fail Create")
@@ -648,7 +656,7 @@ func newAtomicitySvc(t *testing.T) (*Service, *observingUserRepo, *recordingTxRu
 // write (audit S-3).
 func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "lock-atomic", Email: "l@a.t", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -656,7 +664,7 @@ func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	// (Create itself runs inside RunInTx and would otherwise be conflated).
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
-	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 	assert.Equal(t, 1, runner.runs, "Lock must run inside exactly one tx")
 	assert.True(t, repo.getInTx, "Lock.GetByID must be observed inside RunInTx (no TOCTOU window)")
 	assert.True(t, repo.updInTx, "Lock.Update must run inside the same tx")
@@ -668,14 +676,14 @@ func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 // Update had no tx wrapping; post-fix both repo calls observe inTx=true.
 func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "update-atomic", Email: "u@p.t", Password: "hash",
 	})
 	require.NoError(t, err)
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
 	newEmail := "new@p.t"
-	updated, err := svc.Update(context.Background(), UpdateInput{ID: user.ID, Email: &newEmail})
+	updated, err := svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
 	require.NoError(t, err)
 	assert.Equal(t, "new@p.t", updated.Email)
 	assert.Equal(t, 1, runner.runs, "Update must run inside exactly one tx")
@@ -688,14 +696,14 @@ func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
 // invalid input is not a database concern.
 func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "upd-bad-status", Email: "b@s.t", Password: "hash",
 	})
 	require.NoError(t, err)
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
 	bad := "deleted"
-	_, err = svc.Update(context.Background(), UpdateInput{ID: user.ID, Status: &bad})
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Status: &bad})
 	require.Error(t, err)
 	var ec *errcode.Error
 	require.ErrorAs(t, err, &ec)
@@ -708,14 +716,14 @@ func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
 // wrapping at all; post-fix both repo calls observe inTx=true (audit S-3).
 func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "unlock-atomic", Email: "u@a.t", Password: "hash",
 	})
 	require.NoError(t, err)
-	require.NoError(t, svc.Lock(context.Background(), user.ID))
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 	repo.getInTx, repo.updInTx, runner.runs = false, false, 0
 
-	require.NoError(t, svc.Unlock(context.Background(), user.ID))
+	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
 	assert.Equal(t, 1, runner.runs, "Unlock must run inside exactly one tx")
 	assert.True(t, repo.getInTx, "Unlock.GetByID must be observed inside RunInTx (no TOCTOU window)")
 	assert.True(t, repo.updInTx, "Unlock.Update must run inside the same tx")
@@ -740,7 +748,7 @@ func TestService_Unlock_UpdateErrorPropagatesAndAbortsBeforeLog(t *testing.T) {
 		WithTxManager(runner))
 	require.NoError(t, err)
 
-	err = svc.Unlock(context.Background(), "usr-rb")
+	err = svc.Unlock(adminCtxForService(), "usr-rb")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "identity-manage: unlock:",
 		"error must wrap with the unlock call-site prefix")
@@ -761,7 +769,7 @@ func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 		WithTxManager(runner))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "", Email: "ok@e.t", Password: "pw",
 	})
 	require.Error(t, err)
@@ -785,7 +793,7 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 		WithTxManager(runner))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "ok", Email: "", Password: "pw",
 	})
 	require.Error(t, err)
@@ -812,7 +820,7 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 		WithTxManager(runner))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "ok", Email: "ok@e.t", Password: "",
 	})
 	require.Error(t, err)
@@ -833,7 +841,7 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 // (debuggability).
 func TestService_Create_RequireNotBlankShortCircuitsOnFirstField(t *testing.T) {
 	svc := newTestService()
-	_, err := svc.Create(context.Background(), CreateInput{
+	_, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "", Email: "", Password: "",
 	})
 	require.Error(t, err)
@@ -902,7 +910,7 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	err = svc.Lock(context.Background(), "usr-rf-fail")
+	err = svc.Lock(adminCtxForService(), "usr-rf-fail")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "lock revoke refresh chains",
 		"error must wrap the refresh-revoke call-site prefix")
@@ -912,6 +920,138 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 		"publish must not run after refresh-revoke failure: tx must abort first or a TopicUserLocked event would commit while the refresh chain stays live")
 	assert.Nil(t, sloghelper.FindLogEntry(buf.String(), "user locked"),
 		"success log line must not fire when the tx aborts")
+}
+
+// ---------------------------------------------------------------------------
+// F4: capturingEmitter — typed payload assertions for Lock/Unlock/Update/Delete
+// ---------------------------------------------------------------------------
+
+// capturingEmitter records every emitted Entry for typed-payload assertions.
+type capturingEmitter struct {
+	entries []outbox.Entry
+}
+
+func (c *capturingEmitter) Emit(_ context.Context, entry outbox.Entry) error {
+	c.entries = append(c.entries, entry)
+	return nil
+}
+
+// TestService_Lock_EmitsTypedPayload asserts that Lock emits exactly one
+// event.user.locked.v1 with a non-empty userId and actorId.
+func TestService_Lock_EmitsTypedPayload(t *testing.T) {
+	svc := newTestService()
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "lock-payload", Email: "lp@e.t", Password: "hash"})
+	require.NoError(t, err)
+
+	cap := &capturingEmitter{}
+	svc2, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+	// Create user in svc2's own repo.
+	user2, err := svc2.Create(adminCtxForService(), CreateInput{Username: user.Username + "2", Email: "lp2@e.t", Password: "hash"})
+	require.NoError(t, err)
+
+	// Reset capture after Create (which also emits).
+	cap.entries = nil
+
+	require.NoError(t, svc2.Lock(adminCtxForService(), user2.ID))
+	require.Len(t, cap.entries, 1, "Lock must emit exactly one event")
+
+	var payload dto.UserLockedEvent
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload.UserID, "emitted UserLockedEvent.userId must be non-empty")
+	assert.NotEmpty(t, payload.ActorID, "emitted UserLockedEvent.actorId must be non-empty")
+	assert.Equal(t, user2.ID, payload.UserID)
+	assert.Equal(t, "test-admin", payload.ActorID)
+}
+
+// TestService_Update_EmitsTypedPayload asserts Update emits one UserUpdatedEvent
+// with non-empty userId and actorId.
+func TestService_Update_EmitsTypedPayload(t *testing.T) {
+	cap := &capturingEmitter{}
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "upd-payload", Email: "up@e.t", Password: "hash"})
+	require.NoError(t, err)
+	cap.entries = nil
+
+	newEmail := "upd-new@e.t"
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
+	require.NoError(t, err)
+	require.Len(t, cap.entries, 1, "Update must emit exactly one event")
+
+	var payload dto.UserUpdatedEvent
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload.UserID, "emitted UserUpdatedEvent.userId must be non-empty")
+	assert.NotEmpty(t, payload.ActorID, "emitted UserUpdatedEvent.actorId must be non-empty")
+	assert.Equal(t, user.ID, payload.UserID)
+	assert.Equal(t, "test-admin", payload.ActorID)
+}
+
+// TestService_Delete_EmitsTypedPayload asserts Delete emits one UserDeletedEvent
+// with non-empty userId and actorId.
+func TestService_Delete_EmitsTypedPayload(t *testing.T) {
+	cap := &capturingEmitter{}
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "del-payload", Email: "dp@e.t", Password: "hash"})
+	require.NoError(t, err)
+	cap.entries = nil
+
+	require.NoError(t, svc.Delete(adminCtxForService(), user.ID))
+	require.Len(t, cap.entries, 1, "Delete must emit exactly one event")
+
+	var payload dto.UserDeletedEvent
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload.UserID, "emitted UserDeletedEvent.userId must be non-empty")
+	assert.NotEmpty(t, payload.ActorID, "emitted UserDeletedEvent.actorId must be non-empty")
+	assert.Equal(t, user.ID, payload.UserID)
+	assert.Equal(t, "test-admin", payload.ActorID)
+}
+
+// TestService_Unlock_EmitsTypedPayload asserts Unlock emits one UserUnlockedEvent
+// with non-empty userId and actorId.
+func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
+	cap := &capturingEmitter{}
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "unl-payload", Email: "ulp@e.t", Password: "hash"})
+	require.NoError(t, err)
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
+	cap.entries = nil
+
+	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
+	require.Len(t, cap.entries, 1, "Unlock must emit exactly one event")
+
+	var payload dto.UserUnlockedEvent
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload.UserID, "emitted UserUnlockedEvent.userId must be non-empty")
+	assert.NotEmpty(t, payload.ActorID, "emitted UserUnlockedEvent.actorId must be non-empty")
+	assert.Equal(t, user.ID, payload.UserID)
+	assert.Equal(t, "test-admin", payload.ActorID)
+}
+
+// TestService_Lock_NoActor_ReturnsUnauthorized asserts that Lock with a
+// context that carries no auth principal returns ErrAuthUnauthorized.
+// This guards the actorFromContext fail-fast invariant.
+func TestService_Lock_NoActor_ReturnsUnauthorized(t *testing.T) {
+	svc := newTestService()
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "lock-noauth", Email: "na@e.t", Password: "hash"})
+	require.NoError(t, err)
+
+	// context.Background() has no auth principal.
+	err = svc.Lock(context.Background(), user.ID)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ec.Code,
+		"Lock without auth context must return ErrAuthUnauthorized")
 }
 
 // TestService_Lock_PublishFailureAbortsBeforeLog asserts the success log
@@ -933,7 +1073,7 @@ func TestService_Lock_PublishFailureAbortsBeforeLog(t *testing.T) {
 		WithEmitter(emitter), WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	err = svc.Lock(context.Background(), "usr-pub-fail")
+	err = svc.Lock(adminCtxForService(), "usr-pub-fail")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "broker unavailable", "underlying publish error must be unwrapable")
 	assert.Equal(t, 1, emitter.calls, "publish was attempted exactly once for TopicUserLocked")
