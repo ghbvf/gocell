@@ -18,13 +18,6 @@ import (
 const (
 	ruleCtxCancelLocalImplBan = "CTXCANCEL-LOCAL-IMPL-BAN-01"
 	ruleRepoLogKeyIDRedact    = "REPO-LOG-KEY-ID-REDACT-01"
-
-	// bannedWrapMethodPrefix targets receiver methods that forward to
-	// ctxcancel.Wrap behind an extra layer of indirection. The canonical
-	// pattern across cells/*/internal/adapters is to call ctxcancel.Wrap
-	// directly at the IO boundary; any "wrapCtx*" receiver method is dead
-	// weight by definition.
-	bannedWrapMethodPrefix = "wrapCtx"
 )
 
 // bannedTypeNameRegex matches names that look like a re-implementation of the
@@ -35,10 +28,14 @@ const (
 // with the canonical helper (pkg/ctxcancel.Wrap).
 var bannedTypeNameRegex = regexp.MustCompile(`^(?:[Ll]ocal)?[Cc](?:tx|ontext)[Cc]ancel(?:ed|lation)?Error$`)
 
-// bannedLogAttrLiterals enumerates the cryptographic-identifier names
-// that must never appear as a string literal in a log call's attribute
-// list anywhere under cells/. Key IDs belong on Prometheus metric labels
-// (low-cardinality, controlled fan-out), not on the log plane.
+// bannedLogAttrLiterals enumerates the cryptographic-identifier names that
+// must never appear as the *key* slot of a slog attribute anywhere under
+// cells/. Key IDs belong on Prometheus metric labels (low-cardinality,
+// controlled fan-out), not on the log plane.
+//
+// The rule scans only key slots — string literals appearing as attribute
+// *values* (e.g. `slog.String("description", "stored_key_id")` where the user
+// happens to log a banned word as a value) are intentionally not flagged.
 var bannedLogAttrLiterals = map[string]struct{}{
 	"key_id":         {},
 	"keyID":          {},
@@ -47,21 +44,33 @@ var bannedLogAttrLiterals = map[string]struct{}{
 	"current_key_id": {},
 }
 
-// slogLevelMethods is the closed set of slog level method names recognised by
-// this rule. Using exact-match rather than prefix matching avoids false
-// positives on names that happen to start with a level keyword but are not
-// log emitters (e.g. ErrorList, WarnCounter, InfoBox).
+// slogMethodKeyStart maps every recognised slog level method name to the
+// argument index at which keyed attribute pairs begin. Exact-match (not
+// prefix) avoids false positives on names like `ErrorList` / `WarnCounter` /
+// `InfoBox` that start with a level keyword but are not log emitters.
 //
-// The set covers the standard slog API surface:
-//   - plain:    Warn / Error / Info / Debug
-//   - formatted: Warnf / Errorf / Infof / Debugf  (popular wrapper conventions)
-//   - line:     Warnln / Errorln / Infoln / Debugln (popular wrapper conventions)
-//   - context:  WarnContext / ErrorContext / InfoContext / DebugContext
-var slogLevelMethods = map[string]struct{}{
-	"Warn": {}, "Warnf": {}, "Warnln": {}, "WarnContext": {},
-	"Error": {}, "Errorf": {}, "Errorln": {}, "ErrorContext": {},
-	"Info": {}, "Infof": {}, "Infoln": {}, "InfoContext": {},
-	"Debug": {}, "Debugf": {}, "Debugln": {}, "DebugContext": {},
+//   - plain (Warn / Error / Info / Debug + f/ln variants): keys start at Args[1]
+//     because Args[0] is the message string.
+//   - context-aware (WarnContext / ErrorContext / InfoContext / DebugContext):
+//     keys start at Args[2] because Args[0]=ctx, Args[1]=msg.
+//   - dynamic level (Log, LogAttrs): keys start at Args[3] because
+//     Args[0]=ctx, Args[1]=level, Args[2]=msg. Log accepts untyped key/value
+//     pairs; LogAttrs takes typed Attr values — both flow through the same
+//     key-slot scan logic below.
+var slogMethodKeyStart = map[string]int{
+	"Warn": 1, "Warnf": 1, "Warnln": 1, "WarnContext": 2,
+	"Error": 1, "Errorf": 1, "Errorln": 1, "ErrorContext": 2,
+	"Info": 1, "Infof": 1, "Infoln": 1, "InfoContext": 2,
+	"Debug": 1, "Debugf": 1, "Debugln": 1, "DebugContext": 2,
+	"Log": 3, "LogAttrs": 3,
+}
+
+// slogAttrCtors enumerates the slog package-level constructors that produce
+// a typed Attr (or Group). Each takes the key as Args[0]; the rest carry the
+// value(s). The set is closed against std slog as of Go 1.22.
+var slogAttrCtors = map[string]struct{}{
+	"String": {}, "Any": {}, "Bool": {}, "Int": {}, "Int64": {}, "Uint64": {},
+	"Float64": {}, "Time": {}, "Duration": {}, "Group": {}, "Attr": {},
 }
 
 type repoErrViolation struct {
@@ -131,6 +140,7 @@ func scanCtxCancelLocalImpl(path string) ([]repoErrViolation, error) {
 }
 
 func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string) []repoErrViolation {
+	ctxAliases := contextImportAliases(file)
 	var out []repoErrViolation
 
 	for _, decl := range file.Decls {
@@ -154,12 +164,12 @@ func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string)
 				}
 			}
 		case *ast.FuncDecl:
-			if d.Recv != nil && strings.HasPrefix(d.Name.Name, bannedWrapMethodPrefix) {
+			if isThinCtxCancelWrapper(d) {
 				out = append(out, repoErrViolation{
 					Rule:    ruleCtxCancelLocalImplBan,
 					File:    path,
 					Line:    fset.Position(d.Pos()).Line,
-					Message: fmt.Sprintf("local wrap method %q (call pkg/ctxcancel.Wrap directly)", d.Name.Name),
+					Message: fmt.Sprintf("thin ctxcancel.Wrap forwarder %q (inline ctxcancel.Wrap at the callsite)", d.Name.Name),
 				})
 			}
 			if d.Body != nil {
@@ -171,7 +181,7 @@ func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string)
 					if !isErrorsIsCall(call) || len(call.Args) < 2 {
 						return true
 					}
-					if !isContextCancelSelector(call.Args[1]) {
+					if !isContextCancelSelector(call.Args[1], ctxAliases) {
 						return true
 					}
 					out = append(out, repoErrViolation{
@@ -183,6 +193,71 @@ func scanCtxCancelLocalImplAST(fset *token.FileSet, file *ast.File, path string)
 					return true
 				})
 			}
+		}
+	}
+	return out
+}
+
+// isThinCtxCancelWrapper reports whether fn is a receiver method whose entire
+// body is a single `return ctxcancel.Wrap(...)` statement. Such forwarders are
+// dead weight — callsites should call ctxcancel.Wrap directly. Helpers that
+// combine ctx-cancel detection with additional non-trivial logic (e.g. mapping
+// to a domain-specific errcode envelope) have body length > 1 and pass.
+//
+// Targets *receiver methods* only: free functions cannot become indirect
+// forwarders for the same per-repo callsite (they are inherently package-wide
+// API surface), so the rule does not extend there.
+func isThinCtxCancelWrapper(fn *ast.FuncDecl) bool {
+	if fn.Recv == nil || fn.Body == nil {
+		return false
+	}
+	if len(fn.Body.List) != 1 {
+		return false
+	}
+	ret, ok := fn.Body.List[0].(*ast.ReturnStmt)
+	if !ok || len(ret.Results) != 1 {
+		return false
+	}
+	call, ok := ret.Results[0].(*ast.CallExpr)
+	if !ok {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok {
+		return false
+	}
+	return pkg.Name == "ctxcancel" && sel.Sel.Name == "Wrap"
+}
+
+// contextImportAliases returns the identifier names through which the
+// "context" stdlib package is referenced in file. Default = {"context"};
+// an explicit alias `import c "context"` adds {"c"}; a dot-import
+// `import . "context"` returns {} (selector-based detection cannot match
+// dot-imported symbols, so the rule fails open on that — dot-imports of
+// stdlib are rare and warned by other linters).
+func contextImportAliases(file *ast.File) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, imp := range file.Imports {
+		if imp.Path == nil {
+			continue
+		}
+		path, err := strconv.Unquote(imp.Path.Value)
+		if err != nil || path != "context" {
+			continue
+		}
+		switch {
+		case imp.Name == nil:
+			out["context"] = struct{}{}
+		case imp.Name.Name == ".":
+			// Dot-import: out of scope (see doc comment).
+		case imp.Name.Name == "_":
+			// Blank import: package not referenced under any name.
+		default:
+			out[imp.Name.Name] = struct{}{}
 		}
 	}
 	return out
@@ -200,7 +275,7 @@ func isErrorsIsCall(call *ast.CallExpr) bool {
 	return pkg.Name == "errors" && sel.Sel.Name == "Is"
 }
 
-func isContextCancelSelector(expr ast.Expr) bool {
+func isContextCancelSelector(expr ast.Expr, ctxAliases map[string]struct{}) bool {
 	sel, ok := expr.(*ast.SelectorExpr)
 	if !ok {
 		return false
@@ -209,7 +284,7 @@ func isContextCancelSelector(expr ast.Expr) bool {
 	if !ok {
 		return false
 	}
-	if pkg.Name != "context" {
+	if _, ok := ctxAliases[pkg.Name]; !ok {
 		return false
 	}
 	return sel.Sel.Name == "Canceled" || sel.Sel.Name == "DeadlineExceeded"
@@ -269,12 +344,52 @@ func (e *localCtxCanceledError) Error() string { return "" }
 `,
 			wantMatch: true,
 		},
-		"detects_wrap_method": {
+		// Rule 1.B is now semantic: a receiver method whose body is exactly
+		// `return ctxcancel.Wrap(...)` is a thin forwarder, regardless of name.
+		"detects_thin_wrapper_named_wrapCtxCancel": {
 			src: `package fixture
 type Repo struct{}
-func (r *Repo) wrapCtxCancel(err error) error { return err }
+func (r *Repo) wrapCtxCancel(err error, op, id string) error {
+	return ctxcancel.Wrap(err, op, id)
+}
 `,
 			wantMatch: true,
+		},
+		"detects_thin_wrapper_with_unrelated_name": {
+			src: `package fixture
+type Repo struct{}
+// Method name does NOT start with wrapCtx — the prefix is irrelevant under
+// semantic detection. The body alone (single return ctxcancel.Wrap) makes it
+// a thin forwarder.
+func (r *Repo) forward(err error, op string) error {
+	return ctxcancel.Wrap(err, op, "")
+}
+`,
+			wantMatch: true,
+		},
+		"passes_helper_with_fallback_construction": {
+			src: `package fixture
+type Repo struct{}
+type ErrEnvelope struct{ Cause error }
+func (e *ErrEnvelope) Error() string { return "" }
+// Bundles ctx-cancel detection with additional non-trivial logic — body
+// has multiple statements, NOT a thin forwarder.
+func (r *Repo) wrapNonScanQueryErr(err error, op string) error {
+	if cancelErr := ctxcancel.Wrap(err, op, ""); cancelErr != nil {
+		return cancelErr
+	}
+	return &ErrEnvelope{Cause: err}
+}
+`,
+			wantMatch: false,
+		},
+		"passes_method_returning_err_directly": {
+			src: `package fixture
+type Repo struct{}
+// Single return stmt but the call is not ctxcancel.Wrap.
+func (r *Repo) wrapCtxCancel(err error) error { return err }
+`,
+			wantMatch: false,
 		},
 		"detects_errors_is_context_canceled": {
 			src: `package fixture
@@ -296,6 +411,33 @@ import (
 )
 func Foo(err error) bool {
 	return errors.Is(err, context.DeadlineExceeded)
+}
+`,
+			wantMatch: true,
+		},
+		// Import-alias bypass: `import c "context"` then errors.Is(err, c.Canceled)
+		// must still trigger Rule 1.C — the rule resolves any alias the file has
+		// imported the context package under.
+		"detects_errors_is_context_alias_canceled": {
+			src: `package fixture
+import (
+	c "context"
+	"errors"
+)
+func Foo(err error) bool {
+	return errors.Is(err, c.Canceled)
+}
+`,
+			wantMatch: true,
+		},
+		"detects_errors_is_context_alias_deadline": {
+			src: `package fixture
+import (
+	ctx2 "context"
+	"errors"
+)
+func Foo(err error) bool {
+	return errors.Is(err, ctx2.DeadlineExceeded)
 }
 `,
 			wantMatch: true,
@@ -419,70 +561,156 @@ func scanRepoLogKeyIDRedact(path string) ([]repoErrViolation, error) {
 }
 
 func scanRepoLogKeyIDRedactAST(fset *token.FileSet, file *ast.File, path string) []repoErrViolation {
+	consts := buildStringConstResolver(file)
 	var out []repoErrViolation
 	ast.Inspect(file, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if !isLogLevelCall(call) {
+		keyStart, ok := logCallKeyStart(call)
+		if !ok {
 			return true
 		}
-		for i := 1; i < len(call.Args); i++ {
-			for _, lit := range collectStringLiterals(call.Args[i]) {
-				s, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					continue
-				}
-				if _, banned := bannedLogAttrLiterals[s]; banned {
-					out = append(out, repoErrViolation{
-						Rule:    ruleRepoLogKeyIDRedact,
-						File:    path,
-						Line:    fset.Position(lit.Pos()).Line,
-						Message: fmt.Sprintf("banned log attr literal %q (key IDs belong on metric labels)", s),
-					})
-				}
-			}
-		}
+		out = append(out, scanLogAttrKeys(fset, path, call, keyStart, consts)...)
 		return true
 	})
 	return out
 }
 
-// isLogLevelCall reports whether call is a method call whose Sel.Name is in
-// the closed slogLevelMethods set. Covers both `slog.Warn(...)` package-level
-// calls and `r.logger.WarnContext(...)` receiver calls without binding to the
-// slog package import path.
+// scanLogAttrKeys inspects the key slots of a slog level call, walking the
+// arg list from keyStart and treating each item as either:
 //
-// Exact-match (not prefix) is used to avoid false positives on method names
-// like ErrorList or WarnCounter that start with a level keyword but are not
-// log emitters.
-func isLogLevelCall(call *ast.CallExpr) bool {
+//   - a typed Attr constructor `slog.X(key, ...)` — only Args[0] (the key)
+//     is checked; the value position is left alone (a banned literal in the
+//     value slot is not a log-plane leak).
+//   - an untyped key/value pair from an `args ...any` log signature — the
+//     current item is the key, the next item is the value, advance by 2.
+//
+// Keys that resolve via a same-file string `const` declaration (one-hop
+// alias folding) are checked as if the literal had been written inline.
+func scanLogAttrKeys(fset *token.FileSet, path string, call *ast.CallExpr, keyStart int, consts stringConstResolver) []repoErrViolation {
+	var out []repoErrViolation
+	args := call.Args
+	for i := keyStart; i < len(args); {
+		arg := args[i]
+		if inner, ok := arg.(*ast.CallExpr); ok && isSlogAttrCtor(inner) {
+			if len(inner.Args) >= 1 {
+				if hit := checkBannedKey(fset, path, inner.Args[0], consts); hit != nil {
+					out = append(out, *hit)
+				}
+			}
+			i++
+			continue
+		}
+		// Untyped pair: this arg is the key, args[i+1] is the value.
+		if hit := checkBannedKey(fset, path, arg, consts); hit != nil {
+			out = append(out, *hit)
+		}
+		i += 2
+	}
+	return out
+}
+
+// logCallKeyStart returns the index at which keyed attributes begin for a
+// recognised slog level call, or 0 / false when call is not a log emitter.
+func logCallKeyStart(call *ast.CallExpr) (int, bool) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return 0, false
+	}
+	idx, ok := slogMethodKeyStart[sel.Sel.Name]
+	return idx, ok
+}
+
+// isSlogAttrCtor reports whether call is a typed slog attribute constructor
+// such as slog.String("k", v) / slog.Any("k", v) / slog.Group("k", attrs...).
+// Constrained to the slog package selector so unrelated identically-named
+// helpers in user code do not opt into the key-slot scan.
+func isSlogAttrCtor(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
-	_, ok = slogLevelMethods[sel.Sel.Name]
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "slog" {
+		return false
+	}
+	_, ok = slogAttrCtors[sel.Sel.Name]
 	return ok
 }
 
-// collectStringLiterals walks expr's AST sub-tree and returns every
-// *ast.BasicLit Kind=STRING. Walks recursively so that
-// `slog.String("key_id", x)` (a CallExpr with a literal arg) is reached
-// even though it is itself an argument of the outer log call.
-func collectStringLiterals(expr ast.Expr) []*ast.BasicLit {
-	var out []*ast.BasicLit
-	ast.Inspect(expr, func(n ast.Node) bool {
-		lit, ok := n.(*ast.BasicLit)
+// checkBannedKey resolves expr to a string (literal or one-hop string const)
+// and returns a violation when the result is in bannedLogAttrLiterals.
+func checkBannedKey(fset *token.FileSet, path string, expr ast.Expr, consts stringConstResolver) *repoErrViolation {
+	var (
+		key string
+		pos token.Pos
+	)
+	switch e := expr.(type) {
+	case *ast.BasicLit:
+		if e.Kind != token.STRING {
+			return nil
+		}
+		s, err := strconv.Unquote(e.Value)
+		if err != nil {
+			return nil
+		}
+		key, pos = s, e.Pos()
+	case *ast.Ident:
+		s, ok := consts[e.Name]
 		if !ok {
-			return true
+			return nil
 		}
-		if lit.Kind == token.STRING {
-			out = append(out, lit)
+		key, pos = s, e.Pos()
+	default:
+		return nil
+	}
+	if _, banned := bannedLogAttrLiterals[key]; !banned {
+		return nil
+	}
+	return &repoErrViolation{
+		Rule:    ruleRepoLogKeyIDRedact,
+		File:    path,
+		Line:    fset.Position(pos).Line,
+		Message: fmt.Sprintf("banned log attr key %q (key IDs belong on metric labels)", key),
+	}
+}
+
+// stringConstResolver maps a same-file const identifier to its string value
+// for one-hop alias folding. Cross-package and cross-file resolution is
+// intentionally out of scope: the goal is to close the trivial bypass
+// `const k = "stored_key_id"` without paying the cost of full SSA-grade
+// constant propagation.
+type stringConstResolver map[string]string
+
+func buildStringConstResolver(file *ast.File) stringConstResolver {
+	m := stringConstResolver{}
+	for _, decl := range file.Decls {
+		gd, ok := decl.(*ast.GenDecl)
+		if !ok || gd.Tok != token.CONST {
+			continue
 		}
-		return true
-	})
-	return out
+		for _, spec := range gd.Specs {
+			vs, ok := spec.(*ast.ValueSpec)
+			if !ok {
+				continue
+			}
+			for i, name := range vs.Names {
+				if i >= len(vs.Values) {
+					continue
+				}
+				lit, ok := vs.Values[i].(*ast.BasicLit)
+				if !ok || lit.Kind != token.STRING {
+					continue
+				}
+				if s, err := strconv.Unquote(lit.Value); err == nil {
+					m[name.Name] = s
+				}
+			}
+		}
+	}
+	return m
 }
 
 // =====================================================================
@@ -568,9 +796,59 @@ func emit(logger *slog.Logger) {
 `,
 			wantMatch: false,
 		},
-		// Negative fixtures validating that exact-match (not prefix) is used for
-		// isLogLevelCall: methods starting with a level keyword but not in the
-		// closed slogLevelMethods set must NOT be flagged.
+		// Banned word in attribute *value* slot is allowed — only the key is
+		// scanned. A user logging an error description that happens to contain
+		// "stored_key_id" must not trip the rule.
+		"passes_banned_in_value_position": {
+			src: `package fixture
+import "log/slog"
+func emit(logger *slog.Logger) {
+	logger.Warn("msg", slog.String("description", "stored_key_id"))
+}
+`,
+			wantMatch: false,
+		},
+		// Const-alias bypass: declaring the banned key as a same-file string
+		// const must still be detected via one-hop folding.
+		"detects_const_alias_key": {
+			src: `package fixture
+import "log/slog"
+const auditKey = "stored_key_id"
+func emit(logger *slog.Logger, x string) {
+	logger.Warn("msg", slog.String(auditKey, x))
+}
+`,
+			wantMatch: true,
+		},
+		// slog.LogAttrs adds typed Attrs starting at Args[3] (ctx, level, msg).
+		"detects_logattrs_with_banned_key": {
+			src: `package fixture
+import (
+	"context"
+	"log/slog"
+)
+func emit(ctx context.Context, logger *slog.Logger, x string) {
+	logger.LogAttrs(ctx, slog.LevelWarn, "msg", slog.String("stored_key_id", x))
+}
+`,
+			wantMatch: true,
+		},
+		// slog.Log accepts untyped key/value pairs starting at Args[3].
+		"detects_log_method_untyped_pair": {
+			src: `package fixture
+import (
+	"context"
+	"log/slog"
+)
+func emit(ctx context.Context, logger *slog.Logger, x string) {
+	logger.Log(ctx, slog.LevelWarn, "msg", "stored_key_id", x)
+}
+`,
+			wantMatch: true,
+		},
+		// Negative fixtures validating that logCallKeyStart uses exact-match
+		// against slogMethodKeyStart: methods starting with a level keyword but
+		// not in the closed set must NOT be flagged.
 		"passes_errorlist_call_not_a_log_method": {
 			src: `package fixture
 type Errs interface{ ErrorList(label string) }
