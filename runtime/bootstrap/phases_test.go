@@ -196,6 +196,10 @@ func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
 	cfg := &tls.Config{
 		ClientAuth: tls.RequireAndVerifyClientCert,
 		ClientCAs:  pool,
+		// GetCertificate provides the server-side certificate at handshake time.
+		// Without at least one cert source, the TLS sanity check (Wave B) rejects
+		// the config because no TLS handshake can complete.
+		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil },
 	}
 	b := New(
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
@@ -1009,3 +1013,74 @@ func (s *stubHMACKeyring) Current() []byte {
 	return []byte("test-secret-32-bytes-padding----")
 }
 func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }
+
+// ---------------------------------------------------------------------------
+// T-06: phase5 FinalizeAuth called twice returns labeled error
+// ---------------------------------------------------------------------------
+
+// TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError verifies that
+// calling phase5FinalizeAllRouters a second time (after authFinalized=true) returns
+// an error that names the listener ref, making post-mortem diagnosis unambiguous.
+func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing.T) {
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
+	s := buildPhase5State(t)
+
+	routers := map[cell.ListenerRef]*router.Router{
+		cell.PrimaryListener: buildRouter(t, cell.PrimaryListener),
+	}
+
+	// First call must succeed.
+	require.NoError(t, b.phase5FinalizeAllRouters(routers))
+
+	// Second call must fail and include the listener ref in the error.
+	err := b.phase5FinalizeAllRouters(routers)
+	require.Error(t, err, "FinalizeAuth called twice must return an error")
+	assert.Contains(t, err.Error(), "finalize auth",
+		"error must contain 'finalize auth' label to identify the failing phase")
+	_ = s // s is built for test hygiene (health handler initialisation).
+}
+
+// ---------------------------------------------------------------------------
+// Path3 TLS phase0 三连
+// ---------------------------------------------------------------------------
+
+// TestPhase0_TLSConfigEmpty_Rejected verifies that a TLS config with no
+// certificate source is rejected at phase0 (Wave B sanity check).
+func TestPhase0_TLSConfigEmpty_Rejected(t *testing.T) {
+	b := New(
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil,
+			WithListenerTLS(&tls.Config{})), // no Certificates / GetCertificate / GetConfigForClient
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "TLS config has no Certificates / GetCertificate / GetConfigForClient")
+}
+
+// TestPhase0_TLSConfigWithCertificates_Accepted verifies that a TLS config
+// with at least one certificate is accepted at phase0.
+func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
+	// tls.Certificate zero value is deliberately used here — we only need the
+	// slice to be non-empty to pass the sanity check; actual TLS handshake is
+	// not exercised in this unit test.
+	b := New(
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil,
+			WithListenerTLS(&tls.Config{
+				Certificates: []tls.Certificate{{}},
+			})),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}
+
+// TestPhase0_TLSConfigWithGetCertificate_Accepted verifies that a TLS config
+// with a non-nil GetCertificate callback is accepted at phase0.
+func TestPhase0_TLSConfigWithGetCertificate_Accepted(t *testing.T) {
+	b := New(
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil,
+			WithListenerTLS(&tls.Config{
+				GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return nil, nil
+				},
+			})),
+	)
+	require.NoError(t, b.phase0ValidateOptions())
+}

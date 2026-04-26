@@ -285,11 +285,8 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 		return err
 	}
 	for ref, cfg := range b.listenerConfigs {
-		if cfg.net == nil && cfg.addr == "" {
-			return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
-		}
-		if cfg.shutGrace < 0 {
-			return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v; use a non-negative duration or zero to inherit the global shutdownTimeout", ref.String(), cfg.shutGrace)
+		if err := validateListenerConfig(ref, cfg); err != nil {
+			return err
 		}
 	}
 	// B2: when a metrics handler is configured, a dedicated HealthListener must
@@ -300,6 +297,22 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 				"bootstrap: WithHealthRoutes(WithMetricsHandler(...)) requires a dedicated HealthListener; " +
 					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener")
 		}
+	}
+	return nil
+}
+
+// validateListenerConfig validates a single listener config: address presence,
+// shutdownGrace sign, and TLS handshake-ability. Extracted from
+// validateHTTPListenerConfigs to keep cognitive complexity within budget.
+func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
+	if cfg.net == nil && cfg.addr == "" {
+		return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
+	}
+	if cfg.shutGrace < 0 {
+		return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v; use a non-negative duration or zero to inherit the global shutdownTimeout", ref.String(), cfg.shutGrace)
+	}
+	if cfg.tls != nil && len(cfg.tls.Certificates) == 0 && cfg.tls.GetCertificate == nil && cfg.tls.GetConfigForClient == nil {
+		return fmt.Errorf("bootstrap: listener %q TLS config has no Certificates / GetCertificate / GetConfigForClient; the server cannot perform a TLS handshake", ref.String())
 	}
 	return nil
 }

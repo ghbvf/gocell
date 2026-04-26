@@ -1,3 +1,5 @@
+//go:build integration
+
 // AUTH-INT-REACHABILITY-01 + PR-P0-AUTH-INTENT cell-level integration tests.
 //
 // These tests exercise the end-to-end composition of session-login (to mint a
@@ -379,13 +381,6 @@ type rbacStubTxRunner struct{}
 func (rbacStubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error) error {
 	return fn(context.Background())
 }
-
-// noopPublisher implements eventbus.Publisher for tests that do not care
-// about published events. Keeps AccessCore.Init happy in demo mode.
-type noopPublisher struct{}
-
-func (noopPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
-func (noopPublisher) Close(_ context.Context) error                       { return nil }
 
 // Compile-time proof these tests hit the real slices (not stubs).
 var (

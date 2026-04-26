@@ -1316,3 +1316,31 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 	assert.Equal(t, http.StatusUnauthorized, rec.Code,
 		"GET must require auth when only POST is declared public")
 }
+
+// TestRouter_ServeHTTP_NoFinalizeAuth_Panics asserts that calling ServeHTTP
+// on a router that has auth route metadata declared but FinalizeAuth has NOT
+// been called results in a panic with the expected message.
+//
+// This is the safety guard that prevents a mis-wired bootstrap from silently
+// skipping the auth compilation step (FinalizeAuth) and serving requests
+// without the compiled public/PasswordResetExempt matchers in place.
+func TestRouter_ServeHTTP_NoFinalizeAuth_Panics(t *testing.T) {
+	r := New()
+
+	// Declare auth metadata without calling FinalizeAuth — this is the
+	// mis-wired state the guard is designed to detect.
+	r.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "GET",
+		Path:   "/api/v1/probe",
+		Public: true,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/probe", nil)
+	rec := httptest.NewRecorder()
+
+	assert.PanicsWithValue(t,
+		"router: FinalizeAuth must be called before ServeHTTP when auth route metadata has been declared",
+		func() { r.ServeHTTP(rec, req) },
+		"ServeHTTP must panic when FinalizeAuth has not been called after DeclareAuthMeta",
+	)
+}

@@ -3,6 +3,7 @@ package rabbitmq
 import (
 	"context"
 	"errors"
+	"runtime"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -145,4 +146,60 @@ func TestSubscriptionRun_CtxTimeout(t *testing.T) {
 
 	// The inflight delivery is never completed — release it to avoid goroutine leak.
 	t.Cleanup(func() { run.markDeliveryDone() })
+}
+
+// TestSubscriptionRun_WaitAndClose_CtxTimeout_AbandonedGoroutineEventuallyExits
+// verifies that when waitAndClose returns DeadlineExceeded (ctx expired before
+// in-flight deliveries drained), the internal wg-waiter goroutine does NOT
+// leak permanently. After releasing the delivery via markDeliveryDone(), the
+// abandoned goroutine must exit within a generous window so that long-running
+// test suites do not accumulate goroutine leaks from successive reconnect cycles.
+//
+// Goroutine-exit is verified by: waiting for the count to rise (wg-waiter
+// spawned), then checking it falls back to the per-call baseline after
+// markDeliveryDone. The per-call baseline is taken just before waitAndClose so
+// that the already-live test-framework goroutines are included and we only
+// track the delta introduced by the wg-waiter.
+func TestSubscriptionRun_WaitAndClose_CtxTimeout_AbandonedGoroutineEventuallyExits(t *testing.T) {
+	ch := newMockChannel()
+	run := newSubscriptionRun(ch, "cg-abandon-exits")
+
+	// Register one in-flight delivery; the goroutine inside waitAndClose will
+	// block on localWg.Wait() until we call markDeliveryDone below.
+	run.registerDelivery()
+
+	// Capture baseline immediately before calling waitAndClose so the
+	// wg-waiter goroutine has not started yet.
+	baselineCount := runtime.NumGoroutine()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 80*time.Millisecond)
+	defer cancel()
+
+	err := run.waitAndClose(ctx)
+	require.ErrorIs(t, err, context.DeadlineExceeded,
+		"waitAndClose must return DeadlineExceeded when ctx expires with in-flight delivery")
+
+	// Channel must NOT have been closed: Phase 2 is skipped on ctx expiry.
+	assert.False(t, ch.closeCalled,
+		"ch.Close must not be called when waitAndClose returns early due to ctx expiry")
+
+	// Confirm the wg-waiter goroutine is alive: the count must rise above
+	// baseline while the delivery is still in-flight.
+	var countWhileBlocked int
+	require.Eventually(t, func() bool {
+		countWhileBlocked = runtime.NumGoroutine()
+		return countWhileBlocked > baselineCount
+	}, 200*time.Millisecond, 5*time.Millisecond,
+		"wg-waiter goroutine must be observable after ctx-expired waitAndClose (baseline was %d)",
+		baselineCount)
+
+	// Release the in-flight delivery — this unblocks the abandoned wg-waiter goroutine.
+	run.markDeliveryDone()
+
+	// The abandoned goroutine must exit: count must drop below its peak.
+	assert.Eventually(t, func() bool {
+		return runtime.NumGoroutine() < countWhileBlocked
+	}, 500*time.Millisecond, 10*time.Millisecond,
+		"goroutine count must decrease from peak (%d) after markDeliveryDone unblocks the abandoned wg-waiter",
+		countWhileBlocked)
 }

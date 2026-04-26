@@ -1019,3 +1019,12 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 		"%s %s must appear in Router.DeclaredAuthMetas(); got %v",
 		wantMethod, wantPath, r.DeclaredAuthMetas())
 }
+
+// noopPublisher implements eventbus.Publisher for tests that do not care
+// about published events. Keeps AccessCore.Init happy in demo mode.
+type noopPublisher struct{}
+
+func (noopPublisher) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (noopPublisher) Close(_ context.Context) error                       { return nil }
+
+var _ outbox.Publisher = noopPublisher{}

@@ -1,4 +1,4 @@
-package bootstrap_test
+package bootstrap
 
 // listener_test.go — table-driven coverage for WithListener and ListenerOption helpers.
 
@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
 // TestWithListener_AppendsToListenerConfigs verifies that calling WithListener
@@ -20,8 +19,8 @@ import (
 func TestWithListener_AppendsToListenerConfigs(t *testing.T) {
 	t.Parallel()
 
-	b := bootstrap.New(
-		bootstrap.WithListener(cell.PrimaryListener, ":8080", nil),
+	b := New(
+		WithListener(cell.PrimaryListener, ":8080", nil),
 	)
 	// Confirm the Bootstrap was built without panic — listenerConfigs populated.
 	// We cannot inspect b.listenerConfigs directly (unexported), but we can
@@ -36,10 +35,10 @@ func TestWithListener_AppendsToListenerConfigs(t *testing.T) {
 func TestWithListener_MultipleListeners(t *testing.T) {
 	t.Parallel()
 
-	b := bootstrap.New(
-		bootstrap.WithListener(cell.PrimaryListener, ":8080", nil),
-		bootstrap.WithListener(cell.InternalListener, ":9090", nil),
-		bootstrap.WithListener(cell.HealthListener, ":9091", nil),
+	b := New(
+		WithListener(cell.PrimaryListener, ":8080", nil),
+		WithListener(cell.InternalListener, ":9090", nil),
+		WithListener(cell.HealthListener, ":9091", nil),
 	)
 	if b == nil {
 		t.Fatal("Bootstrap.New returned nil")
@@ -52,27 +51,27 @@ func TestWithListenerOptions(t *testing.T) {
 
 	tests := []struct {
 		name string
-		opts []bootstrap.ListenerOption
+		opts []ListenerOption
 	}{
 		{
 			name: "WithListenerNet_nil_stores_nil",
-			opts: []bootstrap.ListenerOption{bootstrap.WithListenerNet(nil)},
+			opts: []ListenerOption{WithListenerNet(nil)},
 		},
 		{
 			name: "WithListenerTLS_nil_stores_nil",
-			opts: []bootstrap.ListenerOption{bootstrap.WithListenerTLS(nil)},
+			opts: []ListenerOption{WithListenerTLS(nil)},
 		},
 		{
 			name: "WithListenerShutdownGrace_positive",
-			opts: []bootstrap.ListenerOption{bootstrap.WithListenerShutdownGrace(5 * time.Second)},
+			opts: []ListenerOption{WithListenerShutdownGrace(5 * time.Second)},
 		},
 		{
 			name: "WithListenerShutdownGrace_negative_stored_as_is",
-			opts: []bootstrap.ListenerOption{bootstrap.WithListenerShutdownGrace(-1 * time.Second)},
+			opts: []ListenerOption{WithListenerShutdownGrace(-1 * time.Second)},
 		},
 		{
 			name: "WithListenerTLS_non_nil",
-			opts: []bootstrap.ListenerOption{bootstrap.WithListenerTLS(&tls.Config{MinVersion: tls.VersionTLS13})},
+			opts: []ListenerOption{WithListenerTLS(&tls.Config{MinVersion: tls.VersionTLS13})},
 		},
 	}
 
@@ -80,8 +79,8 @@ func TestWithListenerOptions(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			b := bootstrap.New(
-				bootstrap.WithListener(cell.PrimaryListener, ":8080", nil, tc.opts...),
+			b := New(
+				WithListener(cell.PrimaryListener, ":8080", nil, tc.opts...),
 			)
 			if b == nil {
 				t.Fatal("Bootstrap.New returned nil")
@@ -100,10 +99,10 @@ func TestWithListenerNet_RealListener(t *testing.T) {
 	}
 	defer ln.Close()
 
-	b := bootstrap.New(
-		bootstrap.WithListener(
+	b := New(
+		WithListener(
 			cell.PrimaryListener, ln.Addr().String(), nil,
-			bootstrap.WithListenerNet(ln),
+			WithListenerNet(ln),
 		),
 	)
 	if b == nil {
@@ -115,10 +114,10 @@ func TestWithListenerNet_RealListener(t *testing.T) {
 func TestWithListenerShutdownGrace_ZeroValue(t *testing.T) {
 	t.Parallel()
 
-	b := bootstrap.New(
-		bootstrap.WithListener(
+	b := New(
+		WithListener(
 			cell.HealthListener, ":9091", nil,
-			bootstrap.WithListenerShutdownGrace(0),
+			WithListenerShutdownGrace(0),
 		),
 	)
 	if b == nil {
@@ -132,10 +131,10 @@ func TestWithListenerShutdownGrace_ZeroValue(t *testing.T) {
 func TestWithListenerShutdownGrace_NegativeRejectsAtPhase0(t *testing.T) {
 	t.Parallel()
 
-	b := bootstrap.New(
-		bootstrap.WithListener(
+	b := New(
+		WithListener(
 			cell.PrimaryListener, ":9090", nil,
-			bootstrap.WithListenerShutdownGrace(-1*time.Second),
+			WithListenerShutdownGrace(-1*time.Second),
 		),
 	)
 	if b == nil {

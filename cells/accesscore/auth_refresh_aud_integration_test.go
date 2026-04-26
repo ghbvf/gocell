@@ -1,3 +1,5 @@
+//go:build integration
+
 // PR-A30 S22 REFRESH-AUD-REAL-ROUTE-TEST-01.
 //
 // Refresh tokens are opaque (PR-A29) — audience is on the *response* access JWT,
