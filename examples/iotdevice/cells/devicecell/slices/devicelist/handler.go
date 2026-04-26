@@ -45,12 +45,15 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes registers device-list routes.
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	auth.Mount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specDeviceListSlice,
 		Handler:  http.HandlerFunc(h.HandleList),
 		Policy:   auth.AnyRole("admin"),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // HandleList handles GET /api/v1/devices/.

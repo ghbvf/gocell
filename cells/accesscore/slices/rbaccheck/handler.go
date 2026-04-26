@@ -64,17 +64,22 @@ func NewHandler(svc *Service) *Handler {
 // RegisterRoutes registers rbac-check routes on the given mux via auth.Mount
 // so every request emits a contract-tagged span. Policy is declared at
 // registration time; handler bodies contain only business logic.
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
-	auth.Mount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specRoleList,
 		Handler:  http.HandlerFunc(h.handleListRoles),
 		Policy:   auth.SelfOr("userID", "admin"),
-	})
-	auth.Mount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specRoleCheck,
 		Handler:  http.HandlerFunc(h.handleHasRole),
 		Policy:   auth.SelfOr("userID", "admin"),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {

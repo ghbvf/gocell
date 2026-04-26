@@ -88,7 +88,7 @@ func (s *Service) Register(ctx context.Context, name string) (*domain.Device, er
 		return device, nil
 	}
 	entry := outbox.Entry{
-		ID:        outbox.NewEntryID(),
+		ID:        outbox.MustNewEntryID(),
 		EventType: TopicDeviceRegistered,
 		Payload:   payload,
 	}

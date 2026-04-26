@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	kworker "github.com/ghbvf/gocell/kernel/worker"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -83,6 +84,23 @@ func TestWorkerGroup_StartError(t *testing.T) {
 	err := g.Start(context.Background())
 	assert.Error(t, err)
 	assert.Equal(t, "start failed", err.Error())
+}
+
+// earlyExitWorker.Start returns nil immediately (without ctx cancellation).
+// WorkerGroup must convert that into ErrWorkerExitedEarly so callers can
+// detect the abnormal signal via errors.Is.
+type earlyExitWorker struct{}
+
+func (earlyExitWorker) Start(_ context.Context) error { return nil }
+func (earlyExitWorker) Stop(_ context.Context) error  { return nil }
+
+func TestWorkerGroup_NilExitMappedToErrExitedEarly(t *testing.T) {
+	g := NewWorkerGroup()
+	g.Add(earlyExitWorker{})
+
+	err := g.Start(context.Background())
+	require.Error(t, err)
+	assert.ErrorIs(t, err, kworker.ErrWorkerExitedEarly)
 }
 
 func TestWorkerGroup_Stop(t *testing.T) {

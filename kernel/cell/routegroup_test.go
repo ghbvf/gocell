@@ -37,12 +37,12 @@ func TestRouteGroup_ContributorReturnsDeclaredGroups(t *testing.T) {
 		{
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1/foo",
-			Register: func(mux cell.RouteMux) {},
+			Register: func(mux cell.RouteMux) error { return nil },
 		},
 		{
 			Listener: cell.InternalListener,
 			Prefix:   "/internal/v1/foo",
-			Register: func(mux cell.RouteMux) {},
+			Register: func(mux cell.RouteMux) error { return nil },
 		},
 	}
 
@@ -88,21 +88,21 @@ func TestRouteGroup_FieldCombinations(t *testing.T) {
 	}{
 		{
 			name:     "primary_listener_with_prefix",
-			rg:       cell.RouteGroup{Listener: cell.PrimaryListener, Prefix: "/api/v1/x", Register: func(cell.RouteMux) {}},
+			rg:       cell.RouteGroup{Listener: cell.PrimaryListener, Prefix: "/api/v1/x", Register: func(cell.RouteMux) error { return nil }},
 			wantRef:  "primary",
 			wantPfx:  "/api/v1/x",
 			wantNilR: false,
 		},
 		{
 			name:     "internal_listener_with_prefix",
-			rg:       cell.RouteGroup{Listener: cell.InternalListener, Prefix: "/internal/v1/y", Register: func(cell.RouteMux) {}},
+			rg:       cell.RouteGroup{Listener: cell.InternalListener, Prefix: "/internal/v1/y", Register: func(cell.RouteMux) error { return nil }},
 			wantRef:  "internal",
 			wantPfx:  "/internal/v1/y",
 			wantNilR: false,
 		},
 		{
 			name:     "health_listener_no_prefix",
-			rg:       cell.RouteGroup{Listener: cell.HealthListener, Prefix: "", Register: func(cell.RouteMux) {}},
+			rg:       cell.RouteGroup{Listener: cell.HealthListener, Prefix: "", Register: func(cell.RouteMux) error { return nil }},
 			wantRef:  "health",
 			wantPfx:  "",
 			wantNilR: false,
@@ -144,7 +144,7 @@ func assertRouteGroupFields(t *testing.T, rg cell.RouteGroup, wantRef, wantPfx s
 // TestRouteGroup_SingleGroupConstructor covers the DX-05 SingleGroup helper.
 func TestRouteGroup_SingleGroupConstructor(t *testing.T) {
 	t.Parallel()
-	rg := cell.SingleGroup(cell.PrimaryListener, "/api/v1/sg", func(cell.RouteMux) {})
+	rg := cell.SingleGroup(cell.PrimaryListener, "/api/v1/sg", func(cell.RouteMux) error { return nil })
 	if rg.Listener.String() != "primary" {
 		t.Errorf("SingleGroup Listener = %q, want primary", rg.Listener.String())
 	}

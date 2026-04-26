@@ -52,5 +52,9 @@ func newInternalAuthChainFromEnv() ([]cell.ListenerAuth, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create internal listener nonce store: %w", err)
 	}
-	return []cell.ListenerAuth{cell.NewAuthServiceToken(store, ring)}, nil
+	plan, err := cell.NewAuthServiceToken(store, ring)
+	if err != nil {
+		return nil, fmt.Errorf("build internal auth chain: %w", err)
+	}
+	return []cell.ListenerAuth{plan}, nil
 }

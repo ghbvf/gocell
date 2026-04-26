@@ -438,7 +438,7 @@ func assertPasswordResetErrorWithHint(t *testing.T, rec *httptest.ResponseRecord
 
 // testExemptMatcher returns the canonical (method, path) matcher used by the
 // test suite when exercising the password-reset gate. Mirrors the matcher that
-// Router.FinalizeAuth compiles from auth.Mount(Route{PasswordResetExempt: true})
+// Router.FinalizeAuth compiles from auth.MustMount(Route{PasswordResetExempt: true})
 // metadata declared by accesscore's identity and session cells.
 func testExemptMatcher(t *testing.T) func(method, urlPath string) bool {
 	t.Helper()

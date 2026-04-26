@@ -2,6 +2,7 @@ package idempotency
 
 import (
 	"context"
+	"crypto/rand"
 	"testing"
 	"time"
 
@@ -108,6 +109,7 @@ func TestInMemClaimer_Claim_ExpiredLease_ReacquiredBySecond(t *testing.T) {
 	c := &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
 		now:     func() time.Time { return time.Unix(1000, 0) },
+		rand:    rand.Reader,
 	}
 	ctx := context.Background()
 
@@ -175,6 +177,7 @@ func TestInMemReceipt_Extend_Success(t *testing.T) {
 	c := &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
 		now:     func() time.Time { return time.Unix(1000, 0) },
+		rand:    rand.Reader,
 	}
 	ctx := context.Background()
 
@@ -216,6 +219,7 @@ func TestInMemReceipt_Extend_TokenMismatch_ReturnsErrLeaseExpired(t *testing.T) 
 	c := &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
 		now:     func() time.Time { return time.Unix(1000, 0) },
+		rand:    rand.Reader,
 	}
 	ctx := context.Background()
 
@@ -236,6 +240,7 @@ func TestInMemReceipt_Extend_AfterExpiredLease_ReturnsErrLeaseExpired(t *testing
 	c := &InMemClaimer{
 		entries: make(map[string]*inMemEntry),
 		now:     func() time.Time { return now },
+		rand:    rand.Reader,
 	}
 	ctx := context.Background()
 

@@ -110,7 +110,7 @@ func defaultRuntimeOptions(
 	if shared.PrimaryHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(
 			cell.PrimaryListener, shared.PrimaryHTTPAddr,
-			[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)},
+			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		))
 	}
 	if shared.InternalHTTPAddr != "" {
@@ -138,7 +138,7 @@ func buildInternalAuthChain(guard *internalGuard) []cell.ListenerAuth {
 	if guard == nil {
 		return nil
 	}
-	return []cell.ListenerAuth{cell.NewAuthServiceToken(guard.NonceStore(), guard.ring)}
+	return []cell.ListenerAuth{cell.MustNewAuthServiceToken(guard.NonceStore(), guard.ring)}
 }
 
 // buildKeyProvider constructs the KeyProvider from the supplied providerName,

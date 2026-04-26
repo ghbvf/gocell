@@ -18,12 +18,12 @@ func TestStubEventRouter_AddContractHandler(t *testing.T) {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
 
-	r.AddContractHandler(testEventSpec("topic.a.v1"), handler, "cell-a")
+	_ = r.AddContractHandler(testEventSpec("topic.a.v1"), handler, "cell-a")
 	assert.Equal(t, 1, r.HandlerCount())
 	assert.Equal(t, "topic.a.v1", r.Topics[0])
 	assert.Equal(t, "cell-a", r.ConsumerGroups[0])
 
-	r.AddContractHandler(testEventSpec("topic.b.v1"), handler, "cell-b")
+	_ = r.AddContractHandler(testEventSpec("topic.b.v1"), handler, "cell-b")
 	assert.Equal(t, 2, r.HandlerCount())
 	assert.Equal(t, "topic.b.v1", r.Topics[1])
 	assert.Equal(t, "cell-b", r.ConsumerGroups[1])
@@ -42,8 +42,8 @@ func TestStubEventRouter_SliceInvariant(t *testing.T) {
 
 	specA := testEventSpec("event.a.v1")
 	specB := testEventSpec("event.b.v1")
-	r.AddContractHandler(specA, handler, "cell-a")
-	r.AddContractHandler(specB, handler, "cell-b")
+	_ = r.AddContractHandler(specA, handler, "cell-a")
+	_ = r.AddContractHandler(specB, handler, "cell-b")
 
 	require.Len(t, r.Topics, 2, "Topics count")
 	require.Len(t, r.Handlers, 2, "Handlers count")

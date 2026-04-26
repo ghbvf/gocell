@@ -108,22 +108,26 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 // subscription middleware pipeline owns wrapper.WrapConsumer so the span sits
 // outside ConsumerBase (and after observability metadata restore).
 //
-// spec.Kind MUST be "event" and spec.Topic MUST be set (WrapConsumer
-// panics otherwise). topic used for the Subscriber.Setup /Subscribe
-// lifecycle is derived from spec.Topic — callers do not pass a separate
-// topic string.
-func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) {
+// spec.Kind MUST be "event" and spec.Topic MUST be set. topic used for the
+// Subscriber.Setup / Subscribe lifecycle is derived from spec.Topic — callers
+// do not pass a separate topic string.
+//
+// Returns a non-nil error when handler is nil, consumerGroup is empty, the
+// spec is malformed, or kernel/cell.EventRouter contract is otherwise
+// violated; callers (Cell.RegisterSubscriptions) should propagate the error
+// to the bootstrap phase5 walker.
+func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) error {
 	if handler == nil {
-		panic("eventrouter: AddContractHandler called with nil handler")
+		return fmt.Errorf("eventrouter: AddContractHandler called with nil handler")
 	}
 	if consumerGroup == "" {
-		panic("eventrouter: AddContractHandler called with empty consumerGroup; cells must declare their identity")
+		return fmt.Errorf("eventrouter: AddContractHandler called with empty consumerGroup; cells must declare their identity")
 	}
 	if spec.Kind != "event" {
-		panic(fmt.Sprintf("eventrouter: Contract.Kind %q must be \"event\"", spec.Kind))
+		return fmt.Errorf("eventrouter: Contract.Kind %q must be \"event\"", spec.Kind)
 	}
 	if err := spec.Validate(); err != nil {
-		panic(err.Error())
+		return fmt.Errorf("eventrouter: AddContractHandler: %w", err)
 	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -133,6 +137,7 @@ func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.En
 		consumerGroup: consumerGroup,
 		contract:      spec,
 	})
+	return nil
 }
 
 // errAlreadyRunning is returned if Run is called more than once.

@@ -56,17 +56,22 @@ func NewHandler(svc *Service) *Handler {
 
 // RegisterRoutes registers order-query routes on mux via auth.Mount so
 // CH-04/CH-05 governance can correlate contracts to handler functions.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specOrderGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
 		Policy:   auth.AnyRole(dto.RoleCustomer),
-	})
-	auth.Mount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specOrderList,
 		Handler:  http.HandlerFunc(h.HandleList),
 		Policy:   auth.AnyRole(dto.RoleCustomer),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // HandleGet handles GET /api/v1/orders/{id}.

@@ -89,25 +89,23 @@ func okHandler() outbox.EntryHandler {
 
 // --- Guard tests ---
 
-func TestAddContractHandler_NilHandler_Panics(t *testing.T) {
+func TestAddContractHandler_NilHandler_ReturnsError(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})
-	assert.PanicsWithValue(t,
-		"eventrouter: AddContractHandler called with nil handler",
-		func() { r.AddContractHandler(configEntryUpsertedSpec(), nil, "accesscore") },
-	)
+	err := r.AddContractHandler(configEntryUpsertedSpec(), nil, "accesscore")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil handler")
 }
 
-func TestAddContractHandler_EmptyConsumerGroup_Panics(t *testing.T) {
+func TestAddContractHandler_EmptyConsumerGroup_ReturnsError(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})
-	assert.PanicsWithValue(t,
-		"eventrouter: AddContractHandler called with empty consumerGroup; cells must declare their identity",
-		func() { r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "") },
-	)
+	err := r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "empty consumerGroup")
 }
 
-func TestAddContractHandler_NonEventSpec_Panics(t *testing.T) {
+func TestAddContractHandler_NonEventSpec_ReturnsError(t *testing.T) {
 	t.Parallel()
 	// Spec with Kind != "event" must be rejected at registration time.
 	httpSpec := wrapper.ContractSpec{
@@ -115,10 +113,8 @@ func TestAddContractHandler_NonEventSpec_Panics(t *testing.T) {
 		Method: "POST", Path: "/x",
 	}
 	r := New(&blockingSubscriber{})
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on non-event spec")
-	}()
-	r.AddContractHandler(httpSpec, okHandler(), "mycell")
+	err := r.AddContractHandler(httpSpec, okHandler(), "mycell")
+	require.Error(t, err)
 }
 
 // --- Happy-path registration + tracing middleware ---
@@ -126,7 +122,7 @@ func TestAddContractHandler_NonEventSpec_Panics(t *testing.T) {
 func TestAddContractHandler_RegistersBusinessHandler(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})
-	r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore")
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore"))
 	assert.Equal(t, 1, r.HandlerCount())
 
 	// Router stores the business handler; bootstrap-owned middleware wraps it.
@@ -140,10 +136,10 @@ func TestContractTracingMiddleware_WrapsWithContractSpan(t *testing.T) {
 	r := New(&blockingSubscriber{})
 
 	var inner bool
-	r.AddContractHandler(configEntryUpsertedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		inner = true
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
-	}, "accesscore")
+	}, "accesscore"))
 	require.Equal(t, 1, r.HandlerCount())
 
 	// Drive one entry through the middleware position used by bootstrap:
@@ -232,7 +228,7 @@ func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		spec := configEntryUpsertedSpec()
 		spec.Topic = spec.Topic + "." + string(rune('a'+i))
-		r.AddContractHandler(spec, okHandler(), "accesscore")
+		require.NoError(t, r.AddContractHandler(spec, okHandler(), "accesscore"))
 	}
 	assert.Equal(t, 3, r.HandlerCount())
 }
@@ -243,7 +239,7 @@ func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 func TestAddContractHandler_HandlerConfigShape(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})
-	r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore")
+	require.NoError(t, r.AddContractHandler(configEntryUpsertedSpec(), okHandler(), "accesscore"))
 	require.Equal(t, 1, len(r.handlers))
 	cfg := r.handlers[0]
 	assert.Equal(t, "event.config.entry-upserted.v1", cfg.topic, "topic derived from spec.Topic")

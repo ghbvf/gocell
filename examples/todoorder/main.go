@@ -89,7 +89,7 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ":8082",
-			[]cell.ListenerAuth{cell.NewAuthJWT(jwtVerifier)}),
+			[]cell.ListenerAuth{cell.MustNewAuthJWT(jwtVerifier)}),
 		bootstrap.WithListener(cell.InternalListener, ":9082", internalAuthChain),
 		bootstrap.WithHealthRoutes(healthOpts...),
 	)

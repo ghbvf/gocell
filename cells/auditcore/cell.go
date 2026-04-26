@@ -369,8 +369,8 @@ func (c *AuditCore) RouteGroups() []cell.RouteGroup {
 		{
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1/audit",
-			Register: func(mux cell.RouteMux) {
-				c.queryHandler.RegisterRoutes(mux)
+			Register: func(mux cell.RouteMux) error {
+				return c.queryHandler.RegisterRoutes(mux)
 			},
 		},
 	}
@@ -388,7 +388,9 @@ func (c *AuditCore) RegisterSubscriptions(r cell.EventRouter) error {
 			return fmt.Errorf("auditcore: missing ContractSpec for topic %q — "+
 				"auditAppendSpecs and auditappend.Topics must stay in sync", topic)
 		}
-		r.AddContractHandler(spec, handler, "auditcore")
+		if err := r.AddContractHandler(spec, handler, "auditcore"); err != nil {
+			return fmt.Errorf("auditcore: subscribe %s: %w", topic, err)
+		}
 	}
 	return nil
 }

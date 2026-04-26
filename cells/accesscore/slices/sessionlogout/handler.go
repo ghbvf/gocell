@@ -36,12 +36,15 @@ func NewHandler(svc *Service) *Handler {
 // AuthMiddleware still requires a valid JWT; PasswordResetExempt keeps the
 // route reachable while the caller still owes a password reset (standard
 // user-self-recovery flow).
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract:            specSessionDelete,
 		Handler:             http.HandlerFunc(h.HandleLogout),
 		PasswordResetExempt: true,
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // HandleLogout handles DELETE /api/v1/access/sessions/{id}.

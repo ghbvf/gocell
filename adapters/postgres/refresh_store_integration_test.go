@@ -34,7 +34,7 @@ func TestPGRefreshStore_ContractSuite(t *testing.T) {
 		require.NoError(t, migrator.Up(ctx))
 
 		clock := storetest.NewFakeClock(baseTime)
-		store := NewRefreshStore(p.DB(), policy, clock, nil)
+		store := MustNewRefreshStore(p.DB(), policy, clock, nil)
 		return store, clock
 	})
 }
@@ -187,7 +187,7 @@ func TestPGRefreshStore_DMLState(t *testing.T) {
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
 	policy := refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: 7 * 24 * time.Hour}
-	store := NewRefreshStore(p.DB(), policy, clock, nil)
+	store := MustNewRefreshStore(p.DB(), policy, clock, nil)
 
 	const sessionID = "sess-dml-state"
 	const subjectID = "usr-dml-state"
@@ -267,7 +267,7 @@ func TestPGRefreshStore_ReuseCascadeSurvivesAmbientRollback(t *testing.T) {
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	store := NewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	store := MustNewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 	txm := NewTxManager(p)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-ambient", "usr-reuse-ambient")
@@ -298,7 +298,7 @@ func TestPGRefreshStore_SessionLockRejectsChildValidatedBeforeCascade(t *testing
 	require.NoError(t, migrator.Up(ctx))
 
 	clock := storetest.NewFakeClock(time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
-	store := NewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	store := MustNewRefreshStore(p.DB(), refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 
 	parentWire, _, err := store.Issue(ctx, "sess-reuse-lock", "usr-reuse-lock")
 	require.NoError(t, err)

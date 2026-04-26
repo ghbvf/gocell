@@ -53,12 +53,15 @@ func NewHandler(svc *Service) *Handler {
 // RegisterRoutes registers the device-status route on mux via auth.Mount so
 // CH-04/CH-05 governance can correlate this contract to HandleGetStatus.
 // Device status is queried by operators or by the device itself.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specDeviceStatus,
 		Handler:  http.HandlerFunc(h.HandleGetStatus),
 		Policy:   auth.AnyRole(dto.RoleOperator, dto.RoleDevice),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // HandleGetStatus handles GET /api/v1/devices/{id}/status.

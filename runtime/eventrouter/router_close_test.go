@@ -141,7 +141,7 @@ func TestRouterClose_CallsStopIntakeBeforeCancel(t *testing.T) {
 	composite := newCompositeStopIntakeSubscriber()
 
 	r := New(composite)
-	r.AddContractHandler(testEventSpec("topic.drain"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.drain"), noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -208,7 +208,7 @@ func TestRouterClose_NoStopIntakeFallback(t *testing.T) {
 func TestRouterClose_NoStopIntakeFallback_WithHandlers(t *testing.T) {
 	sub := &blockingSubscriber{}
 	r := New(sub)
-	r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -302,7 +302,7 @@ func TestRouterClose_WaitsForInflightAfterStopIntake(t *testing.T) {
 	sub := newInflightSubscriber(handlerDuration)
 
 	r := New(sub)
-	r.AddContractHandler(testEventSpec("topic.inflight"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.inflight"), noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)
@@ -354,7 +354,7 @@ func TestRouterClose_StopIntakeError_ContinuesShutdown(t *testing.T) {
 		stopIntakeErr: context.DeadlineExceeded, // simulate StopIntake timeout
 	}
 	r := New(sr)
-	r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
+	_ = r.AddContractHandler(testEventSpec("topic.a"), noopHandler, "test")
 
 	ctx := context.Background()
 	done := make(chan error, 1)

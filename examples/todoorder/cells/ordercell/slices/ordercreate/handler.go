@@ -49,12 +49,15 @@ func NewHandler(svc *Service) *Handler {
 
 // RegisterRoutes registers the order-create route on mux via auth.Mount so
 // CH-04/CH-05 governance can correlate this contract to HandleCreate.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specOrderCreate,
 		Handler:  http.HandlerFunc(h.HandleCreate),
 		Policy:   auth.AnyRole(dto.RoleCustomer),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // createRequest is the JSON body for POST /api/v1/orders.

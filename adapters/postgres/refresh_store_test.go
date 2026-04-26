@@ -14,10 +14,10 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// NewRefreshStore constructor panics
+// NewRefreshStore constructor validation
 // ---------------------------------------------------------------------------
 
-func TestNewRefreshStore_Panics(t *testing.T) {
+func TestNewRefreshStore_ReturnsErrorOnInvalidArgs(t *testing.T) {
 	validClock := storetest.NewFakeClock(time.Now())
 	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
 
@@ -26,36 +26,39 @@ func TestNewRefreshStore_Panics(t *testing.T) {
 	dummyPool := new(pgxpool.Pool)
 
 	t.Run("nil_pool", func(t *testing.T) {
-		assert.Panics(t, func() {
-			NewRefreshStore(nil, validPolicy, validClock, nil)
-		})
+		_, err := NewRefreshStore(nil, validPolicy, validClock, nil)
+		assert.Error(t, err)
 	})
 
 	t.Run("nil_clock", func(t *testing.T) {
-		assert.Panics(t, func() {
-			NewRefreshStore(dummyPool, validPolicy, nil, nil)
-		})
+		_, err := NewRefreshStore(dummyPool, validPolicy, nil, nil)
+		assert.Error(t, err)
 	})
 
 	t.Run("zero_MaxAge", func(t *testing.T) {
 		p := refresh.Policy{ReuseInterval: time.Second, MaxAge: 0}
-		assert.Panics(t, func() {
-			NewRefreshStore(dummyPool, p, validClock, nil)
-		})
+		_, err := NewRefreshStore(dummyPool, p, validClock, nil)
+		assert.Error(t, err)
 	})
 
 	t.Run("negative_MaxAge", func(t *testing.T) {
 		p := refresh.Policy{ReuseInterval: time.Second, MaxAge: -time.Hour}
-		assert.Panics(t, func() {
-			NewRefreshStore(dummyPool, p, validClock, nil)
-		})
+		_, err := NewRefreshStore(dummyPool, p, validClock, nil)
+		assert.Error(t, err)
 	})
 
 	t.Run("negative_ReuseInterval", func(t *testing.T) {
 		p := refresh.Policy{ReuseInterval: -time.Second, MaxAge: time.Hour}
-		assert.Panics(t, func() {
-			NewRefreshStore(dummyPool, p, validClock, nil)
-		})
+		_, err := NewRefreshStore(dummyPool, p, validClock, nil)
+		assert.Error(t, err)
+	})
+}
+
+func TestMustNewRefreshStore_PanicsOnNilPool(t *testing.T) {
+	validClock := storetest.NewFakeClock(time.Now())
+	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
+	assert.Panics(t, func() {
+		MustNewRefreshStore(nil, validPolicy, validClock, nil)
 	})
 }
 
@@ -64,11 +67,10 @@ func TestNewRefreshStore_NilRandReader_UsesDefault(t *testing.T) {
 	validClock := storetest.NewFakeClock(time.Now())
 	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
 
-	// nil randReader must not panic — constructor falls back to crypto/rand.Reader.
-	assert.NotPanics(t, func() {
-		s := NewRefreshStore(dummyPool, validPolicy, validClock, nil)
-		assert.NotNil(t, s.rand, "rand field must be non-nil after constructor")
-	})
+	// nil randReader must not error — constructor falls back to crypto/rand.Reader.
+	s, err := NewRefreshStore(dummyPool, validPolicy, validClock, nil)
+	require.NoError(t, err)
+	assert.NotNil(t, s.rand, "rand field must be non-nil after constructor")
 }
 
 // ---------------------------------------------------------------------------

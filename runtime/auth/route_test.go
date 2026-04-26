@@ -79,53 +79,50 @@ func TestMount_WritesContractIDIntoContext(t *testing.T) {
 	assert.Equal(t, "http.auth.login.v1", seen)
 }
 
-func TestMount_PanicsOnMissingContractID(t *testing.T) {
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on empty Contract.ID")
-	}()
-	Mount(newCaptureMux(), Route{Handler: noopHandler})
+func TestMount_ReturnsErrorOnMissingContractID(t *testing.T) {
+	err := Mount(newCaptureMux(), Route{Handler: noopHandler})
+	require.Error(t, err)
 }
 
-func TestMount_PanicsOnNilHandler(t *testing.T) {
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on nil Handler")
-	}()
-	Mount(newCaptureMux(), Route{Contract: loginContractSpec()})
+func TestMount_ReturnsErrorOnNilHandler(t *testing.T) {
+	err := Mount(newCaptureMux(), Route{Contract: loginContractSpec()})
+	require.Error(t, err)
 }
 
-func TestMount_PanicsOnNonHTTPKind(t *testing.T) {
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on non-http kind")
-	}()
-	Mount(newCaptureMux(), Route{
+func TestMount_ReturnsErrorOnNonHTTPKind(t *testing.T) {
+	err := Mount(newCaptureMux(), Route{
 		Contract: wrapper.ContractSpec{ID: "event.x.v1", Kind: "event", Transport: "amqp", Topic: "x"},
 		Handler:  noopHandler,
 	})
+	require.Error(t, err)
 }
 
-func TestMount_PanicsOnInvalidMethod(t *testing.T) {
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on invalid method")
-	}()
-	Mount(newCaptureMux(), Route{
+func TestMount_ReturnsErrorOnInvalidMethod(t *testing.T) {
+	err := Mount(newCaptureMux(), Route{
 		Contract: wrapper.ContractSpec{
 			ID: "http.x.v1", Kind: "http", Transport: "http",
 			Method: "foo", Path: "/x",
 		},
 		Handler: noopHandler,
 	})
+	require.Error(t, err)
 }
 
-func TestMount_PanicsPublicWithPolicy(t *testing.T) {
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on Public+Policy")
-	}()
-	Mount(newCaptureMux(), Route{
+func TestMount_ReturnsErrorOnPublicWithPolicy(t *testing.T) {
+	err := Mount(newCaptureMux(), Route{
 		Contract: loginContractSpec(),
 		Handler:  noopHandler,
 		Public:   true,
 		Policy:   requireAuthenticatedPolicy(),
 	})
+	require.Error(t, err)
+}
+
+func TestMustMount_PanicsOnNilHandler(t *testing.T) {
+	defer func() {
+		require.NotNil(t, recover(), "expected panic on nil Handler")
+	}()
+	MustMount(newCaptureMux(), Route{Contract: loginContractSpec()})
 }
 
 func TestRequirePolicy_NilPanics(t *testing.T) {
@@ -285,32 +282,30 @@ func TestMount_AcceptsRootPrefix(t *testing.T) {
 	assert.Equal(t, "/api/v1/access/sessions/login", mux.metas[0].Path)
 }
 
-func TestMount_PanicsOnPrefixMismatch(t *testing.T) {
+func TestMount_ReturnsErrorOnPrefixMismatch(t *testing.T) {
 	mux := newPrefixedCaptureMux("/api/v1/access")
-	require.Panics(t, func() {
-		Mount(mux, Route{
-			Contract: wrapper.ContractSpec{
-				ID: "http.foo.bar.v1", Kind: "http", Transport: "http",
-				Method: "GET", Path: "/foo/bar",
-			},
-			Handler: noopHandler,
-			Public:  true,
-		})
+	err := Mount(mux, Route{
+		Contract: wrapper.ContractSpec{
+			ID: "http.foo.bar.v1", Kind: "http", Transport: "http",
+			Method: "GET", Path: "/foo/bar",
+		},
+		Handler: noopHandler,
+		Public:  true,
 	})
+	require.Error(t, err)
 }
 
-func TestMount_PanicsOnPartialSegmentPrefix(t *testing.T) {
+func TestMount_ReturnsErrorOnPartialSegmentPrefix(t *testing.T) {
 	mux := newPrefixedCaptureMux("/api/v1/a")
-	require.Panics(t, func() {
-		Mount(mux, Route{
-			Contract: wrapper.ContractSpec{
-				ID: "http.auth.x.v1", Kind: "http", Transport: "http",
-				Method: "GET", Path: "/api/v1/auth/x",
-			},
-			Handler: noopHandler,
-			Public:  true,
-		})
+	err := Mount(mux, Route{
+		Contract: wrapper.ContractSpec{
+			ID: "http.auth.x.v1", Kind: "http", Transport: "http",
+			Method: "GET", Path: "/api/v1/auth/x",
+		},
+		Handler: noopHandler,
+		Public:  true,
 	})
+	require.Error(t, err)
 }
 
 func TestMount_AcceptsValidSegmentPrefix(t *testing.T) {

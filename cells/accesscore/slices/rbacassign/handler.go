@@ -63,20 +63,25 @@ type RevokeRequest struct {
 // RegisterRoutes registers rbac-assign routes on the given mux.
 // Policy is declared at registration time; handler bodies contain only
 // business logic (no inline guard calls).
-func (h *Handler) RegisterRoutes(mux kcell.RouteMux) {
+func (h *Handler) RegisterRoutes(mux kcell.RouteMux) error {
 	internalAdminPolicy := auth.AnyRole(auth.RoleInternalAdmin)
-	auth.Mount(mux, auth.Route{
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specRoleAssign,
 		Handler:  http.HandlerFunc(h.handleAssign),
 		Policy:   internalAdminPolicy,
 		// Route lives on InternalListener (/internal/v1/*); internal affinity
 		// is derived from the path prefix via AuthRouteMeta.IsInternal().
-	})
-	auth.Mount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specRoleRevoke,
 		Handler:  http.HandlerFunc(h.handleRevoke),
 		Policy:   internalAdminPolicy,
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (h *Handler) handleAssign(w http.ResponseWriter, r *http.Request) {

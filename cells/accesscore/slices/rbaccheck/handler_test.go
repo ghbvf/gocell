@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -78,7 +79,10 @@ func setup(t *testing.T, runMode query.RunMode) http.Handler {
 		panic(err)
 	}
 	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/access/roles", NewHandler(svc).RegisterRoutes)
+	h := NewHandler(svc)
+	mux.Route("/api/v1/access/roles", func(s cell.RouteMux) {
+		require.NoError(t, h.RegisterRoutes(s))
+	})
 	return mux
 }
 

@@ -5,6 +5,8 @@
 package accesscore
 
 import (
+	"fmt"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -18,6 +20,12 @@ import (
 //
 // HTTP contract specs are owned by each slice's handler.go (single source of
 // truth); RouteGroups below delegates to slice.RegisterRoutes for HTTP wiring.
+
+// errFmtSubscribe is the wrap format used by RegisterSubscriptions when an
+// AddContractHandler call rejects a spec. Centralized so the four wrap
+// sites stay aligned and SonarCloud's duplicate-literal rule is satisfied.
+const errFmtSubscribe = "accesscore: subscribe %s: %w"
+
 var (
 	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
 	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
@@ -45,24 +53,46 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 		{
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1/access",
-			Register: func(mux cell.RouteMux) {
+			Register: func(mux cell.RouteMux) error {
+				// mux.Route's callback signature is func(RouteMux) (no error
+				// return), so slice RegisterRoutes errors are captured via
+				// outer-variable closure and surfaced through this Register's
+				// error return — bootstrap phase5 wraps with cell+listener+prefix
+				// context. Same pattern as bootstrap/mountOneRouteGroup.
+				var firstErr error
+				captureErr := func(err error) {
+					if err != nil && firstErr == nil {
+						firstErr = err
+					}
+				}
 				mux.Route("/setup", func(s cell.RouteMux) {
-					c.setupHandler.RegisterRoutes(s)
+					captureErr(c.setupHandler.RegisterRoutes(s))
 				})
-				mux.Route("/users", c.identityHandler.RegisterRoutes)
+				mux.Route("/users", func(s cell.RouteMux) {
+					captureErr(c.identityHandler.RegisterRoutes(s))
+				})
 				mux.Route("/sessions", func(s cell.RouteMux) {
-					c.loginHandler.RegisterRoutes(s)
-					c.refreshHandler.RegisterRoutes(s)
-					c.logoutHandler.RegisterRoutes(s)
+					captureErr(c.loginHandler.RegisterRoutes(s))
+					captureErr(c.refreshHandler.RegisterRoutes(s))
+					captureErr(c.logoutHandler.RegisterRoutes(s))
 				})
-				mux.Route("/roles", c.rbacHandler.RegisterRoutes)
+				mux.Route("/roles", func(s cell.RouteMux) {
+					captureErr(c.rbacHandler.RegisterRoutes(s))
+				})
+				return firstErr
 			},
 		},
 		{
 			Listener: cell.InternalListener,
 			Prefix:   "/internal/v1/access",
-			Register: func(mux cell.RouteMux) {
-				mux.Route("/roles", c.rbacAssignHandler.RegisterRoutes)
+			Register: func(mux cell.RouteMux) error {
+				var firstErr error
+				mux.Route("/roles", func(s cell.RouteMux) {
+					if err := c.rbacAssignHandler.RegisterRoutes(s); err != nil {
+						firstErr = err
+					}
+				})
+				return firstErr
 			},
 		},
 	}
@@ -73,16 +103,24 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
 	// config-receive: config state-sync events from configcore.
 	upsertedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryUpserted)
-	r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "accesscore")
+	if err := r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "accesscore"); err != nil {
+		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryUpserted.Topic, err)
+	}
 
 	deletedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryDeleted)
-	r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "accesscore")
+	if err := r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "accesscore"); err != nil {
+		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryDeleted.Topic, err)
+	}
 
 	// rbac-session-sync: invalidate sessions on role assignment or revocation.
 	// Same handler + same consumer group across both topics — HandleRoleChanged
 	// is topic-agnostic.
 	roleHandler := outbox.WrapLegacyHandler(c.rbacSessionConsumer.HandleRoleChanged)
-	r.AddContractHandler(specEventRoleAssigned, roleHandler, "accesscore-rbac-session-sync")
-	r.AddContractHandler(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync")
+	if err := r.AddContractHandler(specEventRoleAssigned, roleHandler, "accesscore-rbac-session-sync"); err != nil {
+		return fmt.Errorf(errFmtSubscribe, specEventRoleAssigned.Topic, err)
+	}
+	if err := r.AddContractHandler(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync"); err != nil {
+		return fmt.Errorf(errFmtSubscribe, specEventRoleRevoked.Topic, err)
+	}
 	return nil
 }

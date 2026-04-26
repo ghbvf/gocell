@@ -118,10 +118,10 @@ func newE2EFixture() *e2eFixture {
 	// Policies are declared via auth.Mount to match production wiring.
 	mux := celltest.NewTestMux()
 	h := NewHandler(idmSvc)
-	auth.Mount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users"), Handler: http.HandlerFunc(h.handleCreate), Policy: auth.AnyRole(domain.RoleAdmin)})
-	auth.Mount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handleGet), Policy: auth.SelfOr("id", domain.RoleAdmin)})
-	auth.Mount(mux, auth.Route{Contract: testHTTPContract("PATCH", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handlePatch), Policy: auth.SelfOr("id", domain.RoleAdmin)})
-	auth.Mount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users/{id}/password"), Handler: http.HandlerFunc(h.handleChangePassword), Policy: auth.SelfOr("id", domain.RoleAdmin)})
+	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users"), Handler: http.HandlerFunc(h.handleCreate), Policy: auth.AnyRole(domain.RoleAdmin)})
+	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("GET", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handleGet), Policy: auth.SelfOr("id", domain.RoleAdmin)})
+	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("PATCH", "/api/v1/access/users/{id}"), Handler: http.HandlerFunc(h.handlePatch), Policy: auth.SelfOr("id", domain.RoleAdmin)})
+	auth.MustMount(mux, auth.Route{Contract: testHTTPContract("POST", "/api/v1/access/users/{id}/password"), Handler: http.HandlerFunc(h.handleChangePassword), Policy: auth.SelfOr("id", domain.RoleAdmin)})
 
 	return &e2eFixture{
 		mux:         mux,

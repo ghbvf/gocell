@@ -285,7 +285,7 @@ func (s *Service) publishUserCreated(ctx context.Context, user *domain.User) err
 		return fmt.Errorf("setup: marshal user.created payload: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        outbox.NewEntryID(),
+		ID:        outbox.MustNewEntryID(),
 		EventType: dto.TopicUserCreated,
 		Payload:   payload,
 	}

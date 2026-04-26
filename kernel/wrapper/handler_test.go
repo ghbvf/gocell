@@ -36,7 +36,7 @@ func TestHTTPHandler_WritesContractIDIntoContext(t *testing.T) {
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
 		seen, _ = ctxkeys.ContractIDFrom(r.Context())
 	})
-	h := wrapper.HTTPHandler(loginSpec(), inner)
+	h := wrapper.MustHTTPHandler(loginSpec(), inner)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	assert.Equal(t, "http.auth.login.v1", seen)
@@ -49,7 +49,7 @@ func TestHTTPHandler_AppendsContractAttrsToCarrier(t *testing.T) {
 	t.Parallel()
 	carrier := &wrapper.AttrCarrier{}
 	inner := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {})
-	h := wrapper.HTTPHandler(loginSpec(), inner)
+	h := wrapper.MustHTTPHandler(loginSpec(), inner)
 
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil).
 		WithContext(wrapper.WithAttrCarrier(context.Background(), carrier))
@@ -76,7 +76,7 @@ func TestHTTPHandler_NoCarrier_StillInvokesInner(t *testing.T) {
 		called = true
 		w.WriteHeader(200)
 	})
-	h := wrapper.HTTPHandler(loginSpec(), inner)
+	h := wrapper.MustHTTPHandler(loginSpec(), inner)
 	req := httptest.NewRequest("POST", "/api/v1/auth/login", nil)
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
@@ -84,8 +84,9 @@ func TestHTTPHandler_NoCarrier_StillInvokesInner(t *testing.T) {
 	assert.Equal(t, 200, rec.Code)
 }
 
-// TestHTTPHandler_PanicsOnInvalidSpec asserts registration-time fail-fast.
-func TestHTTPHandler_PanicsOnInvalidSpec(t *testing.T) {
+// TestHTTPHandler_ReturnsErrorOnInvalidSpec asserts registration-time
+// validation: HTTPHandler returns a non-nil error rather than panicking.
+func TestHTTPHandler_ReturnsErrorOnInvalidSpec(t *testing.T) {
 	t.Parallel()
 	cases := []wrapper.ContractSpec{
 		{},                      // all empty
@@ -94,33 +95,35 @@ func TestHTTPHandler_PanicsOnInvalidSpec(t *testing.T) {
 		{ID: "a", Kind: "http", Transport: "http", Method: "POST"}, // missing path
 	}
 	for _, spec := range cases {
-		func(s wrapper.ContractSpec) {
-			defer func() {
-				require.NotNil(t, recover(), "expected panic for %+v", s)
-			}()
-			_ = wrapper.HTTPHandler(s, okHandler(200))
-		}(spec)
+		_, err := wrapper.HTTPHandler(spec, okHandler(200))
+		assert.Errorf(t, err, "expected error for %+v", spec)
 	}
 }
 
-// TestHTTPHandler_PanicsOnNilHandler ensures nil inner handler is rejected.
-func TestHTTPHandler_PanicsOnNilHandler(t *testing.T) {
+// TestHTTPHandler_ReturnsErrorOnNilHandler ensures nil inner handler is rejected.
+func TestHTTPHandler_ReturnsErrorOnNilHandler(t *testing.T) {
+	t.Parallel()
+	_, err := wrapper.HTTPHandler(loginSpec(), nil)
+	require.Error(t, err)
+}
+
+// TestHTTPHandler_ReturnsErrorOnNonHTTPKind ensures event-kind specs are rejected.
+func TestHTTPHandler_ReturnsErrorOnNonHTTPKind(t *testing.T) {
+	t.Parallel()
+	_, err := wrapper.HTTPHandler(wrapper.ContractSpec{
+		ID: "event.x.v1", Kind: "event", Transport: "amqp", Topic: "x",
+	}, okHandler(200))
+	require.Error(t, err)
+}
+
+// TestMustHTTPHandler_PanicsOnNilHandler asserts the Must wrapper panics on
+// the same misuse where HTTPHandler returns error.
+func TestMustHTTPHandler_PanicsOnNilHandler(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		require.NotNil(t, recover(), "expected panic on nil handler")
 	}()
-	_ = wrapper.HTTPHandler(loginSpec(), nil)
-}
-
-// TestHTTPHandler_PanicsOnNonHTTPKind ensures event-kind specs are rejected.
-func TestHTTPHandler_PanicsOnNonHTTPKind(t *testing.T) {
-	t.Parallel()
-	defer func() {
-		require.NotNil(t, recover(), "expected panic on non-http kind")
-	}()
-	_ = wrapper.HTTPHandler(wrapper.ContractSpec{
-		ID: "event.x.v1", Kind: "event", Transport: "amqp", Topic: "x",
-	}, okHandler(200))
+	_ = wrapper.MustHTTPHandler(loginSpec(), nil)
 }
 
 // TestAttrCarrier_Nil_ReturnsCtxUnchanged ensures WithAttrCarrier(nil) is a

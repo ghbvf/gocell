@@ -86,7 +86,7 @@ func (s *Service) writeOutboxEntry(ctx context.Context, eventType string, evt dt
 		return fmt.Errorf("rbac-assign: marshal role-changed event: %w", err)
 	}
 	entry := outbox.Entry{
-		ID:        outbox.NewEntryID(),
+		ID:        outbox.MustNewEntryID(),
 		EventType: eventType,
 		Payload:   payload,
 	}

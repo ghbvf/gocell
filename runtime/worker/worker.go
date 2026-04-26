@@ -9,6 +9,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -56,6 +57,13 @@ func (g *WorkerGroup) Add(w Worker) {
 // Start launches all workers concurrently. It blocks until all workers
 // return. If any worker returns a non-context error, all sibling workers are
 // cancelled via a shared context. The first error encountered is returned.
+//
+// Early-exit handling: a worker that returns nil while the group context is
+// still live has terminated its long-running loop without signalling failure
+// — historically that produced a silent firstErr=nil. The group now records
+// kworker.ErrWorkerExitedEarly so callers can errors.Is-detect the abnormal
+// signal. Returns from a Stop or context cancellation propagate untouched
+// (errors.Is(err, context.Canceled) is honoured).
 func (g *WorkerGroup) Start(ctx context.Context) error {
 	g.mu.Lock()
 	workers := make([]Worker, len(g.workers))
@@ -75,11 +83,18 @@ func (g *WorkerGroup) Start(ctx context.Context) error {
 		wg.Add(1)
 		go func(w Worker) {
 			defer wg.Done()
-			if err := w.Start(groupCtx); err != nil {
-				slog.Error("worker exited with error", slog.Any("error", err))
-				errOnce.Do(func() { firstErr = err })
-				cancel() // cancel sibling workers
+			err := w.Start(groupCtx)
+			if err == nil && groupCtx.Err() == nil {
+				err = kworker.ErrWorkerExitedEarly
 			}
+			if err == nil {
+				return
+			}
+			slog.Error("worker exited with error",
+				slog.String("worker_type", fmt.Sprintf("%T", w)),
+				slog.Any("error", err))
+			errOnce.Do(func() { firstErr = err })
+			cancel() // cancel sibling workers
 		}(w)
 	}
 

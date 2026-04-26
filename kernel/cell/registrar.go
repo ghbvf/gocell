@@ -207,7 +207,11 @@ type EventRouter interface {
 	// bootstrap's ContractTracingMiddleware wraps the subscription so every
 	// consumed entry emits a CONSUME span annotated with gocell.contract.id
 	// / messaging.destination.
-	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string)
+	//
+	// Returns a non-nil error when handler is nil, consumerGroup is empty,
+	// spec.Kind != "event", or spec.Validate() fails. Callers (typically
+	// Cell.RegisterSubscriptions) should propagate the error.
+	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) error
 }
 
 // EventRegistrar is optionally implemented by Cells that subscribe to events.

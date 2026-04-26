@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -55,7 +56,12 @@ func newContractRBACHandler() http.Handler {
 	}
 
 	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/access/roles", NewHandler(svc).RegisterRoutes)
+	h := NewHandler(svc)
+	mux.Route("/api/v1/access/roles", func(s cell.RouteMux) {
+		if err := h.RegisterRoutes(s); err != nil {
+			panic("newContractRBACHandler: RegisterRoutes: " + err.Error())
+		}
+	})
 	return mux
 }
 

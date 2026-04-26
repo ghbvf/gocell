@@ -41,10 +41,10 @@ func TestAuthPlan_Describe(t *testing.T) {
 		want string
 	}{
 		{"AuthNone", cell.AuthNone{}, "none"},
-		{"AuthJWT", cell.NewAuthJWT(verifier), "jwt"},
-		{"AuthJWTFromAssembly", cell.NewAuthJWTFromAssembly(asm), "jwt"},
+		{"AuthJWT", cell.MustNewAuthJWT(verifier), "jwt"},
+		{"AuthJWTFromAssembly", cell.MustNewAuthJWTFromAssembly(asm), "jwt"},
 		{"AuthMTLS", cell.AuthMTLS{}, "mtls"},
-		{"AuthServiceToken", cell.NewAuthServiceToken(store, ring), "service-token"},
+		{"AuthServiceToken", cell.MustNewAuthServiceToken(store, ring), "service-token"},
 	}
 
 	for _, tc := range tests {
@@ -81,46 +81,64 @@ func TestAuthPlan_AuthKind(t *testing.T) {
 	}
 }
 
-// ─── Constructor nil/empty panic guards ───────────────────────────────────────
+// ─── Constructor nil/empty error guards ───────────────────────────────────────
 
-func TestNewAuthJWT_NilPanics(t *testing.T) {
+func TestNewAuthJWT_NilReturnsError(t *testing.T) {
+	t.Parallel()
+	if _, err := cell.NewAuthJWT(nil); err == nil {
+		t.Error("expected error for nil verifier, got nil")
+	}
+}
+
+func TestMustNewAuthJWT_NilPanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		if recover() == nil {
 			t.Error("expected panic for nil verifier, got none")
 		}
 	}()
-	cell.NewAuthJWT(nil)
+	cell.MustNewAuthJWT(nil)
 }
 
-func TestNewAuthJWTFromAssembly_NilPanics(t *testing.T) {
+func TestNewAuthJWTFromAssembly_NilReturnsError(t *testing.T) {
+	t.Parallel()
+	if _, err := cell.NewAuthJWTFromAssembly(nil); err == nil { //nolint:staticcheck // SA1012: deliberate nil arg
+		t.Error("expected error for nil assembly, got nil")
+	}
+}
+
+func TestMustNewAuthJWTFromAssembly_NilPanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		if recover() == nil {
 			t.Error("expected panic for nil assembly, got none")
 		}
 	}()
-	cell.NewAuthJWTFromAssembly(nil) //nolint:staticcheck // SA1012: deliberate nil arg to test panic guard
+	cell.MustNewAuthJWTFromAssembly(nil) //nolint:staticcheck // SA1012: deliberate nil arg to test panic guard
 }
 
-func TestNewAuthServiceToken_NilStorePanics(t *testing.T) {
+func TestNewAuthServiceToken_NilStoreReturnsError(t *testing.T) {
+	t.Parallel()
+	if _, err := cell.NewAuthServiceToken(nil, &stubHMACKeyring{}); err == nil {
+		t.Error("expected error for nil store, got nil")
+	}
+}
+
+func TestNewAuthServiceToken_NilRingReturnsError(t *testing.T) {
+	t.Parallel()
+	if _, err := cell.NewAuthServiceToken(&stubNonceStore{}, nil); err == nil {
+		t.Error("expected error for nil ring, got nil")
+	}
+}
+
+func TestMustNewAuthServiceToken_NilStorePanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
 		if recover() == nil {
 			t.Error("expected panic for nil store, got none")
 		}
 	}()
-	cell.NewAuthServiceToken(nil, &stubHMACKeyring{})
-}
-
-func TestNewAuthServiceToken_NilRingPanics(t *testing.T) {
-	t.Parallel()
-	defer func() {
-		if recover() == nil {
-			t.Error("expected panic for nil ring, got none")
-		}
-	}()
-	cell.NewAuthServiceToken(&stubNonceStore{}, nil)
+	cell.MustNewAuthServiceToken(nil, &stubHMACKeyring{})
 }
 
 // shortHMACKeyring intentionally returns a secret below MinHMACKeyBytes to
@@ -132,27 +150,20 @@ func (*shortHMACKeyring) Secrets() [][]byte { return [][]byte{(&shortHMACKeyring
 
 func TestNewAuthServiceToken_RejectsShortKey(t *testing.T) {
 	t.Parallel()
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("expected panic for short HMAC ring.Current(), got none")
-		}
-		msg, ok := r.(string)
-		if !ok {
-			t.Fatalf("panic value is not string: %T %v", r, r)
-		}
-		// Panic message format (auth_plan.go::NewAuthServiceToken):
-		//   "cell: NewAuthServiceToken HMAC ring.Current() returned 31 bytes, minimum is 32 (NIST SP 800-107)"
-		if !strings.Contains(msg, "minimum is 32") {
-			t.Errorf("panic message must mention 'minimum is 32': %q", msg)
-		}
-	}()
 	// Pre-condition: stub returns 31 bytes (one short of MinHMACKeyBytes=32).
 	if got := len((&shortHMACKeyring{}).Current()); got >= cell.MinHMACKeyBytes {
 		t.Fatalf("test fixture broken: shortHMACKeyring.Current() returned %d bytes, want < %d",
 			got, cell.MinHMACKeyBytes)
 	}
-	cell.NewAuthServiceToken(&stubNonceStore{}, &shortHMACKeyring{})
+	_, err := cell.NewAuthServiceToken(&stubNonceStore{}, &shortHMACKeyring{})
+	if err == nil {
+		t.Fatal("expected error for short HMAC ring.Current(), got nil")
+	}
+	// Error message format (auth_plan.go::NewAuthServiceToken):
+	//   "cell: NewAuthServiceToken HMAC ring.Current() returned 31 bytes, minimum is 32 (NIST SP 800-107)"
+	if !strings.Contains(err.Error(), "minimum is 32") {
+		t.Errorf("error message must mention 'minimum is 32': %q", err.Error())
+	}
 }
 
 // ─── AuthJWT fields ───────────────────────────────────────────────────────────
@@ -160,7 +171,10 @@ func TestNewAuthServiceToken_RejectsShortKey(t *testing.T) {
 func TestNewAuthJWT_StoresVerifier(t *testing.T) {
 	t.Parallel()
 	v := &stubVerifier{}
-	p := cell.NewAuthJWT(v)
+	p, err := cell.NewAuthJWT(v)
+	if err != nil {
+		t.Fatalf("NewAuthJWT returned unexpected error: %v", err)
+	}
 	if p.Verifier != v {
 		t.Errorf("NewAuthJWT Verifier field mismatch: got %v, want %v", p.Verifier, v)
 	}
@@ -172,7 +186,10 @@ func TestAuthJWTFromAssembly_ResolvedVerifier(t *testing.T) {
 	t.Parallel()
 
 	asm := &stubAssemblyRef{id: "test"}
-	p := cell.NewAuthJWTFromAssembly(asm)
+	p, err := cell.NewAuthJWTFromAssembly(asm)
+	if err != nil {
+		t.Fatalf("NewAuthJWTFromAssembly returned unexpected error: %v", err)
+	}
 
 	// Before SetResolved, ResolvedVerifier returns nil.
 	if got := p.ResolvedVerifier(); got != nil {

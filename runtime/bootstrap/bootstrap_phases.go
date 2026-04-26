@@ -43,7 +43,7 @@ import (
 // RES-5 the isolation runs as router early-responder middleware before
 // FinalizeAuth's policy-coverage walk reaches it, so no whitelist hole is
 // needed.
-// Health probes (/healthz, /readyz) are declared via auth.Mount(Public:true)
+// Health probes (/healthz, /readyz) are declared via auth.MustMount(Public:true)
 // inside HealthRouteGroups and do not need any whitelist entry.
 
 // phaseState extends runState with phase-local values that must be shared
@@ -638,16 +638,26 @@ func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _
 	if len(rg.Middleware) > 0 {
 		mws := rg.Middleware
 		inner := register
-		register = func(sub cell.RouteMux) {
-			inner(sub.With(mws...))
+		register = func(sub cell.RouteMux) error {
+			return inner(sub.With(mws...))
 		}
 	}
+	var registerErr error
 	if rg.Prefix != "" {
-		rtr.Route(rg.Prefix, register)
+		// rtr.Route signature is from cell.RouteMux which still takes a no-error
+		// closure; capture the Register error via the outer variable so it
+		// surfaces to the phase5 walker. rtr.Route is synchronous (chi.Mux
+		// builds the sub-tree before returning) so registerErr is read after
+		// the closure exits — no data race on the outer variable.
+		rtr.Route(rg.Prefix, func(sub cell.RouteMux) {
+			if err := register(sub); err != nil {
+				registerErr = err
+			}
+		})
 	} else {
-		register(rtr)
+		registerErr = register(rtr)
 	}
-	return nil
+	return registerErr
 }
 
 // phase5FinalizeAllRouters installs /internal/v1/* isolation on the primary

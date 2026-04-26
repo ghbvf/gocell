@@ -235,7 +235,7 @@ func TestConfigRepo_Integration_AtomicTx(t *testing.T) {
 			Version: 1,
 		}
 		outboxEntry := outbox.Entry{
-			ID:            outbox.NewEntryID(),
+			ID:            outbox.MustNewEntryID(),
 			AggregateID:   entry.ID,
 			AggregateType: "config_entry",
 			EventType:     domain.TopicConfigEntryUpserted,

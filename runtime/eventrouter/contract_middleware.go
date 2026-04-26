@@ -15,10 +15,12 @@ import (
 //
 // Router.AddContractHandler is the only registration entry point, and it
 // validates the ContractSpec at registration time — no subscription reaches
-// this middleware without a populated ContractID. wrapper.WrapConsumer's
+// this middleware without a populated ContractID. wrapper.MustWrapConsumer's
 // spec.Validate() is the second line of defence: if any caller ever bypasses
 // AddContractHandler and still threads an empty-ID subscription through,
-// WrapConsumer panics at construction time.
+// WrapConsumer panics at construction time. The outbox.SubscriptionMiddleware
+// closure has no error-return path; MustWrapConsumer matches the contract
+// while keeping the spec-validation defense in depth.
 func ContractTracingMiddleware(tr wrapper.Tracer, redactor wrapper.ErrorRedactor) outbox.SubscriptionMiddleware {
 	return func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		spec := wrapper.ContractSpec{
@@ -31,6 +33,6 @@ func ContractTracingMiddleware(tr wrapper.Tracer, redactor wrapper.ErrorRedactor
 		if redactor != nil {
 			opts = append(opts, wrapper.WithConsumerErrorRedactor(redactor))
 		}
-		return wrapper.WrapConsumer(tr, spec, next, opts...)
+		return wrapper.MustWrapConsumer(tr, spec, next, opts...)
 	}
 }

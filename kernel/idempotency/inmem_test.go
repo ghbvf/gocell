@@ -2,6 +2,7 @@ package idempotency
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 )
@@ -149,5 +150,33 @@ func TestInMemClaimer_Release_AfterLeaseExpiryAndReclaim_ReturnsStaleError(t *te
 	state, _, _ := c.Claim(ctx, "k", time.Minute, time.Hour)
 	if state != ClaimBusy {
 		t.Fatalf("stale Release must not drop newer claim's entry, got state %v", state)
+	}
+}
+
+// errReader always returns the configured error; used to exercise the
+// crypto/rand.Read failure branch in InMemClaimer.Claim without depending
+// on a broken host entropy source.
+type errReader struct{ err error }
+
+func (r errReader) Read(_ []byte) (int, error) { return 0, r.err }
+
+// TestInMemClaimer_Claim_RandFailure_PreservesContract verifies the Claimer
+// contract: when the entropy source fails, Claim must return state \!= ClaimAcquired
+// and a nil receipt so callers branching on `state == ClaimAcquired` cannot
+// nil-deref. ClaimBusy is the closest-equivalent caller-action (requeue) for
+// this transient infrastructure failure.
+func TestInMemClaimer_Claim_RandFailure_PreservesContract(t *testing.T) {
+	c := NewInMemClaimer()
+	c.rand = errReader{err: errors.New("entropy exhausted")}
+
+	state, receipt, err := c.Claim(context.Background(), "k1", time.Minute, time.Hour)
+	if err == nil {
+		t.Fatal("expected entropy failure to surface as Claim error")
+	}
+	if state == ClaimAcquired {
+		t.Fatalf("Claimer contract violation: state=ClaimAcquired with nil receipt would nil-deref callers; got state=%v", state)
+	}
+	if receipt != nil {
+		t.Fatalf("Claimer contract: receipt must be nil on infrastructure error; got %T", receipt)
 	}
 }

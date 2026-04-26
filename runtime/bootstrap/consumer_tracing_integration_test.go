@@ -95,7 +95,7 @@ func (c *consumerSpyCell) RegisterSubscriptions(r cell.EventRouter) error {
 		c.calls <- entry
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
-	r.AddContractHandler(c.spec, handler, "consumer-spy")
+	_ = r.AddContractHandler(c.spec, handler, "consumer-spy")
 	return nil
 }
 
@@ -145,7 +145,7 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 	// Publish one entry on the topic and await handler invocation.
 	// The bus requires a v1 wire envelope, built via outbox.MarshalDirectEnvelope.
 	bodyPayload, _ := json.Marshal(map[string]string{"hello": "world"})
-	envelope := outbox.MarshalDirectEnvelope(spec.Topic, "integration.test", "integration-evt-1", bodyPayload)
+	envelope := outbox.MustMarshalDirectEnvelope(spec.Topic, "integration.test", "integration-evt-1", bodyPayload)
 	err := bus.Publish(ctx, spec.Topic, envelope)
 	require.NoError(t, err)
 

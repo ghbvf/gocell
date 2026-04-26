@@ -42,17 +42,22 @@ func NewHandler(svc *Service) *Handler {
 // The /setup tree is mounted under the cell's /access prefix (Consul
 // /acl/bootstrap convention rather than Vault's top-level /sys/init) so the
 // path matches Cell ownership.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.Mount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specSetupStatus,
 		Handler:  http.HandlerFunc(h.HandleStatus),
 		Public:   true,
-	})
-	auth.Mount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specSetupAdmin,
 		Handler:  http.HandlerFunc(h.HandleCreateAdmin),
 		Public:   true,
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // HandleStatus handles GET /api/v1/access/setup/status.

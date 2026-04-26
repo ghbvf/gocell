@@ -90,15 +90,19 @@ func defaultEventSpanName(spec ContractSpec) string {
 // WithConsumerErrorRedactor allows callers to scrub error text before it
 // reaches span.RecordError (F5 / round-4). Applied uniformly to the three
 // RecordError call sites below (Requeue/Reject disposition + panic path).
-func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...ConsumerOption) ConsumerFunc {
+//
+// Returns a non-nil error when fn is nil, spec.Kind != "event", or
+// spec.Validate fails. Callers that want to fail-fast at composition time
+// should use MustWrapConsumer.
+func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...ConsumerOption) (ConsumerFunc, error) {
 	if fn == nil {
-		panic("wrapper.WrapConsumer: fn must not be nil")
+		return nil, fmt.Errorf("wrapper.WrapConsumer: fn must not be nil")
 	}
 	if spec.Kind != "event" {
-		panic(fmt.Sprintf("wrapper.WrapConsumer: spec.Kind %q must be \"event\"", spec.Kind))
+		return nil, fmt.Errorf("wrapper.WrapConsumer: spec.Kind %q must be \"event\"", spec.Kind)
 	}
 	if err := spec.Validate(); err != nil {
-		panic(err.Error())
+		return nil, fmt.Errorf("wrapper.WrapConsumer: %w", err)
 	}
 	if tr == nil {
 		tr = NoopTracer{}
@@ -146,7 +150,19 @@ func WrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...Consume
 		}
 		span.End()
 		return res
+	}, nil
+}
+
+// MustWrapConsumer is the composition-root fail-fast variant of WrapConsumer.
+// It panics when WrapConsumer returns an error. Suitable for static wiring
+// where the spec is a build-time literal; use WrapConsumer directly when the
+// spec is data-driven.
+func MustWrapConsumer(tr Tracer, spec ContractSpec, fn ConsumerFunc, opts ...ConsumerOption) ConsumerFunc {
+	c, err := WrapConsumer(tr, spec, fn, opts...)
+	if err != nil {
+		panic(err.Error())
 	}
+	return c
 }
 
 // identityRedactor is the default — passes errors through unchanged.

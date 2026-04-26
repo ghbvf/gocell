@@ -20,12 +20,16 @@ type StubEventRouter struct {
 }
 
 // AddContractHandler records the topic (derived from spec.Topic), handler,
-// consumerGroup, and the full ContractSpec.
-func (r *StubEventRouter) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) {
+// consumerGroup, and the full ContractSpec. The stub never validates the
+// inputs — production-style validation lives in runtime/eventrouter.Router.
+// Returns nil unconditionally so cells can exercise their RegisterSubscriptions
+// happy path without bringing in the full router pipeline.
+func (r *StubEventRouter) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) error {
 	r.Topics = append(r.Topics, spec.Topic)
 	r.Handlers = append(r.Handlers, handler)
 	r.ConsumerGroups = append(r.ConsumerGroups, consumerGroup)
 	r.Contracts = append(r.Contracts, spec)
+	return nil
 }
 
 // HandlerCount returns the number of registered handlers.

@@ -26,7 +26,11 @@ type RouteGroup struct {
 	// Register is called by bootstrap to mount the cell's sub-tree on the
 	// chosen mux. Required; a nil Register is a programmer error detected
 	// at phase5 validation time.
-	Register func(mux RouteMux)
+	//
+	// Returning a non-nil error aborts the bootstrap walk; the error is
+	// wrapped with the cell ID + group prefix at the phase5 call site so
+	// operators see which sub-tree failed mounting.
+	Register func(mux RouteMux) error
 	// CellID is the identifier of the cell that contributed this group.
 	// Set automatically by bootstrap during phase5CollectRouteGroups for
 	// error-context enrichment (OPS-02). Cells do not need to populate this.
@@ -38,7 +42,7 @@ type RouteGroup struct {
 // and register function. Equivalent to declaring the struct literal inline.
 //
 // DX-05: reduces boilerplate in cells that declare a single route group.
-func SingleGroup(l ListenerRef, prefix string, fn func(RouteMux)) RouteGroup {
+func SingleGroup(l ListenerRef, prefix string, fn func(RouteMux) error) RouteGroup {
 	return RouteGroup{Listener: l, Prefix: prefix, Register: fn}
 }
 

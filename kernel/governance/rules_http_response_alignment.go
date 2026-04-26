@@ -458,7 +458,10 @@ func extractContractIDFromLit(expr ast.Expr) string {
 	return ""
 }
 
-// isAuthMountCall returns true when the call is auth.Mount(…).
+// isAuthMountCall returns true when the call is auth.Mount(…) or
+// auth.MustMount(…). Both signatures share the (mux, Route) shape and bind
+// a wrapper.ContractSpec literal; the governance scanner correlates the
+// route declaration regardless of which variant the cell uses.
 func isAuthMountCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
@@ -468,7 +471,7 @@ func isAuthMountCall(call *ast.CallExpr) bool {
 	if !ok {
 		return false
 	}
-	return pkg.Name == "auth" && sel.Sel.Name == "Mount"
+	return pkg.Name == "auth" && (sel.Sel.Name == "Mount" || sel.Sel.Name == "MustMount")
 }
 
 // extractAuthMountContractAndHandler parses an auth.Mount call and returns

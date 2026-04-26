@@ -11,41 +11,59 @@ paths:
 ## Auth 路由声明 + 三 listener + RouteGroup (PR-A14b / PR262)
 
 每个 Cell 实现 `RouteGroupContributor` 接口，通过 `RouteGroups()` 声明路由组。
-每个路由组指定目标 listener、URL 前缀、以及注册回调（`Register func(mux cell.RouteMux)`）。
+每个路由组指定目标 listener、URL 前缀、以及注册回调（`Register func(mux cell.RouteMux) error` — PR-MODE-6: error-first 链路，phase5 把 Register 的错误连同 cell+listener+prefix 上下文 wrap 后冒泡到 `Bootstrap.Run`）。
 Bootstrap 在 phase5 收集所有路由组并挂载到对应 listener 的 chi.Mux 上。
 
-每条业务路由通过 `auth.Mount(mux, auth.Route{...})` 注册（**不是** `auth.Declare`/`auth.RouteDecl` —— 这两个旧符号已删除）。`auth.Route.Contract` 是 `wrapper.ContractSpec`，承载 method+path+contract id；Mount 自动 strip listener prefix、注册 chi handler、转发 AuthRouteMeta 给 FinalizeAuth。
+每条业务路由通过 `auth.Mount(mux, auth.Route{...})` 注册（**不是** `auth.Declare`/`auth.RouteDecl` —— 这两个旧符号已删除）。`auth.Route.Contract` 是 `wrapper.ContractSpec`，承载 method+path+contract id；Mount 自动 strip listener prefix、注册 chi handler、转发 AuthRouteMeta 给 FinalizeAuth。Mount 返回 `error`（PR-MODE-6 ERROR-FIRST-API）；`auth.MustMount` 是 composition-root fail-fast 包装，但 **slice handler 内部应直接用 `auth.Mount` + 错误传播**，让错误一路冒泡到 phase5。
 
 ```go
-// Cell.RouteGroups — PR-A14b 声明式路由组
+// Slice handler — RegisterRoutes 返回 error，使用 auth.Mount + 错误传播
+func (h *Handler) RegisterRoutes(mux cell.RouteHandler) error {
+    if err := auth.Mount(mux, auth.Route{
+        Contract: specSessionsLogin, // wrapper.ContractSpec — Method+Path+Kind=http
+        Handler:  http.HandlerFunc(h.loginHandler.HandleLogin),
+        Public:   true,              // JWT 豁免
+    }); err != nil {
+        return err
+    }
+    if err := auth.Mount(mux, auth.Route{
+        Contract:            specSessionsLogout,
+        Handler:             http.HandlerFunc(h.logoutHandler.HandleLogout),
+        PasswordResetExempt: true,   // 允许 reset-required token 穿过
+    }); err != nil {
+        return err
+    }
+    return nil
+}
+
+// Cell.RouteGroups — PR-A14b 声明式路由组（PR-MODE-6 错误链路贯通）
 func (c *AccessCore) RouteGroups() []cell.RouteGroup {
     return []cell.RouteGroup{
         {
             Listener: cell.PrimaryListener,
             Prefix:   "/api/v1/access",
-            Register: func(mux cell.RouteMux) {
+            Register: func(mux cell.RouteMux) error {
+                // mux.Route 的 callback 仍是 func(RouteMux) 无 error 返回，
+                // 用 outer-variable closure 捕获 slice 错误并通过 Register 返回
+                // 给 phase5。bootstrap/mountOneRouteGroup 用同样模式。
+                var firstErr error
+                captureErr := func(err error) {
+                    if err != nil && firstErr == nil {
+                        firstErr = err
+                    }
+                }
                 mux.Route("/sessions", func(s cell.RouteMux) {
-                    auth.Mount(s, auth.Route{
-                        Contract: specSessionsLogin, // wrapper.ContractSpec — Method+Path+Kind=http
-                        Handler:  http.HandlerFunc(c.loginHandler.HandleLogin),
-                        Public:   true,                     // JWT 豁免
-                    })
-                    auth.Mount(s, auth.Route{
-                        Contract:            specSessionsLogout,
-                        Handler:             http.HandlerFunc(c.logoutHandler.HandleLogout),
-                        PasswordResetExempt: true,         // 允许 reset-required token 穿过
-                    })
+                    captureErr(c.loginHandler.RegisterRoutes(s))
+                    captureErr(c.logoutHandler.RegisterRoutes(s))
                 })
+                return firstErr
             },
         },
         {
             Listener: cell.InternalListener,
             Prefix:   "/internal/v1/access",
-            Register: func(mux cell.RouteMux) {
-                auth.Mount(mux, auth.Route{
-                    Contract: specRolesAssign,
-                    Handler:  http.HandlerFunc(c.rbacAssignHandler.HandleAssign),
-                })
+            Register: func(mux cell.RouteMux) error {
+                return c.rbacAssignHandler.RegisterRoutes(mux)
             },
         },
     }
@@ -54,12 +72,16 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 // composition root — WithListener(ref, addr, authChain []cell.ListenerAuth, ...ListenerOption)
 // JWT auth lives on the listener auth chain; there is no separate WithAuthMiddleware /
 // WithAuthDiscovery option (PR262: typed AuthPlan replaces cell.Policy).
+//
+// AuthPlan 构造函数（PR-MODE-6）现在是 error-first：`cell.NewAuthJWT(v) (AuthJWT, error)`。
+// composition root 用 `cell.MustNewAuthJWT(v)` panic-on-misconfig 简化静态字面量；
+// 数据驱动场景用 `cell.NewAuthJWT(v)` 显式处理 error。
 bootstrap.New(
     bootstrap.WithAssembly(asm),
     bootstrap.WithListener(cell.PrimaryListener, ":8080",
-        []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
+        []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
     bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
-        []cell.ListenerAuth{cell.NewAuthServiceToken(nonceStore, ring)}),
+        []cell.ListenerAuth{cell.MustNewAuthServiceToken(nonceStore, ring)}),
     bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", nil),
 )
 ```
@@ -80,9 +102,9 @@ bootstrap.New(
 
 | 构造函数 | 说明 | 典型 listener |
 |---------|------|--------------|
-| `cell.NewAuthJWT(verifier)` | JWT 验证（直接注入 IntentTokenVerifier） | PrimaryListener |
-| `cell.NewAuthJWTFromAssembly(asm)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
-| `cell.NewAuthServiceToken(store, ring)` | HMAC-SHA256 service token | InternalListener |
+| `cell.MustNewAuthJWT(verifier)` / `cell.NewAuthJWT(v) (AuthJWT, error)` | JWT 验证（直接注入 IntentTokenVerifier）。Must 适用于静态 composition；error-first 适用于运行时配置。 | PrimaryListener |
+| `cell.MustNewAuthJWTFromAssembly(asm)` / `cell.NewAuthJWTFromAssembly(asm) (..., error)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
+| `cell.MustNewAuthServiceToken(store, ring)` / `cell.NewAuthServiceToken(...) (..., error)` | HMAC-SHA256 service token | InternalListener |
 | `cell.AuthMTLS{}` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
 | `nil` | 无验证（等同于 `cell.AuthNone{}`；推荐 nil 减少样板） | HealthListener（loopback 隔离） |
 
@@ -92,8 +114,8 @@ bootstrap.New(
 // mTLS + service-token 双层守护（外层 transport 证书验证 + 内层 HMAC token 防重放）
 bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
     []cell.ListenerAuth{
-        cell.AuthMTLS{},                                // 外层：peer cert presence check
-        cell.NewAuthServiceToken(nonceStore, ring),     // 内层：HMAC-SHA256 + replay guard
+        cell.AuthMTLS{},                                    // 外层：peer cert presence check
+        cell.MustNewAuthServiceToken(nonceStore, ring),     // 内层：HMAC-SHA256 + replay guard
     },
     bootstrap.WithListenerTLS(tlsCfg), // ClientAuth=RequireAndVerifyClientCert + ClientCAs required
 )
@@ -127,9 +149,9 @@ token 直接 plumb 到 `runtime/http/health.Handler.SetVerboseToken`；不匹配
 const WebhookListener cell.ListenerRef = "webhook"
 
 bootstrap.WithListener(cell.PrimaryListener, ":8080",
-    []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)})
+    []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)})
 bootstrap.WithListener(WebhookListener, ":8090",
-    []cell.ListenerAuth{cell.NewAuthServiceToken(store, ring)})
+    []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)})
 ```
 
 历史 `cell.GroupAuth` 接口、`cell.AuthVerboseToken` 类型、`bootstrap.WithLivezAuth/WithReadyzAuth/WithMetricsAuth` options 均已删除。`AUTH-PLAN-04 (LAYER-09)` archtest 仍禁止 cells 直接构造 AuthPlan（composition root 责任）。
@@ -181,7 +203,7 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - 路由级 Policy 存在时，Listener 认证链中间件在路由层之前运行（链中间件先于路由 handler）
 - `Public: true` 不能与路由级 `Policy` 同时设置（FinalizeAuth fail-fast）
 - `Public: true` 是 JWT 豁免标志，只对安装了 JWT 中间件的 listener 有意义
-- JWT 单一路径（PR262）：`cell.NewAuthJWT(verifier)` 直接注入；`cell.NewAuthJWTFromAssembly(asm)` phase4 时通过 `AuthJWTFromAssembly.Validate()` 从 `authProvider` Cell 发现 verifier。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。Verifier 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher，零样板。
+- JWT 单一路径（PR262 / PR-MODE-6）：`cell.MustNewAuthJWT(verifier)`（或 error-first 的 `cell.NewAuthJWT(v)`）直接注入；`cell.MustNewAuthJWTFromAssembly(asm)` phase4 时通过 `AuthJWTFromAssembly.Validate()` 从 `authProvider` Cell 发现 verifier。**没有** `WithAuthMiddleware` / `WithAuthDiscovery` 等 Bootstrap 顶层 Option。Verifier 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher，零样板。
 - `/internal/v1/*` 路由（`IsInternal()` 为 true）必须挂在 InternalListener；非 internal 路径不得挂在 InternalListener（FinalizeAuth 双向 fail-fast 校验）。
 
 ### 规则
@@ -193,4 +215,4 @@ internal listener 的 `ServiceTokenMiddleware` 必须带一个 replay-safe `auth
 - CORS OPTIONS：当前无 CORS middleware；如需公开 OPTIONS 请显式 `auth.Mount` + `Public: true`
 - 禁止在 `cmd/*` / `examples/*/main.go` 硬编码业务路径字面量（`grep '"POST /api/v1/"'` 必须为空）
 - Cell 禁止直接 import `runtime/http/router`；通过 `cell.RouteMux` / `cell.RouteGroup` 声明路由（LAYER-07）
-- Cell 禁止构造 AuthPlan 值（`cell.NewAuthJWT` 等）；认证计划由 composition root（`cmd/`）组装后通过 `WithListener` 注入（LAYER-09 / AUTH-PLAN-04）
+- Cell 禁止构造 AuthPlan 值（`cell.NewAuthJWT` / `cell.MustNewAuthJWT` / `cell.NewAuthServiceToken` / `cell.MustNewAuthServiceToken` 等所有变体）；认证计划由 composition root（`cmd/`）组装后通过 `WithListener` 注入（LAYER-09 / AUTH-PLAN-04）

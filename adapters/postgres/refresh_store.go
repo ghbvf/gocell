@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"time"
@@ -110,19 +111,21 @@ func (r refreshRow) toToken() *refresh.Token {
 	}
 }
 
-// NewRefreshStore constructs a PGRefreshStore.
-func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Clock, randReader io.Reader) *PGRefreshStore {
+// NewRefreshStore constructs a PGRefreshStore. Returns a non-nil error if
+// pool/clock are nil or policy values are out of range; callers that prefer
+// fail-fast at composition time can use MustNewRefreshStore.
+func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Clock, randReader io.Reader) (*PGRefreshStore, error) {
 	if pool == nil {
-		panic("postgres.NewRefreshStore: pool must not be nil")
+		return nil, fmt.Errorf("postgres.NewRefreshStore: pool must not be nil")
 	}
 	if clock == nil {
-		panic("postgres.NewRefreshStore: clock must not be nil")
+		return nil, fmt.Errorf("postgres.NewRefreshStore: clock must not be nil")
 	}
 	if policy.MaxAge <= 0 {
-		panic("postgres.NewRefreshStore: policy.MaxAge must be positive")
+		return nil, fmt.Errorf("postgres.NewRefreshStore: policy.MaxAge must be positive")
 	}
 	if policy.ReuseInterval < 0 {
-		panic("postgres.NewRefreshStore: policy.ReuseInterval must not be negative")
+		return nil, fmt.Errorf("postgres.NewRefreshStore: policy.ReuseInterval must not be negative")
 	}
 	if randReader == nil {
 		randReader = rand.Reader
@@ -132,7 +135,17 @@ func NewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Cl
 		policy: policy,
 		clock:  clock,
 		rand:   randReader,
+	}, nil
+}
+
+// MustNewRefreshStore is the composition-root fail-fast variant of
+// NewRefreshStore. It panics when NewRefreshStore returns an error.
+func MustNewRefreshStore(pool *pgxpool.Pool, policy refresh.Policy, clock refresh.Clock, randReader io.Reader) *PGRefreshStore {
+	store, err := NewRefreshStore(pool, policy, clock, randReader)
+	if err != nil {
+		panic(err.Error())
 	}
+	return store
 }
 
 // execCtx executes a SQL statement against the ambient transaction in ctx when
