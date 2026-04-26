@@ -16,14 +16,17 @@ username="${E2E_ADMIN_USERNAME:-admin}"
 email="${E2E_ADMIN_EMAIL:-admin@e2e.local}"
 password="${E2E_ADMIN_PASSWORD:-E2E-Bootstrap-Pwd-1!}"
 
+setup_body=$(jq -n --arg u "$username" --arg e "$email" --arg p "$password" \
+    '{username:$u, email:$e, password:$p}')
 curl -fsS -X POST "$base/api/v1/access/setup/admin" \
     -H "Content-Type: application/json" \
-    -d "$(printf '{"username":"%s","email":"%s","password":"%s"}' "$username" "$email" "$password")" \
+    -d "$setup_body" \
     >/dev/null
 
+login_body=$(jq -n --arg u "$username" --arg p "$password" '{username:$u, password:$p}')
 token=$(curl -fsS -X POST "$base/api/v1/access/sessions/login" \
     -H "Content-Type: application/json" \
-    -d "$(printf '{"username":"%s","password":"%s"}' "$username" "$password")" \
+    -d "$login_body" \
     | jq -r '.data.accessToken // empty')
 
 if [ -z "$token" ]; then

@@ -45,7 +45,8 @@ services:
       GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:gocell_e2e@postgres:5432/gocell_e2e?sslmode=disable
       GOCELL_REDIS_ADDR: redis:6379
       GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
-      GOCELL_CONFIGCORE_MASTER_KEY: ZTJlLWNvbmZpZ2NvcmUtbWFzdGVyLWtleS0zMmJ5dGUh
+      # 64 hex chars = 32 bytes for AES-256-GCM. Not in demo_keys.go banlist.
+      GOCELL_CONFIGCORE_MASTER_KEY: 0e2e0011223344556677889900aabbccddeeff112233445566778899aabbccdd
       GOCELL_CONFIGCORE_CURSOR_KEY: e2e-configcore-cursor-key-32byte-fixed-test-value
       GOCELL_ACCESSCORE_CURSOR_KEY: e2e-accesscore-cursor-key-32byte-fixed-test-value
       GOCELL_AUDITCORE_CURSOR_KEY:  e2e-auditcore-cursor-key-32byte-fixed-test-value

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 )
 
 // Parse reads `go test -json` events from r and returns the aggregated Result.
@@ -105,6 +106,13 @@ func (r *Result) apply(ev testEvent) {
 		case "pass", "fail", "skip":
 			stat.Action = ev.Action
 		}
+		return
+	}
+	// Sub-tests (t.Run) emit their own pass/fail/skip events; the parent
+	// then emits a terminal event aggregating the children. Counting both
+	// would double-count one logical test, so only the top-level test is
+	// tallied (sub-test names contain "/").
+	if strings.Contains(ev.Test, "/") {
 		return
 	}
 	// Test-level terminal events.

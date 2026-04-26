@@ -17,7 +17,9 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates curl openssl
 RUN mkdir -p /etc/gocell \
     && openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /etc/gocell/jwt-private.pem 2>/dev/null \
-    && openssl rsa -in /etc/gocell/jwt-private.pem -pubout -out /etc/gocell/jwt-public.pem 2>/dev/null
+    && openssl rsa -in /etc/gocell/jwt-private.pem -pubout -out /etc/gocell/jwt-public.pem 2>/dev/null \
+    && chmod 600 /etc/gocell/jwt-private.pem \
+    && chmod 644 /etc/gocell/jwt-public.pem
 COPY --from=build /out/corebundle /usr/local/bin/corebundle
 RUN printf '%s\n' \
     '#!/bin/sh' \

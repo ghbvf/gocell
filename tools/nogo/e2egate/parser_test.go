@@ -65,6 +65,20 @@ const eventsMultiPackageMixed = `{"Action":"run","Package":"pkg/a","Test":"TestA
 {"Action":"fail","Package":"pkg/b","Elapsed":0.2}
 `
 
+// eventsSubTests has one parent test with three t.Run children; counting both
+// parent and children would inflate TotalExecuted to 4. The parser must count
+// only the parent (top-level) terminal event.
+const eventsSubTests = `{"Action":"run","Package":"pkg/sub","Test":"TestParent"}
+{"Action":"run","Package":"pkg/sub","Test":"TestParent/SubA"}
+{"Action":"pass","Package":"pkg/sub","Test":"TestParent/SubA","Elapsed":0.0}
+{"Action":"run","Package":"pkg/sub","Test":"TestParent/SubB"}
+{"Action":"pass","Package":"pkg/sub","Test":"TestParent/SubB","Elapsed":0.0}
+{"Action":"run","Package":"pkg/sub","Test":"TestParent/SubC"}
+{"Action":"pass","Package":"pkg/sub","Test":"TestParent/SubC","Elapsed":0.0}
+{"Action":"pass","Package":"pkg/sub","Test":"TestParent","Elapsed":0.1}
+{"Action":"pass","Package":"pkg/sub","Elapsed":0.1}
+`
+
 func TestParse_AllPass_GatePasses(t *testing.T) {
 	res, err := e2egate.Parse(strings.NewReader(eventsAllPass))
 	require.NoError(t, err)
@@ -126,6 +140,17 @@ func TestParse_EmptyStdin_GateFails(t *testing.T) {
 func TestParse_InvalidJSON_ReturnsError(t *testing.T) {
 	_, err := e2egate.Parse(strings.NewReader(eventsInvalidJSON))
 	require.Error(t, err, "Parse must surface JSON decoder errors so the caller exits non-zero")
+}
+
+func TestParse_SubTests_CountedOncePerParent(t *testing.T) {
+	res, err := e2egate.Parse(strings.NewReader(eventsSubTests))
+	require.NoError(t, err)
+	assert.False(t, res.Failed(), "gate should pass when parent test ran; reasons=%v", res.Reasons)
+	// One parent test (3 subtests are not counted separately).
+	assert.Equal(t, 1, res.TotalExecuted)
+	require.Contains(t, res.Packages, "pkg/sub")
+	assert.Equal(t, 1, res.Packages["pkg/sub"].Executed)
+	assert.Equal(t, 0, res.Packages["pkg/sub"].Skipped)
 }
 
 func TestParse_MultiPackageOnePassOneFail_GatePasses(t *testing.T) {

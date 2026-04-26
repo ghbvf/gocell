@@ -28,13 +28,23 @@ import (
 	e2erequire "github.com/ghbvf/gocell/tests/e2e/internal/require"
 )
 
-// e2eBaseURL returns the base URL of the running corebundle, defaulting to
-// localhost:8080. Override via E2E_BASE_URL environment variable.
+// e2eBaseURL returns the base URL of the primary listener (business API),
+// defaulting to localhost:8080. Override via E2E_BASE_URL environment variable.
 func e2eBaseURL() string {
 	if u := os.Getenv("E2E_BASE_URL"); u != "" {
 		return u
 	}
 	return "http://localhost:8080"
+}
+
+// e2eHealthURL returns the base URL of the health listener (/healthz /readyz
+// /metrics live here, not on the primary listener). Defaults to localhost:9091;
+// override via E2E_HEALTH_URL.
+func e2eHealthURL() string {
+	if u := os.Getenv("E2E_HEALTH_URL"); u != "" {
+		return u
+	}
+	return "http://localhost:9091"
 }
 
 // e2eAdminToken returns the admin JWT for bootstrapped e2e environment.
@@ -43,12 +53,14 @@ func e2eAdminToken() string {
 	return os.Getenv("E2E_ADMIN_TOKEN")
 }
 
-// waitForReady polls /healthz until the server is up or the timeout elapses.
+// waitForReady polls /readyz on the health listener until the server is up or
+// the timeout elapses. /readyz waits for cell readiness (DB pools, migrations,
+// outbox dispatchers) — strictly stronger than /healthz liveness.
 func waitForReady(t *testing.T, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		resp, err := http.Get(e2eBaseURL() + "/healthz") //nolint:noctx
+		resp, err := http.Get(e2eHealthURL() + "/readyz") //nolint:noctx
 		if err == nil && resp.StatusCode == http.StatusOK {
 			resp.Body.Close()
 			return
@@ -58,7 +70,7 @@ func waitForReady(t *testing.T, timeout time.Duration) {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
-	t.Fatalf("server at %s did not become ready within %s", e2eBaseURL(), timeout)
+	t.Fatalf("server at %s did not become ready within %s", e2eHealthURL(), timeout)
 }
 
 // ---------------------------------------------------------------------------

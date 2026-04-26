@@ -294,16 +294,22 @@ jobs:
           go test -tags=e2e -json -count=1 -timeout=120s ./tests/e2e/... \
             | tee "$RUNNER_TEMP/e2e.json" \
             | "$RUNNER_TEMP/e2egate"
+      - name: Capture compose logs
+        if: always()
+        working-directory: tests/e2e
+        run: docker compose -f docker-compose.e2e.yaml logs --no-color > "$RUNNER_TEMP/compose.log" 2>&1 || true
       - name: Teardown
         if: always()
         working-directory: tests/e2e
         run: docker compose -f docker-compose.e2e.yaml down -v
-      - name: Upload e2e events on failure
+      - name: Upload e2e diagnostics on failure
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: e2e-events
-          path: ${{ runner.temp }}/e2e.json
+          name: e2e-diagnostics
+          path: |
+            ${{ runner.temp }}/e2e.json
+            ${{ runner.temp }}/compose.log
           retention-days: 7
 
   os-smoke:
