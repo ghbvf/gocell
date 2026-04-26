@@ -1,0 +1,69 @@
+# docker-compose for the PR-CFG-J e2e harness.
+#
+# Three services (postgres + redis + corebundle) drive the corebundle binary
+# in real adapter mode against a real PostgreSQL and a real Redis (for
+# distributed nonce store + outbox idempotency claimer per PR-CFG-F).
+#
+# - JWT RSA keys are generated at image build time inside the corebundle
+#   image (see Dockerfile.corebundle); the entrypoint exports them as env.
+# - Configcore encryption uses local-aes with a fixed test master key
+#   (vault-transit coverage stays in adapters/vault integration tests).
+# - All other secrets are fixed e2e literals; this is the single CI
+#   context, so override defaults are intentionally absent.
+
+services:
+  postgres:
+    image: postgres:15.13-alpine
+    environment:
+      POSTGRES_USER: gocell
+      POSTGRES_PASSWORD: gocell_e2e
+      POSTGRES_DB: gocell_e2e
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gocell -d gocell_e2e"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  redis:
+    image: redis:7.4.2-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  corebundle:
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.corebundle
+    depends_on:
+      postgres: {condition: service_healthy}
+      redis:    {condition: service_healthy}
+    environment:
+      GOCELL_ADAPTER_MODE: real
+      GOCELL_CELL_ADAPTER_MODE: postgres
+      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:gocell_e2e@postgres:5432/gocell_e2e?sslmode=disable
+      GOCELL_REDIS_ADDR: redis:6379
+      GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
+      GOCELL_CONFIGCORE_MASTER_KEY: ZTJlLWNvbmZpZ2NvcmUtbWFzdGVyLWtleS0zMmJ5dGUh
+      GOCELL_CONFIGCORE_CURSOR_KEY: e2e-configcore-cursor-key-32byte-fixed-test-value
+      GOCELL_ACCESSCORE_CURSOR_KEY: e2e-accesscore-cursor-key-32byte-fixed-test-value
+      GOCELL_AUDITCORE_CURSOR_KEY:  e2e-auditcore-cursor-key-32byte-fixed-test-value
+      GOCELL_AUDITCORE_HMAC_KEY:    e2e-auditcore-hmac-key-32byte-fixed-test-value
+      GOCELL_JWT_ISSUER: gocell-e2e
+      GOCELL_JWT_AUDIENCE: gocell-e2e-clients
+      GOCELL_SERVICE_SECRET: e2e-service-secret-32byte-fixed-test
+      GOCELL_METRICS_TOKEN: e2e-metrics-token
+      GOCELL_READYZ_VERBOSE_TOKEN: e2e-readyz-verbose-token
+      GOCELL_HTTP_PRIMARY_ADDR: ":8080"
+      GOCELL_HTTP_INTERNAL_ADDR: ":9090"
+      GOCELL_HTTP_HEALTH_ADDR: ":9091"
+      GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE: interactive
+    ports:
+      - "8080:8080"
+      - "9091:9091"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:9091/readyz"]
+      interval: 3s
+      timeout: 3s
+      retries: 60

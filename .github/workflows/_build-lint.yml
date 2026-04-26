@@ -258,6 +258,54 @@ jobs:
           path: coverage-integration.out
           retention-days: 1
 
+  e2e:
+    # PR-CFG-J: real-execution gate for tests/e2e. Runs corebundle in a
+    # docker-compose harness (postgres + redis + corebundle) and pipes
+    # `go test -json` through tools/nogo/e2egate, which fails the job when
+    # zero tests executed or any package declared tests but had them all
+    # skipped (require.Docker / require.PG gate not opened).
+    #
+    # Independent of integration-test on purpose: testcontainers and
+    # docker-compose are different infra strategies, and a failure in
+    # either should not blame the other.
+    if: ${{ inputs.run-integration }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: "1.25"
+          cache-dependency-path: go.sum
+      - name: Build e2egate
+        run: go build -o "$RUNNER_TEMP/e2egate" ./tools/nogo/e2egate/cmd/e2egate
+      - name: Start docker-compose harness
+        working-directory: tests/e2e
+        run: docker compose -f docker-compose.e2e.yaml up -d --wait
+      - name: Bootstrap admin and capture token
+        run: bash tests/e2e/scripts/bootstrap-admin.sh >> "$GITHUB_ENV"
+      - name: Run e2e tests with execution gate
+        env:
+          GOCELL_E2E_DOCKER_AVAILABLE: "1"
+          GOCELL_E2E_PG_AVAILABLE: "1"
+          GOCELL_E2E_RMQ_AVAILABLE: "0"
+        run: |
+          set -o pipefail
+          go test -tags=e2e -json -count=1 -timeout=120s ./tests/e2e/... \
+            | tee "$RUNNER_TEMP/e2e.json" \
+            | "$RUNNER_TEMP/e2egate"
+      - name: Teardown
+        if: always()
+        working-directory: tests/e2e
+        run: docker compose -f docker-compose.e2e.yaml down -v
+      - name: Upload e2e events on failure
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: e2e-events
+          path: ${{ runner.temp }}/e2e.json
+          retention-days: 7
+
   os-smoke:
     if: ${{ inputs.run-os-smoke }}
     # Advisory status: job failure does NOT fail the overall workflow.

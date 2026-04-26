@@ -1,0 +1,32 @@
+# Multi-stage build of cmd/corebundle for the e2e docker-compose harness.
+# Build context is the gocell repo root (compose: build.context = "../..").
+#
+# JWT RSA keys are generated at image build time and exposed via env vars by
+# the entrypoint wrapper; this keeps test keys out of the repo and out of the
+# compose YAML, while remaining deterministic per image build.
+
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+RUN apk add --no-cache git
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle
+
+FROM alpine:3.20
+RUN apk add --no-cache ca-certificates curl openssl
+RUN mkdir -p /etc/gocell \
+    && openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /etc/gocell/jwt-private.pem 2>/dev/null \
+    && openssl rsa -in /etc/gocell/jwt-private.pem -pubout -out /etc/gocell/jwt-public.pem 2>/dev/null
+COPY --from=build /out/corebundle /usr/local/bin/corebundle
+RUN printf '%s\n' \
+    '#!/bin/sh' \
+    'set -eu' \
+    'GOCELL_JWT_PRIVATE_KEY="$(cat /etc/gocell/jwt-private.pem)"' \
+    'GOCELL_JWT_PUBLIC_KEY="$(cat /etc/gocell/jwt-public.pem)"' \
+    'export GOCELL_JWT_PRIVATE_KEY GOCELL_JWT_PUBLIC_KEY' \
+    'exec /usr/local/bin/corebundle "$@"' \
+    > /usr/local/bin/start-corebundle.sh \
+    && chmod +x /usr/local/bin/start-corebundle.sh
+EXPOSE 8080 9090 9091
+ENTRYPOINT ["/usr/local/bin/start-corebundle.sh"]

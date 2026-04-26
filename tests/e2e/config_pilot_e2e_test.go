@@ -2,9 +2,10 @@
 
 // Package e2e contains end-to-end tests that exercise the full configcore
 // PG pilot including value encryption. These tests require a live 3-container
-// environment (PostgreSQL + Vault + corebundle HTTP server) started via:
+// environment (PostgreSQL + Redis + corebundle HTTP server) started via:
 //
 //	docker compose -f tests/e2e/docker-compose.e2e.yaml up -d
+//	bash tests/e2e/scripts/bootstrap-admin.sh   # exports E2E_ADMIN_TOKEN
 //
 // Run with:
 //
