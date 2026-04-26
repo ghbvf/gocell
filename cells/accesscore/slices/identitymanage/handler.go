@@ -1,6 +1,7 @@
 package identitymanage
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -242,51 +243,53 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	// JSON merge patch: only fields present in the JSON body are updated.
-	// Patchable fields: name, email, status. Other fields are silently ignored.
-	// Uses DecodeJSON (not strict) because map targets accept any key by design.
-	var raw map[string]json.RawMessage
-	if err := httputil.DecodeJSON(r, &raw); err != nil {
+	var req struct {
+		Name                 json.RawMessage `json:"name"`
+		Email                json.RawMessage `json:"email"`
+		Status               json.RawMessage `json:"status"`
+		RequirePasswordReset json.RawMessage `json:"requirePasswordReset"`
+	}
+	if err := httputil.DecodeJSONStrict(r, &req); err != nil {
 		httputil.WriteDecodeError(r.Context(), w, err)
 		return
 	}
 
 	input := UpdateInput{ID: id}
-	if v, ok := raw["name"]; ok {
-		var name string
-		if err := json.Unmarshal(v, &name); err != nil {
-			httputil.WriteError(r.Context(), w, http.StatusBadRequest,
-				string(errcode.ErrValidationFailed), fmt.Sprintf("field 'name' must be a string: %v", err))
-			return
-		}
-		input.Name = &name
+	name, err := decodePatchString(req.Name, "name")
+	if err != nil {
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest,
+			string(errcode.ErrValidationFailed), err.Error())
+		return
 	}
-	if v, ok := raw["email"]; ok {
-		var email string
-		if err := json.Unmarshal(v, &email); err != nil {
-			httputil.WriteError(r.Context(), w, http.StatusBadRequest,
-				string(errcode.ErrValidationFailed), fmt.Sprintf("field 'email' must be a string: %v", err))
-			return
-		}
-		input.Email = &email
+	if name != nil {
+		input.Name = name
 	}
-	if v, ok := raw["status"]; ok {
-		var status string
-		if err := json.Unmarshal(v, &status); err != nil {
-			httputil.WriteError(r.Context(), w, http.StatusBadRequest,
-				string(errcode.ErrValidationFailed), fmt.Sprintf("field 'status' must be a string: %v", err))
-			return
-		}
-		input.Status = &status
+	email, err := decodePatchString(req.Email, "email")
+	if err != nil {
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest,
+			string(errcode.ErrValidationFailed), err.Error())
+		return
 	}
-	if v, ok := raw["requirePasswordReset"]; ok {
-		var flag bool
-		if err := json.Unmarshal(v, &flag); err != nil {
-			httputil.WriteError(r.Context(), w, http.StatusBadRequest,
-				string(errcode.ErrValidationFailed), fmt.Sprintf("field 'requirePasswordReset' must be a boolean: %v", err))
-			return
-		}
-		input.RequirePasswordReset = &flag
+	if email != nil {
+		input.Email = email
+	}
+	status, err := decodePatchString(req.Status, "status")
+	if err != nil {
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest,
+			string(errcode.ErrValidationFailed), err.Error())
+		return
+	}
+	if status != nil {
+		input.Status = status
+	}
+	requirePasswordReset, err := decodePatchBool(req.RequirePasswordReset, "requirePasswordReset")
+	if err != nil {
+		httputil.WriteError(r.Context(), w, http.StatusBadRequest,
+			string(errcode.ErrValidationFailed), err.Error())
+		return
+	}
+	if requirePasswordReset != nil {
+		input.RequirePasswordReset = requirePasswordReset
 	}
 
 	user, err := h.svc.Update(r.Context(), input)
@@ -295,6 +298,34 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toUserResponse(user)})
+}
+
+func decodePatchString(raw json.RawMessage, field string) (*string, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("field '%s' must be a string", field)
+	}
+	var value string
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("field '%s' must be a string: %w", field, err)
+	}
+	return &value, nil
+}
+
+func decodePatchBool(raw json.RawMessage, field string) (*bool, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return nil, fmt.Errorf("field '%s' must be a boolean", field)
+	}
+	var value bool
+	if err := json.Unmarshal(raw, &value); err != nil {
+		return nil, fmt.Errorf("field '%s' must be a boolean: %w", field, err)
+	}
+	return &value, nil
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {

@@ -15,7 +15,7 @@ endpoints:
         type: string
         required: false
         minLength: 0
-        maxLength: 256
+        maxLength: 4096
       limit:
         type: integer
         required: false

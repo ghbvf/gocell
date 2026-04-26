@@ -9,6 +9,27 @@ endpoints:
   http:
     method: GET
     path: /internal/v1/devicecommands
+    queryParams:
+      cursor:
+        type: string
+        required: false
+        minLength: 0
+        maxLength: 4096
+      deviceId:
+        type: string
+        required: false
+        minLength: 0
+        maxLength: 256
+      limit:
+        type: integer
+        required: false
+        minimum: 1
+        maximum: 500
+      statuses:
+        type: string
+        required: false
+        minLength: 0
+        maxLength: 256
     successStatus: 200
     noContent: false
     responses:

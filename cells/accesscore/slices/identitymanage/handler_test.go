@@ -339,7 +339,7 @@ func TestHandler_UpdateUnknownField(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
-func TestHandler_PatchAcceptsUnknownFields(t *testing.T) {
+func TestHandler_PatchRejectsUnknownFields(t *testing.T) {
 	r := setup()
 
 	// Create a user first (as admin).
@@ -357,14 +357,15 @@ func TestHandler_PatchAcceptsUnknownFields(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &created))
 
-	// PATCH with unknown field should succeed (merge patch accepts any key, self-access).
+	// PATCH request schema is strict; unknown fields should fail fast instead
+	// of being silently ignored.
 	w = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodPatch, identityPrefix+"/"+created.Data.ID,
 		strings.NewReader(`{"email":"new@f.com","extra":"ignored"}`))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext(created.Data.ID, nil)) // self-access
 	r.ServeHTTP(w, req)
-	assert.Equal(t, http.StatusOK, w.Code, "PATCH uses DecodeJSON (not strict); unknown fields must be accepted for merge patch semantics")
+	assert.Equal(t, http.StatusBadRequest, w.Code, "PATCH must reject unknown fields to match additionalProperties:false")
 }
 
 func TestHandler_CreateThenGetThenDelete(t *testing.T) {
