@@ -1,0 +1,15 @@
+id: event.user.updated.v1
+kind: event
+ownerCell: accesscore
+consistencyLevel: L2
+lifecycle: draft
+endpoints:
+  publisher: accesscore
+  subscribers:
+    - auditcore
+schemaRefs:
+  headers: headers.schema.json
+  payload: payload.schema.json
+replayable: true
+idempotencyKey: event_id
+deliverySemantics: at-least-once

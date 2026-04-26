@@ -1,11 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "event.user.created.v1.payload",
+  "title": "event.user.updated.v1.payload",
   "type": "object",
   "properties": {
     "userId": { "type": "string" },
-    "username": { "type": "string" }
+    "actorId": { "type": "string" }
   },
-  "required": ["userId", "username"],
+  "required": ["userId", "actorId"],
   "additionalProperties": false
 }

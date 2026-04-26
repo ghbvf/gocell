@@ -24,6 +24,7 @@ import (
 type EntryUpserted struct {
 	Key     string
 	Version int
+	ActorID string
 }
 
 // EntryDeleted is accesscore's local typed view of event.config.entry-deleted.v1.
@@ -33,17 +34,20 @@ type EntryUpserted struct {
 type EntryDeleted struct {
 	Key     string
 	Version int
+	ActorID string
 }
 
 // internal wire structs; not exported
 type entryUpsertedWire struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	ActorID string `json:"actorId"`
 }
 
 type entryDeletedWire struct {
 	Key     string `json:"key"`
 	Version int    `json:"version"`
+	ActorID string `json:"actorId"`
 }
 
 // DecodeEntryUpserted strictly decodes and validates event.config.entry-upserted.v1.

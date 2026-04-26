@@ -122,7 +122,7 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	assert.Equal(t, dto.TopicUserCreated, w.entries[0].EventType)
 	var payload map[string]any
 	require.NoError(t, json.Unmarshal(w.entries[0].Payload, &payload))
-	assert.Equal(t, out.ID, payload["user_id"])
+	assert.Equal(t, out.ID, payload["userId"])
 	assert.Equal(t, "root", payload["username"])
 
 	// Verify persisted user does NOT have PasswordResetRequired

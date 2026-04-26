@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "http.config.internal.get.v1.response",
+  "description": "Single ConfigEntry wrapped in {data: {...}} envelope. Internal variant of http.config.get.v1.response.",
+  "type": "object",
+  "required": ["data"],
+  "additionalProperties": false,
+  "properties": {
+    "data": {
+      "type": "object",
+      "required": ["id", "key", "value", "sensitive", "version", "createdAt", "updatedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "key": { "type": "string" },
+        "value": { "type": "string" },
+        "sensitive": { "type": "boolean", "description": "true 表示该 entry 的 value 已脱敏返回" },
+        "version": { "type": "integer" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      }
+    }
+  }
+}

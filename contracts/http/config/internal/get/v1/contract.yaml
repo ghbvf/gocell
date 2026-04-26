@@ -1,0 +1,30 @@
+id: http.config.internal.get.v1
+kind: http
+ownerCell: configcore
+consistencyLevel: L1
+lifecycle: draft
+endpoints:
+  server: configcore
+  clients:
+    - accesscore
+  http:
+    method: GET
+    path: /internal/v1/config/{key}
+    pathParams:
+      key:
+        type: string
+    successStatus: 200
+    noContent: false
+    responses:
+      401:
+        description: "Unauthorized — missing or invalid service token"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      403:
+        description: "Forbidden — service token lacks required permission"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Config key not found"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+schemaRefs:
+  request: request.schema.json
+  response: response.schema.json
