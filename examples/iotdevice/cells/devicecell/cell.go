@@ -44,6 +44,7 @@ var (
 	_ cell.RouteGroupContributor = (*DeviceCell)(nil)
 	_ cell.LifecycleContributor  = (*DeviceCell)(nil)
 	_ kcommand.QueueRegistrar    = (*DeviceCell)(nil)
+	_ cell.HealthContributor     = (*DeviceCell)(nil)
 )
 
 type commandQueueStore interface {
@@ -86,6 +87,7 @@ type DeviceCell struct {
 	*cell.BaseCell
 	deviceRepo      domain.DeviceRepository
 	publisher       outbox.Publisher
+	emitter         outbox.Emitter // set during Init; retained for HealthCheckers
 	cursorCodec     *query.CursorCodec
 	logger          *slog.Logger
 	metricsProvider metrics.Provider
@@ -96,6 +98,20 @@ type DeviceCell struct {
 	commandHandler  *devicecommand.Handler
 	statusHandler   *devicestatus.Handler
 	listHandler     *devicelist.Handler
+}
+
+// HealthCheckers implements cell.HealthContributor. Aggregates the outbox
+// emitter's HealthCheckers (fail-open drop rate → degraded signal) so /readyz
+// surfaces "device events are being lost in fail-open path" without polluting
+// the cell's primary Cell.Health() signal.
+func (c *DeviceCell) HealthCheckers() map[string]func(context.Context) error {
+	checkers := make(map[string]func(context.Context) error)
+	if hc, ok := c.emitter.(cell.HealthContributor); ok {
+		for k, v := range hc.HealthCheckers() {
+			checkers[k] = v
+		}
+	}
+	return checkers
 }
 
 // RegisterCommandQueue implements kernel/command.QueueRegistrar. The supplied
@@ -175,13 +191,14 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := cell.CheckNotNoop(deps.DurabilityMode, "devicecell", c.publisher); err != nil {
 		return err
 	}
-	emitter, err := c.buildEmitter()
+	builtEmitter, err := c.buildEmitter()
 	if err != nil {
 		return err
 	}
+	c.emitter = builtEmitter
 
 	// device-register slice
-	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger, deviceregister.WithEmitter(emitter))
+	registerSvc := deviceregister.NewService(c.deviceRepo, c.logger, deviceregister.WithEmitter(builtEmitter))
 	c.registerHandler = deviceregister.NewHandler(registerSvc)
 	c.AddSlice(cell.NewBaseSlice("deviceregister", "devicecell", cell.L4))
 
