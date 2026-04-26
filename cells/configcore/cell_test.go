@@ -628,3 +628,25 @@ func TestConfigCore_DeriveModes(t *testing.T) {
 		})
 	}
 }
+
+// TestConfigCore_HealthCheckers_WithDirectEmitter verifies that after Init
+// with a DirectEmitter-backed publisher, HealthCheckers returns the
+// outbox-failopen-rate checker scoped to "configcore".
+func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
+	c := newTestCell()
+	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
+	require.NoError(t, c.Init(context.Background(), deps))
+
+	checkers := c.HealthCheckers()
+	const emitterKey = "outbox-failopen-rate:configcore"
+	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
+	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
+}
+
+// TestConfigCore_HealthCheckers_NilEmitter verifies that HealthCheckers returns
+// an empty map when the emitter does not implement cell.HealthContributor.
+func TestConfigCore_HealthCheckers_NilEmitter(t *testing.T) {
+	c := NewConfigCore() // no emitter set
+	checkers := c.HealthCheckers()
+	assert.Empty(t, checkers, "nil emitter must produce empty health checkers map")
+}

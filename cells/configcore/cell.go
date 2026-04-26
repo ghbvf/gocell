@@ -3,6 +3,7 @@
 package configcore
 
 import (
+	"context"
 	"log/slog"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
@@ -29,6 +30,7 @@ var (
 	_ cell.Cell                  = (*ConfigCore)(nil)
 	_ cell.RouteGroupContributor = (*ConfigCore)(nil)
 	_ cell.EventRegistrar        = (*ConfigCore)(nil)
+	_ cell.HealthContributor     = (*ConfigCore)(nil)
 )
 
 // Option configures a ConfigCore Cell.
@@ -188,6 +190,20 @@ type ConfigCore struct {
 	flagHandler      *featureflag.Handler
 	flagWriteHandler *flagwrite.Handler
 	subscribeSvc     *configsubscribe.Service
+}
+
+// HealthCheckers implements cell.HealthContributor. Aggregates the outbox
+// emitter's HealthCheckers (currently fail-open drop rate → degraded signal)
+// so /readyz surfaces "config events are being lost in fail-open path"
+// without polluting the cell's primary Cell.Health() signal.
+func (c *ConfigCore) HealthCheckers() map[string]func(context.Context) error {
+	checkers := make(map[string]func(context.Context) error)
+	if hc, ok := c.emitter.(cell.HealthContributor); ok {
+		for k, v := range hc.HealthCheckers() {
+			checkers[k] = v
+		}
+	}
+	return checkers
 }
 
 // NewConfigCore creates a new ConfigCore Cell.
