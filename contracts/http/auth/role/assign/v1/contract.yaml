@@ -12,11 +12,17 @@ endpoints:
     path: /internal/v1/access/roles/assign
     successStatus: 201
     responses:
+      400:
+        description: "Bad request — request body decode failure or userId/roleId blank (ErrAuthRBACInvalidInput)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
         description: "Forbidden — authenticated but lacks admin role"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — role with given id does not exist (ErrAuthRoleNotFound)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

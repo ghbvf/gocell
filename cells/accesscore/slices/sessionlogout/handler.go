@@ -25,7 +25,10 @@ func NewHandler(svc *Service) *Handler {
 // session id gets the same 404 as a request for a non-existent session id —
 // hiding enumeration of session ids belonging to other users.
 func (h *Handler) HandleLogout(w http.ResponseWriter, r *http.Request) {
-	sessionID := r.PathValue("id")
+	sessionID, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	if !ok {
+		return
+	}
 
 	p, ok := auth.FromContext(r.Context())
 	if !ok || p.Subject == "" {

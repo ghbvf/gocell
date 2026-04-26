@@ -150,7 +150,16 @@ func (s *Scaffolder) CreateSlice(opts SliceOpts) error {
 	dir := filepath.Join(cellDir, "slices", opts.ID)
 	outPath := filepath.Join(dir, "slice.yaml")
 
-	return s.renderToFile("templates/slice.yaml.tpl", outPath, opts)
+	if err := s.renderToFile("templates/slice.yaml.tpl", outPath, opts); err != nil {
+		return err
+	}
+	// Emit handler.go alongside slice.yaml so generated slices ship with the
+	// canonical UUID path-param validation pattern (PR-A45 / CH-05). Failure
+	// here would leave slice.yaml on disk; that's acceptable because the
+	// failure is conflict-only (file already exists) — caller can rerun after
+	// resolving manually.
+	handlerPath := filepath.Join(dir, "handler.go")
+	return s.renderToFile("templates/handler.go.tpl", handlerPath, opts)
 }
 
 // CreateContract creates contracts/{kind}/{domain...}/{version}/contract.yaml.

@@ -12,6 +12,9 @@ endpoints:
     path: /internal/v1/access/roles/revoke
     successStatus: 200
     responses:
+      400:
+        description: "Bad request — request body decode failure or userId/roleId blank (ErrAuthRBACInvalidInput)"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"

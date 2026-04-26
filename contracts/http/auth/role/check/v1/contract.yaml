@@ -19,6 +19,9 @@ endpoints:
     successStatus: 200
     noContent: false
     responses:
+      400:
+        description: "Bad request — path parameter userID is not a valid UUID (ERR_VALIDATION_INVALID_UUID) or roleName is blank"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"

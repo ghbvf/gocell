@@ -296,6 +296,7 @@ var codeToStatus = map[errcode.Code]int{
 	errcode.ErrCursorInvalid:             http.StatusBadRequest,
 	errcode.ErrPageSizeExceeded:          http.StatusBadRequest,
 	errcode.ErrValidationFailed:          http.StatusBadRequest,
+	errcode.ErrValidationInvalidUUID:     http.StatusBadRequest,
 	errcode.ErrMetadataInvalid:           http.StatusBadRequest,
 	errcode.ErrLifecycleInvalid:          http.StatusBadRequest,
 	errcode.ErrReferenceBroken:           http.StatusBadRequest,

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
@@ -74,7 +75,8 @@ func TestBootstrapper_FullFlow_OnCurrentOS(t *testing.T) {
 	// Admin user must exist with PasswordResetRequired=true.
 	user, getErr := userRepo.GetByUsername(context.Background(), "admin")
 	require.NoError(t, getErr)
-	assert.True(t, strings.HasPrefix(user.ID, "usr-bootstrap-"), "user ID must have bootstrap prefix")
+	_, idParseErr := uuid.Parse(user.ID)
+	assert.NoError(t, idParseErr, "user ID must be a valid UUID")
 	assert.True(t, user.PasswordResetRequired, "PasswordResetRequired must be set")
 
 	// Admin role must be assigned.

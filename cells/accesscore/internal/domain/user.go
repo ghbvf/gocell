@@ -2,7 +2,6 @@
 package domain
 
 import (
-	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -131,11 +130,10 @@ func (u *User) MarkProvisionComplete() {
 
 // IsRecoverableProvisionOrphan verifies that a duplicate username belongs to
 // the same interrupted provisioning attempt class, not to an ordinary user.
-func (u *User) IsRecoverableProvisionOrphan(source UserSource, idPrefix string) bool {
+func (u *User) IsRecoverableProvisionOrphan(source UserSource) bool {
 	return ValidAdminProvisionSource(source) &&
 		u.CreationSource == source &&
-		u.ProvisionState == ProvisionStatePending &&
-		strings.HasPrefix(u.ID, idPrefix)
+		u.ProvisionState == ProvisionStatePending
 }
 
 // MarkPasswordResetRequired sets the PasswordResetRequired flag to true and

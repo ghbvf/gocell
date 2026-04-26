@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -159,7 +160,8 @@ func TestSetupEndpoints_FirstRunFlow(t *testing.T) {
 		}
 		require.NoError(t, json.NewDecoder(resp.Body).Decode(&body))
 		assert.Equal(t, "root", body.Data.Username)
-		assert.Contains(t, body.Data.ID, "usr-")
+		_, idErr := uuid.Parse(body.Data.ID)
+		assert.NoError(t, idErr, "user id must be a canonical UUID (PR-A45)")
 	})
 
 	// 3. Second POST must 410 Gone (one-shot lifecycle).

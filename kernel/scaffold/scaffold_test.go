@@ -2,6 +2,8 @@ package scaffold
 
 import (
 	"errors"
+	"go/parser"
+	"go/token"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,6 +152,19 @@ func TestCreateSlice(t *testing.T) {
 	assert.Contains(t, content, "unit.sessionlogin.service")
 	assert.Contains(t, content, "contract: []")
 	assert.Contains(t, content, "waivers: []")
+
+	// PR-A45 / PR239-T1: scaffold must also emit a handler.go that already
+	// uses the canonical UUID path-param validation pattern (httputil.ParseUUIDPathParam).
+	// CH-05 enforces this convention for any contract declaring `pathParams.{name}.format: uuid`,
+	// so the scaffolded slice must lead developers into the correct shape from the start.
+	handlerPath := filepath.Join(sliceDir, "handler.go")
+	handlerContent := readGenerated(t, handlerPath)
+	assert.Contains(t, handlerContent, "package sessionlogin",
+		"handler package must match slice ID")
+	assert.Contains(t, handlerContent, "httputil.ParseUUIDPathParam(w, r,",
+		"handler must contain the UUID path-param validation boilerplate (CH-05)")
+	assert.Contains(t, handlerContent, "github.com/ghbvf/gocell/pkg/httputil",
+		"handler must import pkg/httputil")
 }
 
 func TestCreateSlice_CellMissing(t *testing.T) {
@@ -617,6 +632,7 @@ func TestTemplateFS_ContainsAllTemplates(t *testing.T) {
 	expected := []string{
 		"templates/cell.yaml.tpl",
 		"templates/slice.yaml.tpl",
+		"templates/handler.go.tpl",
 		"templates/contract-http.yaml.tpl",
 		"templates/contract-event.yaml.tpl",
 		"templates/contract-command.yaml.tpl",
@@ -629,6 +645,64 @@ func TestTemplateFS_ContainsAllTemplates(t *testing.T) {
 		require.NoError(t, err, "template %s should be embedded", name)
 		assert.True(t, len(data) > 0, "template %s should not be empty", name)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// Scaffold smoke test (PR-A45 / PR239-T1 / PR239-T2)
+//
+// Verifies two contracts of the scaffolded slice:
+//   1. The generated handler.go is syntactically valid Go (parses cleanly)
+//      and contains the canonical UUID path-param validation call. This
+//      protects against template drift that would otherwise only be caught
+//      at slice-population time, days after scaffold runs.
+//   2. The generated contract.yaml carries an intentional TODO placeholder
+//      path "/api/v1/TODO/{id}" that FMT-13 (path ↔ pathParams cross-check)
+//      WILL reject — this proves the placeholder mechanism works without
+//      requiring scaffold output to be commit-ready.
+// ---------------------------------------------------------------------------
+
+func TestScaffoldSlice_HandlerParsesAndContainsParseUUIDPathParam(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	require.NoError(t, s.CreateCell(CellOpts{ID: "smoketest", OwnerTeam: "platform"}))
+	require.NoError(t, s.CreateSlice(SliceOpts{ID: "smokeslice", CellID: "smoketest"}))
+
+	handlerPath := filepath.Join(root, "cells", "smoketest", "slices", "smokeslice", "handler.go")
+
+	// Parse the generated handler.go — catches template syntax errors at
+	// scaffold time rather than waiting for a developer to copy-edit the
+	// stub. This is cheaper than running `go build` (which would need a
+	// synthesized go.mod) but still catches the failure mode that PR239-T1
+	// cares about: scaffold emits non-compiling Go.
+	fset := token.NewFileSet()
+	_, err := parser.ParseFile(fset, handlerPath, nil, parser.ParseComments)
+	require.NoError(t, err, "scaffolded handler.go must parse as valid Go")
+
+	content := readGenerated(t, handlerPath)
+	assert.Contains(t, content, "ParseUUIDPathParam(w, r, \"id\")",
+		"scaffolded handler.go must call httputil.ParseUUIDPathParam (CH-05 invariant)")
+}
+
+func TestScaffoldContract_HTTPPlaceholderPathHasIDToken(t *testing.T) {
+	root := t.TempDir()
+	s := New(root)
+	require.NoError(t, s.CreateCell(CellOpts{ID: "smoketest", OwnerTeam: "platform"}))
+	require.NoError(t, s.CreateContract(ContractOpts{
+		ID: "http.smoke.create.v1", Kind: "http", OwnerCell: "smoketest",
+	}))
+
+	contractPath := filepath.Join(root, "contracts", "http", "smoke", "create", "v1", "contract.yaml")
+	content := readGenerated(t, contractPath)
+
+	// PR239-T2: the template ships a deliberate placeholder path that exposes
+	// an `{id}` token without a matching pathParams declaration so that
+	// FMT-13 (governance) rejects it on first `gocell validate --strict`,
+	// forcing the developer to author a real contract instead of leaving
+	// scaffold output in place.
+	assert.Contains(t, content, "/api/v1/TODO/{id}",
+		"http contract template must keep the TODO placeholder so FMT-13 catches unfinished scaffolds")
+	assert.NotContains(t, content, "pathParams:\n      id:",
+		"placeholder must NOT pre-declare pathParams.id, otherwise FMT-13 misses the TODO signal")
 }
 
 // ---------------------------------------------------------------------------
@@ -671,7 +745,9 @@ func TestIntegration_CellSliceContractJourney(t *testing.T) {
 	paths := []string{
 		"cells/order-core/cell.yaml",
 		"cells/order-core/slices/ordercreate/slice.yaml",
+		"cells/order-core/slices/ordercreate/handler.go",
 		"cells/order-core/slices/ordercancel/slice.yaml",
+		"cells/order-core/slices/ordercancel/handler.go",
 		"contracts/http/order/create/v1/contract.yaml",
 		"contracts/event/order/created/v1/contract.yaml",
 		"journeys/J-ordercheckout.yaml",

@@ -166,7 +166,6 @@ func (b *bootstrapper) ensureAdmin(ctx context.Context) (worker.Worker, error) {
 		Email:        b.cfg.Username + "@gocell.local",
 		PasswordHash: hash,
 		RequireReset: true,
-		IDPrefix:     "usr-bootstrap-",
 		Source:       domain.UserSourceBootstrap,
 	})
 	if err != nil {

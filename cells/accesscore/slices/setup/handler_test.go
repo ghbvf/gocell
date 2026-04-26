@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -77,7 +78,8 @@ func TestHandler_CreateAdmin_FreshSystem_Returns201(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "root", resp.Data.Username)
 	assert.Equal(t, "root@local", resp.Data.Email)
-	assert.Contains(t, resp.Data.ID, "usr-")
+	_, idParseErr := uuid.Parse(resp.Data.ID)
+	assert.NoError(t, idParseErr, "user ID must be a valid UUID")
 	assert.NotEmpty(t, resp.Data.CreatedAt)
 }
 

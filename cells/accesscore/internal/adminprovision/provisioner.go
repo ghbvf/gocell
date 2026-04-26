@@ -44,15 +44,13 @@ const (
 // ProvisionInput holds the inputs for a single Ensure call.
 //
 // PasswordHash is pre-hashed by the caller (bcrypt). Provisioner never sees
-// plaintext. Source and IDPrefix prove ownership for duplicate-user recovery;
-// a duplicate username is recoverable only when the existing row is still a
-// pending provisioning row from the same source and ID prefix.
+// plaintext. A duplicate username is recoverable only when the existing row is
+// still a pending provisioning row from the same Source.
 type ProvisionInput struct {
 	Username     string
 	Email        string
 	PasswordHash []byte
 	RequireReset bool
-	IDPrefix     string
 	Source       domain.UserSource
 }
 
@@ -125,7 +123,7 @@ func (p *Provisioner) Status(ctx context.Context) (bool, error) {
 // Steps:
 //  1. Fast-path CountByRole: if > 0, return OutcomeAlreadyExists (no I/O writes).
 //  2. Ensure admin role exists (tolerate ErrAuthRoleDuplicate).
-//  3. Build user with prefix + uuid, persist via UserRepo.Create.
+//  3. Build user with a fresh UUID, persist via UserRepo.Create.
 //     - On ErrAuthUserDuplicate: recount admins. > 0 → OutcomeRaceSkipped
 //     (concurrent replica finished first). == 0 → only recover if the
 //     duplicate row is a pending same-source provisioning orphan.
@@ -133,9 +131,6 @@ func (p *Provisioner) Status(ctx context.Context) (bool, error) {
 //  5. Mark the provisioning row complete so future duplicate usernames cannot
 //     be reclaimed after the first-admin sequence is done.
 func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (*domain.User, ProvisionOutcome, error) {
-	if in.IDPrefix == "" {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: IDPrefix is required")
-	}
 	if len(in.PasswordHash) == 0 {
 		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: PasswordHash is required")
 	}
@@ -233,7 +228,7 @@ func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput
 	if err != nil {
 		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: construct user: %w", err)
 	}
-	user.ID = in.IDPrefix + p.newID()
+	user.ID = p.newID()
 	user.MarkProvisionPending(in.Source)
 	if in.RequireReset {
 		user.MarkPasswordResetRequired()
@@ -265,7 +260,7 @@ func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput
 	if err != nil {
 		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: lookup orphan user: %w", err)
 	}
-	if !existing.IsRecoverableProvisionOrphan(in.Source, in.IDPrefix) {
+	if !existing.IsRecoverableProvisionOrphan(in.Source) {
 		p.logger.Warn("admin provision: duplicate username is not a recoverable orphan",
 			slog.String("event", "admin_provision_duplicate_rejected"),
 			slog.String("user_id", existing.ID),

@@ -53,8 +53,8 @@ func (noopTxRunner) RunInTx(ctx context.Context, fn func(context.Context) error)
 var _ persistence.TxRunner = noopTxRunner{}
 
 func seedContractSession(repo *mem.SessionRepository) string {
-	sess, _ := domain.NewSession("usr-1", "at-1", time.Now().Add(time.Hour))
-	sess.ID = "sess-1"
+	sess, _ := domain.NewSession(testID("usr-1"), "at-1", time.Now().Add(time.Hour))
+	sess.ID = testID("sess-1")
 	_ = repo.Create(context.Background(), sess)
 	return sess.ID
 }
@@ -80,7 +80,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 	rec := httptest.NewRecorder()
 	// Simulate the auth middleware having populated the caller's subject in ctx.
 	req := httptest.NewRequest(c.HTTP.Method, path, nil).
-		WithContext(auth.TestContext("usr-1", nil))
+		WithContext(auth.TestContext(testID("usr-1"), nil))
 	mux.ServeHTTP(rec, req)
 	c.ValidateHTTPResponseRecorder(t, rec)
 }
@@ -98,7 +98,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 
 	sessID := seedContractSession(sessionRepo)
 
-	err := svc.Logout(context.Background(), sessID, "usr-1")
+	err := svc.Logout(context.Background(), sessID, testID("usr-1"))
 	require.NoError(t, err)
 
 	require.Len(t, writer.entries, 1, "Logout must emit one outbox entry")
@@ -174,7 +174,7 @@ func TestService_Logout_OutboxWriteError(t *testing.T) {
 	svc := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(noopTxRunner{}))
 
-	err := svc.Logout(context.Background(), "sess-1", "usr-1")
+	err := svc.Logout(context.Background(), testID("sess-1"), testID("usr-1"))
 	require.Error(t, err, "Logout must propagate outbox.Write error to preserve L2 atomicity")
 	assert.Contains(t, err.Error(), "outbox")
 }
