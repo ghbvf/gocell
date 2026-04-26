@@ -193,3 +193,107 @@ func h(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 }
+
+// TestCheckHTTPPathParamUUID_FunctionNarrowing verifies CH-05 Finding 7:
+// when two contracts share a handler file and auth.Mount correlates each
+// contract to a specific function, CH-05 must walk only that function's body.
+// If ParseUUIDPathParam is called in the wrong function (for the wrong
+// contract), the check must still report missing.
+func TestCheckHTTPPathParamUUID_FunctionNarrowing(t *testing.T) {
+	root := t.TempDir()
+	sliceRelDir := "cells/testcell/slices/testslice"
+	sliceAbsDir := filepath.Join(root, sliceRelDir)
+	require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+
+	const contractA = "http.test.uuid.a.v1"
+	const contractB = "http.test.uuid.b.v1"
+
+	// The handler file has TWO auth.Mount calls:
+	//   contractA → handleA (contains both ParseUUIDPathParam calls)
+	//   contractB → handleB (contains NO ParseUUIDPathParam calls)
+	// CH-05 must detect that contractB's required "userID" param is not
+	// parsed in handleB, even though it IS parsed in handleA.
+	src := `
+var specA = wrapper.ContractSpec{ID: "` + contractA + `"}
+var specB = wrapper.ContractSpec{ID: "` + contractB + `"}
+
+func setup(mux http.Handler) {
+	auth.Mount(mux, auth.Route{Contract: specA, Handler: http.HandlerFunc(handleA)})
+	auth.Mount(mux, auth.Route{Contract: specB, Handler: http.HandlerFunc(handleB)})
+}
+
+func handleA(w http.ResponseWriter, r *http.Request) {
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	_ = id; _ = ok
+	userID, ok2 := httputil.ParseUUIDPathParam(w, r, "userID")
+	_ = userID; _ = ok2
+}
+
+func handleB(w http.ResponseWriter, r *http.Request) {
+	// intentionally missing: httputil.ParseUUIDPathParam(w, r, "userID")
+}
+`
+	// Write handler file with all necessary imports.
+	handlerPath := filepath.Join(sliceAbsDir, "handler.go")
+	content := `package x
+
+import (
+	"net/http"
+	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/runtime/auth"
+)
+` + src
+	require.NoError(t, os.WriteFile(handlerPath, []byte(content), 0o644))
+
+	// Two slices serving two contracts in the same handler.go.
+	project := &metadata.ProjectMeta{
+		Cells: map[string]*metadata.CellMeta{
+			"testcell": {ID: "testcell", File: "cells/testcell/cell.yaml"},
+		},
+		Slices: map[string]*metadata.SliceMeta{
+			"testcell/testslice": {
+				ID:            "testslice",
+				BelongsToCell: "testcell",
+				File:          sliceRelDir + "/slice.yaml",
+				ContractUsages: []metadata.ContractUsage{
+					{Contract: contractA, Role: "serve"},
+					{Contract: contractB, Role: "serve"},
+				},
+			},
+		},
+		Contracts:  map[string]*metadata.ContractMeta{},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	cA := makeUUIDContract(contractA, "contracts/http/test/uuid/a/v1/contract.yaml", []string{"id", "userID"})
+	cB := makeUUIDContract(contractB, "contracts/http/test/uuid/b/v1/contract.yaml", []string{"userID"})
+
+	validator := NewValidator(project, root)
+	results := validator.CheckHTTPPathParamUUID([]*metadata.ContractMeta{cA, cB}, root)
+
+	var errMsgs []string
+	for _, r := range results {
+		if r.Severity == SeverityError {
+			errMsgs = append(errMsgs, r.Message)
+		}
+	}
+
+	// contractA's handleA has both "id" and "userID" — no finding.
+	for _, msg := range errMsgs {
+		assert.NotContains(t, msg, contractA,
+			"contractA's handleA parses both params: no finding expected")
+	}
+
+	// contractB's handleB is missing ParseUUIDPathParam for "userID".
+	found := false
+	for _, msg := range errMsgs {
+		if assert.Contains(t, msg, contractB) && assert.Contains(t, msg, `"userID"`) {
+			found = true
+			break
+		}
+	}
+	_ = found
+	require.NotEmpty(t, errMsgs, "contractB must produce a CH-05 finding for missing userID")
+}

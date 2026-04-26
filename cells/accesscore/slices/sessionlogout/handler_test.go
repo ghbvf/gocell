@@ -15,6 +15,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
@@ -31,12 +32,12 @@ func newHandlerLogoutRefreshStore() refresh.Store {
 
 func setup() *Handler {
 	sessionRepo := mem.NewSessionRepository()
-	sess, _ := domain.NewSession(testID("usr-1"), "access-tok", time.Now().Add(time.Hour))
-	sess.ID = testID("sess-1")
+	sess, _ := domain.NewSession(testutil.TestID("usr-1"), "access-tok", time.Now().Add(time.Hour))
+	sess.ID = testutil.TestID("sess-1")
 	_ = sessionRepo.Create(context.Background(), sess)
 	// Victim session owned by a different user — used to prove IDOR guard.
-	other, _ := domain.NewSession(testID("usr-victim"), "at-v", time.Now().Add(time.Hour))
-	other.ID = testID("sess-victim")
+	other, _ := domain.NewSession(testutil.TestID("usr-victim"), "at-v", time.Now().Add(time.Hour))
+	other.ID = testutil.TestID("sess-victim")
 	_ = sessionRepo.Create(context.Background(), other)
 
 	svc := NewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default())
@@ -52,14 +53,14 @@ func TestHandleLogout(t *testing.T) {
 	}{
 		{
 			name:       "own session returns 204",
-			path:       "/" + testID("sess-1"),
-			caller:     testID("usr-1"),
+			path:       "/" + testutil.TestID("sess-1"),
+			caller:     testutil.TestID("usr-1"),
 			wantStatus: http.StatusNoContent,
 		},
 		{
 			name:       "nonexistent session returns 404",
-			path:       "/" + testID("no-such-sess"),
-			caller:     testID("usr-1"),
+			path:       "/" + testutil.TestID("no-such-sess"),
+			caller:     testutil.TestID("usr-1"),
 			wantStatus: http.StatusNotFound,
 		},
 		{
@@ -67,8 +68,8 @@ func TestHandleLogout(t *testing.T) {
 			// to a non-existent id — 404, not 403 — so attackers cannot
 			// enumerate session ownership.
 			name:       "other user's session returns 404 not 403",
-			path:       "/" + testID("sess-victim"),
-			caller:     testID("usr-attacker"),
+			path:       "/" + testutil.TestID("sess-victim"),
+			caller:     testutil.TestID("usr-attacker"),
 			wantStatus: http.StatusNotFound,
 		},
 		{
@@ -76,7 +77,7 @@ func TestHandleLogout(t *testing.T) {
 			// (no auth middleware injected subject), the handler must fail
 			// closed rather than allow anonymous revokes.
 			name:       "missing subject in ctx returns 401",
-			path:       "/" + testID("sess-1"),
+			path:       "/" + testutil.TestID("sess-1"),
 			caller:     "",
 			wantStatus: http.StatusUnauthorized,
 		},
@@ -84,14 +85,14 @@ func TestHandleLogout(t *testing.T) {
 			// Defense-in-depth: Principal is present in context (ok=true) but
 			// Subject is empty — handler must still reject with 401.
 			name:       "principal present but empty subject returns 401",
-			path:       "/" + testID("sess-1"),
+			path:       "/" + testutil.TestID("sess-1"),
 			caller:     "empty-subject-sentinel",
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
 			name:       "invalid UUID in path returns 400",
 			path:       "/" + invalidUUID,
-			caller:     testID("usr-1"),
+			caller:     testutil.TestID("usr-1"),
 			wantStatus: http.StatusBadRequest,
 		},
 	}

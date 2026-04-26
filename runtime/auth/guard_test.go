@@ -286,3 +286,59 @@ func TestSelfOr(t *testing.T) {
 		})
 	}
 }
+
+// TestSelfOr_UUIDNormalization verifies Finding 11: SelfOr normalizes UUID
+// path-value format variants before subject comparison so that uppercase or
+// compact UUID representations are treated identically to canonical lowercase.
+func TestSelfOr_UUIDNormalization(t *testing.T) {
+	const canonicalUUID = "0e8d6e9a-3a6f-4b1f-9c1e-2a3b4c5d6e7f"
+
+	tests := []struct {
+		name      string
+		subject   string // stored in Principal (canonical lowercase)
+		pathValue string // raw path value (may be in any UUID format)
+		wantErr   bool
+	}{
+		{
+			name:      "self-access canonical lowercase UUID — Allow",
+			subject:   canonicalUUID,
+			pathValue: canonicalUUID,
+			wantErr:   false,
+		},
+		{
+			name:      "self-access uppercase UUID — Allow after normalization",
+			subject:   canonicalUUID,
+			pathValue: "0E8D6E9A-3A6F-4B1F-9C1E-2A3B4C5D6E7F",
+			wantErr:   false,
+		},
+		{
+			name:      "self-access compact 32-char hex UUID — Allow after normalization",
+			subject:   canonicalUUID,
+			pathValue: "0e8d6e9a3a6f4b1f9c1e2a3b4c5d6e7f",
+			wantErr:   false,
+		},
+		{
+			name:      "different UUID — Deny",
+			subject:   canonicalUUID,
+			pathValue: "11111111-1111-1111-1111-111111111111",
+			wantErr:   true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := TestContext(tc.subject, nil)
+			r := buildRequest(ctx)
+			r.SetPathValue("id", tc.pathValue)
+			err := SelfOr("id")(r)
+			if tc.wantErr {
+				require.Error(t, err)
+				var ecErr *errcode.Error
+				require.True(t, errors.As(err, &ecErr))
+				assert.Equal(t, errcode.ErrAuthForbidden, ecErr.Code)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}

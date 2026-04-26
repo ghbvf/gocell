@@ -13,6 +13,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
@@ -66,7 +67,7 @@ func setup(t *testing.T, runMode query.RunMode) http.Handler {
 			{Resource: "users", Action: "write"},
 		},
 	})
-	_, _ = roleRepo.AssignToUser(context.Background(), testID("user-1"), "r1")
+	_, _ = roleRepo.AssignToUser(context.Background(), testutil.TestID("user-1"), "r1")
 
 	codec, err := query.NewCursorCodec([]byte("gocell-demo-ACCESS-CORE-key-32!!"))
 	if err != nil {
@@ -92,8 +93,8 @@ func TestHandler(t *testing.T) {
 	}{
 		{
 			name:       "GET /{userID} self-access returns roles with permissions",
-			path:       "/api/v1/access/roles/" + testID("user-1"),
-			subject:    testID("user-1"),
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
+			subject:    testutil.TestID("user-1"),
 			roles:      nil,
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
@@ -119,8 +120,8 @@ func TestHandler(t *testing.T) {
 		},
 		{
 			name:       "GET /{userID} self-access no roles returns empty",
-			path:       "/api/v1/access/roles/" + testID("unknown-user"),
-			subject:    testID("unknown-user"),
+			path:       "/api/v1/access/roles/" + testutil.TestID("unknown-user"),
+			subject:    testutil.TestID("unknown-user"),
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -132,8 +133,8 @@ func TestHandler(t *testing.T) {
 		},
 		{
 			name:       "GET /{userID}/{roleName} self-access has role",
-			path:       "/api/v1/access/roles/" + testID("user-1") + "/admin",
-			subject:    testID("user-1"),
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1") + "/admin",
+			subject:    testutil.TestID("user-1"),
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -147,8 +148,8 @@ func TestHandler(t *testing.T) {
 		},
 		{
 			name:       "GET /{userID}/{roleName} self-access missing role",
-			path:       "/api/v1/access/roles/" + testID("user-1") + "/viewer",
-			subject:    testID("user-1"),
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1") + "/viewer",
+			subject:    testutil.TestID("user-1"),
 			wantStatus: http.StatusOK,
 			checkBody: func(t *testing.T, body []byte) {
 				var resp struct {
@@ -163,35 +164,35 @@ func TestHandler(t *testing.T) {
 		// Trust boundary tests (#27r)
 		{
 			name:       "GET /{userID} admin bypass allowed",
-			path:       "/api/v1/access/roles/" + testID("user-1"),
-			subject:    testID("admin-user"),
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
+			subject:    testutil.TestID("admin-user"),
 			roles:      []string{"admin"},
 			wantStatus: http.StatusOK,
 		},
 		{
 			name:       "GET /{userID} different user no admin returns 403",
-			path:       "/api/v1/access/roles/" + testID("user-1"),
-			subject:    testID("user-2"),
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
+			subject:    testutil.TestID("user-2"),
 			roles:      []string{"viewer"},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "GET /{userID}/{roleName} different user no admin returns 403",
-			path:       "/api/v1/access/roles/" + testID("user-1") + "/admin",
-			subject:    testID("user-2"),
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1") + "/admin",
+			subject:    testutil.TestID("user-2"),
 			roles:      []string{"viewer"},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "GET /{userID} no subject returns 401",
-			path:       "/api/v1/access/roles/" + testID("user-1"),
+			path:       "/api/v1/access/roles/" + testutil.TestID("user-1"),
 			subject:    "", // no auth context
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
 			name:       "GET /{userID} invalid UUID returns 400",
 			path:       "/api/v1/access/roles/" + invalidUUID,
-			subject:    testID("user-1"),
+			subject:    testutil.TestID("user-1"),
 			roles:      []string{"admin"},
 			wantStatus: http.StatusBadRequest,
 			checkBody: func(t *testing.T, body []byte) {
@@ -226,8 +227,8 @@ func TestHandler(t *testing.T) {
 func TestHandler_ListRoles_ProdMode_InvalidCursor_Returns400(t *testing.T) {
 	r := setup(t, query.RunModeProd)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testID("user-1")+"?cursor=not-a-valid-cursor", nil)
-	req = req.WithContext(auth.TestContext(testID("user-1"), nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+testutil.TestID("user-1")+"?cursor=not-a-valid-cursor", nil)
+	req = req.WithContext(auth.TestContext(testutil.TestID("user-1"), nil))
 
 	r.ServeHTTP(w, req)
 

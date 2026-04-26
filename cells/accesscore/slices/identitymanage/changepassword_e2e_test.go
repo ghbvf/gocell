@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -143,7 +144,7 @@ func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword str
 	// PR-A45: handler edge ParseUUIDPathParam requires canonical UUIDs in
 	// path positions; testID derives a deterministic UUID from the username
 	// so seed and request paths agree.
-	user.ID = testID("e2e-" + username)
+	user.ID = testutil.TestID("e2e-" + username)
 	user.MarkPasswordResetRequired()
 	require.NoError(t, f.userRepo.Create(context.Background(), user))
 
@@ -231,7 +232,7 @@ func TestChangePassword_FullFlow(t *testing.T) {
 	// so use a syntactically valid UUID to avoid the upstream
 	// ParseUUIDPathParam guard intercepting before the middleware decision
 	// is observable.
-	assert.Equal(t, http.StatusNoContent, muxWithMiddleware(http.MethodDelete, "/api/v1/access/sessions/"+testID("sess-x")),
+	assert.Equal(t, http.StatusNoContent, muxWithMiddleware(http.MethodDelete, "/api/v1/access/sessions/"+testutil.TestID("sess-x")),
 		"DELETE /sessions/{id} must be exempt from password reset enforcement")
 
 	// --- Step 4: ChangePassword ---

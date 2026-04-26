@@ -3,9 +3,9 @@ package governance
 import (
 	"fmt"
 	"go/ast"
-	"go/parser"
 	"go/token"
 	"log/slog"
+	"sort"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -17,18 +17,27 @@ const CodeContractHealthPathParamUUID = "CH-05" // SeverityError
 // httputil.ParseUUIDPathParam(w, r, "{name}") for that parameter.
 //
 // Contracts without a matching in-repo handler are silently skipped.
+//
+// CH-05 reuses the same parsedHandlerFile cache and contractToFuncs mapping
+// from CH-04 (rules_http_response_alignment.go) to narrow the walk to the
+// specific handler function linked to each contract via auth.Mount. When no
+// auth.Mount correlation is found the rule falls back to whole-file scanning
+// and emits a SeverityWarn note.
 func (v *Validator) CheckHTTPPathParamUUID(contracts []*metadata.ContractMeta, projectRoot string) []ValidationResult {
+	// Share the same parse cache across all contracts in one call; avoids
+	// re-parsing the same handler.go for every contract it serves.
+	cache := map[string]*parsedHandlerFile{}
 	var results []ValidationResult
 	for _, c := range contracts {
 		if c.Kind != "http" {
 			continue
 		}
-		results = append(results, v.checkPathParamUUIDForContract(c, projectRoot)...)
+		results = append(results, v.checkPathParamUUIDForContract(c, projectRoot, cache)...)
 	}
 	return results
 }
 
-func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, projectRoot string) []ValidationResult {
+func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, projectRoot string, cache map[string]*parsedHandlerFile) []ValidationResult {
 	uuidParams := collectUUIDPathParams(c)
 	if len(uuidParams) == 0 {
 		return nil
@@ -41,7 +50,7 @@ func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, proj
 		return nil
 	}
 
-	parsed, err := extractParsedUUIDParamNames(handlerFile)
+	ph, err := parseHandlerFile(handlerFile, cache)
 	if err != nil {
 		slog.Debug("CH-05: failed to parse handler AST",
 			slog.String("contract", c.ID),
@@ -50,6 +59,35 @@ func (v *Validator) checkPathParamUUIDForContract(c *metadata.ContractMeta, proj
 		return nil
 	}
 
+	// Narrow to the specific handler function when auth.Mount correlation is
+	// available; fall back to whole-file scan with a Warn note otherwise.
+	var searchNode ast.Node
+	narrowed := false
+	if fnName, ok := ph.contractToFuncs[c.ID]; ok {
+		if body, ok := ph.funcBodies[fnName]; ok {
+			searchNode = body
+			narrowed = true
+		}
+	}
+
+	var results []ValidationResult
+	if !narrowed {
+		// No auth.Mount correlation — walk entire file. Emit a Warn so that
+		// developers know the check is less precise than usual.
+		slog.Warn("CH-05: no auth.Mount correlation found, falling back to file-wide scan",
+			slog.String("contract", c.ID),
+			slog.String("file", handlerFile))
+		// Collect from allCodes equivalent: scan all function bodies.
+		parsed := collectParsedUUIDParamNamesFromNode(ph.funcBodies)
+		return buildPathParamFindings(v, c, uuidParams, parsed)
+	}
+
+	parsed := collectParsedUUIDParamNamesFromAST(searchNode)
+	return append(results, buildPathParamFindings(v, c, uuidParams, parsed)...)
+}
+
+// buildPathParamFindings compares required UUID params vs parsed call sites.
+func buildPathParamFindings(v *Validator, c *metadata.ContractMeta, uuidParams []string, parsed map[string]struct{}) []ValidationResult {
 	var results []ValidationResult
 	for _, paramName := range uuidParams {
 		if _, ok := parsed[paramName]; !ok {
@@ -76,58 +114,61 @@ func collectUUIDPathParams(c *metadata.ContractMeta) []string {
 		}
 	}
 	// Sort for deterministic finding order across Go map iteration.
-	sortStrings(names)
+	sort.Strings(names)
 	return names
 }
 
-// sortStrings sorts a string slice in place (avoids importing sort package
-// twice when the governance package already imports it in the sibling file;
-// Go resolves this via the package-level sort import, so a named helper here
-// keeps complexity ≤15 per function).
-func sortStrings(ss []string) {
-	for i := 1; i < len(ss); i++ {
-		for j := i; j > 0 && ss[j] < ss[j-1]; j-- {
-			ss[j], ss[j-1] = ss[j-1], ss[j]
-		}
-	}
-}
-
-// extractParsedUUIDParamNames walks the AST of filename and returns the set
-// of parameter names passed to httputil.ParseUUIDPathParam(w, r, "<name>")
-// calls anywhere in the file.
-func extractParsedUUIDParamNames(filename string) (map[string]struct{}, error) {
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, filename, nil, 0)
-	if err != nil {
-		return nil, fmt.Errorf("parse %s: %w", filename, err)
-	}
-
+// collectParsedUUIDParamNamesFromNode walks a single AST node (typically a
+// function body) and returns the set of parameter names passed to
+// httputil.ParseUUIDPathParam(w, r, "<name>") calls within it.
+func collectParsedUUIDParamNamesFromAST(node ast.Node) map[string]struct{} {
 	found := make(map[string]struct{})
-	ast.Inspect(f, func(n ast.Node) bool {
+	ast.Inspect(node, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if !isParseUUIDPathParamCall(call) {
-			return true
-		}
-		// Args[2] must be a string literal with the param name.
-		if len(call.Args) < 3 {
-			return true
-		}
-		lit, ok := call.Args[2].(*ast.BasicLit)
-		if !ok || lit.Kind != token.STRING {
-			return true
-		}
-		// Strip enclosing double quotes from the literal value.
-		name := lit.Value
-		if len(name) >= 2 && name[0] == '"' && name[len(name)-1] == '"' {
-			name = name[1 : len(name)-1]
-		}
-		found[name] = struct{}{}
+		collectParseUUIDCallName(call, found)
 		return true
 	})
-	return found, nil
+	return found
+}
+
+// collectParsedUUIDParamNamesFromNode walks all function bodies in the map
+// (used for the fallback whole-file scan path).
+func collectParsedUUIDParamNamesFromNode(funcBodies map[string]ast.Node) map[string]struct{} {
+	found := make(map[string]struct{})
+	for _, body := range funcBodies {
+		ast.Inspect(body, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			collectParseUUIDCallName(call, found)
+			return true
+		})
+	}
+	return found
+}
+
+// collectParseUUIDCallName inspects a single call expression and, if it is
+// httputil.ParseUUIDPathParam(w, r, "<name>"), adds "<name>" to found.
+func collectParseUUIDCallName(call *ast.CallExpr, found map[string]struct{}) {
+	if !isParseUUIDPathParamCall(call) {
+		return
+	}
+	if len(call.Args) < 3 {
+		return
+	}
+	lit, ok := call.Args[2].(*ast.BasicLit)
+	if !ok || lit.Kind != token.STRING {
+		return
+	}
+	name := lit.Value
+	if len(name) >= 2 && name[0] == '"' && name[len(name)-1] == '"' {
+		name = name[1 : len(name)-1]
+	}
+	found[name] = struct{}{}
 }
 
 // isParseUUIDPathParamCall returns true when call is

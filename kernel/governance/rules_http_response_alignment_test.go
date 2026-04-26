@@ -20,6 +20,15 @@ func writeHandlerFile(t *testing.T, dir, src string) string {
 	return path
 }
 
+// writeHandlerFileWithHTTPUtil writes Go source as handler.go with httputil imported.
+func writeHandlerFileWithHTTPUtil(t *testing.T, dir, src string) string {
+	t.Helper()
+	path := filepath.Join(dir, "handler.go")
+	content := "package x\n\nimport \"net/http\"\nimport \"github.com/ghbvf/gocell/pkg/errcode\"\nimport \"github.com/ghbvf/gocell/pkg/httputil\"\n\n" + src
+	require.NoError(t, os.WriteFile(path, []byte(content), 0o644))
+	return path
+}
+
 // makeContract builds a minimal ContractMeta for CH-04 tests. contractFile is
 // relative to projectRoot (e.g. "contracts/http/foo/v1/contract.yaml").
 func makeContract(id, contractFile string, responses map[int]contracts.HTTPResponse) *metadata.ContractMeta {
@@ -161,6 +170,32 @@ func h(w http.ResponseWriter, r *http.Request) {
 `,
 			responses: map[int]contracts.HTTPResponse{},
 		},
+		{
+			// Finding 9: errcode.WithDetails wraps an inner errcode.New call;
+			// the ast.Inspect recursive walk must find the inner New call's Code.
+			name: "errcode.WithDetails wrapping inner New: inner code is found",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	_ = errcode.WithDetails(errcode.New(errcode.ErrAuthUserNotFound, "x"), nil)
+}
+`,
+			responses: map[int]contracts.HTTPResponse{
+				404: {Description: "not found", SchemaRef: "err.json"},
+			},
+		},
+		{
+			// Finding 9: WithDetails inner code NOT declared → must produce finding.
+			name: "errcode.WithDetails inner code missing from contract",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	_ = errcode.WithDetails(errcode.New(errcode.ErrAuthUserNotFound, "x"), nil)
+}
+`,
+			responses: map[int]contracts.HTTPResponse{
+				400: {Description: "bad request", SchemaRef: "err.json"},
+			},
+			wantErrors: []string{"handler returns 404 but contract does not declare it"},
+		},
 	}
 
 	for _, tc := range tests {
@@ -211,6 +246,98 @@ func h(w http.ResponseWriter, r *http.Request) {
 
 			if tc.noHandler {
 				assert.Empty(t, results, "expected no findings when no handler exists")
+			}
+		})
+	}
+}
+
+// TestCheckHTTPResponseAlignment_HelperWriteStatuses verifies Finding 10:
+// CH-04 must detect 4xx/5xx status codes written internally by pkg/httputil
+// helpers (ParseUUIDPathParam, WriteDecodeError, ParsePageParamsOrWrite).
+func TestCheckHTTPResponseAlignment_HelperWriteStatuses(t *testing.T) {
+	tests := []struct {
+		name       string
+		handlerSrc string
+		responses  map[int]contracts.HTTPResponse
+		wantErrors []string
+	}{
+		{
+			name: "ParseUUIDPathParam: handler calls it but contract missing 400",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	_ = id; _ = ok
+}
+`,
+			responses: map[int]contracts.HTTPResponse{
+				404: {Description: "not found", SchemaRef: "err.json"},
+			},
+			wantErrors: []string{"handler returns 400 but contract does not declare it"},
+		},
+		{
+			name: "WriteDecodeError: handler declares both 400 and 413, no finding",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	httputil.WriteDecodeError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "x"))
+}
+`,
+			responses: map[int]contracts.HTTPResponse{
+				400: {Description: "bad request", SchemaRef: "err.json"},
+				413: {Description: "too large", SchemaRef: "err.json"},
+			},
+		},
+		{
+			name: "WriteDecodeError: contract declares 400 but missing 413",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	httputil.WriteDecodeError(r.Context(), w, errcode.New(errcode.ErrValidationFailed, "x"))
+}
+`,
+			responses: map[int]contracts.HTTPResponse{
+				400: {Description: "bad request", SchemaRef: "err.json"},
+			},
+			wantErrors: []string{"handler returns 413 but contract does not declare it"},
+		},
+		{
+			name: "ParsePageParamsOrWrite: handler calls it but contract missing 400",
+			handlerSrc: `
+func h(w http.ResponseWriter, r *http.Request) {
+	_, ok := httputil.ParsePageParamsOrWrite(w, r)
+	_ = ok
+}
+`,
+			responses: map[int]contracts.HTTPResponse{
+				200: {},
+			},
+			wantErrors: []string{"handler returns 400 but contract does not declare it"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			const contractID = "http.test.helpers.v1"
+			sliceRelDir := "cells/testcell/slices/testslice"
+
+			sliceAbsDir := filepath.Join(root, sliceRelDir)
+			require.NoError(t, os.MkdirAll(sliceAbsDir, 0o755))
+			writeHandlerFileWithHTTPUtil(t, sliceAbsDir, tc.handlerSrc)
+
+			project := makeProject(contractID, sliceRelDir)
+			c := makeContract(contractID, "contracts/http/test/helpers/v1/contract.yaml", tc.responses)
+
+			validator := NewValidator(project, root)
+			results := validator.CheckHTTPResponseAlignment([]*metadata.ContractMeta{c}, root)
+
+			var errs []ValidationResult
+			for _, r := range results {
+				if r.Severity == SeverityError {
+					errs = append(errs, r)
+				}
+			}
+			require.Len(t, errs, len(tc.wantErrors), "error count mismatch")
+			for i, want := range tc.wantErrors {
+				assert.Contains(t, errs[i].Message, want)
 			}
 		})
 	}

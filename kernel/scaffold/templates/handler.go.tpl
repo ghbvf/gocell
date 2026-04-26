@@ -28,6 +28,7 @@ func NewHandler() *Handler { return &Handler{} }
 //	    type: string
 //	    format: uuid     # → CH-05 requires httputil.ParseUUIDPathParam call below
 //	responses:
+//	  200: { schemaRef: ... }   # success response
 //	  400: { schemaRef: ... }   # ERR_VALIDATION_INVALID_UUID, written by the helper
 //	  404: { schemaRef: ... }   # ErrXxxNotFound from your domain layer
 func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
@@ -36,5 +37,5 @@ func (h *Handler) HandleGet(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = id // TODO: pass to service / repository
-	w.WriteHeader(http.StatusNotImplemented)
+	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": nil})
 }

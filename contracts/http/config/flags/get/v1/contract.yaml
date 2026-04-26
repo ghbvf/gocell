@@ -16,11 +16,17 @@ endpoints:
     successStatus: 200
     noContent: false
     responses:
+      400:
+        description: "Bad request — invalid pagination parameter or oversized payload"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
         description: "Forbidden — authenticated principal lacks the admin role required to read flag metadata"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

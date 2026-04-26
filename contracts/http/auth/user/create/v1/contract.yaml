@@ -25,6 +25,9 @@ endpoints:
       409:
         description: "Conflict — username already exists (ErrAuthUserDuplicate)"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

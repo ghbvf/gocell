@@ -11,9 +11,18 @@ import (
 
 // ParseUUIDPathParam extracts a UUID-typed path parameter from r and writes a
 // 400 ERR_VALIDATION_INVALID_UUID response if the value is missing or
-// malformed. On success it returns the canonical lowercase UUID string and
-// ok=true; on failure it returns ("", false) after the response has been
+// malformed. On success it returns the canonical lowercase dashed UUID string
+// and ok=true; on failure it returns ("", false) after the response has been
 // written, and the caller MUST return immediately.
+//
+// Accepts both canonical dashed (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx) and
+// compact 32-char hex forms; both are normalized to canonical lowercase dashed
+// UUID before being returned. Whitespace, braces, and other non-hex characters
+// are rejected with 400.
+//
+// name MUST match the `pathParams.{name}` key declared in contract.yaml; the
+// same name appears verbatim in the 400 response message so clients can
+// identify the offending parameter.
 //
 // The contract.yaml convention `pathParams.{name}.format: uuid` is the
 // authoritative discriminator: any handler serving such a path must use this

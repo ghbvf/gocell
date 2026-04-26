@@ -6,13 +6,13 @@ import (
 	"go/parser"
 	"go/token"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // CodeContractHealthResponseAlignment is the rule code for CH-04 — emitted as
@@ -169,13 +169,25 @@ var errcodeNameToStatus = func() map[string]int {
 	}
 	m := make(map[string]int, len(pairs))
 	for _, p := range pairs {
-		status := httputil.MapCodeToStatus(p.code)
+		status := errcode.MapCodeToStatus(p.code)
 		if status >= 400 {
 			m[p.name] = status
 		}
 	}
 	return m
 }()
+
+// httpHelperWritesStatuses maps pkg/httputil helper names that write HTTP error
+// responses internally to the set of ≥400 status codes they may emit.
+// Hand-curated because the helpers don't expose status as parameters — handler
+// AST sees only the call site. When a new helper that writes responses is
+// added, register it here or CH-04 silently skips alignment for that call site
+// (slog.Warn at scan time alerts the developer).
+var httpHelperWritesStatuses = map[string][]int{
+	"WriteDecodeError":       {http.StatusBadRequest, http.StatusRequestEntityTooLarge},
+	"ParseUUIDPathParam":     {http.StatusBadRequest},
+	"ParsePageParamsOrWrite": {http.StatusBadRequest},
+}
 
 // CheckHTTPResponseAlignment enforces CH-04: every 4xx/5xx status code that a
 // handler can return must be declared in the corresponding contract's responses
@@ -521,6 +533,7 @@ func collectStatusCodesFromNode(node ast.Node, out map[int]struct{}) {
 		}
 		collectHTTPStatusSelectors(call, out)
 		collectErrcodeConstants(call, out)
+		collectHelperWriteStatuses(call, out)
 		return true
 	})
 }
@@ -574,12 +587,62 @@ func collectErrcodeConstants(call *ast.CallExpr, out map[int]struct{}) {
 	name := arg.Sel.Name
 	status, found := errcodeNameToStatus[name]
 	if !found {
-		slog.Debug("CH-04: unknown errcode constant in handler, skipping",
+		// When handlers start using a new errcode constant, register it in the
+		// errcodeNameToStatus pairs slice above, or CH-04 silently skips
+		// alignment checks for that constant's status code.
+		slog.Warn("CH-04: unknown errcode constant in handler, skipping alignment check",
 			slog.String("constant", name))
 		return
 	}
 	if status >= 400 {
 		out[status] = struct{}{}
+	}
+}
+
+// collectHelperWriteStatuses detects httputil.<HelperName>(w, ...) calls and
+// adds the status codes the helper is known to write internally to out.
+// Uses httpHelperWritesStatuses for the known-helper lookup.
+//
+// Helpers that write responses without accepting a status code parameter are
+// invisible to collectHTTPStatusSelectors, so this table bridges that gap for
+// CH-04. Unknown httputil calls emit a slog.Warn so new helpers are not silently
+// skipped.
+func collectHelperWriteStatuses(call *ast.CallExpr, out map[int]struct{}) {
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok {
+		return
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "httputil" {
+		return
+	}
+	helperName := sel.Sel.Name
+	statuses, known := httpHelperWritesStatuses[helperName]
+	if !known {
+		// Not every httputil function writes a response. Only warn for names
+		// that are not in a well-known "does not write status" allowlist.
+		// Presence in the map (regardless of value) suppresses the warning;
+		// absence means a genuinely unknown helper that may write status.
+		knownNonWriters := map[string]struct{}{
+			"WriteJSON":        {}, // writes, but caller supplies the status — already caught by collectHTTPStatusSelectors
+			"WriteError":       {}, // caller supplies status
+			"WritePublicError": {}, // caller supplies status
+			"WriteDomainError": {}, // status derived from errcode mapping — already caught by collectErrcodeConstants
+			"MapCodeToStatus":  {},
+			"IsClientError":    {},
+			"DecodeJSON":       {},
+			"DecodeJSONStrict": {}, // strict variant; same semantics as DecodeJSON
+		}
+		if _, suppressed := knownNonWriters[helperName]; !suppressed {
+			slog.Warn("CH-04: unknown httputil helper call, skipping helper-status inference",
+				slog.String("helper", helperName))
+		}
+		return
+	}
+	for _, s := range statuses {
+		if s >= 400 {
+			out[s] = struct{}{}
+		}
 	}
 }
 
