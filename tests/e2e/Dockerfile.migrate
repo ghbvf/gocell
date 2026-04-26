@@ -1,0 +1,15 @@
+# One-shot migration runner for the e2e docker-compose harness.
+# Reads GOCELL_PG_DSN and applies all embedded postgres migrations via
+# tools/pg-migrate. Build context is the gocell repo root.
+
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+RUN apk add --no-cache git
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /out/pg-migrate ./tools/pg-migrate
+
+FROM alpine:3.20
+COPY --from=build /out/pg-migrate /usr/local/bin/pg-migrate
+ENTRYPOINT ["/usr/local/bin/pg-migrate"]

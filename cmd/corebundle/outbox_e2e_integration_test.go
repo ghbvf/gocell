@@ -35,6 +35,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"sync"
@@ -418,4 +419,216 @@ func publishConfig(t *testing.T, baseURL, token, key string) {
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	require.Equal(t, http.StatusCreated, resp.StatusCode, "config publish must return 201 (creates new ConfigVersion)")
+}
+
+// TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet validates the closed
+// loop: configcore.configwrite → PG outbox → relay → eventbus →
+// accesscore.configreceive → ConfigClient.GetEntry (HTTP call to internal
+// endpoint) succeeds.
+//
+// Chain under test:
+//
+//	HTTP publish → configcore WriteService (L2) → outbox_entries
+//	→ OutboxRelay.publishAll → eventbus → configreceive handler
+//	→ HTTPConfigClient.GetEntry → stub internal server → assertion
+//
+// The stub internal server records every GET /internal/v1/config/{key} request
+// so the test can assert the closed loop completed without needing slog
+// interception. The service token is signed with a test HMAC ring; the stub
+// server records the request path and responds 200 with a minimal config
+// entry JSON, completing the round-trip.
+//
+// This test guards PR-CFG-G1 commit 4: the accesscore configreceive slice
+// now calls back to configcore after an entry-upserted event, closing the
+// metadata-only refetch loop (PR-CFG-B) end-to-end.
+func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
+	testutil.RequireDocker(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	// --- Step 1: Start PG testcontainer ---
+	pgContainer, err := tcpostgres.Run(ctx, testutil.PostgresImage,
+		tcpostgres.WithDatabase("test"),
+		tcpostgres.WithUsername("test"),
+		tcpostgres.WithPassword("test"),
+		tcpostgres.BasicWaitStrategies(),
+	)
+	require.NoError(t, err, "start postgres container")
+	t.Cleanup(func() {
+		if err := pgContainer.Terminate(context.Background()); err != nil {
+			t.Logf("WARN: postgres container terminate failed: %v", err)
+		}
+	})
+
+	// --- Step 2: Apply migrations ---
+	pgConnStr, err := pgContainer.ConnectionString(ctx, "sslmode=disable")
+	require.NoError(t, err)
+
+	migrationPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
+	require.NoError(t, err, "create migration PG pool")
+	migrator, err := adapterpg.NewMigrator(migrationPool, adapterpg.MigrationsFS(), "schema_migrations")
+	require.NoError(t, err, "create migrator")
+	require.NoError(t, migrator.Up(ctx), "run migrations")
+	_ = migrationPool.Close(ctx)
+
+	// --- Step 3: Build production-shaped bundle ---
+	eb := eventbus.New()
+	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
+
+	modResult, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{
+		Topology:         bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"},
+		PGConfig:         adapterpg.Config{DSN: pgConnStr},
+		Publisher:        eb,
+		MetricsProvider:  kernelmetrics.NopProvider{},
+		ValueTransformer: crypto.NoopTransformer{},
+	})
+	require.NoError(t, err, "buildConfigCoreOpts must succeed in postgres mode")
+	pgRes := modResult.PGResource
+	cellAdapterOpts := modResult.CellOptions
+	relayBootstrapOpts := modResult.BootstrapOpts
+	require.NotNil(t, pgRes, "PGResource must be non-nil in postgres mode")
+	require.NotEmpty(t, relayBootstrapOpts, "relay bootstrap opts must be non-empty in postgres mode")
+	t.Cleanup(func() { _ = pgRes.Close(context.Background()) })
+
+	// --- Step 4: Stub internal server —
+	// Simulates GET /internal/v1/config/{key} — the endpoint that
+	// accesscore.configreceive calls after receiving an upsert event.
+	// Records path; responds 200 with a minimal {data:{...}} envelope.
+	type refetchCall struct{ path string }
+	refetchCh := make(chan refetchCall, 8)
+	internalSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		refetchCh <- refetchCall{path: r.URL.Path}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		// Minimal config entry response matching configEntryDataResponse shape.
+		_, _ = w.Write([]byte(`{"data":{"key":"refetch.test.key","value":"refetch-value","sensitive":false,"version":1}}`))
+	}))
+	t.Cleanup(internalSrv.Close)
+
+	// Create a test HMAC ring for service-token signing in HTTPConfigClient.
+	// The stub server does not verify the token; it just records the call.
+	testRing, ringErr := auth.NewHMACKeyRing(
+		[]byte("test-service-secret-32-bytes-xxx!"),
+		nil,
+	)
+	require.NoError(t, ringErr, "create test HMAC ring")
+
+	// --- Step 5: Assemble cells ---
+	hmacKey := []byte("test-hmac-key-32-bytes-long!!!!!")
+
+	privKey, pubKey := auth.MustGenerateTestKeyPair()
+	keySet, err := auth.NewKeySet(privKey, pubKey)
+	require.NoError(t, err)
+	jwtIssuer, err := auth.NewJWTIssuer(keySet, "test", 15*time.Minute,
+		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
+	require.NoError(t, err)
+	jwtVerifier, err := auth.NewJWTVerifier(keySet, auth.WithExpectedAudiences("gocell"))
+	require.NoError(t, err)
+
+	cursorCodec, err := query.NewCursorCodec([]byte("test-config-cursor-key-32bytes!!"))
+	require.NoError(t, err)
+	auditCursorCodec, err := query.NewCursorCodec([]byte("test-audit-cursor-key-32-bytes!!"))
+	require.NoError(t, err)
+
+	e2eStateDir := t.TempDir()
+	t.Setenv("GOCELL_STATE_DIR", e2eStateDir)
+
+	configOpts := append([]configcore.Option{
+		configcore.WithCursorCodec(cursorCodec),
+	}, cellAdapterOpts...)
+	configCell := configcore.NewConfigCore(configOpts...)
+
+	// Wire accesscore with the HTTPConfigClient pointing at the stub server.
+	// After receiving an entry-upserted event, configreceive will call
+	// internalSrv.URL + /internal/v1/config/{key}, and the stub records it.
+	accessCell := accesscore.NewAccessCore(
+		accesscore.WithInMemoryDefaults(),
+		accesscore.WithOutboxDeps(eb, nil),
+		accesscore.WithJWTIssuer(jwtIssuer),
+		accesscore.WithJWTVerifier(jwtVerifier),
+		accesscore.WithInitialAdminBootstrap(),
+		accesscore.WithRefreshMetricsProvider(kernelmetrics.NopProvider{}),
+		accesscore.WithHTTPConfigClient(internalSrv.URL, testRing),
+	)
+	auditCell := auditcore.NewAuditCore(
+		auditcore.WithInMemoryDefaults(),
+		auditcore.WithOutboxDeps(eb, nil),
+		auditcore.WithHMACKey(hmacKey),
+		auditcore.WithCursorCodec(auditCursorCodec),
+		auditcore.WithMetricsProvider(kernelmetrics.NopProvider{}),
+	)
+
+	asm := assembly.New(assembly.Config{ID: "e2e-refetch-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(configCell))
+	require.NoError(t, asm.Register(accessCell))
+	require.NoError(t, asm.Register(auditCell))
+
+	// --- Step 6: Boot the assembly ---
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+
+	baseOpts := []bootstrap.Option{
+		bootstrap.WithAssembly(asm),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
+		bootstrap.WithShutdownTimeout(3 * time.Second),
+	}
+	app := bootstrap.New(append(baseOpts, relayBootstrapOpts...)...)
+
+	appErrCh := make(chan error, 1)
+	appCtx, appCancel := context.WithCancel(ctx)
+	go func() { appErrCh <- app.Run(appCtx) }()
+
+	addr := ln.Addr().String()
+	baseURL := "http://" + addr
+	waitForHealthy(t, addr)
+
+	// --- Step 7: Authenticate as admin ---
+	e2eCredPath := e2eStateDir + "/initial_admin_password"
+	require.Eventually(t, func() bool {
+		_, statErr := os.Stat(e2eCredPath)
+		return statErr == nil
+	}, 5*time.Second, 50*time.Millisecond, "e2e credential file must exist")
+
+	e2eUsername, e2eBootstrapPass, err := readE2ECredentials(e2eCredPath)
+	require.NoError(t, err)
+
+	bootstrapToken := loginAdminBootstrap(t, baseURL, e2eUsername, e2eBootstrapPass)
+	adminUserID := extractE2ESubFromJWT(t, bootstrapToken)
+	const refetchTestAdminPass = "RefetchTest@Pass9876!" //nolint:gosec // test-only credential
+	token := changeE2EPassword(t, baseURL, bootstrapToken, adminUserID, e2eBootstrapPass, refetchTestAdminPass)
+
+	// --- Step 8: Publish a config entry — triggers the refetch closed loop ---
+	const refetchKey = "refetch.test.key"
+	createConfig(t, baseURL, token, refetchKey, "refetch-value")
+	publishConfig(t, baseURL, token, refetchKey)
+
+	// --- Step 9: Assert the closed loop completed ---
+	// The relay delivers the entry-upserted event → configreceive calls
+	// HTTPConfigClient.GetEntry → stub server records the request.
+	//
+	// Expect a GET /internal/v1/config/refetch.test.key request within 15s.
+	require.Eventually(t, func() bool {
+		select {
+		case call := <-refetchCh:
+			return call.path == "/internal/v1/config/"+refetchKey
+		default:
+			return false
+		}
+	}, 15*time.Second, 100*time.Millisecond,
+		"refetch closed loop: accesscore.configreceive must call GET /internal/v1/config/%s "+
+			"within 15s of publish; missing call indicates relay→eventbus→configreceive→ConfigClient "+
+			"pipeline is broken (PR-CFG-G1 refetch loop guard)",
+		refetchKey)
+
+	// --- Teardown ---
+	appCancel()
+	select {
+	case err := <-appErrCh:
+		assert.NoError(t, err, "bundle must shut down without error")
+	case <-time.After(10 * time.Second):
+		t.Error("bootstrap did not shut down in time")
+	}
 }
