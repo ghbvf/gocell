@@ -535,3 +535,220 @@ func TestCONTRACTCONSISTENCYEMIT01_ExamplesSkipped(t *testing.T) {
 		t.Errorf("examples-skipped: expected 0 findings, got %d: %v", len(got), got)
 	}
 }
+
+// TestCONTRACTCONSISTENCYEMIT01_SubscriberTopicNotCollected is a regression test
+// for A2: collectAllTopicSelectors must NOT be called for files that contain no real
+// emit call sites. A slice that only subscribes to dto.TopicB must not contribute
+// dto.TopicB to the cell's emit-topic set.
+func TestCONTRACTCONSISTENCYEMIT01_SubscriberTopicNotCollected(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topicA := "event.test.a.v1"
+	topicB := "event.test.b.v1"
+
+	// dto has both constants.
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	if err := os.MkdirAll(dtoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte("package dto\n\nconst (\n\tTopicA = \""+topicA+"\"\n\tTopicB = \""+topicB+"\"\n)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// emitter-slice: emits TopicA via outbox.Emit.
+	emitterDir := filepath.Join(root, "cells", ownerCell, "slices", "emitterslice")
+	writeServiceFile(t, emitterDir, `package emitterslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+func doEmit(ctx context.Context, e outbox.Emitter) error {
+	return outbox.Emit(ctx, e, dto.TopicA, struct{}{})
+}
+`)
+
+	// subscriber-slice: subscribes to TopicB — but does NOT emit. Uses dto.TopicB only
+	// in a subscribe call. This file must NOT contribute TopicB to emit topics.
+	subDir := filepath.Join(root, "cells", ownerCell, "slices", "subscriberslice")
+	if err := os.MkdirAll(subDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(subDir, "service.go"), []byte(`package subscriberslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+)
+
+type handler func(ctx context.Context, topic string) error
+
+func register(sub handler) {
+	sub(context.Background(), dto.TopicB)
+}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Contract declares only TopicA as trigger (L2).
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.a.v1", ownerCell, "L2", []string{topicA}),
+	})
+
+	v := NewValidator(project, root)
+	results := v.validateCONTRACTCONSISTENCYEMIT01()
+	got := findResultByCode(results, codeContractConsistencyEmit01)
+
+	// TopicB must NOT appear in emit topics — no reverse finding for it.
+	for _, r := range got {
+		if strings.Contains(r.Message, topicB) {
+			t.Errorf("SubscriberTopicNotCollected: dto.TopicB from subscriber-only file must not appear in emit topics; finding: %v", r)
+		}
+	}
+	// TopicA is correctly emitted and declared — no forward/reverse errors for it.
+	if len(got) != 0 {
+		t.Errorf("SubscriberTopicNotCollected: expected 0 findings, got %d: %v", len(got), got)
+	}
+}
+
+// TestCONTRACTCONSISTENCYEMIT01_CaseE_ReverseMismatch is the existing CaseE renamed
+// to clarify it tests the reverse-mismatch (emit without declaration) path.
+// The original CaseE function is preserved under its original name for git history.
+
+// TestCONTRACTCONSISTENCYEMIT01_CaseE_NoOpPassthrough: L0 contract, no triggers, no
+// service.go for the cell → 0 ValidationResults (bottom-out path that was missing).
+func TestCONTRACTCONSISTENCYEMIT01_CaseE_NoOpPassthrough(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+
+	// L0 HTTP contract — no triggers, no cells/<ownerCell>/slices directory.
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.noop.v1", ownerCell, "L0", nil),
+	})
+
+	v := NewValidator(project, root)
+	results := v.validateCONTRACTCONSISTENCYEMIT01()
+	got := findResultByCode(results, codeContractConsistencyEmit01)
+	if len(got) != 0 {
+		t.Errorf("CaseE_NoOpPassthrough: expected 0 findings for L0 no-triggers, got %d: %v", len(got), got)
+	}
+}
+
+// TestCONTRACTCONSISTENCYEMIT01_CaseD_ReceiverStyle: receiver-style Emit emits TopicX,
+// contract declares TopicY. Expects both forward (declared Y but no emit Y) and
+// reverse (emit X but no declare X) findings.
+func TestCONTRACTCONSISTENCYEMIT01_CaseD_ReceiverStyle(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	declaredTopic := "event.y.v1"
+	emittedTopic := "event.x.v1"
+
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	if err := os.MkdirAll(dtoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte("package dto\n\nconst (\n\tTopicX = \""+emittedTopic+"\"\n\tTopicY = \""+declaredTopic+"\"\n)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+	writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+type emitter interface {
+	Emit(ctx context.Context, entry outbox.Entry) error
+}
+
+func doEmit(ctx context.Context, e emitter) error {
+	return e.Emit(ctx, outbox.Entry{EventType: dto.TopicX})
+}
+`)
+
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.y.v1", ownerCell, "L2", []string{declaredTopic}),
+	})
+
+	v := NewValidator(project, root)
+	results := v.validateCONTRACTCONSISTENCYEMIT01()
+	got := findResultByCode(results, codeContractConsistencyEmit01)
+
+	forwardFail := false
+	reverseFail := false
+	for _, r := range got {
+		if strings.Contains(r.Message, "no non-test Go file") && strings.Contains(r.Message, declaredTopic) {
+			forwardFail = true
+		}
+		if strings.Contains(r.Message, "service emits") && strings.Contains(r.Message, emittedTopic) {
+			reverseFail = true
+		}
+	}
+	if !forwardFail {
+		t.Errorf("CaseD_ReceiverStyle: expected forward failure for %q, findings: %v", declaredTopic, got)
+	}
+	if !reverseFail {
+		t.Errorf("CaseD_ReceiverStyle: expected reverse failure for %q, findings: %v", emittedTopic, got)
+	}
+}
+
+// TestCONTRACTCONSISTENCYEMIT01_MultiContractNoDuplicateFindings: same ownerCell has
+// 2 L2 HTTP contracts each declaring 1 trigger; service emits a 3rd topic not in either
+// contract. Assert the reverse finding for the 3rd topic appears exactly once.
+func TestCONTRACTCONSISTENCYEMIT01_MultiContractNoDuplicateFindings(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topic1 := "event.test.one.v1"
+	topic2 := "event.test.two.v1"
+	extraTopic := "event.test.extra.v1"
+
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	if err := os.MkdirAll(dtoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte("package dto\n\nconst (\n\tTopicOne   = \""+topic1+"\"\n\tTopicTwo   = \""+topic2+"\"\n\tTopicExtra = \""+extraTopic+"\"\n)\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+	writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+func doEmit(ctx context.Context, e outbox.Emitter) error {
+	_ = outbox.Emit(ctx, e, dto.TopicOne, struct{}{})
+	_ = outbox.Emit(ctx, e, dto.TopicTwo, struct{}{})
+	return outbox.Emit(ctx, e, dto.TopicExtra, struct{}{})
+}
+`)
+
+	// Two L2 contracts, each declaring one of the two topics.
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.one.v1", ownerCell, "L2", []string{topic1}),
+		httpContract("http.test.two.v1", ownerCell, "L2", []string{topic2}),
+	})
+
+	v := NewValidator(project, root)
+	results := v.validateCONTRACTCONSISTENCYEMIT01()
+	got := findResultByCode(results, codeContractConsistencyEmit01)
+
+	extraCount := 0
+	for _, r := range got {
+		if strings.Contains(r.Message, "service emits") && strings.Contains(r.Message, extraTopic) {
+			extraCount++
+		}
+	}
+	if extraCount != 1 {
+		t.Errorf("MultiContractNoDuplicateFindings: expected exactly 1 reverse finding for %q, got %d; findings: %v",
+			extraTopic, extraCount, got)
+	}
+}

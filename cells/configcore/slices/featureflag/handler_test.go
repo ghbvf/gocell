@@ -126,10 +126,10 @@ func TestHandler_HandleList(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	require.Len(t, resp.Data, 1)
 	item := resp.Data[0]
-	assert.Contains(t, item, "description")
-	assert.Contains(t, item, "version")
-	assert.Contains(t, item, "createdAt")
-	assert.Contains(t, item, "updatedAt")
+	assert.Equal(t, "Dark mode toggle", item["description"], "description must match fixture value")
+	assert.Equal(t, float64(1), item["version"], "version must match fixture value")
+	assert.NotEmpty(t, item["createdAt"], "createdAt must be non-empty")
+	assert.NotEmpty(t, item["updatedAt"], "updatedAt must be non-empty")
 }
 
 func TestHandler_HandleGet_Found(t *testing.T) {

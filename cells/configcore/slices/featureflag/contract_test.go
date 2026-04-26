@@ -19,6 +19,8 @@ func TestHttpConfigFlagsListV1Serve(t *testing.T) {
 	c.ValidateResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100,"description":"Dark mode toggle","version":1,"createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))
 	c.MustRejectResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}],"nextCursor":"","hasMore":false}`))
 	c.MustRejectResponse(t, []byte(`{"data":"not-array","hasMore":false}`))
+	// D5: type constraint — version must be integer (minimum:1), not string.
+	c.MustRejectResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100,"description":"Dark mode toggle","version":"not-a-number","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))
 }
 
 func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
@@ -32,6 +34,8 @@ func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
 	c.ValidateResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100,"description":"Dark mode toggle","version":1,"createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}`))
 	c.MustRejectResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}}`))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
+	// D5: type constraint — version must be integer (minimum:1), not string.
+	c.MustRejectResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100,"description":"Dark mode toggle","version":"not-a-number","createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}`))
 }
 
 func TestHttpConfigFlagsEvaluateV1Serve(t *testing.T) {
