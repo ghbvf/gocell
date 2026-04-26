@@ -62,27 +62,6 @@ func (r *FlagRepository) resolveWriteDB(ctx context.Context) (DBTX, error) {
 	return r.db, nil
 }
 
-// wrapCtxCancel detects whether err is a context cancellation and, if so,
-// returns a structured *errcode.Error carrying ErrClientCanceled (mapped
-// to HTTP 499 + slog.Warn at the response boundary). Returns nil when err
-// is not a cancellation, signalling the caller to fall through to the
-// generic infra-error mapping.
-//
-// `op` is a PascalCase operation label (e.g. "List", "Update");
-// `identifier` is a caller-formatted resource locator (e.g. "key=foo").
-// Both are recorded only in InternalMessage and never in the public
-// Message, preventing flag-name leakage to clients.
-//
-// No slog.Warn is emitted here: the HTTP boundary's log4xx already records
-// a Warn entry with code/status/InternalMessage/correlation IDs, so emitting
-// a second Warn at the repository layer produces duplicate observability
-// noise without adding new context.
-//
-// ref: pkg/ctxcancel.Wrap — canonical helper.
-func (r *FlagRepository) wrapCtxCancel(_ context.Context, op, identifier string, err error) *errcode.Error {
-	return ctxcancel.Wrap(err, op, identifier)
-}
-
 // scanFlagOrMapError runs scanFlagRow and translates the three known failure
 // modes into GoCell errcode.Error values:
 //
@@ -101,7 +80,7 @@ func (r *FlagRepository) scanFlagOrMapError(ctx context.Context, row Row, op, ke
 	if err == nil {
 		return flag, nil
 	}
-	if cancelErr := r.wrapCtxCancel(ctx, op, "key="+key, err); cancelErr != nil {
+	if cancelErr := ctxcancel.Wrap(err, op, "key="+key); cancelErr != nil {
 		return nil, cancelErr
 	}
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -138,14 +117,14 @@ func scanFlagRow(row Row) (*domain.FeatureFlag, error) {
 	return &f, nil
 }
 
-// wrapNonScanQueryErr is the analogue of wrapCtxCancel for failures returned
-// by Exec/Query (i.e. before any row scan) — it short-circuits ctx cancel
-// to ErrClientCanceled, otherwise falls back to ErrFlagRepoQuery. `msg`
-// is the generic public Message returned to API consumers; `identifier` is
-// a caller-formatted resource locator (e.g. "key=foo") recorded only in
-// InternalMessage to prevent user-input echo in public error responses.
-func (r *FlagRepository) wrapNonScanQueryErr(ctx context.Context, op, identifier, msg string, err error) error {
-	if cancelErr := r.wrapCtxCancel(ctx, op, identifier, err); cancelErr != nil {
+// wrapNonScanQueryErr handles failures returned by Exec/Query (i.e. before
+// any row scan): short-circuits ctx cancel through pkg/ctxcancel.Wrap,
+// otherwise falls back to ErrFlagRepoQuery. `msg` is the generic public
+// Message returned to API consumers; `identifier` is a caller-formatted
+// resource locator (e.g. "key=foo") recorded only in InternalMessage to
+// prevent user-input echo in public error responses.
+func (r *FlagRepository) wrapNonScanQueryErr(_ context.Context, op, identifier, msg string, err error) error {
+	if cancelErr := ctxcancel.Wrap(err, op, identifier); cancelErr != nil {
 		return cancelErr
 	}
 	internal := fmt.Sprintf("flag repo: %s failed", op)
@@ -235,7 +214,7 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 	for rows.Next() {
 		flag, scanErr := scanFlagRow(rows)
 		if scanErr != nil {
-			if cancelErr := r.wrapCtxCancel(ctx, "List", "", scanErr); cancelErr != nil {
+			if cancelErr := ctxcancel.Wrap(scanErr, "List", ""); cancelErr != nil {
 				return nil, cancelErr
 			}
 			return nil, errcode.Wrap(errcode.ErrFlagRepoQuery, "flag repo: scan failed", scanErr)

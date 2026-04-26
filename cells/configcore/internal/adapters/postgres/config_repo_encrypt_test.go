@@ -543,8 +543,9 @@ func parseLogEntries(t *testing.T, buf *bytes.Buffer) []map[string]any {
 }
 
 // TestGetByKey_StaleKey_EmitsWarn verifies that when GetByKey detects a stale
-// key (stored keyID != current keyID), it emits a slog.Warn with the structured
-// fields: key, stored_key_id, current_key_id.
+// key (stored keyID != current keyID), it emits a slog.Warn carrying ONLY the
+// business key. Cryptographic key IDs are routed exclusively through the
+// onStaleCipher callback (Prometheus label dimension), never the log plane.
 func TestGetByKey_StaleKey_EmitsWarn(t *testing.T) {
 	ctx := context.Background()
 	// Encrypt with v1, then rotate current to v2 → stale.
@@ -581,8 +582,10 @@ func TestGetByKey_StaleKey_EmitsWarn(t *testing.T) {
 	assert.Equal(t, "WARN", logEntry["level"], "log level must be WARN")
 	assert.Equal(t, "config value encrypted with stale key", logEntry["msg"])
 	assert.Equal(t, "api_secret", logEntry["key"])
-	assert.Equal(t, storedKeyID, logEntry["stored_key_id"])
-	assert.Equal(t, "local-aes-v2", logEntry["current_key_id"])
+	_, hasStored := logEntry["stored_key_id"]
+	assert.False(t, hasStored, "stored_key_id must not appear in slog Warn (cryptographic ID redaction)")
+	_, hasCurrent := logEntry["current_key_id"]
+	assert.False(t, hasCurrent, "current_key_id must not appear in slog Warn (cryptographic ID redaction)")
 }
 
 // TestGetByKey_FreshKey_NoWarn verifies that no slog.Warn is emitted when the
@@ -652,8 +655,11 @@ func TestList_StaleKey_EmitsWarn(t *testing.T) {
 	require.Len(t, logEntries, 1, "exactly one warn for the stale sensitive entry")
 	assert.Equal(t, "WARN", logEntries[0]["level"])
 	assert.Equal(t, "config values encrypted with stale key (first occurrence in this List page)", logEntries[0]["msg"])
-	assert.Equal(t, storedKeyID, logEntries[0]["stored_key_id"])
-	assert.Equal(t, "local-aes-v2", logEntries[0]["current_key_id"])
+	assert.Equal(t, "stale_cfg", logEntries[0]["key"])
+	_, hasStored := logEntries[0]["stored_key_id"]
+	assert.False(t, hasStored, "stored_key_id must not appear in slog Warn (cryptographic ID redaction)")
+	_, hasCurrent := logEntries[0]["current_key_id"]
+	assert.False(t, hasCurrent, "current_key_id must not appear in slog Warn (cryptographic ID redaction)")
 }
 
 // TestGetByKey_StaleKey_OnStaleCipherCallback verifies that the optional
@@ -746,12 +752,17 @@ func TestList_StaleKey_LogDedup(t *testing.T) {
 	// Callback must fire for every stale entry (3 total).
 	assert.Equal(t, 3, callbackCount, "onStaleCipher callback must fire for every stale entry")
 
-	// slog.Warn must fire only ONCE for the shared stale keyID.
+	// slog.Warn must fire only ONCE for the shared stale keyID; dedup is keyed
+	// on the (redacted) stale keyID internally, but the log line surfaces the
+	// business key of the first occurrence — never the keyID itself.
 	logEntries := parseLogEntries(t, &logBuf)
 	require.Len(t, logEntries, 1, "only one warn per distinct stale keyID per List call")
 	assert.Equal(t, "WARN", logEntries[0]["level"])
-	assert.Equal(t, storedKeyID, logEntries[0]["stored_key_id"])
-	assert.Equal(t, "local-aes-v2", logEntries[0]["current_key_id"])
+	assert.Equal(t, "key_a", logEntries[0]["key"], "first occurrence's business key surfaces in log")
+	_, hasStored := logEntries[0]["stored_key_id"]
+	assert.False(t, hasStored, "stored_key_id must not appear in slog Warn (cryptographic ID redaction)")
+	_, hasCurrent := logEntries[0]["current_key_id"]
+	assert.False(t, hasCurrent, "current_key_id must not appear in slog Warn (cryptographic ID redaction)")
 }
 
 // TestList_StaleKey_TwoDistinctKeyIDs_TwoWarns verifies that when entries are
@@ -798,16 +809,24 @@ func TestList_StaleKey_TwoDistinctKeyIDs_TwoWarns(t *testing.T) {
 	// Callback fires for all 3.
 	assert.Equal(t, 3, callbackCount)
 
-	// Two distinct keyIDs → two slog.Warn lines.
+	// Two distinct keyIDs → two slog.Warn lines (dedup is keyed on the redacted
+	// keyID internally; each log line surfaces the business key of the first
+	// occurrence for that keyID — key_a for v1, key_c for v2).
 	logEntries := parseLogEntries(t, &logBuf)
 	require.Len(t, logEntries, 2, "one warn per distinct stale keyID")
 	assert.Equal(t, "WARN", logEntries[0]["level"])
 	assert.Equal(t, "WARN", logEntries[1]["level"])
-	storedIDs := []string{
-		logEntries[0]["stored_key_id"].(string),
-		logEntries[1]["stored_key_id"].(string),
+	businessKeys := []string{
+		logEntries[0]["key"].(string),
+		logEntries[1]["key"].(string),
 	}
-	assert.ElementsMatch(t, []string{keyIDv1, keyIDv2}, storedIDs)
+	assert.ElementsMatch(t, []string{"key_a", "key_c"}, businessKeys)
+	for _, entry := range logEntries {
+		_, hasStored := entry["stored_key_id"]
+		assert.False(t, hasStored, "stored_key_id must not appear in slog Warn (cryptographic ID redaction)")
+		_, hasCurrent := entry["current_key_id"]
+		assert.False(t, hasCurrent, "current_key_id must not appear in slog Warn (cryptographic ID redaction)")
+	}
 }
 
 // TestWithOnStaleCipher_Option verifies that NewConfigRepository wired with the

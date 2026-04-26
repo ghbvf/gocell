@@ -208,10 +208,13 @@ func (m *plaintextMigrator) encryptBatch(ctx context.Context, updateQ, table str
 			continue
 		}
 		result.Processed++
+		// keyID is intentionally redacted from the log plane: cryptographic
+		// identifiers belong on Prometheus labels with bounded cardinality, not
+		// on slog where they pollute log indices and complicate redaction
+		// pipelines. table + aad_identity together suffice to correlate.
 		slog.Info("plaintext-migrator: encrypted row",
 			slog.String("table", table),
-			slog.String("aad_identity", row.aadIdentity),
-			slog.String("key_id", keyID))
+			slog.String("aad_identity", row.aadIdentity))
 	}
 	return nil
 }
