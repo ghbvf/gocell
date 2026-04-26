@@ -244,12 +244,17 @@ jobs:
         # -coverpkg removed to match per-shard unit test profile semantics —
         # each run only reports coverage for the packages it tested, avoiding
         # per-file dilution in the merged Sonar view.
-        # tests/e2e/... is included here with -tags=integration,e2e so the e2e
-        # package is compiled and any infrastructure-conditional tests run.
-        # When docker compose is absent, require.Docker / require.PG / require.RMQ
-        # skip those tests automatically; the build tag ensures the package is at
-        # least compiled, catching type/import regressions in CI.
-        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/e2e/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+        # tests/e2e/internal/... covers the require+clients helpers (pure
+        # unit tests); the smoke and encryption sub-packages are owned by
+        # the dedicated `e2e` job which runs the docker-compose harness.
+        # Earlier this scope used the broader ./tests/e2e/... — but
+        # require.Docker only skips when no docker socket is reachable, and
+        # GitHub runners always expose one for testcontainers, so smoke
+        # tests under ./tests/e2e ran here and blocked on a corebundle
+        # that never started in this job. Compile-time tag regressions
+        # for the smoke / encryption packages remain covered by the e2e
+        # job's `go test -tags=e2e ./tests/e2e/...`.
+        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
