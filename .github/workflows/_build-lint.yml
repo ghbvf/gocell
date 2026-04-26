@@ -290,9 +290,15 @@ jobs:
           cache-dependency-path: go.sum
       - name: Build e2egate
         run: go build -o "$RUNNER_TEMP/e2egate" ./tools/e2egate/cmd/e2egate
-      - name: Start dependencies (postgres + redis + migrate)
+      - name: Start dependencies (postgres + redis)
         working-directory: tests/e2e
-        run: docker compose -f docker-compose.e2e.yaml up -d --wait postgres redis migrate
+        run: docker compose -f docker-compose.e2e.yaml up -d --wait postgres redis
+      - name: Run migrations to completion
+        working-directory: tests/e2e
+        # `up --wait` errors on one-shot services because they exit instead of
+        # becoming healthy. Run migrate foreground via --exit-code-from so the
+        # step status mirrors the migrator's exit code (0 ok, !=0 fails).
+        run: docker compose -f docker-compose.e2e.yaml up --exit-code-from migrate migrate
       - name: Start corebundle
         working-directory: tests/e2e
         run: docker compose -f docker-compose.e2e.yaml up -d --wait corebundle

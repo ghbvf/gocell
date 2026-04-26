@@ -36,10 +36,11 @@ func TestEventUserCreatedV1Subscribe(t *testing.T) {
 	root := contracttest.ContractsRoot()
 	c := contracttest.LoadByID(t, root, "event.user.created.v1")
 
-	c.ValidatePayload(t, []byte(`{"userId":"usr-1","username":"alice"}`))
+	c.ValidatePayload(t, []byte(`{"userId":"usr-1","username":"alice","actorId":"admin-1"}`))
 	// snake_case user_id is rejected — schema migrated to camelCase (G.6)
 	c.MustRejectPayload(t, []byte(`{"user_id":"x"}`))
-	c.MustRejectPayload(t, []byte(`{"userId":"x"}`)) // missing required username
+	c.MustRejectPayload(t, []byte(`{"userId":"x"}`))                // missing username + actorId
+	c.MustRejectPayload(t, []byte(`{"userId":"u","username":"a"}`)) // missing actorId
 }
 
 func TestEventUserLockedV1Subscribe(t *testing.T) {

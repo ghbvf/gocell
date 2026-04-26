@@ -4,8 +4,9 @@
   "type": "object",
   "properties": {
     "userId": { "type": "string" },
-    "username": { "type": "string" }
+    "username": { "type": "string" },
+    "actorId": { "type": "string" }
   },
-  "required": ["userId", "username"],
+  "required": ["userId", "username", "actorId"],
   "additionalProperties": false
 }

@@ -168,7 +168,7 @@ func TestService_WithEmitter(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
-	_, err = svc.Create(context.Background(), CreateInput{
+	_, err = svc.Create(adminCtxForService(), CreateInput{
 		Username: "alice", Email: "a@b.c", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -183,7 +183,7 @@ func TestService_WithTxManager(t *testing.T) {
 		WithTxManager(tx), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
-	_, err = svc.Create(context.Background(), CreateInput{
+	_, err = svc.Create(adminCtxForService(), CreateInput{
 		Username: "alice", Email: "a@b.c", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -196,7 +196,7 @@ func TestService_Lock_WithOutbox(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -241,7 +241,7 @@ func TestService_Create_OutboxWriteError(t *testing.T) {
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
 
-	_, err = svc.Create(context.Background(), CreateInput{
+	_, err = svc.Create(adminCtxForService(), CreateInput{
 		Username: "alice", Email: "a@b.c", Password: "hash",
 	})
 	require.Error(t, err, "Create must propagate outbox.Write error to preserve L2 atomicity")
@@ -254,7 +254,7 @@ func TestService_Lock_OutboxWriteError(t *testing.T) {
 	svcCreate, err := NewService(repo, mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, &stubOutboxWriter{})), WithTxManager(&stubTxRunner{}), WithTokenIssuer(outboxStubIssuer))
 	require.NoError(t, err)
-	user, err := svcCreate.Create(context.Background(), CreateInput{
+	user, err := svcCreate.Create(adminCtxForService(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
 	})
 	require.NoError(t, err)

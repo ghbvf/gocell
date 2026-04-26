@@ -164,12 +164,21 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, err
 	}
 
+	actor, err := actorFromContext(ctx)
+	if err != nil {
+		return nil, err
+	}
+
 	user.ID = uuid.NewString()
 	if input.RequirePasswordReset {
 		user.MarkPasswordResetRequired()
 	}
 
-	eventPayload := dto.UserCreatedEvent{UserID: user.ID, Username: user.Username}
+	eventPayload := dto.UserCreatedEvent{
+		UserID:   user.ID,
+		Username: user.Username,
+		ActorID:  actor,
+	}
 	if err := s.txRunner.RunInTx(ctx, func(txCtx context.Context) error {
 		if err := s.repo.Create(txCtx, user); err != nil {
 			return fmt.Errorf("identity-manage: create: %w", err)

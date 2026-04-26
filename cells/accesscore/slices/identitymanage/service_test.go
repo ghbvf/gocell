@@ -82,7 +82,7 @@ func TestService_Create(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			svc := newTestService()
-			user, err := svc.Create(context.Background(), tt.input)
+			user, err := svc.Create(adminCtxForService(), tt.input)
 			if tt.wantErr {
 				assert.Error(t, err)
 			} else {
@@ -96,7 +96,7 @@ func TestService_Create(t *testing.T) {
 
 func TestService_LockUnlock(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "bob", Email: "b@c.d", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -118,7 +118,7 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 		WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "carol", Email: "c@d.e", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -144,7 +144,7 @@ func TestService_Lock_RevokesSession(t *testing.T) {
 
 func TestService_Delete(t *testing.T) {
 	svc := newTestService()
-	user, _ := svc.Create(context.Background(), CreateInput{
+	user, _ := svc.Create(adminCtxForService(), CreateInput{
 		Username: "del", Email: "d@e.f", Password: "hash",
 	})
 
@@ -155,7 +155,7 @@ func TestService_Delete(t *testing.T) {
 
 func TestService_Update(t *testing.T) {
 	svc := newTestService()
-	user, _ := svc.Create(context.Background(), CreateInput{
+	user, _ := svc.Create(adminCtxForService(), CreateInput{
 		Username: "upd", Email: "old@e.f", Password: "hash",
 	})
 
@@ -192,7 +192,7 @@ func seedUserWithHash(t *testing.T, repo *mem.UserRepository, username, password
 
 func TestService_Update_PatchSemantics(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "patch", Email: "p@e.f", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -482,7 +482,7 @@ func (r *recordingTokenIssuer) IssueForUser(ctx context.Context, userID string) 
 
 func TestService_Create_RequirePasswordResetTrue_UserMarked(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username:             "req-reset",
 		Email:                "r@r.com",
 		Password:             "pass",
@@ -494,7 +494,7 @@ func TestService_Create_RequirePasswordResetTrue_UserMarked(t *testing.T) {
 
 func TestService_Create_DefaultFalse(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "no-reset",
 		Email:    "n@n.com",
 		Password: "pass",
@@ -569,7 +569,7 @@ func TestService_Create_PublishError_DoesNotFailCreate(t *testing.T) {
 		WithEmitter(emitter), WithTokenIssuer(&stubTokenIssuer{}))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "pub-err-user", Email: "pub@err.com", Password: "hash",
 	})
 	require.NoError(t, err, "publish failure in demo mode must not fail Create")
@@ -656,7 +656,7 @@ func newAtomicitySvc(t *testing.T) (*Service, *observingUserRepo, *recordingTxRu
 // write (audit S-3).
 func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "lock-atomic", Email: "l@a.t", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -676,7 +676,7 @@ func TestService_Lock_GetByIDAndUpdateInsideTx(t *testing.T) {
 // Update had no tx wrapping; post-fix both repo calls observe inTx=true.
 func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "update-atomic", Email: "u@p.t", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -696,7 +696,7 @@ func TestService_Update_GetByIDAndUpdateInsideTx(t *testing.T) {
 // invalid input is not a database concern.
 func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "upd-bad-status", Email: "b@s.t", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -716,7 +716,7 @@ func TestService_Update_InvalidStatusFailsBeforeTx(t *testing.T) {
 // wrapping at all; post-fix both repo calls observe inTx=true (audit S-3).
 func TestService_Unlock_GetByIDAndUpdateInsideTx(t *testing.T) {
 	svc, repo, runner := newAtomicitySvc(t)
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "unlock-atomic", Email: "u@a.t", Password: "hash",
 	})
 	require.NoError(t, err)
@@ -769,7 +769,7 @@ func TestService_Create_BlankUsername_RejectsBeforeRepoCreate(t *testing.T) {
 		WithTxManager(runner))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "", Email: "ok@e.t", Password: "pw",
 	})
 	require.Error(t, err)
@@ -793,7 +793,7 @@ func TestService_Create_BlankEmail_RejectsBeforeRepoCreate(t *testing.T) {
 		WithTxManager(runner))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "ok", Email: "", Password: "pw",
 	})
 	require.Error(t, err)
@@ -820,7 +820,7 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 		WithTxManager(runner))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{
+	user, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "ok", Email: "ok@e.t", Password: "",
 	})
 	require.Error(t, err)
@@ -841,7 +841,7 @@ func TestService_Create_BlankPassword_RoutesIdentityInvalidInputCode(t *testing.
 // (debuggability).
 func TestService_Create_RequireNotBlankShortCircuitsOnFirstField(t *testing.T) {
 	svc := newTestService()
-	_, err := svc.Create(context.Background(), CreateInput{
+	_, err := svc.Create(adminCtxForService(), CreateInput{
 		Username: "", Email: "", Password: "",
 	})
 	require.Error(t, err)
@@ -940,7 +940,7 @@ func (c *capturingEmitter) Emit(_ context.Context, entry outbox.Entry) error {
 // event.user.locked.v1 with a non-empty userId and actorId.
 func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{Username: "lock-payload", Email: "lp@e.t", Password: "hash"})
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "lock-payload", Email: "lp@e.t", Password: "hash"})
 	require.NoError(t, err)
 
 	cap := &capturingEmitter{}
@@ -948,7 +948,7 @@ func TestService_Lock_EmitsTypedPayload(t *testing.T) {
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 	// Create user in svc2's own repo.
-	user2, err := svc2.Create(context.Background(), CreateInput{Username: user.Username + "2", Email: "lp2@e.t", Password: "hash"})
+	user2, err := svc2.Create(adminCtxForService(), CreateInput{Username: user.Username + "2", Email: "lp2@e.t", Password: "hash"})
 	require.NoError(t, err)
 
 	// Reset capture after Create (which also emits).
@@ -973,7 +973,7 @@ func TestService_Update_EmitsTypedPayload(t *testing.T) {
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{Username: "upd-payload", Email: "up@e.t", Password: "hash"})
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "upd-payload", Email: "up@e.t", Password: "hash"})
 	require.NoError(t, err)
 	cap.entries = nil
 
@@ -998,7 +998,7 @@ func TestService_Delete_EmitsTypedPayload(t *testing.T) {
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{Username: "del-payload", Email: "dp@e.t", Password: "hash"})
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "del-payload", Email: "dp@e.t", Password: "hash"})
 	require.NoError(t, err)
 	cap.entries = nil
 
@@ -1021,7 +1021,7 @@ func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
 		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
 	require.NoError(t, err)
 
-	user, err := svc.Create(context.Background(), CreateInput{Username: "unl-payload", Email: "ulp@e.t", Password: "hash"})
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "unl-payload", Email: "ulp@e.t", Password: "hash"})
 	require.NoError(t, err)
 	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
 	cap.entries = nil
@@ -1042,7 +1042,7 @@ func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
 // This guards the actorFromContext fail-fast invariant.
 func TestService_Lock_NoActor_ReturnsUnauthorized(t *testing.T) {
 	svc := newTestService()
-	user, err := svc.Create(context.Background(), CreateInput{Username: "lock-noauth", Email: "na@e.t", Password: "hash"})
+	user, err := svc.Create(adminCtxForService(), CreateInput{Username: "lock-noauth", Email: "na@e.t", Password: "hash"})
 	require.NoError(t, err)
 
 	// context.Background() has no auth principal.

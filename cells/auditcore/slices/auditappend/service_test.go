@@ -145,11 +145,10 @@ func TestService_HandleEvent_PublishError_DoesNotFailAppend(t *testing.T) {
 	assert.Equal(t, 1, svc.ChainLen(), "entry should still be appended to chain")
 }
 
-// TestService_HandleEvent_ActorExtraction covers the snake_case + camelCase
-// fallback in the actor-id extractor. Regression guard from PR-A6 review:
-// event.user.created.v1 still publishes user_id (snake), while session/config
-// events publish userId (camel). auditappend must attribute both correctly
-// instead of silently falling back to "system".
+// TestService_HandleEvent_ActorExtraction covers the actor-id extractor's
+// priority: actorId (preferred) > userId (fallback) > "system" (default).
+// G.6 migrated user events from snake_case user_id to camelCase userId; G.2
+// added required actorId to all admin-write events.
 func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -170,7 +169,13 @@ func TestService_HandleEvent_ActorExtraction(t *testing.T) {
 			wantActorID: "adm-1",
 		},
 		{
-			name:        "no actor field (config.entry-upserted) → system",
+			name:        "actorId field (config.entry-upserted, PR-CFG-G1) — production path",
+			eventType:   "event.config.entry-upserted.v1",
+			payload:     map[string]any{"key": "k", "version": 1, "actorId": "adm-99"},
+			wantActorID: "adm-99",
+		},
+		{
+			name:        "no actor field (legacy config event) → system fallback",
 			eventType:   "event.config.entry-upserted.v1",
 			payload:     map[string]any{"key": "k", "version": 1},
 			wantActorID: "system",
