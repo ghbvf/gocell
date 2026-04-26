@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
 	"github.com/ghbvf/gocell/kernel/idempotency"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -37,6 +38,16 @@ type SharedDeps struct {
 
 	// EventBus is the in-process event bus used for both publish and subscribe.
 	EventBus *eventbus.InMemoryEventBus
+
+	// SharedPGPool is the PG pool created by ConfigCoreModule when StorageBackend
+	// is "postgres". Shared with AccessCoreModule + AuditCoreModule so they can
+	// register typed outbox writers + tx managers (durable mode requires both
+	// non-nil per kernel/cell.ResolveEmitter). Nil in memory mode.
+	//
+	// Lifecycle: ConfigCoreModule owns the pool (creates it, registered as
+	// provisional resource). AccessCoreModule + AuditCoreModule are read-only
+	// consumers — they must not call Close on the pool.
+	SharedPGPool *adapterpg.Pool
 
 	// RedisClient is configured when distributed replay/idempotency state is
 	// required or when the operator explicitly provides Redis env vars.

@@ -241,6 +241,10 @@ type ConfigCoreModuleConfig struct {
 type ConfigCoreModuleResult struct {
 	// PGResource is the ManagedResource for the PG pool. Nil in memory mode.
 	PGResource kernellifecycle.ManagedResource
+	// PGPool is the raw PG pool opened in postgres mode. Nil in memory mode.
+	// ConfigCoreModule writes this to SharedDeps.SharedPGPool after a successful
+	// buildConfigCoreOpts call so AccessCoreModule + AuditCoreModule can read it.
+	PGPool *adapterpg.Pool
 	// CellOptions are the configcore.Option values to pass to NewConfigCore.
 	CellOptions []configcore.Option
 	// BootstrapOpts are bootstrap.Option values — in postgres mode carries
@@ -316,6 +320,7 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 		// lifecycle is managed separately from the pool (PGResource.Worker() == nil).
 		return ConfigCoreModuleResult{
 			PGResource:    pgRes,
+			PGPool:        pool,
 			CellOptions:   cellOpts,
 			BootstrapOpts: []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)},
 		}, nil

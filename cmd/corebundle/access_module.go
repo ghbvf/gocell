@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -94,14 +95,42 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 
 	accessOpts := []accesscore.Option{
 		accesscore.WithInMemoryDefaults(),
-		// Demo-mode wiring: publisher only, no outboxWriter — cell.ResolveEmitter
-		// picks DirectEmitter(FailOpen) and keeps L2 slices running non-durably.
+		// Publisher set unconditionally; outboxWriter set conditionally below.
+		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
+		// (memory mode) and WriterEmitter when both pub+writer are non-nil (durable).
 		accesscore.WithOutboxDeps(shared.EventBus, nil),
 		accesscore.WithJWTIssuer(shared.JWTDeps.issuer),
 		accesscore.WithJWTVerifier(shared.JWTDeps.verifier),
 		accesscore.WithCursorCodec(cursorCodec),
 		accesscore.WithRefreshMetricsProvider(shared.PromStack.metricProvider),
 		accesscore.WithRefreshGC(time.Hour, 24*time.Hour),
+	}
+	if shared.Topology.StorageBackend == "postgres" {
+		if shared.SharedPGPool == nil {
+			return nil, nil, nil, fmt.Errorf("AccessCoreModule: postgres mode requires SharedPGPool " +
+				"(ConfigCoreModule must run before AccessCoreModule)")
+		}
+		writer := adapterpg.NewOutboxWriter()
+		txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
+		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
+		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
+		accessOpts = append(accessOpts,
+			accesscore.WithOutboxDeps(nil, writer),
+			accesscore.WithTxManager(txMgr),
+		)
+		// Wire the ConfigClient for the configreceive slice to fetch entry values
+		// from configcore's internal GET /internal/v1/config/{key} endpoint after
+		// an upsert event (contract: http.config.internal.get.v1).
+		// baseURL is constructed from InternalHTTPAddr. If the addr is a port-only
+		// string (e.g. ":9090") we resolve to loopback; if host:port, prepend scheme.
+		// The HMAC ring from InternalGuard is reused for outbound service-token signing.
+		// In dev mode (InternalGuard == nil) the configreceive slice runs in log-only mode.
+		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
+		if shared.InternalGuard != nil {
+			accessOpts = append(accessOpts,
+				accesscore.WithHTTPConfigClient(internalBaseURL, shared.InternalGuard.ring),
+			)
+		}
 	}
 	if mode == adminProvisionModeBootstrap {
 		accessOpts = append(accessOpts, accesscore.WithInitialAdminBootstrap(m.InitialAdminOpts...))
@@ -112,6 +141,20 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 }
 
 var _ CellModule = AccessCoreModule{}
+
+// internalAddrToBaseURL converts a bind address to an HTTP base URL suitable
+// for the internal HTTP client. Port-only addresses (e.g. ":9090") are resolved
+// to "http://127.0.0.1:9090"; host:port addresses get "http://" prepended.
+// Used to construct the ConfigClient base URL from SharedDeps.InternalHTTPAddr.
+func internalAddrToBaseURL(addr string) string {
+	if addr == "" {
+		return "http://127.0.0.1:9090"
+	}
+	if strings.HasPrefix(addr, ":") {
+		return "http://127.0.0.1" + addr
+	}
+	return "http://" + addr
+}
 
 func resolveAdminProvisionMode(raw string, forceBootstrap bool) (adminProvisionMode, error) {
 	switch strings.TrimSpace(raw) {

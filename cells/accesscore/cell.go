@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
+	accesshttp "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/http"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
@@ -197,6 +198,19 @@ func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
 // log-only mode — no cross-cell HTTP call is made.
 func WithConfigClient(c ports.ConfigClient) Option {
 	return func(ac *AccessCore) { ac.configClient = c }
+}
+
+// WithHTTPConfigClient constructs a new HTTPConfigClient from the given base URL
+// and HMAC key ring and injects it as the ConfigClient.
+//
+// This public factory is the composition-root entrypoint for cmd/corebundle
+// and similar callers that cannot import cells/accesscore/internal/adapters/http
+// directly. It is equivalent to calling WithConfigClient(NewHTTPConfigClient(baseURL, ring)).
+//
+// contract: http.config.internal.get.v1
+// ref: go-micro config/source/remote — polling + on-change patterns.
+func WithHTTPConfigClient(baseURL string, ring *auth.HMACKeyRing) Option {
+	return WithConfigClient(accesshttp.NewHTTPConfigClient(baseURL, ring))
 }
 
 // AccessCore is the accesscore Cell implementation.

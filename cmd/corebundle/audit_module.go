@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -54,14 +55,31 @@ func (AuditCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.Cell
 		return nil, nil, nil, fmt.Errorf("auditcore HMAC key: %w", err)
 	}
 
-	c := auditcore.NewAuditCore(
+	auditOpts := []auditcore.Option{
 		auditcore.WithInMemoryDefaults(),
-		// Demo-mode wiring: publisher only, no outboxWriter.
+		// Publisher set unconditionally; outboxWriter set conditionally below.
+		// cell.ResolveEmitter picks DirectEmitter(FailOpen) when writer is nil
+		// (memory mode) and WriterEmitter when both pub+writer are non-nil (durable).
 		auditcore.WithOutboxDeps(shared.EventBus, nil),
 		auditcore.WithHMACKey(hmacKey),
 		auditcore.WithCursorCodec(cursorCodec),
 		auditcore.WithMetricsProvider(shared.PromStack.metricProvider),
-	)
+	}
+	if shared.Topology.StorageBackend == "postgres" {
+		if shared.SharedPGPool == nil {
+			return nil, nil, nil, fmt.Errorf("AuditCoreModule: postgres mode requires SharedPGPool " +
+				"(ConfigCoreModule must run before AuditCoreModule)")
+		}
+		writer := adapterpg.NewOutboxWriter()
+		txMgr := adapterpg.NewTxManager(shared.SharedPGPool)
+		// Accumulative WithOutboxDeps: adds writer without replacing the publisher
+		// set above. WithTxManager wires the TxRunner for L2 transactional atomicity.
+		auditOpts = append(auditOpts,
+			auditcore.WithOutboxDeps(nil, writer),
+			auditcore.WithTxManager(txMgr),
+		)
+	}
+	c := auditcore.NewAuditCore(auditOpts...)
 	return c, nil, nil, nil
 }
 
