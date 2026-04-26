@@ -18,12 +18,16 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
 )
+
+const invalidUUID = "not-a-uuid-string"
 
 func newHandlerIdentityRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
@@ -158,8 +162,8 @@ func TestHandler(t *testing.T) {
 		{
 			name:       "GET /{id} nonexistent returns 404",
 			method:     http.MethodGet,
-			path:       "/no-such-id",
-			subject:    "no-such-id", // self-access
+			path:       "/" + testutil.TestID("no-such-id"),
+			subject:    testutil.TestID("no-such-id"), // self-access
 			wantStatus: http.StatusNotFound,
 		},
 		{
@@ -192,37 +196,37 @@ func TestHandler(t *testing.T) {
 		{
 			name:       "GET /{id} self-access authz passes (user not found)",
 			method:     http.MethodGet,
-			path:       "/self-access-test",
-			subject:    "self-access-test",
+			path:       "/" + testutil.TestID("self-access-test"),
+			subject:    testutil.TestID("self-access-test"),
 			wantStatus: http.StatusNotFound, // authz passes (self), service returns 404
 		},
 		{
 			name:       "GET /{id} different user non-admin returns 403",
 			method:     http.MethodGet,
-			path:       "/user-1",
-			subject:    "user-2",
+			path:       "/" + testutil.TestID("user-1"),
+			subject:    testutil.TestID("user-2"),
 			roles:      []string{"viewer"},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "GET /{id} no auth returns 401",
 			method:     http.MethodGet,
-			path:       "/user-1",
+			path:       "/" + testutil.TestID("user-1"),
 			subject:    "",
 			wantStatus: http.StatusUnauthorized,
 		},
 		{
 			name:       "DELETE /{id} non-admin returns 403",
 			method:     http.MethodDelete,
-			path:       "/user-1",
-			subject:    "user-1", // even self cannot delete
+			path:       "/" + testutil.TestID("user-1"),
+			subject:    testutil.TestID("user-1"), // even self cannot delete (admin check fires first)
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "DELETE /{id} admin self-delete returns 409",
 			method:     http.MethodDelete,
-			path:       "/admin-1",
-			subject:    "admin-1",
+			path:       "/" + testutil.TestID("admin-1"),
+			subject:    testutil.TestID("admin-1"),
 			roles:      []string{"admin"},
 			wantStatus: http.StatusConflict,
 		},
@@ -231,24 +235,41 @@ func TestHandler(t *testing.T) {
 			// self-delete check (409). Non-admins cannot reach the self-delete guard.
 			name:       "DELETE /{id} non-admin self-delete still returns 403",
 			method:     http.MethodDelete,
-			path:       "/user-1",
-			subject:    "user-1",
+			path:       "/" + testutil.TestID("user-1"),
+			subject:    testutil.TestID("user-1"),
 			roles:      []string{"viewer"},
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "POST /{id}/lock non-admin returns 403",
 			method:     http.MethodPost,
-			path:       "/user-1/lock",
-			subject:    "user-1",
+			path:       "/" + testutil.TestID("user-1") + "/lock",
+			subject:    testutil.TestID("user-1"),
 			wantStatus: http.StatusForbidden,
 		},
 		{
 			name:       "POST /{id}/unlock non-admin returns 403",
 			method:     http.MethodPost,
-			path:       "/user-1/unlock",
-			subject:    "user-1",
+			path:       "/" + testutil.TestID("user-1") + "/unlock",
+			subject:    testutil.TestID("user-1"),
 			wantStatus: http.StatusForbidden,
+		},
+		{
+			name:       "GET /{id} invalid UUID returns 400",
+			method:     http.MethodGet,
+			path:       "/" + invalidUUID,
+			subject:    "admin-user",
+			roles:      []string{"admin"},
+			wantStatus: http.StatusBadRequest,
+			checkBody: func(t *testing.T, body []byte) {
+				var b struct {
+					Error struct {
+						Code string `json:"code"`
+					} `json:"error"`
+				}
+				require.NoError(t, json.Unmarshal(body, &b))
+				assert.Equal(t, string(errcode.ErrValidationInvalidUUID), b.Error.Code)
+			},
 		},
 	}
 
@@ -457,12 +478,12 @@ func TestHandler_ChangePassword_SelfAllowed(t *testing.T) {
 		PasswordResetRequired: false,
 	}}
 	r, repo := setupWithIssuer(stubIssuer)
-	seedUserInRepo(t, repo, "usr-self", "self-user", "oldpass")
+	seedUserInRepo(t, repo, testutil.TestID("usr-self"), "self-user", "oldpass")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
-	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/usr-self/password", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-self")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-self", nil)) // self-access
+	req = req.WithContext(auth.TestContext(testutil.TestID("usr-self"), nil)) // self-access
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -477,10 +498,10 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 		RefreshToken: "admin-issued-rt",
 	}}
 	r, repo := setupWithIssuer(stubIssuer)
-	seedUserInRepo(t, repo, "usr-target", "target-user", "oldpass")
+	seedUserInRepo(t, repo, testutil.TestID("usr-target"), "target-user", "oldpass")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass2"}`
-	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/usr-target/password", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-target")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	req = req.WithContext(auth.TestContext("admin-user", []string{"admin"}))
 	w := httptest.NewRecorder()
@@ -492,12 +513,12 @@ func TestHandler_ChangePassword_AdminOnAnotherUser_Allowed(t *testing.T) {
 
 func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 	r, repo := setupWithIssuer(nil)
-	seedUserInRepo(t, repo, "usr-victim", "victim-user", "oldpass")
+	seedUserInRepo(t, repo, testutil.TestID("usr-victim"), "victim-user", "oldpass")
 
 	body := `{"oldPassword":"oldpass","newPassword":"newpass"}`
-	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/usr-victim/password", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-victim")+"/password", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-stranger", []string{"viewer"})) // not self, not admin
+	req = req.WithContext(auth.TestContext(testutil.TestID("usr-stranger"), []string{"viewer"})) // not self, not admin
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -506,11 +527,11 @@ func TestHandler_ChangePassword_StrangerForbidden(t *testing.T) {
 
 func TestHandler_ChangePassword_BadJSON(t *testing.T) {
 	r, repo := setupWithIssuer(nil)
-	seedUserInRepo(t, repo, "usr-badjson", "badjson-user", "oldpass")
+	seedUserInRepo(t, repo, testutil.TestID("usr-badjson"), "badjson-user", "oldpass")
 
-	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/usr-badjson/password", strings.NewReader(`{bad json`))
+	req := httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("usr-badjson")+"/password", strings.NewReader(`{bad json`))
 	req.Header.Set("Content-Type", "application/json")
-	req = req.WithContext(auth.TestContext("usr-badjson", nil)) // self
+	req = req.WithContext(auth.TestContext(testutil.TestID("usr-badjson"), nil)) // self
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 

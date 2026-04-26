@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/internal/testoutbox"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -72,7 +73,7 @@ func TestHandler_UpdatePUT(t *testing.T) {
 func TestHandler_UpdatePUT_BadJSON(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPut, identityPrefix+"/some-id", strings.NewReader("{bad")))
+	req := withAdmin(httptest.NewRequest(http.MethodPut, identityPrefix+"/"+testutil.TestID("some-id"), strings.NewReader("{bad")))
 	req.Header.Set("Content-Type", "application/json")
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
@@ -146,7 +147,7 @@ func TestHandler_LockUnlock(t *testing.T) {
 func TestHandler_Lock_NotFound(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/no-such-id/lock", nil))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/lock", nil))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
@@ -154,7 +155,7 @@ func TestHandler_Lock_NotFound(t *testing.T) {
 func TestHandler_Unlock_NotFound(t *testing.T) {
 	r := setup()
 	w := httptest.NewRecorder()
-	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/no-such-id/unlock", nil))
+	req := withAdmin(httptest.NewRequest(http.MethodPost, identityPrefix+"/"+testutil.TestID("no-such-id")+"/unlock", nil))
 	r.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }

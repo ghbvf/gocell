@@ -12,6 +12,10 @@ endpoints:
     path: /api/v1/orders/
     successStatus: 200
     noContent: false
+    responses:
+      400:
+        description: "Bad request — invalid pagination parameter"
+        schemaRef: "../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

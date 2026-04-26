@@ -12,5 +12,9 @@ endpoints:
     path: /internal/v1/devicecommands
     successStatus: 200
     noContent: false
+    responses:
+      400:
+        description: "Bad request — invalid pagination parameter"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   response: response.schema.json

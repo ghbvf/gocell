@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
@@ -37,7 +38,6 @@ func stdInput() adminprovision.ProvisionInput {
 		Email:        "admin@local",
 		PasswordHash: []byte("$2a$10$stubhash0000000000000000000000000000000000000000"),
 		RequireReset: true,
-		IDPrefix:     "usr-bootstrap-",
 		Source:       domain.UserSourceBootstrap,
 	}
 }
@@ -98,13 +98,14 @@ func TestProvisioner_Status_InfraError_Surfaced(t *testing.T) {
 func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
-	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("aaaa-1111"))
+	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("00000000-0000-4000-8000-000000000001"))
 
 	user, outcome, err := p.Ensure(context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeCreated, outcome)
 	require.NotNil(t, user)
-	assert.Equal(t, "usr-bootstrap-aaaa-1111", user.ID)
+	_, parseErr := uuid.Parse(user.ID)
+	assert.NoError(t, parseErr, "user ID must be a valid UUID")
 	assert.True(t, user.PasswordResetRequired)
 	assert.Equal(t, domain.UserSourceBootstrap, user.CreationSource)
 	assert.Equal(t, domain.ProvisionStateComplete, user.ProvisionState)
@@ -144,13 +145,15 @@ func TestProvisioner_Ensure_RaceSkipped_NoCreatedUserReturned(t *testing.T) {
 	assert.False(t, roleRepo.assignCalled, "AssignToUser must NOT run on race path")
 }
 
+const orphanPriorID = "11111111-1111-4111-8111-111111111177"
+
 func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	// Pre-seed an orphan user (previous crash between Create + Assign): row
 	// exists but no admin role assigned.
 	orphan, err := domain.NewUser("admin", "admin@local", "$2a$10$oldhash000000000000000000000000000000000000000000000")
 	require.NoError(t, err)
-	orphan.ID = "usr-bootstrap-orphan-prior"
+	orphan.ID = orphanPriorID
 	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
 
@@ -161,9 +164,9 @@ func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeOrphanRecovered, outcome)
 	require.NotNil(t, user)
-	assert.Equal(t, "usr-bootstrap-orphan-prior", user.ID, "orphan ID preserved")
+	assert.Equal(t, orphanPriorID, user.ID, "orphan ID preserved")
 	// Hash was rewritten to the new caller-supplied hash
-	refreshed, err := userRepo.GetByID(context.Background(), "usr-bootstrap-orphan-prior")
+	refreshed, err := userRepo.GetByID(context.Background(), orphanPriorID)
 	require.NoError(t, err)
 	assert.Equal(t, string(stdInput().PasswordHash), refreshed.PasswordHash)
 	assert.Equal(t, domain.UserSourceBootstrap, refreshed.CreationSource)
@@ -204,10 +207,11 @@ func TestProvisioner_Ensure_DuplicateIdentityUser_ReturnsConflictWithoutTakeover
 }
 
 func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeover(t *testing.T) {
+	const bootstrapPendingID = "33333333-3333-4333-8333-333333333377"
 	userRepo := mem.NewUserRepository()
 	existing, err := domain.NewUser("admin", "admin@local", "$2a$10$bootstraphash00000000000000000000000000000000000000")
 	require.NoError(t, err)
-	existing.ID = "usr-bootstrap-pending"
+	existing.ID = bootstrapPendingID
 	existing.MarkProvisionPending(domain.UserSourceBootstrap)
 	existing.MarkPasswordResetRequired()
 	require.NoError(t, userRepo.Create(context.Background(), existing))
@@ -217,7 +221,6 @@ func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeo
 
 	in := stdInput()
 	in.Source = domain.UserSourceSetup
-	in.IDPrefix = "usr-"
 	in.RequireReset = false
 	user, outcome, err := p.Ensure(context.Background(), in)
 	require.Error(t, err)
@@ -227,7 +230,7 @@ func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeo
 	require.ErrorAs(t, err, &ec)
 	assert.Equal(t, errcode.ErrAuthUserDuplicate, ec.Code)
 
-	refreshed, err := userRepo.GetByID(context.Background(), "usr-bootstrap-pending")
+	refreshed, err := userRepo.GetByID(context.Background(), bootstrapPendingID)
 	require.NoError(t, err)
 	assert.Equal(t, "$2a$10$bootstraphash00000000000000000000000000000000000000", refreshed.PasswordHash)
 	assert.True(t, refreshed.PasswordResetRequired)
@@ -242,7 +245,7 @@ func TestProvisioner_Ensure_OrphanUpdateFails_Surfaced(t *testing.T) {
 	// Orphan path reached, but UserRepo.Update fails when rewriting the hash.
 	inner := mem.NewUserRepository()
 	orphan, _ := domain.NewUser("admin", "admin@local", "$2a$10$orphanold")
-	orphan.ID = "usr-bootstrap-orphan-pre"
+	orphan.ID = "22222222-2222-4222-8222-222222222277"
 	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
 	require.NoError(t, inner.Create(context.Background(), orphan))
 	userRepo := &updateFailUserRepo{inner: inner, updateErr: errors.New("update failed")}
@@ -332,9 +335,8 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 		name string
 		in   adminprovision.ProvisionInput
 	}{
-		{"missing prefix", adminprovision.ProvisionInput{Username: "u", Email: "u@x", PasswordHash: []byte("h")}},
-		{"missing hash", adminprovision.ProvisionInput{Username: "u", Email: "u@x", IDPrefix: "usr-"}},
-		{"missing source", adminprovision.ProvisionInput{Username: "u", Email: "u@x", PasswordHash: []byte("h"), IDPrefix: "usr-"}},
+		{"missing hash", adminprovision.ProvisionInput{Username: "u", Email: "u@x"}},
+		{"missing source", adminprovision.ProvisionInput{Username: "u", Email: "u@x", PasswordHash: []byte("h")}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

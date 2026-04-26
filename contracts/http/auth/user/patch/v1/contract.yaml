@@ -17,11 +17,20 @@ endpoints:
     successStatus: 200
     noContent: false
     responses:
+      400:
+        description: "Bad request — path parameter id is not a valid UUID (ERR_VALIDATION_INVALID_UUID) or merge-patch field type validation failure"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       401:
         description: "Unauthorized — missing or invalid bearer token"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
       403:
         description: "Forbidden — authenticated but lacks admin role"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      404:
+        description: "Not found — user with given id does not exist"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json

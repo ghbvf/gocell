@@ -12,6 +12,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// canonicalUUID is a known canonical lowercase UUID used across B4 tests.
+const canonicalUUID = "6ba7b810-9dad-11d1-80b4-00c04fd430c8"
+
+// uppercaseUUID is the same UUID in UPPERCASE — must still match canonical.
+const uppercaseUUID = "6BA7B810-9DAD-11D1-80B4-00C04FD430C8"
+
+// compactUUID is the same UUID without dashes — must still match canonical.
+const compactUUID = "6ba7b8109dad11d180b400c04fd430c8"
+
 func TestRequireSelfOrRole(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -280,6 +289,78 @@ func TestRequireSelfOrRole_EmptyUserSubject_Unauthorized(t *testing.T) {
 	var ecErr *errcode.Error
 	require.True(t, errors.As(err, &ecErr))
 	assert.Equal(t, errcode.ErrAuthUnauthorized, ecErr.Code)
+}
+
+// TestRequireSelfOrRole_UUIDNormalization verifies B4: both p.Subject and
+// targetID are normalized to canonical lowercase UUID before comparison, so
+// that different format variants of the same UUID are treated as equal.
+//
+// Existing SelfOr tests (Finding 11) continue to cover the path-param side;
+// these cases cover the p.Subject side.
+func TestRequireSelfOrRole_UUIDNormalization(t *testing.T) {
+	tests := []struct {
+		name     string
+		subject  string // value placed in p.Subject
+		targetID string // value passed as targetID
+		wantErr  bool
+	}{
+		{
+			// Regression: canonical subject + canonical target → Allow (unchanged).
+			name:     "both canonical lowercase → Allow",
+			subject:  canonicalUUID,
+			targetID: canonicalUUID,
+			wantErr:  false,
+		},
+		{
+			// B4: p.Subject arrives from an external IdP in UPPERCASE; handler
+			// edge already normalized path-param to canonical — must still Allow.
+			name:     "UPPERCASE subject, lowercase canonical target → Allow",
+			subject:  uppercaseUUID,
+			targetID: canonicalUUID,
+			wantErr:  false,
+		},
+		{
+			// B4: targetID arrives in compact form (no dashes); p.Subject is
+			// canonical lowercase — must still Allow.
+			name:     "canonical subject, compact-no-dashes target → Allow",
+			subject:  canonicalUUID,
+			targetID: compactUUID,
+			wantErr:  false,
+		},
+		{
+			// PR-A45 round-4: brace-wrapped subjects (length 38) used to be
+			// silently normalized by google/uuid.Parse. ParseCanonicalUUID rejects
+			// them, so the raw "{...}" subject is compared verbatim against the
+			// canonical target and never matches → Forbidden.
+			name:     "brace-wrapped subject, canonical target → Forbidden",
+			subject:  "{" + canonicalUUID + "}",
+			targetID: canonicalUUID,
+			wantErr:  true,
+		},
+		{
+			// urn:uuid: prefixed target (length 45) — same rationale.
+			name:     "canonical subject, urn:uuid prefixed target → Forbidden",
+			subject:  canonicalUUID,
+			targetID: "urn:uuid:" + canonicalUUID,
+			wantErr:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := WithPrincipal(context.Background(), &Principal{
+				Kind:    PrincipalUser,
+				Subject: tc.subject,
+				Roles:   nil,
+			})
+			err := RequireSelfOrRole(ctx, tc.targetID)
+			if tc.wantErr {
+				require.Error(t, err)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
 }
 
 // withPrincipalCtx builds a context carrying a PrincipalUser with the given

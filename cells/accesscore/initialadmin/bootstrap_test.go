@@ -9,9 +9,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
+
+	"github.com/google/uuid"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
@@ -173,7 +174,8 @@ func TestBootstrap_FirstRun_CreatesUserAndWritesFile(t *testing.T) {
 	// User must exist in repo.
 	user, getErr := userRepo.GetByUsername(context.Background(), "admin")
 	require.NoError(t, getErr)
-	assert.True(t, strings.HasPrefix(user.ID, "usr-bootstrap-"), "user ID must have bootstrap prefix")
+	_, parseErr := uuid.Parse(user.ID)
+	assert.NoError(t, parseErr, "user ID must be a valid UUID")
 
 	// Role must be assigned.
 	roles, rolesErr := roleRepo.GetByUserID(context.Background(), user.ID)
@@ -336,11 +338,12 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	userRepo := deps.UserRepo.(*mem.UserRepository)
 	roleRepo := deps.RoleRepo.(*mem.RoleRepository)
 
+	const crashedRunID = "44444444-4444-4444-8444-444444444477"
 	// Simulate the "previous run crashed between Create and AssignToUser"
 	// state: admin username row exists, but no admin role assignment.
 	orphan, err := domain.NewUser("admin", "admin@gocell.local", "$2a$12$orphanedhashFromPrevRun")
 	require.NoError(t, err)
-	orphan.ID = "usr-bootstrap-crashed-run"
+	orphan.ID = crashedRunID
 	orphan.MarkProvisionPending(domain.UserSourceBootstrap)
 	orphan.MarkPasswordResetRequired()
 	require.NoError(t, userRepo.Create(context.Background(), orphan))
@@ -359,7 +362,7 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	// row; we did not create a new user with a fresh UUID).
 	recovered, err := userRepo.GetByUsername(context.Background(), "admin")
 	require.NoError(t, err)
-	assert.Equal(t, "usr-bootstrap-crashed-run", recovered.ID,
+	assert.Equal(t, crashedRunID, recovered.ID,
 		"orphan user id must be preserved — recovery resumes, does not replace")
 
 	// Password hash must have been rewritten (new random password in credfile

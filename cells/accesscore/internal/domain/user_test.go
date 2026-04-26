@@ -165,11 +165,10 @@ func TestUser_ProvisionStateLifecycle(t *testing.T) {
 	user.MarkProvisionPending(UserSourceSetup)
 	assert.Equal(t, UserSourceSetup, user.CreationSource)
 	assert.Equal(t, ProvisionStatePending, user.ProvisionState)
-	assert.True(t, user.IsRecoverableProvisionOrphan(UserSourceSetup, "usr-setup-"))
-	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceBootstrap, "usr-bootstrap-"))
-	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceSetup, "usr-bootstrap-"))
+	assert.True(t, user.IsRecoverableProvisionOrphan(UserSourceSetup))
+	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceBootstrap))
 
 	user.MarkProvisionComplete()
 	assert.Equal(t, ProvisionStateComplete, user.ProvisionState)
-	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceSetup, "usr-setup-"))
+	assert.False(t, user.IsRecoverableProvisionOrphan(UserSourceSetup))
 }

@@ -22,6 +22,9 @@ endpoints:
       410:
         description: "Gone — first-run admin already provisioned; endpoint retired for this deployment. Response details carry nextAction=\"login\" only; clients resolve the login endpoint via OpenAPI / contract registry. See docs/architecture/202604181900-adr-auth-setup-first-run.md."
         schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
+      413:
+        description: "Payload Too Large — request body exceeds the size limit"
+        schemaRef: "../../../../../shared/errors/error-response-v1.schema.json"
 schemaRefs:
   request: request.schema.json
   response: response.schema.json

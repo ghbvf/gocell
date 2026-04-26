@@ -5,6 +5,7 @@ import (
 	"slices"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
 )
 
 // RequireSelfOrRole checks that the authenticated subject matches targetID
@@ -38,7 +39,24 @@ func RequireSelfOrRole(ctx context.Context, targetID string, bypassRoles ...stri
 			"subject", p.Subject)
 	}
 
-	if targetID != "" && p.Subject == targetID {
+	// B4: Normalize both sides so canonical UUID case variants match. The
+	// handler edge already produces canonical lowercase via ParseUUIDPathParam;
+	// p.Subject may originate from an external IdP or pre-normalization data.
+	// httputil.ParseCanonicalUUID is intentionally stricter than google/uuid.Parse:
+	// brace-wrapped, urn:uuid:, and whitespace-padded forms are NOT recognized
+	// here, so a subject in a non-canonical wire shape will not authorize a
+	// canonical-shaped target via silent normalization. IdP adapters are
+	// responsible for producing canonical subjects on intake.
+	subject := p.Subject
+	if canonical, ok := httputil.ParseCanonicalUUID(subject); ok {
+		subject = canonical
+	}
+	target := targetID
+	if canonical, ok := httputil.ParseCanonicalUUID(target); ok {
+		target = canonical
+	}
+
+	if target != "" && subject == target {
 		return nil
 	}
 

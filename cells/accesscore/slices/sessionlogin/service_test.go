@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
@@ -211,7 +211,8 @@ func TestService_Login_TokensContainSessionID(t *testing.T) {
 	require.NoError(t, err)
 	sid := accessClaims.SessionID
 	assert.NotEmpty(t, sid, "access token must contain sid claim")
-	assert.True(t, strings.HasPrefix(sid, "sess-"), "sid must start with sess-")
+	_, sidParseErr := uuid.Parse(sid)
+	assert.NoError(t, sidParseErr, "session id must be a canonical UUID (PR-A45)")
 
 	// Refresh token is now an opaque wire token (not a JWT).
 	// It must be non-empty; the session linkage is tracked in the refresh store, not in the token payload.

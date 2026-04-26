@@ -4,15 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"go/ast"
-	"go/parser"
-	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"runtime"
-	"strconv"
 	"testing"
 
 	"github.com/ghbvf/gocell/pkg/ctxcancel"
@@ -1024,56 +1018,25 @@ func TestWriteDomainError_504_LogsError(t *testing.T) {
 	assertStringAttr(t, *errRec, "cancel_reason", "deadline_exceeded")
 }
 
-// TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,
-// extracts every Code constant, and verifies it has an entry in codeToStatus.
-// This fails loudly when a new errcode.Code is added without registering an
-// HTTP status mapping, forcing the developer to make a conscious choice.
+// TestCodeToStatus_Exhaustive delegates to pkg/errcode/status_test.go which
+// owns the canonical codeToStatus map. This stub is kept for historical
+// reference; the authoritative exhaustive check runs as part of:
+//
+//	go test ./pkg/errcode/...
 func TestCodeToStatus_Exhaustive(t *testing.T) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	require.True(t, ok)
-	errcodeFile := filepath.Join(filepath.Dir(thisFile), "..", "errcode", "errcode.go")
-
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, errcodeFile, nil, 0)
-	require.NoError(t, err, "failed to parse errcode.go")
-
-	// Collect string values of all `const ... Code = "..."` declarations.
-	var codes []string
-	for _, decl := range f.Decls {
-		genDecl, ok := decl.(*ast.GenDecl)
-		if !ok || genDecl.Tok != token.CONST {
-			continue
-		}
-		for _, spec := range genDecl.Specs {
-			vs, ok := spec.(*ast.ValueSpec)
-			if !ok || vs.Type == nil {
-				continue
-			}
-			ident, ok := vs.Type.(*ast.Ident)
-			if !ok || ident.Name != "Code" {
-				continue
-			}
-			for _, val := range vs.Values {
-				lit, ok := val.(*ast.BasicLit)
-				if !ok || lit.Kind != token.STRING {
-					continue
-				}
-				s, err := strconv.Unquote(lit.Value)
-				if err != nil {
-					continue
-				}
-				codes = append(codes, s)
-			}
-		}
+	// Spot-check a handful of codes via the exported wrapper to confirm the
+	// delegation in httputil.MapCodeToStatus works end-to-end.
+	cases := []struct {
+		code errcode.Code
+		want int
+	}{
+		{errcode.ErrCellNotFound, http.StatusNotFound},
+		{errcode.ErrValidationFailed, http.StatusBadRequest},
+		{errcode.ErrAuthForbidden, http.StatusForbidden},
+		{errcode.ErrInternal, http.StatusInternalServerError},
 	}
-
-	require.NotEmpty(t, codes, "should find Code constants in errcode.go")
-
-	for _, code := range codes {
-		t.Run(code, func(t *testing.T) {
-			_, registered := codeToStatus[errcode.Code(code)]
-			assert.True(t, registered,
-				"errcode.Code %q has no entry in codeToStatus — add it to the map in response.go", code)
-		})
+	for _, tc := range cases {
+		got := MapCodeToStatus(tc.code)
+		assert.Equal(t, tc.want, got, "MapCodeToStatus(%q)", tc.code)
 	}
 }

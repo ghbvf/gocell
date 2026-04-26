@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 
@@ -590,13 +592,15 @@ func TestAccessCore_RouteUserCreate_NonAdmin_Returns403(t *testing.T) {
 func TestAccessCore_RouteSessionLogout(t *testing.T) {
 	r := initCellWithRouter(t)
 
+	// Path params under /api/v1/access/sessions/{id} are declared
+	// `format: uuid` in the contract; non-existent but well-formed UUIDs reach
+	// the handler and return 404. SelfOr("id", RoleAdmin) policy: subject
+	// must match the path {id} or carry the admin role. Use the same session
+	// UUID as subject so the policy admits the request.
+	const nonexistentSessionID = "00000000-0000-4000-8000-000000000099"
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/sess-nonexistent", nil)
-	// SelfOr("id", RoleAdmin) policy: subject must match the path {id} or carry
-	// the admin role. Use the session ID as subject so the policy admits the
-	// request and we can verify the handler is wired (returns 404 = not found,
-	// not a routing miss).
-	req = req.WithContext(auth.TestContext("sess-nonexistent", nil))
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/access/sessions/"+nonexistentSessionID, nil)
+	req = req.WithContext(auth.TestContext(nonexistentSessionID, nil))
 	r.ServeHTTP(rec, req)
 
 	// 404 means handler was reached and session not found (correct routing).
@@ -610,9 +614,10 @@ func TestAccessCore_RouteSessionLogout(t *testing.T) {
 func TestAccessCore_RouteUserGet(t *testing.T) {
 	r := initCellWithRouter(t)
 
+	const nonexistentUserID = "00000000-0000-4000-8000-000000000098"
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/usr-nonexistent", nil)
-	req = req.WithContext(auth.TestContext("usr-nonexistent", nil)) // self-access
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/users/"+nonexistentUserID, nil)
+	req = req.WithContext(auth.TestContext(nonexistentUserID, nil)) // self-access
 	r.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusNotFound, rec.Code,
@@ -708,13 +713,16 @@ func TestAccessCore_RouteRoleRevoke_NonAdmin_Returns403(t *testing.T) {
 func TestAccessCore_RouteRolesList(t *testing.T) {
 	r := initCellWithRouter(t)
 
+	const userID = "00000000-0000-4000-8000-000000000097"
 	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/user-1", nil)
-	req = req.WithContext(auth.TestContext("user-1", nil)) // self-access
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/roles/"+userID, nil)
+	req = req.WithContext(auth.TestContext(userID, nil)) // self-access
 	r.ServeHTTP(rec, req)
 
 	assert.NotEqual(t, http.StatusNotFound, rec.Code,
 		"GET /api/v1/access/roles/{userID} should not return 404 (got %d)", rec.Code)
+	assert.NotEqual(t, http.StatusBadRequest, rec.Code,
+		"path param must be a valid UUID (CH-05); got %d body=%s", rec.Code, rec.Body.String())
 }
 
 // TestAccessCore_SessionRevocation_E2E verifies the complete session revocation
@@ -785,7 +793,8 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 
 	sid := claims.SessionID
 	require.NotEmpty(t, sid, "token must contain sid claim")
-	require.True(t, strings.HasPrefix(sid, "sess-"), "sid must start with sess-")
+	_, sidParseErr := uuid.Parse(sid)
+	require.NoError(t, sidParseErr, "session id must be a canonical UUID (PR-A45)")
 
 	// Revoke the session.
 	sess, err := sessionRepo.GetByID(ctx, sid)

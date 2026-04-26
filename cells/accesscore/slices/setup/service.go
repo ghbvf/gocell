@@ -29,10 +29,6 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
-// UserIDPrefix distinguishes setup-path admins from bootstrap-path admins in
-// audit logs ("usr-" vs. "usr-bootstrap-").
-const UserIDPrefix = "usr-"
-
 // Password bounds for the setup endpoint:
 //   - Password bytes must be printable ASCII so JSON Schema maxLength and
 //     bcrypt's byte-counted input limit have the same semantics.
@@ -236,7 +232,6 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 		Email:        in.Email,
 		PasswordHash: hash,
 		RequireReset: false,
-		IDPrefix:     UserIDPrefix,
 		Source:       domain.UserSourceSetup,
 	})
 	if err != nil {

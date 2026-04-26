@@ -149,7 +149,7 @@ func (s *Service) Create(ctx context.Context, input CreateInput) (*domain.User, 
 		return nil, err
 	}
 
-	user.ID = "usr" + "-" + uuid.NewString()
+	user.ID = uuid.NewString()
 	if input.RequirePasswordReset {
 		user.MarkPasswordResetRequired()
 	}

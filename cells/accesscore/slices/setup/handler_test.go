@@ -8,18 +8,34 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/setup"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 )
 
-func newHandlerFresh(t *testing.T) *setup.Handler {
+const (
+	setupStatusPath = "/api/v1/access/setup/status"
+	setupAdminPath  = "/api/v1/access/setup/admin"
+)
+
+// newHandlerMux wires the slice handler onto a celltest mux via RegisterRoutes
+// — same code path cell_routes.go takes in production.
+func newHandlerMux(t *testing.T, h *setup.Handler) http.Handler {
+	t.Helper()
+	mux := celltest.NewTestMux()
+	h.RegisterRoutes(mux)
+	return mux
+}
+
+func newHandlerFresh(t *testing.T) http.Handler {
 	t.Helper()
 	svc := newService(t, mem.NewUserRepository(), mem.NewRoleRepository(), &stubWriter{})
-	return setup.NewHandler(svc)
+	return newHandlerMux(t, setup.NewHandler(svc))
 }
 
 // --- HandleStatus ---------------------------------------------------------
@@ -27,9 +43,9 @@ func newHandlerFresh(t *testing.T) *setup.Handler {
 func TestHandler_Status_FreshSystem_ReturnsFalse(t *testing.T) {
 	h := newHandlerFresh(t)
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/setup/status", nil)
+	req := httptest.NewRequest(http.MethodGet, setupStatusPath, nil)
 
-	h.HandleStatus(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var body struct {
@@ -44,11 +60,11 @@ func TestHandler_Status_WithAdmin_ReturnsTrue(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, nil)
-	h := setup.NewHandler(svc)
+	h := newHandlerMux(t, setup.NewHandler(svc))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/api/v1/access/setup/status", nil)
-	h.HandleStatus(w, req)
+	req := httptest.NewRequest(http.MethodGet, setupStatusPath, nil)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var body struct {
@@ -64,11 +80,11 @@ func TestHandler_CreateAdmin_FreshSystem_Returns201(t *testing.T) {
 	h := newHandlerFresh(t)
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleCreateAdmin(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusCreated, w.Code)
 	var resp struct {
@@ -77,7 +93,8 @@ func TestHandler_CreateAdmin_FreshSystem_Returns201(t *testing.T) {
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
 	assert.Equal(t, "root", resp.Data.Username)
 	assert.Equal(t, "root@local", resp.Data.Email)
-	assert.Contains(t, resp.Data.ID, "usr-")
+	_, idParseErr := uuid.Parse(resp.Data.ID)
+	assert.NoError(t, idParseErr, "user ID must be a valid UUID")
 	assert.NotEmpty(t, resp.Data.CreatedAt)
 }
 
@@ -86,14 +103,14 @@ func TestHandler_CreateAdmin_AlreadyExists_Returns410(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedAdmin(t, userRepo, roleRepo)
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
-	h := setup.NewHandler(svc)
+	h := newHandlerMux(t, setup.NewHandler(svc))
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleCreateAdmin(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusGone, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_SETUP_ALREADY_INITIALIZED")
@@ -107,11 +124,11 @@ func TestHandler_CreateAdmin_AlreadyExists_Returns410(t *testing.T) {
 func TestHandler_CreateAdmin_MalformedJSON_Returns400(t *testing.T) {
 	h := newHandlerFresh(t)
 
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(`not-json`))
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(`not-json`))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleCreateAdmin(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -120,11 +137,11 @@ func TestHandler_CreateAdmin_UnknownField_Returns400(t *testing.T) {
 	h := newHandlerFresh(t)
 
 	body := `{"username":"u","email":"u@x","password":"p","extra":"field"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleCreateAdmin(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code, "DecodeJSONStrict rejects unknown fields")
 }
@@ -133,11 +150,11 @@ func TestHandler_CreateAdmin_BlankPassword_Returns400(t *testing.T) {
 	h := newHandlerFresh(t)
 
 	body := `{"username":"root","email":"root@local","password":""}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleCreateAdmin(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_AUTH_IDENTITY_INVALID_INPUT")
@@ -168,11 +185,11 @@ func TestHandler_CreateAdmin_FieldLengthOutOfRange_Returns400(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newHandlerFresh(t)
-			req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
 			w := httptest.NewRecorder()
 
-			h.HandleCreateAdmin(w, req)
+			h.ServeHTTP(w, req)
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 			assert.Contains(t, w.Body.String(), "ERR_AUTH_IDENTITY_INVALID_INPUT")
@@ -185,14 +202,14 @@ func TestHandler_CreateAdmin_DuplicateIdentityUser_Returns409(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	seedIdentityUser(t, userRepo, "root", "root@local")
 	svc := newService(t, userRepo, roleRepo, &stubWriter{})
-	h := setup.NewHandler(svc)
+	h := newHandlerMux(t, setup.NewHandler(svc))
 
 	body := `{"username":"root","email":"root@local","password":"SecretPass!23"}`
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/access/setup/admin", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, setupAdminPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 
-	h.HandleCreateAdmin(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusConflict, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_AUTH_USER_DUPLICATE")

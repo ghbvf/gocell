@@ -95,6 +95,36 @@ c.ValidateHTTPResponseRecorder(t, rec)
 c.ValidatePayload(t, pub.calls[0].payload)
 ```
 
+## Path-param 校验（PR-A45 / CH-04 / CH-05）
+
+UUID 类型的路径参数必须用 `httputil.ParseUUIDPathParam(w, r, name)` 在 handler
+入口校验，非法值返回 400 + `ERR_VALIDATION_INVALID_UUID`，不降级到下游 404：
+
+```go
+func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
+    id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+    if !ok {
+        return // 400 + ERR_VALIDATION_INVALID_UUID 已写出
+    }
+    user, err := h.svc.GetByID(r.Context(), id)
+    ...
+}
+```
+
+**权威源**：contract.yaml 中 `pathParams.{name}.format == "uuid"` 决定该参数是否
+强制使用 helper。`gocell check contract-health` 的 CH-05 规则在 build 阶段静态
+强制 — `format: uuid` 路径参数若未调用 `ParseUUIDPathParam` 则 fail。
+
+**Service 边界约定**：handler 调用 helper 后传给 service 的 string 已是 canonical
+lowercase UUID。Service 函数签名保持 `string` 类型，不做二次 `uuid.Parse`。
+未来若 service 被 CLI/RPC 等非 HTTP 入口直接调用，新调用方负责自己的 UUID 校验。
+
+**Contract 4xx 完整性（CH-04）**：handler 直接返回的每个 4xx/5xx 状态码必须在
+`contract.yaml.responses[N]` 中声明，否则 `gocell check contract-health` fail。
+errcode 间接路径（`WriteDomainError(errcode.New(...))`）也会被 AST 反查 status
+覆盖。中间件/框架隐式发出的状态（401/403/429/5xx 等）由于 handler AST 不可见，
+不会触发 missing 报错；contract 中的 over-declaration 也不报警告（避免噪音）。
+
 ## ADV-05 治理规则：active event 必须有 subscriber
 
 `kernel/governance` ADV-05 在 `gocell validate` 阶段对每个 `kind: event` 的 contract 强制：

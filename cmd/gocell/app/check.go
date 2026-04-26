@@ -109,6 +109,8 @@ func checkContractHealth(args []string) error {
 
 	validator := governance.NewValidator(project, root)
 	results := validator.CheckContractHealth(contracts)
+	results = append(results, validator.CheckHTTPResponseAlignment(contracts, root)...)
+	results = append(results, validator.CheckHTTPPathParamUUID(contracts, root)...)
 
 	if err := printer.Print(results); err != nil {
 		return fmt.Errorf(errEmitResults, err)

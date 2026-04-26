@@ -17,11 +17,11 @@ const msgInternalServerError = "internal server error"
 
 // StatusClientClosedRequest is nginx's non-standard 499 status code returned
 // when the client closes the connection before the server finishes
-// responding. Go stdlib does not define this constant, so it is declared
-// here for use across the codeToStatus mapping and the tracing middleware.
+// responding. Re-exported from pkg/errcode for callers that only import
+// pkg/httputil (e.g. tracing middleware).
 //
 // ref: nginx ngx_http_request.h — NGX_HTTP_CLIENT_CLOSED_REQUEST 499
-const StatusClientClosedRequest = 499
+const StatusClientClosedRequest = errcode.StatusClientClosedRequest
 
 // WriteJSON writes v as a JSON response with the given HTTP status code.
 func WriteJSON(w http.ResponseWriter, status int, v any) {
@@ -267,220 +267,15 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	}
 }
 
-// codeToStatus maps known error codes to HTTP status codes.
-// All codes use errcode constants for compile-time checking.
-var codeToStatus = map[errcode.Code]int{
-	// --- 404 Not Found ---
-	errcode.ErrMetadataNotFound:   http.StatusNotFound,
-	errcode.ErrCellNotFound:       http.StatusNotFound,
-	errcode.ErrSliceNotFound:      http.StatusNotFound,
-	errcode.ErrContractNotFound:   http.StatusNotFound,
-	errcode.ErrAssemblyNotFound:   http.StatusNotFound,
-	errcode.ErrJourneyNotFound:    http.StatusNotFound,
-	errcode.ErrSessionNotFound:    http.StatusNotFound,
-	errcode.ErrSessionConflict:    http.StatusConflict,
-	errcode.ErrOrderNotFound:      http.StatusNotFound,
-	errcode.ErrDeviceNotFound:     http.StatusNotFound,
-	errcode.ErrCommandNotFound:    http.StatusNotFound,
-	errcode.ErrAuthUserNotFound:   http.StatusNotFound,
-	errcode.ErrAuthRoleNotFound:   http.StatusNotFound,
-	errcode.ErrConfigNotFound:     http.StatusNotFound,
-	errcode.ErrConfigRepoNotFound: http.StatusNotFound,
-	errcode.ErrFlagNotFound:       http.StatusNotFound,
-	errcode.ErrWSConnNotFound:     http.StatusNotFound,
-	errcode.ErrAuditRepoNotFound:  http.StatusNotFound,
-	errcode.ErrZeroTestMatch:      http.StatusNotFound,
-
-	// --- 400 Bad Request ---
-	errcode.ErrEnvelopeSchema:            http.StatusBadRequest,
-	errcode.ErrCursorInvalid:             http.StatusBadRequest,
-	errcode.ErrPageSizeExceeded:          http.StatusBadRequest,
-	errcode.ErrValidationFailed:          http.StatusBadRequest,
-	errcode.ErrMetadataInvalid:           http.StatusBadRequest,
-	errcode.ErrLifecycleInvalid:          http.StatusBadRequest,
-	errcode.ErrReferenceBroken:           http.StatusBadRequest,
-	errcode.ErrCheckRefInvalid:           http.StatusBadRequest,
-	errcode.ErrAuthInvalidInput:          http.StatusBadRequest,
-	errcode.ErrAuthIdentityInvalidInput:  http.StatusBadRequest,
-	errcode.ErrAuthLoginInvalidInput:     http.StatusBadRequest,
-	errcode.ErrAuthRefreshInvalidInput:   http.StatusBadRequest,
-	errcode.ErrAuthSessionInvalidInput:   http.StatusBadRequest,
-	errcode.ErrAuthLogoutInvalidInput:    http.StatusBadRequest,
-	errcode.ErrAuthRBACInvalidInput:      http.StatusBadRequest,
-	errcode.ErrConfigInvalidInput:        http.StatusBadRequest,
-	errcode.ErrConfigPublishInvalidInput: http.StatusBadRequest,
-	errcode.ErrFlagInvalidInput:          http.StatusBadRequest,
-	errcode.ErrInvalidTimeFormat:         http.StatusBadRequest,
-
-	// --- 401 Unauthorized ---
-	errcode.ErrAuthUnauthorized:       http.StatusUnauthorized,
-	errcode.ErrAuthKeyInvalid:         http.StatusUnauthorized,
-	errcode.ErrAuthVerifierConfig:     http.StatusInternalServerError,
-	errcode.ErrAuthTokenInvalid:       http.StatusUnauthorized,
-	errcode.ErrAuthTokenExpired:       http.StatusUnauthorized,
-	errcode.ErrAuthLoginFailed:        http.StatusUnauthorized,
-	errcode.ErrAuthRefreshFailed:      http.StatusUnauthorized,
-	errcode.ErrAuthInvalidToken:       http.StatusUnauthorized,
-	errcode.ErrAuthInvalidTokenIntent: http.StatusUnauthorized,
-	errcode.ErrRefreshTokenRejected:   http.StatusUnauthorized,
-
-	// --- 403 Forbidden ---
-	errcode.ErrAuthForbidden:             http.StatusForbidden,
-	errcode.ErrAuthUserLocked:            http.StatusForbidden,
-	errcode.ErrCSRFOriginDenied:          http.StatusForbidden,
-	errcode.ErrAuthPasswordResetRequired: http.StatusForbidden,
-
-	// --- 409 Conflict ---
-	errcode.ErrAuthUserDuplicate:   http.StatusConflict,
-	errcode.ErrAuthSelfDelete:      http.StatusConflict,
-	errcode.ErrAuthRoleDuplicate:   http.StatusConflict,
-	errcode.ErrConfigDuplicate:     http.StatusConflict,
-	errcode.ErrConfigRepoDuplicate: http.StatusConflict,
-	errcode.ErrFlagDuplicate:       http.StatusConflict,
-	// ErrDistlockTimeout: the requested lock key is currently held by another
-	// holder. The caller should retry (409 rather than 503: the conflict is a
-	// business-level contention, not an infra outage).
-	errcode.ErrDistlockTimeout: http.StatusConflict,
-
-	// --- 410 Gone ---
-	// Setup is a one-shot lifecycle endpoint: once the first admin exists, the
-	// endpoint is permanently retired for the lifetime of this deployment.
-	// 410 signals "permanently unavailable" (vs. 409's "retry may succeed"),
-	// shrinks the anonymous attack surface, and lets installer UIs distinguish
-	// "not initialized yet" from "already past initialization window".
-	errcode.ErrSetupAlreadyInitialized: http.StatusGone,
-
-	// --- 429 Too Many Requests ---
-	errcode.ErrRateLimited: http.StatusTooManyRequests,
-
-	// --- 499 Client Closed Request ---
-	// Nginx-style 499: the client disconnected before the server finished
-	// responding (context.Canceled surfaced from a downstream IO
-	// operation). Routed to log4xx → slog.Warn so the 5xx error rate stays
-	// clean of client-direction noise.
-	//
-	// Note: context.DeadlineExceeded does NOT come here — it is a real
-	// server-side / inherited timeout and maps to ErrServerTimeout → 504
-	// below, so it correctly counts toward the 5xx error rate.
-	errcode.ErrClientCanceled: StatusClientClosedRequest,
-
-	// --- 504 Gateway Timeout ---
-	// Server-side or inherited request timeout — context.DeadlineExceeded
-	// surfaced from a downstream IO operation. Distinct from 499 (client
-	// disconnect): a 504 is a real server-direction timeout that should
-	// trigger SDK retry policies and 5xx alerting. Routed to log5xx →
-	// slog.Error per the standard 5xx response path.
-	//
-	// ref: RFC 9110 §15.6.5 — 504 Gateway Timeout
-	// ref: kratos transport/http/status — DeadlineExceeded → 504
-	errcode.ErrServerTimeout: http.StatusGatewayTimeout,
-
-	// --- 413 Request Entity Too Large ---
-	errcode.ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
-
-	// --- 503 Service Unavailable ---
-	errcode.ErrCircuitOpen:            http.StatusServiceUnavailable,
-	errcode.ErrWSHubStopping:          http.StatusServiceUnavailable,
-	errcode.ErrWSHubNotRunning:        http.StatusServiceUnavailable,
-	errcode.ErrWSMaxConns:             http.StatusServiceUnavailable,
-	errcode.ErrRelayBudgetExhausted:   http.StatusServiceUnavailable,
-	errcode.ErrAuthRefreshUnavailable: http.StatusServiceUnavailable,
-	// Vault / key-provider unavailability: infra down rather than internal bug.
-	// 503 lets upstream load balancers and clients apply retry semantics
-	// (Retry-After, circuit breakers) — matching ErrCircuitOpen's model.
-	errcode.ErrVaultAuthFailed:      http.StatusServiceUnavailable,
-	errcode.ErrKeyProviderTransient: http.StatusServiceUnavailable,
-
-	// --- 500 Internal Server Error ---
-	errcode.ErrInternal:                http.StatusInternalServerError,
-	errcode.ErrDependencyCycle:         http.StatusInternalServerError,
-	errcode.ErrBusClosed:               http.StatusInternalServerError,
-	errcode.ErrAdapterPGNoTx:           http.StatusInternalServerError,
-	errcode.ErrTestExecution:           http.StatusInternalServerError,
-	errcode.ErrCellMissingOutbox:       http.StatusInternalServerError,
-	errcode.ErrCellMissingCodec:        http.StatusInternalServerError,
-	errcode.ErrCellMissingTokenIssuer:  http.StatusInternalServerError,
-	errcode.ErrCellInvalidConfig:       http.StatusInternalServerError,
-	errcode.ErrCellPlatformUnsupported: http.StatusInternalServerError,
-	errcode.ErrArchiveUpload:           http.StatusInternalServerError,
-	errcode.ErrArchiveMarshal:          http.StatusInternalServerError,
-	errcode.ErrAuditRepoQuery:          http.StatusInternalServerError,
-	errcode.ErrConfigRepoQuery:         http.StatusInternalServerError,
-	errcode.ErrFlagRepoQuery:           http.StatusInternalServerError,
-	errcode.ErrAuthKeyMissing:          http.StatusInternalServerError,
-	// Role resolution failure at token-issuance time — infrastructure fault
-	// (RoleRepository unavailable). Fail-closed: callers abort authn action
-	// rather than issue a token with empty roles.
-	errcode.ErrAuthRoleFetchFailed: http.StatusInternalServerError,
-	errcode.ErrWSAlreadyStarted:    http.StatusInternalServerError,
-	errcode.ErrWSAlreadyStopped:    http.StatusInternalServerError,
-	// Observability init failures (missing Provider, missing CellID) —
-	// these originate from composition-root misconfiguration and never
-	// escape via HTTP in practice, but the exhaustive test requires every
-	// errcode.Code to map. 500 is the conservative choice: if one ever
-	// reaches the HTTP layer, it signals an internal setup bug.
-	errcode.ErrObservabilityConfigInvalid: http.StatusInternalServerError,
-	// Lifecycle operation called in wrong state (e.g. bootstrap phase violation).
-	errcode.ErrBootstrapLifecycle: http.StatusInternalServerError,
-	// KeyProvider / encryption failures — infrastructure-level, never leak
-	// ciphertext or key IDs to the client; surface as 500 so the sanitised
-	// "internal server error" body is returned.
-	errcode.ErrKeyProviderKeyNotFound:   http.StatusInternalServerError,
-	errcode.ErrKeyProviderAuthFailed:    http.StatusInternalServerError,
-	errcode.ErrKeyProviderEncryptFailed: http.StatusInternalServerError,
-	errcode.ErrKeyProviderDecryptFailed: http.StatusInternalServerError,
-	errcode.ErrKeyProviderRotateFailed:  http.StatusInternalServerError,
-	errcode.ErrConfigDecryptFailed:      http.StatusInternalServerError,
-	errcode.ErrConfigEncryptFailed:      http.StatusInternalServerError,
-	errcode.ErrConfigKeyMissing:         http.StatusInternalServerError,
-	// Control-plane startup configuration errors — fail-fast at boot, never
-	// reach HTTP in practice. 500 is the conservative choice if one ever
-	// escapes: operator misconfiguration is a deployment bug, not a client bug.
-	errcode.ErrControlplaneServiceSecretMissing:  http.StatusInternalServerError,
-	errcode.ErrControlplaneNonceStoreMissing:     http.StatusInternalServerError,
-	errcode.ErrControlplaneClaimerNotDistributed: http.StatusInternalServerError,
-	errcode.ErrControlplaneVerboseTokenMissing:   http.StatusInternalServerError,
-	errcode.ErrControlplaneVerboseTokenSample:    http.StatusInternalServerError,
-	// ErrReadyzVerboseDenied is a 401 because the verbose endpoint enforces
-	// an X-Readyz-Token bearer check (PR-A35); a mismatched or missing
-	// header is treated exactly like any other bearer-token failure.
-	errcode.ErrReadyzVerboseDenied: http.StatusUnauthorized,
-	// ErrReadyzUnhealthy / ErrReadyzShuttingDown are 503 so load balancers
-	// and kubelet readinessProbes mark the pod unavailable. The codes let
-	// operators distinguish probe failure from graceful shutdown in
-	// dashboards without reading the JSON body.
-	errcode.ErrReadyzUnhealthy:    http.StatusServiceUnavailable,
-	errcode.ErrReadyzShuttingDown: http.StatusServiceUnavailable,
-	// Note: ErrKeyProviderTransient and ErrVaultAuthFailed are mapped to 503
-	// in the section above — infrastructure unavailability is retryable and
-	// should not be conflated with internal bugs.
-
-	// --- Auth replay / nonce-store codes ---
-	// ErrAuthReplayDetected is a security signal: the nonce has already been
-	// consumed. Client must not retry with the same token (401).
-	errcode.ErrAuthReplayDetected: http.StatusUnauthorized,
-	// ErrNonceStoreFull is a transient capacity condition: the in-memory store
-	// is at cap with no expired entries to reclaim. Client should back off (503).
-	errcode.ErrNonceStoreFull: http.StatusServiceUnavailable,
-
-	// --- 501 Not Implemented ---
-	errcode.ErrNotImplemented: http.StatusNotImplemented,
-}
-
 // MapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.
-// Known codes use an explicit lookup table. Unknown codes default to 500
-// and emit a warning log to prompt registration.
+// Delegates to errcode.MapCodeToStatus; re-exported here so callers that
+// already import pkg/httputil do not need a separate pkg/errcode import.
 func MapCodeToStatus(code errcode.Code) int {
-	if status, ok := codeToStatus[code]; ok {
-		return status
-	}
-	slog.Warn("unmapped error code, defaulting to 500", slog.String("code", string(code)))
-	return http.StatusInternalServerError
+	return errcode.MapCodeToStatus(code)
 }
 
 // IsClientError returns true if the given error code maps to a 4xx HTTP status
-// (client error). Unknown codes return false.
+// (client error). Delegates to errcode.IsClientError.
 func IsClientError(code errcode.Code) bool {
-	status, ok := codeToStatus[code]
-	return ok && status >= 400 && status < 500
+	return errcode.IsClientError(code)
 }

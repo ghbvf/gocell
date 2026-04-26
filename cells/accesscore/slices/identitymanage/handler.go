@@ -183,7 +183,10 @@ func (h *Handler) handleCreate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	if !ok {
+		return
+	}
 	user, err := h.svc.GetByID(r.Context(), id)
 	if err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
@@ -193,7 +196,10 @@ func (h *Handler) handleGet(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	if !ok {
+		return
+	}
 	var req struct {
 		Email string `json:"email"`
 	}
@@ -215,7 +221,10 @@ func (h *Handler) handleUpdate(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	if !ok {
+		return
+	}
 	// JSON merge patch: only fields present in the JSON body are updated.
 	// Patchable fields: name, email, status. Other fields are silently ignored.
 	// Uses DecodeJSON (not strict) because map targets accept any key by design.
@@ -272,7 +281,10 @@ func (h *Handler) handlePatch(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	if !ok {
+		return
+	}
 
 	// Prevent admin self-deletion — removing own account would lock out the
 	// operator with no recovery path if this is the last admin.
@@ -290,7 +302,10 @@ func (h *Handler) handleDelete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	if !ok {
+		return
+	}
 	if err := h.svc.Lock(r.Context(), id); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
@@ -299,7 +314,10 @@ func (h *Handler) handleLock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	if !ok {
+		return
+	}
 	if err := h.svc.Unlock(r.Context(), id); err != nil {
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
@@ -308,7 +326,10 @@ func (h *Handler) handleUnlock(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) handleChangePassword(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	id, ok := httputil.ParseUUIDPathParam(w, r, "id")
+	if !ok {
+		return
+	}
 	var req struct {
 		OldPassword string `json:"oldPassword"`
 		NewPassword string `json:"newPassword"`

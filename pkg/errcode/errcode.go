@@ -136,6 +136,12 @@ const (
 	ErrCursorInvalid     Code = "ERR_CURSOR_INVALID"
 	ErrPageSizeExceeded  Code = "ERR_PAGE_SIZE_EXCEEDED"
 	ErrInvalidTimeFormat Code = "ERR_INVALID_TIME_FORMAT"
+	// ErrValidationInvalidUUID signals that a UUID-typed input (currently used
+	// for HTTP path parameters declared with `format: uuid` in contract.yaml)
+	// failed to parse. Maps to HTTP 400 to distinguish "malformed identifier
+	// shape" from "identifier valid but resource not found" (404). Issued at
+	// handler edge by httputil.ParseUUIDPathParam.
+	ErrValidationInvalidUUID Code = "ERR_VALIDATION_INVALID_UUID"
 
 	// Resilience middleware error codes.
 	ErrCircuitOpen Code = "ERR_CIRCUIT_OPEN"

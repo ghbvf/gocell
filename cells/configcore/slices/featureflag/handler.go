@@ -4,8 +4,12 @@ import (
 	"net/http"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	dto "github.com/ghbvf/gocell/cells/configcore/internal/dto"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // FeatureFlagResponse is the public DTO for FeatureFlag, isolating the API
@@ -42,6 +46,23 @@ func toEvaluateResultResponse(r *EvaluateResult) EvaluateResultResponse {
 	return EvaluateResultResponse{Key: r.Key, Enabled: r.Enabled}
 }
 
+// spec vars for featureflag routes, cross-checked against
+// contracts/http/config/flags/*/v1/contract.yaml by FMT-18.
+var (
+	specFlagsList = wrapper.ContractSpec{
+		ID: "http.config.flags.list.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/flags/",
+	}
+	specFlagsGet = wrapper.ContractSpec{
+		ID: "http.config.flags.get.v1", Kind: "http", Transport: "http",
+		Method: "GET", Path: "/api/v1/flags/{key}",
+	}
+	specFlagsEvaluate = wrapper.ContractSpec{
+		ID: "http.config.flags.evaluate.v1", Kind: "http", Transport: "http",
+		Method: "POST", Path: "/api/v1/flags/{key}/evaluate",
+	}
+)
+
 // Handler provides HTTP endpoints for feature flag operations.
 type Handler struct {
 	svc *Service
@@ -50,6 +71,27 @@ type Handler struct {
 // NewHandler creates a feature-flag Handler.
 func NewHandler(svc *Service) *Handler {
 	return &Handler{svc: svc}
+}
+
+// RegisterRoutes registers feature-flag read routes on mux via auth.Mount so
+// CH-04/CH-05 governance can correlate contracts to handler functions.
+// All routes are admin-gated (auth.AnyRole(RoleAdmin)).
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
+	auth.Mount(mux, auth.Route{
+		Contract: specFlagsList,
+		Handler:  http.HandlerFunc(h.HandleList),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Mount(mux, auth.Route{
+		Contract: specFlagsGet,
+		Handler:  http.HandlerFunc(h.HandleGet),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
+	})
+	auth.Mount(mux, auth.Route{
+		Contract: specFlagsEvaluate,
+		Handler:  http.HandlerFunc(h.HandleEvaluate),
+		Policy:   auth.AnyRole(dto.RoleAdmin),
+	})
 }
 
 // HandleList handles GET / — returns paginated feature flags.

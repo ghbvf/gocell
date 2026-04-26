@@ -16,13 +16,18 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 )
 
 // testIssuer is declared in service_test.go
 
-func setup() (*Handler, string) {
+const refreshPath = "/api/v1/access/sessions/refresh"
+
+// setup wires the slice handler onto a celltest mux via RegisterRoutes — the
+// same code path cell_routes.go takes in production.
+func setup() (http.Handler, string) {
 	sessionRepo := mem.NewSessionRepository()
 	refreshStore := newTestRefreshStore()
 
@@ -44,7 +49,9 @@ func setup() (*Handler, string) {
 	_ = userRepo.Create(context.Background(), u)
 
 	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
-	return NewHandler(svc), wireToken
+	mux := celltest.NewTestMux()
+	NewHandler(svc).RegisterRoutes(mux)
+	return mux, wireToken
 }
 
 type unavailableRefreshStore struct {
@@ -169,9 +176,9 @@ func TestHandleRefresh(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/refresh", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			h.HandleRefresh(w, req)
+			h.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
 				tc.checkBody(t, w.Body.Bytes())
@@ -185,12 +192,13 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
 	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default())
-	h := NewHandler(svc)
+	mux := celltest.NewTestMux()
+	NewHandler(svc).RegisterRoutes(mux)
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/refresh", strings.NewReader(`{"refreshToken":"opaque"}`))
+	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(`{"refreshToken":"opaque"}`))
 	req.Header.Set("Content-Type", "application/json")
-	h.HandleRefresh(w, req)
+	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
 	assertErrorBody(t, w.Body.Bytes(), "ERR_AUTH_REFRESH_UNAVAILABLE", "internal server error")
@@ -202,9 +210,9 @@ func TestHandler_Refresh_BlankToken(t *testing.T) {
 	h, _ := setup()
 	body := `{"refreshToken":""}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/refresh", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, refreshPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	h.HandleRefresh(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 

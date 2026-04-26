@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/crypto/bcrypt"
@@ -45,7 +46,9 @@ func (s *stubWriter) Write(_ context.Context, e outbox.Entry) error {
 
 func newService(t *testing.T, userRepo ports.UserRepository, roleRepo ports.RoleRepository, w *stubWriter) *setup.Service {
 	t.Helper()
-	prov, err := adminprovision.NewProvisioner(userRepo, roleRepo, discardLogger(), func() string { return "fixed-uuid" })
+	prov, err := adminprovision.NewProvisioner(userRepo, roleRepo, discardLogger(), func() string {
+		return "00000000-0000-4000-8000-000000000001"
+	})
 	require.NoError(t, err)
 	opts := []setup.Option{}
 	if w != nil {
@@ -106,7 +109,8 @@ func TestService_CreateAdmin_FreshSystem_Creates_EmitsEvent(t *testing.T) {
 	require.NotNil(t, out)
 	assert.Equal(t, "root", out.Username)
 	assert.Equal(t, "root@local", out.Email)
-	assert.True(t, strings.HasPrefix(out.ID, setup.UserIDPrefix))
+	_, parseErr := uuid.Parse(out.ID)
+	assert.NoError(t, parseErr, "user ID must be a valid UUID")
 
 	// Verify admin role assigned
 	cnt, err := roleRepo.CountByRole(context.Background(), domain.RoleAdmin)

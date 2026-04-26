@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/domain"
 	dto "github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/dto"
@@ -17,10 +16,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
 // Role constants re-exported from internal/dto for use by the assembly root
@@ -181,25 +178,13 @@ func (c *OrderCell) resolveOutboxDeps(mode cell.DurabilityMode) error {
 	return nil
 }
 
-// Contract specs for ordercell example routes (examples not backed by
-// contracts/ YAML; FMT-18 exempts examples/**).
-var (
-	specOrderCreate = wrapper.ContractSpec{
-		ID: "http.todoorder.orders.create.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/orders/",
-	}
-	specOrderList = wrapper.ContractSpec{
-		ID: "http.todoorder.orders.list.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/orders/",
-	}
-	specOrderGet = wrapper.ContractSpec{
-		ID: "http.todoorder.orders.get.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/orders/{id}",
-	}
-)
-
 // RouteGroups declares ordercell's HTTP route groups on the PrimaryListener.
+// Each slice owns its own ContractSpec literals + auth.Route declarations
+// (admin policy included) in its handler.go's RegisterRoutes; cell.go is pure
+// wiring.
 //
+// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
+// resource owns its own route + authz declaration.
 // ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
 func (c *OrderCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{
@@ -208,21 +193,8 @@ func (c *OrderCell) RouteGroups() []cell.RouteGroup {
 			Prefix:   "/api/v1",
 			Register: func(mux cell.RouteMux) {
 				mux.Route("/orders", func(orders cell.RouteMux) {
-					auth.Mount(orders, auth.Route{
-						Contract: specOrderCreate,
-						Handler:  http.HandlerFunc(c.createHandler.HandleCreate),
-						Policy:   auth.AnyRole(dto.RoleCustomer),
-					})
-					auth.Mount(orders, auth.Route{
-						Contract: specOrderList,
-						Handler:  http.HandlerFunc(c.queryHandler.HandleList),
-						Policy:   auth.AnyRole(dto.RoleCustomer),
-					})
-					auth.Mount(orders, auth.Route{
-						Contract: specOrderGet,
-						Handler:  http.HandlerFunc(c.queryHandler.HandleGet),
-						Policy:   auth.AnyRole(dto.RoleCustomer),
-					})
+					c.createHandler.RegisterRoutes(orders)
+					c.queryHandler.RegisterRoutes(orders)
 				})
 			},
 		},

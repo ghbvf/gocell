@@ -32,6 +32,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/sessionlogin"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -140,7 +141,10 @@ func bootstrapAdminUser(t *testing.T, f *e2eFixture, username, plainPassword str
 
 	user, err := domain.NewUser(username, username+"@gocell.local", string(hash))
 	require.NoError(t, err)
-	user.ID = "usr-e2e-" + username
+	// PR-A45: handler edge ParseUUIDPathParam requires canonical UUIDs in
+	// path positions; testID derives a deterministic UUID from the username
+	// so seed and request paths agree.
+	user.ID = testutil.TestID("e2e-" + username)
 	user.MarkPasswordResetRequired()
 	require.NoError(t, f.userRepo.Create(context.Background(), user))
 
@@ -223,7 +227,12 @@ func TestChangePassword_FullFlow(t *testing.T) {
 		"GET /users/{id} must be blocked (403) by password-reset enforcement")
 	assert.Equal(t, http.StatusOK, muxWithMiddleware(http.MethodPost, "/api/v1/access/users/"+userID+"/password"),
 		"POST /users/{id}/password must be exempt from password reset enforcement")
-	assert.Equal(t, http.StatusNoContent, muxWithMiddleware(http.MethodDelete, "/api/v1/access/sessions/sess-x"),
+	// PR-A45: middleware allowlist cares about the path template, not the
+	// concrete id. The stub handler downstream returns 204 unconditionally,
+	// so use a syntactically valid UUID to avoid the upstream
+	// ParseUUIDPathParam guard intercepting before the middleware decision
+	// is observable.
+	assert.Equal(t, http.StatusNoContent, muxWithMiddleware(http.MethodDelete, "/api/v1/access/sessions/"+testutil.TestID("sess-x")),
 		"DELETE /sessions/{id} must be exempt from password reset enforcement")
 
 	// --- Step 4: ChangePassword ---
