@@ -87,3 +87,39 @@ func TestResolveRef(t *testing.T) {
 		})
 	}
 }
+
+func TestJourneyRefScope(t *testing.T) {
+	tests := []struct {
+		name    string
+		ref     string
+		want    string
+		wantErr bool
+	}{
+		{
+			name: "journey ref",
+			ref:  "journey.J-ssologin.session-revoke",
+			want: "J-ssologin",
+		},
+		{
+			name:    "non journey ref",
+			ref:     "smoke.accesscore.startup",
+			wantErr: true,
+		},
+		{
+			name:    "invalid ref",
+			ref:     "journey.only-two",
+			wantErr: true,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := JourneyRefScope(tt.ref)
+			if tt.wantErr {
+				require.Error(t, err)
+				return
+			}
+			require.NoError(t, err)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
