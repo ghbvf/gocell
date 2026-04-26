@@ -90,7 +90,7 @@ func (h *Handler) HandlePublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toConfigVersionResponse(version)})
+	httputil.WriteJSON(w, http.StatusCreated, map[string]any{"data": toConfigVersionResponse(version)})
 }
 
 // HandleRollback handles POST /{key}/rollback — rolls back a config entry.

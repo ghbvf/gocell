@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -183,6 +184,22 @@ func countContractHealthErrors(results []governance.ValidationResult) int {
 	return countErrors(results)
 }
 
+// availableCellsMsg builds the "available cells: [...]" fragment for error messages.
+// Returns at most 10 sorted cell IDs, appending ", ..." when there are more.
+func availableCellsMsg(cells map[string]*metadata.CellMeta) string {
+	ids := make([]string, 0, len(cells))
+	for id := range cells {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	suffix := ""
+	if len(ids) > 10 {
+		ids = ids[:10]
+		suffix = ", ..."
+	}
+	return "[" + strings.Join(ids, ", ") + suffix + "]"
+}
+
 // checkSliceCoverage checks that every slices/ subdirectory has a slice.yaml
 // and that each parsed SliceMeta correctly references its parent cell.
 //
@@ -204,6 +221,18 @@ func checkSliceCoverage(args []string) error {
 	project, err := parser.Parse()
 	if err != nil {
 		return fmt.Errorf(errMetadataParse, err)
+	}
+
+	if *cellID != "" {
+		if _, ok := project.Cells[*cellID]; !ok {
+			return printAndCheck(*format, []governance.ValidationResult{{
+				Code:      "CHECK-CELL-NOT-FOUND",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueRequired,
+				Scope:     cmdSliceCoverage,
+				Message:   fmt.Sprintf("cell %q not found in project; available cells: %s", *cellID, availableCellsMsg(project.Cells)),
+			}}, cmdSliceCoverage, "")
+		}
 	}
 
 	var results []governance.ValidationResult
@@ -807,10 +836,15 @@ func checkUnconditionalSkip(args []string) error {
 func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.ValidationResult, error) {
 	// packages.LoadAllSyntax loads type-annotated syntax for initial packages
 	// and all transitive dependencies — the minimum mode checker.Analyze needs.
+	// BuildFlags includes the build tags used by integration, e2e, and smoke
+	// test files so the analyzer sees those files instead of silently skipping
+	// them — without this, //go:build integration test files are invisible and
+	// unconditional t.Skip calls inside them are never reported.
 	cfg := &packages.Config{
-		Mode:  packages.LoadAllSyntax,
-		Tests: true,
-		Dir:   root,
+		Mode:       packages.LoadAllSyntax,
+		Tests:      true,
+		Dir:        root,
+		BuildFlags: []string{"-tags=integration,e2e,examples_smoke"},
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {

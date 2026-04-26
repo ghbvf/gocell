@@ -1,7 +1,7 @@
 id: http.config.flags.create.v1
 kind: http
 ownerCell: configcore
-consistencyLevel: L2
+consistencyLevel: L1
 lifecycle: active
 endpoints:
   server: configcore

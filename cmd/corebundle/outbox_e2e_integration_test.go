@@ -417,5 +417,5 @@ func publishConfig(t *testing.T, baseURL, token, key string) {
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(t, err)
 	defer resp.Body.Close()
-	require.Equal(t, http.StatusOK, resp.StatusCode, "config publish must return 200")
+	require.Equal(t, http.StatusCreated, resp.StatusCode, "config publish must return 201 (creates new ConfigVersion)")
 }

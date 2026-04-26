@@ -2,6 +2,7 @@ package featureflag
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	dto "github.com/ghbvf/gocell/cells/configcore/internal/dto"
@@ -15,11 +16,15 @@ import (
 // FeatureFlagResponse is the public DTO for FeatureFlag, isolating the API
 // contract from the domain model.
 type FeatureFlagResponse struct {
-	ID                string `json:"id"`
-	Key               string `json:"key"`
-	Type              string `json:"type"`
-	Enabled           bool   `json:"enabled"`
-	RolloutPercentage int    `json:"rolloutPercentage"`
+	ID                string    `json:"id"`
+	Key               string    `json:"key"`
+	Type              string    `json:"type"`
+	Enabled           bool      `json:"enabled"`
+	RolloutPercentage int       `json:"rolloutPercentage"`
+	Description       string    `json:"description"`
+	Version           int       `json:"version"`
+	CreatedAt         time.Time `json:"createdAt"`
+	UpdatedAt         time.Time `json:"updatedAt"`
 }
 
 func toFeatureFlagResponse(f *domain.FeatureFlag) FeatureFlagResponse {
@@ -29,6 +34,8 @@ func toFeatureFlagResponse(f *domain.FeatureFlag) FeatureFlagResponse {
 	return FeatureFlagResponse{
 		ID: f.ID, Key: f.Key, Type: string(f.Type),
 		Enabled: f.Enabled, RolloutPercentage: f.RolloutPercentage,
+		Description: f.Description, Version: f.Version,
+		CreatedAt: f.CreatedAt, UpdatedAt: f.UpdatedAt,
 	}
 }
 

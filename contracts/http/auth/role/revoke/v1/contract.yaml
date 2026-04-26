@@ -1,8 +1,10 @@
 id: http.auth.role.revoke.v1
 kind: http
 ownerCell: accesscore
-consistencyLevel: L0
+consistencyLevel: L2
 lifecycle: active
+triggers:
+  - event.role.revoked.v1
 endpoints:
   server: accesscore
   clients:

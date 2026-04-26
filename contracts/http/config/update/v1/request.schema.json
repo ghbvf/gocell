@@ -3,8 +3,7 @@
   "title": "http.config.update.v1.request",
   "type": "object",
   "properties": {
-    "value": { "type": "string" },
-    "sensitive": { "type": "boolean" }
+    "value": { "type": "string" }
   },
   "required": ["value"],
   "additionalProperties": false

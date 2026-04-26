@@ -29,7 +29,7 @@ go test -tags integration ./... -count=1 -v
 go test -tags integration ./adapters/postgres/... -count=1 -v
 go test -tags integration ./adapters/redis/...    -count=1 -v
 go test -tags integration ./adapters/rabbitmq/... -count=1 -v
-go test -tags integration ./adapters/websocket/.. -count=1 -v
+go test -tags integration ./adapters/websocket/... -count=1 -v
 # adapters/oidc and adapters/s3 are thin SDK wrappers with unit tests only.
 ```
 
@@ -56,21 +56,31 @@ go test -tags integration ./tests/integration/... -run TestAssembly -count=1 -v
 ## Writing a New Integration Test
 
 1. Add `//go:build integration` as the first line (before `package`).
-2. Use `t.Skip("stub: requires ...")` for placeholder tests until the infrastructure helper is ready.
+2. Conditional skip pattern: wrap `t.Skip` in an environment or build-tag guard so it never runs unconditionally:
+
+   ```go
+   if testing.Short() || os.Getenv("GOCELL_PG_DSN") == "" {
+       t.Skip("requires PG_DSN")
+   }
+   ```
+
+   Permanent stub tests (will never run) MUST be deleted, not marked `t.Skip` — run `gocell check unconditional-skip ./...` to detect violations; analyzer at `tools/nogo/unconditionalskip`.
 3. Read connection parameters from environment variables (e.g., `GOCELL_CONFIGCORE_DATABASE_URL`, `GOCELL_REDIS_ADDR`). Most integration tests start their own testcontainer and pass the DSN directly; see `cmd/corebundle/main_integration_test.go` for the pattern.
 4. Each test must be self-contained: create its own schema/queue/bucket, run assertions, then clean up.
 5. Use `t.Parallel()` only when tests do not share mutable state (e.g., separate database schemas).
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
+> Defaults below describe the local docker-compose / testcontainer dev loop. **Never reuse these values in production** — they are public dev fixtures (e.g. RabbitMQ `guest:guest`, MinIO `minioadmin:minioadmin`) and will fail security scans. CI provides real values via secrets.
+
+| Variable | Default (local dev only) | Description |
+|----------|--------------------------|-------------|
 | `GOCELL_CONFIGCORE_DATABASE_URL` | (testcontainer; see test setup) | PostgreSQL DSN for configcore integration tests. Most tests start their own container and pass DSN directly. |
 | `GOCELL_REDIS_ADDR` | `localhost:6379` | Redis address |
-| `GOCELL_AMQP_URL` | `amqp://guest:guest@localhost:5672/` | RabbitMQ connection URL |
+| `GOCELL_AMQP_URL` | (set from CI secret; local docker-compose default uses public `guest:guest@localhost:5672`) | RabbitMQ connection URL |
 | `GOCELL_S3_ENDPOINT` | `http://localhost:9000` | MinIO / S3 endpoint |
-| `GOCELL_S3_ACCESS_KEY` | `minioadmin` | S3 access key |
-| `GOCELL_S3_SECRET_KEY` | `minioadmin` | S3 secret key |
+| `GOCELL_S3_ACCESS_KEY` | (set from CI secret; local docker-compose default is the public `minioadmin` fixture) | S3 access key |
+| `GOCELL_S3_SECRET_KEY` | (set from CI secret; local docker-compose default is the public `minioadmin` fixture) | S3 secret key |
 | `GOCELL_OIDC_ISSUER` | `http://localhost:8080/realms/gocell` | OIDC issuer URL |
 
 ## CI Pipeline

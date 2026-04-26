@@ -1,8 +1,10 @@
 id: http.auth.user.create.v1
 kind: http
 ownerCell: accesscore
-consistencyLevel: L1
+consistencyLevel: L2
 lifecycle: active
+triggers:
+  - event.user.created.v1
 endpoints:
   server: accesscore
   clients:

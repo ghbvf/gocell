@@ -276,23 +276,7 @@ func TestTransitReadiness_RevokedToken(t *testing.T) {
 		"revoked token must return ErrKeyProviderAuthFailed (Vault returns 403 after revocation), got: %v", probeErr)
 }
 
-// ---------------------------------------------------------------------------
-// TC-INT-10: /readyz HTTP integration
-// Skipped with explanation: current bootstrap wiring does not expose a
-// standalone /readyz HTTP server in unit/integration test context.
-// Checkers() return value is verified directly in TC-INT-6 to TC-INT-9.
-// ---------------------------------------------------------------------------
-
-// TestTransitReadiness_ReadyzHTTPIntegration is intentionally skipped.
-//
-// The /readyz HTTP endpoint is assembled at the bootstrap layer
-// (runtime/bootstrap), which is out of scope for adapters/vault integration
-// tests. The readiness probe function itself is verified by TC-INT-6 to
-// TC-INT-9 at the Checkers() level. A full bootstrap-layer /readyz HTTP test
-// requires the composition root and is tracked as a separate journey test
-// (see journeys/J-readiness.yaml).
-func TestTransitReadiness_ReadyzHTTPIntegration(t *testing.T) {
-	t.Skipf("TC-INT-10: /readyz HTTP integration requires bootstrap composition root; " +
-		"Checkers() readiness probe is covered by TC-INT-6 to TC-INT-9. " +
-		"See journeys/J-readiness.yaml for full HTTP integration tracking.")
-}
+// TC-INT-10 (/readyz HTTP integration) was removed: it was a permanent stub
+// with an unconditional t.Skip (no infrastructure condition). The Checkers()
+// readiness probe is verified by TC-INT-6 to TC-INT-9. A full bootstrap-layer
+// /readyz HTTP test is tracked as a journey test in journeys/J-readiness.yaml.

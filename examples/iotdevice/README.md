@@ -69,6 +69,7 @@ go run ./examples/iotdevice
 
 ```bash
 curl -X POST http://localhost:8083/api/v1/devices \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"name":"sensor-001"}'
 ```
@@ -98,13 +99,16 @@ Response (200):
 curl -X POST http://localhost:8083/api/v1/devices/{id}/commands \
   -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
-  -d '{"payload":"reboot"}'
+  -d '{"commandType":"default","payload":"reboot"}'
 ```
+
+`commandType` is optional in the enqueue request (only `payload` is required).
+Omitting it defaults the field to `"default"`; the device sees that value in the dequeue response.
 
 Response (201):
 
 ```json
-{"data":{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"pending","createdAt":"..."}}
+{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"default","payload":"reboot","status":"pending","createdAt":"..."}}
 ```
 
 ### Device dequeues commands
@@ -117,7 +121,7 @@ curl http://localhost:8083/api/v1/devices/{id}/commands \
 Response (200):
 
 ```json
-{"data":[{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"sent","attempt":1,"createdAt":"...","sentAt":"..."}],"nextCursor":"","hasMore":false}
+{"data":[{"id":"cmd-...","deviceId":"dev-...","commandType":"default","payload":"reboot","status":"sent","attempt":1,"createdAt":"...","sentAt":"..."}],"nextCursor":"","hasMore":false}
 ```
 
 ### Device reports command receipt
@@ -130,7 +134,7 @@ curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/report \
 Response (200):
 
 ```json
-{"data":{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"delivered","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"..."}}
+{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"default","payload":"reboot","status":"delivered","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"..."}}
 ```
 
 ### Device acknowledges command execution
@@ -145,7 +149,7 @@ curl -X POST http://localhost:8083/api/v1/devices/{id}/commands/{cmdId}/ack \
 Response (200):
 
 ```json
-{"data":{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"succeeded","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"...","completedAt":"..."}}
+{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"default","payload":"reboot","status":"succeeded","attempt":1,"createdAt":"...","sentAt":"...","deliveredAt":"...","completedAt":"..."}}
 ```
 
 ### Query device status
@@ -176,6 +180,7 @@ curl -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" 'http://localhost:8083/re
 ```bash
 # 1. Register a device
 DEV=$(curl -s -X POST http://localhost:8083/api/v1/devices \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"name":"sensor-001"}')
 echo "$DEV"
@@ -185,7 +190,7 @@ DEV_ID=$(echo "$DEV" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 CMD=$(curl -s -X POST "http://localhost:8083/api/v1/devices/${DEV_ID}/commands" \
   -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
-  -d '{"payload":"reboot"}')
+  -d '{"commandType":"default","payload":"reboot"}')
 echo "$CMD"
 CMD_ID=$(echo "$CMD" | grep -o '"id":"[^"]*"' | head -1 | cut -d'"' -f4)
 

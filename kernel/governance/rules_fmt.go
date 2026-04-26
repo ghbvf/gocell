@@ -386,15 +386,33 @@ const (
 	fieldSchemaRefsResponse = "schemaRefs.response"
 )
 
-// validateFMT13 checks optional HTTP transport metadata on migrated HTTP contracts.
-// Legacy HTTP contracts may omit endpoints.http entirely, but once present it must
-// be internally consistent and must not conflict with no-content semantics.
+// validateFMT13 checks HTTP transport metadata on contracts.
+//
+// Two cases are checked:
+//   - kind=http with nil endpoints.http → Error: required block missing (FMT-13 必填化)
+//   - any kind with non-nil endpoints.http → delegate to validateFMT13ForContract,
+//     which rejects non-http contracts declaring endpoints.http and validates the
+//     block's internal consistency for http contracts.
 func (v *Validator) validateFMT13() []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if c.Endpoints.HTTP == nil {
+		isHTTP := cell.ContractKind(c.Kind) == cell.ContractHTTP
+		if isHTTP && c.Endpoints.HTTP == nil {
+			// FMT-13 必填化: HTTP contracts must now declare endpoints.http.
+			results = append(results, v.newResult(
+				codeFMT13, SeverityError, IssueRequired,
+				contractFile(c),
+				"endpoints.http",
+				fmt.Sprintf("HTTP contract %q must declare endpoints.http; add to contract.yaml:\n  http:\n    method: GET                # GET|POST|PUT|PATCH|DELETE\n    path: /api/v1/...\n    successStatus: 200\n    noContent: false", c.ID),
+			))
 			continue
 		}
+		if c.Endpoints.HTTP == nil {
+			// Non-HTTP contract without endpoints.http — nothing to validate.
+			continue
+		}
+		// endpoints.http is non-nil: validate it (validateFMT13ForContract also
+		// rejects non-http contracts that erroneously declare endpoints.http).
 		results = append(results, v.validateFMT13ForContract(c)...)
 	}
 	return results

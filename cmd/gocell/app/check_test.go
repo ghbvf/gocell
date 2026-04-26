@@ -2,8 +2,10 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +15,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 )
+
+// goModVersion returns the major.minor version string of the running Go toolchain
+// (e.g. "1.22") so generated go.mod files track the actual toolchain instead of
+// a hardcoded value that drifts over time.
+func goModVersion() string {
+	v := runtime.Version() // e.g. "go1.26.1"
+	v = strings.TrimPrefix(v, "go")
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) >= 2 {
+		return parts[0] + "." + parts[1]
+	}
+	return v
+}
 
 func TestCheckContractHealthCI(t *testing.T) {
 	// Run against the real project — should pass with 0 issues.
@@ -548,6 +563,85 @@ func TestCheckL0ImportsForSingleCell_NonL0JSONFormat(t *testing.T) {
 	}
 	require.NoError(t, json.Unmarshal([]byte(out), &doc), "output must be valid JSON: %q", out)
 	assert.Empty(t, doc.Issues, "non-L0 skip must produce zero issues")
+}
+
+// TestCheckSliceCoverage_UnknownCell verifies that --cell=<id> with an ID not
+// present in the project produces CHECK-CELL-NOT-FOUND and a non-nil error
+// (non-zero exit). Previously this was a silent false-green pass.
+func TestCheckSliceCoverage_UnknownCell(t *testing.T) {
+	root := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/test\n"), 0o644))
+
+	// Minimal project with one real cell so the parser succeeds.
+	cellDir := filepath.Join(root, "cells", "realcell")
+	require.NoError(t, os.MkdirAll(cellDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(cellDir, "cell.yaml"), []byte(
+		"id: realcell\ntype: core\nconsistencyLevel: L1\nowner:\n  team: t\n  role: r\nschema:\n  primary: t\nverify:\n  smoke: []\n"),
+		0o644))
+
+	orig, _ := os.Getwd()
+	require.NoError(t, os.Chdir(root))
+	t.Cleanup(func() { _ = os.Chdir(orig) })
+
+	err := runCheck([]string{"slice-coverage", "--cell=does-not-exist"})
+	require.Error(t, err, "unknown --cell must produce non-zero exit")
+	assert.Contains(t, err.Error(), "issue(s)", "error must report finding count")
+
+	// Verify the text-format output contains the finding code and available cells.
+	textOut := captureStdout(t, func() {
+		_ = runCheck([]string{"slice-coverage", "--cell=does-not-exist"})
+	})
+	assert.Contains(t, textOut, "CHECK-CELL-NOT-FOUND", "text output must contain CHECK-CELL-NOT-FOUND code")
+	assert.Contains(t, textOut, "available cells", "text output must list available cells")
+
+	// Also verify the finding code in JSON output.
+	out := captureStdout(t, func() {
+		_ = runCheck([]string{"slice-coverage", "--cell=does-not-exist", "--format=json"})
+	})
+	assert.Contains(t, out, "CHECK-CELL-NOT-FOUND", "JSON output must contain CHECK-CELL-NOT-FOUND code")
+	assert.Contains(t, out, "available cells", "JSON output must include available cells in message")
+}
+
+// TestRunUnconditionalSkipAnalyzer_BuildTaggedFile verifies that
+// BuildFlags=-tags=integration e2e examples_smoke causes the analyzer to
+// include build-tagged test files. Without BuildFlags those files are silently
+// excluded by go/packages and unconditional t.Skip calls inside them are never
+// reported.
+//
+// Strategy: write a temp Go module with a //go:build examples_smoke test file
+// that contains an unconditional t.Skip, then assert the analyzer finds it.
+func TestRunUnconditionalSkipAnalyzer_BuildTaggedFile(t *testing.T) {
+	root := t.TempDir()
+
+	// Minimal go.mod — the module path must resolve; no external deps needed.
+	// Use the actual toolchain version so this fixture tracks upgrades automatically.
+	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(
+		fmt.Sprintf("module example.com/skiptest\n\ngo %s\n", goModVersion())), 0o644))
+
+	// A package directory.
+	pkgDir := filepath.Join(root, "mypkg")
+	require.NoError(t, os.MkdirAll(pkgDir, 0o755))
+
+	// A non-tagged file so the package is visible even without build tags.
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "main.go"), []byte(
+		"package mypkg\n"), 0o644))
+
+	// A build-tagged test file with an unconditional t.Skip.
+	require.NoError(t, os.WriteFile(filepath.Join(pkgDir, "smoke_test.go"), []byte(
+		"//go:build examples_smoke\n\npackage mypkg\n\nimport \"testing\"\n\nfunc TestSmoke(t *testing.T) {\n\tt.Skip(\"unconditional stub\")\n}\n"), 0o644))
+
+	results, err := runUnconditionalSkipAnalyzer([]string{"./..."}, root)
+	require.NoError(t, err, "analyzer must not error on this synthetic module")
+
+	var found bool
+	for _, r := range results {
+		if r.Code == "UNCONDITIONAL-SKIP-01" && strings.Contains(r.File, "smoke_test.go") {
+			found = true
+			break
+		}
+	}
+	assert.True(t, found,
+		"analyzer with BuildFlags must report UNCONDITIONAL-SKIP-01 in build-tagged file; got: %+v", results)
 }
 
 // ---------------------------------------------------------------------------

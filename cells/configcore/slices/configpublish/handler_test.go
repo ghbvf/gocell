@@ -78,7 +78,10 @@ func TestConfigVersionResponse_Fields(t *testing.T) {
 	assert.Contains(t, s, `"configId"`)
 	assert.Contains(t, s, `"version"`)
 	assert.Contains(t, s, `"value"`)
-	// PR#155 review F3: lock the sensitive JSON tag so removing it would fail here.
+	// configpublish RESPONSE DTO deliberately exposes the `sensitive` flag so
+	// callers know to redact UI; this is unrelated to PR-CFG-G2's removal of
+	// `sensitive` from contracts/http/config/update/v1/request.schema.json
+	// (which deleted the request-side field that handler/service/repo never read).
 	assert.Contains(t, s, `"sensitive"`)
 	assert.Contains(t, s, `"publishedAt"`)
 }
@@ -127,7 +130,7 @@ func TestHandler_HandlePublish_OK(t *testing.T) {
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil))
 	handler.ServeHTTP(w, req)
 
-	assert.Equal(t, http.StatusOK, w.Code)
+	assert.Equal(t, http.StatusCreated, w.Code)
 	body := w.Body.String()
 	assert.Contains(t, body, `"publishedAt"`)
 	assert.Contains(t, body, `"configId"`)
@@ -209,7 +212,7 @@ func TestHandler_HandlePublish_SensitiveRedacted(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/db.password/publish", nil))
 	handler.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusCreated, w.Code)
 
 	var resp struct {
 		Data struct {
@@ -234,7 +237,7 @@ func TestHandler_HandlePublish_NonSensitiveVisible(t *testing.T) {
 	w := httptest.NewRecorder()
 	req := withAdmin(httptest.NewRequest(http.MethodPost, configPrefix+"/app.name/publish", nil))
 	handler.ServeHTTP(w, req)
-	require.Equal(t, http.StatusOK, w.Code)
+	require.Equal(t, http.StatusCreated, w.Code)
 
 	var resp struct {
 		Data struct {
