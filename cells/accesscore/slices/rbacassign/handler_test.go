@@ -14,6 +14,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/auth"
 )
@@ -28,7 +29,12 @@ func setupHandler() (http.Handler, *mem.RoleRepository) {
 
 	svc := NewService(roleRepo, mem.NewSessionRepository(), slog.Default())
 	mux := celltest.NewTestMux()
-	mux.Route("/internal/v1/access/roles", NewHandler(svc).RegisterRoutes)
+	h := NewHandler(svc)
+	mux.Route("/internal/v1/access/roles", func(s cell.RouteMux) {
+		if err := h.RegisterRoutes(s); err != nil {
+			panic("setupHandler: RegisterRoutes: " + err.Error())
+		}
+	})
 	return mux, roleRepo
 }
 

@@ -31,12 +31,15 @@ func NewHandler(svc *Service) *Handler {
 // CH-04/CH-05 governance can correlate this contract to HandleRefresh.
 // Refresh is a public endpoint: callers supply a refresh token in the request
 // body; no JWT is required.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.MustMount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specRefresh,
 		Handler:  http.HandlerFunc(h.HandleRefresh),
 		Public:   true,
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // HandleRefresh handles POST /api/v1/access/sessions/refresh.

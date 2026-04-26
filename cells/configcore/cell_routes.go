@@ -41,31 +41,45 @@ func (c *ConfigCore) RouteGroups() []cell.RouteGroup {
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1",
 			Register: func(mux cell.RouteMux) error {
+				// mux.Route's callback signature is func(RouteMux) (no error
+				// return), so slice RegisterRoutes errors are captured via
+				// outer-variable closure and surfaced through this Register's
+				// error return — bootstrap phase5 wraps with cell+listener+prefix
+				// context.
+				var firstErr error
+				captureErr := func(err error) {
+					if err != nil && firstErr == nil {
+						firstErr = err
+					}
+				}
 				mux.Route("/config", func(cfg cell.RouteMux) {
-					c.readHandler.RegisterRoutes(cfg)
-					c.writeHandler.RegisterRoutes(cfg)
-					c.publishHandler.RegisterRoutes(cfg)
+					captureErr(c.readHandler.RegisterRoutes(cfg))
+					captureErr(c.writeHandler.RegisterRoutes(cfg))
+					captureErr(c.publishHandler.RegisterRoutes(cfg))
 				})
 				mux.Route("/flags", func(f cell.RouteMux) {
-					c.flagHandler.RegisterRoutes(f)
-					c.flagWriteHandler.RegisterRoutes(f)
+					captureErr(c.flagHandler.RegisterRoutes(f))
+					captureErr(c.flagWriteHandler.RegisterRoutes(f))
 				})
-				return nil
+				return firstErr
 			},
 		},
 		{
 			// InternalListener: service-token authentication is enforced by the
-			// listener chain (cell.NewAuthServiceToken). Per-route Policy further
+			// listener chain (cell.MustNewAuthServiceToken). Per-route Policy further
 			// requires the principal's RoleInternalAdmin (injected by
 			// ServiceTokenMiddleware). PR-CFG-G1: refetch endpoint lets accesscore
 			// fetch the current value after receiving an entry-upserted event.
 			Listener: cell.InternalListener,
 			Prefix:   "/internal/v1",
 			Register: func(mux cell.RouteMux) error {
+				var firstErr error
 				mux.Route("/config", func(cfg cell.RouteMux) {
-					c.readHandler.RegisterInternalRoutes(cfg)
+					if err := c.readHandler.RegisterInternalRoutes(cfg); err != nil {
+						firstErr = err
+					}
 				})
-				return nil
+				return firstErr
 			},
 		},
 	}

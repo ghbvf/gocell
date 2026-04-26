@@ -19,6 +19,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/testutil"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -45,7 +46,12 @@ func setup() http.Handler {
 		panic("setup: " + err.Error())
 	}
 	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/access/users", NewHandler(svc).RegisterRoutes)
+	h := NewHandler(svc)
+	mux.Route("/api/v1/access/users", func(s cell.RouteMux) {
+		if err := h.RegisterRoutes(s); err != nil {
+			panic("setup: RegisterRoutes: " + err.Error())
+		}
+	})
 	return mux
 }
 
@@ -62,7 +68,12 @@ func setupWithIssuer(issuer TokenIssuer) (http.Handler, *mem.UserRepository) {
 		panic("setupWithIssuer: " + err.Error())
 	}
 	mux := celltest.NewTestMux()
-	mux.Route("/api/v1/access/users", NewHandler(svc).RegisterRoutes)
+	h := NewHandler(svc)
+	mux.Route("/api/v1/access/users", func(s cell.RouteMux) {
+		if err := h.RegisterRoutes(s); err != nil {
+			panic("setupWithIssuer: RegisterRoutes: " + err.Error())
+		}
+	})
 	return mux, repo
 }
 

@@ -48,25 +48,45 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1/access",
 			Register: func(mux cell.RouteMux) error {
+				// mux.Route's callback signature is func(RouteMux) (no error
+				// return), so slice RegisterRoutes errors are captured via
+				// outer-variable closure and surfaced through this Register's
+				// error return — bootstrap phase5 wraps with cell+listener+prefix
+				// context. Same pattern as bootstrap/mountOneRouteGroup.
+				var firstErr error
+				captureErr := func(err error) {
+					if err != nil && firstErr == nil {
+						firstErr = err
+					}
+				}
 				mux.Route("/setup", func(s cell.RouteMux) {
-					c.setupHandler.RegisterRoutes(s)
+					captureErr(c.setupHandler.RegisterRoutes(s))
 				})
-				mux.Route("/users", c.identityHandler.RegisterRoutes)
+				mux.Route("/users", func(s cell.RouteMux) {
+					captureErr(c.identityHandler.RegisterRoutes(s))
+				})
 				mux.Route("/sessions", func(s cell.RouteMux) {
-					c.loginHandler.RegisterRoutes(s)
-					c.refreshHandler.RegisterRoutes(s)
-					c.logoutHandler.RegisterRoutes(s)
+					captureErr(c.loginHandler.RegisterRoutes(s))
+					captureErr(c.refreshHandler.RegisterRoutes(s))
+					captureErr(c.logoutHandler.RegisterRoutes(s))
 				})
-				mux.Route("/roles", c.rbacHandler.RegisterRoutes)
-				return nil
+				mux.Route("/roles", func(s cell.RouteMux) {
+					captureErr(c.rbacHandler.RegisterRoutes(s))
+				})
+				return firstErr
 			},
 		},
 		{
 			Listener: cell.InternalListener,
 			Prefix:   "/internal/v1/access",
 			Register: func(mux cell.RouteMux) error {
-				mux.Route("/roles", c.rbacAssignHandler.RegisterRoutes)
-				return nil
+				var firstErr error
+				mux.Route("/roles", func(s cell.RouteMux) {
+					if err := c.rbacAssignHandler.RegisterRoutes(s); err != nil {
+						firstErr = err
+					}
+				})
+				return firstErr
 			},
 		},
 	}

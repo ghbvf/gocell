@@ -83,22 +83,29 @@ func NewHandler(svc *Service) *Handler {
 // RegisterRoutes registers feature-flag read routes on mux via auth.Mount so
 // CH-04/CH-05 governance can correlate contracts to handler functions.
 // All routes are admin-gated (auth.AnyRole(RoleAdmin)).
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.MustMount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsList,
 		Handler:  http.HandlerFunc(h.HandleList),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
-	})
-	auth.MustMount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
-	})
-	auth.MustMount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specFlagsEvaluate,
 		Handler:  http.HandlerFunc(h.HandleEvaluate),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // HandleList handles GET / — returns paginated feature flags.

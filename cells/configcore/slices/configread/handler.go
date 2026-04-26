@@ -46,17 +46,22 @@ func NewHandler(svc *Service) *Handler {
 // CH-04/CH-05 governance can correlate contracts to handler functions.
 // Both routes are admin-gated (auth.AnyRole(RoleAdmin)). Mounted on
 // PrimaryListener for /api/v1/config/* by ConfigCore.RouteGroups.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.MustMount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigList,
 		Handler:  http.HandlerFunc(h.HandleList),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
-	})
-	auth.MustMount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
 		Policy:   auth.AnyRole(dto.RoleAdmin),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // RegisterInternalRoutes registers the internal control-plane GET that
@@ -67,12 +72,15 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 // Reuses HandleGet — the same response shape (sensitive=true returns the
 // redacted "******" placeholder) applies on both listeners; consumers must
 // not log Value for sensitive entries (see configport.go ConfigEntry doc).
-func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) {
-	auth.MustMount(mux, auth.Route{
+func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specConfigInternalGet,
 		Handler:  http.HandlerFunc(h.HandleGet),
 		Policy:   auth.AnyRole(auth.RoleInternalAdmin),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // HandleGet handles GET /{key} — returns a single config entry.

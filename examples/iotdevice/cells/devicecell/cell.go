@@ -287,23 +287,28 @@ func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 			// outer Route("/api/v1") wrapper that would double-prefix.
 			Prefix: "",
 			Register: func(mux cell.RouteMux) error {
+				var firstErr error
+				captureErr := func(err error) {
+					if err != nil && firstErr == nil {
+						firstErr = err
+					}
+				}
 				mux.Route("/api/v1/devices", func(devices cell.RouteMux) {
-					c.registerHandler.RegisterRoutes(devices)
-					c.listHandler.RegisterRoutes(devices)
-					c.statusHandler.RegisterRoutes(devices)
+					captureErr(c.registerHandler.RegisterRoutes(devices))
+					captureErr(c.listHandler.RegisterRoutes(devices))
+					captureErr(c.statusHandler.RegisterRoutes(devices))
 					// device-command public routes (enqueue, dequeue, report, ack,
 					// extend-lease) live under /api/v1/devices/{id}/commands.
-					c.commandHandler.RegisterRoutes(devices)
+					captureErr(c.commandHandler.RegisterRoutes(devices))
 				})
-				return nil
+				return firstErr
 			},
 		},
 		{
 			Listener: cell.InternalListener,
 			Prefix:   "",
 			Register: func(mux cell.RouteMux) error {
-				c.commandHandler.RegisterInternalRoutes(mux)
-				return nil
+				return c.commandHandler.RegisterInternalRoutes(mux)
 			},
 		},
 	}

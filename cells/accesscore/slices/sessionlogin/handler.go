@@ -51,10 +51,13 @@ func (h *Handler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 
 // RegisterRoutes registers the session-login route on mux. Login is a public
 // endpoint (no JWT required): callers identify themselves via username+password.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.MustMount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specLogin,
 		Handler:  http.HandlerFunc(h.HandleLogin),
 		Public:   true,
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }

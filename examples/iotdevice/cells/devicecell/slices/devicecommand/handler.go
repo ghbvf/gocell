@@ -85,45 +85,59 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes registers device-command routes on the given mux.
-func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
-	auth.MustMount(mux, auth.Route{
+func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specCommandEnqueue,
 		Handler:  http.HandlerFunc(h.HandleEnqueue),
 		Policy:   auth.AnyRole(dto.RoleAdmin, dto.RoleOperator),
-	})
-	auth.MustMount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specCommandDequeue,
 		Handler:  http.HandlerFunc(h.HandleDequeue),
 		Policy:   auth.SelfOr("id", "admin"),
-	})
-	auth.MustMount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specCommandReport,
 		Handler:  http.HandlerFunc(h.HandleReport),
 		Policy:   auth.SelfOr("id", "admin"),
-	})
-	auth.MustMount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specCommandAck,
 		Handler:  http.HandlerFunc(h.HandleAck),
 		Policy:   auth.SelfOr("id", "admin"),
-	})
-	auth.MustMount(mux, auth.Route{
+	}); err != nil {
+		return err
+	}
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specCommandExtendLease,
 		Handler:  http.HandlerFunc(h.HandleExtendLease),
 		Policy:   auth.SelfOr("id", "admin"),
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // RegisterInternalRoutes registers device-command ops routes on the internal
 // listener. The bootstrap internal middleware authenticates service tokens;
 // the route policy then requires the built-in internal admin role.
-func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) {
-	auth.MustMount(mux, auth.Route{
+func (h *Handler) RegisterInternalRoutes(mux kcell.RouteHandler) error {
+	if err := auth.Mount(mux, auth.Route{
 		Contract: specInternalCommandScanActive,
 		Handler:  http.HandlerFunc(h.HandleScanActive),
 		Policy:   auth.AnyRole(auth.RoleInternalAdmin),
 		// Route lives on InternalListener (/internal/v1/*); internal affinity
 		// is derived from the path prefix via AuthRouteMeta.IsInternal().
-	})
+	}); err != nil {
+		return err
+	}
+	return nil
 }
 
 // enqueueRequest is the JSON body for POST /api/v1/devices/{id}/commands.
