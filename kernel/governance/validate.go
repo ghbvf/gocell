@@ -9,6 +9,7 @@ package governance
 
 import (
 	"os"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -91,7 +92,7 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 	actorTypes := make(map[string]string, len(project.Actors))
 	for _, a := range project.Actors {
 		actorSet[a.ID] = true
-		actorTypes[a.ID] = a.Type
+		actorTypes[a.ID] = strings.TrimSpace(strings.ToLower(a.Type))
 	}
 	return &Validator{
 		locator: locator{project: project},

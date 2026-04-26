@@ -234,9 +234,12 @@ func (v *Validator) actorExists(id string) bool {
 }
 
 // actorTypeOf returns the registered type of an actor (e.g., "external"),
-// or "" if the ID is not in actors.yaml. Cell IDs return "" because cells
-// are internal components by construction; audience-aware rules treat any
-// non-external client as internal.
+// or "" if the ID is not registered in actors.yaml. The type strings are
+// canonicalised (lower-cased and trimmed) at NewValidator construction so
+// callers can compare against fixed lowercase literals like "external".
+// Cell IDs are never present in this map (only actors.yaml entries are
+// indexed); audience-aware rules treat any non-external value (including
+// "") as internal.
 func (v *Validator) actorTypeOf(id string) string {
 	return v.actorTypes[id]
 }

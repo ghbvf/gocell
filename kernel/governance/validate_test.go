@@ -2460,6 +2460,23 @@ func TestREF17(t *testing.T) {
 			},
 			wantCount: 0,
 		},
+		{
+			name: "internal path with actor of empty type passes",
+			setup: func(pm *metadata.ProjectMeta) {
+				withInternalPath(pm)
+				pm.Actors = append(pm.Actors, metadata.ActorMeta{ID: "untyped-actor", Type: ""})
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"untyped-actor"}
+			},
+			wantCount: 0, // type "" is not "external", treated as internal
+		},
+		{
+			name: "internal path with wildcard and external client errors only on external",
+			setup: func(pm *metadata.ProjectMeta) {
+				withInternalPath(pm)
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*", "edge-bff"}
+			},
+			wantCount: 1, // "*" is skipped; only edge-bff triggers
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -2472,6 +2489,8 @@ func TestREF17(t *testing.T) {
 				assert.Equal(t, SeverityError, r.Severity)
 				assert.Equal(t, IssueForbidden, r.IssueType)
 				assert.Contains(t, r.Field, "endpoints.clients")
+				assert.Contains(t, r.Message, "internal")
+				assert.Contains(t, r.Message, "external actor")
 			}
 		})
 	}
