@@ -5,7 +5,6 @@ consistencyLevel: L2
 lifecycle: active
 triggers:
   - event.config.version-published.v1
-  - event.config.entry-upserted.v1
 endpoints:
   server: configcore
   clients:

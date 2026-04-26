@@ -752,3 +752,88 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 			extraTopic, extraCount, got)
 	}
 }
+
+// TestCONTRACTCONSISTENCYEMIT01_SubscriberSelectorIgnored is a regression test
+// verifying that a subscribe(ctx, dto.TopicY, h) call and a comparison
+// `if topic == dto.TopicZ {}` in a service file do NOT contribute their topic
+// selectors to the cell's emit-topic set. Only actual outbox.Emit calls (or
+// receiver *.Emit calls with an outbox.Entry) count as emit evidence.
+//
+// Setup:
+//   - Cell "foo" has one HTTP contract with consistencyLevel: L2 and
+//     triggers: [event.foo.y.v1].
+//   - The cell's service.go subscribes to dto.TopicY and compares dto.TopicZ
+//     but contains NO outbox.Emit call to either topic.
+//
+// Expected: forward-check fails because nothing actually emits event.foo.y.v1.
+func TestCONTRACTCONSISTENCYEMIT01_SubscriberSelectorIgnored(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "foo"
+	topicY := "event.foo.y.v1"
+	topicZ := "event.foo.z.v1"
+
+	// Write dto with both constants.
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	if err := os.MkdirAll(dtoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte(
+		"package dto\n\nconst (\n\tTopicY = \""+topicY+"\"\n\tTopicZ = \""+topicZ+"\"\n)\n",
+	), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// handler/service.go: subscribes to dto.TopicY and compares dto.TopicZ —
+	// but contains NO outbox.Emit call to either.
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "handler")
+	if err := os.MkdirAll(sliceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(sliceDir, "service.go"), []byte(`package handler
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/foo/internal/dto"
+)
+
+type subscribeFn func(ctx context.Context, topic string, handler func()) error
+
+func register(ctx context.Context, sub subscribeFn) error {
+	return sub(ctx, dto.TopicY, func() {})
+}
+
+func check(topic string) bool {
+	return topic == dto.TopicZ
+}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Contract declares trigger event.foo.y.v1 (L2).
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.foo.x.v1", ownerCell, "L2", []string{topicY}),
+	})
+
+	v := NewValidator(project, root)
+	results := v.validateCONTRACTCONSISTENCYEMIT01()
+	got := findResultByCode(results, codeContractConsistencyEmit01)
+
+	// Forward check must fail: no file actually emits event.foo.y.v1.
+	forwardFail := false
+	for _, r := range got {
+		if strings.Contains(r.Message, "no non-test Go file") && strings.Contains(r.Message, topicY) {
+			forwardFail = true
+		}
+	}
+	if !forwardFail {
+		t.Errorf("SubscriberSelectorIgnored: expected forward-check failure for %q (subscriber/comparison must not count as emit); findings: %v",
+			topicY, got)
+	}
+
+	// TopicZ must NOT appear as an emitted topic (no reverse finding for it).
+	for _, r := range got {
+		if strings.Contains(r.Message, topicZ) {
+			t.Errorf("SubscriberSelectorIgnored: dto.TopicZ from comparison-only code must not appear in emit topics; finding: %v", r)
+		}
+	}
+}

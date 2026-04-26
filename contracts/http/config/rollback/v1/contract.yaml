@@ -4,6 +4,7 @@ ownerCell: configcore
 consistencyLevel: L2
 lifecycle: active
 triggers:
+  - event.config.entry-upserted.v1
   - event.config.rollback.v1
 endpoints:
   server: configcore
