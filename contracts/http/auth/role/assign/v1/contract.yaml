@@ -7,8 +7,7 @@ triggers:
   - event.role.assigned.v1
 endpoints:
   server: accesscore
-  clients:
-    - edge-bff
+  clients: []
   http:
     method: POST
     path: /internal/v1/access/roles/assign

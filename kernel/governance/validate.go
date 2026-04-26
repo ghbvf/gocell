@@ -72,6 +72,7 @@ type Validator struct {
 	fileExists func(path string) bool            // file existence check (injectable for tests)
 	readFile   func(path string) ([]byte, error) // file reader (injectable for tests)
 	actorSet   map[string]bool                   // pre-built set of external actor IDs
+	actorTypes map[string]string                 // pre-built map of actor ID → type (e.g., "external") for audience-aware rules
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -87,8 +88,10 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 		}
 	}
 	actorSet := make(map[string]bool, len(project.Actors))
+	actorTypes := make(map[string]string, len(project.Actors))
 	for _, a := range project.Actors {
 		actorSet[a.ID] = true
+		actorTypes[a.ID] = a.Type
 	}
 	return &Validator{
 		locator: locator{project: project},
@@ -98,8 +101,9 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 			_, err := os.Stat(path)
 			return err == nil
 		},
-		readFile: os.ReadFile,
-		actorSet: actorSet,
+		readFile:   os.ReadFile,
+		actorSet:   actorSet,
+		actorTypes: actorTypes,
 	}
 }
 
@@ -141,6 +145,7 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateREF05, v.validateREF06, v.validateREF07, v.validateREF08,
 		v.validateREF09, v.validateREF10, v.validateREF11, v.validateREF12,
 		v.validateREF13, v.validateREF14, v.validateREF15, v.validateREF16,
+		v.validateREF17,
 		v.validateTOPO01, v.validateTOPO02, v.validateTOPO03, v.validateTOPO04,
 		v.validateTOPO05, v.validateTOPO06, v.validateTOPO07, v.validateTOPO08,
 		v.validateVERIFY01, v.validateVERIFY02, v.validateVERIFY03,

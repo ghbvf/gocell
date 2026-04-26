@@ -2367,6 +2367,116 @@ func TestREF14(t *testing.T) {
 	}
 }
 
+// --- REF-17: contract clients audience (internal path → no external actor) ---
+
+func TestREF17(t *testing.T) {
+	// Helper: switch http.auth.login.v1 to internal path so we can drive
+	// the audience check from validProject() without standing up a new contract.
+	withInternalPath := func(pm *metadata.ProjectMeta) {
+		pm.Contracts["http.auth.login.v1"].Endpoints.HTTP.Path = "/internal/v1/access/sessions/login"
+	}
+	tests := []struct {
+		name      string
+		setup     func(*metadata.ProjectMeta)
+		wantCount int
+	}{
+		{
+			name:      "public path with external client passes",
+			setup:     func(_ *metadata.ProjectMeta) {}, // validProject default: /api/v1/... + clients=[auditcore]
+			wantCount: 0,
+		},
+		{
+			name: "public path with external client still passes",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "internal path with cell client passes",
+			setup: func(pm *metadata.ProjectMeta) {
+				withInternalPath(pm)
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"auditcore"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "internal path with wildcard client passes",
+			setup: func(pm *metadata.ProjectMeta) {
+				withInternalPath(pm)
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "internal path with empty clients passes",
+			setup: func(pm *metadata.ProjectMeta) {
+				withInternalPath(pm)
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = nil
+			},
+			wantCount: 0,
+		},
+		{
+			name: "internal path with single external client errors",
+			setup: func(pm *metadata.ProjectMeta) {
+				withInternalPath(pm)
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "internal path with multiple external clients errors per client",
+			setup: func(pm *metadata.ProjectMeta) {
+				withInternalPath(pm)
+				pm.Actors = append(pm.Actors, metadata.ActorMeta{
+					ID: "second-bff", Type: "external", MaxConsistencyLevel: "L2",
+				})
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff", "second-bff"}
+			},
+			wantCount: 2,
+		},
+		{
+			name: "internal path mixing external and cell clients reports only external",
+			setup: func(pm *metadata.ProjectMeta) {
+				withInternalPath(pm)
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"auditcore", "edge-bff"}
+			},
+			wantCount: 1,
+		},
+		{
+			name: "non-http contract with internal-looking client is skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				// Event contract has no HTTP; REF-17 must not touch it even if
+				// subscribers/clients shape happens to include external actors.
+				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{"edge-bff"}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "http contract without HTTP transport is skipped",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = nil
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateREF17(), "REF-17")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityError, r.Severity)
+				assert.Equal(t, IssueForbidden, r.IssueType)
+				assert.Contains(t, r.Field, "endpoints.clients")
+			}
+		})
+	}
+}
+
 // --- REF-15: assembly.id == map key ---
 
 func TestREF15(t *testing.T) {

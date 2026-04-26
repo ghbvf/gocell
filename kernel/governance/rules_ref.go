@@ -3,6 +3,7 @@ package governance
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
@@ -376,6 +377,43 @@ func (v *Validator) validateREF15() []ValidationResult {
 				"id",
 				fmt.Sprintf("assembly id %q does not match map key %q (expected directory name)", a.ID, a.Dir),
 			))
+		}
+	}
+	return results
+}
+
+// validateREF17 checks that HTTP contracts whose endpoint path is exposed on
+// the internal audience (path prefix "/internal/") do not list any external
+// actor (actors.yaml entry with type "external") as a client. The internal
+// audience is reserved for cell-to-cell or trusted-internal traffic; routing
+// an external actor through it would bypass the public-API contract surface
+// and the auth posture that comes with it.
+//
+// ref: kubernetes pkg/apis/core/validation/validation.go (audience-aware
+// admission). We diverge from k8s by validating contract.endpoints.clients
+// against actors.yaml types rather than RBAC roles.
+func (v *Validator) validateREF17() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Kind != "http" || c.Endpoints.HTTP == nil {
+			continue
+		}
+		path := c.Endpoints.HTTP.Path
+		if !strings.HasPrefix(path, "/internal/") {
+			continue
+		}
+		for i, client := range c.Endpoints.Clients {
+			if client == "*" {
+				continue
+			}
+			if v.actorTypeOf(client) == "external" {
+				results = append(results, v.newResult(
+					"REF-17", SeverityError, IssueForbidden,
+					contractFile(c),
+					fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i),
+					fmt.Sprintf("contract %q is internal (path %q) but client %q is an external actor; remove it or move the endpoint to a public path", c.ID, path, client),
+				))
+			}
 		}
 	}
 	return results
