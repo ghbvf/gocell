@@ -154,6 +154,65 @@ func TestParamSchemaRequiredThreeStates(t *testing.T) {
 	})
 }
 
+// TestParamSchemaConstraintsRoundTrip locks in YAML round-trip semantics for
+// the four new constraint fields (MinLength, MaxLength, Minimum, Maximum).
+// They are *int so omitted/zero/non-zero are three distinct states, mirroring
+// the three-state Required pattern (FMT-24 governance rule depends on the
+// distinction between "no declaration" and "declared as zero").
+func TestParamSchemaConstraintsRoundTrip(t *testing.T) {
+	zero := 0
+	nonZero := 500
+	t.Run("nil constraints are omitted", func(t *testing.T) {
+		data, got := roundTrip(t, ParamSchema{Type: "string"})
+		assert.Nil(t, got.MinLength)
+		assert.Nil(t, got.MaxLength)
+		assert.Nil(t, got.Minimum)
+		assert.Nil(t, got.Maximum)
+		assert.NotContains(t, string(data), "minLength")
+		assert.NotContains(t, string(data), "maxLength")
+		assert.NotContains(t, string(data), "minimum")
+		assert.NotContains(t, string(data), "maximum")
+	})
+	t.Run("zero values are emitted (not omitted)", func(t *testing.T) {
+		data, got := roundTrip(t, ParamSchema{
+			Type:      "string",
+			MinLength: &zero,
+		})
+		require.NotNil(t, got.MinLength)
+		assert.Equal(t, 0, *got.MinLength)
+		assert.Contains(t, string(data), "minLength: 0")
+	})
+	t.Run("non-zero string constraints round-trip", func(t *testing.T) {
+		one := 1
+		twoFiftySix := 256
+		data, got := roundTrip(t, ParamSchema{
+			Type:      "string",
+			MinLength: &one,
+			MaxLength: &twoFiftySix,
+		})
+		require.NotNil(t, got.MinLength)
+		require.NotNil(t, got.MaxLength)
+		assert.Equal(t, 1, *got.MinLength)
+		assert.Equal(t, 256, *got.MaxLength)
+		assert.Contains(t, string(data), "minLength: 1")
+		assert.Contains(t, string(data), "maxLength: 256")
+	})
+	t.Run("integer constraints round-trip", func(t *testing.T) {
+		one := 1
+		data, got := roundTrip(t, ParamSchema{
+			Type:    "integer",
+			Minimum: &one,
+			Maximum: &nonZero,
+		})
+		require.NotNil(t, got.Minimum)
+		require.NotNil(t, got.Maximum)
+		assert.Equal(t, 1, *got.Minimum)
+		assert.Equal(t, 500, *got.Maximum)
+		assert.Contains(t, string(data), "minimum: 1")
+		assert.Contains(t, string(data), "maximum: 500")
+	})
+}
+
 func TestParamTypesWhitelist(t *testing.T) {
 	for _, name := range []string{"string", "integer", "number", "boolean", "uuid"} {
 		assert.True(t, ParamTypes[name], "%s should be accepted", name)

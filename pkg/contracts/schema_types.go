@@ -42,11 +42,23 @@ type HTTPTransport struct {
 //
 // Format is a free-form hint (e.g. "uuid", "date-time", "int64") — it does
 // not influence FMT-13 enforcement today, but static tooling (codegen,
-// OpenAPI export) consumes it.
+// OpenAPI export) consumes it. Governance rule FMT-24 exempts
+// `format: "uuid"` from minLength/maxLength enforcement (UUIDs are fixed
+// at 36 characters per RFC 4122).
+//
+// MinLength / MaxLength / Minimum / Maximum are *int (not int) for the
+// same three-state reason as Required: nil = "not declared", non-nil =
+// "declared, even if zero". Governance rule FMT-24 distinguishes the
+// two: missing declarations are violations; explicit zero (e.g.
+// `minLength: 0` to permit empty strings) is accepted.
 type ParamSchema struct {
-	Type     string `yaml:"type"               json:"type"`
-	Required *bool  `yaml:"required,omitempty" json:"required,omitempty"`
-	Format   string `yaml:"format,omitempty"   json:"format,omitempty"`
+	Type      string `yaml:"type"                json:"type"`
+	Required  *bool  `yaml:"required,omitempty"  json:"required,omitempty"`
+	Format    string `yaml:"format,omitempty"    json:"format,omitempty"`
+	MinLength *int   `yaml:"minLength,omitempty" json:"minLength,omitempty"`
+	MaxLength *int   `yaml:"maxLength,omitempty" json:"maxLength,omitempty"`
+	Minimum   *int   `yaml:"minimum,omitempty"   json:"minimum,omitempty"`
+	Maximum   *int   `yaml:"maximum,omitempty"   json:"maximum,omitempty"`
 }
 
 // ParamTypes lists the accepted `type` values for ParamSchema.
