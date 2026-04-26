@@ -93,20 +93,32 @@ func flattenPackagesErrors(pkgs []*packages.Package) []packages.Error {
 	return out
 }
 
-// sharedResolverOnce guards the module-wide singleton for cells/.
+// sharedResolverMu guards the module-wide singleton for cells/.
+// err paths are NOT cached — if loading fails the next call will retry.
+// Only a successful load is cached; this avoids permanently poisoning the
+// singleton on transient failures (e.g. missing toolchain during partial CI).
 var (
-	sharedResolverOnce sync.Once
-	sharedResolver     *topicConstResolver
-	sharedResolverErr  error
+	sharedResolverMu sync.Mutex
+	sharedResolver   *topicConstResolver
 )
 
 // CellsTopicResolver lazily loads "./cells/..." with full type info and
 // returns a shared resolver. Module root is determined by the caller via
 // findModuleRoot. All callers that target cells/* should reuse this singleton
 // — packages loading is the dominant cost.
+//
+// Error paths are not cached: a failure on one call allows the next caller
+// to retry (e.g. after a missing toolchain becomes available).
 func CellsTopicResolver(modRoot string) (*topicConstResolver, error) {
-	sharedResolverOnce.Do(func() {
-		sharedResolver, sharedResolverErr = newTopicConstResolver(modRoot, "./cells/...")
-	})
-	return sharedResolver, sharedResolverErr
+	sharedResolverMu.Lock()
+	defer sharedResolverMu.Unlock()
+	if sharedResolver != nil {
+		return sharedResolver, nil
+	}
+	r, err := newTopicConstResolver(modRoot, "./cells/...")
+	if err != nil {
+		return nil, err // do not cache err; next call will retry
+	}
+	sharedResolver = r
+	return r, nil
 }

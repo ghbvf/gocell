@@ -4,10 +4,8 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
-	"os"
 	"path/filepath"
 	"regexp"
-	"sort"
 	"strings"
 	"testing"
 
@@ -60,6 +58,9 @@ func (v outboxTopicViolation) String() string {
 // ref: kubernetes apiserver/pkg/audit Backend.FailurePolicy (Ignore/Fail)
 // ref: ThreeDotsLabs/watermill message/router/middleware/retry.go
 func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
+	if testing.Short() {
+		t.Skip("skipping packages.Load-based archtest in -short mode (loads ./cells/... module-wide, ~5-10s)")
+	}
 	root := findModuleRoot(t)
 
 	violations, err := checkOutboxTopicFailOpenRule(root)
@@ -291,34 +292,4 @@ func findArchTestDir(t *testing.T) string {
 	t.Helper()
 	root := findModuleRoot(t)
 	return filepath.Join(root, "tools", "archtest")
-}
-
-// findCellProductionGoFiles walks cells/** for production .go files
-// (excluding _test.go + vendor + .git + testdata + generated). Used by both
-// the outbox topic scanner (via packages.Load) and by AST-only scanners in
-// repoerr_test.go that do not require type information.
-func findCellProductionGoFiles(root string) ([]string, error) {
-	var files []string
-	err := filepath.WalkDir(filepath.Join(root, "cells"), func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", "worktrees", "testdata", "generated", ".git":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") {
-			return nil
-		}
-		if strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		files = append(files, path)
-		return nil
-	})
-	sort.Strings(files)
-	return files, err
 }
