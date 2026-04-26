@@ -2,6 +2,7 @@ package outbox
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"reflect"
@@ -70,7 +71,33 @@ type DirectEmitter struct {
 	cellID            string
 	logger            *slog.Logger
 	failOpenDroppedCv metrics.CounterVec
+	failOpenTracker   *failOpenTracker
 }
+
+// DirectEmitterOption configures NewDirectEmitter.
+type DirectEmitterOption func(*directEmitterOptions)
+
+type directEmitterOptions struct {
+	logger             *slog.Logger
+	failOpenRateThresh float64
+}
+
+// WithLogger overrides slog.Default() for this DirectEmitter's structured logs.
+func WithLogger(l *slog.Logger) DirectEmitterOption {
+	return func(o *directEmitterOptions) { o.logger = l }
+}
+
+// WithFailOpenRateThreshold sets the drop ratio threshold above which the
+// emitter's HealthCheckers checker reports cell.ErrDegraded. The implicit
+// time window is the interval between two /readyz probes (typically
+// 10-30s). 0 disables the checker; default is 0.05 (5%).
+//
+// ref: kernel/outbox/failopen_tracker.go for ratio semantics.
+func WithFailOpenRateThreshold(ratio float64) DirectEmitterOption {
+	return func(o *directEmitterOptions) { o.failOpenRateThresh = ratio }
+}
+
+const defaultFailOpenRateThreshold = 0.05 // 5%
 
 // NewDirectEmitter adapts a Publisher into an Emitter that publishes v1 wire
 // envelopes. cellID is the owning Cell's ID and is used as the "cell" label on
@@ -79,8 +106,11 @@ type DirectEmitter struct {
 // register the fail-open dropped counter (fqName after Namespace injection:
 // gocell_outbox_emit_failopen_dropped_total); pass metrics.NopProvider{} in
 // tests or demos where no backend is wired. A nil mp returns an errcode error.
-// A nil logger uses slog.Default().
-func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, cellID string, loggers ...*slog.Logger) (*DirectEmitter, error) {
+//
+// Use WithLogger to override the default slog.Default() logger.
+// Use WithFailOpenRateThreshold to set the drop-ratio threshold for the
+// HealthCheckers checker (default 5%; 0 disables).
+func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Provider, cellID string, opts ...DirectEmitterOption) (*DirectEmitter, error) {
 	if isNilEmitterDependency(p) {
 		return nil, errcode.New(errcode.ErrCellMissingOutbox,
 			"outbox: nil publisher for DirectEmitter")
@@ -101,11 +131,24 @@ func NewDirectEmitter(p Publisher, mode DirectPublishFailureMode, mp metrics.Pro
 	if err != nil {
 		return nil, fmt.Errorf("outbox: register failopen_dropped counter: %w", err)
 	}
-	logger := slog.Default()
-	if len(loggers) > 0 && loggers[0] != nil {
-		logger = loggers[0]
+	cfg := &directEmitterOptions{
+		logger:             slog.Default(),
+		failOpenRateThresh: defaultFailOpenRateThreshold,
 	}
-	return &DirectEmitter{publisher: p, mode: mode, cellID: cellID, logger: logger, failOpenDroppedCv: cv}, nil
+	for _, opt := range opts {
+		opt(cfg)
+	}
+	if cfg.logger == nil {
+		cfg.logger = slog.Default() // 防御 WithLogger(nil)
+	}
+	return &DirectEmitter{
+		publisher:         p,
+		mode:              mode,
+		cellID:            cellID,
+		logger:            cfg.logger,
+		failOpenDroppedCv: cv,
+		failOpenTracker:   newFailOpenTracker(cfg.failOpenRateThresh),
+	}, nil
 }
 
 // Emit validates the entry, injects observability metadata from ctx, marshals
@@ -148,14 +191,57 @@ func (e *DirectEmitter) Emit(ctx context.Context, entry Entry) error {
 				"cell":  e.cellID,
 				"topic": topic,
 			}).Inc()
+			e.failOpenTracker.RecordDrop()
 			return nil
 		}
 		return fmt.Errorf("outbox: direct publish failed for topic %s: %w", topic, err)
 	}
+	e.failOpenTracker.RecordSuccess()
 	return nil
 }
 
 var _ Emitter = (*DirectEmitter)(nil)
+
+// ErrDegraded is the canonical sentinel returned by DirectEmitter.HealthCheckers
+// to signal "operational but degraded" — the emitter is still serving requests
+// but the fail-open drop ratio has exceeded the configured threshold, meaning
+// events are silently lost at an elevated rate.
+//
+// The /readyz aggregator detects ErrDegraded via errors.Is and maps it to
+// HTTP 200 + body status="degraded" rather than 503, so K8s readinessProbe
+// does not evict the pod for soft-failure signals.
+//
+// kernel/cell.ErrDegraded is an alias to this sentinel so that callers
+// referencing either symbol satisfy the same errors.Is chain.
+//
+// ref: envoyproxy/envoy admin /ready — DEGRADED returns 200, distinguishing
+// "soft failure, do not evict" from "hard failure, drain traffic".
+// ref: kernel/cell/health.go — cell-layer alias to this sentinel.
+var ErrDegraded = errors.New("outbox: degraded")
+
+// HealthCheckers implements cell.HealthContributor. The checker name is
+// scoped by cellID to avoid collisions when multiple cells own a
+// DirectEmitter (each /readyz checker name MUST be globally unique).
+//
+// The checker returns ErrDegraded when the fail-open drop ratio exceeds the
+// threshold configured via WithFailOpenRateThreshold (default 5%). The /readyz
+// aggregator detects this via errors.Is and maps to HTTP 200 + status="degraded"
+// rather than 503.
+//
+// ref: kernel/outbox/emitter.go ErrDegraded
+// ref: cells/accesscore/cell_providers.go:22-38 — kebab-case checker name convention
+func (e *DirectEmitter) HealthCheckers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		"outbox-failopen-rate:" + e.cellID: e.checkFailOpenRate,
+	}
+}
+
+func (e *DirectEmitter) checkFailOpenRate(_ context.Context) error {
+	if e.failOpenTracker.Tripped() {
+		return fmt.Errorf("outbox: fail-open drop ratio exceeded threshold for cell %q: %w", e.cellID, ErrDegraded)
+	}
+	return nil
+}
 
 // DurabilityReporter is an optional interface Emitter implementations may
 // expose so callers (typically Cell boundaries) can query whether this

@@ -1,6 +1,6 @@
 package cell
 
-import "errors"
+import "github.com/ghbvf/gocell/kernel/outbox"
 
 // ErrDegraded is the canonical sentinel returned by cell.HealthContributor
 // checkers to signal "operational but degraded" — the cell is still serving
@@ -14,10 +14,14 @@ import "errors"
 // the actionable signal; ErrDegraded is the on-the-wire indicator that the
 // pod knows it is in a degraded state.
 //
+// This is an alias to outbox.ErrDegraded so that errors.Is matches regardless
+// of which symbol the caller uses.
+//
 // ref: envoyproxy/envoy admin /ready — DEGRADED returns 200, distinguishing
 // "soft failure, do not evict" from "hard failure, drain traffic".
 // ref: HealthStatus.Status type tag in kernel/cell/types.go:63
 // ("healthy" | "degraded" | "unhealthy") — degraded is already a first-class
 // state on the per-cell HealthStatus; this sentinel extends it to the
 // per-checker plane.
-var ErrDegraded = errors.New("cell: degraded")
+// ref: kernel/outbox/emitter.go ErrDegraded — authoritative definition.
+var ErrDegraded = outbox.ErrDegraded

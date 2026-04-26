@@ -107,7 +107,7 @@ func resolveDemoEmitter(cfg EmitterConfig, logger *slog.Logger) (EmitterOutcome,
 			return EmitterOutcome{}, errcode.New(errcode.ErrCellMissingOutbox,
 				cfg.CellID+" demo mode with direct publisher requires MetricsProvider; pass kernel/observability/metrics.NopProvider{} explicitly in tests (e.g. via cells/{accesscore,auditcore,configcore}.WithMetricsProvider(...))")
 		}
-		emitter, err := outbox.NewDirectEmitter(cfg.Publisher, cfg.DirectPublishMode, cfg.MetricsProvider, cfg.CellID, logger)
+		emitter, err := outbox.NewDirectEmitter(cfg.Publisher, cfg.DirectPublishMode, cfg.MetricsProvider, cfg.CellID, outbox.WithLogger(logger))
 		if err != nil {
 			return EmitterOutcome{}, err
 		}
