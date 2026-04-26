@@ -310,3 +310,71 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildStandaloneOptions verifies that an addr accepted by
+// ValidateTLSEndpoint is converted to go-redis Options with the right
+// TLSConfig populated. SEC-FAIL-CLOSED requires the validator and the dial
+// path to agree on TLS enforcement; without ParseURL wiring, rediss://
+// would silently downgrade to plain TCP.
+func TestBuildStandaloneOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		addr        string
+		wantTLS     bool
+		wantAddr    string
+		wantDB      int
+		expectError bool
+	}{
+		{
+			name:     "rediss URL form sets TLSConfig",
+			addr:     "rediss://prod.redis:6379",
+			wantTLS:  true,
+			wantAddr: "prod.redis:6379",
+		},
+		{
+			name:     "redis URL form preserves TLSConfig nil",
+			addr:     "redis://localhost:6379/3",
+			wantTLS:  false,
+			wantAddr: "localhost:6379",
+			wantDB:   3,
+		},
+		{
+			name:     "plain host port preserves TLSConfig nil",
+			addr:     "127.0.0.1:6379",
+			wantTLS:  false,
+			wantAddr: "127.0.0.1:6379",
+		},
+		{
+			name:        "malformed URL returns error",
+			addr:        "rediss://[::z]:not-a-port",
+			expectError: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Config{Mode: ModeStandalone, Addr: tc.addr}
+			cfg.defaults()
+			opts, err := buildStandaloneOptions(cfg)
+			if tc.expectError {
+				require.Error(t, err, "expected parse error for %q", tc.addr)
+				return
+			}
+			require.NoError(t, err, "addr=%q", tc.addr)
+			require.Equal(t, tc.wantAddr, opts.Addr)
+			if tc.wantTLS {
+				require.NotNil(t, opts.TLSConfig,
+					"TLSConfig must be set for %q so go-redis dials TLS", tc.addr)
+			} else {
+				require.Nil(t, opts.TLSConfig)
+			}
+			if tc.wantDB != 0 {
+				require.Equal(t, tc.wantDB, opts.DB)
+			}
+		})
+	}
+}

@@ -18,9 +18,18 @@
 # via secret managers (Vault, GH Secrets, etc.) — never reuse these
 # values outside the e2e harness.
 
+# SEC-FAIL-CLOSED (PR-MODE-1): all 4 services share network_mode: host so that
+# corebundle reaches Redis/Postgres at 127.0.0.1, satisfying the loopback
+# exception in pkg/secutil.ValidateTLSEndpoint without operating a TLS-enabled
+# Redis container. Host networking is supported on Linux runners (CI uses
+# ubuntu-latest); macOS Docker Desktop does not honour it, so the e2e harness
+# is Linux-only by construction. Production deployments connect to managed
+# Redis/Postgres over TLS scheme URLs (rediss://, postgres+ssl); this fixture
+# is not a deployment template.
 services:
   postgres:
     image: postgres:15-alpine
+    network_mode: host
     environment:
       POSTGRES_USER: gocell
       # Required env: caller MUST export E2E_PG_PASSWORD before `docker compose up`.
@@ -37,6 +46,7 @@ services:
 
   redis:
     image: redis:7-alpine
+    network_mode: host
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 2s
@@ -47,8 +57,9 @@ services:
     build:
       context: ../..
       dockerfile: tests/e2e/Dockerfile.migrate
+    network_mode: host
     environment:
-      GOCELL_PG_DSN: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@postgres:5432/gocell?sslmode=disable
+      GOCELL_PG_DSN: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@127.0.0.1:5432/gocell?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -58,6 +69,7 @@ services:
     build:
       context: ../..
       dockerfile: tests/e2e/Dockerfile.corebundle
+    network_mode: host
     environment:
       # Topology: real adapter mode + postgres storage backend.
       GOCELL_ADAPTER_MODE: real
@@ -65,8 +77,9 @@ services:
       # Single-pod deployment: in-memory nonce store is sufficient.
       GOCELL_SINGLE_POD: "1"
 
-      # configcore cell: PG DSN + AES-256 envelope encryption.
-      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@postgres:5432/gocell?sslmode=disable
+      # configcore cell: PG DSN + AES-256 envelope encryption. Loopback host
+      # under the host-network compose topology (see file header).
+      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@127.0.0.1:5432/gocell?sslmode=disable
       GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
       # 64-hex-char = 32 bytes. E2e-only; never reuse in production.
       GOCELL_CONFIGCORE_MASTER_KEY: aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899
@@ -79,8 +92,9 @@ services:
       # accesscore cell: cursor key.
       GOCELL_ACCESSCORE_CURSOR_KEY: access-cursor-key-32b-e2e-padx!!
 
-      # Redis for distributed replay protection and outbox claimer.
-      GOCELL_REDIS_ADDR: redis:6379
+      # Redis for distributed replay protection and outbox claimer. Loopback
+      # host under host-network topology — ValidateTLSEndpoint loopback exception.
+      GOCELL_REDIS_ADDR: 127.0.0.1:6379
 
       # Production control-plane tokens (e2e-only values; not secret material).
       GOCELL_SERVICE_SECRET: e2e-service-secret-32-bytes-xxxxx!
@@ -94,7 +108,8 @@ services:
       GOCELL_JWT_ISSUER: gocell-e2e
       GOCELL_JWT_AUDIENCE: gocell-e2e-clients
 
-      # HTTP listener addresses — corebundle container.
+      # HTTP listener addresses — corebundle container (host network: ports
+      # bind directly on the runner; no docker port mapping needed).
       GOCELL_HTTP_PRIMARY_ADDR: "0.0.0.0:8080"
       GOCELL_HTTP_INTERNAL_ADDR: "127.0.0.1:9090"
       # 0.0.0.0 required for CI host-side WaitForReady; production must bind to 127.0.0.1
@@ -104,9 +119,6 @@ services:
       # The bootstrap-admin.sh step calls that endpoint immediately after
       # corebundle's healthcheck passes.
       GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE: interactive
-    ports:
-      - "8080:8080"
-      - "9091:9091"
     depends_on:
       migrate:
         condition: service_completed_successfully

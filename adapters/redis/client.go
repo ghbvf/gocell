@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/adapters/adapterutil"
@@ -192,6 +193,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	)
 	switch cfg.Mode {
 	case ModeSentinel:
+		// Sentinel mode currently expects plain host:port entries; rediss://
+		// URL form would require parsing each addr and threading TLSConfig
+		// through FailoverOptions, which is out of scope. validateEndpointTLS
+		// rejects non-loopback bare addrs, so any sentinel-mode entry that
+		// reaches here is loopback (dev/CI testcontainers).
 		fc := goredis.NewFailoverClient(&goredis.FailoverOptions{
 			MasterName:    cfg.SentinelMaster,
 			SentinelAddrs: cfg.SentinelAddrs,
@@ -205,15 +211,15 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 		rdb = fc
 		statsProvider = fc
 	default:
-		rc := goredis.NewClient(&goredis.Options{
-			Addr:         cfg.Addr,
-			Password:     cfg.Password,
-			DB:           cfg.DB,
-			DialTimeout:  cfg.DialTimeout,
-			ReadTimeout:  cfg.ReadTimeout,
-			WriteTimeout: cfg.WriteTimeout,
-			PoolSize:     cfg.PoolSize,
-		})
+		// SEC-FAIL-CLOSED: build Options via ParseURL when Addr is a URL form
+		// so that rediss://host:port carries TLSConfig into the dial. Without
+		// this, go-redis silently downgrades to plain TCP and ValidateTLSEndpoint
+		// becomes a paper guarantee.
+		opts, err := buildStandaloneOptions(cfg)
+		if err != nil {
+			return nil, err
+		}
+		rc := goredis.NewClient(opts)
 		rdb = rc
 		statsProvider = rc
 	}
@@ -242,6 +248,44 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 func newClientFromCmdable(rdb cmdable, cfg Config) *Client {
 	cfg.defaults()
 	return &Client{rdb: rdb, config: cfg}
+}
+
+// buildStandaloneOptions converts cfg into goredis.Options. When cfg.Addr is a
+// URL form (`rediss://...` or `redis://...`), the URL is parsed via
+// goredis.ParseURL so that TLSConfig populated by `rediss` reaches go-redis;
+// without this step the new Standalone client would dial plain TCP regardless
+// of the scheme, and SEC-FAIL-CLOSED ValidateTLSEndpoint would be a paper-only
+// guarantee. For plain host:port input the function passes through unchanged.
+//
+// Explicit Config fields (Password, DB) take precedence over URL-encoded values
+// when both are set, so Config remains the single source of truth in tests.
+func buildStandaloneOptions(cfg Config) (*goredis.Options, error) {
+	base := &goredis.Options{
+		Password:     cfg.Password,
+		DB:           cfg.DB,
+		DialTimeout:  cfg.DialTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		PoolSize:     cfg.PoolSize,
+	}
+	if !strings.Contains(cfg.Addr, "://") {
+		base.Addr = cfg.Addr
+		return base, nil
+	}
+	parsed, err := goredis.ParseURL(cfg.Addr)
+	if err != nil {
+		return nil, errcode.Wrap(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: invalid Addr URL %q", cfg.Addr), err)
+	}
+	base.Addr = parsed.Addr
+	base.TLSConfig = parsed.TLSConfig
+	if base.Password == "" && parsed.Password != "" {
+		base.Password = parsed.Password
+	}
+	if base.DB == 0 && parsed.DB != 0 {
+		base.DB = parsed.DB
+	}
+	return base, nil
 }
 
 // Health pings the Redis server and returns an error if it is unreachable.

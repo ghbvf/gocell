@@ -310,13 +310,15 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 // certificate availability) with per-listener ref context and error formatting
 // would push the outer function beyond the limit of 15.
 func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
-	// SEC-FAIL-CLOSED: nil authChain is rejected at phase0. Callers must pass
-	// an explicit chain — use []cell.ListenerAuth{cell.AuthNone{}} for listeners
-	// that genuinely require no authentication (e.g. HealthListener behind a
-	// Kubernetes probe path on a loopback interface).
-	if cfg.authChain == nil {
+	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
+	// slices are behaviourally identical to nil — both produce an
+	// unauthenticated listener — so requiring `[]cell.ListenerAuth{cell.AuthNone{}}`
+	// for genuinely public listeners (HealthListener on a loopback probe path)
+	// keeps the explicit no-auth marker visible to grep, archtest SEC-02, and
+	// future reviewers.
+	if len(cfg.authChain) == 0 {
 		return errcode.New(errcode.ErrListenerAuthChainMissing,
-			fmt.Sprintf("bootstrap: listener %q requires explicit authChain "+
+			fmt.Sprintf("bootstrap: listener %q requires non-empty authChain "+
 				"(use []cell.ListenerAuth{cell.AuthNone{}} for no-auth listeners)", ref.String()))
 	}
 	if cfg.net == nil && cfg.addr == "" {

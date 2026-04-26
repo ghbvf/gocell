@@ -193,6 +193,17 @@ func TestPhase0_RejectsNilAuthChain(t *testing.T) {
 				WithListener(cell.HealthListener, ":9091", nil), // nil → rejected; use AuthNone{}
 			},
 		},
+		{
+			name: "InternalListener empty slice authChain",
+			listeners: []Option{
+				WithListener(cell.PrimaryListener, ":8080",
+					[]cell.ListenerAuth{cell.AuthNone{}}),
+				// Empty slice == nil for the unauthenticated listener it produces;
+				// phase0 must reject so callers can't bypass the explicit AuthNone{}
+				// marker that archtest SEC-FAIL-CLOSED-02 grep-checks.
+				WithListener(cell.InternalListener, ":9090", []cell.ListenerAuth{}),
+			},
+		},
 	}
 
 	for _, tc := range tests {
