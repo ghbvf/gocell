@@ -182,6 +182,22 @@ func countContractHealthErrors(results []governance.ValidationResult) int {
 	return countErrors(results)
 }
 
+// availableCellsMsg builds the "available cells: [...]" fragment for error messages.
+// Returns at most 10 sorted cell IDs, appending ", ..." when there are more.
+func availableCellsMsg(cells map[string]*metadata.CellMeta) string {
+	ids := make([]string, 0, len(cells))
+	for id := range cells {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	suffix := ""
+	if len(ids) > 10 {
+		ids = ids[:10]
+		suffix = ", ..."
+	}
+	return "[" + strings.Join(ids, ", ") + suffix + "]"
+}
+
 // checkSliceCoverage checks that every slices/ subdirectory has a slice.yaml
 // and that each parsed SliceMeta correctly references its parent cell.
 //
@@ -207,23 +223,12 @@ func checkSliceCoverage(args []string) error {
 
 	if *cellID != "" {
 		if _, ok := project.Cells[*cellID]; !ok {
-			ids := make([]string, 0, len(project.Cells))
-			for id := range project.Cells {
-				ids = append(ids, id)
-			}
-			sort.Strings(ids)
-			available := ids
-			suffix := ""
-			if len(ids) > 10 {
-				available = ids[:10]
-				suffix = ", ..."
-			}
 			return printAndCheck(*format, []governance.ValidationResult{{
 				Code:      "CHECK-CELL-NOT-FOUND",
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRequired,
 				Scope:     cmdSliceCoverage,
-				Message:   fmt.Sprintf("cell %q not found in project; available cells: [%s%s]", *cellID, strings.Join(available, ", "), suffix),
+				Message:   fmt.Sprintf("cell %q not found in project; available cells: %s", *cellID, availableCellsMsg(project.Cells)),
 			}}, cmdSliceCoverage, "")
 		}
 	}

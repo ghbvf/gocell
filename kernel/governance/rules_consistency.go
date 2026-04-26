@@ -189,35 +189,50 @@ func scanCellEmitTopics(root, ownerCell, fileForError string) (map[string]struct
 
 	fset := token.NewFileSet()
 	_ = filepath.WalkDir(slicesDir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
-		}
-		if d.IsDir() {
-			if n := d.Name(); n == "mem" || n == "testdata" {
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		f, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			return nil
-		}
-		fileConsts := collectFileConsts(f, pkgConsts)
-		scanResults, hasEmit := scanFileForEmits(f, fset, pkgConsts, fileConsts, fileForError, root, topics)
-		results = append(results, scanResults...)
-		// Only collect topic selectors from files that contain real emit calls.
-		// Restricting to emit-call files prevents subscriber topic constants
-		// (e.g. in subscribe(ctx, dto.TopicX, handler)) from being counted as
-		// emit evidence, which would cause false-negatives in the reverse check.
-		if hasEmit {
-			collectAllTopicSelectors(f, pkgConsts, topics)
-		}
-		return nil
+		return scanSliceFile(path, d, err, fset, pkgConsts, fileForError, root, topics, &results)
 	})
 	return topics, results
+}
+
+// scanSliceFile is the WalkDir callback body for scanCellEmitTopics.
+// It skips directories, test files, and unparseable files; for each non-test
+// Go file it runs emit scanning and, only when emit calls are found, also
+// collects selector-based topic hints.
+func scanSliceFile(
+	path string, d fs.DirEntry, err error,
+	fset *token.FileSet,
+	pkgConsts cellPkgConsts,
+	fileForError, root string,
+	topics map[string]struct{},
+	results *[]ValidationResult,
+) error {
+	if err != nil {
+		return nil
+	}
+	if d.IsDir() {
+		if n := d.Name(); n == "mem" || n == "testdata" {
+			return filepath.SkipDir
+		}
+		return nil
+	}
+	if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+		return nil
+	}
+	f, parseErr := parser.ParseFile(fset, path, nil, 0)
+	if parseErr != nil {
+		return nil
+	}
+	fileConsts := collectFileConsts(f, pkgConsts)
+	scanResults, hasEmit := scanFileForEmits(f, fset, pkgConsts, fileConsts, fileForError, root, topics)
+	*results = append(*results, scanResults...)
+	// Only collect topic selectors from files that contain real emit calls.
+	// Restricting to emit-call files prevents subscriber topic constants
+	// (e.g. in subscribe(ctx, dto.TopicX, handler)) from being counted as
+	// emit evidence, which would cause false-negatives in the reverse check.
+	if hasEmit {
+		collectAllTopicSelectors(f, pkgConsts, topics)
+	}
+	return nil
 }
 
 // scanFileForEmits walks a single parsed file's AST and collects emitted topics.

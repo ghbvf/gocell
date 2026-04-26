@@ -93,18 +93,18 @@ type WaiverMeta struct {
 
 // ContractMeta maps to contracts/{kind}/{domain...}/{version}/contract.yaml.
 type ContractMeta struct {
-	ID                string         `yaml:"id"`
-	Kind              string         `yaml:"kind"` // http|event|command|projection
-	OwnerCell         string         `yaml:"ownerCell"`
-	ConsistencyLevel  string         `yaml:"consistencyLevel"`
-	Lifecycle         string         `yaml:"lifecycle"`          // draft|active|deprecated
+	ID               string `yaml:"id"`
+	Kind             string `yaml:"kind"` // http|event|command|projection
+	OwnerCell        string `yaml:"ownerCell"`
+	ConsistencyLevel string `yaml:"consistencyLevel"`
+	Lifecycle        string `yaml:"lifecycle"` // draft|active|deprecated
 	// Triggers lists the outbox event topics emitted by this contract's owner
 	// cell when the HTTP handler succeeds. Required for L2+ HTTP contracts.
 	// Each value MUST be a string literal or named constant (dto.TopicX /
 	// domain.TopicX); dynamic expressions (fmt.Sprintf, variables) are rejected
 	// by CONTRACT-CONSISTENCY-EMIT-01. Validated bidirectionally against
 	// outbox.Emit call sites in cells/<ownerCell>/slices/**/service.go.
-	Triggers []string `yaml:"triggers,omitempty"`
+	Triggers          []string       `yaml:"triggers,omitempty"`
 	Endpoints         EndpointsMeta  `yaml:"endpoints"`
 	SchemaRefs        SchemaRefsMeta `yaml:"schemaRefs,omitempty"`
 	Replayable        *bool          `yaml:"replayable,omitempty"`
