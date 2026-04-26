@@ -16,7 +16,8 @@ func TestHttpConfigFlagsListV1Serve(t *testing.T) {
 	assert.True(t, has403, "http.config.flags.list.v1 must declare 403 (route is RoleAdmin-gated)")
 	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
 
-	c.ValidateResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}],"nextCursor":"","hasMore":false}`))
+	c.ValidateResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100,"description":"Dark mode toggle","version":1,"createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))
+	c.MustRejectResponse(t, []byte(`{"data":[{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}],"nextCursor":"","hasMore":false}`))
 	c.MustRejectResponse(t, []byte(`{"data":"not-array","hasMore":false}`))
 }
 
@@ -28,7 +29,8 @@ func TestHttpConfigFlagsGetV1Serve(t *testing.T) {
 	assert.True(t, has403, "http.config.flags.get.v1 must declare 403 (route is RoleAdmin-gated)")
 	c.ValidateErrorResponse(t, 403, []byte(`{"error":{"code":"ERR_AUTH_FORBIDDEN","message":"access denied","details":{}}}`))
 
-	c.ValidateResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}}`))
+	c.ValidateResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100,"description":"Dark mode toggle","version":1,"createdAt":"2024-01-01T00:00:00Z","updatedAt":"2024-01-01T00:00:00Z"}}`))
+	c.MustRejectResponse(t, []byte(`{"data":{"id":"f-1","key":"dark-mode","type":"boolean","enabled":true,"rolloutPercentage":100}}`))
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
 

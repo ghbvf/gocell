@@ -16,7 +16,7 @@ endpoints:
     pathParams:
       key:
         type: string
-    successStatus: 200
+    successStatus: 201
     noContent: false
     responses:
       401:

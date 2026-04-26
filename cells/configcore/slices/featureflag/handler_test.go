@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
@@ -32,9 +33,12 @@ func TestToEvaluateResultResponse_NilInput(t *testing.T) {
 }
 
 func TestFeatureFlagResponse_Fields(t *testing.T) {
+	now := time.Now()
 	flag := &domain.FeatureFlag{
 		ID: "ff-1", Key: "dark-mode", Type: domain.FlagBoolean,
 		Enabled: true, RolloutPercentage: 80,
+		Description: "Toggles dark mode UI", Version: 2,
+		CreatedAt: now, UpdatedAt: now,
 	}
 	resp := toFeatureFlagResponse(flag)
 
@@ -43,6 +47,10 @@ func TestFeatureFlagResponse_Fields(t *testing.T) {
 	assert.Equal(t, "boolean", resp.Type)
 	assert.True(t, resp.Enabled)
 	assert.Equal(t, 80, resp.RolloutPercentage)
+	assert.Equal(t, "Toggles dark mode UI", resp.Description)
+	assert.Equal(t, 2, resp.Version)
+	assert.Equal(t, now, resp.CreatedAt)
+	assert.Equal(t, now, resp.UpdatedAt)
 
 	// Verify camelCase JSON keys.
 	b, err := json.Marshal(resp)
@@ -53,6 +61,10 @@ func TestFeatureFlagResponse_Fields(t *testing.T) {
 	assert.Contains(t, s, `"type"`)
 	assert.Contains(t, s, `"enabled"`)
 	assert.Contains(t, s, `"rolloutPercentage"`)
+	assert.Contains(t, s, `"description"`)
+	assert.Contains(t, s, `"version"`)
+	assert.Contains(t, s, `"createdAt"`)
+	assert.Contains(t, s, `"updatedAt"`)
 }
 
 func TestEvaluateResultResponse_Fields(t *testing.T) {
@@ -92,8 +104,11 @@ func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCo
 
 func TestHandler_HandleList(t *testing.T) {
 	handler, repo := setupHandler()
+	now := time.Now()
 	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
 		ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: true,
+		Description: "Dark mode toggle", Version: 1,
+		CreatedAt: now, UpdatedAt: now,
 	}))
 
 	w := httptest.NewRecorder()
@@ -103,12 +118,27 @@ func TestHandler_HandleList(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "dark-mode")
 	assert.Contains(t, w.Body.String(), "\"hasMore\"")
+
+	// Verify 4 new fields are present in list items.
+	var resp struct {
+		Data []map[string]any `json:"data"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	require.Len(t, resp.Data, 1)
+	item := resp.Data[0]
+	assert.Contains(t, item, "description")
+	assert.Contains(t, item, "version")
+	assert.Contains(t, item, "createdAt")
+	assert.Contains(t, item, "updatedAt")
 }
 
 func TestHandler_HandleGet_Found(t *testing.T) {
 	handler, repo := setupHandler()
+	now := time.Now()
 	require.NoError(t, repo.Create(context.Background(), &domain.FeatureFlag{
 		ID: "f1", Key: "dark-mode", Type: domain.FlagBoolean, Enabled: true,
+		Description: "Dark mode toggle", Version: 3,
+		CreatedAt: now, UpdatedAt: now,
 	}))
 
 	w := httptest.NewRecorder()
@@ -118,7 +148,7 @@ func TestHandler_HandleGet_Found(t *testing.T) {
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "dark-mode")
 
-	// Verify camelCase JSON keys (#27n).
+	// Verify camelCase JSON keys including 4 new fields (#27n).
 	var raw map[string]json.RawMessage
 	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &raw))
 	var dataMap map[string]any
@@ -128,6 +158,12 @@ func TestHandler_HandleGet_Found(t *testing.T) {
 	assert.Contains(t, dataMap, "type", "key must be camelCase")
 	assert.Contains(t, dataMap, "enabled", "key must be camelCase")
 	assert.Contains(t, dataMap, "rolloutPercentage", "key must be camelCase")
+	assert.Contains(t, dataMap, "description", "description must be present")
+	assert.Contains(t, dataMap, "version", "version must be present")
+	assert.Contains(t, dataMap, "createdAt", "createdAt must be present")
+	assert.Contains(t, dataMap, "updatedAt", "updatedAt must be present")
+	assert.Equal(t, "Dark mode toggle", dataMap["description"])
+	assert.Equal(t, float64(3), dataMap["version"])
 }
 
 func TestHandler_HandleGet_NotFound(t *testing.T) {
