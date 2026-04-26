@@ -70,6 +70,45 @@ func TestParseUUIDPathParam(t *testing.T) {
 			wantOK:    true, // google/uuid accepts compact form; canonicalizes to dashed lowercase
 			wantValue: validUUID,
 		},
+		{
+			// google/uuid.Parse silently accepts brace-wrapped Microsoft GUIDs
+			// (length 38). The strict canonical helper rejects them so on-the-wire
+			// forms match contract.yaml `pathParams.format: uuid`.
+			name:       "brace wrapped rejected",
+			paramName:  "id",
+			raw:        "{" + validUUID + "}",
+			wantOK:     false,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   string(errcode.ErrValidationInvalidUUID),
+		},
+		{
+			// google/uuid.Parse silently accepts urn:uuid: prefixed form (length 45).
+			name:       "urn prefix rejected",
+			paramName:  "id",
+			raw:        "urn:uuid:" + validUUID,
+			wantOK:     false,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   string(errcode.ErrValidationInvalidUUID),
+		},
+		{
+			// Length 38 (1 leading + 36 + 1 trailing space) collides with the
+			// brace-dispatch branch in google/uuid v1.6 and would otherwise pass.
+			// Strict canonical helper rejects it via the length 32/36 check.
+			name:       "leading and trailing space rejected",
+			paramName:  "id",
+			raw:        " " + validUUID + " ",
+			wantOK:     false,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   string(errcode.ErrValidationInvalidUUID),
+		},
+		{
+			name:       "trailing whitespace rejected",
+			paramName:  "id",
+			raw:        validUUID + " ",
+			wantOK:     false,
+			wantStatus: http.StatusBadRequest,
+			wantCode:   string(errcode.ErrValidationInvalidUUID),
+		},
 	}
 
 	for _, tt := range tests {

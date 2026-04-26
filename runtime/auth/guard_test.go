@@ -323,6 +323,25 @@ func TestSelfOr_UUIDNormalization(t *testing.T) {
 			pathValue: "11111111-1111-1111-1111-111111111111",
 			wantErr:   true,
 		},
+		{
+			// google/uuid.Parse silently accepts brace-wrapped GUIDs and would
+			// have previously normalized to canonical, allowing self-access via a
+			// non-canonical wire form. ParseCanonicalUUID rejects length-38 inputs
+			// so the raw "{...}" string is compared verbatim against the canonical
+			// subject and never matches.
+			name:      "self-access brace-wrapped UUID — Deny (strict canonical)",
+			subject:   canonicalUUID,
+			pathValue: "{" + canonicalUUID + "}",
+			wantErr:   true,
+		},
+		{
+			// google/uuid.Parse accepts urn:uuid: prefixed form (length 45). Same
+			// rationale: not a canonical wire form → no normalization → mismatch.
+			name:      "self-access urn:uuid prefixed — Deny (strict canonical)",
+			subject:   canonicalUUID,
+			pathValue: "urn:uuid:" + canonicalUUID,
+			wantErr:   true,
+		},
 	}
 
 	for _, tc := range tests {

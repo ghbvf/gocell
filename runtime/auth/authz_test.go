@@ -327,6 +327,23 @@ func TestRequireSelfOrRole_UUIDNormalization(t *testing.T) {
 			targetID: compactUUID,
 			wantErr:  false,
 		},
+		{
+			// PR-A45 round-4: brace-wrapped subjects (length 38) used to be
+			// silently normalized by google/uuid.Parse. ParseCanonicalUUID rejects
+			// them, so the raw "{...}" subject is compared verbatim against the
+			// canonical target and never matches → Forbidden.
+			name:     "brace-wrapped subject, canonical target → Forbidden",
+			subject:  "{" + canonicalUUID + "}",
+			targetID: canonicalUUID,
+			wantErr:  true,
+		},
+		{
+			// urn:uuid: prefixed target (length 45) — same rationale.
+			name:     "canonical subject, urn:uuid prefixed target → Forbidden",
+			subject:  canonicalUUID,
+			targetID: "urn:uuid:" + canonicalUUID,
+			wantErr:  true,
+		},
 	}
 
 	for _, tc := range tests {
