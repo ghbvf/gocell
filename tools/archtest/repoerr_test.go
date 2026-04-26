@@ -19,14 +19,11 @@ const (
 	ruleCtxCancelLocalImplBan = "CTXCANCEL-LOCAL-IMPL-BAN-01"
 	ruleRepoLogKeyIDRedact    = "REPO-LOG-KEY-ID-REDACT-01"
 
-	// bannedWrapMethodPrefix targets receiver methods whose entire purpose is to
-	// forward a single ctx-cancel detection to ctxcancel.Wrap (a thin wrapper).
-	// The "wrapCtx" prefix is the established naming convention for such forwarders.
-	//
-	// Helpers that wrap ctx-cancel detection together with additional non-trivial
-	// logic (e.g. flag_repo.wrapNonScanQueryErr also constructs ErrFlagRepoQuery
-	// fallback envelopes) are NOT thin wrappers and remain legitimate. Such helpers
-	// are deliberately named with a non-wrapCtx prefix to opt out of this rule.
+	// bannedWrapMethodPrefix targets receiver methods that forward to
+	// ctxcancel.Wrap behind an extra layer of indirection. The canonical
+	// pattern across cells/*/internal/adapters is to call ctxcancel.Wrap
+	// directly at the IO boundary; any "wrapCtx*" receiver method is dead
+	// weight by definition.
 	bannedWrapMethodPrefix = "wrapCtx"
 )
 

@@ -117,29 +117,6 @@ func scanFlagRow(row Row) (*domain.FeatureFlag, error) {
 	return &f, nil
 }
 
-// wrapNonScanQueryErr handles failures returned by Exec/Query (i.e. before
-// any row scan): short-circuits ctx cancel through pkg/ctxcancel.Wrap,
-// otherwise falls back to ErrFlagRepoQuery. `msg` is the generic public
-// Message returned to API consumers; `identifier` is a caller-formatted
-// resource locator (e.g. "key=foo") recorded only in InternalMessage to
-// prevent user-input echo in public error responses.
-func (r *FlagRepository) wrapNonScanQueryErr(_ context.Context, op, identifier, msg string, err error) error {
-	if cancelErr := ctxcancel.Wrap(err, op, identifier); cancelErr != nil {
-		return cancelErr
-	}
-	internal := fmt.Sprintf("flag repo: %s failed", op)
-	if identifier != "" {
-		internal = fmt.Sprintf("flag repo: %s failed (%s)", op, identifier)
-	}
-	return &errcode.Error{
-		Code:            errcode.ErrFlagRepoQuery,
-		Message:         msg,
-		InternalMessage: internal,
-		Cause:           err,
-		Category:        errcode.CategoryInfra,
-	}
-}
-
 // Create inserts a new feature flag. All 8 columns are written.
 func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) error {
 	const sql = `INSERT INTO feature_flags
@@ -165,8 +142,18 @@ func (r *FlagRepository) Create(ctx context.Context, flag *domain.FeatureFlag) e
 		flag.ID, flag.Key, flag.Enabled, flag.RolloutPercentage,
 		flag.Description, flag.Version, flag.CreatedAt, flag.UpdatedAt,
 	); err != nil {
-		return r.wrapNonScanQueryErr(ctx, "Create", "key="+flag.Key,
-			"flag repo: create failed", err)
+		if cancelErr := ctxcancel.Wrap(err, "Create", "key="+flag.Key); cancelErr != nil {
+			return cancelErr
+		}
+		// InternalMessage carries the key for operator triage; the public
+		// Message stays generic so user input never echoes in API responses.
+		return &errcode.Error{
+			Code:            errcode.ErrFlagRepoQuery,
+			Message:         "flag repo: create failed",
+			InternalMessage: "flag repo: Create failed (key=" + flag.Key + ")",
+			Cause:           err,
+			Category:        errcode.CategoryInfra,
+		}
 	}
 	return nil
 }
@@ -206,7 +193,10 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 	sqlStr, args := b.Build()
 	rows, err := r.resolveDB(ctx).Query(ctx, sqlStr, args...)
 	if err != nil {
-		return nil, r.wrapNonScanQueryErr(ctx, "List", "", "flag repo: list failed", err)
+		if cancelErr := ctxcancel.Wrap(err, "List", ""); cancelErr != nil {
+			return nil, cancelErr
+		}
+		return nil, errcode.WrapInfra(errcode.ErrFlagRepoQuery, "flag repo: list failed", err)
 	}
 	defer rows.Close()
 
@@ -222,7 +212,10 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 		flags = append(flags, flag)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, r.wrapNonScanQueryErr(ctx, "List", "", "flag repo: rows error", err)
+		if cancelErr := ctxcancel.Wrap(err, "List", ""); cancelErr != nil {
+			return nil, cancelErr
+		}
+		return nil, errcode.WrapInfra(errcode.ErrFlagRepoQuery, "flag repo: rows error", err)
 	}
 	return flags, nil
 }
