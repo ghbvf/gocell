@@ -30,7 +30,7 @@ const (
 //
 // ref: kubernetes apiserver/pkg/audit — audit events default to Fail policy;
 // operators opt into Ignore per backend, not per event type.
-var outboxSecurityTopicPattern = regexp.MustCompile(`^(session|user|role|audit)\.`)
+var outboxSecurityTopicPattern = regexp.MustCompile(`^(event\.)?(session|user|role|audit)\.`)
 
 type outboxTopicViolation struct {
 	Rule    string
@@ -46,7 +46,8 @@ func (v outboxTopicViolation) String() string {
 // TestSecurityTopicsDoNotOptInFailOpen enforces OUTBOX-TOPIC-FAILOPEN-01:
 // an outbox.Entry composite literal whose Topic or EventType string constant
 // matches one of the security-sensitive prefixes (session.*, user.*, role.*,
-// audit.*) must not set FailurePolicy: outbox.FailurePolicyFailOpen.
+// audit.* and their event.* contract forms) must not set FailurePolicy:
+// outbox.FailurePolicyFailOpen.
 //
 // The scanner uses go/types TypesInfo to evaluate Topic/EventType field
 // expressions, covering BasicLit, same-package const Idents, and cross-package
@@ -74,8 +75,8 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 	}
 
 	assert.Empty(t, violations,
-		"security-sensitive topics (session.*, user.*, role.*, audit.*) must not "+
-			"set FailurePolicy: outbox.FailurePolicyFailOpen on the outbox.Entry "+
+		"security-sensitive topics (session.*, user.*, role.*, audit.*, event.* security contracts) "+
+			"must not set FailurePolicy: outbox.FailurePolicyFailOpen on the outbox.Entry "+
 			"literal; drop silently = lose audit invariant. Leave FailurePolicy "+
 			"unset (= Default, falls through to Cell ctor default = FailClosed).")
 }
@@ -212,11 +213,13 @@ func extractStringField(r *topicConstResolver, pkg *packages.Package, lit *ast.C
 // packages.Load to exercise the full type-checking path.
 //
 // Cases:
-//   - basicliteral: BasicLit "session.created.v1" + FailOpen → flagged
-//   - samepackage_const: Ident sessionTopic (= "session.created.v1") + FailOpen → flagged
-//   - crosspackage_dto: SelectorExpr dto.TopicSessionCreated + FailOpen → flagged
+//   - basicliteral: BasicLit "session.created.v1" + FailOpen -> flagged
+//   - eventprefixed: BasicLit "event.session.created.v1" + FailOpen -> flagged
+//   - samepackage_const: Ident sessionTopic (= "session.created.v1") + FailOpen -> flagged
+//   - crosspackage_dto: SelectorExpr dto.TopicSessionCreated + FailOpen -> flagged
+//   - crosspackage_event_dto: SelectorExpr dto.TopicSessionCreated + event. prefix + FailOpen -> flagged
 //   - samepackage_failclosed: same-package const + FailClosed → not flagged
-//   - nonsecurity_metric: non-security topic + FailOpen → not flagged
+//   - nonsecurity_metric: non-security topic + FailOpen -> not flagged
 func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 	fixturesRoot := filepath.Join(findArchTestDir(t), "testdata", "topic_const_fixtures")
 
@@ -225,8 +228,10 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 		wantMatch bool
 	}{
 		{"./basicliteral_session_failopen", true},
+		{"./basicliteral_event_session_failopen", true},
 		{"./samepackage_const_session_failopen", true},
 		{"./crosspackage_dto_session_failopen/consumer", true},
+		{"./crosspackage_event_dto_session_failopen/consumer", true},
 		{"./samepackage_const_session_failclosed", false},
 		{"./nonsecurity_metric_failopen_passes", false},
 	}
