@@ -5,6 +5,7 @@ package auditappend
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -93,17 +94,21 @@ func (s *Service) HandleEvent(ctx context.Context, entry outbox.Entry) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Reject invalid JSON payloads immediately — an unparseable payload can
+	// never be audited correctly and retrying will not fix it. Route to DLX
+	// via PermanentError so operators can inspect the dead letter.
+	if !json.Valid(entry.Payload) {
+		return outbox.NewPermanentError(fmt.Errorf(
+			"audit-append: invalid JSON payload event=%s type=%s",
+			entry.ID, entry.EventType))
+	}
+
 	// Extract actorId from payload. All events emitted by PR-CFG-G1 commit 2
 	// carry an `actorId` field (camelCase). Falls back to `userId` for events
 	// (e.g. event.user.created.v1) that still use the userId field name.
 	// Defaults to "system" when neither field is present.
 	var actorID string
-	if !json.Valid(entry.Payload) {
-		s.logger.Warn("audit-append: failed to extract actor from payload",
-			slog.String("error", "invalid JSON"),
-			slog.String("event_id", entry.ID),
-			slog.String("event_type", entry.EventType))
-	} else {
+	{
 		var payload struct {
 			ActorID string `json:"actorId"`
 			UserID  string `json:"userId"`

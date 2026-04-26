@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 const (
@@ -58,8 +59,9 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
 // When a ConfigClient is configured it fetches the current entry value from
 // configcore (contract: http.config.internal.get.v1) and logs it. Fetch
-// failures are non-fatal (warn + continue) so a transient configcore outage
-// does not poison the consumer pipeline.
+// failures are retriable: a transient error is returned (triggering Requeue)
+// so the consumer pipeline retries. A 404 (entry truly gone) is treated as
+// a stale event: log Warn and Ack (retry cannot help).
 func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) error {
 	event, err := dto.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
@@ -75,16 +77,27 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 	if s.configClient != nil {
 		cfg, fetchErr := s.configClient.GetEntry(ctx, event.Key)
 		if fetchErr != nil {
-			s.logger.Warn("config-receive: failed to fetch config entry after upsert",
+			// If the config entry is genuinely gone (404), the event is stale;
+			// retrying won't help, so log at Warn and Ack.
+			if errcode.IsDomainNotFound(fetchErr, errcode.ErrConfigNotFound, errcode.ErrConfigRepoNotFound) {
+				s.logger.Warn("config-receive: config entry not found after upsert (stale event), skipping",
+					slog.Any("error", fetchErr),
+					slog.String("key", event.Key),
+					slog.Int("version", event.Version))
+				return nil
+			}
+			// Transient failure — return error so the legacy handler wrapper
+			// triggers Requeue and the consumer pipeline retries.
+			s.logger.Error("config-receive: failed to fetch config entry after upsert",
 				slog.Any("error", fetchErr),
 				slog.String("key", event.Key),
 				slog.Int("version", event.Version))
-		} else {
-			s.logger.Info("config-receive: fetched config entry",
-				slog.String("key", cfg.Key),
-				slog.Int("version", cfg.Version),
-				slog.Bool("sensitive", cfg.Sensitive))
+			return fetchErr
 		}
+		s.logger.Info("config-receive: fetched config entry",
+			slog.String("key", cfg.Key),
+			slog.Int("version", cfg.Version),
+			slog.Bool("sensitive", cfg.Sensitive))
 	}
 
 	return nil

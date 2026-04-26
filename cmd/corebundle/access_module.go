@@ -145,6 +145,10 @@ var _ CellModule = AccessCoreModule{}
 // internalAddrToBaseURL converts a bind address to an HTTP base URL suitable
 // for the internal HTTP client. Port-only addresses (e.g. ":9090") are resolved
 // to "http://127.0.0.1:9090"; host:port addresses get "http://" prepended.
+// As a defensive measure, "0.0.0.0:port" bind addresses are normalised to
+// "127.0.0.1:port" so the ConfigClient always connects on loopback regardless
+// of how the listener was configured (prevents accidental bridge-network routing
+// when a container misconfigures GOCELL_HTTP_INTERNAL_ADDR=0.0.0.0:9090).
 // Used to construct the ConfigClient base URL from SharedDeps.InternalHTTPAddr.
 func internalAddrToBaseURL(addr string) string {
 	if addr == "" {
@@ -152,6 +156,10 @@ func internalAddrToBaseURL(addr string) string {
 	}
 	if strings.HasPrefix(addr, ":") {
 		return "http://127.0.0.1" + addr
+	}
+	// Normalise 0.0.0.0:port → 127.0.0.1:port (defense against misconfiguration).
+	if strings.HasPrefix(addr, "0.0.0.0:") {
+		return "http://127.0.0.1:" + strings.TrimPrefix(addr, "0.0.0.0:")
 	}
 	return "http://" + addr
 }

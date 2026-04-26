@@ -81,7 +81,7 @@ services:
 
       # HTTP listener addresses — corebundle container.
       GOCELL_HTTP_PRIMARY_ADDR: "0.0.0.0:8080"
-      GOCELL_HTTP_INTERNAL_ADDR: "0.0.0.0:9090"
+      GOCELL_HTTP_INTERNAL_ADDR: "127.0.0.1:9090"
       GOCELL_HTTP_HEALTH_ADDR: "0.0.0.0:9091"
 
       # Admin provisioning: interactive (operator calls POST /setup/admin).

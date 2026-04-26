@@ -8,17 +8,20 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // stubConfigClient is a test double for ports.ConfigClient.
 type stubConfigClient struct {
-	entry ports.ConfigEntry
-	err   error
+	entry      ports.ConfigEntry
+	err        error
+	calledWith string // records the key argument passed to GetEntry
 }
 
-func (s *stubConfigClient) GetEntry(_ context.Context, _ string) (ports.ConfigEntry, error) {
+func (s *stubConfigClient) GetEntry(_ context.Context, key string) (ports.ConfigEntry, error) {
+	s.calledWith = key
 	return s.entry, s.err
 }
 
@@ -183,9 +186,14 @@ func TestHandleEntryUpserted_WithConfigClient_FetchOK(t *testing.T) {
 	}
 	err := svc.HandleEntryUpserted(context.Background(), entry)
 	require.NoError(t, err)
+	// F5: assert stub was called with the correct key from the event payload.
+	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigClient.GetEntry must be called with the event's key")
 }
 
-func TestHandleEntryUpserted_WithConfigClient_FetchError_NonFatal(t *testing.T) {
+// TestHandleEntryUpserted_WithConfigClient_FetchError asserts that a transient
+// fetch error (non-404) causes HandleEntryUpserted to return an error so the
+// legacy handler wrapper triggers Requeue instead of silently Acking.
+func TestHandleEntryUpserted_WithConfigClient_FetchError(t *testing.T) {
 	stub := &stubConfigClient{
 		err: errors.New("configcore unavailable"),
 	}
@@ -196,9 +204,29 @@ func TestHandleEntryUpserted_WithConfigClient_FetchError_NonFatal(t *testing.T) 
 		Topic:   TopicConfigEntryUpserted,
 		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 	}
-	// Fetch failure must NOT return an error — the consumer pipeline must not be poisoned.
+	// Transient fetch failure must return a non-nil error → Requeue (not Ack).
 	err := svc.HandleEntryUpserted(context.Background(), entry)
-	require.NoError(t, err)
+	require.Error(t, err, "transient fetch failure must return non-nil error to trigger Requeue")
+	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigClient.GetEntry must be called with the event's key")
+}
+
+// TestHandleEntryUpserted_WithConfigClient_FetchNotFound asserts that a 404
+// (config entry genuinely gone) is treated as a stale event: log Warn + Ack
+// (returning nil), since retrying cannot help when the entry no longer exists.
+func TestHandleEntryUpserted_WithConfigClient_FetchNotFound(t *testing.T) {
+	stub := &stubConfigClient{
+		err: errcode.NewDomain(errcode.ErrConfigNotFound, "config entry not found"),
+	}
+	svc := NewService(slog.Default(), WithConfigClient(stub))
+
+	entry := outbox.Entry{
+		ID:      "evt-cfg-404",
+		Topic:   TopicConfigEntryUpserted,
+		Payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+	}
+	// 404 → stale event → Ack (nil error), no retry.
+	err := svc.HandleEntryUpserted(context.Background(), entry)
+	require.NoError(t, err, "not-found fetch error must return nil (stale event, no retry needed)")
 }
 
 func TestHandleEntryUpserted_WithoutConfigClient_NoFetch(t *testing.T) {

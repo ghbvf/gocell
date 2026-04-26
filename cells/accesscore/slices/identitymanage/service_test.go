@@ -3,6 +3,7 @@ package identitymanage
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"testing"
@@ -919,6 +920,138 @@ func TestService_Lock_RefreshRevokeFailureAbortsBeforePublishAndLog(t *testing.T
 		"publish must not run after refresh-revoke failure: tx must abort first or a TopicUserLocked event would commit while the refresh chain stays live")
 	assert.Nil(t, sloghelper.FindLogEntry(buf.String(), "user locked"),
 		"success log line must not fire when the tx aborts")
+}
+
+// ---------------------------------------------------------------------------
+// F4: capturingEmitter — typed payload assertions for Lock/Unlock/Update/Delete
+// ---------------------------------------------------------------------------
+
+// capturingEmitter records every emitted Entry for typed-payload assertions.
+type capturingEmitter struct {
+	entries []outbox.Entry
+}
+
+func (c *capturingEmitter) Emit(_ context.Context, entry outbox.Entry) error {
+	c.entries = append(c.entries, entry)
+	return nil
+}
+
+// TestService_Lock_EmitsTypedPayload asserts that Lock emits exactly one
+// event.user.locked.v1 with a non-empty userId and actorId.
+func TestService_Lock_EmitsTypedPayload(t *testing.T) {
+	svc := newTestService()
+	user, err := svc.Create(context.Background(), CreateInput{Username: "lock-payload", Email: "lp@e.t", Password: "hash"})
+	require.NoError(t, err)
+
+	cap := &capturingEmitter{}
+	svc2, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+	// Create user in svc2's own repo.
+	user2, err := svc2.Create(context.Background(), CreateInput{Username: user.Username + "2", Email: "lp2@e.t", Password: "hash"})
+	require.NoError(t, err)
+
+	// Reset capture after Create (which also emits).
+	cap.entries = nil
+
+	require.NoError(t, svc2.Lock(adminCtxForService(), user2.ID))
+	require.Len(t, cap.entries, 1, "Lock must emit exactly one event")
+
+	var payload dto.UserLockedEvent
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload.UserID, "emitted UserLockedEvent.userId must be non-empty")
+	assert.NotEmpty(t, payload.ActorID, "emitted UserLockedEvent.actorId must be non-empty")
+	assert.Equal(t, user2.ID, payload.UserID)
+	assert.Equal(t, "test-admin", payload.ActorID)
+}
+
+// TestService_Update_EmitsTypedPayload asserts Update emits one UserUpdatedEvent
+// with non-empty userId and actorId.
+func TestService_Update_EmitsTypedPayload(t *testing.T) {
+	cap := &capturingEmitter{}
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	user, err := svc.Create(context.Background(), CreateInput{Username: "upd-payload", Email: "up@e.t", Password: "hash"})
+	require.NoError(t, err)
+	cap.entries = nil
+
+	newEmail := "upd-new@e.t"
+	_, err = svc.Update(adminCtxForService(), UpdateInput{ID: user.ID, Email: &newEmail})
+	require.NoError(t, err)
+	require.Len(t, cap.entries, 1, "Update must emit exactly one event")
+
+	var payload dto.UserUpdatedEvent
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload.UserID, "emitted UserUpdatedEvent.userId must be non-empty")
+	assert.NotEmpty(t, payload.ActorID, "emitted UserUpdatedEvent.actorId must be non-empty")
+	assert.Equal(t, user.ID, payload.UserID)
+	assert.Equal(t, "test-admin", payload.ActorID)
+}
+
+// TestService_Delete_EmitsTypedPayload asserts Delete emits one UserDeletedEvent
+// with non-empty userId and actorId.
+func TestService_Delete_EmitsTypedPayload(t *testing.T) {
+	cap := &capturingEmitter{}
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	user, err := svc.Create(context.Background(), CreateInput{Username: "del-payload", Email: "dp@e.t", Password: "hash"})
+	require.NoError(t, err)
+	cap.entries = nil
+
+	require.NoError(t, svc.Delete(adminCtxForService(), user.ID))
+	require.Len(t, cap.entries, 1, "Delete must emit exactly one event")
+
+	var payload dto.UserDeletedEvent
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload.UserID, "emitted UserDeletedEvent.userId must be non-empty")
+	assert.NotEmpty(t, payload.ActorID, "emitted UserDeletedEvent.actorId must be non-empty")
+	assert.Equal(t, user.ID, payload.UserID)
+	assert.Equal(t, "test-admin", payload.ActorID)
+}
+
+// TestService_Unlock_EmitsTypedPayload asserts Unlock emits one UserUnlockedEvent
+// with non-empty userId and actorId.
+func TestService_Unlock_EmitsTypedPayload(t *testing.T) {
+	cap := &capturingEmitter{}
+	svc, err := NewService(mem.NewUserRepository(), mem.NewSessionRepository(), newIdentityRefreshStore(), slog.Default(),
+		WithEmitter(cap), WithTokenIssuer(minimalStubIssuer))
+	require.NoError(t, err)
+
+	user, err := svc.Create(context.Background(), CreateInput{Username: "unl-payload", Email: "ulp@e.t", Password: "hash"})
+	require.NoError(t, err)
+	require.NoError(t, svc.Lock(adminCtxForService(), user.ID))
+	cap.entries = nil
+
+	require.NoError(t, svc.Unlock(adminCtxForService(), user.ID))
+	require.Len(t, cap.entries, 1, "Unlock must emit exactly one event")
+
+	var payload dto.UserUnlockedEvent
+	require.NoError(t, json.Unmarshal(cap.entries[0].Payload, &payload))
+	assert.NotEmpty(t, payload.UserID, "emitted UserUnlockedEvent.userId must be non-empty")
+	assert.NotEmpty(t, payload.ActorID, "emitted UserUnlockedEvent.actorId must be non-empty")
+	assert.Equal(t, user.ID, payload.UserID)
+	assert.Equal(t, "test-admin", payload.ActorID)
+}
+
+// TestService_Lock_NoActor_ReturnsUnauthorized asserts that Lock with a
+// context that carries no auth principal returns ErrAuthUnauthorized.
+// This guards the actorFromContext fail-fast invariant.
+func TestService_Lock_NoActor_ReturnsUnauthorized(t *testing.T) {
+	svc := newTestService()
+	user, err := svc.Create(context.Background(), CreateInput{Username: "lock-noauth", Email: "na@e.t", Password: "hash"})
+	require.NoError(t, err)
+
+	// context.Background() has no auth principal.
+	err = svc.Lock(context.Background(), user.ID)
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrAuthUnauthorized, ec.Code,
+		"Lock without auth context must return ErrAuthUnauthorized")
 }
 
 // TestService_Lock_PublishFailureAbortsBeforeLog asserts the success log

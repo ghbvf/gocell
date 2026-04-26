@@ -58,6 +58,11 @@ func run(ctx context.Context) error {
 		return err
 	}
 
+	// Module order is load-bearing: ConfigCoreModule MUST run first because it
+	// creates the shared *adapterpg.Pool and writes it to shared.SharedPGPool.
+	// AccessCore + AuditCore read SharedPGPool to wire their outbox writers in
+	// postgres mode. Reordering here will trigger ERR_CELL_MISSING_OUTBOX at
+	// startup. See cmd/corebundle/{access,audit}_module.go.
 	cells, cellOpts, err := BuildApp(ctx, shared,
 		ConfigCoreModule{},
 		AccessCoreModule{},

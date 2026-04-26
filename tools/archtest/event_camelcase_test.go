@@ -73,8 +73,7 @@ func TestEventPayloadSchemasUseCamelCase(t *testing.T) {
 		t.Logf("%s", v)
 	}
 	assert.Empty(t, violations,
-		"all event payload schema properties must use camelCase (no underscores); "+
-			"see G.6 camelCase migration in PR-CFG-G1")
+		"rule EVENT-PAYLOAD-CAMELCASE-01: rename property names in contracts/event/**/payload.schema.json to camelCase (e.g. user_id → userId)")
 }
 
 // TestEventDTOJSONTagsUseCamelCase enforces EVENT-DTO-CAMELCASE-01:
@@ -95,8 +94,7 @@ func TestEventDTOJSONTagsUseCamelCase(t *testing.T) {
 		t.Logf("%s", v)
 	}
 	assert.Empty(t, violations,
-		"all json struct tags in event DTO files (cells/**/dto/*event*.go) must use camelCase "+
-			"(no underscores in the json field name); see G.6 camelCase migration in PR-CFG-G1")
+		"rule EVENT-DTO-CAMELCASE-01: rename json struct tags in cells/**/dto/*event*.go to camelCase")
 }
 
 // checkEventDTOCamelCase walks cells/ looking for dto/*event*.go files and

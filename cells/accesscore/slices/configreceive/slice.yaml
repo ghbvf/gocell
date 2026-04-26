@@ -17,4 +17,4 @@ verify:
 
 allowedFiles:
   - cells/accesscore/slices/configreceive/**
-  - cells/accesscore/internal/adapters/http/**
+  - cells/accesscore/internal/adapters/http/configclient*.go
