@@ -38,13 +38,21 @@ const (
 	ErrCellMissingCodec       Code = "ERR_CELL_MISSING_CODEC"
 	ErrCellMissingTokenIssuer Code = "ERR_CELL_MISSING_TOKEN_ISSUER"
 	ErrCellInvalidConfig      Code = "ERR_CELL_INVALID_CONFIG"
-	ErrSessionNotFound        Code = "ERR_SESSION_NOT_FOUND"
-	ErrSessionConflict        Code = "ERR_SESSION_CONFLICT"
-	ErrOrderNotFound          Code = "ERR_ORDER_NOT_FOUND"
-	ErrDeviceNotFound         Code = "ERR_DEVICE_NOT_FOUND"
-	ErrCommandNotFound        Code = "ERR_COMMAND_NOT_FOUND"
-	ErrAdapterPGNoTx          Code = "ERR_ADAPTER_PG_NO_TX"
-	ErrAuthKeyInvalid         Code = "ERR_AUTH_KEY_INVALID"
+	// ErrCellPlatformUnsupported signals that a Cell option requested capability
+	// that is not implemented on the current GOOS — distinct from
+	// ErrCellInvalidConfig (configuration mistake) so operators can route
+	// "this build was deployed to the wrong platform" failures separately from
+	// "the deployment YAML is wrong". Surfaced fail-fast at cell.Init() time so
+	// the failure is visible at process startup rather than during phase3b
+	// LifecycleHook execution.
+	ErrCellPlatformUnsupported Code = "ERR_CELL_PLATFORM_UNSUPPORTED"
+	ErrSessionNotFound         Code = "ERR_SESSION_NOT_FOUND"
+	ErrSessionConflict         Code = "ERR_SESSION_CONFLICT"
+	ErrOrderNotFound           Code = "ERR_ORDER_NOT_FOUND"
+	ErrDeviceNotFound          Code = "ERR_DEVICE_NOT_FOUND"
+	ErrCommandNotFound         Code = "ERR_COMMAND_NOT_FOUND"
+	ErrAdapterPGNoTx           Code = "ERR_ADAPTER_PG_NO_TX"
+	ErrAuthKeyInvalid          Code = "ERR_AUTH_KEY_INVALID"
 	// ErrAuthVerifierConfig signals a JWT verifier construction error — e.g.
 	// required configuration (WithExpectedAudiences) was not provided.
 	// Distinct from ErrAuthKeyInvalid (key material) so operators can route

@@ -241,6 +241,12 @@ func (c *AccessCore) Init(ctx context.Context, deps cell.Dependencies) error {
 		return err
 	}
 	if c.initialAdmin != nil {
+		// Platform check fails fast at phase2 Init() rather than at phase3b
+		// LifecycleHook OnStart, so an unsupported GOOS surfaces before any
+		// bootstrap goroutine runs.
+		if err := initialadmin.PlatformSupported(); err != nil {
+			return err
+		}
 		c.initialAdmin.Bind(initialadmin.BootstrapDeps{
 			UserRepo: c.userRepo,
 			RoleRepo: c.roleRepo,

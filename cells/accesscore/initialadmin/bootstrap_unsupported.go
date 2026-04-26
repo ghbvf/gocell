@@ -4,18 +4,21 @@ package initialadmin
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // errUnsupportedPlatform is returned by bootstrapper.ensureAdmin on platforms
-// where writeCredentialFile is unavailable.
-var errUnsupportedPlatform = errors.New("initialadmin: bootstrap not supported on this platform")
+// where writeCredentialFile is unavailable. Carries ErrCellPlatformUnsupported
+// so operators can distinguish "wrong build for this platform" from generic
+// configuration errors.
+var errUnsupportedPlatform = errcode.New(errcode.ErrCellPlatformUnsupported,
+	"initialadmin: bootstrap not supported on this platform")
 
 // BootstrapDeps holds the injected repository and utility dependencies.
 type BootstrapDeps struct {
