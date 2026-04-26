@@ -1109,10 +1109,10 @@ func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
 	}
 	httpErrCh := b.phase7ServeAll(servers)
 	s.httpErrCh = httpErrCh
-	// Capture servers slice for teardown (OPS-01: pass boundServers for named logging).
-	capturedServers := servers
+	// Convert to shutdownTasks for teardown (OPS-01: named logging via shutdownTask.name).
+	shutTasks := boundServersToTasks(servers)
 	s.addTeardown(func(c context.Context) error {
-		return shutdownAllServers(c, capturedServers)
+		return shutdownAllServers(c, shutTasks)
 	})
 	return nil
 }
@@ -1247,7 +1247,16 @@ func resolveListener(cfg listenerConfig) (ln net.Listener, owned bool, err error
 	return tcpLn, true, nil
 }
 
-// shutdownAllServers drains all servers in parallel. Each server uses a
+// shutdownTask represents a single server shutdown operation with its name and
+// grace period. Extracted from boundServer to allow tests to inject arbitrary
+// shutdown functions without requiring a real http.Server.
+type shutdownTask struct {
+	name      string
+	shutGrace time.Duration
+	shutdown  func(context.Context) error
+}
+
+// shutdownAllServers drains all servers in parallel. Each task uses a
 // per-server context derived from the parent ctx:
 //   - when shutGrace > 0 (set via WithListenerShutdownGrace), the parent ctx
 //     is wrapped with context.WithTimeout(ctx, shutGrace) so shutGrace is an
@@ -1258,40 +1267,57 @@ func resolveListener(cfg listenerConfig) (ln net.Listener, owned bool, err error
 //
 // Errors are aggregated via errors.Join so operators see every failure.
 //
-// OPS-01: accepts []boundServer so each shutdown log line carries the listener
-// name instead of an opaque numeric index.
-//
+// OPS-01: each task carries a name so shutdown log lines identify the listener.
 // R2-03: parent ctx (not context.Background) is the timeout parent so the
 // global shutdownTimeout always bounds per-listener drains.
-func shutdownAllServers(ctx context.Context, servers []boundServer) error {
+func shutdownAllServers(ctx context.Context, tasks []shutdownTask) error {
 	slog.Info("bootstrap: draining HTTP servers")
 	type drainResult struct {
 		err error
 	}
-	resultCh := make(chan drainResult, len(servers))
-	for _, bs := range servers {
-		bs := bs // capture
+	resultCh := make(chan drainResult, len(tasks))
+	for _, task := range tasks {
+		task := task // capture
 		go func() {
-			shutCtx, cancel := shutdownCtxFor(ctx, bs.shutGrace)
+			shutCtx, cancel := shutdownCtxFor(ctx, task.shutGrace)
 			defer cancel()
-			err := bs.srv.Shutdown(shutCtx)
+			err := task.shutdown(shutCtx)
 			if err != nil {
 				slog.Error("bootstrap: HTTP server drain failed",
-					slog.String("listener", bs.name), slog.Any("error", err))
+					slog.String("listener", task.name), slog.Any("error", err))
+				// OPS-01: wrap with the listener name so the returned error chain
+				// preserves the same attribution that already lives in the slog
+				// line. Without this, errors.Join collapses to opaque "shutdown
+				// failed" lines once the goroutine returns and operators can no
+				// longer tell which listener tripped from the error object alone.
+				err = fmt.Errorf("listener %q shutdown: %w", task.name, err)
 			} else {
-				slog.Info("bootstrap: HTTP server drained", slog.String("listener", bs.name))
+				slog.Info("bootstrap: HTTP server drained", slog.String("listener", task.name))
 			}
 			resultCh <- drainResult{err: err}
 		}()
 	}
 	var errs []error
-	for range servers {
+	for range tasks {
 		r := <-resultCh
 		if r.err != nil {
 			errs = append(errs, r.err)
 		}
 	}
 	return errors.Join(errs...)
+}
+
+// boundServersToTasks converts []boundServer into []shutdownTask for shutdownAllServers.
+func boundServersToTasks(servers []boundServer) []shutdownTask {
+	tasks := make([]shutdownTask, len(servers))
+	for i, bs := range servers {
+		tasks[i] = shutdownTask{
+			name:      bs.name,
+			shutGrace: bs.shutGrace,
+			shutdown:  bs.srv.Shutdown,
+		}
+	}
+	return tasks
 }
 
 // phase8StartWorkers starts the WorkerGroup using the caller-supplied runCtx

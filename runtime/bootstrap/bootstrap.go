@@ -11,6 +11,7 @@ package bootstrap
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -285,11 +286,8 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 		return err
 	}
 	for ref, cfg := range b.listenerConfigs {
-		if cfg.net == nil && cfg.addr == "" {
-			return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
-		}
-		if cfg.shutGrace < 0 {
-			return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v; use a non-negative duration or zero to inherit the global shutdownTimeout", ref.String(), cfg.shutGrace)
+		if err := validateListenerConfig(ref, cfg); err != nil {
+			return err
 		}
 	}
 	// B2: when a metrics handler is configured, a dedicated HealthListener must
@@ -299,6 +297,57 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 			return fmt.Errorf(
 				"bootstrap: WithHealthRoutes(WithMetricsHandler(...)) requires a dedicated HealthListener; " +
 					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener")
+		}
+	}
+	return nil
+}
+
+// validateListenerConfig validates a single listener config: address presence,
+// shutdownGrace sign, and TLS handshake-ability. Extracted from
+// validateHTTPListenerConfigs to keep that function's cognitive complexity within
+// budget: combining the three conditions (addr+net presence, shutGrace sign, TLS
+// certificate availability) with per-listener ref context and error formatting
+// would push the outer function beyond the limit of 15.
+func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
+	if cfg.net == nil && cfg.addr == "" {
+		return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
+	}
+	if cfg.shutGrace < 0 {
+		return fmt.Errorf("bootstrap: listener %q has negative shutdownGrace %v; use a non-negative duration or zero to inherit the global shutdownTimeout", ref.String(), cfg.shutGrace)
+	}
+	if err := validateListenerTLSConfig(ref, cfg.tls); err != nil {
+		return err
+	}
+	return nil
+}
+
+// validateListenerTLSConfig fail-fasts when the supplied tls.Config cannot
+// possibly produce a successful handshake. The check covers two distinct
+// failure modes that crypto/tls otherwise only surfaces at handshake time:
+//
+//  1. No certificate source at all (Certificates / GetCertificate /
+//     GetConfigForClient all empty / nil).
+//  2. A static Certificates slice present but every entry is a zero-value
+//     tls.Certificate — i.e. no certificate chain AND no private key — which
+//     trips an opaque "tls: no certificates configured" / "tls: failed to
+//     find any PEM data" once the first ClientHello arrives.
+//
+// nil cfg is a non-TLS listener and returns nil.
+func validateListenerTLSConfig(ref cell.ListenerRef, cfg *tls.Config) error {
+	if cfg == nil {
+		return nil
+	}
+	if len(cfg.Certificates) == 0 && cfg.GetCertificate == nil && cfg.GetConfigForClient == nil {
+		return fmt.Errorf("bootstrap: listener %q TLS config has no Certificates / GetCertificate / GetConfigForClient; the server cannot perform a TLS handshake", ref.String())
+	}
+	// Static Certificates must each carry at least a chain or a key. Dynamic
+	// sources (GetCertificate / GetConfigForClient) are trusted as opaque
+	// callbacks and intentionally not introspected here.
+	if len(cfg.Certificates) > 0 {
+		for i, c := range cfg.Certificates {
+			if len(c.Certificate) == 0 && c.PrivateKey == nil && c.Leaf == nil {
+				return fmt.Errorf("bootstrap: listener %q TLS Certificates[%d] is a zero-value tls.Certificate (no chain, no private key); load a real key pair via tls.LoadX509KeyPair or set GetCertificate", ref.String(), i)
+			}
 		}
 	}
 	return nil

@@ -1,3 +1,5 @@
+//go:build integration
+
 // Integration tests for audience validation wiring in buildJWTDeps (PR-R-AUTH-AUD-VALIDATION).
 //
 // Verifies that the verifier constructed by buildJWTDeps enforces RFC 8725 §3.3:

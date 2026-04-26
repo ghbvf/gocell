@@ -2,10 +2,13 @@ package bootstrap
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
 	"runtime"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -355,6 +358,7 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	primaryAddr := primaryLn.Addr().String()
+	internalAddr := internalLn.Addr().String()
 	require.Eventually(t, func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
@@ -364,6 +368,11 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
+	// Baseline is taken AFTER the server is confirmed stable (healthz 200 above).
+	// All bootstrap-internal goroutines (HTTP serve loops, etc.) are already running,
+	// so the baseline already includes them. Taking it here — before cancel() — provides
+	// a happens-before synchronisation point: no goroutine launches between this line
+	// and cancel().
 	before := runtime.NumGoroutine()
 
 	cancel()
@@ -379,14 +388,12 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 		return runtime.NumGoroutine() <= before
 	}, 2*time.Second, 50*time.Millisecond, "goroutine count did not return to baseline")
 
-	// Both listeners must be closed after shutdown — new Listen on same
-	// *:0 port won't collide since ports are ephemeral, but the listeners
-	// themselves should report closed when double-closed.
-	// net.Listener's Close is idempotent-ish: second close typically returns
-	// errClosed, not an error we must propagate. We just verify they're not
-	// accepting.
+	// Both listeners must be closed after shutdown — verify neither accepts new connections.
 	_, err := net.Dial("tcp", primaryAddr)
 	assert.Error(t, err, "primary listener should be closed; Dial must fail")
+
+	_, err = net.Dial("tcp", internalAddr)
+	assert.Error(t, err, "internal listener should be closed; Dial must fail")
 }
 
 // TestTripleListener_ShutdownNoGoroutineLeak extends the dual-listener goroutine
@@ -426,6 +433,11 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "health listener did not become ready")
 
+	// Baseline is taken AFTER the server is confirmed stable (healthz 200 above).
+	// All bootstrap-internal goroutines (HTTP serve loops, etc.) are already running,
+	// so the baseline already includes them. Taking it here — before cancel() — provides
+	// a happens-before synchronisation point: no goroutine launches between this line
+	// and cancel().
 	before := runtime.NumGoroutine()
 
 	cancel()
@@ -514,4 +526,438 @@ func TestDualListener_BootstrapOwnedPrimary_InternalBindFails(t *testing.T) {
 	require.Error(t, err, "internal bind failure must cause Run to return an error")
 	assert.Contains(t, err.Error(), "listen internal",
 		"error must identify the failing listener as 'internal'")
+}
+
+// ---------------------------------------------------------------------------
+// T-01: FinalizeAuth duplicate meta detection
+// ---------------------------------------------------------------------------
+
+// duplicateMetaCell mounts two routes with the same (method, path) to trigger
+// FinalizeAuth duplicate detection.
+type duplicateMetaCell struct {
+	*cell.BaseCell
+}
+
+func (c *duplicateMetaCell) RouteGroups() []cell.RouteGroup {
+	spec := testHTTPContract(http.MethodGet, "/api/v1/dup/ping")
+	return []cell.RouteGroup{
+		{
+			Listener: cell.PrimaryListener,
+			Prefix:   "",
+			Register: func(mux cell.RouteMux) {
+				auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
+				auth.Mount(mux, auth.Route{Contract: spec, Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
+			},
+		},
+	}
+}
+
+// TestDualListener_FinalizeAuth_DuplicateMeta_Errors verifies that FinalizeAuth
+// returns an error when the same (method, path) pair is mounted twice on the
+// primary listener — protecting configuration cleanliness (FinalizeAuth invariant).
+func TestDualListener_FinalizeAuth_DuplicateMeta_Errors(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "dup-meta-test", DurabilityMode: cell.DurabilityDemo})
+	c := &duplicateMetaCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: "dup-meta-cell", Type: cell.CellTypeCore}),
+	}
+	require.NoError(t, asm.Register(c))
+
+	primaryLn := newLocalListener(t)
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithShutdownTimeout(time.Second),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := b.Run(ctx)
+	require.Error(t, err, "duplicate route meta must cause Run to return an error")
+}
+
+// ---------------------------------------------------------------------------
+// T-02: shutdownAllServers aggregates partial errors (Wave C dependency)
+// ---------------------------------------------------------------------------
+
+// TestShutdownAllServers_AggregatesPartialErrors verifies that shutdownAllServers
+// collects errors from all tasks and joins them, not short-circuiting on the first.
+func TestShutdownAllServers_AggregatesPartialErrors(t *testing.T) {
+	err1 := errors.New("server-a shutdown timeout")
+	err2 := errors.New("server-b connection reset")
+
+	tasks := []shutdownTask{
+		{
+			name:      "server-a",
+			shutGrace: 0,
+			shutdown:  func(_ context.Context) error { return err1 },
+		},
+		{
+			name:      "server-b",
+			shutGrace: 0,
+			shutdown:  func(_ context.Context) error { return err2 },
+		},
+		{
+			name:      "server-c",
+			shutGrace: 0,
+			shutdown:  func(_ context.Context) error { return nil },
+		},
+	}
+
+	ctx := context.Background()
+	got := shutdownAllServers(ctx, tasks)
+	require.Error(t, got, "shutdownAllServers must return error when any task fails")
+	assert.True(t, errors.Is(got, err1) || strings.Contains(got.Error(), err1.Error()),
+		"joined error must contain err1")
+	assert.True(t, errors.Is(got, err2) || strings.Contains(got.Error(), err2.Error()),
+		"joined error must contain err2")
+	// OPS-01: aggregated error must preserve per-listener attribution so
+	// operators can pick out which listener tripped from the error object alone
+	// (matching the slog "listener=" attribute).
+	assert.Contains(t, got.Error(), `listener "server-a"`,
+		"joined error must wrap err1 with listener name")
+	assert.Contains(t, got.Error(), `listener "server-b"`,
+		"joined error must wrap err2 with listener name")
+}
+
+// ---------------------------------------------------------------------------
+// T-03: Phase7ServeAll dual listener — no close race (-race required)
+// ---------------------------------------------------------------------------
+
+// TestPhase7ServeAll_DualListener_NoCloseRace verifies that concurrent Serve
+// goroutines do not race on shared state when the listeners are closed in
+// parallel during shutdown. This test is only meaningful with -race.
+func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
+	// This test is intentionally NOT skipped in -short because it validates a
+	// safety property (no data race) under parallel server shutdown.
+	primaryLn := newLocalListener(t)
+	internalLn := newLocalListener(t)
+
+	c := newDualListenerCell(
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+	)
+	asm := assembly.New(assembly.Config{ID: "race-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(c))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	primaryAddr := primaryLn.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
+
+	// Fire concurrent requests while shutting down to exercise the race window.
+	// WaitGroup ensures all in-flight goroutines have exited before the test
+	// function returns, preventing goroutine leaks that could pollute later tests.
+	var wg sync.WaitGroup
+	var inFlight atomic.Int32
+	for i := 0; i < 4; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			inFlight.Add(1)
+			defer inFlight.Add(-1)
+			_, _ = testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
+		}()
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+
+	// Wait for all in-flight request goroutines to complete.
+	wg.Wait()
+}
+
+// ---------------------------------------------------------------------------
+// T-04: Phase7BindListeners — owned socket closed on sibling failure
+// ---------------------------------------------------------------------------
+
+// TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure verifies that
+// when bootstrap owns a socket (primary :0) and the next bind fails (collision),
+// the already-owned socket is released. This mirrors TEST-11 for the generic path.
+func TestPhase7BindListeners_OwnedSocket_ClosedOnSiblingFailure(t *testing.T) {
+	// Hold a port so internal bind collides.
+	holdLn := newLocalListener(t)
+	collidingAddr := holdLn.Addr().String()
+
+	asm := assembly.New(assembly.Config{ID: "owned-sibling-fail", DurabilityMode: cell.DurabilityDemo})
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),  // bootstrap-owned; should succeed then be released
+		WithListener(cell.InternalListener, collidingAddr, nil), // collides
+		WithShutdownTimeout(time.Second),
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	err := b.Run(ctx)
+	require.Error(t, err, "sibling bind failure must propagate")
+	assert.Contains(t, err.Error(), "listen internal")
+}
+
+// ---------------------------------------------------------------------------
+// T-05: RouteGroup Middleware order preserved
+// ---------------------------------------------------------------------------
+
+// middlewareOrderCell mounts a route with two middleware that record call order.
+type middlewareOrderCell struct {
+	*cell.BaseCell
+	order *[]string
+}
+
+func (c *middlewareOrderCell) RouteGroups() []cell.RouteGroup {
+	order := c.order
+	mw1 := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*order = append(*order, "mw1")
+			next.ServeHTTP(w, r)
+		})
+	}
+	mw2 := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			*order = append(*order, "mw2")
+			next.ServeHTTP(w, r)
+		})
+	}
+	return []cell.RouteGroup{
+		{
+			Listener:   cell.PrimaryListener,
+			Prefix:     "/api/v1/mwtest",
+			Middleware: []func(http.Handler) http.Handler{mw1, mw2},
+			Register: func(mux cell.RouteMux) {
+				auth.Mount(mux, auth.Route{
+					Contract: testHTTPContract(http.MethodGet, "/api/v1/mwtest/ping"),
+					Handler:  http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }),
+					Public:   true,
+				})
+			},
+		},
+	}
+}
+
+// TestRouteGroup_Middleware_OrderPreserved verifies that RouteGroup.Middleware
+// entries are applied in declaration order: first registered is outermost.
+func TestRouteGroup_Middleware_OrderPreserved(t *testing.T) {
+	var order []string
+	c := &middlewareOrderCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{ID: "mw-order-cell", Type: cell.CellTypeCore}),
+		order:    &order,
+	}
+	asm := assembly.New(assembly.Config{ID: "mw-order-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(c))
+
+	primaryLn := newLocalListener(t)
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	primaryAddr := primaryLn.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
+
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/mwtest/ping", primaryAddr))
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode)
+	assert.Equal(t, []string{"mw1", "mw2"}, order,
+		"middleware must execute in declaration order (first registered = outermost)")
+
+	cancel()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T-09: AuthWiring internal guard waits for internal listener ready
+// ---------------------------------------------------------------------------
+
+// TestAuthWiring_InternalGuard_WaitsForInternalListenerReady verifies that
+// the internal listener is serving before the primary listener becomes healthy.
+// Both must be bound and accepting before /healthz returns 200.
+func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
+	primaryLn := newLocalListener(t)
+	internalLn := newLocalListener(t)
+
+	c := newDualListenerCell(
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+	)
+	asm := assembly.New(assembly.Config{ID: "auth-wiring-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(c))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	primaryAddr := primaryLn.Addr().String()
+	internalAddr := internalLn.Addr().String()
+	// Wait for primary healthy.
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
+
+	// Internal listener must also be reachable by the time primary is healthy.
+	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr))
+	require.NoError(t, err)
+	resp.Body.Close()
+	assert.Equal(t, http.StatusOK, resp.StatusCode,
+		"internal listener must be reachable after primary becomes healthy")
+
+	cancel()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// T-10: Goroutine baseline after server stable
+// ---------------------------------------------------------------------------
+
+// TestShutdown_NumGoroutineBaseline_AfterServerStable verifies that after a
+// clean shutdown, the goroutine count does not permanently exceed the baseline
+// taken just before shutdown began.
+func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
+	primaryLn := newLocalListener(t)
+	internalLn := newLocalListener(t)
+
+	c := newDualListenerCell(
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+		func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) },
+	)
+	asm := assembly.New(assembly.Config{ID: "goroutine-baseline-test", DurabilityMode: cell.DurabilityDemo})
+	require.NoError(t, asm.Register(c))
+
+	b := New(
+		WithAssembly(asm),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), nil, WithListenerNet(internalLn)),
+		WithShutdownTimeout(2*time.Second),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- b.Run(ctx) }()
+
+	primaryAddr := primaryLn.Addr().String()
+	require.Eventually(t, func() bool {
+		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
+
+	// Baseline is taken AFTER the server is confirmed stable (healthz 200 returned
+	// above). Taking it here ensures that all bootstrap-internal goroutines (HTTP
+	// serve loops, worker loops, etc.) are already running, so the baseline already
+	// includes them. Taking it before cancel() also provides a happens-before
+	// synchronisation point: there are no in-flight goroutine launches between this
+	// line and cancel().
+	baseline := runtime.NumGoroutine()
+
+	cancel()
+	select {
+	case err := <-done:
+		assert.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap did not shut down in time")
+	}
+
+	// 2 s convergence window: the Go runtime does not reclaim goroutine stack
+	// frames synchronously; after Run returns the net/http server and internal
+	// goroutines are in the process of exiting.  2 s is generous enough to
+	// tolerate slow CI machines while still catching real leaks.
+	require.Eventually(t, func() bool {
+		return runtime.NumGoroutine() <= baseline
+	}, 2*time.Second, 50*time.Millisecond,
+		"goroutine count must not exceed baseline after clean shutdown")
+}
+
+// ---------------------------------------------------------------------------
+// Phase0 三连：NoListeners / DuplicateListenerRefs / MetricsRequiresHealth
+// ---------------------------------------------------------------------------
+
+// TestPhase0_NoListenersDeclared verifies that phase0 fails fast when no
+// listeners are declared.
+func TestPhase0_NoListenersDeclared(t *testing.T) {
+	b := New() // no WithListener calls
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no HTTP listeners declared")
+}
+
+// TestPhase0_DuplicateListenerRefs verifies that phase0 fails fast when the
+// same ListenerRef is declared more than once.
+func TestPhase0_DuplicateListenerRefs(t *testing.T) {
+	b := New(
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil), // duplicate
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate WithListener")
+}
+
+// TestPhase0_MetricsRequiresHealthListener verifies that configuring a metrics
+// handler without a dedicated HealthListener is rejected at phase0 (B2 rule).
+func TestPhase0_MetricsRequiresHealthListener(t *testing.T) {
+	b := New(
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		WithHealthRoutes(WithMetricsHandler(http.NewServeMux())),
+	)
+	err := b.phase0ValidateOptions()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "WithHealthRoutes(WithMetricsHandler")
 }

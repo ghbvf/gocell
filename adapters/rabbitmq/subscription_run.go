@@ -29,11 +29,21 @@ type subscriptionRun struct {
 	consumerTag string
 	localWg     sync.WaitGroup // tracks processDelivery goroutines of this run only
 	closed      sync.Once
+	// wgDoneCh is closed exactly once when all in-flight deliveries have
+	// completed (localWg.Wait() returns in any wg-waiter goroutine).
+	// Initialised by newSubscriptionRun; closeWgDone ensures only one of the
+	// potentially concurrent wg-waiters closes it.
+	wgDoneCh    chan struct{}
+	closeWgDone sync.Once
 }
 
 // newSubscriptionRun creates a subscriptionRun for the given channel and consumer tag.
 func newSubscriptionRun(ch AMQPChannel, tag string) *subscriptionRun {
-	return &subscriptionRun{ch: ch, consumerTag: tag}
+	return &subscriptionRun{
+		ch:          ch,
+		consumerTag: tag,
+		wgDoneCh:    make(chan struct{}),
+	}
 }
 
 // registerDelivery marks one in-flight processDelivery goroutine started.
@@ -54,7 +64,9 @@ func (r *subscriptionRun) markDeliveryDone() {
 // Phase 1: waits for localWg (all processDelivery goroutines of this run).
 // If ctx expires before all goroutines complete, returns ctx.Err() immediately
 // without closing the channel — the channel will be abandoned (process-exit
-// cleanup semantics, matching the existing Close timeout path).
+// cleanup semantics, matching the existing Close timeout path). The internal
+// wg-waiter goroutine continues running until localWg.Wait() returns; callers
+// that need to observe its exit (e.g. leak tests) should use wgDone().
 //
 // Phase 2: closes the AMQP channel via sync.Once so that concurrent callers
 // (subscribeOnce exit path + Subscriber.Close) cannot double-close.
@@ -63,14 +75,19 @@ func (r *subscriptionRun) markDeliveryDone() {
 // ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan→WaitGroup→ch.Close
 func (r *subscriptionRun) waitAndClose(ctx context.Context) error {
 	// Phase 1: wait for in-flight deliveries bounded by ctx.
-	done := make(chan struct{})
+	// The wg-waiter goroutine closes r.wgDoneCh when localWg.Wait() returns,
+	// providing a happens-before signal for goroutine-exit assertions in tests.
+	// wgDoneCh is initialised by newSubscriptionRun so this goroutine captures
+	// a stable reference with no data race even when waitAndClose is called
+	// concurrently from subscribeOnce and Subscriber.Close.
+	// closeWgDone ensures only one of the concurrent wg-waiters closes the channel.
 	go func() {
 		r.localWg.Wait()
-		close(done)
+		r.closeWgDone.Do(func() { close(r.wgDoneCh) })
 	}()
 
 	select {
-	case <-done:
+	case <-r.wgDoneCh:
 	case <-ctx.Done():
 		slog.Warn("rabbitmq: subscriptionRun wait-inflight ctx expired",
 			slog.String("consumer_tag", r.consumerTag),
@@ -89,6 +106,14 @@ func (r *subscriptionRun) waitAndClose(ctx context.Context) error {
 		}
 	})
 	return closeErr
+}
+
+// wgDone returns a channel that is closed when all in-flight deliveries have
+// completed (localWg.Wait() has returned in the wg-waiter goroutine spawned by
+// waitAndClose). The channel is ready as soon as newSubscriptionRun returns;
+// it is closed at most once regardless of concurrent waitAndClose calls.
+func (r *subscriptionRun) wgDone() <-chan struct{} {
+	return r.wgDoneCh
 }
 
 // cancelWithBudget issues basic.cancel for this run's consumer with per-call timeout.
