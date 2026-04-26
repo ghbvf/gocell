@@ -17,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 	"github.com/ghbvf/gocell/runtime/auth/refresh/storetest"
@@ -24,12 +25,18 @@ import (
 
 // testIssuer is declared in service_test.go
 
+const loginPath = "/api/v1/access/sessions/login"
+
 func newHandlerRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
 	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
-func setup() *Handler {
+// setup wires the slice handler onto a celltest mux via RegisterRoutes — the
+// same code path cell_routes.go takes in production. Tests dispatch via
+// mux.ServeHTTP so per-package coverage records both HandleLogin and the
+// RegisterRoutes wiring.
+func setup() http.Handler {
 	userRepo := mem.NewUserRepository()
 	hash, _ := bcrypt.GenerateFromPassword([]byte("correct-pass"), bcrypt.MinCost)
 	user := &domain.User{
@@ -39,7 +46,9 @@ func setup() *Handler {
 	_ = userRepo.Create(context.Background(), user)
 
 	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), newHandlerRefreshStore(), testIssuer, slog.Default())
-	return NewHandler(svc)
+	mux := celltest.NewTestMux()
+	NewHandler(svc).RegisterRoutes(mux)
+	return mux
 }
 
 func TestTokenPairResponse_Fields(t *testing.T) {
@@ -138,9 +147,9 @@ func TestHandleLogin(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := setup()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(tc.body))
+			req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(tc.body))
 			req.Header.Set("Content-Type", "application/json")
-			h.HandleLogin(w, req)
+			h.ServeHTTP(w, req)
 			assert.Equal(t, tc.wantStatus, w.Code)
 			if tc.checkBody != nil {
 				tc.checkBody(t, w.Body.Bytes())
@@ -170,9 +179,9 @@ func TestHandler_Login_BlankUsername(t *testing.T) {
 	h := setup()
 	body := `{"username":"","password":"correct-pass"}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	h.HandleLogin(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assertBlankFieldError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_INVALID_INPUT", "username")
@@ -184,9 +193,9 @@ func TestHandler_Login_BlankPassword(t *testing.T) {
 	h := setup()
 	body := `{"username":"alice","password":""}`
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, loginPath, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	h.HandleLogin(w, req)
+	h.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assertBlankFieldError(t, w.Body.Bytes(), "ERR_AUTH_LOGIN_INVALID_INPUT", "password")

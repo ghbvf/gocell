@@ -12,11 +12,25 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	"github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+const configBasePath = "/api/v1/config"
+
+// asAdmin attaches an admin Principal to req so it satisfies the
+// auth.AnyRole(RoleAdmin) policy applied by RegisterRoutes.
+func asAdmin(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("admin-user", []string{string(dto.RoleAdmin)}))
+}
+
+// setupHandler wires the slice handler onto a celltest mux via RegisterRoutes —
+// nested under /api/v1/config to match the production cell_routes.go layout
+// (which uses mux.Route to compose the collection-root trailing-slash dispatch).
 func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	repo := mem.NewConfigRepository()
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
@@ -24,10 +38,10 @@ func setupHandler() (http.Handler, *mem.ConfigRepository) {
 	if err != nil {
 		panic(err)
 	}
-	mux := http.NewServeMux()
-	h := NewHandler(svc)
-	mux.HandleFunc("GET /{key}", h.HandleGet)
-	mux.HandleFunc("GET /", h.HandleList)
+	mux := celltest.NewTestMux()
+	mux.Route(configBasePath, func(sub kcell.RouteMux) {
+		NewHandler(svc).RegisterRoutes(sub)
+	})
 	return mux, repo
 }
 
@@ -40,8 +54,8 @@ func TestHandler_HandleGet_Found(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/app.name", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/app.name", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "gocell")
@@ -64,8 +78,8 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/missing-key", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/missing-key", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
@@ -83,8 +97,8 @@ func TestHandler_HandleList_OK(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "\"data\":")
@@ -95,8 +109,8 @@ func TestHandler_HandleList_Empty(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "\"data\":")
@@ -107,8 +121,8 @@ func TestHandler_HandleList_InvalidLimit(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/?limit=abc", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/?limit=abc", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
@@ -118,8 +132,8 @@ func TestHandler_HandleList_ExceedsMaxLimit(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/?limit=501", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/?limit=501", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
@@ -141,13 +155,13 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	cursor := ""
 
 	for page := 0; page < 10; page++ {
-		url := "/?limit=3"
+		url := configBasePath + "/?limit=3"
 		if cursor != "" {
 			url += "&cursor=" + cursor
 		}
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)
-		handler.ServeHTTP(w, req)
+		handler.ServeHTTP(w, asAdmin(req))
 
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]any
@@ -201,8 +215,8 @@ func TestHandler_HandleList_InvalidCursor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler, _ := setupHandler()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/?cursor="+tc.cursor, nil)
-			handler.ServeHTTP(w, req)
+			req := httptest.NewRequest(http.MethodGet, configBasePath+"/?cursor="+tc.cursor, nil)
+			handler.ServeHTTP(w, asAdmin(req))
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
@@ -220,8 +234,8 @@ func TestHandler_HandleGet_SensitiveRedacted(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/db.password", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/db.password", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp struct {
@@ -242,8 +256,8 @@ func TestHandler_HandleGet_NonSensitiveVisible(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/app.name", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/app.name", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	var resp struct {
@@ -267,8 +281,8 @@ func TestHandler_HandleList_SensitiveRedacted(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, configBasePath+"/", nil)
+	handler.ServeHTTP(w, asAdmin(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	body := w.Body.String()

@@ -11,13 +11,25 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
+	dto "github.com/ghbvf/gocell/cells/configcore/internal/dto"
 	"github.com/ghbvf/gocell/cells/configcore/internal/mem"
+	kcell "github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/kernel/cell/celltest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 var flagHandlerTestKey = bytes.Repeat([]byte("f"), 32)
+
+const flagsBasePath = "/api/v1/flags"
+
+// asAdminFlag attaches an admin Principal to req so it satisfies the
+// auth.AnyRole(RoleAdmin) policy applied by RegisterRoutes.
+func asAdminFlag(req *http.Request) *http.Request {
+	return req.WithContext(auth.TestContext("admin-user", []string{string(dto.RoleAdmin)}))
+}
 
 func TestToFeatureFlagResponse_NilInput(t *testing.T) {
 	var got FeatureFlagResponse
@@ -75,6 +87,9 @@ func setupHandler() (http.Handler, *mem.FlagRepository) {
 	return h, r
 }
 
+// setupHandlerWithCodec wires the slice handler onto a celltest mux via
+// RegisterRoutes — nested under /api/v1/flags to match production cell_routes.go
+// (which uses mux.Route to compose the collection-root trailing-slash dispatch).
 func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCodec) {
 	repo := mem.NewFlagRepository()
 	codec, _ := query.NewCursorCodec(flagHandlerTestKey)
@@ -82,11 +97,10 @@ func setupHandlerWithCodec() (http.Handler, *mem.FlagRepository, *query.CursorCo
 	if err != nil {
 		panic(err)
 	}
-	h := NewHandler(svc)
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /", h.HandleList)
-	mux.HandleFunc("GET /{key}", h.HandleGet)
-	mux.HandleFunc("POST /{key}/evaluate", h.HandleEvaluate)
+	mux := celltest.NewTestMux()
+	mux.Route(flagsBasePath, func(sub kcell.RouteMux) {
+		NewHandler(svc).RegisterRoutes(sub)
+	})
 	return mux, repo, codec
 }
 
@@ -97,8 +111,8 @@ func TestHandler_HandleList(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/", nil)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "dark-mode")
@@ -112,8 +126,8 @@ func TestHandler_HandleGet_Found(t *testing.T) {
 	}))
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/dark-mode", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/dark-mode", nil)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "dark-mode")
@@ -134,8 +148,8 @@ func TestHandler_HandleGet_NotFound(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/missing", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/missing", nil)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
@@ -148,9 +162,9 @@ func TestHandler_HandleEvaluate_OK(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"subject":"user-1"}`
-	req := httptest.NewRequest(http.MethodPost, "/dark-mode/evaluate", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, flagsBasePath+"/dark-mode/evaluate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(w, req)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	assert.Equal(t, http.StatusOK, w.Code)
 	assert.Contains(t, w.Body.String(), "dark-mode")
@@ -169,9 +183,9 @@ func TestHandler_HandleEvaluate_UnknownField(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"subject":"user-1","extra":"y"}`
-	req := httptest.NewRequest(http.MethodPost, "/dark-mode/evaluate", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, flagsBasePath+"/dark-mode/evaluate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(w, req)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -180,9 +194,9 @@ func TestHandler_HandleEvaluate_BadJSON(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/dark-mode/evaluate", strings.NewReader("{bad"))
+	req := httptest.NewRequest(http.MethodPost, flagsBasePath+"/dark-mode/evaluate", strings.NewReader("{bad"))
 	req.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(w, req)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
@@ -192,9 +206,9 @@ func TestHandler_HandleEvaluate_NotFound(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	body := `{"subject":"user-1"}`
-	req := httptest.NewRequest(http.MethodPost, "/missing/evaluate", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, flagsBasePath+"/missing/evaluate", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
-	handler.ServeHTTP(w, req)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	// Service returns ErrFlagNotFound -> 404.
 	assert.Equal(t, http.StatusNotFound, w.Code)
@@ -204,8 +218,8 @@ func TestHandler_HandleList_InvalidLimit(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/?limit=abc", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/?limit=abc", nil)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_VALIDATION_FAILED")
@@ -215,8 +229,8 @@ func TestHandler_HandleList_ExceedsMaxLimit(t *testing.T) {
 	handler, _ := setupHandler()
 
 	w := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodGet, "/?limit=501", nil)
-	handler.ServeHTTP(w, req)
+	req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/?limit=501", nil)
+	handler.ServeHTTP(w, asAdminFlag(req))
 
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 	assert.Contains(t, w.Body.String(), "ERR_PAGE_SIZE_EXCEEDED")
@@ -235,13 +249,13 @@ func TestHandler_HandleList_Pagination_FullTraversal(t *testing.T) {
 	cursor := ""
 
 	for page := 0; page < 10; page++ {
-		url := "/?limit=3"
+		url := flagsBasePath + "/?limit=3"
 		if cursor != "" {
 			url += "&cursor=" + cursor
 		}
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)
-		handler.ServeHTTP(w, req)
+		handler.ServeHTTP(w, asAdminFlag(req))
 
 		require.Equal(t, http.StatusOK, w.Code)
 		var resp map[string]any
@@ -295,8 +309,8 @@ func TestHandler_HandleList_InvalidCursor(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			handler, _ := setupHandler()
 			w := httptest.NewRecorder()
-			req := httptest.NewRequest(http.MethodGet, "/?cursor="+tc.cursor, nil)
-			handler.ServeHTTP(w, req)
+			req := httptest.NewRequest(http.MethodGet, flagsBasePath+"/?cursor="+tc.cursor, nil)
+			handler.ServeHTTP(w, asAdminFlag(req))
 
 			assert.Equal(t, http.StatusBadRequest, w.Code)
 			assert.Contains(t, w.Body.String(), "ERR_CURSOR_INVALID")
