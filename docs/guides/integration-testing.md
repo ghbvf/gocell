@@ -71,14 +71,16 @@ go test -tags integration ./tests/integration/... -run TestAssembly -count=1 -v
 
 ## Environment Variables
 
-| Variable | Default | Description |
-|----------|---------|-------------|
+> Defaults below describe the local docker-compose / testcontainer dev loop. **Never reuse these values in production** — they are public dev fixtures (e.g. RabbitMQ `guest:guest`, MinIO `minioadmin:minioadmin`) and will fail security scans. CI provides real values via secrets.
+
+| Variable | Default (local dev only) | Description |
+|----------|--------------------------|-------------|
 | `GOCELL_CONFIGCORE_DATABASE_URL` | (testcontainer; see test setup) | PostgreSQL DSN for configcore integration tests. Most tests start their own container and pass DSN directly. |
 | `GOCELL_REDIS_ADDR` | `localhost:6379` | Redis address |
-| `GOCELL_AMQP_URL` | `amqp://guest:guest@localhost:5672/` | RabbitMQ connection URL |
+| `GOCELL_AMQP_URL` | (set from CI secret; local docker-compose default uses public `guest:guest@localhost:5672`) | RabbitMQ connection URL |
 | `GOCELL_S3_ENDPOINT` | `http://localhost:9000` | MinIO / S3 endpoint |
-| `GOCELL_S3_ACCESS_KEY` | `minioadmin` | S3 access key |
-| `GOCELL_S3_SECRET_KEY` | `minioadmin` | S3 secret key |
+| `GOCELL_S3_ACCESS_KEY` | (set from CI secret; local docker-compose default is the public `minioadmin` fixture) | S3 access key |
+| `GOCELL_S3_SECRET_KEY` | (set from CI secret; local docker-compose default is the public `minioadmin` fixture) | S3 secret key |
 | `GOCELL_OIDC_ISSUER` | `http://localhost:8080/realms/gocell` | OIDC issuer URL |
 
 ## CI Pipeline
