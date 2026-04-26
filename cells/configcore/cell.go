@@ -196,10 +196,21 @@ type ConfigCore struct {
 // emitter's HealthCheckers (currently fail-open drop rate → degraded signal)
 // so /readyz surfaces "config events are being lost in fail-open path"
 // without polluting the cell's primary Cell.Health() signal.
+//
+// The emitter checker (outbox-failopen-rate.configcore) is enabled by default
+// at a 5% threshold; it returns cell.ErrDegraded when the fail-open drop ratio
+// sustained between two /readyz probes exceeds that threshold. Disable via
+// outbox.WithFailOpenRateThreshold(0) when constructing the emitter.
 func (c *ConfigCore) HealthCheckers() map[string]func(context.Context) error {
 	checkers := make(map[string]func(context.Context) error)
 	if hc, ok := c.emitter.(cell.HealthContributor); ok {
 		for k, v := range hc.HealthCheckers() {
+			if _, dup := checkers[k]; dup {
+				slog.Error("configcore: duplicate health checker name; emitter checker dropped",
+					slog.String("checker", k),
+					slog.String("source", "outbox-emitter"))
+				continue
+			}
 			checkers[k] = v
 		}
 	}
