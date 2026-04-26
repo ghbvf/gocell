@@ -76,7 +76,10 @@ services:
       GOCELL_METRICS_TOKEN: e2e-metrics-token
       GOCELL_READYZ_VERBOSE_TOKEN: e2e-readyz-verbose-token
       GOCELL_HTTP_PRIMARY_ADDR: ":8080"
-      GOCELL_HTTP_INTERNAL_ADDR: ":9090"
+      # Internal listener stays loopback-only inside the container; tests do
+      # not call /internal/v1/* endpoints, and no other compose service
+      # depends on it. Mirrors production default (127.0.0.1:9090).
+      GOCELL_HTTP_INTERNAL_ADDR: "127.0.0.1:9090"
       GOCELL_HTTP_HEALTH_ADDR: ":9091"
       GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE: interactive
     ports:
