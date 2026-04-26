@@ -28,7 +28,6 @@ type WireMessage struct {
 	Metadata      map[string]string     `json:"metadata,omitempty"`
 	Observability ObservabilityMetadata `json:"observability,omitempty"`
 	CreatedAt     time.Time             `json:"createdAt"`
-	Attempts      int                   `json:"attempts,omitempty"`
 }
 
 // MarshalEnvelope serializes an Entry into the canonical v1 wire envelope.

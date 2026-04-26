@@ -41,6 +41,7 @@ func TestUnmarshalEnvelope_V1Success(t *testing.T) {
 		Topic:         "order.created.v1",
 		Payload:       []byte(`{"orderId":"o-1","amount":99}`),
 		Metadata:      map[string]string{"trace_id": "t-123"},
+		Observability: ObservabilityMetadata{TraceID: "abc123"},
 		CreatedAt:     now,
 	}
 
@@ -58,6 +59,7 @@ func TestUnmarshalEnvelope_V1Success(t *testing.T) {
 	assert.Equal(t, string(entry.Payload), string(got.Payload))
 	assert.Equal(t, entry.Metadata, got.Metadata)
 	assert.True(t, got.CreatedAt.Equal(now))
+	assert.Equal(t, entry.Observability, got.Observability)
 }
 
 func TestUnmarshalEnvelope_UnknownVersionRejected(t *testing.T) {
@@ -116,6 +118,39 @@ func TestMarshalDirectEnvelope_ProducesV1(t *testing.T) {
 	assert.Equal(t, topic, got.EventType)
 	assert.Equal(t, topic, got.Topic)
 	assert.Equal(t, string(payload), string(got.Payload))
+}
+
+func TestUnmarshalEnvelope_PreservesObservability(t *testing.T) {
+	// W3C traceparent: version(2)-traceID(32)-spanID(16)-flags(2) = 55 bytes, lowercase hex.
+	obs := ObservabilityMetadata{
+		TraceID:       "4bf92f3577b34da6a3ce929d0e0e4736",
+		TraceParent:   "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
+		RequestID:     "req-abc-123",
+		CorrelationID: "corr-xyz-456",
+	}
+
+	entry := Entry{
+		ID:            "obs-rt-1",
+		EventType:     "test.event.v1",
+		Topic:         "test.event.v1",
+		Payload:       []byte(`{"x":1}`),
+		Metadata:      map[string]string{"foo": "bar"},
+		Observability: obs,
+		CreatedAt:     time.Date(2026, 4, 26, 0, 0, 0, 0, time.UTC),
+	}
+
+	raw, err := MarshalEnvelope(entry)
+	require.NoError(t, err)
+
+	got, err := UnmarshalEnvelope(entry.Topic, raw)
+	require.NoError(t, err)
+
+	assert.Equal(t, obs.TraceID, got.Observability.TraceID)
+	assert.Equal(t, obs.TraceParent, got.Observability.TraceParent)
+	assert.Equal(t, obs.RequestID, got.Observability.RequestID)
+	assert.Equal(t, obs.CorrelationID, got.Observability.CorrelationID)
+	// struct-equal 兜底：未来新增字段时测试自动失败
+	assert.Equal(t, obs, got.Observability)
 }
 
 func TestMarshalDirectEnvelope_PanicsOnEmptyRequiredFields(t *testing.T) {
