@@ -241,9 +241,9 @@ owner:
 func TestFind_RootSequence(t *testing.T) {
 	src := `
 - id: first
-  type: external
+  maxConsistencyLevel: L1
 - id: second
-  type: external
+  maxConsistencyLevel: L2
 `
 	root := mustParseNode(t, src)
 
@@ -258,12 +258,12 @@ func TestFind_RootSequence(t *testing.T) {
 		t.Errorf("Find([0].id).Line = %d, want 2", n.Line)
 	}
 
-	n, err = Find(root, "[1].type")
+	n, err = Find(root, "[1].maxConsistencyLevel")
 	if err != nil {
-		t.Fatalf("Find([1].type) err = %v", err)
+		t.Fatalf("Find([1].maxConsistencyLevel) err = %v", err)
 	}
-	if n.Value != "external" {
-		t.Errorf("Find([1].type).Value = %q, want external", n.Value)
+	if n.Value != "L2" {
+		t.Errorf("Find([1].maxConsistencyLevel).Value = %q, want L2", n.Value)
 	}
 
 	// Pure index without a trailing field returns the mapping node.

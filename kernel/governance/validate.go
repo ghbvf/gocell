@@ -71,7 +71,7 @@ type Validator struct {
 	now        func() time.Time                  // clock function (injectable for tests)
 	fileExists func(path string) bool            // file existence check (injectable for tests)
 	readFile   func(path string) ([]byte, error) // file reader (injectable for tests)
-	actorSet   map[string]bool                   // pre-built set of external actor IDs
+	actorSet   map[string]bool                   // pre-built set of external actor IDs from actors.yaml (membership = external)
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -141,6 +141,7 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateREF05, v.validateREF06, v.validateREF07, v.validateREF08,
 		v.validateREF09, v.validateREF10, v.validateREF11, v.validateREF12,
 		v.validateREF13, v.validateREF14, v.validateREF15, v.validateREF16,
+		v.validateREF17,
 		v.validateTOPO01, v.validateTOPO02, v.validateTOPO03, v.validateTOPO04,
 		v.validateTOPO05, v.validateTOPO06, v.validateTOPO07, v.validateTOPO08,
 		v.validateVERIFY01, v.validateVERIFY02, v.validateVERIFY03,

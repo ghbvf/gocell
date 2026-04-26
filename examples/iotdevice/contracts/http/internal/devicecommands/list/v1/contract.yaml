@@ -5,8 +5,7 @@ consistencyLevel: L4
 lifecycle: active
 endpoints:
   server: devicecell
-  clients:
-    - edge-bff
+  clients: []
   http:
     method: GET
     path: /internal/v1/devicecommands

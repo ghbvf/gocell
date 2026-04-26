@@ -3,7 +3,9 @@ package governance
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -410,6 +412,55 @@ func (v *Validator) validateREF16() []ValidationResult {
 				"id",
 				fmt.Sprintf("assembly %q has no generated boundary.yaml at assemblies/%s/generated/boundary.yaml; run 'gocell generate' to create it", a.ID, a.ID),
 			))
+		}
+	}
+	return results
+}
+
+// validateREF17 checks that HTTP contracts on the internal audience
+// (cell.InternalPathPrefix) do not list any external actor as a client.
+// Internal endpoints are reserved for cell-to-cell traffic and admin/ops
+// callers reached through trusted internal listeners; routing a registered
+// external actor through them bypasses the public-API contract surface and
+// the auth posture that comes with it.
+//
+// Audience comes from the runtime path-prefix SoR (kernel/cell), not a
+// governance-local string, so router/registrar/admission stay aligned.
+//
+// External-actor membership comes from actors.yaml: every entry is external
+// by construction (see ActorMeta godoc). The wildcard "*" client is also
+// rejected on internal paths — its allow-all semantics include external
+// actors, which is exactly what this rule forbids.
+//
+// ref: kubernetes pkg/apis/core/validation/validation.go (audience-aware
+// admission). We diverge from k8s by validating contract.endpoints.clients
+// against actors.yaml membership rather than RBAC roles.
+func (v *Validator) validateREF17() []ValidationResult {
+	var results []ValidationResult
+	for _, c := range v.project.Contracts {
+		if c.Kind != "http" || c.Endpoints.HTTP == nil {
+			continue
+		}
+		path := c.Endpoints.HTTP.Path
+		if !strings.HasPrefix(path, cell.InternalPathPrefix) {
+			continue
+		}
+		for i, client := range c.Endpoints.Clients {
+			field := fmt.Sprintf("endpoints.%s[%d]", consumerFieldName(c.Kind), i)
+			switch {
+			case client == "*":
+				results = append(results, v.newResult(
+					"REF-17", SeverityError, IssueForbidden,
+					contractFile(c), field,
+					fmt.Sprintf("contract %q is internal (path %q) but clients contains wildcard %q; wildcards admit external actors, list explicit internal cell IDs instead", c.ID, path, client),
+				))
+			case v.isExternalActor(client):
+				results = append(results, v.newResult(
+					"REF-17", SeverityError, IssueForbidden,
+					contractFile(c), field,
+					fmt.Sprintf("contract %q is internal (path %q) but client %q is registered in actors.yaml (external); remove it or move the endpoint to a public path", c.ID, path, client),
+				))
+			}
 		}
 	}
 	return results

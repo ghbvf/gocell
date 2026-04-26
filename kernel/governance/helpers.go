@@ -232,3 +232,11 @@ func (v *Validator) actorExists(id string) bool {
 	}
 	return v.actorSet[id]
 }
+
+// isExternalActor reports whether the ID is registered in actors.yaml.
+// actors.yaml exclusively registers external systems — membership is the
+// type declaration (see ActorMeta godoc). Cell IDs never satisfy this
+// predicate; they are checked separately by actorExists when needed.
+func (v *Validator) isExternalActor(id string) bool {
+	return v.actorSet[id]
+}

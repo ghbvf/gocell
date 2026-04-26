@@ -61,9 +61,8 @@ verify:
 
 // minimalActorYAML is the smallest valid actors.yaml element.
 // actors.yaml is a YAML sequence at the top level ([]ActorMeta), so injection
-// inserts the dynamic field as a sibling of id/type within the sequence entry.
+// inserts the dynamic field as a sibling of id within the sequence entry.
 const minimalActorYAML = `- id: test-actor
-  type: external
   maxConsistencyLevel: L2
 `
 
