@@ -17,6 +17,18 @@ func buildConsistencyProject(ownerCell string, contracts []*metadata.ContractMet
 	for _, c := range contracts {
 		contractMap[c.ID] = c
 	}
+	for _, c := range contracts {
+		if c.Kind != "http" {
+			continue
+		}
+		for _, trigger := range c.Triggers {
+			if _, exists := contractMap[trigger]; !exists {
+				contractMap[trigger] = eventContract(trigger, ownerCell)
+			}
+		}
+	}
+	slices := map[string]*metadata.SliceMeta{}
+	addSliceUsages(slices, ownerCell, "testslice", defaultContractUsages(contracts)...)
 	return &metadata.ProjectMeta{
 		Cells: map[string]*metadata.CellMeta{
 			ownerCell: {
@@ -31,7 +43,7 @@ func buildConsistencyProject(ownerCell string, contracts []*metadata.ContractMet
 				File:             "cells/" + ownerCell + "/cell.yaml",
 			},
 		},
-		Slices:     map[string]*metadata.SliceMeta{},
+		Slices:     slices,
 		Contracts:  contractMap,
 		Journeys:   map[string]*metadata.JourneyMeta{},
 		Assemblies: map[string]*metadata.AssemblyMeta{},
@@ -58,6 +70,61 @@ func httpContract(id, ownerCell, consistencyLevel string, triggers []string) *me
 		},
 		Dir:  "contracts/http/test/action/v1",
 		File: "contracts/http/test/action/v1/contract.yaml",
+	}
+}
+
+// eventContract creates a ContractMeta for an event contract whose id is also
+// the outbox topic string.
+func eventContract(id, ownerCell string) *metadata.ContractMeta {
+	return &metadata.ContractMeta{
+		ID:               id,
+		Kind:             "event",
+		OwnerCell:        ownerCell,
+		ConsistencyLevel: "L2",
+		Lifecycle:        "active",
+		Endpoints: metadata.EndpointsMeta{
+			Publisher: ownerCell,
+			Subscribers: []string{
+				"auditcore",
+			},
+		},
+		Dir:  strings.ReplaceAll(id, ".", "/"),
+		File: "contracts/" + strings.ReplaceAll(id, ".", "/") + "/contract.yaml",
+	}
+}
+
+func defaultContractUsages(contracts []*metadata.ContractMeta) []metadata.ContractUsage {
+	seen := map[string]struct{}{}
+	var usages []metadata.ContractUsage
+	for _, c := range contracts {
+		if c.Kind != "http" {
+			continue
+		}
+		usages = append(usages, metadata.ContractUsage{Contract: c.ID, Role: "serve"})
+		for _, trigger := range c.Triggers {
+			if _, ok := seen[trigger]; ok {
+				continue
+			}
+			seen[trigger] = struct{}{}
+			usages = append(usages, metadata.ContractUsage{Contract: trigger, Role: "publish"})
+		}
+	}
+	return usages
+}
+
+func addSliceUsages(slices map[string]*metadata.SliceMeta, ownerCell, sliceID string, usages ...metadata.ContractUsage) {
+	key := ownerCell + "/" + sliceID
+	slices[key] = &metadata.SliceMeta{
+		ID:             sliceID,
+		BelongsToCell:  ownerCell,
+		ContractUsages: usages,
+		Verify: metadata.SliceVerifyMeta{
+			Unit:     []string{"unit." + sliceID + ".service"},
+			Contract: []string{},
+		},
+		Dir:     sliceID,
+		CellDir: ownerCell,
+		File:    "cells/" + ownerCell + "/slices/" + sliceID + "/slice.yaml",
 	}
 }
 
@@ -93,6 +160,22 @@ func findResultByCode(results []ValidationResult, code string) []ValidationResul
 		}
 	}
 	return out
+}
+
+func hasFindingContaining(results []ValidationResult, parts ...string) bool {
+	for _, r := range results {
+		matches := true
+		for _, part := range parts {
+			if !strings.Contains(r.Message, part) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
 }
 
 // TestCONTRACTCONSISTENCYEMIT01_CaseA: L2 contract + triggers + service emits → PASS.
@@ -596,6 +679,14 @@ func register(sub handler) {
 	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
 		httpContract("http.test.a.v1", ownerCell, "L2", []string{topicA}),
 	})
+	project.Slices = map[string]*metadata.SliceMeta{}
+	addSliceUsages(project.Slices, ownerCell, "emitterslice",
+		metadata.ContractUsage{Contract: "http.test.a.v1", Role: "serve"},
+		metadata.ContractUsage{Contract: topicA, Role: "publish"},
+	)
+	addSliceUsages(project.Slices, ownerCell, "subscriberslice",
+		metadata.ContractUsage{Contract: topicB, Role: "subscribe"},
+	)
 
 	v := NewValidator(project, root)
 	results := v.validateCONTRACTCONSISTENCYEMIT01()
@@ -835,5 +926,403 @@ func check(topic string) bool {
 		if strings.Contains(r.Message, topicZ) {
 			t.Errorf("SubscriberSelectorIgnored: dto.TopicZ from comparison-only code must not appear in emit topics; finding: %v", r)
 		}
+	}
+}
+
+func TestCONTRACTCONSISTENCYEMIT01_EmitMustComeFromServingSlice(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topic := "event.test.created.v1"
+	httpID := "http.test.action.v1"
+
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	writeDtoConst(t, dtoDir, "TopicTestCreated", topic)
+
+	servingDir := filepath.Join(root, "cells", ownerCell, "slices", "httpslice")
+	writeServiceFile(t, servingDir, `package httpslice
+
+func handle() error {
+	return nil
+}
+`)
+
+	emittingDir := filepath.Join(root, "cells", ownerCell, "slices", "emitterslice")
+	writeServiceFile(t, emittingDir, `package emitterslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+func doEmit(ctx context.Context, e outbox.Emitter) error {
+	return outbox.Emit(ctx, e, dto.TopicTestCreated, struct{}{})
+}
+`)
+
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract(httpID, ownerCell, "L2", []string{topic}),
+	})
+	project.Slices = map[string]*metadata.SliceMeta{}
+	addSliceUsages(project.Slices, ownerCell, "httpslice",
+		metadata.ContractUsage{Contract: httpID, Role: "serve"},
+		metadata.ContractUsage{Contract: topic, Role: "publish"},
+	)
+	addSliceUsages(project.Slices, ownerCell, "emitterslice",
+		metadata.ContractUsage{Contract: topic, Role: "publish"},
+	)
+
+	v := NewValidator(project, root)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	if !hasFindingContaining(got, "httpslice", "no non-test Go file", topic) {
+		t.Fatalf("expected serving-slice forward failure for %q, findings: %v", topic, got)
+	}
+}
+
+func TestCONTRACTCONSISTENCYEMIT01_TriggerMustReferenceExistingEventContract(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topic := "event.test.missing.v1"
+
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	writeDtoConst(t, dtoDir, "TopicMissing", topic)
+
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+	writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+func doEmit(ctx context.Context, e outbox.Emitter) error {
+	return outbox.Emit(ctx, e, dto.TopicMissing, struct{}{})
+}
+`)
+
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+	})
+	delete(project.Contracts, topic)
+
+	v := NewValidator(project, root)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	if !hasFindingContaining(got, "trigger", topic, "existing event contract") {
+		t.Fatalf("expected missing event-contract trigger finding, findings: %v", got)
+	}
+}
+
+func TestCONTRACTCONSISTENCYEMIT01_TriggerMustReferenceEventKind(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topic := "event.test.created.v1"
+
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	writeDtoConst(t, dtoDir, "TopicCreated", topic)
+
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+	writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+func doEmit(ctx context.Context, e outbox.Emitter) error {
+	return outbox.Emit(ctx, e, dto.TopicCreated, struct{}{})
+}
+`)
+
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		{
+			ID:               topic,
+			Kind:             "command",
+			OwnerCell:        ownerCell,
+			ConsistencyLevel: "L2",
+			Lifecycle:        "active",
+			Endpoints: metadata.EndpointsMeta{
+				Handler: ownerCell,
+			},
+			Dir:  "contracts/command/test/created/v1",
+			File: "contracts/command/test/created/v1/contract.yaml",
+		},
+	})
+
+	v := NewValidator(project, root)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	if !hasFindingContaining(got, "trigger", topic, "kind:event") {
+		t.Fatalf("expected non-event trigger finding, findings: %v", got)
+	}
+}
+
+func TestCONTRACTCONSISTENCYEMIT01_ReceiverDynamicTopicRejected(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topic := "event.test.created.v1"
+
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+	writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"fmt"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+type emitter interface {
+	Emit(ctx context.Context, entry outbox.Entry) error
+}
+
+func doEmit(ctx context.Context, e emitter, suffix string) error {
+	return e.Emit(ctx, outbox.Entry{EventType: fmt.Sprintf("event.test.%s.v1", suffix)})
+}
+`)
+
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+	})
+
+	v := NewValidator(project, root)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	dynamicFound := false
+	for _, r := range got {
+		if strings.Contains(r.Message, "dynamic topic") && r.File != "" && r.Line > 0 && r.Column > 0 {
+			dynamicFound = true
+		}
+	}
+	if !dynamicFound {
+		t.Fatalf("expected receiver dynamic-topic finding with source position, findings: %v", got)
+	}
+}
+
+func TestCONTRACTCONSISTENCYEMIT01_HelperDynamicTopicRejected(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topic := "event.test.created.v1"
+
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+	writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"fmt"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+func publish(ctx context.Context, e outbox.Emitter, topic string) error {
+	return outbox.Emit(ctx, e, topic, struct{}{})
+}
+
+func doEmit(ctx context.Context, e outbox.Emitter, suffix string) error {
+	return publish(ctx, e, fmt.Sprintf("event.test.%s.v1", suffix))
+}
+`)
+
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+	})
+
+	v := NewValidator(project, root)
+	got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+	dynamicFound := false
+	for _, r := range got {
+		if strings.Contains(r.Message, "dynamic topic") && r.File != "" && r.Line > 0 && r.Column > 0 {
+			dynamicFound = true
+		}
+	}
+	if !dynamicFound {
+		t.Fatalf("expected helper dynamic-topic finding with source position, findings: %v", got)
+	}
+}
+
+func TestCONTRACTCONSISTENCYEMIT01_HelperAndEntryEvidenceScoped(t *testing.T) {
+	t.Run("helper with same name in another package does not count", func(t *testing.T) {
+		root := t.TempDir()
+		ownerCell := "testcell"
+		topic := "event.test.created.v1"
+
+		dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+		writeDtoConst(t, dtoDir, "TopicTestCreated", topic)
+
+		sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+		writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+func publish(ctx context.Context, e outbox.Emitter, topic string) error {
+	return nil
+}
+
+func doWork(ctx context.Context, e outbox.Emitter) error {
+	return publish(ctx, e, dto.TopicTestCreated)
+}
+`)
+		otherPkgDir := filepath.Join(sliceDir, "otherpkg")
+		writeServiceFile(t, otherPkgDir, `package otherpkg
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+func publish(ctx context.Context, e outbox.Emitter, topic string) error {
+	return outbox.Emit(ctx, e, topic, struct{}{})
+}
+`)
+
+		project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+			httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		})
+
+		v := NewValidator(project, root)
+		got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+		if !hasFindingContaining(got, "no non-test Go file", topic) {
+			t.Fatalf("expected same-name helper in another package not to satisfy trigger, findings: %v", got)
+		}
+	})
+
+	t.Run("entry variable in another function does not count", func(t *testing.T) {
+		root := t.TempDir()
+		ownerCell := "testcell"
+		topic := "event.test.created.v1"
+
+		dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+		writeDtoConst(t, dtoDir, "TopicTestCreated", topic)
+
+		sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+		writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+type emitter interface {
+	Emit(ctx context.Context, entry outbox.Entry) error
+}
+
+func unrelated() {
+	entry := outbox.Entry{EventType: dto.TopicTestCreated}
+	_ = entry
+}
+
+func doEmit(ctx context.Context, e emitter) error {
+	return e.Emit(ctx, entry)
+}
+`)
+
+		project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+			httpContract("http.test.action.v1", ownerCell, "L2", []string{topic}),
+		})
+
+		v := NewValidator(project, root)
+		got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01)
+		if !hasFindingContaining(got, "no non-test Go file", topic) {
+			t.Fatalf("expected same-name entry in another function not to satisfy trigger, findings: %v", got)
+		}
+	})
+}
+
+func TestCONTRACTCONSISTENCYEMIT01_ControlFlowAndLocalConstEvidence(t *testing.T) {
+	root := t.TempDir()
+	ownerCell := "testcell"
+	topics := []string{
+		"event.test.if.v1",
+		"event.test.else.v1",
+		"event.test.for.v1",
+		"event.test.range.v1",
+		"event.test.switch.v1",
+		"event.test.typeswitch.v1",
+		"event.test.select.v1",
+		"event.test.var.v1",
+		"event.test.alias.v1",
+		"event.test.literal.v1",
+	}
+
+	dtoDir := filepath.Join(root, "cells", ownerCell, "internal", "dto")
+	if err := os.MkdirAll(dtoDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dtoDir, "topics.go"), []byte(`package dto
+
+const (
+	TopicIf         = "event.test.if.v1"
+	TopicElse       = "event.test.else.v1"
+	TopicFor        = "event.test.for.v1"
+	TopicRange      = "event.test.range.v1"
+	TopicSwitch     = "event.test.switch.v1"
+	TopicTypeSwitch = "event.test.typeswitch.v1"
+	TopicSelect     = "event.test.select.v1"
+	TopicVar        = "event.test.var.v1"
+	TopicAlias      = "event.test.alias.v1"
+)
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sliceDir := filepath.Join(root, "cells", ownerCell, "slices", "testslice")
+	writeServiceFile(t, sliceDir, `package testslice
+
+import (
+	"context"
+	"github.com/ghbvf/gocell/cells/testcell/internal/dto"
+	"github.com/ghbvf/gocell/kernel/outbox"
+)
+
+const LocalAlias = dto.TopicAlias
+
+type emitter interface {
+	Emit(ctx context.Context, entry outbox.Entry) error
+}
+
+func doEmit(ctx context.Context, receiver emitter, out outbox.Emitter, ch <-chan struct{}, value any, n int) error {
+	if n > 0 {
+		entry := outbox.Entry{EventType: dto.TopicIf}
+		_ = receiver.Emit(ctx, entry)
+	} else {
+		entry := outbox.Entry{EventType: dto.TopicElse}
+		_ = receiver.Emit(ctx, entry)
+	}
+	for i := 0; i < 1; i++ {
+		_ = outbox.Emit(ctx, out, dto.TopicFor, struct{}{})
+	}
+	for range []int{1} {
+		_ = outbox.Emit(ctx, out, dto.TopicRange, struct{}{})
+	}
+	switch n {
+	case 1:
+		_ = outbox.Emit(ctx, out, dto.TopicSwitch, struct{}{})
+	}
+	switch value.(type) {
+	case string:
+		_ = outbox.Emit(ctx, out, dto.TopicTypeSwitch, struct{}{})
+	}
+	select {
+	case <-ch:
+		_ = outbox.Emit(ctx, out, dto.TopicSelect, struct{}{})
+	default:
+	}
+	var declared = outbox.Entry{EventType: dto.TopicVar}
+	_ = receiver.Emit(ctx, declared)
+	_ = outbox.Emit(ctx, out, LocalAlias, struct{}{})
+	return outbox.Emit(ctx, out, "event.test.literal.v1", struct{}{})
+}
+`)
+
+	project := buildConsistencyProject(ownerCell, []*metadata.ContractMeta{
+		httpContract("http.test.control.v1", ownerCell, "L2", topics),
+	})
+
+	v := NewValidator(project, root)
+	if got := findResultByCode(v.validateCONTRACTCONSISTENCYEMIT01(), codeContractConsistencyEmit01); len(got) != 0 {
+		t.Fatalf("control-flow/local-const evidence should satisfy all triggers, got %d findings: %v", len(got), got)
 	}
 }

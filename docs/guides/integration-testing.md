@@ -29,7 +29,7 @@ go test -tags integration ./... -count=1 -v
 go test -tags integration ./adapters/postgres/... -count=1 -v
 go test -tags integration ./adapters/redis/...    -count=1 -v
 go test -tags integration ./adapters/rabbitmq/... -count=1 -v
-go test -tags integration ./adapters/websocket/.. -count=1 -v
+go test -tags integration ./adapters/websocket/... -count=1 -v
 # adapters/oidc and adapters/s3 are thin SDK wrappers with unit tests only.
 ```
 

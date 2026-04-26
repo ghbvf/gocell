@@ -110,12 +110,13 @@ schemaRefs:
 
 #### `triggers` 字段语义
 
-L2+ HTTP contract 必须声明非空的 `triggers`。值为 owner cell 的 HTTP handler 成功时通过 outbox 发布的事件 topic 字符串。`CONTRACT-CONSISTENCY-EMIT-01` 规则对此进行双向校验：
+L2+ HTTP contract 必须声明非空的 `triggers`。值为 owner cell 的 HTTP handler 成功时通过 outbox 发布的事件 contract ID / topic 字符串。`CONTRACT-CONSISTENCY-EMIT-01` 规则对此进行双向校验：
 
-- **正向检查**：contract 声明的每个 trigger 必须能在 `cells/<ownerCell>/slices/` 下的非测试 Go 文件中找到对应的 `outbox.Emit` 或 `*.Emitter.Emit` 调用。
-- **反向检查**：service 代码中出现的每个 emit topic 必须在该 cell 的至少一个 HTTP contract 的 `triggers` 中声明。
+- **引用检查**：每个 trigger 必须引用已存在的 `kind: event` contract，且 event contract 的 owner / publisher 与 HTTP owner cell 一致；服务该 HTTP contract 的 slice 必须同时声明对应 event contract 的 `role: publish`。
+- **正向检查**：contract 声明的每个 trigger 必须能在服务该 HTTP contract 的 slice 非测试 Go 文件中找到对应的 `outbox.Emit` 或 `*.Emitter.Emit` 调用。
+- **反向检查**：HTTP-serving slice 代码中出现的每个 emit topic 必须在该 slice 服务的至少一个 HTTP contract 的 `triggers` 中声明。
 
-Topic 值必须是字符串字面量或具名常量（`dto.TopicX` / `domain.TopicX`）；动态 `fmt.Sprintf` 表达式被拒绝（运行时不可知）。
+Topic 值必须是字符串字面量或具名常量（`dto.TopicX` / `domain.TopicX`）；动态 `fmt.Sprintf` 表达式和 helper / receiver 路径上的 unresolved topic 都会被拒绝（运行时不可知）。
 
 完整 HTTP 传输层示例（`GET /api/v1/access/users/{id}` 带 cursor 分页 + 401/403）：
 

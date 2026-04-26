@@ -1,15 +1,14 @@
 package governance
 
 // Rule CONTRACT-CONSISTENCY-EMIT-01 validates bidirectional alignment between
-// HTTP contract triggers and outbox.Emit calls in the owning cell's service files.
+// HTTP contract triggers and outbox.Emit calls in the slice serving that HTTP contract.
 //
 // Three constraints:
 //  1. L2+ HTTP contract without triggers → Error (triggers required)
 //  2. Triggers present but consistencyLevel ∈ {L0, L1} → Error (level mismatch)
 //  3. Bidirectional AST check: every trigger must appear in a resolvable emit
-//     call somewhere in the cell's slice service files, and every resolvable
-//     emit call topic must be covered by a trigger in some HTTP contract of the
-//     same cell.
+//     call in the serving slice, and every resolvable emit topic in that serving
+//     slice must be covered by one of the HTTP contracts served by the slice.
 //
 // ref: tools/archtest/outbox_service_test.go — same-package const propagation
 // ref: golang.org/x/tools/go/analysis/passes/nilness rule discipline
@@ -38,6 +37,19 @@ type pkgConstMap = map[string]string
 // cellPkgConsts maps pkgIdent ("dto" or "domain") → pkgConstMap.
 type cellPkgConsts = map[string]pkgConstMap
 
+type consistencyIndex struct {
+	contractByID       map[string]*metadata.ContractMeta
+	httpServeSlices    map[string][]sliceRef
+	eventPublishSlices map[string][]sliceRef
+}
+
+type sliceRef struct {
+	cellID  string
+	sliceID string
+	dir     string
+	file    string
+}
+
 // validateCONTRACTCONSISTENCYEMIT01 checks three consistency constraints
 // between HTTP contract triggers and outbox emit calls in service files.
 // Contracts under examples/ are excluded — they are illustrative and may
@@ -45,58 +57,153 @@ type cellPkgConsts = map[string]pkgConstMap
 //
 // Structured as two phases:
 //
-//  1. Per-cell phase: scan emit topics and run reverse-check unconditionally for
-//     every cell that has HTTP contracts. Also discovers cells that have no HTTP
-//     contracts but do emit — their topics must not be undeclared.
+//  1. Per-slice phase: scan emit topics only for slices that serve L2+ HTTP
+//     contracts with triggers, then reverse-check those emits against contracts
+//     served by the same slice.
 //
 //  2. Per-contract phase: run constraint-1/2 checks and forward-check (every
-//     declared trigger must appear in the cell's emit set).
+//     declared trigger must reference a real event contract and appear in the
+//     serving slice's emit set).
 //
-// The per-cell phase runs before the per-contract loop so that reverse-check is
-// never gated on a contract having non-empty triggers.
+// The per-slice phase runs before the per-contract loop so reverse-checks are
+// evaluated once per serving slice instead of once per contract.
 func (v *Validator) validateCONTRACTCONSISTENCYEMIT01() []ValidationResult {
-	cellTriggerSets := buildCellTriggerSets(v.project.Contracts)
-	cellEmitSets, perCellResults := v.runPerCellPhase(cellTriggerSets)
-	perContractResults := v.runPerContractPhase(cellEmitSets)
-	return append(perCellResults, perContractResults...)
+	idx := buildConsistencyIndex(v.project)
+	sliceEmitSets, perSliceResults := v.runPerSlicePhase(idx)
+	perContractResults := v.runPerContractPhase(idx, sliceEmitSets)
+	return append(perSliceResults, perContractResults...)
 }
 
-// runPerCellPhase scans emit topics and runs reverse-checks for all cells with
-// HTTP contracts that have declared triggers. Returns the emit-set cache and findings.
-//
-// Reverse-check only runs for cells that have at least one HTTP contract with
-// non-empty triggers (L2+ contract). A cell whose only HTTP contracts are L0/L1
-// with no triggers is typically event-driven: its emits come from event-subscription
-// handlers, not from HTTP endpoints, and those emits do not need HTTP trigger
-// declarations. Skipping reverse-check for such cells avoids false positives
-// without weakening the forward-check (which still runs per-contract in phase 2).
-func (v *Validator) runPerCellPhase(cellTriggerSets map[string]map[string]struct{}) (
+func buildConsistencyIndex(project *metadata.ProjectMeta) consistencyIndex {
+	idx := consistencyIndex{
+		contractByID:       map[string]*metadata.ContractMeta{},
+		httpServeSlices:    map[string][]sliceRef{},
+		eventPublishSlices: map[string][]sliceRef{},
+	}
+	if project == nil {
+		return idx
+	}
+	for id, c := range project.Contracts {
+		idx.contractByID[id] = c
+	}
+	for key, s := range project.Slices {
+		if s == nil {
+			continue
+		}
+		ref := newSliceRef(key, s)
+		for _, cu := range s.ContractUsages {
+			switch cu.Role {
+			case "serve":
+				idx.httpServeSlices[cu.Contract] = append(idx.httpServeSlices[cu.Contract], ref)
+			case "publish":
+				idx.eventPublishSlices[cu.Contract] = append(idx.eventPublishSlices[cu.Contract], ref)
+			}
+		}
+	}
+	return idx
+}
+
+func newSliceRef(key string, s *metadata.SliceMeta) sliceRef {
+	cellID := s.BelongsToCell
+	sliceID := s.ID
+	if cellID == "" || sliceID == "" {
+		parts := strings.Split(key, "/")
+		if len(parts) == 2 {
+			if cellID == "" {
+				cellID = parts[0]
+			}
+			if sliceID == "" {
+				sliceID = parts[1]
+			}
+		}
+	}
+	cellDir := s.CellDir
+	if cellDir == "" {
+		cellDir = cellID
+	}
+	sliceDir := s.Dir
+	if sliceDir == "" {
+		sliceDir = sliceID
+	}
+	dir := filepath.ToSlash(filepath.Join("cells", cellDir, "slices", sliceDir))
+	if s.File != "" {
+		dir = filepath.ToSlash(filepath.Dir(s.File))
+	}
+	return sliceRef{
+		cellID:  cellID,
+		sliceID: sliceID,
+		dir:     dir,
+		file:    s.File,
+	}
+}
+
+func (r sliceRef) key() string {
+	return r.cellID + "/" + r.sliceID + "@" + r.dir
+}
+
+// runPerSlicePhase scans only HTTP-serving slices and runs reverse-checks
+// against the triggers declared by HTTP contracts served by that same slice.
+func (v *Validator) runPerSlicePhase(idx consistencyIndex) (
 	map[string]map[string]struct{}, []ValidationResult,
 ) {
-	var results []ValidationResult
-	cellEmitSets := map[string]map[string]struct{}{}
+	sliceTriggerSets := map[string]map[string]struct{}{}
+	slicesByKey := map[string]sliceRef{}
 
-	for ownerCell, triggerSet := range cellTriggerSets {
-		emits, scanResults := scanCellEmitTopics(v.root, ownerCell, "")
-		results = append(results, scanResults...)
-		cellEmitSets[ownerCell] = emits
-		if len(triggerSet) == 0 {
-			continue // event-driven cell — no HTTP trigger declarations needed
+	for _, c := range v.project.Contracts {
+		addServingSliceTriggers(c, idx, slicesByKey, sliceTriggerSets)
+	}
+	return v.scanServingSlices(slicesByKey, sliceTriggerSets)
+}
+
+func addServingSliceTriggers(
+	c *metadata.ContractMeta,
+	idx consistencyIndex,
+	slicesByKey map[string]sliceRef,
+	sliceTriggerSets map[string]map[string]struct{},
+) {
+	if cell.ContractKind(c.Kind) != cell.ContractHTTP || isExamplePath(c.File) || isExamplePath(c.Dir) {
+		return
+	}
+	if len(c.Triggers) == 0 || !isL2OrHigher(c.ConsistencyLevel) {
+		return
+	}
+	for _, ref := range idx.httpServeSlices[c.ID] {
+		key := ref.key()
+		slicesByKey[key] = ref
+		if sliceTriggerSets[key] == nil {
+			sliceTriggerSets[key] = map[string]struct{}{}
 		}
-		results = append(results, v.checkReverseEmits(ownerCell, emits, triggerSet)...)
+		addTriggers(sliceTriggerSets[key], c.Triggers)
 	}
+}
 
-	// Scan cells that have NO HTTP contracts at all but do emit — every emit is unaccounted.
-	for _, ownerCell := range discoverEmittingCellsWithoutHTTPContracts(v.root, cellTriggerSets) {
-		emits, scanResults := scanCellEmitTopics(v.root, ownerCell, "")
-		results = append(results, scanResults...)
-		results = append(results, v.checkReverseEmits(ownerCell, emits, nil)...)
+func addTriggers(dst map[string]struct{}, triggers []string) {
+	for _, trigger := range triggers {
+		dst[trigger] = struct{}{}
 	}
-	return cellEmitSets, results
+}
+
+func (v *Validator) scanServingSlices(
+	slicesByKey map[string]sliceRef,
+	sliceTriggerSets map[string]map[string]struct{},
+) (map[string]map[string]struct{}, []ValidationResult) {
+	var results []ValidationResult
+	sliceEmitSets := map[string]map[string]struct{}{}
+
+	for key, ref := range slicesByKey {
+		emits, scanResults := scanSliceEmitTopics(v.root, ref, "")
+		results = append(results, scanResults...)
+		sliceEmitSets[key] = emits
+		results = append(results, v.checkReverseEmits(ref, emits, sliceTriggerSets[key])...)
+	}
+	return sliceEmitSets, results
 }
 
 // runPerContractPhase runs constraint-1/2 and forward-check for each HTTP contract.
-func (v *Validator) runPerContractPhase(cellEmitSets map[string]map[string]struct{}) []ValidationResult {
+func (v *Validator) runPerContractPhase(
+	idx consistencyIndex,
+	sliceEmitSets map[string]map[string]struct{},
+) []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
 		if cell.ContractKind(c.Kind) != cell.ContractHTTP {
@@ -110,7 +217,9 @@ func (v *Validator) runPerContractPhase(cellEmitSets map[string]map[string]struc
 		if skip || len(c.Triggers) == 0 || !isL2OrHigher(c.ConsistencyLevel) {
 			continue
 		}
-		results = append(results, v.checkForwardTriggers(c, cellEmitSets[c.OwnerCell])...)
+		servingSlices := idx.httpServeSlices[c.ID]
+		results = append(results, v.checkTriggerContracts(c, servingSlices, idx)...)
+		results = append(results, v.checkForwardTriggers(c, servingSlices, sliceEmitSets)...)
 	}
 	return results
 }
@@ -118,103 +227,6 @@ func (v *Validator) runPerContractPhase(cellEmitSets map[string]map[string]struc
 // isExamplePath returns true if the path is under an examples/ subtree.
 func isExamplePath(p string) bool {
 	return strings.HasPrefix(p, "examples/")
-}
-
-// buildCellTriggerSets pre-computes per-cell declared triggers for all HTTP contracts.
-// Returns a map of ownerCell → set of declared trigger topic strings.
-func buildCellTriggerSets(contracts map[string]*metadata.ContractMeta) map[string]map[string]struct{} {
-	sets := map[string]map[string]struct{}{}
-	for _, c := range contracts {
-		if cell.ContractKind(c.Kind) != cell.ContractHTTP {
-			continue
-		}
-		if isExamplePath(c.File) || isExamplePath(c.Dir) {
-			continue
-		}
-		if sets[c.OwnerCell] == nil {
-			sets[c.OwnerCell] = map[string]struct{}{}
-		}
-		for _, t := range c.Triggers {
-			sets[c.OwnerCell][t] = struct{}{}
-		}
-	}
-	return sets
-}
-
-// discoverEmittingCellsWithoutHTTPContracts walks cells/ to find cells that have
-// no HTTP contracts (not in knownCells) but contain outbox.Emit or receiver .Emit
-// calls. Only non-example cells are considered.
-func discoverEmittingCellsWithoutHTTPContracts(root string, knownCells map[string]map[string]struct{}) []string {
-	cellsDir := filepath.Join(root, "cells")
-	entries, err := os.ReadDir(cellsDir)
-	if err != nil {
-		return nil
-	}
-	var extras []string
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		name := e.Name()
-		if _, known := knownCells[name]; known {
-			continue
-		}
-		// Skip cells under examples/ paths (cell dir is directly under cells/).
-		slicesDir := filepath.Join(cellsDir, name, "slices")
-		if _, statErr := os.Stat(slicesDir); statErr != nil {
-			continue
-		}
-		if cellHasAnyEmit(slicesDir) {
-			extras = append(extras, name)
-		}
-	}
-	return extras
-}
-
-// cellHasAnyEmit does a quick scan of all non-test Go files under slicesDir to
-// check whether any file contains an outbox.Emit or receiver .Emit call.
-func cellHasAnyEmit(slicesDir string) bool {
-	found := false
-	fset := token.NewFileSet()
-	_ = filepath.WalkDir(slicesDir, func(path string, d fs.DirEntry, err error) error {
-		if found || err != nil || d.IsDir() {
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-		f, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			return nil
-		}
-		if fileHasEmitCall(f) {
-			found = true
-		}
-		return nil
-	})
-	return found
-}
-
-// fileHasEmitCall returns true if the file's AST contains any outbox.Emit or
-// receiver .Emit call site.
-func fileHasEmitCall(f *ast.File) bool {
-	found := false
-	ast.Inspect(f, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		if (isOutboxEmitCall(call) && len(call.Args) >= 3) ||
-			(isReceiverEmitCall(call) && len(call.Args) >= 2) {
-			found = true
-			return false
-		}
-		return true
-	})
-	return found
 }
 
 // checkConsistencyConstraints12 validates constraints 1 and 2 for a contract.
@@ -239,16 +251,84 @@ func (v *Validator) checkConsistencyConstraints12(c *metadata.ContractMeta) ([]V
 	return nil, false
 }
 
-// checkForwardTriggers validates that each contract trigger appears in emitTopics.
-func (v *Validator) checkForwardTriggers(c *metadata.ContractMeta, emitTopics map[string]struct{}) []ValidationResult {
+func (v *Validator) checkTriggerContracts(
+	c *metadata.ContractMeta,
+	servingSlices []sliceRef,
+	idx consistencyIndex,
+) []ValidationResult {
 	var results []ValidationResult
+	if len(servingSlices) == 0 {
+		results = append(results, v.newResult(
+			codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
+			contractFile(c), "triggers",
+			fmt.Sprintf("contract %q declares triggers but no slice declares role: serve for it", c.ID),
+		))
+	}
 	for _, t := range c.Triggers {
-		if _, found := emitTopics[t]; !found {
+		eventContract, ok := idx.contractByID[t]
+		if !ok {
 			results = append(results, v.newResult(
 				codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
 				contractFile(c), "triggers",
-				fmt.Sprintf("contract %q declares trigger %q but no non-test Go file under cells/%s/slices/ emits it via outbox.Emit or *.Emitter.Emit; topic must be string literal or named constant (dynamic fmt.Sprintf rejected)", c.ID, t, c.OwnerCell),
+				fmt.Sprintf("contract %q declares trigger %q but it does not reference an existing event contract", c.ID, t),
 			))
+			continue
+		}
+		if cell.ContractKind(eventContract.Kind) != cell.ContractEvent {
+			results = append(results, v.newResult(
+				codeContractConsistencyEmit01, SeverityError, IssueMismatch,
+				contractFile(c), "triggers",
+				fmt.Sprintf("contract %q declares trigger %q but referenced contract kind=%s; triggers must reference kind:event contracts", c.ID, t, eventContract.Kind),
+			))
+			continue
+		}
+		if eventContract.OwnerCell != c.OwnerCell || eventContract.Endpoints.Publisher != c.OwnerCell {
+			results = append(results, v.newResult(
+				codeContractConsistencyEmit01, SeverityError, IssueMismatch,
+				contractFile(c), "triggers",
+				fmt.Sprintf("contract %q declares trigger %q but event contract owner/publisher must both be %s", c.ID, t, c.OwnerCell),
+			))
+		}
+		for _, ref := range servingSlices {
+			if !slicePublishes(idx, ref, t) {
+				results = append(results, v.newResult(
+					codeContractConsistencyEmit01, SeverityError, IssueMismatch,
+					contractFile(c), "triggers",
+					fmt.Sprintf("contract %q declares trigger %q but serving slice %s/%s does not declare role: publish for that event contract", c.ID, t, ref.cellID, ref.sliceID),
+				))
+			}
+		}
+	}
+	return results
+}
+
+func slicePublishes(idx consistencyIndex, ref sliceRef, contractID string) bool {
+	for _, publisher := range idx.eventPublishSlices[contractID] {
+		if publisher.key() == ref.key() {
+			return true
+		}
+	}
+	return false
+}
+
+// checkForwardTriggers validates that each contract trigger appears in emitTopics
+// from each slice that serves that HTTP contract.
+func (v *Validator) checkForwardTriggers(
+	c *metadata.ContractMeta,
+	servingSlices []sliceRef,
+	sliceEmitSets map[string]map[string]struct{},
+) []ValidationResult {
+	var results []ValidationResult
+	for _, ref := range servingSlices {
+		emitTopics := sliceEmitSets[ref.key()]
+		for _, t := range c.Triggers {
+			if _, found := emitTopics[t]; !found {
+				results = append(results, v.newResult(
+					codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
+					contractFile(c), "triggers",
+					fmt.Sprintf("contract %q declares trigger %q but no non-test Go file under %s emits it via outbox.Emit or *.Emitter.Emit; serving slice %s/%s must emit the trigger topic as a string literal or named constant", c.ID, t, ref.dir, ref.cellID, ref.sliceID),
+				))
+			}
 		}
 	}
 	return results
@@ -257,7 +337,7 @@ func (v *Validator) checkForwardTriggers(c *metadata.ContractMeta, emitTopics ma
 // checkReverseEmits validates that each emitted topic appears in declared triggers.
 // declared may be nil when a cell has no HTTP contracts; in that case every emit fails.
 func (v *Validator) checkReverseEmits(
-	ownerCell string,
+	ref sliceRef,
 	emitTopics map[string]struct{},
 	declared map[string]struct{},
 ) []ValidationResult {
@@ -267,43 +347,26 @@ func (v *Validator) checkReverseEmits(
 			results = append(results, v.newScopedResult(
 				codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
 				"project", "triggers",
-				fmt.Sprintf("service emits topic %q but no HTTP contract in cell %s declares it in triggers; fix: add %q to triggers in one of cells/%s's HTTP contract.yaml files (or change the emit if dead code)", t, ownerCell, t, ownerCell),
+				fmt.Sprintf("service emits topic %q in serving slice %s/%s but no HTTP contract served by that slice declares it in triggers; fix: add %q to the slice's HTTP contract triggers or change the emit if dead code", t, ref.cellID, ref.sliceID, t),
 			))
 		}
 	}
 	return results
 }
 
-// scanCellEmitTopics scans all non-test Go files under cells/<ownerCell>/slices/
-// and returns the set of resolvable topic strings emitted by the cell.
-//
-// Resolution strategy (in order of precision):
-//  1. outbox.Emit(ctx, emitter, TOPIC, ...) — third arg resolved if literal or const;
-//     call expressions → dynamic-topic error.
-//  2. EventType: EXPR in outbox.Entry composite literals — resolved if literal or const.
-//  3. Pre-assigned entry variable passed to receiver Emit — walk back assignments.
-//  4. Same-package helper: if a function calls helper(ctx, dto.TopicX) and helper's body
-//     emits via outbox.Emit(ctx, e, topicParam, ...) where topicParam is the matching
-//     parameter, resolve via the call-site argument expression.
-//
-// Topic selectors in subscriber/comparison contexts are NOT collected — only
-// direct emit call evidence counts.
-func scanCellEmitTopics(root, ownerCell, fileForError string) (map[string]struct{}, []ValidationResult) {
+func scanSliceEmitTopics(root string, ref sliceRef, fileForError string) (map[string]struct{}, []ValidationResult) {
 	topics := map[string]struct{}{}
 	var results []ValidationResult
 
-	cellDir := filepath.Join(root, "cells", ownerCell)
+	cellDir := filepath.Join(root, "cells", ref.cellID)
 	pkgConsts := buildPkgConsts(cellDir)
-	slicesDir := filepath.Join(cellDir, "slices")
-	if _, err := os.Stat(slicesDir); err != nil {
+	sliceDir := filepath.Join(root, filepath.FromSlash(ref.dir))
+	if _, err := os.Stat(sliceDir); err != nil {
 		return topics, results
 	}
 
 	fset := token.NewFileSet()
-
-	// Two-pass approach: first collect all function declarations across all files
-	// so that helper resolution can reference them, then scan for emits.
-	allFiles := collectParsedFiles(fset, slicesDir)
+	allFiles := collectParsedFiles(fset, sliceDir)
 	helperMap := buildHelperEmitMap(allFiles, pkgConsts)
 
 	for _, f := range allFiles {
@@ -315,7 +378,10 @@ func scanCellEmitTopics(root, ownerCell, fileForError string) (map[string]struct
 
 // parsedFile wraps a parsed AST file for use in the two-pass emit scan.
 type parsedFile struct {
-	ast *ast.File
+	ast         *ast.File
+	path        string
+	dir         string
+	packageName string
 }
 
 // collectParsedFiles walks slicesDir and parses all non-test Go files,
@@ -339,7 +405,12 @@ func collectParsedFiles(fset *token.FileSet, slicesDir string) []parsedFile {
 		if parseErr != nil {
 			return nil
 		}
-		files = append(files, parsedFile{ast: f})
+		files = append(files, parsedFile{
+			ast:         f,
+			path:        path,
+			dir:         filepath.Dir(path),
+			packageName: f.Name.Name,
+		})
 		return nil
 	})
 	return files
@@ -352,18 +423,24 @@ type helperEmitFunc struct {
 	paramIndex int
 }
 
+type helperKey struct {
+	dir      string
+	pkg      string
+	name     string
+	receiver string
+}
+
 // buildHelperEmitMap scans all files to find functions and methods that:
 //   - have ≥1 parameter
 //   - contain an outbox.Emit call (or receiver emit via outbox.Entry{EventType:param})
 //     whose topic comes from one of the function/method's parameters (not a const)
 //
-// Returns map of funcName → helperEmitFunc.
-// Both plain functions and methods are included (keyed by bare name).
+// Returns map of package-dir + function/method identity → helperEmitFunc.
 // Only one-topic-from-param functions/methods are supported (first match wins).
 // Two-level chains are handled: if a function/method calls another helper whose
 // body emits and that helper is also in the map, the caller is also registered.
-func buildHelperEmitMap(files []parsedFile, pkgConsts cellPkgConsts) map[string]helperEmitFunc {
-	helpers := map[string]helperEmitFunc{}
+func buildHelperEmitMap(files []parsedFile, pkgConsts cellPkgConsts) map[helperKey]helperEmitFunc {
+	helpers := map[helperKey]helperEmitFunc{}
 	// First pass: direct emitters (outbox.Emit or receiver emit with entry var).
 	registerDirectEmitters(files, pkgConsts, helpers)
 	// Second pass: transitive callers — functions/methods that call a known helper.
@@ -373,16 +450,16 @@ func buildHelperEmitMap(files []parsedFile, pkgConsts cellPkgConsts) map[string]
 
 // registerDirectEmitters adds all functions/methods whose body directly emits
 // (via outbox.Emit or receiver emit with entry var) using a parameter as the topic.
-func registerDirectEmitters(files []parsedFile, pkgConsts cellPkgConsts, helpers map[string]helperEmitFunc) {
+func registerDirectEmitters(files []parsedFile, pkgConsts cellPkgConsts, helpers map[helperKey]helperEmitFunc) {
 	for _, pf := range files {
-		scanFuncDeclsForDirectEmit(pf.ast.Decls, pkgConsts, helpers)
+		scanFuncDeclsForDirectEmit(pf, pkgConsts, helpers)
 	}
 }
 
 // scanFuncDeclsForDirectEmit processes a list of declarations looking for
 // direct-emit helper functions.
-func scanFuncDeclsForDirectEmit(decls []ast.Decl, pkgConsts cellPkgConsts, helpers map[string]helperEmitFunc) {
-	for _, decl := range decls {
+func scanFuncDeclsForDirectEmit(pf parsedFile, pkgConsts cellPkgConsts, helpers map[helperKey]helperEmitFunc) {
+	for _, decl := range pf.ast.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Name == nil || fn.Body == nil || fn.Type.Params == nil {
 			continue
@@ -392,37 +469,48 @@ func scanFuncDeclsForDirectEmit(decls []ast.Decl, pkgConsts cellPkgConsts, helpe
 			continue
 		}
 		if idx, found := findHelperTopicParamIndex(fn.Body, paramNames, pkgConsts); found {
-			helpers[fn.Name.Name] = helperEmitFunc{paramIndex: idx}
+			helpers[funcHelperKey(pf, fn)] = helperEmitFunc{paramIndex: idx}
 		}
 	}
 }
 
 // registerTransitiveCallers adds functions/methods that call a known helper and
 // pass one of their own parameters as the helper's topic argument.
-func registerTransitiveCallers(files []parsedFile, pkgConsts cellPkgConsts, helpers map[string]helperEmitFunc) {
+func registerTransitiveCallers(files []parsedFile, pkgConsts cellPkgConsts, helpers map[helperKey]helperEmitFunc) {
 	for _, pf := range files {
-		scanFuncDeclsForTransitive(pf.ast.Decls, pkgConsts, helpers)
+		scanFuncDeclsForTransitive(pf, pkgConsts, helpers)
 	}
 }
 
 // scanFuncDeclsForTransitive processes a list of declarations looking for
 // transitive-emit helper functions.
-func scanFuncDeclsForTransitive(decls []ast.Decl, pkgConsts cellPkgConsts, helpers map[string]helperEmitFunc) {
-	for _, decl := range decls {
+func scanFuncDeclsForTransitive(pf parsedFile, pkgConsts cellPkgConsts, helpers map[helperKey]helperEmitFunc) {
+	for _, decl := range pf.ast.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok || fn.Name == nil || fn.Body == nil || fn.Type.Params == nil {
 			continue
 		}
-		if _, already := helpers[fn.Name.Name]; already {
+		key := funcHelperKey(pf, fn)
+		if _, already := helpers[key]; already {
 			continue
 		}
 		paramNames := funcParamNames(fn)
 		if len(paramNames) == 0 {
 			continue
 		}
-		if idx, found := findTransitiveHelperParamIndex(fn.Body, paramNames, pkgConsts, helpers); found {
-			helpers[fn.Name.Name] = helperEmitFunc{paramIndex: idx}
+		scope := functionScope(fn)
+		if idx, found := findTransitiveHelperParamIndex(fn.Body, pf, scope, paramNames, pkgConsts, helpers); found {
+			helpers[key] = helperEmitFunc{paramIndex: idx}
 		}
+	}
+}
+
+func funcHelperKey(pf parsedFile, fn *ast.FuncDecl) helperKey {
+	return helperKey{
+		dir:      pf.dir,
+		pkg:      pf.packageName,
+		name:     fn.Name.Name,
+		receiver: receiverTypeName(fn),
 	}
 }
 
@@ -435,6 +523,52 @@ func funcParamNames(fn *ast.FuncDecl) []string {
 		}
 	}
 	return names
+}
+
+type emitScope struct {
+	receiverVars map[string]string
+}
+
+func functionScope(fn *ast.FuncDecl) emitScope {
+	scope := emitScope{receiverVars: map[string]string{}}
+	if fn.Recv != nil {
+		addReceiverVars(scope.receiverVars, fn.Recv.List)
+	}
+	if fn.Type.Params != nil {
+		addReceiverVars(scope.receiverVars, fn.Type.Params.List)
+	}
+	return scope
+}
+
+func addReceiverVars(receiverVars map[string]string, fields []*ast.Field) {
+	for _, field := range fields {
+		typ := exprTypeName(field.Type)
+		if typ == "" {
+			continue
+		}
+		for _, name := range field.Names {
+			receiverVars[name.Name] = typ
+		}
+	}
+}
+
+func receiverTypeName(fn *ast.FuncDecl) string {
+	if fn.Recv == nil || len(fn.Recv.List) == 0 {
+		return ""
+	}
+	return exprTypeName(fn.Recv.List[0].Type)
+}
+
+func exprTypeName(expr ast.Expr) string {
+	switch t := expr.(type) {
+	case *ast.Ident:
+		return t.Name
+	case *ast.StarExpr:
+		return exprTypeName(t.X)
+	case *ast.SelectorExpr:
+		return t.Sel.Name
+	}
+	return ""
 }
 
 // findHelperTopicParamIndex inspects a function/method body for emit evidence
@@ -625,9 +759,11 @@ func isOutboxEntryType(compLit *ast.CompositeLit) bool {
 // Returns the parameter index in the current function and true on first match.
 func findTransitiveHelperParamIndex(
 	body *ast.BlockStmt,
+	pf parsedFile,
+	scope emitScope,
 	paramNames []string,
 	pkgConsts cellPkgConsts,
-	helpers map[string]helperEmitFunc,
+	helpers map[helperKey]helperEmitFunc,
 ) (int, bool) {
 	dummyConsts := pkgConstMap{}
 	var foundIdx int
@@ -640,7 +776,7 @@ func findTransitiveHelperParamIndex(
 		if !ok {
 			return true
 		}
-		idx, ok := resolveTransitiveTopicParam(call, paramNames, pkgConsts, dummyConsts, helpers)
+		idx, ok := resolveTransitiveTopicParam(call, pf, scope, paramNames, pkgConsts, dummyConsts, helpers)
 		if ok {
 			foundIdx = idx
 			found = true
@@ -654,16 +790,18 @@ func findTransitiveHelperParamIndex(
 // one of the caller's paramNames is passed as the helper's topic argument.
 func resolveTransitiveTopicParam(
 	call *ast.CallExpr,
+	pf parsedFile,
+	scope emitScope,
 	paramNames []string,
 	pkgConsts cellPkgConsts,
 	dummyConsts pkgConstMap,
-	helpers map[string]helperEmitFunc,
+	helpers map[helperKey]helperEmitFunc,
 ) (int, bool) {
-	calledName := resolveCallName(call)
-	if calledName == "" {
+	calledKey, ok := resolveHelperCallKey(call, pf, scope)
+	if !ok {
 		return 0, false
 	}
-	helper, ok := helpers[calledName]
+	helper, ok := helpers[calledKey]
 	if !ok || helper.paramIndex >= len(call.Args) {
 		return 0, false
 	}
@@ -683,18 +821,31 @@ func resolveTransitiveTopicParam(
 	return 0, false
 }
 
-// resolveCallName extracts the bare function/method name from a call expression.
-// For ident calls (foo(...)), returns "foo".
-// For selector calls (s.foo(...) or pkg.foo(...)), returns "foo".
-// Returns "" for complex call expressions.
-func resolveCallName(call *ast.CallExpr) string {
+func resolveHelperCallKey(call *ast.CallExpr, pf parsedFile, scope emitScope) (helperKey, bool) {
 	switch fn := call.Fun.(type) {
 	case *ast.Ident:
-		return fn.Name
+		return helperKey{
+			dir:  pf.dir,
+			pkg:  pf.packageName,
+			name: fn.Name,
+		}, true
 	case *ast.SelectorExpr:
-		return fn.Sel.Name
+		ident, ok := fn.X.(*ast.Ident)
+		if !ok {
+			return helperKey{}, false
+		}
+		receiver, ok := scope.receiverVars[ident.Name]
+		if !ok {
+			return helperKey{}, false
+		}
+		return helperKey{
+			dir:      pf.dir,
+			pkg:      pf.packageName,
+			name:     fn.Sel.Name,
+			receiver: receiver,
+		}, true
 	}
-	return ""
+	return helperKey{}, false
 }
 
 // scanFileForEmits walks a single parsed file's AST and collects emitted topics.
@@ -708,37 +859,220 @@ func scanFileForEmits(
 	pf parsedFile,
 	fset *token.FileSet,
 	pkgConsts cellPkgConsts,
-	helperMap map[string]helperEmitFunc,
+	helperMap map[helperKey]helperEmitFunc,
 	fileForError string,
 	root string,
 	topics map[string]struct{},
 ) []ValidationResult {
-	f := pf.ast
-	fileConsts := collectFileConsts(f, pkgConsts)
 	var results []ValidationResult
-	ast.Inspect(f, func(n ast.Node) bool {
+	fileConsts := collectFileConsts(pf.ast, pkgConsts)
+	for _, decl := range pf.ast.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			continue
+		}
+		ctx := emitScanContext{
+			pf:         pf,
+			fset:       fset,
+			pkgConsts:  pkgConsts,
+			fileConsts: fileConsts,
+			helperMap:  helperMap,
+			root:       root,
+			topics:     topics,
+			scope:      functionScope(fn),
+			paramNames: funcParamNames(fn),
+		}
+		if helper, ok := helperMap[funcHelperKey(pf, fn)]; ok {
+			ctx.currentHelperParam = helper.paramIndex
+		} else {
+			ctx.currentHelperParam = -1
+		}
+		state := emitScanState{entryTopics: map[string][]string{}}
+		results = append(results, scanBlockForEmits(fn.Body, ctx, &state)...)
+	}
+	return results
+}
+
+type emitScanContext struct {
+	pf                 parsedFile
+	fset               *token.FileSet
+	pkgConsts          cellPkgConsts
+	fileConsts         pkgConstMap
+	helperMap          map[helperKey]helperEmitFunc
+	root               string
+	topics             map[string]struct{}
+	scope              emitScope
+	paramNames         []string
+	currentHelperParam int
+}
+
+type emitScanState struct {
+	entryTopics map[string][]string
+}
+
+func scanBlockForEmits(block *ast.BlockStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	if block == nil {
+		return nil
+	}
+	var results []ValidationResult
+	for _, stmt := range block.List {
+		results = append(results, scanStmtForEmits(stmt, ctx, state)...)
+	}
+	return results
+}
+
+func scanStmtForEmits(stmt ast.Stmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	switch s := stmt.(type) {
+	case *ast.AssignStmt:
+		results := collectEntryAssignments(s, ctx, state)
+		return append(results, scanNodeForEmitCalls(s, ctx, state)...)
+	case *ast.DeclStmt:
+		results := collectEntryDecls(s, ctx, state)
+		return append(results, scanNodeForEmitCalls(s, ctx, state)...)
+	case *ast.ReturnStmt, *ast.ExprStmt, *ast.GoStmt, *ast.DeferStmt, *ast.SendStmt:
+		return scanNodeForEmitCalls(s, ctx, state)
+	case *ast.IfStmt:
+		return scanIfForEmits(s, ctx, state)
+	case *ast.ForStmt:
+		return scanForForEmits(s, ctx, state)
+	case *ast.RangeStmt:
+		return scanRangeForEmits(s, ctx, state)
+	case *ast.SwitchStmt:
+		return scanSwitchForEmits(s, ctx, state)
+	case *ast.TypeSwitchStmt:
+		return scanTypeSwitchForEmits(s, ctx, state)
+	case *ast.SelectStmt:
+		return scanSelectForEmits(s, ctx, state)
+	case *ast.BlockStmt:
+		return scanBlockForEmits(s, ctx, state)
+	default:
+		return scanNodeForEmitCalls(s, ctx, state)
+	}
+}
+
+func scanIfForEmits(stmt *ast.IfStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	var results []ValidationResult
+	if stmt.Init != nil {
+		results = append(results, scanStmtForEmits(stmt.Init, ctx, state)...)
+	}
+	if stmt.Cond != nil {
+		results = append(results, scanNodeForEmitCalls(stmt.Cond, ctx, state)...)
+	}
+	results = append(results, scanBlockForEmits(stmt.Body, ctx, state)...)
+	if stmt.Else != nil {
+		results = append(results, scanElseForEmits(stmt.Else, ctx, state)...)
+	}
+	return results
+}
+
+func scanForForEmits(stmt *ast.ForStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	var results []ValidationResult
+	if stmt.Init != nil {
+		results = append(results, scanStmtForEmits(stmt.Init, ctx, state)...)
+	}
+	if stmt.Cond != nil {
+		results = append(results, scanNodeForEmitCalls(stmt.Cond, ctx, state)...)
+	}
+	if stmt.Post != nil {
+		results = append(results, scanStmtForEmits(stmt.Post, ctx, state)...)
+	}
+	return append(results, scanBlockForEmits(stmt.Body, ctx, state)...)
+}
+
+func scanRangeForEmits(stmt *ast.RangeStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	results := scanNodeForEmitCalls(stmt.X, ctx, state)
+	return append(results, scanBlockForEmits(stmt.Body, ctx, state)...)
+}
+
+func scanElseForEmits(node ast.Stmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	if block, ok := node.(*ast.BlockStmt); ok {
+		return scanBlockForEmits(block, ctx, state)
+	}
+	return scanStmtForEmits(node, ctx, state)
+}
+
+func scanSwitchForEmits(stmt *ast.SwitchStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	var results []ValidationResult
+	if stmt.Init != nil {
+		results = append(results, scanStmtForEmits(stmt.Init, ctx, state)...)
+	}
+	if stmt.Tag != nil {
+		results = append(results, scanNodeForEmitCalls(stmt.Tag, ctx, state)...)
+	}
+	for _, item := range stmt.Body.List {
+		clause, ok := item.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		for _, expr := range clause.List {
+			results = append(results, scanNodeForEmitCalls(expr, ctx, state)...)
+		}
+		for _, bodyStmt := range clause.Body {
+			results = append(results, scanStmtForEmits(bodyStmt, ctx, state)...)
+		}
+	}
+	return results
+}
+
+func scanTypeSwitchForEmits(stmt *ast.TypeSwitchStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	var results []ValidationResult
+	if stmt.Init != nil {
+		results = append(results, scanStmtForEmits(stmt.Init, ctx, state)...)
+	}
+	if stmt.Assign != nil {
+		results = append(results, scanStmtForEmits(stmt.Assign, ctx, state)...)
+	}
+	for _, item := range stmt.Body.List {
+		clause, ok := item.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		for _, bodyStmt := range clause.Body {
+			results = append(results, scanStmtForEmits(bodyStmt, ctx, state)...)
+		}
+	}
+	return results
+}
+
+func scanSelectForEmits(stmt *ast.SelectStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	var results []ValidationResult
+	for _, item := range stmt.Body.List {
+		clause, ok := item.(*ast.CommClause)
+		if !ok {
+			continue
+		}
+		if clause.Comm != nil {
+			results = append(results, scanStmtForEmits(clause.Comm, ctx, state)...)
+		}
+		for _, bodyStmt := range clause.Body {
+			results = append(results, scanStmtForEmits(bodyStmt, ctx, state)...)
+		}
+	}
+	return results
+}
+
+func scanNodeForEmitCalls(node ast.Node, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	var results []ValidationResult
+	ast.Inspect(node, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-
-		// outbox.Emit(ctx, emitter, TOPIC, payload) — direct call.
-		if isOutboxEmitCall(call) && len(call.Args) >= 3 {
-			r := collectOutboxEmitTopic(call, fset, pkgConsts, fileConsts, fileForError, root, topics)
-			results = append(results, r...)
-			return true
-		}
-
-		// receiver.Emit(ctx, entry) — receiver-style emit.
-		if isReceiverEmitCall(call) && len(call.Args) >= 2 {
-			collectReceiverEmitTopics(call.Args[1], f, pkgConsts, fileConsts, topics)
-			return true
-		}
-
-		// helper(args...) — check if this is a known same-package helper.
-		collectHelperCallTopics(call, f, pkgConsts, fileConsts, helperMap, topics)
+		results = append(results, collectEmitCallTopics(call, ctx, state)...)
 		return true
 	})
+	return results
+}
+
+func collectEmitCallTopics(call *ast.CallExpr, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	var results []ValidationResult
+	if isOutboxEmitCall(call) && len(call.Args) >= 3 {
+		return collectOutboxEmitTopic(call, ctx, state)
+	}
+	if isReceiverEmitCall(call) && len(call.Args) >= 2 {
+		results = append(results, collectReceiverEmitTopics(call.Args[1], ctx, state)...)
+	}
+	results = append(results, collectHelperCallTopics(call, ctx)...)
 	return results
 }
 
@@ -746,32 +1080,37 @@ func scanFileForEmits(
 // or method that emits via a topic parameter, and if so resolves the topic from
 // the call-site argument.
 //
-// Handles both plain function calls (helper(...)) and receiver/selector method
-// calls (s.method(...), pkg.Func(...)). The helper map is keyed by bare name
-// so we match on the last segment (method name) regardless of receiver type.
+// Handles plain function calls (helper(...)) and receiver method calls when the
+// receiver variable can be tied to the current function's receiver or parameter
+// type. Package selectors and arbitrary selector last-segment matches are not
+// accepted as helper evidence.
 func collectHelperCallTopics(
 	call *ast.CallExpr,
-	f *ast.File,
-	pkgConsts cellPkgConsts,
-	fileConsts pkgConstMap,
-	helperMap map[string]helperEmitFunc,
-	topics map[string]struct{},
-) {
-	calledName := resolveCallName(call)
-	if calledName == "" {
-		return
-	}
-	helper, ok := helperMap[calledName]
+	ctx emitScanContext,
+) []ValidationResult {
+	calledKey, ok := resolveHelperCallKey(call, ctx.pf, ctx.scope)
 	if !ok {
-		return
+		return nil
+	}
+	helper, ok := ctx.helperMap[calledKey]
+	if !ok {
+		return nil
 	}
 	if helper.paramIndex >= len(call.Args) {
-		return
+		return nil
 	}
 	topicArg := call.Args[helper.paramIndex]
-	if topic, resolved := resolveTopicExpr(topicArg, pkgConsts, fileConsts); resolved {
-		topics[topic] = struct{}{}
+	if topic, resolved := resolveTopicExpr(topicArg, ctx.pkgConsts, ctx.fileConsts); resolved {
+		ctx.topics[topic] = struct{}{}
+		return nil
 	}
+	if isCurrentHelperTopicParam(topicArg, ctx) {
+		return nil
+	}
+	return []ValidationResult{dynamicTopicResult(
+		topicArg, ctx.fset, ctx.root,
+		"dynamic topic in helper emit not allowed; topic argument must resolve to a string literal or named constant",
+	)}
 }
 
 // collectOutboxEmitTopic extracts the topic from outbox.Emit third arg.
@@ -779,52 +1118,121 @@ func collectHelperCallTopics(
 // root is used to compute a project-relative file path for the finding.
 func collectOutboxEmitTopic(
 	call *ast.CallExpr,
-	fset *token.FileSet,
-	pkgConsts cellPkgConsts,
-	fileConsts pkgConstMap,
-	fileForError string,
-	root string,
-	topics map[string]struct{},
+	ctx emitScanContext,
+	state *emitScanState,
 ) []ValidationResult {
 	topicExpr := call.Args[2]
-	topic, resolved := resolveTopicExpr(topicExpr, pkgConsts, fileConsts)
+	topic, resolved := resolveTopicExpr(topicExpr, ctx.pkgConsts, ctx.fileConsts)
 	if resolved {
-		topics[topic] = struct{}{}
+		ctx.topics[topic] = struct{}{}
+		return nil
+	}
+	if isCurrentHelperTopicParam(topicExpr, ctx) {
 		return nil
 	}
 	if isDynamicExpr(topicExpr) {
-		pos := fset.Position(call.Pos())
-		relFile := pos.Filename
-		if root != "" {
-			if rel, err := filepath.Rel(root, pos.Filename); err == nil {
-				relFile = rel
-			}
-		}
-		return []ValidationResult{{
-			Code:      codeContractConsistencyEmit01,
-			Severity:  SeverityError,
-			IssueType: IssueInvalid,
-			File:      relFile,
-			Field:     "triggers",
-			Message: fmt.Sprintf(
-				"dynamic topic in emit not allowed at %s:%d; topic must be string literal or named constant",
-				relFile, pos.Line,
-			),
-		}}
+		return []ValidationResult{dynamicTopicResult(
+			topicExpr, ctx.fset, ctx.root,
+			"dynamic topic in emit not allowed; topic must be string literal or named constant",
+		)}
 	}
+	_ = state
 	return nil
 }
 
 // collectReceiverEmitTopics resolves topics from a receiver-style Emit call.
 func collectReceiverEmitTopics(
 	entryArg ast.Expr,
-	f *ast.File,
-	pkgConsts cellPkgConsts,
-	fileConsts pkgConstMap,
-	topics map[string]struct{},
-) {
-	for _, t := range extractEntryTopics(entryArg, f, pkgConsts, fileConsts) {
-		topics[t] = struct{}{}
+	ctx emitScanContext,
+	state *emitScanState,
+) []ValidationResult {
+	resolved, results := extractEntryTopics(entryArg, ctx, state)
+	for _, t := range resolved {
+		ctx.topics[t] = struct{}{}
+	}
+	return results
+}
+
+func collectEntryAssignments(stmt *ast.AssignStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	var results []ValidationResult
+	for i, lhs := range stmt.Lhs {
+		lhsIdent, ok := lhs.(*ast.Ident)
+		if !ok || i >= len(stmt.Rhs) {
+			continue
+		}
+		compLit, ok := stmt.Rhs[i].(*ast.CompositeLit)
+		if !ok || !isOutboxEntryType(compLit) {
+			delete(state.entryTopics, lhsIdent.Name)
+			continue
+		}
+		results = append(results, bindEntryTopic(lhsIdent.Name, compLit, ctx, state)...)
+	}
+	return results
+}
+
+func collectEntryDecls(stmt *ast.DeclStmt, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	genDecl, ok := stmt.Decl.(*ast.GenDecl)
+	if !ok || genDecl.Tok != token.VAR {
+		return nil
+	}
+	var results []ValidationResult
+	for _, spec := range genDecl.Specs {
+		vspec, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			continue
+		}
+		for i, name := range vspec.Names {
+			if i >= len(vspec.Values) {
+				continue
+			}
+			compLit, ok := vspec.Values[i].(*ast.CompositeLit)
+			if !ok || !isOutboxEntryType(compLit) {
+				continue
+			}
+			results = append(results, bindEntryTopic(name.Name, compLit, ctx, state)...)
+		}
+	}
+	return results
+}
+
+func bindEntryTopic(name string, compLit *ast.CompositeLit, ctx emitScanContext, state *emitScanState) []ValidationResult {
+	topic, found, results := extractEventTypeFromCompLit(compLit, ctx)
+	if found {
+		state.entryTopics[name] = []string{topic}
+		return results
+	}
+	delete(state.entryTopics, name)
+	return results
+}
+
+func isCurrentHelperTopicParam(expr ast.Expr, ctx emitScanContext) bool {
+	if ctx.currentHelperParam < 0 || ctx.currentHelperParam >= len(ctx.paramNames) {
+		return false
+	}
+	ident, ok := expr.(*ast.Ident)
+	return ok && ident.Name == ctx.paramNames[ctx.currentHelperParam]
+}
+
+func dynamicTopicResult(expr ast.Expr, fset *token.FileSet, root, message string) ValidationResult {
+	pos := fset.Position(expr.Pos())
+	relFile := pos.Filename
+	if root != "" {
+		if rel, err := filepath.Rel(root, pos.Filename); err == nil {
+			relFile = filepath.ToSlash(rel)
+		}
+	}
+	return ValidationResult{
+		Code:      codeContractConsistencyEmit01,
+		Severity:  SeverityError,
+		IssueType: IssueInvalid,
+		File:      relFile,
+		Field:     "triggers",
+		Message: fmt.Sprintf(
+			"%s at %s:%d:%d",
+			message, relFile, pos.Line, pos.Column,
+		),
+		Line:   pos.Line,
+		Column: pos.Column,
 	}
 }
 
@@ -1034,49 +1442,25 @@ func isReceiverEmitCall(call *ast.CallExpr) bool {
 }
 
 // extractEntryTopics resolves the EventType from the entry argument of a receiver Emit call.
-// Handles both inline composite literals and pre-assigned entry variables.
-func extractEntryTopics(entryArg ast.Expr, f *ast.File, pkgConsts cellPkgConsts, fileConsts pkgConstMap) []string {
+// Handles both inline composite literals and entry variables assigned earlier in the
+// current function body.
+func extractEntryTopics(entryArg ast.Expr, ctx emitScanContext, state *emitScanState) ([]string, []ValidationResult) {
 	if compLit, ok := entryArg.(*ast.CompositeLit); ok {
-		topic, found := extractEventTypeFromCompLit(compLit, pkgConsts, fileConsts)
+		topic, found, results := extractEventTypeFromCompLit(compLit, ctx)
 		if found {
-			return []string{topic}
+			return []string{topic}, results
 		}
-		return nil
+		return nil, results
 	}
 	ident, ok := entryArg.(*ast.Ident)
 	if !ok {
-		return nil
+		return nil, nil
 	}
-	return findEntryTopicsFromIdent(ident.Name, f, pkgConsts, fileConsts)
-}
-
-// findEntryTopicsFromIdent searches the file AST for assignments to the given
-// identifier and resolves their EventType fields.
-func findEntryTopicsFromIdent(name string, f *ast.File, pkgConsts cellPkgConsts, fileConsts pkgConstMap) []string {
-	var topics []string
-	ast.Inspect(f, func(n ast.Node) bool {
-		stmt, ok := n.(*ast.AssignStmt)
-		if !ok {
-			return true
-		}
-		for i, lhs := range stmt.Lhs {
-			lhsIdent, ok := lhs.(*ast.Ident)
-			if !ok || lhsIdent.Name != name || i >= len(stmt.Rhs) {
-				continue
-			}
-			if compLit, ok := stmt.Rhs[i].(*ast.CompositeLit); ok {
-				if topic, found := extractEventTypeFromCompLit(compLit, pkgConsts, fileConsts); found {
-					topics = append(topics, topic)
-				}
-			}
-		}
-		return true
-	})
-	return topics
+	return state.entryTopics[ident.Name], nil
 }
 
 // extractEventTypeFromCompLit finds the EventType field in a composite literal.
-func extractEventTypeFromCompLit(compLit *ast.CompositeLit, pkgConsts cellPkgConsts, fileConsts pkgConstMap) (string, bool) {
+func extractEventTypeFromCompLit(compLit *ast.CompositeLit, ctx emitScanContext) (string, bool, []ValidationResult) {
 	for _, elt := range compLit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -1086,7 +1470,19 @@ func extractEventTypeFromCompLit(compLit *ast.CompositeLit, pkgConsts cellPkgCon
 		if !ok || key.Name != "EventType" {
 			continue
 		}
-		return resolveTopicExpr(kv.Value, pkgConsts, fileConsts)
+		if topic, resolved := resolveTopicExpr(kv.Value, ctx.pkgConsts, ctx.fileConsts); resolved {
+			return topic, true, nil
+		}
+		if isCurrentHelperTopicParam(kv.Value, ctx) {
+			return "", false, nil
+		}
+		if isDynamicExpr(kv.Value) {
+			return "", false, []ValidationResult{dynamicTopicResult(
+				kv.Value, ctx.fset, ctx.root,
+				"dynamic topic in receiver emit not allowed; EventType must resolve to a string literal or named constant",
+			)}
+		}
+		return "", false, nil
 	}
-	return "", false
+	return "", false, nil
 }
