@@ -1425,6 +1425,15 @@ func TestVERIFY06(t *testing.T) {
 			wantCount: 1,
 		},
 		{
+			name: "active journey cannot borrow another journey checkRef",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "other journey check", Mode: "auto", CheckRef: "journey.J-other.session-db"},
+				}
+			},
+			wantCount: 1,
+		},
+		{
 			name: "experimental journey with only manual criteria passes",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].Lifecycle = "experimental"

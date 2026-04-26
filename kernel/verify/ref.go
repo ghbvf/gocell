@@ -11,6 +11,7 @@ import (
 // resolvedRef holds the parsed components of a verify reference string.
 type resolvedRef struct {
 	Kind       string // "journey", "smoke", "unit", "contract"
+	Scope      string // second segment; for journey refs this must equal JourneyMeta.ID
 	Pkg        string // Go test package path; empty means caller-provided
 	RunPattern string // CamelCase -run regex pattern
 }
@@ -40,13 +41,18 @@ func resolveRef(ref string) (resolvedRef, error) {
 
 	switch prefix {
 	case PrefixJourney:
+		journeyID := parts[1]
+		if err := validateSegment(journeyID, "journey ID"); err != nil {
+			return resolvedRef{}, err
+		}
 		// Journey tests may live in ./journeys/... or ./tests/integration/...
 		// The Runner resolves the actual path at execution time.
 		// Include journeyID in pattern to disambiguate refs with identical suffixes
 		// (e.g., event-publish appears across multiple journeys).
-		testName := "Test" + kebabToCamelCase(parts[1]) + kebabToCamelCase(suffix)
+		testName := "Test" + kebabToCamelCase(journeyID) + kebabToCamelCase(suffix)
 		return resolvedRef{
 			Kind:       PrefixJourney,
+			Scope:      journeyID,
 			Pkg:        "", // resolved by Runner based on project layout
 			RunPattern: "^" + regexp.QuoteMeta(testName) + "$",
 		}, nil
@@ -87,6 +93,19 @@ func resolveRef(ref string) (resolvedRef, error) {
 		return resolvedRef{}, errcode.New(errcode.ErrCheckRefInvalid,
 			fmt.Sprintf("ref %q has unknown prefix %q (expected journey, smoke, unit, or contract)", ref, prefix))
 	}
+}
+
+// JourneyRefScope returns the journey ID declared inside a journey checkRef.
+func JourneyRefScope(ref string) (string, error) {
+	resolved, err := resolveRef(ref)
+	if err != nil {
+		return "", err
+	}
+	if resolved.Kind != PrefixJourney {
+		return "", errcode.New(errcode.ErrCheckRefInvalid,
+			fmt.Sprintf("journey checkRef %q must use journey prefix", ref))
+	}
+	return resolved.Scope, nil
 }
 
 // validateSegment rejects path segments that could cause directory traversal.

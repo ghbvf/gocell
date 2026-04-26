@@ -131,6 +131,47 @@ func TestRunJourney_InvalidRef(t *testing.T) {
 	assert.Contains(t, result.Errors[0].Error(), "ERR_CHECKREF_INVALID")
 }
 
+func TestRunActiveJourneys_ManualOnlyActiveFails(t *testing.T) {
+	r := NewRunner(&metadata.ProjectMeta{
+		Journeys: map[string]*metadata.JourneyMeta{
+			"J-test": {
+				ID:        "J-test",
+				Lifecycle: "active",
+				PassCriteria: []metadata.PassCriterion{
+					{Mode: "manual", Text: "Security signoff"},
+				},
+			},
+		},
+	}, t.TempDir())
+
+	result, err := r.RunActiveJourneys(context.Background())
+	require.NoError(t, err)
+	assert.False(t, result.Passed, "active journeys need at least one auto checkRef")
+	require.NotEmpty(t, result.Results)
+	assert.Contains(t, result.Results[len(result.Results)-1].Output, "active journey has no auto checkRef")
+}
+
+func TestRunJourneyCheckRef_RejectsMismatchedJourneyScope(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "journeys"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "journey_test.go"), []byte(`package journeys
+import "testing"
+func TestJOtherHappyPath(t *testing.T) {}
+`), 0o644))
+
+	r := NewRunner(&metadata.ProjectMeta{}, dir)
+	tr, errs := r.RunJourneyCheckRef(
+		context.Background(),
+		&metadata.JourneyMeta{ID: "J-current"},
+		"journey.J-other.happy-path",
+	)
+
+	assert.False(t, tr.Passed, "a journey must not borrow another journey's passing test")
+	require.Len(t, errs, 1)
+	assert.Contains(t, errs[0].Error(), `belongs to journey "J-other"`)
+}
+
 func TestResolveJourneyPkg_IntegrationDir(t *testing.T) {
 	dir := t.TempDir()
 	require.NoError(t, os.MkdirAll(filepath.Join(dir, "tests", "integration"), 0o755))

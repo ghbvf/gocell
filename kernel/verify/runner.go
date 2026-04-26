@@ -202,11 +202,28 @@ func (r *Runner) RunActiveJourneys(ctx context.Context) (*VerifyResult, error) {
 		result.Results = append(result.Results, jr.Results...)
 		result.Errors = append(result.Errors, jr.Errors...)
 		result.ManualPending = append(result.ManualPending, jr.ManualPending...)
+		if !hasAutoCheckRef(j) {
+			result.Results = append(result.Results, TestResult{
+				Name:   j.ID,
+				Passed: false,
+				Output: "active journey has no auto checkRef — automated verification required",
+			})
+			result.Passed = false
+		}
 		if !jr.Passed || len(jr.Errors) > 0 {
 			result.Passed = false
 		}
 	}
 	return result, nil
+}
+
+func hasAutoCheckRef(j *metadata.JourneyMeta) bool {
+	for _, pc := range j.PassCriteria {
+		if pc.Mode == ModeAuto && strings.TrimSpace(pc.CheckRef) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func sortedJourneyIDs(journeys map[string]*metadata.JourneyMeta) []string {
@@ -230,6 +247,14 @@ func (r *Runner) RunJourneyCheckRef(ctx context.Context, j *metadata.JourneyMeta
 	resolved, err := resolveRef(ref)
 	if err != nil {
 		return TestResult{Name: ref, Passed: false}, []error{err}
+	}
+	if resolved.Kind != PrefixJourney {
+		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.ErrCheckRefInvalid,
+			fmt.Sprintf("journey checkRef %q must use journey prefix", ref))}
+	}
+	if j != nil && resolved.Scope != j.ID {
+		return TestResult{Name: ref, Passed: false}, []error{errcode.New(errcode.ErrCheckRefInvalid,
+			fmt.Sprintf("journey checkRef %q belongs to journey %q, not %q", ref, resolved.Scope, j.ID))}
 	}
 	pkg, extraArgs := r.resolveJourneyPkg(j, resolved)
 	args := append([]string{pkg, "-v", "-run", resolved.RunPattern}, extraArgs...)

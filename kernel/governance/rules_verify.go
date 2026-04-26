@@ -8,6 +8,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/verify"
 )
 
 // validateVERIFY01 checks that every contractUsage has a matching
@@ -363,6 +364,15 @@ func (v *Validator) validateVERIFY06CheckRef(
 	i int,
 	pc metadata.PassCriterion,
 ) []ValidationResult {
+	scope, err := verify.JourneyRefScope(pc.CheckRef)
+	if err != nil || scope != j.ID {
+		return []ValidationResult{v.newResult(
+			"VERIFY-06", SeverityError, IssueMismatch,
+			journeyFile(j),
+			fmt.Sprintf("passCriteria[%d].checkRef", i),
+			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey", j.ID, pc.CheckRef),
+		)}
+	}
 	if v.verifyJourneyRef == nil {
 		return nil
 	}

@@ -200,7 +200,7 @@ passCriteria:
     mode: manual
 ```
 
-`lifecycle: active` 表示该 Journey 已进入 strict 验收门禁：每条 `mode: auto` 的 `checkRef` 必须能解析到真实、可执行、非 skip 的 Go 测试目标，且至少存在 1 条这样的自动验收。`checkRef: journey.J-foo.bar-baz` 绑定到测试函数 `TestJFooBarBaz`。`mode: manual` 不允许写 `checkRef`；人工证据不是自动执行引用。`experimental` 可用于脚手架或探索阶段，允许 manual-only。`cells` 是路由锚点，不是完备参与方集合。`contracts` 是验收策展，不是完整依赖图。需要完整依赖图时，从 `slice.contractUsages` 聚合。
+`lifecycle: active` 表示该 Journey 已进入 strict 验收门禁：每条 `mode: auto` 的 `checkRef` 必须能解析到真实、可执行、非 skip 的 Go 测试目标，且至少存在 1 条这样的自动验收。`checkRef: journey.J-foo.bar-baz` 绑定到测试函数 `TestJFooBarBaz`，其中 `J-foo` 必须等于当前 Journey ID，不能借用其他 Journey 的验收测试。`mode: manual` 不允许写 `checkRef`；人工证据不是自动执行引用。`experimental` 可用于脚手架或探索阶段，允许 manual-only。`cells` 是路由锚点，不是完备参与方集合。`contracts` 是验收策展，不是完整依赖图。需要完整依赖图时，从 `slice.contractUsages` 聚合。
 
 ### Status Board
 
