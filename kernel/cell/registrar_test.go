@@ -62,8 +62,9 @@ type mockEventRouter struct {
 	topics []string
 }
 
-func (m *mockEventRouter) AddContractHandler(spec wrapper.ContractSpec, _ outbox.EntryHandler, _ string) {
+func (m *mockEventRouter) AddContractHandler(spec wrapper.ContractSpec, _ outbox.EntryHandler, _ string) error {
 	m.topics = append(m.topics, spec.Topic)
+	return nil
 }
 
 // Compile-time check.
@@ -77,10 +78,9 @@ type eventCell struct {
 
 func (e *eventCell) RegisterSubscriptions(r EventRouter) error {
 	e.registered = true
-	r.AddContractHandler(testEventSpec("session.created"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	return r.AddContractHandler(testEventSpec("session.created"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test")
-	return nil
 }
 
 // Compile-time check.
@@ -97,10 +97,9 @@ func (d *dualRouteGroupEventCell) RouteGroups() []RouteGroup { return d.groups }
 
 func (d *dualRouteGroupEventCell) RegisterSubscriptions(r EventRouter) error {
 	d.eventRegistered = true
-	r.AddContractHandler(testEventSpec("device.enrolled"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
+	return r.AddContractHandler(testEventSpec("device.enrolled"), func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	}, "test")
-	return nil
 }
 
 // Compile-time checks.

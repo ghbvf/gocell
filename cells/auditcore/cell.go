@@ -388,7 +388,9 @@ func (c *AuditCore) RegisterSubscriptions(r cell.EventRouter) error {
 			return fmt.Errorf("auditcore: missing ContractSpec for topic %q — "+
 				"auditAppendSpecs and auditappend.Topics must stay in sync", topic)
 		}
-		r.AddContractHandler(spec, handler, "auditcore")
+		if err := r.AddContractHandler(spec, handler, "auditcore"); err != nil {
+			return fmt.Errorf("auditcore: subscribe %s: %w", topic, err)
+		}
 	}
 	return nil
 }

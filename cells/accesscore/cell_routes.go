@@ -5,6 +5,8 @@
 package accesscore
 
 import (
+	"fmt"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -73,16 +75,24 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
 	// config-receive: config state-sync events from configcore.
 	upsertedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryUpserted)
-	r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "accesscore")
+	if err := r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "accesscore"); err != nil {
+		return fmt.Errorf("accesscore: subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
+	}
 
 	deletedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryDeleted)
-	r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "accesscore")
+	if err := r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "accesscore"); err != nil {
+		return fmt.Errorf("accesscore: subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
+	}
 
 	// rbac-session-sync: invalidate sessions on role assignment or revocation.
 	// Same handler + same consumer group across both topics — HandleRoleChanged
 	// is topic-agnostic.
 	roleHandler := outbox.WrapLegacyHandler(c.rbacSessionConsumer.HandleRoleChanged)
-	r.AddContractHandler(specEventRoleAssigned, roleHandler, "accesscore-rbac-session-sync")
-	r.AddContractHandler(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync")
+	if err := r.AddContractHandler(specEventRoleAssigned, roleHandler, "accesscore-rbac-session-sync"); err != nil {
+		return fmt.Errorf("accesscore: subscribe %s: %w", specEventRoleAssigned.Topic, err)
+	}
+	if err := r.AddContractHandler(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync"); err != nil {
+		return fmt.Errorf("accesscore: subscribe %s: %w", specEventRoleRevoked.Topic, err)
+	}
 	return nil
 }

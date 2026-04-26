@@ -95,7 +95,7 @@ func (c *consumerSpyCell) RegisterSubscriptions(r cell.EventRouter) error {
 		c.calls <- entry
 		return outbox.HandleResult{Disposition: outbox.DispositionAck}
 	})
-	r.AddContractHandler(c.spec, handler, "consumer-spy")
+	_ = r.AddContractHandler(c.spec, handler, "consumer-spy")
 	return nil
 }
 

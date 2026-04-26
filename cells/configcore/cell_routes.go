@@ -4,6 +4,8 @@
 package configcore
 
 import (
+	"fmt"
+
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
@@ -71,9 +73,13 @@ func (c *ConfigCore) RouteGroups() []cell.RouteGroup {
 // The Router manages goroutine lifecycle and setup-error detection.
 func (c *ConfigCore) RegisterSubscriptions(r cell.EventRouter) error {
 	upsertedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryUpserted)
-	r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "configcore")
+	if err := r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "configcore"); err != nil {
+		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
+	}
 
 	deletedHandler := outbox.WrapLegacyHandler(c.subscribeSvc.HandleEntryDeleted)
-	r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "configcore")
+	if err := r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "configcore"); err != nil {
+		return fmt.Errorf("configcore: subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
+	}
 	return nil
 }
