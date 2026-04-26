@@ -39,10 +39,19 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
 ### 批量模式（多方审查报告）
 
 当输入是 review 文档时：
+
 1. 解析文档中的所有 findings（按 ID、文件、描述提取）
-2. 对每条 finding 执行阶段 1（验证是否存在）
-3. **对每条 CONFIRMED finding 执行阶段 2.6（当前分支归属判定）**
-4. 输出汇总表：状态 + 归属
+2. **按 Cell 包聚类**（`cells/<cellid>/*`、`kernel/*`、`runtime/*`、`adapters/*`、`pkg/*` 各为一组）
+3. **决定并发度**（subagent 数量上限 1-3）：
+
+   | finding 数 | 并发 sub-agent 数 |
+   |-----------|------------------|
+   | ≤ 3 | 0（主 agent 直接处理） |
+   | 4-9 | 2 |
+   | ≥ 10 | 3 |
+
+4. **Triage 并行**（subagent_type: `Explore`）：将聚类后的组分发给 sub-agent，每组完整执行阶段 1.1→1.4 + 2.6，返回结构化表格。**同 Cell 包必须分给同一 agent**（避免重复 Read 同文件 + 防 fix 阶段写冲突）。Sub-agent prompt 必须自包含（finding 列表、当前分支 diff 摘要、CLAUDE.md 关键约束）。
+5. 主 agent 汇总各 sub-agent 结果，输出状态/归属表：
 
    | 状态 | 归属 | 处理方式 |
    |------|------|---------|
@@ -52,13 +61,14 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
    | RESOLVED | — | 标注已修，跳过 |
    | CANNOT_VERIFY | — | 标注待确认，跳过 |
 
-5. **只修 IN_SCOPE + RELATED 条目**，按分析结果决策：
+6. **只修 IN_SCOPE + RELATED 条目**，按分析结果决策：
    - IN_SCOPE + Cx1 + 满足自动执行条件 → 直接修
    - IN_SCOPE + Cx2 → 执行推荐方案（最小或彻底，由时机判断决定）
    - IN_SCOPE + Cx3/Cx4 → 只输出方案，标注"需人工决策"
    - RELATED + Cx1/Cx2 → 搭车修，标注"搭车"
    - OUT_OF_SCOPE → 登记 backlog，标注推荐归入的 batch
-6. 按复杂度从低到高排序执行：先批量处理 Cx1，再逐条处理 Cx2，最后汇总 Cx3/Cx4 方案
+7. **修复并行**（subagent_type: `developer`）：按相同的 Cell 包聚类分发，并发数同步骤 3。每个 sub-agent 串行处理自己组内的 finding（同包内串行避免写冲突），跑阶段 4.4 的 Edit-Test Loop。Cx1 + Cx2 都并行；Cx3/Cx4 只输出方案不派发。
+8. 主 agent 汇总各 sub-agent 修复结果，跑阶段 4.5 最终测试 + 4.8 git 收尾 + backlog 更新。
 
 ---
 
@@ -305,6 +315,8 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 scope 按层：kernel/runtime/cells/pkg。安全约束：只 add 修复文件（不 add -A）；不 amend。
 
 ### 4.4 执行代码修改（逐编辑测试循环）
+
+> **批量模式并行**：4+ 条 finding 时按批量模式步骤 7 派发 developer sub-agent，下面循环在每个 sub-agent 内对其分组的 finding 串行执行；单条 / ≤3 条由主 agent 直接执行。
 
 对每个任务，执行 Edit-Test Loop + 状态更新：
 
