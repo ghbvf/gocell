@@ -95,9 +95,8 @@ type Hub struct {
 	conns  map[string]*connEntry
 	wg     sync.WaitGroup // tracks readLoop + pingLoop goroutines
 
-	// cancelMu protects runCtx/runCancel from concurrent Start/Stop access.
+	// cancelMu protects runCancel from concurrent Start/Stop access.
 	cancelMu  sync.Mutex
-	runCtx    context.Context
 	runCancel context.CancelFunc
 
 	// shutdownDone is closed when shutdown completes. Lets concurrent
@@ -154,7 +153,6 @@ func (h *Hub) Start(ctx context.Context) error {
 		return errcode.New(ErrWSAlreadyStopped, "websocket: hub already stopped")
 	}
 	h.runCancel = cancel
-	h.runCtx = runCtx
 	h.wg.Add(1)
 	h.cancelMu.Unlock()
 
@@ -226,7 +224,6 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	h.cancelMu.Lock()
 	cancel := h.runCancel
 	h.runCancel = nil
-	h.runCtx = nil
 	h.cancelMu.Unlock()
 	if cancel != nil {
 		cancel()
@@ -281,17 +278,16 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	return err
 }
 
-// Register adds a connection to the Hub and starts reading from it.
+// Register adds a connection to the Hub and starts reading from it. ctx is used
+// as the parent for per-connection values; cancellation is controlled by the
+// Hub so request-scope cancellation does not immediately tear down accepted
+// WebSocket connections after the HTTP handler returns.
 // The read loop uses a per-connection context that is cancelled when the
 // connection is unregistered or the Hub shuts down.
 //
 // The Hub must be in the running state (Start called). Register on an
 // idle, stopping, or stopped Hub returns an error and closes the conn.
-func (h *Hub) Register(conn Conn) error {
-	h.cancelMu.Lock()
-	runCtx := h.runCtx
-	h.cancelMu.Unlock()
-
+func (h *Hub) Register(ctx context.Context, conn Conn) error {
 	h.connMu.Lock()
 	s := h.state.Load()
 	if s == stateStopping {
@@ -310,11 +306,6 @@ func (h *Hub) Register(conn Conn) error {
 		_ = conn.Close()
 		return errcode.New(ErrWSMaxConns, "websocket: max connections reached")
 	}
-	if runCtx == nil {
-		h.connMu.Unlock()
-		_ = conn.Close()
-		return errcode.New(ErrWSHubNotRunning, "websocket: hub is not running, connection rejected")
-	}
 
 	// Evict existing entry with same ID to prevent context leak.
 	var evicted *connEntry
@@ -323,7 +314,7 @@ func (h *Hub) Register(conn Conn) error {
 		evicted = old
 	}
 
-	connCtx, cancel := context.WithCancel(runCtx)
+	connCtx, cancel := context.WithCancel(context.WithoutCancel(ctx))
 	entry := &connEntry{conn: conn, cancel: cancel}
 	h.conns[conn.ID()] = entry
 	h.wg.Add(1)
