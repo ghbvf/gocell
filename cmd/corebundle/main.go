@@ -30,6 +30,7 @@ import (
 	"log/slog"
 	"os"
 
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/shutdown"
 )
@@ -88,10 +89,38 @@ func run(ctx context.Context) error {
 		slog.String("service_token_nonce_store", adapterInfo["service_token_nonce_store"]),
 		slog.String("outbox_consumer_claimer", adapterInfo["outbox_consumer_claimer"]))
 
+	logSinglePodNonceStoreAcknowledgement(shared)
 	logInitialAdminCredPath()
 
 	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
 
 	return bootstrap.New(opts...).Run(ctx)
+}
+
+// logSinglePodNonceStoreAcknowledgement emits a positive-path Info log when
+// the deployment is real-mode + single-pod + InMemory NonceStore — i.e. the
+// operator explicitly opted into single-pod replay protection via
+// GOCELL_SINGLE_POD=1 and accepted in-memory nonce semantics. This makes the
+// "I know what I'm doing" choice visible in startup logs.
+//
+// Multi-pod + real + InMemory is rejected upstream by SharedDeps.Validate
+// (ERR_CONTROLPLANE_NONCE_STORE_MISSING), so this function does not emit a
+// defensive Warn for that case — that path is unreachable in normal startup,
+// and a log here would be dead code.
+func logSinglePodNonceStoreAcknowledgement(shared *SharedDeps) {
+	if shared == nil || shared.InternalGuard == nil {
+		return
+	}
+	ns := shared.InternalGuard.NonceStore()
+	if ns == nil || ns.Kind() != auth.NonceStoreKindInMemory {
+		return
+	}
+	if !shared.Topology.RequireProductionControlPlane() ||
+		!shared.Topology.SinglePodReplayProtection {
+		return
+	}
+	slog.Info("controlplane: in-memory nonce store acknowledged for single-pod deployment",
+		slog.String("nonce_store_kind", string(ns.Kind())),
+		slog.String("note", "GOCELL_SINGLE_POD=1 set; multi-pod deployments must inject a distributed NonceStore via WithServiceTokenNonceStore"))
 }

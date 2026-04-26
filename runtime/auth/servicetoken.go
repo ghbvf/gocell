@@ -296,6 +296,15 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 	// errors.Is traverses the full chain, so ErrNonceReused in the Cause matches.
 	if errors.Is(err, ErrNonceReused) {
 		cfg.metrics.recordServiceVerify("failure", "replay")
+		// httputil.WriteError only logs at 5xx, but replay is a security signal
+		// that operators must be able to attribute back to caller IP / path /
+		// request_id. Emit a structured Warn here so the alerting-rules.md
+		// triage step "grep slog code=ERR_AUTH_REPLAY_DETECTED" produces hits.
+		cfg.logger.WarnContext(r.Context(), "service token replay detected",
+			slog.String("code", string(errcode.ErrAuthReplayDetected)),
+			slog.String("path", r.URL.Path),
+			slog.String("remote", r.RemoteAddr),
+		)
 		httputil.WriteError(r.Context(), w, http.StatusUnauthorized,
 			string(errcode.ErrAuthReplayDetected), "service token replay detected")
 		return
@@ -307,7 +316,7 @@ func writeServiceTokenError(cfg serviceTokenConfig, err error, w http.ResponseWr
 		cfg.metrics.recordServiceVerify("failure", "nonce_store_full")
 		cfg.logger.Error("nonce store full; rejecting request",
 			slog.String("path", r.URL.Path))
-		httputil.WriteError(r.Context(), w, http.StatusServiceUnavailable, "ERR_INTERNAL", "service temporarily unavailable")
+		httputil.WriteError(r.Context(), w, http.StatusServiceUnavailable, string(errcode.ErrNonceStoreFull), "service temporarily unavailable")
 		return
 	}
 

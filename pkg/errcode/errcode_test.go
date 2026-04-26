@@ -267,6 +267,9 @@ func TestSentinelCodes(t *testing.T) {
 		ErrDependencyCycle,
 		ErrValidationFailed,
 		ErrReferenceBroken,
+		ErrAuthReplayDetected,
+		ErrNonceStoreFull,
+		ErrCellPlatformUnsupported,
 	}
 	seen := make(map[Code]bool, len(codes))
 	for _, c := range codes {
