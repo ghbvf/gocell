@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
@@ -8,13 +9,16 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"syscall"
 	"testing"
 
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -491,6 +495,122 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 			require.Error(t, err, "real mode must reject env=%s with demo value", tc.patch.name)
 			assert.Contains(t, err.Error(), tc.want)
 			assert.Contains(t, err.Error(), "well-known demo key")
+		})
+	}
+}
+
+// captureSlogInfoLines installs a JSON slog handler capturing Info-and-above
+// records into a buffer for log assertion. The restore must be called via
+// t.Cleanup; not concurrency-safe across goroutines.
+func captureSlogInfoLines(t *testing.T) (*bytes.Buffer, func()) {
+	t.Helper()
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo})))
+	return &buf, func() { slog.SetDefault(prev) }
+}
+
+// guardWithStore builds a test internalGuard backed by the supplied NonceStore,
+// keeping the ring/middleware fields populated to mirror production wiring.
+func guardWithStore(t *testing.T, store auth.NonceStore) *internalGuard {
+	t.Helper()
+	ring, err := auth.NewHMACKeyRing([]byte("test-secret-32-bytes-long-padding!"), nil)
+	require.NoError(t, err)
+	return &internalGuard{
+		ring:       ring,
+		nonceStore: store,
+		mw:         func(h http.Handler) http.Handler { return h },
+	}
+}
+
+// TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo
+// verifies that the positive-path Info signal fires when the operator opted
+// into single-pod replay protection (GOCELL_SINGLE_POD=1) on real mode with
+// the default in-memory nonce store.
+func TestLogSinglePodNonceStoreAcknowledgement_RealSinglePodInMemory_LogsInfo(t *testing.T) {
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	require.NoError(t, err)
+	shared := &SharedDeps{
+		Topology: bootstrap.Topology{
+			AdapterMode:               "real",
+			SinglePodReplayProtection: true,
+		},
+		InternalGuard: guardWithStore(t, store),
+	}
+
+	buf, restore := captureSlogInfoLines(t)
+	t.Cleanup(restore)
+
+	logSinglePodNonceStoreAcknowledgement(shared)
+
+	out := buf.String()
+	require.NotEmpty(t, out, "expected an Info log line; got empty buffer")
+	assert.Contains(t, out, "in-memory nonce store acknowledged for single-pod",
+		"Info message must announce the acknowledgement so the configuration is auditable")
+	assert.Contains(t, out, string(auth.NonceStoreKindInMemory),
+		"log must include nonce_store_kind label so dashboards can filter by store kind")
+	assert.Contains(t, out, "GOCELL_SINGLE_POD",
+		"log note must reference the env switch operators set to enter this branch")
+}
+
+// TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog asserts
+// that the Info signal stays silent on every other configuration: dev mode,
+// distributed nonce store, multi-pod, or a nil InternalGuard. This protects
+// against accidentally turning the acknowledgement into noise on the dev path.
+func TestLogSinglePodNonceStoreAcknowledgement_NegativePaths_NoInfoLog(t *testing.T) {
+	inMemStore, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	require.NoError(t, err)
+
+	cases := []struct {
+		name   string
+		shared *SharedDeps
+	}{
+		{
+			name: "dev mode (single-pod ack ignored)",
+			shared: &SharedDeps{
+				Topology: bootstrap.Topology{
+					AdapterMode:               "",
+					SinglePodReplayProtection: true,
+				},
+				InternalGuard: guardWithStore(t, inMemStore),
+			},
+		},
+		{
+			name: "real mode without GOCELL_SINGLE_POD (multi-pod path; SharedDeps.Validate would reject upstream)",
+			shared: &SharedDeps{
+				Topology: bootstrap.Topology{
+					AdapterMode:               "real",
+					SinglePodReplayProtection: false,
+				},
+				InternalGuard: guardWithStore(t, inMemStore),
+			},
+		},
+		{
+			name: "nil internal guard",
+			shared: &SharedDeps{
+				Topology: bootstrap.Topology{
+					AdapterMode:               "real",
+					SinglePodReplayProtection: true,
+				},
+				InternalGuard: nil,
+			},
+		},
+		{
+			name:   "nil shared",
+			shared: nil,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			buf, restore := captureSlogInfoLines(t)
+			t.Cleanup(restore)
+
+			logSinglePodNonceStoreAcknowledgement(tc.shared)
+
+			assert.False(t,
+				strings.Contains(buf.String(), "in-memory nonce store acknowledged for single-pod"),
+				"acknowledgement must NOT fire for non-matching configurations; got: %s", buf.String())
 		})
 	}
 }
