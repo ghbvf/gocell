@@ -11,6 +11,12 @@ WORKDIR /src
 RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
+# Recursive COPY is intentional and bounded by the repo-root .dockerignore
+# (.git, .claude, docs/, worktrees/, bak/, *.env, coverage*.out are filtered).
+# Multi-stage isolation: the build stage and its filesystem are discarded
+# after `go build`; only /out/corebundle crosses into the runtime image, so
+# nothing the scanner worries about ("sensitive data") can survive into the
+# shipped artifact.
 COPY . .
 RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle
 

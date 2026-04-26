@@ -291,6 +291,12 @@ jobs:
           # accesscore in DurabilityDurable mode).
           GOCELL_E2E_PG_AVAILABLE: "0"
           GOCELL_E2E_RMQ_AVAILABLE: "0"
+        # No -coverprofile here: Go's coverage instruments only the test
+        # process, but the SUT (corebundle) runs as a separate container
+        # process — Go can't observe it. The integration-test job already
+        # covers ./tests/e2e/... + corebundle code paths under -tags=
+        # integration,e2e via testcontainers; adding a profile here would
+        # only re-record the HTTP client lines and dilute Sonar's view.
         run: |
           set -o pipefail
           go test -tags=e2e -json -count=1 -timeout=120s ./tests/e2e/... \

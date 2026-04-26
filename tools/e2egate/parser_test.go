@@ -33,6 +33,13 @@ const eventsMixedPassSkip = `{"Action":"run","Package":"pkg/a","Test":"TestOne"}
 {"Action":"pass","Package":"pkg/a","Elapsed":0.3}
 `
 
+// NOTE on package-level Action across the next two fixtures: when every
+// test in a package takes the t.Skip path, Go's testing runner still emits
+// {"Action":"pass"} at the package level (Elapsed=0). The literal
+// {"Action":"skip"} at the package level is reserved for "no test files"
+// (eventsPackageLevelSkip) and "go test -run pattern matched nothing".
+// Mixing the two confuses readers, so the gate distinguishes them by
+// counting test-level events rather than relying on the package action.
 const eventsAllSkipConditional = `{"Action":"run","Package":"pkg/e2e","Test":"TestE2E_A"}
 {"Action":"output","Package":"pkg/e2e","Test":"TestE2E_A","Output":"--- SKIP: TestE2E_A\n"}
 {"Action":"skip","Package":"pkg/e2e","Test":"TestE2E_A","Elapsed":0}
@@ -44,6 +51,22 @@ const eventsAllSkipConditional = `{"Action":"run","Package":"pkg/e2e","Test":"Te
 `
 
 const eventsPackageLevelSkip = `{"Action":"skip","Package":"pkg/notests","Output":"?   pkg/notests   [no test files]\n"}
+`
+
+// eventsBenchOnly simulates `go test -json -bench=.` against a package that
+// only declares Benchmarks (no Test*). The runner emits bench events plus
+// a package-level "pass", but no test-level pass/fail/skip — semantically
+// equivalent to "no test files" for gate purposes (no Test ran).
+const eventsBenchOnly = `{"Action":"run","Package":"pkg/bench","Test":"BenchmarkX"}
+{"Action":"bench","Package":"pkg/bench","Test":"BenchmarkX","Output":"BenchmarkX-8\t1000\t1.0 ns/op\n"}
+{"Action":"output","Package":"pkg/bench","Test":"BenchmarkX","Output":"PASS\n"}
+{"Action":"pass","Package":"pkg/bench","Elapsed":0.05}
+`
+
+// eventsGarbageInput is non-JSON from the very first byte — the decoder
+// fails immediately rather than partway through a stream.
+const eventsGarbageInput = `not-json-at-all
+just plain text
 `
 
 const eventsBuildFail = `{"Action":"output","Package":"pkg/broken","Output":"FAIL    pkg/broken [build failed]\n"}
@@ -151,6 +174,27 @@ func TestParse_EmptyStdin_GateFails(t *testing.T) {
 func TestParse_InvalidJSON_ReturnsError(t *testing.T) {
 	_, err := e2egate.Parse(strings.NewReader(eventsInvalidJSON))
 	require.Error(t, err, "Parse must surface JSON decoder errors so the caller exits non-zero")
+}
+
+func TestParse_BenchOnlyPackage_GateFails(t *testing.T) {
+	// Bench-only packages do not exercise any Test*; the runner emits
+	// "bench" events (which apply() ignores) and a package-level "pass".
+	// TotalExecuted stays 0, so the global gate triggers.
+	res, err := e2egate.Parse(strings.NewReader(eventsBenchOnly))
+	require.NoError(t, err)
+	assert.True(t, res.Failed(),
+		"bench-only package must fail the gate (no Test* executed); reasons=%v", res.Reasons)
+	assert.Equal(t, 0, res.TotalExecuted)
+	assert.Equal(t, 0, res.TotalSkipped)
+	require.Contains(t, res.Packages, "pkg/bench")
+	assert.Equal(t, "pass", res.Packages["pkg/bench"].Action,
+		"package-level action is pass even when only benchmarks ran")
+}
+
+func TestParse_GarbageInput_ReturnsError(t *testing.T) {
+	_, err := e2egate.Parse(strings.NewReader(eventsGarbageInput))
+	require.Error(t, err,
+		"first-byte non-JSON must surface decoder error so caller exits non-zero")
 }
 
 func TestParse_HelperPackageWithoutTests_GatePasses(t *testing.T) {
