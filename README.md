@@ -6,25 +6,42 @@ GoCell provides Cell/Slice runtime primitives, governance toolchain, and built-i
 
 ## Quick Start (5 minutes)
 
-```bash
-git clone https://github.com/ghbvf/gocell.git
-cd gocell
-go run ./examples/todoorder
-```
-
-Open another terminal:
+The todoorder example requires JWT keys and a service secret since PR-CFG-F.
+Copy-paste the five steps below in a single terminal:
 
 ```bash
-# Create an order
-curl -s -X POST http://localhost:8082/api/v1/orders \
+# Step 1 — generate RS256 key pair
+openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 \
+  -out /tmp/gocell-todoorder-jwt.key
+openssl rsa -in /tmp/gocell-todoorder-jwt.key -pubout \
+  -out /tmp/gocell-todoorder-jwt.pub
+
+# Step 2 — set required env vars
+export GOCELL_JWT_PRIVATE_KEY="$(cat /tmp/gocell-todoorder-jwt.key)"
+export GOCELL_JWT_PUBLIC_KEY="$(cat /tmp/gocell-todoorder-jwt.pub)"
+export GOCELL_JWT_ISSUER=todoorder-local
+export GOCELL_JWT_AUDIENCE=gocell
+export GOCELL_TODOORDER_SERVICE_SECRET="$(openssl rand -base64 32)"
+
+# Step 3 — mint a test RS256 token (role:customer, signed by the local key)
+export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken)"
+
+# Step 4 — start the server (primary :8082, internal :9082)
+go run ./examples/todoorder &
+
+# Step 5 — exercise the API
+curl -s -X POST http://localhost:8082/api/v1/orders/ \
+  -H "Authorization: Bearer $TODOORDER_TOKEN" \
   -H 'Content-Type: application/json' \
   -d '{"item":"my first order"}' | jq .
 
-# List orders
-curl -s http://localhost:8082/api/v1/orders | jq .
+curl -s http://localhost:8082/api/v1/orders/ \
+  -H "Authorization: Bearer $TODOORDER_TOKEN" | jq .
 ```
 
 Check the application logs — you should see `event.order.created consumed`.
+
+For full configuration options (production hardening, real-mode adapters, multi-pod), see `examples/todoorder/README.md`.
 
 ## Core Concepts
 

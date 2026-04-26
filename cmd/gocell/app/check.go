@@ -204,6 +204,18 @@ func checkSliceCoverage(args []string) error {
 		return fmt.Errorf(errMetadataParse, err)
 	}
 
+	if *cellID != "" {
+		if _, ok := project.Cells[*cellID]; !ok {
+			return printAndCheck(*format, []governance.ValidationResult{{
+				Code:      "CHECK-CELL-NOT-FOUND",
+				Severity:  governance.SeverityError,
+				IssueType: governance.IssueRequired,
+				Scope:     cmdSliceCoverage,
+				Message:   fmt.Sprintf("cell %q not found in project", *cellID),
+			}}, cmdSliceCoverage, "")
+		}
+	}
+
 	var results []governance.ValidationResult
 	cellCount := 0
 	sliceCount := 0
@@ -805,10 +817,15 @@ func checkUnconditionalSkip(args []string) error {
 func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.ValidationResult, error) {
 	// packages.LoadAllSyntax loads type-annotated syntax for initial packages
 	// and all transitive dependencies — the minimum mode checker.Analyze needs.
+	// BuildFlags includes the build tags used by integration, e2e, and smoke
+	// test files so the analyzer sees those files instead of silently skipping
+	// them — without this, //go:build integration test files are invisible and
+	// unconditional t.Skip calls inside them are never reported.
 	cfg := &packages.Config{
-		Mode:  packages.LoadAllSyntax,
-		Tests: true,
-		Dir:   root,
+		Mode:       packages.LoadAllSyntax,
+		Tests:      true,
+		Dir:        root,
+		BuildFlags: []string{"-tags=integration e2e examples_smoke"},
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {

@@ -101,10 +101,13 @@ curl -X POST http://localhost:8083/api/v1/devices/{id}/commands \
   -d '{"payload":"reboot"}'
 ```
 
+`commandType` is optional in the enqueue request (only `payload` is required).
+Omitting it leaves the field empty; the device sees it in the dequeue response.
+
 Response (201):
 
 ```json
-{"data":{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"pending","createdAt":"..."}}
+{"data":{"id":"cmd-...","deviceId":"dev-...","commandType":"","payload":"reboot","status":"pending","createdAt":"..."}}
 ```
 
 ### Device dequeues commands
@@ -117,7 +120,7 @@ curl http://localhost:8083/api/v1/devices/{id}/commands \
 Response (200):
 
 ```json
-{"data":[{"id":"cmd-...","deviceId":"dev-...","payload":"reboot","status":"sent","attempt":1,"createdAt":"...","sentAt":"..."}],"nextCursor":"","hasMore":false}
+{"data":[{"id":"cmd-...","deviceId":"dev-...","commandType":"","payload":"reboot","status":"sent","attempt":1,"createdAt":"...","sentAt":"..."}],"nextCursor":"","hasMore":false}
 ```
 
 ### Device reports command receipt
