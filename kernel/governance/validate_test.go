@@ -2647,15 +2647,45 @@ func TestADV05(t *testing.T) {
 
 // --- ADV-06: subscription declaration drift between contract.yaml and slice.yaml ---
 
+type adv06Case struct {
+	name         string
+	setup        func(*metadata.ProjectMeta)
+	wantCount    int
+	wantFields   []string
+	wantFiles    []string
+	wantMessages []string
+}
+
+// assertADV06Findings checks that ADV-06 findings match the table-driven case
+// expectation: severity/type uniformly, plus optional per-finding field/file/
+// message. Indexing is positional; tests must list expectations in the order
+// findings are produced (direction A first, then direction B; within a
+// direction, findings follow project map iteration which is non-deterministic
+// in general but stable for fixtures with a single contract per direction).
+func assertADV06Findings(t *testing.T, got []ValidationResult, tt adv06Case) {
+	t.Helper()
+	assert.Len(t, got, tt.wantCount)
+	for _, r := range got {
+		assert.Equal(t, SeverityError, r.Severity)
+		assert.Equal(t, IssueMismatch, r.IssueType)
+	}
+	limit := tt.wantCount
+	if len(got) < limit {
+		limit = len(got)
+	}
+	for i := 0; i < limit && i < len(tt.wantFields); i++ {
+		assert.Equal(t, tt.wantFields[i], got[i].Field)
+	}
+	for i := 0; i < limit && i < len(tt.wantFiles); i++ {
+		assert.Equal(t, tt.wantFiles[i], got[i].File)
+	}
+	for i := 0; i < limit && i < len(tt.wantMessages); i++ {
+		assert.Contains(t, got[i].Message, tt.wantMessages[i])
+	}
+}
+
 func TestADV06(t *testing.T) {
-	tests := []struct {
-		name         string
-		setup        func(*metadata.ProjectMeta)
-		wantCount    int
-		wantFields   []string
-		wantFiles    []string
-		wantMessages []string
-	}{
+	tests := []adv06Case{
 		{
 			name:      "baseline (validProject) — contract.subscribers and slice.contractUsages aligned → 0 findings",
 			setup:     func(_ *metadata.ProjectMeta) {},
@@ -2945,36 +2975,7 @@ func TestADV06(t *testing.T) {
 			tt.setup(pm)
 			val := NewValidator(pm, "")
 			got := findByCode(val.validateADV06(), "ADV-06")
-			assert.Len(t, got, tt.wantCount)
-			for _, r := range got {
-				assert.Equal(t, SeverityError, r.Severity)
-				assert.Equal(t, IssueMismatch, r.IssueType)
-			}
-			switch tt.wantCount {
-			case 1:
-				if len(tt.wantFields) > 0 {
-					assert.Equal(t, tt.wantFields[0], got[0].Field)
-				}
-				if len(tt.wantFiles) > 0 {
-					assert.Equal(t, tt.wantFiles[0], got[0].File)
-				}
-				if len(tt.wantMessages) > 0 {
-					assert.Contains(t, got[0].Message, tt.wantMessages[0])
-				}
-			case 2:
-				if len(tt.wantFields) >= 2 {
-					assert.Equal(t, tt.wantFields[0], got[0].Field)
-					assert.Equal(t, tt.wantFields[1], got[1].Field)
-				}
-				if len(tt.wantFiles) >= 2 {
-					assert.Equal(t, tt.wantFiles[0], got[0].File)
-					assert.Equal(t, tt.wantFiles[1], got[1].File)
-				}
-				if len(tt.wantMessages) >= 2 {
-					assert.Contains(t, got[0].Message, tt.wantMessages[0])
-					assert.Contains(t, got[1].Message, tt.wantMessages[1])
-				}
-			}
+			assertADV06Findings(t, got, tt)
 		})
 	}
 }
