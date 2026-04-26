@@ -121,8 +121,9 @@ func (v *Validator) validateADV05() []ValidationResult {
 //
 //   - Direction B (slice → contract): when a slice declares a subscribe usage
 //     for contract X, X's endpoints.subscribers must list the slice's owning
-//     cell. Otherwise the cell silently subscribes to an event that the
-//     contract does not acknowledge.
+//     cell (or the wildcardConsumer "*" which matches any cell, consistent
+//     with TOPO-03 / REF-14 / TOPO-07 semantics). Otherwise the cell silently
+//     subscribes to an event that the contract does not acknowledge.
 //
 // Only lifecycle "active" event contracts are checked. Draft contracts are
 // allowed to be misaligned during the design phase; deprecated contracts are
@@ -215,7 +216,7 @@ func (v *Validator) adv06SliceToContract() []ValidationResult {
 			if !isActiveEvent(c) {
 				continue
 			}
-			if containsString(c.Endpoints.Subscribers, s.BelongsToCell) {
+			if cellMatchesConsumer(c.Endpoints.Subscribers, s.BelongsToCell) {
 				continue
 			}
 			results = append(results, v.newResult(

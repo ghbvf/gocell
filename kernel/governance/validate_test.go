@@ -2904,6 +2904,40 @@ func TestADV06(t *testing.T) {
 			},
 			wantCount: 0,
 		},
+		{
+			name: "wildcard subscribers `*` matches any cell → 0 findings (consistent with TOPO-03/REF-14/TOPO-07)",
+			setup: func(pm *metadata.ProjectMeta) {
+				replayable := true
+				// Active event broadcast: subscribers=[*] means any cell may consume.
+				// auditcore/audit-write declares subscribe, which must satisfy
+				// direction B without triggering an ADV-06 false positive.
+				pm.Contracts["event.broadcast.signal.v1"] = &metadata.ContractMeta{
+					ID:               "event.broadcast.signal.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{"*"},
+					},
+					Replayable:        &replayable,
+					IdempotencyKey:    "broadcast-id",
+					DeliverySemantics: "at-least-once",
+					Dir:               "contracts/event/broadcast/signal/v1",
+					File:              "contracts/event/broadcast/signal/v1/contract.yaml",
+				}
+				pm.Slices["auditcore/audit-write"].ContractUsages = append(
+					pm.Slices["auditcore/audit-write"].ContractUsages,
+					metadata.ContractUsage{Contract: "event.broadcast.signal.v1", Role: "subscribe"},
+				)
+				pm.Slices["auditcore/audit-write"].Verify.Contract = append(
+					pm.Slices["auditcore/audit-write"].Verify.Contract,
+					"contract.event.broadcast.signal.v1.subscribe",
+				)
+			},
+			wantCount: 0,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

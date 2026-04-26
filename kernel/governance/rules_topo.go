@@ -73,7 +73,7 @@ func (v *Validator) validateTOPO03() []ValidationResult {
 				continue
 			}
 			consumers := contractConsumers(c)
-			if len(consumers) > 0 && !containsString(consumers, "*") && !containsString(consumers, s.BelongsToCell) {
+			if len(consumers) > 0 && !cellMatchesConsumer(consumers, s.BelongsToCell) {
 				results = append(results, v.newResult(
 					"TOPO-03", SeverityError, IssueMismatch,
 					sliceFile(s),
@@ -279,7 +279,7 @@ func (v *Validator) checkConsumerActors(
 	var results []ValidationResult
 	consumers := contractConsumers(c)
 	for i, consumerID := range consumers {
-		if consumerID == "*" {
+		if isWildcardConsumer(consumerID) {
 			continue
 		}
 		if _, isCell := v.project.Cells[consumerID]; isCell {
