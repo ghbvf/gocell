@@ -19,10 +19,24 @@ const (
 	ruleCtxCancelLocalImplBan = "CTXCANCEL-LOCAL-IMPL-BAN-01"
 	ruleRepoLogKeyIDRedact    = "REPO-LOG-KEY-ID-REDACT-01"
 
+	// bannedWrapMethodPrefix targets receiver methods whose entire purpose is to
+	// forward a single ctx-cancel detection to ctxcancel.Wrap (a thin wrapper).
+	// The "wrapCtx" prefix is the established naming convention for such forwarders.
+	//
+	// Helpers that wrap ctx-cancel detection together with additional non-trivial
+	// logic (e.g. flag_repo.wrapNonScanQueryErr also constructs ErrFlagRepoQuery
+	// fallback envelopes) are NOT thin wrappers and remain legitimate. Such helpers
+	// are deliberately named with a non-wrapCtx prefix to opt out of this rule.
 	bannedWrapMethodPrefix = "wrapCtx"
 )
 
-var bannedTypeNameRegex = regexp.MustCompile(`^(?:local)?[Cc]tx[Cc]ancel(?:ed)?Error$`)
+// bannedTypeNameRegex matches names that look like a re-implementation of the
+// canonical ctxcancel error type. Pattern intent: optional "local" or "Local"
+// prefix, then "ctx" or "context" stem, then a Cancel/Canceled/Cancellation
+// root, then "Error" suffix. This is intentionally broad — any new local
+// cancel-error type variant should be caught and either renamed or replaced
+// with the canonical helper (pkg/ctxcancel.Wrap).
+var bannedTypeNameRegex = regexp.MustCompile(`^(?:[Ll]ocal)?[Cc](?:tx|ontext)[Cc]ancel(?:ed|lation)?Error$`)
 
 // bannedLogAttrLiterals enumerates the cryptographic-identifier names
 // that must never appear as a string literal in a log call's attribute
@@ -36,11 +50,22 @@ var bannedLogAttrLiterals = map[string]struct{}{
 	"current_key_id": {},
 }
 
-// slogLevelMethodPrefixes covers Warn/Warnf/WarnContext etc. The rule
-// matches by method-name prefix on any *ast.SelectorExpr — covering
-// both `slog.Warn(...)` package-level calls and `r.logger.WarnContext(...)`
-// receiver calls without binding to the slog package.
-var slogLevelMethodPrefixes = []string{"Warn", "Error", "Info", "Debug"}
+// slogLevelMethods is the closed set of slog level method names recognised by
+// this rule. Using exact-match rather than prefix matching avoids false
+// positives on names that happen to start with a level keyword but are not
+// log emitters (e.g. ErrorList, WarnCounter, InfoBox).
+//
+// The set covers the standard slog API surface:
+//   - plain:    Warn / Error / Info / Debug
+//   - formatted: Warnf / Errorf / Infof / Debugf  (popular wrapper conventions)
+//   - line:     Warnln / Errorln / Infoln / Debugln (popular wrapper conventions)
+//   - context:  WarnContext / ErrorContext / InfoContext / DebugContext
+var slogLevelMethods = map[string]struct{}{
+	"Warn": {}, "Warnf": {}, "Warnln": {}, "WarnContext": {},
+	"Error": {}, "Errorf": {}, "Errorln": {}, "ErrorContext": {},
+	"Info": {}, "Infof": {}, "Infoln": {}, "InfoContext": {},
+	"Debug": {}, "Debugf": {}, "Debugln": {}, "DebugContext": {},
+}
 
 type repoErrViolation struct {
 	Rule    string
@@ -204,6 +229,9 @@ func findCellAdapterProductionGoFiles(root string) ([]string, error) {
 	}
 	var out []string
 	for _, f := range all {
+		// filepath.ToSlash converts path separators to "/" on Windows so the
+		// substring match works consistently across platforms (filepath.WalkDir
+		// returns native separators on each OS).
 		if strings.Contains(filepath.ToSlash(f), "/internal/adapters/") {
 			out = append(out, f)
 		}
@@ -299,6 +327,30 @@ func Foo(err error) bool {
 			src: `package fixture
 type ContextValue struct{ V string }
 type ErrorPayload struct{ Cause error }
+`,
+			wantMatch: false,
+		},
+		// New variants added to widen bannedTypeNameRegex coverage.
+		"detects_context_cancel_error": {
+			src: `package fixture
+type contextCancelError struct{}
+func (e *contextCancelError) Error() string { return "" }
+`,
+			wantMatch: true,
+		},
+		"detects_ctx_cancellation_error": {
+			src: `package fixture
+type ctxCancellationError struct{}
+func (e *ctxCancellationError) Error() string { return "" }
+`,
+			wantMatch: true,
+		},
+		"passes_unrelated_error_types": {
+			src: `package fixture
+type ConfigError struct{ msg string }
+func (e *ConfigError) Error() string { return e.msg }
+type DatabaseError struct{ cause error }
+func (e *DatabaseError) Error() string { return e.cause.Error() }
 `,
 			wantMatch: false,
 		},
@@ -400,21 +452,21 @@ func scanRepoLogKeyIDRedactAST(fset *token.FileSet, file *ast.File, path string)
 	return out
 }
 
-// isLogLevelCall reports whether call is a method call whose Sel.Name
-// starts with Warn/Error/Info/Debug. Covers both `slog.Warn(...)` and
-// `r.logger.WarnContext(...)`.
+// isLogLevelCall reports whether call is a method call whose Sel.Name is in
+// the closed slogLevelMethods set. Covers both `slog.Warn(...)` package-level
+// calls and `r.logger.WarnContext(...)` receiver calls without binding to the
+// slog package import path.
+//
+// Exact-match (not prefix) is used to avoid false positives on method names
+// like ErrorList or WarnCounter that start with a level keyword but are not
+// log emitters.
 func isLogLevelCall(call *ast.CallExpr) bool {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return false
 	}
-	name := sel.Sel.Name
-	for _, p := range slogLevelMethodPrefixes {
-		if strings.HasPrefix(name, p) {
-			return true
-		}
-	}
-	return false
+	_, ok = slogLevelMethods[sel.Sel.Name]
+	return ok
 }
 
 // collectStringLiterals walks expr's AST sub-tree and returns every
@@ -445,7 +497,7 @@ func TestRepoLogKeyIDRedact_Fixtures(t *testing.T) {
 		src       string
 		wantMatch bool
 	}{
-		"flags_stored_key_id_in_warn": {
+		"detects_stored_key_id_in_warn": {
 			src: `package fixture
 import "log/slog"
 func emit(logger *slog.Logger, x string) {
@@ -454,7 +506,7 @@ func emit(logger *slog.Logger, x string) {
 `,
 			wantMatch: true,
 		},
-		"flags_keyID_in_error": {
+		"detects_keyID_in_error": {
 			src: `package fixture
 import "log/slog"
 func emit(logger *slog.Logger, x string) {
@@ -463,7 +515,7 @@ func emit(logger *slog.Logger, x string) {
 `,
 			wantMatch: true,
 		},
-		"flags_key_id_in_warncontext": {
+		"detects_key_id_in_warncontext": {
 			src: `package fixture
 import (
 	"context"
@@ -475,7 +527,7 @@ func emit(ctx context.Context, logger *slog.Logger, x string) {
 `,
 			wantMatch: true,
 		},
-		"flags_current_key_id_in_info": {
+		"detects_current_key_id_in_info": {
 			src: `package fixture
 import "log/slog"
 func emit(logger *slog.Logger, x string) {
@@ -484,7 +536,7 @@ func emit(logger *slog.Logger, x string) {
 `,
 			wantMatch: true,
 		},
-		"flags_slog_pkg_warn": {
+		"detects_slog_pkg_warn": {
 			src: `package fixture
 import "log/slog"
 func emit(x string) {
@@ -515,6 +567,36 @@ func mkLabel() string {
 import "log/slog"
 func emit(logger *slog.Logger) {
 	logger.Warn("stored_key_id")
+}
+`,
+			wantMatch: false,
+		},
+		// Negative fixtures validating that exact-match (not prefix) is used for
+		// isLogLevelCall: methods starting with a level keyword but not in the
+		// closed slogLevelMethods set must NOT be flagged.
+		"passes_errorlist_call_not_a_log_method": {
+			src: `package fixture
+type Errs interface{ ErrorList(label string) }
+func use(e Errs) {
+	e.ErrorList("stored_key_id")
+}
+`,
+			wantMatch: false,
+		},
+		"passes_warncounter_call_not_a_log_method": {
+			src: `package fixture
+type Metrics interface{ WarnCounter(key string) }
+func use(m Metrics) {
+	m.WarnCounter("stored_key_id")
+}
+`,
+			wantMatch: false,
+		},
+		"passes_infobox_call_not_a_log_method": {
+			src: `package fixture
+type UI interface{ InfoBox(msg string) }
+func use(u UI) {
+	u.InfoBox("key_id")
 }
 `,
 			wantMatch: false,

@@ -732,9 +732,14 @@ func TestList_StaleKey_LogDedup(t *testing.T) {
 	repo := newEncryptedRepoFromDBTX(db, tr)
 	repo.logger = logger
 
-	// Wire callback to count every stale invocation (metrics accuracy).
-	var callbackCount int
-	repo.onStaleCipher = func(_, _, _ string) { callbackCount++ }
+	// Wire callback to record every stale invocation with full triple
+	// (key, storedKeyID, currentKeyID) so any parameter-order regression
+	// is caught immediately.
+	type stalecallArgs struct{ key, storedKeyID, currentKeyID string }
+	var callbackCalls []stalecallArgs
+	repo.onStaleCipher = func(key, storedID, currentID string) {
+		callbackCalls = append(callbackCalls, stalecallArgs{key, storedID, currentID})
+	}
 
 	entries, err := repo.List(ctx, query.ListParams{
 		Limit: 10,
@@ -749,8 +754,17 @@ func TestList_StaleKey_LogDedup(t *testing.T) {
 	assert.True(t, entries[2].Stale, "key_c must be stale")
 	assert.False(t, entries[3].Stale, "plain_cfg must not be stale")
 
-	// Callback must fire for every stale entry (3 total).
-	assert.Equal(t, 3, callbackCount, "onStaleCipher callback must fire for every stale entry")
+	// Callback must fire for every stale entry (3 total) with correct args.
+	require.Len(t, callbackCalls, 3, "onStaleCipher callback must fire for every stale entry")
+	assert.ElementsMatch(t, []string{"key_a", "key_b", "key_c"},
+		[]string{callbackCalls[0].key, callbackCalls[1].key, callbackCalls[2].key},
+		"callback must receive each stale business key")
+	for i, call := range callbackCalls {
+		assert.Equal(t, storedKeyID, call.storedKeyID,
+			"call[%d]: storedKeyID must be %q", i, storedKeyID)
+		assert.Equal(t, "local-aes-v2", call.currentKeyID,
+			"call[%d]: currentKeyID must be \"local-aes-v2\"", i)
+	}
 
 	// slog.Warn must fire only ONCE for the shared stale keyID; dedup is keyed
 	// on the (redacted) stale keyID internally, but the log line surfaces the
@@ -791,8 +805,12 @@ func TestList_StaleKey_TwoDistinctKeyIDs_TwoWarns(t *testing.T) {
 	repo := newEncryptedRepoFromDBTX(db, tr)
 	repo.logger = logger
 
-	var callbackCount int
-	repo.onStaleCipher = func(_, _, _ string) { callbackCount++ }
+	// Wire callback to record full triple so parameter-order regressions are caught.
+	type stalecallArgs struct{ key, storedKeyID, currentKeyID string }
+	var callbackCalls []stalecallArgs
+	repo.onStaleCipher = func(key, storedID, currentID string) {
+		callbackCalls = append(callbackCalls, stalecallArgs{key, storedID, currentID})
+	}
 
 	entries, err := repo.List(ctx, query.ListParams{
 		Limit: 10,
@@ -806,8 +824,21 @@ func TestList_StaleKey_TwoDistinctKeyIDs_TwoWarns(t *testing.T) {
 	assert.True(t, entries[1].Stale)
 	assert.True(t, entries[2].Stale)
 
-	// Callback fires for all 3.
-	assert.Equal(t, 3, callbackCount)
+	// Callback fires for all 3 with correct per-entry args.
+	require.Len(t, callbackCalls, 3, "onStaleCipher must fire for every stale entry")
+	// Business keys across all three calls.
+	assert.ElementsMatch(t, []string{"key_a", "key_b", "key_c"},
+		[]string{callbackCalls[0].key, callbackCalls[1].key, callbackCalls[2].key},
+		"callback must receive each stale business key")
+	// storedKeyID per call: key_a and key_b use v1, key_c uses v2.
+	gotStoredIDs := []string{callbackCalls[0].storedKeyID, callbackCalls[1].storedKeyID, callbackCalls[2].storedKeyID}
+	assert.ElementsMatch(t, []string{keyIDv1, keyIDv1, keyIDv2}, gotStoredIDs,
+		"storedKeyID must reflect the key used to encrypt each entry")
+	// currentKeyID is always v3 for all calls.
+	for i, call := range callbackCalls {
+		assert.Equal(t, "local-aes-v3", call.currentKeyID,
+			"call[%d]: currentKeyID must be \"local-aes-v3\"", i)
+	}
 
 	// Two distinct keyIDs → two slog.Warn lines (dedup is keyed on the redacted
 	// keyID internally; each log line surfaces the business key of the first
