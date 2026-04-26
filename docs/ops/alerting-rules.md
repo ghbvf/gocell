@@ -194,7 +194,7 @@ InMemoryNonceStore 达到容量上限且无过期 entry 可回收。短窗内是
 ```yaml
 - alert: GoCellAuthNonceStoreFull
   expr: sum(rate(gocell_auth_service_token_verify_total{result="failure",reason="nonce_store_full"}[5m])) > 0
-  for: 5m
+  for: 2m
   labels:
     severity: warning
   annotations:
