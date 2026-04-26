@@ -193,10 +193,8 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 	sqlStr, args := b.Build()
 	rows, err := r.resolveDB(ctx).Query(ctx, sqlStr, args...)
 	if err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "List", ""); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.WrapInfra(errcode.ErrFlagRepoQuery, "flag repo: list failed", err)
+		return nil, ctxcancel.WrapOrInfra(err, "List", "",
+			errcode.ErrFlagRepoQuery, "flag repo: list failed")
 	}
 	defer rows.Close()
 
@@ -204,18 +202,14 @@ func (r *FlagRepository) List(ctx context.Context, params query.ListParams) ([]*
 	for rows.Next() {
 		flag, scanErr := scanFlagRow(rows)
 		if scanErr != nil {
-			if cancelErr := ctxcancel.Wrap(scanErr, "List", ""); cancelErr != nil {
-				return nil, cancelErr
-			}
-			return nil, errcode.Wrap(errcode.ErrFlagRepoQuery, "flag repo: scan failed", scanErr)
+			return nil, ctxcancel.WrapOrInfra(scanErr, "List", "",
+				errcode.ErrFlagRepoQuery, "flag repo: scan failed")
 		}
 		flags = append(flags, flag)
 	}
 	if err := rows.Err(); err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "List", ""); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.WrapInfra(errcode.ErrFlagRepoQuery, "flag repo: rows error", err)
+		return nil, ctxcancel.WrapOrInfra(err, "List", "",
+			errcode.ErrFlagRepoQuery, "flag repo: rows error")
 	}
 	return flags, nil
 }

@@ -607,10 +607,8 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 	sql, args := b.Build()
 	rows, err := r.resolveDB(ctx).Query(ctx, sql, args...)
 	if err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "List", ""); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.WrapInfra(errcode.ErrConfigRepoQuery, "config repo: list failed", err)
+		return nil, ctxcancel.WrapOrInfra(err, "List", "",
+			errcode.ErrConfigRepoQuery, "config repo: list failed")
 	}
 	defer rows.Close()
 
@@ -623,10 +621,8 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 			valueKeyID *string
 		)
 		if err := rows.Scan(&e.ID, &e.Key, &e.Value, &e.Sensitive, &e.Version, &e.CreatedAt, &e.UpdatedAt, &valueKeyID); err != nil {
-			if cancelErr := ctxcancel.Wrap(err, "List", ""); cancelErr != nil {
-				return nil, cancelErr
-			}
-			return nil, errcode.WrapInfra(errcode.ErrConfigRepoQuery, "config repo: scan failed", err)
+			return nil, ctxcancel.WrapOrInfra(err, "List", "",
+				errcode.ErrConfigRepoQuery, "config repo: scan failed")
 		}
 		if e.Sensitive {
 			r.applySensitiveListSentinel(ctx, &e, valueKeyID, currentID, staleLogged)
@@ -634,10 +630,8 @@ func (r *ConfigRepository) List(ctx context.Context, params query.ListParams) ([
 		entries = append(entries, &e)
 	}
 	if err := rows.Err(); err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "List", ""); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.WrapInfra(errcode.ErrConfigRepoQuery, "config repo: rows error", err)
+		return nil, ctxcancel.WrapOrInfra(err, "List", "",
+			errcode.ErrConfigRepoQuery, "config repo: rows error")
 	}
 
 	return entries, nil
@@ -675,12 +669,10 @@ func (r *ConfigRepository) PublishVersion(ctx context.Context, version *domain.C
 		)
 	}
 	if err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "PublishVersion", "configID="+version.ConfigID); cancelErr != nil {
-			return cancelErr
-		}
-		return errcode.WrapInfra(errcode.ErrConfigRepoQuery,
+		return ctxcancel.WrapOrInfra(err, "PublishVersion", "configID="+version.ConfigID,
+			errcode.ErrConfigRepoQuery,
 			fmt.Sprintf("config repo: publish version failed for config %s v%d",
-				version.ConfigID, version.Version), err)
+				version.ConfigID, version.Version))
 	}
 	return nil
 }

@@ -75,10 +75,8 @@ func (r *AuditRepository) Append(ctx context.Context, entry *domain.AuditEntry) 
 		entry.Hash,
 	)
 	if err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "Append", "id="+entry.ID); cancelErr != nil {
-			return cancelErr
-		}
-		return errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: append failed", err)
+		return ctxcancel.WrapOrInfra(err, "Append", "id="+entry.ID,
+			errcode.ErrAuditRepoQuery, "audit repo: append failed")
 	}
 
 	return nil
@@ -105,10 +103,8 @@ func (r *AuditRepository) GetRange(ctx context.Context, from, to int) ([]*domain
 
 	rows, err := r.db.Query(ctx, query, limit, from)
 	if err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "GetRange", ""); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: get range failed", err)
+		return nil, ctxcancel.WrapOrInfra(err, "GetRange", "",
+			errcode.ErrAuditRepoQuery, "audit repo: get range failed")
 	}
 	defer rows.Close()
 
@@ -132,10 +128,8 @@ func (r *AuditRepository) Query(ctx context.Context, filters ports.AuditFilters,
 	sql, args := b.Build()
 	rows, err := r.db.Query(ctx, sql, args...)
 	if err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "Query", ""); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: query failed", err)
+		return nil, ctxcancel.WrapOrInfra(err, "Query", "",
+			errcode.ErrAuditRepoQuery, "audit repo: query failed")
 	}
 	defer rows.Close()
 
@@ -156,18 +150,14 @@ func scanAuditEntries(rows Rows) ([]*domain.AuditEntry, error) {
 			&e.ID, &e.EventID, &e.EventType, &e.ActorID,
 			&e.Timestamp, &e.Payload, &e.PrevHash, &e.Hash,
 		); err != nil {
-			if cancelErr := ctxcancel.Wrap(err, "ScanRow", ""); cancelErr != nil {
-				return nil, cancelErr
-			}
-			return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: scan failed", err)
+			return nil, ctxcancel.WrapOrInfra(err, "ScanRow", "",
+				errcode.ErrAuditRepoQuery, "audit repo: scan failed")
 		}
 		entries = append(entries, &e)
 	}
 	if err := rows.Err(); err != nil {
-		if cancelErr := ctxcancel.Wrap(err, "RowsErr", ""); cancelErr != nil {
-			return nil, cancelErr
-		}
-		return nil, errcode.Wrap(errcode.ErrAuditRepoQuery, "audit repo: rows error", err)
+		return nil, ctxcancel.WrapOrInfra(err, "RowsErr", "",
+			errcode.ErrAuditRepoQuery, "audit repo: rows error")
 	}
 	return entries, nil
 }
