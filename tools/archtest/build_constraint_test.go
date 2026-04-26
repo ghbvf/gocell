@@ -22,6 +22,7 @@ var skipDirs = map[string]bool{
 	"worktrees":    true,
 	"generated":    true,
 	"node_modules": true,
+	"testdata":     true,
 }
 
 // findIntegrationTagViolations walks rootDir and returns the relative paths (from
@@ -66,13 +67,19 @@ func findIntegrationTagViolations(rootDir string) ([]string, error) {
 	return violations, nil
 }
 
-// fileHasIntegrationTag returns true iff the file contains a //go:build line
-// whose constraint expression:
+// fileHasIntegrationTag returns true iff the file carries, in its header
+// section (before the package clause and following only blank lines and other
+// comments — the only zone the Go toolchain recognises for build constraints),
+// a //go:build line whose constraint expression:
 //  1. evaluates to true when the "integration" tag is active, AND
 //  2. evaluates to false when no tags are active (i.e., the file is not built
 //     unconditionally — it must actually be gated on the integration tag).
 //
-// Returns (false, nil) when the file lacks a //go:build line entirely.
+// A //go:build line that appears after the package clause (or after any other
+// non-comment, non-blank line) is invisible to the toolchain and therefore
+// counted as a violation, matching the semantics of `go build` / `go test`.
+//
+// Returns (false, nil) when the file lacks a //go:build line in the header.
 // Returns (false, err) when the line cannot be parsed.
 func fileHasIntegrationTag(path string) (bool, error) {
 	f, err := os.Open(path)
@@ -84,21 +91,32 @@ func fileHasIntegrationTag(path string) (bool, error) {
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if !constraint.IsGoBuild(line) {
-			continue
+		trimmed := strings.TrimSpace(line)
+
+		// Header zone ends at the first non-blank, non-comment line. The Go
+		// toolchain (see go/build/read.go readGoInfo) stops parsing build
+		// constraints once it sees the package clause, so any //go:build below
+		// that point would be ignored at compile time and must not be accepted
+		// by this gate either.
+		if trimmed == "" || strings.HasPrefix(trimmed, "//") || strings.HasPrefix(trimmed, "/*") {
+			if !constraint.IsGoBuild(line) {
+				continue
+			}
+			expr, parseErr := constraint.Parse(line)
+			if parseErr != nil {
+				return false, parseErr
+			}
+			withIntegration := expr.Eval(func(tag string) bool { return tag == "integration" })
+			withoutAny := expr.Eval(func(_ string) bool { return false })
+			return withIntegration && !withoutAny, nil
 		}
-		expr, parseErr := constraint.Parse(line)
-		if parseErr != nil {
-			return false, parseErr
-		}
-		withIntegration := expr.Eval(func(tag string) bool { return tag == "integration" })
-		withoutAny := expr.Eval(func(_ string) bool { return false })
-		return withIntegration && !withoutAny, nil
+		// First substantive line (typically `package …`) — stop scanning.
+		break
 	}
 	if err := scanner.Err(); err != nil {
 		return false, err
 	}
-	// No //go:build line found.
+	// No //go:build line found in the header zone.
 	return false, nil
 }
 
@@ -155,6 +173,13 @@ func TestArchtest_BuildConstraint_Violation_Fixture(t *testing.T) {
 			content: "//go:build integration\n\npackage fixture\n\nimport \"testing\"\n\nfunc TestGood(t *testing.T) {}\n",
 			wantBad: false,
 		},
+		{
+			// Build constraint placed after the package clause is invisible to
+			// the Go toolchain and must be flagged by the gate.
+			name:    "misplaced_after_package_integration_test.go",
+			content: "package fixture\n\n//go:build integration\n\nimport \"testing\"\n\nfunc TestMisplaced(t *testing.T) {}\n",
+			wantBad: true,
+		},
 	}
 
 	root := t.TempDir()
@@ -171,8 +196,10 @@ func TestArchtest_BuildConstraint_Violation_Fixture(t *testing.T) {
 		violationSet[filepath.Base(v)] = true
 	}
 
+	wantViolations := 0
 	for _, fx := range fixtures {
 		if fx.wantBad {
+			wantViolations++
 			assert.True(t, violationSet[fx.name],
 				"expected %q to be flagged as a violation", fx.name)
 		} else {
@@ -181,7 +208,6 @@ func TestArchtest_BuildConstraint_Violation_Fixture(t *testing.T) {
 		}
 	}
 
-	// Exactly 2 violations expected.
-	assert.Len(t, violations, 2,
-		"fixture must produce exactly 2 violations (bad + wrong_tag)")
+	assert.Len(t, violations, wantViolations,
+		"fixture must produce exactly %d violations", wantViolations)
 }

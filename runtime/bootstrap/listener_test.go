@@ -22,11 +22,19 @@ func TestWithListener_AppendsToListenerConfigs(t *testing.T) {
 	b := New(
 		WithListener(cell.PrimaryListener, ":8080", nil),
 	)
-	// Confirm the Bootstrap was built without panic — listenerConfigs populated.
-	// We cannot inspect b.listenerConfigs directly (unexported), but we can
-	// verify build-time behaviour by checking no panic occurred and that b is not nil.
-	if b == nil {
-		t.Fatal("Bootstrap.New returned nil")
+	// White-box assertion (same package): verify that exactly one entry was stored
+	// and that phase0 validation accepts it (success path, no error).
+	// We do not merely check b != nil — we verify functional correctness:
+	// (a) listenerConfigs has exactly one entry keyed by PrimaryListener, and
+	// (b) phase0ValidateOptions returns no error for this valid configuration.
+	if len(b.listenerConfigs) != 1 {
+		t.Fatalf("expected 1 listenerConfig entry, got %d", len(b.listenerConfigs))
+	}
+	if _, ok := b.listenerConfigs[cell.PrimaryListener]; !ok {
+		t.Fatal("listenerConfigs must contain an entry for cell.PrimaryListener")
+	}
+	if err := b.phase0ValidateOptions(); err != nil {
+		t.Fatalf("phase0ValidateOptions must succeed for a valid single-listener config, got: %v", err)
 	}
 }
 

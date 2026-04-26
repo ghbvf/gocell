@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -357,6 +358,7 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 	go func() { done <- b.Run(ctx) }()
 
 	primaryAddr := primaryLn.Addr().String()
+	internalAddr := internalLn.Addr().String()
 	require.Eventually(t, func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", primaryAddr))
 		if err != nil {
@@ -366,6 +368,11 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
+	// Baseline is taken AFTER the server is confirmed stable (healthz 200 above).
+	// All bootstrap-internal goroutines (HTTP serve loops, etc.) are already running,
+	// so the baseline already includes them. Taking it here — before cancel() — provides
+	// a happens-before synchronisation point: no goroutine launches between this line
+	// and cancel().
 	before := runtime.NumGoroutine()
 
 	cancel()
@@ -381,14 +388,12 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 		return runtime.NumGoroutine() <= before
 	}, 2*time.Second, 50*time.Millisecond, "goroutine count did not return to baseline")
 
-	// Both listeners must be closed after shutdown — new Listen on same
-	// *:0 port won't collide since ports are ephemeral, but the listeners
-	// themselves should report closed when double-closed.
-	// net.Listener's Close is idempotent-ish: second close typically returns
-	// errClosed, not an error we must propagate. We just verify they're not
-	// accepting.
+	// Both listeners must be closed after shutdown — verify neither accepts new connections.
 	_, err := net.Dial("tcp", primaryAddr)
 	assert.Error(t, err, "primary listener should be closed; Dial must fail")
+
+	_, err = net.Dial("tcp", internalAddr)
+	assert.Error(t, err, "internal listener should be closed; Dial must fail")
 }
 
 // TestTripleListener_ShutdownNoGoroutineLeak extends the dual-listener goroutine
@@ -428,6 +433,11 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "health listener did not become ready")
 
+	// Baseline is taken AFTER the server is confirmed stable (healthz 200 above).
+	// All bootstrap-internal goroutines (HTTP serve loops, etc.) are already running,
+	// so the baseline already includes them. Taking it here — before cancel() — provides
+	// a happens-before synchronisation point: no goroutine launches between this line
+	// and cancel().
 	before := runtime.NumGoroutine()
 
 	cancel()
@@ -600,6 +610,13 @@ func TestShutdownAllServers_AggregatesPartialErrors(t *testing.T) {
 		"joined error must contain err1")
 	assert.True(t, errors.Is(got, err2) || strings.Contains(got.Error(), err2.Error()),
 		"joined error must contain err2")
+	// OPS-01: aggregated error must preserve per-listener attribution so
+	// operators can pick out which listener tripped from the error object alone
+	// (matching the slog "listener=" attribute).
+	assert.Contains(t, got.Error(), `listener "server-a"`,
+		"joined error must wrap err1 with listener name")
+	assert.Contains(t, got.Error(), `listener "server-b"`,
+		"joined error must wrap err2 with listener name")
 }
 
 // ---------------------------------------------------------------------------
@@ -644,9 +661,14 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
 	// Fire concurrent requests while shutting down to exercise the race window.
+	// WaitGroup ensures all in-flight goroutines have exited before the test
+	// function returns, preventing goroutine leaks that could pollute later tests.
+	var wg sync.WaitGroup
 	var inFlight atomic.Int32
 	for i := 0; i < 4; i++ {
+		wg.Add(1)
 		go func() {
+			defer wg.Done()
 			inFlight.Add(1)
 			defer inFlight.Add(-1)
 			_, _ = testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", primaryAddr))
@@ -660,6 +682,9 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("bootstrap did not shut down in time")
 	}
+
+	// Wait for all in-flight request goroutines to complete.
+	wg.Wait()
 }
 
 // ---------------------------------------------------------------------------
@@ -874,6 +899,12 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
+	// Baseline is taken AFTER the server is confirmed stable (healthz 200 returned
+	// above). Taking it here ensures that all bootstrap-internal goroutines (HTTP
+	// serve loops, worker loops, etc.) are already running, so the baseline already
+	// includes them. Taking it before cancel() also provides a happens-before
+	// synchronisation point: there are no in-flight goroutine launches between this
+	// line and cancel().
 	baseline := runtime.NumGoroutine()
 
 	cancel()
@@ -884,6 +915,10 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 		t.Fatal("bootstrap did not shut down in time")
 	}
 
+	// 2 s convergence window: the Go runtime does not reclaim goroutine stack
+	// frames synchronously; after Run returns the net/http server and internal
+	// goroutines are in the process of exiting.  2 s is generous enough to
+	// tolerate slow CI machines while still catching real leaks.
 	require.Eventually(t, func() bool {
 		return runtime.NumGoroutine() <= baseline
 	}, 2*time.Second, 50*time.Millisecond,

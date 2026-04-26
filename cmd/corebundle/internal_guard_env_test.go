@@ -11,6 +11,8 @@ import (
 	"log/slog"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,6 +20,10 @@ import (
 // captureSlogWarnLines installs a JSON slog handler capturing Warn-and-above
 // records into a buffer. Returns the buffer and a restore function.
 // The restore must be called via t.Cleanup to avoid polluting other tests.
+//
+// NOT concurrency-safe: callers must not run parallel sub-tests while this
+// capture is active, because slog.SetDefault replaces the global logger for
+// the entire process.
 func captureSlogWarnLines(t *testing.T) (*bytes.Buffer, func()) {
 	t.Helper()
 	var buf bytes.Buffer
@@ -118,6 +124,25 @@ func TestInternalGuardFromEnv_WarnLogging_TableDriven(t *testing.T) {
 
 			assert.Equal(t, tc.wantWarnCnt, countWarnLines(buf),
 				"case %q: unexpected number of slog.Warn lines", tc.name)
+
+			// Deep assertions for specific cases.
+			switch tc.name {
+			case "real_no_secret":
+				// internalGuardFromEnv must return ERR_CONTROLPLANE_SERVICE_SECRET_MISSING
+				// when GOCELL_SERVICE_SECRET is empty in adapter mode "real".
+				var ec *errcode.Error
+				require.ErrorAs(t, err, &ec,
+					"real_no_secret: error must be an *errcode.Error")
+				assert.Equal(t, errcode.ErrControlplaneServiceSecretMissing, ec.Code,
+					"real_no_secret: error code must be ERR_CONTROLPLANE_SERVICE_SECRET_MISSING")
+			case "real_with_secret":
+				// The guard must have a non-noop NonceStore installed.
+				require.NotNil(t, guard, "real_with_secret: guard must not be nil")
+				ns := guard.NonceStore()
+				require.NotNil(t, ns, "real_with_secret: NonceStore must not be nil")
+				assert.NotEqual(t, auth.NonceStoreKindNoop, ns.Kind(),
+					"real_with_secret: NonceStore must not be noop in adapter mode real")
+			}
 		})
 	}
 }

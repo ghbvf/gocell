@@ -1285,6 +1285,12 @@ func shutdownAllServers(ctx context.Context, tasks []shutdownTask) error {
 			if err != nil {
 				slog.Error("bootstrap: HTTP server drain failed",
 					slog.String("listener", task.name), slog.Any("error", err))
+				// OPS-01: wrap with the listener name so the returned error chain
+				// preserves the same attribution that already lives in the slog
+				// line. Without this, errors.Join collapses to opaque "shutdown
+				// failed" lines once the goroutine returns and operators can no
+				// longer tell which listener tripped from the error object alone.
+				err = fmt.Errorf("listener %q shutdown: %w", task.name, err)
 			} else {
 				slog.Info("bootstrap: HTTP server drained", slog.String("listener", task.name))
 			}
@@ -1305,7 +1311,6 @@ func shutdownAllServers(ctx context.Context, tasks []shutdownTask) error {
 func boundServersToTasks(servers []boundServer) []shutdownTask {
 	tasks := make([]shutdownTask, len(servers))
 	for i, bs := range servers {
-		bs := bs // capture
 		tasks[i] = shutdownTask{
 			name:      bs.name,
 			shutGrace: bs.shutGrace,
