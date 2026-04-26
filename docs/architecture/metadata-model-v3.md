@@ -251,11 +251,12 @@ smokeTargets:
 ```yaml
 # actors.yaml
 - id: edge-bff
-  type: external
   maxConsistencyLevel: L1
 ```
 
 `maxConsistencyLevel` 仅约束提供方角色，不限制消费方。
+
+actors.yaml 的成员资格本身就是类型声明：每个条目都是 external actor（内部调用方是 cell，注册在 cells/ 而不是这里）。治理规则 REF-17 据此拒绝 actors.yaml 条目作为 internal endpoint 的 client。
 
 ---
 
