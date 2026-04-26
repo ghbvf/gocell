@@ -36,7 +36,7 @@ token=$(curl -fsS -X POST "$base/api/v1/access/sessions/login" \
     -d "$login_body" \
     | jq -r '.data.accessToken // empty')
 
-if [ -z "$token" ]; then
+if [[ -z "$token" ]]; then
     echo "bootstrap-admin: login response missing data.accessToken" >&2
     exit 1
 fi

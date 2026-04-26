@@ -39,14 +39,29 @@ type SharedDeps struct {
 	// EventBus is the in-process event bus used for both publish and subscribe.
 	EventBus *eventbus.InMemoryEventBus
 
-	// SharedPGPool is the PG pool created by ConfigCoreModule when StorageBackend
-	// is "postgres". Shared with AccessCoreModule + AuditCoreModule so they can
-	// register typed outbox writers + tx managers (durable mode requires both
-	// non-nil per kernel/cell.ResolveEmitter). Nil in memory mode.
+	// SharedPGPool is the postgres pool created by ConfigCoreModule when running
+	// in StorageBackend == "postgres" mode. AccessCoreModule + AuditCoreModule
+	// receive the same pointer to wire their TxManager / OutboxWriter without
+	// double-creating a pool.
 	//
-	// Lifecycle: ConfigCoreModule owns the pool (creates it, registered as
-	// provisional resource). AccessCoreModule + AuditCoreModule are read-only
-	// consumers — they must not call Close on the pool.
+	// Happens-before contract (load-bearing, do not break):
+	//   - The pool is registered as a ManagedResource by ConfigCoreModule.Provide
+	//     before any consumer module reads it.
+	//   - All consumers of this pool (TxManager, OutboxWriter, OutboxRelay,
+	//     EventRouter goroutines, ConsumerBase workers) MUST be registered AFTER
+	//     the pool ManagedResource — i.e. as later WithManagedResource /
+	//     WithWorkers options — so bootstrap's LIFO shutdown order stops them
+	//     before pool.Close() runs.
+	//   - main.go::BuildApp module order locks this for cell modules
+	//     (MODULE-ORDER-CONFIGCORE-FIRST-01 archtest).
+	//   - For new lifecycle hooks added outside cell modules: register them
+	//     after the pool, never before.
+	//
+	// Violating this contract produces use-after-close errors during shutdown
+	// that are silent in normal runs (Close() returns first, workers' next DB
+	// call fails).
+	//
+	// Nil in non-postgres modes (in-memory).
 	SharedPGPool *adapterpg.Pool
 
 	// RedisClient is configured when distributed replay/idempotency state is

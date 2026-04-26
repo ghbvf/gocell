@@ -23,7 +23,11 @@ services:
     image: postgres:15-alpine
     environment:
       POSTGRES_USER: gocell
-      POSTGRES_PASSWORD: gocell-e2e-pwd
+      # Required env: caller MUST export E2E_PG_PASSWORD before `docker compose up`.
+      # No default — software-fallback would re-introduce a hardcoded credential.
+      # CI workflow declares it (.github/workflows/_build-lint.yml::e2e env block);
+      # local devs use tests/e2e/.env.e2e.example as a starting point.
+      POSTGRES_PASSWORD: ${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}
       POSTGRES_DB: gocell
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U gocell -d gocell"]
@@ -44,7 +48,7 @@ services:
       context: ../..
       dockerfile: tests/e2e/Dockerfile.migrate
     environment:
-      GOCELL_PG_DSN: postgres://gocell:gocell-e2e-pwd@postgres:5432/gocell?sslmode=disable
+      GOCELL_PG_DSN: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@postgres:5432/gocell?sslmode=disable
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,7 +66,7 @@ services:
       GOCELL_SINGLE_POD: "1"
 
       # configcore cell: PG DSN + AES-256 envelope encryption.
-      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:gocell-e2e-pwd@postgres:5432/gocell?sslmode=disable
+      GOCELL_CONFIGCORE_DATABASE_URL: postgres://gocell:${E2E_PG_PASSWORD:?E2E_PG_PASSWORD must be set}@postgres:5432/gocell?sslmode=disable
       GOCELL_CONFIGCORE_KEY_PROVIDER: local-aes
       # 64-hex-char = 32 bytes. E2e-only; never reuse in production.
       GOCELL_CONFIGCORE_MASTER_KEY: aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899

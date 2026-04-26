@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -786,4 +787,97 @@ func (r *orderedCloseResource) Close(ctx context.Context) error {
 		return r.closeFn(ctx)
 	}
 	return nil
+}
+
+// sequencedResource records the monotonic sequence number at which Close() was
+// invoked. Used by TestManagedResource_LIFOCloseBySequence to assert that the
+// last-registered resource closes before the first-registered resource,
+// satisfying the MODULE-ORDER-CLOSE-LIFO contract documented in
+// cmd/corebundle/shared_deps.go (SharedPGPool happens-before contract).
+//
+// A shared counter is incremented on each Close(); the sequence number
+// captured by each resource reflects call order without relying on wall-clock
+// granularity (two synchronous Close() calls in the same teardown loop can
+// share the same nanosecond, making timestamp comparison unreliable).
+type sequencedResource struct {
+	name     string
+	counter  *atomic.Int64 // shared across resources; incremented on each Close
+	closeSeq atomic.Int64  // sequence number captured at Close(); 0 = not yet closed
+}
+
+func (r *sequencedResource) Checkers() map[string]func(context.Context) error {
+	return map[string]func(context.Context) error{
+		r.name: func(_ context.Context) error { return nil },
+	}
+}
+
+func (r *sequencedResource) Worker() kworker.Worker { return nil }
+
+func (r *sequencedResource) Close(_ context.Context) error {
+	seq := r.counter.Add(1) // returns new value (1-based)
+	r.closeSeq.Store(seq)
+	return nil
+}
+
+// TestManagedResource_LIFOCloseBySequence asserts the MODULE-ORDER-CLOSE-LIFO
+// contract using monotonic sequence numbers: the resource registered last
+// (worker, simulating a ConsumerBase / OutboxRelay) must have its Close()
+// invoked before the resource registered first (pgRes, simulating SharedPGPool).
+//
+// This locks in the bootstrap LIFO guarantee that protects against
+// use-after-close DB calls: if a consumer worker still holds an open DB
+// transaction when pool.Close() is called, the next DB call will fail or panic.
+// LIFO order ensures all consumer workers are stopped before the pool is closed.
+//
+// Ref: cmd/corebundle/shared_deps.go SharedPGPool "Happens-before contract".
+func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
+	var counter atomic.Int64
+	pgRes := &sequencedResource{name: "fake-pg-pool", counter: &counter}
+	worker := &sequencedResource{name: "fake-consumer-worker", counter: &counter}
+
+	ln := newLocalListener(t)
+	app := New(
+		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		// pgRes registered FIRST (simulating ConfigCoreModule.Provide).
+		WithManagedResource(pgRes),
+		// worker registered SECOND (simulating a later consumer module / WithWorkers).
+		WithManagedResource(worker),
+	)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	errCh := make(chan error, 1)
+	go func() { errCh <- app.Run(ctx) }()
+
+	waitForHealthy(t, ln.Addr().String())
+
+	cancel()
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Errorf("unexpected Run error: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("bootstrap.Run did not exit within 5s after cancel")
+	}
+
+	pgSeq := pgRes.closeSeq.Load()
+	workerSeq := worker.closeSeq.Load()
+	if pgSeq == 0 {
+		t.Fatal("pgRes.Close was never invoked")
+	}
+	if workerSeq == 0 {
+		t.Fatal("worker.Close was never invoked")
+	}
+	// LIFO: worker (registered last) must close first → smaller sequence number.
+	if workerSeq >= pgSeq {
+		t.Errorf(
+			"MODULE-ORDER-CLOSE-LIFO contract violated: worker.Close (registered last, seq=%d) "+
+				"must execute BEFORE pgRes.Close (registered first, seq=%d). "+
+				"LIFO ordering is the bootstrap's only guarantee that consumer workers "+
+				"don't see a closed pool. See cmd/corebundle/shared_deps.go SharedPGPool "+
+				"happens-before contract.",
+			workerSeq, pgSeq,
+		)
+	}
 }

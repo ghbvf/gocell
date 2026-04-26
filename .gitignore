@@ -37,6 +37,10 @@ __debug_bin*
 tmp/
 *.tmp
 
+# Local env files (e.g. tests/e2e/.env.e2e); .env.e2e.example is committed
+*.env.e2e
+.env.e2e
+
 # Claude Code
 worktrees/
 .claude/scheduled_tasks.lock
