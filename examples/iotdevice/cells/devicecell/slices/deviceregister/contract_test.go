@@ -37,7 +37,7 @@ var _ outbox.Publisher = (*recordingPublisher)(nil)
 func newContractHandler() (http.Handler, *recordingPublisher) {
 	repo := mem.NewDeviceRepository()
 	pub := &recordingPublisher{}
-	emitter, err := outbox.NewDirectEmitter(pub, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "devicecell", slog.Default())
+	emitter, err := outbox.NewDirectEmitter(pub, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "devicecell", outbox.WithLogger(slog.Default()))
 	if err != nil {
 		panic(err)
 	}

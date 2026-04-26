@@ -145,7 +145,7 @@ func (c *DeviceCell) buildEmitter() (*outbox.DirectEmitter, error) {
 	if mp == nil {
 		mp = metrics.NopProvider{}
 	}
-	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, "devicecell", c.logger)
+	return outbox.NewDirectEmitter(c.publisher, outbox.DirectPublishFailOpen, mp, "devicecell", outbox.WithLogger(c.logger))
 }
 
 // Init sets up repositories, slice services, and handlers.
