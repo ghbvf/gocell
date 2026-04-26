@@ -384,7 +384,9 @@ waivers:
 
 ### Advisory 规则（ADV-*）
 
-以下规则由 `gocell validate --strict` 强制执行，违反即 CI 失败（error 级）：
+以下规则在 `gocell validate` 默认运行（不依赖 `--strict`，`--strict` 只控
+FMT-* 子集）。`error` 级违反让 CLI 退出非 0、阻断 CI；`warning` 级仅打印，
+除非 CI 另行配置 warnings-as-errors。
 
 | 规则 | 级别 | 说明 |
 |------|------|------|
