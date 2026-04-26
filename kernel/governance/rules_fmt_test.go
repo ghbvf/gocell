@@ -57,8 +57,11 @@ func TestFMT13_MissingEndpointsHTTP(t *testing.T) {
 	if len(fmt13Errors) != 1 {
 		t.Fatalf("FMT-13 missing endpoints.http: expected 1 error, got %d: %v", len(fmt13Errors), fmt13Errors)
 	}
-	if !strings.Contains(fmt13Errors[0].Message, "must declare endpoints.http") {
-		t.Errorf("FMT-13: expected 'must declare endpoints.http' in message, got: %s", fmt13Errors[0].Message)
+	if !strings.Contains(fmt13Errors[0].Message, "endpoints.http") {
+		t.Errorf("FMT-13: expected 'endpoints.http' in message, got: %s", fmt13Errors[0].Message)
+	}
+	if !strings.Contains(fmt13Errors[0].Message, "method:") {
+		t.Errorf("FMT-13: expected 'method:' YAML template in message, got: %s", fmt13Errors[0].Message)
 	}
 }
 

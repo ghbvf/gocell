@@ -213,7 +213,7 @@ func doEmit(ctx context.Context, e outbox.Emitter) error {
 	forwardFail := false
 	reverseFail := false
 	for _, r := range got {
-		if strings.Contains(r.Message, "no service.go") && strings.Contains(r.Message, declaredTopic) {
+		if strings.Contains(r.Message, "no non-test Go file") && strings.Contains(r.Message, declaredTopic) {
 			forwardFail = true
 		}
 		if strings.Contains(r.Message, "service emits") && strings.Contains(r.Message, emittedTopic) {
@@ -320,13 +320,21 @@ func doEmit(ctx context.Context, e outbox.Emitter, v string) error {
 	got := findResultByCode(results, codeContractConsistencyEmit01)
 
 	dynamicFail := false
+	relPathOK := false
 	for _, r := range got {
 		if strings.Contains(r.Message, "dynamic topic in emit") {
 			dynamicFail = true
+			// B4: file path in finding must be relative (not absolute).
+			if r.File != "" && !strings.HasPrefix(r.File, "/") {
+				relPathOK = true
+			}
 		}
 	}
 	if !dynamicFail {
 		t.Errorf("case F: expected dynamic topic error, findings: %v", got)
+	}
+	if !relPathOK {
+		t.Errorf("case F: dynamic topic finding must report a relative file path, findings: %v", got)
 	}
 }
 
@@ -466,7 +474,7 @@ func doWork(ctx context.Context, e outbox.Emitter) error {
 	// The forward check should pass because collectAllTopicSelectors found the topic.
 	forwardErrors := 0
 	for _, r := range findResultByCode(results, codeContractConsistencyEmit01) {
-		if strings.Contains(r.Message, "no service.go") {
+		if strings.Contains(r.Message, "no non-test Go file") {
 			forwardErrors++
 		}
 	}

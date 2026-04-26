@@ -2,8 +2,10 @@ package app
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -13,6 +15,19 @@ import (
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 )
+
+// goModVersion returns the major.minor version string of the running Go toolchain
+// (e.g. "1.22") so generated go.mod files track the actual toolchain instead of
+// a hardcoded value that drifts over time.
+func goModVersion() string {
+	v := runtime.Version() // e.g. "go1.26.1"
+	v = strings.TrimPrefix(v, "go")
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) >= 2 {
+		return parts[0] + "." + parts[1]
+	}
+	return v
+}
 
 func TestCheckContractHealthCI(t *testing.T) {
 	// Run against the real project — should pass with 0 issues.
@@ -572,11 +587,19 @@ func TestCheckSliceCoverage_UnknownCell(t *testing.T) {
 	require.Error(t, err, "unknown --cell must produce non-zero exit")
 	assert.Contains(t, err.Error(), "issue(s)", "error must report finding count")
 
+	// Verify the text-format output contains the finding code and available cells.
+	textOut := captureStdout(t, func() {
+		_ = runCheck([]string{"slice-coverage", "--cell=does-not-exist"})
+	})
+	assert.Contains(t, textOut, "CHECK-CELL-NOT-FOUND", "text output must contain CHECK-CELL-NOT-FOUND code")
+	assert.Contains(t, textOut, "available cells", "text output must list available cells")
+
 	// Also verify the finding code in JSON output.
 	out := captureStdout(t, func() {
 		_ = runCheck([]string{"slice-coverage", "--cell=does-not-exist", "--format=json"})
 	})
 	assert.Contains(t, out, "CHECK-CELL-NOT-FOUND", "JSON output must contain CHECK-CELL-NOT-FOUND code")
+	assert.Contains(t, out, "available cells", "JSON output must include available cells in message")
 }
 
 // TestRunUnconditionalSkipAnalyzer_BuildTaggedFile verifies that
@@ -591,8 +614,9 @@ func TestRunUnconditionalSkipAnalyzer_BuildTaggedFile(t *testing.T) {
 	root := t.TempDir()
 
 	// Minimal go.mod — the module path must resolve; no external deps needed.
+	// Use the actual toolchain version so this fixture tracks upgrades automatically.
 	require.NoError(t, os.WriteFile(filepath.Join(root, "go.mod"), []byte(
-		"module example.com/skiptest\n\ngo 1.22\n"), 0o644))
+		fmt.Sprintf("module example.com/skiptest\n\ngo %s\n", goModVersion())), 0o644))
 
 	// A package directory.
 	pkgDir := filepath.Join(root, "mypkg")

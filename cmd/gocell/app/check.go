@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"golang.org/x/tools/go/analysis"
@@ -206,12 +207,23 @@ func checkSliceCoverage(args []string) error {
 
 	if *cellID != "" {
 		if _, ok := project.Cells[*cellID]; !ok {
+			ids := make([]string, 0, len(project.Cells))
+			for id := range project.Cells {
+				ids = append(ids, id)
+			}
+			sort.Strings(ids)
+			available := ids
+			suffix := ""
+			if len(ids) > 10 {
+				available = ids[:10]
+				suffix = ", ..."
+			}
 			return printAndCheck(*format, []governance.ValidationResult{{
 				Code:      "CHECK-CELL-NOT-FOUND",
 				Severity:  governance.SeverityError,
 				IssueType: governance.IssueRequired,
 				Scope:     cmdSliceCoverage,
-				Message:   fmt.Sprintf("cell %q not found in project", *cellID),
+				Message:   fmt.Sprintf("cell %q not found in project; available cells: [%s%s]", *cellID, strings.Join(available, ", "), suffix),
 			}}, cmdSliceCoverage, "")
 		}
 	}
@@ -825,7 +837,7 @@ func runUnconditionalSkipAnalyzer(patterns []string, root string) ([]governance.
 		Mode:       packages.LoadAllSyntax,
 		Tests:      true,
 		Dir:        root,
-		BuildFlags: []string{"-tags=integration e2e examples_smoke"},
+		BuildFlags: []string{"-tags=integration,e2e,examples_smoke"},
 	}
 	pkgs, err := packages.Load(cfg, patterns...)
 	if err != nil {

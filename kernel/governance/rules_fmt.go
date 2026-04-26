@@ -403,7 +403,7 @@ func (v *Validator) validateFMT13() []ValidationResult {
 				codeFMT13, SeverityError, IssueRequired,
 				contractFile(c),
 				"endpoints.http",
-				fmt.Sprintf("HTTP contract %q must declare endpoints.http (method/path/successStatus)", c.ID),
+				fmt.Sprintf("HTTP contract %q must declare endpoints.http; add to contract.yaml:\n  http:\n    method: GET                # GET|POST|PUT|PATCH|DELETE\n    path: /api/v1/...\n    successStatus: 200\n    noContent: false", c.ID),
 			))
 			continue
 		}

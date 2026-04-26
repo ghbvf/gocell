@@ -141,7 +141,7 @@ func (v *Validator) checkForwardTriggers(c *metadata.ContractMeta, emitTopics ma
 			results = append(results, v.newResult(
 				codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
 				contractFile(c), "triggers",
-				fmt.Sprintf("contract %q declares trigger %q but no service.go in cell %s emits it", c.ID, t, c.OwnerCell),
+				fmt.Sprintf("contract %q declares trigger %q but no non-test Go file under cells/%s/slices/ emits it via outbox.Emit or *.Emitter.Emit; topic must be string literal or named constant (dynamic fmt.Sprintf rejected)", c.ID, t, c.OwnerCell),
 			))
 		}
 	}
@@ -161,7 +161,7 @@ func (v *Validator) checkReverseEmits(
 			results = append(results, v.newScopedResult(
 				codeContractConsistencyEmit01, SeverityError, IssueRefNotFound,
 				"project", "triggers",
-				fmt.Sprintf("service emits topic %q but no HTTP contract in cell %s declares it in triggers", t, ownerCell),
+				fmt.Sprintf("service emits topic %q but no HTTP contract in cell %s declares it in triggers; fix: add %q to triggers in one of cells/%s's HTTP contract.yaml files (or change the emit if dead code)", t, ownerCell, t, ownerCell),
 			))
 		}
 	}
@@ -206,50 +206,64 @@ func scanCellEmitTopics(root, ownerCell, fileForError string) (map[string]struct
 			return nil
 		}
 		fileConsts := collectFileConsts(f, pkgConsts)
-		scanResults := scanFileForEmits(f, fset, pkgConsts, fileConsts, fileForError, topics)
+		scanResults, hasEmit := scanFileForEmits(f, fset, pkgConsts, fileConsts, fileForError, root, topics)
 		results = append(results, scanResults...)
-		collectAllTopicSelectors(f, pkgConsts, topics)
+		// Only collect topic selectors from files that contain real emit calls.
+		// Restricting to emit-call files prevents subscriber topic constants
+		// (e.g. in subscribe(ctx, dto.TopicX, handler)) from being counted as
+		// emit evidence, which would cause false-negatives in the reverse check.
+		if hasEmit {
+			collectAllTopicSelectors(f, pkgConsts, topics)
+		}
 		return nil
 	})
 	return topics, results
 }
 
 // scanFileForEmits walks a single parsed file's AST and collects emitted topics.
+// Returns the validation results and a boolean indicating whether the file
+// contained at least one real emit call site (outbox.Emit or receiver *.Emit).
 func scanFileForEmits(
 	f *ast.File,
 	fset *token.FileSet,
 	pkgConsts cellPkgConsts,
 	fileConsts pkgConstMap,
 	fileForError string,
+	root string,
 	topics map[string]struct{},
-) []ValidationResult {
+) ([]ValidationResult, bool) {
 	var results []ValidationResult
+	var hasEmit bool
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
 		if isOutboxEmitCall(call) && len(call.Args) >= 3 {
-			r := collectOutboxEmitTopic(call, fset, pkgConsts, fileConsts, fileForError, topics)
+			hasEmit = true
+			r := collectOutboxEmitTopic(call, fset, pkgConsts, fileConsts, fileForError, root, topics)
 			results = append(results, r...)
 			return true
 		}
 		if isReceiverEmitCall(call) && len(call.Args) >= 2 {
+			hasEmit = true
 			collectReceiverEmitTopics(call.Args[1], f, pkgConsts, fileConsts, topics)
 		}
 		return true
 	})
-	return results
+	return results, hasEmit
 }
 
 // collectOutboxEmitTopic extracts the topic from outbox.Emit third arg.
 // Appends to topics on success; returns a dynamic-topic error on call expressions.
+// root is used to compute a project-relative file path for the finding.
 func collectOutboxEmitTopic(
 	call *ast.CallExpr,
 	fset *token.FileSet,
 	pkgConsts cellPkgConsts,
 	fileConsts pkgConstMap,
 	fileForError string,
+	root string,
 	topics map[string]struct{},
 ) []ValidationResult {
 	topicExpr := call.Args[2]
@@ -260,15 +274,21 @@ func collectOutboxEmitTopic(
 	}
 	if isDynamicExpr(topicExpr) {
 		pos := fset.Position(call.Pos())
+		relFile := pos.Filename
+		if root != "" {
+			if rel, err := filepath.Rel(root, pos.Filename); err == nil {
+				relFile = rel
+			}
+		}
 		return []ValidationResult{{
 			Code:      codeContractConsistencyEmit01,
 			Severity:  SeverityError,
 			IssueType: IssueInvalid,
-			File:      fileForError,
+			File:      relFile,
 			Field:     "triggers",
 			Message: fmt.Sprintf(
 				"dynamic topic in emit not allowed at %s:%d; topic must be string literal or named constant",
-				pos.Filename, pos.Line,
+				relFile, pos.Line,
 			),
 		}}
 	}
