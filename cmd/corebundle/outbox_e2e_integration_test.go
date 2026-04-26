@@ -423,14 +423,14 @@ func publishConfig(t *testing.T, baseURL, token, key string) {
 
 // TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet validates the closed
 // loop: configcore.configwrite → PG outbox → relay → eventbus →
-// accesscore.configreceive → ConfigClient.GetEntry (HTTP call to internal
+// accesscore.configreceive → ConfigGetter.GetEntry (HTTP call to internal
 // endpoint) succeeds.
 //
 // Chain under test:
 //
 //	HTTP publish → configcore WriteService (L2) → outbox_entries
 //	→ OutboxRelay.publishAll → eventbus → configreceive handler
-//	→ HTTPConfigClient.GetEntry → stub internal server → assertion
+//	→ HTTPConfigGetter.GetEntry → stub internal server → assertion
 //
 // The stub internal server records every GET /internal/v1/config/{key} request
 // so the test can assert the closed loop completed without needing slog
@@ -519,7 +519,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	}))
 	t.Cleanup(internalSrv.Close)
 
-	// Create a test HMAC ring for service-token signing in HTTPConfigClient.
+	// Create a test HMAC ring for service-token signing in HTTPConfigGetter.
 	// The stub server does not verify the token; it just records the call.
 	testRing, ringErr := auth.NewHMACKeyRing(
 		[]byte("test-service-secret-32-bytes-xxx!"),
@@ -552,7 +552,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 	}, cellAdapterOpts...)
 	configCell := configcore.NewConfigCore(configOpts...)
 
-	// Wire accesscore with the HTTPConfigClient pointing at the stub server.
+	// Wire accesscore with the HTTPConfigGetter pointing at the stub server.
 	// After receiving an entry-upserted event, configreceive will call
 	// internalSrv.URL + /internal/v1/config/{key}, and the stub records it.
 	accessCell := accesscore.NewAccessCore(
@@ -562,7 +562,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithRefreshMetricsProvider(kernelmetrics.NopProvider{}),
-		accesscore.WithConfigClientHTTP(internalSrv.URL, testRing),
+		accesscore.WithConfigGetterHTTP(internalSrv.URL, testRing),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),
@@ -620,11 +620,11 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 	// --- Step 9: Assert the closed loop completed ---
 	// The relay delivers the entry-upserted event → configreceive calls
-	// HTTPConfigClient.GetEntry → stub server records the request.
+	// HTTPConfigGetter.GetEntry → stub server records the request.
 	//
 	// Captures the first call matching the expected path; subsequent
 	// asserts validate semantics (method + auth header). Eventually waits
-	// up to 15s for the relay→eventbus→configreceive→ConfigClient pipeline.
+	// up to 15s for the relay→eventbus→configreceive→ConfigGetter pipeline.
 	var captured refetchCall
 	require.Eventually(t, func() bool {
 		select {
@@ -638,19 +638,19 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		return false
 	}, 15*time.Second, 100*time.Millisecond,
 		"refetch closed loop: accesscore.configreceive must call GET /internal/v1/config/%s "+
-			"within 15s of publish; missing call indicates relay→eventbus→configreceive→ConfigClient "+
+			"within 15s of publish; missing call indicates relay→eventbus→configreceive→ConfigGetter "+
 			"pipeline is broken (PR-CFG-G1 refetch loop guard)",
 		refetchKey)
-	// Method must be GET (HTTPConfigClient.GetEntry uses http.MethodGet).
+	// Method must be GET (HTTPConfigGetter.GetEntry uses http.MethodGet).
 	assert.Equal(t, http.MethodGet, captured.method,
-		"refetch must use GET — wrong method indicates HTTPConfigClient regression")
+		"refetch must use GET — wrong method indicates HTTPConfigGetter regression")
 	// Authorization header must carry a ServiceToken — the real internal
 	// listener auth chain rejects requests without a service-token; the stub
 	// does not verify the signature but asserting the header prefix catches
 	// auth-chain regressions (e.g. ring not wired, token never minted).
 	assert.True(t, strings.HasPrefix(captured.authHeader, "ServiceToken "),
 		"refetch Authorization header must start with \"ServiceToken \"; got %q — "+
-			"indicates HTTPConfigClient is not signing requests with the configured ring",
+			"indicates HTTPConfigGetter is not signing requests with the configured ring",
 		captured.authHeader)
 
 	// --- Teardown ---

@@ -1,6 +1,6 @@
 // Package ports defines accesscore's outbound dependency interfaces.
 //
-// Cross-cell HTTP clients (e.g. ConfigClient that calls configcore's internal
+// Cross-cell HTTP clients (e.g. ConfigGetter that calls configcore's internal
 // GET /internal/v1/config/{key}) are abstracted here so accesscore slices can
 // be unit-tested with stub implementations. Concrete HTTP-backed
 // implementations live in cells/accesscore/internal/adapters/http/.
@@ -23,9 +23,9 @@ type ConfigEntry struct {
 	Version   int
 }
 
-// ConfigClient abstracts the cross-cell HTTP call to configcore's internal
+// ConfigGetter abstracts the cross-cell HTTP call to configcore's internal
 // GET /internal/v1/config/{key} endpoint (contract: http.config.internal.get.v1).
 // Implementations live in cells/accesscore/internal/adapters/http/.
-type ConfigClient interface {
+type ConfigGetter interface {
 	GetEntry(ctx context.Context, key string) (ConfigEntry, error)
 }

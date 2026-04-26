@@ -192,33 +192,33 @@ func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
 	return func(c *AccessCore) { c.initialAdmin = initialadmin.NewLifecycle(opts...) }
 }
 
-// WithConfigClient injects the ConfigClient used by the configreceive slice to
+// WithConfigGetter injects the ConfigGetter used by the configreceive slice to
 // fetch the current config entry value from configcore after an upsert event
 // (contract: http.config.internal.get.v1). When not set the slice operates in
 // log-only mode — no cross-cell HTTP call is made.
 //
 // Tests should prefer this option with a stub implementation. Production
 // composition roots that cannot import cells/accesscore/internal/adapters/http
-// (e.g. cmd/corebundle) use WithConfigClientHTTP instead.
-func WithConfigClient(c ports.ConfigClient) Option {
-	return func(ac *AccessCore) { ac.configClient = c }
+// (e.g. cmd/corebundle) use WithConfigGetterHTTP instead.
+func WithConfigGetter(c ports.ConfigGetter) Option {
+	return func(ac *AccessCore) { ac.configGetter = c }
 }
 
-// WithConfigClientHTTP constructs a new HTTP-backed ConfigClient from the
+// WithConfigGetterHTTP constructs a new HTTP-backed ConfigGetter from the
 // given base URL and HMAC key ring and injects it.
 //
 // This public factory is the composition-root entrypoint for cmd/corebundle
 // and similar callers that cannot import cells/accesscore/internal/adapters/http
-// directly. It is equivalent to calling WithConfigClient(NewHTTPConfigClient(baseURL, ring)).
+// directly. It is equivalent to calling WithConfigGetter(NewHTTPConfigGetter(baseURL, ring)).
 //
 // The ring parameter is *auth.HMACKeyRing (concrete type) because outbound
 // service-token signing relies on its Current() method; tests that don't need
-// real signing should use WithConfigClient(stub) instead.
+// real signing should use WithConfigGetter(stub) instead.
 //
 // contract: http.config.internal.get.v1
 // ref: go-micro config/source/remote — polling + on-change patterns.
-func WithConfigClientHTTP(baseURL string, ring *auth.HMACKeyRing) Option {
-	return WithConfigClient(accesshttp.NewHTTPConfigClient(baseURL, ring))
+func WithConfigGetterHTTP(baseURL string, ring *auth.HMACKeyRing) Option {
+	return WithConfigGetter(accesshttp.NewHTTPConfigGetter(baseURL, ring))
 }
 
 // AccessCore is the accesscore Cell implementation.
@@ -257,9 +257,9 @@ type AccessCore struct {
 	// nil means the feature is disabled.
 	initialAdmin *initialadmin.Lifecycle
 
-	// configClient is used by the configreceive slice to fetch config entry
+	// configGetter is used by the configreceive slice to fetch config entry
 	// values from configcore after an upsert event. nil = log-only mode.
-	configClient ports.ConfigClient
+	configGetter ports.ConfigGetter
 
 	// Slice handlers.
 	identityHandler *identitymanage.Handler

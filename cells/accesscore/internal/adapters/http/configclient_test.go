@@ -21,7 +21,7 @@ func newTestRing(t *testing.T) *auth.HMACKeyRing {
 	return ring
 }
 
-func TestHTTPConfigClient_GetEntry_OK(t *testing.T) {
+func TestHTTPConfigGetter_GetEntry_OK(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, http.MethodGet, r.Method)
 		assert.Equal(t, "/internal/v1/config/app.name", r.URL.Path)
@@ -46,7 +46,7 @@ func TestHTTPConfigClient_GetEntry_OK(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigClientWithHTTPClient(srv.URL, ring, srv.Client())
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client())
 	entry, err := client.GetEntry(context.Background(), "app.name")
 	require.NoError(t, err)
 	assert.Equal(t, "app.name", entry.Key)
@@ -55,7 +55,7 @@ func TestHTTPConfigClient_GetEntry_OK(t *testing.T) {
 	assert.Equal(t, 3, entry.Version)
 }
 
-func TestHTTPConfigClient_GetEntry_NotFound(t *testing.T) {
+func TestHTTPConfigGetter_GetEntry_NotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
@@ -66,7 +66,7 @@ func TestHTTPConfigClient_GetEntry_NotFound(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigClientWithHTTPClient(srv.URL, ring, srv.Client())
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client())
 	_, err := client.GetEntry(context.Background(), "missing.key")
 	require.Error(t, err)
 
@@ -75,7 +75,7 @@ func TestHTTPConfigClient_GetEntry_NotFound(t *testing.T) {
 	assert.Equal(t, errcode.ErrConfigNotFound, ec.Code)
 }
 
-func TestHTTPConfigClient_GetEntry_SensitiveEntry(t *testing.T) {
+func TestHTTPConfigGetter_GetEntry_SensitiveEntry(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
@@ -94,21 +94,21 @@ func TestHTTPConfigClient_GetEntry_SensitiveEntry(t *testing.T) {
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigClientWithHTTPClient(srv.URL, ring, srv.Client())
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client())
 	entry, err := client.GetEntry(context.Background(), "db.password")
 	require.NoError(t, err)
 	assert.Equal(t, "db.password", entry.Key)
 	assert.True(t, entry.Sensitive)
 }
 
-func TestHTTPConfigClient_GetEntry_UnexpectedStatus(t *testing.T) {
+func TestHTTPConfigGetter_GetEntry_UnexpectedStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 
 	ring := newTestRing(t)
-	client := NewHTTPConfigClientWithHTTPClient(srv.URL, ring, srv.Client())
+	client := NewHTTPConfigGetterWithHTTPClient(srv.URL, ring, srv.Client())
 	_, err := client.GetEntry(context.Background(), "any.key")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unexpected status 500")

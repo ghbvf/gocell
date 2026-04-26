@@ -34,17 +34,17 @@ const (
 // DLX: broker-native via DispositionReject → Nack(requeue=false)
 type Service struct {
 	logger       *slog.Logger
-	configClient ports.ConfigClient // optional; nil disables GetEntry fetch
+	configGetter ports.ConfigGetter // optional; nil disables GetEntry fetch
 }
 
 // Option configures a configreceive Service.
 type Option func(*Service)
 
-// WithConfigClient injects the ConfigClient used to fetch the current config
+// WithConfigGetter injects the ConfigGetter used to fetch the current config
 // entry value after an upsert event. When nil or not provided the service
 // operates in log-only mode (no cross-cell HTTP call is made).
-func WithConfigClient(c ports.ConfigClient) Option {
-	return func(s *Service) { s.configClient = c }
+func WithConfigGetter(c ports.ConfigGetter) Option {
+	return func(s *Service) { s.configGetter = c }
 }
 
 // NewService creates a config-receive Service.
@@ -57,7 +57,7 @@ func NewService(logger *slog.Logger, opts ...Option) *Service {
 }
 
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
-// When a ConfigClient is configured it fetches the current entry value from
+// When a ConfigGetter is configured it fetches the current entry value from
 // configcore (contract: http.config.internal.get.v1) and logs it. Fetch
 // failures are retriable: a transient error is returned (triggering Requeue)
 // so the consumer pipeline retries. A 404 (entry truly gone) is treated as
@@ -74,8 +74,8 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
 
-	if s.configClient != nil {
-		cfg, fetchErr := s.configClient.GetEntry(ctx, event.Key)
+	if s.configGetter != nil {
+		cfg, fetchErr := s.configGetter.GetEntry(ctx, event.Key)
 		if fetchErr != nil {
 			// If the config entry is genuinely gone (404), the event is stale;
 			// retrying won't help, so log at Warn and Ack.

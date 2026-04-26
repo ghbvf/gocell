@@ -118,7 +118,7 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 			accesscore.WithOutboxDeps(nil, writer),
 			accesscore.WithTxManager(txMgr),
 		)
-		// Wire the ConfigClient for the configreceive slice to fetch entry values
+		// Wire the ConfigGetter for the configreceive slice to fetch entry values
 		// from configcore's internal GET /internal/v1/config/{key} endpoint after
 		// an upsert event (contract: http.config.internal.get.v1).
 		// baseURL is constructed from InternalHTTPAddr. If the addr is a port-only
@@ -128,7 +128,7 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
 		if shared.InternalGuard != nil {
 			accessOpts = append(accessOpts,
-				accesscore.WithConfigClientHTTP(internalBaseURL, shared.InternalGuard.ring),
+				accesscore.WithConfigGetterHTTP(internalBaseURL, shared.InternalGuard.ring),
 			)
 		}
 	}
@@ -146,10 +146,10 @@ var _ CellModule = AccessCoreModule{}
 // for the internal HTTP client. Port-only addresses (e.g. ":9090") are resolved
 // to "http://127.0.0.1:9090"; host:port addresses get "http://" prepended.
 // As a defensive measure, "0.0.0.0:port" bind addresses are normalised to
-// "127.0.0.1:port" so the ConfigClient always connects on loopback regardless
+// "127.0.0.1:port" so the ConfigGetter always connects on loopback regardless
 // of how the listener was configured (prevents accidental bridge-network routing
 // when a container misconfigures GOCELL_HTTP_INTERNAL_ADDR=0.0.0.0:9090).
-// Used to construct the ConfigClient base URL from SharedDeps.InternalHTTPAddr.
+// Used to construct the ConfigGetter base URL from SharedDeps.InternalHTTPAddr.
 func internalAddrToBaseURL(addr string) string {
 	if addr == "" {
 		return "http://127.0.0.1:9090"

@@ -13,14 +13,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// stubConfigClient is a test double for ports.ConfigClient.
-type stubConfigClient struct {
+// stubConfigGetter is a test double for ports.ConfigGetter.
+type stubConfigGetter struct {
 	entry      ports.ConfigEntry
 	err        error
 	calledWith string // records the key argument passed to GetEntry
 }
 
-func (s *stubConfigClient) GetEntry(_ context.Context, key string) (ports.ConfigEntry, error) {
+func (s *stubConfigGetter) GetEntry(_ context.Context, key string) (ports.ConfigEntry, error) {
 	s.calledWith = key
 	return s.entry, s.err
 }
@@ -177,11 +177,11 @@ func TestWrapLegacyHandler_EntryUpserted_ValueField_Reject(t *testing.T) {
 	assert.Error(t, result.Err)
 }
 
-func TestHandleEntryUpserted_WithConfigClient_FetchOK(t *testing.T) {
-	stub := &stubConfigClient{
+func TestHandleEntryUpserted_WithConfigGetter_FetchOK(t *testing.T) {
+	stub := &stubConfigGetter{
 		entry: ports.ConfigEntry{Key: "jwt.ttl", Value: "30m", Version: 2},
 	}
-	svc := NewService(slog.Default(), WithConfigClient(stub))
+	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
 	entry := outbox.Entry{
 		ID:      "evt-cfg-1",
@@ -191,17 +191,17 @@ func TestHandleEntryUpserted_WithConfigClient_FetchOK(t *testing.T) {
 	err := svc.HandleEntryUpserted(context.Background(), entry)
 	require.NoError(t, err)
 	// F5: assert stub was called with the correct key from the event payload.
-	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigClient.GetEntry must be called with the event's key")
+	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigGetter.GetEntry must be called with the event's key")
 }
 
-// TestHandleEntryUpserted_WithConfigClient_FetchError asserts that a transient
+// TestHandleEntryUpserted_WithConfigGetter_FetchError asserts that a transient
 // fetch error (non-404) causes HandleEntryUpserted to return an error so the
 // legacy handler wrapper triggers Requeue instead of silently Acking.
-func TestHandleEntryUpserted_WithConfigClient_FetchError(t *testing.T) {
-	stub := &stubConfigClient{
+func TestHandleEntryUpserted_WithConfigGetter_FetchError(t *testing.T) {
+	stub := &stubConfigGetter{
 		err: errors.New("configcore unavailable"),
 	}
-	svc := NewService(slog.Default(), WithConfigClient(stub))
+	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
 	entry := outbox.Entry{
 		ID:      "evt-cfg-2",
@@ -211,17 +211,17 @@ func TestHandleEntryUpserted_WithConfigClient_FetchError(t *testing.T) {
 	// Transient fetch failure must return a non-nil error → Requeue (not Ack).
 	err := svc.HandleEntryUpserted(context.Background(), entry)
 	require.Error(t, err, "transient fetch failure must return non-nil error to trigger Requeue")
-	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigClient.GetEntry must be called with the event's key")
+	assert.Equal(t, "jwt.ttl", stub.calledWith, "ConfigGetter.GetEntry must be called with the event's key")
 }
 
-// TestHandleEntryUpserted_WithConfigClient_FetchNotFound asserts that a 404
+// TestHandleEntryUpserted_WithConfigGetter_FetchNotFound asserts that a 404
 // (config entry genuinely gone) is treated as a stale event: log Warn + Ack
 // (returning nil), since retrying cannot help when the entry no longer exists.
-func TestHandleEntryUpserted_WithConfigClient_FetchNotFound(t *testing.T) {
-	stub := &stubConfigClient{
+func TestHandleEntryUpserted_WithConfigGetter_FetchNotFound(t *testing.T) {
+	stub := &stubConfigGetter{
 		err: errcode.NewDomain(errcode.ErrConfigNotFound, "config entry not found"),
 	}
-	svc := NewService(slog.Default(), WithConfigClient(stub))
+	svc := NewService(slog.Default(), WithConfigGetter(stub))
 
 	entry := outbox.Entry{
 		ID:      "evt-cfg-404",
@@ -233,8 +233,8 @@ func TestHandleEntryUpserted_WithConfigClient_FetchNotFound(t *testing.T) {
 	require.NoError(t, err, "not-found fetch error must return nil (stale event, no retry needed)")
 }
 
-func TestHandleEntryUpserted_WithoutConfigClient_NoFetch(t *testing.T) {
-	// Nil configClient — service must function correctly in log-only mode.
+func TestHandleEntryUpserted_WithoutConfigGetter_NoFetch(t *testing.T) {
+	// Nil configGetter — service must function correctly in log-only mode.
 	svc := NewService(slog.Default())
 
 	entry := outbox.Entry{

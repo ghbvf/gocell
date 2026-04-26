@@ -26,33 +26,33 @@ type configEntryDataResponse struct {
 	} `json:"data"`
 }
 
-// HTTPConfigClient calls configcore's internal GET /internal/v1/config/{key}
+// HTTPConfigGetter calls configcore's internal GET /internal/v1/config/{key}
 // endpoint. It signs every outbound request with a service token derived from
 // the provided HMACKeyRing.
 //
 // contract: http.config.internal.get.v1
 // ref: go-micro config/source/remote — polling + on-change patterns.
-type HTTPConfigClient struct {
+type HTTPConfigGetter struct {
 	baseURL string
 	ring    *auth.HMACKeyRing
 	client  *http.Client
 }
 
-// NewHTTPConfigClient creates a new HTTPConfigClient.
+// NewHTTPConfigGetter creates a new HTTPConfigGetter.
 // baseURL is the base address of the internal listener (e.g. "http://localhost:9090").
 // ring is used to generate the service token Authorization header.
-func NewHTTPConfigClient(baseURL string, ring *auth.HMACKeyRing) *HTTPConfigClient {
-	return &HTTPConfigClient{
+func NewHTTPConfigGetter(baseURL string, ring *auth.HMACKeyRing) *HTTPConfigGetter {
+	return &HTTPConfigGetter{
 		baseURL: baseURL,
 		ring:    ring,
 		client:  &http.Client{Timeout: 5 * time.Second},
 	}
 }
 
-// NewHTTPConfigClientWithHTTPClient creates a new HTTPConfigClient with a custom
+// NewHTTPConfigGetterWithHTTPClient creates a new HTTPConfigGetter with a custom
 // *http.Client (used in tests with httptest.Server).
-func NewHTTPConfigClientWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, httpClient *http.Client) *HTTPConfigClient {
-	return &HTTPConfigClient{
+func NewHTTPConfigGetterWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, httpClient *http.Client) *HTTPConfigGetter {
+	return &HTTPConfigGetter{
 		baseURL: baseURL,
 		ring:    ring,
 		client:  httpClient,
@@ -62,7 +62,7 @@ func NewHTTPConfigClientWithHTTPClient(baseURL string, ring *auth.HMACKeyRing, h
 // GetEntry fetches the current config entry for key from the configcore
 // internal endpoint. Returns errcode.ErrConfigNotFound when the key does not
 // exist (HTTP 404).
-func (c *HTTPConfigClient) GetEntry(ctx context.Context, key string) (ports.ConfigEntry, error) {
+func (c *HTTPConfigGetter) GetEntry(ctx context.Context, key string) (ports.ConfigEntry, error) {
 	path := "/internal/v1/config/" + url.PathEscape(key)
 	fullURL := c.baseURL + path
 
@@ -104,5 +104,5 @@ func (c *HTTPConfigClient) GetEntry(ctx context.Context, key string) (ports.Conf
 	}, nil
 }
 
-// Ensure HTTPConfigClient implements ports.ConfigClient at compile time.
-var _ ports.ConfigClient = (*HTTPConfigClient)(nil)
+// Ensure HTTPConfigGetter implements ports.ConfigGetter at compile time.
+var _ ports.ConfigGetter = (*HTTPConfigGetter)(nil)
