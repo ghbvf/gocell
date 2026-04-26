@@ -29,8 +29,13 @@ func NewHandler(svc *Service) *Handler {
 
 // RegisterRoutes registers the session-delete route on mux via auth.Mount so
 // CH-04/CH-05 governance can correlate this contract to HandleLogout.
-// PasswordResetExempt: a token carrying password_reset_required=true can still
-// reach this endpoint so a locked-out user can revoke their own session.
+//
+// {id} is a session id, NOT a user id, so the route-level policy cannot be
+// SelfOr("id", admin). Session ownership is enforced inside HandleLogout by
+// comparing the principal subject against the session's user_id. Baseline
+// AuthMiddleware still requires a valid JWT; PasswordResetExempt keeps the
+// route reachable while the caller still owes a password reset (standard
+// user-self-recovery flow).
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 	auth.Mount(mux, auth.Route{
 		Contract:            specSessionDelete,

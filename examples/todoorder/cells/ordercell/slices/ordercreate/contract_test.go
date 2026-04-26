@@ -10,7 +10,17 @@ import (
 
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/pkg/contracttest"
+	"github.com/stretchr/testify/require"
 )
+
+func TestSpecOrderCreateMatchesContract(t *testing.T) {
+	root := contracttest.ExampleContractsRoot("todoorder")
+	c := contracttest.LoadByID(t, root, "http.order.create.v1")
+	require.NotNil(t, c.HTTP)
+	require.Equal(t, c.ID, specOrderCreate.ID)
+	require.Equal(t, c.HTTP.Method, specOrderCreate.Method)
+	require.Equal(t, c.HTTP.Path, specOrderCreate.Path)
+}
 
 func newContractHandler(t testing.TB) (http.Handler, *recordingWriter) {
 	t.Helper()

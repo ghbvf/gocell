@@ -47,6 +47,15 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 	return mux, pub
 }
 
+func TestSpecDeviceRegisterMatchesContract(t *testing.T) {
+	root := contracttest.ExampleContractsRoot("iotdevice")
+	c := contracttest.LoadByID(t, root, "http.device.register.v1")
+	require.NotNil(t, c.HTTP)
+	require.Equal(t, c.ID, specDeviceRegister.ID)
+	require.Equal(t, c.HTTP.Method, specDeviceRegister.Method)
+	require.Equal(t, c.HTTP.Path, specDeviceRegister.Path)
+}
+
 func TestHttpDeviceRegisterV1Serve(t *testing.T) {
 	root := contracttest.ExampleContractsRoot("iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.register.v1")

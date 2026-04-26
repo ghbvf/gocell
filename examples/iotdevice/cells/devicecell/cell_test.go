@@ -14,7 +14,6 @@ import (
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/mem"
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/cell/celltest"
-	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
@@ -141,49 +140,6 @@ func TestDeviceCell_RouteGroups(t *testing.T) {
 		Method: http.MethodGet,
 		Path:   "/api/v1/devices",
 	})
-}
-
-func TestDeviceCellContractSpecsMatchContracts(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
-	tests := []struct {
-		name       string
-		contractID string
-		specID     string
-		method     string
-		path       string
-	}{
-		{
-			name:       "register",
-			contractID: "http.device.register.v1",
-			specID:     specDeviceRegister.ID,
-			method:     specDeviceRegister.Method,
-			path:       specDeviceRegister.Path,
-		},
-		{
-			name:       "list",
-			contractID: "http.device.list.v1",
-			specID:     specDeviceList.ID,
-			method:     specDeviceList.Method,
-			path:       specDeviceList.Path,
-		},
-		{
-			name:       "status",
-			contractID: "http.device.status.v1",
-			specID:     specDeviceStatus.ID,
-			method:     specDeviceStatus.Method,
-			path:       specDeviceStatus.Path,
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			contract := contracttest.LoadByID(t, root, tc.contractID)
-			require.NotNil(t, contract.HTTP)
-			assert.Equal(t, contract.ID, tc.specID)
-			assert.Equal(t, contract.HTTP.Method, tc.method)
-			assert.Equal(t, contract.HTTP.Path, tc.path)
-		})
-	}
 }
 
 // extractData unmarshals a JSON response and returns the "data" envelope.

@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net/http"
 	"time"
 
 	"github.com/ghbvf/gocell/examples/iotdevice/cells/devicecell/internal/domain"
@@ -22,10 +21,8 @@ import (
 	"github.com/ghbvf/gocell/kernel/command/commandtest"
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
-	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/auth"
 	commandruntime "github.com/ghbvf/gocell/runtime/command"
 )
 
@@ -265,62 +262,35 @@ func (c *DeviceCell) Init(ctx context.Context, deps cell.Dependencies) error {
 	return nil
 }
 
-// Contract spec literals for devicecell. FMT-18 exempts examples/**, so keep
-// these aligned with examples/iotdevice/contracts/** by convention.
-var (
-	specDeviceRegister = wrapper.ContractSpec{
-		ID: "http.device.register.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/devices",
-	}
-	specDeviceList = wrapper.ContractSpec{
-		ID: "http.device.list.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/devices/",
-	}
-	specDeviceStatus = wrapper.ContractSpec{
-		ID: "http.device.status.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/devices/{id}/status",
-	}
-)
-
 // RouteGroups declares devicecell's HTTP route groups: the public
 // /api/v1/devices/* tree on the PrimaryListener and the internal
 // /internal/v1/devicecommands ops route on the InternalListener.
+//
+// Each slice owns its own ContractSpec literals + auth.Route declarations in
+// its handler.go's RegisterRoutes. cell.go is pure wiring: it picks the
+// listener + URL prefix and delegates to slice.RegisterRoutes.
 //
 // F5 round-3: the InternalListener group restores RegisterInternalRoutes
 // which the PR-A14b RouteGroups migration accidentally dropped. The
 // commandHandler.HandleScanActive endpoint is required by the
 // http.device.command.scan-active.v1 contract.
 //
+// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
+// resource owns its own route + authz declaration.
 // ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
 func (c *DeviceCell) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{
 		{
 			Listener: cell.PrimaryListener,
 			// Empty prefix: contract specs already carry absolute /api/v1/...
-			// paths, so we mount auth.Mount routes directly on the root mux
-			// without an outer Route("/api/v1") wrapper that would double-prefix.
+			// paths, so we mount routes directly on the root mux without an
+			// outer Route("/api/v1") wrapper that would double-prefix.
 			Prefix: "",
 			Register: func(mux cell.RouteMux) {
 				mux.Route("/api/v1/devices", func(devices cell.RouteMux) {
-					// Device self-registration is a public endpoint: devices bootstrap
-					// without a user JWT; the caller identifies itself in the request body.
-					auth.Mount(devices, auth.Route{
-						Contract: specDeviceRegister,
-						Handler:  http.HandlerFunc(c.registerHandler.HandleRegister),
-						Public:   true,
-					})
-					// Device list: paginated listing of all devices at /api/v1/devices/.
-					auth.Mount(devices, auth.Route{
-						Contract: specDeviceList,
-						Handler:  http.HandlerFunc(c.listHandler.HandleList),
-						Policy:   auth.AnyRole(dto.RoleAdmin),
-					})
-					// Device status is queried by operators or by the device itself.
-					auth.Mount(devices, auth.Route{
-						Contract: specDeviceStatus,
-						Handler:  http.HandlerFunc(c.statusHandler.HandleGetStatus),
-						Policy:   auth.AnyRole(dto.RoleOperator, dto.RoleDevice),
-					})
+					c.registerHandler.RegisterRoutes(devices)
+					c.listHandler.RegisterRoutes(devices)
+					c.statusHandler.RegisterRoutes(devices)
 					// device-command public routes (enqueue, dequeue, report, ack,
 					// extend-lease) live under /api/v1/devices/{id}/commands.
 					c.commandHandler.RegisterRoutes(devices)

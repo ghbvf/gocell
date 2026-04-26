@@ -17,7 +17,17 @@ import (
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
+	"github.com/stretchr/testify/require"
 )
+
+func TestSpecDeviceListMatchesContract(t *testing.T) {
+	root := contracttest.ExampleContractsRoot("iotdevice")
+	c := contracttest.LoadByID(t, root, "http.device.list.v1")
+	require.NotNil(t, c.HTTP)
+	require.Equal(t, c.ID, specDeviceListSlice.ID)
+	require.Equal(t, c.HTTP.Method, specDeviceListSlice.Method)
+	require.Equal(t, c.HTTP.Path, specDeviceListSlice.Path)
+}
 
 func newContractDeviceListHandler(t *testing.T) http.Handler {
 	t.Helper()

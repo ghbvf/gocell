@@ -4,6 +4,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -12,6 +13,57 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// TestMapCodeToStatus_Known checks the lookup path for a small representative
+// sample across status families.
+func TestMapCodeToStatus_Known(t *testing.T) {
+	cases := []struct {
+		code Code
+		want int
+	}{
+		{ErrSessionNotFound, http.StatusNotFound},
+		{ErrValidationFailed, http.StatusBadRequest},
+		{ErrAuthUnauthorized, http.StatusUnauthorized},
+		{ErrAuthForbidden, http.StatusForbidden},
+		{ErrSessionConflict, http.StatusConflict},
+		{ErrNotImplemented, http.StatusNotImplemented},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.code), func(t *testing.T) {
+			assert.Equal(t, tc.want, MapCodeToStatus(tc.code))
+		})
+	}
+}
+
+// TestMapCodeToStatus_UnknownDefaults500 ensures unmapped codes degrade to 500
+// rather than panicking, while emitting a warn (verified indirectly: no panic).
+func TestMapCodeToStatus_UnknownDefaults500(t *testing.T) {
+	assert.Equal(t, http.StatusInternalServerError,
+		MapCodeToStatus(Code("ERR_NOT_REGISTERED_IN_TABLE")))
+}
+
+// TestIsClientError covers the 4xx-range membership predicate.
+func TestIsClientError(t *testing.T) {
+	cases := []struct {
+		code Code
+		want bool
+	}{
+		{ErrValidationFailed, true},       // 400
+		{ErrAuthUnauthorized, true},       // 401
+		{ErrAuthForbidden, true},          // 403
+		{ErrSessionNotFound, true},        // 404
+		{ErrSessionConflict, true},        // 409
+		{ErrNotImplemented, false},        // 501 — server-side
+		{Code("ERR_UNREGISTERED"), false}, // unknown — false (not in table)
+		{ErrAuthVerifierConfig, false},    // 500 — server-side
+		{ErrNonceStoreFull, false},        // 503 — server-side
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.code), func(t *testing.T) {
+			assert.Equal(t, tc.want, IsClientError(tc.code))
+		})
+	}
+}
 
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,
 // extracts every Code constant, and verifies it has an entry in codeToStatus.

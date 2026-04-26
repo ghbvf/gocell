@@ -5,44 +5,20 @@
 package accesscore
 
 import (
-	"net/http"
-
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
-	"github.com/ghbvf/gocell/runtime/auth"
 )
 
-// Contract spec literals — one per route / subscription; cross-checked
-// against contracts/**/contract.yaml by FMT-18 governance (PR-A11-V).
+// Event specs use wrapper.EventSpec (id==topic). Previously the configreceive
+// consumer's topic constant was aliased into the spec Topic field; that
+// double-declaration meant FMT-18 silently skipped validation because the
+// literal scanner only sees string literals. EventSpec makes the id==topic
+// identity explicit and FMT-18 sees the ID literal in the call.
+//
+// HTTP contract specs are owned by each slice's handler.go (single source of
+// truth); RouteGroups below delegates to slice.RegisterRoutes for HTTP wiring.
 var (
-	specAuthSetupStatus = wrapper.ContractSpec{
-		ID: "http.auth.setup.status.v1", Kind: "http", Transport: "http",
-		Method: "GET", Path: "/api/v1/access/setup/status",
-	}
-	specAuthSetupAdmin = wrapper.ContractSpec{
-		ID: "http.auth.setup.admin.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/access/setup/admin",
-	}
-	specAuthLogin = wrapper.ContractSpec{
-		ID: "http.auth.login.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/access/sessions/login",
-	}
-	specAuthRefresh = wrapper.ContractSpec{
-		ID: "http.auth.refresh.v1", Kind: "http", Transport: "http",
-		Method: "POST", Path: "/api/v1/access/sessions/refresh",
-	}
-	specAuthSessionDelete = wrapper.ContractSpec{
-		ID: "http.auth.session.delete.v1", Kind: "http", Transport: "http",
-		Method: "DELETE", Path: "/api/v1/access/sessions/{id}",
-	}
-
-	// Event specs use wrapper.EventSpec (id==topic). Previously the
-	// configreceive consumer's topic constant was aliased into the spec
-	// Topic field; that double-declaration meant FMT-18 silently skipped
-	// validation because the literal scanner only sees string literals.
-	// EventSpec makes the id==topic identity explicit and FMT-18 sees the
-	// ID literal in the call.
 	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
 	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
 	specEventRoleAssigned        = wrapper.EventSpec("event.role.assigned.v1", "amqp")
@@ -53,6 +29,16 @@ var (
 //   - PrimaryListener at /api/v1/access: public/authenticated business routes.
 //   - InternalListener at /internal/v1/access: control-plane RBAC assignment.
 //
+// Each slice owns its own ContractSpec literals + auth.Route declarations in
+// its handler.go's RegisterRoutes. cell_routes.go is pure wiring: it picks the
+// listener + URL prefix and delegates to slice.RegisterRoutes. This keeps a
+// single source of truth per endpoint (the slice) and lets CH-04/CH-05
+// governance correlate contracts to handler functions in one place.
+//
+// ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer per
+// resource owns its own route + authz declaration.
+// ref: go-kratos/kratos transport/http/server.go — service self-declares
+// routes; main only wires services into the server.
 // ref: go-zero rest/server.go AddRoutes — per-listener route declaration.
 func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 	return []cell.RouteGroup{
@@ -60,65 +46,19 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 			Listener: cell.PrimaryListener,
 			Prefix:   "/api/v1/access",
 			Register: func(mux cell.RouteMux) {
-				// Interactive first-run admin provisioning, scoped under /access/ so
-				// the path prefix matches Cell ownership (Consul /acl/bootstrap
-				// convention, rather than Vault's top-level /sys/init). Both endpoints
-				// are Public: no admin exists yet to authenticate against; once an
-				// admin exists, the endpoint returns 410 Gone via a fast-path Status
-				// check before bcrypt runs.
 				mux.Route("/setup", func(s cell.RouteMux) {
-					auth.Mount(s, auth.Route{
-						Contract: specAuthSetupStatus,
-						Handler:  http.HandlerFunc(c.setupHandler.HandleStatus),
-						Public:   true,
-					})
-					auth.Mount(s, auth.Route{
-						Contract: specAuthSetupAdmin,
-						Handler:  http.HandlerFunc(c.setupHandler.HandleCreateAdmin),
-						Public:   true,
-					})
+					c.setupHandler.RegisterRoutes(s)
 				})
-
-				// Identity management: /api/v1/access/users
 				mux.Route("/users", c.identityHandler.RegisterRoutes)
-
-				// Session endpoints: /api/v1/access/sessions.
-				// Router.FinalizeAuth aggregates Public + PasswordResetExempt metas
-				// across all Cells at Bootstrap phase 5.
-				// Login and refresh are public (no JWT required). Logout requires the
-				// caller to be authenticated as the session owner or an admin, and is
-				// PasswordResetExempt so a token carrying password_reset_required=true
-				// can still reach this endpoint.
 				mux.Route("/sessions", func(s cell.RouteMux) {
-					auth.Mount(s, auth.Route{
-						Contract: specAuthLogin,
-						Handler:  http.HandlerFunc(c.loginHandler.HandleLogin),
-						Public:   true,
-					})
-					auth.Mount(s, auth.Route{
-						Contract: specAuthRefresh,
-						Handler:  http.HandlerFunc(c.refreshHandler.HandleRefresh),
-						Public:   true,
-					})
-					// Logout: {id} is a session id, NOT a user id, so the route-level
-					// policy cannot be SelfOr("id", admin). Session ownership is enforced
-					// inside HandleLogout by comparing the principal subject against the
-					// session's user_id. Baseline AuthMiddleware still requires a valid
-					// JWT; PasswordResetExempt keeps the route reachable while the caller
-					// still owes a password reset (standard user-self-recovery flow).
-					auth.Mount(s, auth.Route{
-						Contract:            specAuthSessionDelete,
-						Handler:             http.HandlerFunc(c.logoutHandler.HandleLogout),
-						PasswordResetExempt: true,
-					})
+					c.loginHandler.RegisterRoutes(s)
+					c.refreshHandler.RegisterRoutes(s)
+					c.logoutHandler.RegisterRoutes(s)
 				})
-
-				// RBAC queries: /api/v1/access/roles
 				mux.Route("/roles", c.rbacHandler.RegisterRoutes)
 			},
 		},
 		{
-			// Internal admin endpoints: /internal/v1/access/roles
 			Listener: cell.InternalListener,
 			Prefix:   "/internal/v1/access",
 			Register: func(mux cell.RouteMux) {

@@ -14,7 +14,24 @@ import (
 	"github.com/ghbvf/gocell/examples/todoorder/cells/ordercell/internal/mem"
 	"github.com/ghbvf/gocell/pkg/contracttest"
 	"github.com/ghbvf/gocell/pkg/query"
+	"github.com/stretchr/testify/require"
 )
+
+func TestSpecOrderQueryMatchesContracts(t *testing.T) {
+	root := contracttest.ExampleContractsRoot("todoorder")
+
+	get := contracttest.LoadByID(t, root, "http.order.get.v1")
+	require.NotNil(t, get.HTTP)
+	require.Equal(t, get.ID, specOrderGet.ID)
+	require.Equal(t, get.HTTP.Method, specOrderGet.Method)
+	require.Equal(t, get.HTTP.Path, specOrderGet.Path)
+
+	list := contracttest.LoadByID(t, root, "http.order.list.v1")
+	require.NotNil(t, list.HTTP)
+	require.Equal(t, list.ID, specOrderList.ID)
+	require.Equal(t, list.HTTP.Method, specOrderList.Method)
+	require.Equal(t, list.HTTP.Path, specOrderList.Path)
+}
 
 func newContractQueryHandler(orders ...*domain.Order) http.Handler {
 	repo := mem.NewOrderRepository()

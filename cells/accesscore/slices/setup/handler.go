@@ -33,8 +33,15 @@ func NewHandler(svc *Service) *Handler {
 }
 
 // RegisterRoutes registers setup routes on mux via auth.Mount so CH-04/CH-05
-// governance can correlate contracts to handler functions. Both endpoints are
-// Public: no admin exists yet to authenticate against during first-run setup.
+// governance can correlate contracts to handler functions.
+//
+// Both endpoints are Public: no admin exists yet to authenticate against
+// during first-run setup. Once an admin exists, CreateAdmin returns 410 Gone
+// via a fast-path Status check before bcrypt runs.
+//
+// The /setup tree is mounted under the cell's /access prefix (Consul
+// /acl/bootstrap convention rather than Vault's top-level /sys/init) so the
+// path matches Cell ownership.
 func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) {
 	auth.Mount(mux, auth.Route{
 		Contract: specSetupStatus,
