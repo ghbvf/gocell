@@ -11,6 +11,11 @@ import (
 	"github.com/ghbvf/gocell/kernel/verify"
 )
 
+const (
+	codeVERIFY06                  = "VERIFY-06"
+	fieldPassCriteriaCheckRefTmpl = "passCriteria[%d].checkRef"
+)
+
 // validateVERIFY01 checks that every contractUsage has a matching
 // verify.contract entry or a valid waiver.
 //
@@ -312,7 +317,7 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 			if pc.CheckRef == "" {
 				continue
 			}
-			field := fmt.Sprintf("passCriteria[%d].checkRef", i)
+			field := fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i)
 			results = append(results, v.validateVerifyRef(pc.CheckRef, file, field)...)
 		}
 	}
@@ -350,7 +355,7 @@ func (v *Validator) validateVERIFY06Journey(j *metadata.JourneyMeta) []Validatio
 	}
 	if autoCount == 0 {
 		results = append(results, v.newResult(
-			"VERIFY-06", SeverityError, IssueRequired,
+			codeVERIFY06, SeverityError, IssueRequired,
 			journeyFile(j),
 			"passCriteria",
 			fmt.Sprintf("active journey %q must declare at least one auto passCriteria entry with checkRef", j.ID),
@@ -367,9 +372,9 @@ func (v *Validator) validateVERIFY06CheckRef(
 	scope, err := verify.JourneyRefScope(pc.CheckRef)
 	if err != nil || scope != j.ID {
 		return []ValidationResult{v.newResult(
-			"VERIFY-06", SeverityError, IssueMismatch,
+			codeVERIFY06, SeverityError, IssueMismatch,
 			journeyFile(j),
-			fmt.Sprintf("passCriteria[%d].checkRef", i),
+			fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i),
 			fmt.Sprintf("active journey %q auto checkRef %q must belong to the same journey", j.ID, pc.CheckRef),
 		)}
 	}
@@ -381,9 +386,9 @@ func (v *Validator) validateVERIFY06CheckRef(
 		return nil
 	}
 	return []ValidationResult{v.newResult(
-		"VERIFY-06", SeverityError, IssueRefNotFound,
+		codeVERIFY06, SeverityError, IssueRefNotFound,
 		journeyFile(j),
-		fmt.Sprintf("passCriteria[%d].checkRef", i),
+		fmt.Sprintf(fieldPassCriteriaCheckRefTmpl, i),
 		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target", j.ID, pc.CheckRef),
 	)}
 }
