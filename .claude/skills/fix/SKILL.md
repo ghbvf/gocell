@@ -50,7 +50,7 @@ allowed-tools: [Read, Write, Edit, Glob, Grep, Bash, Agent, AskUserQuestion]
    | 4-9 | 2 |
    | ≥ 10 | 3 |
 
-4. **Triage 并行**（subagent_type: `Explore`）：将聚类后的组分发给 sub-agent，每组完整执行阶段 1.1→1.4 + 2.6，返回结构化表格。**同 Cell 包必须分给同一 agent**（避免重复 Read 同文件 + 防 fix 阶段写冲突）。Sub-agent prompt 必须自包含（finding 列表、当前分支 diff 摘要、CLAUDE.md 关键约束）。
+4. **Triage 并行**（subagent_type: `Explore`）：将聚类后的组分发给 sub-agent，每组完整执行阶段 1.1→1.4 + 2.4，返回结构化表格。**同 Cell 包必须分给同一 agent**（避免重复 Read 同文件 + 防 fix 阶段写冲突）。Sub-agent prompt 必须自包含（finding 列表、当前分支 diff 摘要、CLAUDE.md 关键约束）。
 5. 主 agent 汇总各 sub-agent 结果，输出状态/归属表：
 
    | 状态 | 归属 | 处理方式 |
@@ -255,7 +255,7 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 
 **必须给出明确的时机建议**，回答三个问题：
 
-**Q0: 是否属于当前分支？**（阶段 2.6 判定结果优先）
+**Q0: 是否属于当前分支？**（阶段 2.4 判定结果优先）
 
 | 归属 | 时机决策 |
 |------|---------|
@@ -285,7 +285,6 @@ Cx2 及以上问题，**先查参考实现再动手**。三层按权威性递减
 | 复杂度                                                      | 条件 | 决策 |
 |----------------------------------------------------------|------|-----|
 | Cx1 + IN_SCOPE + ≤2文件 + 不改 kernel 接口/migration/bootstrap | 全满足 | **[AUTO-FIX]** 直接修 |
-| Cx1 + + OUT_OF_SCOPE + touch when edit                   | — | **[AUTO-FIX]** |
 | Cx2 + IN_SCOPE + 能做                                      | — | 执行推荐方案 |
 | Cx2 + 不能做（有前置依赖）                                         | — | 记录报告，标注阻塞 |
 | Cx3/Cx4                                                  | 任何 | 只输出方案，标注"需人工决策" |
