@@ -69,6 +69,7 @@ go run ./examples/iotdevice
 
 ```bash
 curl -X POST http://localhost:8083/api/v1/devices \
+  -H "Authorization: Bearer ${IOT_ADMIN_TOKEN}" \
   -H 'Content-Type: application/json' \
   -d '{"name":"sensor-001"}'
 ```

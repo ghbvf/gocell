@@ -6,7 +6,7 @@ GoCell provides Cell/Slice runtime primitives, governance toolchain, and built-i
 
 ## Quick Start (5 minutes)
 
-The todoorder example requires JWT keys and a service secret since PR-CFG-F.
+The todoorder example requires JWT keys and a service secret for the internal listener.
 Copy-paste the five steps below in a single terminal:
 
 ```bash
@@ -24,6 +24,7 @@ export GOCELL_JWT_AUDIENCE=gocell
 export GOCELL_TODOORDER_SERVICE_SECRET="$(openssl rand -base64 32)"
 
 # Step 3 — mint a test RS256 token (role:customer, signed by the local key)
+# reads $GOCELL_JWT_PRIVATE_KEY/$GOCELL_JWT_ISSUER/$GOCELL_JWT_AUDIENCE from env
 export TODOORDER_TOKEN="$(go run ./examples/todoorder/localtoken)"
 
 # Step 4 — start the server (primary :8082, internal :9082)

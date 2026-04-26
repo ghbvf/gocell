@@ -64,7 +64,7 @@ go test -tags integration ./tests/integration/... -run TestAssembly -count=1 -v
    }
    ```
 
-   Permanent stub tests (will never run) MUST be deleted, not marked `t.Skip` — see `tools/nogo/unconditionalskip` analyzer (PR-CFG-D).
+   Permanent stub tests (will never run) MUST be deleted, not marked `t.Skip` — run `gocell check unconditional-skip ./...` to detect violations; analyzer at `tools/nogo/unconditionalskip`.
 3. Read connection parameters from environment variables (e.g., `GOCELL_CONFIGCORE_DATABASE_URL`, `GOCELL_REDIS_ADDR`). Most integration tests start their own testcontainer and pass the DSN directly; see `cmd/corebundle/main_integration_test.go` for the pattern.
 4. Each test must be self-contained: create its own schema/queue/bucket, run assertions, then clean up.
 5. Use `t.Parallel()` only when tests do not share mutable state (e.g., separate database schemas).
