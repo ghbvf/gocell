@@ -1,0 +1,142 @@
+package e2egate_test
+
+import (
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/tools/nogo/e2egate"
+)
+
+// Test fixtures: each block represents the output of `go test -json`. Lines
+// are JSON-encoded test2json events. We craft minimal valid streams to drive
+// each gate decision branch.
+
+const eventsAllPass = `{"Action":"run","Package":"pkg/a","Test":"TestOne"}
+{"Action":"output","Package":"pkg/a","Test":"TestOne","Output":"=== RUN   TestOne\n"}
+{"Action":"pass","Package":"pkg/a","Test":"TestOne","Elapsed":0.1}
+{"Action":"run","Package":"pkg/a","Test":"TestTwo"}
+{"Action":"pass","Package":"pkg/a","Test":"TestTwo","Elapsed":0.1}
+{"Action":"run","Package":"pkg/a","Test":"TestThree"}
+{"Action":"pass","Package":"pkg/a","Test":"TestThree","Elapsed":0.1}
+{"Action":"pass","Package":"pkg/a","Elapsed":0.4}
+`
+
+const eventsMixedPassSkip = `{"Action":"run","Package":"pkg/a","Test":"TestOne"}
+{"Action":"pass","Package":"pkg/a","Test":"TestOne","Elapsed":0.1}
+{"Action":"run","Package":"pkg/a","Test":"TestTwo"}
+{"Action":"pass","Package":"pkg/a","Test":"TestTwo","Elapsed":0.1}
+{"Action":"run","Package":"pkg/a","Test":"TestThree"}
+{"Action":"skip","Package":"pkg/a","Test":"TestThree","Elapsed":0}
+{"Action":"pass","Package":"pkg/a","Elapsed":0.3}
+`
+
+const eventsAllSkipConditional = `{"Action":"run","Package":"pkg/e2e","Test":"TestE2E_A"}
+{"Action":"output","Package":"pkg/e2e","Test":"TestE2E_A","Output":"--- SKIP: TestE2E_A\n"}
+{"Action":"skip","Package":"pkg/e2e","Test":"TestE2E_A","Elapsed":0}
+{"Action":"run","Package":"pkg/e2e","Test":"TestE2E_B"}
+{"Action":"skip","Package":"pkg/e2e","Test":"TestE2E_B","Elapsed":0}
+{"Action":"run","Package":"pkg/e2e","Test":"TestE2E_C"}
+{"Action":"skip","Package":"pkg/e2e","Test":"TestE2E_C","Elapsed":0}
+{"Action":"pass","Package":"pkg/e2e","Elapsed":0.0}
+`
+
+const eventsPackageLevelSkip = `{"Action":"skip","Package":"pkg/notests","Output":"?   pkg/notests   [no test files]\n"}
+`
+
+const eventsBuildFail = `{"Action":"output","Package":"pkg/broken","Output":"FAIL    pkg/broken [build failed]\n"}
+{"Action":"fail","Package":"pkg/broken","Elapsed":0}
+`
+
+const eventsEmpty = ``
+
+const eventsInvalidJSON = `{"Action":"run","Package":"pkg/a","Test":"TestOne"}
+not-a-valid-json-line
+{"Action":"pass","Package":"pkg/a","Test":"TestOne","Elapsed":0.1}
+`
+
+const eventsMultiPackageMixed = `{"Action":"run","Package":"pkg/a","Test":"TestA"}
+{"Action":"pass","Package":"pkg/a","Test":"TestA","Elapsed":0.1}
+{"Action":"pass","Package":"pkg/a","Elapsed":0.1}
+{"Action":"run","Package":"pkg/b","Test":"TestB"}
+{"Action":"fail","Package":"pkg/b","Test":"TestB","Elapsed":0.2}
+{"Action":"fail","Package":"pkg/b","Elapsed":0.2}
+`
+
+func TestParse_AllPass_GatePasses(t *testing.T) {
+	res, err := e2egate.Parse(strings.NewReader(eventsAllPass))
+	require.NoError(t, err)
+	assert.False(t, res.Failed(), "gate should pass on all-pass run; reasons=%v", res.Reasons)
+	assert.Equal(t, 3, res.TotalExecuted)
+	assert.Equal(t, 0, res.TotalSkipped)
+	require.Contains(t, res.Packages, "pkg/a")
+	assert.Equal(t, 3, res.Packages["pkg/a"].Executed)
+	assert.Equal(t, 0, res.Packages["pkg/a"].Skipped)
+	assert.Equal(t, "pass", res.Packages["pkg/a"].Action)
+}
+
+func TestParse_MixedPassSkip_GatePasses(t *testing.T) {
+	res, err := e2egate.Parse(strings.NewReader(eventsMixedPassSkip))
+	require.NoError(t, err)
+	assert.False(t, res.Failed(), "gate should pass when at least one test executed; reasons=%v", res.Reasons)
+	assert.Equal(t, 2, res.TotalExecuted)
+	assert.Equal(t, 1, res.TotalSkipped)
+}
+
+func TestParse_AllSkipConditional_GateFails(t *testing.T) {
+	res, err := e2egate.Parse(strings.NewReader(eventsAllSkipConditional))
+	require.NoError(t, err)
+	assert.True(t, res.Failed(), "gate should fail when every test in the package was skipped")
+	assert.Equal(t, 0, res.TotalExecuted)
+	assert.Equal(t, 3, res.TotalSkipped)
+	require.NotEmpty(t, res.Reasons)
+	joined := strings.Join(res.Reasons, "\n")
+	assert.Contains(t, joined, "pkg/e2e", "reason should name the offending package")
+	assert.Contains(t, joined, "all-skipped", "reason should label the failure mode")
+}
+
+func TestParse_PackageLevelSkip_NoTestFiles_GateFails(t *testing.T) {
+	res, err := e2egate.Parse(strings.NewReader(eventsPackageLevelSkip))
+	require.NoError(t, err)
+	assert.True(t, res.Failed(), "gate must fail when the only event is a package-level skip with zero executed tests")
+	assert.Equal(t, 0, res.TotalExecuted)
+}
+
+func TestParse_BuildFail_GateFails(t *testing.T) {
+	res, err := e2egate.Parse(strings.NewReader(eventsBuildFail))
+	require.NoError(t, err)
+	assert.True(t, res.Failed(), "gate should fail on build failure")
+	require.Contains(t, res.Packages, "pkg/broken")
+	assert.True(t, res.Packages["pkg/broken"].BuildFailed)
+	joined := strings.Join(res.Reasons, "\n")
+	assert.Contains(t, joined, "pkg/broken")
+	assert.Contains(t, joined, "build")
+}
+
+func TestParse_EmptyStdin_GateFails(t *testing.T) {
+	res, err := e2egate.Parse(strings.NewReader(eventsEmpty))
+	require.NoError(t, err)
+	assert.True(t, res.Failed(), "gate must fail on empty input")
+	assert.Equal(t, 0, res.TotalExecuted)
+	assert.NotEmpty(t, res.Reasons)
+}
+
+func TestParse_InvalidJSON_ReturnsError(t *testing.T) {
+	_, err := e2egate.Parse(strings.NewReader(eventsInvalidJSON))
+	require.Error(t, err, "Parse must surface JSON decoder errors so the caller exits non-zero")
+}
+
+func TestParse_MultiPackageOnePassOneFail_GatePasses(t *testing.T) {
+	// Test failures are not gate failures; the gate only checks that at
+	// least one test executed and no package was wholly skipped.
+	res, err := e2egate.Parse(strings.NewReader(eventsMultiPackageMixed))
+	require.NoError(t, err)
+	assert.False(t, res.Failed(), "gate should pass — a failing test still counts as executed; reasons=%v", res.Reasons)
+	assert.Equal(t, 2, res.TotalExecuted)
+	require.Contains(t, res.Packages, "pkg/a")
+	require.Contains(t, res.Packages, "pkg/b")
+	assert.Equal(t, "pass", res.Packages["pkg/a"].Action)
+	assert.Equal(t, "fail", res.Packages["pkg/b"].Action)
+}
