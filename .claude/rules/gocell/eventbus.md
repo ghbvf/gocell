@@ -64,6 +64,13 @@ func (c *MyCell) RegisterSubscriptions(r cell.EventRouter) error {
 }
 ```
 
+**声明对齐约束（ADV-06）**：`r.AddHandler(<topic>, ...)` 的 topic 必须同步声明在三处：
+1. slice.yaml `contractUsages` 含 `{contract: <topic>, role: subscribe}` 条目
+2. contract.yaml `endpoints.subscribers` 含本 slice 所属 cell 的 ID
+3. slice.yaml `verify.contract` 含 `contract.<topic>.subscribe`
+
+任一漂移由 `gocell validate --strict` ADV-06 规则拦截（error 级）。
+
 ### 旧 handler 迁移
 
 使用 `outbox.WrapLegacyHandler` 适配旧签名：

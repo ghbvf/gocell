@@ -3,6 +3,7 @@ package governance
 import (
 	"fmt"
 
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/metadata"
 )
 
@@ -103,6 +104,14 @@ func (v *Validator) validateADV05() []ValidationResult {
 // validateADV06 detects subscription declaration drift between contract.yaml's
 // endpoints.subscribers and slice.yaml's contractUsages[role=subscribe].
 //
+// ADV-06 checks that contract.yaml and slice.yaml agree on which cells subscribe
+// to a given active event contract. Drift (contract lists a cell that has no
+// matching subscribe usage, or a slice declares subscribe but the contract does
+// not list its cell) means the audit/event-consumer declaration is out of sync
+// with the implementation — the "declaration ≠ implementation" anti-pattern.
+// This is as critical as ADV-05 (active event with no subscriber) and must be
+// CI fail-closed.
+//
 // The two YAML files must agree on which cells subscribe to a given event:
 //
 //   - Direction A (contract → slice): when a contract's endpoints.subscribers
@@ -131,14 +140,25 @@ func (v *Validator) validateADV06() []ValidationResult {
 	return results
 }
 
+// isActiveEvent reports whether the contract is a non-nil active event,
+// which is the precondition shared by ADV-05 and ADV-06 for active drift checks.
+func isActiveEvent(c *metadata.ContractMeta) bool {
+	return c != nil &&
+		cell.ContractKind(c.Kind) == cell.ContractEvent &&
+		c.Lifecycle == string(cell.LifecycleActive)
+}
+
 // buildCellSubscribeIndex maps each cell ID to the set of contract IDs that
 // any of its slices declare with role=subscribe. Keeps direction A linear
 // instead of O(contracts × slices) per subscriber.
+//
+// Only used by adv06ContractToSlice (direction A); adv06SliceToContract
+// (direction B) iterates slices directly.
 func buildCellSubscribeIndex(slices map[string]*metadata.SliceMeta) map[string]map[string]bool {
 	idx := make(map[string]map[string]bool, len(slices))
 	for _, s := range slices {
 		for _, cu := range s.ContractUsages {
-			if cu.Role != "subscribe" {
+			if cell.ContractRole(cu.Role) != cell.RoleSubscribe {
 				continue
 			}
 			set, ok := idx[s.BelongsToCell]
@@ -154,13 +174,17 @@ func buildCellSubscribeIndex(slices map[string]*metadata.SliceMeta) map[string]m
 
 // adv06ContractToSlice flags active event contracts whose endpoints.subscribers
 // names a cell that has no matching subscribe contractUsage in any of its slices.
+//
+// Note: when ADV-05 fires (subscribers is empty), direction A produces no
+// findings because there are no cell subscribers to check; direction B still
+// runs independently.
 func (v *Validator) adv06ContractToSlice(cellSubscribes map[string]map[string]bool) []ValidationResult {
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		if c.Kind != "event" || c.Lifecycle != "active" {
+		if !isActiveEvent(c) {
 			continue
 		}
-		for _, subscriber := range c.Endpoints.Subscribers {
+		for i, subscriber := range c.Endpoints.Subscribers {
 			if _, isCell := v.project.Cells[subscriber]; !isCell {
 				continue
 			}
@@ -168,10 +192,10 @@ func (v *Validator) adv06ContractToSlice(cellSubscribes map[string]map[string]bo
 				continue
 			}
 			results = append(results, v.newResult(
-				"ADV-06", SeverityWarning, IssueMismatch,
+				"ADV-06", SeverityError, IssueMismatch,
 				contractFile(c),
-				"endpoints.subscribers",
-				fmt.Sprintf("event contract %q lists cell %q as subscriber, but no slice in %q declares a contractUsage with role=subscribe for this contract; add the contractUsage in the relevant slice.yaml or remove %q from endpoints.subscribers", c.ID, subscriber, subscriber, subscriber),
+				fmt.Sprintf("endpoints.subscribers[%d]", i),
+				fmt.Sprintf("event contract %q lists cell %q as subscriber, but no slice in %q declares contractUsage{contract: %q, role: subscribe}; add this contractUsage to a slice in %q (e.g. cells/%s/slices/<slice>/slice.yaml) or remove %q from endpoints.subscribers", c.ID, subscriber, subscriber, c.ID, subscriber, subscriber, subscriber),
 			))
 		}
 	}
@@ -184,18 +208,18 @@ func (v *Validator) adv06SliceToContract() []ValidationResult {
 	var results []ValidationResult
 	for _, s := range v.project.Slices {
 		for i, cu := range s.ContractUsages {
-			if cu.Role != "subscribe" {
+			if cell.ContractRole(cu.Role) != cell.RoleSubscribe {
 				continue
 			}
 			c := v.project.Contracts[cu.Contract]
-			if c == nil || c.Kind != "event" || c.Lifecycle != "active" {
+			if !isActiveEvent(c) {
 				continue
 			}
 			if containsString(c.Endpoints.Subscribers, s.BelongsToCell) {
 				continue
 			}
 			results = append(results, v.newResult(
-				"ADV-06", SeverityWarning, IssueMismatch,
+				"ADV-06", SeverityError, IssueMismatch,
 				sliceFile(s),
 				fmt.Sprintf("contractUsages[%d].contract", i),
 				fmt.Sprintf("slice %q declares contractUsage{contract: %q, role: subscribe}, but the contract's endpoints.subscribers does not list cell %q; add %q to the contract's endpoints.subscribers or remove the subscribe contractUsage from this slice", s.ID, cu.Contract, s.BelongsToCell, s.BelongsToCell),
