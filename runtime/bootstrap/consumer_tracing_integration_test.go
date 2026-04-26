@@ -129,8 +129,8 @@ func TestBootstrap_ConsumerTracingIntegration(t *testing.T) {
 		WithSubscriber(bus),
 		WithPublisher(bus),
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), nil, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithTracer(spyTracer),
 	)
 

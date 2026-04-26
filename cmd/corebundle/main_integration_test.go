@@ -199,6 +199,10 @@ func TestIntegration_AdminExists_OrphanSwept(t *testing.T) {
 	// PR-A35: verbose endpoint is gated in every mode; this integration test
 	// doesn't exercise /readyz?verbose so waive the endpoint explicitly.
 	t.Setenv("GOCELL_READYZ_VERBOSE_DISABLED", "1")
+	// PR-MODE-1 SEC-FAIL-CLOSED: GOCELL_SERVICE_SECRET is now required in
+	// every adapter mode (controlplane guard fail-closed). Set a deterministic
+	// test secret so internalGuardFromEnv succeeds during run().
+	t.Setenv("GOCELL_SERVICE_SECRET", "test-service-secret-for-sweep-test")
 
 	// Use a short-lived context: long enough for assembly init + lifecycle start
 	// (Steps 3-4.6), but we accept context.Canceled, sandbox-bind, or

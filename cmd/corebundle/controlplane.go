@@ -37,11 +37,9 @@ func (g *internalGuard) NonceStore() auth.NonceStore { return g.nonceStore }
 // internalGuardFromEnv builds an internalGuard for /internal/v1/* from
 // GOCELL_SERVICE_SECRET (and optionally GOCELL_SERVICE_SECRET_PREVIOUS).
 //
-//   - In "real" adapter mode, the env var is required; a missing value is
-//     returned as an ErrControlplaneServiceSecretMissing so operators can
-//     grep startup logs for the specific misconfiguration class.
-//   - In dev mode (any non-"real" mode), an empty secret returns (nil, nil) —
-//     the caller skips WithInternalMiddleware.
+// GOCELL_SERVICE_SECRET is required in all adapter modes (SEC-FAIL-CLOSED).
+// A missing secret returns ErrControlplaneServiceSecretMissing regardless of
+// the adapterMode parameter — there is no dev-mode silent bypass.
 //
 // The guard always wires a replay-defense NonceStore when installed. A
 // single-process InMemoryNonceStore is used by default; multi-pod
@@ -56,12 +54,8 @@ func (g *internalGuard) NonceStore() auth.NonceStore { return g.nonceStore }
 func internalGuardFromEnv(adapterMode string, store auth.NonceStore) (*internalGuard, error) {
 	secret := os.Getenv(auth.EnvServiceSecret)
 	if secret == "" {
-		if isRealMode(adapterMode) {
-			return nil, errcode.New(errcode.ErrControlplaneServiceSecretMissing,
-				"GOCELL_SERVICE_SECRET must be set in adapter mode \"real\" to protect /internal/v1/*")
-		}
-		slog.Warn("controlplane guard disabled: GOCELL_SERVICE_SECRET is empty (dev mode only)")
-		return nil, nil
+		return nil, errcode.New(errcode.ErrControlplaneServiceSecretMissing,
+			"GOCELL_SERVICE_SECRET must be set in all adapter modes to protect /internal/v1/*")
 	}
 	if err := rejectDemoKey(adapterMode, auth.EnvServiceSecret, []byte(secret)); err != nil {
 		return nil, err

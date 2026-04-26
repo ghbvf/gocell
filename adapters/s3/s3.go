@@ -13,6 +13,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	awss3 "github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
 // Config holds the S3 connection configuration.
@@ -51,10 +52,15 @@ func envWithFallback(primary, legacy string) string {
 	return ""
 }
 
-// Validate checks that required fields are populated.
+// Validate checks that required fields are populated and that the endpoint
+// uses a TLS scheme for remote hosts (loopback exempt for dev/CI).
 func (c Config) Validate() error {
 	if c.Endpoint == "" {
 		return errcode.New(ErrAdapterS3Config, "s3: endpoint is required")
+	}
+	// SEC-FAIL-CLOSED: reject non-TLS endpoints before any network operation.
+	if err := secutil.ValidateTLSEndpoint(c.Endpoint); err != nil {
+		return err
 	}
 	if c.Region == "" {
 		return errcode.New(ErrAdapterS3Config, "s3: region is required")

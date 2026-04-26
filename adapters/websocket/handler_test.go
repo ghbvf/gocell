@@ -14,6 +14,7 @@ import (
 	"nhooyr.io/websocket"
 
 	adapterws "github.com/ghbvf/gocell/adapters/websocket"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	rtws "github.com/ghbvf/gocell/runtime/websocket"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -52,7 +53,10 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	}, 2*time.Second, time.Millisecond)
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{}))
+	// Use explicit AllowedOrigins; empty origins will be rejected after SEC-FAIL-CLOSED-04.
+	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"*"},
+	}))
 
 	server := httptest.NewServer(mux)
 
@@ -338,7 +342,10 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 	hub := rtws.NewHub(cfg, nil)
 	// Hub intentionally NOT started.
 
-	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{})
+	// AllowedOrigins is required post-SEC-FAIL-CLOSED-04; use a valid value.
+	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
+	})
 
 	// Use ResponseRecorder — no TCP needed, no sandbox issue.
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
@@ -346,4 +353,54 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+// TestUpgradeHandler_RejectsEmptyOrigins verifies that constructing an
+// UpgradeConfig with nil AllowedOrigins panics at construction time with an
+// *errcode.Error (SEC-FAIL-CLOSED). The recover block asserts the panic value
+// carries errcode.ErrWebsocketOriginsMissing so that recover chains can
+// errors.As on the recovered value.
+//
+// Positive case: AllowedOrigins: []string{"example.com"} must not panic.
+func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
+	cfg := rtws.DefaultHubConfig()
+
+	t.Run("empty origins — expect construction panic with *errcode.Error", func(t *testing.T) {
+		hub := rtws.NewHub(cfg, nil)
+
+		var panicVal any
+		panicked := func() (didPanic bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					panicVal = r
+					didPanic = true
+				}
+			}()
+			_ = adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{AllowedOrigins: nil})
+			return false
+		}()
+
+		if !panicked {
+			t.Fatal("UpgradeHandler with nil AllowedOrigins must panic at construction time")
+		}
+		// The panic value must be an *errcode.Error so recover chains can errors.As on it.
+		ec, ok := panicVal.(*errcode.Error)
+		if !ok {
+			t.Errorf("panic value must be *errcode.Error; got %T: %v", panicVal, panicVal)
+			return
+		}
+		if ec.Code != errcode.ErrWebsocketOriginsMissing {
+			t.Errorf("panic *errcode.Error must have code ErrWebsocketOriginsMissing; got %q", ec.Code)
+		}
+	})
+
+	t.Run("explicit allowed origins — ok", func(t *testing.T) {
+		hub := rtws.NewHub(cfg, nil)
+
+		// Must not panic; construction with valid origins must succeed.
+		handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+			AllowedOrigins: []string{"example.com"},
+		})
+		require.NotNil(t, handler)
+	})
 }

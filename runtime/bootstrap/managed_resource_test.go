@@ -18,6 +18,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	koutbox "github.com/ghbvf/gocell/kernel/outbox"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/runtime/http/health"
 	runtimeoutbox "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/runtime/outbox/outboxtest"
 	"github.com/stretchr/testify/assert"
@@ -80,9 +81,10 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -98,7 +100,12 @@ func TestManagedResource_RegistersHealthChecker(t *testing.T) {
 
 	// /readyz?verbose should include the "fake-pg" checker name in the body,
 	// proving the checker was actually registered (not just that readyz returns 200).
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("http://%s/readyz?verbose=true", addr), nil)
+	if err != nil {
+		t.Fatalf("NewRequestWithContext failed: %v", err)
+	}
+	req.Header.Set(health.VerboseTokenHeader, testVerboseToken)
+	resp, err := testHTTPClient.Do(req)
 	if err != nil {
 		t.Fatalf("GET /readyz?verbose failed: %v", err)
 	}
@@ -120,8 +127,8 @@ func TestManagedResource_RegistersWorker(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -171,8 +178,8 @@ func TestManagedResource_LIFOClose(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 		WithManagedResource(res3),
@@ -230,8 +237,8 @@ func TestManagedResource_NilWorkerNoOp(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -262,8 +269,8 @@ func TestManagedResource_CloseErrorPropagates(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res1),
 		WithManagedResource(res2),
 	)
@@ -347,8 +354,8 @@ func TestManagedResource_CloseErrorPropagatesToPhase10(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithManagedResource(res),
 	)
 
@@ -439,10 +446,11 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithManagedResource(relay),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -453,7 +461,7 @@ func TestRelay_AsManagedResource_RegistersCheckers(t *testing.T) {
 	waitForHealthy(t, addr)
 
 	// GET /readyz?verbose — all three relay checkers must appear.
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
@@ -506,10 +514,11 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithManagedResource(relay),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -546,7 +555,7 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	}, 3*time.Second, 20*time.Millisecond, "/readyz must return 503 after poll budget trips")
 
 	// Verify verbose output contains the unhealthy checker name.
-	verboseResp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	verboseResp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
 	defer verboseResp.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
@@ -599,10 +608,11 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 
 	b := New(
 		WithAssembly(asm),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithShutdownTimeout(2*time.Second),
 		WithManagedResource(relay),
+		WithHealthRoutes(WithReadyzVerboseToken(testVerboseToken)),
 	)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -612,7 +622,7 @@ func TestRelay_AsManagedResource_DisabledBudget_SkipsChecker(t *testing.T) {
 	addr := ln.Addr().String()
 	waitForHealthy(t, addr)
 
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz?verbose", addr))
+	resp, err := verboseGet(ctx, fmt.Sprintf("http://%s", addr))
 	require.NoError(t, err)
 	defer resp.Body.Close()
 
@@ -837,8 +847,8 @@ func TestManagedResource_LIFOCloseBySequence(t *testing.T) {
 
 	ln := newLocalListener(t)
 	app := New(
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		// pgRes registered FIRST (simulating ConfigCoreModule.Provide).
 		WithManagedResource(pgRes),
 		// worker registered SECOND (simulating a later consumer module / WithWorkers).

@@ -559,18 +559,11 @@ func TestReadyz_VerboseToken_StrictDeny(t *testing.T) {
 			wantDeniedBody:  true,
 		},
 		{
-			// PR-258 R2-01 round-3 re-collapse: handler is permissive when no
-			// token is configured. Verbose-mode gating is the route group's
-			// PolicyVerboseToken middleware (single source of truth);
-			// SetVerboseToken at the handler is opt-in defense-in-depth only.
-			// With no handler-level token configured, ?verbose renders the
-			// verbose body — the route group must add PolicyVerboseToken to
-			// gate it.
-			name:            "no token configured renders verbose (handler permissive)",
+			name:            "no token configured denies verbose (fail-closed)",
 			tokenConfigured: "",
 			sendVerbose:     true,
-			wantStatus:      http.StatusOK,
-			wantVerboseBody: true,
+			wantStatus:      http.StatusUnauthorized,
+			wantDeniedBody:  true,
 		},
 		{
 			name:            "bare readyz stays 200 even with verbose disabled via missing token",
@@ -1342,4 +1335,45 @@ func TestStatusFromRank(t *testing.T) {
 	assert.Equal(t, "degraded", statusFromRank(1))
 	assert.Equal(t, "unhealthy", statusFromRank(2))
 	assert.Equal(t, "unhealthy", statusFromRank(99))
+}
+
+// TestVerboseDecision_DefaultDenies verifies that the /readyz?verbose endpoint
+// returns HTTP 401 when no verbose token is configured and verbose is not
+// explicitly disabled. This is the SEC-FAIL-CLOSED-04 (health verbose) fix:
+// the previous fail-open default silently rendered the verbose body when token=""
+// and disabled=false, leaking internal health details to unauthenticated callers.
+//
+// TDD phase-1 red-light: the current verboseDecision returns (true, false) in the
+// "no token, not disabled" branch, so this test will FAIL until phase-2 changes
+// the branch to return (false, true).
+func TestVerboseDecision_DefaultDenies(t *testing.T) {
+	t.Parallel()
+
+	// Build a minimal assembly with one started cell so /readyz returns healthy.
+	asm := assembly.New(assembly.Config{ID: "test-sec", DurabilityMode: cell.DurabilityDemo})
+	c := newStubCell("sec-cell-1")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	defer func() { _ = asm.Stop(context.Background()) }()
+
+	h := New(asm)
+	// Deliberately do NOT call h.SetVerboseToken(...) and do NOT call
+	// h.SetVerboseDisabled(). This is the "default" state where operators have
+	// not configured verbose behaviour at all.
+
+	rec := httptest.NewRecorder()
+	// Request verbose output without a token header.
+	req := httptest.NewRequest(http.MethodGet, "/readyz?verbose=true", nil)
+	h.ReadyzHandler().ServeHTTP(rec, req)
+
+	// Phase-2 expectation: 401 with ErrReadyzVerboseDenied envelope.
+	// Phase-1 current: 200 with verbose body (fail-open) → test FAILS.
+	assert.Equal(t, http.StatusUnauthorized, rec.Code,
+		"readyz?verbose without token configuration must return 401; "+
+			"operators must explicitly configure a token or disable verbose")
+
+	// Verify the error envelope shape.
+	errObj := errorBody(t, rec)
+	assert.Equal(t, string(errcode.ErrReadyzVerboseDenied), errObj["code"],
+		"error code must be ERR_READYZ_VERBOSE_DENIED")
 }

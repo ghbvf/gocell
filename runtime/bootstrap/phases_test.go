@@ -94,7 +94,7 @@ func TestPhase5CollectRouteGroups_HealthListenerPresent_PreservesHealthListener(
 // --- phase0ValidateOptions tests ---
 
 func TestPhase0_AcceptsValidOptions(t *testing.T) {
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
 	require.NoError(t, b.phase0ValidateOptions())
 }
 
@@ -209,7 +209,7 @@ func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
 		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil },
 	}
 	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil),
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0",
 			[]cell.ListenerAuth{cell.AuthMTLS{}},
 			WithListenerTLS(cfg)),
@@ -1029,7 +1029,7 @@ func (s *stubHMACKeyring) Secrets() [][]byte { return [][]byte{s.Current()} }
 // calling phase5FinalizeAllRouters a second time (after authFinalized=true) returns
 // an error that names the listener ref, making post-mortem diagnosis unambiguous.
 func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing.T) {
-	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", nil))
+	b := New(WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
 	s := buildPhase5State(t)
 
 	routers := map[cell.ListenerRef]*router.Router{
@@ -1055,7 +1055,7 @@ func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing
 // certificate source is rejected at phase0 (Wave B sanity check).
 func TestPhase0_TLSConfigEmpty_Rejected(t *testing.T) {
 	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil,
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
 			WithListenerTLS(&tls.Config{})), // no Certificates / GetCertificate / GetConfigForClient
 	)
 	err := b.phase0ValidateOptions()
@@ -1072,7 +1072,7 @@ func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
 	// recognises this as a populated entry. Actual TLS handshake is not
 	// exercised in this unit test.
 	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil,
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				Certificates: []tls.Certificate{{Certificate: [][]byte{{0x00}}}},
 			})),
@@ -1086,7 +1086,7 @@ func TestPhase0_TLSConfigWithCertificates_Accepted(t *testing.T) {
 // first ClientHello with an opaque tls error rather than fail-fast at startup.
 func TestPhase0_TLSConfigCertificateZeroValue_Rejected(t *testing.T) {
 	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil,
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				Certificates: []tls.Certificate{{}},
 			})),
@@ -1100,7 +1100,7 @@ func TestPhase0_TLSConfigCertificateZeroValue_Rejected(t *testing.T) {
 // with a non-nil GetCertificate callback is accepted at phase0.
 func TestPhase0_TLSConfigWithGetCertificate_Accepted(t *testing.T) {
 	b := New(
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", nil,
+		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
 					return nil, nil

@@ -42,8 +42,8 @@ func TestR2_MetricsCollector_RecordsHTTPRequests(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), nil, bootstrap.WithListenerNet(healthLn)))
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
 

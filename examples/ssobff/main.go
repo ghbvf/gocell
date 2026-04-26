@@ -193,7 +193,7 @@ func main() {
 		// not share the auth-fronted business surface. Also gives operators a
 		// stable port to script readiness against (referenced by
 		// examples/ssobff/smoke_test.go and docs/ops/listener-topology.md).
-		bootstrap.WithListener(cell.HealthListener, healthAddr, nil),
+		bootstrap.WithListener(cell.HealthListener, healthAddr, []cell.ListenerAuth{cell.AuthNone{}}),
 		bootstrap.WithHealthRoutes(healthOpts...),
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
 	)

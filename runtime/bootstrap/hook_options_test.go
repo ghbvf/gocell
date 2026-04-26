@@ -95,8 +95,8 @@ func TestWithAssembly_OverridesHookOptions_BehaviourContract(t *testing.T) {
 		WithAssembly(asm),
 		WithHookObserver(bootstrapObs), // must be ignored
 		WithHookTimeout(time.Second),   // must be ignored
-		WithListener(cell.PrimaryListener, ln.Addr().String(), nil, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", nil, WithListenerNet(newLocalListener(t))),
+		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
+		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
 		WithPublisher(eb),
 		WithSubscriber(eb),
 		WithShutdownTimeout(2*time.Second),

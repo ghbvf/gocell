@@ -34,7 +34,12 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 	require.Eventually(t, func() bool { return hub.IsRunning() }, 2*time.Second, time.Millisecond)
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{}))
+	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		// SEC-FAIL-CLOSED (PR-MODE-1): empty AllowedOrigins now panics; the
+		// integration test exercises a loopback httptest.Server, so any origin
+		// pattern that matches `127.0.0.1` is acceptable.
+		AllowedOrigins: []string{"*"},
+	}))
 	server := httptest.NewServer(mux)
 
 	t.Cleanup(func() {

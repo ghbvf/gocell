@@ -15,11 +15,12 @@
 //   - GOCELL_JWT_AUDIENCE: JWT aud claim written into tokens and verified on
 //     inbound requests via VerifyIntent. Must be set before startup.
 //
-// # Required env vars (real adapter mode only)
+// # Required env vars (all adapter modes)
 //
 //   - GOCELL_SERVICE_SECRET: HMAC-SHA256 secret (≥32 bytes) protecting
-//     /internal/v1/* paths via ServiceTokenMiddleware. Missing in real mode
-//     aborts startup; missing in dev mode disables the guard with a Warn log.
+//     /internal/v1/* paths via ServiceTokenMiddleware. Must be set in all
+//     adapter modes — missing in any mode aborts startup with
+//     ERR_CONTROLPLANE_SERVICE_SECRET_MISSING (SEC-FAIL-CLOSED, PR-MODE-1).
 //
 // See also: docs/ops/env-vars.md for the full env var reference.
 package main

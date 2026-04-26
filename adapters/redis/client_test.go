@@ -3,12 +3,15 @@ package redis
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -228,4 +231,160 @@ func TestClient_ImplementsContextCloser(t *testing.T) {
 	var _ interface {
 		Close(ctx context.Context) error
 	} = (*Client)(nil)
+}
+
+// TestConfigValidate_RejectNonTLSRemote verifies that NewClient returns a TLS
+// validation error (errcode.ErrAdapterEndpointNotTLS) for remote non-TLS
+// endpoints, and accepts loopback addresses and TLS-scheme URLs without error.
+//
+// Loopback addresses (127.0.0.1) are exempt — they may fail with a connection
+// refused error but must NOT produce a TLS validation error.
+func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
+	tests := []struct {
+		name       string
+		cfg        Config
+		wantTLSErr bool // expect errcode.ErrAdapterEndpointNotTLS
+	}{
+		{
+			name: "standalone remote non-TLS addr — reject",
+			cfg: Config{
+				Mode:        ModeStandalone,
+				Addr:        "prod.redis.example.internal:6379",
+				DialTimeout: 100 * time.Millisecond,
+			},
+			wantTLSErr: true,
+		},
+		{
+			name: "sentinel remote non-TLS addr — reject",
+			cfg: Config{
+				Mode:           ModeSentinel,
+				SentinelAddrs:  []string{"prod1.sentinel.example.internal:26379"},
+				SentinelMaster: "mymaster",
+				DialTimeout:    100 * time.Millisecond,
+			},
+			wantTLSErr: true,
+		},
+		{
+			name: "standalone loopback — ok (no TLS error expected)",
+			cfg: Config{
+				Mode:        ModeStandalone,
+				Addr:        "127.0.0.1:6379",
+				DialTimeout: 100 * time.Millisecond,
+			},
+			wantTLSErr: false,
+		},
+		{
+			name: "standalone rediss scheme — ok (TLS scheme accepted)",
+			cfg: Config{
+				Mode:        ModeStandalone,
+				Addr:        "rediss://prod.redis.example.internal:6379",
+				DialTimeout: 100 * time.Millisecond,
+			},
+			wantTLSErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := NewClient(context.Background(), tc.cfg)
+			assertNewClientTLSResult(t, tc.cfg, err, tc.wantTLSErr)
+		})
+	}
+}
+
+// assertNewClientTLSResult checks NewClient's error against the expected TLS
+// validation outcome. When wantTLSErr is true the error must be a
+// *errcode.Error tagged ErrAdapterEndpointNotTLS; for accepted endpoints the
+// error (if any) may be a connection failure but must not be a TLS validation
+// error. Extracted to keep TestConfigValidate_RejectNonTLSRemote's loop body
+// within the cognitive-complexity budget.
+func assertNewClientTLSResult(t *testing.T, cfg Config, err error, wantTLSErr bool) {
+	t.Helper()
+	if !wantTLSErr {
+		if err == nil {
+			return
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrAdapterEndpointNotTLS {
+			t.Errorf("NewClient(%+v): unexpected TLS validation error: %v", cfg, err)
+		}
+		return
+	}
+	require.Error(t, err,
+		"NewClient(%+v): expected TLS validation error, got nil", cfg)
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
+		t.Errorf("NewClient(%+v): error %q is not errcode.ErrAdapterEndpointNotTLS",
+			cfg, err.Error())
+	}
+}
+
+// TestBuildStandaloneOptions verifies that an addr accepted by
+// ValidateTLSEndpoint is converted to go-redis Options with the right
+// TLSConfig populated. SEC-FAIL-CLOSED requires the validator and the dial
+// path to agree on TLS enforcement; without ParseURL wiring, rediss://
+// would silently downgrade to plain TCP.
+func TestBuildStandaloneOptions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		addr        string
+		wantTLS     bool
+		wantAddr    string
+		wantDB      int
+		expectError bool
+	}{
+		{
+			name:     "rediss URL form sets TLSConfig",
+			addr:     "rediss://prod.redis:6379",
+			wantTLS:  true,
+			wantAddr: "prod.redis:6379",
+		},
+		{
+			name:     "redis URL form preserves TLSConfig nil",
+			addr:     "redis://localhost:6379/3",
+			wantTLS:  false,
+			wantAddr: "localhost:6379",
+			wantDB:   3,
+		},
+		{
+			name:     "plain host port preserves TLSConfig nil",
+			addr:     "127.0.0.1:6379",
+			wantTLS:  false,
+			wantAddr: "127.0.0.1:6379",
+		},
+		{
+			name:        "malformed URL returns error",
+			addr:        "rediss://[::z]:not-a-port",
+			expectError: true,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := Config{Mode: ModeStandalone, Addr: tc.addr}
+			cfg.defaults()
+			opts, err := buildStandaloneOptions(cfg)
+			if tc.expectError {
+				require.Error(t, err, "expected parse error for %q", tc.addr)
+				return
+			}
+			require.NoError(t, err, "addr=%q", tc.addr)
+			require.Equal(t, tc.wantAddr, opts.Addr)
+			if tc.wantTLS {
+				require.NotNil(t, opts.TLSConfig,
+					"TLSConfig must be set for %q so go-redis dials TLS", tc.addr)
+			} else {
+				require.Nil(t, opts.TLSConfig)
+			}
+			if tc.wantDB != 0 {
+				require.Equal(t, tc.wantDB, opts.DB)
+			}
+		})
+	}
 }

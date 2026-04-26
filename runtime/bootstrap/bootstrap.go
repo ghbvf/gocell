@@ -25,6 +25,7 @@ import (
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/http/router"
@@ -309,6 +310,17 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 // certificate availability) with per-listener ref context and error formatting
 // would push the outer function beyond the limit of 15.
 func validateListenerConfig(ref cell.ListenerRef, cfg listenerConfig) error {
+	// SEC-FAIL-CLOSED: nil OR empty authChain is rejected at phase0. Empty
+	// slices are behaviourally identical to nil — both produce an
+	// unauthenticated listener — so requiring `[]cell.ListenerAuth{cell.AuthNone{}}`
+	// for genuinely public listeners (HealthListener on a loopback probe path)
+	// keeps the explicit no-auth marker visible to grep, archtest SEC-02, and
+	// future reviewers.
+	if len(cfg.authChain) == 0 {
+		return errcode.New(errcode.ErrListenerAuthChainMissing,
+			fmt.Sprintf("bootstrap: listener %q requires non-empty authChain "+
+				"(use []cell.ListenerAuth{cell.AuthNone{}} for no-auth listeners)", ref.String()))
+	}
 	if cfg.net == nil && cfg.addr == "" {
 		return fmt.Errorf("bootstrap: listener %q has no address or pre-bound net.Listener; use WithListener addr or WithListenerNet", ref.String())
 	}

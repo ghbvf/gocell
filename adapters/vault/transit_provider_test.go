@@ -23,6 +23,7 @@ package vault
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -1662,5 +1663,82 @@ func TestResolveStartupTimeout_EnvOverride(t *testing.T) {
 				t.Errorf("resolveStartupTimeout(%q) = %v, want %v", tc.env, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr verifies that
+// NewTransitKeyProviderFromEnv rejects non-TLS VAULT_ADDR values for remote
+// hosts once phase-2 wires secutil.ValidateTLSEndpoint. During TDD phase-1
+// these rejection cases will FAIL because the stub returns nil for all inputs,
+// meaning the function proceeds past TLS check and errors at auth setup instead
+// of at the expected TLS validation stage.
+//
+// Loopback exception: http://127.0.0.1:8200 is accepted by TLS validation
+// (no network I/O during validation); the function may still fail at auth
+// setup but must NOT fail with a TLS validation error.
+func TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr(t *testing.T) {
+	tests := []struct {
+		name       string
+		addr       string
+		wantTLSErr bool // expect error specifically from TLS validation
+	}{
+		{
+			name:       "http remote — reject (TLS required)",
+			addr:       "http://prod.vault.io:8200",
+			wantTLSErr: true,
+		},
+		{
+			name:       "https remote — ok (TLS validation passes)",
+			addr:       "https://prod.vault.io:8200",
+			wantTLSErr: false,
+		},
+		{
+			name:       "http loopback — ok (loopback exception)",
+			addr:       "http://127.0.0.1:8200",
+			wantTLSErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// Set VAULT_ADDR; VAULT_AUTH_METHOD intentionally left unset so the
+			// function fails at auth setup for non-TLS-rejected cases. TLS validation
+			// must happen BEFORE auth setup (fail-fast ordering constraint).
+			t.Setenv("VAULT_ADDR", tc.addr)
+			t.Setenv("VAULT_AUTH_METHOD", "") // unset to ensure auth setup fails fast
+
+			_, err := NewTransitKeyProviderFromEnv(false)
+			assertVaultTLSResult(t, tc.addr, err, tc.wantTLSErr)
+		})
+	}
+}
+
+// assertVaultTLSResult checks NewTransitKeyProviderFromEnv's error against the
+// expected TLS validation outcome. When wantTLSErr is true the error must
+// chain to ErrAdapterEndpointNotTLS; otherwise the function may still error at
+// auth setup (missing VAULT_AUTH_METHOD) but must not produce a TLS validation
+// error. Extracted to keep TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr's
+// loop body within the cognitive-complexity budget.
+func assertVaultTLSResult(t *testing.T, addr string, err error, wantTLSErr bool) {
+	t.Helper()
+	if !wantTLSErr {
+		if err == nil {
+			return
+		}
+		var ec *errcode.Error
+		if errors.As(err, &ec) && ec.Code == errcode.ErrAdapterEndpointNotTLS {
+			t.Errorf("NewTransitKeyProviderFromEnv(%q): got unexpected TLS error: %v", addr, err)
+		}
+		return
+	}
+	if err == nil {
+		t.Errorf("NewTransitKeyProviderFromEnv(%q): expected TLS error, got nil", addr)
+		return
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
+		t.Errorf("NewTransitKeyProviderFromEnv(%q): error %q is not errcode.ErrAdapterEndpointNotTLS",
+			addr, err.Error())
 	}
 }

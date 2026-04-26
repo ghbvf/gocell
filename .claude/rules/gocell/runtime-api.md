@@ -82,9 +82,20 @@ bootstrap.New(
         []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
     bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
         []cell.ListenerAuth{cell.MustNewAuthServiceToken(nonceStore, ring)}),
-    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", nil),
+    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091",
+        []cell.ListenerAuth{cell.AuthNone{}}),
 )
 ```
+
+**SEC-FAIL-CLOSED**：`authChain` 必须非 nil（PR-MODE-1）。HealthListener 的「无认证」由 loopback 隔离 + 显式 `cell.AuthNone{}` 共同表达；隐式 nil 在 phase0 fail-fast，错误码 `ERR_LISTENER_AUTH_CHAIN_MISSING`。
+
+**PR-MODE-1 新增 sentinel 对照表**：
+
+| 错误码 | 触发路径 | 说明 |
+|--------|---------|------|
+| `ErrListenerAuthChainMissing` | `bootstrap` phase0 | WithListener 第三参传 nil，启动时 fail-fast |
+| `ErrReadyzVerboseUnconfigured` | `runtime/http/health` verboseDecision | /readyz?verbose 请求但未配置 token 且未明确 disable |
+| `ErrWebsocketOriginsMissing` | `adapters/websocket` UpgradeHandler | AllowedOrigins 为空，构造时 panic |
 
 ### ListenerRef 常量
 
@@ -98,7 +109,8 @@ bootstrap.New(
 
 `WithListener(ref, addr, authChain []cell.ListenerAuth, opts...)` 的第三参数是一个
 **sealed interface slice**。每个元素实现 `cell.ListenerAuth`（marker method `listenerAuthOK()`）。
-传 `nil` 表示无认证（等同于旧 `PolicyNone`）。
+**`authChain` 必须显式声明（SEC-FAIL-CLOSED，PR-MODE-1）**：传 nil 在 phase0 fail-fast；显式无认证使用
+`[]cell.ListenerAuth{cell.AuthNone{}}`。
 
 | 构造函数 | 说明 | 典型 listener |
 |---------|------|--------------|
@@ -106,7 +118,7 @@ bootstrap.New(
 | `cell.MustNewAuthJWTFromAssembly(asm)` / `cell.NewAuthJWTFromAssembly(asm) (..., error)` | JWT 验证（phase4 自动从 authProvider Cell 发现 verifier） | PrimaryListener |
 | `cell.MustNewAuthServiceToken(store, ring)` / `cell.NewAuthServiceToken(...) (..., error)` | HMAC-SHA256 service token | InternalListener |
 | `cell.AuthMTLS{}` | mTLS — 仅断言存在 peer cert；链验证由 `tls.Config.ClientAuth=RequireAndVerifyClientCert` 在握手层完成（必须配置 WithListenerTLS） | InternalListener（高安全场景） |
-| `nil` | 无验证（等同于 `cell.AuthNone{}`；推荐 nil 减少样板） | HealthListener（loopback 隔离） |
+| `cell.AuthNone{}` | 显式无验证（HealthListener loopback 隔离场景；nil 已被 phase0 拒绝） | HealthListener（loopback 隔离） |
 
 **多 plan chain 示例**：
 
