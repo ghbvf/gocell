@@ -21,6 +21,9 @@ jobs:
       - name: Validate metadata (strict)
         run: go run ./cmd/gocell validate --strict
 
+      - name: Verify active journeys
+        run: go run ./cmd/gocell verify journey --active
+
       - name: Scaffold rejects kebab slice names
         run: |
           set +e

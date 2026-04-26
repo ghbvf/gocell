@@ -2,6 +2,7 @@ package verify
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -19,7 +20,7 @@ type resolvedRef struct {
 //
 // Supported formats:
 //
-//	journey.{journeyID}.{suffix} → pkg="./journeys/...", pattern=CamelCase(journeyID)+CamelCase(suffix)
+//	journey.{journeyID}.{suffix} → pkg resolved by Runner, pattern=^Test{CamelCase(journeyID)}{CamelCase(suffix)}$
 //	smoke.{cellID}.{suffix}     → pkg="./cells/{cellID}/...", pattern=CamelCase(suffix)
 //	unit.{scope}.{suffix}       → pkg="" (caller provides), pattern=CamelCase(suffix)
 //	contract.{id...}.{role}     → pkg="" (caller provides), pattern=CamelCase(role)
@@ -43,10 +44,11 @@ func resolveRef(ref string) (resolvedRef, error) {
 		// The Runner resolves the actual path at execution time.
 		// Include journeyID in pattern to disambiguate refs with identical suffixes
 		// (e.g., event-publish appears across multiple journeys).
+		testName := "Test" + kebabToCamelCase(parts[1]) + kebabToCamelCase(suffix)
 		return resolvedRef{
 			Kind:       PrefixJourney,
 			Pkg:        "", // resolved by Runner based on project layout
-			RunPattern: kebabToCamelCase(parts[1]) + kebabToCamelCase(suffix),
+			RunPattern: "^" + regexp.QuoteMeta(testName) + "$",
 		}, nil
 
 	case PrefixSmoke:

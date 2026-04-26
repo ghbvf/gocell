@@ -286,7 +286,7 @@ func TestOrderCell_RouteCreateOrder(t *testing.T) {
 		"POST /api/v1/orders/ should return 201")
 }
 
-func TestJourney_JOrdercreateHttpCreate(t *testing.T) {
+func TestJOrdercreateHttpCreate(t *testing.T) {
 	TestOrderCell_RouteCreateOrder(t)
 }
 

@@ -1,6 +1,6 @@
 id: J-useronboarding
 goal: 新用户完成创建并具备登录能力
-lifecycle: active
+lifecycle: experimental
 owner:
   team: platform
   role: journey-owner

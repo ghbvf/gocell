@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata/schemas"
+	"github.com/santhosh-tekuri/jsonschema/v6"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"gopkg.in/yaml.v3"
@@ -272,6 +273,57 @@ func TestJourneySchemaRequiresLifecycle(t *testing.T) {
 	lifecycle, ok := properties["lifecycle"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, []any{"active", "experimental"}, lifecycle["enum"])
+}
+
+func TestJourneySchemaLeavesActiveAutoGateToStrictValidation(t *testing.T) {
+	schema := loadJourneySchema(t)
+	doc := map[string]any{
+		"id":        "J-manual",
+		"goal":      "manual active journey is structurally valid",
+		"lifecycle": "active",
+		"owner": map[string]any{
+			"team": "platform",
+			"role": "journey-owner",
+		},
+		"cells": []any{"accesscore"},
+		"passCriteria": []any{
+			map[string]any{"text": "manual signoff", "mode": "manual"},
+		},
+	}
+	assert.NoError(t, schema.Validate(doc))
+}
+
+func TestJourneySchemaRejectsManualCheckRef(t *testing.T) {
+	schema := loadJourneySchema(t)
+	doc := map[string]any{
+		"id":        "J-manual",
+		"goal":      "manual checkRef is forbidden",
+		"lifecycle": "experimental",
+		"owner": map[string]any{
+			"team": "platform",
+			"role": "journey-owner",
+		},
+		"cells": []any{"accesscore"},
+		"passCriteria": []any{
+			map[string]any{"text": "manual signoff", "mode": "manual", "checkRef": "journey.J-manual.signoff"},
+		},
+	}
+	assert.Error(t, schema.Validate(doc))
+}
+
+func loadJourneySchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	data, err := schemas.FS.ReadFile("journey.schema.json")
+	require.NoError(t, err)
+
+	var doc any
+	require.NoError(t, json.Unmarshal(data, &doc))
+	compiler := jsonschema.NewCompiler()
+	const url = "file:///journey.schema.json"
+	require.NoError(t, compiler.AddResource(url, doc))
+	schema, err := compiler.Compile(url)
+	require.NoError(t, err)
+	return schema
 }
 
 func TestAssemblyMetaRoundTrip(t *testing.T) {

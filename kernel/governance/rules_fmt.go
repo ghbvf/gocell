@@ -110,27 +110,44 @@ func (v *Validator) validateFMT24() []ValidationResult {
 		}
 
 		for i, pc := range j.PassCriteria {
-			modeField := fmt.Sprintf("passCriteria[%d].mode", i)
-			if !validPassCriterionModes[pc.Mode] {
-				results = append(results, v.newResult(
-					"FMT-24", SeverityError, IssueInvalid,
-					file,
-					modeField,
-					fmt.Sprintf("journey %q passCriteria[%d].mode %q is not valid (must be auto or manual)", j.ID, i, pc.Mode),
-				))
-				continue
-			}
-			if pc.Mode == "auto" && strings.TrimSpace(pc.CheckRef) == "" {
-				results = append(results, v.newResult(
-					"FMT-24", SeverityError, IssueRequired,
-					file,
-					fmt.Sprintf("passCriteria[%d].checkRef", i),
-					fmt.Sprintf("journey %q auto passCriteria[%d] requires checkRef", j.ID, i),
-				))
-			}
+			results = append(results, v.validatePassCriterionFMT24(j, file, i, pc)...)
 		}
 	}
 	return results
+}
+
+func (v *Validator) validatePassCriterionFMT24(
+	j *metadata.JourneyMeta,
+	file string,
+	i int,
+	pc metadata.PassCriterion,
+) []ValidationResult {
+	modeField := fmt.Sprintf("passCriteria[%d].mode", i)
+	if !validPassCriterionModes[pc.Mode] {
+		return []ValidationResult{v.newResult(
+			"FMT-24", SeverityError, IssueInvalid,
+			file,
+			modeField,
+			fmt.Sprintf("journey %q passCriteria[%d].mode %q is not valid (must be auto or manual)", j.ID, i, pc.Mode),
+		)}
+	}
+	if pc.Mode == "auto" && strings.TrimSpace(pc.CheckRef) == "" {
+		return []ValidationResult{v.newResult(
+			"FMT-24", SeverityError, IssueRequired,
+			file,
+			fmt.Sprintf("passCriteria[%d].checkRef", i),
+			fmt.Sprintf("journey %q auto passCriteria[%d] requires checkRef", j.ID, i),
+		)}
+	}
+	if pc.Mode == "manual" && strings.TrimSpace(pc.CheckRef) != "" {
+		return []ValidationResult{v.newResult(
+			"FMT-24", SeverityError, IssueForbidden,
+			file,
+			fmt.Sprintf("passCriteria[%d].checkRef", i),
+			fmt.Sprintf("journey %q manual passCriteria[%d] must not declare checkRef", j.ID, i),
+		)}
+	}
+	return nil
 }
 
 // validateFMT02 checks that cell.type is one of {core, edge, support}.

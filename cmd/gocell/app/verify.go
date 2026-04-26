@@ -18,6 +18,7 @@ import (
 //	gocell verify slice --id=<cellID/sliceID>
 //	gocell verify cell --id=<cellID>
 //	gocell verify journey --id=<journeyID>
+//	gocell verify journey --active
 //	gocell verify targets --files=<file1,file2,...>
 func runVerify(args []string) error {
 	if len(args) < 1 {
@@ -117,13 +118,52 @@ func verifyCell(args []string) error {
 }
 
 func verifyJourney(args []string) error {
-	return runVerifyResultCmd(args, verifyResultExec{
-		name: "journey",
-		flag: "id",
-		exec: func(ctx context.Context, r *verify.Runner, id string) (*verify.VerifyResult, error) {
-			return r.RunJourney(ctx, id)
-		},
-	})
+	fs := flag.NewFlagSet("verify journey", flag.ContinueOnError)
+	id := fs.String("id", "", "journey id")
+	active := fs.Bool("active", false, "run all active journeys")
+	format := fs.String("format", "text",
+		"output format: "+strings.Join(printers.SupportedVerifyFormats(), " | "))
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *id == "" && !*active {
+		return fmt.Errorf("exactly one of --id or --active is required")
+	}
+	if *id != "" && *active {
+		return fmt.Errorf("exactly one of --id or --active is required")
+	}
+
+	printer, err := printers.NewVerifyPrinter(*format, os.Stdout)
+	if err != nil {
+		return err
+	}
+	root, project, err := parseProjectMeta()
+	if err != nil {
+		return err
+	}
+
+	runner := verify.NewRunner(project, root)
+	var result *verify.VerifyResult
+	if *active {
+		result, err = runner.RunActiveJourneys(context.Background())
+	} else {
+		result, err = runner.RunJourney(context.Background(), *id)
+	}
+	if err != nil {
+		return fmt.Errorf("verify journey: %w", err)
+	}
+
+	if err := printer.Print(result); err != nil {
+		return fmt.Errorf("emit verify result: %w", err)
+	}
+	if !result.Passed {
+		target := *id
+		if *active {
+			target = "--active"
+		}
+		return fmt.Errorf("verify journey %s: FAILED", target)
+	}
+	return nil
 }
 
 func verifyTargets(args []string) error {

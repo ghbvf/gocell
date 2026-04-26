@@ -205,7 +205,14 @@ func TestIsZeroMatch(t *testing.T) {
 	assert.True(t, isZeroMatch("testing: warning: no tests to run\nPASS"))
 	assert.True(t, isZeroMatch("?   \tpkg\t[no test files]"))
 	assert.False(t, isZeroMatch("--- PASS: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isZeroMatch("testing: warning: no tests to run\n--- SKIP: TestFoo (0.00s)\nPASS"))
 	assert.False(t, isZeroMatch(""))
+}
+
+func TestIsSkipOnly(t *testing.T) {
+	assert.True(t, isSkipOnly("=== RUN   TestFoo\n--- SKIP: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isSkipOnly("=== RUN   TestFoo\n--- PASS: TestFoo (0.00s)\nPASS"))
+	assert.False(t, isSkipOnly(""))
 }
 
 func TestVerifyCell_NoSmoke(t *testing.T) {
@@ -248,4 +255,13 @@ func TestRecordResult_ZeroMatchMessage(t *testing.T) {
 	assert.False(t, result.Passed)
 	require.Len(t, result.Errors, 1)
 	assert.Contains(t, result.Errors[0].Error(), "check your YAML ref")
+}
+
+func TestRecordResult_SkipOnlyFails(t *testing.T) {
+	result := &VerifyResult{TargetID: "test", Passed: true}
+	res := goTestResult{Output: "--- SKIP: TestFoo (0.00s)\nPASS", Passed: true, SkippedOnly: true}
+	recordResult(result, "ref", res, "./pkg/...", "^TestFoo$")
+	assert.False(t, result.Passed)
+	require.Len(t, result.Errors, 1)
+	assert.Contains(t, result.Errors[0].Error(), "only skipped tests")
 }

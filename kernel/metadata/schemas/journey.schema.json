@@ -69,39 +69,33 @@
             "description": "Whether this criterion is verified automatically or manually.",
             "enum": ["auto", "manual"]
           },
-          "checkRef": {
-            "type": "string",
-            "description": "Reference to an automated check. Required when mode is 'auto'."
+	      "checkRef": {
+	        "type": "string",
+	        "description": "Reference to an automated check. Required when mode is 'auto' and forbidden when mode is 'manual'."
+	      }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": { "mode": { "const": "auto" } },
+              "required": ["mode"]
+            },
+            "then": {
+              "required": ["checkRef"]
+            }
+          },
+          {
+            "if": {
+              "properties": { "mode": { "const": "manual" } },
+              "required": ["mode"]
+            },
+            "then": {
+              "not": { "required": ["checkRef"] }
+            }
           }
-        },
-        "if": {
-          "properties": { "mode": { "const": "auto" } },
-          "required": ["mode"]
-        },
-        "then": {
-          "required": ["checkRef"]
-        }
+        ]
       },
       "minItems": 0
-    }
-  },
-  "if": {
-    "properties": { "lifecycle": { "const": "active" } },
-    "required": ["lifecycle"]
-  },
-  "then": {
-    "properties": {
-      "passCriteria": {
-        "contains": {
-          "type": "object",
-          "required": ["mode", "checkRef"],
-          "properties": {
-            "mode": { "const": "auto" },
-            "checkRef": { "type": "string", "minLength": 1 }
-          }
-        },
-        "minContains": 1
-      }
     }
   }
 }

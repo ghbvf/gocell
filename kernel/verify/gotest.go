@@ -13,10 +13,11 @@ import (
 
 // goTestResult holds the outcome of a single `go test` invocation.
 type goTestResult struct {
-	Output    string // combined stdout+stderr
-	Passed    bool   // exit code == 0
-	ZeroMatch bool   // go test ran but no tests matched -run pattern
-	Err       error  // non-ExitError (command couldn't run at all)
+	Output      string // combined stdout+stderr
+	Passed      bool   // exit code == 0
+	ZeroMatch   bool   // go test ran but no tests matched -run pattern
+	SkippedOnly bool   // go test matched tests, but every matched test skipped
+	Err         error  // non-ExitError (command couldn't run at all)
 }
 
 // runGoTest executes `go test` with the given arguments in dir.
@@ -36,7 +37,7 @@ func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
 
 	if runErr == nil {
 		zm := isZeroMatch(output)
-		return goTestResult{Output: output, Passed: true, ZeroMatch: zm}
+		return goTestResult{Output: output, Passed: true, ZeroMatch: zm, SkippedOnly: !zm && isSkipOnly(output)}
 	}
 
 	var exitErr *exec.ExitError
@@ -59,7 +60,16 @@ func isZeroMatch(output string) bool {
 	if !hasNoTests {
 		return false
 	}
+	if strings.Contains(output, "--- SKIP") {
+		return false
+	}
 	// If any test actually ran, it's not a zero match.
 	return !strings.Contains(output, "--- PASS") &&
+		!strings.Contains(output, "--- FAIL")
+}
+
+func isSkipOnly(output string) bool {
+	return strings.Contains(output, "--- SKIP") &&
+		!strings.Contains(output, "--- PASS") &&
 		!strings.Contains(output, "--- FAIL")
 }

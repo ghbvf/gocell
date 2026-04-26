@@ -454,6 +454,54 @@ passCriteria:
 	assert.Contains(t, out, "VERIFY-06")
 }
 
+func TestRunValidate_Strict_DetectsStaleActiveJourneyCheckRef(t *testing.T) {
+	dir := setupProject(t, "cells/platform", "journeys", "tests/integration")
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "cells", "platform", "cell.yaml"), []byte(`id: platform
+type: core
+consistencyLevel: L1
+owner:
+  team: squad
+  role: cell-owner
+schema:
+  primary: cell_platform
+verify:
+  smoke:
+    - smoke.platform.startup
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "J-stale.yaml"), []byte(`id: J-stale
+goal: stale auto check
+lifecycle: active
+owner:
+  team: squad
+  role: journey-owner
+cells:
+  - platform
+contracts: []
+passCriteria:
+  - text: stale target
+    mode: auto
+    checkRef: journey.J-stale.missing
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "journeys", "status-board.yaml"), []byte(`- journeyId: J-stale
+  state: todo
+  risk: low
+  blocker: ""
+  updatedAt: 2026-04-27
+`), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "tests", "integration", "journey_test.go"), []byte(`package integration
+import "testing"
+func TestOtherJourney(t *testing.T) {}
+`), 0o644))
+
+	var gotErr error
+	out := captureStdout(t, func() {
+		gotErr = runValidate([]string{"--root", dir, "--strict"})
+	})
+	require.Error(t, gotErr)
+	assert.Contains(t, out, "VERIFY-06")
+	assert.Contains(t, out, "J-stale")
+}
+
 // Dry-run must still fail-fast on invalid opts — this is the whole point: CI
 // pre-commit hooks can call `scaffold ... --dry-run` and stop on bad inputs
 // without leaving partial files behind.

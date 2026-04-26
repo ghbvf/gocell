@@ -1,6 +1,6 @@
 id: J-configrollback
 goal: 配置版本回滚后状态订阅 cell 回退生效，审计记录完整
-lifecycle: active
+lifecycle: experimental
 owner:
   team: platform
   role: journey-owner

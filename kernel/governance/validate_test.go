@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/kernel/verify"
 	"github.com/ghbvf/gocell/pkg/contracts"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -192,6 +194,14 @@ func validProject() *metadata.ProjectMeta {
 			{ID: "edge-bff", MaxConsistencyLevel: "L1"},
 		},
 	}
+}
+
+func verifiedJourneyRefVerifier(
+	_ context.Context,
+	_ *metadata.JourneyMeta,
+	ref string,
+) (verify.TestResult, []error) {
+	return verify.TestResult{Name: ref, Passed: true}, nil
 }
 
 // findByCode returns all results matching the given code.
@@ -1376,12 +1386,25 @@ func TestVERIFY06(t *testing.T) {
 	tests := []struct {
 		name      string
 		setup     func(*metadata.ProjectMeta)
+		verifier  func(context.Context, *metadata.JourneyMeta, string) (verify.TestResult, []error)
 		wantCount int
 	}{
 		{
 			name:      "active journey with auto check passes",
 			setup:     func(_ *metadata.ProjectMeta) {},
 			wantCount: 0,
+		},
+		{
+			name: "active journey with stale auto check fails strict",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
+					{Text: "stale check", Mode: "auto", CheckRef: "journey.J-ssologin.missing"},
+				}
+			},
+			verifier: func(_ context.Context, _ *metadata.JourneyMeta, ref string) (verify.TestResult, []error) {
+				return verify.TestResult{Name: ref, Passed: false, ZeroMatch: true}, nil
+			},
+			wantCount: 1,
 		},
 		{
 			name: "active journey with only manual criteria fails strict",
@@ -1417,6 +1440,10 @@ func TestVERIFY06(t *testing.T) {
 			pm := validProject()
 			tt.setup(pm)
 			val := NewValidator(pm, ".")
+			val.verifyJourneyRef = verifiedJourneyRefVerifier
+			if tt.verifier != nil {
+				val.verifyJourneyRef = tt.verifier
+			}
 			got := findByCode(val.validateVERIFY06(true), "VERIFY-06")
 			assert.Len(t, got, tt.wantCount)
 		})
@@ -1506,13 +1533,13 @@ func TestFMT24(t *testing.T) {
 			wantCount: 1,
 		},
 		{
-			name: "manual criterion may carry documentation checkRef",
+			name: "manual criterion must not carry checkRef",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Journeys["J-ssologin"].PassCriteria = []metadata.PassCriterion{
 					{Text: "manual signoff", Mode: "manual", CheckRef: "journey.J-ssologin.signoff"},
 				}
 			},
-			wantCount: 0,
+			wantCount: 1,
 		},
 	}
 	for _, tt := range tests {

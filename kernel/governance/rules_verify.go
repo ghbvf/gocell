@@ -1,6 +1,7 @@
 package governance
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
@@ -318,20 +319,35 @@ func (v *Validator) validateVERIFY05() []ValidationResult {
 	return results
 }
 
-// validateVERIFY06 checks that strict-mode active journeys have at least one
-// runnable automated pass criterion.
+// validateVERIFY06 checks that strict-mode active journeys have executable
+// automated acceptance checks. A non-empty checkRef is only a declaration; the
+// gate is the actual test target resolving and running without zero-match or
+// skip-only results.
 func (v *Validator) validateVERIFY06(strict bool) []ValidationResult {
 	if !strict {
 		return nil
 	}
 	var results []ValidationResult
 	for _, j := range v.project.Journeys {
-		if j.Lifecycle != "active" {
+		results = append(results, v.validateVERIFY06Journey(j)...)
+	}
+	return results
+}
+
+func (v *Validator) validateVERIFY06Journey(j *metadata.JourneyMeta) []ValidationResult {
+	if j.Lifecycle != "active" {
+		return nil
+	}
+	var results []ValidationResult
+	autoCount := 0
+	for i, pc := range j.PassCriteria {
+		if pc.Mode != "auto" || strings.TrimSpace(pc.CheckRef) == "" {
 			continue
 		}
-		if journeyHasRunnableAutoCheck(j) {
-			continue
-		}
+		autoCount++
+		results = append(results, v.validateVERIFY06CheckRef(j, i, pc)...)
+	}
+	if autoCount == 0 {
 		results = append(results, v.newResult(
 			"VERIFY-06", SeverityError, IssueRequired,
 			journeyFile(j),
@@ -342,11 +358,22 @@ func (v *Validator) validateVERIFY06(strict bool) []ValidationResult {
 	return results
 }
 
-func journeyHasRunnableAutoCheck(j *metadata.JourneyMeta) bool {
-	for _, pc := range j.PassCriteria {
-		if pc.Mode == "auto" && strings.TrimSpace(pc.CheckRef) != "" {
-			return true
-		}
+func (v *Validator) validateVERIFY06CheckRef(
+	j *metadata.JourneyMeta,
+	i int,
+	pc metadata.PassCriterion,
+) []ValidationResult {
+	if v.verifyJourneyRef == nil {
+		return nil
 	}
-	return false
+	tr, errs := v.verifyJourneyRef(context.Background(), j, pc.CheckRef)
+	if tr.Passed && len(errs) == 0 && !tr.ZeroMatch && !tr.SkippedOnly {
+		return nil
+	}
+	return []ValidationResult{v.newResult(
+		"VERIFY-06", SeverityError, IssueRefNotFound,
+		journeyFile(j),
+		fmt.Sprintf("passCriteria[%d].checkRef", i),
+		fmt.Sprintf("active journey %q auto checkRef %q must resolve to an executable non-skipped test target", j.ID, pc.CheckRef),
+	)}
 }

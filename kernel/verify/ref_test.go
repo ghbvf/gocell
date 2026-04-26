@@ -17,7 +17,7 @@ func TestResolveRef(t *testing.T) {
 		{
 			name: "journey ref includes journeyID",
 			ref:  "journey.J-ssologin.session-revoke",
-			want: resolvedRef{Kind: "journey", Pkg: "", RunPattern: "JSsologinSessionRevoke"},
+			want: resolvedRef{Kind: "journey", Pkg: "", RunPattern: "^TestJSsologinSessionRevoke$"},
 		},
 		{
 			name: "smoke ref",
