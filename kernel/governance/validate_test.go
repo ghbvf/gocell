@@ -2645,6 +2645,169 @@ func TestADV05(t *testing.T) {
 	}
 }
 
+// --- ADV-06: subscription declaration drift between contract.yaml and slice.yaml ---
+
+func TestADV06(t *testing.T) {
+	tests := []struct {
+		name        string
+		setup       func(*metadata.ProjectMeta)
+		wantCount   int
+		wantField   string
+		wantFile    string
+		wantMessage string
+	}{
+		{
+			name:      "baseline (validProject) — contract.subscribers and slice.contractUsages aligned → 0 findings",
+			setup:     func(_ *metadata.ProjectMeta) {},
+			wantCount: 0,
+		},
+		{
+			name: "direction A: contract.subscribers lists cell that has no slice with subscribe usage → 1 warning on contract.yaml",
+			setup: func(pm *metadata.ProjectMeta) {
+				replayable := true
+				// Add an active event with auditcore as subscriber, but no auditcore slice
+				// declares a subscribe usage for this contract.
+				pm.Contracts["event.user.created.v1"] = &metadata.ContractMeta{
+					ID:               "event.user.created.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{"auditcore"},
+					},
+					Replayable:        &replayable,
+					IdempotencyKey:    "user-id",
+					DeliverySemantics: "at-least-once",
+					Dir:               "contracts/event/user/created/v1",
+					File:              "contracts/event/user/created/v1/contract.yaml",
+				}
+			},
+			wantCount:   1,
+			wantField:   "endpoints.subscribers",
+			wantFile:    "contracts/event/user/created/v1/contract.yaml",
+			wantMessage: "auditcore",
+		},
+		{
+			name: "direction B: slice declares subscribe but contract.subscribers does not list its cell → 1 warning on slice.yaml",
+			setup: func(pm *metadata.ProjectMeta) {
+				replayable := true
+				// Add a contract whose subscribers list is empty so direction A
+				// has no cell subscriber to flag, isolating direction B.
+				// (ADV-05 will fire on this same contract for "active with no
+				// subscribers", but findByCode filters to ADV-06 only.)
+				pm.Contracts["event.lonely.signal.v1"] = &metadata.ContractMeta{
+					ID:               "event.lonely.signal.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{},
+					},
+					Replayable:        &replayable,
+					IdempotencyKey:    "signal-id",
+					DeliverySemantics: "at-least-once",
+					Dir:               "contracts/event/lonely/signal/v1",
+					File:              "contracts/event/lonely/signal/v1/contract.yaml",
+				}
+				// auditcore declares it subscribes to the contract.
+				pm.Slices["auditcore/audit-write"].ContractUsages = append(
+					pm.Slices["auditcore/audit-write"].ContractUsages,
+					metadata.ContractUsage{Contract: "event.lonely.signal.v1", Role: "subscribe"},
+				)
+				pm.Slices["auditcore/audit-write"].Verify.Contract = append(
+					pm.Slices["auditcore/audit-write"].Verify.Contract,
+					"contract.event.lonely.signal.v1.subscribe",
+				)
+			},
+			wantCount:   1,
+			wantField:   "contractUsages[1].contract",
+			wantFile:    "cells/auditcore/slices/audit-write/slice.yaml",
+			wantMessage: "event.lonely.signal.v1",
+		},
+		{
+			name: "draft event with mismatch → 0 findings (draft exempt)",
+			setup: func(pm *metadata.ProjectMeta) {
+				replayable := true
+				pm.Contracts["event.draft.preview.v1"] = &metadata.ContractMeta{
+					ID:               "event.draft.preview.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "draft",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{"auditcore"},
+					},
+					Replayable:        &replayable,
+					IdempotencyKey:    "preview-id",
+					DeliverySemantics: "at-least-once",
+					Dir:               "contracts/event/draft/preview/v1",
+					File:              "contracts/event/draft/preview/v1/contract.yaml",
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "external actor as subscriber → 0 findings (actors do not own slices)",
+			setup: func(pm *metadata.ProjectMeta) {
+				replayable := true
+				pm.Contracts["event.notify.external.v1"] = &metadata.ContractMeta{
+					ID:               "event.notify.external.v1",
+					Kind:             "event",
+					OwnerCell:        "accesscore",
+					ConsistencyLevel: "L2",
+					Lifecycle:        "active",
+					Endpoints: metadata.EndpointsMeta{
+						Publisher:   "accesscore",
+						Subscribers: []string{"edge-bff"}, // external actor
+					},
+					Replayable:        &replayable,
+					IdempotencyKey:    "notify-id",
+					DeliverySemantics: "at-least-once",
+					Dir:               "contracts/event/notify/external/v1",
+					File:              "contracts/event/notify/external/v1/contract.yaml",
+				}
+			},
+			wantCount: 0,
+		},
+		{
+			name: "non-event contract (http with clients) → 0 findings (ADV-06 only checks event subscriptions)",
+			setup: func(pm *metadata.ProjectMeta) {
+				// http.auth.login.v1 in validProject() already has clients=[auditcore]
+				// but auditcore has no slice with role=call for this contract.
+				// ADV-06 must not flag this — it only looks at events.
+			},
+			wantCount: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pm := validProject()
+			tt.setup(pm)
+			val := NewValidator(pm, "")
+			got := findByCode(val.validateADV06(), "ADV-06")
+			assert.Len(t, got, tt.wantCount)
+			for _, r := range got {
+				assert.Equal(t, SeverityWarning, r.Severity)
+				assert.Equal(t, IssueMismatch, r.IssueType)
+				if tt.wantField != "" {
+					assert.Equal(t, tt.wantField, r.Field)
+				}
+				if tt.wantFile != "" {
+					assert.Equal(t, tt.wantFile, r.File)
+				}
+				if tt.wantMessage != "" {
+					assert.Contains(t, r.Message, tt.wantMessage)
+				}
+			}
+		})
+	}
+}
+
 // --- helper function tests for new utilities ---
 
 func TestContractDirFromID(t *testing.T) {
