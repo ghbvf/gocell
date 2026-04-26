@@ -20,6 +20,12 @@ import (
 //
 // HTTP contract specs are owned by each slice's handler.go (single source of
 // truth); RouteGroups below delegates to slice.RegisterRoutes for HTTP wiring.
+
+// errFmtSubscribe is the wrap format used by RegisterSubscriptions when an
+// AddContractHandler call rejects a spec. Centralized so the four wrap
+// sites stay aligned and SonarCloud's duplicate-literal rule is satisfied.
+const errFmtSubscribe = "accesscore: subscribe %s: %w"
+
 var (
 	specEventConfigEntryUpserted = wrapper.EventSpec("event.config.entry-upserted.v1", "amqp")
 	specEventConfigEntryDeleted  = wrapper.EventSpec("event.config.entry-deleted.v1", "amqp")
@@ -98,12 +104,12 @@ func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
 	// config-receive: config state-sync events from configcore.
 	upsertedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryUpserted)
 	if err := r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "accesscore"); err != nil {
-		return fmt.Errorf("accesscore: subscribe %s: %w", specEventConfigEntryUpserted.Topic, err)
+		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryUpserted.Topic, err)
 	}
 
 	deletedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryDeleted)
 	if err := r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "accesscore"); err != nil {
-		return fmt.Errorf("accesscore: subscribe %s: %w", specEventConfigEntryDeleted.Topic, err)
+		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryDeleted.Topic, err)
 	}
 
 	// rbac-session-sync: invalidate sessions on role assignment or revocation.
@@ -111,10 +117,10 @@ func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
 	// is topic-agnostic.
 	roleHandler := outbox.WrapLegacyHandler(c.rbacSessionConsumer.HandleRoleChanged)
 	if err := r.AddContractHandler(specEventRoleAssigned, roleHandler, "accesscore-rbac-session-sync"); err != nil {
-		return fmt.Errorf("accesscore: subscribe %s: %w", specEventRoleAssigned.Topic, err)
+		return fmt.Errorf(errFmtSubscribe, specEventRoleAssigned.Topic, err)
 	}
 	if err := r.AddContractHandler(specEventRoleRevoked, roleHandler, "accesscore-rbac-session-sync"); err != nil {
-		return fmt.Errorf("accesscore: subscribe %s: %w", specEventRoleRevoked.Topic, err)
+		return fmt.Errorf(errFmtSubscribe, specEventRoleRevoked.Topic, err)
 	}
 	return nil
 }
