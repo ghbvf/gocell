@@ -441,10 +441,10 @@ func TestDirectEmitter_HealthCheckers_DegradedOnHighDropRatio(t *testing.T) {
 	}
 
 	checkers := e.HealthCheckers()
-	require.Contains(t, checkers, "outbox-failopen-rate:testcell")
+	require.Contains(t, checkers, "outbox-failopen-rate.testcell")
 
 	// 10 drops / 10 total = 100% > 5% default threshold → Tripped
-	checkErr := checkers["outbox-failopen-rate:testcell"](ctx)
+	checkErr := checkers["outbox-failopen-rate.testcell"](ctx)
 	require.Error(t, checkErr)
 	assert.ErrorIs(t, checkErr, ErrDegraded)
 }
@@ -463,10 +463,10 @@ func TestDirectEmitter_HealthCheckers_HealthyOnLowDropRatio(t *testing.T) {
 	}
 
 	checkers := e.HealthCheckers()
-	require.Contains(t, checkers, "outbox-failopen-rate:testcell")
+	require.Contains(t, checkers, "outbox-failopen-rate.testcell")
 
 	// 0 drops / 10 total = 0% < 5% threshold → not tripped
-	checkErr := checkers["outbox-failopen-rate:testcell"](ctx)
+	checkErr := checkers["outbox-failopen-rate.testcell"](ctx)
 	assert.NoError(t, checkErr)
 }
 
@@ -500,7 +500,7 @@ func TestNewDirectEmitter_WithFailOpenRateThresholdZeroDisables(t *testing.T) {
 	}
 
 	// threshold 0 → Tripped always false
-	checkErr := e.HealthCheckers()["outbox-failopen-rate:testcell"](ctx)
+	checkErr := e.HealthCheckers()["outbox-failopen-rate.testcell"](ctx)
 	assert.NoError(t, checkErr)
 }
 
@@ -536,3 +536,20 @@ func TestDirectEmitter_InjectsObservabilityFromContext(t *testing.T) {
 	assert.Equal(t, wantTraceID, got.Observability.TraceID,
 		"DirectEmitter must inject trace_id from ctx into entry.Observability")
 }
+
+// TestNewDirectEmitter_WithLoggerNilFallsBackToDefault verifies that
+// WithLogger(nil) falls back to slog.Default() in NewDirectEmitter
+// (defensive — protects against accidental nil logger from caller).
+func TestNewDirectEmitter_WithLoggerNilFallsBackToDefault(t *testing.T) {
+	e, err := NewDirectEmitter(noopPub{}, DirectPublishFailClosed, metrics.NopProvider{}, "test-cell",
+		WithLogger(nil))
+	require.NoError(t, err)
+	require.NotNil(t, e)
+	// Trigger Emit path, confirm no panic.
+	require.NoError(t, e.Emit(context.Background(), validEntry("logger-nil-test")))
+}
+
+type noopPub struct{}
+
+func (noopPub) Publish(_ context.Context, _ string, _ []byte) error { return nil }
+func (noopPub) Close(_ context.Context) error                       { return nil }

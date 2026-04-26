@@ -88,9 +88,15 @@ func WithLogger(l *slog.Logger) DirectEmitterOption {
 }
 
 // WithFailOpenRateThreshold sets the drop ratio threshold above which the
-// emitter's HealthCheckers checker reports cell.ErrDegraded. The implicit
-// time window is the interval between two /readyz probes (typically
-// 10-30s). 0 disables the checker; default is 0.05 (5%).
+// emitter's HealthCheckers checker reports cell.ErrDegraded.
+//
+// Default is 0.05 (5%) — the tracker is enabled by default because fail-open
+// drop monitoring is framework infrastructure responsibility, not a per-cell
+// opt-in (CLAUDE.md "生产配置禁止静默降级"). Pass WithFailOpenRateThreshold(0)
+// to explicitly disable.
+//
+// The implicit time window is the interval between two /readyz probes
+// (typically 10-30s under K8s readinessProbe).
 //
 // ref: kernel/outbox/failopen_tracker.go for ratio semantics.
 func WithFailOpenRateThreshold(ratio float64) DirectEmitterOption {
@@ -217,7 +223,7 @@ var _ Emitter = (*DirectEmitter)(nil)
 // ref: envoyproxy/envoy admin /ready — DEGRADED returns 200, distinguishing
 // "soft failure, do not evict" from "hard failure, drain traffic".
 // ref: kernel/cell/health.go — cell-layer alias to this sentinel.
-var ErrDegraded = errors.New("outbox: degraded")
+var ErrDegraded = errors.New("degraded")
 
 // HealthCheckers implements cell.HealthContributor. The checker name is
 // scoped by cellID to avoid collisions when multiple cells own a
@@ -228,11 +234,18 @@ var ErrDegraded = errors.New("outbox: degraded")
 // aggregator detects this via errors.Is and maps to HTTP 200 + status="degraded"
 // rather than 503.
 //
+// Implementation note: the underlying tracker uses delta semantics — two
+// consecutive /readyz probes with no new emit between them yield ratio
+// 0/0 → not tripped (preserve healthy state). Operators monitoring
+// degraded transitions via /readyz should not interpret a return-to-healthy
+// as "drops have stopped"; pair with the gocell_outbox_emit_failopen_dropped_total
+// counter for the actionable signal.
+//
 // ref: kernel/outbox/emitter.go ErrDegraded
 // ref: cells/accesscore/cell_providers.go:22-38 — kebab-case checker name convention
 func (e *DirectEmitter) HealthCheckers() map[string]func(context.Context) error {
 	return map[string]func(context.Context) error{
-		"outbox-failopen-rate:" + e.cellID: e.checkFailOpenRate,
+		"outbox-failopen-rate." + e.cellID: e.checkFailOpenRate,
 	}
 }
 

@@ -638,7 +638,7 @@ func TestConfigCore_HealthCheckers_WithDirectEmitter(t *testing.T) {
 	require.NoError(t, c.Init(context.Background(), deps))
 
 	checkers := c.HealthCheckers()
-	const emitterKey = "outbox-failopen-rate:configcore"
+	const emitterKey = "outbox-failopen-rate.configcore"
 	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
 	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }

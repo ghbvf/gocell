@@ -9,6 +9,10 @@ import "github.com/ghbvf/gocell/kernel/outbox"
 // via errors.Is and maps it to HTTP 200 + body status="degraded" rather than
 // 503, so K8s readinessProbe does not evict the pod for soft-failure signals.
 //
+// Note: the authoritative definition lives in kernel/outbox because
+// kernel/cell already imports kernel/outbox (registrar/mode_resolver);
+// reversing the dependency would create an import cycle.
+//
 // Operators should pair degraded responses with Prometheus alerts on the
 // underlying metric (e.g., gocell_outbox_emit_failopen_dropped_total) for
 // the actionable signal; ErrDegraded is the on-the-wire indicator that the

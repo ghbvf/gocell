@@ -1157,7 +1157,7 @@ func TestReadyz_DegradedReturns200WithStatusField(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("outbox-failopen-rate:configcore", func(_ context.Context) error {
+	h.RegisterChecker("outbox-failopen-rate.configcore", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
 	})
 
@@ -1200,35 +1200,51 @@ func TestReadyz_UnhealthyTrumpsDegraded(t *testing.T) {
 	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
 }
 
-// TestReadyz_DegradedAggregatesFromCellHealth verifies that when a cell reports
-// HealthStatus.Status="degraded" and all probes are healthy, the aggregate
-// result is "degraded" (HTTP 200 with status field).
+// stubDegradedCell is a minimal Cell that always reports HealthStatus.Status="degraded".
+// Used by TestReadyz_DegradedAggregatesFromCellHealth to exercise the E2E path
+// through ReadyzHandler → aggregateCellHealth → assembly.Health() → cell.Health().
+type stubDegradedCell struct {
+	*cell.BaseCell
+}
+
+func newStubDegradedCell(id string) *stubDegradedCell {
+	return &stubDegradedCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+	}
+}
+
+// Health overrides BaseCell.Health() to always return "degraded", simulating
+// a cell that is started but operating in a degraded state.
+func (s *stubDegradedCell) Health() cell.HealthStatus {
+	return cell.HealthStatus{Status: "degraded"}
+}
+
+// TestReadyz_DegradedAggregatesFromCellHealth verifies the E2E path:
+// when a cell's Health() returns HealthStatus.Status="degraded" and no probe
+// checkers are registered, ReadyzHandler must respond HTTP 200 with body
+// status="degraded" (not "unhealthy" / 503).
 func TestReadyz_DegradedAggregatesFromCellHealth(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test-cell-degraded", DurabilityMode: cell.DurabilityDemo})
+	c := newStubDegradedCell("degraded-cell")
+	require.NoError(t, asm.Register(c))
 	require.NoError(t, asm.Start(context.Background()))
 	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	// No checkers — only cell health contributes.
-	// Directly call aggregateCellHealth after injecting a degraded status.
-	// We simulate by calling computeReadyz with a custom assembly snapshot.
-	// Instead, test via the rank helpers directly:
-	rank := rankStatus("degraded")
-	assert.Equal(t, 1, rank, "degraded must have rank 1")
-	assert.Greater(t, rankStatus("unhealthy"), rank, "unhealthy must outrank degraded")
-	assert.Greater(t, rank, rankStatus("healthy"), "degraded must outrank healthy")
-	assert.Equal(t, "degraded", statusFromRank(1))
-	assert.Equal(t, "healthy", statusFromRank(0))
-	assert.Equal(t, "unhealthy", statusFromRank(2))
+	// No probe checkers — only cell Health() contributes to the aggregate.
 
-	// Verify that a purely-healthy assembly + no checkers gives HTTP 200 / healthy.
 	rec := httptest.NewRecorder()
 	req := newVerboseRequest("/readyz?verbose=true")
 	h.ReadyzHandler().ServeHTTP(rec, req)
-	assert.Equal(t, http.StatusOK, rec.Code)
+
+	assert.Equal(t, http.StatusOK, rec.Code, "degraded cell must produce HTTP 200, not 503")
 	data := dataBody(t, rec)
-	assert.Equal(t, "healthy", data["status"])
+	assert.Equal(t, "degraded", data["status"],
+		"ReadyzHandler must aggregate cell HealthStatus='degraded' into body status='degraded'")
 }
 
 // TestReadyz_VerboseExposesDegradedDependency verifies that when a probe returns
@@ -1240,7 +1256,7 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 
 	h := New(asm)
 	h.SetVerboseToken(testVerboseToken)
-	h.RegisterChecker("outbox-failopen-rate:configcore", func(_ context.Context) error {
+	h.RegisterChecker("outbox-failopen-rate.configcore", func(_ context.Context) error {
 		return fmt.Errorf("drop ratio exceeded: %w", cell.ErrDegraded)
 	})
 
@@ -1253,8 +1269,8 @@ func TestReadyz_VerboseExposesDegradedDependency(t *testing.T) {
 	data := dataBody(t, rec)
 	deps, ok := data["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose body must contain dependencies map")
-	entry, ok := deps["outbox-failopen-rate:configcore"].(map[string]any)
-	require.True(t, ok, "outbox-failopen-rate:configcore must be present in dependencies")
+	entry, ok := deps["outbox-failopen-rate.configcore"].(map[string]any)
+	require.True(t, ok, "outbox-failopen-rate.configcore must be present in dependencies")
 	assert.Equal(t, "degraded", entry["status"],
 		"verbose dependency entry status must be 'degraded'")
 	_, hasErr := entry["error"]

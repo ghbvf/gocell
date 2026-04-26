@@ -128,7 +128,7 @@ func TestHealthCheckers_WithDirectEmitter(t *testing.T) {
 
 	checkers := c.HealthCheckers()
 	require.Contains(t, checkers, "session-store", "session-store checker must be present")
-	const emitterKey = "outbox-failopen-rate:accesscore"
+	const emitterKey = "outbox-failopen-rate.accesscore"
 	require.Contains(t, checkers, emitterKey, "DirectEmitter health checker must be aggregated")
 	assert.NoError(t, checkers[emitterKey](context.Background()), "fresh emitter should be healthy")
 }
