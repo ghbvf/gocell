@@ -47,20 +47,15 @@ func newTestInternalGuard(t *testing.T) *internalGuard {
 // buildInternalAuthChain coverage
 // ---------------------------------------------------------------------------
 
-// TestBuildInternalAuthChain_NilGuard_ReturnsNil verifies the nil-guard
-// branch of buildInternalAuthChain (dev mode where no service secret is set).
-// A nil chain means no authentication middleware on the internal listener.
-func TestBuildInternalAuthChain_NilGuard_ReturnsNil(t *testing.T) {
-	chain := buildInternalAuthChain(nil)
-	assert.Nil(t, chain, "nil guard must produce a nil auth chain (no auth middleware)")
-}
-
 // TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken verifies that
-// a real guard produces an AuthServiceToken plan in the chain.
+// a guard produces an AuthServiceToken plan in the chain. After SEC-FAIL-CLOSED,
+// internalGuardFromEnv always returns an error rather than a nil guard when
+// GOCELL_SERVICE_SECRET is unset, so buildInternalAuthChain is only ever
+// called with a non-nil guard.
 func TestBuildInternalAuthChain_NonNilGuard_ReturnsServiceToken(t *testing.T) {
 	guard := newTestInternalGuard(t)
 	chain := buildInternalAuthChain(guard)
-	require.Len(t, chain, 1, "non-nil guard must produce a 1-plan chain")
+	require.Len(t, chain, 1, "guard must produce a 1-plan chain")
 	_, ok := chain[0].(cell.AuthServiceToken)
 	assert.True(t, ok, "plan must be cell.AuthServiceToken; got %T", chain[0])
 }

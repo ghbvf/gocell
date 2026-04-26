@@ -89,6 +89,14 @@ bootstrap.New(
 
 **SEC-FAIL-CLOSED**：`authChain` 必须非 nil（PR-MODE-1）。HealthListener 的「无认证」由 loopback 隔离 + 显式 `cell.AuthNone{}` 共同表达；隐式 nil 在 phase0 fail-fast，错误码 `ERR_LISTENER_AUTH_CHAIN_MISSING`。
 
+**PR-MODE-1 新增 sentinel 对照表**：
+
+| 错误码 | 触发路径 | 说明 |
+|--------|---------|------|
+| `ErrListenerAuthChainMissing` | `bootstrap` phase0 | WithListener 第三参传 nil，启动时 fail-fast |
+| `ErrReadyzVerboseUnconfigured` | `runtime/http/health` verboseDecision | /readyz?verbose 请求但未配置 token 且未明确 disable |
+| `ErrWebsocketOriginsMissing` | `adapters/websocket` UpgradeHandler | AllowedOrigins 为空，构造时 panic |
+
 ### ListenerRef 常量
 
 | 常量 | 物理端口 | 挂载路由 | 默认地址 |

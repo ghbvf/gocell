@@ -559,6 +559,8 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	// verbose output when token="" leaks internal health details.
 	if token == "" {
 		slog.Warn("readyz: verbose requested but no token configured; denying",
+			slog.String("reason", "token_unconfigured"),
+			slog.String("hint", "set GOCELL_READYZ_VERBOSE_TOKEN or GOCELL_READYZ_VERBOSE_DISABLED=1"),
 			slog.String("remote_addr", r.RemoteAddr))
 		return false, true
 	}
@@ -566,6 +568,7 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 	configured := sha256.Sum256([]byte(token))
 	if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
 		slog.Warn("readyz: verbose token mismatch at handler layer; denying",
+			slog.String("reason", "token_mismatch"),
 			slog.String("remote_addr", r.RemoteAddr))
 		return false, true
 	}

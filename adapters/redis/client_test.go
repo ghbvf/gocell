@@ -3,13 +3,15 @@ package redis
 import (
 	"context"
 	"encoding/json"
-	"strings"
+	"errors"
 	"testing"
 	"time"
 
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
 func TestConfigDefaults(t *testing.T) {
@@ -231,20 +233,9 @@ func TestClient_ImplementsContextCloser(t *testing.T) {
 	} = (*Client)(nil)
 }
 
-// tlsErrSignal is the expected error code emitted by ValidateTLSEndpoint.
-// TODO(phase2): replace with errcode.ErrAdapterEndpointNotTLS constant.
-const tlsErrSignal = "ERR_ADAPTER_ENDPOINT_NOT_TLS"
-
 // TestConfigValidate_RejectNonTLSRemote verifies that NewClient returns a TLS
-// validation error (not a generic connection error) for remote non-TLS endpoints.
-//
-// TDD phase-1 red-light: the stub ValidateTLSEndpoint returns nil for all inputs,
-// so NewClient proceeds past TLS validation and returns a network/connection error.
-// The test checks that the error contains a TLS validation signal — which the
-// stub-induced connection error does NOT, so these sub-tests FAIL.
-//
-// Phase-2 expectation: ValidateTLSEndpoint rejects before any dial, producing a
-// fast error with the TLS validation code in the error message.
+// validation error (errcode.ErrAdapterEndpointNotTLS) for remote non-TLS
+// endpoints, and accepts loopback addresses and TLS-scheme URLs without error.
 //
 // Loopback addresses (127.0.0.1) are exempt — they may fail with a connection
 // refused error but must NOT produce a TLS validation error.
@@ -252,14 +243,14 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 	tests := []struct {
 		name       string
 		cfg        Config
-		wantTLSErr bool // expect error with TLS validation signal
+		wantTLSErr bool // expect errcode.ErrAdapterEndpointNotTLS
 	}{
 		{
 			name: "standalone remote non-TLS addr — reject",
 			cfg: Config{
 				Mode:        ModeStandalone,
 				Addr:        "prod.redis.example.internal:6379",
-				DialTimeout: 100 * time.Millisecond, // fast dial timeout for test
+				DialTimeout: 100 * time.Millisecond,
 			},
 			wantTLSErr: true,
 		},
@@ -299,24 +290,19 @@ func TestConfigValidate_RejectNonTLSRemote(t *testing.T) {
 			t.Parallel()
 			_, err := NewClient(context.Background(), tc.cfg)
 			if tc.wantTLSErr {
-				// Phase-1 (stub): err may be nil or a generic network error — no TLS signal.
-				// The test FAILS because the error lacks the TLS validation code.
-				// Phase-2: ValidateTLSEndpoint produces an immediate error with TLS code.
 				require.Error(t, err,
-					"NewClient(%+v): expected TLS validation error, got nil (phase-1 red-light)", tc.cfg)
-				// TODO(phase2): use errors.Is(err, errcode.ErrAdapterEndpointNotTLS)
-				if !strings.Contains(err.Error(), tlsErrSignal) &&
-					!strings.Contains(err.Error(), "TLS") &&
-					!strings.Contains(err.Error(), "tls") {
-					t.Errorf("NewClient(%+v): error %q lacks TLS validation signal %q (phase-1 red-light: stub allows non-TLS through producing DNS/connection error instead)",
-						tc.cfg, err.Error(), tlsErrSignal)
+					"NewClient(%+v): expected TLS validation error, got nil", tc.cfg)
+				var ec *errcode.Error
+				if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
+					t.Errorf("NewClient(%+v): error %q is not errcode.ErrAdapterEndpointNotTLS",
+						tc.cfg, err.Error())
 				}
 			} else {
 				// Loopback / TLS scheme: must not produce a TLS validation error.
 				// Connection refused is acceptable (no real Redis server running).
 				if err != nil {
-					if strings.Contains(err.Error(), tlsErrSignal) ||
-						strings.Contains(err.Error(), "not tls") {
+					var ec *errcode.Error
+					if errors.As(err, &ec) && ec.Code == errcode.ErrAdapterEndpointNotTLS {
 						t.Errorf("NewClient(%+v): unexpected TLS validation error: %v", tc.cfg, err)
 					}
 				}

@@ -110,9 +110,9 @@ func TestConfigValidate_RejectsNonTLSEndpoint(t *testing.T) {
 			err := cfg.Validate()
 			if tc.wantErr {
 				require.Error(t, err, "Validate(%q): expected TLS validation error", tc.endpoint)
-				// TODO(phase2): tighten to errors.Is(err, errcode.ErrAdapterEndpointNotTLS)
 				var ec *errcode.Error
 				require.ErrorAs(t, err, &ec, "error must be an *errcode.Error")
+				assert.Equal(t, errcode.ErrAdapterEndpointNotTLS, ec.Code)
 			} else {
 				require.NoError(t, err, "Validate(%q): expected no error", tc.endpoint)
 			}

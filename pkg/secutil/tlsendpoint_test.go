@@ -1,20 +1,19 @@
 package secutil_test
 
 import (
-	"strings"
+	"errors"
 	"testing"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
 // TestValidateTLSEndpoint verifies the TLS-endpoint validation helper across
 // the canonical cases defined by the SEC-FAIL-CLOSED loopback exception rule:
 //   - Remote endpoints require a TLS scheme (https, rediss, tls-aware bare host is rejected).
-//   - Loopback hosts (127.0.0.1, ::1, localhost) are exempt regardless of scheme.
+//   - Loopback hosts (127.x.x.x, ::1, IPv4-mapped IPv6, localhost) are exempt regardless of scheme.
 //   - Empty endpoint is always rejected.
-//
-// TODO(phase2): replace string-assertion on "TLS" with errors.Is(err, errcode.ErrAdapterEndpointNotTLS)
-// once the sentinel is added to pkg/errcode in phase 2.
+//   - unix:// with empty host is accepted; unix://host/path is rejected.
 func TestValidateTLSEndpoint(t *testing.T) {
 	t.Parallel()
 
@@ -22,9 +21,6 @@ func TestValidateTLSEndpoint(t *testing.T) {
 		name    string
 		input   string
 		wantErr bool
-		// errHint is checked via strings.Contains on err.Error() when wantErr=true.
-		// TODO(phase2): replace with errors.Is(err, errcode.ErrAdapterEndpointNotTLS)
-		errHint string
 	}{
 		{
 			name:    "https remote — ok",
@@ -35,7 +31,6 @@ func TestValidateTLSEndpoint(t *testing.T) {
 			name:    "http remote — reject",
 			input:   "http://prod.example.com",
 			wantErr: true,
-			errHint: "TLS",
 		},
 		{
 			name:    "redis loopback — ok",
@@ -46,7 +41,6 @@ func TestValidateTLSEndpoint(t *testing.T) {
 			name:    "redis remote — reject",
 			input:   "redis://prod.redis:6379",
 			wantErr: true,
-			errHint: "TLS",
 		},
 		{
 			name:    "rediss remote — ok",
@@ -72,37 +66,51 @@ func TestValidateTLSEndpoint(t *testing.T) {
 			name:    "bare non-loopback host:port — reject",
 			input:   "vault.prod.io:8200",
 			wantErr: true,
-			errHint: "TLS",
 		},
 		{
 			name:    "empty string — reject",
 			input:   "",
 			wantErr: true,
-			errHint: "TLS",
 		},
-		// Additional coverage: IPv6 bracket form with port in URL host.
+		// IPv6 bracket form with port in URL host.
 		{
 			name:    "URL with [::1]:port loopback host — ok",
 			input:   "redis://[::1]:6379",
 			wantErr: false,
 		},
-		// Additional coverage: unknown scheme is fail-closed.
+		// Unknown scheme is fail-closed.
 		{
 			name:    "ftp remote — reject (unknown scheme)",
 			input:   "ftp://files.example.com/data",
 			wantErr: true,
-			errHint: "TLS",
 		},
-		// Additional coverage: unix socket is TLS-equivalent (no network).
+		// unix:// with empty host is a local socket — ok.
 		{
 			name:    "unix socket — ok",
 			input:   "unix:///var/run/redis.sock",
 			wantErr: false,
 		},
-		// Additional coverage: wss is TLS.
+		// unix:// with a non-empty host must be rejected (F2).
+		{
+			name:    "unix with non-empty host — reject",
+			input:   "unix://evil.host/x",
+			wantErr: true,
+		},
+		// wss is TLS.
 		{
 			name:    "wss remote — ok",
 			input:   "wss://ws.example.com/events",
+			wantErr: false,
+		},
+		// Expanded loopback coverage (F2): 127.0.0.2 and IPv4-mapped IPv6.
+		{
+			name:    "bare 127.0.0.2:port — ok (loopback exception)",
+			input:   "127.0.0.2:6379",
+			wantErr: false,
+		},
+		{
+			name:    "IPv4-mapped IPv6 loopback — ok",
+			input:   "[::ffff:127.0.0.1]:8200",
 			wantErr: false,
 		},
 	}
@@ -117,10 +125,10 @@ func TestValidateTLSEndpoint(t *testing.T) {
 					t.Errorf("ValidateTLSEndpoint(%q): want error, got nil", tc.input)
 					return
 				}
-				// TODO(phase2): switch to errors.Is(err, errcode.ErrAdapterEndpointNotTLS)
-				if tc.errHint != "" && !strings.Contains(err.Error(), tc.errHint) {
-					t.Errorf("ValidateTLSEndpoint(%q): error %q does not contain hint %q",
-						tc.input, err.Error(), tc.errHint)
+				var ec *errcode.Error
+				if !errors.As(err, &ec) || ec.Code != errcode.ErrAdapterEndpointNotTLS {
+					t.Errorf("ValidateTLSEndpoint(%q): error %q does not have code ErrAdapterEndpointNotTLS",
+						tc.input, err.Error())
 				}
 			} else {
 				if err != nil {

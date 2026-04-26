@@ -56,9 +56,9 @@ func TestSecurityDefaults(t *testing.T) {
 	})
 }
 
-// testSEC01AddrDrivenGate is intentionally a no-op.
+// testSEC01AddrDrivenGate is skipped — SEC-FAIL-CLOSED-01 is retired.
 //
-// Rationale (SEC-FAIL-CLOSED-01 retired): the addr-driven gate pattern
+// Rationale: the addr-driven gate pattern
 // (if shared.PrimaryHTTPAddr != "" { bootstrap.WithListener(...) }) does NOT
 // produce fail-open authentication behaviour — it merely skips listener
 // registration when the addr is absent. The actual auth-chain nil risk is
@@ -71,11 +71,10 @@ func TestSecurityDefaults(t *testing.T) {
 // SharedDeps.Validate and internalGuardFromEnv (which now fails-fast in ALL
 // adapter modes when GOCELL_SERVICE_SECRET is unset, not just "real" mode).
 //
-// Removing this rule avoids penalising a safe addr-conditional pattern while
-// keeping the actionable nil-authChain rule (SEC-02) intact.
+// SEC-02 covers the actual nil-authChain risk. See git history for context.
 func testSEC01AddrDrivenGate(t *testing.T, _ string) {
 	t.Helper()
-	// Rule retired — see inline rationale above.
+	t.Skip("SEC-FAIL-CLOSED-01 retired: addr-driven if-gate is safe; SEC-02 covers actual fail-open. See git history for context.")
 }
 
 // testSEC02ListenerAuthChainNonNil scans all production Go files under

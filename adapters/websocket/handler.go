@@ -26,7 +26,7 @@ type UpgradeConfig struct {
 func (c UpgradeConfig) Validate() error {
 	if len(c.AllowedOrigins) == 0 {
 		return errcode.New(errcode.ErrWebsocketOriginsMissing,
-			"websocket: AllowedOrigins is required (fail-closed; use [\"*\"] only in dev)")
+			"websocket: UpgradeConfig.AllowedOrigins must be non-empty; use [\"*\"] only in dev (fail-closed)")
 	}
 	return nil
 }
@@ -39,7 +39,7 @@ func (c UpgradeConfig) Validate() error {
 // startup rather than silently accepting connections from all origins.
 func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 	if err := cfg.Validate(); err != nil {
-		panic(err.Error())
+		panic(err)
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hub.IsRunning() {
@@ -68,6 +68,7 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 		conn := NewConn(connID, wsConn)
 
 		if regErr := hub.Register(conn); regErr != nil {
+			_ = wsConn.Close(websocket.StatusNormalClosure, "registration rejected")
 			slog.Warn("websocket: register rejected",
 				slog.Any("error", regErr),
 				slog.String("remote_addr", r.RemoteAddr),

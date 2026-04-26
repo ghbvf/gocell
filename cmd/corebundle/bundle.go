@@ -68,15 +68,16 @@ func defaultRuntimeOptions(
 	//
 	// Primary listener: AuthJWTFromAssembly discovers IntentTokenVerifier from
 	// accesscore post-Init (lazy phase4 resolution, fail-closed).
-	// Internal listener: AuthServiceToken from InternalGuard (nil → no auth
-	// in dev mode where GOCELL_SERVICE_SECRET is unset).
+	// Internal listener: AuthServiceToken from InternalGuard. Guard is always
+	// non-nil when InternalHTTPAddr is set: SharedDeps.Validate enforces this
+	// for production topologies, and tests either supply a guard or leave the
+	// addr empty (skipping listener registration entirely).
 	// Health listener: framework-owned /healthz, /readyz, /metrics route groups;
 	// when shared.VerboseToken is set, the health handler's strict-gate path
 	// (WithReadyzVerboseToken → SetVerboseToken) requires a matching X-Readyz-Token
 	// for ?verbose=true requests; mismatches return 401 ErrReadyzVerboseDenied.
 	//
 	// ref: go-kratos/kratos app.go — per-server option pattern.
-	internalChain := buildInternalAuthChain(shared.InternalGuard)
 
 	healthRouteOpts := []bootstrap.HealthRouteGroupOption{
 		bootstrap.WithMetricsHandler(metricsHandler),
@@ -114,7 +115,7 @@ func defaultRuntimeOptions(
 		))
 	}
 	if shared.InternalHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, internalChain))
+		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, buildInternalAuthChain(shared.InternalGuard)))
 	}
 	// B2: HealthListener is required when a metrics handler is configured.
 	// Production deployments always set GOCELL_HTTP_HEALTH_ADDR.
@@ -132,12 +133,11 @@ func defaultRuntimeOptions(
 }
 
 // buildInternalAuthChain constructs the auth chain for the internal listener.
-// In dev mode (InternalGuard == nil) nil is returned (no auth); in production
-// the InternalGuard's store and ring are promoted to AuthServiceToken.
+// guard is always non-nil after SEC-FAIL-CLOSED: internalGuardFromEnv now
+// returns an error rather than a nil guard in all adapter modes when
+// GOCELL_SERVICE_SECRET is unset, so SharedDeps.Validate fails fast before
+// this function is reached with a nil guard.
 func buildInternalAuthChain(guard *internalGuard) []cell.ListenerAuth {
-	if guard == nil {
-		return nil
-	}
 	return []cell.ListenerAuth{cell.MustNewAuthServiceToken(guard.NonceStore(), guard.ring)}
 }
 
