@@ -133,7 +133,6 @@ build:
 
 		// --- actors ---
 		"actors.yaml": &fstest.MapFile{Data: []byte(`- id: edge-bff
-  type: external
   maxConsistencyLevel: L1
 `)},
 	}
@@ -285,7 +284,6 @@ func TestParseFS_FullProject(t *testing.T) {
 	// Actors
 	assert.Len(t, pm.Actors, 1)
 	assert.Equal(t, "edge-bff", pm.Actors[0].ID)
-	assert.Equal(t, "external", pm.Actors[0].Type)
 	assert.Equal(t, "L1", pm.Actors[0].MaxConsistencyLevel)
 }
 
@@ -1028,7 +1026,6 @@ nope: true
 			name: "unknown field in actors entry",
 			fs: fstest.MapFS{
 				"actors.yaml": &fstest.MapFile{Data: []byte(`- id: ext
-  type: external
   maxConsistencyLevel: L2
   phantom: yes
 `)},
@@ -1121,7 +1118,7 @@ func TestParseFS_RejectsMultipleDocuments(t *testing.T) {
 		{
 			name: "multi-doc actors.yaml",
 			fs: fstest.MapFS{
-				"actors.yaml": &fstest.MapFile{Data: []byte("- id: a\n  type: external\n  maxConsistencyLevel: L2\n---\n- id: b\n  type: external\n  maxConsistencyLevel: L3\n")},
+				"actors.yaml": &fstest.MapFile{Data: []byte("- id: a\n  maxConsistencyLevel: L2\n---\n- id: b\n  maxConsistencyLevel: L3\n")},
 			},
 		},
 	}

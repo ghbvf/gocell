@@ -282,7 +282,6 @@ func TestStatusBoardEntryRoundTrip(t *testing.T) {
 func TestActorMetaRoundTrip(t *testing.T) {
 	orig := ActorMeta{
 		ID:                  "edge-bff",
-		Type:                "external",
 		MaxConsistencyLevel: "L1",
 	}
 	_, got := roundTrip(t, orig)
@@ -416,7 +415,7 @@ func TestContractMeta_ProviderEndpoint(t *testing.T) {
 
 func TestActorSliceRoundTrip(t *testing.T) {
 	orig := []ActorMeta{
-		{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L1"},
+		{ID: "edge-bff", MaxConsistencyLevel: "L1"},
 	}
 	data, err := yaml.Marshal(orig)
 	require.NoError(t, err)

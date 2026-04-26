@@ -59,7 +59,6 @@ build:
   deployTemplate: t
 `)},
 		"actors.yaml": &fstest.MapFile{Data: []byte(`- id: ext
-  type: external
   maxConsistencyLevel: L2
 `)},
 		"journeys/status-board.yaml": &fstest.MapFile{Data: []byte(`- journeyId: J-smoke

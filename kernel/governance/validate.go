@@ -9,7 +9,6 @@ package governance
 
 import (
 	"os"
-	"strings"
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -72,8 +71,7 @@ type Validator struct {
 	now        func() time.Time                  // clock function (injectable for tests)
 	fileExists func(path string) bool            // file existence check (injectable for tests)
 	readFile   func(path string) ([]byte, error) // file reader (injectable for tests)
-	actorSet   map[string]bool                   // pre-built set of external actor IDs
-	actorTypes map[string]string                 // pre-built map of actor ID → type (e.g., "external") for audience-aware rules
+	actorSet   map[string]bool                   // pre-built set of external actor IDs from actors.yaml (membership = external)
 }
 
 // NewValidator creates a Validator for the given parsed project metadata.
@@ -89,10 +87,8 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 		}
 	}
 	actorSet := make(map[string]bool, len(project.Actors))
-	actorTypes := make(map[string]string, len(project.Actors))
 	for _, a := range project.Actors {
 		actorSet[a.ID] = true
-		actorTypes[a.ID] = strings.TrimSpace(strings.ToLower(a.Type))
 	}
 	return &Validator{
 		locator: locator{project: project},
@@ -102,9 +98,8 @@ func NewValidator(project *metadata.ProjectMeta, root string) *Validator {
 			_, err := os.Stat(path)
 			return err == nil
 		},
-		readFile:   os.ReadFile,
-		actorSet:   actorSet,
-		actorTypes: actorTypes,
+		readFile: os.ReadFile,
+		actorSet: actorSet,
 	}
 }
 

@@ -188,7 +188,7 @@ func validProject() *metadata.ProjectMeta {
 			{JourneyID: "J-ssologin", State: "doing", Risk: "low", UpdatedAt: "2026-04-04"},
 		},
 		Actors: []metadata.ActorMeta{
-			{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L1"},
+			{ID: "edge-bff", MaxConsistencyLevel: "L1"},
 		},
 	}
 }
@@ -693,7 +693,7 @@ func TestTOPO04(t *testing.T) {
 			name: "contract level within external actor max level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "L3"},
+					{ID: "ext-gateway", MaxConsistencyLevel: "L3"},
 				}
 				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
@@ -714,7 +714,7 @@ func TestTOPO04(t *testing.T) {
 			name: "contract level exceeds external actor max level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "L1"},
+					{ID: "ext-gateway", MaxConsistencyLevel: "L1"},
 				}
 				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
@@ -735,7 +735,7 @@ func TestTOPO04(t *testing.T) {
 			name: "external actor with malformed maxConsistencyLevel reports error",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "INVALID"},
+					{ID: "ext-gateway", MaxConsistencyLevel: "INVALID"},
 				}
 				// OwnerCell is set for REF-03; TOPO-04 uses endpoints.server as provider.
 				pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
@@ -767,7 +767,7 @@ func TestTOPO04(t *testing.T) {
 func TestTOPO04_EmptyMaxConsistencyLevel(t *testing.T) {
 	pm := validProject()
 	pm.Actors = []metadata.ActorMeta{
-		{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: ""},
+		{ID: "ext-gateway", MaxConsistencyLevel: ""},
 	}
 	pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 		ID:               "http.ext.gw.v1",
@@ -786,7 +786,7 @@ func TestTOPO04_EmptyMaxConsistencyLevel(t *testing.T) {
 func TestTOPO04_MalformedMessage(t *testing.T) {
 	pm := validProject()
 	pm.Actors = []metadata.ActorMeta{
-		{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "INVALID"},
+		{ID: "ext-gateway", MaxConsistencyLevel: "INVALID"},
 	}
 	pm.Contracts["http.ext.gw.v1"] = &metadata.ContractMeta{
 		ID:               "http.ext.gw.v1",
@@ -1216,7 +1216,7 @@ func TestVERIFY04(t *testing.T) {
 			name: "active contract with external actor provider is skipped",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "ext-gateway", Type: "external", MaxConsistencyLevel: "L3"},
+					{ID: "ext-gateway", MaxConsistencyLevel: "L3"},
 				}
 				pm.Contracts["http.ext.gateway.v1"] = &metadata.ContractMeta{
 					ID:               "http.ext.gateway.v1",
@@ -2401,12 +2401,12 @@ func TestREF17(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "internal path with wildcard client passes",
+			name: "internal path with wildcard client errors (fail-closed)",
 			setup: func(pm *metadata.ProjectMeta) {
 				withInternalPath(pm)
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*"}
 			},
-			wantCount: 0,
+			wantCount: 1, // wildcard admits external actors → forbidden on internal
 		},
 		{
 			name: "internal path with empty clients passes",
@@ -2429,7 +2429,7 @@ func TestREF17(t *testing.T) {
 			setup: func(pm *metadata.ProjectMeta) {
 				withInternalPath(pm)
 				pm.Actors = append(pm.Actors, metadata.ActorMeta{
-					ID: "second-bff", Type: "external", MaxConsistencyLevel: "L2",
+					ID: "second-bff", MaxConsistencyLevel: "L2",
 				})
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff", "second-bff"}
 			},
@@ -2461,21 +2461,34 @@ func TestREF17(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name: "internal path with actor of empty type passes",
+			name: "internal path with newly-registered actor errors (membership = external)",
 			setup: func(pm *metadata.ProjectMeta) {
 				withInternalPath(pm)
-				pm.Actors = append(pm.Actors, metadata.ActorMeta{ID: "untyped-actor", Type: ""})
-				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"untyped-actor"}
+				// actors.yaml membership IS the type declaration; any new entry
+				// is external by construction (see ActorMeta godoc).
+				pm.Actors = append(pm.Actors, metadata.ActorMeta{ID: "new-actor"})
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"new-actor"}
 			},
-			wantCount: 0, // type "" is not "external", treated as internal
+			wantCount: 1,
 		},
 		{
-			name: "internal path with wildcard and external client errors only on external",
+			name: "internal path with wildcard and external client errors on both",
 			setup: func(pm *metadata.ProjectMeta) {
 				withInternalPath(pm)
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*", "edge-bff"}
 			},
-			wantCount: 1, // "*" is skipped; only edge-bff triggers
+			wantCount: 2, // both fail-closed: wildcard + external actor
+		},
+		{
+			name: "non-v1 internal-looking path is not flagged (uses cell.InternalPathPrefix SoR)",
+			setup: func(pm *metadata.ProjectMeta) {
+				// /internal/foo (no /v1/) is NOT routed to InternalListener by
+				// runtime — REF-17 must align with the runtime SoR and not
+				// flag such paths as internal.
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP.Path = "/internal/foo"
+				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
+			},
+			wantCount: 0,
 		},
 	}
 	for _, tt := range tests {
@@ -2490,7 +2503,6 @@ func TestREF17(t *testing.T) {
 				assert.Equal(t, IssueForbidden, r.IssueType)
 				assert.Contains(t, r.Field, "endpoints.clients")
 				assert.Contains(t, r.Message, "internal")
-				assert.Contains(t, r.Message, "external actor")
 			}
 		})
 	}
@@ -3509,7 +3521,7 @@ func TestTOPO07(t *testing.T) {
 			name: "consumer actor within max level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L2"},
+					{ID: "edge-bff", MaxConsistencyLevel: "L2"},
 				}
 				// http.auth.login.v1 is L1, edge-bff max is L2: OK
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
@@ -3520,7 +3532,7 @@ func TestTOPO07(t *testing.T) {
 			name: "consumer actor exceeds max level — IssueMismatch on contract file",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
+					{ID: "edge-bff", MaxConsistencyLevel: "L0"},
 				}
 				// http.auth.login.v1 is L1, edge-bff max is L0: violation
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
@@ -3533,7 +3545,7 @@ func TestTOPO07(t *testing.T) {
 			name: "consumer actor with no max level (unconstrained)",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: ""},
+					{ID: "edge-bff", MaxConsistencyLevel: ""},
 				}
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 			},
@@ -3543,7 +3555,7 @@ func TestTOPO07(t *testing.T) {
 			name: "consumer actor with malformed max level — IssueInvalid on actors.yaml",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "INVALID"},
+					{ID: "edge-bff", MaxConsistencyLevel: "INVALID"},
 				}
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 			},
@@ -3563,7 +3575,7 @@ func TestTOPO07(t *testing.T) {
 			name: "wildcard consumer is skipped",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
+					{ID: "edge-bff", MaxConsistencyLevel: "L0"},
 				}
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"*"}
 			},
@@ -3573,7 +3585,7 @@ func TestTOPO07(t *testing.T) {
 			name: "event contract consumer actor exceeds max level",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L1"},
+					{ID: "edge-bff", MaxConsistencyLevel: "L1"},
 				}
 				// event.session.created.v1 is L2, edge-bff max is L1: violation
 				pm.Contracts["event.session.created.v1"].Endpoints.Subscribers = []string{"edge-bff"}
@@ -3584,8 +3596,8 @@ func TestTOPO07(t *testing.T) {
 			name: "multiple consumer actors, one exceeds",
 			setup: func(pm *metadata.ProjectMeta) {
 				pm.Actors = []metadata.ActorMeta{
-					{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
-					{ID: "ext-monitor", Type: "external", MaxConsistencyLevel: "L4"},
+					{ID: "edge-bff", MaxConsistencyLevel: "L0"},
+					{ID: "ext-monitor", MaxConsistencyLevel: "L4"},
 				}
 				pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff", "ext-monitor"}
 			},
@@ -3657,7 +3669,7 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			pm := validProject()
 			pm.Actors = []metadata.ActorMeta{
-				{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "L0"},
+				{ID: "edge-bff", MaxConsistencyLevel: "L0"},
 			}
 			c := &metadata.ContractMeta{
 				ID: tt.kind + ".test.v1", Kind: tt.kind,
@@ -3679,7 +3691,7 @@ func TestTOPO07_FieldNameMatchesKind(t *testing.T) {
 func TestTOPO07_MalformedMessage(t *testing.T) {
 	pm := validProject()
 	pm.Actors = []metadata.ActorMeta{
-		{ID: "edge-bff", Type: "external", MaxConsistencyLevel: "INVALID"},
+		{ID: "edge-bff", MaxConsistencyLevel: "INVALID"},
 	}
 	pm.Contracts["http.auth.login.v1"].Endpoints.Clients = []string{"edge-bff"}
 

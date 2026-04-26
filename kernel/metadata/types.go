@@ -207,9 +207,15 @@ type StatusBoardEntry struct {
 }
 
 // ActorMeta maps to a single entry in actors.yaml.
+//
+// actors.yaml registers external systems that participate in contracts but
+// are not modeled as cells. Membership in this file is itself the type
+// declaration ("registered actor = external"); audience-aware governance
+// rules (REF-17) reject any actor in this file from internal endpoints.
+// No type field is needed — keeping it would create a parallel truth source
+// against the cell-vs-actor distinction already implied by membership.
 type ActorMeta struct {
 	ID                  string `yaml:"id"`
-	Type                string `yaml:"type"`
 	MaxConsistencyLevel string `yaml:"maxConsistencyLevel"`
 }
 
