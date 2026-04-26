@@ -105,7 +105,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	// from accesscore's authProvider during phase4.
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
@@ -317,10 +317,10 @@ func TestAuthWiring_InternalGuard_RequiresServiceToken(t *testing.T) {
 	// cell.Policy (round-3 collapse) and resolves the verifier lazily at phase4.
 	_ = guard // guard is superseded by PolicyServiceToken below
 	internalLn := newCorebundleLocalListener(t)
-	internalAuthChain := []cell.ListenerAuth{cell.NewAuthServiceToken(nonceStore, ring)}
+	internalAuthChain := []cell.ListenerAuth{cell.MustNewAuthServiceToken(nonceStore, ring)}
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
+		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain,
 			bootstrap.WithListenerNet(internalLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
@@ -529,7 +529,7 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
-		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)},
+		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),
 		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), nil,
 			bootstrap.WithListenerNet(internalLn)),

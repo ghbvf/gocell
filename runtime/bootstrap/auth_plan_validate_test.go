@@ -56,28 +56,28 @@ func TestValidateAuthChainJWTSingleton(t *testing.T) {
 	}{
 		{
 			name:    "AcceptsJWTFirst",
-			chain:   []cell.ListenerAuth{cell.NewAuthJWT(verifier), cell.AuthMTLS{}},
+			chain:   []cell.ListenerAuth{cell.MustNewAuthJWT(verifier), cell.AuthMTLS{}},
 			wantErr: false,
 		},
 		{
 			name:    "AcceptsJWTFromAssemblyFirst",
-			chain:   []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm), cell.NewAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{})},
+			chain:   []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm), cell.MustNewAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{})},
 			wantErr: false,
 		},
 		{
 			name:    "AcceptsJWTAlone",
-			chain:   []cell.ListenerAuth{cell.NewAuthJWT(verifier)},
+			chain:   []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)},
 			wantErr: false,
 		},
 		{
 			name:    "RejectsJWTNotFirst",
-			chain:   []cell.ListenerAuth{cell.AuthMTLS{}, cell.NewAuthJWT(verifier)},
+			chain:   []cell.ListenerAuth{cell.AuthMTLS{}, cell.MustNewAuthJWT(verifier)},
 			wantErr: true,
 			errMsg:  "must be sole/first plan",
 		},
 		{
 			name:    "RejectsDuplicateJWT",
-			chain:   []cell.ListenerAuth{cell.NewAuthJWT(verifier), cell.NewAuthJWT(verifier)},
+			chain:   []cell.ListenerAuth{cell.MustNewAuthJWT(verifier), cell.MustNewAuthJWT(verifier)},
 			wantErr: true,
 			errMsg:  "at most one",
 		},
@@ -126,7 +126,7 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 		b := New(
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
-				[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asmA)}),
+				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmA)}),
 		)
 		err := b.validateAuthPlanAssemblyMatch()
 		require.NoError(t, err)
@@ -137,7 +137,7 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 		b := New(
 			WithAssembly(asmA),
 			WithListener(cell.PrimaryListener, "127.0.0.1:0",
-				[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asmB)}),
+				[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmB)}),
 		)
 		err := b.validateAuthPlanAssemblyMatch()
 		require.Error(t, err)
@@ -238,21 +238,21 @@ func TestCheckJWTSingleton(t *testing.T) {
 		errMsg  string
 	}{
 		{"empty", nil, false, ""},
-		{"jwt_alone", []cell.ListenerAuth{cell.NewAuthJWT(verifier)}, false, ""},
-		{"jwt_from_assembly_alone", []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}, false, ""},
+		{"jwt_alone", []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, false, ""},
+		{"jwt_from_assembly_alone", []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, false, ""},
 		{
 			"jwt_not_first",
-			[]cell.ListenerAuth{cell.AuthMTLS{}, cell.NewAuthJWT(verifier)},
+			[]cell.ListenerAuth{cell.AuthMTLS{}, cell.MustNewAuthJWT(verifier)},
 			true, "sole/first",
 		},
 		{
 			"dual_jwt",
-			[]cell.ListenerAuth{cell.NewAuthJWT(verifier), cell.NewAuthJWT(verifier)},
+			[]cell.ListenerAuth{cell.MustNewAuthJWT(verifier), cell.MustNewAuthJWT(verifier)},
 			true, "at most one",
 		},
 		{
 			"jwt_and_jwt_from_assembly",
-			[]cell.ListenerAuth{cell.NewAuthJWT(verifier), cell.NewAuthJWTFromAssembly(asm)},
+			[]cell.ListenerAuth{cell.MustNewAuthJWT(verifier), cell.MustNewAuthJWTFromAssembly(asm)},
 			true, "at most one",
 		},
 	}

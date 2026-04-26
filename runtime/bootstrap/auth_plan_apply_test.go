@@ -75,7 +75,7 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 	ring := &applyStubHMACKeyring{}
 	asm := &applyStubAssemblyRef{id: "test-asm"}
 
-	resolvedPlan := cell.NewAuthJWTFromAssembly(asm)
+	resolvedPlan := cell.MustNewAuthJWTFromAssembly(asm)
 	resolvedPlan.SetResolved(verifier)
 
 	ref := cell.PrimaryListener
@@ -97,7 +97,7 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 		},
 		{
 			name:          "AuthJWT",
-			chain:         []cell.ListenerAuth{cell.NewAuthJWT(verifier)},
+			chain:         []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)},
 			wantMWCount:   0,
 			wantRouterOpt: true,
 			wantDescribe:  "jwt",
@@ -112,7 +112,7 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 		{
 			name: "AuthJWTFromAssembly_unresolved",
 			chain: []cell.ListenerAuth{
-				cell.NewAuthJWTFromAssembly(asm), // not SetResolved
+				cell.MustNewAuthJWTFromAssembly(asm), // not SetResolved
 			},
 			wantErr: true,
 		},
@@ -125,7 +125,7 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 		},
 		{
 			name:          "AuthServiceToken",
-			chain:         []cell.ListenerAuth{cell.NewAuthServiceToken(store, ring)},
+			chain:         []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)},
 			wantMWCount:   1,
 			wantRouterOpt: false,
 			wantDescribe:  "service-token",
@@ -134,7 +134,7 @@ func TestApplyListenerAuthChain_EachKind(t *testing.T) {
 			name: "MultiPlan_MTLSAndServiceToken",
 			chain: []cell.ListenerAuth{
 				cell.AuthMTLS{},
-				cell.NewAuthServiceToken(store, ring),
+				cell.MustNewAuthServiceToken(store, ring),
 			},
 			wantMWCount:   2,
 			wantRouterOpt: false,
@@ -258,7 +258,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		asm := &fakeAssemblyWithCells{id: "no-providers", cells: map[string]cell.Cell{}}
 		b := newMinimalBootstrap()
 		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
-			authChain: []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)},
+			authChain: []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
@@ -276,7 +276,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		b := newMinimalBootstrap()
 		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
-			authChain: []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)},
+			authChain: []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
@@ -293,7 +293,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		b := newMinimalBootstrap()
 		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
-			authChain: []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)},
+			authChain: []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.Error(t, err)
@@ -308,7 +308,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 				"cell-auth": newFakeAuthCell("cell-auth", verifier),
 			},
 		}
-		plan := cell.NewAuthJWTFromAssembly(asm)
+		plan := cell.MustNewAuthJWTFromAssembly(asm)
 		b := newMinimalBootstrap()
 		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
 			authChain: []cell.ListenerAuth{plan},
@@ -356,7 +356,7 @@ func TestExplicitAuthNone(t *testing.T) {
 		{"nil_chain", nil, false},
 		{"empty_chain", []cell.ListenerAuth{}, false},
 		{"auth_none_explicit", []cell.ListenerAuth{cell.AuthNone{}}, true},
-		{"jwt_plan", []cell.ListenerAuth{cell.NewAuthJWT(verifier)}, false},
+		{"jwt_plan", []cell.ListenerAuth{cell.MustNewAuthJWT(verifier)}, false},
 		{"mtls_plan", []cell.ListenerAuth{cell.AuthMTLS{}}, false},
 	}
 	for _, tc := range tests {

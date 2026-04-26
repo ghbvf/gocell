@@ -186,7 +186,7 @@ func main() {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
-		bootstrap.WithListener(cell.PrimaryListener, primaryAddr, []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
+		bootstrap.WithListener(cell.PrimaryListener, primaryAddr, []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
 		bootstrap.WithListener(cell.InternalListener, internalAddr, internalAuthChain),
 		// Dedicated health listener on a loopback port — keeps /healthz, /readyz,
 		// /metrics off the public port (8081) so probes and metric scrapers do

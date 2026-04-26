@@ -100,13 +100,25 @@ type AuthJWT struct {
 	Verifier IntentTokenVerifier
 }
 
-// NewAuthJWT constructs an AuthJWT plan. Panics if v is nil, following
-// bootstrap's fail-fast convention for programmer errors at composition time.
-func NewAuthJWT(v IntentTokenVerifier) AuthJWT {
+// NewAuthJWT constructs an AuthJWT plan. Returns an error when v is nil so the
+// caller can decide between fail-fast (use MustNewAuthJWT) and graceful refusal.
+func NewAuthJWT(v IntentTokenVerifier) (AuthJWT, error) {
 	if v == nil {
-		panic("cell: NewAuthJWT verifier must not be nil; use NewAuthJWTFromAssembly(asm) to discover from an authProvider cell")
+		return AuthJWT{}, fmt.Errorf("cell: NewAuthJWT verifier must not be nil; use NewAuthJWTFromAssembly(asm) to discover from an authProvider cell")
 	}
-	return AuthJWT{Verifier: v}
+	return AuthJWT{Verifier: v}, nil
+}
+
+// MustNewAuthJWT is the composition-root convenience wrapper around NewAuthJWT
+// that panics when the constructor returns an error. Suitable for static wiring
+// where verifier presence is a build-time invariant; callers that resolve the
+// verifier from runtime config should use NewAuthJWT directly.
+func MustNewAuthJWT(v IntentTokenVerifier) AuthJWT {
+	plan, err := NewAuthJWT(v)
+	if err != nil {
+		panic(err.Error())
+	}
+	return plan
 }
 
 func (AuthJWT) authPlanKind() AuthKind { return AuthKindJWT }
@@ -153,16 +165,27 @@ type AuthJWTFromAssembly struct {
 	resolved *atomic.Pointer[IntentTokenVerifier]
 }
 
-// NewAuthJWTFromAssembly constructs an AuthJWTFromAssembly plan.
-// Panics if asm is nil.
-func NewAuthJWTFromAssembly(asm AssemblyRef) AuthJWTFromAssembly {
+// NewAuthJWTFromAssembly constructs an AuthJWTFromAssembly plan. Returns an
+// error when asm is nil; use MustNewAuthJWTFromAssembly for fail-fast static
+// wiring.
+func NewAuthJWTFromAssembly(asm AssemblyRef) (AuthJWTFromAssembly, error) {
 	if asm == nil {
-		panic("cell: NewAuthJWTFromAssembly assembly must not be nil")
+		return AuthJWTFromAssembly{}, fmt.Errorf("cell: NewAuthJWTFromAssembly assembly must not be nil")
 	}
 	return AuthJWTFromAssembly{
 		Assembly: asm,
 		resolved: &atomic.Pointer[IntentTokenVerifier]{},
+	}, nil
+}
+
+// MustNewAuthJWTFromAssembly is the composition-root convenience wrapper around
+// NewAuthJWTFromAssembly that panics on misconfiguration.
+func MustNewAuthJWTFromAssembly(asm AssemblyRef) AuthJWTFromAssembly {
+	plan, err := NewAuthJWTFromAssembly(asm)
+	if err != nil {
+		panic(err.Error())
 	}
+	return plan
 }
 
 func (AuthJWTFromAssembly) authPlanKind() AuthKind { return AuthKindJWTFromAssembly }
@@ -239,25 +262,37 @@ type AuthServiceToken struct {
 	Ring HMACKeyring
 }
 
-// NewAuthServiceToken constructs an AuthServiceToken plan. Panics if either
-// argument is nil or if ring.Current() returns fewer than MinHMACKeyBytes bytes
-// — both are required for a properly guarded internal listener; a short HMAC
-// secret silently weakens MAC strength and is rejected at construction time
+// NewAuthServiceToken constructs an AuthServiceToken plan. Returns an error if
+// either argument is nil or if ring.Current() returns fewer than MinHMACKeyBytes
+// bytes — both are required for a properly guarded internal listener; a short
+// HMAC secret silently weakens MAC strength and is rejected at construction time
 // (NIST SP 800-107 §5.3.4 — HMAC key length must match underlying hash
 // security strength: 256-bit / 32-byte for HMAC-SHA-256).
-func NewAuthServiceToken(store NonceStore, ring HMACKeyring) AuthServiceToken {
+//
+// Use MustNewAuthServiceToken for fail-fast static wiring at composition root.
+func NewAuthServiceToken(store NonceStore, ring HMACKeyring) (AuthServiceToken, error) {
 	if store == nil {
-		panic("cell: NewAuthServiceToken store must not be nil")
+		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken store must not be nil")
 	}
 	if ring == nil {
-		panic("cell: NewAuthServiceToken ring must not be nil")
+		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken ring must not be nil")
 	}
 	if got := len(ring.Current()); got < MinHMACKeyBytes {
-		panic(fmt.Sprintf(
+		return AuthServiceToken{}, fmt.Errorf(
 			"cell: NewAuthServiceToken HMAC ring.Current() returned %d bytes, minimum is %d (NIST SP 800-107)",
-			got, MinHMACKeyBytes))
+			got, MinHMACKeyBytes)
 	}
-	return AuthServiceToken{Store: store, Ring: ring}
+	return AuthServiceToken{Store: store, Ring: ring}, nil
+}
+
+// MustNewAuthServiceToken is the composition-root convenience wrapper around
+// NewAuthServiceToken that panics on misconfiguration.
+func MustNewAuthServiceToken(store NonceStore, ring HMACKeyring) AuthServiceToken {
+	plan, err := NewAuthServiceToken(store, ring)
+	if err != nil {
+		panic(err.Error())
+	}
+	return plan
 }
 
 func (AuthServiceToken) authPlanKind() AuthKind { return AuthKindServiceToken }

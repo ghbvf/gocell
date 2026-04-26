@@ -111,7 +111,7 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
 		primaryLn.Addr().String(),
-		[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)},
+		[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		bootstrap.WithListenerNet(primaryLn),
 	))
 	opts = append(opts, extra...)

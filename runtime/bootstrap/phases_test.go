@@ -135,7 +135,7 @@ func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 	b := New(
 		WithAssembly(asmA),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asmB)}),
+			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asmB)}),
 	)
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
@@ -149,7 +149,7 @@ func TestPhase0_AcceptsAuthJWTFromAssemblyMatch(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0",
-			[]cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)}),
+			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
 	)
 	require.NoError(t, b.phase0ValidateOptions())
 }
@@ -241,7 +241,7 @@ func TestChainProtectsRoutes(t *testing.T) {
 		},
 		{
 			name:  "auth_jwt_protected",
-			chain: []cell.ListenerAuth{cell.NewAuthJWT(stubVerifier)},
+			chain: []cell.ListenerAuth{cell.MustNewAuthJWT(stubVerifier)},
 			want:  true,
 		},
 		{
@@ -251,7 +251,7 @@ func TestChainProtectsRoutes(t *testing.T) {
 		},
 		{
 			name:  "auth_service_token_protected",
-			chain: []cell.ListenerAuth{cell.NewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			chain: []cell.ListenerAuth{cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
 			want:  true,
 		},
 		{
@@ -264,7 +264,7 @@ func TestChainProtectsRoutes(t *testing.T) {
 			// Multi-protective chain (mTLS outer + HMAC inner) is the
 			// canonical InternalListener configuration.
 			name:  "mixed_mtls_plus_service_token_protected",
-			chain: []cell.ListenerAuth{cell.AuthMTLS{}, cell.NewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
+			chain: []cell.ListenerAuth{cell.AuthMTLS{}, cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})},
 			want:  true,
 		},
 	}
