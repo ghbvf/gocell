@@ -32,13 +32,32 @@ services:
       timeout: 2s
       retries: 30
 
+  migrate:
+    # One-shot migration runner. corebundle's VerifyExpectedVersion guard
+    # rejects a fresh database; this service applies all embedded postgres
+    # migrations after postgres becomes healthy and exits 0 so corebundle
+    # can start. Reuses the corebundle image so go modules / build context
+    # are downloaded once.
+    image: gocell-corebundle-e2e:latest
+    build:
+      context: ../..
+      dockerfile: tests/e2e/Dockerfile.corebundle
+    depends_on:
+      postgres: {condition: service_healthy}
+    environment:
+      GOCELL_PG_DSN: postgres://gocell:gocell_e2e@postgres:5432/gocell_e2e?sslmode=disable
+    entrypoint: ["/usr/local/bin/pg-migrate"]
+    restart: "no"
+
   corebundle:
+    image: gocell-corebundle-e2e:latest
     build:
       context: ../..
       dockerfile: tests/e2e/Dockerfile.corebundle
     depends_on:
       postgres: {condition: service_healthy}
       redis:    {condition: service_healthy}
+      migrate:  {condition: service_completed_successfully}
     environment:
       GOCELL_ADAPTER_MODE: real
       GOCELL_CELL_ADAPTER_MODE: postgres

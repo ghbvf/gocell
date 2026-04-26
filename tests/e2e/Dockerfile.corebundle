@@ -11,7 +11,8 @@ RUN apk add --no-cache git
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle
+RUN CGO_ENABLED=0 go build -o /out/corebundle ./cmd/corebundle \
+    && CGO_ENABLED=0 go build -o /out/pg-migrate ./tools/pg-migrate
 
 FROM alpine:3.20
 RUN apk add --no-cache ca-certificates curl openssl
@@ -21,6 +22,7 @@ RUN mkdir -p /etc/gocell \
     && chmod 600 /etc/gocell/jwt-private.pem \
     && chmod 644 /etc/gocell/jwt-public.pem
 COPY --from=build /out/corebundle /usr/local/bin/corebundle
+COPY --from=build /out/pg-migrate /usr/local/bin/pg-migrate
 RUN printf '%s\n' \
     '#!/bin/sh' \
     'set -eu' \

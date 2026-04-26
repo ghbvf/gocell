@@ -15,7 +15,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/ghbvf/gocell/tools/nogo/e2egate"
+	"github.com/ghbvf/gocell/tools/e2egate"
 )
 
 func main() {

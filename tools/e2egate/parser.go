@@ -134,13 +134,25 @@ func (r *Result) evaluate() {
 	sort.Strings(names)
 	for _, name := range names {
 		stat := r.Packages[name]
+		// Build failure: package-level "fail" with no test events.
 		if stat.Action == "fail" && stat.Executed == 0 && stat.Skipped == 0 {
 			stat.BuildFailed = true
 			r.Reasons = append(r.Reasons,
 				fmt.Sprintf("package %q build failed (no tests ran)", name))
 			continue
 		}
-		if stat.Executed == 0 && (stat.Skipped > 0 || stat.Action == "skip") {
+		// "no test files" — package-level skip with no test events. This is
+		// emitted for helper packages that legitimately contain no _test.go
+		// files; never a per-package gate failure on its own. The global
+		// TotalExecuted == 0 rule below still catches a run where every
+		// package matches this case.
+		if stat.Action == "skip" && stat.Executed == 0 && stat.Skipped == 0 {
+			continue
+		}
+		// Conditional all-skip: package declared tests but every one took the
+		// require.Docker / require.PG / require.RMQ skip path. This is the
+		// "false-green CI" signature the gate exists to catch.
+		if stat.Executed == 0 && stat.Skipped > 0 {
 			r.Reasons = append(r.Reasons,
 				fmt.Sprintf("package %q all-skipped (%d skipped, 0 executed)", name, stat.Skipped))
 		}

@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/ghbvf/gocell/tools/nogo/e2egate"
+	"github.com/ghbvf/gocell/tools/e2egate"
 )
 
 // Test fixtures: each block represents the output of `go test -json`. Lines
@@ -63,6 +63,17 @@ const eventsMultiPackageMixed = `{"Action":"run","Package":"pkg/a","Test":"TestA
 {"Action":"run","Package":"pkg/b","Test":"TestB"}
 {"Action":"fail","Package":"pkg/b","Test":"TestB","Elapsed":0.2}
 {"Action":"fail","Package":"pkg/b","Elapsed":0.2}
+`
+
+// eventsHelperPackagePlusRealTests mirrors `go test ./tests/e2e/...` when the
+// expansion includes both a real test package and a helper package without any
+// _test.go files (e.g., tests/e2e/internal/require). The helper emits a
+// package-level skip with no test events; the real package executes tests.
+// The gate must accept this — only an *all-packages-no-execution* run fails.
+const eventsHelperPackagePlusRealTests = `{"Action":"skip","Package":"pkg/helper","Output":"?   pkg/helper   [no test files]\n"}
+{"Action":"run","Package":"pkg/real","Test":"TestReal"}
+{"Action":"pass","Package":"pkg/real","Test":"TestReal","Elapsed":0.1}
+{"Action":"pass","Package":"pkg/real","Elapsed":0.1}
 `
 
 // eventsSubTests has one parent test with three t.Run children; counting both
@@ -140,6 +151,21 @@ func TestParse_EmptyStdin_GateFails(t *testing.T) {
 func TestParse_InvalidJSON_ReturnsError(t *testing.T) {
 	_, err := e2egate.Parse(strings.NewReader(eventsInvalidJSON))
 	require.Error(t, err, "Parse must surface JSON decoder errors so the caller exits non-zero")
+}
+
+func TestParse_HelperPackageWithoutTests_GatePasses(t *testing.T) {
+	// Real test package executed; helper had no _test.go files. The gate
+	// must NOT fail just because the helper emitted a package-level skip.
+	res, err := e2egate.Parse(strings.NewReader(eventsHelperPackagePlusRealTests))
+	require.NoError(t, err)
+	assert.False(t, res.Failed(),
+		"helper packages without test files must not fail the gate; reasons=%v", res.Reasons)
+	assert.Equal(t, 1, res.TotalExecuted)
+	require.Contains(t, res.Packages, "pkg/helper")
+	require.Contains(t, res.Packages, "pkg/real")
+	assert.Equal(t, "skip", res.Packages["pkg/helper"].Action)
+	assert.Equal(t, 0, res.Packages["pkg/helper"].Executed)
+	assert.Equal(t, 0, res.Packages["pkg/helper"].Skipped)
 }
 
 func TestParse_SubTests_CountedOncePerParent(t *testing.T) {
