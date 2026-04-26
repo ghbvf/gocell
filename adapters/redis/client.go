@@ -10,6 +10,7 @@ import (
 	"github.com/ghbvf/gocell/adapters/adapterutil"
 	"github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/secutil"
 	goredis "github.com/redis/go-redis/v9"
 )
 
@@ -110,6 +111,20 @@ func (c *Config) defaults() {
 	}
 }
 
+// validateEndpointTLS enforces SEC-FAIL-CLOSED: all addresses must use a
+// TLS-secured scheme or be loopback (127.0.0.1, ::1, localhost) for dev/CI.
+func (c *Config) validateEndpointTLS() error {
+	if c.Mode == ModeStandalone {
+		return secutil.ValidateTLSEndpoint(c.Addr)
+	}
+	for _, addr := range c.SentinelAddrs {
+		if err := secutil.ValidateTLSEndpoint(addr); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // cmdable is an internal interface matching the subset of redis.Cmdable
 // used by this package. It enables unit testing with mock implementations.
 type cmdable interface {
@@ -164,6 +179,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	if cfg.Mode == ModeSentinel && cfg.SentinelMaster == "" {
 		return nil, errcode.New(ErrAdapterRedisConnect,
 			"redis: Config.SentinelMaster is required for sentinel mode")
+	}
+
+	// SEC-FAIL-CLOSED: validate TLS before any network dial.
+	if err := cfg.validateEndpointTLS(); err != nil {
+		return nil, err
 	}
 
 	var (

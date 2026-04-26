@@ -21,6 +21,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/worker"
 	"github.com/ghbvf/gocell/pkg/aeadutil"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
 // reauthBackoffInitial is the first backoff interval for re-authentication retries.
@@ -757,6 +758,11 @@ func NewTransitKeyProviderFromEnv(realMode bool) (*TransitKeyProvider, error) {
 	if addr == "" {
 		return nil, errcode.New(errcode.ErrVaultAuthFailed,
 			"vault-transit: VAULT_ADDR is required (known values: Vault server address, e.g. https://vault.example.internal:8200)")
+	}
+	// SEC-FAIL-CLOSED: reject non-TLS Vault addresses before any SDK or network
+	// operation. Loopback addresses are exempt for dev/CI testcontainer use.
+	if err := secutil.ValidateTLSEndpoint(addr); err != nil {
+		return nil, err
 	}
 	cfg := vaultapi.DefaultConfig()
 	cfg.Address = addr

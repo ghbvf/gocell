@@ -52,7 +52,10 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	}, 2*time.Second, time.Millisecond)
 
 	mux := http.NewServeMux()
-	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{}))
+	// Use explicit AllowedOrigins; empty origins will be rejected after SEC-FAIL-CLOSED-04.
+	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"*"},
+	}))
 
 	server := httptest.NewServer(mux)
 
@@ -338,7 +341,10 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 	hub := rtws.NewHub(cfg, nil)
 	// Hub intentionally NOT started.
 
-	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{})
+	// AllowedOrigins is required post-SEC-FAIL-CLOSED-04; use a valid value.
+	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
+	})
 
 	// Use ResponseRecorder — no TCP needed, no sandbox issue.
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
@@ -346,4 +352,66 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+}
+
+// TestUpgradeHandler_RejectsEmptyOrigins verifies that constructing an
+// UpgradeConfig with nil AllowedOrigins either panics at construction time
+// OR causes the handler to return 500 (fail-fast) on the first request,
+// rather than silently enabling InsecureSkipVerify=true for all clients.
+//
+// Positive case: AllowedOrigins: []string{"example.com"} must not panic/fail.
+//
+// TDD phase-1 red-light: the current UpgradeHandler silently sets
+// InsecureSkipVerify=true for empty origins — it does NOT panic and does NOT
+// return 500. The hub-not-running 503 path executes first (hub is not started),
+// producing 503 instead of 500. This test FAILS in phase-1 because it strictly
+// asserts panic or 500, and 503 (current behaviour) is explicitly rejected.
+func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
+	cfg := rtws.DefaultHubConfig()
+
+	t.Run("empty origins — expect construction panic or first-request 500", func(t *testing.T) {
+		hub := rtws.NewHub(cfg, nil)
+
+		// Phase-2 may implement fail-fast as a panic in UpgradeHandler constructor.
+		var handler http.Handler
+		panicked := func() (didPanic bool) {
+			defer func() {
+				if r := recover(); r != nil {
+					didPanic = true
+				}
+			}()
+			handler = adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{AllowedOrigins: nil})
+			return false
+		}()
+
+		if panicked {
+			// Good: construction fail-fast via panic (phase-2 path A).
+			return
+		}
+
+		// Handler was constructed without panic: it MUST return 500 (fail-fast) on
+		// the first request. A 503 (hub not running) is NOT acceptable — origin
+		// validation must fire BEFORE the hub-running check.
+		req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+
+		// Phase-1 current: returns 503 (hub not running, no origin check) → test FAILS.
+		// Phase-2 expectation: returns 500 (origin validation fires first) → test PASSES.
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("UpgradeHandler with nil AllowedOrigins must return 500 (fail-fast); "+
+				"got %d (if 503: origin validation is not running before hub check — phase-1 red-light)",
+				rec.Code)
+		}
+	})
+
+	t.Run("explicit allowed origins — ok", func(t *testing.T) {
+		hub := rtws.NewHub(cfg, nil)
+
+		// Must not panic; construction with valid origins must succeed.
+		handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+			AllowedOrigins: []string{"example.com"},
+		})
+		require.NotNil(t, handler)
+	})
 }

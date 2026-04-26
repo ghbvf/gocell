@@ -16,11 +16,16 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestInternalGuardFromEnv_DevMode_MissingSecret_ReturnsNilGuard(t *testing.T) {
+// TestInternalGuardFromEnv_DevMode_MissingSecret_ReturnsError verifies that
+// dev mode (empty adapterMode) now requires GOCELL_SERVICE_SECRET — the
+// previous behaviour of returning (nil, nil) to silently disable the guard in
+// non-real modes has been removed by the SEC-FAIL-CLOSED change.
+func TestInternalGuardFromEnv_DevMode_MissingSecret_ReturnsError(t *testing.T) {
 	t.Setenv("GOCELL_SERVICE_SECRET", "")
-	guard, err := internalGuardFromEnv("", nil) // dev mode
-	require.NoError(t, err)
-	assert.Nil(t, guard, "dev mode with empty secret must return nil guard (guard disabled)")
+	_, err := internalGuardFromEnv("", nil) // dev mode
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
+		"all modes must fail fast when service secret is unset")
 }
 
 func TestInternalGuardFromEnv_RealMode_MissingSecret_Error(t *testing.T) {
@@ -165,4 +170,40 @@ func TestInternalGuardFromEnv_NonceStoreTTL_UsesServiceTokenNonceTTL(t *testing.
 	require.True(t, ok, "production guard must use *InMemoryNonceStore by default")
 	assert.Equal(t, auth.ServiceTokenNonceTTL, store.MaxAge(),
 		"nonce TTL must use the centralized service-token retention constant")
+}
+
+// TestInternalGuardFromEnv_RequiresSecretInAllModes verifies that
+// internalGuardFromEnv returns an error when GOCELL_SERVICE_SECRET is empty,
+// regardless of the adapterMode parameter. This is the SEC-FAIL-CLOSED fix for
+// the /internal/v1/* guard: the previous implementation returned (nil, nil) in
+// non-real modes, silently exposing the control plane without any auth.
+//
+// TDD phase-1 red-light: the current implementation returns (nil, nil) for
+// non-real modes with missing secret. These cases will FAIL until phase-2
+// removes the isRealMode branch and requires the secret in all modes.
+func TestInternalGuardFromEnv_RequiresSecretInAllModes(t *testing.T) {
+	// No t.Parallel() here: subtests call t.Setenv which requires sequential execution.
+
+	modes := []string{"", "memory", "postgres", "real"}
+
+	for _, mode := range modes {
+		mode := mode
+		t.Run("mode="+mode, func(t *testing.T) {
+			// No t.Parallel(): t.Setenv must run sequentially (Go testing constraint).
+			t.Setenv("GOCELL_SERVICE_SECRET", "")
+
+			guard, err := internalGuardFromEnv(mode, nil)
+
+			// Phase-2 expectation: error in ALL modes when secret is empty.
+			// Phase-1 current: non-real modes return (nil, nil) → test FAILS.
+			if err == nil {
+				t.Errorf("internalGuardFromEnv(mode=%q): expected error for empty GOCELL_SERVICE_SECRET, got nil (guard=%v)",
+					mode, guard)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "GOCELL_SERVICE_SECRET",
+				"error must name GOCELL_SERVICE_SECRET env var")
+		})
+	}
 }

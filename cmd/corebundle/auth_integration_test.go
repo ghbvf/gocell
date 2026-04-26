@@ -106,7 +106,7 @@ func TestAuthWiring_RealAssembly_ProtectedRoutes401(t *testing.T) {
 	app := bootstrap.New(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}, bootstrap.WithListenerNet(ln)),
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", nil, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),
 	)
@@ -531,10 +531,10 @@ func TestAuthWiring_HealthListener_PrimaryDoesNotServeHealthz(t *testing.T) {
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 			bootstrap.WithListenerNet(primaryLn)),
-		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), nil,
+		bootstrap.WithListener(cell.InternalListener, internalLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}},
 			bootstrap.WithListenerNet(internalLn)),
 		// HealthListener declared explicitly — /healthz, /readyz move here.
-		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), nil,
+		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}},
 			bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithPublisher(eb), bootstrap.WithSubscriber(eb),
 		bootstrap.WithShutdownTimeout(2*time.Second),

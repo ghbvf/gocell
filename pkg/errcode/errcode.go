@@ -378,6 +378,18 @@ const (
 	// distinguish "forgot to configure" from "configured with the sample".
 	ErrControlplaneVerboseTokenSample Code = "ERR_CONTROLPLANE_VERBOSE_TOKEN_SAMPLE"
 
+	// ErrAdapterEndpointNotTLS signals that a remote adapter endpoint (Redis,
+	// Vault, S3, etc.) was configured with a non-TLS scheme and is not a loopback
+	// address. Adapters call secutil.ValidateTLSEndpoint at construction time and
+	// fail-closed with this code so that plaintext connections to production
+	// infrastructure are rejected at startup rather than at first use.
+	//
+	// Loopback addresses (127.0.0.1, ::1, localhost) are exempt to allow
+	// testcontainer / dev-CI workflows without TLS termination.
+	//
+	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
+	ErrAdapterEndpointNotTLS Code = "ERR_ADAPTER_ENDPOINT_NOT_TLS"
+
 	// ErrDistlockTimeout is returned by Locker.Acquire when the requested key is
 	// already held by another holder and the lock cannot be granted immediately.
 	// Maps to HTTP 409 Conflict at the API boundary.
@@ -426,6 +438,38 @@ const (
 	// ref: RFC 9110 §15.6.5 — 504 Gateway Timeout
 	// ref: kratos transport/http/status — Canceled→499, DeadlineExceeded→504
 	ErrServerTimeout Code = "ERR_SERVER_TIMEOUT"
+
+	// ErrListenerAuthChainMissing signals that a bootstrap listener was declared
+	// with a nil authChain. Bootstrap phase0 fail-fasts with this code so that
+	// listeners without explicit authentication intent are rejected at startup
+	// rather than silently accepting all requests. Operators must pass an
+	// explicit authChain — use []cell.ListenerAuth{cell.AuthNone{}} for
+	// listeners that genuinely require no authentication (e.g. HealthListener
+	// behind a Kubernetes probe path).
+	//
+	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
+	ErrListenerAuthChainMissing Code = "ERR_LISTENER_AUTH_CHAIN_MISSING"
+
+	// ErrReadyzVerboseUnconfigured signals that /readyz?verbose was requested
+	// but neither a verbose token nor the explicit disabled flag has been
+	// configured. This fail-closed default forces operators to make an explicit
+	// choice — configure a token (WithReadyzVerboseToken) or disable the verbose
+	// endpoint (WithReadyzVerboseDisabled) — rather than leaking internal health
+	// details to unauthenticated callers by default.
+	//
+	// Maps to HTTP 401 Unauthorized at the health handler layer.
+	//
+	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
+	ErrReadyzVerboseUnconfigured Code = "ERR_READYZ_VERBOSE_UNCONFIGURED"
+
+	// ErrWebsocketOriginsMissing signals that an UpgradeHandler was constructed
+	// with an empty AllowedOrigins list. The handler rejects construction
+	// fail-fast rather than silently enabling InsecureSkipVerify=true, which
+	// would accept connections from any origin. Operators must supply at least
+	// one origin pattern.
+	//
+	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
+	ErrWebsocketOriginsMissing Code = "ERR_WEBSOCKET_ORIGINS_MISSING"
 )
 
 // Error is a structured error that carries a machine-readable Code, a

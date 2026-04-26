@@ -120,7 +120,7 @@ func defaultRuntimeOptions(
 	// Production deployments always set GOCELL_HTTP_HEALTH_ADDR.
 	// Tests inject their own HealthListener via extra bootstrap.WithListener options.
 	if shared.HealthHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, nil))
+		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []cell.ListenerAuth{cell.AuthNone{}}))
 	}
 	if shared.RedisClient != nil {
 		opts = append(opts,

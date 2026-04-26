@@ -1664,3 +1664,79 @@ func TestResolveStartupTimeout_EnvOverride(t *testing.T) {
 		})
 	}
 }
+
+// TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr verifies that
+// NewTransitKeyProviderFromEnv rejects non-TLS VAULT_ADDR values for remote
+// hosts once phase-2 wires secutil.ValidateTLSEndpoint. During TDD phase-1
+// these rejection cases will FAIL because the stub returns nil for all inputs,
+// meaning the function proceeds past TLS check and errors at auth setup instead
+// of at the expected TLS validation stage.
+//
+// Loopback exception: http://127.0.0.1:8200 is accepted by TLS validation
+// (no network I/O during validation); the function may still fail at auth
+// setup but must NOT fail with a TLS validation error.
+func TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr(t *testing.T) {
+	tests := []struct {
+		name       string
+		addr       string
+		wantTLSErr bool // expect error specifically from TLS validation
+	}{
+		{
+			name:       "http remote — reject (TLS required)",
+			addr:       "http://prod.vault.io:8200",
+			wantTLSErr: true,
+		},
+		{
+			name:       "https remote — ok (TLS validation passes)",
+			addr:       "https://prod.vault.io:8200",
+			wantTLSErr: false,
+		},
+		{
+			name:       "http loopback — ok (loopback exception)",
+			addr:       "http://127.0.0.1:8200",
+			wantTLSErr: false,
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			// Set VAULT_ADDR; VAULT_AUTH_METHOD intentionally left unset so the
+			// function fails at auth setup for non-TLS-rejected cases. TLS validation
+			// must happen BEFORE auth setup (fail-fast ordering constraint).
+			t.Setenv("VAULT_ADDR", tc.addr)
+			t.Setenv("VAULT_AUTH_METHOD", "") // unset to ensure auth setup fails fast
+
+			_, err := NewTransitKeyProviderFromEnv(false)
+			if tc.wantTLSErr {
+				// Phase-1: the stub does NOT reject http://remote → error is from missing
+				// VAULT_AUTH_METHOD, not TLS. Test will FAIL because error lacks TLS hint.
+				// Phase-2: ValidateTLSEndpoint rejects before auth setup → error has TLS hint.
+				if err == nil {
+					t.Errorf("NewTransitKeyProviderFromEnv(%q): expected TLS error, got nil", tc.addr)
+					return
+				}
+				// TODO(phase2): tighten to errors.Is(err, errcode.ErrAdapterEndpointNotTLS)
+				if !errContains(err, "TLS") && !errContains(err, "tls") && !errContains(err, "http://") {
+					t.Errorf("NewTransitKeyProviderFromEnv(%q): error %q does not indicate TLS rejection",
+						tc.addr, err.Error())
+				}
+			} else {
+				// For ok cases: TLS validation must not produce a TLS-specific error.
+				// The function will error at auth setup (missing VAULT_AUTH_METHOD) — that
+				// is acceptable. Fail only if a TLS validation error is produced.
+				if err != nil && (errContains(err, "TLS") || errContains(err, "not tls")) {
+					t.Errorf("NewTransitKeyProviderFromEnv(%q): got unexpected TLS error: %v", tc.addr, err)
+				}
+			}
+		})
+	}
+}
+
+// errContains reports whether err.Error() contains sub.
+func errContains(err error, sub string) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), sub)
+}

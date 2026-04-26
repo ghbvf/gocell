@@ -186,10 +186,20 @@ var codeToStatus = map[Code]int{
 	// an X-Readyz-Token bearer check (PR-A35); a mismatched or missing
 	// header is treated exactly like any other bearer-token failure.
 	ErrReadyzVerboseDenied: http.StatusUnauthorized,
+	// ErrReadyzVerboseUnconfigured is a 401 — verbose requested without a
+	// configured token AND without explicit Disabled is fail-closed (PR-MODE-1).
+	ErrReadyzVerboseUnconfigured: http.StatusUnauthorized,
 	// ErrReadyzUnhealthy / ErrReadyzShuttingDown are 503 so load balancers
 	// and kubelet readinessProbes mark the pod unavailable.
 	ErrReadyzUnhealthy:    http.StatusServiceUnavailable,
 	ErrReadyzShuttingDown: http.StatusServiceUnavailable,
+	// SEC-FAIL-CLOSED startup misconfiguration (PR-MODE-1): adapter endpoint
+	// not TLS, listener authChain missing, websocket origins missing — all
+	// fail-fast at boot, never reach HTTP in practice. 500 is the conservative
+	// choice if one ever escapes (operator misconfiguration, not client bug).
+	ErrAdapterEndpointNotTLS:    http.StatusInternalServerError,
+	ErrListenerAuthChainMissing: http.StatusInternalServerError,
+	ErrWebsocketOriginsMissing:  http.StatusInternalServerError,
 
 	// --- Auth replay / nonce-store codes ---
 	// ErrAuthReplayDetected is a security signal: the nonce has already been

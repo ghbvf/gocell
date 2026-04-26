@@ -100,6 +100,9 @@ func TestRun_DevMode_StartsAndCancels(t *testing.T) {
 	// PR-A35: verbose endpoint is now gated in every mode; this dev-mode
 	// smoke test explicitly waives the verbose debug channel.
 	t.Setenv("GOCELL_READYZ_VERBOSE_DISABLED", "1")
+	// SEC-FAIL-CLOSED: GOCELL_SERVICE_SECRET is now required in all adapter
+	// modes (including dev). Provide a fresh test secret to satisfy the guard.
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — run() should exit cleanly
@@ -374,6 +377,9 @@ func TestBootstrap_DemoModeUsesInMemory(t *testing.T) {
 	// PR-A35: verbose endpoint is now gated in every mode; this smoke test
 	// does not exercise /readyz?verbose so it explicitly waives the endpoint.
 	t.Setenv("GOCELL_READYZ_VERBOSE_DISABLED", "1")
+	// SEC-FAIL-CLOSED: GOCELL_SERVICE_SECRET is now required in all adapter
+	// modes (including dev/in-memory). Provide a fresh test secret.
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately — we only need Init(), not server start

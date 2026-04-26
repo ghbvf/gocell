@@ -528,21 +528,17 @@ func runOneProbe(ctx context.Context, fn Checker, deadline time.Duration) (pr Pr
 }
 
 // verboseDecision determines whether the request renders the verbose body.
-// PR-258 round-3: token gating is exclusively the responsibility of
-// bootstrap.PolicyVerboseToken middleware on the readyz route group — the
-// handler-layer gate is opt-in defense-in-depth via SetVerboseToken (set by
-// bootstrap.WithReadyzVerboseToken). When no handler-layer token is
-// configured, the handler is permissive: ?verbose=true → render verbose body,
-// ?verbose=false / absent → plain body. The "denied" return is retained for
-// signature compatibility with PR-A35 callers; it is only set when an
-// explicit handler-layer token is configured AND the submitted header
-// mismatches.
+// SEC-FAIL-CLOSED (PR-MODE-1): the default is now fail-closed. When no token
+// is configured and verbose is not explicitly disabled, the handler denies the
+// verbose request with a 401 (denied=true). Operators must make an explicit
+// choice: configure a token (SetVerboseToken / WithReadyzVerboseToken) or
+// disable the endpoint (SetVerboseDisabled / WithReadyzVerboseDisabled).
 //
 // Outcomes:
 //
 //	(verbose=false, denied=false) — non-verbose query, or WithVerboseDisabled set
-//	(verbose=true,  denied=false) — verbose body rendered
-//	(false,         denied=true)  — handler-layer token configured + mismatch → 401
+//	(verbose=true,  denied=false) — verbose body rendered (token configured + matched)
+//	(false,         denied=true)  — no token configured, or token mismatch → 401
 //
 // See docs/ops/readyz.md for the full state table.
 func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
@@ -558,14 +554,20 @@ func (h *Handler) verboseDecision(r *http.Request) (verbose, denied bool) {
 			slog.String("remote_addr", r.RemoteAddr))
 		return false, false
 	}
-	if token != "" {
-		submitted := sha256.Sum256([]byte(r.Header.Get(VerboseTokenHeader)))
-		configured := sha256.Sum256([]byte(token))
-		if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
-			slog.Warn("readyz: verbose token mismatch at handler layer; denying",
-				slog.String("remote_addr", r.RemoteAddr))
-			return false, true
-		}
+	// SEC-FAIL-CLOSED: no token configured → deny. Operators must explicitly
+	// configure a token or disable the verbose endpoint. Silently rendering
+	// verbose output when token="" leaks internal health details.
+	if token == "" {
+		slog.Warn("readyz: verbose requested but no token configured; denying",
+			slog.String("remote_addr", r.RemoteAddr))
+		return false, true
+	}
+	submitted := sha256.Sum256([]byte(r.Header.Get(VerboseTokenHeader)))
+	configured := sha256.Sum256([]byte(token))
+	if subtle.ConstantTimeCompare(submitted[:], configured[:]) != 1 {
+		slog.Warn("readyz: verbose token mismatch at handler layer; denying",
+			slog.String("remote_addr", r.RemoteAddr))
+		return false, true
 	}
 	return true, false
 }

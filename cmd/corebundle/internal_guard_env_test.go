@@ -1,8 +1,9 @@
-// F06: table-driven tests for internalGuardFromEnv slog.Warn emission.
+// F06: table-driven tests for internalGuardFromEnv behaviour.
 //
-// Verifies that the "controlplane guard disabled" warning is emitted exactly
-// once in dev mode with an empty secret, and NOT emitted in other branches
-// (dev+secret, real+no-secret-returns-error, real+secret-installs-guard).
+// SEC-FAIL-CLOSED: the previous "dev mode silent bypass" (return nil, nil with
+// a slog.Warn when secret is empty in non-real modes) has been removed.
+// GOCELL_SERVICE_SECRET is now required in ALL adapter modes.
+// This file verifies the new uniform error behaviour.
 package main
 
 import (
@@ -60,11 +61,13 @@ func TestInternalGuardFromEnv_WarnLogging_TableDriven(t *testing.T) {
 		wantGuard   bool
 	}{
 		{
+			// SEC-FAIL-CLOSED: dev mode now also requires the secret.
+			// Previously returned (nil, nil) with a slog.Warn; now returns an error.
 			name:        "dev_no_secret",
 			adapterMode: "",
 			secret:      "",
-			wantWarnCnt: 1,
-			wantErr:     false,
+			wantWarnCnt: 0,
+			wantErr:     true,
 			wantGuard:   false,
 		},
 		{
@@ -127,6 +130,13 @@ func TestInternalGuardFromEnv_WarnLogging_TableDriven(t *testing.T) {
 
 			// Deep assertions for specific cases.
 			switch tc.name {
+			case "dev_no_secret":
+				// SEC-FAIL-CLOSED: dev mode now also returns ERR_CONTROLPLANE_SERVICE_SECRET_MISSING.
+				var ec *errcode.Error
+				require.ErrorAs(t, err, &ec,
+					"dev_no_secret: error must be an *errcode.Error")
+				assert.Equal(t, errcode.ErrControlplaneServiceSecretMissing, ec.Code,
+					"dev_no_secret: error code must be ERR_CONTROLPLANE_SERVICE_SECRET_MISSING")
 			case "real_no_secret":
 				// internalGuardFromEnv must return ERR_CONTROLPLANE_SERVICE_SECRET_MISSING
 				// when GOCELL_SERVICE_SECRET is empty in adapter mode "real".

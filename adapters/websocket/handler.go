@@ -14,28 +14,41 @@ import (
 // UpgradeConfig configures the WebSocket upgrade handler.
 type UpgradeConfig struct {
 	// AllowedOrigins is a list of allowed origin patterns for the upgrade.
-	// An empty list allows all origins (insecure, for development only).
+	// Must be non-empty — the handler is fail-closed and panics at construction
+	// time if AllowedOrigins is nil or empty. Use []string{"*"} only in
+	// development environments where origin checking is intentionally disabled.
 	AllowedOrigins []string
 }
 
+// Validate checks that the UpgradeConfig is well-formed. Returns an errcode
+// error if AllowedOrigins is empty so callers can distinguish configuration
+// errors from runtime errors.
+func (c UpgradeConfig) Validate() error {
+	if len(c.AllowedOrigins) == 0 {
+		return errcode.New(errcode.ErrWebsocketOriginsMissing,
+			"websocket: AllowedOrigins is required (fail-closed; use [\"*\"] only in dev)")
+	}
+	return nil
+}
+
 // UpgradeHandler returns an http.Handler that upgrades HTTP connections to
-// WebSocket and registers them with the Hub. If the Hub is not running,
-// the handler returns 503 Service Unavailable without performing the
-// WebSocket handshake.
+// WebSocket and registers them with the Hub. Panics at construction time if
+// cfg.AllowedOrigins is empty — SEC-FAIL-CLOSED: the previous behaviour of
+// silently setting InsecureSkipVerify=true for empty origins is removed.
+// Callers at the composition root will observe the panic immediately at
+// startup rather than silently accepting connections from all origins.
 func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
+	if err := cfg.Validate(); err != nil {
+		panic(err.Error())
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hub.IsRunning() {
 			http.Error(w, "websocket hub not ready", http.StatusServiceUnavailable)
 			return
 		}
 
-		opts := &websocket.AcceptOptions{}
-
-		if len(cfg.AllowedOrigins) > 0 {
-			opts.OriginPatterns = cfg.AllowedOrigins
-		} else {
-			opts.InsecureSkipVerify = true
-			slog.Warn("websocket: InsecureSkipVerify enabled, all origins accepted — not suitable for production")
+		opts := &websocket.AcceptOptions{
+			OriginPatterns: cfg.AllowedOrigins,
 		}
 
 		wsConn, err := websocket.Accept(w, r, opts)
