@@ -110,6 +110,15 @@ func validProject() *metadata.ProjectMeta {
 				Endpoints: metadata.EndpointsMeta{
 					Server:  "accesscore",
 					Clients: []string{"auditcore"},
+					// FMT-13 now requires endpoints.http on all HTTP contracts.
+					// Use NoContent:true / 204 so no response schema file is needed,
+					// keeping validProject self-contained (no filesystem deps).
+					HTTP: &metadata.HTTPTransportMeta{
+						Method:        "DELETE",
+						Path:          "/api/v1/access/sessions/login",
+						SuccessStatus: 204,
+						NoContent:     true,
+					},
 				},
 				Dir:  "contracts/http/auth/login/v1",
 				File: "contracts/http/auth/login/v1/contract.yaml",
@@ -2967,10 +2976,15 @@ func TestFMT13(t *testing.T) {
 		wantField    string
 	}{
 		{
-			name:         "legacy http contract without transport metadata is allowed",
-			setup:        func(_ *metadata.ProjectMeta) {},
-			wantErrors:   0,
+			// FMT-13 now requires endpoints.http on all HTTP contracts (FMT-13 必填化).
+			// Remove the endpoints.http from the contract to trigger the error.
+			name: "http contract without transport metadata is now required (FMT-13必填化)",
+			setup: func(pm *metadata.ProjectMeta) {
+				pm.Contracts["http.auth.login.v1"].Endpoints.HTTP = nil
+			},
+			wantErrors:   1,
 			wantWarnings: 0,
+			wantField:    "endpoints.http",
 		},
 		{
 			name: "complete migrated http contract is allowed",

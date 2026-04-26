@@ -156,6 +156,7 @@ func (v *Validator) rules() []func() []ValidationResult {
 		v.validateFMTContractDirIDMatch01,
 		v.validateStatusBoardStateEnum01,
 		v.validateContractDeprecatedCleanup01,
+		v.validateCONTRACTCONSISTENCYEMIT01,
 	}
 }
 
