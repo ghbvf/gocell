@@ -443,6 +443,25 @@ func TestRegisterChecker_DuplicateReturnsError(t *testing.T) {
 	assert.Contains(t, err.Error(), `duplicate checker name "db"`)
 }
 
+func TestRegisterChecker_NilCheckerReturnsError(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
+	h := New(asm)
+
+	err := h.RegisterChecker("db", nil)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `nil checker for "db"`)
+}
+
+func TestMustRegisterChecker_PanicsOnError(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
+	h := New(asm)
+
+	require.Panics(t, func() {
+		h.MustRegisterChecker("db", nil)
+	})
+}
+
 func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Start(context.Background()))
