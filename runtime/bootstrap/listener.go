@@ -62,11 +62,11 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 // authChain is the ordered slice of ListenerAuth plans applied uniformly to
 // every route mounted on this listener. RouteGroups inherit this chain — there
 // is no group-level override (PR269 round-3: cells needing a different scheme
-// must declare their routes on a different listener). A nil or empty chain
-// means no listener-level auth middleware; each route must then declare its
-// own auth-related guards via auth.Mount (Public, PasswordResetExempt, etc.).
-// Pass cell.AuthNone{} for an explicit no-auth declaration (e.g. HealthListener
-// behind a Kubernetes probe path).
+// must declare their routes on a different listener). Listener auth is explicit:
+// a nil or empty chain is a phase0 error. Pass
+// []cell.ListenerAuth{cell.AuthNone{}} for a deliberate no-auth listener
+// (e.g. HealthListener behind a Kubernetes probe path). Route-specific policy
+// and exemptions still live on auth.Mount.
 //
 // authChain semantics: when chain contains both AuthJWT and non-JWT plans,
 // AuthJWT must be at position 0 (validated at phase0). Runtime execution

@@ -32,7 +32,7 @@ var businessMethods = map[string]bool{
 // (IsInternal()), or whitelisted are auto-exempted.
 //
 // Returns an error listing all uncovered routes. Intended to be called by
-// FinalizeAuth after all Cell RegisterRoutes calls have completed.
+// FinalizeAuth after all RouteGroup.Register calls have completed.
 //
 // Whitelist entries support two formats:
 //   - Exact: "METHOD /path" (e.g. "GET /debug/pprof")

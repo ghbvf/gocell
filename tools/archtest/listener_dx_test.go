@@ -42,6 +42,8 @@ var oldRouteSurfaceDocTerms = []string{
 	"HTTPRegistrar",
 	"WithInternalMiddleware",
 	"Cell.RegisterRoutes",
+	"Cell RegisterRoutes",
+	"cell.RegisterRoutes",
 	"func (c *MyCell) RegisterRoutes",
 	"RegisterRoutes(mux cell.RouteMux)",
 	"publicMux",
@@ -102,6 +104,11 @@ func TestListenerDXA52Guard(t *testing.T) {
 		var violations []string
 		for _, file := range files {
 			violations = append(violations, activeDocTermViolations(t, root, file)...)
+		}
+		goFiles, err := listenerDXProductionGoFiles(root)
+		require.NoError(t, err)
+		for _, file := range goFiles {
+			violations = append(violations, activeGoCommentTermViolations(t, root, file)...)
 		}
 		assert.Empty(t, violations, "%s: active docs/godoc must not show deleted listener APIs or Delegated examples:\n%s",
 			ruleListenerDXA52, strings.Join(violations, "\n"))
@@ -308,8 +315,9 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 		if !ok || fn.Name.Name != "Mount" {
 			continue
 		}
-		if fn.Type.Params == nil || len(fn.Type.Params.List) != 2 {
-			return []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line, "auth.Mount must accept mux and Route parameters")}
+		if !listenerDXFuncHasParams(fn.Type, "cell.RouteHandler", "Route") {
+			return []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line,
+				"auth.Mount must be func(mux cell.RouteHandler, r Route) error")}
 		}
 		if !listenerDXFuncReturnsOnlyError(fn.Type) {
 			return []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line, "auth.Mount must return error")}
@@ -320,7 +328,37 @@ func authMountSignatureViolations(t *testing.T, root string) []string {
 }
 
 func listenerDXFuncHasOneParam(fn *ast.FuncType, wantType string) bool {
-	return fn.Params != nil && len(fn.Params.List) == 1 && listenerDXExprName(fn.Params.List[0].Type) == wantType
+	return listenerDXFuncHasParams(fn, wantType)
+}
+
+func listenerDXFuncHasParams(fn *ast.FuncType, wantTypes ...string) bool {
+	gotTypes := listenerDXFuncParamTypes(fn)
+	if len(gotTypes) != len(wantTypes) {
+		return false
+	}
+	for i, want := range wantTypes {
+		if gotTypes[i] != want {
+			return false
+		}
+	}
+	return true
+}
+
+func listenerDXFuncParamTypes(fn *ast.FuncType) []string {
+	if fn.Params == nil {
+		return nil
+	}
+	var gotTypes []string
+	for _, field := range fn.Params.List {
+		count := len(field.Names)
+		if count == 0 {
+			count = 1
+		}
+		for i := 0; i < count; i++ {
+			gotTypes = append(gotTypes, listenerDXExprName(field.Type))
+		}
+	}
+	return gotTypes
 }
 
 func listenerDXFuncReturnsOnlyError(fn *ast.FuncType) bool {
@@ -344,8 +382,9 @@ func activeDocTermViolations(t *testing.T, root, path string) []string {
 	require.NoError(t, err)
 	lines := strings.Split(string(data), "\n")
 	var violations []string
+	terms := listenerDXForbiddenDocTerms()
 	for i, line := range lines {
-		for _, term := range append(activeDocForbiddenTerms, oldRouteSurfaceDocTerms...) {
+		for _, term := range terms {
 			if strings.Contains(line, term) {
 				violations = append(violations, listenerDXViolation(root, path, i+1,
 					fmt.Sprintf("active docs/godoc contains %q", term)))
@@ -353,6 +392,34 @@ func activeDocTermViolations(t *testing.T, root, path string) []string {
 		}
 	}
 	return violations
+}
+
+func activeGoCommentTermViolations(t *testing.T, root, path string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var violations []string
+	terms := listenerDXForbiddenDocTerms()
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			for _, term := range terms {
+				if strings.Contains(comment.Text, term) {
+					violations = append(violations, listenerDXViolation(root, path, fset.Position(comment.Pos()).Line,
+						fmt.Sprintf("active godoc/comment contains %q", term)))
+				}
+			}
+		}
+	}
+	return violations
+}
+
+func listenerDXForbiddenDocTerms() []string {
+	terms := make([]string, 0, len(activeDocForbiddenTerms)+len(oldRouteSurfaceDocTerms))
+	terms = append(terms, activeDocForbiddenTerms...)
+	terms = append(terms, oldRouteSurfaceDocTerms...)
+	return terms
 }
 
 func listenerDXViolation(root, path string, line int, msg string) string {

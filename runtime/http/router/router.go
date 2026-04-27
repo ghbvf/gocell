@@ -252,8 +252,8 @@ func WithDefaultMiddleware(mws ...func(http.Handler) http.Handler) Option {
 // cell routes are registered.
 //
 // Bootstrap creates one Router per declared listener (primary/internal/health)
-// via NewForListener. The old multi-mux design (outerMux/publicMux/internalMux)
-// has been replaced by this per-listener model.
+// via NewForListener. The old shared-root multiplexer design has been replaced
+// by this per-listener model.
 //
 // ref: go-kratos/kratos transport/http/server.go — per-server middleware
 // ref: go-chi/chi mux.go — one chi.Mux root per listener
@@ -571,7 +571,7 @@ func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
 }
 
 // DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
-// metadata forwarded by auth.Mount during Cell RegisterRoutes. FinalizeAuth
+// metadata forwarded by auth.Mount during RouteGroup.Register. FinalizeAuth
 // compiles the accumulated metas into matchers that the AuthMiddleware reads
 // via lazy closures installed in buildAuthOpts.
 //
