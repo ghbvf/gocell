@@ -5,10 +5,15 @@ linters:
   # gosimple is part of staticcheck in v2.
   enable:
     - gocognit
+    - nilerr
+    - nilnesserr
+    - nilnil
 
   settings:
     gocognit:
       min-complexity: 15 # project rule: ≤ 15, flag at 15+
+    nilnil:
+      only-two: false
 
   exclusions:
     rules:

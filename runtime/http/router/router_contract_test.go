@@ -72,7 +72,7 @@ func TestMount_PrefixStripping(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			r := New()
+			r := MustNew()
 
 			sub := chi.NewRouter()
 			body := tt.wantBody
@@ -97,7 +97,7 @@ func TestMount_PrefixStripping(t *testing.T) {
 // --- Mount Middleware Inheritance -------------------------------------------
 
 func TestMount_MiddlewareInheritance(t *testing.T) {
-	r := New() // New() applies default middleware (RequestID, SecurityHeaders, etc.)
+	r := MustNew() // New() applies default middleware (RequestID, SecurityHeaders, etc.)
 
 	sub := chi.NewRouter()
 	sub.Get("/resource", func(w http.ResponseWriter, _ *http.Request) {
@@ -122,7 +122,7 @@ func TestMount_MiddlewareInheritance(t *testing.T) {
 func TestWith_ScopedMiddleware(t *testing.T) {
 	// With() returns a new RouteMux that applies additional middleware only
 	// to routes registered through it, without affecting the parent.
-	r := New()
+	r := MustNew()
 
 	marker := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -163,7 +163,7 @@ func TestRoute_PrefixStripping(t *testing.T) {
 	// prefix.  Registering "GET /users" inside Route("/api/v1", ...) means
 	// a request to /api/v1/users reaches the handler.
 
-	r := New()
+	r := MustNew()
 
 	var handlerCalled bool
 	r.Route("/api/v1", func(mux cell.RouteMux) {
@@ -193,7 +193,7 @@ func TestRoute_PrefixStripping(t *testing.T) {
 // --- Group No Prefix Change ------------------------------------------------
 
 func TestGroup_NoPrefixChange(t *testing.T) {
-	r := New()
+	r := MustNew()
 
 	var handlerCalled bool
 	r.Group(func(mux cell.RouteMux) {
@@ -218,7 +218,7 @@ func TestGroup_NoPrefixChange(t *testing.T) {
 func TestGroup_MiddlewareIsolation(t *testing.T) {
 	// Middleware applied via With() inside a Group must not leak to handlers
 	// outside the group.
-	r := New()
+	r := MustNew()
 
 	marker := func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -257,7 +257,7 @@ func TestGroup_MiddlewareIsolation(t *testing.T) {
 // --- 404 / 405 Table-Driven -----------------------------------------------
 
 func TestRouter_NotFound(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Handle("GET /exists", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -284,7 +284,7 @@ func TestRouter_NotFound(t *testing.T) {
 }
 
 func TestRouter_MethodNotAllowed(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Handle("POST /submit", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -317,7 +317,7 @@ func TestRouter_MethodNotAllowed(t *testing.T) {
 // --- Subtree 404 / 405 ----------------------------------------------------
 
 func TestRoute_NotFoundAndMethodNotAllowed(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Route("/api", func(mux cell.RouteMux) {
 		mux.Handle("GET /users", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -352,7 +352,7 @@ func TestRoute_NotFoundAndMethodNotAllowed(t *testing.T) {
 }
 
 func TestMount_NotFoundAndMethodNotAllowed(t *testing.T) {
-	r := New()
+	r := MustNew()
 	sub := chi.NewRouter()
 	sub.Get("/items", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -389,7 +389,7 @@ func TestMount_NotFoundAndMethodNotAllowed(t *testing.T) {
 // --- Nested Mount ----------------------------------------------------------
 
 func TestMount_Nested(t *testing.T) {
-	r := New()
+	r := MustNew()
 
 	// Inner sub-router mounted at /v1 inside the outer sub-router at /api.
 	// The handler's pattern is relative to the innermost mount point.
@@ -436,7 +436,7 @@ func TestMount_Nested(t *testing.T) {
 // --- Mount with Route Params -----------------------------------------------
 
 func TestMount_WithRouteParams(t *testing.T) {
-	r := New()
+	r := MustNew()
 
 	sub := chi.NewRouter()
 	sub.Get("/{id}", func(w http.ResponseWriter, req *http.Request) {
@@ -472,7 +472,7 @@ func TestMount_WithRouteParams(t *testing.T) {
 // --- Metrics Endpoint Opt-In -------------------------------------------------
 
 func TestMetricsEndpoint_NotExposedByDefault(t *testing.T) {
-	r := New()
+	r := MustNew()
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	r.ServeHTTP(rec, req)
@@ -485,7 +485,7 @@ func TestMetricsEndpoint_CollectorOnly_NotExposed(t *testing.T) {
 	// a /metrics HTTP endpoint. Adopts Prometheus/Kratos separation of
 	// "collect" vs "serve".
 	mc := metrics.NewInMemoryCollector()
-	r := New(WithMetricsCollector(mc))
+	r := MustNew(WithMetricsCollector(mc))
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	r.ServeHTTP(rec, req)
@@ -497,7 +497,7 @@ func TestMetricsEndpoint_CollectorOnly_NotExposed(t *testing.T) {
 // served by a primary-listener router. Metrics endpoints belong exclusively
 // on the HealthListener via bootstrap.HealthRouteGroups.
 func TestMetricsEndpoint_NotOnPrimaryListener(t *testing.T) {
-	r := New() // PrimaryListener router; no health/metrics handler registered
+	r := MustNew() // PrimaryListener router; no health/metrics handler registered
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
 	r.ServeHTTP(rec, req)

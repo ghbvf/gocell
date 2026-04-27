@@ -127,8 +127,8 @@ func TestUnionAuthenticator_EmptyChildren(t *testing.T) {
 	if ok {
 		t.Error("expected ok=false with no children")
 	}
-	if got != nil {
-		t.Errorf("expected nil principal, got %v", got)
+	if got == nil {
+		t.Error("expected absent principal sentinel")
 	}
 }
 
@@ -144,8 +144,8 @@ func TestUnionAuthenticator_AllAbsent(t *testing.T) {
 	if ok {
 		t.Error("expected ok=false when all absent")
 	}
-	if got != nil {
-		t.Errorf("expected nil principal, got %v", got)
+	if got == nil {
+		t.Error("expected absent principal sentinel")
 	}
 	if first.calls != 1 {
 		t.Errorf("first should be called once, got %d", first.calls)
@@ -186,8 +186,8 @@ func TestJWTAuthenticator_NoAuthHeader_Absent(t *testing.T) {
 	if ok {
 		t.Fatal("expected ok=false (absent credential)")
 	}
-	if p != nil {
-		t.Fatalf("expected nil principal, got %v", p)
+	if p == nil {
+		t.Fatal("expected absent principal sentinel")
 	}
 }
 
@@ -202,8 +202,8 @@ func TestJWTAuthenticator_NonBearerScheme_Absent(t *testing.T) {
 	if ok {
 		t.Fatal("expected ok=false for non-Bearer scheme")
 	}
-	if p != nil {
-		t.Fatalf("expected nil principal, got %v", p)
+	if p == nil {
+		t.Fatal("expected absent principal sentinel")
 	}
 }
 
@@ -235,7 +235,7 @@ func TestJWTAuthenticator_IntentMismatch_Error(t *testing.T) {
 		t.Fatal("expected ok=false on intent mismatch")
 	}
 	if p != nil {
-		t.Fatalf("expected nil principal, got %v", p)
+		t.Fatalf("expected nil principal on error, got %v", p)
 	}
 }
 
@@ -327,8 +327,8 @@ func TestServiceTokenAuthenticator_NoHeader_Absent(t *testing.T) {
 	if ok {
 		t.Fatal("expected ok=false (absent credential)")
 	}
-	if p != nil {
-		t.Fatalf("expected nil principal, got %v", p)
+	if p == nil {
+		t.Fatal("expected absent principal sentinel")
 	}
 }
 
@@ -344,8 +344,8 @@ func TestServiceTokenAuthenticator_BearerSchemeIgnored_Absent(t *testing.T) {
 	if ok {
 		t.Fatal("expected ok=false: Bearer scheme must be absent for ServiceToken authenticator")
 	}
-	if p != nil {
-		t.Fatalf("expected nil principal, got %v", p)
+	if p == nil {
+		t.Fatal("expected absent principal sentinel")
 	}
 }
 
@@ -529,7 +529,7 @@ func TestJWTAuthenticator_EmptySubject_Error(t *testing.T) {
 
 // TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed verifies that when
 // Union(JWT, ServiceToken) receives "Authorization: ServiceToken <payload>",
-// the JWT authenticator returns absent (nil, false, nil) — because it sees a
+// the JWT authenticator returns absent (non-nil sentinel, false, nil) — because it sees a
 // non-Bearer scheme — and the ServiceToken authenticator validates the
 // credential and returns a valid Principal. No cross-bleed between the two.
 func TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed(t *testing.T) {

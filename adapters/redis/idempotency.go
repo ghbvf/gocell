@@ -151,7 +151,7 @@ func (c *IdempotencyClaimer) Claim(ctx context.Context, key string, leaseTTL, do
 
 	switch code {
 	case 0:
-		return idempotency.ClaimDone, nil, nil
+		return idempotency.ClaimDone, idempotency.NonAcquiredReceipt(), nil
 	case 1:
 		r := &redisReceipt{
 			rdb:      c.rdb,
@@ -162,7 +162,7 @@ func (c *IdempotencyClaimer) Claim(ctx context.Context, key string, leaseTTL, do
 		}
 		return idempotency.ClaimAcquired, r, nil
 	default:
-		return idempotency.ClaimBusy, nil, nil
+		return idempotency.ClaimBusy, idempotency.NonAcquiredReceipt(), nil
 	}
 }
 

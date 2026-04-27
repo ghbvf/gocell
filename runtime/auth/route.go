@@ -115,15 +115,19 @@ func Mount(mux cell.RouteHandler, r Route) error {
 		// declarer.DeclareAuthMeta's Path is the sub-route-relative path;
 		// chiRouterAdapter recomposes it with its prefix on its way up to
 		// the top-level Router.
-		declarer.DeclareAuthMeta(cell.AuthRouteMeta{
+		if err := declarer.DeclareAuthMeta(cell.AuthRouteMeta{
 			Method:              r.Contract.Method,
 			Path:                cleanedRel,
 			Public:              r.Public,
 			PasswordResetExempt: r.PasswordResetExempt,
-		})
+		}); err != nil {
+			return fmt.Errorf("auth.Mount: declare auth metadata: %w", err)
+		}
 	}
 	if declarer, ok := mux.(cell.HTTPContractDeclarer); ok {
-		declarer.DeclareHTTPContract(r.Contract)
+		if err := declarer.DeclareHTTPContract(r.Contract); err != nil {
+			return fmt.Errorf("auth.Mount: declare HTTP contract metadata: %w", err)
+		}
 	}
 	return nil
 }

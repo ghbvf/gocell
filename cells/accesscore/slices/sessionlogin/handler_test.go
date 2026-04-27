@@ -29,7 +29,7 @@ const loginPath = "/api/v1/access/sessions/login"
 
 func newHandlerRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
@@ -45,7 +45,7 @@ func setup() http.Handler {
 	}
 	_ = userRepo.Create(context.Background(), user)
 
-	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), newHandlerRefreshStore(), testIssuer, slog.Default())
+	svc := MustNewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(), newHandlerRefreshStore(), testIssuer, slog.Default())
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux

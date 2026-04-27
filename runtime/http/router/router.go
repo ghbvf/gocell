@@ -18,6 +18,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path"
+	"reflect"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -25,6 +26,8 @@ import (
 	kcell "github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/httputil"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 	"github.com/ghbvf/gocell/runtime/observability/metrics"
@@ -124,11 +127,25 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // ref: go-kratos/kratos — auth middleware at service level with selector-based bypass
 // ref: go-zero — per-route WithJwt() opt-in auth
 func WithAuthMiddleware(verifier auth.IntentTokenVerifier) Option {
-	if verifier == nil {
-		panic("router: WithAuthMiddleware requires a non-nil IntentTokenVerifier")
-	}
 	return func(r *Router) {
+		if isNilIntentTokenVerifier(verifier) {
+			r.authVerifierNil = true
+			return
+		}
 		r.authVerifier = verifier
+	}
+}
+
+func isNilIntentTokenVerifier(verifier auth.IntentTokenVerifier) bool {
+	if verifier == nil {
+		return true
+	}
+	v := reflect.ValueOf(verifier)
+	switch v.Kind() {
+	case reflect.Pointer, reflect.Map, reflect.Slice, reflect.Chan, reflect.Func, reflect.Interface:
+		return v.IsNil()
+	default:
+		return false
 	}
 }
 
@@ -270,6 +287,7 @@ type Router struct {
 	circuitBreaker      middleware.Allower
 	circuitBreakerNil   bool
 	authVerifier        auth.IntentTokenVerifier
+	authVerifierNil     bool
 	authMetrics         *auth.AuthMetrics
 	securityHeadersOpts []middleware.SecurityHeadersOption
 	bodyLimit           int64
@@ -334,31 +352,24 @@ func earlyResponderMiddleware(er earlyResponder) func(http.Handler) http.Handler
 const internalPathPrefix = kcell.InternalPathPrefix
 
 // New creates a Router with default middleware and optional configuration.
-// Convenience wrapper around NewForListener using cell.PrimaryListener and
-// no default policy (PolicyNone semantics: observability only, no auth).
-//
-// It panics if the configuration is invalid.
-// Use NewE for an error-returning variant suitable for managed startup.
-func New(opts ...Option) *Router {
-	r, err := NewE(opts...)
-	if err != nil {
-		panic(err)
-	}
-	return r
-}
-
-// NewE creates a Router with default middleware and optional configuration.
-// Unlike New, it returns an error instead of panicking on invalid
-// configuration, making it suitable for Bootstrap.Run and other managed
-// startup sequences.
+// It returns an error when configuration is invalid.
 //
 // The resulting Router serves the zero-value ListenerRef (no listener
 // affinity). For production use call NewForListener instead.
 //
 // ref: gin-gonic/gin — SetTrustedProxies returns error at config time
 // ref: uber-go/fx — startup failures return error, trigger rollback
-func NewE(opts ...Option) (*Router, error) {
+func New(opts ...Option) (*Router, error) {
 	return NewForListener(kcell.ListenerRef{}, opts...)
+}
+
+// MustNew is the composition-root fail-fast variant of New.
+func MustNew(opts ...Option) *Router {
+	r, err := New(opts...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return r
 }
 
 // NewForListener builds a Router for a specific listener. Listener-level
@@ -392,13 +403,18 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 	if r.circuitBreakerNil {
 		return nil, fmt.Errorf("router: circuit breaker must not be nil")
 	}
+	if r.authVerifierNil {
+		return nil, fmt.Errorf("router: auth middleware verifier must not be nil")
+	}
 
 	realIPMW, err := r.buildRealIPMiddleware()
 	if err != nil {
 		return nil, err
 	}
 
-	r.buildMux(realIPMW)
+	if err := r.buildMux(realIPMW); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -408,11 +424,16 @@ func NewForListener(ref kcell.ListenerRef, opts ...Option) (*Router, error) {
 func (r *Router) Handler() http.Handler { return r.mux }
 
 // ServeHTTP delegates to the router's mux, making Router drop-in compatible
-// with http.Handler. Panics if FinalizeAuth has not been called when auth route
-// metadata has been declared.
+// with http.Handler. If auth route metadata was declared but FinalizeAuth was
+// not called, ServeHTTP fails closed with 500 instead of serving routes with
+// incomplete auth state.
 func (r *Router) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	if len(r.declaredAuthMetas) > 0 && !r.authFinalized {
-		panic("router: FinalizeAuth must be called before ServeHTTP when auth route metadata has been declared")
+		slog.ErrorContext(req.Context(), "router: FinalizeAuth must be called before ServeHTTP",
+			slog.Int("declared_auth_routes", len(r.declaredAuthMetas)))
+		httputil.WriteError(req.Context(), w, http.StatusInternalServerError,
+			string(errcode.ErrInternal), "internal server error")
+		return
 	}
 	r.mux.ServeHTTP(w, req)
 }
@@ -440,7 +461,7 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
-func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) {
+func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) error {
 	// Lazy public predicate so Tracing/RequestID honour public routes declared
 	// later via auth.Mount / FinalizeAuth.
 	lazyPublic := func(req *http.Request) bool {
@@ -501,12 +522,17 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) {
 		r.mux.Use(middleware.RateLimit(r.rateLimiter))
 	}
 	if r.circuitBreaker != nil {
-		r.mux.Use(middleware.CircuitBreaker(r.circuitBreaker))
+		cb, err := middleware.CircuitBreaker(r.circuitBreaker)
+		if err != nil {
+			return fmt.Errorf("router: circuit breaker middleware: %w", err)
+		}
+		r.mux.Use(cb)
 	}
 	if r.authVerifier != nil {
 		r.mux.Use(auth.AuthMiddleware(r.authVerifier, r.buildAuthOpts()...))
 	}
 	r.mux.Use(middleware.BodyLimit(r.bodyLimit))
+	return nil
 }
 
 // buildAuthOpts constructs the AuthOption slice for the auth middleware.
@@ -574,27 +600,29 @@ func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
 // compiles the accumulated metas into matchers that the AuthMiddleware reads
 // via lazy closures installed in buildAuthOpts.
 //
-// Panics if called after FinalizeAuth — all declarations must precede the
-// compile step.
-func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) {
+// Returns an error if called after FinalizeAuth — all declarations must precede
+// the compile step.
+func (r *Router) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 	if r.authFinalized {
-		panic(fmt.Sprintf(
+		return fmt.Errorf(
 			"router: DeclareAuthMeta called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
-			m.Method, m.Path))
+			m.Method, m.Path)
 	}
 	r.declaredAuthMetas = append(r.declaredAuthMetas, m)
+	return nil
 }
 
 // DeclareHTTPContract implements cell.HTTPContractDeclarer. It stores the
 // route contract metadata separately from auth metadata so Tracing can tag
 // spans for requests rejected before reaching wrapper.HTTPHandler.
-func (r *Router) DeclareHTTPContract(spec wrapper.ContractSpec) {
+func (r *Router) DeclareHTTPContract(spec wrapper.ContractSpec) error {
 	if r.authFinalized {
-		panic(fmt.Sprintf(
+		return fmt.Errorf(
 			"router: DeclareHTTPContract called after FinalizeAuth — route %s %s must be declared before FinalizeAuth",
-			spec.Method, spec.Path))
+			spec.Method, spec.Path)
 	}
 	r.declaredHTTPContracts = append(r.declaredHTTPContracts, spec)
+	return nil
 }
 
 // FinalizeAuth compiles all accumulated AuthRouteMeta declarations into
@@ -944,26 +972,27 @@ func (a *chiRouterAdapter) With(mw ...func(http.Handler) http.Handler) kcell.Rou
 
 // DeclareAuthMeta composes the adapter's mount prefix with the declared path
 // before handing the metadata off to the Router.
-func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) {
+func (a *chiRouterAdapter) DeclareAuthMeta(m kcell.AuthRouteMeta) error {
 	if a.declarer == nil {
-		return
+		return nil
 	}
 	if a.prefix != "" {
 		m.Path = joinPrefix(a.prefix, m.Path)
 	}
-	a.declarer.DeclareAuthMeta(m)
+	return a.declarer.DeclareAuthMeta(m)
 }
 
 // DeclareHTTPContract forwards the route's full ContractSpec to the
 // Router-rooted declarer. ContractSpec.Path is already the canonical full
 // path, so unlike AuthRouteMeta it is not composed with the chi prefix.
-func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) {
+func (a *chiRouterAdapter) DeclareHTTPContract(spec wrapper.ContractSpec) error {
 	if a.declarer == nil {
-		return
+		return nil
 	}
 	if declarer, ok := a.declarer.(kcell.HTTPContractDeclarer); ok {
-		declarer.DeclareHTTPContract(spec)
+		return declarer.DeclareHTTPContract(spec)
 	}
+	return nil
 }
 
 // joinPrefix composes a parent mount prefix with a child pattern/path,

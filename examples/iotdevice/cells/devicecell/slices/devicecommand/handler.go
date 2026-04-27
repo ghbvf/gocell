@@ -284,12 +284,6 @@ func (h *Handler) writeCommand(w http.ResponseWriter, r *http.Request, cmdID str
 		httputil.WriteDomainError(r.Context(), w, err)
 		return
 	}
-	if entry == nil {
-		httputil.WriteError(r.Context(), w, http.StatusInternalServerError,
-			string(errcode.ErrInternal),
-			"devicecommand: ack succeeded but entry not found")
-		return
-	}
 
 	httputil.WriteJSON(w, http.StatusOK, map[string]any{"data": toCommandResponse(*entry)})
 }

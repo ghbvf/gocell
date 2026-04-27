@@ -50,12 +50,12 @@ func NewService(
 	refreshStore refresh.Store,
 	logger *slog.Logger,
 	opts ...Option,
-) *Service {
+) (*Service, error) {
 	if sessionRepo == nil {
-		panic("sessionlogout.NewService: sessionRepo must not be nil")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogout.NewService: sessionRepo must not be nil")
 	}
 	if refreshStore == nil {
-		panic("sessionlogout.NewService: refreshStore must not be nil")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogout.NewService: refreshStore must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -69,6 +69,20 @@ func NewService(
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	return s, nil
+}
+
+// MustNewService is the static-wiring variant of NewService.
+func MustNewService(
+	sessionRepo ports.SessionRepository,
+	refreshStore refresh.Store,
+	logger *slog.Logger,
+	opts ...Option,
+) *Service {
+	s, err := NewService(sessionRepo, refreshStore, logger, opts...)
+	if err != nil {
+		panic(err.Error())
 	}
 	return s
 }

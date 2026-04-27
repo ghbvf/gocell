@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // sweep intentionally does not depend on ports.UserRepository — credential
@@ -60,7 +59,7 @@ type sweepConfig struct {
 // attempt to write a new credential file and fail with errCredFileExists. This
 // is a rare bootstrap-interruption scenario not covered by P1-16; it surfaces
 // as an ensureAdmin error and requires operator intervention.
-func sweep(ctx context.Context, cfg sweepConfig) (worker.Worker, error) {
+func sweep(ctx context.Context, cfg sweepConfig) (sweepResult, error) {
 	if cfg.Logger == nil {
 		cfg.Logger = slog.Default()
 	}
@@ -72,14 +71,14 @@ func sweep(ctx context.Context, cfg sweepConfig) (worker.Worker, error) {
 	credPath, err := ResolveCredentialPath(cfg.StateDir)
 	if err != nil {
 		// Non-absolute StateDir is a configuration error — fail fast.
-		return nil, err
+		return sweepResult{}, err
 	}
 
 	expiresAt, err := readCredentialExpiresAt(credPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			// No file — nothing to sweep.
-			return nil, nil
+			return sweepResult{}, nil
 		}
 		// Unreadable file or parse error: log and continue startup (don't delete).
 		// Attach failure_kind so operators can distinguish permission errors from
@@ -96,7 +95,7 @@ func sweep(ctx context.Context, cfg sweepConfig) (worker.Worker, error) {
 			slog.String("failure_kind", failureKind),
 			slog.Any("error", errcode.WrapInfra(errcode.ErrInternal, "sweep: read cred file", err)),
 		)
-		return nil, nil
+		return sweepResult{}, nil
 	}
 
 	now := clk.Now()
@@ -108,14 +107,14 @@ func sweep(ctx context.Context, cfg sweepConfig) (worker.Worker, error) {
 				slog.String("file_path", credPath),
 				slog.Any("error", errcode.WrapInfra(errcode.ErrInternal, "sweep: remove cred file", removeErr)),
 			)
-			return nil, nil
+			return sweepResult{}, nil
 		}
 		cfg.Logger.InfoContext(ctx, "sweep: removed expired credential file",
 			slog.String("event", "initial_admin_credential_swept"),
 			slog.String("file_path", credPath),
 			slog.Time("expires_at", expiresAt),
 		)
-		return nil, nil
+		return sweepResult{}, nil
 	}
 
 	// Not expired — re-register a cleaner worker so the runtime cleans up after
@@ -145,7 +144,7 @@ func sweep(ctx context.Context, cfg sweepConfig) (worker.Worker, error) {
 			slog.String("file_path", credPath),
 			slog.Any("error", err),
 		)
-		return nil, nil
+		return sweepResult{}, nil
 	}
-	return cleaner, nil
+	return sweepResult{Cleaner: cleaner}, nil
 }

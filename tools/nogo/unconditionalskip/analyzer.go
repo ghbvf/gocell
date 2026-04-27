@@ -13,6 +13,7 @@ package unconditionalskip
 import (
 	"go/ast"
 	"go/types"
+	"reflect"
 
 	"golang.org/x/tools/go/analysis"
 	"golang.org/x/tools/go/analysis/passes/inspect"
@@ -22,14 +23,17 @@ import (
 // Analyzer is the exported analysis.Analyzer that can be embedded into nogo
 // rule sets or run via singlechecker.Main.
 var Analyzer = &analysis.Analyzer{
-	Name:     "unconditionalskip",
-	Doc:      "reports test functions whose first statement is an unconditional t.Skip/t.Skipf/t.SkipNow",
-	URL:      "https://github.com/ghbvf/gocell/tools/nogo/unconditionalskip",
-	Requires: []*analysis.Analyzer{inspect.Analyzer},
-	Run:      run,
+	Name:       "unconditionalskip",
+	Doc:        "reports test functions whose first statement is an unconditional t.Skip/t.Skipf/t.SkipNow",
+	URL:        "https://github.com/ghbvf/gocell/tools/nogo/unconditionalskip",
+	Requires:   []*analysis.Analyzer{inspect.Analyzer},
+	Run:        run,
+	ResultType: reflect.TypeOf(result{}),
 }
 
 const diagMessage = "unconditional t.Skip — wrap in if-condition or remove the test"
+
+type result struct{}
 
 func run(pass *analysis.Pass) (interface{}, error) {
 	insp := pass.ResultOf[inspect.Analyzer].(*inspector.Inspector)
@@ -50,7 +54,7 @@ func run(pass *analysis.Pass) (interface{}, error) {
 		checkBody(pass, fn.Body)
 	})
 
-	return nil, nil
+	return result{}, nil
 }
 
 // isTestOrBenchmark reports whether fn is a top-level test or benchmark

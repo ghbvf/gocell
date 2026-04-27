@@ -165,7 +165,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {

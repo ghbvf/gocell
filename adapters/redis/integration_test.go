@@ -128,7 +128,7 @@ func TestIntegration_IdempotencyClaimer(t *testing.T) {
 	state, receipt2, err := claimer.Claim(ctx, key, 5*time.Minute, 10*time.Second)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state)
-	assert.Nil(t, receipt2)
+	assert.NotNil(t, receipt2)
 }
 
 // TestIntegration_RedisDriver_SetNX_Contention verifies that a second SetNX

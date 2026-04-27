@@ -64,7 +64,7 @@ func newProxyCheckerStrict(proxies []string) (*proxyChecker, error) {
 
 // ValidateTrustedProxies validates all entries and returns the constructed
 // proxyChecker for reuse. Returns a descriptive error for the first invalid
-// entry. Used by router.New() for fail-fast validation at construction time,
+// entry. Used by router.MustNew() for fail-fast validation at construction time,
 // eliminating the need to parse proxies twice (once to validate, once to use).
 //
 // ref: gin-gonic/gin — SetTrustedProxies validates eagerly at config time

@@ -53,21 +53,21 @@ func NewService(
 	issuer *auth.JWTIssuer,
 	logger *slog.Logger,
 	opts ...Option,
-) *Service {
+) (*Service, error) {
 	if sessionRepo == nil {
-		panic("sessionrefresh.NewService: sessionRepo must not be nil")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: sessionRepo must not be nil")
 	}
 	if roleRepo == nil {
-		panic("sessionrefresh.NewService: roleRepo must not be nil")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: roleRepo must not be nil")
 	}
 	if userRepo == nil {
-		panic("sessionrefresh.NewService: userRepo must not be nil")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: userRepo must not be nil")
 	}
 	if refreshStore == nil {
-		panic("sessionrefresh.NewService: refreshStore must not be nil")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: refreshStore must not be nil")
 	}
 	if issuer == nil {
-		panic("sessionrefresh.NewService: issuer must not be nil")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: issuer must not be nil")
 	}
 	if logger == nil {
 		logger = slog.Default()
@@ -82,6 +82,23 @@ func NewService(
 	}
 	for _, o := range opts {
 		o(s)
+	}
+	return s, nil
+}
+
+// MustNewService is the static-wiring variant of NewService.
+func MustNewService(
+	sessionRepo ports.SessionRepository,
+	roleRepo ports.RoleRepository,
+	userRepo ports.UserRepository,
+	refreshStore refresh.Store,
+	issuer *auth.JWTIssuer,
+	logger *slog.Logger,
+	opts ...Option,
+) *Service {
+	s, err := NewService(sessionRepo, roleRepo, userRepo, refreshStore, issuer, logger, opts...)
+	if err != nil {
+		panic(err.Error())
 	}
 	return s
 }

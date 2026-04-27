@@ -170,7 +170,7 @@ func (m AuthRouteMeta) IsInternal() bool {
 // This keeps kernel/cell free of runtime/auth dependencies while still
 // letting the Router and TestMux aggregate per-route auth context.
 type AuthRouteDeclarer interface {
-	DeclareAuthMeta(meta AuthRouteMeta)
+	DeclareAuthMeta(meta AuthRouteMeta) error
 }
 
 // HTTPContractDeclarer is implemented by aggregators that want to receive the
@@ -178,7 +178,7 @@ type AuthRouteDeclarer interface {
 // this metadata when available so outer runtime middleware can annotate spans
 // even when pre-handler middleware short-circuits before wrapper.HTTPHandler.
 type HTTPContractDeclarer interface {
-	DeclareHTTPContract(spec wrapper.ContractSpec)
+	DeclareHTTPContract(spec wrapper.ContractSpec) error
 }
 
 // EventRouter declares event subscriptions. Cells call AddContractHandler

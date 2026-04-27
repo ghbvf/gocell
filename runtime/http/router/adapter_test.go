@@ -11,18 +11,18 @@ import (
 )
 
 func TestWithBodyLimit(t *testing.T) {
-	r := New(WithBodyLimit(1024))
+	r := MustNew(WithBodyLimit(1024))
 	assert.Equal(t, int64(1024), r.bodyLimit)
 }
 
 func TestWithTrustedProxies(t *testing.T) {
 	proxies := []string{"10.0.0.0/8", "192.168.1.1"}
-	r := New(WithTrustedProxies(proxies))
+	r := MustNew(WithTrustedProxies(proxies))
 	assert.Equal(t, proxies, r.trustedProxies)
 }
 
 func TestWithTrustedProxies_Integration(t *testing.T) {
-	r := New(WithTrustedProxies([]string{"10.0.0.0/8"}))
+	r := MustNew(WithTrustedProxies([]string{"10.0.0.0/8"}))
 
 	var gotIP string
 	r.Handle("GET /check-ip", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -44,13 +44,13 @@ func TestWithTrustedProxies_Integration(t *testing.T) {
 
 func TestRouter_Handler(t *testing.T) {
 	// PR-A14b: each Router has a single Handler() serving its listener's mux.
-	r := New()
+	r := MustNew()
 	assert.NotNil(t, r.Handler())
 	assert.Equal(t, r.mux, r.Handler())
 }
 
 func TestRouteGroup_Route(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Route("/api", func(mux kcell.RouteMux) {
 		mux.Route("/v2", func(sub kcell.RouteMux) {
 			sub.Handle("/ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -68,7 +68,7 @@ func TestRouteGroup_Route(t *testing.T) {
 }
 
 func TestRouteGroup_Mount(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Route("/api", func(mux kcell.RouteMux) {
 		subHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -84,7 +84,7 @@ func TestRouteGroup_Mount(t *testing.T) {
 }
 
 func TestRouteGroup_Group(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Route("/api", func(mux kcell.RouteMux) {
 		mux.Group(func(sub kcell.RouteMux) {
 			sub.Handle("/grouped", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -101,7 +101,7 @@ func TestRouteGroup_Group(t *testing.T) {
 }
 
 func TestRouteGroup_With(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Route("/api", func(mux kcell.RouteMux) {
 		authed := mux.With(func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -122,7 +122,7 @@ func TestRouteGroup_With(t *testing.T) {
 }
 
 func TestWith(t *testing.T) {
-	r := New()
+	r := MustNew()
 	authed := r.With(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 			w.Header().Set("X-Root", "yes")

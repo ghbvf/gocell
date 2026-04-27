@@ -64,9 +64,9 @@ func (c *InMemClaimer) Claim(_ context.Context, key string, leaseTTL, doneTTL ti
 	if existing, ok := c.entries[key]; ok {
 		if now.Before(existing.expiresAt) {
 			if existing.state == ClaimDone {
-				return ClaimDone, nil, nil
+				return ClaimDone, NonAcquiredReceipt(), nil
 			}
-			return ClaimBusy, nil, nil
+			return ClaimBusy, NonAcquiredReceipt(), nil
 		}
 		// Expired entry — drop and fall through to fresh acquisition.
 		delete(c.entries, key)

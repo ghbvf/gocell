@@ -19,19 +19,25 @@ package archtest
 //     OTHER error-less function in lifecycle.go that contains panic() is
 //     still reported as a violation.
 //
-// Enforced file scope (PR-MODE-6):
+// Enforced file scope (PR-MODE-6 + PR-MODE-6.1):
 //   - kernel/wrapper/handler.go, consumer.go, spec.go, lifecycle.go (whitelisted)
 //   - kernel/cell/auth_plan.go
 //   - kernel/outbox/entry_id.go, envelope.go
 //   - kernel/idempotency/inmem.go
 //   - kernel/worker/worker.go
-//   - runtime/eventrouter/router.go
+//   - runtime/eventrouter/router.go, contract_middleware.go
 //   - runtime/auth/route.go
 //   - runtime/worker/worker.go
+//   - runtime/distlock/locker.go
+//   - runtime/auth/refresh/memstore/store.go
+//   - runtime/http/middleware/circuit_breaker.go
+//   - runtime/http/health/health.go
+//   - runtime/http/router/router.go
+//   - kernel/persistence/tx.go
+//   - cells/accesscore/slices/sessionlogin/service.go
+//   - cells/accesscore/slices/sessionrefresh/service.go
+//   - cells/accesscore/slices/sessionlogout/service.go
 //   - adapters/postgres/refresh_store.go
-//
-// Future PRs may extend the scope; see
-// docs/architecture/202604270030-architectural-panic-whitelist.md §Roadmap.
 
 import (
 	"go/ast"
@@ -64,6 +70,15 @@ var errorFirstEnforcedFiles = []string{
 	"runtime/eventrouter/contract_middleware.go",
 	"runtime/auth/route.go",
 	"runtime/worker/worker.go",
+	"runtime/distlock/locker.go",
+	"runtime/auth/refresh/memstore/store.go",
+	"runtime/http/middleware/circuit_breaker.go",
+	"runtime/http/health/health.go",
+	"runtime/http/router/router.go",
+	"kernel/persistence/tx.go",
+	"cells/accesscore/slices/sessionlogin/service.go",
+	"cells/accesscore/slices/sessionrefresh/service.go",
+	"cells/accesscore/slices/sessionlogout/service.go",
 	"adapters/postgres/refresh_store.go",
 }
 

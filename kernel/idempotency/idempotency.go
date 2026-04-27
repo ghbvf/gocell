@@ -13,6 +13,10 @@ import (
 // Callers MUST stop business logic on this error and proceed to Release.
 var ErrLeaseExpired = errors.New("idempotency: processing lease expired")
 
+// ErrNoClaimLease indicates Receipt methods were called for a Claim result
+// that did not acquire a processing lease.
+var ErrNoClaimLease = errors.New("idempotency: no acquired claim lease")
+
 // DefaultTTL is the standard idempotency key TTL per the EventBus specification.
 const DefaultTTL = 24 * time.Hour
 
@@ -45,6 +49,27 @@ type Receipt interface {
 	// Returns ErrLeaseExpired if the lease is no longer held (fencing failure)
 	// or wraps the underlying backend error otherwise.
 	Extend(ctx context.Context, ttl time.Duration) error
+}
+
+// NonAcquiredReceipt returns a sentinel receipt for ClaimDone and ClaimBusy.
+// Callers must branch on ClaimState and ignore this receipt unless the state is
+// ClaimAcquired; if misused, its methods return ErrNoClaimLease.
+func NonAcquiredReceipt() Receipt {
+	return nonAcquiredReceipt{}
+}
+
+type nonAcquiredReceipt struct{}
+
+func (nonAcquiredReceipt) Commit(context.Context) error {
+	return ErrNoClaimLease
+}
+
+func (nonAcquiredReceipt) Release(context.Context) error {
+	return ErrNoClaimLease
+}
+
+func (nonAcquiredReceipt) Extend(context.Context, time.Duration) error {
+	return ErrNoClaimLease
 }
 
 // ---------------------------------------------------------------------------
@@ -88,8 +113,8 @@ type Claimer interface {
 	//
 	// Returns:
 	//   - (ClaimAcquired, receipt, nil) — caller should process, then Commit or Release.
-	//   - (ClaimDone, nil, nil) — already processed; caller should Ack.
-	//   - (ClaimBusy, nil, nil) — another consumer is processing; caller should Requeue.
+	//   - (ClaimDone, NonAcquiredReceipt(), nil) — already processed; caller should Ack.
+	//   - (ClaimBusy, NonAcquiredReceipt(), nil) — another consumer is processing; caller should Requeue.
 	//   - (_, nil, err) — infrastructure error.
 	Claim(ctx context.Context, key string, leaseTTL, doneTTL time.Duration) (ClaimState, Receipt, error)
 }

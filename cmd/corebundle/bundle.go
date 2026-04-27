@@ -146,8 +146,8 @@ func buildInternalAuthChain(guard *internalGuard) []cell.ListenerAuth {
 // masterKey, and prevMasterKey (all pre-read from per-cell env by the caller).
 //
 // Supported providerName values: "local-aes", "vault-transit".
-// In memory mode (empty providerName) nil is returned (no encryption;
-// NoopTransformer via keyProviderToTransformer).
+// In memory mode (empty providerName) a no-key sentinel is returned (no
+// encryption; NoopTransformer via keyProviderToTransformer).
 // In postgres mode (empty providerName) the function fails-fast: sensitive-value
 // encryption is a production security invariant; silently wiring NoopTransformer
 // would defeat the stated threat model (see docs/architecture/202604191800-adr-config-value-encryption.md).
@@ -174,7 +174,7 @@ func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prev
 					"Silent NoopTransformer fallback is disabled because it would persist "+
 					"sensitive values unencrypted.")
 		}
-		return nil, nil
+		return noKeyProvider{}, nil
 	}
 	switch providerName {
 	case "local-aes":
@@ -210,12 +210,32 @@ func buildKeyProvider(storageBackend, adapterMode, providerName, masterKey, prev
 }
 
 // keyProviderToTransformer wraps a KeyProvider in a ValueTransformer.
-// When kp is nil (no encryption configured), returns NoopTransformer.
+// When kp is nil or the no-key sentinel (no encryption configured), returns
+// NoopTransformer.
 func keyProviderToTransformer(kp kcrypto.KeyProvider) kcrypto.ValueTransformer {
-	if kp == nil {
+	if kp == nil || isNoKeyProvider(kp) {
 		return crypto.NoopTransformer{}
 	}
 	return crypto.NewValueTransformer(kp)
+}
+
+type noKeyProvider struct{}
+
+func (noKeyProvider) Current(context.Context) (kcrypto.KeyHandle, error) {
+	return nil, errcode.New(errcode.ErrConfigKeyMissing, "configcore: no key provider configured")
+}
+
+func (noKeyProvider) ByID(context.Context, string) (kcrypto.KeyHandle, error) {
+	return nil, errcode.New(errcode.ErrConfigKeyMissing, "configcore: no key provider configured")
+}
+
+func (noKeyProvider) Rotate(context.Context) (string, error) {
+	return "", errcode.New(errcode.ErrConfigKeyMissing, "configcore: no key provider configured")
+}
+
+func isNoKeyProvider(kp kcrypto.KeyProvider) bool {
+	_, ok := kp.(noKeyProvider)
+	return ok
 }
 
 // ConfigCoreModuleConfig bundles the inputs for buildConfigCoreOpts so that

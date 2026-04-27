@@ -515,13 +515,14 @@ func TestShutdownMetrics_NilSafe(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// Test 7: newShutdownMetrics with nil provider returns nil
+// Test 7: newShutdownMetrics with nil provider returns disabled metrics
 // ---------------------------------------------------------------------------
 
 func TestNewShutdownMetrics_NilProvider(t *testing.T) {
 	m, err := newShutdownMetrics(nil)
 	require.NoError(t, err)
-	assert.Nil(t, m, "nil provider must return nil shutdownMetrics")
+	require.NotNil(t, m, "nil provider must return a disabled shutdownMetrics")
+	assert.True(t, m.disabled)
 }
 
 // ---------------------------------------------------------------------------

@@ -150,8 +150,7 @@ func scanDTOJSONTagsCamelCase(root, path string) ([]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		// Best-effort: parse failure surfaces via go build, not archtest.
-		return nil, nil
+		return nil, err
 	}
 
 	rel, _ := filepath.Rel(root, path)

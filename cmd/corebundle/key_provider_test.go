@@ -16,13 +16,13 @@ const validMasterKeyHex = "aabbccddeeff00112233445566778899aabbccddeeff001122334
 // demoMasterKeyHex is the well-known demo key shipped in test fixtures.
 const demoMasterKeyHex = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 
-// TestBuildKeyProvider_MemoryMode_NoEnv_ReturnsNil verifies that in memory
-// storage mode, an empty providerName leads to nil (which the caller
-// maps to NoopTransformer). No encryption is required for in-memory storage.
-func TestBuildKeyProvider_MemoryMode_NoEnv_ReturnsNil(t *testing.T) {
+// TestBuildKeyProvider_MemoryMode_NoEnv_ReturnsNoKey verifies that in memory
+// storage mode, an empty providerName leads to the no-key sentinel (which the
+// caller maps to NoopTransformer). No encryption is required for in-memory storage.
+func TestBuildKeyProvider_MemoryMode_NoEnv_ReturnsNoKey(t *testing.T) {
 	kp, err := buildKeyProvider("memory", "", "", "", "")
 	require.NoError(t, err)
-	assert.Nil(t, kp, "memory mode + empty provider should return nil (no provider)")
+	assert.True(t, isNoKeyProvider(kp), "memory mode + empty provider should return no-key sentinel")
 }
 
 // TestBuildKeyProvider_PostgresMode_NoEnv_FailsFast verifies that postgres

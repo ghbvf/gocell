@@ -22,7 +22,7 @@ import (
 
 func newOutboxRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 // --- stubs ---
@@ -56,7 +56,7 @@ func seedUserDirect(repo *mem.UserRepository, username, passwordHash string) {
 func TestService_WithEmitter(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
+	svc := MustNewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
@@ -72,7 +72,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	tx := &stubTxRunner{}
-	svc := NewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
+	svc := MustNewService(userRepo, mem.NewSessionRepository(), mem.NewRoleRepository(),
 		newOutboxRefreshStore(), testIssuer, slog.Default(), WithTxManager(tx))
 
 	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)

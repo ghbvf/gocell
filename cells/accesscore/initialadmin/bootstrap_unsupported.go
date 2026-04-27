@@ -10,7 +10,6 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/pkg/errcode"
-	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // errUnsupportedPlatform is returned by bootstrapper.ensureAdmin on platforms
@@ -49,6 +48,6 @@ func newBootstrapper(_ BootstrapDeps, _ bootstrapConfig) (*bootstrapper, error) 
 }
 
 // ensureAdmin always returns errUnsupportedPlatform on unsupported platforms.
-func (b *bootstrapper) ensureAdmin(_ context.Context) (worker.Worker, error) {
-	return nil, errUnsupportedPlatform
+func (b *bootstrapper) ensureAdmin(_ context.Context) (ensureAdminResult, error) {
+	return ensureAdminResult{}, errUnsupportedPlatform
 }

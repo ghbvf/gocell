@@ -87,8 +87,7 @@ func collectTypeMethods(t *testing.T, root string) *typeMethodSet {
 
 		f, parseErr := parser.ParseFile(fset, path, nil, 0)
 		if parseErr != nil {
-			// Skip unparseable files — they'll surface in go build.
-			return nil
+			return parseErr
 		}
 
 		for _, decl := range f.Decls {

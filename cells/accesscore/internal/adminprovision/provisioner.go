@@ -54,6 +54,12 @@ type ProvisionInput struct {
 	Source       domain.UserSource
 }
 
+// ProvisionResult holds the successful outcome of Ensure.
+type ProvisionResult struct {
+	User    *domain.User
+	Outcome ProvisionOutcome
+}
+
 // UUIDGenerator returns a fresh UUID string. Injected for deterministic tests.
 type UUIDGenerator func() string
 
@@ -130,12 +136,12 @@ func (p *Provisioner) Status(ctx context.Context) (bool, error) {
 //  4. AssignToUser(user, admin) — idempotent per port contract.
 //  5. Mark the provisioning row complete so future duplicate usernames cannot
 //     be reclaimed after the first-admin sequence is done.
-func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (*domain.User, ProvisionOutcome, error) {
+func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (ProvisionResult, error) {
 	if len(in.PasswordHash) == 0 {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: PasswordHash is required")
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: PasswordHash is required")
 	}
 	if !domain.ValidAdminProvisionSource(in.Source) {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: Source must be setup or bootstrap")
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: Source must be setup or bootstrap")
 	}
 
 	// Serialize the fast-path → Create → Assign sequence so two concurrent
@@ -147,35 +153,35 @@ func (p *Provisioner) Ensure(ctx context.Context, in ProvisionInput) (*domain.Us
 	// 1. Fast path.
 	exists, err := p.Status(ctx)
 	if err != nil {
-		return nil, OutcomeUnknown, err
+		return ProvisionResult{Outcome: OutcomeUnknown}, err
 	}
 	if exists {
 		p.logger.Debug("admin provision skipped: admin already exists",
 			slog.String("event", "admin_provision_skip"))
-		return nil, OutcomeAlreadyExists, nil
+		return ProvisionResult{Outcome: OutcomeAlreadyExists}, nil
 	}
 
 	// 2. Ensure admin role.
 	if err := p.ensureAdminRole(ctx); err != nil {
-		return nil, OutcomeUnknown, err
+		return ProvisionResult{Outcome: OutcomeUnknown}, err
 	}
 
 	// 3. Persist user (with race / orphan detection).
-	user, outcome, err := p.createUserOrRecover(ctx, in)
-	if err != nil || outcome == OutcomeRaceSkipped {
-		return nil, outcome, err
+	result, err := p.createUserOrRecover(ctx, in)
+	if err != nil || result.Outcome == OutcomeRaceSkipped {
+		return result, err
 	}
 
 	// 4. Assign admin role (idempotent).
-	if _, err := p.roleRepo.AssignToUser(ctx, user.ID, domain.RoleAdmin); err != nil {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: assign admin role: %w", err)
+	if _, err := p.roleRepo.AssignToUser(ctx, result.User.ID, domain.RoleAdmin); err != nil {
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: assign admin role: %w", err)
 	}
-	if err := p.markProvisionComplete(ctx, user); err != nil {
-		p.rollbackAssignedAdmin(ctx, user.ID)
-		return nil, OutcomeUnknown, err
+	if err := p.markProvisionComplete(ctx, result.User); err != nil {
+		p.rollbackAssignedAdmin(ctx, result.User.ID)
+		return ProvisionResult{Outcome: OutcomeUnknown}, err
 	}
 
-	return user, outcome, nil
+	return result, nil
 }
 
 // Compensate best-effort removes the admin role assignment and user row after
@@ -219,14 +225,14 @@ func (p *Provisioner) ensureAdminRole(ctx context.Context) error {
 
 // createUserOrRecover persists a new admin user or resumes orphan recovery.
 // Return convention:
-//   - (user, OutcomeCreated, nil)          — fresh row persisted
-//   - (user, OutcomeOrphanRecovered, nil)  — existing orphan row reclaimed
-//   - (nil, OutcomeRaceSkipped, nil)       — concurrent replica finished first
-//   - (nil, OutcomeUnknown, err)           — infra error
-func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput) (*domain.User, ProvisionOutcome, error) {
+//   - {User:user, Outcome:OutcomeCreated}, nil         — fresh row persisted
+//   - {User:user, Outcome:OutcomeOrphanRecovered}, nil — existing orphan row reclaimed
+//   - {Outcome:OutcomeRaceSkipped}, nil                — concurrent replica finished first
+//   - {Outcome:OutcomeUnknown}, err                    — infra error
+func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput) (ProvisionResult, error) {
 	user, err := domain.NewUser(in.Username, in.Email, string(in.PasswordHash))
 	if err != nil {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: construct user: %w", err)
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: construct user: %w", err)
 	}
 	user.ID = p.newID()
 	user.MarkProvisionPending(in.Source)
@@ -236,36 +242,36 @@ func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput
 
 	createErr := p.userRepo.Create(ctx, user)
 	if createErr == nil {
-		return user, OutcomeCreated, nil
+		return ProvisionResult{User: user, Outcome: OutcomeCreated}, nil
 	}
 
 	var ecErr *errcode.Error
 	if !errors.As(createErr, &ecErr) || ecErr.Code != errcode.ErrAuthUserDuplicate {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: create user: %w", createErr)
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: create user: %w", createErr)
 	}
 
 	// Duplicate — race or orphan recovery.
 	recount, err := p.roleRepo.CountByRole(ctx, domain.RoleAdmin)
 	if err != nil {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: recount after duplicate user: %w", err)
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: recount after duplicate user: %w", err)
 	}
 	if recount > 0 {
 		p.logger.Debug("admin provision: duplicate user creation race; admin already exists",
 			slog.String("event", "admin_provision_race"))
-		return nil, OutcomeRaceSkipped, nil
+		return ProvisionResult{Outcome: OutcomeRaceSkipped}, nil
 	}
 
 	// Orphan recovery.
 	existing, err := p.userRepo.GetByUsername(ctx, in.Username)
 	if err != nil {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: lookup orphan user: %w", err)
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: lookup orphan user: %w", err)
 	}
 	if !existing.IsRecoverableProvisionOrphan(in.Source) {
 		p.logger.Warn("admin provision: duplicate username is not a recoverable orphan",
 			slog.String("event", "admin_provision_duplicate_rejected"),
 			slog.String("user_id", existing.ID),
 			slog.String("source", string(existing.CreationSource)))
-		return nil, OutcomeUnknown, errcode.NewDomain(errcode.ErrAuthUserDuplicate,
+		return ProvisionResult{Outcome: OutcomeUnknown}, errcode.NewDomain(errcode.ErrAuthUserDuplicate,
 			"admin provisioning username already exists")
 	}
 	// Orphan recovery must fully reassert the caller's RequireReset intent,
@@ -277,12 +283,12 @@ func (p *Provisioner) createUserOrRecover(ctx context.Context, in ProvisionInput
 	existing.PasswordHash = string(in.PasswordHash)
 	existing.PasswordResetRequired = in.RequireReset
 	if err := p.userRepo.Update(ctx, existing); err != nil {
-		return nil, OutcomeUnknown, fmt.Errorf("adminprovision: reset orphan credentials: %w", err)
+		return ProvisionResult{Outcome: OutcomeUnknown}, fmt.Errorf("adminprovision: reset orphan credentials: %w", err)
 	}
 	p.logger.Info("admin provision: resuming orphan-user recovery",
 		slog.String("event", "admin_provision_orphan_recover"),
 		slog.String("user_id", existing.ID))
-	return existing, OutcomeOrphanRecovered, nil
+	return ProvisionResult{User: existing, Outcome: OutcomeOrphanRecovered}, nil
 }
 
 func (p *Provisioner) markProvisionComplete(ctx context.Context, user *domain.User) error {

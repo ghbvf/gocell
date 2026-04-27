@@ -14,9 +14,11 @@ import (
 // fakeProvider is a minimal KeyProvider for compile-time assertions only.
 type fakeProvider struct{}
 
-func (fakeProvider) Current(_ context.Context) (kcrypto.KeyHandle, error)        { return nil, nil }
-func (fakeProvider) ByID(_ context.Context, _ string) (kcrypto.KeyHandle, error) { return nil, nil }
-func (fakeProvider) Rotate(_ context.Context) (string, error)                    { return "", nil }
+func (fakeProvider) Current(_ context.Context) (kcrypto.KeyHandle, error) { return fakeHandle{}, nil }
+func (fakeProvider) ByID(_ context.Context, _ string) (kcrypto.KeyHandle, error) {
+	return fakeHandle{}, nil
+}
+func (fakeProvider) Rotate(_ context.Context) (string, error) { return "", nil }
 
 // fakeHandle is a minimal KeyHandle for compile-time assertions only.
 type fakeHandle struct{}

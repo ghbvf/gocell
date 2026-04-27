@@ -31,10 +31,10 @@ func TestNoopTxRunner_PropagatesError(t *testing.T) {
 	assert.ErrorIs(t, got, want)
 }
 
-func TestNoopTxRunner_NilFnPanics(t *testing.T) {
-	assert.PanicsWithValue(t, "persistence: nil fn passed to RunInTx", func() {
-		_ = NoopTxRunner{}.RunInTx(context.Background(), nil)
-	})
+func TestNoopTxRunner_NilFnReturnsError(t *testing.T) {
+	err := NoopTxRunner{}.RunInTx(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil fn")
 }
 
 func TestNoopTxRunner_Noop(t *testing.T) {
@@ -79,12 +79,12 @@ func TestRunnerOrNoop_RealRunnerReturnedUnchanged(t *testing.T) {
 	assert.Equal(t, 1, real.calls)
 }
 
-func TestRunnerOrNoop_NilFallbackPreservesNilFnPanic(t *testing.T) {
+func TestRunnerOrNoop_NilFallbackPreservesNilFnError(t *testing.T) {
 	runner := RunnerOrNoop(nil)
 
-	assert.PanicsWithValue(t, "persistence: nil fn passed to RunInTx", func() {
-		_ = runner.RunInTx(context.Background(), nil)
-	})
+	err := runner.RunInTx(context.Background(), nil)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "nil fn")
 }
 
 type recordingTxRunner struct {

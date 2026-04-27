@@ -182,8 +182,9 @@ func TestLifecycle_StartWithBind_RepeatRun_AdminExists_NoCleaner(t *testing.T) {
 		Hasher:         l.cfg.Hasher,
 	})
 	require.NoError(t, err)
-	firstWorker, err := bs.ensureAdmin(context.Background())
+	firstResult, err := bs.ensureAdmin(context.Background())
 	require.NoError(t, err)
+	firstWorker := firstResult.Cleaner
 	// Stop the first cleaner so its credential file TTL doesn't interfere.
 	if firstWorker != nil {
 		require.NoError(t, firstWorker.Stop(context.Background()))

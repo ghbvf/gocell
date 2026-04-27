@@ -298,10 +298,6 @@ func (s *Service) getOwnedCommand(ctx context.Context, deviceID, cmdID string) (
 	if err != nil {
 		return nil, fmt.Errorf("device-command: get command: %w", err)
 	}
-	if e == nil {
-		return nil, errcode.New(errcode.ErrCommandNotFound,
-			fmt.Sprintf("device-command: command %q not found", cmdID))
-	}
 
 	if e.DeviceID != deviceID {
 		return nil, errcode.New(errcode.ErrAuthForbidden,

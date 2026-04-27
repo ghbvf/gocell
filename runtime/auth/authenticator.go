@@ -2,9 +2,9 @@
 //
 // An Authenticator inspects an *http.Request and returns one of three outcomes:
 //
-//	(p, true, nil)    — credential present and valid; caller stops the chain.
-//	(nil, false, nil) — credential absent; caller should try the next authenticator.
-//	(nil, false, err) — credential present but invalid; caller MUST NOT fall through.
+//	(p, true, nil)                 — credential present and valid; caller stops the chain.
+//	(absentPrincipal(), false, nil) — credential absent; caller should try the next authenticator.
+//	(nil, false, err)              — credential present but invalid; caller MUST NOT fall through.
 //
 // ref: kubernetes/apiserver pkg/authentication/request/union/union.go (FailOnError=true)
 package auth
@@ -31,6 +31,10 @@ type AuthenticatorFunc func(r *http.Request) (*Principal, bool, error)
 // Authenticate implements Authenticator.
 func (f AuthenticatorFunc) Authenticate(r *http.Request) (*Principal, bool, error) {
 	return f(r)
+}
+
+func absentPrincipal() *Principal {
+	return &Principal{}
 }
 
 // UnionAuthenticator tries each child in order and returns the first successful
@@ -61,7 +65,7 @@ func (u *UnionAuthenticator) Authenticate(r *http.Request) (*Principal, bool, er
 		}
 		// Credential absent — try the next authenticator.
 	}
-	return nil, false, nil
+	return absentPrincipal(), false, nil
 }
 
 // NewJWTAuthenticator returns an Authenticator that extracts a Bearer token
@@ -69,9 +73,9 @@ func (u *UnionAuthenticator) Authenticate(r *http.Request) (*Principal, bool, er
 //
 // Outcomes:
 //
-//	(p, true, nil)    — token present and valid; Principal populated from claims.
-//	(nil, false, nil) — no Authorization header, or non-Bearer scheme (let Union continue).
-//	(nil, false, err) — Bearer token present but VerifyIntent rejected it (short-circuit).
+//	(p, true, nil)                 — token present and valid; Principal populated from claims.
+//	(absentPrincipal(), false, nil) — no Authorization header, or non-Bearer scheme (let Union continue).
+//	(nil, false, err)              — Bearer token present but VerifyIntent rejected it (short-circuit).
 //
 // ref: kubernetes/apiserver pkg/authentication/request/bearertoken/bearertoken.go
 func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
@@ -79,7 +83,7 @@ func NewJWTAuthenticator(v IntentTokenVerifier) Authenticator {
 		token := extractBearerToken(r)
 		if token == "" {
 			// No Bearer credential — absent, let the Union try the next authenticator.
-			return nil, false, nil
+			return absentPrincipal(), false, nil
 		}
 		claims, err := v.VerifyIntent(r.Context(), token, TokenIntentAccess)
 		if err != nil {
@@ -121,9 +125,9 @@ func jwtClaimsToPrincipal(c Claims) *Principal {
 //
 // Outcomes:
 //
-//	(p, true, nil)    — ServiceToken header present and valid.
-//	(nil, false, nil) — no Authorization header, or non-"ServiceToken" scheme.
-//	(nil, false, err) — ServiceToken present but validation failed (expired, bad MAC, replay).
+//	(p, true, nil)                 — ServiceToken header present and valid.
+//	(absentPrincipal(), false, nil) — no Authorization header, or non-"ServiceToken" scheme.
+//	(nil, false, err)              — ServiceToken present but validation failed (expired, bad MAC, replay).
 //
 // Options reuse ServiceTokenOption so callers share the same clock/nonce/metrics
 // injection points as ServiceTokenMiddleware.
@@ -142,12 +146,12 @@ func NewServiceTokenAuthenticator(ring cell.HMACKeyring, opts ...ServiceTokenOpt
 	return AuthenticatorFunc(func(r *http.Request) (*Principal, bool, error) {
 		raw := r.Header.Get("Authorization")
 		if raw == "" {
-			return nil, false, nil
+			return absentPrincipal(), false, nil
 		}
 		scheme, payload, ok := strings.Cut(raw, " ")
 		if !ok || !strings.EqualFold(scheme, "ServiceToken") {
 			// Bearer or other scheme — absent for this authenticator.
-			return nil, false, nil
+			return absentPrincipal(), false, nil
 		}
 		payload = strings.TrimSpace(payload)
 		if err := verifyServiceTokenPayload(ring, payload, cfg, r); err != nil {

@@ -155,7 +155,7 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	if cfg.CredentialPath != "" {
 		sweepStateDir = filepath.Dir(cfg.CredentialPath)
 	}
-	sweepCleaner, err := sweep(ctx, sweepConfig{
+	sweepResult, err := sweep(ctx, sweepConfig{
 		StateDir:  sweepStateDir,
 		Clock:     cfg.Clock,
 		Scheduler: cfg.Scheduler,
@@ -164,6 +164,7 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("initialadmin: sweep: %w", err)
 	}
+	sweepCleaner := sweepResult.Cleaner
 
 	bs, err := newBootstrapper(BootstrapDeps{
 		UserRepo: deps.UserRepo,
@@ -181,10 +182,11 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("initialadmin: construct: %w", err)
 	}
-	adminWorker, err := bs.ensureAdmin(ctx)
+	adminResult, err := bs.ensureAdmin(ctx)
 	if err != nil {
 		return fmt.Errorf("initialadmin: ensure: %w", err)
 	}
+	adminWorker := adminResult.Cleaner
 
 	// Priority identical to old behaviour: adminWorker > sweepCleaner.
 	var result worker.Worker

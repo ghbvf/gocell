@@ -177,7 +177,7 @@ func WithInMemoryDefaults() Option {
 		c.userRepo = mem.NewUserRepository()
 		c.sessionRepo = mem.NewSessionRepository()
 		c.roleRepo = mem.NewRoleRepository()
-		c.refreshStore = refreshmem.New(defaultRefreshPolicy, realClock{}, nil)
+		c.refreshStore = refreshmem.MustNew(defaultRefreshPolicy, realClock{}, nil)
 	}
 }
 

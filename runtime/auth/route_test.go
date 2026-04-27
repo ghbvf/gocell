@@ -23,8 +23,9 @@ func newCaptureMux() *captureMux { return &captureMux{ServeMux: http.NewServeMux
 
 func (m *captureMux) Handle(pattern string, h http.Handler) { m.ServeMux.Handle(pattern, h) }
 
-func (m *captureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) {
+func (m *captureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) error {
 	m.metas = append(m.metas, meta)
+	return nil
 }
 
 var (
@@ -148,8 +149,9 @@ func (m *prefixedCaptureMux) Handle(pattern string, h http.Handler) {
 	m.ServeMux.Handle(pattern, h)
 }
 
-func (m *prefixedCaptureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) {
+func (m *prefixedCaptureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) error {
 	m.metas = append(m.metas, meta)
+	return nil
 }
 
 func (m *prefixedCaptureMux) Prefix() string { return m.prefix }

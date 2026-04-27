@@ -167,7 +167,10 @@ func (v *Validator) walkDocNamingInclude(include string, exclude []string, seen 
 		return nil
 	}
 	err := filepath.WalkDir(baseAbs, func(abs string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return nil
 		}
 		v.addDocNamingTarget(abs, exclude, seen)

@@ -227,7 +227,7 @@ func isPrintableASCII(s string) bool {
 // Extracted from CreateAdmin to keep CreateAdmin under the cognitive-complexity
 // ceiling after adding the pre-bcrypt Status fast-path.
 func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput, hash []byte) (*domain.User, error) {
-	user, outcome, err := s.provisioner.Ensure(ctx, adminprovision.ProvisionInput{
+	result, err := s.provisioner.Ensure(ctx, adminprovision.ProvisionInput{
 		Username:     in.Username,
 		Email:        in.Email,
 		PasswordHash: hash,
@@ -237,24 +237,24 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 	if err != nil {
 		return nil, fmt.Errorf("setup: ensure admin: %w", err)
 	}
-	switch outcome {
+	switch result.Outcome {
 	case adminprovision.OutcomeAlreadyExists, adminprovision.OutcomeRaceSkipped:
 		return nil, setupRetiredError()
 	case adminprovision.OutcomeCreated:
-		if err := s.publishUserCreated(ctx, user); err != nil {
+		if err := s.publishUserCreated(ctx, result.User); err != nil {
 			return nil, err
 		}
 	case adminprovision.OutcomeOrphanRecovered:
 		s.logger.Warn("setup: orphan user recovered; emitting user.created",
 			slog.String("event", "setup_orphan_recover"),
-			slog.String("user_id", user.ID))
-		if err := s.publishUserCreated(ctx, user); err != nil {
+			slog.String("user_id", result.User.ID))
+		if err := s.publishUserCreated(ctx, result.User); err != nil {
 			return nil, err
 		}
 	default:
-		return nil, fmt.Errorf("setup: unexpected provision outcome %d", outcome)
+		return nil, fmt.Errorf("setup: unexpected provision outcome %d", result.Outcome)
 	}
-	return user, nil
+	return result.User, nil
 }
 
 // setupRetiredError is returned when the first-run admin already exists. It

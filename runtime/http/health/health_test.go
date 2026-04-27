@@ -433,14 +433,14 @@ func TestReadyzVerboseQueryParsing(t *testing.T) {
 	}
 }
 
-func TestRegisterChecker_DuplicatePanics(t *testing.T) {
+func TestRegisterChecker_DuplicateReturnsError(t *testing.T) {
 	asm := assembly.New(assembly.Config{ID: "test", DurabilityMode: cell.DurabilityDemo})
 	h := New(asm)
-	h.RegisterChecker("db", func(_ context.Context) error { return nil })
+	require.NoError(t, h.RegisterChecker("db", func(_ context.Context) error { return nil }))
 
-	assert.PanicsWithValue(t, `health: duplicate checker name "db"`, func() {
-		h.RegisterChecker("db", func(_ context.Context) error { return nil })
-	})
+	err := h.RegisterChecker("db", func(_ context.Context) error { return nil })
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), `duplicate checker name "db"`)
 }
 
 func TestReadyz_ShuttingDown_Returns503(t *testing.T) {

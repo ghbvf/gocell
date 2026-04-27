@@ -42,6 +42,15 @@ func stdInput() adminprovision.ProvisionInput {
 	}
 }
 
+func ensureForTest(
+	p *adminprovision.Provisioner,
+	ctx context.Context,
+	in adminprovision.ProvisionInput,
+) (*domain.User, adminprovision.ProvisionOutcome, error) {
+	result, err := p.Ensure(ctx, in)
+	return result.User, result.Outcome, err
+}
+
 // --- NewProvisioner -------------------------------------------------------
 
 func TestNewProvisioner_NilDependency_ReturnsError(t *testing.T) {
@@ -100,7 +109,7 @@ func TestProvisioner_Ensure_FreshSystem_CreatesUserAndRole(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("00000000-0000-4000-8000-000000000001"))
 
-	user, outcome, err := p.Ensure(context.Background(), stdInput())
+	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeCreated, outcome)
 	require.NotNil(t, user)
@@ -124,7 +133,7 @@ func TestProvisioner_Ensure_AdminExists_FastPathSkipsNoWrites(t *testing.T) {
 	counting := &countingUserRepo{UserRepository: userRepo}
 	p := newProvisioner(t, counting, roleRepo, fixedUUID("x"))
 
-	user, outcome, err := p.Ensure(context.Background(), stdInput())
+	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeAlreadyExists, outcome)
 	assert.Nil(t, user)
@@ -138,7 +147,7 @@ func TestProvisioner_Ensure_RaceSkipped_NoCreatedUserReturned(t *testing.T) {
 	roleRepo := &scriptedRoleRepo{counts: []int{0, 1}}
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
 
-	user, outcome, err := p.Ensure(context.Background(), stdInput())
+	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeRaceSkipped, outcome)
 	assert.Nil(t, user)
@@ -160,7 +169,7 @@ func TestProvisioner_Ensure_OrphanRecovered_ResumesAssignment(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
 
-	user, outcome, err := p.Ensure(context.Background(), stdInput())
+	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeOrphanRecovered, outcome)
 	require.NotNil(t, user)
@@ -187,7 +196,7 @@ func TestProvisioner_Ensure_DuplicateIdentityUser_ReturnsConflictWithoutTakeover
 	roleRepo := mem.NewRoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
 
-	user, outcome, err := p.Ensure(context.Background(), stdInput())
+	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Nil(t, user)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
@@ -222,7 +231,7 @@ func TestProvisioner_Ensure_DuplicateDifferentSource_ReturnsConflictWithoutTakeo
 	in := stdInput()
 	in.Source = domain.UserSourceSetup
 	in.RequireReset = false
-	user, outcome, err := p.Ensure(context.Background(), in)
+	user, outcome, err := ensureForTest(p, context.Background(), in)
 	require.Error(t, err)
 	assert.Nil(t, user)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
@@ -252,7 +261,7 @@ func TestProvisioner_Ensure_OrphanUpdateFails_Surfaced(t *testing.T) {
 
 	roleRepo := mem.NewRoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-	_, outcome, err := p.Ensure(context.Background(), stdInput())
+	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
 	assert.ErrorContains(t, err, "reset orphan credentials")
@@ -264,7 +273,7 @@ func TestProvisioner_Ensure_OrphanLookupFails_Surfaced(t *testing.T) {
 	userRepo := &orphanLookupFailRepo{duplicateUserRepo: duplicateUserRepo{}, lookupErr: errors.New("lookup failed")}
 	roleRepo := &scriptedRoleRepo{counts: []int{0, 0}}
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-	_, outcome, err := p.Ensure(context.Background(), stdInput())
+	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
 	assert.ErrorContains(t, err, "lookup orphan user")
@@ -275,7 +284,7 @@ func TestProvisioner_Ensure_RecountAfterDuplicateFails_Surfaced(t *testing.T) {
 	userRepo := &duplicateUserRepo{}
 	roleRepo := &recountErrRoleRepo{firstCount: 0, recountErr: errors.New("recount failed")}
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("x"))
-	_, outcome, err := p.Ensure(context.Background(), stdInput())
+	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
 	assert.ErrorContains(t, err, "recount after duplicate user")
@@ -284,7 +293,7 @@ func TestProvisioner_Ensure_RecountAfterDuplicateFails_Surfaced(t *testing.T) {
 func TestProvisioner_Ensure_RoleRepoCountError_Surfaced(t *testing.T) {
 	roleRepo := &errRoleRepo{countErr: errors.New("boom")}
 	p := newProvisioner(t, mem.NewUserRepository(), roleRepo, fixedUUID("x"))
-	_, outcome, err := p.Ensure(context.Background(), stdInput())
+	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
 }
@@ -292,7 +301,7 @@ func TestProvisioner_Ensure_RoleRepoCountError_Surfaced(t *testing.T) {
 func TestProvisioner_Ensure_RoleCreateNonDuplicateError_Surfaced(t *testing.T) {
 	roleRepo := &errRoleRepo{createErr: errors.New("pg down")}
 	p := newProvisioner(t, mem.NewUserRepository(), roleRepo, fixedUUID("x"))
-	_, outcome, err := p.Ensure(context.Background(), stdInput())
+	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
 	assert.ErrorContains(t, err, "ensure admin role")
@@ -305,7 +314,7 @@ func TestProvisioner_Ensure_RoleCreateDuplicate_Tolerated(t *testing.T) {
 	require.NoError(t, roleRepo.Create(context.Background(), role))
 
 	p := newProvisioner(t, mem.NewUserRepository(), roleRepo, fixedUUID("x"))
-	user, outcome, err := p.Ensure(context.Background(), stdInput())
+	user, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	assert.Equal(t, adminprovision.OutcomeCreated, outcome)
 	require.NotNil(t, user)
@@ -314,7 +323,7 @@ func TestProvisioner_Ensure_RoleCreateDuplicate_Tolerated(t *testing.T) {
 func TestProvisioner_Ensure_UserCreateInfraError_Surfaced(t *testing.T) {
 	userRepo := &errUserRepo{createErr: errors.New("db down")}
 	p := newProvisioner(t, userRepo, mem.NewRoleRepository(), fixedUUID("x"))
-	_, outcome, err := p.Ensure(context.Background(), stdInput())
+	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
 	assert.ErrorContains(t, err, "create user")
@@ -323,7 +332,7 @@ func TestProvisioner_Ensure_UserCreateInfraError_Surfaced(t *testing.T) {
 func TestProvisioner_Ensure_AssignToUserError_Surfaced(t *testing.T) {
 	roleRepo := &errRoleRepo{assignErr: errors.New("fk violation")}
 	p := newProvisioner(t, mem.NewUserRepository(), roleRepo, fixedUUID("x"))
-	_, outcome, err := p.Ensure(context.Background(), stdInput())
+	_, outcome, err := ensureForTest(p, context.Background(), stdInput())
 	require.Error(t, err)
 	assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
 	assert.ErrorContains(t, err, "assign admin role")
@@ -340,7 +349,7 @@ func TestProvisioner_Ensure_InvalidInput_Errors(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			_, outcome, err := p.Ensure(context.Background(), tc.in)
+			_, outcome, err := ensureForTest(p, context.Background(), tc.in)
 			require.Error(t, err)
 			assert.Equal(t, adminprovision.OutcomeUnknown, outcome)
 		})
@@ -353,7 +362,7 @@ func TestProvisioner_Compensate_RemovesRoleAndUser(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	roleRepo := mem.NewRoleRepository()
 	p := newProvisioner(t, userRepo, roleRepo, fixedUUID("zzz"))
-	user, _, err := p.Ensure(context.Background(), stdInput())
+	user, _, err := ensureForTest(p, context.Background(), stdInput())
 	require.NoError(t, err)
 	require.NotNil(t, user)
 
@@ -454,7 +463,7 @@ func (r *scriptedRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, 
 	return true, nil
 }
 func (r *scriptedRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
-	return nil, nil
+	return &domain.Role{ID: id}, nil
 }
 func (r *scriptedRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return nil, nil
@@ -485,7 +494,7 @@ func (r *errRoleRepo) RemoveFromUserIfNotLast(ctx context.Context, userID, roleI
 	return true, nil
 }
 func (r *errRoleRepo) GetByID(ctx context.Context, id string) (*domain.Role, error) {
-	return nil, nil
+	return &domain.Role{ID: id}, nil
 }
 func (r *errRoleRepo) ListByUserID(ctx context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
 	return nil, nil

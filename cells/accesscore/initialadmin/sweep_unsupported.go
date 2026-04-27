@@ -5,8 +5,6 @@ package initialadmin
 import (
 	"context"
 	"log/slog"
-
-	"github.com/ghbvf/gocell/runtime/worker"
 )
 
 // sweepConfig parameterises startup-time credential sweep.
@@ -24,6 +22,6 @@ type sweepConfig struct {
 
 // sweep is a no-op on non-unix platforms.
 // Credential file operations are only supported on unix.
-func sweep(_ context.Context, _ sweepConfig) (worker.Worker, error) {
-	return nil, nil
+func sweep(_ context.Context, _ sweepConfig) (sweepResult, error) {
+	return sweepResult{}, nil
 }

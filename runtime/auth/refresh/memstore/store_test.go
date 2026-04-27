@@ -20,6 +20,6 @@ func TestMemStoreContract(t *testing.T) {
 		clock := storetest.NewFakeClock(baseTime)
 		// Pass nil for rand so memstore falls back to crypto/rand (fine for
 		// the red phase; B3 may inject a deterministic reader for hermeticity).
-		return memstore.New(policy, clock, nil), clock
+		return memstore.MustNew(policy, clock, nil), clock
 	})
 }

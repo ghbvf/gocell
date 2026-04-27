@@ -24,7 +24,7 @@
 //
 //	rdb := goredis.NewClient(&goredis.Options{Addr: "localhost:6379"})
 //	driver := redis.NewRedisDriver(rdb)
-//	locker := distlock.New(driver,
+//	locker := distlock.MustNew(driver,
 //	    distlock.WithRenewFraction(0.5),
 //	    distlock.WithReleaseTimeout(5*time.Second),
 //	)

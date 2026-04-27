@@ -48,7 +48,7 @@ func setup() (http.Handler, string) {
 	u.ID = "usr-1"
 	_ = userRepo.Create(context.Background(), u)
 
-	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux, wireToken
@@ -191,7 +191,7 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 	userRepo := mem.NewUserRepository()
 	store := unavailableRefreshStore{Store: newTestRefreshStore()}
-	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, store, testIssuer, slog.Default())
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 

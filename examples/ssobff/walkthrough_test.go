@@ -260,7 +260,7 @@ func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturing
 	// here too — auth.MustMount(Public:true) on /internal paths still works because
 	// the matcher fires before AuthMiddleware and the test never exercises a
 	// JWT-only internal route.
-	r := router.New(
+	r := router.MustNew(
 		router.WithAuthMiddleware(ac.TokenVerifier()),
 	)
 	mountAllRouteGroups(r, ac, auc, cc)

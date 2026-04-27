@@ -95,10 +95,10 @@ func TestLoadRedisConfigFromEnv_InvalidDBFailFast(t *testing.T) {
 func TestBuildRedisClient_NotConfiguredReturnsNil(t *testing.T) {
 	t.Setenv(envRedisAddr, "")
 
-	client, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
+	result, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
 
 	require.NoError(t, err)
-	assert.Nil(t, client)
+	assert.Nil(t, result.Client)
 }
 
 func TestBuildRedisClient_UsesConfiguredFactory(t *testing.T) {
@@ -111,9 +111,10 @@ func TestBuildRedisClient_UsesConfiguredFactory(t *testing.T) {
 		return new(adapterredis.Client), nil
 	})
 
-	client, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
+	result, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
 
 	require.NoError(t, err)
+	client := result.Client
 	require.NotNil(t, client)
 	assert.Equal(t, "redis:6379", gotCfg.Addr)
 	assert.Equal(t, "secret", gotCfg.Password)
@@ -126,10 +127,10 @@ func TestBuildRedisClient_FactoryErrorWrapped(t *testing.T) {
 		return nil, errRedisTestFactory
 	})
 
-	client, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
+	result, err := buildRedisClient(context.Background(), bootstrap.Topology{AdapterMode: "dev"})
 
 	require.Error(t, err)
-	assert.Nil(t, client)
+	assert.Nil(t, result.Client)
 	assert.ErrorIs(t, err, errRedisTestFactory)
 	assert.Contains(t, err.Error(), "build Redis client")
 }
@@ -273,5 +274,5 @@ func (fakeDistributedNonceStore) Kind() auth.NonceStoreKind {
 type fakeDistributedClaimer struct{}
 
 func (fakeDistributedClaimer) Claim(context.Context, string, time.Duration, time.Duration) (idempotency.ClaimState, idempotency.Receipt, error) {
-	return idempotency.ClaimDone, nil, nil
+	return idempotency.ClaimDone, idempotency.NonAcquiredReceipt(), nil
 }

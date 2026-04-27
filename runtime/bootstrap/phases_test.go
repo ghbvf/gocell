@@ -206,7 +206,7 @@ func TestPhase0_AcceptsAuthMTLSWithProperTLS(t *testing.T) {
 		// GetCertificate provides the server-side certificate at handshake time.
 		// Without at least one cert source, the TLS sanity check (Wave B) rejects
 		// the config because no TLS handshake can complete.
-		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) { return nil, nil },
+		GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) { return &tls.Certificate{}, nil },
 	}
 	b := New(
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
@@ -1103,7 +1103,7 @@ func TestPhase0_TLSConfigWithGetCertificate_Accepted(t *testing.T) {
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}},
 			WithListenerTLS(&tls.Config{
 				GetCertificate: func(_ *tls.ClientHelloInfo) (*tls.Certificate, error) {
-					return nil, nil
+					return &tls.Certificate{}, nil
 				},
 			})),
 	)

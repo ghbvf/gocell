@@ -92,13 +92,14 @@ func TestSweep_NoFile_NoOp(t *testing.T) {
 	logger, cap := newBootstrapCapturingLogger()
 	now := time.Now()
 
-	w, err := sweep(context.Background(), sweepConfig{
+	result, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
 	})
 
 	require.NoError(t, err)
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when file does not exist")
 
 	cap.mu.Lock()
@@ -115,13 +116,14 @@ func TestSweep_ExpiredFile_Removed(t *testing.T) {
 
 	credPath := writeExpiredCredFile(t, dir, now)
 
-	w, err := sweep(context.Background(), sweepConfig{
+	result, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
 	})
 
 	require.NoError(t, err)
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when expired file is removed")
 
 	// File must be gone.
@@ -145,13 +147,14 @@ func TestSweep_FreshFile_Retained(t *testing.T) {
 
 	credPath := writeFreshCredFile(t, dir, now)
 
-	w, err := sweep(context.Background(), sweepConfig{
+	result, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
 	})
 
 	require.NoError(t, err)
+	w := result.Cleaner
 
 	// File must be retained.
 	_, statErr := os.Stat(credPath)
@@ -178,13 +181,14 @@ func TestSweep_FreshFile_ReturnsCleanerWorker(t *testing.T) {
 
 	// Use a manual scheduler so the timer never fires during the test.
 	sched := &manualScheduler{}
-	w, err := sweep(context.Background(), sweepConfig{
+	result, err := sweep(context.Background(), sweepConfig{
 		StateDir:  dir,
 		Clock:     fixedClock{now: now},
 		Scheduler: sched,
 		Logger:    logger,
 	})
 	require.NoError(t, err)
+	w := result.Cleaner
 	require.NotNil(t, w, "worker must be non-nil for fresh file")
 
 	// Stop before Start is idempotent (cleaner.state transitions to Stopped).
@@ -210,13 +214,14 @@ func TestSweep_UnreadableFile_LogErrorContinue(t *testing.T) {
 		_ = os.Chmod(credPath, 0o600)
 	})
 
-	w, err := sweep(context.Background(), sweepConfig{
+	result, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
 	})
 
 	require.NoError(t, err, "sweep must not return error even when file is unreadable")
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when file is unreadable")
 
 	// Must have at least one Error-level log.
@@ -239,13 +244,14 @@ func TestSweep_StateDirNotExist_NoError(t *testing.T) {
 	logger, cap := newBootstrapCapturingLogger()
 	now := time.Now()
 
-	w, err := sweep(context.Background(), sweepConfig{
+	result, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
 	})
 
 	require.NoError(t, err)
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when StateDir does not exist")
 
 	cap.mu.Lock()
@@ -266,13 +272,14 @@ func TestSweep_MalformedExpiresAt_LogErrorContinue(t *testing.T) {
 
 	credPath := writeMalformedCredFile(t, dir)
 
-	w, err := sweep(context.Background(), sweepConfig{
+	result, err := sweep(context.Background(), sweepConfig{
 		StateDir: dir,
 		Clock:    fixedClock{now: now},
 		Logger:   logger,
 	})
 
 	require.NoError(t, err, "malformed expires_at must not block startup")
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when expires_at is malformed")
 
 	// File must be retained (never delete unknown formats).

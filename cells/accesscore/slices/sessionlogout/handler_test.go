@@ -30,7 +30,7 @@ const (
 
 func newHandlerLogoutRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 // setup wires the slice handler onto a celltest mux via RegisterRoutes — the
@@ -45,7 +45,7 @@ func setup() http.Handler {
 	other.ID = testutil.TestID("sess-victim")
 	_ = sessionRepo.Create(context.Background(), other)
 
-	svc := NewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default())
+	svc := MustNewService(sessionRepo, newHandlerLogoutRefreshStore(), slog.Default())
 	mux := celltest.NewTestMux()
 	NewHandler(svc).RegisterRoutes(mux)
 	return mux

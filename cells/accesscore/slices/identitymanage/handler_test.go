@@ -32,7 +32,7 @@ const invalidUUID = "not-a-uuid-string"
 
 func newHandlerIdentityRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 // handlerStubIssuer is a minimal TokenIssuer stub used by handler tests that

@@ -151,24 +151,30 @@ func New(asm *assembly.CoreAssembly, opts ...Option) *Handler {
 	return h
 }
 
-// RegisterChecker adds a named readiness checker. It panics if a checker with
-// the same name is already registered (fail-fast at startup, matching Go
-// convention for registration functions like http.HandleFunc). Passing a nil
-// fn also panics for the same reason.
+// RegisterChecker adds a named readiness checker. It returns an error when a
+// checker with the same name is already registered or when fn is nil.
 //
 // The supplied function is wrapped with wrapCtxSafe before being stored, so
 // the effective Checker honours ctx.Done regardless of the inner
 // implementation's cooperativeness. See wrapCtxSafe for the full contract.
-func (h *Handler) RegisterChecker(name string, fn Checker) {
+func (h *Handler) RegisterChecker(name string, fn Checker) error {
 	if fn == nil {
-		panic(fmt.Sprintf("health: nil checker for %q", name))
+		return fmt.Errorf("health: nil checker for %q", name)
 	}
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	if _, exists := h.checkers[name]; exists {
-		panic(fmt.Sprintf("health: duplicate checker name %q", name))
+		return fmt.Errorf("health: duplicate checker name %q", name)
 	}
 	h.checkers[name] = wrapCtxSafe(fn)
+	return nil
+}
+
+// MustRegisterChecker is the static-wiring variant of RegisterChecker.
+func (h *Handler) MustRegisterChecker(name string, fn Checker) {
+	if err := h.RegisterChecker(name, fn); err != nil {
+		panic(err.Error())
+	}
 }
 
 // SetVerboseToken sets a bearer token that must be provided via the

@@ -144,7 +144,7 @@ func findWithListenerNilAuthChain(path string) ([]int, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil // tolerate parse errors (build step handles them)
+		return nil, err
 	}
 	var lines []int
 	ast.Inspect(f, func(n ast.Node) bool {
@@ -282,7 +282,7 @@ func findInsecureSkipVerifyAssign(path string) ([]int, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	var lines []int
 	ast.Inspect(f, func(n ast.Node) bool {

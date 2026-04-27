@@ -21,12 +21,12 @@ import (
 
 func newLogoutRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 func newTestService() (*Service, *mem.SessionRepository) {
 	repo := mem.NewSessionRepository()
-	return NewService(repo, newLogoutRefreshStore(), slog.Default()), repo
+	return MustNewService(repo, newLogoutRefreshStore(), slog.Default()), repo
 }
 
 func seedSession(repo *mem.SessionRepository, id, userID string) {
@@ -135,7 +135,7 @@ func TestService_Logout_PublishError_DoesNotFailLogout(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore", outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter))
+	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(emitter))
 
 	err = svc.Logout(context.Background(), "sess-pub", "usr-1")
 	require.NoError(t, err, "publish failure in demo mode should not fail logout")

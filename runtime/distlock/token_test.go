@@ -22,7 +22,7 @@ func TestRandomToken_LengthAndUniqueness(t *testing.T) {
 
 	fc := locktest.NewFakeClock(time.Time{})
 	fd := locktest.NewFakeDriver()
-	l := distlock.New(fd, distlock.WithClock(fc))
+	l := distlock.MustNew(fd, distlock.WithClock(fc))
 
 	tokens := make(map[string]bool, n)
 	releases := make([]func() error, 0, n)

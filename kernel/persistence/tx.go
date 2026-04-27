@@ -3,7 +3,10 @@
 // adapters/postgres) and consumed by cells via dependency injection.
 package persistence
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 // TxRunner executes fn within a database transaction. The transaction
 // is embedded in the context so that participants (e.g., outbox.Writer)
@@ -20,10 +23,11 @@ type TxRunner interface {
 type NoopTxRunner struct{}
 
 // RunInTx calls fn with the provided context (no transaction wrapping).
-// Panics if fn is nil (programming error, ref: net/http.HandleFunc, database/sql.Register).
+// Returns an error when fn is nil so callers can propagate wiring mistakes
+// through their normal startup or request error path.
 func (NoopTxRunner) RunInTx(ctx context.Context, fn func(ctx context.Context) error) error {
 	if fn == nil {
-		panic("persistence: nil fn passed to RunInTx")
+		return fmt.Errorf("persistence: nil fn passed to RunInTx")
 	}
 	return fn(ctx)
 }
