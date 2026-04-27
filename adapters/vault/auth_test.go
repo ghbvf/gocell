@@ -474,23 +474,7 @@ func TestKubernetesAuth_Login_ReadsServiceAccountJWTAndSetsClientToken(t *testin
 	)
 	jwtPath := writeTempFile(t, wantJWT)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/v1/auth/kubernetes/login" {
-			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
-		}
-		var req map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatalf("decode request: %v", err)
-		}
-		if req["role"] != wantRole {
-			t.Fatalf("role = %q, want %q", req["role"], wantRole)
-		}
-		if req["jwt"] != wantJWT {
-			t.Fatalf("jwt = %q, want projected service account JWT", req["jwt"])
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"auth":{"client_token":"vault-k8s-token","lease_duration":3600,"renewable":true}}`))
-	}))
+	server := newKubernetesLoginTestServer(t, wantRole, wantJWT)
 	defer server.Close()
 
 	cfg := vaultapi.DefaultConfig()
@@ -508,6 +492,37 @@ func TestKubernetesAuth_Login_ReadsServiceAccountJWTAndSetsClientToken(t *testin
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
+	assertKubernetesAuthLoginResult(t, result, client)
+}
+
+func newKubernetesLoginTestServer(t *testing.T, wantRole, wantJWT string) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertKubernetesLoginRequest(t, r, wantRole, wantJWT)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"auth":{"client_token":"vault-k8s-token","lease_duration":3600,"renewable":true}}`))
+	}))
+}
+
+func assertKubernetesLoginRequest(t *testing.T, r *http.Request, wantRole, wantJWT string) {
+	t.Helper()
+	if r.Method != http.MethodPut || r.URL.Path != "/v1/auth/kubernetes/login" {
+		t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+	}
+	var req map[string]string
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		t.Fatalf("decode request: %v", err)
+	}
+	if req["role"] != wantRole {
+		t.Fatalf("role = %q, want %q", req["role"], wantRole)
+	}
+	if req["jwt"] != wantJWT {
+		t.Fatalf("jwt = %q, want projected service account JWT", req["jwt"])
+	}
+}
+
+func assertKubernetesAuthLoginResult(t *testing.T, result AuthResult, client *vaultapi.Client) {
+	t.Helper()
 	if result.ClientToken != "vault-k8s-token" {
 		t.Errorf("ClientToken = %q, want vault-k8s-token", result.ClientToken)
 	}
