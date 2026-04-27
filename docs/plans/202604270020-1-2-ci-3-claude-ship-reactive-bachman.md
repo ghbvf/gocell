@@ -31,6 +31,18 @@ PR-CFG-G1 review 的 8 条 FU 是同型现象的**缩小版预览**——任何 
 3. **claude 规则分层**：参考 `docs/new-setting/` 风格；本 plan 只**先写大概骨架** + 反复模式占位条款，详细内容后续 plan
 4. **v1 schema ADR 一起决策**：不再排到 backlog，纳入本 plan 决策
 
+## 当前完成状态（2026-04-27）
+
+**基准**：最近合并 PR 为 #302（`b5131358`，2026-04-27 18:22 CST），`origin/develop` 已到该提交；本地 `develop` 尚落后 1 个提交，未在本次文档更新中 rebase。
+
+| 阶段 | 状态 | PR / 依据 | 备注 |
+|---|---|---|---|
+| 阶段 0 Baseline 同步 | ✅ 已完成 | #291 / #292 已合入，后续 Phase 1 PR 均基于更新后的 `develop` 合并 | 当前本地工作区有未提交改动，未执行 pull/rebase |
+| 阶段 1 CI 模式治理 | ✅ 已完成（8/8） | #293 / #294 / #295 / #296 / #297 / #298 / #300 / #302 | #301 为 review hardening 补充闭环，不单独占 Phase 1 名额 |
+| 阶段 2 Claude 分层规则骨架 | ⏳ 未开始 | 未找到 `PR-CLAUDE-LAYERED` 合并 PR；`origin/develop` 上 6 个层级 `CLAUDE.md` 仍缺失 | 下一步 |
+| 阶段 3 v1 Schema 演进 ADR | ⏳ 未开始 | 未找到 `PR-V1-EVOLVE-ADR` 合并 PR；`docs/architecture/202604260000-v1-schema-evolution.md` 仍缺失 | 阶段 1 后执行 |
+| 阶段 4 6 角色 retrospective | ⏳ 未开始 | 依赖阶段 2 + 阶段 3 完成 | 最终验收 |
+
 ---
 
 ## 范围与依赖
@@ -50,7 +62,7 @@ PR-CFG-G1 review 的 8 条 FU 是同型现象的**缩小版预览**——任何 
 
 ## 实施切分（4 阶段）
 
-### 阶段 0 — Baseline 同步（10 min）
+### 阶段 0 — Baseline 同步（10 min，✅ 已完成）
 
 ```bash
 git fetch origin && git pull --rebase   # 整合 G1 #292 / G2 #291 合并状态
@@ -63,7 +75,7 @@ go run ./cmd/gocell validate --strict   # 当前基线 0 violations
 
 ---
 
-### 阶段 1 — CI 模式治理（**8 个 PR，每个 1 模式 + 业务修复**，~62h，🔴 治本+治标）
+### 阶段 1 — CI 模式治理（**8 个 PR，每个 1 模式 + 业务修复**，~62h，✅ 已完成）
 
 **抽象**：每个 PR = 1 archtest 规则 + 该规则触发的全仓业务代码 fail 一次性全量消化。**CI 始终绿**（开 PR 前先在 worktree 跑通 archtest 0 violations）。
 
@@ -71,17 +83,17 @@ go run ./cmd/gocell validate --strict   # 当前基线 0 violations
 
 **PR 顺序**（安全优先 → 漂移 → 一致性 → 健壮性 → 边界 → 验收）：
 
-| PR | 规则 + 落点 | 业务消化范围 | 工时 |
-|---|---|---|---:|
-| **PR-MODE-1** SEC-FAIL-CLOSED | 新 `tools/archtest/security_defaults_test.go`（4 sub-test）| 修 `cmd/corebundle/{controlplane,bundle}.go` 控制面 addr-driven；`runtime/bootstrap/listener.go` internal/health 强制 auth chain；`runtime/http/health/health.go` verbose token fail-closed；`adapters/{redis,vault,s3}` Config endpoint 强制 TLS；`adapters/websocket/handler.go` Origins required；`examples/*/main.go` 同步修 demo | 12h |
-| **PR-MODE-2** META-SUBSCRIPTION-DRIFT | `kernel/governance/rules_advisory.go` 扩 ADV-06 | 修 `cells/auditcore/slices/auditappend/slice.yaml` contractUsages 同步实际订阅；扫全仓其他 cells 的同型漂移并修 | 5h |
-| **PR-MODE-3** META-QUERYPARAM-DRIFT | 新 `tools/archtest/queryparam_drift_test.go` | 修 `cells/auditcore/slices/auditquery` contract.yaml + handler 双向同步；`cells/accesscore/slices/identitymanage/handler.go` user patch 改 strict DTO；扫全仓同型漂移 | 8h |
-| **PR-MODE-4** CONTRACT-CLIENTS-AUDIENCE | `kernel/governance/rules_ref.go` 新 REF-17 | 修 `contracts/http/auth/role/{assign,revoke,list}/v1/contract.yaml::endpoints.clients`（含 backlog G2-FU1）；扫全仓 internal path 但 clients 含 external actor 的所有点 | 4h |
-| **PR-MODE-5** CONTRACT-INPUT-CONSTRAINT | `kernel/governance/rules_strict.go` 扩 FMT-INPUT-CONSTRAINT-01 | 全仓 HTTP request schema 字符串字段加 `minLength`/`maxLength`；list endpoint `limit` 加 `maximum: 500` | 5h |
-| **PR-MODE-6** ERROR-FIRST-API | 新 `tools/archtest/error_first_test.go` | 修 `kernel/wrapper/{handler,spec,auth_plan}.go` 改 error-first + 提供 `Must*` 包装；`adapters/postgres/refresh_store.go`；`runtime/eventrouter/router.go` RegisterSubscriptions panic→error；`runtime/worker/worker.go` nil 退出建模为 `ErrWorkerExitedEarly`；architectural panic 白名单 ≤ 5 点 ADR 标注 | 14h |
-| **PR-MODE-7** CELL-PORTS-PURE | `tools/archtest/layer_test.go` 扩 LAYER-10 | 修 `cells/configcore/{cell,cell_init}.go` Cell 公共 API 不再暴露 `*adapterpg.Pool`；`cmd/corebundle/{configcore,access,audit}_module.go` composition root 装配责任回收；扫全仓同型边界泄漏 | 10h |
-| **PR-MODE-8** JOURNEY-AUTO-CHECK | `kernel/governance/rules_verify.go` 扩 VERIFY-06 | strict 模式要求 `lifecycle: active` journey ≥1 auto check；修 `journeys/J-*.yaml` 全部加 auto check 或标 experimental（结合 backlog `PR220-3`）| 4h |
-| **合计** | — | — | **62h** |
+| PR | 状态 | 规则 + 落点 | 业务消化范围 | 工时 |
+|---|---|---|---|---:|
+| **PR-MODE-1** SEC-FAIL-CLOSED | ✅ #297 已合并 | 新 `tools/archtest/security_defaults_test.go`（4 sub-test）| 修 `cmd/corebundle/{controlplane,bundle}.go` 控制面 addr-driven；`runtime/bootstrap/listener.go` internal/health 强制 auth chain；`runtime/http/health/health.go` verbose token fail-closed；`adapters/{redis,vault,s3}` Config endpoint 强制 TLS；`adapters/websocket/handler.go` Origins required；`examples/*/main.go` 同步修 demo | 12h |
+| **PR-MODE-2** META-SUBSCRIPTION-DRIFT | ✅ #294 已合并 | `kernel/governance/rules_advisory.go` 扩 ADV-06 | 修 `cells/auditcore/slices/auditappend/slice.yaml` contractUsages 同步实际订阅；扫全仓其他 cells 的同型漂移并修 | 5h |
+| **PR-MODE-3** META-QUERYPARAM-DRIFT | ✅ #300 已合并 | 新 `tools/archtest/queryparam_drift_test.go` | 修 `cells/auditcore/slices/auditquery` contract.yaml + handler 双向同步；`cells/accesscore/slices/identitymanage/handler.go` user patch 改 strict DTO；扫全仓同型漂移 | 8h |
+| **PR-MODE-4** CONTRACT-CLIENTS-AUDIENCE | ✅ #293 已合并 | `kernel/governance/rules_ref.go` 新 REF-17 | 修 `contracts/http/auth/role/{assign,revoke,list}/v1/contract.yaml::endpoints.clients`（含 backlog G2-FU1）；扫全仓 internal path 但 clients 含 external actor 的所有点 | 4h |
+| **PR-MODE-5** CONTRACT-INPUT-CONSTRAINT | ✅ #298 已合并 | `kernel/governance/rules_strict.go` 扩 FMT-INPUT-CONSTRAINT-01 | 全仓 HTTP request schema 字符串字段加 `minLength`/`maxLength`；list endpoint `limit` 加 `maximum: 500` | 5h |
+| **PR-MODE-6** ERROR-FIRST-API | ✅ #296 已合并 | 新 `tools/archtest/error_first_test.go` | 修 `kernel/wrapper/{handler,spec,auth_plan}.go` 改 error-first + 提供 `Must*` 包装；`adapters/postgres/refresh_store.go`；`runtime/eventrouter/router.go` RegisterSubscriptions panic→error；`runtime/worker/worker.go` nil 退出建模为 `ErrWorkerExitedEarly`；architectural panic 白名单 ≤ 5 点 ADR 标注 | 14h |
+| **PR-MODE-7** CELL-PORTS-PURE | ✅ #302 已合并 | `tools/archtest/layer_test.go` 扩 LAYER-10 | 修 `cells/configcore/{cell,cell_init}.go` Cell 公共 API 不再暴露 `*adapterpg.Pool`；`cmd/corebundle/{configcore,access,audit}_module.go` composition root 装配责任回收；扫全仓同型边界泄漏 | 10h |
+| **PR-MODE-8** JOURNEY-AUTO-CHECK | ✅ #295 已合并 | `kernel/governance/rules_verify.go` 扩 VERIFY-06 | strict 模式要求 `lifecycle: active` journey ≥1 auto check；修 `journeys/J-*.yaml` 全部加 auto check 或标 experimental（结合 backlog `PR220-3`）| 4h |
+| **合计** | ✅ 8/8 已合并 | — | — | **62h** |
 
 **关键复用**：
 - `tools/archtest/topic_const_resolver.go::ResolveString` — 所有 archtest 复用
@@ -110,7 +122,7 @@ go test -tags=integration ./adapters/... ./cmd/corebundle/... -timeout 15m
 
 ---
 
-### 阶段 2 — Claude 分层规则骨架（**单 PR `PR-CLAUDE-LAYERED`**，~4h，🟡 流程治理 + 占位）
+### 阶段 2 — Claude 分层规则骨架（**单 PR `PR-CLAUDE-LAYERED`**，~4h，⏳ 未开始）
 
 **抽象**：参考 `docs/new-setting/` 已设计未应用的分层方案，**先写大概骨架** + 把反复模式守护作为占位条款写入对应层 CLAUDE.md，**详细内容后续 plan 再展开**。
 
@@ -154,7 +166,7 @@ go test -tags=integration ./adapters/... ./cmd/corebundle/... -timeout 15m
 
 ---
 
-### 阶段 3 — v1 Schema 演进 ADR（**单 PR `PR-V1-EVOLVE-ADR`**，~5h，🟡 架构决策）
+### 阶段 3 — v1 Schema 演进 ADR（**单 PR `PR-V1-EVOLVE-ADR`**，~5h，⏳ 未开始）
 
 **抽象**：v1 响应 schema 普遍 `additionalProperties: false`（PR-CFG-E #278 加，对应 contracts 报告 P1.2）与 `.claude/rules/gocell/api-versioning.md:12` "v1 只增不删 / 新增可选字段不破坏 v1" 硬冲突。决策方向 + 落地。
 
@@ -190,7 +202,7 @@ go test -tags=integration ./adapters/... ./cmd/corebundle/... -timeout 15m
 
 ---
 
-### 阶段 4 — 6 角色 retrospective（**L4 强制，~3h，🟢 验收**）
+### 阶段 4 — 6 角色 retrospective（**L4 强制，~3h，⏳ 未开始**）
 
 **抽象**：阶段 1+2+3 累计 diff 整体走 6 角色并行 review，确认无新反复模式漏网。
 
@@ -261,11 +273,11 @@ PR-MODE-1（adapter Config endpoint scheme）/ PR-MODE-2（topic 常量传播）
 
 | 阶段 | PR 数 | 工时 | 节奏 | 累计 |
 |---|---:|---:|---|---:|
-| 0 | — | 0.2h | 立即 | 0.2h |
-| 1 | 8（CI 模式 + 业务消化）| 62h | 部分并行（3 路） ~3-4 工作日 | 62h |
-| 2 | 1（PR-CLAUDE-LAYERED 骨架）| 4h | 与阶段 1 部分并行 | 62h |
-| 3 | 1（PR-V1-EVOLVE-ADR）| 5h | 阶段 1 后 | 71h |
-| 4 | 0（retrospective） | 3h | 串行 | **74h** |
+| 0 | ✅ — | 0.2h | 已完成 | 0.2h |
+| 1 | ✅ 8（CI 模式 + 业务消化）| 62h | 已完成（#293-#298 / #300 / #302） | 62h |
+| 2 | ⏳ 1（PR-CLAUDE-LAYERED 骨架）| 4h | 未开始 | 66h |
+| 3 | ⏳ 1（PR-V1-EVOLVE-ADR）| 5h | 阶段 1 后，未开始 | 71h |
+| 4 | ⏳ 0（retrospective） | 3h | 等阶段 2/3 完成后串行 | **74h** |
 
 **双人并行**：~5 工作日；单人全工时 ~74h
 
@@ -319,3 +331,4 @@ ls docs/reviews/202604*-recurring-patterns-retrospective.md
 - backlog1.md §2.4-2.7 的 PR-LIFECYCLE-ROBUSTNESS / PR-TEST-DEPTH / PR-API-CONSISTENCY / PR-CLI-CONSISTENCY — 既有节奏排期
 - backlog1.md §3 既有 PR 扩充（PR-A53/A41/PR252-F2）
 - 触发条件项 Wave 9/10
+- **PR-MODE-2 范围澄清**：「代码 ↔ slice.yaml 漂移」（即 `RegisterSubscriptions`/`AddHandler` 实际订阅与 `slice.yaml::contractUsages` 不一致）**留作未来另立 archtest**，不在 PR-MODE-2 内。理由：PR-MODE-2 走 `kernel/governance` ADV-06 纯 YAML 双源（`contract.yaml::endpoints.subscribers` ↔ `slice.yaml::contractUsages[role=subscribe]`），当前 contract.yaml 是 ground truth，三方对齐由 ADV-06 双向 + 既有 ADV-05 共同保证；引入 archtest 跨层（依赖 `golang.org/x/tools/go/packages`）会扩大 PR 范围且违反「1 模式 1 PR」原则。

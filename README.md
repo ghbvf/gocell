@@ -290,17 +290,17 @@ mode never silently falls back to those no-op dependencies.
 ## Architecture
 
 ```
-├── kernel/       — Cell/Slice runtime + governance tools (framework core)
-├── cells/        — Platform Cell implementations (accesscore / auditcore / configcore)
-├── contracts/    — Platform cross-Cell boundary contracts ({kind}/{domain}/{version}/)
-├── journeys/     — Platform Journey acceptance specs + status-board.yaml
-├── runtime/      — HTTP middleware, auth, worker, observability, bootstrap
-├── adapters/     — External system adapters (postgres / redis / rabbitmq / websocket / s3 / oidc)
-├── pkg/          — Shared utilities (errcode / ctxkeys / httputil / query)
-├── cmd/          — CLI (gocell validate [--strict] / scaffold / generate / check / verify)
-├── examples/     — Example projects; may include example-local cells/contracts/journeys
-├── templates/    — Project templates (ADR / cell-design / contract-review / runbook / postmortem / grafana)
-└── generated/    — Tool-generated artifacts (indexes, derived views)
+kernel/       — Cell/Slice runtime + governance tools (framework core)
+cells/        — Platform Cell implementations (accesscore / auditcore / configcore)
+contracts/    — Platform cross-Cell boundary contracts ({kind}/{domain}/{version}/)
+journeys/     — Platform Journey acceptance specs + status-board.yaml
+runtime/      — HTTP middleware, auth, worker, observability, bootstrap
+adapters/     — External system adapters (postgres / redis / rabbitmq / websocket / s3 / oidc)
+pkg/          — Shared utilities (errcode / ctxkeys / httputil / query)
+cmd/          — CLI (gocell validate [--strict] / scaffold / generate / check / verify)
+examples/     — Example projects; may include example-local cells/contracts/journeys
+templates/    — Project templates (ADR / cell-design / contract-review / runbook / postmortem / grafana)
+generated/    — Tool-generated artifacts (indexes, derived views)
 ```
 
 ### Layer Dependencies
