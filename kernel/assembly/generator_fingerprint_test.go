@@ -476,3 +476,79 @@ func mutateContractField(c *metadata.ContractMeta, f reflect.StructField) { //no
 		}
 	}
 }
+
+// TestSourceFingerprint_SchemaExtraContentChange verifies that modifying a
+// schema referenced via SchemaRefs.Extra (the inline-captured map of
+// additional schema-ref keys) changes the fingerprint.
+func TestSourceFingerprint_SchemaExtraContentChange(t *testing.T) {
+	root := t.TempDir()
+	contractDir := filepath.Join(root, "contracts", "http", "auth", "login", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+	extraPath := filepath.Join(contractDir, "extra.schema.json")
+	require.NoError(t, os.WriteFile(extraPath, []byte(`{"version":1}`), 0o644))
+
+	p := fingerprintProject()
+	p.Contracts["http.auth.login.v1"].Dir = filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1"))
+	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{
+		Extra: map[string]string{"audit": "extra.schema.json"},
+	}
+
+	baseline := computeFingerprintWithRoot(t, p, root)
+
+	require.NoError(t, os.WriteFile(extraPath, []byte(`{"version":2}`), 0o644))
+	got := computeFingerprintWithRoot(t, p, root)
+
+	assert.NotEqual(t, baseline, got, "changing Extra schema file content must change fingerprint")
+}
+
+// TestSourceFingerprint_SchemaMissingFileFailsLoudly verifies that a schema
+// ref pointing at a nonexistent file produces an error from
+// GenerateBoundary — fingerprinting must not silently skip missing schemas.
+func TestSourceFingerprint_SchemaMissingFileFailsLoudly(t *testing.T) {
+	root := t.TempDir()
+
+	p := fingerprintProject()
+	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
+	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{
+		Request: "does-not-exist.schema.json",
+	}
+
+	gen := NewGenerator(p, "github.com/ghbvf/gocell", root)
+	_, err := gen.GenerateBoundary("ssobff")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "does-not-exist.schema.json")
+}
+
+// TestSourceFingerprint_SchemaExtraMissingFileFailsLoudly is the Extra-map
+// equivalent of the above: a missing Extra file must surface an error.
+func TestSourceFingerprint_SchemaExtraMissingFileFailsLoudly(t *testing.T) {
+	root := t.TempDir()
+
+	p := fingerprintProject()
+	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
+	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{
+		Extra: map[string]string{"audit": "missing.schema.json"},
+	}
+
+	gen := NewGenerator(p, "github.com/ghbvf/gocell", root)
+	_, err := gen.GenerateBoundary("ssobff")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "missing.schema.json")
+}
+
+// TestSourceFingerprint_SchemaExtraEmptyPathSkipped verifies that an Extra
+// entry with empty value is silently skipped (the path is "" so there's
+// nothing to read or hash).
+func TestSourceFingerprint_SchemaExtraEmptyPathSkipped(t *testing.T) {
+	root := t.TempDir()
+
+	p := fingerprintProject()
+	p.Contracts["http.auth.login.v1"].Dir = "contracts/http/auth/login/v1"
+	p.Contracts["http.auth.login.v1"].SchemaRefs = contracts.SchemaRefs{
+		Extra: map[string]string{"audit": ""},
+	}
+
+	gen := NewGenerator(p, "github.com/ghbvf/gocell", root)
+	_, err := gen.GenerateBoundary("ssobff")
+	require.NoError(t, err, "empty Extra entry should be skipped, not error")
+}
