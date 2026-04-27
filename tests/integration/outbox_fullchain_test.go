@@ -8,7 +8,6 @@ import (
 	"testing"
 	"time"
 
-	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/ghbvf/gocell/adapters/postgres"
 	"github.com/ghbvf/gocell/adapters/rabbitmq"
 	"github.com/ghbvf/gocell/adapters/redis"
@@ -18,6 +17,7 @@ import (
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/google/uuid"
+	amqp "github.com/rabbitmq/amqp091-go"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
@@ -410,7 +410,8 @@ func TestIntegration_OutboxFullChain(t *testing.T) {
 	state, receipt2, err := claimer.Claim(ctx, idemKey, idempotency.DefaultLeaseTTL, idempotency.DefaultTTL)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state, "same idempotency key should be detected as done")
-	assert.Nil(t, receipt2, "ClaimDone should not return a Receipt")
+	require.NotNil(t, receipt2, "ClaimDone should return a non-acquired receipt")
+	assert.ErrorIs(t, receipt2.Commit(ctx), idempotency.ErrNoClaimLease)
 
 	// ---------------------------------------------------------------
 	// Step 12: Verify a fresh key is NOT detected as processed.
