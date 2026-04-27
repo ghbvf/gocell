@@ -125,7 +125,8 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		// baseURL is constructed from InternalHTTPAddr. If the addr is a port-only
 		// string (e.g. ":9090") we resolve to loopback; if host:port, prepend scheme.
 		// The HMAC ring from InternalGuard is reused for outbound service-token signing.
-		// In dev mode (InternalGuard == nil) the configreceive slice runs in log-only mode.
+		// If tests construct SharedDeps without InternalGuard, configreceive stays
+		// in log-only mode.
 		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
 		if shared.InternalGuard != nil {
 			accessOpts = append(accessOpts,

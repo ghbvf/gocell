@@ -78,8 +78,8 @@ type SharedDeps struct {
 	ConsumerClaimerKind consumerClaimerKind
 
 	// InternalGuard is the service-token guard protecting /internal/v1/*.
-	// Required when Topology.RequireProductionControlPlane() is true; nil in
-	// dev mode (empty GOCELL_SERVICE_SECRET).
+	// Required whenever InternalHTTPAddr is non-empty; internalGuardFromEnv
+	// rejects an empty GOCELL_SERVICE_SECRET in every adapter mode.
 	//
 	// Held as a typed value (rather than a bare middleware closure) so
 	// validateControlPlane can inspect the backing NonceStore and reject
