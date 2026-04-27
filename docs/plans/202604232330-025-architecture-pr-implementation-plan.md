@@ -18,21 +18,19 @@
 
 | Wave | 剩余 OPEN |
 |---|---|
-| **Wave 2.5** | PR-CFG-1（最小修） / PR-CFG-4 / PR-CFG-6 |
+| **Wave 2.5** | PR-CFG-1（✅ 复核关闭） / PR-CFG-4 / PR-CFG-6 |
 | **Wave 3** | PR-A15 / A16 / A17 / A36 / A37 / A38 |
 | **Wave 4** | PR-A21 / A22 / A24 / A33 |
 
 > Wave 1 / Wave 2 / Wave 2.5 已清零 / Wave 3 已完工（A14b/A18/A35）/ Wave 4 已完工（A19/A20/A23）/ won't-do（PR-CFG-5）—— 全部从本 plan 删除。
 
-### Wave 2.5 残余（3 PR）
+### Wave 2.5 残余（PR-CFG-1 已关闭，剩 PR-CFG-4 / PR-CFG-6）
 
-#### PR-CFG-1 READYZ-RELAY-PROBE-FORWARD-01（P1, Cx1, 🔴 治理基线收口 — 范围已收窄，~2-4h）
+#### PR-CFG-1 READYZ-RELAY-PROBE-FORWARD-01（✅ 2026-04-27 复核关闭）
 
-**真问题**：`bootstrap.expandManagedResources()` (`runtime/bootstrap/managed_resource.go:63-88`) 已实现"`ManagedResource.Checkers()` 自动聚合到 readyz"（#268 PR-CFG-A 落地），治理约束**已存在**。剩余缺口在 `adapters/postgres/pool_resource.go:71-83`：`PGResource.Checkers()` 仅返回 `"postgres"` pool ping，未把 relay 的 `outbox-relay-poll/reclaim/cleanup` 三探针转发出去。relay 失败时 readyz 仍绿是真实运维盲区。
+**复核结论**：基于 `develop @ b5131358`，relay 已在 `cmd/corebundle/bundle.go::buildConfigCoreOpts` 通过 `bootstrap.WithManagedResource(relayWorker)` 独立注册；`bootstrap.expandManagedResources()` 会自动聚合该 relay 的 `Relay.Checkers()`，因此 `outbox-relay-poll/reclaim/cleanup` 已进入 `/readyz?verbose`。原先“把 relay 探针转发进 `PGResource.Checkers()`”的最小修已经过期；若现在继续实施，会与独立 relay ManagedResource 产生重复 checker key，并被 bootstrap duplicate-checker fail-fast 拦截。
 
-**最小修**：`PGResource.Checkers()` 在返回 map 中合并 relay 的 `HealthCheckers()`（按 `relayHealthChecker` 接口或 `*runtimeoutbox.Relay` 类型断言）；`pool_resource_test.go` 加正向断言。
-**搭车（可选 Cx2）**：archtest 加"adapter 暴露 HealthCheckers 但未桥接到 ManagedResource.Checkers" 防回退；可拆独立 PR。
-**文件**：`adapters/postgres/pool_resource.go` + `pool_resource_test.go` + 可选 `tools/archtest/managed_resource_test.go`（新）。
+**关闭方式**：保持 `PGResource` 只负责 postgres pool probe + pool Close；保持 relay 作为独立 ManagedResource 负责 Worker/Close/Checkers。`docs/patterns/pg-cell-template.md` 已同步该 wiring 模式，避免新 cell 模板复活 `NewPGResource(pool, relayWorker)` 旧写法。
 
 #### PR-CFG-4 CONFIG-READ-METADATA-ADMIN-GATE-01（P1, Cx2, 🔴 安全数据泄漏，~1d）
 
