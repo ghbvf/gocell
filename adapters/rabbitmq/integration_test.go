@@ -29,10 +29,10 @@ import (
 // ~5-7s more expensive.
 func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, *tcrabbitmq.RabbitMQContainer, func()) {
 	t.Helper()
+
 	ctx := context.Background()
 
-	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
-	require.NoError(t, err, "start dedicated rabbitmq container")
+	container := testutil.StartRabbitMQContainer(t, ctx)
 
 	amqpURL, err := container.AmqpURL(ctx)
 	require.NoError(t, err, "get dedicated rabbitmq amqp url")

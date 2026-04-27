@@ -55,13 +55,12 @@ down:
 
 # ---------------------------------------------------------------------------
 # Integration tests  (T08)
-# Boots all services, runs adapter-level tests, tears down.
+# Testcontainers self-provisions required services. GOCELL_TEST_DOCKER_REQUIRED
+# makes Docker provider failures fail fast instead of producing local skips.
 # ---------------------------------------------------------------------------
 
 test-integration:
-	docker compose up -d --wait
-	go test ./adapters/... ./tests/integration/... -tags=integration -count=1 -v
-	docker compose down
+	GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e ./adapters/... ./tests/integration/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m -v
 
 # ---------------------------------------------------------------------------
 # examples/ssobff startup smoke

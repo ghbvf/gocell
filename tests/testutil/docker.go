@@ -3,42 +3,64 @@ package testutil
 
 import (
 	"context"
-	"net"
+	"fmt"
 	"os"
 	"testing"
 	"time"
+
+	"github.com/testcontainers/testcontainers-go"
 )
 
-// RequireDocker skips t if Docker is not available in the test environment.
-// Integration tests that use testcontainers must call this at the top of the
-// test (or setup helper) so they self-skip in CI environments without Docker.
-//
-// Detection strategy:
-//  1. DOCKER_HOST env var — if set and non-empty, assume Docker is available.
-//  2. Default Unix socket /var/run/docker.sock — try a 1-second TCP dial.
-//
-// This avoids importing the Docker client SDK while remaining correct for the
-// common CI cases (socket present or DOCKER_HOST set).
-func RequireDocker(t *testing.T) {
-	t.Helper()
-	if dockerAvailable() {
-		return
-	}
-	t.Skip("docker not available; skipping integration test")
+const dockerProviderHealthTimeout = 10 * time.Second
+
+type dockerHealthProvider interface {
+	Health(context.Context) error
 }
 
-// dockerAvailable returns true when Docker appears reachable.
-func dockerAvailable() bool {
-	if host := os.Getenv("DOCKER_HOST"); host != "" {
-		return true
+var (
+	getDockerProvider = func() (dockerHealthProvider, error) {
+		return testcontainers.ProviderDocker.GetProvider()
 	}
-	// Try the default Unix socket via a short-lived TCP dial.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", "/var/run/docker.sock")
+	skipIfDockerProviderUnhealthy = testcontainers.SkipIfProviderIsNotHealthy
+)
+
+// RequireDocker skips t if Docker is not available in a local test environment.
+// Integration tests that use testcontainers must call this at the top of the
+// test (or setup helper) so local runs self-skip when Docker is unavailable.
+//
+// Set GOCELL_TEST_DOCKER_REQUIRED=1 in CI jobs where Docker-backed integration
+// tests are mandatory. In that mode an unavailable provider is a test failure,
+// not a skip, so CI cannot go green without executing the integration path.
+func RequireDocker(t *testing.T) {
+	t.Helper()
+	if dockerRequired() {
+		ctx, cancel := context.WithTimeout(context.Background(), dockerProviderHealthTimeout)
+		defer cancel()
+		if err := dockerProviderHealth(ctx); err != nil {
+			t.Fatal(requireDockerFailureMessage(err))
+		}
+		return
+	}
+
+	skipIfDockerProviderUnhealthy(t)
+}
+
+func dockerRequired() bool {
+	return os.Getenv("GOCELL_TEST_DOCKER_REQUIRED") == "1"
+}
+
+func dockerProviderHealth(ctx context.Context) error {
+	provider, err := getDockerProvider()
 	if err != nil {
-		return false
+		return err
 	}
-	_ = conn.Close()
-	return true
+	return provider.Health(ctx)
+}
+
+func requireDockerFailureMessage(err error) string {
+	return fmt.Sprintf(
+		"docker provider required by GOCELL_TEST_DOCKER_REQUIRED=1 but unhealthy or unavailable (DOCKER_HOST=%q): %v; start Docker or unset GOCELL_TEST_DOCKER_REQUIRED for local self-skip",
+		os.Getenv("DOCKER_HOST"),
+		err,
+	)
 }

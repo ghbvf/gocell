@@ -23,6 +23,8 @@ import (
 // connected Client plus a cleanup function.
 func startRedis(t *testing.T) (*Client, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
+
 	ctx := context.Background()
 
 	container, err := tcredis.Run(ctx, testutil.RedisImage)

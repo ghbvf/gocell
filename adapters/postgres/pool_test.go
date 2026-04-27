@@ -3,10 +3,11 @@ package postgres
 import (
 	"context"
 	"encoding/json"
-	"os"
+	"errors"
 	"testing"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -136,15 +137,18 @@ func TestPool_Stats_NotInitialized(t *testing.T) {
 }
 
 func TestNewPool_UnreachableHost(t *testing.T) {
-	if os.Getenv("PG_INTEGRATION") == "" {
-		t.Skip("skipping integration test; set PG_INTEGRATION=1 to run")
-	}
-	_, err := NewPool(t.Context(), Config{
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+
+	_, err := NewPool(ctx, Config{
 		DSN:      "postgres://nobody:nopass@127.0.0.1:1/nonexistent",
 		MaxConns: 1,
 	})
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ERR_ADAPTER_PG_CONNECT")
+
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "NewPool unreachable error must be structured errcode: %v", err)
+	assert.Equal(t, ErrAdapterPGConnect, ec.Code)
 }
 
 // ---------------------------------------------------------------------------
