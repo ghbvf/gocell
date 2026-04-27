@@ -137,6 +137,33 @@ func TestSweep_ExpiredFile_Removed(t *testing.T) {
 	assert.Equal(t, slog.LevelInfo, rec.level, "expected Info level log")
 }
 
+func TestSweep_EmptyCredentialPathUsesDefaultResolver(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOCELL_STATE_DIR", dir)
+	logger, _ := newBootstrapCapturingLogger()
+	now := time.Now()
+	credPath := writeExpiredCredFile(t, dir, now)
+
+	result, err := sweep(context.Background(), sweepConfig{
+		Clock:  fixedClock{now: now},
+		Logger: logger,
+	})
+
+	require.NoError(t, err)
+	assert.Nil(t, result.Cleaner)
+	_, statErr := os.Stat(credPath)
+	assert.True(t, isNotExist(statErr), "empty CredentialPath must sweep the resolved default credential file")
+}
+
+func TestSweep_RelativeCredentialPathReturnsError(t *testing.T) {
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: "relative/initial_admin_password",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result.Cleaner)
+}
+
 // TestSweep_FreshFile_Retained verifies that a non-expired credential file is
 // left untouched and a non-nil cleaner worker is returned for runtime cleanup
 // (P1-16 full fix: fresh orphan files must not persist until next restart).
