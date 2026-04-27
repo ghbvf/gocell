@@ -944,6 +944,16 @@ func findWarnRecord(h *captureHandler) *slog.Record {
 	return nil
 }
 
+func countWarnRecords(h *captureHandler) int {
+	count := 0
+	for i := range h.records {
+		if h.records[i].Level == slog.LevelWarn {
+			count++
+		}
+	}
+	return count
+}
+
 // findErrorRecord returns the first slog.Record at Error level captured by h,
 // or nil if none was recorded. Symmetric with findWarnRecord for 5xx tests.
 func findErrorRecord(h *captureHandler) *slog.Record {
@@ -1085,6 +1095,44 @@ func TestWriteDomainError_4xx_LogsWarn_NoCorrelation(t *testing.T) {
 
 	_, hasSpanID := attrValue(*warnRec, "span_id")
 	assert.False(t, hasSpanID, "log record must NOT contain 'span_id' attr when not set in ctx")
+}
+
+func TestWriteDomainError_4xx_LogSampling(t *testing.T) {
+	handler := &captureHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	ctx := WithListErrorLogSampling(context.Background(), t.Name())
+	for i := 0; i < 200; i++ {
+		rec := httptest.NewRecorder()
+		WriteDomainError(ctx, rec, errcode.New(errcode.ErrValidationFailed, "invalid cursor"))
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+	}
+
+	assert.Equal(t, 2, countWarnRecords(handler), "1%% sampling should log two records for 200 client errors")
+}
+
+func TestWithListErrorLogSampling_EveryOneLogsAll(t *testing.T) {
+	ctx := withClientErrorLogSampling(context.Background(), t.Name(), 1)
+
+	assert.True(t, shouldLogClientError(ctx))
+	assert.True(t, shouldLogClientError(ctx))
+
+	ctxZero := withClientErrorLogSampling(context.Background(), t.Name()+"/zero", 0)
+	assert.True(t, shouldLogClientError(ctxZero))
+	assert.True(t, shouldLogClientError(ctxZero))
+}
+
+func TestWithListErrorLogSampling_RouteKeyedCounters(t *testing.T) {
+	sampler := newListErrorLogSampler(2)
+	ctxA := sampler.withContext(context.Background(), t.Name()+"/a")
+	ctxB := sampler.withContext(context.Background(), t.Name()+"/b")
+
+	assert.False(t, shouldLogClientError(ctxA))
+	assert.True(t, shouldLogClientError(ctxA))
+	assert.False(t, shouldLogClientError(ctxB))
+	assert.True(t, shouldLogClientError(ctxB))
 }
 
 // TestWriteDomainError_499_LogsWarn locks the PR-A50+A51 + PR275 contract:

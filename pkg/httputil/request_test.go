@@ -47,16 +47,20 @@ func TestParsePageParams_ExceedsMax(t *testing.T) {
 
 func TestParsePageParams_ZeroLimit(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/items?limit=0", nil)
-	pr, err := ParsePageParams(r)
-	require.NoError(t, err)
-	assert.Equal(t, query.DefaultPageSize, pr.Limit)
+	_, err := ParsePageParams(r)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
 }
 
 func TestParsePageParams_NegativeLimit(t *testing.T) {
 	r := httptest.NewRequest(http.MethodGet, "/api/v1/items?limit=-1", nil)
-	pr, err := ParsePageParams(r)
-	require.NoError(t, err)
-	assert.Equal(t, query.DefaultPageSize, pr.Limit)
+	_, err := ParsePageParams(r)
+	require.Error(t, err)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrValidationFailed, ecErr.Code)
 }
 
 func TestParsePageParams_NonNumericLimit(t *testing.T) {

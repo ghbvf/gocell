@@ -2,7 +2,6 @@ package httputil
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -19,23 +18,20 @@ import (
 // rejecting oversize cursors at the parse boundary bounds the work any handler
 // can be forced to do before the codec's own length guard fires.
 // ref: kubernetes apiserver 4 KiB continue-token guidance.
-// Zero or negative limits are normalized to DefaultPageSize.
+// Omitted limits are normalized to DefaultPageSize. Explicit zero or negative
+// limits are rejected to match contract queryParam minimum: 1.
 func ParsePageParams(r *http.Request) (query.PageParams, error) {
 	var pr query.PageParams
 
 	if s := r.URL.Query().Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil {
-			slog.Warn("pagination: invalid limit parameter",
-				slog.String("value", s),
-			)
 			return pr, errcode.New(errcode.ErrValidationFailed, "invalid limit parameter")
 		}
+		if n < 1 {
+			return pr, errcode.New(errcode.ErrValidationFailed, "limit must be at least 1")
+		}
 		if n > query.MaxPageSize {
-			slog.Warn("pagination: page size exceeded",
-				slog.Int("requested", n),
-				slog.Int("max", query.MaxPageSize),
-			)
 			return pr, errcode.New(errcode.ErrPageSizeExceeded,
 				fmt.Sprintf("limit %d exceeds maximum %d", n, query.MaxPageSize))
 		}
@@ -44,10 +40,6 @@ func ParsePageParams(r *http.Request) (query.PageParams, error) {
 
 	cursor := r.URL.Query().Get("cursor")
 	if len(cursor) > query.MaxCursorTokenBytes {
-		slog.Warn("pagination: cursor token exceeds maximum length",
-			slog.Int("length", len(cursor)),
-			slog.Int("max", query.MaxCursorTokenBytes),
-		)
 		return pr, errcode.New(errcode.ErrCursorInvalid,
 			"cursor token exceeds maximum length")
 	}

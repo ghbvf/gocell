@@ -182,6 +182,10 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 // span attribute client.cancel.reason and is sourced from
 // ctxcancel.Wrap → ecErr.Details["reason"].
 func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int) {
+	if !shouldLogClientError(ctx) {
+		return
+	}
+
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
 		slog.Int("status", status),
