@@ -232,7 +232,10 @@ jobs:
         # that never started in this job. Compile-time tag regressions
         # for the smoke / encryption packages remain covered by the e2e
         # job's `go test -tags=e2e ./tests/e2e/...`.
-        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+        # tests/testutil owns shared testcontainer startup helpers; include it
+        # so new non-test helper code is covered by its own integration
+        # contract tests instead of relying on downstream packages.
+        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/testutil/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
 
       - name: OTel collector smoke
         env:
