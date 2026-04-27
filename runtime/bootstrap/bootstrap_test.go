@@ -4006,7 +4006,8 @@ func TestBootstrap_Phase5_FinalizeFailure_OnInternalListener(t *testing.T) {
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
+		WithListener(cell.InternalListener, "127.0.0.1:0",
+			[]cell.ListenerAuth{cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})}),
 		WithShutdownTimeout(time.Second),
 	)
 

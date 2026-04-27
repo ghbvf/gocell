@@ -238,6 +238,7 @@ func (d *SharedDeps) Validate() error {
 	errs := d.validateCore()
 	errs = append(errs, d.validateVerboseEndpoint()...)
 	errs = append(errs, d.validateHealthReachability()...)
+	errs = append(errs, d.validateInternalListenerGuard()...)
 	errs = append(errs, d.validateControlPlane()...)
 	return errors.Join(errs...)
 }
@@ -346,6 +347,9 @@ func (d *SharedDeps) validateControlPlane() []error {
 				"InMemoryNonceStore (single pod) or a shared store (multi-pod) "+
 				"via WithServiceTokenNonceStore"))
 	} else if kind == auth.NonceStoreKindInMemory && !d.Topology.SinglePodReplayProtection && d.Topology.RequireProductionControlPlane() {
+		slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
+			slog.String("nonce_store_kind", string(kind)),
+			slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments or configure a distributed NonceStore"))
 		errs = append(errs, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
 			"in-memory nonce store requires GOCELL_SINGLE_POD=1 (single-pod deployments) "+
 				"or a distributed store via WithServiceTokenNonceStore (multi-pod); "+
@@ -357,6 +361,15 @@ func (d *SharedDeps) validateControlPlane() []error {
 				"outbox idempotency claimer; set "+envRedisAddr+" or run with GOCELL_SINGLE_POD=1"))
 	}
 	return errs
+}
+
+func (d *SharedDeps) validateInternalListenerGuard() []error {
+	if d.InternalHTTPAddr == "" || d.InternalGuard != nil {
+		return nil
+	}
+	return []error{errcode.New(errcode.ErrControlplaneServiceSecretMissing,
+		"SharedDeps.InternalGuard must be set when SharedDeps.InternalHTTPAddr is non-empty "+
+			"to protect /internal/v1/*; set GOCELL_SERVICE_SECRET or clear GOCELL_HTTP_INTERNAL_ADDR")}
 }
 
 func (d *SharedDeps) validateHealthReachability() []error {

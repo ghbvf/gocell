@@ -25,6 +25,8 @@ package cell
 import (
 	"fmt"
 	"sync/atomic"
+
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // MinHMACKeyBytes is the minimum byte length required for HMAC secrets used by
@@ -103,7 +105,7 @@ type AuthJWT struct {
 // NewAuthJWT constructs an AuthJWT plan. Returns an error when v is nil so the
 // caller can decide between fail-fast (use MustNewAuthJWT) and graceful refusal.
 func NewAuthJWT(v IntentTokenVerifier) (AuthJWT, error) {
-	if v == nil {
+	if validation.IsNilInterface(v) {
 		return AuthJWT{}, fmt.Errorf("cell: NewAuthJWT verifier must not be nil; use NewAuthJWTFromAssembly(asm) to discover from an authProvider cell")
 	}
 	return AuthJWT{Verifier: v}, nil
@@ -169,7 +171,7 @@ type AuthJWTFromAssembly struct {
 // error when asm is nil; use MustNewAuthJWTFromAssembly for fail-fast static
 // wiring.
 func NewAuthJWTFromAssembly(asm AssemblyRef) (AuthJWTFromAssembly, error) {
-	if asm == nil {
+	if validation.IsNilInterface(asm) {
 		return AuthJWTFromAssembly{}, fmt.Errorf("cell: NewAuthJWTFromAssembly assembly must not be nil")
 	}
 	return AuthJWTFromAssembly{
@@ -271,10 +273,10 @@ type AuthServiceToken struct {
 //
 // Use MustNewAuthServiceToken for fail-fast static wiring at composition root.
 func NewAuthServiceToken(store NonceStore, ring HMACKeyring) (AuthServiceToken, error) {
-	if store == nil {
+	if validation.IsNilInterface(store) {
 		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken store must not be nil")
 	}
-	if ring == nil {
+	if validation.IsNilInterface(ring) {
 		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken ring must not be nil")
 	}
 	if got := len(ring.Current()); got < MinHMACKeyBytes {

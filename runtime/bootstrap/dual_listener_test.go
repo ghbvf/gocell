@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"runtime"
 	"strings"
 	"sync"
@@ -63,6 +64,28 @@ func (c *dualListenerCell) RouteGroups() []cell.RouteGroup {
 	}
 }
 
+func testInternalAuthChain(t *testing.T) ([]cell.ListenerAuth, *auth.HMACKeyRing) {
+	t.Helper()
+	ring, err := auth.NewHMACKeyRing([]byte("test-service-token-secret-32-bytes"), nil)
+	require.NoError(t, err)
+	store, err := auth.NewInMemoryNonceStore(auth.ServiceTokenNonceTTL)
+	require.NoError(t, err)
+	return []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)}, ring
+}
+
+func getWithServiceToken(t *testing.T, rawURL string, ring *auth.HMACKeyRing) *http.Response {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	require.NoError(t, err)
+	req.Header.Set("Authorization", "ServiceToken "+
+		auth.GenerateServiceToken(ring, http.MethodGet, parsed.Path, parsed.RawQuery, time.Now()))
+	resp, err := testHTTPClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
 // TestDualListener_PrimaryReturns404ForInternalPrefix is the core acceptance
 // test for PR-A14a: hitting /internal/v1/* on the primary listener must
 // yield 404, proving port-level physical isolation. The route IS registered
@@ -84,11 +107,12 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 	)
 	asm := assembly.New(assembly.Config{ID: "dual-primary-404", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
+	internalAuthChain, internalRing := testInternalAuthChain(t)
 
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(internalLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -120,8 +144,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 
 	t.Run("internal_404s_public_prefix", func(t *testing.T) {
 		// internal:port + /api/v1/* → 404
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/api/v1/test/ping", internalAddr))
-		require.NoError(t, err)
+		resp := getWithServiceToken(t, fmt.Sprintf("http://%s/api/v1/test/ping", internalAddr), internalRing)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 			"internal listener must 404 on /api/v1/*")
@@ -131,8 +154,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 
 	t.Run("internal_404s_infra_endpoints", func(t *testing.T) {
 		for _, p := range []string{"/healthz", "/readyz", "/metrics", "/"} {
-			resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s%s", internalAddr, p))
-			require.NoError(t, err)
+			resp := getWithServiceToken(t, fmt.Sprintf("http://%s%s", internalAddr, p), internalRing)
 			resp.Body.Close()
 			assert.Equal(t, http.StatusNotFound, resp.StatusCode,
 				"internal listener must 404 on infra path %q", p)
@@ -148,8 +170,7 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 	})
 
 	t.Run("internal_routes_internal_business", func(t *testing.T) {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr))
-		require.NoError(t, err)
+		resp := getWithServiceToken(t, fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr), internalRing)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode)
 		assert.Equal(t, int64(1), internalHits.Load())
@@ -166,11 +187,11 @@ func TestDualListener_PrimaryReturns404ForInternalPrefix(t *testing.T) {
 
 // TestDualListener_InternalRoutesAccessibleWithoutJWT verifies that the
 // InternalListener router does NOT install JWT auth (no auth verifier on
-// internal listener — service-token protection is the caller's responsibility
-// via a cell.Policy on the InternalListener declaration).
+// internal listener). A ServiceToken guards the listener and injects the
+// internal service principal used by route policies.
 //
 // PR-A14b: WithInternalMiddleware was deleted. Internal listener middleware
-// must now be applied via cell.Policy in WithListener or per-group policy.
+// must now be applied through the listener auth chain.
 func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 	primaryLn := newLocalListener(t)
 	internalLn := newLocalListener(t)
@@ -188,11 +209,12 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 	)
 	asm := assembly.New(assembly.Config{ID: "dual-nojwt-test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
+	internalAuthChain, internalRing := testInternalAuthChain(t)
 
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(internalLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -211,13 +233,13 @@ func TestDualListener_InternalRoutesAccessibleWithoutJWT(t *testing.T) {
 		return resp.StatusCode == http.StatusOK
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
-	// Internal endpoint is reachable without a JWT (no auth verifier on internal listener).
-	t.Run("internal_accessible_without_token", func(t *testing.T) {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr))
-		require.NoError(t, err)
+	// Internal endpoint is reachable with a ServiceToken and without a JWT
+	// bearer. The internal listener must not install the public JWT verifier.
+	t.Run("internal_accessible_with_service_token_without_jwt", func(t *testing.T) {
+		resp := getWithServiceToken(t, fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr), internalRing)
 		defer resp.Body.Close()
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
-			"internal listener must NOT require JWT (service-token auth is caller-side policy)")
+			"internal listener must NOT require JWT; ServiceToken is the internal transport guard")
 		assert.Equal(t, int64(1), internalHits.Load())
 	})
 
@@ -350,11 +372,12 @@ func TestDualListener_ShutdownClosesBothServersNoGoroutineLeak(t *testing.T) {
 	)
 	asm := assembly.New(assembly.Config{ID: "shutdown-test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
+	internalAuthChain, _ := testInternalAuthChain(t)
 
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(internalLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -415,11 +438,12 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 	)
 	asm := assembly.New(assembly.Config{ID: "triple-shutdown-test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
+	internalAuthChain, _ := testInternalAuthChain(t)
 
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(internalLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(healthLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
@@ -681,11 +705,12 @@ func TestPhase7ServeAll_DualListener_NoCloseRace(t *testing.T) {
 	)
 	asm := assembly.New(assembly.Config{ID: "race-test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
+	internalAuthChain, _ := testInternalAuthChain(t)
 
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(internalLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -864,11 +889,12 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 	)
 	asm := assembly.New(assembly.Config{ID: "auth-wiring-test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
+	internalAuthChain, internalRing := testInternalAuthChain(t)
 
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(internalLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -889,8 +915,7 @@ func TestAuthWiring_InternalGuard_WaitsForInternalListenerReady(t *testing.T) {
 	}, 3*time.Second, 50*time.Millisecond, "primary listener did not become ready")
 
 	// Internal listener must also be reachable by the time primary is healthy.
-	resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr))
-	require.NoError(t, err)
+	resp := getWithServiceToken(t, fmt.Sprintf("http://%s/internal/v1/admin/ping", internalAddr), internalRing)
 	resp.Body.Close()
 	assert.Equal(t, http.StatusOK, resp.StatusCode,
 		"internal listener must be reachable after primary becomes healthy")
@@ -921,11 +946,12 @@ func TestShutdown_NumGoroutineBaseline_AfterServerStable(t *testing.T) {
 	)
 	asm := assembly.New(assembly.Config{ID: "goroutine-baseline-test", DurabilityMode: cell.DurabilityDemo})
 	require.NoError(t, asm.Register(c))
+	internalAuthChain, _ := testInternalAuthChain(t)
 
 	b := New(
 		WithAssembly(asm),
 		WithListener(cell.PrimaryListener, primaryLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(primaryLn)),
-		WithListener(cell.InternalListener, internalLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(internalLn)),
+		WithListener(cell.InternalListener, internalLn.Addr().String(), internalAuthChain, WithListenerNet(internalLn)),
 		WithShutdownTimeout(2*time.Second),
 	)
 

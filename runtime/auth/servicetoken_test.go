@@ -299,6 +299,19 @@ func TestServiceTokenMiddleware_NilRing(t *testing.T) {
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 
+func TestServiceTokenMiddleware_TypedNilRing(t *testing.T) {
+	var ring *HMACKeyRing
+	handler := ServiceTokenMiddleware(ring)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("should not be called")
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
 // shortKeyringStub returns a sub-MinHMACKeyBytes secret to exercise the
 // defense-in-depth strength check inside ServiceTokenMiddleware (PR269 round-3
 // F5). cell.NewAuthServiceToken would normally reject this at construction

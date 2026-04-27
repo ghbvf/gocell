@@ -174,6 +174,54 @@ func TestSharedDeps_Validate_RealModeRejectsLoopbackHealthAddrWithoutLocalOnlyWa
 	}
 }
 
+func TestSharedDeps_Validate_InternalAddrRequiresGuardInAllModes(t *testing.T) {
+	tests := []struct {
+		name string
+		topo bootstrap.Topology
+	}{
+		{name: "dev", topo: bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""}},
+		{name: "real", topo: bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newValidatedSharedDeps(t, tc.topo)
+			deps.InternalHTTPAddr = "127.0.0.1:9090"
+			deps.InternalGuard = nil
+
+			err := deps.Validate()
+
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "InternalHTTPAddr")
+			assert.Contains(t, err.Error(), "InternalGuard")
+			assert.Contains(t, err.Error(), "/internal/v1/*")
+		})
+	}
+}
+
+func TestSharedDeps_Validate_RealMultiPodInMemoryNonceStore_LogsWarnAndErrors(t *testing.T) {
+	topo := bootstrap.Topology{
+		StorageBackend:            "postgres",
+		AdapterMode:               "real",
+		SinglePodReplayProtection: false,
+	}
+	deps := newValidatedSharedDeps(t, topo)
+
+	buf, restore := captureSlogWarnLines(t)
+	t.Cleanup(restore)
+
+	err := deps.Validate()
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "GOCELL_SINGLE_POD=1")
+	out := buf.String()
+	assert.Contains(t, out, "in-memory nonce store rejected")
+	assert.Contains(t, out, "multi-pod")
+	assert.Contains(t, out, "nonce_store_kind")
+	assert.Contains(t, out, string(auth.NonceStoreKindInMemory))
+	assert.Contains(t, out, "GOCELL_SINGLE_POD=1")
+}
+
 func TestLoadSharedDepsFromEnv_RealModeAllowsDefaultLoopbackHealthWithLocalOnlyWaiver(t *testing.T) {
 	privPEM, pubPEM := generateTestPEM(t)
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")

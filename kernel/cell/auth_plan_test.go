@@ -90,6 +90,14 @@ func TestNewAuthJWT_NilReturnsError(t *testing.T) {
 	}
 }
 
+func TestNewAuthJWT_TypedNilReturnsError(t *testing.T) {
+	t.Parallel()
+	var verifier *stubVerifier
+	if _, err := cell.NewAuthJWT(verifier); err == nil {
+		t.Error("expected error for typed-nil verifier, got nil")
+	}
+}
+
 func TestMustNewAuthJWT_NilPanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
@@ -104,6 +112,14 @@ func TestNewAuthJWTFromAssembly_NilReturnsError(t *testing.T) {
 	t.Parallel()
 	if _, err := cell.NewAuthJWTFromAssembly(nil); err == nil { //nolint:staticcheck // SA1012: deliberate nil arg
 		t.Error("expected error for nil assembly, got nil")
+	}
+}
+
+func TestNewAuthJWTFromAssembly_TypedNilReturnsError(t *testing.T) {
+	t.Parallel()
+	var asm *stubAssemblyRef
+	if _, err := cell.NewAuthJWTFromAssembly(asm); err == nil {
+		t.Error("expected error for typed-nil assembly, got nil")
 	}
 }
 
@@ -124,10 +140,26 @@ func TestNewAuthServiceToken_NilStoreReturnsError(t *testing.T) {
 	}
 }
 
+func TestNewAuthServiceToken_TypedNilStoreReturnsError(t *testing.T) {
+	t.Parallel()
+	var store *stubNonceStore
+	if _, err := cell.NewAuthServiceToken(store, &stubHMACKeyring{}); err == nil {
+		t.Error("expected error for typed-nil store, got nil")
+	}
+}
+
 func TestNewAuthServiceToken_NilRingReturnsError(t *testing.T) {
 	t.Parallel()
 	if _, err := cell.NewAuthServiceToken(&stubNonceStore{}, nil); err == nil {
 		t.Error("expected error for nil ring, got nil")
+	}
+}
+
+func TestNewAuthServiceToken_TypedNilRingReturnsError(t *testing.T) {
+	t.Parallel()
+	var ring *stubHMACKeyring
+	if _, err := cell.NewAuthServiceToken(&stubNonceStore{}, ring); err == nil {
+		t.Error("expected error for typed-nil ring, got nil")
 	}
 }
 

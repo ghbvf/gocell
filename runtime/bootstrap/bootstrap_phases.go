@@ -27,6 +27,7 @@ import (
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/config"
 	"github.com/ghbvf/gocell/runtime/eventbus"
@@ -151,6 +152,12 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 		return err
 	}
 	if err := b.validateAuthChainJWTSingleton(); err != nil {
+		return err
+	}
+	if err := b.validateAuthNoneExclusive(); err != nil {
+		return err
+	}
+	if err := b.validateAuthServiceTokenPlans(); err != nil {
 		return err
 	}
 	// PR-A14b: validate declarative listener configs last — other option
@@ -698,8 +705,45 @@ func (b *Bootstrap) phase5FinalizeAllRouters(routers map[cell.ListenerRef]*route
 		if err := rtr.FinalizeAuth(); err != nil {
 			return fmt.Errorf("bootstrap: %s router finalize auth: %w", ref.String(), err)
 		}
+		if err := b.validateInternalGuardForDeclaredRoutes(ref, rtr); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// validateInternalGuardForDeclaredRoutes enforces the internal-listener
+// trust boundary once route metadata has been collected. Declaring a
+// /internal/v1/* route means the listener must carry a concrete transport
+// guard; AuthNone is acceptable only for listeners with no internal routes.
+func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef, rtr *router.Router) error {
+	if ref != cell.InternalListener {
+		return nil
+	}
+	cfg, ok := b.listenerConfigs[ref]
+	if !ok || chainContainsInternalGuard(cfg.authChain) {
+		return nil
+	}
+	internalRoutes := declaredInternalRoutes(rtr)
+	if len(internalRoutes) == 0 {
+		return nil
+	}
+	sort.Strings(internalRoutes)
+	return errcode.New(errcode.ErrCellInvalidConfig,
+		fmt.Sprintf("bootstrap: internal listener has %d /internal/v1/* route(s) declared without an internal guard: [%s]; "+
+			"set bootstrap.WithListener(cell.InternalListener, ..., []cell.ListenerAuth{cell.NewAuthServiceToken(store, ring)}) "+
+			"and optionally layer cell.AuthMTLS{} with verified client TLS",
+			len(internalRoutes), strings.Join(internalRoutes, ", ")))
+}
+
+func declaredInternalRoutes(rtr *router.Router) []string {
+	var routes []string
+	for _, meta := range rtr.DeclaredAuthMetas() {
+		if meta.IsInternal() {
+			routes = append(routes, meta.Method+" "+meta.Path)
+		}
+	}
+	return routes
 }
 
 // validateAuthVerifierForDeclaredRoutes ensures protected routes mounted on a
