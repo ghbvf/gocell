@@ -6,9 +6,15 @@ on:
   pull_request:
     branches: [develop, main, 'release/**']
 
+# Governance Strict is the K8s-style `make verify` runner — it discovers and
+# executes every hack/verify-*.sh gate in deterministic order, accumulating
+# failures. Adding a new gate is a single new file under hack/; this workflow
+# never needs to change.
+# ref: kubernetes/kubernetes hack/make-rules/verify.sh
+
 jobs:
-  gocell-validate-strict:
-    name: gocell validate --strict
+  verify:
+    name: make verify
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -18,27 +24,5 @@ jobs:
           go-version: "1.25"
           cache-dependency-path: go.sum
 
-      - name: Validate metadata (strict)
-        run: go run ./cmd/gocell validate --strict
-
-      - name: Verify active journeys
-        run: go run ./cmd/gocell verify journey --active
-
-      - name: Scaffold rejects kebab slice names
-        run: |
-          set +e
-          result=$(go run ./cmd/gocell scaffold slice --id=test-slice --cell=accesscore 2>&1)
-          exit_code=$?
-          set -e
-          echo "scaffold exit code: $exit_code"
-          echo "scaffold output: $result"
-          if [ "$exit_code" -eq 0 ]; then
-            echo "FAIL: scaffold exited 0 but should have rejected kebab slice name"
-            exit 1
-          fi
-          if echo "$result" | grep -q "must not contain"; then
-            echo "PASS: scaffold correctly rejects kebab slice name"
-          else
-            echo "FAIL: scaffold rejected (exit $exit_code) but error message did not contain 'must not contain'"
-            exit 1
-          fi
+      - name: make verify
+        run: make verify

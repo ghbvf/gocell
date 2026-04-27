@@ -133,26 +133,14 @@ jobs:
       - name: Test
         run: go test ${{ matrix.race && '-race' || '' }} -covermode=atomic -coverprofile=coverage-shard-${{ matrix.shard }}.out ${{ matrix.pkgs }} -count=1 -timeout 5m
 
-      - name: Validate metadata
-        if: matrix.static_checks
-        # --strict gates metadata promotion rules, including active journey
-        # checkRefs resolving to real executable tests.
-        run: go run ./cmd/gocell validate --strict
-
-      - name: Verify active journeys
-        if: matrix.static_checks
-        run: go run ./cmd/gocell verify journey --active
-
-      - name: Check contract health
-        if: matrix.static_checks
-        run: go run ./cmd/gocell check contract-health
-
-      - name: Check unconditional t.Skip
-        if: matrix.static_checks
-        run: go run ./cmd/gocell check unconditional-skip ./...
-
-      # NOTE: Example metadata may live under examples/*/cells and examples/*/contracts.
-      # The main `gocell validate` step above already covers it.
+      # Static governance gates (validate --strict, verify journey, check
+      # contract-health, check unconditional-skip, examples internal-import
+      # ban) are owned by the dedicated Governance Strict workflow
+      # (.github/workflows/governance.yml → `make verify`). Running them
+      # here would duplicate work and create two paths to update whenever a
+      # gate is added. archtest layer/cell-internal guards remain covered by
+      # the kernel shard's Test step via ./tools/... in matrix.pkgs and are
+      # additionally re-run inside `make verify` (cheap, < 30s).
 
       # Compile-verify e2e package even when integration-test job is skipped.
       # The e2e build tag gates runtime behaviour; this step ensures type/import
@@ -160,19 +148,6 @@ jobs:
       - name: Vet e2e package (compile verification)
         if: matrix.static_checks
         run: go vet -tags=e2e ./tests/e2e/...
-
-      - name: Check layering — examples no internal imports
-        if: matrix.static_checks
-        run: |
-          if grep -rn --include='*.go' "github.com/ghbvf/gocell/cells/.*/internal" examples/ 2>/dev/null; then
-            echo "FAIL: examples/ imports root cells/*/internal/"
-            exit 1
-          fi
-          if grep -rn --include='*.go' "github.com/ghbvf/gocell/adapters/.*/internal" examples/ 2>/dev/null; then
-            echo "FAIL: examples/ imports adapters/*/internal/"
-            exit 1
-          fi
-          echo "PASS: no internal import violations"
 
       # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
       # deliberately — it is not a duplicate of the Test step. The gate requires

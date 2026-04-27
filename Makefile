@@ -1,4 +1,4 @@
-.PHONY: build check-build test validate generate cover clean \
+.PHONY: build check-build test verify validate generate cover clean \
         up down \
         test-integration \
         test-examples-smoke \
@@ -20,6 +20,13 @@ check-build:
 
 test:
 	go test ./... -count=1
+
+# verify discovers and runs every hack/verify-*.sh in deterministic order,
+# accumulating failures. Single entry point for static governance gates
+# (validate --strict, archtest, contract-health, journey, etc.).
+# ref: kubernetes/kubernetes hack/make-rules/verify.sh
+verify:
+	bash hack/make-rules/verify.sh
 
 validate:
 	go run ./cmd/gocell validate
