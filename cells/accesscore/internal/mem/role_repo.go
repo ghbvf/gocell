@@ -148,12 +148,22 @@ func (r *RoleRepository) RemoveFromUserIfNotLast(_ context.Context, userID, role
 
 // ListByUserID returns paginated roles for userID sorted per params.
 func (r *RoleRepository) ListByUserID(_ context.Context, userID string, params query.ListParams) ([]*domain.Role, error) {
+	roles := r.rolesByUserSnapshot(userID)
+
+	query.Sort(roles, params.Sort, compareRoleField)
+	result, err := query.ApplyCursor(roles, params, roleFieldValue)
+	if err != nil {
+		return nil, fmt.Errorf("role-repo: list-by-user: %w", err)
+	}
+	return result, nil
+}
+
+func (r *RoleRepository) rolesByUserSnapshot(userID string) []*domain.Role {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-
 	roleIDs, ok := r.userRoles[userID]
 	if !ok {
-		return []*domain.Role{}, nil
+		return []*domain.Role{}
 	}
 
 	roles := make([]*domain.Role, 0, len(roleIDs))
@@ -165,13 +175,7 @@ func (r *RoleRepository) ListByUserID(_ context.Context, userID string, params q
 			roles = append(roles, &clone)
 		}
 	}
-
-	query.Sort(roles, params.Sort, compareRoleField)
-	result, err := query.ApplyCursor(roles, params, roleFieldValue)
-	if err != nil {
-		return nil, fmt.Errorf("role-repo: list-by-user: %w", err)
-	}
-	return result, nil
+	return roles
 }
 
 func compareRoleField(a, b *domain.Role, field string) int {

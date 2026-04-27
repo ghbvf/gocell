@@ -18,7 +18,8 @@ import (
 // rejecting oversize cursors at the parse boundary bounds the work any handler
 // can be forced to do before the codec's own length guard fires.
 // ref: kubernetes apiserver 4 KiB continue-token guidance.
-// Zero or negative limits are normalized to DefaultPageSize.
+// Omitted limits are normalized to DefaultPageSize. Explicit zero or negative
+// limits are rejected to match contract queryParam minimum: 1.
 func ParsePageParams(r *http.Request) (query.PageParams, error) {
 	var pr query.PageParams
 
@@ -26,6 +27,9 @@ func ParsePageParams(r *http.Request) (query.PageParams, error) {
 		n, err := strconv.Atoi(s)
 		if err != nil {
 			return pr, errcode.New(errcode.ErrValidationFailed, "invalid limit parameter")
+		}
+		if n < 1 {
+			return pr, errcode.New(errcode.ErrValidationFailed, "limit must be at least 1")
 		}
 		if n > query.MaxPageSize {
 			return pr, errcode.New(errcode.ErrPageSizeExceeded,
