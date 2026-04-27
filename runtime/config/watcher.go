@@ -143,6 +143,7 @@ type Watcher struct {
 	pendingPivot  bool           // true if any coalesced event was a symlink pivot
 	debounceMu    sync.Mutex     // protects timer + pendingPivot manipulation
 	closed        atomic.Bool    // admission gate: true after Close() starts
+	callbackGate  sync.Mutex     // serializes callback admission with Close Wait
 	callbackWg    sync.WaitGroup // tracks in-flight callback execution
 	closeErr      error          // cached Close result
 }
@@ -389,8 +390,23 @@ func (w *Watcher) firePendingCallbacks() {
 	w.fireCallbacks(pivot)
 }
 
-func (w *Watcher) fireCallbacks(symPivot bool) {
+// beginCallback admits one callback run and records it as in-flight.
+// The gate makes the closed check and WaitGroup Add atomic with Close's
+// transition to drain, so Add cannot race with Wait.
+func (w *Watcher) beginCallback() bool {
+	w.callbackGate.Lock()
+	defer w.callbackGate.Unlock()
+	if w.closed.Load() {
+		return false
+	}
 	w.callbackWg.Add(1)
+	return true
+}
+
+func (w *Watcher) fireCallbacks(symPivot bool) {
+	if !w.beginCallback() {
+		return
+	}
 	defer w.callbackWg.Done()
 
 	w.mu.Lock()
@@ -427,9 +443,10 @@ func (w *Watcher) fireCallbacks(symPivot bool) {
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser pattern.
 func (w *Watcher) Close(ctx context.Context) error {
 	w.closeOnce.Do(func() {
-		// Set admission gate first — firePendingCallbacks and scheduleCallback
-		// check this before touching the WaitGroup, preventing Add-after-Wait.
+		// Stop admitting callbacks before waiting for in-flight ones.
+		w.callbackGate.Lock()
 		w.closed.Store(true)
+		w.callbackGate.Unlock()
 		close(w.done)
 
 		// Stop debounce timers to prevent goroutine leaks. Timer goroutines

@@ -11,16 +11,38 @@ endpoints:
     method: GET
     path: /api/v1/audit/entries
     queryParams:
-      cursor:
+      actorId:
         type: string
         required: false
         minLength: 0
         maxLength: 256
+      cursor:
+        type: string
+        required: false
+        minLength: 0
+        maxLength: 4096
+      eventType:
+        type: string
+        required: false
+        minLength: 0
+        maxLength: 256
+      from:
+        type: string
+        format: date-time
+        required: false
+        minLength: 0
+        maxLength: 64
       limit:
         type: integer
         required: false
         minimum: 1
         maximum: 500
+      to:
+        type: string
+        format: date-time
+        required: false
+        minLength: 0
+        maxLength: 64
     successStatus: 200
     noContent: false
     responses:

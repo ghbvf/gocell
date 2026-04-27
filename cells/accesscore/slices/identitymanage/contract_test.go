@@ -196,6 +196,7 @@ func TestHttpAuthUserPatchV1Serve(t *testing.T) {
 	c.ValidateRequest(t, []byte(`{"name":"Bob"}`))
 	c.ValidateRequest(t, []byte(`{"email":"new@b.com"}`))
 	c.ValidateRequest(t, []byte(`{"name":"Bob","email":"new@b.com","status":"active"}`))
+	c.MustRejectRequest(t, []byte(`{"email":"new@b.com","extra":"ignored"}`))
 
 	c.MustRejectResponse(t, []byte(`{"wrong":"shape"}`))
 }
