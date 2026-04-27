@@ -234,11 +234,13 @@ jobs:
         # job's `go test -tags=e2e ./tests/e2e/...`.
         run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
 
-      - name: OTel collector compile gate
-        # The real collector round-trip is nightly/manual only. This compile
-        # gate keeps the otelcollector build-tag file from drifting on PRs
-        # without starting the heavy collector container.
-        run: go test -tags=integration,otelcollector ./adapters/otel/... -run '^$' -count=1 -timeout 2m
+      - name: OTel collector smoke
+        env:
+          GOCELL_TEST_DOCKER_REQUIRED: "1"
+        # Keep the PR/push gate focused on the single real OTLP/gRPC collector
+        # round-trip. The nightly/manual workflow still runs the full package
+        # under the same tags as a compatibility patrol.
+        run: go test -tags=integration,otelcollector ./adapters/otel/... -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

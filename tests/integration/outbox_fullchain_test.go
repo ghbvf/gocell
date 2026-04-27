@@ -22,7 +22,6 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
-	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
 	"github.com/testcontainers/testcontainers-go/wait"
 )
@@ -69,12 +68,10 @@ func setupPostgresContainer(t *testing.T) (*postgres.Pool, func()) {
 
 func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 	t.Helper()
-	testutil.RequireDocker(t)
 
 	ctx := context.Background()
 
-	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
-	require.NoError(t, err, "start rabbitmq container")
+	container := testutil.StartRabbitMQContainer(t, ctx)
 
 	amqpURL, err := container.AmqpURL(ctx)
 	require.NoError(t, err, "get rabbitmq amqp url")

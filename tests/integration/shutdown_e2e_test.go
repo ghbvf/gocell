@@ -53,17 +53,19 @@ import (
 // running against the same broker.
 func startShutdownTestBroker(t *testing.T) (amqpURL, mgmtURL string, container *tcrabbitmq.RabbitMQContainer, cleanup func()) {
 	t.Helper()
-	testutil.RequireDocker(t)
 
 	ctx := context.Background()
-	c, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
-	require.NoError(t, err, "start rabbitmq container for shutdown e2e")
+	c := testutil.StartRabbitMQContainer(t, ctx)
 
 	amqp, err := c.AmqpURL(ctx)
 	require.NoError(t, err, "get amqp url")
 
-	mgmt, err := c.HttpURL(ctx)
-	require.NoError(t, err, "get management http url")
+	var mgmt string
+	require.EventuallyWithT(t, func(collect *assert.CollectT) {
+		var httpErr error
+		mgmt, httpErr = c.HttpURL(ctx)
+		require.NoError(collect, httpErr, "get management http url")
+	}, 10*time.Second, 100*time.Millisecond, "management http url should be mapped")
 
 	cleanup = func() {
 		if termErr := c.Terminate(ctx); termErr != nil {

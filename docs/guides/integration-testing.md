@@ -59,13 +59,16 @@ GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./tests/integration/... 
 
 ### OTel collector protocol test
 
-The OpenTelemetry Collector round-trip test is intentionally heavier than the
-regular PR integration suite. Run it locally or through the nightly/manual CI
-workflow:
+PR and push CI run the minimal real OpenTelemetry Collector round-trip smoke.
+Run the same check locally with:
 
 ```bash
-GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,otelcollector ./adapters/otel/... -count=1 -timeout 10m -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,otelcollector ./adapters/otel/... \
+  -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m -v
 ```
+
+The nightly/manual workflow runs the full `./adapters/otel/...` package under
+the same tags as a supplemental compatibility patrol.
 
 ## Test File Conventions
 
@@ -126,9 +129,9 @@ pipeline:
    set.
 3. Uploads the integration coverage profile.
 
-The OTel Collector real protocol test runs in a separate nightly/manual workflow
-with `-tags=integration,otelcollector`; PR CI compile-checks that build tag with
-`-run '^$'` but does not start the collector container.
+The OTel Collector real protocol smoke runs in PR/push CI with
+`-tags=integration,otelcollector`; the nightly/manual workflow runs the broader
+package under the same tags.
 
 See `scripts/healthcheck-verify.sh` for the health-check gate that precedes integration tests.
 

@@ -116,7 +116,7 @@ func collectTestcontainerDockerGuardFindings(t *testing.T, root string) []string
 		if skipDir := dockerGuardSkipDir(d); skipDir {
 			return filepath.SkipDir
 		}
-		if d.IsDir() || !isGoTestFile(path) {
+		if d.IsDir() || !isGoSourceFile(path) {
 			return nil
 		}
 
@@ -143,8 +143,8 @@ func dockerGuardSkipDir(d fs.DirEntry) bool {
 	}
 }
 
-func isGoTestFile(path string) bool {
-	return filepath.Ext(path) == ".go" && strings.HasSuffix(path, "_test.go")
+func isGoSourceFile(path string) bool {
+	return filepath.Ext(path) == ".go"
 }
 
 func testcontainerDockerGuardFindingsForFile(path string) ([]string, error) {
