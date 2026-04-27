@@ -105,12 +105,15 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
 	root := findModuleRoot(t)
 	modulePath := readModulePath(t, root)
-	pkgs := loadTypedPackages(t, root, "./adapters/...")
+	pkgs := loadTypedPackages(t, root, "./adapters/...", "./cmd/corebundle")
 
 	var violations []string
 	for _, pkg := range pkgs {
 		adapterPkg, ok := strings.CutPrefix(pkg.PkgPath, modulePath+"/adapters/")
 		if !ok || strings.Contains(adapterPkg, "/") {
+			if pkg.PkgPath == modulePath+"/cmd/corebundle" {
+				violations = append(violations, healthCheckerCallNameViolations(pkg, "cmd/corebundle")...)
+			}
 			continue
 		}
 		violations = append(violations, adapterCheckerNameViolations(pkg, "adapters/"+adapterPkg)...)
@@ -211,4 +214,33 @@ func checkerNamesFromFunc(info *types.Info, fn *ast.FuncDecl) []string {
 		return true
 	})
 	return names
+}
+
+func healthCheckerCallNameViolations(pkg *packages.Package, rel string) []string {
+	var violations []string
+	for _, file := range pkg.Syntax {
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok || selectorName(call.Fun) != "WithHealthChecker" || len(call.Args) == 0 {
+				return true
+			}
+			name, ok := constStringValue(pkg.TypesInfo, call.Args[0])
+			if !ok {
+				return true
+			}
+			if !adapterReadyProbeNamePattern.MatchString(name) {
+				violations = append(violations, rel+" bootstrap.WithHealthChecker probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
+			}
+			return true
+		})
+	}
+	return violations
+}
+
+func constStringValue(info *types.Info, expr ast.Expr) (string, bool) {
+	tv, ok := info.Types[expr]
+	if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+		return "", false
+	}
+	return constant.StringVal(tv.Value), true
 }

@@ -53,6 +53,34 @@ updates:
 		"group names must not satisfy the guard unless a pattern covers the action")
 }
 
+func TestDependabotCoversCIAndGolangCILintRejectsNonRootPatternOnly(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: "github-actions"
+    directory: "/tools"
+    schedule:
+      interval: "weekly"
+    groups:
+      golangci:
+        patterns:
+          - "golangci/golangci-lint-action"
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+`)
+	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
+		"golangci-lint action pattern must be attached to the root github-actions update")
+}
+
 type dependabotConfig struct {
 	Version int                `yaml:"version"`
 	Updates []dependabotUpdate `yaml:"updates"`
@@ -83,18 +111,13 @@ func validateDependabotCoversCIAndGolangCILint(body []byte) error {
 
 	var hasGitHubActions bool
 	var hasGoMod bool
-	var hasGolangCIActionPattern bool
 	for _, update := range cfg.Updates {
 		switch update.PackageEcosystem {
 		case "github-actions":
 			if update.Directory == "/" {
 				hasGitHubActions = true
-			}
-			for _, group := range update.Groups {
-				for _, pattern := range group.Patterns {
-					if pattern == "golangci/golangci-lint-action" {
-						hasGolangCIActionPattern = true
-					}
+				if rootGitHubActionsUpdateCoversGolangCI(update) {
+					return validateDependabotHasGoModRoot(cfg)
 				}
 			}
 		case "gomod":
@@ -106,11 +129,28 @@ func validateDependabotCoversCIAndGolangCILint(body []byte) error {
 	if !hasGitHubActions {
 		return fmt.Errorf("dependabot must update GitHub Actions pins from directory /")
 	}
-	if !hasGolangCIActionPattern {
-		return fmt.Errorf("dependabot github-actions groups must explicitly pattern-match golangci/golangci-lint-action")
-	}
 	if !hasGoMod {
 		return fmt.Errorf("dependabot must update Go module pins from directory /")
 	}
-	return nil
+	return fmt.Errorf("dependabot root github-actions groups must explicitly pattern-match golangci/golangci-lint-action")
+}
+
+func rootGitHubActionsUpdateCoversGolangCI(update dependabotUpdate) bool {
+	for _, group := range update.Groups {
+		for _, pattern := range group.Patterns {
+			if pattern == "golangci/golangci-lint-action" {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func validateDependabotHasGoModRoot(cfg dependabotConfig) error {
+	for _, update := range cfg.Updates {
+		if update.PackageEcosystem == "gomod" && update.Directory == "/" {
+			return nil
+		}
+	}
+	return fmt.Errorf("dependabot must update Go module pins from directory /")
 }
