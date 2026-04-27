@@ -1,23 +1,20 @@
 package archtest
 
 import (
-	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
-	"path/filepath"
+	"go/types"
 	"sort"
 	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
 )
 
 type adapterExportedType struct {
-	ID      string
-	Name    string
-	Methods map[string]struct{}
+	ID   string
+	Name string
+	Type types.Type
 }
 
 var adapterManagedResourceOptOut = map[string]string{
@@ -82,14 +79,17 @@ var adapterManagedResourceOptOut = map[string]string{
 
 func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	root := findModuleRoot(t)
-	types := collectAdapterExportedTypes(t, filepath.Join(root, "adapters"))
+	modulePath := readModulePath(t, root)
+	pkgs := loadTypedPackages(t, root, "./kernel/lifecycle", "./adapters/...")
+	managedResource := managedResourceInterface(t, pkgs, modulePath)
+	adapterTypes := collectAdapterExportedTypes(pkgs, modulePath)
 
 	var violations []string
-	for _, typ := range types {
+	for _, typ := range adapterTypes {
 		if reason := adapterManagedResourceOptOut[typ.ID]; reason != "" {
 			continue
 		}
-		if !hasMethods(typ.Methods, "Checkers", "Worker", "Close") {
+		if !implementsManagedResource(typ.Type, managedResource) {
 			violations = append(violations, typ.ID+" must implement lifecycle.ManagedResource or be listed in adapterManagedResourceOptOut")
 		}
 	}
@@ -98,79 +98,54 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	assert.Empty(t, violations, "A54 ManagedResource contract violations")
 }
 
-func collectAdapterExportedTypes(t *testing.T, adapterRoot string) []adapterExportedType {
-	t.Helper()
-	entries, err := os.ReadDir(adapterRoot)
-	require.NoError(t, err)
-
+func collectAdapterExportedTypes(pkgs []*packages.Package, modulePath string) []adapterExportedType {
+	adapterPrefix := modulePath + "/adapters/"
 	var out []adapterExportedType
-	for _, entry := range entries {
-		if !entry.IsDir() {
+	for _, pkg := range pkgs {
+		adapterPkg, ok := strings.CutPrefix(pkg.PkgPath, adapterPrefix)
+		if !ok || strings.Contains(adapterPkg, "/") {
 			continue
 		}
-		pkgDir := filepath.Join(adapterRoot, entry.Name())
-		rel := filepath.ToSlash(filepath.Join("adapters", entry.Name()))
-		types := map[string]*adapterExportedType{}
-
-		files, err := os.ReadDir(pkgDir)
-		require.NoError(t, err)
-		for _, file := range files {
-			if file.IsDir() || !strings.HasSuffix(file.Name(), ".go") || strings.HasSuffix(file.Name(), "_test.go") {
+		scope := pkg.Types.Scope()
+		for _, name := range scope.Names() {
+			obj, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok || !obj.Exported() {
 				continue
 			}
-			parseAdapterTypeFile(t, filepath.Join(pkgDir, file.Name()), rel, types)
-		}
-		for _, typ := range types {
-			out = append(out, *typ)
+			out = append(out, adapterExportedType{
+				ID:   "adapters/" + adapterPkg + "." + name,
+				Name: name,
+				Type: obj.Type(),
+			})
 		}
 	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].ID < out[j].ID
+	})
 	return out
 }
 
-func parseAdapterTypeFile(t *testing.T, path, rel string, types map[string]*adapterExportedType) {
+func managedResourceInterface(t *testing.T, pkgs []*packages.Package, modulePath string) *types.Interface {
 	t.Helper()
-	fset := token.NewFileSet()
-	f, err := parser.ParseFile(fset, path, nil, 0)
-	require.NoError(t, err)
-
-	for _, decl := range f.Decls {
-		switch d := decl.(type) {
-		case *ast.GenDecl:
-			if d.Tok != token.TYPE {
-				continue
-			}
-			for _, spec := range d.Specs {
-				ts, ok := spec.(*ast.TypeSpec)
-				if !ok || !ast.IsExported(ts.Name.Name) {
-					continue
-				}
-				id := rel + "." + ts.Name.Name
-				if types[id] == nil {
-					types[id] = &adapterExportedType{ID: id, Name: ts.Name.Name, Methods: map[string]struct{}{}}
-				}
-			}
-		case *ast.FuncDecl:
-			if d.Recv == nil || len(d.Recv.List) == 0 || !d.Name.IsExported() {
-				continue
-			}
-			recv := receiverTypeName(d.Recv.List[0].Type)
-			if recv == "" || !ast.IsExported(recv) {
-				continue
-			}
-			id := rel + "." + recv
-			if types[id] == nil {
-				types[id] = &adapterExportedType{ID: id, Name: recv, Methods: map[string]struct{}{}}
-			}
-			types[id].Methods[d.Name.Name] = struct{}{}
+	for _, pkg := range pkgs {
+		if pkg.PkgPath != modulePath+"/kernel/lifecycle" {
+			continue
 		}
+		obj := pkg.Types.Scope().Lookup("ManagedResource")
+		require.NotNil(t, obj, "kernel/lifecycle.ManagedResource not found")
+		named, ok := obj.Type().(*types.Named)
+		require.True(t, ok, "ManagedResource type = %T, want *types.Named", obj.Type())
+		iface, ok := named.Underlying().(*types.Interface)
+		require.True(t, ok, "ManagedResource underlying type = %T, want *types.Interface", named.Underlying())
+		return iface.Complete()
 	}
+	require.FailNow(t, "kernel/lifecycle package not loaded")
+	return nil
 }
 
-func hasMethods(methods map[string]struct{}, names ...string) bool {
-	for _, name := range names {
-		if _, ok := methods[name]; !ok {
-			return false
-		}
+func implementsManagedResource(typ types.Type, managedResource *types.Interface) bool {
+	if types.Implements(typ, managedResource) {
+		return true
 	}
-	return true
+	return types.Implements(types.NewPointer(typ), managedResource)
 }
