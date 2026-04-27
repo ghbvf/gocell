@@ -7,7 +7,8 @@
 //
 //	app := bootstrap.New(
 //	    bootstrap.WithAssembly(asm),
-//	    bootstrap.WithHTTPAddr(":8080"),
+//	    bootstrap.WithListener(cell.PrimaryListener, ":8080",
+//	        []cell.ListenerAuth{cell.AuthNone{}}),
 //	    bootstrap.WithPublisher(pub),
 //	    bootstrap.WithSubscriber(sub),
 //	)

@@ -52,7 +52,6 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 | `Policy` | `auth.Policy`——路由级策略 | 可选；`Public=true` 时必须为 nil |
 | `Public` | JWT 豁免 | 与 `Policy` / `PasswordResetExempt` 互斥 |
 | `PasswordResetExempt` | 允许 password-reset token 穿过 | 与 `Public` 互斥；handler 内做细粒度校验 |
-| `Delegated` | JWT 验证下放（service-token / mTLS） | 配合 `WithInternalPathPrefixGuard` |
 
 ### FinalizeAuth 生命周期
 
@@ -60,9 +59,10 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 
 1. 收集所有 `auth.Mount` 推送的 `AuthRouteMeta`
 2. 去重 `(method, path)`——重复 fail-fast
-3. 编译 public / password-reset-exempt / delegated 匹配器
+3. 编译 public / password-reset-exempt 匹配器
 4. 从首个 `POST + PasswordResetExempt=true` 路由派生 password-reset change-endpoint hint
-5. AuthMiddleware 在请求时通过 Router 字段 lazy 读取匹配器
+5. 校验 `/internal/v1/*` 路由只能挂在 `cell.InternalListener`
+6. AuthMiddleware 在请求时通过 Router 字段 lazy 读取匹配器
 
 ### 规则
 
@@ -74,22 +74,23 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 
 ## Composition Root（Bootstrap）
 
-JWT auth 通过 listener 的 `cell.Policy` 装配 —— **没有** `WithAuthDiscovery` / `WithAuthMiddleware` 等顶层 Bootstrap Option（PR-258 F3 round-3 elegant collapse）。
+JWT auth 通过 listener 的 `[]cell.ListenerAuth` 装配；RouteGroup 继承 listener auth chain。
 
 ```go
 bootstrap.New(
     bootstrap.WithAssembly(asm),
     bootstrap.WithListener(cell.PrimaryListener, ":8080",
-        bootstrap.PolicyJWTFromAssembly(asm)),  // phase4 自动从 authProvider Cell 发现 verifier
+        []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
     bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
-        bootstrap.PolicyServiceToken(store, ring)),
-    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091", cell.Policy{}),
+        []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)}),
+    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091",
+        []cell.ListenerAuth{cell.AuthNone{}}),
 )
 ```
 
-- `PolicyJWTFromAssembly(asm)` 用于生产：phase4 通过 `cell.Policy.Validate` 钩子从 `authProvider` Cell 发现 verifier
-- `PolicyJWT(verifier)` 用于测试或非 assembly-discovery 场景：直接注入
-- 单一路径：verifier 经 `cell.Policy.Extension` 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher
+- `cell.MustNewAuthJWTFromAssembly(asm)` 用于生产：phase4 通过 listener auth plan 从 `authProvider` Cell 发现 verifier
+- `cell.MustNewAuthJWT(verifier)` 用于测试或非 assembly-discovery 场景：直接注入
+- 单一路径：verifier 经 listener auth plan 流向 `router.WithAuthMiddleware`，自动获取 FinalizeAuth 编译的 Public/PasswordResetExempt matcher
 
 ## EventRouter 订阅注册
 

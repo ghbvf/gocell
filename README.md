@@ -197,6 +197,7 @@ import (
 
     mycell "github.com/ghbvf/gocell/cells/mycell"
     "github.com/ghbvf/gocell/kernel/assembly"
+    "github.com/ghbvf/gocell/kernel/cell"
     "github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -209,9 +210,10 @@ func main() {
 
     app := bootstrap.New(
         bootstrap.WithAssembly(asm),
-        // PR-A14a dual listener — primary (public + infra) + internal (/internal/v1/*).
-        bootstrap.WithHTTPPrimaryAddr(":8080"),
-        bootstrap.WithHTTPInternalAddr("127.0.0.1:9090"),
+        bootstrap.WithListener(cell.PrimaryListener, ":8080",
+            []cell.ListenerAuth{cell.AuthNone{}}),
+        bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
+            []cell.ListenerAuth{cell.AuthNone{}}),
     )
     app.Run(ctx)
 }
@@ -375,7 +377,8 @@ safely degrade to a new root trace.
 tracer := tracing.NewTracer("my-service")  // or adapters/otel.NewTracer(...)
 app := bootstrap.New(
     bootstrap.WithAssembly(asm),
-    bootstrap.WithHTTPAddr(":8080"),
+    bootstrap.WithListener(cell.PrimaryListener, ":8080",
+        []cell.ListenerAuth{cell.AuthNone{}}),
     bootstrap.WithTracer(tracer),
 )
 

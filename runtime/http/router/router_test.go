@@ -266,6 +266,42 @@ func TestNormalRequestUnchanged(t *testing.T) {
 	assert.Equal(t, int64(1), snap.RequestCounts[key])
 }
 
+func TestNewForListener_AccessLogIncludesListener(t *testing.T) {
+	tests := []struct {
+		name string
+		ref  cell.ListenerRef
+	}{
+		{name: "primary", ref: cell.PrimaryListener},
+		{name: "internal", ref: cell.InternalListener},
+		{name: "health", ref: cell.HealthListener},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewJSONHandler(&buf, nil))
+			original := slog.Default()
+			slog.SetDefault(logger)
+			defer slog.SetDefault(original)
+
+			r, err := NewForListener(tt.ref)
+			require.NoError(t, err)
+			r.Handle("/listener-log", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusNoContent)
+			}))
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodGet, "/listener-log", nil)
+			r.ServeHTTP(rec, req)
+
+			require.Equal(t, http.StatusNoContent, rec.Code)
+			entry, found := findAccessLogEntry(buf.Bytes(), "/listener-log")
+			require.True(t, found, "access log entry must exist")
+			assert.Equal(t, tt.ref.String(), entry["listener"])
+		})
+	}
+}
+
 func TestDefaultMiddlewareApplied(t *testing.T) {
 	r := New()
 	r.Handle("/mid-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

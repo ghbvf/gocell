@@ -122,6 +122,48 @@ func TestAccessLog_TraceID_WhenSet(t *testing.T) {
 	assert.Equal(t, "abc123trace", logEntry["trace_id"])
 }
 
+func TestAccessLog_Listener_WhenSet(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	})
+	handler := ListenerContext("internal")(Recorder(AccessLog(inner)))
+
+	req := httptest.NewRequest(http.MethodPatch, "/internal/v1/config/key", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.Equal(t, "internal", logEntry["listener"])
+}
+
+func TestAccessLog_NoListener_WhenNotSet(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+	handler := Recorder(AccessLog(inner))
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var logEntry map[string]any
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &logEntry))
+	assert.NotContains(t, logEntry, "listener")
+}
+
 func TestAccessLog_NoTraceID_WhenNotSet(t *testing.T) {
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))

@@ -200,9 +200,9 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
             Prefix:   "/internal/v1/my-domain",
             Register: func(mux cell.RouteMux) {
                 auth.Mount(mux, auth.Route{
-                    Contract:  specAdminAction,
-                    Handler:   http.HandlerFunc(c.handleAdminAction),
-                    Delegated: true,
+                    Contract: specAdminAction,
+                    Handler:  http.HandlerFunc(c.handleAdminAction),
+                    Policy:   auth.AnyRole(auth.RoleInternalAdmin),
                 })
             },
         },

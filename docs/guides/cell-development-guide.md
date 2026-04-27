@@ -152,7 +152,6 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
             },
             Handler: http.HandlerFunc(c.handler.AdminOp),
             Policy:    internalAdminPolicy,
-            Delegated: true, // 必须：FinalizeAuth 在启动期断言 Delegated ⇔ /internal/v1/*
         })
     })
 }
@@ -160,9 +159,9 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 
 **约束**：
 
-- 所有 `/internal/v1/*` 路由必须 `Delegated: true`，否则 `FinalizeAuth()` 启动期失败；反之 `Delegated: true` 只能用于 `/internal/v1/*`。
+- 所有 `/internal/v1/*` 路由必须挂在 `cell.InternalListener`；`FinalizeAuth()` 会在启动期校验内部前缀与 listener 归属一致。
 - 禁止在 `Route` / `Group` / `With` 嵌套子作用域里再次进入 `/internal/v1/*`——会触发 `chiRouterAdapter.guardNestedInternalRegistration` panic（顶层 Router 是内外 mux 分流的唯一入口）。
-- `/healthz` / `/readyz` / `/metrics` 只在 primary listener，internal listener 对这些路径返回 404。
+- `/healthz` / `/readyz` / `/metrics` 只在 health listener；未声明 health listener 时才 fallback 到 primary。
 
 ### 5. 注册事件订阅（可选）
 

@@ -9,8 +9,9 @@ import (
 )
 
 // AccessLog logs structured request/response information via slog.Info.
-// Fields: method, path, route, status, duration_ms, request_id,
-// correlation_id, trace_id, real_ip.
+// Fields: method, path, route, status, duration_ms, listener, request_id,
+// correlation_id, trace_id, real_ip. The listener field is emitted only when
+// the router annotated the request with a non-empty physical listener name.
 //
 // ref: go-zero rest/handler/loghandler.go — structured request logging with trace context
 //
@@ -39,6 +40,9 @@ func AccessLog(next http.Handler) http.Handler {
 				slog.String("route", route),
 				slog.Int("status", state.Status()),
 				slog.Int64("duration_ms", duration.Milliseconds()),
+			}
+			if listener, ok := listenerFromContext(r.Context()); ok {
+				attrs = append(attrs, slog.String("listener", listener))
 			}
 			if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
 				attrs = append(attrs, slog.String("request_id", reqID))

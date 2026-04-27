@@ -370,7 +370,7 @@ func NewE(opts ...Option) (*Router, error) {
 //
 // The middleware chain is:
 //
-//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//	ListenerContext → RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 //
@@ -437,7 +437,7 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //
 // Chain order (outer to inner):
 //
-//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//	ListenerContext → RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) {
@@ -460,6 +460,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) {
 
 	// --- Observability layer ---
 	r.mux.Use(
+		middleware.ListenerContext(r.ref.String()),
 		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
 		middleware.Recorder,
