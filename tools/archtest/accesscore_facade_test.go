@@ -24,15 +24,7 @@ func TestAccessCoreFacadePolishA61Guard(t *testing.T) {
 	t.Run("R9_no_bootstrap_credential_path_facade", func(t *testing.T) {
 		var violations []string
 
-		accesscoreCell := filepath.Join(root, "cells", "accesscore", "cell.go")
-		file, err := parser.ParseFile(fset, accesscoreCell, nil, parser.SkipObjectResolution)
-		require.NoError(t, err)
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if ok && fn.Recv == nil && fn.Name.Name == "ResolveBootstrapCredentialPath" {
-				violations = append(violations, relPath(t, root, accesscoreCell)+": exported facade ResolveBootstrapCredentialPath must be deleted")
-			}
-		}
+		violations = append(violations, scanAccesscoreFacadeDeclarations(t, fset, root)...)
 
 		for _, dir := range []string{"cmd", "examples"} {
 			violations = append(violations, scanResolveBootstrapCredentialPathCalls(t, fset, root, filepath.Join(root, dir))...)
@@ -40,6 +32,29 @@ func TestAccessCoreFacadePolishA61Guard(t *testing.T) {
 
 		assert.Empty(t, violations, strings.Join(violations, "\n"))
 	})
+}
+
+func scanAccesscoreFacadeDeclarations(t *testing.T, fset *token.FileSet, root string) []string {
+	t.Helper()
+	var violations []string
+	accesscoreDir := filepath.Join(root, "cells", "accesscore")
+	entries, err := os.ReadDir(accesscoreDir)
+	require.NoError(t, err)
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".go") || strings.HasSuffix(entry.Name(), "_test.go") {
+			continue
+		}
+		path := filepath.Join(accesscoreDir, entry.Name())
+		file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+		require.NoError(t, parseErr)
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if ok && fn.Recv == nil && fn.Name.Name == "ResolveBootstrapCredentialPath" {
+				violations = append(violations, relPath(t, root, path)+": exported facade ResolveBootstrapCredentialPath must be deleted")
+			}
+		}
+	}
+	return violations
 }
 
 func scanResolveBootstrapCredentialPathCalls(t *testing.T, fset *token.FileSet, root, dir string) []string {
