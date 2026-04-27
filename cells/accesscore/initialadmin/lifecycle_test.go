@@ -158,6 +158,41 @@ func TestLifecycle_StartWithBind_FirstRun_CreatesAdmin(t *testing.T) {
 	assert.NotEmpty(t, user.ID)
 }
 
+func TestLifecycle_StartWithBind_LogsEffectiveCredentialPathAfterWrite(t *testing.T) {
+	dir := t.TempDir()
+	credPath := filepath.Join(dir, "custom_admin_password")
+	logger := slog.New(&capturingHandlerCross{})
+	deps := BootstrapDeps{
+		UserRepo: mem.NewUserRepository(),
+		RoleRepo: mem.NewRoleRepository(),
+		Logger:   logger,
+	}
+	l := NewLifecycle(
+		WithCredentialPath(credPath),
+		WithTTL(time.Hour),
+		WithPasswordHasher(BcryptHasher{Cost: 4}),
+		WithScheduler(newFakeSchedulerCross()),
+		withPasswordSource(newFixedPasswordSourceCross()),
+	)
+	l.Bind(deps, logger)
+
+	require.NoError(t, l.Hook().OnStart(context.Background()))
+
+	handler := logger.Handler().(*capturingHandlerCross)
+	handler.mu.Lock()
+	defer handler.mu.Unlock()
+	var found bool
+	for _, rec := range handler.records {
+		if rec.attrs["event"] != "initial_admin_credentials_written" {
+			continue
+		}
+		found = true
+		assert.Equal(t, credPath, rec.attrs["cred_path"])
+		assert.NotContains(t, rec.message, "admin_changeme")
+	}
+	assert.True(t, found, "expected lifecycle to log written credential path")
+}
+
 // ---------------------------------------------------------------------------
 // 5. start with Bind (repeat run) — admin already exists, no cleaner
 // ---------------------------------------------------------------------------
@@ -331,6 +366,24 @@ func TestLifecycle_StartFail_CleanerRemainsNil(t *testing.T) {
 
 	// stop must be safe even when start failed.
 	assert.NoError(t, hook.OnStop(context.Background()))
+}
+
+func TestLifecycle_StartFail_RelativeStateDirReturnsInvalidConfigError(t *testing.T) {
+	t.Setenv("GOCELL_STATE_DIR", "relative/path")
+	l := NewLifecycle(
+		WithTTL(time.Hour),
+		WithPasswordHasher(BcryptHasher{Cost: 4}),
+		withPasswordSource(newFixedPasswordSourceCross()),
+	)
+	deps := makeLifecycleDeps(t)
+	l.Bind(deps, deps.Logger)
+
+	err := l.Hook().OnStart(context.Background())
+
+	require.Error(t, err)
+	var ec *errcode.Error
+	require.True(t, errors.As(err, &ec), "expected errcode.Error, got %T: %v", err, err)
+	assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 }
 
 // ---------------------------------------------------------------------------

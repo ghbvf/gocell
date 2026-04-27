@@ -9,7 +9,6 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
-	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -381,26 +380,6 @@ func buildConfigCorePGStorage(pool *adapterpg.Pool, cfg ConfigCoreModuleConfig) 
 		return nil, nil, fmt.Errorf("configcore PG repository wiring: %w", err)
 	}
 	return pgRes, storageOpt, nil
-}
-
-// logInitialAdminCredPath emits a startup info log so operators know where to
-// find the initial admin credential when bootstrap mode is active. Interactive
-// mode does not write a credential file, so it intentionally skips path
-// resolution and avoids warning on GOCELL_STATE_DIR values it will not use.
-func logInitialAdminCredPath(mode adminProvisionMode) {
-	if mode != adminProvisionModeBootstrap {
-		return
-	}
-	credPath, err := initialadmin.ResolveCredentialPath("")
-	if err != nil {
-		// GOCELL_STATE_DIR is not absolute — the bootstrapper will fail-fast too,
-		// so log the error here and let the user fix the config.
-		slog.Warn("corebundle: invalid GOCELL_STATE_DIR; initial admin credential path unresolvable",
-			slog.Any("error", err))
-		return
-	}
-	slog.Info("corebundle: starting; if first run, initial admin credentials are written to "+credPath,
-		slog.String("cred_path", credPath))
 }
 
 // buildConsumerBase constructs ConsumerBase from the topology-selected

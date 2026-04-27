@@ -80,48 +80,23 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")
 }
 
-// ---------------------------------------------------------------------------
-// logInitialAdminCredPath coverage
-// ---------------------------------------------------------------------------
-
-// TestLogInitialAdminCredPath_InteractiveSkipsPathResolution verifies that
-// interactive admin provisioning does not advertise or validate the bootstrap
-// credential path.
-func TestLogInitialAdminCredPath_InteractiveSkipsPathResolution(t *testing.T) {
+// TestAccessCoreModule_BootstrapProvideDoesNotAdvertiseCredentialPath verifies
+// wiring does not promise a credential file before lifecycle execution owns the
+// effective config and outcome.
+func TestAccessCoreModule_BootstrapProvideDoesNotAdvertiseCredentialPath(t *testing.T) {
 	buf, restore := captureSlogInfoLines(t)
 	t.Cleanup(restore)
 
-	t.Setenv("GOCELL_STATE_DIR", "relative/not/absolute")
-	require.NotPanics(t, func() { logInitialAdminCredPath(adminProvisionModeInteractive) })
+	shared := buildTestSharedDeps(t)
+	t.Setenv(AdminProvisionModeEnv, "bootstrap")
+
+	_, _, _, err := AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()}.Provide(context.Background(), shared)
+	require.NoError(t, err)
 
 	logs := buf.String()
+	assert.Contains(t, logs, "admin provision mode resolved")
 	assert.NotContains(t, logs, "initial admin credential")
-	assert.NotContains(t, logs, "GOCELL_STATE_DIR")
-}
-
-// TestLogInitialAdminCredPath_BootstrapInvalidStateDirWarns verifies that
-// bootstrap mode still warns when the credential path cannot be resolved.
-func TestLogInitialAdminCredPath_BootstrapInvalidStateDirWarns(t *testing.T) {
-	buf, restore := captureSlogInfoLines(t)
-	t.Cleanup(restore)
-
-	t.Setenv("GOCELL_STATE_DIR", "relative/not/absolute")
-	require.NotPanics(t, func() { logInitialAdminCredPath(adminProvisionModeBootstrap) })
-
-	logs := buf.String()
-	assert.Contains(t, logs, "invalid GOCELL_STATE_DIR")
-}
-
-// TestLogInitialAdminCredPath_ValidStateDir verifies that logInitialAdminCredPath
-// runs without panic when GOCELL_STATE_DIR is a valid absolute path.
-func TestLogInitialAdminCredPath_ValidStateDir(t *testing.T) {
-	buf, restore := captureSlogInfoLines(t)
-	t.Cleanup(restore)
-
-	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
-	require.NotPanics(t, func() { logInitialAdminCredPath(adminProvisionModeBootstrap) })
-
-	assert.Contains(t, buf.String(), "initial admin credentials are written")
+	assert.NotContains(t, logs, "cred_path")
 }
 
 // ---------------------------------------------------------------------------

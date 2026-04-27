@@ -182,6 +182,11 @@ func (l *Lifecycle) start(ctx context.Context) error {
 		return fmt.Errorf("initialadmin: ensure: %w", err)
 	}
 	adminWorker := adminResult.Cleaner
+	if adminWorker != nil {
+		logger.InfoContext(ctx, "initialadmin: initial admin credentials written",
+			slog.String("event", "initial_admin_credentials_written"),
+			slog.String("cred_path", bs.cfg.CredentialPath))
+	}
 
 	// Priority identical to old behaviour: adminWorker > sweepCleaner.
 	var result worker.Worker

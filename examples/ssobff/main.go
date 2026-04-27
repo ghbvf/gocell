@@ -15,7 +15,6 @@ import (
 	"time"
 
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -199,21 +198,12 @@ func main() {
 		// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore.
 	)
 
-	// Pass "" so per-OS platform defaults in ResolveCredentialPath kick in.
-	// Override with GOCELL_STATE_DIR to redirect to a custom directory.
-	credPath, err := initialadmin.ResolveCredentialPath(os.Getenv("GOCELL_STATE_DIR"))
-	if err != nil {
-		logger.Warn("ssobff: failed to resolve bootstrap credential path",
-			slog.Any("error", err))
-		credPath = "<unresolved>"
-	}
-	logger.Info("ssobff: starting; if first run, initial admin credentials are written to cred_path",
+	logger.Info("ssobff: starting",
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
 		slog.String("primary_addr", primaryAddr),
 		slog.String("internal_addr", internalAddr),
 		slog.String("health_addr", healthAddr),
-		slog.String("cred_path", credPath),
 	)
 	if err := app.Run(ctx); err != nil {
 		logger.Error("ssobff: application exited with error", slog.Any("error", err))

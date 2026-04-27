@@ -460,6 +460,7 @@ func TestBootstrap_NewBootstrapperValidatesInput(t *testing.T) {
 		deps    BootstrapDeps
 		cfg     bootstrapConfig
 		wantErr string
+		envDir  string
 	}{
 		{
 			name:    "nil userRepo",
@@ -485,10 +486,20 @@ func TestBootstrap_NewBootstrapperValidatesInput(t *testing.T) {
 			cfg:     bootstrapConfig{TTL: -time.Minute},
 			wantErr: "TTL",
 		},
+		{
+			name:    "relative env credential path",
+			deps:    BootstrapDeps{UserRepo: validUserRepo, RoleRepo: validRoleRepo, Logger: logger},
+			cfg:     bootstrapConfig{},
+			wantErr: "absolute",
+			envDir:  "relative/path",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			if tt.envDir != "" {
+				t.Setenv("GOCELL_STATE_DIR", tt.envDir)
+			}
 			_, err := newBootstrapper(tt.deps, tt.cfg)
 			require.Error(t, err)
 			var ec *errcode.Error

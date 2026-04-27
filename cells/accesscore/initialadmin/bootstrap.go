@@ -96,7 +96,8 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 	if cfg.CredentialPath == "" {
 		resolved, resolveErr := ResolveCredentialPath("")
 		if resolveErr != nil {
-			return nil, resolveErr
+			return nil, errcode.Wrap(errcode.ErrCellInvalidConfig,
+				"initialadmin: resolve credential path", resolveErr)
 		}
 		cfg.CredentialPath = resolved
 	}

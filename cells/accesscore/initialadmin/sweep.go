@@ -151,7 +151,12 @@ func sweep(ctx context.Context, cfg sweepConfig) (sweepResult, error) {
 
 func resolveSweepCredentialPath(credentialPath string) (string, error) {
 	if credentialPath == "" {
-		return ResolveCredentialPath("")
+		resolved, err := ResolveCredentialPath("")
+		if err != nil {
+			return "", errcode.Wrap(errcode.ErrCellInvalidConfig,
+				"initialadmin: resolve credential path", err)
+		}
+		return resolved, nil
 	}
 	cleaned := filepath.Clean(credentialPath)
 	if !filepath.IsAbs(cleaned) {
