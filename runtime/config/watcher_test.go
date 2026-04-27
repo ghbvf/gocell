@@ -699,6 +699,50 @@ func TestWatcher_Close_DuringDebounceTimer(t *testing.T) {
 	require.NoError(t, w.Close(context.Background()), "Close(ctx) during active debounce timer must not error")
 }
 
+func TestWatcher_Close_ConcurrentImmediateCallbacksRace(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "config.yaml")
+	touchFile(t, file, "key: v0")
+
+	w, err := NewWatcher(file, WithDebounce(0))
+	require.NoError(t, err)
+
+	callbackStarted := make(chan struct{})
+	releaseCallbacks := make(chan struct{})
+	var startedOnce sync.Once
+	w.OnChange(func(_ WatchEvent) {
+		startedOnce.Do(func() { close(callbackStarted) })
+		<-releaseCallbacks
+	})
+
+	start := make(chan struct{})
+	var wg sync.WaitGroup
+	for range 32 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			w.fireCallbacks(false)
+		}()
+	}
+
+	close(start)
+	select {
+	case <-callbackStarted:
+	case <-time.After(2 * time.Second):
+		close(releaseCallbacks)
+		wg.Wait()
+		t.Fatal("callback did not start")
+	}
+
+	closeCtx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	_ = w.Close(closeCtx)
+
+	close(releaseCallbacks)
+	wg.Wait()
+}
+
 func TestWatcher_RaceDetection_ConcurrentWriteAndClose(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
