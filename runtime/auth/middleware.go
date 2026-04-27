@@ -26,10 +26,9 @@ import (
 // during FinalizeAuth so that route declarations from all Cells are aggregated
 // before the predicate is compiled.
 //
-// PR-A14a: the previous WithDelegatedMatcher option was removed. Routes that
-// delegate JWT authentication to another credential (service-token, mTLS)
-// now live on a physically separate internal listener+mux and never reach
-// this middleware — no in-band bypass predicate is needed.
+// Internal listener routes that authenticate via service-token or mTLS live on
+// a physically separate listener+mux and never reach this middleware — no
+// in-band bypass predicate is needed.
 //
 // ref: go-kratos/kratos — public bypass via selector at composition layer
 // ref: go-zero — JWT opt-in per route group, no hidden runtime defaults

@@ -167,9 +167,9 @@ types that observe traffic:
   compile-checked, so a new bootstrap entry point cannot accidentally
   drop the wiring and panic at first request.
 
-Cells never see the tracer. `RegisterRoutes(mux cell.RouteMux)` and
-`RegisterSubscriptions(r cell.EventRouter)` keep their existing
-signatures; `auth.Mount(mux, Route{Contract, ...})` and
+Cells never see the tracer. `RouteGroups() []cell.RouteGroup` and
+`RegisterSubscriptions(r cell.EventRouter)` keep the cell-facing
+registration surfaces stable; `auth.Mount(mux, Route{Contract, ...})` and
 `r.AddContractHandler(spec, handler, "cellID")` are the contract-first
 registration verbs from the Cell author's perspective.
 
@@ -410,7 +410,7 @@ Rejected in round 1 and **still** rejected. The round-1 defect was not
 "Option pattern bad in absolute terms" but "Option placed on the wrong
 layer": making `HTTPHandler` accept `WithTracer(...)` pushed the
 tracer wiring responsibility onto Cell authors, who had no reason to
-thread it from `Cell.RegisterRoutes` through `auth.Mount`. Zero cells
+thread it from route group registration through `auth.Mount`. Zero cells
 passed it, so every contract span silently became noop. §5 puts the
 tracer on the runtime infrastructure layer (Router / eventrouter.Router
 constructors) where bootstrap is the sole caller — different pattern,

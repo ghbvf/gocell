@@ -153,7 +153,11 @@ package mycell
 import (
     "context"
     "log/slog"
+    "net/http"
+
     "github.com/ghbvf/gocell/kernel/cell"
+    "github.com/ghbvf/gocell/kernel/wrapper"
+    "github.com/ghbvf/gocell/runtime/auth"
 )
 
 type MyCell struct {
@@ -178,10 +182,24 @@ func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
     return c.BaseCell.Init(ctx, deps)
 }
 
-func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
-    mux.Handle("GET /api/v1/hello", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Write([]byte(`{"message":"hello from mycell"}`))
-    }))
+func (c *MyCell) RouteGroups() []cell.RouteGroup {
+    return []cell.RouteGroup{
+        cell.SingleGroup(cell.PrimaryListener, "/api/v1", func(mux cell.RouteMux) error {
+            return auth.Mount(mux, auth.Route{
+                Contract: wrapper.ContractSpec{
+                    ID:        "http.mycell.hello.v1",
+                    Kind:      "http",
+                    Transport: "http",
+                    Method:    "GET",
+                    Path:      "/api/v1/hello",
+                },
+                Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                    _, _ = w.Write([]byte(`{"message":"hello from mycell"}`))
+                }),
+                Public: true,
+            })
+        }),
+    }
 }
 ```
 

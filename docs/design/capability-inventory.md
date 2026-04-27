@@ -34,7 +34,7 @@
 - `Level` enum — L0(LocalOnly)/L1(LocalTx)/L2(OutboxFact)/L3(WorkflowEventual)/L4(DeviceLatent)
 - `ContractKind` enum — http/event/command/projection
 - `ContractRole` enum — serve/call/publish/subscribe/handle/invoke/provide/read
-- `HTTPRegistrar` / `EventRegistrar` / `RouteMux` — 可选注册接口
+- `RouteGroupContributor` / `EventRegistrar` / `RouteMux` — 可选注册接口
 
 ### 2.2 assembly — 应用装配
 - `CoreAssembly` struct — Register/Start(按注册顺序)/Stop(反序) + 状态守卫

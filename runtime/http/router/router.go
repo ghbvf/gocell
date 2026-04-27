@@ -621,7 +621,7 @@ func (r *Router) FinalizeAuth() error {
 	r.authFinalized = true
 
 	if len(r.declaredAuthMetas) > 0 {
-		if err := r.verifyDelegatedConsistency(); err != nil {
+		if err := r.verifyInternalRouteAffinity(); err != nil {
 			return err
 		}
 
@@ -668,14 +668,14 @@ func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	}
 }
 
-// verifyDelegatedConsistency verifies that routes with /internal/v1/* paths
+// verifyInternalRouteAffinity verifies that routes with /internal/v1/* paths
 // are mounted on an InternalListener router and vice versa.
 //
-// The Delegated field was removed; internal-route affinity is now derived
-// structurally from the path prefix via AuthRouteMeta.IsInternal(). This
-// function retains the listener-ref check so that a /internal/v1/* route
-// mounted on the wrong listener still fails fast at startup.
-func (r *Router) verifyDelegatedConsistency() error {
+// Internal-route affinity is derived structurally from the path prefix via
+// AuthRouteMeta.IsInternal(). This function retains the listener-ref check so
+// that a /internal/v1/* route mounted on the wrong listener still fails fast
+// at startup.
+func (r *Router) verifyInternalRouteAffinity() error {
 	isInternal := r.ref == kcell.InternalListener
 	// Zero-ref routers are used in unit tests without a listener identity.
 	// Skip the listener-ref check for those; Bootstrap-built routers always

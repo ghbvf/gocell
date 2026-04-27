@@ -9,14 +9,16 @@ runtime/ 提供通用运行时能力：`http` / `auth` / `bootstrap` / `eventrou
 
 ## Auth 路由声明（F3）
 
-每个 Cell 通过 `auth.Mount(mux, auth.Route{...})` 注册路由，在注册点声明鉴权语义。
-`auth.Route.Contract` 必填，HTTP method/path 从 `wrapper.ContractSpec` 读取。
+每个 Cell 通过 `RouteGroups() []cell.RouteGroup` 声明物理 listener 和路径前缀，
+并在每个 `RouteGroup.Register` 闭包里调用 `auth.Mount(mux, auth.Route{...})`
+注册路由。`auth.Route.Contract` 必填，HTTP method/path 从
+`wrapper.ContractSpec` 读取。
 
 ```go
-func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
-    mux.Route("/api/v1/access", func(sub cell.RouteMux) {
-        sub.Route("/sessions", func(s cell.RouteMux) {
-            auth.Mount(s, auth.Route{
+func (c *MyCell) RouteGroups() []cell.RouteGroup {
+    return []cell.RouteGroup{
+        cell.SingleGroup(cell.PrimaryListener, "/api/v1/access/sessions", func(mux cell.RouteMux) error {
+            if err := auth.Mount(mux, auth.Route{
                 Contract: wrapper.ContractSpec{
                     ID:        "http.access.sessions.login.v1",
                     Kind:      "http",
@@ -26,8 +28,10 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
                 },
                 Handler: http.HandlerFunc(c.loginHandler.HandleLogin),
                 Public:  true, // JWT 豁免
-            })
-            auth.Mount(s, auth.Route{
+            }); err != nil {
+                return err
+            }
+            return auth.Mount(mux, auth.Route{
                 Contract: wrapper.ContractSpec{
                     ID:        "http.access.sessions.logout.v1",
                     Kind:      "http",
@@ -38,8 +42,8 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
                 Handler:             http.HandlerFunc(c.logoutHandler.HandleLogout),
                 PasswordResetExempt: true, // 允许 reset-required token 穿过
             })
-        })
-    })
+        }),
+    }
 }
 ```
 
@@ -55,7 +59,8 @@ func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
 
 ### FinalizeAuth 生命周期
 
-`Bootstrap.Run` 在 `Cell.RegisterRoutes` 完成后自动调用 `rtr.FinalizeAuth()`：
+`Bootstrap.Run` 在所有 `RouteGroup.Register` 闭包完成后自动调用
+`rtr.FinalizeAuth()`：
 
 1. 收集所有 `auth.Mount` 推送的 `AuthRouteMeta`
 2. 去重 `(method, path)`——重复 fail-fast
@@ -83,7 +88,7 @@ bootstrap.New(
         []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)}),
     bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
         []cell.ListenerAuth{cell.MustNewAuthServiceToken(store, ring)}),
-    bootstrap.WithListener(cell.HealthListener, "127.0.0.1:9091",
+    bootstrap.WithListener(cell.HealthListener, ":9091", // PodIP/Service reachable
         []cell.ListenerAuth{cell.AuthNone{}}),
 )
 ```

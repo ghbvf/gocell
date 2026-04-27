@@ -138,6 +138,42 @@ func TestSharedDeps_Validate_VerboseEndpoint(t *testing.T) {
 	}
 }
 
+func TestSharedDeps_Validate_RealModeRejectsLoopbackHealthAddrWithoutLocalOnlyWaiver(t *testing.T) {
+	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
+
+	tests := []struct {
+		name            string
+		addr            string
+		healthLocalOnly bool
+		wantErr         bool
+	}{
+		{name: "loopback rejected", addr: "127.0.0.1:9091", wantErr: true},
+		{name: "localhost rejected", addr: "localhost:9091", wantErr: true},
+		{name: "ipv6 loopback rejected", addr: "[::1]:9091", wantErr: true},
+		{name: "wildcard accepted", addr: ":9091"},
+		{name: "zero wildcard accepted", addr: "0.0.0.0:9091"},
+		{name: "pod reachable accepted", addr: "10.0.0.12:9091"},
+		{name: "loopback accepted with explicit local-only waiver", addr: "127.0.0.1:9091", healthLocalOnly: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newValidatedSharedDeps(t, prodTopo)
+			deps.HealthHTTPAddr = tc.addr
+			deps.HealthLocalOnly = tc.healthLocalOnly
+
+			err := deps.Validate()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "GOCELL_HTTP_HEALTH_ADDR")
+			assert.Contains(t, err.Error(), "GOCELL_HTTP_HEALTH_LOCAL_ONLY=1")
+		})
+	}
+}
+
 type validateDistributedNonceStore struct{}
 
 func (validateDistributedNonceStore) Kind() auth.NonceStoreKind {

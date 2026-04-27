@@ -185,7 +185,7 @@ flowchart LR
 ```mermaid
 flowchart LR
   client["HTTP client"] --> router["router + middleware"]
-  router --> reg["Cell.RegisterRoutes"]
+  router --> reg["RouteGroup.Register"]
   reg --> handler["slice Handler"]
   handler --> service["slice Service"]
   service --> ports["ports interfaces"]

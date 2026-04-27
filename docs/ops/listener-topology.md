@@ -20,8 +20,8 @@ Internal Network        │             internal  127.0.0.1:9090      │
                         └───────────────────────────────────────────┘
 
                         ┌───────────────────────────────────────────┐
-k8s Kubelet / Prometheus│              health  127.0.0.1:9091       │
-     ──────────────────▶│  /healthz  /readyz  /metrics              │
+Kubelet / Prometheus    │              health  :9091                │
+ (PodIP / Service) ────▶│  /healthz  /readyz  /metrics              │
                         │  No auth (network-level isolation only)   │
                         └───────────────────────────────────────────┘
 ```
@@ -32,7 +32,7 @@ k8s Kubelet / Prometheus│              health  127.0.0.1:9091       │
 |----------|---------------------|--------------|
 | primary  | `:8080`             | `GOCELL_HTTP_PRIMARY_ADDR` |
 | internal | `127.0.0.1:9090`    | `GOCELL_HTTP_INTERNAL_ADDR` |
-| health   | `127.0.0.1:9091`    | `GOCELL_HTTP_HEALTH_ADDR` |
+| health   | `127.0.0.1:9091` local/dev default; use `:9091` for PodIP/Service probes | `GOCELL_HTTP_HEALTH_ADDR` |
 
 For full variable reference see `docs/ops/env-vars.md`.
 
@@ -48,7 +48,8 @@ for tests, examples, and one-port dev runs only.
 fallback path collapses port-level isolation between business traffic and
 infra probes, and exposes `/metrics` on the public port. Kubernetes liveness
 / readiness probes and Prometheus scrape targets must point at the dedicated
-health port (`127.0.0.1:9091` by default).
+health port. In production, bind the health listener to a Pod-reachable address
+such as `:9091` unless the probe/scrape runs in the same network namespace.
 
 The fallback is a structural convenience, not a deployment mode. There is no
 flag to opt out; declaring `WithListener(cell.HealthListener, ...)` simply
@@ -58,7 +59,7 @@ disables the remap.
 
 **Breaking change from PR-A14a**: `/healthz`, `/readyz`, and `/metrics` are no
 longer served on the primary port (`:8080`). They are now exclusive to the
-health listener (`127.0.0.1:9091`).
+health listener.
 
 Update your `Pod` / `Deployment` spec:
 
@@ -81,10 +82,13 @@ readinessProbe:
     port: 9091        # health listener
 ```
 
-The health listener defaults to `127.0.0.1:9091`. Kubernetes probes originate
-from the kubelet on the same node, so the loopback address is reachable without
-exposing the port externally. If your cluster uses a dedicated health-check
-network segment, override with `GOCELL_HTTP_HEALTH_ADDR=<node-ip>:9091`.
+The default `127.0.0.1:9091` bind is local-only: it works for local development,
+same-Pod sidecars, or exec-probe style checks that run inside the container's
+network namespace. Kubernetes `httpGet` probes target the Pod IP, and Prometheus
+Pod/Service scrapes also use network addresses, so those deployments must set
+`GOCELL_HTTP_HEALTH_ADDR=:9091` or another Pod-reachable address. In
+`GOCELL_ADAPTER_MODE=real`, corebundle rejects loopback health binds unless
+`GOCELL_HTTP_HEALTH_LOCAL_ONLY=1` explicitly waives this for same-netns access.
 
 ## Prometheus Scrape Config Migration
 
@@ -187,8 +191,8 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
         {
             Listener: cell.PrimaryListener,
             Prefix:   "/api/v1/my-domain",
-            Register: func(mux cell.RouteMux) {
-                auth.Mount(mux, auth.Route{
+            Register: func(mux cell.RouteMux) error {
+                return auth.Mount(mux, auth.Route{
                     Contract: specGetResource, // wrapper.ContractSpec — Method+Path+Kind=http
                     Handler:  http.HandlerFunc(c.handleGet),
                     Policy:   auth.Authenticated(), // route-level auth.Policy — distinct from listener-level cell.ListenerAuth
@@ -198,8 +202,8 @@ func (c *MyCell) RouteGroups() []cell.RouteGroup {
         {
             Listener: cell.InternalListener,
             Prefix:   "/internal/v1/my-domain",
-            Register: func(mux cell.RouteMux) {
-                auth.Mount(mux, auth.Route{
+            Register: func(mux cell.RouteMux) error {
+                return auth.Mount(mux, auth.Route{
                     Contract: specAdminAction,
                     Handler:  http.HandlerFunc(c.handleAdminAction),
                     Policy:   auth.AnyRole(auth.RoleInternalAdmin),

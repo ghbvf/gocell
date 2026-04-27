@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"strings"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adapterredis "github.com/ghbvf/gocell/adapters/redis"
@@ -96,10 +98,17 @@ type SharedDeps struct {
 
 	// HealthHTTPAddr is the bind address for the health+metrics listener
 	// (/healthz /readyz /metrics). Env GOCELL_HTTP_HEALTH_ADDR;
-	// default "127.0.0.1:9091". Prometheus scrape targets and k8s liveness/
-	// readiness probes must point to this address; these endpoints are no
-	// longer served on the primary HTTP port (PR-A14b breaking change).
+	// default "127.0.0.1:9091" for local/dev only. Production deployments
+	// using kubelet HTTP probes or Prometheus PodIP/Service scrapes must bind a
+	// Pod-reachable address such as ":9091"; loopback is allowed in real mode
+	// only when HealthLocalOnly explicitly opts into same-pod/exec access.
 	HealthHTTPAddr string
+
+	// HealthLocalOnly explicitly waives the real-mode guard that rejects
+	// loopback-only HealthHTTPAddr values. Set via GOCELL_HTTP_HEALTH_LOCAL_ONLY=1
+	// only for deployments where health/metrics are reached from the same
+	// network namespace (local dev, same-pod sidecar, or exec-probe style).
+	HealthLocalOnly bool
 
 	// MetricsToken is the token guarding /metrics. Required in production
 	// topology; may be empty in dev mode.
@@ -219,6 +228,7 @@ func (d *SharedDeps) Validate() error {
 	}
 	errs := d.validateCore()
 	errs = append(errs, d.validateVerboseEndpoint()...)
+	errs = append(errs, d.validateHealthReachability()...)
 	errs = append(errs, d.validateControlPlane()...)
 	return errors.Join(errs...)
 }
@@ -340,6 +350,37 @@ func (d *SharedDeps) validateControlPlane() []error {
 	return errs
 }
 
+func (d *SharedDeps) validateHealthReachability() []error {
+	if !d.Topology.RequireProductionControlPlane() || d.HealthLocalOnly {
+		return nil
+	}
+	if d.HealthHTTPAddr == "" || !isLoopbackBindAddr(d.HealthHTTPAddr) {
+		return nil
+	}
+	return []error{errcode.New(errcode.ErrValidationFailed,
+		"GOCELL_HTTP_HEALTH_ADDR is loopback-only in adapter mode \"real\"; "+
+			"kubelet HTTP probes and Prometheus PodIP/Service scrapes cannot reach "+
+			"container loopback. Set GOCELL_HTTP_HEALTH_ADDR=:9091 (or a Pod-reachable "+
+			"address), or set GOCELL_HTTP_HEALTH_LOCAL_ONLY=1 only for same-pod sidecar "+
+			"or exec-probe deployments.")}
+}
+
+func isLoopbackBindAddr(addr string) bool {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	host = strings.Trim(host, "[]")
+	if host == "" {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
 // LoadSharedDepsFromEnv reads all environment variables and builds a fully
 // populated SharedDeps for cross-cutting concerns. Cell-specific dependencies
 // (cursor codecs, HMAC key, KeyProvider, PG config) are constructed in each
@@ -382,6 +423,9 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	verboseToken := os.Getenv("GOCELL_READYZ_VERBOSE_TOKEN")
 	verboseDisabled := os.Getenv("GOCELL_READYZ_VERBOSE_DISABLED") == "1"
 
+	healthLocalOnlyRaw := os.Getenv("GOCELL_HTTP_HEALTH_LOCAL_ONLY")
+	healthLocalOnly := healthLocalOnlyRaw == "1" || strings.EqualFold(healthLocalOnlyRaw, "true")
+
 	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
 	metricsHandler, err := buildMetricsHandler(metricsToken, ps.registry)
 	if err != nil {
@@ -419,9 +463,10 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 
 	healthAddr := os.Getenv("GOCELL_HTTP_HEALTH_ADDR")
 	if healthAddr == "" {
-		// Separate loopback port for /healthz /readyz /metrics.
-		// k8s liveness/readiness probes and Prometheus scrape targets must
-		// be updated from GOCELL_HTTP_PRIMARY_ADDR to this address (PR-A14b).
+		// Separate loopback port for local /healthz /readyz /metrics access.
+		// Real-mode PodIP/Service probes must set a Pod-reachable bind such as
+		// :9091, or explicitly opt into same-netns access with
+		// GOCELL_HTTP_HEALTH_LOCAL_ONLY=1.
 		healthAddr = "127.0.0.1:9091"
 	}
 
@@ -437,6 +482,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		PrimaryHTTPAddr:     primaryAddr,
 		InternalHTTPAddr:    internalAddr,
 		HealthHTTPAddr:      healthAddr,
+		HealthLocalOnly:     healthLocalOnly,
 		MetricsToken:        metricsToken,
 		VerboseToken:        verboseToken,
 		VerboseDisabled:     verboseDisabled,

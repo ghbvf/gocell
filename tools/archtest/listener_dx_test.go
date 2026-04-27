@@ -4,8 +4,10 @@ package archtest
 //
 // The rule is intentionally narrow:
 //   - production Go must not reintroduce deleted listener option APIs;
-//   - production Go must not reintroduce the old auth.Route Delegated field;
-//   - active docs/godoc must not show old listener APIs or Delegated examples.
+//   - production Go must not reintroduce the old auth.Route Delegated surface;
+//   - owner API signatures for RouteGroup.Register and auth.Mount stay aligned;
+//   - active docs/godoc must not show old listener APIs, Delegated examples, or
+//     the legacy single-mux route registration surface.
 //
 // Historical provenance remains allowed in docs/backlog.md, docs/plans/**,
 // docs/reviews/**, docs/archive/**, and CHANGELOG.md.
@@ -35,6 +37,17 @@ var oldListenerAPIIdents = map[string]struct{}{
 	"WithInternalListener": {},
 }
 
+var oldRouteSurfaceDocTerms = []string{
+	"cell.HTTPRegistrar",
+	"HTTPRegistrar",
+	"WithInternalMiddleware",
+	"Cell.RegisterRoutes",
+	"func (c *MyCell) RegisterRoutes",
+	"RegisterRoutes(mux cell.RouteMux)",
+	"publicMux",
+	"internalMux",
+}
+
 var activeDocForbiddenTerms = []string{
 	"WithHTTPAddr",
 	"WithHTTPPrimaryAddr",
@@ -42,6 +55,11 @@ var activeDocForbiddenTerms = []string{
 	"WithPrimaryListener",
 	"WithInternalListener",
 	"Delegated",
+}
+
+var productionForbiddenSurfaceTerms = []string{
+	"Delegated",
+	"WithDelegatedMatcher",
 }
 
 func TestListenerDXA52Guard(t *testing.T) {
@@ -58,14 +76,23 @@ func TestListenerDXA52Guard(t *testing.T) {
 			ruleListenerDXA52, strings.Join(violations, "\n"))
 	})
 
-	t.Run("delegated_route_field_not_reintroduced", func(t *testing.T) {
+	t.Run("delegated_route_surface_not_reintroduced", func(t *testing.T) {
 		files, err := listenerDXProductionGoFiles(root)
 		require.NoError(t, err)
 		var violations []string
 		for _, file := range files {
 			violations = append(violations, delegatedRouteFieldViolations(t, root, file)...)
+			violations = append(violations, forbiddenProductionSurfaceViolations(t, root, file)...)
 		}
-		assert.Empty(t, violations, "%s: auth.Route Delegated field must not reappear:\n%s",
+		assert.Empty(t, violations, "%s: auth.Route Delegated surface must not reappear:\n%s",
+			ruleListenerDXA52, strings.Join(violations, "\n"))
+	})
+
+	t.Run("owner_surface_signatures_stay_current", func(t *testing.T) {
+		var violations []string
+		violations = append(violations, routeGroupRegisterSignatureViolations(t, root)...)
+		violations = append(violations, authMountSignatureViolations(t, root)...)
+		assert.Empty(t, violations, "%s: listener DX owner API signatures drifted:\n%s",
 			ruleListenerDXA52, strings.Join(violations, "\n"))
 	})
 
@@ -195,6 +222,122 @@ func delegatedRouteFieldViolations(t *testing.T, root, path string) []string {
 	return violations
 }
 
+func forbiddenProductionSurfaceViolations(t *testing.T, root, path string) []string {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.ParseComments|parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	var violations []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		id, ok := n.(*ast.Ident)
+		if !ok {
+			return true
+		}
+		for _, term := range productionForbiddenSurfaceTerms {
+			if strings.Contains(id.Name, term) {
+				violations = append(violations, listenerDXViolation(root, path, fset.Position(id.Pos()).Line,
+					fmt.Sprintf("production identifier contains deleted surface %q", term)))
+			}
+		}
+		return true
+	})
+	for _, group := range file.Comments {
+		for _, comment := range group.List {
+			for _, term := range productionForbiddenSurfaceTerms {
+				if strings.Contains(comment.Text, term) {
+					violations = append(violations, listenerDXViolation(root, path, fset.Position(comment.Pos()).Line,
+						fmt.Sprintf("production comment contains deleted surface %q", term)))
+				}
+			}
+		}
+	}
+	return violations
+}
+
+func routeGroupRegisterSignatureViolations(t *testing.T, root string) []string {
+	t.Helper()
+	path := filepath.Join(root, "kernel", "cell", "routegroup.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	for _, decl := range file.Decls {
+		gen, ok := decl.(*ast.GenDecl)
+		if !ok || gen.Tok != token.TYPE {
+			continue
+		}
+		for _, spec := range gen.Specs {
+			ts, ok := spec.(*ast.TypeSpec)
+			if !ok || ts.Name.Name != "RouteGroup" {
+				continue
+			}
+			st, ok := ts.Type.(*ast.StructType)
+			if !ok {
+				return []string{listenerDXViolation(root, path, fset.Position(ts.Pos()).Line, "RouteGroup is no longer a struct")}
+			}
+			for _, field := range st.Fields.List {
+				if len(field.Names) != 1 || field.Names[0].Name != "Register" {
+					continue
+				}
+				fn, ok := field.Type.(*ast.FuncType)
+				if !ok {
+					return []string{listenerDXViolation(root, path, fset.Position(field.Pos()).Line, "RouteGroup.Register is not a func")}
+				}
+				if !listenerDXFuncHasOneParam(fn, "RouteMux") || !listenerDXFuncReturnsOnlyError(fn) {
+					return []string{listenerDXViolation(root, path, fset.Position(field.Pos()).Line,
+						"RouteGroup.Register must be func(mux RouteMux) error")}
+				}
+				return nil
+			}
+			return []string{listenerDXViolation(root, path, fset.Position(ts.Pos()).Line, "RouteGroup.Register field missing")}
+		}
+	}
+	return []string{listenerDXViolation(root, path, 1, "RouteGroup type missing")}
+}
+
+func authMountSignatureViolations(t *testing.T, root string) []string {
+	t.Helper()
+	path := filepath.Join(root, "runtime", "auth", "route.go")
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+	require.NoError(t, err)
+
+	for _, decl := range file.Decls {
+		fn, ok := decl.(*ast.FuncDecl)
+		if !ok || fn.Name.Name != "Mount" {
+			continue
+		}
+		if fn.Type.Params == nil || len(fn.Type.Params.List) != 2 {
+			return []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line, "auth.Mount must accept mux and Route parameters")}
+		}
+		if !listenerDXFuncReturnsOnlyError(fn.Type) {
+			return []string{listenerDXViolation(root, path, fset.Position(fn.Pos()).Line, "auth.Mount must return error")}
+		}
+		return nil
+	}
+	return []string{listenerDXViolation(root, path, 1, "auth.Mount function missing")}
+}
+
+func listenerDXFuncHasOneParam(fn *ast.FuncType, wantType string) bool {
+	return fn.Params != nil && len(fn.Params.List) == 1 && listenerDXExprName(fn.Params.List[0].Type) == wantType
+}
+
+func listenerDXFuncReturnsOnlyError(fn *ast.FuncType) bool {
+	return fn.Results != nil && len(fn.Results.List) == 1 && listenerDXExprName(fn.Results.List[0].Type) == "error"
+}
+
+func listenerDXExprName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return e.Name
+	case *ast.SelectorExpr:
+		return listenerDXExprName(e.X) + "." + e.Sel.Name
+	default:
+		return ""
+	}
+}
+
 func activeDocTermViolations(t *testing.T, root, path string) []string {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -202,7 +345,7 @@ func activeDocTermViolations(t *testing.T, root, path string) []string {
 	lines := strings.Split(string(data), "\n")
 	var violations []string
 	for i, line := range lines {
-		for _, term := range activeDocForbiddenTerms {
+		for _, term := range append(activeDocForbiddenTerms, oldRouteSurfaceDocTerms...) {
 			if strings.Contains(line, term) {
 				violations = append(violations, listenerDXViolation(root, path, i+1,
 					fmt.Sprintf("active docs/godoc contains %q", term)))
