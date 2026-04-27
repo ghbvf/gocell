@@ -9,7 +9,7 @@ endpoints:
   # TODO: fill in the transport layer. FMT-13 enforces path ↔ pathParams
   # consistency once `endpoints.http` is present, so every `{name}` token in
   # `path` must appear as a pathParams key with a typed `type:`.
-  # FMT-25 also requires min/max facets for string and integer path/query
+  # FMT-25 also requires min/max facets for string and integer/number path/query
   # params, except `format: uuid` string params where UUID length is fixed.
   # The placeholder below intentionally fails `gocell validate --strict`
   # (path `/TODO/{id}` carries an `{id}` token with no pathParams declaration)
@@ -19,8 +19,8 @@ endpoints:
     path: /api/v1/TODO/{id}           # TODO: replace with real route template
     # pathParams:                     # TODO: one entry per `{name}` in path
     #   id:
-    #     type: string                # string | integer | number | boolean | uuid
-    #     format: uuid                # optional hint; uuid is exempt from FMT-25 length facets
+    #     type: string                # string | integer | number | boolean
+    #     format: uuid                # UUID convention: type:string + format:uuid
     # queryParams:                    # uncomment if the endpoint accepts query args
     #   cursor:
     #     type: string

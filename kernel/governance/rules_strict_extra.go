@@ -2,6 +2,7 @@ package governance
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -184,6 +185,7 @@ func walkSchemaNamedObjectChildren(root, node map[string]any, path string, depth
 		"then",
 		"else",
 		"unevaluatedProperties",
+		"unevaluatedItems",
 	} {
 		if child, ok := node[keyword].(map[string]any); ok {
 			walkSchemaTreeDepthRoot(root, child, path+"."+keyword, depth+1, seenRefs, visit)
@@ -396,21 +398,36 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 // (path = "endpoints.http.queryParams.<name>.<facet>" /
 // "endpoints.http.pathParams.<name>.<facet>").
 type inputConstraintViolation struct {
-	location string // JSON pointer or full metadata field path.
-	missing  string // "minLength" | "maxLength" | "minimum" | "maximum"
+	location  string // JSON pointer or full metadata field path.
+	missing   string // "minLength" | "maxLength" | "minimum" | "maximum"
+	issueType IssueType
+	message   string
+}
+
+type schemaWalkError struct {
+	path string
+	msg  string
+}
+
+func (e *schemaWalkError) Error() string {
+	return fmt.Sprintf("%s at %s", e.msg, e.path)
 }
 
 // validateFMTInputConstraint01 enforces input-side schema constraints on
 // HTTP-kind contracts:
 //   - request.schema.json: every "type":"string" leaf must declare both
-//     minLength and maxLength; every "type":"integer" leaf must declare both
-//     minimum and maximum.
+//     minLength and maxLength; every "type":"integer" or "type":"number" leaf
+//     must declare both minimum and maximum. JSON Schema type arrays are
+//     interpreted semantically, so ["string","null"] is still governed as a
+//     string input.
 //   - contract.yaml.queryParams / pathParams: same rules apply to each
 //     ParamSchema, with one exemption: Format == "uuid" skips minLength /
 //     maxLength enforcement (RFC 4122 fixes UUIDs at 36 chars).
 //
 // Severity: Error, IssueRequired (missing facets fail the build; existing
-// declarations of explicit zero are accepted).
+// declarations of explicit zero are accepted). Non-local or unresolved $ref
+// targets and depth-limit truncation are IssueInvalid fail-closed diagnostics:
+// FMT-25 must not silently pass schemas it could not fully inspect.
 //
 // Rule ID: FMT-25.
 //
@@ -443,20 +460,33 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 	absPath := filepath.Join(v.root, schemaFile)
 	missing, err := scanSchemaForInputConstraints(absPath)
 	if err != nil && !os.IsNotExist(err) {
+		field := "$"
+		var walkErr *schemaWalkError
+		if errors.As(err, &walkErr) {
+			field = walkErr.path
+		}
 		return []ValidationResult{v.newResult(
 			ruleFMT25, SeverityError, IssueInvalid,
-			schemaFile, "$",
+			schemaFile, field,
 			fmt.Sprintf("contract %q request schema %q failed to parse: %v",
 				c.ID, c.SchemaRefs.Request, err),
 		)}
 	}
 	var results []ValidationResult
 	for _, viol := range missing {
+		issueType := viol.issueType
+		if issueType == "" {
+			issueType = IssueRequired
+		}
+		msg := viol.message
+		if msg == "" {
+			msg = fmt.Sprintf("contract %q request schema field %s missing %s",
+				c.ID, viol.location, viol.missing)
+		}
 		results = append(results, v.newResult(
-			ruleFMT25, SeverityError, IssueRequired,
+			ruleFMT25, SeverityError, issueType,
 			schemaFile, viol.location,
-			fmt.Sprintf("contract %q request schema field %s missing %s",
-				c.ID, viol.location, viol.missing),
+			msg,
 		))
 	}
 	return results
@@ -468,23 +498,42 @@ func (v *Validator) validateParamInputConstraints(c *metadata.ContractMeta) []Va
 	}
 	h := c.Endpoints.HTTP
 	results := v.checkParamSchemaConstraints(c, h.QueryParams, "queryParams")
-	if v.pathParamsReadyForInputConstraints(c, h) {
+	if pathParamsReadyForInputConstraints(h) {
 		results = append(results, v.checkParamSchemaConstraints(c, h.PathParams, "pathParams")...)
 	}
 	return results
 }
 
-func (v *Validator) pathParamsReadyForInputConstraints(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) bool {
-	file := contractFile(c)
-	if len(v.validateFMT13Path(c, h, file)) > 0 {
+func pathParamsReadyForInputConstraints(h *metadata.HTTPTransportMeta) bool {
+	if h.Path == "" || !strings.HasPrefix(h.Path, "/") {
 		return false
 	}
-	return len(v.validateFMT13PathParams(c, h, file)) == 0
+	placeholders := extractPathPlaceholders(h.Path)
+	placeholderSet := make(map[string]bool, len(placeholders))
+	for _, name := range placeholders {
+		placeholderSet[name] = true
+		if _, ok := h.PathParams[name]; !ok {
+			return false
+		}
+	}
+	for _, name := range sortedParamKeys(h.PathParams) {
+		if !placeholderSet[name] {
+			return false
+		}
+		p := h.PathParams[name]
+		if p.Type == "" || !contracts.ParamTypes[p.Type] {
+			return false
+		}
+		if p.Required != nil && !*p.Required {
+			return false
+		}
+	}
+	return true
 }
 
 // scanSchemaForInputConstraints reads a JSON schema file and walks every node,
 // emitting a violation for each missing minLength/maxLength on strings and
-// minimum/maximum on integers. Paths use the same JSON-pointer style as
+// minimum/maximum on integer/number nodes. Paths use the same JSON-pointer style as
 // scanSchemaForStrictMissing (e.g. "$", "$.user.name", "$.tags.items").
 func scanSchemaForInputConstraints(absPath string) ([]inputConstraintViolation, error) {
 	raw, err := os.ReadFile(absPath)
@@ -496,9 +545,11 @@ func scanSchemaForInputConstraints(absPath string) ([]inputConstraintViolation, 
 		return nil, fmt.Errorf("invalid JSON schema %s: %w", absPath, err)
 	}
 	var missing []inputConstraintViolation
-	walkSchemaTreeDepth(schema, "$", 0, func(n map[string]any, p string) {
+	if err := walkSchemaTreeDepthInput(schema, "$", func(n map[string]any, p string) {
 		checkInputConstraints(n, p, &missing)
-	})
+	}); err != nil {
+		return nil, err
+	}
 	// Sort for deterministic output across runs (map iteration is unordered).
 	sort.Slice(missing, func(i, j int) bool {
 		if missing[i].location != missing[j].location {
@@ -511,26 +562,176 @@ func scanSchemaForInputConstraints(absPath string) ([]inputConstraintViolation, 
 
 // checkInputConstraints branches on node["type"] and records missing facets.
 // Strings missing minLength or maxLength → violations.
-// Integers missing minimum or maximum → violations.
-// Other types (boolean, number, object, array) are unaffected.
+// Integers/numbers missing minimum or maximum → violations.
+// Other types (boolean, object, array) are unaffected.
 func checkInputConstraints(node map[string]any, path string, missing *[]inputConstraintViolation) {
-	typVal, _ := node["type"].(string)
-	switch typVal {
-	case "string":
+	types := schemaTypeSet(node["type"])
+	if types["string"] {
 		if _, ok := node["minLength"]; !ok {
 			*missing = append(*missing, inputConstraintViolation{location: path, missing: "minLength"})
 		}
 		if _, ok := node["maxLength"]; !ok {
 			*missing = append(*missing, inputConstraintViolation{location: path, missing: "maxLength"})
 		}
-	case "integer":
+		appendSchemaBoundRelationViolation(node, path, "minLength", "maxLength", missing)
+	}
+	if types["integer"] || types["number"] {
 		if _, ok := node["minimum"]; !ok {
 			*missing = append(*missing, inputConstraintViolation{location: path, missing: "minimum"})
 		}
 		if _, ok := node["maximum"]; !ok {
 			*missing = append(*missing, inputConstraintViolation{location: path, missing: "maximum"})
 		}
+		appendSchemaBoundRelationViolation(node, path, "minimum", "maximum", missing)
 	}
+}
+
+func schemaTypeSet(raw any) map[string]bool {
+	types := map[string]bool{}
+	switch val := raw.(type) {
+	case string:
+		types[val] = true
+	case []any:
+		for _, item := range val {
+			if typ, ok := item.(string); ok {
+				types[typ] = true
+			}
+		}
+	}
+	return types
+}
+
+func appendSchemaBoundRelationViolation(node map[string]any, path, minKey, maxKey string, out *[]inputConstraintViolation) {
+	min, hasMin := schemaNumericFacet(node, minKey)
+	max, hasMax := schemaNumericFacet(node, maxKey)
+	if !hasMin || !hasMax || min <= max {
+		return
+	}
+	*out = append(*out, inputConstraintViolation{
+		location:  path,
+		issueType: IssueInvalid,
+		message:   fmt.Sprintf("request schema field %s has %s > %s", path, minKey, maxKey),
+	})
+}
+
+func schemaNumericFacet(node map[string]any, key string) (float64, bool) {
+	switch val := node[key].(type) {
+	case float64:
+		return val, true
+	case int:
+		return float64(val), true
+	case json.Number:
+		parsed, err := val.Float64()
+		return parsed, err == nil
+	default:
+		return 0, false
+	}
+}
+
+func walkSchemaTreeDepthInput(node map[string]any, path string, visit func(node map[string]any, path string)) error {
+	return walkSchemaTreeDepthInputRoot(node, node, path, 0, map[string]bool{}, visit)
+}
+
+func walkSchemaTreeDepthInputRoot(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+	if depth > 32 {
+		return &schemaWalkError{path: path, msg: "schema walk exceeded maximum depth 32"}
+	}
+	visit(node, path)
+	if ref, ok := node["$ref"].(string); ok && !seenRefs[ref] {
+		if !strings.HasPrefix(ref, "#/") {
+			return &schemaWalkError{path: path, msg: fmt.Sprintf("non-local $ref %q is not supported by FMT-25", ref)}
+		}
+		target, ok := resolveLocalSchemaRef(root, ref)
+		if !ok {
+			return &schemaWalkError{path: path, msg: fmt.Sprintf("unresolved local $ref %q", ref)}
+		}
+		seenRefs[ref] = true
+		if err := walkSchemaTreeDepthInputRoot(root, target, path, depth+1, seenRefs, visit); err != nil {
+			return err
+		}
+		delete(seenRefs, ref)
+	}
+	if err := walkSchemaInputMapChildren(root, node, path, depth, seenRefs, visit); err != nil {
+		return err
+	}
+	if err := walkSchemaInputObjectChildren(root, node, path, depth, seenRefs, visit); err != nil {
+		return err
+	}
+	return walkSchemaInputArrayChildren(root, node, path, depth, seenRefs, visit)
+}
+
+func walkSchemaInputMapChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+	for _, keyword := range []string{"properties", "patternProperties", "dependentSchemas"} {
+		if err := walkSchemaInputMapKeywordChildren(root, node, path, keyword, depth, seenRefs, visit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func walkSchemaInputMapKeywordChildren(root, node map[string]any, path, keyword string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+	children, ok := node[keyword].(map[string]any)
+	if !ok {
+		return nil
+	}
+	for _, key := range sortedAnyMapKeys(children) {
+		child, ok := children[key].(map[string]any)
+		if !ok {
+			continue
+		}
+		childPath := schemaInputMapChildPath(path, keyword, key)
+		if err := walkSchemaTreeDepthInputRoot(root, child, childPath, depth+1, seenRefs, visit); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func schemaInputMapChildPath(path, keyword, key string) string {
+	if keyword == "properties" {
+		return path + "." + key
+	}
+	return path + "." + keyword + "." + key
+}
+
+func walkSchemaInputObjectChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+	for _, keyword := range []string{
+		"items",
+		"additionalProperties",
+		"contains",
+		"propertyNames",
+		"not",
+		"if",
+		"then",
+		"else",
+		"unevaluatedProperties",
+		"unevaluatedItems",
+	} {
+		if child, ok := node[keyword].(map[string]any); ok {
+			if err := walkSchemaTreeDepthInputRoot(root, child, path+"."+keyword, depth+1, seenRefs, visit); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func walkSchemaInputArrayChildren(root, node map[string]any, path string, depth int, seenRefs map[string]bool, visit func(node map[string]any, path string)) error {
+	for _, keyword := range []string{"allOf", "anyOf", "oneOf", "prefixItems"} {
+		children, ok := node[keyword].([]any)
+		if !ok {
+			continue
+		}
+		for i, val := range children {
+			if child, ok := val.(map[string]any); ok {
+				childPath := fmt.Sprintf("%s.%s[%d]", path, keyword, i)
+				if err := walkSchemaTreeDepthInputRoot(root, child, childPath, depth+1, seenRefs, visit); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return nil
 }
 
 // checkParamSchemaConstraints scans a map of ParamSchema (queryParams or
@@ -561,7 +762,7 @@ func (v *Validator) checkParamSchemaConstraints(c *metadata.ContractMeta, params
 }
 
 // checkSingleParamConstraints checks one ParamSchema for missing min/max
-// declarations. Branches on Type (string vs integer); other types are
+// declarations. Branches on Type (string vs integer/number); other types are
 // untouched. Format == "uuid" exempts string params from length checks.
 func (v *Validator) checkSingleParamConstraints(c *metadata.ContractMeta, p contracts.ParamSchema, field string) []ValidationResult {
 	switch p.Type {
@@ -569,15 +770,17 @@ func (v *Validator) checkSingleParamConstraints(c *metadata.ContractMeta, p cont
 		if p.Format == "uuid" {
 			return nil // RFC 4122 fixes length; schema-level constraint is redundant.
 		}
-		return v.emitMissingFacets(c, field, []missingFacet{
+		results := v.emitMissingFacets(c, field, []missingFacet{
 			{p.MinLength == nil, "minLength"},
 			{p.MaxLength == nil, "maxLength"},
 		})
-	case "integer":
-		return v.emitMissingFacets(c, field, []missingFacet{
+		return append(results, v.emitInvalidParamRelation(c, field, "minLength", p.MinLength, "maxLength", p.MaxLength)...)
+	case "integer", "number":
+		results := v.emitMissingFacets(c, field, []missingFacet{
 			{p.Minimum == nil, "minimum"},
 			{p.Maximum == nil, "maximum"},
 		})
+		return append(results, v.emitInvalidParamRelation(c, field, "minimum", p.Minimum, "maximum", p.Maximum)...)
 	}
 	return nil
 }
@@ -604,4 +807,15 @@ func (v *Validator) emitMissingFacets(c *metadata.ContractMeta, fieldBase string
 		))
 	}
 	return results
+}
+
+func (v *Validator) emitInvalidParamRelation(c *metadata.ContractMeta, fieldBase, minName string, min *int, maxName string, max *int) []ValidationResult {
+	if min == nil || max == nil || *min <= *max {
+		return nil
+	}
+	return []ValidationResult{v.newResult(
+		ruleFMT25, SeverityError, IssueInvalid,
+		contractFile(c), fieldBase,
+		fmt.Sprintf("contract %q %s has %s > %s", c.ID, fieldBase, minName, maxName),
+	)}
 }

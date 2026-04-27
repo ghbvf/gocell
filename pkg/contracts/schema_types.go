@@ -29,7 +29,9 @@ type HTTPTransport struct {
 
 // ParamSchema describes a single HTTP path or query parameter.
 //
-// Type must be one of the well-known primitive names in ParamTypes.
+// Type must be one of the well-known primitive names in ParamTypes. UUID path
+// parameters use `type: "string"` with `format: "uuid"` so governance and
+// runtime parsing rules share one convention.
 //
 // Required encodes three distinct states, chosen via pointer so YAML
 // `required: false` can be distinguished from an omitted field:
@@ -50,7 +52,9 @@ type HTTPTransport struct {
 // same three-state reason as Required: nil = "not declared", non-nil =
 // "declared, even if zero". Governance rule FMT-25 distinguishes the
 // two: missing declarations are violations; explicit zero (e.g.
-// `minLength: 0` to permit empty strings) is accepted.
+// `minLength: 0` to permit empty strings) is accepted. Minimum / Maximum
+// govern both integer and number parameters; use integer-valued bounds in
+// contract.yaml until ParamSchema grows decimal bound fields.
 type ParamSchema struct {
 	Type      string `yaml:"type"                json:"type"`
 	Required  *bool  `yaml:"required,omitempty"  json:"required,omitempty"`
@@ -68,7 +72,6 @@ var ParamTypes = map[string]bool{
 	"integer": true,
 	"number":  true,
 	"boolean": true,
-	"uuid":    true,
 }
 
 // HTTPResponse describes a declared error response for a specific HTTP status code.

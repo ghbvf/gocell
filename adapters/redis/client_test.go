@@ -388,3 +388,99 @@ func TestBuildStandaloneOptions(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildFailoverOptions_RedissURLFormSetsTLSConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Mode:           ModeSentinel,
+		SentinelAddrs:  []string{"rediss://sentinel-a.redis.example.internal:26379", "rediss://sentinel-b.redis.example.internal:26379"},
+		SentinelMaster: "mymaster",
+		Password:       "secret",
+		DB:             2,
+	}
+	cfg.defaults()
+
+	opts, err := buildFailoverOptions(cfg)
+	require.NoError(t, err)
+	require.Equal(t, "mymaster", opts.MasterName)
+	require.Equal(t, []string{
+		"sentinel-a.redis.example.internal:26379",
+		"sentinel-b.redis.example.internal:26379",
+	}, opts.SentinelAddrs)
+	require.NotNil(t, opts.TLSConfig, "rediss Sentinel addresses must dial with TLS")
+	require.Empty(t, opts.TLSConfig.ServerName,
+		"shared failover TLSConfig must let crypto/tls infer SNI per Sentinel/master address")
+	require.Equal(t, "secret", opts.Password)
+	require.Equal(t, 2, opts.DB)
+}
+
+func TestBuildFailoverOptions_RedissURLPreservesSkipVerify(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Mode:           ModeSentinel,
+		SentinelAddrs:  []string{"rediss://sentinel.redis.example.internal:26379?skip_verify=true"},
+		SentinelMaster: "mymaster",
+	}
+	cfg.defaults()
+
+	opts, err := buildFailoverOptions(cfg)
+	require.NoError(t, err)
+	require.NotNil(t, opts.TLSConfig)
+	require.True(t, opts.TLSConfig.InsecureSkipVerify)
+	require.Empty(t, opts.TLSConfig.ServerName)
+}
+
+func TestBuildFailoverOptions_RedissURLCredentialsUseFailoverSemantics(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Mode: ModeSentinel,
+		SentinelAddrs: []string{
+			"rediss://sentinel-user:sentinel-pass@sentinel.redis.example.internal:26379?username=data-user&password=data-pass",
+		},
+		SentinelMaster: "mymaster",
+	}
+	cfg.defaults()
+
+	opts, err := buildFailoverOptions(cfg)
+	require.NoError(t, err)
+	require.Equal(t, "sentinel-user", opts.SentinelUsername)
+	require.Equal(t, "sentinel-pass", opts.SentinelPassword)
+	require.Equal(t, "data-user", opts.Username)
+	require.Equal(t, "data-pass", opts.Password)
+}
+
+func TestBuildFailoverOptions_RejectsInconsistentSentinelURLTLSSettings(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Mode: ModeSentinel,
+		SentinelAddrs: []string{
+			"rediss://sentinel-a.redis.example.internal:26379?skip_verify=true",
+			"rediss://sentinel-b.redis.example.internal:26379",
+		},
+		SentinelMaster: "mymaster",
+	}
+	cfg.defaults()
+
+	_, err := buildFailoverOptions(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "same TLS verification settings")
+}
+
+func TestBuildFailoverOptions_RejectsMixedSentinelAddressForms(t *testing.T) {
+	t.Parallel()
+
+	cfg := Config{
+		Mode:           ModeSentinel,
+		SentinelAddrs:  []string{"rediss://sentinel-a.redis.example.internal:26379", "sentinel-b.redis.example.internal:26379"},
+		SentinelMaster: "mymaster",
+	}
+	cfg.defaults()
+
+	_, err := buildFailoverOptions(cfg)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "cannot mix URL and host:port")
+}

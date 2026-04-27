@@ -74,8 +74,8 @@
       "properties": {
         "type": {
           "type": "string",
-          "enum": ["string", "integer", "number", "boolean", "uuid"],
-          "description": "Primitive type of the parameter."
+          "enum": ["string", "integer", "number", "boolean"],
+          "description": "Primitive type of the parameter. UUID parameters use type=string with format=uuid."
         },
         "required": {
           "type": "boolean",
@@ -97,11 +97,11 @@
         },
         "minimum": {
           "type": "integer",
-          "description": "Minimum integer value accepted for this parameter. Required by FMT-25 for integer path/query params."
+          "description": "Minimum numeric value accepted for this parameter. Required by FMT-25 for integer and number path/query params."
         },
         "maximum": {
           "type": "integer",
-          "description": "Maximum integer value accepted for this parameter. Required by FMT-25 for integer path/query params."
+          "description": "Maximum numeric value accepted for this parameter. Required by FMT-25 for integer and number path/query params."
         }
       }
     }

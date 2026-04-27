@@ -129,15 +129,19 @@ endpoints:
     path: /api/v1/access/users/{id}
     pathParams:                   # path 模板的 {name} 必须在这里有同名 key
       id:
-        type: string              # string | integer | number | boolean | uuid
-        format: uuid              # 可选 hint；codegen/OpenAPI 消费
+        type: string              # string | integer | number | boolean
+        format: uuid              # UUID 统一使用 type:string + format:uuid
     queryParams:                  # query 参数显式 typed map
       cursor:
         type: string
         required: false
+        minLength: 0
+        maxLength: 256
       limit:
         type: integer
         required: false
+        minimum: 1
+        maximum: 500
     successStatus: 200
     noContent: false
     responses:                    # 错误响应声明；FMT-13 不强制，但 auth-
@@ -151,8 +155,12 @@ endpoints:
 
 FMT-13 治理规则（PR-A9）：
 - path 中每个 `{name}` 占位符必须在 `pathParams` 下有同名 key（双向一致性，Error）
-- `pathParams` / `queryParams` 的 `type` 必须在白名单 `string | integer | number | boolean | uuid`
+- `pathParams` / `queryParams` 的 `type` 必须在白名单 `string | integer | number | boolean`
 - `pathParams.<name>.required: false` 非法（路径占位符天然必填）
+
+FMT-25 输入约束规则：
+- 非 UUID string 参数必须声明 `minLength` / `maxLength`；UUID 使用 `type: string` + `format: uuid`
+- integer / number 参数必须声明 `minimum` / `maximum`
 
 目录约定：`contracts/{kind}/{domain...}/{version}/contract.yaml`。`schemaRefs` 相对 `contract.yaml` 所在目录解析。
 

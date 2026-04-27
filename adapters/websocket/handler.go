@@ -1,7 +1,9 @@
 package websocket
 
 import (
+	"bufio"
 	"log/slog"
+	"net"
 	"net/http"
 
 	"nhooyr.io/websocket"
@@ -51,14 +53,18 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 			OriginPatterns: cfg.AllowedOrigins,
 		}
 
-		wsConn, err := websocket.Accept(w, r, opts)
+		if _, ok := w.(http.Hijacker); !ok {
+			logUpgradeFailure(r, errcode.New(ErrAdapterWSUpgrade,
+				"websocket: response writer does not support hijack"))
+			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+			return
+		}
+
+		acceptWriter := newUpgradeAcceptWriter(w)
+		wsConn, err := websocket.Accept(acceptWriter, r, opts)
 		if err != nil {
-			slog.Error("websocket: upgrade failed",
-				slog.Any("error", err),
-				slog.String("remote_addr", r.RemoteAddr),
-			)
-			httpErr := errcode.Wrap(ErrAdapterWSUpgrade, "websocket: upgrade failed", err)
-			http.Error(w, httpErr.Error(), http.StatusBadRequest)
+			logUpgradeFailure(r, err)
+			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
 			return
 		}
 
@@ -80,4 +86,62 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 			slog.String("remote_addr", r.RemoteAddr),
 		)
 	})
+}
+
+func logUpgradeFailure(r *http.Request, err error) {
+	slog.Error("websocket: upgrade failed",
+		slog.Any("error", err),
+		slog.String("remote_addr", r.RemoteAddr),
+	)
+}
+
+type upgradeAcceptWriter struct {
+	http.ResponseWriter
+	header http.Header
+	status int
+}
+
+func newUpgradeAcceptWriter(w http.ResponseWriter) *upgradeAcceptWriter {
+	return &upgradeAcceptWriter{
+		ResponseWriter: w,
+		header:         make(http.Header),
+	}
+}
+
+func (w *upgradeAcceptWriter) Header() http.Header {
+	return w.header
+}
+
+func (w *upgradeAcceptWriter) WriteHeader(status int) {
+	w.status = status
+	if status == http.StatusSwitchingProtocols {
+		copyHeaders(w.ResponseWriter.Header(), w.header)
+		w.ResponseWriter.WriteHeader(status)
+	}
+}
+
+func (w *upgradeAcceptWriter) Write(p []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return len(p), nil
+}
+
+func (w *upgradeAcceptWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := w.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errcode.New(ErrAdapterWSUpgrade,
+			"websocket: response writer does not support hijack")
+	}
+	copyHeaders(w.ResponseWriter.Header(), w.header)
+	return hijacker.Hijack()
+}
+
+func copyHeaders(dst, src http.Header) {
+	for key, values := range src {
+		dst.Del(key)
+		for _, value := range values {
+			dst.Add(key, value)
+		}
+	}
 }

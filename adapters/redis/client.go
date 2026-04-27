@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -193,21 +194,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	)
 	switch cfg.Mode {
 	case ModeSentinel:
-		// Sentinel mode currently expects plain host:port entries; rediss://
-		// URL form would require parsing each addr and threading TLSConfig
-		// through FailoverOptions, which is out of scope. validateEndpointTLS
-		// rejects non-loopback bare addrs, so any sentinel-mode entry that
-		// reaches here is loopback (dev/CI testcontainers).
-		fc := goredis.NewFailoverClient(&goredis.FailoverOptions{
-			MasterName:    cfg.SentinelMaster,
-			SentinelAddrs: cfg.SentinelAddrs,
-			Password:      cfg.Password,
-			DB:            cfg.DB,
-			DialTimeout:   cfg.DialTimeout,
-			ReadTimeout:   cfg.ReadTimeout,
-			WriteTimeout:  cfg.WriteTimeout,
-			PoolSize:      cfg.PoolSize,
-		})
+		opts, err := buildFailoverOptions(cfg)
+		if err != nil {
+			return nil, err
+		}
+		fc := goredis.NewFailoverClient(opts)
 		rdb = fc
 		statsProvider = fc
 	default:
@@ -286,6 +277,148 @@ func buildStandaloneOptions(cfg Config) (*goredis.Options, error) {
 		base.DB = parsed.DB
 	}
 	return base, nil
+}
+
+// buildFailoverOptions converts cfg into go-redis FailoverOptions. Sentinel
+// mode accepts either plain host:port entries for loopback dev/test use, or URL
+// entries (`rediss://host:port`) for TLS remote deployments. URL entries are
+// parsed before reaching go-redis so SentinelAddrs contain host:port values and
+// TLSConfig is populated on FailoverOptions.
+//
+// ref: redis/go-redis sentinel.go ParseFailoverURL — FailoverOptions carries a
+// single TLSConfig that enables TLS dials for Sentinel and the resolved master.
+func buildFailoverOptions(cfg Config) (*goredis.FailoverOptions, error) {
+	base := &goredis.FailoverOptions{
+		MasterName:   cfg.SentinelMaster,
+		Password:     cfg.Password,
+		DB:           cfg.DB,
+		DialTimeout:  cfg.DialTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		PoolSize:     cfg.PoolSize,
+	}
+
+	hasURL, hasPlain := sentinelAddressForms(cfg.SentinelAddrs)
+	if hasURL && hasPlain {
+		return nil, errcode.New(ErrAdapterRedisConnect,
+			"redis: sentinel addresses cannot mix URL and host:port forms")
+	}
+	if !hasURL {
+		base.SentinelAddrs = append([]string(nil), cfg.SentinelAddrs...)
+		return base, nil
+	}
+
+	return buildFailoverURLOptions(base, cfg.SentinelAddrs)
+}
+
+func sentinelAddressForms(addrs []string) (hasURL, hasPlain bool) {
+	for _, addr := range addrs {
+		if strings.Contains(addr, "://") {
+			hasURL = true
+		} else {
+			hasPlain = true
+		}
+	}
+	return hasURL, hasPlain
+}
+
+func buildFailoverURLOptions(base *goredis.FailoverOptions, addrs []string) (*goredis.FailoverOptions, error) {
+	for _, addr := range addrs {
+		if err := appendFailoverURL(base, addr); err != nil {
+			return nil, err
+		}
+	}
+	return base, nil
+}
+
+func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
+	parsed, err := goredis.ParseFailoverURL(addr)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr), err)
+	}
+	if len(base.SentinelAddrs) > 0 && ((base.TLSConfig == nil) != (parsed.TLSConfig == nil)) {
+		return errcode.New(ErrAdapterRedisConnect,
+			"redis: sentinel URL addresses must use the same TLS scheme")
+	}
+	if len(base.SentinelAddrs) == 0 {
+		base.TLSConfig = failoverTLSConfig(parsed.TLSConfig)
+	} else if err := checkFailoverTLSConfigCompatible(base.TLSConfig, parsed.TLSConfig); err != nil {
+		return err
+	}
+	if err := mergeFailoverURLFields(base, parsed); err != nil {
+		return err
+	}
+	if len(parsed.SentinelAddrs) != 1 {
+		return errcode.New(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr))
+	}
+	base.SentinelAddrs = append(base.SentinelAddrs, parsed.SentinelAddrs[0])
+	return nil
+}
+
+func checkFailoverTLSConfigCompatible(base, parsed *tls.Config) error {
+	if base == nil || parsed == nil || base.InsecureSkipVerify == parsed.InsecureSkipVerify {
+		return nil
+	}
+	return errcode.New(ErrAdapterRedisConnect,
+		"redis: sentinel URL addresses must use the same TLS verification settings")
+}
+
+func mergeFailoverURLFields(base, parsed *goredis.FailoverOptions) error {
+	if err := mergeFailoverStringField(&base.MasterName, parsed.MasterName, "master_name"); err != nil {
+		return err
+	}
+	if err := mergeFailoverStringField(&base.Username, parsed.Username, "username"); err != nil {
+		return err
+	}
+	if err := mergeFailoverStringField(&base.Password, parsed.Password, "password"); err != nil {
+		return err
+	}
+	if err := mergeFailoverStringField(&base.SentinelUsername, parsed.SentinelUsername, "sentinel username"); err != nil {
+		return err
+	}
+	if err := mergeFailoverStringField(&base.SentinelPassword, parsed.SentinelPassword, "sentinel password"); err != nil {
+		return err
+	}
+	return mergeFailoverIntField(&base.DB, parsed.DB, "db")
+}
+
+func mergeFailoverStringField(dst *string, incoming, name string) error {
+	if incoming == "" || *dst == incoming {
+		return nil
+	}
+	if *dst != "" {
+		return errcode.New(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: conflicting Sentinel URL %s values", name))
+	}
+	*dst = incoming
+	return nil
+}
+
+func mergeFailoverIntField(dst *int, incoming int, name string) error {
+	if incoming == 0 || *dst == incoming {
+		return nil
+	}
+	if *dst != 0 {
+		return errcode.New(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: conflicting Sentinel URL %s values", name))
+	}
+	*dst = incoming
+	return nil
+}
+
+func failoverTLSConfig(parsed *tls.Config) *tls.Config {
+	if parsed == nil {
+		return nil
+	}
+	cfg := parsed.Clone()
+	// FailoverOptions carries a single TLSConfig shared by every Sentinel dial
+	// and by the resolved master dial. Leaving the first URL's ServerName here
+	// would force that SNI onto all later addresses; an empty ServerName lets
+	// crypto/tls infer the host from each tls.DialWithDialer target.
+	cfg.ServerName = ""
+	return cfg
 }
 
 // Health pings the Redis server and returns an error if it is unreachable.
