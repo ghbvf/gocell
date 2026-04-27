@@ -50,7 +50,9 @@ type HTTPTransport struct {
 // same three-state reason as Required: nil = "not declared", non-nil =
 // "declared, even if zero". Governance rule FMT-25 distinguishes the
 // two: missing declarations are violations; explicit zero (e.g.
-// `minLength: 0` to permit empty strings) is accepted.
+// `minLength: 0` to permit empty strings) is accepted. Minimum / Maximum
+// govern both integer and number parameters; use integer-valued bounds in
+// contract.yaml until ParamSchema grows decimal bound fields.
 type ParamSchema struct {
 	Type      string `yaml:"type"                json:"type"`
 	Required  *bool  `yaml:"required,omitempty"  json:"required,omitempty"`

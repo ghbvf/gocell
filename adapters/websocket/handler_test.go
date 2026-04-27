@@ -2,6 +2,7 @@ package websocket_test
 
 import (
 	"context"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -88,6 +89,22 @@ func dialWS(t *testing.T, serverURL string) *websocket.Conn {
 	t.Cleanup(func() { _ = conn.CloseNow() })
 
 	return conn
+}
+
+func TestUpgradeHandler_UpgradeFailureResponseIsPublic(t *testing.T) {
+	_, server := setupTestHub(t, nil)
+	defer server.Close()
+
+	resp, err := server.Client().Get(server.URL + "/ws")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	assert.Equal(t, "websocket upgrade failed\n", string(body))
+	assert.NotContains(t, string(body), "ERR_ADAPTER_WS_UPGRADE")
+	assert.NotContains(t, string(body), "websocket: the client is not using the websocket protocol")
 }
 
 func TestHub_RegisterUnregister(t *testing.T) {

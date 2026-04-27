@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -839,7 +840,7 @@ func TestScanSchemaForStrictMissing_Basic(t *testing.T) {
 	assert.Equal(t, []string{"$"}, paths)
 }
 
-// --- FMT-25 (HTTP input constraint: minLength/maxLength on strings, minimum/maximum on integers) ---
+// --- FMT-25 (HTTP input constraint: minLength/maxLength on strings, minimum/maximum on numeric values) ---
 
 // fmt25WriteSchema is a test helper that writes a JSON schema string to a
 // contract directory and returns the absolute schema path. Encapsulates the
@@ -956,6 +957,152 @@ func TestFMT25_RequestIntegerMissingMinimumMaximum(t *testing.T) {
 	// version: missing maximum (1 violation)
 	// page:    missing minimum + missing maximum (2 violations)
 	require.Len(t, matches, 3, "expected 3 violations, got %d: %v", len(matches), matches)
+}
+
+// TestFMT25_RequestNumberMissingMinimumMaximum verifies that JSON Schema
+// number fields are governed by the same numeric bounds as integers.
+func TestFMT25_RequestNumberMissingMinimumMaximum(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"ratio": {"type": "number"}
+		}
+	}`
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 2, "number fields must require minimum + maximum, got: %v", matches)
+	gotMessages := []string{matches[0].Message, matches[1].Message}
+	for _, m := range matches {
+		assert.Equal(t, "$.ratio", m.Field)
+	}
+	assert.Condition(t, func() bool {
+		return strings.Contains(gotMessages[0], "minimum") || strings.Contains(gotMessages[1], "minimum")
+	}, "expected a minimum violation, got %v", gotMessages)
+	assert.Condition(t, func() bool {
+		return strings.Contains(gotMessages[0], "maximum") || strings.Contains(gotMessages[1], "maximum")
+	}, "expected a maximum violation, got %v", gotMessages)
+}
+
+// TestFMT25_RequestUnionTypeStringMissingConstraints verifies JSON Schema type
+// arrays are interpreted semantically instead of being skipped.
+func TestFMT25_RequestUnionTypeStringMissingConstraints(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"displayName": {"type": ["string", "null"]}
+		}
+	}`
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 2, "union string|null must still require length facets, got: %v", matches)
+	for _, m := range matches {
+		assert.Equal(t, "$.displayName", m.Field)
+	}
+}
+
+func TestFMT25_RequestExternalRefFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"remote": {"$ref": "https://example.invalid/common.schema.json#/Name"}
+		}
+	}`
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1, "non-local refs must fail closed")
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "$.remote", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "non-local $ref")
+}
+
+func TestFMT25_RequestUnresolvedLocalRefFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"name": {"$ref": "#/$defs/missing"}
+		},
+		"$defs": {}
+	}`
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1, "unresolved local refs must fail closed")
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "$.name", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "unresolved local $ref")
+}
+
+func TestFMT25_RequestMinGreaterThanMaxInvalid(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"name": {"type": "string", "minLength": 20, "maxLength": 5},
+			"ratio": {"type": "number", "minimum": 10, "maximum": 1}
+		}
+	}`
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 2, "inverted bounds must be invalid, got: %v", matches)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "$.name", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "minLength")
+	assert.Equal(t, IssueInvalid, matches[1].IssueType)
+	assert.Equal(t, "$.ratio", matches[1].Field)
+	assert.Contains(t, matches[1].Message, "minimum")
+}
+
+func TestFMT25_RequestDepthLimitFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	schema := map[string]any{
+		"type":                 "object",
+		"additionalProperties": false,
+		"properties":           map[string]any{},
+	}
+	parent := schema["properties"].(map[string]any)
+	for i := 0; i < 34; i++ {
+		child := map[string]any{
+			"type":                 "object",
+			"additionalProperties": false,
+			"properties":           map[string]any{},
+		}
+		parent["nested"] = child
+		parent = child["properties"].(map[string]any)
+	}
+	parent["leaf"] = map[string]any{"type": "string"}
+	raw, err := json.Marshal(schema)
+	require.NoError(t, err)
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", string(raw))
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1, "depth limit must emit an observable diagnostic")
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Contains(t, matches[0].Message, "depth")
 }
 
 // TestFMT25_RequestNestedObjectStringConstraints verifies the walker recurses
@@ -1100,6 +1247,43 @@ func TestFMT25_QueryParamsIntegerMissingConstraints(t *testing.T) {
 	assert.Equal(t, "endpoints.http.queryParams.limit.maximum", matches[1].Field)
 }
 
+// TestFMT25_QueryParamsNumberMissingConstraints verifies path/query ParamSchema
+// type=number is covered by numeric minimum/maximum governance.
+func TestFMT25_QueryParamsNumberMissingConstraints(t *testing.T) {
+	dir := t.TempDir()
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+		`{"type": "object", "additionalProperties": false}`)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
+		map[string]contracts.ParamSchema{
+			"ratio": {Type: "number"},
+		}, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 2)
+	assert.Equal(t, "endpoints.http.queryParams.ratio.minimum", matches[0].Field)
+	assert.Equal(t, "endpoints.http.queryParams.ratio.maximum", matches[1].Field)
+}
+
+func TestFMT25_QueryParamsInvalidBounds(t *testing.T) {
+	dir := t.TempDir()
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
+		`{"type": "object", "additionalProperties": false}`)
+	one := 1
+	ten := 10
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1",
+		map[string]contracts.ParamSchema{
+			"page": {Type: "integer", Minimum: &ten, Maximum: &one},
+		}, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "endpoints.http.queryParams.page", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "minimum")
+}
+
 // TestFMT25_PathParamsStringMissingConstraints verifies pathParams plain
 // strings are checked.
 func TestFMT25_PathParamsStringMissingConstraints(t *testing.T) {
@@ -1217,6 +1401,7 @@ func TestFMT25_CleanSchemaProducesNoViolations(t *testing.T) {
 		map[string]contracts.ParamSchema{
 			"cursor": {Type: "string", MinLength: &one, MaxLength: &twoFiftySix},
 			"limit":  {Type: "integer", Minimum: &one, Maximum: &fiveHundred},
+			"ratio":  {Type: "number", Minimum: &one, Maximum: &fiveHundred},
 		},
 		map[string]contracts.ParamSchema{
 			"id":  {Type: "string", Format: "uuid"},                           // uuid exempt

@@ -193,21 +193,11 @@ func NewClient(ctx context.Context, cfg Config) (*Client, error) {
 	)
 	switch cfg.Mode {
 	case ModeSentinel:
-		// Sentinel mode currently expects plain host:port entries; rediss://
-		// URL form would require parsing each addr and threading TLSConfig
-		// through FailoverOptions, which is out of scope. validateEndpointTLS
-		// rejects non-loopback bare addrs, so any sentinel-mode entry that
-		// reaches here is loopback (dev/CI testcontainers).
-		fc := goredis.NewFailoverClient(&goredis.FailoverOptions{
-			MasterName:    cfg.SentinelMaster,
-			SentinelAddrs: cfg.SentinelAddrs,
-			Password:      cfg.Password,
-			DB:            cfg.DB,
-			DialTimeout:   cfg.DialTimeout,
-			ReadTimeout:   cfg.ReadTimeout,
-			WriteTimeout:  cfg.WriteTimeout,
-			PoolSize:      cfg.PoolSize,
-		})
+		opts, err := buildFailoverOptions(cfg)
+		if err != nil {
+			return nil, err
+		}
+		fc := goredis.NewFailoverClient(opts)
 		rdb = fc
 		statsProvider = fc
 	default:
@@ -286,6 +276,81 @@ func buildStandaloneOptions(cfg Config) (*goredis.Options, error) {
 		base.DB = parsed.DB
 	}
 	return base, nil
+}
+
+// buildFailoverOptions converts cfg into go-redis FailoverOptions. Sentinel
+// mode accepts either plain host:port entries for loopback dev/test use, or URL
+// entries (`rediss://host:port`) for TLS remote deployments. URL entries are
+// parsed before reaching go-redis so SentinelAddrs contain host:port values and
+// TLSConfig is populated on FailoverOptions.
+//
+// ref: redis/go-redis sentinel.go ParseFailoverURL — FailoverOptions carries a
+// single TLSConfig that enables TLS dials for Sentinel and the resolved master.
+func buildFailoverOptions(cfg Config) (*goredis.FailoverOptions, error) {
+	base := &goredis.FailoverOptions{
+		MasterName:   cfg.SentinelMaster,
+		Password:     cfg.Password,
+		DB:           cfg.DB,
+		DialTimeout:  cfg.DialTimeout,
+		ReadTimeout:  cfg.ReadTimeout,
+		WriteTimeout: cfg.WriteTimeout,
+		PoolSize:     cfg.PoolSize,
+	}
+
+	hasURL, hasPlain := sentinelAddressForms(cfg.SentinelAddrs)
+	if hasURL && hasPlain {
+		return nil, errcode.New(ErrAdapterRedisConnect,
+			"redis: sentinel addresses cannot mix URL and host:port forms")
+	}
+	if !hasURL {
+		base.SentinelAddrs = append([]string(nil), cfg.SentinelAddrs...)
+		return base, nil
+	}
+
+	return buildFailoverURLOptions(base, cfg.SentinelAddrs)
+}
+
+func sentinelAddressForms(addrs []string) (hasURL, hasPlain bool) {
+	for _, addr := range addrs {
+		if strings.Contains(addr, "://") {
+			hasURL = true
+		} else {
+			hasPlain = true
+		}
+	}
+	return hasURL, hasPlain
+}
+
+func buildFailoverURLOptions(base *goredis.FailoverOptions, addrs []string) (*goredis.FailoverOptions, error) {
+	for _, addr := range addrs {
+		if err := appendFailoverURL(base, addr); err != nil {
+			return nil, err
+		}
+	}
+	return base, nil
+}
+
+func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
+	parsed, err := goredis.ParseURL(addr)
+	if err != nil {
+		return errcode.Wrap(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr), err)
+	}
+	if len(base.SentinelAddrs) > 0 && ((base.TLSConfig == nil) != (parsed.TLSConfig == nil)) {
+		return errcode.New(ErrAdapterRedisConnect,
+			"redis: sentinel URL addresses must use the same TLS scheme")
+	}
+	if len(base.SentinelAddrs) == 0 {
+		base.TLSConfig = parsed.TLSConfig
+	}
+	base.SentinelAddrs = append(base.SentinelAddrs, parsed.Addr)
+	if base.Password == "" && parsed.Password != "" {
+		base.Password = parsed.Password
+	}
+	if base.DB == 0 && parsed.DB != 0 {
+		base.DB = parsed.DB
+	}
+	return nil
 }
 
 // Health pings the Redis server and returns an error if it is unreachable.
