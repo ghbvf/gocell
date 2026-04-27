@@ -44,6 +44,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	auditcore "github.com/ghbvf/gocell/cells/auditcore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -562,7 +563,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 		accesscore.WithJWTVerifier(jwtVerifier),
 		accesscore.WithInitialAdminBootstrap(),
 		accesscore.WithRefreshMetricsProvider(kernelmetrics.NopProvider{}),
-		accesscore.WithConfigGetterHTTP(internalSrv.URL, testRing),
+		configgetter.WithHTTP(internalSrv.URL, testRing),
 	)
 	auditCell := auditcore.NewAuditCore(
 		auditcore.WithInMemoryDefaults(),

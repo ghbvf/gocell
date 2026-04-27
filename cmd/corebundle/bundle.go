@@ -11,6 +11,7 @@ import (
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
+	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
@@ -231,6 +232,7 @@ type ConfigCoreModuleConfig struct {
 	Publisher        outbox.Publisher
 	MetricsProvider  metrics.Provider
 	ValueTransformer kcrypto.ValueTransformer
+	OnStaleCipher    func(key, storedKeyID, currentKeyID string)
 }
 
 // ConfigCoreModuleResult bundles the outputs from buildConfigCoreOpts. Using a
@@ -302,19 +304,18 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 		pgStore := adapterpg.NewOutboxStore(pool.DB())
 		relayWorker := outboxruntime.NewRelay(pgStore, cfg.Publisher, relayCfg)
 
-		pgRes, resErr := adapterpg.NewPGResource(pool)
-		if resErr != nil {
+		pgRes, storageOpt, storageErr := buildConfigCorePGStorage(pool, cfg)
+		if storageErr != nil {
 			_ = pool.Close(ctx)
-			return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG resource: %w", resErr)
+			return ConfigCoreModuleResult{}, storageErr
 		}
 		slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", cfg.Topology.StorageBackend))
 		cellOpts := []configcore.Option{
-			configcore.WithPostgresPool(pool.DB()),
+			storageOpt,
 			// PG adapter path: publisher + real outbox.Writer compose a
 			// WriterEmitter at Cell boundary; L2 transactional atomicity applies.
 			configcore.WithOutboxDeps(cfg.Publisher, outboxWriter),
 			configcore.WithTxManager(txMgr),
-			configcore.WithValueTransformer(cfg.ValueTransformer),
 		}
 		// Relay is registered independently via bootstrap so its Worker()/Close()
 		// lifecycle is managed separately from the pool (PGResource.Worker() == nil).
@@ -341,6 +342,21 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 		return ConfigCoreModuleResult{}, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", cfg.Topology.StorageBackend))
 	}
+}
+
+func buildConfigCorePGStorage(pool *adapterpg.Pool, cfg ConfigCoreModuleConfig) (kernellifecycle.ManagedResource, configcore.Option, error) {
+	pgRes, err := adapterpg.NewPGResource(pool)
+	if err != nil {
+		return nil, nil, fmt.Errorf("configcore PG resource: %w", err)
+	}
+	storageOpt, err := configpg.WithPool(pool.DB(),
+		configpg.WithValueTransformer(cfg.ValueTransformer),
+		configpg.WithOnStaleCipher(cfg.OnStaleCipher),
+	)
+	if err != nil {
+		return nil, nil, fmt.Errorf("configcore PG repository wiring: %w", err)
+	}
+	return pgRes, storageOpt, nil
 }
 
 // logInitialAdminCredPath emits a startup info log so operators know where to

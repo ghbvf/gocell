@@ -14,4 +14,9 @@
 //	LAYER-05: cells/A must not import cells/B/internal/ (cross-cell isolation)
 //	LAYER-06: cell-owned public subpackages (see cellOwnedSubpackages) may
 //	          only be imported by their owning cell, cmd/, or examples/
+//	LAYER-07: cells/ must not import runtime/http/router directly
+//	LAYER-08: legacy HTTPRegistrar identifier must not reappear
+//	LAYER-09: cells/A must not import cells/B/events
+//	LAYER-10: cells/<cell> root package exported APIs must not expose concrete
+//	          adapter/driver types
 package archtest

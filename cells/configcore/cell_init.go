@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 
-	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configpublish"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configread"
 	"github.com/ghbvf/gocell/cells/configcore/slices/configsubscribe"
@@ -22,25 +21,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/query"
 )
 
-// Init constructs all slices and registers them. If pgPool is set
-// (via WithPostgresPool), the PG repos are built here after all options
-// have been applied (so WithKeyProvider can precede or follow WithPostgresPool).
+// Init constructs all slices and registers them. Storage adapters are resolved
+// by composition roots before NewConfigCore receives its repository options.
 func (c *ConfigCore) Init(ctx context.Context, deps cell.Dependencies) error {
 	if err := c.BaseCell.Init(ctx, deps); err != nil {
 		return err
-	}
-
-	// Deferred PG repo construction — options are all applied before Init().
-	if c.pgPool != nil && c.configRepo == nil {
-		session := cellpg.NewSession(c.pgPool)
-		var repoOpts []cellpg.ConfigRepoOption
-		if c.staleCipherCounter != nil {
-			repoOpts = append(repoOpts, cellpg.WithOnStaleCipher(func(_, _, _ string) {
-				c.staleCipherCounter.Inc()
-			}))
-		}
-		c.configRepo = cellpg.NewConfigRepository(session, c.valueTransformer, c.logger, repoOpts...)
-		c.flagRepo = cellpg.NewFlagRepository(session)
 	}
 
 	// deriveModes' PublishFailureMode return is retained for TestConfigCore_DeriveModes

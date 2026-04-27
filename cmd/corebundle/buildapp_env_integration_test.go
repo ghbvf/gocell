@@ -10,6 +10,7 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	"github.com/ghbvf/gocell/runtime/auth"
+	prom "github.com/prometheus/client_golang/prometheus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -153,4 +154,43 @@ func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
 	// the provisional[0] read above). The conversion documents the expected type
 	// without tripping staticcheck QF1011.
 	_ = kernellifecycle.ManagedResource(pgRes)
+}
+
+type conflictingRenewalMetricsProvider struct {
+	fakeKeyProvider
+}
+
+func (conflictingRenewalMetricsProvider) RenewalMetrics() []prom.Collector {
+	return []prom.Collector{
+		prom.NewCounter(prom.CounterOpts{
+			Namespace: configStaleCipherOpts.Namespace,
+			Subsystem: configStaleCipherOpts.Subsystem,
+			Name:      configStaleCipherOpts.Name,
+			Help:      "conflicting help text forces prometheus registration failure",
+		}),
+	}
+}
+
+func TestConfigCoreModule_Provide_RollsBackPGResourceOnRenewalMetricError(t *testing.T) {
+	dsn, cleanup := setupPostgresForMain(t)
+	defer cleanup()
+
+	setRealModeEnv(t, dsn)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	applyMigrationsForMain(t, ctx, dsn)
+
+	shared, err := LoadSharedDepsFromEnv(ctx)
+	require.NoError(t, err, "LoadSharedDepsFromEnv must succeed")
+
+	_, _, provisional, err := ConfigCoreModule{
+		KeyProviderOverride: &conflictingRenewalMetricsProvider{},
+	}.Provide(ctx, shared)
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "register renewal metrics")
+	assert.Empty(t, provisional, "failed Provide must not return provisional resources")
+	assert.Nil(t, shared.SharedPGPool, "failed Provide must clear the shared PG pool after rollback")
 }

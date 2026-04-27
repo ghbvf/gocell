@@ -10,6 +10,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	"github.com/ghbvf/gocell/cells/accesscore/configgetter"
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
@@ -128,7 +129,7 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		internalBaseURL := internalAddrToBaseURL(shared.InternalHTTPAddr)
 		if shared.InternalGuard != nil {
 			accessOpts = append(accessOpts,
-				accesscore.WithConfigGetterHTTP(internalBaseURL, shared.InternalGuard.ring),
+				configgetter.WithHTTP(internalBaseURL, shared.InternalGuard.ring),
 			)
 		}
 	}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -72,7 +73,17 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	}
 	vt := keyProviderToTransformer(kp)
 
-	// 3. PG pool: read configcore-namespaced env.
+	// 3. Register the stale-cipher counter against the isolated per-run registry.
+	// Use Register (not MustRegister) so that repeated Provide calls in the
+	// same process (e.g. integration tests with shared registry) are handled
+	// gracefully: AlreadyRegisteredError carries the existing collector so we
+	// can reuse it instead of creating an orphaned counter.
+	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
+	}
+
+	// 4. PG pool: read configcore-namespaced env.
 	pgCfg, err := LoadPGConfig("CONFIGCORE")
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configcore pg config: %w", err)
@@ -83,6 +94,9 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		Publisher:        shared.EventBus,
 		MetricsProvider:  shared.PromStack.metricProvider,
 		ValueTransformer: vt,
+		OnStaleCipher: func(_, _, _ string) {
+			staleCipherCounter.Inc()
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -90,45 +104,41 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	pgRes := modResult.PGResource
 	cellOpts := modResult.CellOptions
 	relayOpts := modResult.BootstrapOpts
-	// Expose the pool through SharedDeps so AccessCoreModule + AuditCoreModule
-	// can wire their own outbox.Writer + TxManager from the same pool in
-	// postgres mode. In memory mode modResult.PGPool is nil — SharedPGPool
-	// stays nil and the downstream modules skip the postgres outbox path.
-	shared.SharedPGPool = modResult.PGPool
-
-	// Register the stale-cipher counter against the isolated per-run registry.
-	// Use Register (not MustRegister) so that repeated Provide calls in the
-	// same process (e.g. integration tests with shared registry) are handled
-	// gracefully: AlreadyRegisteredError carries the existing collector so we
-	// can reuse it instead of creating an orphaned counter.
-	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
-	}
-
-	baseOpts := []configcore.Option{
-		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
-		// the transactional writer; memory adapter passes writer=nil).
-		configcore.WithCursorCodec(cursorCodec),
-		configcore.WithOnStaleCipherMetric(staleCipherCounter),
-		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
-	}
-	if vt != nil {
-		baseOpts = append(baseOpts, configcore.WithValueTransformer(vt))
-	}
-	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
-
-	// A13: register vault token renewal counters when the KeyProvider exposes them.
-	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
-		return nil, nil, nil, fmt.Errorf("configcore: register renewal metrics: %w", err)
-	}
-
 	var opts []bootstrap.Option
 	var provisional []kernellifecycle.ManagedResource
 	if pgRes != nil {
 		opts = append(opts, bootstrap.WithManagedResource(pgRes))
 		provisional = append(provisional, pgRes)
 	}
+	rollback := func() {
+		for i := len(provisional) - 1; i >= 0; i-- {
+			if closeErr := provisional[i].Close(ctx); closeErr != nil {
+				slog.Warn("configcore: provisional rollback close failed",
+					slog.Any("error", closeErr))
+			}
+		}
+	}
+	// Expose the pool through SharedDeps so AccessCoreModule + AuditCoreModule
+	// can wire their own outbox.Writer + TxManager from the same pool in
+	// postgres mode. In memory mode modResult.PGPool is nil — SharedPGPool
+	// stays nil and the downstream modules skip the postgres outbox path.
+	shared.SharedPGPool = modResult.PGPool
+
+	baseOpts := []configcore.Option{
+		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
+		// the transactional writer; memory adapter passes writer=nil).
+		configcore.WithCursorCodec(cursorCodec),
+		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
+	}
+	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
+
+	// A13: register vault token renewal counters when the KeyProvider exposes them.
+	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
+		shared.SharedPGPool = nil
+		rollback()
+		return nil, nil, nil, fmt.Errorf("configcore: register renewal metrics: %w", err)
+	}
+
 	// Relay opts: in postgres mode, relayOpts contains WithManagedResource(relay)
 	// so the relay worker is independently managed by bootstrap (Worker/Close/Checkers).
 	opts = append(opts, relayOpts...)

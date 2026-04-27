@@ -572,18 +572,16 @@ func mustNewCfgCodec(t *testing.T, key []byte) *query.CursorCodec {
 	return codec
 }
 
-// TestWithPostgresPool_NilPool_SetsPoolAndDeferred verifies the
-// deferred construction contract: WithPostgresPool stores the pool for use
-// in Init(). With a nil pool, Init() skips deferred repo construction.
-// Outbox wiring is now a separate concern via WithOutboxDeps. The test verifies:
+// TestConfigCore_DurableInit_WithInjectedRepositories verifies the root
+// configcore package remains port-oriented: durable storage is injected as
+// repositories, while adapter-specific construction lives outside this package.
+// The test verifies:
 //  1. pendingOutboxWriter is set by WithOutboxDeps before Init.
-//  2. pgPool is stored (nil here as sentinel for "no PG path in this test").
-//  3. Init() succeeds when configRepo is injected via WithConfigRepository.
-func TestWithPostgresPool_NilPool_SetsPoolAndDeferred(t *testing.T) {
+//  2. Init() succeeds when repositories are injected via port-level options.
+func TestConfigCore_DurableInit_WithInjectedRepositories(t *testing.T) {
 	writer := &recordingConfigWriter{}
 	c := NewConfigCore(
-		WithPostgresPool(nil),                           // nil pool: deferred construction skipped in Init
-		WithConfigRepository(mem.NewConfigRepository()), // inject repo directly to satisfy Init
+		WithConfigRepository(mem.NewConfigRepository()),
 		WithFlagRepository(mem.NewFlagRepository()),
 		WithTxManager(durableTxRunner{}), // non-Nooper; durable-gated CheckNotNoop passes
 		WithOutboxDeps(eventbus.New(), writer),
