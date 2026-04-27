@@ -14,7 +14,7 @@ have changed.
 | `GET /readyz?verbose=true` | 200 / 401 / 503 | Detailed breakdown: cell statuses + per-dependency probe results. Always gated by `X-Readyz-Token` (see below). |
 
 During graceful shutdown `/readyz` returns `503` with
-`{"error":{"code":"ERR_READYZ_SHUTTING_DOWN","message":"...","details":{}}}`
+`{"error":{"code":"ERR_SERVICE_UNAVAILABLE","message":"service unavailable","details":{"status":"shutting_down","reason":"graceful_shutdown"}}}`
 so load balancers can drain traffic before the HTTP server closes
 connections.
 
@@ -100,9 +100,11 @@ the `X-Readyz-Token` header.
 ```json
 {
   "error": {
-    "code": "ERR_READYZ_UNHEALTHY",
-    "message": "readiness checks failed",
+    "code": "ERR_SERVICE_UNAVAILABLE",
+    "message": "service unavailable",
     "details": {
+	      "status": "unhealthy",
+	      "reason": "readiness_failed",
 	      "cells": { "accesscore": "healthy", "auditcore": "degraded" },
 	      "dependencies": {
 	        "postgres_ready": { "status": "healthy", "duration_ms": 3 },

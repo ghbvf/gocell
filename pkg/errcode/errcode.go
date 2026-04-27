@@ -359,21 +359,6 @@ const (
 	// Kubernetes readinessProbes (which must not pass ?verbose).
 	ErrReadyzVerboseDenied Code = "ERR_READYZ_VERBOSE_DENIED"
 
-	// ErrReadyzUnhealthy is the machine-readable signal that at least one
-	// Cell or registered readiness probe reported a non-healthy status.
-	// Maps to HTTP 503 Service Unavailable. Details carry cells + probe
-	// maps (same shape as the prior ad-hoc body) when verbose is authorised;
-	// the plain path exposes an empty details object so the envelope is
-	// uniform and consumers can always walk {"error": {"details": {...}}}.
-	ErrReadyzUnhealthy Code = "ERR_READYZ_UNHEALTHY"
-
-	// ErrReadyzShuttingDown is emitted by /readyz while bootstrap's
-	// shutdown sequence has flipped the handler into drain mode. Maps to
-	// HTTP 503 Service Unavailable. Load balancers should stop sending
-	// traffic as soon as this code appears; operators do not need any
-	// additional dimension on this response, so details is always empty.
-	ErrReadyzShuttingDown Code = "ERR_READYZ_SHUTTING_DOWN"
-
 	// ErrControlplaneVerboseTokenMissing signals that
 	// GOCELL_READYZ_VERBOSE_TOKEN was not set at startup in a mode that
 	// requires the token to be explicitly configured. Starting with PR-A35

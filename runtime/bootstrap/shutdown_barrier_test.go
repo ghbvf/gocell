@@ -15,6 +15,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net"
@@ -82,9 +83,12 @@ func TestShutdown_HTTPAcceptsDuringPreShutdownDelay(t *testing.T) {
 	// Confirm /readyz continues to return 503 throughout the window.
 	respZ, err3 := testHTTPClient.Get(fmt.Sprintf("http://%s/readyz", addr))
 	require.NoError(t, err3, "/readyz must still respond during preShutdownDelay")
-	respZ.Body.Close()
 	assert.Equal(t, http.StatusServiceUnavailable, respZ.StatusCode,
 		"/readyz must return 503 during preShutdownDelay")
+	var body map[string]any
+	require.NoError(t, json.NewDecoder(respZ.Body).Decode(&body))
+	respZ.Body.Close()
+	assertReadyzServiceUnavailable(t, body, "shutting_down", "graceful_shutdown")
 
 	select {
 	case runErr := <-done:

@@ -85,9 +85,11 @@ Example verbose response (`503 Service Unavailable` — at least one probe faili
 ```json
 {
   "error": {
-    "code": "ERR_READYZ_UNHEALTHY",
-    "message": "readiness checks failed",
+    "code": "ERR_SERVICE_UNAVAILABLE",
+    "message": "service unavailable",
     "details": {
+      "status": "unhealthy",
+      "reason": "readiness_failed",
       "cells": {
         "accesscore": "healthy"
       },
