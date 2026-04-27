@@ -41,7 +41,7 @@ var _ = errcode.Category(nil)
 	assert.Empty(t, results)
 }
 
-func TestOBS01_CategoryInLabels_Warning(t *testing.T) {
+func TestOBS01_CategoryInLabels_Error(t *testing.T) {
 	src := `package metrics
 import "github.com/ghbvf/gocell/kernel/observability/metrics"
 import "github.com/ghbvf/gocell/pkg/errcode"
@@ -55,11 +55,11 @@ func register() {
 	})
 	require.Len(t, results, 1)
 	assert.Equal(t, ruleOBS01, results[0].Code)
-	assert.Equal(t, SeverityWarning, results[0].Severity)
+	assert.Equal(t, SeverityError, results[0].Severity)
 	assert.Contains(t, results[0].Message, "Category")
 }
 
-func TestOBS01_IsInfraErrorInLabels_Warning(t *testing.T) {
+func TestOBS01_IsInfraErrorInLabels_Error(t *testing.T) {
 	src := `package metrics
 import "github.com/ghbvf/gocell/kernel/observability/metrics"
 import "github.com/ghbvf/gocell/pkg/errcode"
@@ -73,6 +73,7 @@ func register() {
 		"runtime/observability/metrics/m.go": src,
 	})
 	require.Len(t, results, 1)
+	assert.Equal(t, SeverityError, results[0].Severity)
 	assert.Contains(t, results[0].Message, "IsInfraError")
 }
 
@@ -153,4 +154,88 @@ func register() {
 		"adapters/postgres/metrics.go": src,
 	})
 	require.Len(t, results, 1)
+}
+
+func TestOBS01_DotImport_Detect(t *testing.T) {
+	src := `package metrics
+import "github.com/ghbvf/gocell/kernel/observability/metrics"
+import . "github.com/ghbvf/gocell/pkg/errcode"
+func register() {
+    var err error
+    _ = metrics.CounterOpts{LabelNames: []string{"x", Category(err).String()}}
+}
+`
+	root := t.TempDir()
+	writeFixtures(t, root, map[string]string{
+		"runtime/observability/metrics/m.go": src,
+	})
+	v := &Validator{root: root}
+	results := v.scanOBS01Tree(filepath.Join(root, "runtime/observability/metrics"))
+	require.Len(t, results, 1, "dot-import Category call must be detected")
+	assert.Equal(t, SeverityError, results[0].Severity)
+	assert.Contains(t, results[0].Message, "Category")
+}
+
+func TestOBS01_LabelNamesVariable_NoFalsePositive(t *testing.T) {
+	// LabelNames assigned from a variable reference cannot be statically
+	// inspected — the rule must not fire to avoid false positives.
+	src := `package metrics
+import "github.com/ghbvf/gocell/kernel/observability/metrics"
+import "github.com/ghbvf/gocell/pkg/errcode"
+func register() {
+    var err error
+    _ = errcode.Category(err) // keep both imports used
+    labels := []string{"cell", "method"}
+    _ = metrics.CounterOpts{LabelNames: labels}
+}
+`
+	root := t.TempDir()
+	writeFixtures(t, root, map[string]string{
+		"runtime/observability/metrics/m.go": src,
+	})
+	v := &Validator{root: root}
+	results := v.scanOBS01Tree(filepath.Join(root, "runtime/observability/metrics"))
+	assert.Empty(t, results, "variable-reference LabelNames must not trigger OBS-01")
+}
+
+// TestOBS01_LabelNamesAppend_KnownLimit documents that LabelNames expressed
+// as append(...) is a known limitation: the rule does not inspect non-literal
+// composite expressions and will not report a violation. Tests lock the
+// current behaviour so any future extension is deliberate.
+func TestOBS01_LabelNamesAppend_KnownLimit(t *testing.T) {
+	src := `package metrics
+import "github.com/ghbvf/gocell/kernel/observability/metrics"
+import "github.com/ghbvf/gocell/pkg/errcode"
+func register() {
+    var err error
+    _ = metrics.CounterOpts{LabelNames: append([]string{"x"}, errcode.Category(err).String())}
+}
+`
+	root := t.TempDir()
+	writeFixtures(t, root, map[string]string{
+		"runtime/observability/metrics/m.go": src,
+	})
+	v := &Validator{root: root}
+	results := v.scanOBS01Tree(filepath.Join(root, "runtime/observability/metrics"))
+	// append(...) is not a *ast.CompositeLit, so findOBS01LabelNames returns
+	// (nil, false) and the rule does not fire. Known limitation — extend if
+	// this pattern appears in production metrics code.
+	assert.Empty(t, results, "append() LabelNames is a known limitation — rule does not inspect non-literal slice expressions")
+}
+
+func TestOBS01_WalkDirError_ReportsIncomplete(t *testing.T) {
+	// Place a syntactically invalid .go file (not a test file) inside a scan
+	// directory. parser.ParseFile returns an error, the WalkDir callback
+	// propagates it, and WalkDir itself returns it — triggering scan-incomplete.
+	root := t.TempDir()
+	dir := filepath.Join(root, "runtime/observability/metrics")
+	require.NoError(t, os.MkdirAll(dir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "broken.go"), []byte("this is not valid go {{{"), 0o644))
+
+	v := &Validator{root: root}
+	results := v.scanOBS01Tree(dir)
+	require.Len(t, results, 1, "parse error during walk must produce an incomplete result")
+	assert.Equal(t, ruleOBS01, results[0].Code)
+	assert.Equal(t, SeverityError, results[0].Severity)
+	assert.Contains(t, results[0].Message, "OBS-01 scan incomplete")
 }

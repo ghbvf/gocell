@@ -14,11 +14,11 @@ import (
 // runGenerate implements:
 //
 //	gocell generate assembly --id=<id> [--module=<module>]
+//	gocell generate metrics-schema --id=<id>
 //	gocell generate indexes (placeholder)
-//	gocell generate boundaries (placeholder)
 func runGenerate(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell generate <assembly|indexes|boundaries> [flags]")
+		return fmt.Errorf("usage: gocell generate <assembly|metrics-schema|indexes> [flags]")
 	}
 
 	subtype := args[0]
@@ -27,12 +27,12 @@ func runGenerate(args []string) error {
 	switch subtype {
 	case "assembly":
 		return generateAssembly(subArgs)
+	case "metrics-schema":
+		return generateMetricsSchema(subArgs)
 	case "indexes":
 		return fmt.Errorf("not implemented: gocell generate indexes")
-	case "boundaries":
-		return fmt.Errorf("not implemented: gocell generate boundaries")
 	default:
-		return fmt.Errorf("unknown generate type: %s (expected assembly, indexes, or boundaries)", subtype)
+		return fmt.Errorf("unknown generate type: %s (expected assembly, metrics-schema, or indexes)", subtype)
 	}
 }
 
@@ -72,7 +72,7 @@ func generateAssembly(args []string) error {
 	}
 
 	// Generate.
-	gen := assembly.NewGenerator(project, mod)
+	gen := assembly.NewGenerator(project, mod, root)
 
 	if !*boundaryOnly {
 		entrypoint, err := gen.GenerateEntrypoint(*id)
@@ -101,6 +101,46 @@ func generateAssembly(args []string) error {
 	boundaryPath := filepath.Join(root, "assemblies", *id, "generated", "boundary.yaml")
 	return writeGeneratedFile(root, boundaryPath, boundary,
 		fmt.Sprintf("assembly %q generated dir", *id))
+}
+
+// generateMetricsSchema implements:
+//
+//	gocell generate metrics-schema --id=<assemblyID>
+//
+// It scans runtime/observability/metrics/ and adapters/ for metric Opts
+// composite literals, serializes the result to
+// assemblies/<id>/generated/metrics-schema.yaml, and prints the output path.
+// The file is the Source-of-Record baseline for CI's verify-and-diff gate
+// (OBS-01 policy). Run this command locally and commit the result whenever a
+// metric name, label set, or bucket list changes.
+func generateMetricsSchema(args []string) error {
+	fs := flag.NewFlagSet("generate metrics-schema", flag.ContinueOnError)
+	id := fs.String("id", "", "assembly ID (required)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if *id == "" {
+		return fmt.Errorf("--id is required")
+	}
+
+	root, err := findRoot()
+	if err != nil {
+		return fmt.Errorf("cannot find project root: %w", err)
+	}
+
+	schema, err := governance.BuildMetricsSchema(root, *id)
+	if err != nil {
+		return fmt.Errorf("scan metrics: %w", err)
+	}
+
+	content, err := governance.MarshalMetricsSchema(schema)
+	if err != nil {
+		return fmt.Errorf("serialize metrics-schema: %w", err)
+	}
+
+	outPath := filepath.Join(root, "assemblies", *id, "generated", "metrics-schema.yaml")
+	return writeGeneratedFile(root, outPath, content,
+		fmt.Sprintf("assembly %q metrics-schema", *id))
 }
 
 // writeGeneratedFile creates parent dirs and writes content to outPath, after

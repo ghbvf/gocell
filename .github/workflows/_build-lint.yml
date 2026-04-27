@@ -160,9 +160,34 @@ jobs:
       - name: Verify generated assemblies are up-to-date
         if: matrix.static_checks
         run: |
-          go run ./cmd/gocell generate assembly --id corebundle --boundary-only
-          if ! git diff --exit-code assemblies/corebundle/generated/; then
-            echo "::error::boundary.yaml drift detected. Run 'go run ./cmd/gocell generate assembly --id corebundle --boundary-only' locally and commit the result."
+          for d in assemblies/*/; do
+            go run ./cmd/gocell generate assembly --id "$(basename "$d")" --boundary-only
+          done
+          if ! git diff --exit-code assemblies/; then
+            echo "::error::boundary.yaml drift detected. Run 'for d in assemblies/*/; do go run ./cmd/gocell generate assembly --id \"\$(basename \"\$d\")\" --boundary-only; done' locally and commit the result."
+            exit 1
+          fi
+
+      # Metrics-schema verify-and-diff gate (OBS-01):
+      # assemblies/<id>/generated/metrics-schema.yaml is the Source-of-Record
+      # baseline for Prometheus metric registrations (names, labels, buckets).
+      # Regenerate locally and require a clean diff. Any new metric, label change,
+      # or bucket change requires (a) a bucket-migration table in the PR description
+      # and (b) an updated metrics-schema.yaml committed alongside the change.
+      - name: Verify generated metrics-schema is up-to-date
+        if: matrix.static_checks
+        run: |
+          for d in assemblies/*/; do
+            go run ./cmd/gocell generate metrics-schema --id "$(basename "$d")"
+          done
+          if ! git diff --exit-code assemblies/*/generated/metrics-schema.yaml; then
+            echo "::error::metrics-schema.yaml drift detected. Run 'go run ./cmd/gocell generate metrics-schema --id <id>' locally and commit. SLO bucket / label changes require a migration table in PR description (OBS-01)."
+            exit 1
+          fi
+          # Also catch newly generated files not yet committed (first-time addition).
+          untracked=$(git ls-files --others --exclude-standard assemblies/*/generated/metrics-schema.yaml 2>/dev/null || true)
+          if [ -n "$untracked" ]; then
+            echo "::error::Untracked metrics-schema.yaml files found — commit them: $untracked"
             exit 1
           fi
 

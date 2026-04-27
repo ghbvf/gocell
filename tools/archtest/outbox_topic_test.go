@@ -90,8 +90,8 @@ func checkOutboxTopicFailOpenRule(root string) ([]outboxTopicViolation, error) {
 		return nil, err
 	}
 	var violations []outboxTopicViolation
-	for _, p := range r.Pkgs {
-		pkgViolations, err := scanPackage(root, p, r)
+	for _, p := range r.Packages() {
+		pkgViolations, err := scanPackage(root, p)
 		if err != nil {
 			return nil, err
 		}
@@ -102,7 +102,7 @@ func checkOutboxTopicFailOpenRule(root string) ([]outboxTopicViolation, error) {
 
 // scanPackage scans all non-test Go files in a loaded package for violations.
 // packages.Package.Syntax is aligned with GoFiles via Fset.Position.
-func scanPackage(root string, p *packages.Package, r *typeseval.Resolver) ([]outboxTopicViolation, error) {
+func scanPackage(root string, p *packages.Package) ([]outboxTopicViolation, error) {
 	var violations []outboxTopicViolation
 	for _, file := range p.Syntax {
 		absPath := p.Fset.Position(file.Pos()).Filename
@@ -114,20 +114,19 @@ func scanPackage(root string, p *packages.Package, r *typeseval.Resolver) ([]out
 			return nil, fmt.Errorf("filepath.Rel: %w", err)
 		}
 		rel = filepath.ToSlash(rel)
-		violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, r, p)...)
+		violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, p)...)
 	}
 	return violations, nil
 }
 
 // scanOutboxTopicFailOpenAST is the core AST-matching routine. Given a parsed
-// file, fileset, resolver, and the owning package (for TypesInfo lookup), it
-// returns every outbox.Entry composite literal that opts into
-// FailurePolicyFailOpen with a Topic or EventType matching the
-// security-sensitive prefix regex.
+// file, fileset, and the owning package (for TypesInfo lookup), it returns
+// every outbox.Entry composite literal that opts into FailurePolicyFailOpen
+// with a Topic or EventType matching the security-sensitive prefix regex.
 //
-// Topic/EventType field values are evaluated via typeseval.Resolver.ResolveString,
+// Topic/EventType field values are evaluated via typeseval.EvaluateConstString,
 // covering BasicLit, same-package const Ident, and cross-package SelectorExpr.
-func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, r *typeseval.Resolver, pkg *packages.Package) []outboxTopicViolation {
+func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, pkg *packages.Package) []outboxTopicViolation {
 	var violations []outboxTopicViolation
 	ast.Inspect(file, func(n ast.Node) bool {
 		lit, ok := n.(*ast.CompositeLit)
@@ -137,8 +136,8 @@ func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel s
 		if !isOutboxEntryLiteral(lit) {
 			return true
 		}
-		topic, topicOK := extractStringField(r, pkg, lit, outboxTopicEntryField)
-		eventType, eventTypeOK := extractStringField(r, pkg, lit, outboxTopicEventTypeField)
+		topic, topicOK := extractStringField(pkg, lit, outboxTopicEntryField)
+		eventType, eventTypeOK := extractStringField(pkg, lit, outboxTopicEventTypeField)
 
 		var matched string
 		switch {
@@ -189,11 +188,11 @@ func isOutboxEntryLiteral(lit *ast.CompositeLit) bool {
 	return false
 }
 
-// extractStringField returns the resolved constant-string value for the named
-// field of a composite literal, if present. Uses typeseval.Resolver to evaluate
-// BasicLit, same-package const Ident, and cross-package SelectorExpr uniformly.
+// extractStringField returns the compile-time constant string value for the
+// named field of a composite literal, evaluated via typeseval.EvaluateConstString.
+// Covers BasicLit, same-package const Ident, and cross-package SelectorExpr.
 // Returns ok=false when the field is missing or its value is not a constant string.
-func extractStringField(r *typeseval.Resolver, pkg *packages.Package, lit *ast.CompositeLit, fieldName string) (string, bool) {
+func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName string) (string, bool) {
 	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -203,7 +202,7 @@ func extractStringField(r *typeseval.Resolver, pkg *packages.Package, lit *ast.C
 		if !ok || key.Name != fieldName {
 			continue
 		}
-		return r.ResolveString(pkg, kv.Value)
+		return typeseval.EvaluateConstString(pkg.TypesInfo, kv.Value)
 	}
 	return "", false
 }
@@ -235,6 +234,14 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 		{"./crosspackage_event_dto_session_failopen/consumer", true},
 		{"./samepackage_const_session_failclosed", false},
 		{"./nonsecurity_metric_failopen_passes", false},
+		// Non-session security topics (audit.*, user.*, role.*).
+		{"./basicliteral_audit_failopen", true},
+		// Non-security topic (config.*) with FailOpen — rule must not fire.
+		{"./basicliteral_config_failopen_passes", false},
+		// EventType-only path: Topic absent, EventType is a same-package const.
+		{"./eventtype_only_const_audit_failopen", true},
+		// Cross-package const for a non-session security topic (audit.*).
+		{"./crosspackage_audit_dto/consumer", true},
 	}
 
 	for _, c := range cases {
@@ -244,7 +251,7 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 			require.NoError(t, err, "load fixture package %s", c.pattern)
 
 			var violations []outboxTopicViolation
-			for _, p := range r.Pkgs {
+			for _, p := range r.Packages() {
 				for _, file := range p.Syntax {
 					absPath := p.Fset.Position(file.Pos()).Filename
 					if strings.HasSuffix(absPath, "_test.go") {
@@ -253,7 +260,7 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 					rel, err := filepath.Rel(fixturesRoot, absPath)
 					require.NoError(t, err)
 					rel = filepath.ToSlash(rel)
-					violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, r, p)...)
+					violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, p)...)
 				}
 			}
 

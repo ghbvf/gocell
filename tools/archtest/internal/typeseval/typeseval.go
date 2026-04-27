@@ -46,16 +46,12 @@ func EvaluateConstString(typesInfo *types.Info, expr ast.Expr) (string, bool) {
 
 // Resolver wraps a loaded set of packages for repeated constant evaluation.
 type Resolver struct {
-	Pkgs []*packages.Package
+	pkgs []*packages.Package
 }
 
-// ResolveString resolves expr to its compile-time string constant via the
-// TypesInfo of the supplied package. Safe with nil pkg / nil TypesInfo.
-func (r *Resolver) ResolveString(pkg *packages.Package, expr ast.Expr) (string, bool) {
-	if pkg == nil {
-		return "", false
-	}
-	return EvaluateConstString(pkg.TypesInfo, expr)
+// Packages returns the loaded packages slice.
+func (r *Resolver) Packages() []*packages.Package {
+	return r.pkgs
 }
 
 // LoadPackages loads patterns from modRoot with full type info. Returns the
@@ -74,6 +70,9 @@ func LoadPackages(modRoot string, patterns ...string) ([]*packages.Package, []pa
 	}
 	var errs []packages.Error
 	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		for i := range p.Errors {
+			p.Errors[i].Msg = modRoot + ": " + p.Errors[i].Msg
+		}
 		errs = append(errs, p.Errors...)
 	})
 	return pkgs, errs, nil
@@ -90,7 +89,7 @@ func NewResolver(modRoot string, patterns ...string) (*Resolver, error) {
 	if len(errs) > 0 {
 		return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(errs), errs[0])
 	}
-	return &Resolver{Pkgs: pkgs}, nil
+	return &Resolver{pkgs: pkgs}, nil
 }
 
 var (
@@ -101,8 +100,12 @@ var (
 // SharedResolver returns a process-wide cached Resolver keyed on (modRoot,
 // patterns). Successive callers with the same key reuse the loaded packages.
 // Errors are not cached — a transient failure does not poison subsequent calls.
+//
+// Cache keys are formed by joining modRoot and each pattern with NUL bytes.
+// NUL is illegal in POSIX paths and Go import patterns, so collisions are
+// impossible even when patterns themselves contain "|" or ",".
 func SharedResolver(modRoot string, patterns ...string) (*Resolver, error) {
-	key := modRoot + "|" + strings.Join(patterns, ",")
+	key := modRoot + "\x00" + strings.Join(patterns, "\x00")
 	sharedMu.Lock()
 	defer sharedMu.Unlock()
 	if r, ok := sharedCache[key]; ok {

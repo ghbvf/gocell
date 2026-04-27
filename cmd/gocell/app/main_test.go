@@ -195,13 +195,6 @@ func TestRunGenerateIndexes(t *testing.T) {
 	}
 }
 
-func TestRunGenerateBoundaries(t *testing.T) {
-	err := runGenerate([]string{"boundaries"})
-	if err == nil {
-		t.Error("generate boundaries should return not-implemented error")
-	}
-}
-
 func TestRunGenerateAssemblyMissingID(t *testing.T) {
 	err := runGenerate([]string{"assembly"})
 	if err == nil {

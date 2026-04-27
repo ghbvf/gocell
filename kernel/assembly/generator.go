@@ -13,11 +13,9 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
-	"strconv"
-	"strings"
 	"text/template"
-	"time"
 
 	"github.com/ghbvf/gocell/kernel/assembly/gentpl"
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -27,20 +25,25 @@ import (
 
 // Generator produces derived files for an assembly.
 type Generator struct {
-	project   *metadata.ProjectMeta
-	cells     *registry.CellRegistry
-	contracts *registry.ContractRegistry
-	module    string // Go module path (e.g., "github.com/ghbvf/gocell")
+	project     *metadata.ProjectMeta
+	cells       *registry.CellRegistry
+	contracts   *registry.ContractRegistry
+	module      string // Go module path (e.g., "github.com/ghbvf/gocell")
+	projectRoot string // absolute path to project root for reading schema files (empty = skip)
 }
 
-// NewGenerator creates a Generator from project metadata and a Go module path.
-// It builds CellRegistry and ContractRegistry internally from the project.
-func NewGenerator(project *metadata.ProjectMeta, module string) *Generator {
+// NewGenerator creates a Generator from project metadata, a Go module path,
+// and the absolute filesystem path to the project root (the directory
+// containing go.mod). projectRoot is required when contracts reference schema
+// files; passing "" causes fingerprinting to skip schema content hashing,
+// which is acceptable only for tests that use contracts without SchemaRefs.
+func NewGenerator(project *metadata.ProjectMeta, module, projectRoot string) *Generator {
 	return &Generator{
-		project:   project,
-		cells:     registry.NewCellRegistry(project),
-		contracts: registry.NewContractRegistry(project),
-		module:    module,
+		project:     project,
+		cells:       registry.NewCellRegistry(project),
+		contracts:   registry.NewContractRegistry(project),
+		module:      module,
+		projectRoot: projectRoot,
 	}
 }
 
@@ -53,7 +56,6 @@ type entrypointContext struct {
 
 // boundaryContext is the template context for boundary.yaml.tpl.
 type boundaryContext struct {
-	GeneratedAt       string
 	Fingerprint       string
 	AssemblyID        string
 	ExportedContracts []string
@@ -103,10 +105,12 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 		return nil, err
 	}
 	smokeTargets := g.collectSmokeTargets(cellSet)
-	fingerprint := g.sourceFingerprint(assemblyID, exported, imported)
+	fingerprint, fpErr := g.sourceFingerprint(assemblyID, exported, imported)
+	if fpErr != nil {
+		return nil, fpErr
+	}
 
 	ctx := boundaryContext{
-		GeneratedAt:       sourceDateEpochOrNow(),
 		Fingerprint:       fingerprint,
 		AssemblyID:        assemblyID,
 		ExportedContracts: exported,
@@ -115,19 +119,6 @@ func (g *Generator) GenerateBoundary(assemblyID string) ([]byte, error) {
 	}
 
 	return g.executeTemplate("boundary.yaml.tpl", ctx)
-}
-
-// sourceDateEpochOrNow returns a deterministic RFC3339 timestamp when the
-// SOURCE_DATE_EPOCH environment variable is set (Unix seconds), otherwise
-// returns the current UTC time. This enables reproducible builds.
-// ref: https://reproducible-builds.org/docs/source-date-epoch/
-func sourceDateEpochOrNow() string {
-	if v := os.Getenv("SOURCE_DATE_EPOCH"); v != "" {
-		if secs, err := strconv.ParseInt(v, 10, 64); err == nil {
-			return time.Unix(secs, 0).UTC().Format(time.RFC3339)
-		}
-	}
-	return time.Now().UTC().Format(time.RFC3339)
 }
 
 // computeBoundaryContracts determines which contracts cross the assembly boundary.
@@ -196,32 +187,56 @@ func (g *Generator) collectSmokeTargets(cellSet map[string]bool) []string {
 	return targets
 }
 
-// sourceFingerprint computes a SHA-256 hex digest of all source YAML for the
-// assembly. It hashes the assembly ID and all related cell IDs in sorted order
-// to produce a deterministic fingerprint. The exported/imported boundary
-// contracts are passed in to avoid recomputing them.
-func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []string) string {
+// sourceFingerprint computes a SHA-256 hex digest from a canonical serialization
+// of all ContractMeta for the assembly's boundary contracts. Adding a new field
+// to ContractMeta automatically changes the fingerprint — no manual update to the
+// hashing logic is required.
+//
+// The fingerprint covers:
+//  1. Assembly identity (ID + sorted cell list + build config)
+//  2. Each boundary contract's full structural metadata (via canonicalEncode)
+//     prefixed by its ID to prevent cross-contract collisions
+//  3. Schema file contents (when projectRoot is set)
+//  4. The sorted contract-ID membership list for the boundary itself
+func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []string) (string, error) {
 	asm := g.project.Assemblies[assemblyID]
 	if asm == nil {
-		return ""
+		return "", nil
 	}
 
 	h := sha256.New()
-	cells := sortedCopy(asm.Cells)
+	g.hashAssemblyIdentity(h, asm)
 
-	// Hash assembly identity.
+	if err := g.hashBoundaryContracts(h, exported, imported); err != nil {
+		return "", err
+	}
+
+	// Record the boundary membership lists so that adding or removing a contract
+	// from the boundary also shifts the fingerprint.
+	fmt.Fprint(h, "exported:") //nolint:errcheck
+	for _, cID := range exported {
+		fmt.Fprintf(h, "%s\x00", cID) //nolint:errcheck
+	}
+	fmt.Fprint(h, "imported:") //nolint:errcheck
+	for _, cID := range imported {
+		fmt.Fprintf(h, "%s\x00", cID) //nolint:errcheck
+	}
+
+	return fmt.Sprintf("%x", h.Sum(nil)), nil
+}
+
+// hashAssemblyIdentity writes the assembly's stable identity fields into h:
+// build config, sorted cell list, and per-cell structural metadata.
+func (g *Generator) hashAssemblyIdentity(h hashWriter, asm *metadata.AssemblyMeta) {
+	cells := sortedCopy(asm.Cells)
 	// hash.Hash.Write never returns error — safe to ignore per Go spec.
-	fmt.Fprintf(h, "assembly:%s\n", asm.ID) //nolint:errcheck
+	fmt.Fprintf(h, "assembly:%s\n", asm.ID)                       //nolint:errcheck
+	fmt.Fprintf(h, "build.entrypoint:%s\n", asm.Build.Entrypoint) //nolint:errcheck
+	fmt.Fprintf(h, "build.binary:%s\n", asm.Build.Binary)         //nolint:errcheck
 	for _, c := range cells {
 		fmt.Fprintf(h, "cells:%s\n", c) //nolint:errcheck
 	}
-	fmt.Fprintf(h, "build.entrypoint:%s\n", asm.Build.Entrypoint) //nolint:errcheck
-	fmt.Fprintf(h, "build.binary:%s\n", asm.Build.Binary)         //nolint:errcheck
-
-	// Hash cell metadata in sorted order for determinism.
-	cellSet := make(map[string]bool, len(asm.Cells))
 	for _, cellID := range cells {
-		cellSet[cellID] = true
 		cellMeta := g.cells.Get(cellID)
 		if cellMeta == nil {
 			fmt.Fprintf(h, "cell:%s:missing\n", cellID) //nolint:errcheck
@@ -235,108 +250,103 @@ func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []st
 			fmt.Fprintf(h, "cell:%s:smoke:%s\n", cellID, s) //nolint:errcheck
 		}
 	}
-
-	// Hash boundary contracts with full structural detail. Each contract's
-	// kind, lifecycle, consistency level, transport details (HTTP method/path/
-	// status/listener/responses, event/command/projection identifiers) and
-	// participant lists are folded in so that any structural drift — even one
-	// that leaves the contract ID unchanged — invalidates the fingerprint and
-	// triggers a boundary.yaml regenerate.
-	for _, cID := range exported {
-		writeContractFingerprint(h, "export", cID, g.contracts.Get(cID))
-	}
-	for _, cID := range imported {
-		writeContractFingerprint(h, "import", cID, g.contracts.Get(cID))
-	}
-
-	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
-// listenerKindFromPath classifies an HTTP path by its listener stripe. Paths
-// under /internal/ map to the InternalListener; everything else (api, admin,
-// webhooks) maps to PrimaryListener. Path moves between stripes are a load-
-// bearing structural change that callers must regenerate boundary.yaml on.
-func listenerKindFromPath(path string) string {
-	if strings.HasPrefix(path, "/internal/") {
-		return "internal"
+// hashBoundaryContracts writes each boundary contract's canonical encoding into h.
+// Contracts are visited in sorted ID order to ensure determinism.
+func (g *Generator) hashBoundaryContracts(h hashWriter, exported, imported []string) error {
+	allContracts := make([]string, 0, len(exported)+len(imported))
+	allContracts = append(allContracts, exported...)
+	allContracts = append(allContracts, imported...)
+	sort.Strings(allContracts)
+
+	for _, cID := range allContracts {
+		c := g.contracts.Get(cID)
+		// Write the contract ID as a separator even for nil contracts.
+		fmt.Fprintf(h, "contract:%s\x00", cID) //nolint:errcheck
+		if c == nil {
+			fmt.Fprint(h, "nil\n") //nolint:errcheck
+			continue
+		}
+		// normalizeContract sorts participant lists (Subscribers, Clients, etc.)
+		// so declaration order does not affect the fingerprint — only membership does.
+		nc := normalizeContract(*c)
+		if err := canonicalEncode(h, nc); err != nil {
+			return fmt.Errorf("fingerprint: canonical encode contract %q: %w", cID, err)
+		}
+		// Schema file contents are outside ContractMeta itself; hash them separately.
+		if err := writeSchemaFileContents(h, g.projectRoot, c); err != nil {
+			return err
+		}
 	}
-	return "primary"
+	return nil
 }
 
-func sortedIntKeys(m map[int]metadata.HTTPResponseMeta) []int {
-	keys := make([]int, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
+// normalizeContract returns a copy of c with participant slice fields sorted so
+// that declaration order does not influence the fingerprint — only membership
+// does. Triggers are NOT sorted because their order may carry semantic meaning
+// (e.g. emission sequence). The returned value is a shallow copy; the caller
+// must not modify it.
+func normalizeContract(c metadata.ContractMeta) metadata.ContractMeta {
+	e := c.Endpoints
+	e.Clients = sortedCopy(e.Clients)
+	e.Subscribers = sortedCopy(e.Subscribers)
+	e.Invokers = sortedCopy(e.Invokers)
+	e.Readers = sortedCopy(e.Readers)
+	c.Endpoints = e
+	return c
+}
+
+// writeSchemaFileContents hashes the content of each non-empty schema ref file
+// for the contract. Paths are resolved relative to the contract's Dir.
+func writeSchemaFileContents(h hashWriter, projectRoot string, c *metadata.ContractMeta) error {
+	if c == nil || projectRoot == "" {
+		return nil
 	}
-	sort.Ints(keys)
-	return keys
+	contractDir := filepath.Join(projectRoot, filepath.FromSlash(c.Dir))
+	refs := []struct {
+		key  string
+		path string
+	}{
+		{"schema.request", c.SchemaRefs.Request},
+		{"schema.response", c.SchemaRefs.Response},
+		{"schema.payload", c.SchemaRefs.Payload},
+		{"schema.headers", c.SchemaRefs.Headers},
+	}
+	for _, r := range refs {
+		if r.path == "" {
+			continue
+		}
+		absPath := filepath.Join(contractDir, r.path)
+		content, err := os.ReadFile(absPath)
+		if err != nil {
+			return fmt.Errorf("fingerprint: read schema %s for contract %q: %w", r.path, c.ID, err)
+		}
+		fmt.Fprintf(h, "%s:%s:", r.key, r.path) //nolint:errcheck
+		_, _ = h.Write(content)
+		fmt.Fprint(h, "\n") //nolint:errcheck
+	}
+	keys := sortedMapKeys(c.SchemaRefs.Extra)
+	for _, k := range keys {
+		path := c.SchemaRefs.Extra[k]
+		if path == "" {
+			continue
+		}
+		absPath := filepath.Join(contractDir, path)
+		content, err := os.ReadFile(absPath)
+		if err != nil {
+			return fmt.Errorf("fingerprint: read schema %s for contract %q: %w", path, c.ID, err)
+		}
+		fmt.Fprintf(h, "schema.extra.%s:%s:", k, path) //nolint:errcheck
+		_, _ = h.Write(content)
+		fmt.Fprint(h, "\n") //nolint:errcheck
+	}
+	return nil
 }
 
 // hashWriter is the interface satisfied by hash.Hash for fingerprint writes.
 type hashWriter interface {
 	Write(p []byte) (n int, err error)
-}
-
-func writeContractFingerprint(h hashWriter, prefix, cID string, c *metadata.ContractMeta) {
-	fmt.Fprintf(h, "%s:%s\n", prefix, cID) //nolint:errcheck
-	if c == nil {
-		return
-	}
-	fmt.Fprintf(h, "%s:%s:kind:%s\n", prefix, cID, c.Kind)                    //nolint:errcheck
-	fmt.Fprintf(h, "%s:%s:lifecycle:%s\n", prefix, cID, c.Lifecycle)          //nolint:errcheck
-	fmt.Fprintf(h, "%s:%s:consistency:%s\n", prefix, cID, c.ConsistencyLevel) //nolint:errcheck
-	fmt.Fprintf(h, "%s:%s:idempotency:%s\n", prefix, cID, c.IdempotencyKey)   //nolint:errcheck
-	fmt.Fprintf(h, "%s:%s:delivery:%s\n", prefix, cID, c.DeliverySemantics)   //nolint:errcheck
-	if c.Replayable != nil {
-		fmt.Fprintf(h, "%s:%s:replayable:%t\n", prefix, cID, *c.Replayable) //nolint:errcheck
-	}
-	for _, t := range sortedCopy(c.Triggers) {
-		fmt.Fprintf(h, "%s:%s:trigger:%s\n", prefix, cID, t) //nolint:errcheck
-	}
-	writeContractEndpointsFingerprint(h, prefix, cID, c)
-}
-
-// writeContractEndpointsFingerprint folds kind-specific endpoint fields into
-// the fingerprint stream. Split out from writeContractFingerprint to keep
-// gocognit ≤ 15 (gocell governance threshold).
-func writeContractEndpointsFingerprint(h hashWriter, prefix, cID string, c *metadata.ContractMeta) {
-	switch c.Kind {
-	case "http":
-		fmt.Fprintf(h, "%s:%s:server:%s\n", prefix, cID, c.Endpoints.Server) //nolint:errcheck
-		for _, x := range sortedCopy(c.Endpoints.Clients) {
-			fmt.Fprintf(h, "%s:%s:client:%s\n", prefix, cID, x) //nolint:errcheck
-		}
-		writeHTTPTransportFingerprint(h, prefix, cID, c.Endpoints.HTTP)
-	case "event":
-		fmt.Fprintf(h, "%s:%s:publisher:%s\n", prefix, cID, c.Endpoints.Publisher) //nolint:errcheck
-		for _, x := range sortedCopy(c.Endpoints.Subscribers) {
-			fmt.Fprintf(h, "%s:%s:subscriber:%s\n", prefix, cID, x) //nolint:errcheck
-		}
-	case "command":
-		fmt.Fprintf(h, "%s:%s:handler:%s\n", prefix, cID, c.Endpoints.Handler) //nolint:errcheck
-		for _, x := range sortedCopy(c.Endpoints.Invokers) {
-			fmt.Fprintf(h, "%s:%s:invoker:%s\n", prefix, cID, x) //nolint:errcheck
-		}
-	case "projection":
-		fmt.Fprintf(h, "%s:%s:provider:%s\n", prefix, cID, c.Endpoints.Provider) //nolint:errcheck
-		for _, x := range sortedCopy(c.Endpoints.Readers) {
-			fmt.Fprintf(h, "%s:%s:reader:%s\n", prefix, cID, x) //nolint:errcheck
-		}
-	}
-}
-
-func writeHTTPTransportFingerprint(h hashWriter, prefix, cID string, t *metadata.HTTPTransportMeta) {
-	if t == nil {
-		return
-	}
-	fmt.Fprintf(h, "%s:%s:method:%s\n", prefix, cID, t.Method)                       //nolint:errcheck
-	fmt.Fprintf(h, "%s:%s:path:%s\n", prefix, cID, t.Path)                           //nolint:errcheck
-	fmt.Fprintf(h, "%s:%s:listener:%s\n", prefix, cID, listenerKindFromPath(t.Path)) //nolint:errcheck
-	fmt.Fprintf(h, "%s:%s:status:%d\n", prefix, cID, t.SuccessStatus)                //nolint:errcheck
-	fmt.Fprintf(h, "%s:%s:noContent:%t\n", prefix, cID, t.NoContent)                 //nolint:errcheck
-	for _, status := range sortedIntKeys(t.Responses) {
-		fmt.Fprintf(h, "%s:%s:resp:%d\n", prefix, cID, status) //nolint:errcheck
-	}
 }
 
 // executeTemplate loads a template from the embedded FS, parses it, and
@@ -376,6 +386,19 @@ func sortedCopy(ss []string) []string {
 
 // sortedKeys returns sorted keys from a bool map.
 func sortedKeys(m map[string]bool) []string {
+	if len(m) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+// sortedMapKeys returns sorted keys from any string-keyed map.
+func sortedMapKeys[V any](m map[string]V) []string {
 	if len(m) == 0 {
 		return nil
 	}

@@ -119,9 +119,6 @@ func exposesHealthCheckerMethod(s *typeMethodSet, qualified string) bool {
 // HealthCheckers() also implements the full ManagedResource contract
 // (Checkers + Worker + Close), counting promoted methods from embedded fields.
 func TestHealthCheckersImpliesManagedResource(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode (loads runtime/ + adapters/, ~10-15s)")
-	}
 	root := findModuleRoot(t)
 	s := collectMethodSets(t, root, "./runtime/...", "./adapters/...")
 
@@ -157,9 +154,6 @@ func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 // (promoted_ok.App must NOT be flagged) and that bare Checkers() declarations
 // are still flagged (checkers_only.Bad must be flagged).
 func TestHealthAggregation_FixtureRegression(t *testing.T) {
-	if testing.Short() {
-		t.Skip("packages.Load is slow under -short")
-	}
 	fixturesRoot := filepath.Join(findArchTestDir(t), "testdata", "health_agg_fixtures")
 	s := collectMethodSets(t, fixturesRoot, "./promoted_ok", "./checkers_only", "./base")
 
