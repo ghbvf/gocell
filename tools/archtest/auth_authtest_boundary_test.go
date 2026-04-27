@@ -188,9 +188,7 @@ func parseImports(path string) ([]string, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.ImportsOnly|parser.SkipObjectResolution)
 	if err != nil {
-		// Return a best-effort result from raw scanning on parse failure so a
-		// single malformed file does not abort the entire walk.
-		return rawScanImports(data, path), nil
+		return rawScanImports(data, path), err
 	}
 	var imports []string
 	for _, imp := range f.Imports {
@@ -205,9 +203,8 @@ func parseImports(path string) ([]string, error) {
 // pkgIdent and the selector matches selName. Comments and string literals do
 // not match because they are not represented as ast.CallExpr nodes — the entire
 // point of moving rule A from text grep to AST detection is to avoid those
-// false positives. On parse failure the file is skipped (returns nil, nil) —
-// AST cannot reason about a malformed file, and the parser failure itself is
-// surfaced by go vet / build steps.
+// false positives. Parse failures are returned to make malformed files fail
+// the archtest directly.
 func findCallExpr(path, pkgIdent, selName string) ([]int, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -216,7 +213,7 @@ func findCallExpr(path, pkgIdent, selName string) ([]int, error) {
 	fset := token.NewFileSet()
 	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil
+		return nil, err
 	}
 	var lines []int
 	ast.Inspect(f, func(n ast.Node) bool {

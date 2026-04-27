@@ -183,7 +183,7 @@ func TestPerListener_PrimaryRouter_WithAuthMiddleware_Enforces(t *testing.T) {
 // /internal/v1/* route declared on a zero-ref router (unit-test scenario)
 // passes FinalizeAuth — the listener-identity check is skipped for zero-ref.
 func TestDualMux_FinalizeAuth_InternalPathOnZeroRefAccepted(t *testing.T) {
-	rtr, err := NewE()
+	rtr, err := New()
 	require.NoError(t, err)
 
 	// Zero-ref router: listener-identity check is skipped.
@@ -199,7 +199,7 @@ func TestDualMux_FinalizeAuth_InternalPathOnZeroRefAccepted(t *testing.T) {
 // TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations confirms the happy
 // path: internal /internal/v1/* and public /api/v1/* routes both pass.
 func TestDualMux_FinalizeAuth_AcceptsConsistentDeclarations(t *testing.T) {
-	rtr, err := NewE(WithPolicyCoverageWhitelist([]string{
+	rtr, err := New(WithPolicyCoverageWhitelist([]string{
 		"/internal/v1/*",
 		"/api/v1/*",
 	}))

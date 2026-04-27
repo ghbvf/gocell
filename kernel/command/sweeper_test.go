@@ -209,7 +209,7 @@ func (r *mockScanner) ScanActive(_ context.Context, filter command.ScanFilter) (
 }
 
 func (r *mockScanner) GetCommand(_ context.Context, _ string) (*command.Entry, error) {
-	return nil, nil
+	return &command.Entry{}, nil
 }
 
 // mockAckQueue records Queue.Ack calls; other Queue methods are unused in

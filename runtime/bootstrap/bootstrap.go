@@ -618,8 +618,8 @@ type Bootstrap struct {
 	// --- metrics provider + auto-wired HTTP collector ---
 	metricsProvider    kernelmetrics.Provider
 	httpCollector      metricsmiddleware.Collector // cached auto-wired HTTP collector (created once, shared across listeners)
-	shutdownMet        *shutdownMetrics            // nil only when provider is nil
-	shutdownMetricsErr error                       // non-nil when metric registration failed in New
+	shutdownMet        *shutdownMetrics
+	shutdownMetricsErr error // non-nil when metric registration failed in New
 
 	// --- run state ---
 	runOnce sync.Once
@@ -730,8 +730,7 @@ func New(opts ...Option) *Bootstrap {
 		reg(b.lifecycle)
 	}
 	// Register shutdown metrics against the (potentially Nop) provider.
-	// newShutdownMetrics returns (nil, nil) for NopProvider — that is the
-	// correct "disabled" state; nil *shutdownMetrics is safe to call.
+	// newShutdownMetrics returns a disabled metrics object for a nil provider.
 	m, err := newShutdownMetrics(b.metricsProvider)
 	if err != nil {
 		// Store error; phase0 will surface it before any component starts.

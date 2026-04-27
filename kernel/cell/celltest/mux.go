@@ -70,11 +70,12 @@ func (m *TestMux) Prefix() string {
 
 // DeclareAuthMeta records an auth route declaration.
 // Sub-muxes compose their prefix with meta.Path before forwarding to root.
-func (m *TestMux) DeclareAuthMeta(meta cell.AuthRouteMeta) {
+func (m *TestMux) DeclareAuthMeta(meta cell.AuthRouteMeta) error {
 	if m.prefix != "" {
 		meta.Path = path.Clean(m.prefix + meta.Path)
 	}
 	m.root.authMetas = append(m.root.authMetas, meta)
+	return nil
 }
 
 // DeclaredAuthMetas returns a copy of all auth metadata recorded on this root

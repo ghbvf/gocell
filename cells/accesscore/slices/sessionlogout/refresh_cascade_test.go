@@ -23,7 +23,7 @@ import (
 func newCascadeStore(t *testing.T) refresh.Store {
 	t.Helper()
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 100 * time.Millisecond, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 100 * time.Millisecond, MaxAge: time.Hour}, clock, nil)
 }
 
 func TestService_Logout_RevokesRefreshChain(t *testing.T) {
@@ -45,7 +45,7 @@ func TestService_Logout_RevokesRefreshChain(t *testing.T) {
 	wire, _, err := refreshStore.Issue(ctx, sessionID, userID)
 	require.NoError(t, err)
 
-	svc := NewService(sessionRepo, refreshStore, slog.Default())
+	svc := MustNewService(sessionRepo, refreshStore, slog.Default())
 	require.NoError(t, svc.Logout(ctx, sessionID, userID))
 
 	_, _, err = refreshStore.Rotate(ctx, wire)
@@ -76,7 +76,7 @@ func TestService_LogoutUser_RevokesAllRefreshChains(t *testing.T) {
 	otherWire, _, err := refreshStore.Issue(ctx, "sess-other", "other-user")
 	require.NoError(t, err)
 
-	svc := NewService(sessionRepo, refreshStore, slog.Default())
+	svc := MustNewService(sessionRepo, refreshStore, slog.Default())
 	require.NoError(t, svc.LogoutUser(ctx, userID))
 
 	_, _, err = refreshStore.Rotate(ctx, wire1)

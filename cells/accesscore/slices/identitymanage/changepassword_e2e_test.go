@@ -98,12 +98,12 @@ func newE2EFixture() *e2eFixture {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	refreshStore := refreshmem.New(
+	refreshStore := refreshmem.MustNew(
 		refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour},
 		realClock{}, nil,
 	)
 
-	loginSvc := sessionlogin.NewService(
+	loginSvc := sessionlogin.MustNewService(
 		userRepo, sessionRepo, roleRepo, refreshStore, e2eIssuer, slog.Default(),
 	)
 

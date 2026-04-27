@@ -92,13 +92,14 @@ func TestSweep_NoFile_NoOp(t *testing.T) {
 	logger, cap := newBootstrapCapturingLogger()
 	now := time.Now()
 
-	w, err := sweep(context.Background(), sweepConfig{
-		StateDir: dir,
-		Clock:    fixedClock{now: now},
-		Logger:   logger,
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: filepath.Join(dir, "initial_admin_password"),
+		Clock:          fixedClock{now: now},
+		Logger:         logger,
 	})
 
 	require.NoError(t, err)
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when file does not exist")
 
 	cap.mu.Lock()
@@ -115,13 +116,14 @@ func TestSweep_ExpiredFile_Removed(t *testing.T) {
 
 	credPath := writeExpiredCredFile(t, dir, now)
 
-	w, err := sweep(context.Background(), sweepConfig{
-		StateDir: dir,
-		Clock:    fixedClock{now: now},
-		Logger:   logger,
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: credPath,
+		Clock:          fixedClock{now: now},
+		Logger:         logger,
 	})
 
 	require.NoError(t, err)
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when expired file is removed")
 
 	// File must be gone.
@@ -135,6 +137,33 @@ func TestSweep_ExpiredFile_Removed(t *testing.T) {
 	assert.Equal(t, slog.LevelInfo, rec.level, "expected Info level log")
 }
 
+func TestSweep_EmptyCredentialPathUsesDefaultResolver(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("GOCELL_STATE_DIR", dir)
+	logger, _ := newBootstrapCapturingLogger()
+	now := time.Now()
+	credPath := writeExpiredCredFile(t, dir, now)
+
+	result, err := sweep(context.Background(), sweepConfig{
+		Clock:  fixedClock{now: now},
+		Logger: logger,
+	})
+
+	require.NoError(t, err)
+	assert.Nil(t, result.Cleaner)
+	_, statErr := os.Stat(credPath)
+	assert.True(t, isNotExist(statErr), "empty CredentialPath must sweep the resolved default credential file")
+}
+
+func TestSweep_RelativeCredentialPathReturnsError(t *testing.T) {
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: "relative/initial_admin_password",
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, result.Cleaner)
+}
+
 // TestSweep_FreshFile_Retained verifies that a non-expired credential file is
 // left untouched and a non-nil cleaner worker is returned for runtime cleanup
 // (P1-16 full fix: fresh orphan files must not persist until next restart).
@@ -145,13 +174,14 @@ func TestSweep_FreshFile_Retained(t *testing.T) {
 
 	credPath := writeFreshCredFile(t, dir, now)
 
-	w, err := sweep(context.Background(), sweepConfig{
-		StateDir: dir,
-		Clock:    fixedClock{now: now},
-		Logger:   logger,
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: credPath,
+		Clock:          fixedClock{now: now},
+		Logger:         logger,
 	})
 
 	require.NoError(t, err)
+	w := result.Cleaner
 
 	// File must be retained.
 	_, statErr := os.Stat(credPath)
@@ -178,13 +208,14 @@ func TestSweep_FreshFile_ReturnsCleanerWorker(t *testing.T) {
 
 	// Use a manual scheduler so the timer never fires during the test.
 	sched := &manualScheduler{}
-	w, err := sweep(context.Background(), sweepConfig{
-		StateDir:  dir,
-		Clock:     fixedClock{now: now},
-		Scheduler: sched,
-		Logger:    logger,
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: filepath.Join(dir, "initial_admin_password"),
+		Clock:          fixedClock{now: now},
+		Scheduler:      sched,
+		Logger:         logger,
 	})
 	require.NoError(t, err)
+	w := result.Cleaner
 	require.NotNil(t, w, "worker must be non-nil for fresh file")
 
 	// Stop before Start is idempotent (cleaner.state transitions to Stopped).
@@ -210,13 +241,14 @@ func TestSweep_UnreadableFile_LogErrorContinue(t *testing.T) {
 		_ = os.Chmod(credPath, 0o600)
 	})
 
-	w, err := sweep(context.Background(), sweepConfig{
-		StateDir: dir,
-		Clock:    fixedClock{now: now},
-		Logger:   logger,
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: credPath,
+		Clock:          fixedClock{now: now},
+		Logger:         logger,
 	})
 
 	require.NoError(t, err, "sweep must not return error even when file is unreadable")
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when file is unreadable")
 
 	// Must have at least one Error-level log.
@@ -232,27 +264,29 @@ func TestSweep_UnreadableFile_LogErrorContinue(t *testing.T) {
 	assert.True(t, hasError, "expected Error-level log when file is unreadable")
 }
 
-// TestSweep_StateDirNotExist_NoError verifies that a non-existent StateDir
-// is treated as "no file" (normal state), returning (nil, nil) without error logs.
-func TestSweep_StateDirNotExist_NoError(t *testing.T) {
+// TestSweep_CredentialPathParentNotExist_NoError verifies that a credential
+// path under a non-existent directory is treated as "no file" (normal state),
+// returning (nil, nil) without error logs.
+func TestSweep_CredentialPathParentNotExist_NoError(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "nonexistent-subdir")
 	logger, cap := newBootstrapCapturingLogger()
 	now := time.Now()
 
-	w, err := sweep(context.Background(), sweepConfig{
-		StateDir: dir,
-		Clock:    fixedClock{now: now},
-		Logger:   logger,
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: filepath.Join(dir, "initial_admin_password"),
+		Clock:          fixedClock{now: now},
+		Logger:         logger,
 	})
 
 	require.NoError(t, err)
-	assert.Nil(t, w, "no worker expected when StateDir does not exist")
+	w := result.Cleaner
+	assert.Nil(t, w, "no worker expected when credential path does not exist")
 
 	cap.mu.Lock()
 	defer cap.mu.Unlock()
 	for _, r := range cap.records {
 		assert.NotEqual(t, slog.LevelError, r.level,
-			"no Error log expected when StateDir does not exist; got: %v", r)
+			"no Error log expected when credential path does not exist; got: %v", r)
 	}
 }
 
@@ -266,13 +300,14 @@ func TestSweep_MalformedExpiresAt_LogErrorContinue(t *testing.T) {
 
 	credPath := writeMalformedCredFile(t, dir)
 
-	w, err := sweep(context.Background(), sweepConfig{
-		StateDir: dir,
-		Clock:    fixedClock{now: now},
-		Logger:   logger,
+	result, err := sweep(context.Background(), sweepConfig{
+		CredentialPath: credPath,
+		Clock:          fixedClock{now: now},
+		Logger:         logger,
 	})
 
 	require.NoError(t, err, "malformed expires_at must not block startup")
+	w := result.Cleaner
 	assert.Nil(t, w, "no worker expected when expires_at is malformed")
 
 	// File must be retained (never delete unknown formats).

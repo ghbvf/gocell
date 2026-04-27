@@ -24,6 +24,10 @@ type redisNonceStoreFactory func(*adapterredis.Client, time.Duration) (auth.Nonc
 type redisConsumerClaimerFactory func(*adapterredis.Client) idempotency.Claimer
 type redisClientFactory func(context.Context, adapterredis.Config) (*adapterredis.Client, error)
 
+type redisClientResult struct {
+	Client *adapterredis.Client
+}
+
 var (
 	newRedisClient     redisClientFactory     = adapterredis.NewClient
 	newRedisNonceStore redisNonceStoreFactory = func(client *adapterredis.Client, ttl time.Duration) (auth.NonceStore, error) {
@@ -74,19 +78,19 @@ func loadRedisConfigFromEnv(topo bootstrap.Topology) (adapterredis.Config, bool,
 	}, true, nil
 }
 
-func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (*adapterredis.Client, error) {
+func buildRedisClient(ctx context.Context, topo bootstrap.Topology) (redisClientResult, error) {
 	cfg, configured, err := loadRedisConfigFromEnv(topo)
 	if err != nil {
-		return nil, err
+		return redisClientResult{}, err
 	}
 	if !configured {
-		return nil, nil
+		return redisClientResult{}, nil
 	}
 	client, err := newRedisClient(ctx, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("build Redis client: %w", err)
+		return redisClientResult{}, fmt.Errorf("build Redis client: %w", err)
 	}
-	return client, nil
+	return redisClientResult{Client: client}, nil
 }
 
 func buildServiceNonceStore(topo bootstrap.Topology, client *adapterredis.Client) (auth.NonceStore, error) {

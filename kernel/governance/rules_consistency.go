@@ -359,14 +359,26 @@ func scanSliceEmitTopics(root string, ref sliceRef, fileForError string) (map[st
 	var results []ValidationResult
 
 	cellDir := filepath.Join(root, "cells", ref.cellID)
-	pkgConsts := buildPkgConsts(cellDir)
+	pkgConsts, constResults := buildPkgConsts(cellDir, fileForError)
+	results = append(results, constResults...)
 	sliceDir := filepath.Join(root, filepath.FromSlash(ref.dir))
 	if _, err := os.Stat(sliceDir); err != nil {
 		return topics, results
 	}
 
 	fset := token.NewFileSet()
-	allFiles := collectParsedFiles(fset, sliceDir)
+	allFiles, err := collectParsedFiles(fset, sliceDir)
+	if err != nil {
+		results = append(results, ValidationResult{
+			Code:      codeContractConsistencyEmit01,
+			Severity:  SeverityError,
+			IssueType: IssueInvalid,
+			File:      fileForError,
+			Field:     "triggers",
+			Message:   fmt.Sprintf("cannot scan emitted topics in %s/%s: %v", ref.cellID, ref.sliceID, err),
+		})
+		return topics, results
+	}
 	helperMap := buildHelperEmitMap(allFiles, pkgConsts)
 
 	for _, f := range allFiles {
@@ -386,11 +398,11 @@ type parsedFile struct {
 
 // collectParsedFiles walks slicesDir and parses all non-test Go files,
 // returning their ASTs paired with file-level const maps.
-func collectParsedFiles(fset *token.FileSet, slicesDir string) []parsedFile {
+func collectParsedFiles(fset *token.FileSet, slicesDir string) ([]parsedFile, error) {
 	var files []parsedFile
-	_ = filepath.WalkDir(slicesDir, func(path string, d fs.DirEntry, err error) error {
+	err := filepath.WalkDir(slicesDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil
+			return err
 		}
 		if d.IsDir() {
 			if n := d.Name(); n == "mem" || n == "testdata" {
@@ -403,7 +415,7 @@ func collectParsedFiles(fset *token.FileSet, slicesDir string) []parsedFile {
 		}
 		f, parseErr := parser.ParseFile(fset, path, nil, 0)
 		if parseErr != nil {
-			return nil
+			return parseErr
 		}
 		files = append(files, parsedFile{
 			ast:         f,
@@ -413,7 +425,7 @@ func collectParsedFiles(fset *token.FileSet, slicesDir string) []parsedFile {
 		})
 		return nil
 	})
-	return files
+	return files, err
 }
 
 // helperEmitFunc describes a same-package helper function whose body contains a
@@ -1238,8 +1250,9 @@ func dynamicTopicResult(expr ast.Expr, fset *token.FileSet, root, message string
 
 // buildPkgConsts scans internal/dto and internal/domain under cellDir
 // for string constants and returns a map of pkgIdent → constName → stringValue.
-func buildPkgConsts(cellDir string) cellPkgConsts {
+func buildPkgConsts(cellDir, fileForError string) (cellPkgConsts, []ValidationResult) {
 	pkgConsts := cellPkgConsts{}
+	var results []ValidationResult
 	for _, sub := range []string{"internal/dto", "internal/domain"} {
 		dir := filepath.Join(cellDir, sub)
 		if _, err := os.Stat(dir); err != nil {
@@ -1250,16 +1263,28 @@ func buildPkgConsts(cellDir string) cellPkgConsts {
 		if pkgConsts[pkgIdent] == nil {
 			pkgConsts[pkgIdent] = pkgConstMap{}
 		}
-		parseGoDir(dir, pkgConsts[pkgIdent])
+		if err := parseGoDir(dir, pkgConsts[pkgIdent]); err != nil {
+			results = append(results, ValidationResult{
+				Code:      codeContractConsistencyEmit01,
+				Severity:  SeverityError,
+				IssueType: IssueInvalid,
+				File:      fileForError,
+				Field:     "triggers",
+				Message:   fmt.Sprintf("cannot scan constants in %s: %v", filepath.ToSlash(dir), err),
+			})
+		}
 	}
-	return pkgConsts
+	return pkgConsts, results
 }
 
 // parseGoDir parses all non-test Go files in dir and extracts string const declarations.
-func parseGoDir(dir string, consts pkgConstMap) {
+func parseGoDir(dir string, consts pkgConstMap) error {
 	fset := token.NewFileSet()
-	_ = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
+	return filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
 			return nil
 		}
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
@@ -1267,7 +1292,7 @@ func parseGoDir(dir string, consts pkgConstMap) {
 		}
 		f, parseErr := parser.ParseFile(fset, path, nil, 0)
 		if parseErr != nil {
-			return nil
+			return parseErr
 		}
 		extractStringConsts(f, consts)
 		return nil

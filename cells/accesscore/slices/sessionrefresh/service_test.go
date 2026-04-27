@@ -43,7 +43,11 @@ func init() {
 
 func newTestRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+}
+
+type typedNilRefreshStore struct {
+	refresh.Store
 }
 
 // TestNewService_IssuerDefaultAudienceWrittenOnRefresh verifies that the
@@ -99,8 +103,8 @@ func newTestServiceWithClock(seedUsers ...string) (*Service, *mem.SessionReposit
 		_ = userRepo.Create(context.Background(), u)
 	}
 	clock := storetest.NewFakeClock(time.Now())
-	refreshStore := refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
-	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	refreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 	return svc, sessionRepo, refreshStore, clock
 }
 
@@ -111,8 +115,59 @@ func newTestServiceWithUserRepo() (*Service, *mem.SessionRepository, *mem.UserRe
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository()
 	refreshStore := newTestRefreshStore()
-	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 	return svc, sessionRepo, userRepo
+}
+
+func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	refreshStore := newTestRefreshStore()
+
+	cases := []struct {
+		name string
+		run  func() (*Service, error)
+	}{
+		{
+			name: "typed nil sessionRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.SessionRepository
+				return NewService(typedNil, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil roleRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.RoleRepository
+				return NewService(sessionRepo, typedNil, userRepo, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil userRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.UserRepository
+				return NewService(sessionRepo, roleRepo, typedNil, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil refreshStore",
+			run: func() (*Service, error) {
+				var typedNil *typedNilRefreshStore
+				return NewService(sessionRepo, roleRepo, userRepo, typedNil, testIssuer, slog.Default())
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.run()
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+		})
+	}
 }
 
 // issueTestWireToken creates a session + issues a wire token from the refreshStore.
@@ -167,7 +222,7 @@ func TestService_Refresh_RoleFetchFailure_AbortsRefresh(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), u))
 
 	refreshStore := newTestRefreshStore()
-	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 
 	sess, err := domain.NewSession("usr-rolefail", "at", time.Now().Add(time.Hour))
 	require.NoError(t, err)
@@ -391,7 +446,7 @@ func TestService_Refresh_SessionAwareVerifier(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), seedUser))
 
 	refreshStore := newTestRefreshStore()
-	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 
 	sess, err := domain.NewSession("usr-sa", "at", time.Now().Add(time.Hour))
 	require.NoError(t, err)
@@ -426,7 +481,7 @@ func TestRefresh_FailClosedWhenUserUnavailable(t *testing.T) {
 	roleRepo := mem.NewRoleRepository()
 	userRepo := mem.NewUserRepository() // intentionally empty — GetByID returns error
 	refreshStore := newTestRefreshStore()
-	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 
 	sess, err := domain.NewSession("usr-missing", "at", time.Now().Add(time.Hour))
 	require.NoError(t, err)
@@ -456,7 +511,7 @@ func TestRefresh_FlagPropagatesFromCurrentUser_AfterClear(t *testing.T) {
 
 	// Recreate with a known refreshStore so we can issue and rotate wire tokens.
 	refreshStore := newTestRefreshStore()
-	svc2 := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
+	svc2 := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
 
 	sess, _ := domain.NewSession("usr-ref-clear", "at", time.Now().Add(time.Hour))
 	sess.ID = "sess-ref-clear"
@@ -491,7 +546,7 @@ func TestRefresh_FlagStillSetWhenUserNotChanged(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
-	svc := NewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, mem.NewRoleRepository(), userRepo, refreshStore, testIssuer, slog.Default())
 
 	sess, _ := domain.NewSession("usr-ref-reset", "at", time.Now().Add(time.Hour))
 	sess.ID = "sess-ref-reset"
@@ -523,7 +578,7 @@ func TestService_Refresh_InfraErrorOnSessionLookup(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 
 	refreshStore := newTestRefreshStore()
-	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 
 	// Issue a wire token but don't seed the session — GetByID will return infraErr.
 	wireToken, _, err := refreshStore.Issue(context.Background(), "sess-infra", "usr-infra")
@@ -590,7 +645,7 @@ func TestService_Refresh_SessionNotFound_CascadeRevokes(t *testing.T) {
 
 	spy := &spyRefreshStore{Store: innerStore}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := NewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err, "session-not-found must cause Refresh to fail")
@@ -614,7 +669,7 @@ func TestService_Refresh_CascadeRevokeFailure_ReturnsRefreshUnavailable(t *testi
 		err:   errcode.NewInfra(errcode.ErrInternal, "refresh store down"),
 	}
 	sessionRepo := &sessionNotFoundRepo{notFoundErr: notFoundErr}
-	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -646,7 +701,7 @@ func TestService_Refresh_SessionUpdateInfraFailure_DoesNotRotate(t *testing.T) {
 	require.NoError(t, userRepo.Create(context.Background(), user))
 
 	refreshStore := newTestRefreshStore()
-	svc := NewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 	sess, err := domain.NewSession("usr-update-infra", "at", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	sess.ID = "sess-update-infra"
@@ -679,7 +734,7 @@ func TestService_Refresh_SessionUpdateNotFound_CascadeRevokesAndRejects(t *testi
 
 	innerStore := newTestRefreshStore()
 	spy := &spyRefreshStore{Store: innerStore}
-	svc := NewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, spy, testIssuer, slog.Default())
 	sess, err := domain.NewSession("usr-update-missing", "at", time.Now().Add(time.Hour))
 	require.NoError(t, err)
 	sess.ID = "sess-update-missing"
@@ -711,7 +766,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 			build: func(t *testing.T) (*Service, string) {
 				t.Helper()
 				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-uniform-notfound", "sess-uniform-notfound")
-				svc := NewService(
+				svc := MustNewService(
 					&sessionNotFoundRepo{notFoundErr: errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")},
 					mem.NewRoleRepository(),
 					mem.NewUserRepository(),
@@ -743,7 +798,7 @@ func TestService_Refresh_RejectionMessagesAreUniform(t *testing.T) {
 				t.Helper()
 				sessionRepo := mem.NewSessionRepository()
 				refreshStore := newTestRefreshStore()
-				svc := NewService(sessionRepo, mem.NewRoleRepository(), mem.NewUserRepository(), refreshStore, testIssuer, slog.Default())
+				svc := MustNewService(sessionRepo, mem.NewRoleRepository(), mem.NewUserRepository(), refreshStore, testIssuer, slog.Default())
 				sess, err := domain.NewSession("usr-uniform-missing", "at", time.Now().Add(time.Hour))
 				require.NoError(t, err)
 				sess.ID = "sess-uniform-missing"
@@ -781,7 +836,7 @@ func TestService_Refresh_CascadeRejectionReasonIsLogged(t *testing.T) {
 			build: func(t *testing.T, logger *slog.Logger) (*Service, string) {
 				t.Helper()
 				_, _, innerStore, wireToken := issueTestWireToken(t, "usr-log-notfound", "sess-log-notfound")
-				svc := NewService(
+				svc := MustNewService(
 					&sessionNotFoundRepo{notFoundErr: errcode.NewDomain(errcode.ErrSessionNotFound, "session not found")},
 					mem.NewRoleRepository(),
 					mem.NewUserRepository(),
@@ -889,7 +944,7 @@ func TestRefresh_RotateFailure_ReturnsRefreshUnavailable(t *testing.T) {
 		Store: innerStore,
 		err:   errcode.NewInfra(errcode.ErrInternal, "rotate store down"),
 	}
-	svc2 := NewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default())
+	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, failStore, testIssuer, slog.Default())
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -922,7 +977,7 @@ func TestRefresh_RotateMismatch_CascadeRevoke_ReturnsRejected(t *testing.T) {
 	spy := &spyRefreshStore{Store: innerStore}
 	// Override Rotate to return a token with wrong SessionID.
 	mismatchStore := rotateMismatchRefreshStore{Store: spy, rotatedSessionID: "wrong-session", rotatedSubjectID: "usr-mismatch"}
-	svc2 := NewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
+	svc2 := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
 
 	pair, err := svc2.Refresh(context.Background(), wireToken)
 	require.Error(t, err)
@@ -963,7 +1018,7 @@ func TestRefresh_RotateMismatch_CascadeRevokeFails_PropagatesErr(t *testing.T) {
 	// rotateMismatchRefreshStore wraps revokeErrStore so Rotate returns mismatch
 	// but RevokeSession delegates to revokeErrStore and fails.
 	mismatchStore := rotateMismatchRefreshStore{Store: revokeErrStore, rotatedSessionID: "tampered-session", rotatedSubjectID: "usr-mismatch-revoke-fail"}
-	svc := NewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
+	svc := MustNewService(sessionRepo, roleRepo, userRepo, mismatchStore, testIssuer, slog.Default())
 
 	pair, err := svc.Refresh(context.Background(), wireToken)
 	require.Error(t, err)

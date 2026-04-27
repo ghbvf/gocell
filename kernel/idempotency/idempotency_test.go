@@ -53,6 +53,14 @@ func TestReceipt_CommitRelease(t *testing.T) {
 	assert.NoError(t, receipt.Release(context.Background()))
 }
 
+func TestNonAcquiredReceipt_ReturnsLeaseError(t *testing.T) {
+	receipt := NonAcquiredReceipt()
+	require.NotNil(t, receipt)
+	assert.ErrorIs(t, receipt.Commit(context.Background()), ErrNoClaimLease)
+	assert.ErrorIs(t, receipt.Release(context.Background()), ErrNoClaimLease)
+	assert.ErrorIs(t, receipt.Extend(context.Background(), time.Minute), ErrNoClaimLease)
+}
+
 // --- DefaultLeaseTTL Test ---
 
 func TestDefaultLeaseTTL(t *testing.T) {
@@ -86,7 +94,7 @@ func TestInMemClaimer_Claim_Done(t *testing.T) {
 	state, r2, err := c.Claim(ctx, "key-done", 5*time.Minute, 24*time.Hour)
 	assert.NoError(t, err)
 	assert.Equal(t, ClaimDone, state)
-	assert.Nil(t, r2)
+	assert.NotNil(t, r2)
 }
 
 func TestInMemClaimer_Claim_Busy(t *testing.T) {
@@ -102,7 +110,7 @@ func TestInMemClaimer_Claim_Busy(t *testing.T) {
 	state2, r2, err2 := c.Claim(ctx, "key-busy", 5*time.Minute, 24*time.Hour)
 	assert.NoError(t, err2)
 	assert.Equal(t, ClaimBusy, state2)
-	assert.Nil(t, r2)
+	assert.NotNil(t, r2)
 }
 
 func TestInMemClaimer_Claim_ExpiredLease_ReacquiredBySecond(t *testing.T) {

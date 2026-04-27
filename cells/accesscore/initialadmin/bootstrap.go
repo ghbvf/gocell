@@ -137,31 +137,31 @@ func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, er
 // sweep (P1-16) is intentionally NOT called here — it is scheduled independently
 // at the composition root via SweepHook so that orphan cred files are cleaned
 // even when adminExists==true causes ensureAdmin to return early.
-func (b *bootstrapper) ensureAdmin(ctx context.Context) (worker.Worker, error) {
+func (b *bootstrapper) ensureAdmin(ctx context.Context) (ensureAdminResult, error) {
 	// Pre-flight: fail fast if admin already exists (no credfile probe needed).
 	exists, err := b.provisioner.Status(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("initialadmin: check status: %w", err)
+		return ensureAdminResult{}, fmt.Errorf("initialadmin: check status: %w", err)
 	}
 	if exists {
-		return nil, nil
+		return ensureAdminResult{}, nil
 	}
 
 	// Pre-flight: verify the credential directory is writable before creating
 	// the admin user. This catches permission issues at startup time rather
 	// than after user creation (P1-6 fix).
 	if err := b.probeWriteable(); err != nil {
-		return nil, fmt.Errorf("initial admin bootstrap: credential dir not writable: %w", err)
+		return ensureAdminResult{}, fmt.Errorf("initial admin bootstrap: credential dir not writable: %w", err)
 	}
 
 	// Generate and hash password (plaintext discarded after this call).
 	password, hash, err := b.generateAndHash()
 	if err != nil {
-		return nil, err
+		return ensureAdminResult{}, err
 	}
 
 	// Delegate race-safe persistence to adminprovision.
-	user, outcome, err := b.provisioner.Ensure(ctx, adminprovision.ProvisionInput{
+	result, err := b.provisioner.Ensure(ctx, adminprovision.ProvisionInput{
 		Username:     b.cfg.Username,
 		Email:        b.cfg.Username + "@gocell.local",
 		PasswordHash: hash,
@@ -169,26 +169,26 @@ func (b *bootstrapper) ensureAdmin(ctx context.Context) (worker.Worker, error) {
 		Source:       domain.UserSourceBootstrap,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("initialadmin: ensure: %w", err)
+		return ensureAdminResult{}, fmt.Errorf("initialadmin: ensure: %w", err)
 	}
-	switch outcome {
+	switch result.Outcome {
 	case adminprovision.OutcomeAlreadyExists, adminprovision.OutcomeRaceSkipped:
 		// Concurrent replica / prior bootstrap won the race. Silent skip.
-		return nil, nil
+		return ensureAdminResult{}, nil
 	case adminprovision.OutcomeCreated, adminprovision.OutcomeOrphanRecovered:
 		// Fall through to credfile write.
 	default:
-		return nil, fmt.Errorf("initialadmin: unexpected provision outcome %d", outcome)
+		return ensureAdminResult{}, fmt.Errorf("initialadmin: unexpected provision outcome %d", result.Outcome)
 	}
 
 	// Write credential file. On failure, compensate the user/role writes so
 	// the next startup can self-heal (adminExists==false again).
 	cleaner, werr := b.writeFileAndMakeCleaner(password)
 	if werr != nil {
-		b.provisioner.Compensate(ctx, user.ID)
-		return nil, werr
+		b.provisioner.Compensate(ctx, result.User.ID)
+		return ensureAdminResult{}, werr
 	}
-	return cleaner, nil
+	return ensureAdminResult{Cleaner: cleaner}, nil
 }
 
 // probeWriteable verifies the credential file directory is writable by creating

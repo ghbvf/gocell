@@ -1383,9 +1383,7 @@ func (f *fakeTokenRenewer) NewLifetimeWatcher(_ *vaultapi.LifetimeWatcherInput) 
 	if f.newWatcherErr != nil {
 		return nil, f.newWatcherErr
 	}
-	// Return nil watcher — caller (initTokenRenewal) will panic if it dereferences it.
-	// Tests that exercise the happy path must not call this.
-	return nil, nil
+	return nil, fmt.Errorf("test fake: NewLifetimeWatcher called without configured result")
 }
 
 // TestInitTokenRenewal_LookupFails_ReturnsAuthError verifies that a

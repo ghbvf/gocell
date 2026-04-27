@@ -80,7 +80,7 @@ func IsTypedNilAllower(cb Allower) bool {
 // failure, everything else = success).
 //
 // The done callback is invoked via defer to guarantee it is called even when
-// the downstream handler panics (the panic is re-raised after reporting).
+// the downstream handler panics.
 //
 // The middleware reuses an existing RecorderState from context (created by the
 // Recorder middleware). If none exists, it creates its own so it remains
@@ -88,15 +88,25 @@ func IsTypedNilAllower(cb Allower) bool {
 //
 // ref: sony/gobreaker — TwoStepCircuitBreaker for HTTP request protection
 // ref: go-kit/kit circuitbreaker — middleware wrapping pattern
-func CircuitBreaker(cb Allower) func(http.Handler) http.Handler {
-	if cb == nil {
-		panic("middleware: Allower must not be nil")
+func CircuitBreaker(cb Allower) (func(http.Handler) http.Handler, error) {
+	if cb == nil || IsTypedNilAllower(cb) {
+		return nil, errcode.New(errcode.ErrValidationFailed, "middleware: Allower must not be nil")
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			circuitBreakerServe(cb, next, w, r)
 		})
+	}, nil
+}
+
+// MustCircuitBreaker is the composition-root fail-fast variant of
+// CircuitBreaker.
+func MustCircuitBreaker(cb Allower) func(http.Handler) http.Handler {
+	mw, err := CircuitBreaker(cb)
+	if err != nil {
+		panic(err.Error())
 	}
+	return mw
 }
 
 // circuitBreakerServe is the per-request handler for the CircuitBreaker
@@ -120,18 +130,16 @@ func circuitBreakerServe(cb Allower, next http.Handler, w http.ResponseWriter, r
 
 	state, w, r := ensureRecorder(w, r)
 
-	// Use recover to guarantee done(err) on panic, then re-panic.
-	// Without this, a standalone breaker (no Recovery middleware) would
-	// see the default status 200 and record success for a crashing handler.
-	// With Recovery in the chain, Recovery catches first and writes 500,
-	// so recover() here returns nil and we fall through to status-based logic.
+	// Recover only long enough to report a breaker failure, then re-panic so
+	// the outer Recovery middleware remains the single panic-to-HTTP and
+	// panic-to-tracing boundary.
 	//
 	// ref: sony/gobreaker — Execute treats panic as failure
-	// ref: go-kit/kit circuitbreaker — panic propagates after failure recording
+	// ref: go-kit/kit circuitbreaker — panic paths count as failed calls
 	defer func() {
-		if p := recover(); p != nil {
+		if recovered := recover(); recovered != nil {
 			done(errServerFailure)
-			panic(p)
+			repanicAfterBreakerFailure(recovered)
 		}
 		if state.Status() >= 500 {
 			done(errServerFailure)
@@ -141,6 +149,14 @@ func circuitBreakerServe(cb Allower, next http.Handler, w http.ResponseWriter, r
 	}()
 
 	next.ServeHTTP(w, r)
+}
+
+// repanicAfterBreakerFailure is the narrow architectural re-panic point used by
+// CircuitBreaker after it has reported handler panics as breaker failures. It
+// preserves the in-flight panic for the outer Recovery middleware, which owns
+// panic logging, tracing, and HTTP 500 serialization.
+func repanicAfterBreakerFailure(recovered any) {
+	panic(recovered)
 }
 
 // ensureRecorder returns the existing RecorderState from context, or creates a

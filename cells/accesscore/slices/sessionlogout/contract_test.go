@@ -27,7 +27,7 @@ import (
 
 func newContractRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 // --- contract test doubles ---
@@ -68,7 +68,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 
 	sessionRepo := mem.NewSessionRepository()
 	sessID := seedContractSession(sessionRepo)
-	svc := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
+	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, &recordingWriter{})), WithTxManager(noopTxRunner{}))
 
 	mux := http.NewServeMux()
@@ -94,7 +94,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 
 	sessionRepo := mem.NewSessionRepository()
 	writer := &recordingWriter{}
-	svc := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
+	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, writer)), WithTxManager(noopTxRunner{}))
 
 	sessID := seedContractSession(sessionRepo)
@@ -172,7 +172,7 @@ func TestService_Logout_OutboxWriteError(t *testing.T) {
 	sessionRepo := mem.NewSessionRepository()
 	seedContractSession(sessionRepo)
 	failWriter := &recordingWriter{err: errors.New("outbox unavailable")}
-	svc := NewService(sessionRepo, newContractRefreshStore(), slog.Default(),
+	svc := MustNewService(sessionRepo, newContractRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, failWriter)), WithTxManager(noopTxRunner{}))
 
 	err := svc.Logout(context.Background(), testutil.TestID("sess-1"), testutil.TestID("usr-1"))

@@ -117,15 +117,18 @@ func (c *cleaner) Start(ctx context.Context) error {
 	// not from the current process start time.
 	remaining, err := c.resolveRemaining()
 	if err != nil {
-		// File missing — operator already removed it or it never existed.
-		c.logger.Info("initial admin credential file not found; no cleanup needed",
-			slog.String("event", "initial_admin_credential_expired"),
-			slog.String("path", c.path),
-		)
-		c.mu.Lock()
-		c.state = stateStopped
-		c.mu.Unlock()
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			// File missing — operator already removed it or it never existed.
+			c.logger.Info("initial admin credential file not found; no cleanup needed",
+				slog.String("event", "initial_admin_credential_expired"),
+				slog.String("path", c.path),
+			)
+			c.mu.Lock()
+			c.state = stateStopped
+			c.mu.Unlock()
+			return nil
+		}
+		return fmt.Errorf("initialadmin: resolve credential expiry: %w", err)
 	}
 
 	c.mu.Lock()

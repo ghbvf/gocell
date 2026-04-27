@@ -125,7 +125,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 	require.NoError(t, err)
 
 	intClock := storetest.NewFakeClock(time.Now())
-	intRefreshStore := refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, intClock, nil)
+	intRefreshStore := refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, intClock, nil)
 
 	ks, _, _ := auth.MustNewTestKeySet()
 
@@ -161,7 +161,7 @@ func loginAndGetPair(t *testing.T, opts ...loginOption) loginResult {
 		DurabilityMode: cell.DurabilityDemo,
 	}))
 
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
@@ -236,7 +236,7 @@ func TestAuthIntent_AccessTokenBlockedAtRefreshPath(t *testing.T) {
 	// Build a refresh-service that mirrors production wiring.
 	// After the opaque-store rewrite, ParseOpaque rejects the JWT (wrong
 	// selector/verifier format) → refresh.ErrRejected → ErrAuthRefreshFailed.
-	refreshSvc := sessionrefresh.NewService(
+	refreshSvc := sessionrefresh.MustNewService(
 		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 	)
 
@@ -256,7 +256,7 @@ func TestAuthIntent_RefreshTokenSucceedsAtRefreshPath(t *testing.T) {
 	// real login flow, so fx.Cell.sessionRepo already has one).
 	require.NotNil(t, fx.Cell.sessionRepo, "session repo must be wired")
 
-	refreshSvc := sessionrefresh.NewService(
+	refreshSvc := sessionrefresh.MustNewService(
 		fx.Cell.sessionRepo, fx.Cell.roleRepo, fx.Cell.userRepo, fx.Cell.refreshStore, fx.Cell.jwtIssuer, slog.Default(),
 	)
 

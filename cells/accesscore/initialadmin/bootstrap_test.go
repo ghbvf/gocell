@@ -156,8 +156,9 @@ func TestBootstrap_FirstRun_CreatesUserAndWritesFile(t *testing.T) {
 	bs, err := newBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, err := bs.ensureAdmin(context.Background())
+	result, err := bs.ensureAdmin(context.Background())
 	require.NoError(t, err)
+	cleaner := result.Cleaner
 	assert.NotNil(t, cleaner, "ensureAdmin must return a non-nil cleaner on first bootstrap")
 
 	// Credential file must exist.
@@ -219,8 +220,9 @@ func TestBootstrap_SkipsWhenAdminExists(t *testing.T) {
 	bs, err := newBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, runErr := bs.ensureAdmin(context.Background())
+	result, runErr := bs.ensureAdmin(context.Background())
 	require.NoError(t, runErr)
+	cleaner := result.Cleaner
 	assert.Nil(t, cleaner, "cleaner must be nil when admin already exists")
 
 	// Credential file must NOT be created.
@@ -248,8 +250,9 @@ func TestBootstrap_PgRaceDuplicateUserSilentSkip(t *testing.T) {
 	bs, err := newBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, runErr := bs.ensureAdmin(context.Background())
+	result, runErr := bs.ensureAdmin(context.Background())
 	require.NoError(t, runErr, "PG race duplicate should result in silent skip, not error")
+	cleaner := result.Cleaner
 	assert.Nil(t, cleaner, "cleaner must be nil on silent skip")
 
 	// Credential file must NOT be created.
@@ -354,8 +357,9 @@ func TestBootstrap_OrphanUserRecoveryResumesAssign(t *testing.T) {
 	bs, err := newBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, runErr := bs.ensureAdmin(context.Background())
+	result, runErr := bs.ensureAdmin(context.Background())
 	require.NoError(t, runErr, "bootstrap must recover from the orphan-user state, not wedge")
+	cleaner := result.Cleaner
 	assert.NotNil(t, cleaner, "cleaner must be returned after successful recovery")
 
 	// The recovered user must keep the ORIGINAL id (we resumed the existing

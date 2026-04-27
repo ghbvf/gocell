@@ -83,7 +83,7 @@ func mustCursorCodec() *query.CursorCodec {
 
 func newTestRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 func newTestCell() *AccessCore {
@@ -419,7 +419,7 @@ func TestAccessCore_Init_DurableMode_UsesProdRBACRunMode(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
@@ -498,8 +498,8 @@ func initCellWithRouters(t *testing.T) *cellTestRouters {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	primary := router.New()
-	internal := router.New()
+	primary := router.MustNew()
+	internal := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		switch rg.Listener {
 		case cell.PrimaryListener:
@@ -756,7 +756,7 @@ func TestAccessCore_SessionRevocation_E2E(t *testing.T) {
 	require.NoError(t, userRepo.Create(ctx, user))
 
 	// Login via HTTP handler to simulate real flow.
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
@@ -838,7 +838,7 @@ func TestAccessCore_RefreshTokenRevocation_E2E(t *testing.T) {
 	require.NoError(t, userRepo.Create(ctx, user))
 
 	// Login via HTTP.
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {
@@ -1002,7 +1002,7 @@ func TestAccessCore_PasswordResetExempt_PropagatesViaRouter(t *testing.T) {
 		DurabilityMode: cell.DurabilityDemo,
 	}))
 
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Listener == cell.PrimaryListener {
 			if rg.Prefix != "" {

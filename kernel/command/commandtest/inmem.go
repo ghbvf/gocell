@@ -339,7 +339,7 @@ func (q *InMemQueue) GetCommand(_ context.Context, id string) (*command.Entry, e
 
 	e, ok := q.entries[id]
 	if !ok {
-		return nil, nil
+		return nil, errcode.NewDomain(errcode.ErrCommandNotFound, "commandtest: command not found: "+id)
 	}
 	cp := *e
 	return &cp, nil

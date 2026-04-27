@@ -136,7 +136,7 @@ func (t *mockRelayTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, 
 func (t *mockRelayTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
 func (t *mockRelayTx) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
 func (t *mockRelayTx) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
-	return nil, nil
+	return &pgconn.StatementDescription{}, nil
 }
 func (t *mockRelayTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return t.db.Exec(ctx, sql, args...)
@@ -257,7 +257,7 @@ func (t *mockRelayTxIterErr) CopyFrom(_ context.Context, _ pgx.Identifier, _ []s
 func (t *mockRelayTxIterErr) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults { return nil }
 func (t *mockRelayTxIterErr) LargeObjects() pgx.LargeObjects                             { return pgx.LargeObjects{} }
 func (t *mockRelayTxIterErr) Prepare(_ context.Context, _ string, _ string) (*pgconn.StatementDescription, error) {
-	return nil, nil
+	return &pgconn.StatementDescription{}, nil
 }
 func (t *mockRelayTxIterErr) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	return t.db.Exec(ctx, sql, args...)

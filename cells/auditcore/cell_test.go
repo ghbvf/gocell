@@ -335,7 +335,7 @@ func TestAuditCore_RouteQueryEntries(t *testing.T) {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
 	}
@@ -429,7 +429,7 @@ func TestAuditCore_Wiring_StaleCursor_DemoVsDurable(t *testing.T) {
 				DurabilityMode: tc.mode,
 			}))
 
-			r := router.New()
+			r := router.MustNew()
 			for _, rg := range c.RouteGroups() {
 				r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
 			}

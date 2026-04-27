@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/rsa"
 	"errors"
+	"math/big"
 	"os"
 	"testing"
 	"time"
@@ -25,9 +26,11 @@ import (
 // It satisfies both auth.SigningKeyProvider and auth.VerificationKeyStore.
 type stubKeySet struct{}
 
-func (s *stubKeySet) SigningKey() *rsa.PrivateKey                     { return nil }
-func (s *stubKeySet) SigningKeyID() string                            { return "stub-kid" }
-func (s *stubKeySet) PublicKeyByKID(_ string) (*rsa.PublicKey, error) { return nil, nil }
+func (s *stubKeySet) SigningKey() *rsa.PrivateKey { return nil }
+func (s *stubKeySet) SigningKeyID() string        { return "stub-kid" }
+func (s *stubKeySet) PublicKeyByKID(_ string) (*rsa.PublicKey, error) {
+	return &rsa.PublicKey{N: big.NewInt(1), E: 65537}, nil
+}
 
 // TestNew_RealMode_IssuerRequired verifies that RealMode=true requires a non-empty Issuer.
 func TestNew_RealMode_IssuerRequired(t *testing.T) {

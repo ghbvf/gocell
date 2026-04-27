@@ -51,7 +51,7 @@ func findAccessLogEntry(logs []byte, wantPath string) (map[string]any, bool) {
 }
 
 func TestRouterImplementsRouteMux(t *testing.T) {
-	r := New()
+	r := MustNew()
 	var mux cell.RouteMux = r
 	assert.NotNil(t, mux)
 }
@@ -108,7 +108,7 @@ func TestMetricsEndpoint(t *testing.T) {
 }
 
 func TestHandleAndServe(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Handle("/test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":"ok"}`))
@@ -121,7 +121,7 @@ func TestHandleAndServe(t *testing.T) {
 }
 
 func TestRouteGroup(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Route("/api/v1", func(mux cell.RouteMux) {
 		mux.Handle("/ping", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -136,7 +136,7 @@ func TestRouteGroup(t *testing.T) {
 }
 
 func TestGroup(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Group(func(mux cell.RouteMux) {
 		mux.Handle("/grouped", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -150,7 +150,7 @@ func TestGroup(t *testing.T) {
 }
 
 func TestMount(t *testing.T) {
-	r := New()
+	r := MustNew()
 	subRouter := chi.NewRouter()
 	subRouter.Get("/hello", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -177,7 +177,7 @@ func TestRouterChain_WebSocketUpgrade(t *testing.T) {
 		c.CloseNow() //nolint:staticcheck
 	})
 
-	r := New()
+	r := MustNew()
 	r.Mount("/ws", upgrader)
 
 	srv := httptest.NewServer(r)
@@ -200,7 +200,7 @@ func TestPanicRequestRecordedInAccessLog(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(original)
 
-	r := New()
+	r := MustNew()
 	r.Handle("/boom", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("access log panic test")
 	}))
@@ -218,7 +218,7 @@ func TestPanicRequestRecordedInAccessLog(t *testing.T) {
 
 func TestPanicRequestRecordedInMetrics(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
-	r := New(WithMetricsCollector(mc))
+	r := MustNew(WithMetricsCollector(mc))
 	r.Handle("/boom", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("metrics panic test")
 	}))
@@ -242,7 +242,7 @@ func TestNormalRequestUnchanged(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(original)
 
-	r := New(WithMetricsCollector(mc))
+	r := MustNew(WithMetricsCollector(mc))
 	r.Handle("/ok", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{"data":"ok"}`))
@@ -303,7 +303,7 @@ func TestNewForListener_AccessLogIncludesListener(t *testing.T) {
 }
 
 func TestDefaultMiddlewareApplied(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Handle("/mid-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -321,34 +321,34 @@ func TestDefaultMiddlewareApplied(t *testing.T) {
 
 // --- Trusted proxy fail-fast validation ---
 
-func TestNewE_InvalidTrustedProxies_ReturnsError(t *testing.T) {
-	r, err := NewE(WithTrustedProxies([]string{"not-an-ip"}))
+func TestNew_InvalidTrustedProxies_ReturnsError(t *testing.T) {
+	r, err := New(WithTrustedProxies([]string{"not-an-ip"}))
 	require.Error(t, err)
 	assert.Nil(t, r)
 	assert.Contains(t, err.Error(), "not-an-ip")
 	assert.Contains(t, err.Error(), "router")
 }
 
-func TestNewE_ValidTrustedProxies(t *testing.T) {
-	r, err := NewE(WithTrustedProxies([]string{"192.168.1.1", "10.0.0.0/8"}))
+func TestNew_ValidTrustedProxies(t *testing.T) {
+	r, err := New(WithTrustedProxies([]string{"192.168.1.1", "10.0.0.0/8"}))
 	require.NoError(t, err)
 	assert.NotNil(t, r)
 }
 
-func TestNewE_NilTrustedProxies(t *testing.T) {
-	r, err := NewE(WithTrustedProxies(nil))
+func TestNew_NilTrustedProxies(t *testing.T) {
+	r, err := New(WithTrustedProxies(nil))
 	require.NoError(t, err)
 	assert.NotNil(t, r)
 }
 
-func TestNew_InvalidTrustedProxies_Panics(t *testing.T) {
-	// New is the panic-wrapper over NewE — convenience for non-bootstrap callers.
+func TestMustNew_InvalidTrustedProxies_Panics(t *testing.T) {
+	// MustNew is the panic-wrapper over New — convenience for static wiring.
 	assert.Panics(t, func() {
-		New(WithTrustedProxies([]string{"not-an-ip"}))
-	}, "router.New must panic when trusted proxies contain an invalid entry")
+		MustNew(WithTrustedProxies([]string{"not-an-ip"}))
+	}, "router.MustNew must panic when trusted proxies contain an invalid entry")
 }
 
-func TestNew_InvalidTrustedProxies_PanicMessage(t *testing.T) {
+func TestMustNew_InvalidTrustedProxies_PanicMessage(t *testing.T) {
 	defer func() {
 		r := recover()
 		require.NotNil(t, r)
@@ -356,25 +356,23 @@ func TestNew_InvalidTrustedProxies_PanicMessage(t *testing.T) {
 		assert.Contains(t, msg, "not-an-ip")
 		assert.Contains(t, msg, "router")
 	}()
-	New(WithTrustedProxies([]string{"192.168.1.1", "not-an-ip"}))
+	MustNew(WithTrustedProxies([]string{"192.168.1.1", "not-an-ip"}))
 }
 
-func TestNew_PanicPreservesErrorChain(t *testing.T) {
+func TestMustNew_PanicsOnError(t *testing.T) {
 	defer func() {
 		r := recover()
 		require.NotNil(t, r)
-		err, ok := r.(error)
-		require.True(t, ok, "panic value must be an error, got %T", r)
-		assert.ErrorContains(t, err, "router")
+		assert.Contains(t, fmt.Sprintf("%v", r), "router")
 	}()
-	New(WithTrustedProxies([]string{"not-an-ip"}))
+	MustNew(WithTrustedProxies([]string{"not-an-ip"}))
 }
 
 // --- Tracing wiring ---
 
 func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
 	tracer := tracing.NewTracer("test-router-tracer")
-	r := New(WithTracer(tracer))
+	r := MustNew(WithTracer(tracer))
 
 	var gotTraceID string
 	r.Handle("/traced", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -395,7 +393,7 @@ func TestWithTracer_TracingMiddlewareActive(t *testing.T) {
 
 func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
 	tracer := &routerSpyTracer{}
-	r := New(WithTracer(tracer))
+	r := MustNew(WithTracer(tracer))
 
 	auth.MustMount(r, auth.Route{
 		Contract: testHTTPContract(http.MethodGet, "/internal/v1/rbac/check"),
@@ -418,7 +416,7 @@ func TestWithTracer_InternalContractRouteTraced(t *testing.T) {
 
 func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
 	tracer := tracing.NewTracer("test-router-tracer")
-	r := New(WithTracer(tracer))
+	r := MustNew(WithTracer(tracer))
 
 	var gotTraceID string
 	r.Handle("/traced-upstream", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -440,7 +438,7 @@ func TestWithTracer_ExtractsUpstreamTraceparent(t *testing.T) {
 
 func TestWithTracingOptions_PublicEndpointNewRoot(t *testing.T) {
 	tracer := tracing.NewTracer("test-public")
-	r := New(
+	r := MustNew(
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/public"
@@ -479,7 +477,7 @@ func TestWithTracingOptions_PublicEndpointNewRoot(t *testing.T) {
 }
 
 func TestNoTracer_NoTraceID(t *testing.T) {
-	r := New() // no WithTracer
+	r := MustNew() // no WithTracer
 
 	var hasTraceID bool
 	r.Handle("/no-trace", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -503,7 +501,7 @@ func TestWithTracer_TraceIDInAccessLog(t *testing.T) {
 	defer slog.SetDefault(original)
 
 	tracer := tracing.NewTracer("log-test")
-	r := New(WithTracer(tracer))
+	r := MustNew(WithTracer(tracer))
 	r.Handle("/log-trace", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -525,7 +523,7 @@ func TestAccessLog_IncludesRealIP(t *testing.T) {
 	slog.SetDefault(logger)
 	defer slog.SetDefault(original)
 
-	r := New(WithTrustedProxies([]string{"127.0.0.1"}))
+	r := MustNew(WithTrustedProxies([]string{"127.0.0.1"}))
 	r.Handle("/real-ip-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -547,7 +545,7 @@ func TestAccessLog_IncludesRealIP(t *testing.T) {
 
 func TestWithTracer_PanicRequestTraced(t *testing.T) {
 	tracer := tracing.NewTracer("panic-trace-test")
-	r := New(WithTracer(tracer))
+	r := MustNew(WithTracer(tracer))
 	r.Handle("/boom-traced", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("tracing panic test")
 	}))
@@ -563,7 +561,7 @@ func TestWithTracer_PanicRequestTraced(t *testing.T) {
 func TestWithTracer_PanicRequestRecordedInMetrics(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	tracer := tracing.NewTracer("metrics-panic-test")
-	r := New(WithTracer(tracer), WithMetricsCollector(mc))
+	r := MustNew(WithTracer(tracer), WithMetricsCollector(mc))
 	r.Handle("/boom-full", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("full chain panic test")
 	}))
@@ -594,7 +592,7 @@ func (l *routerTestLimiter) Allow(key string) bool {
 
 func TestWithRateLimiter_InDefaultChain(t *testing.T) {
 	limiter := &routerTestLimiter{allow: true}
-	r := New(WithRateLimiter(limiter))
+	r := MustNew(WithRateLimiter(limiter))
 	r.Handle("/rl-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -609,7 +607,7 @@ func TestWithRateLimiter_InDefaultChain(t *testing.T) {
 
 func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
 	limiter := &routerTestLimiter{allow: false}
-	r := New(WithRateLimiter(limiter))
+	r := MustNew(WithRateLimiter(limiter))
 	r.Handle("/rl-reject", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called when rate limited")
 	}))
@@ -629,7 +627,7 @@ func TestWithRateLimiter_Rejected_Returns429(t *testing.T) {
 func TestWithTracer_RateLimitedContractRouteTagged(t *testing.T) {
 	limiter := &routerTestLimiter{allow: false}
 	tracer := &routerSpyTracer{}
-	r := New(WithRateLimiter(limiter), WithTracer(tracer))
+	r := MustNew(WithRateLimiter(limiter), WithTracer(tracer))
 	auth.MustMount(r, auth.Route{
 		Contract: testHTTPContract(http.MethodGet, "/api/v1/rl-contract/{id}"),
 		Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
@@ -668,7 +666,7 @@ func (b *routerTestBreaker) Allow() (bool, func(error)) {
 
 func TestWithCircuitBreaker_InDefaultChain(t *testing.T) {
 	breaker := &routerTestBreaker{}
-	r := New(WithCircuitBreaker(breaker))
+	r := MustNew(WithCircuitBreaker(breaker))
 	r.Handle("/cb-test", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -683,7 +681,7 @@ func TestWithCircuitBreaker_InDefaultChain(t *testing.T) {
 
 func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 	breaker := &routerTestBreaker{allowErr: fmt.Errorf("circuit breaker is open")}
-	r := New(WithCircuitBreaker(breaker))
+	r := MustNew(WithCircuitBreaker(breaker))
 	r.Handle("/cb-reject", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called when circuit is open")
 	}))
@@ -703,7 +701,7 @@ func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {
 	// A bare nil interface value must cause NewE to return an error so that
 	// Bootstrap.Run fails fast instead of silently skipping CB protection.
-	_, err := NewE(WithCircuitBreaker(nil))
+	_, err := New(WithCircuitBreaker(nil))
 	require.Error(t, err, "nil interface Allower must return error from NewE")
 	assert.Contains(t, err.Error(), "circuit breaker")
 }
@@ -713,7 +711,7 @@ func TestWithCircuitBreaker_TypedNilPointer_Error(t *testing.T) {
 	// value is non-nil but the underlying pointer is nil, so calling Allow()
 	// on it would panic at runtime.
 	var cb *routerTestBreaker // typed nil
-	_, err := NewE(WithCircuitBreaker(cb))
+	_, err := New(WithCircuitBreaker(cb))
 	require.Error(t, err, "typed-nil Allower must return error from NewE")
 	assert.Contains(t, err.Error(), "circuit breaker")
 }
@@ -732,7 +730,7 @@ func TestInfraEndpoints_BypassRateLimiter(t *testing.T) {
 
 	hh := health.New(asm)
 	// Primary router rejects ALL traffic via rate limiter.
-	primaryRtr := New(WithRateLimiter(&routerTestLimiter{allow: false}))
+	primaryRtr := MustNew(WithRateLimiter(&routerTestLimiter{allow: false}))
 	primaryRtr.Handle("/api/v1/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("should be rate-limited")
 	}))
@@ -768,7 +766,7 @@ func TestInfraEndpoints_BypassCircuitBreaker(t *testing.T) {
 
 	hh := health.New(asm)
 	// Primary router rejects ALL traffic via open circuit breaker.
-	primaryRtr := New(WithCircuitBreaker(&routerTestBreaker{allowErr: fmt.Errorf("open")}))
+	primaryRtr := MustNew(WithCircuitBreaker(&routerTestBreaker{allowErr: fmt.Errorf("open")}))
 	primaryRtr.Handle("/api/v1/biz", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("should be circuit-broken")
 	}))
@@ -796,7 +794,7 @@ func TestMetrics_Records429And503(t *testing.T) {
 	mc := metrics.NewInMemoryCollector()
 	limiter := &routerTestLimiter{allow: false}
 	breaker := &routerTestBreaker{allowErr: fmt.Errorf("open")}
-	r := New(
+	r := MustNew(
 		WithMetricsCollector(mc),
 		WithRateLimiter(limiter),
 		WithCircuitBreaker(breaker),
@@ -852,7 +850,7 @@ func TestWithAuthMiddleware_ProtectedRoute_NoToken_Returns401(t *testing.T) {
 	verifier := &routerTestVerifier{
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
-	r := New(WithAuthMiddleware(verifier))
+	r := MustNew(WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called without auth token")
 	}))
@@ -873,7 +871,7 @@ func TestWithAuthMiddleware_ProtectedRoute_ValidToken_Returns200(t *testing.T) {
 	verifier := &routerTestVerifier{
 		claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}},
 	}
-	r := New(WithAuthMiddleware(verifier))
+	r := MustNew(WithAuthMiddleware(verifier))
 
 	var gotSubject string
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -897,7 +895,7 @@ func TestWithAuthMiddleware_PublicEndpoint_SkipsAuth(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("should not be called"),
 	}
-	r := New(WithAuthMiddleware(verifier))
+	r := MustNew(WithAuthMiddleware(verifier))
 
 	loginHandler := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -928,7 +926,7 @@ func TestWithAuthMiddleware_InfraEndpoints_BypassAuth(t *testing.T) {
 		err: fmt.Errorf("all tokens rejected"),
 	}
 	// Primary router has auth that rejects everything.
-	primaryRtr := New(WithAuthMiddleware(verifier))
+	primaryRtr := MustNew(WithAuthMiddleware(verifier))
 	primaryRtr.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -959,7 +957,7 @@ func TestWithAuthMiddleware_ChainOrder_RateLimitBeforeAuth(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("should not be called"),
 	}
-	r := New(WithRateLimiter(limiter), WithAuthMiddleware(verifier))
+	r := MustNew(WithRateLimiter(limiter), WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
@@ -976,7 +974,7 @@ func TestWithAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 	verifier := &routerTestVerifier{
 		err: fmt.Errorf("token expired"),
 	}
-	r := New(WithAuthMiddleware(verifier))
+	r := MustNew(WithAuthMiddleware(verifier))
 	r.Handle("/api/v1/data", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called with invalid token")
 	}))
@@ -994,14 +992,15 @@ func TestWithAuthMiddleware_InvalidToken_Returns401(t *testing.T) {
 	assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", errObj["code"])
 }
 
-func TestWithAuthMiddleware_NilVerifier_Panics(t *testing.T) {
-	assert.Panics(t, func() {
-		WithAuthMiddleware(nil)
-	}, "WithAuthMiddleware must panic when verifier is nil")
+func TestWithAuthMiddleware_NilVerifier_ReturnsNewError(t *testing.T) {
+	r, err := New(WithAuthMiddleware(nil))
+	require.Error(t, err)
+	assert.Nil(t, r)
+	assert.Contains(t, err.Error(), "auth middleware verifier must not be nil")
 }
 
 func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
-	r := New(
+	r := MustNew(
 		WithRequestIDOptions(middleware.WithReqIDPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/public"
 		})),
@@ -1042,7 +1041,7 @@ func TestWithRequestIDOptions_PublicEndpoint(t *testing.T) {
 func TestDeclareAuth_AuthBypass(t *testing.T) {
 	// F3: public routes declared via auth.MustMount(Public:true) bypass JWT check.
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
-	r := New(WithAuthMiddleware(verifier))
+	r := MustNew(WithAuthMiddleware(verifier))
 
 	var reached bool
 	auth.MustMount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { reached = true; w.WriteHeader(http.StatusOK) }), Public: true})
@@ -1059,7 +1058,7 @@ func TestDeclareAuth_AuthBypass(t *testing.T) {
 func TestDeclareAuth_AuthBypass_MethodMismatch_Returns401(t *testing.T) {
 	// POST /api/v1/auth/login is public; GET must still require auth.
 	verifier := &routerTestVerifier{err: fmt.Errorf("should not be called")}
-	r := New(WithAuthMiddleware(verifier))
+	r := MustNew(WithAuthMiddleware(verifier))
 
 	auth.MustMount(r, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 	// Register GET with a policy so it is covered by policy enforcement;
@@ -1082,7 +1081,7 @@ func TestDeclareAuth_TracingNewRoot(t *testing.T) {
 	// PR-A14a: /internal is whitelisted from policy coverage (raw r.Handle)
 	// so the non-public route runs without an auth gate.
 	tracer := tracing.NewTracer("test-combined")
-	r := New(
+	r := MustNew(
 		WithTracer(tracer),
 		WithPolicyCoverageWhitelist([]string{"/internal/*"}),
 	)
@@ -1120,7 +1119,7 @@ func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 	// F3: public routes reject client-supplied X-Request-Id.
 	// PR-A14a: /internal is whitelisted from policy coverage (raw r.Handle)
 	// so the non-public route runs without an auth gate.
-	r := New(WithPolicyCoverageWhitelist([]string{"/internal/*"}))
+	r := MustNew(WithPolicyCoverageWhitelist([]string{"/internal/*"}))
 
 	var publicID, internalID string
 	auth.MustMount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/public"), Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1151,7 +1150,7 @@ func TestDeclareAuth_RequestIDRejectsClient(t *testing.T) {
 func TestDeclareAuth_ProtectedStillRequiresAuth(t *testing.T) {
 	// F3: only declared public routes bypass auth; others still require a token.
 	verifier := &routerTestVerifier{claims: auth.Claims{Subject: "user-1", Roles: []string{"admin"}}}
-	r := New(WithAuthMiddleware(verifier))
+	r := MustNew(WithAuthMiddleware(verifier))
 
 	auth.MustMount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 	// /api/v1/data is protected — declared with a policy to satisfy coverage enforcement.
@@ -1172,7 +1171,7 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 	// auth.Mount / FinalizeAuth is consulted for auth + RequestID; the explicit
 	// WithTracingOptions fn controls trace root creation.
 	tracer := tracing.NewTracer("test-combined-fine")
-	r := New(
+	r := MustNew(
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/fine-grained-public"
@@ -1190,7 +1189,7 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 	var publicTraceID, fineTraceID string
 	// Re-register with trace capture (FinalizeAuth already called; use r.Handle for non-declared routes).
 	// Instead, rebuild using a fresh router that captures trace IDs inline.
-	r2 := New(
+	r2 := MustNew(
 		WithTracer(tracer),
 		WithTracingOptions(middleware.WithPublicEndpointFn(func(req *http.Request) bool {
 			return req.URL.Path == "/fine-grained-public"
@@ -1236,7 +1235,7 @@ func TestDeclareAuth_UserTracingOptions_FineGrained(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestWithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
-	r := New(
+	r := MustNew(
 		WithSecurityHeadersOptions(
 			middleware.WithHSTSIncludeSubDomains(),
 			middleware.WithHSTSPreload(),
@@ -1258,7 +1257,7 @@ func TestWithSecurityHeadersOptions_CustomHSTS(t *testing.T) {
 }
 
 func TestWithSecurityHeadersOptions_DefaultHSTS(t *testing.T) {
-	r := New()
+	r := MustNew()
 	r.Handle("/default-hsts", http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -1283,7 +1282,7 @@ func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 	// auth.Mount) so the route runs without any auth gate and the tracing
 	// context is captured unconditionally.
 	tracer := tracing.NewTracer("test-empty")
-	r := New(
+	r := MustNew(
 		WithTracer(tracer),
 		WithPolicyCoverageWhitelist([]string{"/test/*"}),
 	)
@@ -1307,7 +1306,7 @@ func TestDeclareAuth_NoPublicDecls_TracingUnchanged(t *testing.T) {
 
 func TestDeclareAuth_PathNormalization(t *testing.T) {
 	// auth.Mount normalises paths via path.Clean: "/api/v1//login" → "/api/v1/login".
-	r := New()
+	r := MustNew()
 
 	var gotID string
 	auth.MustMount(r, auth.Route{Contract: testHTTPContract(http.MethodGet, "/api/v1//login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
@@ -1331,7 +1330,7 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 	verifier := &routerTestVerifier{
 		claims: auth.Claims{Subject: "user-1"},
 	}
-	r := New(WithAuthMiddleware(verifier))
+	r := MustNew(WithAuthMiddleware(verifier))
 
 	auth.MustMount(r, auth.Route{Contract: testHTTPContract(http.MethodPost, "/api/v1/auth/login"), Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) }), Public: true})
 	// Register the GET handler with a policy so it is covered by policy enforcement;
@@ -1353,30 +1352,27 @@ func TestDeclareAuth_MethodAware_GETDoesNotBypassForPOSTOnly(t *testing.T) {
 		"GET must require auth when only POST is declared public")
 }
 
-// TestRouter_ServeHTTP_NoFinalizeAuth_Panics asserts that calling ServeHTTP
+// TestRouter_ServeHTTP_NoFinalizeAuth_FailsClosed asserts that calling ServeHTTP
 // on a router that has auth route metadata declared but FinalizeAuth has NOT
-// been called results in a panic with the expected message.
+// been called returns a 500 response.
 //
 // This is the safety guard that prevents a mis-wired bootstrap from silently
 // skipping the auth compilation step (FinalizeAuth) and serving requests
 // without the compiled public/PasswordResetExempt matchers in place.
-func TestRouter_ServeHTTP_NoFinalizeAuth_Panics(t *testing.T) {
-	r := New()
+func TestRouter_ServeHTTP_NoFinalizeAuth_FailsClosed(t *testing.T) {
+	r := MustNew()
 
 	// Declare auth metadata without calling FinalizeAuth — this is the
 	// mis-wired state the guard is designed to detect.
-	r.DeclareAuthMeta(cell.AuthRouteMeta{
+	require.NoError(t, r.DeclareAuthMeta(cell.AuthRouteMeta{
 		Method: "GET",
 		Path:   "/api/v1/probe",
 		Public: true,
-	})
+	}))
 
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/probe", nil)
 	rec := httptest.NewRecorder()
 
-	assert.PanicsWithValue(t,
-		"router: FinalizeAuth must be called before ServeHTTP when auth route metadata has been declared",
-		func() { r.ServeHTTP(rec, req) },
-		"ServeHTTP must panic when FinalizeAuth has not been called after DeclareAuthMeta",
-	)
+	require.NotPanics(t, func() { r.ServeHTTP(rec, req) })
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }

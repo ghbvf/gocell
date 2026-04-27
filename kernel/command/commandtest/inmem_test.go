@@ -546,8 +546,11 @@ func TestInMemQueue_GetCommand_NotFound(t *testing.T) {
 	ctx := context.Background()
 
 	got, err := q.GetCommand(ctx, "cmd-nonexistent")
-	require.NoError(t, err)
-	assert.Nil(t, got, "GetCommand on missing id must return (nil, nil)")
+	require.Error(t, err)
+	assert.Nil(t, got)
+	var ecErr *errcode.Error
+	require.ErrorAs(t, err, &ecErr)
+	assert.Equal(t, errcode.ErrCommandNotFound, ecErr.Code)
 }
 
 func TestInMemQueue_ScanActive_Filtering(t *testing.T) {

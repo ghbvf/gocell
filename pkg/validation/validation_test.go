@@ -8,6 +8,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/validation"
 )
 
+type nilInterfaceSample struct{}
+
+type nilInterfaceMarker interface{ Marker() }
+
+type nilInterfaceImpl struct{}
+
+func (*nilInterfaceImpl) Marker() {}
+
 // assertValidationResult is a t.Helper that validates the outcome of a
 // RequireNotBlank call. When wantMessage is empty it asserts nil error;
 // otherwise it asserts a *errcode.Error with the expected code and message.
@@ -31,6 +39,43 @@ func assertValidationResult(t *testing.T, err error, wantCode errcode.Code, want
 	}
 	if ec.Message != wantMessage {
 		t.Errorf("message = %q, want %q", ec.Message, wantMessage)
+	}
+}
+
+func TestIsNilInterface(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		in   any
+		want bool
+	}{
+		{name: "bare nil", in: nil, want: true},
+		{name: "typed nil pointer", in: (*nilInterfaceSample)(nil), want: true},
+		{name: "typed nil map", in: map[string]string(nil), want: true},
+		{name: "typed nil slice", in: []string(nil), want: true},
+		{name: "typed nil func", in: (func())(nil), want: true},
+		{name: "non nil pointer", in: &nilInterfaceSample{}, want: false},
+		{name: "non nil map", in: map[string]string{}, want: false},
+		{name: "non nil slice", in: []string{}, want: false},
+		{name: "non nil string", in: "x", want: false},
+		{name: "zero struct", in: nilInterfaceSample{}, want: false},
+	}
+
+	var typedNil nilInterfaceMarker = (*nilInterfaceImpl)(nil)
+	tests = append(tests, struct {
+		name string
+		in   any
+		want bool
+	}{name: "typed nil interface", in: typedNil, want: true})
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := validation.IsNilInterface(tt.in); got != tt.want {
+				t.Fatalf("IsNilInterface() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

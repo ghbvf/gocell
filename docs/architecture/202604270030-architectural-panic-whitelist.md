@@ -3,6 +3,7 @@
 > Date: 2026-04-27
 > Status: Accepted
 > Context PR: PR-MODE-6 ERROR-FIRST-API (refactor/555-pr-mode-6-error-first-api)
+> Scope update: PR-MODE-6.1 Nil / Error-First full cleanup
 > Tag: ERROR-FIRST-API-01
 
 ## Context
@@ -20,8 +21,8 @@ crash dumps for what should be structured 4xx/5xx responses.
 PR-MODE-6 introduces the `tools/archtest/error_first_test.go::TestErrorFirstAPI01`
 rule: **error-less function declarations in the enrolled file scope MUST NOT
 contain `panic(...)` calls**. Auto-exemptions: `Must*`-prefixed names and
-`func init()`. The rule scans 13 enrolled files (the parent plan's PR-MODE-6
-scope). Future PRs may extend the scope; the path forward is in §Roadmap.
+`func init()`. PR-MODE-6.1 expands the rule to 23 enrolled files, including
+the remaining nil/error-first roadmap files and `runtime/http/router/router.go`.
 
 ## Decision
 
@@ -61,15 +62,16 @@ cancellation. Modelled as `kworker.ErrWorkerExitedEarly` so callers can
 `errors.Is`-detect the abnormal signal — not strictly part of the panic
 refactor, but bundled for the same "fail loudly, propagate errors" theme.
 
-### 4. Hardcoded ADR-pinned whitelist (1 file)
+### 4. Hardcoded ADR-pinned whitelist (2 functions)
 
-The archtest holds **one** file-level whitelist entry. Every other panic
-in the scoped files is either refactored, renamed, or in an `init()`
-function (auto-exempt).
+The archtest holds **two** function-level whitelist entries. Every other panic
+in the scoped files is either refactored, renamed, or in an `init()` function
+(auto-exempt).
 
-| # | File | Justification |
+| # | Function | Justification |
 |---|---|---|
-| 1 | `kernel/wrapper/lifecycle.go` | `recoverAndFinishWithRedactor` is the middle of a `defer recover()` chain that re-panics so the outer `runtime/http/middleware.Recovery` middleware can record + serialize the panic. Refactoring it to return error would dismantle the entire recover propagation idiom and force every wrapped consumer to pre-route panics through a synthetic error path before Go's runtime gets the chance. |
+| 1 | `kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor` | Middle of a `defer recover()` chain that re-panics so the outer `runtime/http/middleware.Recovery` middleware can record + serialize the panic. Refactoring it to return error would dismantle the entire recover propagation idiom and force every wrapped consumer to pre-route panics through a synthetic error path before Go's runtime gets the chance. |
+| 2 | `runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure` | Middle of a `defer recover()` chain that first reports the handler panic as a circuit-breaker failure, then re-panics so the outer `Recovery` middleware remains the single panic-to-HTTP and panic-to-tracing boundary. Swallowing the panic here would bypass `Recovery` and lose panic span recording in the normal router chain. |
 
 ### 5. Auto-exempt categories
 
@@ -83,6 +85,39 @@ function (auto-exempt).
 - **`func init()`**: Init cannot return error; package-level invariant
   violations are by definition fatal. Example: `adapters/postgres/embed.go`
   embedded migrations subdir loading.
+
+### 6. PR-MODE-6.1 scope expansion
+
+PR-MODE-6.1 closes the remaining nil/error-first candidates without adding a
+router whitelist entry. It adds one narrow circuit-breaker re-panic whitelist
+after review found that swallowing handler panics before `Recovery` regressed
+tracing semantics.
+
+- `.golangci.yml` enables `nilerr`, `nilnesserr`, and `nilnil` with
+  `nilnil.only-two: false`, so multi-return success sentinels like
+  `nil, ..., nil` are rejected.
+- `tools/archtest/error_first_test.go` adds `ERROR-FIRST-TYPED-NIL-01`:
+  enrolled error-first constructors with interface dependencies must validate
+  those dependencies through `validation.IsNilInterface(param)`, not only
+  `param == nil`.
+- `runtime/distlock/locker.go::New`,
+  `runtime/auth/refresh/memstore/store.go::New`, and the accesscore
+  session login/refresh/logout `NewService` constructors now return
+  `(..., error)` with `Must*` wrappers for static wiring and test setup.
+- `runtime/http/middleware/circuit_breaker.go::CircuitBreaker`,
+  `runtime/http/health/health.go::RegisterChecker`, and
+  `runtime/http/router/router.go::New` / `NewForListener` return errors
+  for nil, typed-nil, duplicate, and invalid configuration paths.
+- `runtime/http/router/router.go` is now in the archtest scope. Auth metadata
+  declaration returns errors, `auth.Mount` propagates them, and a router with
+  declared auth metadata but missing `FinalizeAuth` fails closed with HTTP 500
+  instead of panicking. No router whitelist entry was added.
+- `kernel/persistence.NoopTxRunner.RunInTx(nil)`,
+  `command.ActiveScanner.GetCommand` not-found handling,
+  `adminprovision.Ensure`, initial-admin cleanup (including exact custom
+  credential-path sweep), governance helpers,
+  archtest AST helpers, and `tools/nogo/unconditionalskip` were adjusted so
+  nil no longer encodes success or silently hides parse/walk failures.
 
 ## Rationale
 
@@ -117,31 +152,32 @@ that construct a single static `cell.NewAuthJWTFromAssembly(asm)` continue
 to write `cell.MustNewAuthJWTFromAssembly(asm)` with no error-handling
 boilerplate.
 
-### Why minimum (1) whitelist?
+### Why minimum (2) whitelist?
 
 Each whitelist entry is a future regression risk: a new contributor sees
 "there are some panics here, panicking must be OK" and adds another. The
 review loop catches new architectural panic claims via the ADR, not via
-the archtest list. By keeping the whitelist to **just** the
-defer-recover-re-panic case (which is structurally not refactorable), we
-maximize the "panic in error-less function = bug" signal.
+the archtest list. By keeping the whitelist to **only** defer-recover-re-panic
+helpers (which are structurally not refactorable to error returns), we maximize
+the "panic in error-less function = bug" signal.
 
 The previous design (5 entries) was rejected: outbox crypto/rand failures
 and envelope marshal invariants were absorbable as either error
 propagation (entry_id, idempotency) or `Must*` rename (envelope), so they
-moved out of the whitelist. The HTTP router state machine (`runtime/http/router/router.go`,
-5 panics across `FinalizeAuth`/`Mount`/state transitions) is **out of
-scope for the archtest**: that file is not in the enrolled list yet.
-PR-MODE-6.1 (scope expansion) may add it later, alongside a router refactor
-or its own whitelist entry.
+moved out of the whitelist. PR-MODE-6.1 also rejected adding the HTTP router
+as a whitelist entry: router construction, auth metadata declaration,
+and unfinalized auth state now surface through errors or fail-closed HTTP
+responses, while `MustNew` remains the explicit panic wrapper for static
+wiring.
 
 ### Whitelist mechanics
 
 Hardcoded in `tools/archtest/error_first_test.go`:
 
 ```go
-var errorFirstWhitelistedFiles = map[string]string{
-    "kernel/wrapper/lifecycle.go": "recoverAndFinishWithRedactor re-panics from defer recover",
+var errorFirstWhitelistedFunctions = map[string]string{
+    "kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor": "re-panics from defer recover so outer Recovery middleware can serialize the panic",
+    "runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover after reporting circuit-breaker failure",
 }
 ```
 
@@ -166,32 +202,31 @@ absorbable as `Must*` rename or error propagation.
 
 ## Roadmap
 
-Future PR-MODE-6.1 candidates for archtest scope expansion (each costs
-its own refactor + propagation pass):
+Completed in PR-MODE-6.1:
 
-- `kernel/persistence/tx.go::RunInTx` — single panic on nil fn, easy
-  refactor to error.
+- `kernel/persistence/tx.go::RunInTx` — nil callback now returns an explicit
+  error.
+- `runtime/distlock/locker.go::New` — config validation now returns error
+  with `MustNew` for static wiring.
+- `runtime/auth/refresh/memstore/store.go::New` — policy/clock/random source
+  validation now returns error with `MustNew`.
+- `runtime/http/middleware/circuit_breaker.go` — nil and typed-nil Allower
+  validation now returns error with `MustCircuitBreaker`.
+- `runtime/http/health/health.go::RegisterChecker` — nil checker and
+  duplicate-name validation now return error with `MustRegisterChecker`.
+- `runtime/http/router/router.go` — added to archtest scope and refactored
+  without adding a router whitelist entry.
+- `cells/accesscore/slices/sessionlogin/service.go::NewService`,
+  `sessionrefresh/service.go::NewService`, and
+  `sessionlogout/service.go::NewService` — nil and typed-nil dependency
+  checks now return errors with `MustNewService` wrappers, enforced by
+  `ERROR-FIRST-TYPED-NIL-01`.
+
+Remaining watchlist:
+
 - `kernel/observability/metrics/metrics.go` — already auto-exempt via
   `MustRegister` prefix, but worth confirming the pattern holds when new
   metrics are added.
-- `runtime/distlock/locker.go::New` — 5 config-validation panics; refactor
-  + propagation to `cmd/corebundle` distlock wiring.
-- `runtime/auth/refresh/memstore/store.go::New` — 3 config-validation
-  panics; analogue of `adapters/postgres/refresh_store.go`.
-- `runtime/http/middleware/circuit_breaker.go` — Allower nil check + re-panic.
-- `runtime/http/health/health.go::Register` — nil-checker / duplicate-name
-  panics.
-- `runtime/http/router/router.go` — state-machine post-conditions (5 sites:
-  lines 128/345/415/581/593). **Decision pending PR-MODE-6.1**: the most
-  likely outcome is to whitelist as architectural (these are internal
-  invariants validated upstream by `auth.Mount`, not caller-facing
-  preconditions), bringing the whitelist count from 1 → 2. Alternative is
-  a `FinalizeAuth` API refactor that bubbles the invariant errors to
-  bootstrap; rejected for this PR because the panic semantics already
-  match `auth.Mount`'s contract (startup-fatal). Track via PR-MODE-6.1
-  scope expansion, not as ad-hoc backlog.
-- `cells/accesscore/slices/sessionlogin/service.go::NewService` — 7 nil-check
-  panics; the cells-layer first foothold for the rule.
 
 Order suggestion: each PR adds 1-3 files to `errorFirstEnforcedFiles`
 in the archtest, refactors the corresponding panics, and updates this
@@ -208,3 +243,6 @@ ADR's §Roadmap to mark the file done.
   the `MustNewEntryID` decision.
 - `Must*` convention: `regexp.MustCompile`, `template.Must`,
   `kubernetes/client-go MustGetSelfLink`.
+- Go `nilness` analyzer; `golangci-lint` `nilnil` settings.
+- Kratos middleware constructors and Kubernetes client-go resourcelock
+  constructor error patterns.

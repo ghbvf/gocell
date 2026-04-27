@@ -48,7 +48,8 @@ func TestIdempotencyClaimer_Claim_Done(t *testing.T) {
 	state, receipt, err := claimer.Claim(ctx, "idem:claim:2", 5*time.Minute, 24*time.Hour)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state)
-	assert.Nil(t, receipt)
+	assert.NotNil(t, receipt)
+	assert.ErrorIs(t, receipt.Commit(ctx), idempotency.ErrNoClaimLease)
 }
 
 func TestIdempotencyClaimer_Claim_Busy(t *testing.T) {
@@ -64,7 +65,8 @@ func TestIdempotencyClaimer_Claim_Busy(t *testing.T) {
 	state, receipt, err := claimer.Claim(ctx, "idem:claim:3", 5*time.Minute, 24*time.Hour)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimBusy, state)
-	assert.Nil(t, receipt)
+	assert.NotNil(t, receipt)
+	assert.ErrorIs(t, receipt.Release(ctx), idempotency.ErrNoClaimLease)
 }
 
 func TestIdempotencyClaimer_Receipt_Commit(t *testing.T) {
@@ -132,7 +134,7 @@ func TestIdempotencyClaimer_After_Commit_Claim_Returns_Done(t *testing.T) {
 	state, receipt2, err := claimer.Claim(ctx, "idem:full:1", 5*time.Minute, 24*time.Hour)
 	require.NoError(t, err)
 	assert.Equal(t, idempotency.ClaimDone, state)
-	assert.Nil(t, receipt2)
+	assert.NotNil(t, receipt2)
 }
 
 func TestIdempotencyClaimer_After_Release_Claim_Reacquires(t *testing.T) {
@@ -361,7 +363,7 @@ func TestIdempotencyClaimer_Claim_Concurrent_OneAcquiredOneBusy(t *testing.T) {
 			assert.NotNil(t, r.receipt, "ClaimAcquired must return a non-nil receipt")
 		case idempotency.ClaimBusy:
 			busy++
-			assert.Nil(t, r.receipt, "ClaimBusy must return nil receipt")
+			assert.NotNil(t, r.receipt, "ClaimBusy must return a non-acquired receipt")
 		default:
 			t.Fatalf("unexpected ClaimState %d", r.state)
 		}

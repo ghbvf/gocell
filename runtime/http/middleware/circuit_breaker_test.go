@@ -30,7 +30,7 @@ func (m *mockBreaker) Allow() (bool, func(error)) {
 
 func TestCircuitBreaker_Closed_PassesThrough(t *testing.T) {
 	cb := &mockBreaker{}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -51,7 +51,7 @@ func TestCircuitBreaker_Closed_PassesThrough(t *testing.T) {
 
 func TestCircuitBreaker_Open_Returns503(t *testing.T) {
 	cb := &mockBreaker{open: true}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called when circuit is open")
 	}))
 
@@ -73,7 +73,7 @@ func TestCircuitBreaker_Open_Returns503(t *testing.T) {
 
 func TestCircuitBreaker_Standalone_NoRecorderState(t *testing.T) {
 	cb := &mockBreaker{}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -89,7 +89,7 @@ func TestCircuitBreaker_Standalone_NoRecorderState(t *testing.T) {
 
 func TestCircuitBreaker_HandlerPanic_DoneStillCalled(t *testing.T) {
 	cb := &mockBreaker{}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		panic("handler panic test")
 	}))
 
@@ -99,9 +99,9 @@ func TestCircuitBreaker_HandlerPanic_DoneStillCalled(t *testing.T) {
 	ctx := WithRecorderState(req.Context(), state)
 	req = req.WithContext(ctx)
 
-	assert.Panics(t, func() {
+	assert.PanicsWithValue(t, "handler panic test", func() {
 		handler.ServeHTTP(wrapped, req)
-	}, "panic must propagate")
+	}, "circuit breaker must re-panic so outer Recovery can observe the panic")
 
 	require.True(t, cb.doneInvoked, "done callback must be invoked even when handler panics")
 	require.NotNil(t, cb.doneErr)
@@ -109,9 +109,28 @@ func TestCircuitBreaker_HandlerPanic_DoneStillCalled(t *testing.T) {
 		"panic must always be recorded as failure, regardless of status code")
 }
 
+func TestCircuitBreaker_WithRecovery_HandlerPanic_RecoveryWrites500(t *testing.T) {
+	cb := &mockBreaker{}
+	handler := Recorder(Recovery(MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("handler panic test")
+	}))))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	assert.NotPanics(t, func() {
+		handler.ServeHTTP(rec, req)
+	}, "outer Recovery must remain responsible for converting panic to HTTP 500")
+
+	require.True(t, cb.doneInvoked, "done callback must be invoked even when handler panics")
+	require.NotNil(t, cb.doneErr)
+	assert.Error(t, *cb.doneErr)
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+}
+
 func TestCircuitBreaker_HandlerError5xx_ReportsFalse(t *testing.T) {
 	cb := &mockBreaker{}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 
@@ -130,7 +149,7 @@ func TestCircuitBreaker_HandlerError5xx_ReportsFalse(t *testing.T) {
 
 func TestCircuitBreaker_HandlerError4xx_ReportsTrue(t *testing.T) {
 	cb := &mockBreaker{}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusBadRequest)
 	}))
 
@@ -163,7 +182,7 @@ func TestCircuitBreaker_Open_RetryAfterHeader(t *testing.T) {
 		mockBreaker: mockBreaker{open: true},
 		retryAfter:  30 * time.Second,
 	}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
 
@@ -178,7 +197,7 @@ func TestCircuitBreaker_Open_RetryAfterHeader(t *testing.T) {
 
 func TestCircuitBreaker_Open_NoRetryAfterWithoutInterface(t *testing.T) {
 	cb := &mockBreaker{open: true}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler should not be called")
 	}))
 
@@ -191,10 +210,16 @@ func TestCircuitBreaker_Open_NoRetryAfterWithoutInterface(t *testing.T) {
 		"Retry-After must not be set when policy does not implement CircuitBreakerRetryAfter")
 }
 
-func TestCircuitBreaker_NilBreaker_Panics(t *testing.T) {
-	assert.Panics(t, func() {
-		CircuitBreaker(nil)
-	}, "nil Allower must panic at construction time")
+func TestCircuitBreaker_NilBreaker_ReturnsError(t *testing.T) {
+	mw, err := CircuitBreaker(nil)
+	assert.Nil(t, mw)
+	assert.Error(t, err)
+}
+
+func TestMustCircuitBreaker_NilBreaker_Panics(t *testing.T) {
+	require.Panics(t, func() {
+		MustCircuitBreaker(nil)
+	})
 }
 
 // TestIsTypedNilAllower verifies that IsTypedNilAllower detects typed-nil
@@ -238,7 +263,7 @@ func TestAllower_ISP(t *testing.T) {
 	var _ Allower = (*allowerOnly)(nil) // compile-time check
 
 	cb := &allowerOnly{mockBreaker: mockBreaker{open: true}}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("should not reach handler")
 	}))
 
@@ -254,7 +279,7 @@ func TestAllower_ISP(t *testing.T) {
 func TestCircuitBreaker_204_ReportsSuccess(t *testing.T) {
 	// 204 No Content is a success status; done must receive nil error.
 	cb := &mockBreaker{}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 
@@ -283,7 +308,7 @@ func TestCircuitBreaker_3xx_ReportsSuccess(t *testing.T) {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cb := &mockBreaker{}
-			handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(tc.code)
 			}))
 
@@ -331,7 +356,7 @@ func TestCircuitBreaker_StateMachineTransition_AllowDoneAllow(t *testing.T) {
 	sb := &statefulMockBreaker{}
 
 	// First request: circuit closed, handler returns 500, done receives non-nil error.
-	handler1 := CircuitBreaker(sb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler1 := MustCircuitBreaker(sb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	rec1 := httptest.NewRecorder()
@@ -347,7 +372,7 @@ func TestCircuitBreaker_StateMachineTransition_AllowDoneAllow(t *testing.T) {
 	assert.Error(t, *sb.doneErr, "5xx must pass non-nil error to done")
 
 	// Second request: same breaker instance is now open — must return 503.
-	handler2 := CircuitBreaker(sb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler2 := MustCircuitBreaker(sb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		t.Fatal("handler must not be called when circuit is open")
 	}))
 	rec2 := httptest.NewRecorder()
@@ -372,7 +397,7 @@ func (n *nilDoneBreaker) Allow() (bool, func(error)) {
 // 200) without panicking.
 func TestCircuitBreaker_AllowerReturnsNilDone_NoPanic(t *testing.T) {
 	cb := &nilDoneBreaker{}
-	handler := CircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
 

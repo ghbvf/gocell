@@ -27,7 +27,7 @@ import (
 
 func newIdentityRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 // testPassword is a deterministic credential used only in contract tests.

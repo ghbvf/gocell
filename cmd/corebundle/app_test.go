@@ -130,14 +130,15 @@ func TestBuildApp_EmptyModuleList(t *testing.T) {
 	assert.Empty(t, opts)
 }
 
-// nilCellModule is a CellModule whose Provide always returns (nil, nil, nil, nil).
+// nilCellModule is a CellModule whose Provide always returns a nil Cell.
 // It is used to test that BuildApp rejects nil Cell returns as a fail-fast error.
 type nilCellModule struct{}
 
 func (m nilCellModule) ID() string { return "nil-cell-module" }
 
 func (m nilCellModule) Provide(_ context.Context, _ *SharedDeps) (cell.Cell, []bootstrap.Option, []kernellifecycle.ManagedResource, error) {
-	return nil, nil, nil, nil
+	var nilCell cell.Cell
+	return nilCell, []bootstrap.Option{}, []kernellifecycle.ManagedResource{}, nil
 }
 
 var _ CellModule = nilCellModule{}

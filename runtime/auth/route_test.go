@@ -23,13 +23,60 @@ func newCaptureMux() *captureMux { return &captureMux{ServeMux: http.NewServeMux
 
 func (m *captureMux) Handle(pattern string, h http.Handler) { m.ServeMux.Handle(pattern, h) }
 
-func (m *captureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) {
+func (m *captureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) error {
 	m.metas = append(m.metas, meta)
+	return nil
 }
 
 var (
 	_ cell.RouteHandler      = (*captureMux)(nil)
 	_ cell.AuthRouteDeclarer = (*captureMux)(nil)
+)
+
+type failingDeclareMux struct {
+	*http.ServeMux
+	handleCalls int
+}
+
+func newFailingDeclareMux() *failingDeclareMux {
+	return &failingDeclareMux{ServeMux: http.NewServeMux()}
+}
+
+func (m *failingDeclareMux) Handle(pattern string, h http.Handler) {
+	m.handleCalls++
+	m.ServeMux.Handle(pattern, h)
+}
+
+func (m *failingDeclareMux) DeclareAuthMeta(cell.AuthRouteMeta) error {
+	return assert.AnError
+}
+
+var (
+	_ cell.RouteHandler      = (*failingDeclareMux)(nil)
+	_ cell.AuthRouteDeclarer = (*failingDeclareMux)(nil)
+)
+
+type failingContractDeclareMux struct {
+	*http.ServeMux
+	handleCalls int
+}
+
+func newFailingContractDeclareMux() *failingContractDeclareMux {
+	return &failingContractDeclareMux{ServeMux: http.NewServeMux()}
+}
+
+func (m *failingContractDeclareMux) Handle(pattern string, h http.Handler) {
+	m.handleCalls++
+	m.ServeMux.Handle(pattern, h)
+}
+
+func (m *failingContractDeclareMux) DeclareHTTPContract(wrapper.ContractSpec) error {
+	return assert.AnError
+}
+
+var (
+	_ cell.RouteHandler         = (*failingContractDeclareMux)(nil)
+	_ cell.HTTPContractDeclarer = (*failingContractDeclareMux)(nil)
 )
 
 var noopHandler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
@@ -77,6 +124,61 @@ func TestMount_WritesContractIDIntoContext(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/v1/access/sessions/login", nil)
 	mux.ServeHTTP(httptest.NewRecorder(), req)
 	assert.Equal(t, "http.auth.login.v1", seen)
+}
+
+func TestMount_DeclareAuthMetaErrorDoesNotRegisterRoute(t *testing.T) {
+	mux := newFailingDeclareMux()
+
+	err := Mount(mux, Route{
+		Contract: loginContractSpec(),
+		Handler:  noopHandler,
+		Public:   true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declare auth metadata")
+	assert.Zero(t, mux.handleCalls, "Mount must validate and declare metadata before registering the route")
+}
+
+func TestMount_DeclareHTTPContractErrorDoesNotRegisterRoute(t *testing.T) {
+	mux := newFailingContractDeclareMux()
+
+	err := Mount(mux, Route{
+		Contract: loginContractSpec(),
+		Handler:  noopHandler,
+		Public:   true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declare HTTP contract metadata")
+	assert.Zero(t, mux.handleCalls, "Mount must declare HTTP contract metadata before registering the route")
+}
+
+func TestMount_AppliesPolicyBeforeHandler(t *testing.T) {
+	mux := newCaptureMux()
+	policyCalled := false
+	handlerCalled := false
+
+	err := Mount(mux, Route{
+		Contract: loginContractSpec(),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			handlerCalled = true
+			w.WriteHeader(http.StatusNoContent)
+		}),
+		Policy: func(_ *http.Request) error {
+			policyCalled = true
+			return nil
+		},
+	})
+	require.NoError(t, err)
+
+	req := httptest.NewRequest("POST", "/api/v1/access/sessions/login", nil)
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	assert.True(t, policyCalled)
+	assert.True(t, handlerCalled)
+	assert.Equal(t, http.StatusNoContent, rec.Code)
 }
 
 func TestMount_ReturnsErrorOnMissingContractID(t *testing.T) {
@@ -148,8 +250,9 @@ func (m *prefixedCaptureMux) Handle(pattern string, h http.Handler) {
 	m.ServeMux.Handle(pattern, h)
 }
 
-func (m *prefixedCaptureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) {
+func (m *prefixedCaptureMux) DeclareAuthMeta(meta cell.AuthRouteMeta) error {
 	m.metas = append(m.metas, meta)
+	return nil
 }
 
 func (m *prefixedCaptureMux) Prefix() string { return m.prefix }

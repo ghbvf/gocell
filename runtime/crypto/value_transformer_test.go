@@ -234,7 +234,10 @@ func (p *singleHandleProvider) Current(_ context.Context) (crypto.KeyHandle, err
 }
 
 func (p *singleHandleProvider) ByID(_ context.Context, _ string) (crypto.KeyHandle, error) {
-	return nil, nil
+	if p.handle == nil {
+		return nil, errors.New("test provider: missing handle")
+	}
+	return p.handle, nil
 }
 
 func (p *singleHandleProvider) Rotate(_ context.Context) (string, error) {

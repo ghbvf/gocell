@@ -30,7 +30,7 @@ func mgr(l distlock.Locker) *distlock.Manager {
 
 // newTestLocker constructs a Locker backed by FakeDriver + FakeClock.
 func newTestLocker(fc *locktest.FakeClock, fd *locktest.FakeDriver) distlock.Locker {
-	return distlock.New(fd, distlock.WithClock(fc))
+	return distlock.MustNew(fd, distlock.WithClock(fc))
 }
 
 // waitForRenewL waits for Renew count using the locker's manager RenewNotify.
@@ -127,7 +127,7 @@ func TestLocker_TC3_RenewError_LockLost(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
 	fd := locktest.NewFakeDriver()
 	// Use maxRenewAttempts=1 so a single injected error exhausts the budget.
-	l := distlock.New(fd,
+	l := distlock.MustNew(fd,
 		distlock.WithClock(fc),
 		distlock.WithMaxRenewAttempts(1),
 	)
@@ -573,7 +573,7 @@ func TestLocker_TC12_DriftFactor(t *testing.T) {
 
 	const driftFactor = 0.01
 	const renewFraction = 0.5
-	l := distlock.New(fd,
+	l := distlock.MustNew(fd,
 		distlock.WithClock(fc),
 		distlock.WithDriftFactor(driftFactor),
 		distlock.WithRenewFraction(renewFraction),
@@ -698,7 +698,7 @@ func TestLocker_New_PanicsOnNilDriver(t *testing.T) {
 			t.Error("New(nil) should panic")
 		}
 	}()
-	_ = distlock.New(nil)
+	_ = distlock.MustNew(nil)
 }
 
 // TestLocker_New_PanicsOnInvalidRenewFraction verifies fail-fast validation in New().
@@ -721,7 +721,7 @@ func TestLocker_New_PanicsOnInvalidRenewFraction(t *testing.T) {
 					t.Errorf("New with renewFraction=%v should panic", tc.fraction)
 				}
 			}()
-			_ = distlock.New(fd, distlock.WithRenewFraction(tc.fraction))
+			_ = distlock.MustNew(fd, distlock.WithRenewFraction(tc.fraction))
 		})
 	}
 }
@@ -744,7 +744,7 @@ func TestLocker_New_PanicsOnInvalidDriftFactor(t *testing.T) {
 					t.Errorf("New with driftFactor=%v should panic", tc.factor)
 				}
 			}()
-			_ = distlock.New(fd, distlock.WithDriftFactor(tc.factor))
+			_ = distlock.MustNew(fd, distlock.WithDriftFactor(tc.factor))
 		})
 	}
 }
@@ -766,7 +766,7 @@ func TestLocker_New_PanicsOnNonPositiveReleaseTimeout(t *testing.T) {
 					t.Errorf("New with releaseTimeout=%v should panic", tc.timeout)
 				}
 			}()
-			_ = distlock.New(fd, distlock.WithReleaseTimeout(tc.timeout))
+			_ = distlock.MustNew(fd, distlock.WithReleaseTimeout(tc.timeout))
 		})
 	}
 }
@@ -859,7 +859,7 @@ func TestLocker_ConcurrentRelease(t *testing.T) {
 func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
-	l := distlock.New(fd,
+	l := distlock.MustNew(fd,
 		distlock.WithClock(fc),
 		distlock.WithRenewFraction(0.5),
 	)
@@ -890,7 +890,7 @@ func TestLocker_ExtremeTTL_LongDuration(t *testing.T) {
 func TestLocker_ExtremeTTL_ShortDuration(t *testing.T) {
 	fc := locktest.NewFakeClock(time.Time{})
 	fd := locktest.NewFakeDriverWithClock(fc.Now)
-	l := distlock.New(fd,
+	l := distlock.MustNew(fd,
 		distlock.WithClock(fc),
 		distlock.WithRenewFraction(0.5),
 	)
@@ -1069,7 +1069,7 @@ func TestLocker_WithMaxRenewAttempts_Validation(t *testing.T) {
 					t.Errorf("New with maxRenewAttempts=%d should panic", tc.n)
 				}
 			}()
-			_ = distlock.New(fd, distlock.WithMaxRenewAttempts(tc.n))
+			_ = distlock.MustNew(fd, distlock.WithMaxRenewAttempts(tc.n))
 		})
 	}
 }

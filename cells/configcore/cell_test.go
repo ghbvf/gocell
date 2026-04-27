@@ -280,7 +280,7 @@ func initCellWithRouter(t *testing.T) *router.Router {
 	}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Prefix != "" {
 			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
@@ -473,7 +473,7 @@ func TestConfigCore_CrossSliceCursorRejection_Reverse(t *testing.T) {
 	deps := cell.Dependencies{Config: make(map[string]any), DurabilityMode: cell.DurabilityDemo}
 	require.NoError(t, c.Init(ctx, deps))
 
-	r := router.New()
+	r := router.MustNew()
 	for _, rg := range c.RouteGroups() {
 		if rg.Prefix != "" {
 			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })

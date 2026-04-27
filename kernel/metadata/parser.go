@@ -182,7 +182,7 @@ func (p *Parser) parseCell(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err != nil {
 		return err
 	}
-	if node != nil {
+	if shouldCacheFileNode(node) {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
@@ -215,7 +215,7 @@ func (p *Parser) parseSlice(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err != nil {
 		return err
 	}
-	if node != nil {
+	if shouldCacheFileNode(node) {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
@@ -263,7 +263,7 @@ func (p *Parser) parseContract(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err != nil {
 		return err
 	}
-	if node != nil {
+	if shouldCacheFileNode(node) {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
@@ -291,7 +291,7 @@ func (p *Parser) parseJourney(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err != nil {
 		return err
 	}
-	if node != nil {
+	if shouldCacheFileNode(node) {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
@@ -313,7 +313,7 @@ func (p *Parser) parseAssembly(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err != nil {
 		return err
 	}
-	if node != nil {
+	if shouldCacheFileNode(node) {
 		pm.fileNodes[path] = node
 	}
 	if m.ID == "" {
@@ -340,7 +340,7 @@ func (p *Parser) parseStatusBoard(fsys fs.FS, path string, pm *ProjectMeta) erro
 	if err != nil {
 		return err
 	}
-	if node != nil {
+	if shouldCacheFileNode(node) {
 		pm.fileNodes[path] = node
 	}
 	pm.StatusBoard = entries
@@ -353,7 +353,7 @@ func (p *Parser) parseActors(fsys fs.FS, path string, pm *ProjectMeta) error {
 	if err != nil {
 		return err
 	}
-	if node != nil {
+	if shouldCacheFileNode(node) {
 		pm.fileNodes[path] = node
 	}
 	pm.Actors = actors
@@ -378,10 +378,11 @@ const maxMetadataFileSize = 1 << 20 // 1 MiB
 //     source Decoder (see yaml.go func (n *Node) Decode), so we re-parse the
 //     bytes rather than calling root.Decode(out).
 //
-// Empty / whitespace-only files are treated as "no content" and return
-// (nil, nil) to preserve the original behaviour of empty actors.yaml or
-// status-board.yaml. Multi-document files are rejected. Files larger than
-// maxMetadataFileSize are rejected before decoding (see that constant).
+// Empty / whitespace-only files are treated as "no content" and return an
+// empty document node to preserve the original behaviour of empty actors.yaml
+// or status-board.yaml without encoding success as nil data. Multi-document
+// files are rejected. Files larger than maxMetadataFileSize are rejected before
+// decoding (see that constant).
 func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	data, err := fs.ReadFile(fsys, path)
 	if err != nil {
@@ -398,7 +399,7 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	dec1 := yaml.NewDecoder(bytes.NewReader(data))
 	if err := dec1.Decode(&root); err != nil {
 		if err == io.EOF {
-			return nil, nil
+			return emptyYAMLDocumentNode(), nil
 		}
 		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
 			fmt.Sprintf("parse %s", path), err)
@@ -427,4 +428,12 @@ func unmarshalFile(fsys fs.FS, path string, out any) (*yaml.Node, error) {
 	}
 
 	return &root, nil
+}
+
+func emptyYAMLDocumentNode() *yaml.Node {
+	return &yaml.Node{Kind: yaml.DocumentNode}
+}
+
+func shouldCacheFileNode(node *yaml.Node) bool {
+	return node != nil && (node.Kind != yaml.DocumentNode || len(node.Content) != 0)
 }

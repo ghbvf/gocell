@@ -25,7 +25,7 @@ import (
 
 func newTestRefreshStore() refresh.Store {
 	clock := storetest.NewFakeClock(time.Now())
-	return refreshmem.New(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
+	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
 type failingIssueRefreshStore struct {
@@ -35,6 +35,10 @@ type failingIssueRefreshStore struct {
 
 func (s failingIssueRefreshStore) Issue(context.Context, string, string) (string, *refresh.Token, error) {
 	return "", nil, s.err
+}
+
+type typedNilRefreshStore struct {
+	refresh.Store
 }
 
 type trackingSessionRepo struct {
@@ -96,7 +100,58 @@ func newTestService() (*Service, *mem.UserRepository) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	return NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default()), userRepo
+	return MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default()), userRepo
+}
+
+func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	refreshStore := newTestRefreshStore()
+
+	cases := []struct {
+		name string
+		run  func() (*Service, error)
+	}{
+		{
+			name: "typed nil userRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.UserRepository
+				return NewService(typedNil, sessionRepo, roleRepo, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil sessionRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.SessionRepository
+				return NewService(userRepo, typedNil, roleRepo, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil roleRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.RoleRepository
+				return NewService(userRepo, sessionRepo, typedNil, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil refreshStore",
+			run: func() (*Service, error) {
+				var typedNil *typedNilRefreshStore
+				return NewService(userRepo, sessionRepo, roleRepo, typedNil, testIssuer, slog.Default())
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.run()
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+		})
+	}
 }
 
 // seedUser creates a user with a bcrypt-hashed password.
@@ -180,7 +235,7 @@ func TestService_Login_RefreshStoreUnavailableReturnsInfraAndNoOrphanSession(t *
 	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
 	roleRepo := mem.NewRoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
-	svc := NewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default())
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default())
 	seedUser(userRepo, "refresh-down", "pass123")
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "refresh-down", Password: "pass123"})
@@ -289,7 +344,7 @@ func TestService_IssueForUser_SessionPersisted(t *testing.T) {
 	userRepo := mem.NewUserRepository()
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
-	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default())
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default())
 	seedUser(userRepo, "issue-persist", "pass123")
 
 	u, err := userRepo.GetByUsername(context.Background(), "issue-persist")
@@ -313,7 +368,7 @@ func TestService_IssueForUser_RefreshStoreUnavailableReturnsInfraAndNoOrphanSess
 	sessionRepo := &trackingSessionRepo{SessionRepository: mem.NewSessionRepository()}
 	roleRepo := mem.NewRoleRepository()
 	store := failingIssueRefreshStore{Store: newTestRefreshStore(), err: fmt.Errorf("refresh db down")}
-	svc := NewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default())
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, store, testIssuer, slog.Default())
 	seedUser(userRepo, "issue-refresh-down", "pass123")
 	u, err := userRepo.GetByUsername(context.Background(), "issue-refresh-down")
 	require.NoError(t, err)
@@ -412,7 +467,7 @@ func TestService_Login_RoleFetchFailure_AbortsLogin(t *testing.T) {
 	seedUser(userRepo, "role-outage", "pass123")
 
 	emitter := &countingEmitter{}
-	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "role-outage", Password: "pass123"})
 	require.Error(t, err, "Login must fail when role fetch fails")
@@ -437,7 +492,7 @@ func TestService_IssueForUser_RoleFetchFailure_AbortsIssue(t *testing.T) {
 	u, err := userRepo.GetByUsername(context.Background(), "issue-outage")
 	require.NoError(t, err)
 
-	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default())
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default())
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.Error(t, err, "IssueForUser must fail when role fetch fails")
@@ -473,7 +528,7 @@ func TestService_Login_PublishError_DoesNotFailLogin(t *testing.T) {
 	fp := failingPublisher{err: fmt.Errorf("broker unavailable")}
 	emitter, err := outbox.NewDirectEmitter(fp, outbox.DirectPublishFailOpen, metrics.NopProvider{}, "accesscore", outbox.WithLogger(slog.Default()))
 	require.NoError(t, err)
-	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
 
 	pair, err := svc.Login(context.Background(), LoginInput{Username: "pub-err", Password: "pass123"})
 	require.NoError(t, err, "publish failure in demo mode should not fail login")
@@ -492,7 +547,7 @@ func TestService_IssueForUser_EmitsSessionCreated(t *testing.T) {
 	require.NoError(t, err)
 
 	emitter := &countingEmitter{}
-	svc := NewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default(), WithEmitter(emitter))
 
 	pair, err := svc.IssueForUser(context.Background(), u.ID)
 	require.NoError(t, err)

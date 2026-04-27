@@ -34,7 +34,7 @@ func (s *stubTxRunner) RunInTx(_ context.Context, fn func(context.Context) error
 func TestService_WithEmitter(t *testing.T) {
 	repo := mem.NewSessionRepository()
 	ow := &stubOutboxWriter{}
-	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
+	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithEmitter(testoutbox.MustEmitter(t, ow)))
 
 	seedSession(repo, "sess-1", "usr-1")
 
@@ -47,7 +47,7 @@ func TestService_WithEmitter(t *testing.T) {
 func TestService_WithTxManager(t *testing.T) {
 	repo := mem.NewSessionRepository()
 	tx := &stubTxRunner{}
-	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(tx))
+	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(), WithTxManager(tx))
 
 	seedSession(repo, "sess-1", "usr-1")
 
@@ -59,7 +59,7 @@ func TestService_WithOutboxAndTx(t *testing.T) {
 	repo := mem.NewSessionRepository()
 	ow := &stubOutboxWriter{}
 	tx := &stubTxRunner{}
-	svc := NewService(repo, newLogoutRefreshStore(), slog.Default(),
+	svc := MustNewService(repo, newLogoutRefreshStore(), slog.Default(),
 		WithEmitter(testoutbox.MustEmitter(t, ow)), WithTxManager(tx))
 
 	seedSession(repo, "sess-1", "usr-1")

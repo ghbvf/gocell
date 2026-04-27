@@ -21,7 +21,7 @@ func (m *mockActiveScanner) ScanActive(_ context.Context, _ ScanFilter) ([]Entry
 	return nil, nil
 }
 func (m *mockActiveScanner) GetCommand(_ context.Context, _ string) (*Entry, error) {
-	return nil, nil
+	return &Entry{}, nil
 }
 
 var _ ActiveScanner = (*mockActiveScanner)(nil)

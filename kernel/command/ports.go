@@ -40,6 +40,6 @@ type ActiveScanner interface {
 	// CreatedAt ascending (FIFO). Implementations MAY impose an adapter-level
 	// result cap but MUST document it.
 	ScanActive(ctx context.Context, filter ScanFilter) ([]Entry, error)
-	// GetCommand returns a single command by ID. Returns (nil, nil) when not found.
+	// GetCommand returns a single command by ID. Returns ErrCommandNotFound when not found.
 	GetCommand(ctx context.Context, id string) (*Entry, error)
 }

@@ -150,10 +150,11 @@ type sharedReplayDeps struct {
 }
 
 func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology) (sharedReplayDeps, error) {
-	redisClient, err := buildRedisClient(ctx, topo)
+	redisResult, err := buildRedisClient(ctx, topo)
 	if err != nil {
 		return sharedReplayDeps{}, err
 	}
+	redisClient := redisResult.Client
 	loaded := false
 	defer func() {
 		if !loaded {

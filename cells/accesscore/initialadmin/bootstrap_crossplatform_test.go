@@ -49,8 +49,9 @@ func TestBootstrapper_FullFlow_OnCurrentOS(t *testing.T) {
 	bs, err := newBootstrapper(deps, cfg)
 	require.NoError(t, err)
 
-	cleaner, err := bs.ensureAdmin(context.Background())
+	result, err := bs.ensureAdmin(context.Background())
 	require.NoError(t, err)
+	cleaner := result.Cleaner
 	assert.NotNil(t, cleaner, "expected non-nil cleaner on first bootstrap")
 
 	// Credential file must exist.

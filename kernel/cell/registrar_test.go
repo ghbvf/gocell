@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/wrapper"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // ---------------------------------------------------------------------------
@@ -413,8 +414,9 @@ type collectingDeclarer struct {
 	metas []AuthRouteMeta
 }
 
-func (c *collectingDeclarer) DeclareAuthMeta(m AuthRouteMeta) {
+func (c *collectingDeclarer) DeclareAuthMeta(m AuthRouteMeta) error {
 	c.metas = append(c.metas, m)
+	return nil
 }
 
 var _ AuthRouteDeclarer = (*collectingDeclarer)(nil)
@@ -520,8 +522,8 @@ func TestAuthRouteDeclarer_InterfaceAssertion(t *testing.T) {
 
 	// The collecting stub satisfies the interface.
 	var d AuthRouteDeclarer = &collectingDeclarer{}
-	d.DeclareAuthMeta(AuthRouteMeta{Method: "POST", Path: "/x", Public: true})
-	d.DeclareAuthMeta(AuthRouteMeta{Method: "GET", Path: "/y"})
+	require.NoError(t, d.DeclareAuthMeta(AuthRouteMeta{Method: "POST", Path: "/x", Public: true}))
+	require.NoError(t, d.DeclareAuthMeta(AuthRouteMeta{Method: "GET", Path: "/y"}))
 
 	got := d.(*collectingDeclarer).metas
 	assert.Len(t, got, 2)

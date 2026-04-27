@@ -136,7 +136,10 @@ func (c *AccessCore) initSlices() error {
 	// session-login must be constructed before identity-manage because
 	// ChangePassword injects loginSvc as the TokenIssuer.
 	loginOpts := []sessionlogin.Option{sessionlogin.WithEmitter(c.emitter), sessionlogin.WithTxManager(c.txRunner)}
-	loginSvc := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
+	loginSvc, err := sessionlogin.NewService(c.userRepo, c.sessionRepo, c.roleRepo, c.refreshStore, c.jwtIssuer, c.logger, loginOpts...)
+	if err != nil {
+		return err
+	}
 	c.loginHandler = sessionlogin.NewHandler(loginSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionlogin", "accesscore", cell.L2))
 
@@ -158,14 +161,20 @@ func (c *AccessCore) initSlices() error {
 	// rotation. No JWT verifier is needed — the opaque wire format is
 	// validated by the store itself; any malformed input (including an
 	// access JWT replay attempt) returns ErrRejected.
-	refreshSvc := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore, c.jwtIssuer, c.logger)
+	refreshSvc, err := sessionrefresh.NewService(c.sessionRepo, c.roleRepo, c.userRepo, c.refreshStore, c.jwtIssuer, c.logger)
+	if err != nil {
+		return err
+	}
 	c.refreshHandler = sessionrefresh.NewHandler(refreshSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionrefresh", "accesscore", cell.L1))
 
 	// session-logout — cascades revocation to refresh.Store so logout
 	// invalidates the full refresh chain, not just the access session.
 	logoutOpts := []sessionlogout.Option{sessionlogout.WithEmitter(c.emitter), sessionlogout.WithTxManager(c.txRunner)}
-	logoutSvc := sessionlogout.NewService(c.sessionRepo, c.refreshStore, c.logger, logoutOpts...)
+	logoutSvc, err := sessionlogout.NewService(c.sessionRepo, c.refreshStore, c.logger, logoutOpts...)
+	if err != nil {
+		return err
+	}
 	c.logoutHandler = sessionlogout.NewHandler(logoutSvc)
 	c.AddSlice(cell.NewBaseSlice("sessionlogout", "accesscore", cell.L2))
 

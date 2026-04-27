@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -151,19 +150,16 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	// cleaner worker that will remove the file after its remaining TTL. This
 	// closes the runtime window where a fresh orphan file would otherwise persist
 	// until the next process restart (P1-16 full fix).
-	var sweepStateDir string
-	if cfg.CredentialPath != "" {
-		sweepStateDir = filepath.Dir(cfg.CredentialPath)
-	}
-	sweepCleaner, err := sweep(ctx, sweepConfig{
-		StateDir:  sweepStateDir,
-		Clock:     cfg.Clock,
-		Scheduler: cfg.Scheduler,
-		Logger:    logger,
+	sweepResult, err := sweep(ctx, sweepConfig{
+		CredentialPath: cfg.CredentialPath,
+		Clock:          cfg.Clock,
+		Scheduler:      cfg.Scheduler,
+		Logger:         logger,
 	})
 	if err != nil {
 		return fmt.Errorf("initialadmin: sweep: %w", err)
 	}
+	sweepCleaner := sweepResult.Cleaner
 
 	bs, err := newBootstrapper(BootstrapDeps{
 		UserRepo: deps.UserRepo,
@@ -181,10 +177,11 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("initialadmin: construct: %w", err)
 	}
-	adminWorker, err := bs.ensureAdmin(ctx)
+	adminResult, err := bs.ensureAdmin(ctx)
 	if err != nil {
 		return fmt.Errorf("initialadmin: ensure: %w", err)
 	}
+	adminWorker := adminResult.Cleaner
 
 	// Priority identical to old behaviour: adminWorker > sweepCleaner.
 	var result worker.Worker

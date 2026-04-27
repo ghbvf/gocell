@@ -85,7 +85,7 @@ type lockerImpl struct {
 
 // New creates a Locker backed by the given Driver.
 //
-// Panics if driver is nil or if any configuration parameter is out of range:
+// Returns an error if driver is nil or if any configuration parameter is out of range:
 //   - renewFraction must be in (0, 1)
 //   - driftFactor must be in [0, 1)
 //   - releaseTimeout must be > 0
@@ -99,41 +99,53 @@ type lockerImpl struct {
 // N active locks = 1 manager goroutine + O(N) heap.
 //
 // ref: plan "共享 manager goroutine" section
-func New(driver Driver, opts ...Option) Locker {
+func New(driver Driver, opts ...Option) (Locker, error) {
 	if driver == nil {
-		panic("distlock.New: driver must not be nil")
+		return nil, errcode.New(errcode.ErrValidationFailed, "distlock.New: driver must not be nil")
 	}
 	cfg := defaultConfig()
 	for _, o := range opts {
 		o(&cfg)
 	}
-	validateConfig(cfg)
+	if err := validateConfig(cfg); err != nil {
+		return nil, err
+	}
 	return &lockerImpl{
 		mgr: newManager(driver, cfg),
 		cfg: cfg,
-	}
+	}, nil
 }
 
-// validateConfig panics if any configuration parameter is outside its valid
-// range. Called once in New() after all options have been applied so that
+// MustNew is the static-wiring variant of New.
+func MustNew(driver Driver, opts ...Option) Locker {
+	l, err := New(driver, opts...)
+	if err != nil {
+		panic(err.Error())
+	}
+	return l
+}
+
+// validateConfig returns an error if any configuration parameter is outside its
+// valid range. Called once in New() after all options have been applied so that
 // defaults are in effect before validation runs.
-func validateConfig(cfg config) {
+func validateConfig(cfg config) error {
 	if cfg.renewFraction <= 0 || cfg.renewFraction >= 1 || math.IsNaN(cfg.renewFraction) {
-		panic("distlock.New: invalid configuration: renewFraction must be in (0, 1), got " +
+		return errcode.New(errcode.ErrValidationFailed, "distlock.New: invalid configuration: renewFraction must be in (0, 1), got "+
 			fmt.Sprintf("%v", cfg.renewFraction))
 	}
 	if cfg.driftFactor < 0 || cfg.driftFactor >= 1 || math.IsNaN(cfg.driftFactor) {
-		panic("distlock.New: invalid configuration: driftFactor must be in [0, 1), got " +
+		return errcode.New(errcode.ErrValidationFailed, "distlock.New: invalid configuration: driftFactor must be in [0, 1), got "+
 			fmt.Sprintf("%v", cfg.driftFactor))
 	}
 	if cfg.releaseTimeout <= 0 {
-		panic("distlock.New: invalid configuration: releaseTimeout must be > 0, got " +
+		return errcode.New(errcode.ErrValidationFailed, "distlock.New: invalid configuration: releaseTimeout must be > 0, got "+
 			fmt.Sprintf("%v", cfg.releaseTimeout))
 	}
 	if cfg.maxRenewAttempts < 1 {
-		panic("distlock.New: invalid configuration: maxRenewAttempts must be ≥ 1, got " +
+		return errcode.New(errcode.ErrValidationFailed, "distlock.New: invalid configuration: maxRenewAttempts must be ≥ 1, got "+
 			fmt.Sprintf("%v", cfg.maxRenewAttempts))
 	}
+	return nil
 }
 
 // Acquire implements Locker.

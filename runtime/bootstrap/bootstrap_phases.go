@@ -92,7 +92,9 @@ func (s *phaseState) registerHealthChecker(name string, fn func(context.Context)
 	if _, exists := s.registeredCheckers[name]; exists {
 		return fmt.Errorf("bootstrap: duplicate health checker %q", name)
 	}
-	s.hh.RegisterChecker(name, fn)
+	if err := s.hh.RegisterChecker(name, fn); err != nil {
+		return err
+	}
 	s.registeredCheckers[name] = struct{}{}
 	return nil
 }

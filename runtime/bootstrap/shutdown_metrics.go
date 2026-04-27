@@ -71,6 +71,8 @@ var defaultShutdownBuckets = []float64{0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5
 // Provider at construction time, matching the "register at start-up" pattern
 // used by relay_collector.go and the kernel hook dispatcher.
 type shutdownMetrics struct {
+	disabled bool
+
 	// phaseEntries counts each phase transition. Using a CounterVec (not a
 	// Gauge) because the kernel Provider interface does not expose Gauge.
 	// A counter-per-phase lets SREs detect missing phase entries (stuck
@@ -91,8 +93,8 @@ type shutdownMetrics struct {
 }
 
 // newShutdownMetrics registers shutdown metrics on p and returns a
-// *shutdownMetrics. Returns (nil, nil) when p is nil, which disables
-// all metric emission while leaving phase10 behaviour unchanged.
+// *shutdownMetrics. A nil Provider returns a disabled metrics object, which
+// leaves phase10 behaviour unchanged without encoding success as nil data.
 //
 // An error is returned only when the Provider itself fails to register a
 // metric family (typically a duplicate name in the same registry). Callers
@@ -102,7 +104,7 @@ type shutdownMetrics struct {
 // pattern for metric registration.
 func newShutdownMetrics(p kernelmetrics.Provider) (*shutdownMetrics, error) {
 	if p == nil {
-		return nil, nil
+		return &shutdownMetrics{disabled: true}, nil
 	}
 
 	// Track registered collectors for rollback on partial failure.
@@ -154,7 +156,7 @@ func newShutdownMetrics(p kernelmetrics.Provider) (*shutdownMetrics, error) {
 // recordPhaseEntry increments the phase-entry counter for the given phase
 // label. No-op on nil receiver.
 func (m *shutdownMetrics) recordPhaseEntry(phase string) {
-	if m == nil {
+	if m == nil || m.disabled {
 		return
 	}
 	m.phaseEntries.With(kernelmetrics.Labels{"phase": phase}).Inc()
@@ -163,7 +165,7 @@ func (m *shutdownMetrics) recordPhaseEntry(phase string) {
 // observePhaseDuration records the duration of a shutdown phase. No-op on
 // nil receiver.
 func (m *shutdownMetrics) observePhaseDuration(phase string, d time.Duration) {
-	if m == nil {
+	if m == nil || m.disabled {
 		return
 	}
 	m.phaseDuration.With(kernelmetrics.Labels{"phase": phase}).Observe(d.Seconds())
@@ -172,7 +174,7 @@ func (m *shutdownMetrics) observePhaseDuration(phase string, d time.Duration) {
 // countOutcome increments the shutdown outcome counter. outcome must be one of
 // "success", "timeout", "teardown_error", or "signal_error". No-op on nil receiver.
 func (m *shutdownMetrics) countOutcome(outcome string) {
-	if m == nil {
+	if m == nil || m.disabled {
 		return
 	}
 	m.shutdownTotal.With(kernelmetrics.Labels{"outcome": outcome}).Inc()

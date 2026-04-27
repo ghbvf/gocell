@@ -19,6 +19,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth/refresh"
 	"github.com/google/uuid"
 )
@@ -66,22 +67,32 @@ type store struct {
 
 // New constructs an in-memory refresh.Store.
 //
-// clock must not be nil. policy.MaxAge must be positive; policy.ReuseInterval
-// must not be negative. If randReader is nil, crypto/rand.Reader is used.
-func New(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) refresh.Store {
+// Returns an error when clock is nil, policy.MaxAge is not positive, or
+// policy.ReuseInterval is negative. If randReader is nil, crypto/rand.Reader
+// is used.
+func New(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) (refresh.Store, error) {
 	if clock == nil {
-		panic("memstore.New: clock must not be nil")
+		return nil, errcode.New(errcode.ErrValidationFailed, "memstore.New: clock must not be nil")
 	}
 	if policy.MaxAge <= 0 {
-		panic("memstore.New: policy.MaxAge must be positive")
+		return nil, errcode.New(errcode.ErrValidationFailed, "memstore.New: policy.MaxAge must be positive")
 	}
 	if policy.ReuseInterval < 0 {
-		panic("memstore.New: policy.ReuseInterval must not be negative")
+		return nil, errcode.New(errcode.ErrValidationFailed, "memstore.New: policy.ReuseInterval must not be negative")
 	}
 	if randReader == nil {
 		randReader = rand.Reader
 	}
-	return &store{policy: policy, clock: clock, rand: randReader}
+	return &store{policy: policy, clock: clock, rand: randReader}, nil
+}
+
+// MustNew is the static-wiring variant of New.
+func MustNew(policy refresh.Policy, clock refresh.Clock, randReader io.Reader) refresh.Store {
+	store, err := New(policy, clock, randReader)
+	if err != nil {
+		panic(err.Error())
+	}
+	return store
 }
 
 func (s *store) generatePair() (selector []byte, verifier []byte, err error) {
