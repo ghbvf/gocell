@@ -20,7 +20,9 @@ change to the driver.
    `set -euo pipefail`.
 2. `cd "$(dirname "${BASH_SOURCE[0]}")/.."` so the script runs from repo root
    regardless of caller's CWD.
-3. Make it executable: `chmod +x hack/verify-<name>.sh`.
+3. `chmod +x hack/verify-<name>.sh` so the file can be invoked directly
+   (`./hack/verify-<name>.sh`) for ad-hoc debugging. The driver itself runs
+   each gate via `bash <script>` and does not depend on the executable bit.
 4. Verify locally: `make verify`. The new gate will be picked up automatically.
 
 There is no allow-list, opt-in flag, or violations baseline. Gates are either
