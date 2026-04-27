@@ -18,7 +18,7 @@
 
 | Wave | 剩余 OPEN |
 |---|---|
-| **Wave 2.5** | PR-CFG-1（✅ 复核关闭） / PR-CFG-4 / PR-CFG-6 |
+| **Wave 2.5** | PR-CFG-4 / PR-CFG-6 |
 | **Wave 3** | PR-A15 / A16 / A17 / A36 / A37 / A38 |
 | **Wave 4** | PR-A21 / A22 / A24 / A33 |
 
