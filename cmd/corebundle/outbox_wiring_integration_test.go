@@ -4,7 +4,6 @@ package main
 
 import (
 	"context"
-	"os"
 	"testing"
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
@@ -17,18 +16,17 @@ import (
 
 // TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil asserts that postgres mode
 // produces a non-nil ManagedResource (pool) and a non-empty bootstrapOpts slice
-// carrying WithManagedResource(relay). This test requires a running PostgreSQL
-// instance (GOCELL_CONFIGCORE_DATABASE_URL must be set).
+// carrying WithManagedResource(relay). The test self-provisions PostgreSQL via
+// testcontainers so CI cannot go green by omitting external DSN configuration.
 //
 // The relay is now registered independently via bootstrapOpts rather than
 // carried inside PGResource.Worker() — PGResource wraps only the pool.
 func TestBuildConfigCoreOpts_PGMode_ManagedResourceNonNil(t *testing.T) {
-	pgDSN, ok := os.LookupEnv("GOCELL_CONFIGCORE_DATABASE_URL")
-	if !ok || pgDSN == "" {
-		t.Skip("GOCELL_CONFIGCORE_DATABASE_URL not set; skipping PG-mode relay wiring integration test")
-	}
-
 	ctx := context.Background()
+	pgDSN, cleanup := setupPostgresForMain(t)
+	defer cleanup()
+	applyMigrationsForMain(t, ctx, pgDSN)
+
 	topo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real"}
 	pgCfg := adapterpg.Config{DSN: pgDSN}
 	result, err := buildConfigCoreOpts(ctx, ConfigCoreModuleConfig{

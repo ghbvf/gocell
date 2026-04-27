@@ -8,27 +8,39 @@ All integration test files use the `//go:build integration` build tag so they ar
 
 ## Prerequisites
 
-```bash
-docker compose up -d          # boots all infra services
-docker compose ps             # verify all services are healthy
-```
+Start the local Docker daemon. Integration tests use testcontainers and
+self-provision PostgreSQL, Redis, RabbitMQ, Vault, and similar dependencies per
+test. Do not start the repository root `docker-compose.yml` for the
+testcontainer-backed integration suite.
 
-The `docker-compose.yml` at the repository root defines the required services.
+Use strict mode when a run must fail if Docker is unavailable:
+
+```bash
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./adapters/postgres/... -count=1
+```
 
 ## Running Integration Tests
 
 ### All integration tests
 
 ```bash
-go test -tags integration ./... -count=1 -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,e2e \
+  ./adapters/... \
+  ./tests/integration/... \
+  ./tests/e2e/internal/... \
+  ./cmd/corebundle/... \
+  ./examples/ssobff/... \
+  ./cells/accesscore/slices/identitymanage/... \
+  ./runtime/bootstrap/... \
+  -count=1 -timeout 15m -v
 ```
 
 ### Single adapter
 
 ```bash
-go test -tags integration ./adapters/postgres/... -count=1 -v
-go test -tags integration ./adapters/redis/...    -count=1 -v
-go test -tags integration ./adapters/rabbitmq/... -count=1 -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./adapters/postgres/... -count=1 -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./adapters/redis/...    -count=1 -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./adapters/rabbitmq/... -count=1 -v
 go test -tags integration ./adapters/websocket/... -count=1 -v
 # adapters/oidc and adapters/s3 are thin SDK wrappers with unit tests only.
 ```
@@ -36,14 +48,27 @@ go test -tags integration ./adapters/websocket/... -count=1 -v
 ### Journey tests only
 
 ```bash
-go test -tags integration ./tests/integration/... -run TestJourney -count=1 -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./tests/integration/... -run TestJourney -count=1 -v
 ```
 
 ### Assembly tests only
 
 ```bash
-go test -tags integration ./tests/integration/... -run TestAssembly -count=1 -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./tests/integration/... -run TestAssembly -count=1 -v
 ```
+
+### OTel collector protocol test
+
+PR and push CI run the minimal real OpenTelemetry Collector round-trip smoke.
+Run the same check locally with:
+
+```bash
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags=integration,otelcollector ./adapters/otel/... \
+  -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m -v
+```
+
+The nightly/manual workflow runs the full `./adapters/otel/...` package under
+the same tags as a supplemental compatibility patrol.
 
 ## Test File Conventions
 
@@ -56,40 +81,57 @@ go test -tags integration ./tests/integration/... -run TestAssembly -count=1 -v
 ## Writing a New Integration Test
 
 1. Add `//go:build integration` as the first line (before `package`).
-2. Conditional skip pattern: wrap `t.Skip` in an environment or build-tag guard so it never runs unconditionally:
+2. If the test starts any testcontainer, call `testutil.RequireDocker(t)` before
+   `testcontainers.GenericContainer` or any `testcontainers-go/modules/* Run`
+   call:
 
    ```go
-   if testing.Short() || os.Getenv("GOCELL_PG_DSN") == "" {
-       t.Skip("requires PG_DSN")
+   func setupPostgres(t *testing.T) {
+       t.Helper()
+       testutil.RequireDocker(t)
+       container, err := tcpostgres.Run(context.Background(), testutil.PostgresImage)
+       require.NoError(t, err)
+       t.Cleanup(func() { _ = container.Terminate(context.Background()) })
    }
    ```
 
-   Permanent stub tests (will never run) MUST be deleted, not marked `t.Skip` — run `gocell check unconditional-skip ./...` to detect violations; analyzer at `tools/nogo/unconditionalskip`.
-3. Read connection parameters from environment variables (e.g., `GOCELL_CONFIGCORE_DATABASE_URL`, `GOCELL_REDIS_ADDR`). Most integration tests start their own testcontainer and pass the DSN directly; see `cmd/corebundle/main_integration_test.go` for the pattern.
+   Local runs self-skip only when Docker is unavailable. CI and ship runs set
+   `GOCELL_TEST_DOCKER_REQUIRED=1`, so Docker provider failures fail the test
+   instead of producing false green.
+3. Do not gate testcontainer-backed tests on DSN/address environment variables
+   or `t.Skip` for missing external services. Start the container in the test
+   and pass its DSN directly; see `cmd/corebundle/main_integration_test.go` for
+   the pattern.
 4. Each test must be self-contained: create its own schema/queue/bucket, run assertions, then clean up.
 5. Use `t.Parallel()` only when tests do not share mutable state (e.g., separate database schemas).
 
+Permanent stub tests (will never run) MUST be deleted, not marked `t.Skip` —
+run `gocell check unconditional-skip ./...` to detect violations; analyzer at
+`tools/nogo/unconditionalskip`.
+
 ## Environment Variables
 
-> Defaults below describe the local docker-compose / testcontainer dev loop. **Never reuse these values in production** — they are public dev fixtures (e.g. RabbitMQ `guest:guest`, MinIO `minioadmin:minioadmin`) and will fail security scans. CI provides real values via secrets.
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GOCELL_TEST_DOCKER_REQUIRED` | unset | Set to `1` in CI or local ship runs to fail when the Docker provider is unhealthy. Leave unset for local self-skip when Docker is not running. |
 
-| Variable | Default (local dev only) | Description |
-|----------|--------------------------|-------------|
-| `GOCELL_CONFIGCORE_DATABASE_URL` | (testcontainer; see test setup) | PostgreSQL DSN for configcore integration tests. Most tests start their own container and pass DSN directly. |
-| `GOCELL_REDIS_ADDR` | `localhost:6379` | Redis address |
-| `GOCELL_AMQP_URL` | (set from CI secret; local docker-compose default uses public `guest:guest@localhost:5672`) | RabbitMQ connection URL |
-| `GOCELL_S3_ENDPOINT` | `http://localhost:9000` | MinIO / S3 endpoint |
-| `GOCELL_S3_ACCESS_KEY` | (set from CI secret; local docker-compose default is the public `minioadmin` fixture) | S3 access key |
-| `GOCELL_S3_SECRET_KEY` | (set from CI secret; local docker-compose default is the public `minioadmin` fixture) | S3 secret key |
-| `GOCELL_OIDC_ISSUER` | `http://localhost:8080/realms/gocell` | OIDC issuer URL |
+Service DSNs such as PostgreSQL, Redis, RabbitMQ, Vault, and OTel Collector are
+test-owned values returned by testcontainers. Do not require developers or CI to
+preconfigure them for the integration suite.
 
 ## CI Pipeline
 
-Integration tests run in a separate CI stage after unit tests pass. The pipeline:
+Integration tests run in a separate CI stage with strict Docker mode. The
+pipeline:
 
-1. Boots Docker Compose services via `docker compose up -d --wait`.
-2. Runs `go test -tags integration ./... -count=1`.
-3. Tears down services via `docker compose down`.
+1. Sets `GOCELL_TEST_DOCKER_REQUIRED=1`.
+2. Runs the testcontainer-backed `go test -tags=integration,e2e ...` package
+   set.
+3. Uploads the integration coverage profile.
+
+The OTel Collector real protocol smoke runs in PR/push CI with
+`-tags=integration,otelcollector`; the nightly/manual workflow runs the broader
+package under the same tags.
 
 See `scripts/healthcheck-verify.sh` for the health-check gate that precedes integration tests.
 

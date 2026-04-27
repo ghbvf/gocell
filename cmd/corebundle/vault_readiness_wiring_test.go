@@ -106,7 +106,7 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 	}
 
 	adapterInfo := adapterInfoForSharedDeps(shared)
-	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,
@@ -143,7 +143,7 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 
 	healthLn := newCorebundleLocalListener(t)
 	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
@@ -214,7 +214,7 @@ func TestA19_ConfigCoreModule_KeyProviderReady(t *testing.T) {
 
 	healthLn2 := newCorebundleLocalListener(t)
 	app, err := buildBootstrapWithFakeKeyProvider(t, shared, kp, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithListener(cell.HealthListener, healthLn2.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn2)))
 	require.NoError(t, err)
 

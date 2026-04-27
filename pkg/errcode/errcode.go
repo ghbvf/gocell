@@ -24,6 +24,7 @@ const (
 	ErrValidationFailed       Code = "ERR_VALIDATION_FAILED"
 	ErrReferenceBroken        Code = "ERR_REFERENCE_BROKEN"
 	ErrInternal               Code = "ERR_INTERNAL"
+	ErrServiceUnavailable     Code = "ERR_SERVICE_UNAVAILABLE"
 	ErrAuthUnauthorized       Code = "ERR_AUTH_UNAUTHORIZED"
 	ErrAuthForbidden          Code = "ERR_AUTH_FORBIDDEN"
 	ErrRateLimited            Code = "ERR_RATE_LIMITED"

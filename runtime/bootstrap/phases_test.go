@@ -1009,7 +1009,7 @@ func (s *stubNonceStore) CheckAndMark(_ context.Context, _ string) error {
 }
 
 func (s *stubNonceStore) Kind() cell.NonceStoreKind {
-	return cell.NonceStoreKindNoop
+	return cell.NonceStoreKindInMemory
 }
 
 type stubHMACKeyring struct{}
@@ -1045,6 +1045,92 @@ func TestBootstrap_Phase5_FinalizeAuthCalledTwice_ReturnsLabeledError(t *testing
 	assert.Contains(t, err.Error(), "finalize auth",
 		"error must contain 'finalize auth' label to identify the failing phase")
 	_ = s // s is built for test hygiene (health handler initialisation).
+}
+
+func TestBootstrap_Phase5_InternalRoutesRequireGuard(t *testing.T) {
+	b := New(WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal listener")
+	assert.Contains(t, err.Error(), "AuthServiceToken")
+	assert.Contains(t, err.Error(), "AuthMTLS")
+	assert.Contains(t, err.Error(), "bootstrap.WithListener")
+}
+
+func TestBootstrap_Phase5_InternalRoutesRejectJWTOnlyGuard(t *testing.T) {
+	b := New(WithListener(cell.InternalListener, "127.0.0.1:0",
+		[]cell.ListenerAuth{cell.MustNewAuthJWT(&stubIntentTokenVerifier{})}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "internal guard")
+	assert.Contains(t, err.Error(), "AuthServiceToken")
+	assert.Contains(t, err.Error(), "AuthMTLS")
+}
+
+func TestBootstrap_Phase5_InternalRoutesRejectMTLSOnlyGuard(t *testing.T) {
+	b := New(WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthMTLS{}}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "AuthServiceToken")
+}
+
+func TestBootstrap_Phase5_InternalRoutesAcceptServiceTokenGuard(t *testing.T) {
+	plan := cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
+	b := New(WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{plan}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.NoError(t, err)
+}
+
+func TestBootstrap_Phase5_InternalRoutesAcceptLayeredInternalGuards(t *testing.T) {
+	plan := cell.MustNewAuthServiceToken(&stubNonceStore{}, &stubHMACKeyring{})
+	b := New(WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthMTLS{}, plan}))
+	rtr := buildRouter(t, cell.InternalListener)
+	require.NoError(t, rtr.DeclareAuthMeta(cell.AuthRouteMeta{
+		Method: "POST",
+		Path:   "/internal/v1/access/roles/assign",
+	}))
+
+	err := b.phase5FinalizeAllRouters(map[cell.ListenerRef]*router.Router{
+		cell.InternalListener: rtr,
+	})
+
+	require.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------

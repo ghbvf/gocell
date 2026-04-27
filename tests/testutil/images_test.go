@@ -13,10 +13,11 @@ var imagePinnedByDigest = regexp.MustCompile(`^[a-z0-9./-]+:\d+\.\d+(\.\d+)?[a-z
 // use tag+digest pinning, not floating tags like "postgres:15-alpine".
 func TestContainerImagesPinned(t *testing.T) {
 	images := map[string]string{
-		"PostgresImage": PostgresImage,
-		"RedisImage":    RedisImage,
-		"RabbitMQImage": RabbitMQImage,
-		"VaultImage":    VaultImage,
+		"PostgresImage":      PostgresImage,
+		"RedisImage":         RedisImage,
+		"RabbitMQImage":      RabbitMQImage,
+		"VaultImage":         VaultImage,
+		"OTelCollectorImage": OTelCollectorImage,
 	}
 	for name, image := range images {
 		t.Run(name, func(t *testing.T) {
@@ -37,6 +38,7 @@ func TestContainerImagesPinned_RejectsFloating(t *testing.T) {
 		"rabbitmq:3-management-alpine",
 		"rabbitmq:3.12.14-management-alpine",
 		"hashicorp/vault:1.17",
+		"otel/opentelemetry-collector:0.123.0",
 	}
 
 	for _, img := range floating {

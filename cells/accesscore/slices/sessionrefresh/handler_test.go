@@ -201,7 +201,7 @@ func TestHandleRefresh_RefreshStoreUnavailable_Returns503(t *testing.T) {
 	mux.ServeHTTP(w, req)
 
 	assert.Equal(t, http.StatusServiceUnavailable, w.Code)
-	assertErrorBody(t, w.Body.Bytes(), "ERR_AUTH_REFRESH_UNAVAILABLE", "internal server error")
+	assertErrorBody(t, w.Body.Bytes(), "ERR_SERVICE_UNAVAILABLE", "service unavailable")
 }
 
 // TestHandler_Refresh_BlankToken verifies that submitting an empty refreshToken

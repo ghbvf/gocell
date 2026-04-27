@@ -65,6 +65,59 @@ func TestIsClientError(t *testing.T) {
 	}
 }
 
+func TestPublicCode_KeepsTransportLevel5xxSemantics(t *testing.T) {
+	cases := []struct {
+		name string
+		code Code
+		want Code
+	}{
+		{
+			name: "500 internal infra code collapses to internal",
+			code: ErrConfigDecryptFailed,
+			want: ErrInternal,
+		},
+		{
+			name: "503 transient infra code collapses to service unavailable",
+			code: ErrKeyProviderTransient,
+			want: ErrServiceUnavailable,
+		},
+		{
+			name: "504 server timeout keeps public machine semantics",
+			code: ErrServerTimeout,
+			want: ErrServerTimeout,
+		},
+		{
+			name: "4xx public codes pass through",
+			code: ErrAuthUnauthorized,
+			want: ErrAuthUnauthorized,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, PublicCode(tc.code))
+		})
+	}
+}
+
+func TestPublicCodeForStatus(t *testing.T) {
+	cases := []struct {
+		status int
+		want   Code
+	}{
+		{http.StatusInternalServerError, ErrInternal},
+		{http.StatusServiceUnavailable, ErrServiceUnavailable},
+		{http.StatusGatewayTimeout, ErrServerTimeout},
+		{http.StatusNotImplemented, ErrInternal},
+	}
+
+	for _, tc := range cases {
+		t.Run(http.StatusText(tc.status), func(t *testing.T) {
+			assert.Equal(t, tc.want, PublicCodeForStatus(tc.status))
+		})
+	}
+}
+
 // TestCodeToStatus_Exhaustive parses pkg/errcode/errcode.go with go/ast,
 // extracts every Code constant, and verifies it has an entry in codeToStatus.
 // This fails loudly when a new errcode.Code is added without registering an

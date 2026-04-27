@@ -695,7 +695,7 @@ func TestWithCircuitBreaker_Open_Returns503(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
+	assert.Equal(t, "ERR_SERVICE_UNAVAILABLE", errObj["code"])
 }
 
 func TestWithCircuitBreaker_NilInterface_Error(t *testing.T) {

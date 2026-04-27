@@ -523,3 +523,121 @@ func TestLifecycle_OmitsCellLabel_WhenCellIDEmpty(t *testing.T) {
 		}
 	}
 }
+
+func TestLifecycle_OnStartNearTimeoutWarns(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	lc := NewLifecycle(LifecycleConfig{
+		DefaultStartTimeout: 20 * time.Millisecond,
+		Logger:              logger,
+	})
+	if err := lc.Append(Hook{
+		CellID: "accesscore",
+		Name:   "accesscore.initial-admin-bootstrap",
+		OnStart: func(_ context.Context) error {
+			time.Sleep(18 * time.Millisecond)
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := lc.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	slow := findLifecycleLogRecord(t, &buf, "hook.start_slow")
+	if slow == nil {
+		t.Fatalf("expected hook.start_slow warning, got logs=%s", buf.String())
+	}
+	if slow["level"] != "WARN" {
+		t.Fatalf("hook.start_slow level mismatch: %v", slow)
+	}
+	if slow["cell"] != "accesscore" {
+		t.Fatalf("hook.start_slow cell mismatch: %v", slow)
+	}
+	if slow["name"] != "accesscore.initial-admin-bootstrap" {
+		t.Fatalf("hook.start_slow name mismatch: %v", slow)
+	}
+	for _, key := range []string{"elapsed", "timeout", "threshold"} {
+		if _, ok := slow[key]; !ok {
+			t.Fatalf("hook.start_slow missing %s: %v", key, slow)
+		}
+	}
+}
+
+func TestLifecycle_OnStartNearTimeoutWarnsWithoutCellID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	lc := NewLifecycle(LifecycleConfig{
+		DefaultStartTimeout: 20 * time.Millisecond,
+		Logger:              logger,
+	})
+	if err := lc.Append(Hook{
+		Name: "composition-root.hook",
+		OnStart: func(_ context.Context) error {
+			time.Sleep(18 * time.Millisecond)
+			return nil
+		},
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := lc.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	slow := findLifecycleLogRecord(t, &buf, "hook.start_slow")
+	if slow == nil {
+		t.Fatalf("expected hook.start_slow warning, got logs=%s", buf.String())
+	}
+	if slow["name"] != "composition-root.hook" {
+		t.Fatalf("hook.start_slow name mismatch: %v", slow)
+	}
+	if _, hasCell := slow["cell"]; hasCell {
+		t.Fatalf("hook.start_slow must omit empty cell label: %v", slow)
+	}
+}
+
+func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	lc := NewLifecycle(LifecycleConfig{
+		DefaultStartTimeout: 1 * time.Nanosecond,
+		Logger:              logger,
+	})
+	if err := lc.Append(Hook{
+		Name: "no-deadline",
+		OnStart: func(_ context.Context) error {
+			time.Sleep(time.Millisecond)
+			return nil
+		},
+		StartTimeout: -1,
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if err := lc.Start(context.Background()); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if rec := findLifecycleLogRecord(t, &buf, "hook.start_slow"); rec != nil {
+		t.Fatalf("negative StartTimeout must skip hook.start_slow, got %v", rec)
+	}
+}
+
+func findLifecycleLogRecord(t *testing.T, buf *bytes.Buffer, msg string) map[string]any {
+	t.Helper()
+	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("bad log line %q: %v", line, err)
+		}
+		if rec["msg"] == msg {
+			return rec
+		}
+	}
+	return nil
+}

@@ -24,6 +24,28 @@ func TestToAuditEntryResponse_NilInput(t *testing.T) {
 	assert.Zero(t, got.ID)
 }
 
+type auditLogCaptureHandler struct {
+	records []slog.Record
+}
+
+func (h *auditLogCaptureHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *auditLogCaptureHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, r.Clone())
+	return nil
+}
+func (h *auditLogCaptureHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *auditLogCaptureHandler) WithGroup(_ string) slog.Handler      { return h }
+
+func countAuditWarnRecords(h *auditLogCaptureHandler) int {
+	count := 0
+	for i := range h.records {
+		if h.records[i].Level == slog.LevelWarn {
+			count++
+		}
+	}
+	return count
+}
+
 func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 	repo := mem.NewAuditRepository()
 	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
@@ -80,6 +102,28 @@ func TestHandleQuery_InvalidTimeFormat(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestHandleQuery_InvalidTimeFormat_UsesListErrorSampling(t *testing.T) {
+	handler := &auditLogCaptureHandler{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(handler))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+
+	repo := mem.NewAuditRepository()
+	svc, err := NewService(repo, testCodec(), slog.Default(), query.RunModeProd)
+	require.NoError(t, err)
+	h := NewHandler(svc)
+
+	for i := 0; i < 200; i++ {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/audit/entries?from=not-a-date", nil)
+		req = req.WithContext(auth.TestContext("usr-1", []string{"admin"}))
+		h.HandleQuery(w, req)
+		assert.Equal(t, http.StatusBadRequest, w.Code)
+	}
+
+	assert.Equal(t, 2, countAuditWarnRecords(handler), "list-boundary sampling should log two WARN records for 200 client errors")
 }
 
 func TestHandleQuery_InvalidLimit(t *testing.T) {

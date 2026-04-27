@@ -34,6 +34,11 @@ type applyStubNonceStore struct{}
 func (s *applyStubNonceStore) CheckAndMark(_ context.Context, _ string) error { return nil }
 func (s *applyStubNonceStore) Kind() cell.NonceStoreKind                      { return cell.NonceStoreKindInMemory }
 
+type applyNoopNonceStore struct{}
+
+func (s *applyNoopNonceStore) CheckAndMark(_ context.Context, _ string) error { return nil }
+func (s *applyNoopNonceStore) Kind() cell.NonceStoreKind                      { return cell.NonceStoreKindNoop }
+
 // applyStubHMACKeyring satisfies cell.HMACKeyring.
 type applyStubHMACKeyring struct{}
 

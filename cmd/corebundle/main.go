@@ -96,7 +96,6 @@ func run(ctx context.Context) error {
 		slog.String("outbox_consumer_claimer", adapterInfo["outbox_consumer_claimer"]))
 
 	logSinglePodNonceStoreAcknowledgement(shared)
-	logInitialAdminCredPath()
 
 	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)

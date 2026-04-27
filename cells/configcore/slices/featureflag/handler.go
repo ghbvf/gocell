@@ -110,6 +110,8 @@ func (h *Handler) RegisterRoutes(mux kcell.RouteHandler) error {
 
 // HandleList handles GET / — returns paginated feature flags.
 func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
+	r = r.WithContext(httputil.WithListErrorLogSampling(r.Context(), specFlagsList.ID))
+
 	pageReq, ok := httputil.ParsePageParamsOrWrite(w, r)
 	if !ok {
 		return
@@ -117,7 +119,7 @@ func (h *Handler) HandleList(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.List(r.Context(), pageReq)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WritePageDomainError(r.Context(), w, err)
 		return
 	}
 

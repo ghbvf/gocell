@@ -14,6 +14,8 @@ package archtest
 //       opts.InsecureSkipVerify = true.
 //   05  example docker compose credentials must come from environment
 //       interpolation, not committed literal values.
+//   06  internal listener guard: production WithListener calls must not wire
+//       cell.InternalListener with a literal AuthNone chain.
 //
 // ref: tools/archtest/auth_authtest_boundary_test.go — 4 sub-test pattern
 
@@ -37,6 +39,7 @@ const (
 	secFailClosed03 = "SEC-FAIL-CLOSED-03"
 	secFailClosed04 = "SEC-FAIL-CLOSED-04"
 	secFailClosed05 = "SEC-FAIL-CLOSED-05"
+	secFailClosed06 = "SEC-FAIL-CLOSED-06"
 )
 
 func TestSecurityDefaults(t *testing.T) {
@@ -60,6 +63,10 @@ func TestSecurityDefaults(t *testing.T) {
 
 	t.Run(secFailClosed05+"_example_compose_credentials_from_env", func(t *testing.T) {
 		testSEC05ExampleComposeCredentialsFromEnv(t, root)
+	})
+
+	t.Run(secFailClosed06+"_internal_listener_must_not_use_authnone", func(t *testing.T) {
+		testSEC06InternalListenerMustNotUseAuthNone(t, root)
 	})
 }
 
@@ -177,6 +184,221 @@ func findWithListenerNilAuthChain(path string) ([]int, error) {
 		return true
 	})
 	return lines, nil
+}
+
+func testSEC06InternalListenerMustNotUseAuthNone(t *testing.T, root string) {
+	t.Helper()
+
+	var scanFiles []string
+	bundleDir := filepath.Join(root, "cmd", "corebundle")
+	bundleFiles, err := findProductionGoFilesInDir(bundleDir)
+	require.NoError(t, err, "reading cmd/corebundle")
+	scanFiles = append(scanFiles, bundleFiles...)
+
+	examplesDir := filepath.Join(root, "examples")
+	err = filepath.WalkDir(examplesDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && filepath.Base(path) == "main.go" {
+			scanFiles = append(scanFiles, path)
+		}
+		return nil
+	})
+	require.NoError(t, err, "reading examples")
+
+	var violations []string
+	for _, f := range scanFiles {
+		hits, err := findInternalListenerAuthNoneChain(f)
+		require.NoErrorf(t, err, "scanning %s", f)
+		rel, _ := filepath.Rel(root, f)
+		rel = filepath.ToSlash(rel)
+		for _, line := range hits {
+			violations = append(violations, fmt.Sprintf("%s:%d: InternalListener uses AuthNone literal (SEC-FAIL-CLOSED-06)", rel, line))
+		}
+	}
+
+	if len(violations) > 0 {
+		for _, v := range violations {
+			t.Logf("%s violation: %s", secFailClosed06, v)
+		}
+	}
+	assert.Empty(t, violations,
+		"production InternalListener declarations must use guarded auth chains, not a literal AuthNone chain")
+}
+
+func findInternalListenerAuthNoneChain(path string) ([]int, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, path, data, parser.SkipObjectResolution)
+	if err != nil {
+		return nil, err
+	}
+	var lines []int
+	facts := collectAuthNoneChainFacts(f)
+	ast.Inspect(f, func(n ast.Node) bool {
+		call, ok := n.(*ast.CallExpr)
+		if !ok || !isWithListenerCall(call) || len(call.Args) < 3 {
+			return true
+		}
+		if !isInternalListenerRef(call.Args[0]) || !chainExprContainsAuthNone(call.Args[2], facts) {
+			return true
+		}
+		lines = append(lines, fset.Position(call.Lparen).Line)
+		return true
+	})
+	return lines, nil
+}
+
+type authNoneChainFacts struct {
+	vars  map[string]bool
+	funcs map[string]bool
+}
+
+func collectAuthNoneChainFacts(f *ast.File) authNoneChainFacts {
+	facts := authNoneChainFacts{
+		vars:  make(map[string]bool),
+		funcs: make(map[string]bool),
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		for _, stmt := range fn.Body.List {
+			ret, ok := stmt.(*ast.ReturnStmt)
+			if !ok {
+				continue
+			}
+			for _, result := range ret.Results {
+				if chainLiteralContainsAuthNone(result) {
+					facts.funcs[fn.Name.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch stmt := n.(type) {
+		case *ast.ValueSpec:
+			for i, name := range stmt.Names {
+				if authNoneRHSAt(stmt.Values, i) {
+					facts.vars[name.Name] = true
+				}
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range stmt.Lhs {
+				id, ok := lhs.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if authNoneRHSAt(stmt.Rhs, i) {
+					facts.vars[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return facts
+}
+
+func authNoneRHSAt(rhs []ast.Expr, idx int) bool {
+	if len(rhs) == 0 {
+		return false
+	}
+	if len(rhs) == 1 {
+		return chainLiteralContainsAuthNone(rhs[0])
+	}
+	if idx >= len(rhs) {
+		return false
+	}
+	return chainLiteralContainsAuthNone(rhs[idx])
+}
+
+func chainExprContainsAuthNone(expr ast.Expr, facts authNoneChainFacts) bool {
+	if chainLiteralContainsAuthNone(expr) {
+		return true
+	}
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return facts.vars[e.Name]
+	case *ast.CallExpr:
+		id, ok := e.Fun.(*ast.Ident)
+		return ok && facts.funcs[id.Name]
+	default:
+		return false
+	}
+}
+
+func TestFindInternalListenerAuthNoneChain_CatchesLiteralVarAndHelper(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
+)
+
+func main() {
+	chain := []cell.ListenerAuth{cell.AuthNone{}}
+	bootstrap.WithListener(cell.InternalListener, ":9090", chain)
+	bootstrap.WithListener(cell.InternalListener, ":9091", insecureInternalAuth())
+}
+
+func insecureInternalAuth() []cell.ListenerAuth {
+	return []cell.ListenerAuth{cell.AuthNone{}}
+}
+`
+	require.NoError(t, os.WriteFile(path, []byte(src), 0o644))
+
+	lines, err := findInternalListenerAuthNoneChain(path)
+
+	require.NoError(t, err)
+	assert.Len(t, lines, 2)
+}
+
+func isWithListenerCall(call *ast.CallExpr) bool {
+	switch fn := call.Fun.(type) {
+	case *ast.SelectorExpr:
+		return fn.Sel.Name == "WithListener"
+	case *ast.Ident:
+		return fn.Name == "WithListener"
+	default:
+		return false
+	}
+}
+
+func isInternalListenerRef(expr ast.Expr) bool {
+	sel, ok := expr.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "InternalListener"
+}
+
+func chainLiteralContainsAuthNone(expr ast.Expr) bool {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	for _, elt := range lit.Elts {
+		if isAuthNoneComposite(elt) {
+			return true
+		}
+	}
+	return false
+}
+
+func isAuthNoneComposite(expr ast.Expr) bool {
+	lit, ok := expr.(*ast.CompositeLit)
+	if !ok {
+		return false
+	}
+	sel, ok := lit.Type.(*ast.SelectorExpr)
+	return ok && sel.Sel.Name == "AuthNone"
 }
 
 // testSEC03AdapterTLSValidation verifies that adapters/redis, adapters/vault,

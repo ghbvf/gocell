@@ -22,6 +22,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 // validateAuthPlanAssemblyMatch enforces the single-assembly invariant:
@@ -114,6 +115,83 @@ func (b *Bootstrap) validateAuthChainJWTSingleton() error {
 		if err := checkJWTSingleton(ref.String(), cfg.authChain); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateAuthNoneExclusive rejects chains that mix AuthNone with real auth
+// plans. AuthNone is an explicit no-auth declaration, not a decoration; mixing
+// it with guards makes startup logs and reviews ambiguous.
+func (b *Bootstrap) validateAuthNoneExclusive() error {
+	for ref, cfg := range b.listenerConfigs {
+		hasNone := false
+		hasGuard := false
+		for _, plan := range cfg.authChain {
+			if _, ok := plan.(cell.AuthNone); ok {
+				hasNone = true
+				continue
+			}
+			hasGuard = true
+		}
+		if hasNone && hasGuard {
+			return errcode.New(errcode.ErrCellInvalidConfig,
+				fmt.Sprintf("listener %q: AuthNone cannot be mixed with other ListenerAuth plans; "+
+					"use []cell.ListenerAuth{cell.AuthNone{}} only for no-auth listeners or remove AuthNone from protected chains",
+					ref.String()))
+		}
+	}
+	return nil
+}
+
+// validateAuthServiceTokenPlans catches malformed AuthServiceToken literals at
+// phase0. The public constructor already enforces these invariants, but direct
+// struct literals can otherwise reach phase5 and fail inside HTTP middleware
+// assembly rather than at the option boundary.
+func (b *Bootstrap) validateAuthServiceTokenPlans() error {
+	for ref, cfg := range b.listenerConfigs {
+		seen := 0
+		for i, plan := range cfg.authChain {
+			p, ok := plan.(cell.AuthServiceToken)
+			if !ok {
+				continue
+			}
+			seen++
+			if seen > 1 {
+				return errcode.New(errcode.ErrCellInvalidConfig,
+					fmt.Sprintf("listener %q: at most one AuthServiceToken plan allowed in authChain",
+						ref.String()))
+			}
+			if err := validateAuthServiceTokenPlan(ref.String(), i, p); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func validateAuthServiceTokenPlan(listener string, position int, p cell.AuthServiceToken) error {
+	if validation.IsNilInterface(p.Store) {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("listener %q: AuthServiceToken at position %d Store must not be nil; "+
+				"construct it with cell.MustNewAuthServiceToken(store, ring)",
+				listener, position))
+	}
+	if validation.IsNilInterface(p.Ring) {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("listener %q: AuthServiceToken at position %d Ring must not be nil; "+
+				"construct it with cell.MustNewAuthServiceToken(store, ring)",
+				listener, position))
+	}
+	if p.Store.Kind() == cell.NonceStoreKindNoop {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("listener %q: AuthServiceToken at position %d Store must not be NonceStoreKindNoop; "+
+				"service-token guards require replay protection",
+				listener, position))
+	}
+	if got := len(p.Ring.Current()); got < cell.MinHMACKeyBytes {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("listener %q: AuthServiceToken at position %d Ring.Current() returned %d bytes, minimum is %d",
+				listener, position, got, cell.MinHMACKeyBytes))
 	}
 	return nil
 }

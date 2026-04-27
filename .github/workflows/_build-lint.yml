@@ -248,6 +248,8 @@ jobs:
           cache-dependency-path: go.sum
 
       - name: Integration tests (testcontainers)
+        env:
+          GOCELL_TEST_DOCKER_REQUIRED: "1"
         # cmd/corebundle contains e2e outbox integration tests (outbox_e2e_integration_test.go)
         # that require PG testcontainers. Include it so A11 + F1 regression guards run in CI.
         # examples/ssobff carries the end-to-end walkthrough test (AUTH-SETUP-01
@@ -272,7 +274,18 @@ jobs:
         # that never started in this job. Compile-time tag regressions
         # for the smoke / encryption packages remain covered by the e2e
         # job's `go test -tags=e2e ./tests/e2e/...`.
-        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+        # tests/testutil owns shared testcontainer startup helpers; include it
+        # so new non-test helper code is covered by its own integration
+        # contract tests instead of relying on downstream packages.
+        run: go test -tags=integration,e2e -covermode=atomic -coverprofile=coverage-integration.out ./adapters/... ./tests/integration/... ./tests/testutil/... ./tests/e2e/internal/... ./cmd/corebundle/... ./examples/ssobff/... ./cells/accesscore/slices/identitymanage/... ./runtime/bootstrap/... -count=1 -timeout 15m
+
+      - name: OTel collector smoke
+        env:
+          GOCELL_TEST_DOCKER_REQUIRED: "1"
+        # Keep the PR/push gate focused on the single real OTLP/gRPC collector
+        # round-trip. The nightly/manual workflow still runs the full package
+        # under the same tags as a compatibility patrol.
+        run: go test -tags=integration,otelcollector ./adapters/otel/... -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m
 
       - name: Upload integration coverage profile
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2

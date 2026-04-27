@@ -223,6 +223,104 @@ func TestValidateAuthPlanMTLSBindings(t *testing.T) {
 	// longer exists; mTLS bindings are validated only at listener scope.
 }
 
+func TestValidateAuthNoneExclusive(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		chain   []cell.ListenerAuth
+		wantErr bool
+	}{
+		{name: "AuthNone alone accepted", chain: []cell.ListenerAuth{cell.AuthNone{}}},
+		{name: "guard alone accepted", chain: []cell.ListenerAuth{cell.AuthMTLS{}}},
+		{name: "AuthNone mixed with guard rejected", chain: []cell.ListenerAuth{cell.AuthNone{}, cell.AuthMTLS{}}, wantErr: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := bootstrapWithListener(cell.PrimaryListener, tc.chain, nil)
+
+			err := b.validateAuthNoneExclusive()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "AuthNone cannot be mixed")
+			assert.Contains(t, err.Error(), cell.PrimaryListener.String())
+		})
+	}
+}
+
+func TestValidateAuthServiceTokenPlans(t *testing.T) {
+	t.Parallel()
+
+	validPlan := cell.MustNewAuthServiceToken(&applyStubNonceStore{}, &applyStubHMACKeyring{})
+
+	tests := []struct {
+		name    string
+		chain   []cell.ListenerAuth
+		wantErr string
+	}{
+		{
+			name:  "accepts one service token",
+			chain: []cell.ListenerAuth{validPlan},
+		},
+		{
+			name:  "accepts mtls plus one service token",
+			chain: []cell.ListenerAuth{cell.AuthMTLS{}, validPlan},
+		},
+		{
+			name: "rejects duplicate service token",
+			chain: []cell.ListenerAuth{
+				validPlan,
+				validPlan,
+			},
+			wantErr: "at most one AuthServiceToken",
+		},
+		{
+			name: "rejects nil nonce store",
+			chain: []cell.ListenerAuth{
+				cell.AuthServiceToken{Store: nil, Ring: &applyStubHMACKeyring{}},
+			},
+			wantErr: "Store must not be nil",
+		},
+		{
+			name: "rejects nil keyring",
+			chain: []cell.ListenerAuth{
+				cell.AuthServiceToken{Store: &applyStubNonceStore{}, Ring: nil},
+			},
+			wantErr: "Ring must not be nil",
+		},
+		{
+			name: "rejects noop nonce store literal",
+			chain: []cell.ListenerAuth{
+				cell.AuthServiceToken{Store: &applyNoopNonceStore{}, Ring: &applyStubHMACKeyring{}},
+			},
+			wantErr: "NonceStoreKindNoop",
+		},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			b := bootstrapWithListener(cell.InternalListener, tc.chain, nil)
+
+			err := b.validateAuthServiceTokenPlans()
+			if tc.wantErr == "" {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.wantErr)
+			assert.Contains(t, err.Error(), cell.InternalListener.String())
+		})
+	}
+}
+
 // ─── TestCheckJWTSingleton (unit test of inner helper) ───────────────────────
 
 func TestCheckJWTSingleton(t *testing.T) {

@@ -109,6 +109,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	subject := p.Subject
+	r = r.WithContext(httputil.WithListErrorLogSampling(r.Context(), specAuditList.ID))
 
 	actorID := r.URL.Query().Get("actorId")
 	if actorID == "" {
@@ -129,8 +130,8 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	if fromStr := r.URL.Query().Get("from"); fromStr != "" {
 		t, err := time.Parse(time.RFC3339Nano, fromStr)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, http.StatusBadRequest, string(errcode.ErrInvalidTimeFormat),
-				"invalid 'from' parameter: expected RFC3339 format")
+			httputil.WritePageDomainError(r.Context(), w, errcode.New(errcode.ErrInvalidTimeFormat,
+				"invalid 'from' parameter: expected RFC3339 format"))
 			return
 		}
 		filters.From = t
@@ -138,8 +139,8 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 	if toStr := r.URL.Query().Get("to"); toStr != "" {
 		t, err := time.Parse(time.RFC3339Nano, toStr)
 		if err != nil {
-			httputil.WriteError(r.Context(), w, http.StatusBadRequest, string(errcode.ErrInvalidTimeFormat),
-				"invalid 'to' parameter: expected RFC3339 format")
+			httputil.WritePageDomainError(r.Context(), w, errcode.New(errcode.ErrInvalidTimeFormat,
+				"invalid 'to' parameter: expected RFC3339 format"))
 			return
 		}
 		filters.To = t
@@ -152,7 +153,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.Query(r.Context(), filters, pageReq)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WritePageDomainError(r.Context(), w, err)
 		return
 	}
 

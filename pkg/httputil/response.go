@@ -13,7 +13,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-const msgInternalServerError = "internal server error"
+const (
+	msgInternalServerError = "internal server error"
+	msgGatewayTimeout      = "gateway timeout"
+	msgServiceUnavailable  = "service unavailable"
+)
 
 // StatusClientClosedRequest is nginx's non-standard 499 status code returned
 // when the client closes the connection before the server finishes
@@ -33,15 +37,31 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 }
 
 // WritePublicError writes a structured error response with the given message
-// verbatim, even for 5xx status codes. Use this for framework-level errors
-// where the message is deliberately chosen and safe to expose (e.g. "service
-// unavailable" for circuit breaker 503, "gateway timeout" for proxy 504).
+// verbatim, even for 5xx status codes. For 5xx responses, the code is reduced
+// to a status-level public code and the original code is logged. Use this for
+// framework-level errors where the message is deliberately chosen and safe to
+// expose (e.g. "service unavailable" for circuit breaker 503, "gateway
+// timeout" for proxy 504).
 //
 // Most callers should use WriteError instead, which masks 5xx messages to
 // prevent accidental information leakage.
 func WritePublicError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
+	respCode := code
+	if status >= 500 {
+		respCode = string(errcode.PublicCodeForStatus(status))
+		if code != respCode {
+			logAttrs := []any{
+				slog.String("code", code),
+				slog.String("public_code", respCode),
+				slog.Int("status", status),
+			}
+			logAttrs = appendCorrelationAttrs(ctx, logAttrs)
+			slog.Error("write public error (5xx)", logAttrs...)
+		}
+	}
+
 	errBody := map[string]any{
-		"code":    code,
+		"code":    respCode,
 		"message": message,
 		"details": map[string]any{},
 	}
@@ -65,20 +85,26 @@ func WritePublicError(ctx context.Context, w http.ResponseWriter, status int, co
 // If ctx carries a request_id (via ctxkeys), it is included in the response.
 // Callers that need additional response headers (e.g. Retry-After) must set
 // them before calling WriteError, as it calls w.WriteHeader internally.
-// For 5xx responses, message is forced to "internal server error" to prevent
-// accidental information leakage through this low-level function.
+// For 5xx responses, message and code are reduced to status-level public
+// values to prevent accidental information leakage through this low-level
+// function.
 func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
 	msg := message
-	if status >= 500 && message != msgInternalServerError {
-		slog.Error("write error (5xx)",
-			slog.String("code", code),
-			slog.String("message", message),
-		)
-		msg = msgInternalServerError
+	respCode := code
+	if status >= 500 {
+		respCode = string(errcode.PublicCodeForStatus(status))
+		if message != msgInternalServerError || code != respCode {
+			slog.Error("write error (5xx)",
+				slog.String("code", code),
+				slog.String("public_code", respCode),
+				slog.String("message", message),
+			)
+		}
+		msg = public5xxMessage(status)
 	}
 
 	errBody := map[string]any{
-		"code":    code,
+		"code":    respCode,
 		"message": msg,
 		"details": map[string]any{},
 	}
@@ -116,8 +142,9 @@ func WriteDecodeError(ctx context.Context, w http.ResponseWriter, err error) {
 
 // WriteDomainError inspects err and writes the appropriate HTTP error response.
 //   - If err is an *errcode.Error the error code is mapped to an HTTP status.
-//     For 5xx responses the message is always "internal server error" and the
-//     original detail is logged via slog. For other statuses Message is used.
+//     For 5xx responses the message and code are reduced to status-level public
+//     values, and the original detail is logged via slog. For other statuses
+//     Message is used.
 //   - Otherwise a generic 500 "internal server error" is returned and the
 //     original error is logged via slog.
 func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
@@ -155,6 +182,10 @@ func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
 // span attribute client.cancel.reason and is sourced from
 // ctxcancel.Wrap → ecErr.Details["reason"].
 func log4xx(ctx context.Context, label string, ecErr *errcode.Error, status int) {
+	if !shouldLogClientError(ctx) {
+		return
+	}
+
 	logAttrs := []any{
 		slog.String("code", string(ecErr.Code)),
 		slog.Int("status", status),
@@ -215,10 +246,11 @@ func appendCorrelationAttrs(ctx context.Context, attrs []any) []any {
 // WriteDomainError when the error is an *errcode.Error. It handles:
 //   - Status mapping via MapCodeToStatus
 //   - 4xx: details pass-through, original message, slog.Warn per observability.md
-//   - 5xx: details stripped, message masked, structured logging with
+//   - 5xx: details stripped, message/code masked, structured logging with
 //     cause/internal/request_id/trace_id/span_id per observability.md
 func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string, ecErr *errcode.Error) {
 	status := MapCodeToStatus(ecErr.Code)
+	respCode := string(ecErr.Code)
 	details := ecErr.Details
 	if details == nil {
 		details = map[string]any{}
@@ -245,12 +277,13 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 		// Log structured fields per observability.md:
 		// "Error 级别必须含完整 error + 关联业务字段"
 		log5xx(ctx, label, ecErr)
-		msg = msgInternalServerError
+		msg = public5xxMessage(status)
+		respCode = string(errcode.PublicCodeForStatus(status))
 		details = map[string]any{}
 	}
 
 	errBody := map[string]any{
-		"code":    string(ecErr.Code),
+		"code":    respCode,
 		"message": msg,
 		"details": details,
 	}
@@ -265,6 +298,16 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	}); encErr != nil {
 		slog.Error("httputil: encode error response", slog.Any("error", encErr))
 	}
+}
+
+func public5xxMessage(status int) string {
+	if status == http.StatusServiceUnavailable {
+		return msgServiceUnavailable
+	}
+	if status == http.StatusGatewayTimeout {
+		return msgGatewayTimeout
+	}
+	return msgInternalServerError
 }
 
 // MapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.

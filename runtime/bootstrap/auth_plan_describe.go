@@ -70,6 +70,20 @@ func chainContainsAuthMTLS(chain []cell.ListenerAuth) bool {
 	return false
 }
 
+// chainContainsInternalGuard reports whether the listener chain has the
+// service-token guard required for /internal/v1/* routes. JWT is intentionally
+// excluded: internal routes use service-token auth so RoleInternalAdmin can be
+// injected for route policies. AuthMTLS may be layered with service-token, but
+// mTLS alone does not currently establish an internal admin principal.
+func chainContainsInternalGuard(chain []cell.ListenerAuth) bool {
+	for _, p := range chain {
+		if _, ok := p.(cell.AuthServiceToken); ok {
+			return true
+		}
+	}
+	return false
+}
+
 // explicitAuthNone reports whether the chain contains at least one AuthNone
 // entry, distinguishing a deliberate AuthNone{} from a nil/empty chain omission.
 // Used by the OPS-07 non-loopback Warn log to help operators distinguish

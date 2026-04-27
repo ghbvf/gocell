@@ -78,8 +78,8 @@ type SharedDeps struct {
 	ConsumerClaimerKind consumerClaimerKind
 
 	// InternalGuard is the service-token guard protecting /internal/v1/*.
-	// Required when Topology.RequireProductionControlPlane() is true; nil in
-	// dev mode (empty GOCELL_SERVICE_SECRET).
+	// Required in every mode; internalGuardFromEnv rejects an empty
+	// GOCELL_SERVICE_SECRET before runtime listener wiring.
 	//
 	// Held as a typed value (rather than a bare middleware closure) so
 	// validateControlPlane can inspect the backing NonceStore and reject
@@ -238,6 +238,7 @@ func (d *SharedDeps) Validate() error {
 	errs := d.validateCore()
 	errs = append(errs, d.validateVerboseEndpoint()...)
 	errs = append(errs, d.validateHealthReachability()...)
+	errs = append(errs, d.validateInternalListenerGuard()...)
 	errs = append(errs, d.validateControlPlane()...)
 	return errors.Join(errs...)
 }
@@ -346,6 +347,9 @@ func (d *SharedDeps) validateControlPlane() []error {
 				"InMemoryNonceStore (single pod) or a shared store (multi-pod) "+
 				"via WithServiceTokenNonceStore"))
 	} else if kind == auth.NonceStoreKindInMemory && !d.Topology.SinglePodReplayProtection && d.Topology.RequireProductionControlPlane() {
+		slog.Warn("controlplane: in-memory nonce store rejected for multi-pod deployment",
+			slog.String("nonce_store_kind", string(kind)),
+			slog.String("hint", "set GOCELL_SINGLE_POD=1 for single-pod deployments or configure a distributed NonceStore"))
 		errs = append(errs, errcode.New(errcode.ErrControlplaneNonceStoreMissing,
 			"in-memory nonce store requires GOCELL_SINGLE_POD=1 (single-pod deployments) "+
 				"or a distributed store via WithServiceTokenNonceStore (multi-pod); "+
@@ -357,6 +361,18 @@ func (d *SharedDeps) validateControlPlane() []error {
 				"outbox idempotency claimer; set "+envRedisAddr+" or run with GOCELL_SINGLE_POD=1"))
 	}
 	return errs
+}
+
+func (d *SharedDeps) validateInternalListenerGuard() []error {
+	if d.InternalHTTPAddr == "" {
+		return []error{errcode.New(errcode.ErrValidationFailed,
+			"SharedDeps.InternalHTTPAddr must be set; the internal listener is always enabled and protected by GOCELL_SERVICE_SECRET")}
+	}
+	if d.InternalGuard != nil {
+		return nil
+	}
+	return []error{errcode.New(errcode.ErrControlplaneServiceSecretMissing,
+		"SharedDeps.InternalGuard must be set to protect /internal/v1/*; set GOCELL_SERVICE_SECRET")}
 }
 
 func (d *SharedDeps) validateHealthReachability() []error {
@@ -424,6 +440,27 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 
 	eb := eventbus.New()
 
+	primaryAddr := os.Getenv("GOCELL_HTTP_PRIMARY_ADDR")
+	if primaryAddr == "" {
+		primaryAddr = ":8080"
+	}
+	internalAddr := os.Getenv("GOCELL_HTTP_INTERNAL_ADDR")
+	if internalAddr == "" {
+		// Default to loopback for local development; startup still requires
+		// GOCELL_SERVICE_SECRET so the listener is service-token guarded in
+		// every mode. Operators binding to an internal VPC interface must set
+		// GOCELL_HTTP_INTERNAL_ADDR explicitly.
+		internalAddr = "127.0.0.1:9090"
+	}
+	healthAddr := os.Getenv("GOCELL_HTTP_HEALTH_ADDR")
+	if healthAddr == "" {
+		// Separate loopback port for local /healthz /readyz /metrics access.
+		// Real-mode PodIP/Service probes must set a Pod-reachable bind such as
+		// :9091, or explicitly opt into same-netns access with
+		// GOCELL_HTTP_HEALTH_LOCAL_ONLY=1.
+		healthAddr = "127.0.0.1:9091"
+	}
+
 	internalGuard, err := internalGuardFromEnv(adapterMode, replay.NonceStore)
 	if err != nil {
 		return nil, err
@@ -455,28 +492,6 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 			slog.Warn("GOCELL_HTTP_ADDR is no longer consumed (PR-A14a dual-listener); set GOCELL_HTTP_PRIMARY_ADDR and GOCELL_HTTP_INTERNAL_ADDR instead",
 				slog.String("legacy_value", legacy))
 		}
-	}
-
-	primaryAddr := os.Getenv("GOCELL_HTTP_PRIMARY_ADDR")
-	if primaryAddr == "" {
-		primaryAddr = ":8080"
-	}
-	internalAddr := os.Getenv("GOCELL_HTTP_INTERNAL_ADDR")
-	if internalAddr == "" {
-		// Default to loopback so a dev-mode deployment without a
-		// service-token guard is not trivially reachable across the
-		// network. Operators binding to an internal VPC interface must set
-		// GOCELL_HTTP_INTERNAL_ADDR explicitly.
-		internalAddr = "127.0.0.1:9090"
-	}
-
-	healthAddr := os.Getenv("GOCELL_HTTP_HEALTH_ADDR")
-	if healthAddr == "" {
-		// Separate loopback port for local /healthz /readyz /metrics access.
-		// Real-mode PodIP/Service probes must set a Pod-reachable bind such as
-		// :9091, or explicitly opt into same-netns access with
-		// GOCELL_HTTP_HEALTH_LOCAL_ONLY=1.
-		healthAddr = "127.0.0.1:9091"
 	}
 
 	deps := &SharedDeps{
