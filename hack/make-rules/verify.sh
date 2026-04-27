@@ -24,17 +24,41 @@ if [[ ${#scripts[@]} -eq 0 ]]; then
     exit 1
 fi
 
+declare -a results=()
 fails=()
 for script in "${scripts[@]}"; do
     name="$(basename "${script}")"
     gocell::log::status "Running ${name}"
     if ! bash "${script}"; then
         fails+=("${name}")
+        results+=("${name}|FAIL")
         gocell::log::status "FAIL: ${name}"
     else
+        results+=("${name}|PASS")
         gocell::log::status "PASS: ${name}"
     fi
 done
+
+# When invoked under GitHub Actions, write a per-gate status table to the job
+# summary so reviewers can see which gate failed without expanding the step
+# log. Mirrors the gate-level summary that Kubernetes emits via juLog/JUnit.
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+    {
+        echo "## make verify gates"
+        echo
+        echo "| Gate | Status |"
+        echo "| --- | --- |"
+        for entry in "${results[@]}"; do
+            gate="${entry%|*}"
+            status="${entry##*|}"
+            if [[ "${status}" == "PASS" ]]; then
+                echo "| \`${gate}\` | ✅ PASS |"
+            else
+                echo "| \`${gate}\` | ❌ FAIL |"
+            fi
+        done
+    } >> "${GITHUB_STEP_SUMMARY}"
+fi
 
 if [[ ${#fails[@]} -gt 0 ]]; then
     gocell::log::error "verify failures (${#fails[@]}):"
