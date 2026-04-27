@@ -476,9 +476,9 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 	internalAddr := os.Getenv("GOCELL_HTTP_INTERNAL_ADDR")
 	if internalAddr == "" {
-		// Default to loopback so a dev-mode deployment without a
-		// service-token guard is not trivially reachable across the
-		// network. Operators binding to an internal VPC interface must set
+		// Default to loopback for local development; startup still requires
+		// GOCELL_SERVICE_SECRET so the listener is service-token guarded in
+		// every mode. Operators binding to an internal VPC interface must set
 		// GOCELL_HTTP_INTERNAL_ADDR explicitly.
 		internalAddr = "127.0.0.1:9090"
 	}
