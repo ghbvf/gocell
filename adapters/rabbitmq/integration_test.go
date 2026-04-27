@@ -29,6 +29,8 @@ import (
 // ~5-7s more expensive.
 func startRabbitMQDedicatedContainer(t *testing.T, config Config) (*Connection, *tcrabbitmq.RabbitMQContainer, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
+
 	ctx := context.Background()
 
 	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)

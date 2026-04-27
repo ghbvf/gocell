@@ -272,22 +272,38 @@ Integration tests verify adapter behaviour against real infrastructure. They use
 
 1. Create `integration_test.go` in your Cell or adapter package.
 2. Add `//go:build integration` as the first line.
-3. Read infrastructure addresses from environment variables (see `docs/guides/integration-testing.md`).
-4. Each test should be self-contained: create its own resources, run assertions, then clean up.
+3. Start required infrastructure with testcontainers and call `testutil.RequireDocker(t)` before the first container start.
+4. Pass container-returned DSNs directly into the adapter or Cell under test; do not skip on missing external DSN environment variables.
+5. Each test should be self-contained: create its own resources, run assertions, then clean up.
 
 ```go
 //go:build integration
 
 package mycell
 
-import "testing"
+import (
+    "context"
+    "testing"
+
+    "github.com/ghbvf/gocell/tests/testutil"
+    tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
+)
 
 func TestIntegration_MyCellSmoke(t *testing.T) {
-    // Boot cell with real adapters
-    c := NewMyCell(
-        WithPostgresRepo(realRepo),
-    )
+    testutil.RequireDocker(t)
+
     ctx := context.Background()
+    container, err := tcpostgres.Run(ctx, testutil.PostgresImage)
+    require.NoError(t, err)
+    t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+
+    dsn, err := container.ConnectionString(ctx, "sslmode=disable")
+    require.NoError(t, err)
+
+    repo := newPostgresRepo(dsn)
+    c := NewMyCell(
+        WithPostgresRepo(repo),
+    )
     deps := cell.Dependencies{...}
 
     require.NoError(t, c.Init(ctx, deps))
@@ -302,9 +318,8 @@ func TestIntegration_MyCellSmoke(t *testing.T) {
 ### Running
 
 ```bash
-docker compose up -d          # boot infrastructure
-go test -tags integration ./adapters/postgres/... -count=1 -v
-go test -tags integration ./tests/integration/... -count=1 -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./adapters/postgres/... -count=1 -v
+GOCELL_TEST_DOCKER_REQUIRED=1 go test -tags integration ./tests/integration/... -count=1 -v
 ```
 
 See `docs/guides/integration-testing.md` for full details and environment variable reference.

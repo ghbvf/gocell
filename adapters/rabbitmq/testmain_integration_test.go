@@ -44,6 +44,8 @@ var (
 // per-test Connection with its own cleanup.
 func sharedBrokerURL(t *testing.T) string {
 	t.Helper()
+	testutil.RequireDocker(t)
+
 	sharedBrokerOnce.Do(func() {
 		ctx := context.Background()
 		// tcrabbitmq.Run's default wait strategy only watches for the

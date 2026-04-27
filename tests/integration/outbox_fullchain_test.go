@@ -37,6 +37,8 @@ type queueInspector interface {
 
 func setupPostgresContainer(t *testing.T) (*postgres.Pool, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
+
 	ctx := context.Background()
 
 	container, err := tcpostgres.Run(ctx, testutil.PostgresImage,
@@ -67,6 +69,8 @@ func setupPostgresContainer(t *testing.T) (*postgres.Pool, func()) {
 
 func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
+
 	ctx := context.Background()
 
 	container, err := tcrabbitmq.Run(ctx, testutil.RabbitMQImage)
@@ -95,6 +99,8 @@ func setupRabbitMQContainer(t *testing.T) (*rabbitmq.Connection, func()) {
 
 func setupRedisContainer(t *testing.T) (*redis.Client, func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
+
 	ctx := context.Background()
 
 	container, err := tcredis.Run(ctx, testutil.RedisImage)
