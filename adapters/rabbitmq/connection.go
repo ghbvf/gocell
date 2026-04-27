@@ -41,16 +41,16 @@ var (
 	errHealthClosed         = errcode.New(ErrAdapterAMQPConnect, "rabbitmq: connection is closed")
 )
 
-// ConnectionState represents the lifecycle state of a Connection.
+// ConnectionPhase represents the lifecycle state of a Connection.
 //
 // ref: wagslane/go-rabbitmq connection_manager.go — adopted explicit state tracking
 // with RWMutex protection (checkout/checkin pattern). Deviated: uses channel-close
 // signaling instead of checkout callbacks.
-type ConnectionState uint8
+type ConnectionPhase uint8
 
 const (
 	// StateConnecting is the initial state before the first successful connection.
-	StateConnecting ConnectionState = iota
+	StateConnecting ConnectionPhase = iota
 	// StateConnected means the connection is live and ready for use.
 	StateConnected
 	// StateDisconnected means the connection was lost and reconnection is in progress.
@@ -60,7 +60,7 @@ const (
 )
 
 // String returns a human-readable label for the connection state.
-func (s ConnectionState) String() string {
+func (s ConnectionPhase) String() string {
 	switch s {
 	case StateConnecting:
 		return "connecting"
@@ -78,8 +78,19 @@ func (s ConnectionState) String() string {
 // MarshalText implements encoding.TextMarshaler so that JSON serialization
 // of PoolStats.State produces a human-readable string ("connected") instead
 // of a numeric uint8 value.
-func (s ConnectionState) MarshalText() ([]byte, error) {
+func (s ConnectionPhase) MarshalText() ([]byte, error) {
 	return []byte(s.String()), nil
+}
+
+// ConnectionState is a structured diagnostic snapshot for dashboards and
+// operator tooling. LastError is sanitized and must never include AMQP URL
+// credentials.
+type ConnectionState struct {
+	State             ConnectionPhase `json:"state"`
+	Message           string          `json:"message"`
+	LastError         string          `json:"lastError,omitempty"`
+	LastDisconnectAt  time.Time       `json:"lastDisconnectAt,omitempty"`
+	ReconnectAttempts int             `json:"reconnectAttempts"`
 }
 
 // isPermanentDialError returns true if the error from Dial indicates a
@@ -280,7 +291,7 @@ func DefaultDial(url string) (AMQPConnection, error) {
 
 // Connection manages an AMQP connection with auto-reconnect and channel pooling.
 //
-// Connection has four lifecycle states (see ConnectionState):
+// Connection has four lifecycle states (see ConnectionPhase):
 //   - connecting:   initial state before first successful dial
 //   - connected:    ready for use (connected channel is closed)
 //   - disconnected: lost connection, attempting backoff reconnect
@@ -307,7 +318,10 @@ type Connection struct {
 
 	// state tracks the connection lifecycle for Health() and observability.
 	// Protected by mu.
-	state ConnectionState
+	state             ConnectionPhase
+	lastError         string
+	lastDisconnectAt  time.Time
+	reconnectAttempts int
 }
 
 // NewConnection creates a new Connection with the given config.
@@ -386,29 +400,16 @@ func (c *Connection) reconnectLoop() {
 			return
 		}
 
-		closeCh := conn.NotifyClose(make(chan *amqp.Error, 1))
-
-		select {
-		case <-c.closeCh:
+		closeErr, ok := c.waitForCloseNotification(conn)
+		if !ok {
 			return
-		case amqpErr, ok := <-closeCh:
-			if !ok {
-				return
-			}
-			if amqpErr != nil {
-				slog.Warn("rabbitmq: connection lost, reconnecting",
-					slog.Any("error", amqpErr))
-			}
 		}
 
 		// RMQ-RACE-01 fix: create a new connected channel BEFORE draining
 		// the pool so that any concurrent WaitConnected callers who hold a
 		// reference to the old (closed) channel will see a different reference
 		// on re-validation and loop back to wait on the new channel.
-		c.mu.Lock()
-		c.connected = make(chan struct{})
-		c.state = StateDisconnected
-		c.mu.Unlock()
+		c.markDisconnected(closeErr)
 
 		// Drain the channel pool on disconnect.
 		c.drainChannelPool()
@@ -423,6 +424,37 @@ func (c *Connection) reconnectLoop() {
 			return
 		}
 	}
+}
+
+func (c *Connection) waitForCloseNotification(conn AMQPConnection) (*amqp.Error, bool) {
+	closeCh := conn.NotifyClose(make(chan *amqp.Error, 1))
+	select {
+	case <-c.closeCh:
+		return nil, false
+	case amqpErr, ok := <-closeCh:
+		if !ok {
+			return nil, false
+		}
+		if amqpErr != nil {
+			slog.Warn("rabbitmq: connection lost, reconnecting",
+				slog.String("error", sanitizeErrorURL(amqpErr.Error(), c.config.URL)))
+		}
+		return amqpErr, true
+	}
+}
+
+func (c *Connection) markDisconnected(closeErr *amqp.Error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.connected = make(chan struct{})
+	c.state = StateDisconnected
+	c.lastDisconnectAt = time.Now().UTC()
+	c.reconnectAttempts = 0
+	if closeErr != nil {
+		c.lastError = sanitizeErrorURL(closeErr.Error(), c.config.URL)
+		return
+	}
+	c.lastError = "connection close notification received"
 }
 
 // reconnectWithBackoff attempts to re-establish the connection with capped
@@ -452,6 +484,9 @@ func (c *Connection) reconnectWithBackoff() bool {
 		}
 
 		delay := c.backoffDelay(attempt)
+		c.mu.Lock()
+		c.reconnectAttempts = attempt + 1
+		c.mu.Unlock()
 		slog.Warn("rabbitmq: reconnect attempt",
 			slog.Int("attempt", attempt+1),
 			slog.Duration("delay", delay))
@@ -463,9 +498,13 @@ func (c *Connection) reconnectWithBackoff() bool {
 		}
 
 		if err := c.connect(); err != nil {
+			sanitizedErr := sanitizeErrorURL(err.Error(), c.config.URL)
+			c.mu.Lock()
+			c.lastError = sanitizedErr
+			c.mu.Unlock()
 			slog.Warn("rabbitmq: reconnect failed, retrying indefinitely",
 				slog.Int("attempt", attempt+1),
-				slog.String("error", sanitizeErrorURL(err.Error(), c.config.URL)))
+				slog.String("error", sanitizedErr))
 			attempt++
 			continue
 		}
@@ -637,7 +676,7 @@ func (c *Connection) Health(ctx context.Context) error {
 type PoolStats struct {
 	ChannelPoolSize int             `json:"channelPoolSize"` // configured pool capacity (subscriber only)
 	IdleChannels    int             `json:"idleChannels"`    // channels currently idle in pool (subscriber only)
-	State           ConnectionState `json:"state"`           // current connection lifecycle state
+	State           ConnectionPhase `json:"state"`           // current connection lifecycle state
 }
 
 // PoolStats returns structured pool statistics suitable for metrics collection
@@ -653,13 +692,38 @@ func (c *Connection) PoolStats() PoolStats {
 	}
 }
 
-// ConnectionStatus returns the current lifecycle state of the connection.
+// ConnectionStatus returns a structured lifecycle snapshot of the connection.
 // Useful for dashboards, structured logging, and operational tooling.
 func (c *Connection) ConnectionStatus() ConnectionState {
 	c.mu.RLock()
-	s := c.state
+	s := c.connectionStatusLocked()
 	c.mu.RUnlock()
 	return s
+}
+
+func (c *Connection) connectionStatusLocked() ConnectionState {
+	return ConnectionState{
+		State:             c.state,
+		Message:           connectionStateMessage(c.state),
+		LastError:         c.lastError,
+		LastDisconnectAt:  c.lastDisconnectAt,
+		ReconnectAttempts: c.reconnectAttempts,
+	}
+}
+
+func connectionStateMessage(state ConnectionPhase) string {
+	switch state {
+	case StateConnected:
+		return "connected"
+	case StateDisconnected:
+		return "reconnecting"
+	case StateConnecting:
+		return "connecting"
+	case StateTerminal:
+		return "terminal"
+	default:
+		return "unknown"
+	}
 }
 
 // Compile-time assertion: Connection satisfies lifecycle.ManagedResource.
@@ -724,7 +788,24 @@ func (c *Connection) Close(ctx context.Context) error {
 	c.closed = true
 	close(c.closeCh)
 	conn := c.conn
+	status := c.connectionStatusLocked()
+	idleChannels := len(c.channelPool)
 	c.mu.Unlock()
+
+	fields := []slog.Attr{
+		slog.String("reason", "managed_resource_close"),
+		slog.String("state", status.State.String()),
+		slog.String("message", status.Message),
+		slog.Int("reconnectAttempts", status.ReconnectAttempts),
+		slog.Int("idleChannels", idleChannels),
+	}
+	if status.LastError != "" {
+		fields = append(fields, slog.String("lastError", status.LastError))
+	}
+	if !status.LastDisconnectAt.IsZero() {
+		fields = append(fields, slog.Time("lastDisconnectAt", status.LastDisconnectAt))
+	}
+	slog.LogAttrs(ctx, slog.LevelInfo, "rabbitmq: closing connection", fields...)
 
 	c.drainChannelPool()
 

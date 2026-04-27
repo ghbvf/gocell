@@ -132,11 +132,11 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
 
-	// A13: register vault token renewal counters when the KeyProvider exposes them.
-	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
+	// Register Vault diagnostics when the KeyProvider exposes them.
+	if err := registerKeyProviderMetrics(kp, shared); err != nil {
 		shared.SharedPGPool = nil
 		rollback()
-		return nil, nil, nil, fmt.Errorf("configcore: register renewal metrics: %w", err)
+		return nil, nil, nil, fmt.Errorf("configcore: register key provider metrics: %w", err)
 	}
 
 	// Relay opts: in postgres mode, relayOpts contains WithManagedResource(relay)
@@ -164,22 +164,66 @@ type renewalMetricsProvider interface {
 	RenewalMetrics() []prom.Collector
 }
 
-// registerRenewalMetrics registers per-collector metrics exposed by KeyProvider
-// implementations that satisfy renewalMetricsProvider. Returns error on
-// registration failures other than AlreadyRegisteredError.
-func registerRenewalMetrics(kp kcrypto.KeyProvider, reg prom.Registerer) error {
+type keyProviderMetricsProvider interface {
+	Metrics() []prom.Collector
+}
+
+// registerKeyProviderMetrics registers the current KeyProvider's diagnostics.
+// These collectors may close over provider instance state (GaugeFunc), so a
+// repeated Provide against the same SharedDeps must replace the previous owned
+// collector set instead of reusing or silently ignoring duplicates.
+func registerKeyProviderMetrics(kp kcrypto.KeyProvider, shared *SharedDeps) error {
+	return replaceRegisteredCollectors(
+		shared.PromStack.registry,
+		&shared.keyProviderMetricCollectors,
+		keyProviderMetricCollectors(kp),
+		"key provider metric",
+	)
+}
+
+func keyProviderMetricCollectors(kp kcrypto.KeyProvider) []prom.Collector {
+	if mp, ok := kp.(keyProviderMetricsProvider); ok {
+		return mp.Metrics()
+	}
 	rmp, ok := kp.(renewalMetricsProvider)
 	if !ok {
 		return nil
 	}
-	for _, col := range rmp.RenewalMetrics() {
-		if err := reg.Register(col); err != nil {
-			if _, ok := err.(prom.AlreadyRegisteredError); !ok {
-				return fmt.Errorf("vault renewal metric: %w", err)
-			}
+	return rmp.RenewalMetrics()
+}
+
+func replaceRegisteredCollectors(reg prom.Registerer, current *[]prom.Collector, next []prom.Collector, label string) error {
+	previous := append([]prom.Collector(nil), (*current)...)
+	unregisterCollectors(reg, previous)
+
+	registered, err := registerCollectorSet(reg, next, label)
+	if err != nil {
+		unregisterCollectors(reg, registered)
+		if _, restoreErr := registerCollectorSet(reg, previous, label+" restore"); restoreErr != nil {
+			return fmt.Errorf("%w (also failed to restore previous collectors: %v)", err, restoreErr)
 		}
+		return err
 	}
+
+	*current = registered
 	return nil
+}
+
+func registerCollectorSet(reg prom.Registerer, collectors []prom.Collector, label string) ([]prom.Collector, error) {
+	registered := make([]prom.Collector, 0, len(collectors))
+	for _, col := range collectors {
+		if err := reg.Register(col); err != nil {
+			return registered, fmt.Errorf("%s: %w", label, err)
+		}
+		registered = append(registered, col)
+	}
+	return registered, nil
+}
+
+func unregisterCollectors(reg prom.Registerer, collectors []prom.Collector) {
+	for _, col := range collectors {
+		reg.Unregister(col)
+	}
 }
 
 // registerOrReuseCounter registers a new counter with the given opts. If the

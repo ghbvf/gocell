@@ -136,13 +136,13 @@ func TestConfigCoreModule_Provide_UsesConfigCoreDatabaseURL(t *testing.T) {
 
 	pgRes := provisional[0]
 
-	// Verify the ManagedResource exposes a "postgres" checker (the name used by
+	// Verify the ManagedResource exposes a "postgres_ready" checker (the name used by
 	// adapterpg.PGResource) and that it reports healthy against the live container
 	// started by setupPostgresForMain.
 	checkers := pgRes.Checkers()
-	pgChecker, ok := checkers["postgres"]
-	require.True(t, ok, "ManagedResource must expose a \"postgres\" checker (adapterpg.PGResource default name)")
-	require.NoError(t, pgChecker(ctx), "postgres checker must pass for the live container DSN")
+	pgChecker, ok := checkers["postgres_ready"]
+	require.True(t, ok, "ManagedResource must expose a \"postgres_ready\" checker (adapterpg.PGResource default name)")
+	require.NoError(t, pgChecker(ctx), "postgres_ready checker must pass for the live container DSN")
 
 	// Close the resource to avoid leaking the connection pool.
 	// Ignore the error — the test has already passed at this point and pool
@@ -190,7 +190,7 @@ func TestConfigCoreModule_Provide_RollsBackPGResourceOnRenewalMetricError(t *tes
 	}.Provide(ctx, shared)
 
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "register renewal metrics")
+	assert.Contains(t, err.Error(), "register key provider metrics")
 	assert.Empty(t, provisional, "failed Provide must not return provisional resources")
 	assert.Nil(t, shared.SharedPGPool, "failed Provide must clear the shared PG pool after rollback")
 }

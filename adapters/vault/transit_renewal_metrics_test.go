@@ -13,7 +13,9 @@ package vault
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +26,28 @@ import (
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
+
+func TestTransitKeyProvider_CacheVersionMetrics_ReportsCachedLatestVersion(t *testing.T) {
+	fake := &fakeVaultClient{latestVersion: 7}
+	p := newTestProvider(t, fake)
+
+	collectors := p.CacheVersionMetrics()
+	require.Len(t, collectors, 1)
+	assertCachedKeyVersionMetric(t, collectors[0], 7)
+
+	_, err := p.Rotate(context.Background())
+	require.NoError(t, err)
+	assertCachedKeyVersionMetric(t, collectors[0], 8)
+}
+
+func assertCachedKeyVersionMetric(t *testing.T, collector prometheus.Collector, version int) {
+	t.Helper()
+	expected := strings.NewReader(fmt.Sprintf(`# HELP gocell_vault_cached_key_version Latest Vault Transit key version cached by this process; 0 means cache miss.
+# TYPE gocell_vault_cached_key_version gauge
+gocell_vault_cached_key_version{key_name="gocell-config",mount_path="transit"} %d
+`, version))
+	require.NoError(t, testutil.CollectAndCompare(collector, expected, "gocell_vault_cached_key_version"))
+}
 
 // newRenewalCounters creates a pair of unregistered Prometheus counters for
 // use in tests. The counters are NOT registered in any registry — they are

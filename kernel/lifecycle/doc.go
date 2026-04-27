@@ -45,4 +45,23 @@
 // consumes ManagedResource via WithManagedResource to register /readyz checkers,
 // start/stop the worker, and close the resource in LIFO order during shutdown.
 // See managed_resource.go for the full contract.
+//
+// Implementation checklist:
+//
+//   - Resource owner types implement all three methods directly: Checkers,
+//     Worker, and Close. Subresources that use a caller-owned connection or pool
+//     stay out of the contract and must be listed in the adapter archtest
+//     opt-out table with a category and reason.
+//   - Checkers return stable snake_case probe names. Adapter readiness probes
+//     use the suffix "_ready" (for example, "rabbitmq_ready" and
+//     "vault_transit_ready"). Multi-role workers may use component-role names
+//     only when a single "_ready" probe would hide distinct failure domains.
+//   - Checker functions must accept the caller's context, avoid unbounded I/O,
+//     and return nil only when the specific dependency needed by the adapter is
+//     usable. Prefer business-path probes over generic process health.
+//   - Worker returns nil when no bootstrap-managed goroutine is needed. A nil
+//     Worker is a contract statement, not a fallback path.
+//   - Close must be idempotent, must honour ctx for network/drain operations,
+//     and should log structured diagnostics before discarding state that helps
+//     explain shutdown or reconnect behaviour.
 package lifecycle

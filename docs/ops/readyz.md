@@ -85,13 +85,13 @@ the `X-Readyz-Token` header.
 ```json
 {
   "data": {
-    "status": "healthy",
-    "cells":   { "accesscore": "healthy", "auditcore": "healthy" },
-    "dependencies": {
-      "postgres-ping": { "status": "healthy", "duration_ms": 3 }
-    },
-    "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
-  }
+	    "status": "healthy",
+	    "cells":   { "accesscore": "healthy", "auditcore": "healthy" },
+	    "dependencies": {
+	      "postgres_ready": { "status": "healthy", "duration_ms": 3 }
+	    },
+	    "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
+	  }
 }
 ```
 
@@ -103,12 +103,12 @@ the `X-Readyz-Token` header.
     "code": "ERR_READYZ_UNHEALTHY",
     "message": "readiness checks failed",
     "details": {
-      "cells": { "accesscore": "healthy", "auditcore": "degraded" },
-      "dependencies": {
-        "postgres-ping": { "status": "healthy", "duration_ms": 3 },
-        "rabbitmq": { "status": "unhealthy", "duration_ms": 12,
-                       "error": "connection refused" }
-      },
+	      "cells": { "accesscore": "healthy", "auditcore": "degraded" },
+	      "dependencies": {
+	        "postgres_ready": { "status": "healthy", "duration_ms": 3 },
+	        "rabbitmq_ready": { "status": "unhealthy", "duration_ms": 12,
+	                       "error": "connection refused" }
+	      },
       "adapters": { "storage": "postgres", "eventbus": "rabbitmq" }
     }
   }

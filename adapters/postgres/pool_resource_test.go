@@ -28,8 +28,8 @@ func TestNewPGResource_Fields(t *testing.T) {
 	if res.pool != pool {
 		t.Error("pool field not set correctly")
 	}
-	if res.name != "postgres" {
-		t.Errorf("expected name 'postgres', got %q", res.name)
+	if res.name != "postgres_ready" {
+		t.Errorf("expected name 'postgres_ready', got %q", res.name)
 	}
 }
 
@@ -73,9 +73,9 @@ func TestPGResource_CheckersReturnsNamed(t *testing.T) {
 	if len(checkers) != 1 {
 		t.Fatalf("expected 1 checker, got %d", len(checkers))
 	}
-	fn, ok := checkers["postgres"]
+	fn, ok := checkers["postgres_ready"]
 	if !ok {
-		t.Fatal("expected checker named 'postgres'")
+		t.Fatal("expected checker named 'postgres_ready'")
 	}
 	if fn == nil {
 		t.Error("checker function must not be nil")
@@ -102,7 +102,7 @@ func (s *stubCloser) Close(_ context.Context) error { s.called++; return nil }
 // exactly once and always returns nil.
 func TestPGResource_CloseReturnsNil(t *testing.T) {
 	sc := &stubCloser{}
-	res := &PGResource{name: "postgres", closeOverride: sc}
+	res := &PGResource{name: "postgres_ready", closeOverride: sc}
 
 	if err := res.Close(context.Background()); err != nil {
 		t.Errorf("Close() returned non-nil error: %v", err)
@@ -125,7 +125,7 @@ func TestPGResource_ImplementsManagedResource(t *testing.T) {
 func TestPGResource_CheckerTimeout(t *testing.T) {
 	var receivedDeadline time.Time
 	res := &PGResource{
-		name: "postgres",
+		name: "postgres_ready",
 		healthFunc: func(ctx context.Context) error {
 			dl, _ := ctx.Deadline()
 			receivedDeadline = dl
@@ -134,7 +134,7 @@ func TestPGResource_CheckerTimeout(t *testing.T) {
 	}
 
 	checkers := res.Checkers()
-	fn := checkers["postgres"]
+	fn := checkers["postgres_ready"]
 	if fn == nil {
 		t.Fatal("checker fn must not be nil")
 	}

@@ -155,7 +155,7 @@ func TestIntegration_ConnectionHealth(t *testing.T) {
 
 	err := conn.Health(context.Background())
 	assert.NoError(t, err, "Health should succeed on a live RabbitMQ")
-	assert.Equal(t, StateConnected, conn.ConnectionStatus())
+	assert.Equal(t, StateConnected, conn.ConnectionStatus().State)
 }
 
 // TestIntegration_PublishConsume publishes a message and consumes it
@@ -170,9 +170,9 @@ func TestIntegration_PublishConsume(t *testing.T) {
 
 	// Subscribe and receive.
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       queueName,
-		PrefetchCount:   1,
-		DLXExchange:     "test.dlx",
+		QueueName:     queueName,
+		PrefetchCount: 1,
+		DLXExchange:   "test.dlx",
 	})
 
 	ctx := context.Background()
@@ -304,9 +304,9 @@ func TestIntegration_ConsumerBaseRetry(t *testing.T) {
 
 	// --- Start main subscriber with ConsumerBase-wrapped handler ---
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       mainQueue,
-		PrefetchCount:   1,
-		DLXExchange:     dlxExchange,
+		QueueName:     mainQueue,
+		PrefetchCount: 1,
+		DLXExchange:   dlxExchange,
 	})
 
 	var callCount atomic.Int32
@@ -394,7 +394,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 
 	// 1. Verify initial healthy state.
 	require.NoError(t, conn.Health(context.Background()), "initial Health should be nil")
-	assert.Equal(t, StateConnected, conn.ConnectionStatus())
+	assert.Equal(t, StateConnected, conn.ConnectionStatus().State)
 
 	// 2. Force-close all connections via rabbitmqctl.
 	exitCode, _, err := container.Exec(ctx, []string{
@@ -411,8 +411,8 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 
 	// Verify the state is Disconnected (not Terminal).
 	status := conn.ConnectionStatus()
-	assert.True(t, status == StateDisconnected || status == StateConnecting,
-		"state should be Disconnected or Connecting during reconnect, got %s", status)
+	assert.True(t, status.State == StateDisconnected || status.State == StateConnecting,
+		"state should be Disconnected or Connecting during reconnect, got %s", status.State)
 
 	// 4. Health() should recover after reconnect succeeds.
 	require.Eventually(t, func() bool {
@@ -420,7 +420,7 @@ func TestIntegration_ConnectionRecovery(t *testing.T) {
 	}, 10*time.Second, 100*time.Millisecond,
 		"Health() should recover after successful reconnect")
 
-	assert.Equal(t, StateConnected, conn.ConnectionStatus(),
+	assert.Equal(t, StateConnected, conn.ConnectionStatus().State,
 		"state should be Connected after recovery")
 
 	// 5. Verify connection is usable: acquire and release a channel.
@@ -476,9 +476,9 @@ func TestIntegration_DLXBrokerNative(t *testing.T) {
 
 	// --- Start the main subscriber with DLX configured ---
 	sub := NewSubscriber(conn, SubscriberConfig{
-		QueueName:       mainQueue,
-		PrefetchCount:   1,
-		DLXExchange:     dlxExchange,
+		QueueName:     mainQueue,
+		PrefetchCount: 1,
+		DLXExchange:   dlxExchange,
 	})
 
 	subCtx, subCancel := context.WithTimeout(ctx, 20*time.Second)

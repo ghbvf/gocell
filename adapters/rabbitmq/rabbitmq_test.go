@@ -4123,7 +4123,7 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		state    ConnectionState
+		state    ConnectionPhase
 		conn     AMQPConnection
 		permErr  error
 		wantCode errcode.Code
@@ -4185,8 +4185,8 @@ func TestConnection_Health_StateDistinction(t *testing.T) {
 func TestConnection_ConnectionStatus(t *testing.T) {
 	tests := []struct {
 		name  string
-		state ConnectionState
-		want  ConnectionState
+		state ConnectionPhase
+		want  ConnectionPhase
 	}{
 		{"connecting", StateConnecting, StateConnecting},
 		{"connected", StateConnected, StateConnected},
@@ -4203,9 +4203,73 @@ func TestConnection_ConnectionStatus(t *testing.T) {
 				terminalCh: make(chan struct{}),
 				state:      tt.state,
 			}
-			assert.Equal(t, tt.want, c.ConnectionStatus())
+			assert.Equal(t, tt.want, c.ConnectionStatus().State)
 		})
 	}
+}
+
+func TestConnection_ConnectionStatus_StructuredDiagnosticSanitizesError(t *testing.T) {
+	rawURL := "amqp://user:secret@localhost:5672/vhost"
+	disconnectedAt := time.Unix(1714400000, 0).UTC()
+	c := &Connection{
+		config:            Config{URL: rawURL},
+		closeCh:           make(chan struct{}),
+		connected:         make(chan struct{}),
+		terminalCh:        make(chan struct{}),
+		state:             StateDisconnected,
+		lastError:         sanitizeErrorURL("read "+rawURL+": EOF", rawURL),
+		lastDisconnectAt:  disconnectedAt,
+		reconnectAttempts: 2,
+		channelPool:       make(chan AMQPChannel, 1),
+	}
+
+	status := c.ConnectionStatus()
+	assert.Equal(t, StateDisconnected, status.State)
+	assert.Equal(t, "reconnecting", status.Message)
+	assert.Equal(t, disconnectedAt, status.LastDisconnectAt)
+	assert.Equal(t, 2, status.ReconnectAttempts)
+	assert.Contains(t, status.LastError, "amqp://***:***@localhost:5672/vhost")
+
+	b, err := json.Marshal(status)
+	require.NoError(t, err)
+	assert.NotContains(t, string(b), "secret")
+	assert.NotContains(t, string(b), "user:secret@")
+	assert.Contains(t, string(b), `"state":"disconnected"`)
+	assert.Contains(t, string(b), `"reconnectAttempts":2`)
+}
+
+func TestConnection_Close_LogsStructuredDiagnostic(t *testing.T) {
+	var buf bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	rawURL := "amqp://user:secret@localhost:5672/vhost"
+	mockConn := newMockConnection()
+	c := &Connection{
+		config:            Config{URL: rawURL},
+		conn:              mockConn,
+		closeCh:           make(chan struct{}),
+		connected:         make(chan struct{}),
+		terminalCh:        make(chan struct{}),
+		channelPool:       make(chan AMQPChannel, 3),
+		state:             StateDisconnected,
+		lastError:         sanitizeErrorURL("lost "+rawURL, rawURL),
+		lastDisconnectAt:  time.Unix(1714400000, 0).UTC(),
+		reconnectAttempts: 2,
+	}
+	c.channelPool <- newMockChannel()
+
+	require.NoError(t, c.Close(context.Background()))
+
+	logLine := buf.String()
+	assert.Contains(t, logLine, `"msg":"rabbitmq: closing connection"`)
+	assert.Contains(t, logLine, `"reason":"managed_resource_close"`)
+	assert.Contains(t, logLine, `"state":"disconnected"`)
+	assert.Contains(t, logLine, `"reconnectAttempts":2`)
+	assert.Contains(t, logLine, `"idleChannels":1`)
+	assert.NotContains(t, logLine, "secret")
+	assert.NotContains(t, logLine, "user:secret@")
 }
 
 func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
@@ -4241,7 +4305,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 	defer conn.Close(context.Background()) //nolint:errcheck
 
 	// Initial state: Connected.
-	assert.Equal(t, StateConnected, conn.ConnectionStatus(), "initial state should be Connected")
+	assert.Equal(t, StateConnected, conn.ConnectionStatus().State, "initial state should be Connected")
 
 	// Wait for reconnectLoop to register NotifyClose.
 	require.Eventually(t, func() bool {
@@ -4264,7 +4328,7 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 		return dialCount >= 2
 	}, 2*time.Second, time.Millisecond)
 
-	assert.Equal(t, StateDisconnected, conn.ConnectionStatus(),
+	assert.Equal(t, StateDisconnected, conn.ConnectionStatus().State,
 		"state should be Disconnected during reconnect")
 
 	// Unblock reconnect.
@@ -4272,20 +4336,20 @@ func TestConnection_ReconnectLoop_StateTransitions(t *testing.T) {
 
 	// State should recover to Connected.
 	require.Eventually(t, func() bool {
-		return conn.ConnectionStatus() == StateConnected
+		return conn.ConnectionStatus().State == StateConnected
 	}, 2*time.Second, time.Millisecond)
 }
 
-func TestConnectionState_String(t *testing.T) {
+func TestConnectionPhase_String(t *testing.T) {
 	tests := []struct {
-		state ConnectionState
+		state ConnectionPhase
 		want  string
 	}{
 		{StateConnecting, "connecting"},
 		{StateConnected, "connected"},
 		{StateDisconnected, "disconnected"},
 		{StateTerminal, "terminal"},
-		{ConnectionState(99), "unknown(99)"},
+		{ConnectionPhase(99), "unknown(99)"},
 	}
 	for _, tt := range tests {
 		assert.Equal(t, tt.want, tt.state.String())

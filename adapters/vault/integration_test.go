@@ -19,35 +19,35 @@ import (
 
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // startVaultContainer starts a Vault dev-mode container for integration tests.
 // The transit secret engine is enabled and the key "gocell-config" is created
-// during init. Returns (addr, token, teardown). Skips the test if the container
-// cannot start (CI without Docker daemon).
+// during init. Returns (addr, token, teardown). Only a missing Docker daemon is
+// allowed to skip; image digest, init command, and address failures must fail.
 func startVaultContainer(t *testing.T) (addr, token string, teardown func()) {
 	t.Helper()
+	testutil.RequireDocker(t)
 	ctx := context.Background()
 
 	container, err := vaultcontainer.Run(ctx,
-		"hashicorp/vault:1.17",
+		testutil.VaultImage,
 		vaultcontainer.WithToken("root-test-token"),
 		vaultcontainer.WithInitCommand(
 			"secrets enable transit",
 			"write -f transit/keys/gocell-config",
 		),
 	)
-	if err != nil {
-		t.Skipf("vault container unavailable: %v", err)
-	}
+	require.NoError(t, err, "start vault container")
 
 	vaultAddr, err := container.HttpHostAddress(ctx)
 	if err != nil {
 		_ = container.Terminate(ctx)
-		t.Skipf("vault container address unavailable: %v", err)
 	}
+	require.NoError(t, err, "get vault container HTTP address")
 
 	teardown = func() {
 		_ = container.Terminate(ctx)
