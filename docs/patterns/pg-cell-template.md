@@ -141,7 +141,7 @@ func (m FooCoreModule) Provide(ctx context.Context, shared *SharedDeps) (
 	}
 
 	// 3. Storage-backend branching via Topology.
-	pgRes, cellOpts, err := buildFooCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus)
+	pgRes, relayOpts, cellOpts, err := buildFooCoreOpts(ctx, shared.Topology, pgCfg, shared.EventBus)
 	if err != nil {
 		return nil, nil, nil, err
 	}
@@ -157,6 +157,9 @@ func (m FooCoreModule) Provide(ctx context.Context, shared *SharedDeps) (
 		opts = append(opts, bootstrap.WithManagedResource(pgRes))
 		provisional = append(provisional, pgRes)
 	}
+	// Relay opts are registered after pgRes so bootstrap's LIFO shutdown stops
+	// the relay before closing the pool it uses.
+	opts = append(opts, relayOpts...)
 	return c, opts, provisional, nil
 }
 
@@ -184,40 +187,41 @@ func buildFooCoreOpts(
 	topo bootstrap.Topology,
 	pgCfg adapterpg.Config,
 	pub outbox.Publisher,
-) (kernellifecycle.ManagedResource, []foocore.Option, error) {
+) (kernellifecycle.ManagedResource, []bootstrap.Option, []foocore.Option, error) {
 	switch topo.StorageBackend {
 	case "postgres":
 		if pgCfg.DSN == "" {
-			return nil, nil, fmt.Errorf("foocore postgres mode requires GOCELL_FOOCORE_DATABASE_URL")
+			return nil, nil, nil, fmt.Errorf("foocore postgres mode requires GOCELL_FOOCORE_DATABASE_URL")
 		}
 		pool, err := adapterpg.NewPool(ctx, pgCfg)
 		if err != nil {
-			return nil, nil, fmt.Errorf("foocore PG pool: %w", err)
+			return nil, nil, nil, fmt.Errorf("foocore PG pool: %w", err)
 		}
 		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, foocore.MigrationsFS()); schemaErr != nil {
 			_ = pool.Close(ctx)
-			return nil, nil, fmt.Errorf("foocore PG schema guard: %w", schemaErr)
+			return nil, nil, nil, fmt.Errorf("foocore PG schema guard: %w", schemaErr)
 		}
 		outboxWriter := adapterpg.NewOutboxWriter()
 		txMgr := adapterpg.NewTxManager(pool)
 		relayWorker := outboxruntime.NewRelay(adapterpg.NewOutboxStore(pool.DB()), pub,
 			outboxruntime.DefaultRelayConfig())
-		pgRes, resErr := adapterpg.NewPGResource(pool, relayWorker)
+		pgRes, resErr := adapterpg.NewPGResource(pool)
 		if resErr != nil {
 			_ = pool.Close(ctx)
-			return nil, nil, fmt.Errorf("foocore PG resource: %w", resErr)
+			return nil, nil, nil, fmt.Errorf("foocore PG resource: %w", resErr)
 		}
 		opts := []foocore.Option{
 			foocore.WithPostgresDefaults(pool.DB(), outboxWriter),
 			foocore.WithTxManager(txMgr),
 		}
-		return pgRes, opts, nil
+		relayOpts := []bootstrap.Option{bootstrap.WithManagedResource(relayWorker)}
+		return pgRes, relayOpts, opts, nil
 
 	case "memory":
-		return nil, []foocore.Option{foocore.WithInMemoryDefaults()}, nil
+		return nil, nil, []foocore.Option{foocore.WithInMemoryDefaults()}, nil
 
 	default:
-		return nil, nil, errcode.New(errcode.ErrValidationFailed,
+		return nil, nil, nil, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("buildFooCoreOpts: unexpected StorageBackend %q", topo.StorageBackend))
 	}
 }
@@ -248,6 +252,13 @@ func buildFooCoreOpts(
    `bootstrap.Run` 在 happy path 管理生命周期（健康检查 + 后台 worker + LIFO Close）。
 2. 作为 `provisional` slice 元素返回——让 `BuildApp` 在**后续模块 Provide 失败**时
    逆序 Close 已开启的连接，防止启动失败时泄漏。
+
+后台 worker 型资源（例如 outbox relay）通过独立
+`bootstrap.WithManagedResource(relayWorker)` 返回，但不塞进 `PGResource`。
+这样 relay 自己的 `Checkers()` 会进入 `/readyz?verbose`，`Worker()/Close()`
+也保持独立；同时 `PGResource.Worker()` 继续为 nil，只表达 pool 的健康检查
+和关闭职责。注册顺序必须是 pool resource 在前、relay opts 在后，bootstrap 的
+LIFO shutdown 才会先停 relay、再关 pool。
 
 ```
 BuildApp 内部逻辑（简化）:

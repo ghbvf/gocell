@@ -18,21 +18,19 @@
 
 | Wave | 剩余 OPEN |
 |---|---|
-| **Wave 2.5** | PR-CFG-1（最小修） / PR-CFG-4 / PR-CFG-6 |
+| **Wave 2.5** | PR-CFG-4 / PR-CFG-6 |
 | **Wave 3** | PR-A15 / A16 / A17 / A36 / A37 / A38 |
 | **Wave 4** | PR-A21 / A22 / A24 / A33 |
 
 > Wave 1 / Wave 2 / Wave 2.5 已清零 / Wave 3 已完工（A14b/A18/A35）/ Wave 4 已完工（A19/A20/A23）/ won't-do（PR-CFG-5）—— 全部从本 plan 删除。
 
-### Wave 2.5 残余（3 PR）
+### Wave 2.5 残余（PR-CFG-1 已关闭，剩 PR-CFG-4 / PR-CFG-6）
 
-#### PR-CFG-1 READYZ-RELAY-PROBE-FORWARD-01（P1, Cx1, 🔴 治理基线收口 — 范围已收窄，~2-4h）
+#### PR-CFG-1 READYZ-RELAY-PROBE-FORWARD-01（✅ 2026-04-27 复核关闭）
 
-**真问题**：`bootstrap.expandManagedResources()` (`runtime/bootstrap/managed_resource.go:63-88`) 已实现"`ManagedResource.Checkers()` 自动聚合到 readyz"（#268 PR-CFG-A 落地），治理约束**已存在**。剩余缺口在 `adapters/postgres/pool_resource.go:71-83`：`PGResource.Checkers()` 仅返回 `"postgres"` pool ping，未把 relay 的 `outbox-relay-poll/reclaim/cleanup` 三探针转发出去。relay 失败时 readyz 仍绿是真实运维盲区。
+**复核结论**：基于 `develop @ b5131358`，relay 已在 `cmd/corebundle/bundle.go::buildConfigCoreOpts` 通过 `bootstrap.WithManagedResource(relayWorker)` 独立注册；`bootstrap.expandManagedResources()` 会自动聚合该 relay 的 `Relay.Checkers()`，因此 `outbox-relay-poll/reclaim/cleanup` 已进入 `/readyz?verbose`。原先“把 relay 探针转发进 `PGResource.Checkers()`”的最小修已经过期；若现在继续实施，会与独立 relay ManagedResource 产生重复 checker key，并被 bootstrap duplicate-checker fail-fast 拦截。
 
-**最小修**：`PGResource.Checkers()` 在返回 map 中合并 relay 的 `HealthCheckers()`（按 `relayHealthChecker` 接口或 `*runtimeoutbox.Relay` 类型断言）；`pool_resource_test.go` 加正向断言。
-**搭车（可选 Cx2）**：archtest 加"adapter 暴露 HealthCheckers 但未桥接到 ManagedResource.Checkers" 防回退；可拆独立 PR。
-**文件**：`adapters/postgres/pool_resource.go` + `pool_resource_test.go` + 可选 `tools/archtest/managed_resource_test.go`（新）。
+**关闭方式**：保持 `PGResource` 只负责 postgres pool probe + pool Close；保持 relay 作为独立 ManagedResource 负责 Worker/Close/Checkers。`docs/patterns/pg-cell-template.md` 已同步该 wiring 模式，避免新 cell 模板复活 `NewPGResource(pool, relayWorker)` 旧写法。
 
 #### PR-CFG-4 CONFIG-READ-METADATA-ADMIN-GATE-01（P1, Cx2, 🔴 安全数据泄漏，~1d）
 
@@ -45,7 +43,7 @@
 
 #### PR-CFG-6 OUTBOX-EMIT-FAILOPEN-DROP-COUNTER-01（P1, Cx2, 🟡 ops 可观测，~3-4h）
 
-**问题**（PR-CFG-1 通用聚合落地后剩余两件）：
+**问题**（relay readyz 聚合路径确认后剩余两件）：
 - (a) `kernel/outbox/emitter.go:101-108` `DirectPublishFailOpen` 分支仅 `slog.Warn` + `return nil`，无任何 metrics counter 自增
 - (b) `tools/archtest/outbox_topic_test.go:217-237` `extractStringField` 检查 `*ast.BasicLit`，遇 `*ast.Ident`（常量引用）/`*ast.SelectorExpr` 时直接 `ok=false` 跳过——常量/变量构造的 topic 漏检
 
@@ -186,19 +184,18 @@
 
 ## Lane 并行执行计划
 
-> 13 条 OPEN 项按文件域 + 主题分 7 条 lane，lane 内串行、lane 间并行。文件域不重叠才能开 worktree 并行；下方 Sprint batch 已按冲突避让。
+> 12 条 OPEN 项按文件域 + 主题分 6 条 lane，lane 内串行、lane 间并行。文件域不重叠才能开 worktree 并行；下方 Sprint batch 已按冲突避让。
 
-### 7 条 lane（剩余开放项）
+### 6 条 lane（剩余开放项）
 
 | Lane | 任务链 | 主要文件域 | 备注 |
 |---|---|---|---|
-| **L1 Health / Adapter** | PR-CFG-1 | `adapters/postgres/pool_resource.go` + 可选 `tools/archtest/managed_resource_test.go` | 🔴 治理基线收口；2-4h 最小修 |
-| **L2 Config / Contracts** | PR-CFG-4 | `cells/configcore/cell_routes.go` + `contracts/http/config/{get,list}/v1/response.schema.json` + `cells/configcore/slices/configread/` | 🔴 安全数据泄漏；1d；前置 #267 PR-CFG-C 已铺基底 |
-| **L3 Outbox / Observability** | PR-CFG-6 → PR-A36 | `kernel/outbox/emitter.go` / `tools/archtest/outbox_topic_test.go` / `runtime/observability/metrics/provider_collector.go` / `runtime/bootstrap/bootstrap_phases.go` / `runtime/http/middleware/metrics.go` | 串行：CFG-6 加 counter 后 A36 重排 label；A36 是 🟠 触发项 |
-| **L4 Auth / Refresh** | PR-A21 → PR-A33 | `runtime/auth/` + `adapters/postgres/refresh_store.go` + migrations 010/011/012 | A21 可能 won't-do（评估）；A33 X12+X13+X14 一批 |
-| **L5 Kernel 新模块** | PR-A15 ‖ PR-A16 ‖ PR-A17 → PR-A24 | `kernel/webhook/` / `kernel/reconcile/` / `runtime/scheduler/` / `kernel/replay/` / `kernel/rollback/` | A15/A16/A17 文件域不重叠可三路并行；A24 v1.1 长期债打包 |
-| **L6 DevTools / Tooling** | PR-A37 → PR-A38 | `cmd/gocell/app/export.go` + `kernel/metadata/export.go` + `tools/depgraph/` | 串行：A38 是 A37 `--include-deps` 提供方 |
-| **L7 Architecture (破坏性)** | PR-A22 Cell ISP | `kernel/cell/` + 所有 `cells/*/cell.go` + examples | 🔴 高风险；独占审，禁止与 L5 / L4 / L2 同 batch（cells/* 大面积冲突） |
+| **L1 Config / Contracts** | PR-CFG-4 | `cells/configcore/cell_routes.go` + `contracts/http/config/{get,list}/v1/response.schema.json` + `cells/configcore/slices/configread/` | 🔴 安全数据泄漏；1d；前置 #267 PR-CFG-C 已铺基底 |
+| **L2 Outbox / Observability** | PR-CFG-6 → PR-A36 | `kernel/outbox/emitter.go` / `tools/archtest/outbox_topic_test.go` / `runtime/observability/metrics/provider_collector.go` / `runtime/bootstrap/bootstrap_phases.go` / `runtime/http/middleware/metrics.go` | 串行：CFG-6 加 counter 后 A36 重排 label；A36 是 🟠 触发项 |
+| **L3 Auth / Refresh** | PR-A21 → PR-A33 | `runtime/auth/` + `adapters/postgres/refresh_store.go` + migrations 010/011/012 | A21 可能 won't-do（评估）；A33 X12+X13+X14 一批 |
+| **L4 Kernel 新模块** | PR-A15 ‖ PR-A16 ‖ PR-A17 → PR-A24 | `kernel/webhook/` / `kernel/reconcile/` / `runtime/scheduler/` / `kernel/replay/` / `kernel/rollback/` | A15/A16/A17 文件域不重叠可三路并行；A24 v1.1 长期债打包 |
+| **L5 DevTools / Tooling** | PR-A37 → PR-A38 | `cmd/gocell/app/export.go` + `kernel/metadata/export.go` + `tools/depgraph/` | 串行：A38 是 A37 `--include-deps` 提供方 |
+| **L6 Architecture (破坏性)** | PR-A22 Cell ISP | `kernel/cell/` + 所有 `cells/*/cell.go` + examples | 🔴 高风险；独占审，禁止与 L4 / L3 / L1 同 batch（cells/* 大面积冲突） |
 
 ### 推荐执行 Sprint
 
@@ -208,11 +205,10 @@
 
 | worktree | PR | 工时 | 文件域 | 冲突检查 |
 |---|---|---|---|---|
-| A | **PR-CFG-1** READYZ-RELAY-PROBE-FORWARD | 2-4h | `adapters/postgres/pool_resource.go` | 与 B / C 无重叠 |
-| B | **PR-CFG-4** CONFIG-READ-METADATA-ADMIN-GATE | 1d | `cells/configcore/` + `contracts/http/config/` | 与 A / C 无重叠 |
-| C | **PR-A37** DEVTOOLS-METADATA-EXPORT | 1d | `cmd/gocell/` + `kernel/metadata/export.go` | 与 A / B 无重叠 |
+| A | **PR-CFG-4** CONFIG-READ-METADATA-ADMIN-GATE | 1d | `cells/configcore/` + `contracts/http/config/` | 与 B 无重叠 |
+| B | **PR-A37** DEVTOOLS-METADATA-EXPORT | 1d | `cmd/gocell/` + `kernel/metadata/export.go` | 与 A 无重叠 |
 
-**原则**：先清两条 🔴（CFG-1 + CFG-4），同窗口起 DX 短链路（A37）。三 worktree 完全独立。
+**原则**：先清 🔴 CFG-4，同窗口起 DX 短链路（A37）。两个 worktree 完全独立；PR-CFG-1 已复核关闭，不再占用 Sprint 入口。
 
 #### Sprint 2（~1.5-2d 净）— Wave 2.5/3 收尾 + 评估项
 
@@ -220,7 +216,7 @@
 |---|---|---|---|---|
 | A | **PR-CFG-6** OUTBOX-EMIT-FAILOPEN-DROP-COUNTER | 3-4h | `kernel/outbox/emitter.go` + `tools/archtest/outbox_topic_test.go` | 无 |
 | A→ | **PR-A36** HTTP-METRICS-LABEL-REALIGN | 4h | `runtime/observability/metrics/provider_collector.go` + `runtime/http/middleware/metrics.go` | CFG-6 合后做（同 lane 串行避免 metrics provider 修改冲突） |
-| B | **PR-A38** TOOLS/DEPGRAPH | 1.5-2d | `tools/depgraph/`（新） | PR-A37（Sprint 1 worktree C）已合 |
+| B | **PR-A38** TOOLS/DEPGRAPH | 1.5-2d | `tools/depgraph/`（新） | PR-A37（Sprint 1 worktree B）已合 |
 | C | **PR-A21** AUTH-JWT-ABSTRACT-EVAL | 0.5-1d | `runtime/auth/` | 无（结论可能 won't-do，先评估） |
 
 **原则**：A 走 Outbox/Observability lane 串行（CFG-6 → A36，避免同改 metrics 包冲突）；B 等 A37 完工启动 depgraph；C 独立评估线，结果写入 backlog 决定继续或关闭。
@@ -250,7 +246,6 @@
 | PR-A | PR-B | 冲突点 | 解决 |
 |---|---|---|---|
 | PR-CFG-6 | PR-A36 | 都触 `runtime/observability/metrics/` | 同 lane 串行（Sprint 2 worktree A） |
-| PR-CFG-1 | PR-A36 | 都触 `runtime/bootstrap/` 边缘 | 不同文件，可并行（CFG-1 改 adapters/postgres，A36 改 bootstrap_phases.go） |
 | PR-A22 | PR-A15/A16/A17 | A22 改 `cells/*/cell.go`，A16 写 example cell，A17 可能加 cell-side scheduler hook | A22 必须独占 sprint，禁止与任何写 cells/* 的 PR 同窗口 |
 | PR-A37 | PR-A38 | A38 是 A37 `--include-deps` 提供方 | 严格串行（Sprint 1 → Sprint 2） |
 | PR-A33 | PR-A21 | 都触 `runtime/auth/` 但 A21 仅评估、A33 改 refresh | 不同 sprint（A21 in Sprint 2 评估；A33 in Sprint 3 实施） |
