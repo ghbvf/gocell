@@ -173,10 +173,11 @@ func ensureRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, htt
 	return state, wrapped, r.WithContext(ctx)
 }
 
-// writeCircuitOpenError writes a 503 response with the ERR_CIRCUIT_OPEN code.
+// writeCircuitOpenError writes a 503 response with a public service-unavailable code.
 // Uses httputil.WritePublicError so the message "service unavailable" is
-// preserved (not masked to "internal server error"), while inheriting the
-// canonical error envelope format.
+// preserved (not masked to "internal server error"), the original circuit-open
+// code stays in server logs, and the response inherits the canonical error
+// envelope format.
 //
 // If the policy implements CircuitBreakerRetryAfter, the Retry-After header
 // is set per RFC 7231 Section 7.1.3.
