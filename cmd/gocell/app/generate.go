@@ -40,6 +40,7 @@ func generateAssembly(args []string) error {
 	fs := flag.NewFlagSet("generate assembly", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
 	module := fs.String("module", "", "Go module path (default: read from go.mod)")
+	boundaryOnly := fs.Bool("boundary-only", false, "regenerate only assemblies/<id>/generated/boundary.yaml; skip entrypoint main.go (used by the regenerate-and-diff CI gate to avoid clobbering hand-extended composition roots)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -73,26 +74,27 @@ func generateAssembly(args []string) error {
 	// Generate.
 	gen := assembly.NewGenerator(project, mod)
 
-	entrypoint, err := gen.GenerateEntrypoint(*id)
-	if err != nil {
-		return fmt.Errorf("generate entrypoint: %w", err)
+	if !*boundaryOnly {
+		entrypoint, err := gen.GenerateEntrypoint(*id)
+		if err != nil {
+			return fmt.Errorf("generate entrypoint: %w", err)
+		}
+		// ref: go-zero goctl — generated file paths driven by configuration
+		asm := project.Assemblies[*id]
+		entrypointRel := asm.Build.Entrypoint
+		if entrypointRel == "" {
+			entrypointRel = filepath.Join("cmd", *id, "main.go")
+		}
+		entrypointPath := filepath.Join(root, entrypointRel)
+		if err := writeGeneratedFile(root, entrypointPath, entrypoint,
+			fmt.Sprintf("assembly %q build.entrypoint %q", *id, entrypointRel)); err != nil {
+			return err
+		}
 	}
 
 	boundary, err := gen.GenerateBoundary(*id)
 	if err != nil {
 		return fmt.Errorf("generate boundary: %w", err)
-	}
-
-	// ref: go-zero goctl — generated file paths driven by configuration
-	asm := project.Assemblies[*id]
-	entrypointRel := asm.Build.Entrypoint
-	if entrypointRel == "" {
-		entrypointRel = filepath.Join("cmd", *id, "main.go")
-	}
-	entrypointPath := filepath.Join(root, entrypointRel)
-	if err := writeGeneratedFile(root, entrypointPath, entrypoint,
-		fmt.Sprintf("assembly %q build.entrypoint %q", *id, entrypointRel)); err != nil {
-		return err
 	}
 
 	// Boundary goes into assemblies/{id}/generated/.

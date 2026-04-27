@@ -15,6 +15,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"text/template"
 	"time"
 
@@ -235,15 +236,107 @@ func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []st
 		}
 	}
 
-	// Hash boundary contracts so that endpoint changes invalidate the fingerprint.
+	// Hash boundary contracts with full structural detail. Each contract's
+	// kind, lifecycle, consistency level, transport details (HTTP method/path/
+	// status/listener/responses, event/command/projection identifiers) and
+	// participant lists are folded in so that any structural drift — even one
+	// that leaves the contract ID unchanged — invalidates the fingerprint and
+	// triggers a boundary.yaml regenerate.
 	for _, cID := range exported {
-		fmt.Fprintf(h, "export:%s\n", cID) //nolint:errcheck
+		writeContractFingerprint(h, "export", cID, g.contracts.Get(cID))
 	}
 	for _, cID := range imported {
-		fmt.Fprintf(h, "import:%s\n", cID) //nolint:errcheck
+		writeContractFingerprint(h, "import", cID, g.contracts.Get(cID))
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil))
+}
+
+// listenerKindFromPath classifies an HTTP path by its listener stripe. Paths
+// under /internal/ map to the InternalListener; everything else (api, admin,
+// webhooks) maps to PrimaryListener. Path moves between stripes are a load-
+// bearing structural change that callers must regenerate boundary.yaml on.
+func listenerKindFromPath(path string) string {
+	if strings.HasPrefix(path, "/internal/") {
+		return "internal"
+	}
+	return "primary"
+}
+
+func sortedIntKeys(m map[int]metadata.HTTPResponseMeta) []int {
+	keys := make([]int, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Ints(keys)
+	return keys
+}
+
+// hashWriter is the interface satisfied by hash.Hash for fingerprint writes.
+type hashWriter interface {
+	Write(p []byte) (n int, err error)
+}
+
+func writeContractFingerprint(h hashWriter, prefix, cID string, c *metadata.ContractMeta) {
+	fmt.Fprintf(h, "%s:%s\n", prefix, cID) //nolint:errcheck
+	if c == nil {
+		return
+	}
+	fmt.Fprintf(h, "%s:%s:kind:%s\n", prefix, cID, c.Kind)                    //nolint:errcheck
+	fmt.Fprintf(h, "%s:%s:lifecycle:%s\n", prefix, cID, c.Lifecycle)          //nolint:errcheck
+	fmt.Fprintf(h, "%s:%s:consistency:%s\n", prefix, cID, c.ConsistencyLevel) //nolint:errcheck
+	fmt.Fprintf(h, "%s:%s:idempotency:%s\n", prefix, cID, c.IdempotencyKey)   //nolint:errcheck
+	fmt.Fprintf(h, "%s:%s:delivery:%s\n", prefix, cID, c.DeliverySemantics)   //nolint:errcheck
+	if c.Replayable != nil {
+		fmt.Fprintf(h, "%s:%s:replayable:%t\n", prefix, cID, *c.Replayable) //nolint:errcheck
+	}
+	for _, t := range sortedCopy(c.Triggers) {
+		fmt.Fprintf(h, "%s:%s:trigger:%s\n", prefix, cID, t) //nolint:errcheck
+	}
+	writeContractEndpointsFingerprint(h, prefix, cID, c)
+}
+
+// writeContractEndpointsFingerprint folds kind-specific endpoint fields into
+// the fingerprint stream. Split out from writeContractFingerprint to keep
+// gocognit ≤ 15 (gocell governance threshold).
+func writeContractEndpointsFingerprint(h hashWriter, prefix, cID string, c *metadata.ContractMeta) {
+	switch c.Kind {
+	case "http":
+		fmt.Fprintf(h, "%s:%s:server:%s\n", prefix, cID, c.Endpoints.Server) //nolint:errcheck
+		for _, x := range sortedCopy(c.Endpoints.Clients) {
+			fmt.Fprintf(h, "%s:%s:client:%s\n", prefix, cID, x) //nolint:errcheck
+		}
+		writeHTTPTransportFingerprint(h, prefix, cID, c.Endpoints.HTTP)
+	case "event":
+		fmt.Fprintf(h, "%s:%s:publisher:%s\n", prefix, cID, c.Endpoints.Publisher) //nolint:errcheck
+		for _, x := range sortedCopy(c.Endpoints.Subscribers) {
+			fmt.Fprintf(h, "%s:%s:subscriber:%s\n", prefix, cID, x) //nolint:errcheck
+		}
+	case "command":
+		fmt.Fprintf(h, "%s:%s:handler:%s\n", prefix, cID, c.Endpoints.Handler) //nolint:errcheck
+		for _, x := range sortedCopy(c.Endpoints.Invokers) {
+			fmt.Fprintf(h, "%s:%s:invoker:%s\n", prefix, cID, x) //nolint:errcheck
+		}
+	case "projection":
+		fmt.Fprintf(h, "%s:%s:provider:%s\n", prefix, cID, c.Endpoints.Provider) //nolint:errcheck
+		for _, x := range sortedCopy(c.Endpoints.Readers) {
+			fmt.Fprintf(h, "%s:%s:reader:%s\n", prefix, cID, x) //nolint:errcheck
+		}
+	}
+}
+
+func writeHTTPTransportFingerprint(h hashWriter, prefix, cID string, t *metadata.HTTPTransportMeta) {
+	if t == nil {
+		return
+	}
+	fmt.Fprintf(h, "%s:%s:method:%s\n", prefix, cID, t.Method)                       //nolint:errcheck
+	fmt.Fprintf(h, "%s:%s:path:%s\n", prefix, cID, t.Path)                           //nolint:errcheck
+	fmt.Fprintf(h, "%s:%s:listener:%s\n", prefix, cID, listenerKindFromPath(t.Path)) //nolint:errcheck
+	fmt.Fprintf(h, "%s:%s:status:%d\n", prefix, cID, t.SuccessStatus)                //nolint:errcheck
+	fmt.Fprintf(h, "%s:%s:noContent:%t\n", prefix, cID, t.NoContent)                 //nolint:errcheck
+	for _, status := range sortedIntKeys(t.Responses) {
+		fmt.Fprintf(h, "%s:%s:resp:%d\n", prefix, cID, status) //nolint:errcheck
+	}
 }
 
 // executeTemplate loads a template from the embedded FS, parses it, and

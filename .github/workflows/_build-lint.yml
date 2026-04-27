@@ -149,6 +149,23 @@ jobs:
         if: matrix.static_checks
         run: go vet -tags=e2e ./tests/e2e/...
 
+      # Boundary regenerate-and-diff gate (PR-CFG-M, closes backlog PR220-e2):
+      # boundary.yaml is the generated source-of-truth for an assembly's exported
+      # / imported contracts. Drift between contract.yaml structural fields and
+      # the recorded sourceFingerprint silently invalidates downstream consumers
+      # of boundary.yaml, so regenerate locally and require a clean diff. Uses
+      # `--boundary-only` so the hand-extended composition root in
+      # cmd/corebundle/main.go is left alone (the boundary.yaml fingerprint is
+      # what gates downstream consumers; main.go is owned by the bundle author).
+      - name: Verify generated assemblies are up-to-date
+        if: matrix.static_checks
+        run: |
+          go run ./cmd/gocell generate assembly --id corebundle --boundary-only
+          if ! git diff --exit-code assemblies/corebundle/generated/; then
+            echo "::error::boundary.yaml drift detected. Run 'go run ./cmd/gocell generate assembly --id corebundle --boundary-only' locally and commit the result."
+            exit 1
+          fi
+
       # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
       # deliberately — it is not a duplicate of the Test step. The gate requires
       # in-package kernel coverage (each package's tests of itself), while the

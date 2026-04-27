@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
@@ -84,12 +85,12 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 // checkOutboxTopicFailOpenRule loads all cells/ packages with full type info
 // and scans every non-test Go file for OUTBOX-TOPIC-FAILOPEN-01 violations.
 func checkOutboxTopicFailOpenRule(root string) ([]outboxTopicViolation, error) {
-	r, err := CellsTopicResolver(root)
+	r, err := typeseval.SharedResolver(root, "./cells/...")
 	if err != nil {
 		return nil, err
 	}
 	var violations []outboxTopicViolation
-	for _, p := range r.pkgs {
+	for _, p := range r.Pkgs {
 		pkgViolations, err := scanPackage(root, p, r)
 		if err != nil {
 			return nil, err
@@ -101,7 +102,7 @@ func checkOutboxTopicFailOpenRule(root string) ([]outboxTopicViolation, error) {
 
 // scanPackage scans all non-test Go files in a loaded package for violations.
 // packages.Package.Syntax is aligned with GoFiles via Fset.Position.
-func scanPackage(root string, p *packages.Package, r *topicConstResolver) ([]outboxTopicViolation, error) {
+func scanPackage(root string, p *packages.Package, r *typeseval.Resolver) ([]outboxTopicViolation, error) {
 	var violations []outboxTopicViolation
 	for _, file := range p.Syntax {
 		absPath := p.Fset.Position(file.Pos()).Filename
@@ -124,9 +125,9 @@ func scanPackage(root string, p *packages.Package, r *topicConstResolver) ([]out
 // FailurePolicyFailOpen with a Topic or EventType matching the
 // security-sensitive prefix regex.
 //
-// Topic/EventType field values are evaluated via topicConstResolver.ResolveString,
+// Topic/EventType field values are evaluated via typeseval.Resolver.ResolveString,
 // covering BasicLit, same-package const Ident, and cross-package SelectorExpr.
-func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, r *topicConstResolver, pkg *packages.Package) []outboxTopicViolation {
+func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel string, r *typeseval.Resolver, pkg *packages.Package) []outboxTopicViolation {
 	var violations []outboxTopicViolation
 	ast.Inspect(file, func(n ast.Node) bool {
 		lit, ok := n.(*ast.CompositeLit)
@@ -189,10 +190,10 @@ func isOutboxEntryLiteral(lit *ast.CompositeLit) bool {
 }
 
 // extractStringField returns the resolved constant-string value for the named
-// field of a composite literal, if present. Uses topicConstResolver to evaluate
+// field of a composite literal, if present. Uses typeseval.Resolver to evaluate
 // BasicLit, same-package const Ident, and cross-package SelectorExpr uniformly.
 // Returns ok=false when the field is missing or its value is not a constant string.
-func extractStringField(r *topicConstResolver, pkg *packages.Package, lit *ast.CompositeLit, fieldName string) (string, bool) {
+func extractStringField(r *typeseval.Resolver, pkg *packages.Package, lit *ast.CompositeLit, fieldName string) (string, bool) {
 	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -239,11 +240,11 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 	for _, c := range cases {
 		c := c
 		t.Run(c.pattern, func(t *testing.T) {
-			r, err := newTopicConstResolver(fixturesRoot, c.pattern)
+			r, err := typeseval.NewResolver(fixturesRoot, c.pattern)
 			require.NoError(t, err, "load fixture package %s", c.pattern)
 
 			var violations []outboxTopicViolation
-			for _, p := range r.pkgs {
+			for _, p := range r.Pkgs {
 				for _, file := range p.Syntax {
 					absPath := p.Fset.Position(file.Pos()).Filename
 					if strings.HasSuffix(absPath, "_test.go") {
