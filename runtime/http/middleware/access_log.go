@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"log/slog"
 	"net/http"
 	"time"
@@ -22,41 +23,62 @@ func AccessLog(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 
-		state := RecorderStateFrom(r.Context())
-		if state == nil {
-			var wrapped http.ResponseWriter
-			state, wrapped = NewRecorder(w)
-			w = wrapped
-		}
+		state, rw := accessLogRecorder(w, r)
 
-		next.ServeHTTP(w, r)
-
-		safeObserve(slog.Default(), func() {
-			duration := time.Since(start)
-			route := RoutePatternFromCtx(r.Context())
-			attrs := []any{
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path),
-				slog.String("route", route),
-				slog.Int("status", state.Status()),
-				slog.Int64("duration_ms", duration.Milliseconds()),
-			}
-			if listener, ok := listenerFromContext(r.Context()); ok {
-				attrs = append(attrs, slog.String("listener", listener))
-			}
-			if reqID, ok := ctxkeys.RequestIDFrom(r.Context()); ok {
-				attrs = append(attrs, slog.String("request_id", reqID))
-			}
-			if correlationID, ok := ctxkeys.CorrelationIDFrom(r.Context()); ok {
-				attrs = append(attrs, slog.String("correlation_id", correlationID))
-			}
-			if traceID, ok := ctxkeys.TraceIDFrom(r.Context()); ok {
-				attrs = append(attrs, slog.String("trace_id", traceID))
-			}
-			if realIP, ok := ctxkeys.RealIPFrom(r.Context()); ok {
-				attrs = append(attrs, slog.String("real_ip", realIP))
-			}
-			slog.Info("http request", attrs...)
-		})
+		next.ServeHTTP(rw, r)
+		logAccessRequest(start, r, state)
 	})
+}
+
+func accessLogRecorder(w http.ResponseWriter, r *http.Request) (*RecorderState, http.ResponseWriter) {
+	state := RecorderStateFrom(r.Context())
+	if state != nil {
+		return state, w
+	}
+	state, wrapped := NewRecorder(w)
+	return state, wrapped
+}
+
+func logAccessRequest(start time.Time, r *http.Request, state *RecorderState) {
+	safeObserve(slog.Default(), func() {
+		slog.Info("http request", accessLogAttrs(start, r, state)...)
+	})
+}
+
+func accessLogAttrs(start time.Time, r *http.Request, state *RecorderState) []any {
+	duration := time.Since(start)
+	attrs := []any{
+		slog.String("method", r.Method),
+		slog.String("path", r.URL.Path),
+		slog.String("route", RoutePatternFromCtx(r.Context())),
+		slog.Int("status", state.Status()),
+		slog.Int64("duration_ms", duration.Milliseconds()),
+	}
+	return appendAccessLogContextAttrs(attrs, r.Context())
+}
+
+func appendAccessLogContextAttrs(attrs []any, ctx context.Context) []any {
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "listener", listenerFromContext)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "request_id", ctxkeys.RequestIDFrom)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "correlation_id", ctxkeys.CorrelationIDFrom)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "trace_id", ctxkeys.TraceIDFrom)
+	attrs = appendAccessLogAttrFrom(ctx, attrs, "real_ip", ctxkeys.RealIPFrom)
+	return attrs
+}
+
+func appendAccessLogAttrFrom(
+	ctx context.Context,
+	attrs []any,
+	key string,
+	get func(context.Context) (string, bool),
+) []any {
+	value, ok := get(ctx)
+	return appendAccessLogAttr(attrs, key, value, ok)
+}
+
+func appendAccessLogAttr(attrs []any, key, value string, ok bool) []any {
+	if !ok {
+		return attrs
+	}
+	return append(attrs, slog.String(key, value))
 }
