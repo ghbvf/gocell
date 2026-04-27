@@ -1,8 +1,12 @@
 package archtest
 
 import (
+	"go/ast"
+	"go/constant"
 	"go/types"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -98,6 +102,24 @@ func TestAdaptersExportedTypesManagedResourceOrOptOut(t *testing.T) {
 	assert.Empty(t, violations, "A54 ManagedResource contract violations")
 }
 
+func TestAdapterManagedResourceCheckerNamesUseReadySuffix(t *testing.T) {
+	root := findModuleRoot(t)
+	modulePath := readModulePath(t, root)
+	pkgs := loadTypedPackages(t, root, "./adapters/...")
+
+	var violations []string
+	for _, pkg := range pkgs {
+		adapterPkg, ok := strings.CutPrefix(pkg.PkgPath, modulePath+"/adapters/")
+		if !ok || strings.Contains(adapterPkg, "/") {
+			continue
+		}
+		violations = append(violations, adapterCheckerNameViolations(pkg, "adapters/"+adapterPkg)...)
+	}
+
+	sort.Strings(violations)
+	assert.Empty(t, violations, "adapter ManagedResource ready probes must use stable snake_case names ending in _ready")
+}
+
 func collectAdapterExportedTypes(pkgs []*packages.Package, modulePath string) []adapterExportedType {
 	adapterPrefix := modulePath + "/adapters/"
 	var out []adapterExportedType
@@ -148,4 +170,45 @@ func implementsManagedResource(typ types.Type, managedResource *types.Interface)
 		return true
 	}
 	return types.Implements(types.NewPointer(typ), managedResource)
+}
+
+var adapterReadyProbeNamePattern = regexp.MustCompile(`^[a-z][a-z0-9]*(?:_[a-z0-9]+)*_ready$`)
+
+func adapterCheckerNameViolations(pkg *packages.Package, rel string) []string {
+	var violations []string
+	for _, file := range pkg.Syntax {
+		for _, decl := range file.Decls {
+			fn, ok := decl.(*ast.FuncDecl)
+			if !ok || fn.Name.Name != "Checkers" || fn.Recv == nil || len(fn.Recv.List) == 0 {
+				continue
+			}
+			recv := receiverTypeName(fn.Recv.List[0].Type)
+			if recv == "" || !ast.IsExported(recv) {
+				continue
+			}
+			for _, name := range checkerNamesFromFunc(pkg.TypesInfo, fn) {
+				if !adapterReadyProbeNamePattern.MatchString(name) {
+					violations = append(violations, rel+"."+recv+" Checkers probe "+strconv.Quote(name)+" must be snake_case and end with _ready")
+				}
+			}
+		}
+	}
+	return violations
+}
+
+func checkerNamesFromFunc(info *types.Info, fn *ast.FuncDecl) []string {
+	var names []string
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		kv, ok := n.(*ast.KeyValueExpr)
+		if !ok {
+			return true
+		}
+		tv, ok := info.Types[kv.Key]
+		if !ok || tv.Value == nil || tv.Value.Kind() != constant.String {
+			return true
+		}
+		names = append(names, constant.StringVal(tv.Value))
+		return true
+	})
+	return names
 }

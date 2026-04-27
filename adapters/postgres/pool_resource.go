@@ -17,7 +17,7 @@ type poolCloser interface {
 }
 
 // PGResource wraps a Pool as a lifecycle.ManagedResource. Bootstrap uses it to:
-//   - Register the pool health probe in /readyz under the "postgres" name.
+//   - Register the pool health probe in /readyz under the "postgres_ready" name.
 //   - Close the pool during LIFO shutdown.
 //
 // The outbox relay is registered independently via bootstrap.WithManagedResource
@@ -29,7 +29,7 @@ type poolCloser interface {
 // by Hook registration; GoCell converges this into a single ManagedResource.
 type PGResource struct {
 	pool          *Pool
-	name          string                          // health checker name; default "postgres"
+	name          string                          // health checker name; default "postgres_ready"
 	closeOverride poolCloser                      // non-nil only in tests; replaces pool for Close()
 	healthFunc    func(ctx context.Context) error // non-nil only in tests; replaces pool.Health
 }
@@ -39,7 +39,7 @@ type PGResource struct {
 // pool at runtime — a silent nil would produce a panic during /readyz
 // probe or shutdown, both of which are the worst times to discover it.
 //
-// name is always "postgres".
+// name is always "postgres_ready".
 //
 // ref: uber-go/fx internal/lifecycle/lifecycle.go Append — resource
 // registration does no nil-substitution; bad inputs surface immediately.
@@ -50,7 +50,7 @@ func NewPGResource(pool *Pool) (*PGResource, error) {
 	}
 	return &PGResource{
 		pool: pool,
-		name: "postgres",
+		name: "postgres_ready",
 	}, nil
 }
 

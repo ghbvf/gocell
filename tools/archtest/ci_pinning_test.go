@@ -1,14 +1,16 @@
 package archtest
 
 import (
+	"bytes"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gopkg.in/yaml.v3"
 )
 
 func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
@@ -28,13 +30,87 @@ func TestDependabotCoversCIAndGolangCILint(t *testing.T) {
 	body, err := os.ReadFile(filepath.Join(root, ".github", "dependabot.yml"))
 	require.NoError(t, err, ".github/dependabot.yml must exist")
 
-	content := string(body)
-	assert.Contains(t, content, `package-ecosystem: "github-actions"`,
-		"dependabot must update GitHub Actions pins")
-	assert.Contains(t, content, `package-ecosystem: "gomod"`,
-		"dependabot must update Go module pins")
-	assert.True(t,
-		strings.Contains(content, "golangci/golangci-lint-action") ||
-			strings.Contains(content, "golangci-lint"),
-		"dependabot config must explicitly cover golangci-lint maintenance")
+	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))
+}
+
+func TestDependabotCoversCIAndGolangCILintRejectsGroupNameOnly(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      golangci-lint:
+        patterns:
+          - "actions/*"
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+`)
+	require.Error(t, validateDependabotCoversCIAndGolangCILint(body),
+		"group names must not satisfy the guard unless a pattern covers the action")
+}
+
+type dependabotConfig struct {
+	Version int                `yaml:"version"`
+	Updates []dependabotUpdate `yaml:"updates"`
+}
+
+type dependabotUpdate struct {
+	PackageEcosystem string                     `yaml:"package-ecosystem"`
+	Directory        string                     `yaml:"directory"`
+	Schedule         dependabotSchedule         `yaml:"schedule"`
+	Groups           map[string]dependabotGroup `yaml:"groups"`
+}
+
+type dependabotSchedule struct {
+	Interval string `yaml:"interval"`
+}
+
+type dependabotGroup struct {
+	Patterns []string `yaml:"patterns"`
+}
+
+func validateDependabotCoversCIAndGolangCILint(body []byte) error {
+	var cfg dependabotConfig
+	dec := yaml.NewDecoder(bytes.NewReader(body))
+	dec.KnownFields(true)
+	if err := dec.Decode(&cfg); err != nil {
+		return fmt.Errorf("parse dependabot.yml: %w", err)
+	}
+
+	var hasGitHubActions bool
+	var hasGoMod bool
+	var hasGolangCIActionPattern bool
+	for _, update := range cfg.Updates {
+		switch update.PackageEcosystem {
+		case "github-actions":
+			if update.Directory == "/" {
+				hasGitHubActions = true
+			}
+			for _, group := range update.Groups {
+				for _, pattern := range group.Patterns {
+					if pattern == "golangci/golangci-lint-action" {
+						hasGolangCIActionPattern = true
+					}
+				}
+			}
+		case "gomod":
+			if update.Directory == "/" {
+				hasGoMod = true
+			}
+		}
+	}
+	if !hasGitHubActions {
+		return fmt.Errorf("dependabot must update GitHub Actions pins from directory /")
+	}
+	if !hasGolangCIActionPattern {
+		return fmt.Errorf("dependabot github-actions groups must explicitly pattern-match golangci/golangci-lint-action")
+	}
+	if !hasGoMod {
+		return fmt.Errorf("dependabot must update Go module pins from directory /")
+	}
+	return nil
 }

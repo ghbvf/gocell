@@ -14,6 +14,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	prom "github.com/prometheus/client_golang/prometheus"
 )
 
 // SharedDeps holds cross-cutting dependencies required by every Cell module.
@@ -123,6 +124,13 @@ type SharedDeps struct {
 	// metricsHandler is the Prometheus HTTP handler built once in
 	// LoadSharedDepsFromEnv and reused by defaultRuntimeOptions.
 	metricsHandler http.Handler
+
+	// keyProviderMetricCollectors are the collectors currently registered for
+	// the ConfigCore KeyProvider. ConfigCoreModule.Provide may be called more
+	// than once against the same SharedDeps in tests/rebuild paths; tracking
+	// ownership here lets the module replace provider-bound GaugeFunc collectors
+	// instead of leaving stale closures attached to an older provider instance.
+	keyProviderMetricCollectors []prom.Collector
 }
 
 type sharedReplayDeps struct {
