@@ -72,7 +72,17 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	}
 	vt := keyProviderToTransformer(kp)
 
-	// 3. PG pool: read configcore-namespaced env.
+	// 3. Register the stale-cipher counter against the isolated per-run registry.
+	// Use Register (not MustRegister) so that repeated Provide calls in the
+	// same process (e.g. integration tests with shared registry) are handled
+	// gracefully: AlreadyRegisteredError carries the existing collector so we
+	// can reuse it instead of creating an orphaned counter.
+	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
+	}
+
+	// 4. PG pool: read configcore-namespaced env.
 	pgCfg, err := LoadPGConfig("CONFIGCORE")
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("configcore pg config: %w", err)
@@ -83,6 +93,9 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		Publisher:        shared.EventBus,
 		MetricsProvider:  shared.PromStack.metricProvider,
 		ValueTransformer: vt,
+		OnStaleCipher: func(_, _, _ string) {
+			staleCipherCounter.Inc()
+		},
 	})
 	if err != nil {
 		return nil, nil, nil, err
@@ -96,25 +109,11 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	// stays nil and the downstream modules skip the postgres outbox path.
 	shared.SharedPGPool = modResult.PGPool
 
-	// Register the stale-cipher counter against the isolated per-run registry.
-	// Use Register (not MustRegister) so that repeated Provide calls in the
-	// same process (e.g. integration tests with shared registry) are handled
-	// gracefully: AlreadyRegisteredError carries the existing collector so we
-	// can reuse it instead of creating an orphaned counter.
-	staleCipherCounter, err := registerOrReuseCounter(shared.PromStack.registry, configStaleCipherOpts)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("configcore: register stale_cipher counter: %w", err)
-	}
-
 	baseOpts := []configcore.Option{
 		// Outbox wiring is provided by buildConfigCoreOpts (PG adapter includes
 		// the transactional writer; memory adapter passes writer=nil).
 		configcore.WithCursorCodec(cursorCodec),
-		configcore.WithOnStaleCipherMetric(staleCipherCounter),
 		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
-	}
-	if vt != nil {
-		baseOpts = append(baseOpts, configcore.WithValueTransformer(vt))
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
 

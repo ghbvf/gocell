@@ -11,6 +11,7 @@ import (
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
 	accesscore "github.com/ghbvf/gocell/cells/accesscore"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
+	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
@@ -231,6 +232,7 @@ type ConfigCoreModuleConfig struct {
 	Publisher        outbox.Publisher
 	MetricsProvider  metrics.Provider
 	ValueTransformer kcrypto.ValueTransformer
+	OnStaleCipher    func(key, storedKeyID, currentKeyID string)
 }
 
 // ConfigCoreModuleResult bundles the outputs from buildConfigCoreOpts. Using a
@@ -309,12 +311,14 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 		}
 		slog.Info("configcore: using PostgreSQL storage", slog.String("cell_adapter_mode", cfg.Topology.StorageBackend))
 		cellOpts := []configcore.Option{
-			configcore.WithPostgresPool(pool.DB()),
+			configpg.WithPool(pool.DB(),
+				configpg.WithValueTransformer(cfg.ValueTransformer),
+				configpg.WithOnStaleCipher(cfg.OnStaleCipher),
+			),
 			// PG adapter path: publisher + real outbox.Writer compose a
 			// WriterEmitter at Cell boundary; L2 transactional atomicity applies.
 			configcore.WithOutboxDeps(cfg.Publisher, outboxWriter),
 			configcore.WithTxManager(txMgr),
-			configcore.WithValueTransformer(cfg.ValueTransformer),
 		}
 		// Relay is registered independently via bootstrap so its Worker()/Close()
 		// lifecycle is managed separately from the pool (PGResource.Worker() == nil).

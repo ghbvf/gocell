@@ -4,6 +4,8 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
+	"go/ast"
+	"go/types"
 	"os"
 	"path/filepath"
 	"sort"
@@ -100,6 +102,7 @@ func isInternal(importPath string) bool {
 // consumers respectively; see the layering conventions in archtest's doc.go).
 var cellOwnedSubpackages = map[string]string{
 	"cells/accesscore/initialadmin": "cells/accesscore/",
+	"cells/configcore/postgres":     "cells/configcore/",
 }
 
 // checkLayering runs all 5 layering rules against the given packages and returns violations.
@@ -226,6 +229,170 @@ func checkCellOwnedSubpackage(modPrefix, srcPath, imp, srcLayer string) *violati
 	return nil
 }
 
+func isRootCellPackage(modPrefix, importPath string) bool {
+	cellsPrefix := modPrefix + "cells/"
+	if !strings.HasPrefix(importPath, cellsPrefix) {
+		return false
+	}
+	rel := strings.TrimPrefix(importPath, cellsPrefix)
+	return rel != "" && !strings.Contains(rel, "/") && !strings.HasSuffix(rel, "_test")
+}
+
+func isCellPublicAPIDisallowedType(modPrefix, pkgPath string) bool {
+	module := strings.TrimSuffix(modPrefix, "/")
+	if strings.HasPrefix(pkgPath, module+"/adapters/") {
+		return true
+	}
+	for _, prefix := range []string{
+		"github.com/aws/aws-sdk-go-v2/",
+		"github.com/jackc/pgx/",
+		"github.com/rabbitmq/amqp091-go",
+		"github.com/redis/go-redis/",
+		"nhooyr.io/websocket",
+	} {
+		if strings.HasPrefix(pkgPath, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func findDisallowedTypePath(modPrefix string, typ types.Type) string {
+	switch t := typ.(type) {
+	case nil:
+		return ""
+	case *types.Basic:
+		return ""
+	case *types.Named:
+		if obj := t.Obj(); obj != nil && obj.Pkg() != nil && isCellPublicAPIDisallowedType(modPrefix, obj.Pkg().Path()) {
+			return obj.Pkg().Path()
+		}
+		return ""
+	case *types.Pointer:
+		return findDisallowedTypePath(modPrefix, t.Elem())
+	case *types.Slice:
+		return findDisallowedTypePath(modPrefix, t.Elem())
+	case *types.Array:
+		return findDisallowedTypePath(modPrefix, t.Elem())
+	case *types.Map:
+		if p := findDisallowedTypePath(modPrefix, t.Key()); p != "" {
+			return p
+		}
+		return findDisallowedTypePath(modPrefix, t.Elem())
+	case *types.Chan:
+		return findDisallowedTypePath(modPrefix, t.Elem())
+	case *types.Signature:
+		if p := findDisallowedTupleTypePath(modPrefix, t.Params()); p != "" {
+			return p
+		}
+		return findDisallowedTupleTypePath(modPrefix, t.Results())
+	case *types.Interface:
+		for i := 0; i < t.NumExplicitMethods(); i++ {
+			if p := findDisallowedTypePath(modPrefix, t.ExplicitMethod(i).Type()); p != "" {
+				return p
+			}
+		}
+		return ""
+	case *types.Struct:
+		for i := 0; i < t.NumFields(); i++ {
+			f := t.Field(i)
+			if !f.Exported() && !f.Anonymous() {
+				continue
+			}
+			if p := findDisallowedTypePath(modPrefix, f.Type()); p != "" {
+				return p
+			}
+		}
+		return ""
+	default:
+		return ""
+	}
+}
+
+func findDisallowedTupleTypePath(modPrefix string, tuple *types.Tuple) string {
+	if tuple == nil {
+		return ""
+	}
+	for i := 0; i < tuple.Len(); i++ {
+		if p := findDisallowedTypePath(modPrefix, tuple.At(i).Type()); p != "" {
+			return p
+		}
+	}
+	return ""
+}
+
+func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) []violation {
+	var out []violation
+	for _, pkg := range pkgs {
+		if !isRootCellPackage(modPrefix, pkg.PkgPath) {
+			continue
+		}
+		for _, file := range pkg.Syntax {
+			for _, decl := range file.Decls {
+				switch d := decl.(type) {
+				case *ast.FuncDecl:
+					if !d.Name.IsExported() {
+						continue
+					}
+					obj := pkg.TypesInfo.Defs[d.Name]
+					if obj == nil {
+						continue
+					}
+					if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
+						symbol := d.Name.Name
+						if d.Recv != nil {
+							symbol = "method " + symbol
+						}
+						out = append(out, violation{
+							Rule:    "LAYER-10",
+							Pkg:     pkg.PkgPath,
+							Import:  p,
+							Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported API %s", pkg.PkgPath, p, symbol),
+						})
+					}
+				case *ast.GenDecl:
+					for _, spec := range d.Specs {
+						switch s := spec.(type) {
+						case *ast.TypeSpec:
+							if !s.Name.IsExported() {
+								continue
+							}
+							typ := pkg.TypesInfo.TypeOf(s.Type)
+							if p := findDisallowedTypePath(modPrefix, typ); p != "" {
+								out = append(out, violation{
+									Rule:    "LAYER-10",
+									Pkg:     pkg.PkgPath,
+									Import:  p,
+									Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported type %s", pkg.PkgPath, p, s.Name.Name),
+								})
+							}
+						case *ast.ValueSpec:
+							for _, name := range s.Names {
+								if !name.IsExported() {
+									continue
+								}
+								obj := pkg.TypesInfo.Defs[name]
+								if obj == nil {
+									continue
+								}
+								if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
+									out = append(out, violation{
+										Rule:    "LAYER-10",
+										Pkg:     pkg.PkgPath,
+										Import:  p,
+										Message: fmt.Sprintf("LAYER-10: %s exposes adapter/driver type %s in exported var/const %s", pkg.PkgPath, p, name.Name),
+									})
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return out
+}
+
 // --- go list integration ---
 
 // findModuleRoot walks up from cwd to find the directory containing go.mod.
@@ -280,12 +447,30 @@ func loadPackages(t *testing.T, root string) []pkgInfo {
 	return out
 }
 
+func loadTypedPackages(t *testing.T, root string, patterns ...string) []*packages.Package {
+	t.Helper()
+	cfg := &packages.Config{
+		Mode:       packages.NeedName | packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo,
+		Dir:        root,
+		BuildFlags: []string{"-tags=integration"},
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	require.NoError(t, err, "packages.Load failed")
+	for _, p := range pkgs {
+		for _, pe := range p.Errors {
+			t.Logf("loadTypedPackages: package %q error: %v", p.PkgPath, pe)
+		}
+	}
+	return pkgs
+}
+
 // --- integration test (real go list data) ---
 
 func TestLayeringRules(t *testing.T) {
 	root := findModuleRoot(t)
 	modPrefix := readModulePath(t, root) + "/"
 	pkgs := loadPackages(t, root)
+	typedCellPkgs := loadTypedPackages(t, root, "./cells/...")
 	require.NotEmpty(t, pkgs, "go list returned no packages")
 
 	violations := checkLayering(modPrefix, pkgs)
@@ -375,6 +560,19 @@ func TestLayeringRules(t *testing.T) {
 		assert.Empty(t, byRule["LAYER-09"],
 			"cells/ must not import another cell's events/ package (cells/{cell}/events/); "+
 				"use contract wire types instead (cell-patterns.md three-tier DTO rule)")
+	})
+
+	// LAYER-10: cells/<cell> root package exported APIs must not expose concrete
+	// adapter/driver types. Composition roots may choose adapters; cell root
+	// packages must expose ports and cell-owned options only.
+	t.Run("LAYER-10_cell_root_public_api_no_adapter_driver_types", func(t *testing.T) {
+		violations := checkCellPublicAPIAdapterTypes(modPrefix, typedCellPkgs)
+		for _, v := range violations {
+			t.Logf("LAYER-10 violation: %s", v.Message)
+		}
+		assert.Empty(t, violations,
+			"cells/<cell> exported APIs must not expose concrete adapter/driver types; "+
+				"move adapter-specific factories into composition-root owned wiring or cell-owned adapter subpackages")
 	})
 }
 
@@ -477,6 +675,46 @@ func TestCellOf(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
 			assert.Equal(t, tt.want, cellOf(mod, tt.input))
+		})
+	}
+}
+
+func TestIsRootCellPackage(t *testing.T) {
+	const mod = "github.com/ghbvf/gocell/"
+	tests := []struct {
+		input string
+		want  bool
+	}{
+		{"github.com/ghbvf/gocell/cells/configcore", true},
+		{"github.com/ghbvf/gocell/cells/accesscore", true},
+		{"github.com/ghbvf/gocell/cells/configcore/postgres", false},
+		{"github.com/ghbvf/gocell/cells/configcore/internal/ports", false},
+		{"github.com/ghbvf/gocell/runtime/auth", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			assert.Equal(t, tt.want, isRootCellPackage(mod, tt.input))
+		})
+	}
+}
+
+func TestIsCellPublicAPIDisallowedType(t *testing.T) {
+	const mod = "github.com/ghbvf/gocell/"
+	tests := []struct {
+		pkgPath string
+		want    bool
+	}{
+		{"github.com/ghbvf/gocell/adapters/postgres", true},
+		{"github.com/jackc/pgx/v5/pgxpool", true},
+		{"github.com/redis/go-redis/v9", true},
+		{"github.com/rabbitmq/amqp091-go", true},
+		{"nhooyr.io/websocket", true},
+		{"github.com/ghbvf/gocell/kernel/outbox", false},
+		{"github.com/prometheus/client_golang/prometheus", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.pkgPath, func(t *testing.T) {
+			assert.Equal(t, tt.want, isCellPublicAPIDisallowedType(mod, tt.pkgPath))
 		})
 	}
 }
@@ -675,6 +913,15 @@ func TestCheckLayering(t *testing.T) {
 			pkgs: []pkgInfo{
 				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore", Imports: []string{
 					"github.com/ghbvf/gocell/cells/accesscore/initialadmin", // forbidden — cell-owned subpkg
+				}},
+			},
+			wantRules: []string{"LAYER-06"},
+		},
+		{
+			name: "LAYER-06 violation: sibling cell imports configcore/postgres",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/cells/auditcore", Imports: []string{
+					"github.com/ghbvf/gocell/cells/configcore/postgres", // forbidden — cell-owned adapter subpkg
 				}},
 			},
 			wantRules: []string{"LAYER-06"},
