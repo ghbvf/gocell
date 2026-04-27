@@ -6,7 +6,6 @@ import (
 	"math"
 	"net/http"
 	"reflect"
-	"runtime/debug"
 	"strconv"
 	"time"
 
@@ -131,26 +130,16 @@ func circuitBreakerServe(cb Allower, next http.Handler, w http.ResponseWriter, r
 
 	state, w, r := ensureRecorder(w, r)
 
-	// Use recover to guarantee done(err) on panic, then write the same
-	// structured 500 body Recovery would produce.
-	// Without this, a standalone breaker (no Recovery middleware) would
-	// see the default status 200 and record success for a crashing handler.
+	// Recover only long enough to report a breaker failure, then re-panic so
+	// the outer Recovery middleware remains the single panic-to-HTTP and
+	// panic-to-tracing boundary.
 	//
 	// ref: sony/gobreaker — Execute treats panic as failure
 	// ref: go-kit/kit circuitbreaker — panic paths count as failed calls
 	defer func() {
 		if recovered := recover(); recovered != nil {
 			done(errServerFailure)
-			slog.ErrorContext(r.Context(), "circuitbreaker: downstream handler panic",
-				slog.Any("panic", recovered),
-				slog.String("stack", string(debug.Stack())),
-				slog.String("method", r.Method),
-				slog.String("path", r.URL.Path))
-			if !state.Committed() {
-				httputil.WriteError(r.Context(), w, http.StatusInternalServerError,
-					string(errcode.ErrInternal), "internal server error")
-			}
-			return
+			repanicAfterBreakerFailure(recovered)
 		}
 		if state.Status() >= 500 {
 			done(errServerFailure)
@@ -160,6 +149,14 @@ func circuitBreakerServe(cb Allower, next http.Handler, w http.ResponseWriter, r
 	}()
 
 	next.ServeHTTP(w, r)
+}
+
+// repanicAfterBreakerFailure is the narrow architectural re-panic point used by
+// CircuitBreaker after it has reported handler panics as breaker failures. It
+// preserves the in-flight panic for the outer Recovery middleware, which owns
+// panic logging, tracing, and HTTP 500 serialization.
+func repanicAfterBreakerFailure(recovered any) {
+	panic(recovered)
 }
 
 // ensureRecorder returns the existing RecorderState from context, or creates a

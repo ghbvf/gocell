@@ -99,14 +99,32 @@ func TestCircuitBreaker_HandlerPanic_DoneStillCalled(t *testing.T) {
 	ctx := WithRecorderState(req.Context(), state)
 	req = req.WithContext(ctx)
 
-	assert.NotPanics(t, func() {
+	assert.PanicsWithValue(t, "handler panic test", func() {
 		handler.ServeHTTP(wrapped, req)
-	}, "panic must be converted into structured 500")
+	}, "circuit breaker must re-panic so outer Recovery can observe the panic")
 
 	require.True(t, cb.doneInvoked, "done callback must be invoked even when handler panics")
 	require.NotNil(t, cb.doneErr)
 	assert.Error(t, *cb.doneErr,
 		"panic must always be recorded as failure, regardless of status code")
+}
+
+func TestCircuitBreaker_WithRecovery_HandlerPanic_RecoveryWrites500(t *testing.T) {
+	cb := &mockBreaker{}
+	handler := Recorder(Recovery(MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		panic("handler panic test")
+	}))))
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+	assert.NotPanics(t, func() {
+		handler.ServeHTTP(rec, req)
+	}, "outer Recovery must remain responsible for converting panic to HTTP 500")
+
+	require.True(t, cb.doneInvoked, "done callback must be invoked even when handler panics")
+	require.NotNil(t, cb.doneErr)
+	assert.Error(t, *cb.doneErr)
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 }
 

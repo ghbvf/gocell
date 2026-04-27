@@ -62,15 +62,16 @@ cancellation. Modelled as `kworker.ErrWorkerExitedEarly` so callers can
 `errors.Is`-detect the abnormal signal — not strictly part of the panic
 refactor, but bundled for the same "fail loudly, propagate errors" theme.
 
-### 4. Hardcoded ADR-pinned whitelist (1 file)
+### 4. Hardcoded ADR-pinned whitelist (2 functions)
 
-The archtest holds **one** file-level whitelist entry. Every other panic
-in the scoped files is either refactored, renamed, or in an `init()`
-function (auto-exempt).
+The archtest holds **two** function-level whitelist entries. Every other panic
+in the scoped files is either refactored, renamed, or in an `init()` function
+(auto-exempt).
 
-| # | File | Justification |
+| # | Function | Justification |
 |---|---|---|
-| 1 | `kernel/wrapper/lifecycle.go` | `recoverAndFinishWithRedactor` is the middle of a `defer recover()` chain that re-panics so the outer `runtime/http/middleware.Recovery` middleware can record + serialize the panic. Refactoring it to return error would dismantle the entire recover propagation idiom and force every wrapped consumer to pre-route panics through a synthetic error path before Go's runtime gets the chance. |
+| 1 | `kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor` | Middle of a `defer recover()` chain that re-panics so the outer `runtime/http/middleware.Recovery` middleware can record + serialize the panic. Refactoring it to return error would dismantle the entire recover propagation idiom and force every wrapped consumer to pre-route panics through a synthetic error path before Go's runtime gets the chance. |
+| 2 | `runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure` | Middle of a `defer recover()` chain that first reports the handler panic as a circuit-breaker failure, then re-panics so the outer `Recovery` middleware remains the single panic-to-HTTP and panic-to-tracing boundary. Swallowing the panic here would bypass `Recovery` and lose panic span recording in the normal router chain. |
 
 ### 5. Auto-exempt categories
 
@@ -87,8 +88,10 @@ function (auto-exempt).
 
 ### 6. PR-MODE-6.1 scope expansion
 
-PR-MODE-6.1 closes the remaining nil/error-first candidates without adding
-an architectural whitelist entry:
+PR-MODE-6.1 closes the remaining nil/error-first candidates without adding a
+router whitelist entry. It adds one narrow circuit-breaker re-panic whitelist
+after review found that swallowing handler panics before `Recovery` regressed
+tracing semantics.
 
 - `.golangci.yml` enables `nilerr`, `nilnesserr`, and `nilnil` with
   `nilnil.only-two: false`, so multi-return success sentinels like
@@ -149,20 +152,20 @@ that construct a single static `cell.NewAuthJWTFromAssembly(asm)` continue
 to write `cell.MustNewAuthJWTFromAssembly(asm)` with no error-handling
 boilerplate.
 
-### Why minimum (1) whitelist?
+### Why minimum (2) whitelist?
 
 Each whitelist entry is a future regression risk: a new contributor sees
 "there are some panics here, panicking must be OK" and adds another. The
 review loop catches new architectural panic claims via the ADR, not via
-the archtest list. By keeping the whitelist to **just** the
-defer-recover-re-panic case (which is structurally not refactorable), we
-maximize the "panic in error-less function = bug" signal.
+the archtest list. By keeping the whitelist to **only** defer-recover-re-panic
+helpers (which are structurally not refactorable to error returns), we maximize
+the "panic in error-less function = bug" signal.
 
 The previous design (5 entries) was rejected: outbox crypto/rand failures
 and envelope marshal invariants were absorbable as either error
 propagation (entry_id, idempotency) or `Must*` rename (envelope), so they
 moved out of the whitelist. PR-MODE-6.1 also rejected adding the HTTP router
-as a second whitelist entry: router construction, auth metadata declaration,
+as a whitelist entry: router construction, auth metadata declaration,
 and unfinalized auth state now surface through errors or fail-closed HTTP
 responses, while `MustNew` remains the explicit panic wrapper for static
 wiring.
@@ -172,8 +175,9 @@ wiring.
 Hardcoded in `tools/archtest/error_first_test.go`:
 
 ```go
-var errorFirstWhitelistedFiles = map[string]string{
-    "kernel/wrapper/lifecycle.go": "recoverAndFinishWithRedactor re-panics from defer recover",
+var errorFirstWhitelistedFunctions = map[string]string{
+    "kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor": "re-panics from defer recover so outer Recovery middleware can serialize the panic",
+    "runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover after reporting circuit-breaker failure",
 }
 ```
 

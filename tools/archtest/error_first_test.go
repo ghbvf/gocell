@@ -18,6 +18,10 @@ package archtest
 //     error would dismantle the entire recover propagation idiom. Any
 //     OTHER error-less function in lifecycle.go that contains panic() is
 //     still reported as a violation.
+//   - runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure —
+//     middle of a `defer recover()` chain that records breaker failure before
+//     re-panicking so the outer Recovery middleware remains the single
+//     panic-to-HTTP and panic-to-tracing boundary.
 //
 // Enforced file scope (PR-MODE-6 + PR-MODE-6.1):
 //   - kernel/wrapper/handler.go, consumer.go, spec.go, lifecycle.go (whitelisted)
@@ -89,7 +93,8 @@ var errorFirstEnforcedFiles = []string{
 // still reported as a violation. ADR-pinned in
 // docs/architecture/202604270030-architectural-panic-whitelist.md (§4).
 var errorFirstWhitelistedFunctions = map[string]string{
-	"kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor": "re-panics from defer recover so outer Recovery middleware can serialize the panic",
+	"kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor":              "re-panics from defer recover so outer Recovery middleware can serialize the panic",
+	"runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover after reporting circuit-breaker failure",
 }
 
 // errorFirstViolation describes a single ERROR-FIRST-API-01 violation.
