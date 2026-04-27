@@ -183,7 +183,7 @@ func scanQueryParamFile(root, path string) ([]routeQueryBinding, map[string]map[
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil, fmt.Errorf("parse %s: %w", filepath.ToSlash(path), err)
 	}
 	rel, err := filepath.Rel(root, path)
 	if err != nil {
@@ -192,6 +192,18 @@ func scanQueryParamFile(root, path string) ([]routeQueryBinding, map[string]map[
 	rel = filepath.ToSlash(rel)
 	specIDs := collectContractSpecIDs(file)
 	return collectRouteBindings(fset, file, rel, specIDs), collectQueryParamUses(file, rel), nil
+}
+
+func TestScanQueryParamFile_ParseErrorFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	path := filepath.Join(root, "cells", "badcell", "slices", "bad", "handler.go")
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, []byte("package bad\nfunc broken("), 0o644))
+
+	_, _, err := scanQueryParamFile(root, path)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "parse")
+	assert.Contains(t, err.Error(), filepath.ToSlash(path))
 }
 
 func collectContractSpecIDs(file *ast.File) map[string]string {
@@ -424,11 +436,24 @@ func routeFuncKeys(rel string, expr ast.Expr) []string {
 }
 
 func routeFuncKeysFromCall(rel string, call *ast.CallExpr) []string {
-	var funcs []string
+	funcs := routeFuncKeys(rel, call.Fun)
 	for _, arg := range call.Args {
 		funcs = append(funcs, routeFuncKeys(rel, arg)...)
 	}
 	return funcs
+}
+
+func TestRouteFuncKeysFromCallIncludesCalleeAndArgs(t *testing.T) {
+	expr, err := parser.ParseExpr(`wrapPolicy(auditQueryPolicy, h.HandleQuery)`)
+	require.NoError(t, err)
+
+	got := routeFuncKeys("cells/auditcore/slices/auditquery/handler.go", expr)
+
+	assert.ElementsMatch(t, []string{
+		"cells/auditcore/slices/auditquery/handler.go#wrapPolicy",
+		"cells/auditcore/slices/auditquery/handler.go#auditQueryPolicy",
+		"cells/auditcore/slices/auditquery/handler.go#HandleQuery",
+	}, got)
 }
 
 func queryGetParam(call *ast.CallExpr) (string, bool) {
