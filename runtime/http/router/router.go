@@ -252,8 +252,8 @@ func WithDefaultMiddleware(mws ...func(http.Handler) http.Handler) Option {
 // cell routes are registered.
 //
 // Bootstrap creates one Router per declared listener (primary/internal/health)
-// via NewForListener. The old multi-mux design (outerMux/publicMux/internalMux)
-// has been replaced by this per-listener model.
+// via NewForListener. The old shared-root multiplexer design has been replaced
+// by this per-listener model.
 //
 // ref: go-kratos/kratos transport/http/server.go — per-server middleware
 // ref: go-chi/chi mux.go — one chi.Mux root per listener
@@ -370,7 +370,7 @@ func NewE(opts ...Option) (*Router, error) {
 //
 // The middleware chain is:
 //
-//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//	ListenerContext → RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 //
@@ -437,7 +437,7 @@ func (r *Router) buildRealIPMiddleware() (func(http.Handler) http.Handler, error
 //
 // Chain order (outer to inner):
 //
-//	RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
+//	ListenerContext → RequestID → RealIP → Recorder → [Tracing] → AccessLog → [Metrics]
 //	→ Recovery → SecurityHeaders → [earlyResponders] → [defaultMiddleware]
 //	→ [RateLimit] → [CircuitBreaker] → [Auth] → BodyLimit → handlers
 func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) {
@@ -460,6 +460,7 @@ func (r *Router) buildMux(realIPMW func(http.Handler) http.Handler) {
 
 	// --- Observability layer ---
 	r.mux.Use(
+		middleware.ListenerContext(r.ref.String()),
 		middleware.RequestIDWithOptions(r.requestIDOpts...),
 		realIPMW,
 		middleware.Recorder,
@@ -570,7 +571,7 @@ func (r *Router) With(mw ...func(http.Handler) http.Handler) kcell.RouteMux {
 }
 
 // DeclareAuthMeta implements cell.AuthRouteDeclarer. It accumulates auth route
-// metadata forwarded by auth.Mount during Cell RegisterRoutes. FinalizeAuth
+// metadata forwarded by auth.Mount during RouteGroup.Register. FinalizeAuth
 // compiles the accumulated metas into matchers that the AuthMiddleware reads
 // via lazy closures installed in buildAuthOpts.
 //
@@ -620,7 +621,7 @@ func (r *Router) FinalizeAuth() error {
 	r.authFinalized = true
 
 	if len(r.declaredAuthMetas) > 0 {
-		if err := r.verifyDelegatedConsistency(); err != nil {
+		if err := r.verifyInternalRouteAffinity(); err != nil {
 			return err
 		}
 
@@ -667,14 +668,14 @@ func (r *Router) warnNoAuthVerifier(p authMetaPartition) {
 	}
 }
 
-// verifyDelegatedConsistency verifies that routes with /internal/v1/* paths
+// verifyInternalRouteAffinity verifies that routes with /internal/v1/* paths
 // are mounted on an InternalListener router and vice versa.
 //
-// The Delegated field was removed; internal-route affinity is now derived
-// structurally from the path prefix via AuthRouteMeta.IsInternal(). This
-// function retains the listener-ref check so that a /internal/v1/* route
-// mounted on the wrong listener still fails fast at startup.
-func (r *Router) verifyDelegatedConsistency() error {
+// Internal-route affinity is derived structurally from the path prefix via
+// AuthRouteMeta.IsInternal(). This function retains the listener-ref check so
+// that a /internal/v1/* route mounted on the wrong listener still fails fast
+// at startup.
+func (r *Router) verifyInternalRouteAffinity() error {
 	isInternal := r.ref == kcell.InternalListener
 	// Zero-ref routers are used in unit tests without a listener identity.
 	// Skip the listener-ref check for those; Bootstrap-built routers always

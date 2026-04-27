@@ -1,9 +1,12 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"runtime"
@@ -457,28 +460,38 @@ func TestTripleListener_ShutdownNoGoroutineLeak(t *testing.T) {
 }
 
 // TestTripleListener_MidBindFailure_RollsBackEarlierBindings verifies that when
-// bootstrap owns three sockets (primary → internal → health) and the health bind
-// fails (port collision), closeOwnedSockets releases the two already-bound
-// bootstrap-owned sockets so no port leak occurs (TEST-11 three-listener variant).
+// bootstrap owns three sockets and the final bind fails, closeOwnedSockets
+// releases the already-bound bootstrap-owned sockets so no port leak occurs
+// (TEST-11 three-listener variant).
 func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
-	// Pre-bind a listener to get a known port for the collision target.
+	var logBuf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&logBuf, nil))
+	original := slog.Default()
+	slog.SetDefault(logger)
+	defer slog.SetDefault(original)
+
+	// Pre-bind a listener to get a known primary port for the collision target.
+	// phase7BindListeners sorts by ref.String(), so bind order is
+	// health -> internal -> primary. Making primary collide proves rollback
+	// closes earlier health/internal sockets.
 	collideLn, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Skip("cannot bind test listener (sandbox):", err)
 	}
 	defer collideLn.Close()
 	collidingAddr := collideLn.Addr().String()
-	// collideLn stays open so bootstrap's health bind collides with EADDRINUSE.
+	// collideLn stays open so bootstrap's primary bind collides with EADDRINUSE.
 
 	asm := assembly.New(assembly.Config{ID: "triple-mid-bind-fail", DurabilityMode: cell.DurabilityDemo})
 
 	b := New(
 		WithAssembly(asm),
-		// Primary and internal: bootstrap-owned sockets on :0 → will succeed.
-		WithListener(cell.PrimaryListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
+		// Health and internal bind first (alphabetical listener ref order) and
+		// must be released when primary fails.
+		WithListener(cell.HealthListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
 		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}),
-		// Health: colliding address → EADDRINUSE.
-		WithListener(cell.HealthListener, collidingAddr, []cell.ListenerAuth{cell.AuthNone{}}),
+		// Primary: colliding address → EADDRINUSE.
+		WithListener(cell.PrimaryListener, collidingAddr, []cell.ListenerAuth{cell.AuthNone{}}),
 		WithShutdownTimeout(2*time.Second),
 	)
 
@@ -486,15 +499,42 @@ func TestTripleListener_MidBindFailure_RollsBackEarlierBindings(t *testing.T) {
 	defer cancel()
 	runErr := b.Run(ctx)
 
-	// collideLn still open — health bind must fail.
-	require.Error(t, runErr, "health bind failure must cause Run to return an error")
-	assert.Contains(t, runErr.Error(), "listen health",
-		"error must identify the failing listener as 'health'")
-	// The two bootstrap-owned sockets (primary + internal) must have been released
-	// by closeOwnedSockets. Verify by trying to re-bind the same port numbers.
-	// (We cannot inspect the exact addrs easily since :0 assigns ephemeral ports,
-	// but the test ensures Run returns an error and does not hang — the primary
-	// ports are returned to the OS on error, confirmed by cleanup.)
+	// collideLn still open — primary bind must fail.
+	require.Error(t, runErr, "primary bind failure must cause Run to return an error")
+	assert.Contains(t, runErr.Error(), "listen primary",
+		"error must identify the failing listener as 'primary'")
+
+	boundAddrs := boundListenerAddrsFromLogs(t, logBuf.Bytes())
+	for _, ref := range []cell.ListenerRef{cell.HealthListener, cell.InternalListener} {
+		addr, ok := boundAddrs[ref.String()]
+		require.Truef(t, ok, "bind log must contain listener %q", ref.String())
+		ln, listenErr := net.Listen("tcp", addr)
+		require.NoErrorf(t, listenErr, "listener %q addr %s must be immediately reusable after rollback", ref.String(), addr)
+		require.NoError(t, ln.Close())
+	}
+}
+
+func boundListenerAddrsFromLogs(t *testing.T, logs []byte) map[string]string {
+	t.Helper()
+	out := make(map[string]string)
+	for _, line := range bytes.Split(logs, []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var entry map[string]any
+		if err := json.Unmarshal(line, &entry); err != nil {
+			continue
+		}
+		if entry["msg"] != "bootstrap: HTTP listener bound" {
+			continue
+		}
+		listener, _ := entry["listener"].(string)
+		addr, _ := entry["addr"].(string)
+		if listener != "" && addr != "" {
+			out[listener] = addr
+		}
+	}
+	return out
 }
 
 // TestDualListener_BootstrapOwnedPrimary_InternalBindFails verifies that when

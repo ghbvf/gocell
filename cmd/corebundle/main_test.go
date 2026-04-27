@@ -35,6 +35,11 @@ func freshTestServiceSecret(t *testing.T) string {
 	return "ts-" + fmt.Sprintf("%x", b) // "ts-" prefix makes it recognisably a test secret
 }
 
+func setPodReachableHealthAddr(t *testing.T) {
+	t.Helper()
+	t.Setenv("GOCELL_HTTP_HEALTH_ADDR", ":9091")
+}
+
 func TestLoadKeySet_DevMode(t *testing.T) {
 	t.Setenv(auth.EnvJWTPrivateKey, "")
 	t.Setenv(auth.EnvJWTPublicKey, "")
@@ -175,6 +180,7 @@ func TestRun_MissingJWTAudience_FailsFast(t *testing.T) {
 func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
 	privPEM, pubPEM := generateTestPEM(t)
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	setPodReachableHealthAddr(t)
 	t.Setenv("GOCELL_SINGLE_POD", "1")
 	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
@@ -206,6 +212,7 @@ func TestRun_RealMode_MissingAccessCursorKey_FailsFast(t *testing.T) {
 func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 	privPEM, pubPEM := generateTestPEM(t)
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	setPodReachableHealthAddr(t)
 	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
@@ -239,6 +246,7 @@ func TestRun_RealMode_MissingVerboseToken_FailsFast(t *testing.T) {
 func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 	privPEM, pubPEM := generateTestPEM(t)
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	setPodReachableHealthAddr(t)
 	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
@@ -270,6 +278,7 @@ func TestRun_RealMode_MissingMetricsToken_FailsFast(t *testing.T) {
 func TestRun_RealMode_MissingServiceSecret_FailsFast(t *testing.T) {
 	privPEM, pubPEM := generateTestPEM(t)
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	setPodReachableHealthAddr(t)
 	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 	t.Setenv(auth.EnvJWTPrevPublicKey, "")
@@ -476,6 +485,7 @@ func TestRun_RealMode_DemoKey_FailsFast(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			privPEM, pubPEM := generateTestPEM(t)
 			t.Setenv("GOCELL_ADAPTER_MODE", "real")
+			setPodReachableHealthAddr(t)
 			t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
 			t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
 			t.Setenv(auth.EnvJWTPrevPublicKey, "")

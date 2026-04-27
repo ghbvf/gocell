@@ -89,19 +89,19 @@ type RouteMux interface {
 }
 
 // RouteHandler is the minimum route-registration surface shared by both the
-// production RouteMux and stdlib *http.ServeMux. Slices expose
-// RegisterRoutes(RouteHandler) so a single declaration — routed through
+// production RouteMux and stdlib *http.ServeMux. Slice route-registration
+// methods accept RouteHandler so a single declaration — routed through
 // auth.Mount — is the source of truth for production wiring (called from
-// Cell.RegisterRoutes), contract tests, and cell-level integration tests.
+// RouteGroup.Register), contract tests, and cell-level integration tests.
 //
 // Both cell.RouteMux and *http.ServeMux satisfy this interface structurally
 // (each declares Handle(pattern string, handler http.Handler)), so slices do
 // not need to know which one they receive at call time.
 //
 // Rationale: early designs let slices wrap handlers with handler-level auth
-// helpers; cell.RegisterRoutes wiring raw HandlerFuncs on RouteMux allowed
-// production to silently skip the wrapper, producing a policy-drift surface
-// that passed contract tests but exposed unguarded routes in production.
+// helpers; legacy cell-level wiring registered raw HandlerFuncs on RouteMux and
+// allowed production to silently skip the wrapper, producing a policy-drift
+// surface that passed contract tests but exposed unguarded routes in production.
 // auth.Mount collapses the two paths into one.
 //
 // ref: kubernetes/kubernetes pkg/endpoints/installer.go — one installer type
@@ -154,7 +154,7 @@ type AuthRouteMeta struct {
 const InternalPathPrefix = "/internal/v1/"
 
 // IsInternal reports whether this route lives on the internal listener,
-// derived from the URL path prefix. Replaces the former Delegated flag.
+// derived from the URL path prefix.
 //
 // The authoring invariant (only InternalListener routes may begin with
 // InternalPathPrefix) is enforced by FinalizeAuth in runtime/http/router.

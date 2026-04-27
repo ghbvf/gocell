@@ -138,6 +138,65 @@ func TestSharedDeps_Validate_VerboseEndpoint(t *testing.T) {
 	}
 }
 
+func TestSharedDeps_Validate_RealModeRejectsLoopbackHealthAddrWithoutLocalOnlyWaiver(t *testing.T) {
+	prodTopo := bootstrap.Topology{StorageBackend: "postgres", AdapterMode: "real", SinglePodReplayProtection: true}
+
+	tests := []struct {
+		name            string
+		addr            string
+		healthLocalOnly bool
+		wantErr         bool
+	}{
+		{name: "loopback rejected", addr: "127.0.0.1:9091", wantErr: true},
+		{name: "localhost rejected", addr: "localhost:9091", wantErr: true},
+		{name: "ipv6 loopback rejected", addr: "[::1]:9091", wantErr: true},
+		{name: "wildcard accepted", addr: ":9091"},
+		{name: "zero wildcard accepted", addr: "0.0.0.0:9091"},
+		{name: "pod reachable accepted", addr: "10.0.0.12:9091"},
+		{name: "loopback accepted with explicit local-only waiver", addr: "127.0.0.1:9091", healthLocalOnly: true},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			deps := newValidatedSharedDeps(t, prodTopo)
+			deps.HealthHTTPAddr = tc.addr
+			deps.HealthLocalOnly = tc.healthLocalOnly
+
+			err := deps.Validate()
+			if !tc.wantErr {
+				require.NoError(t, err)
+				return
+			}
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "GOCELL_HTTP_HEALTH_ADDR")
+			assert.Contains(t, err.Error(), "GOCELL_HTTP_HEALTH_LOCAL_ONLY=1")
+		})
+	}
+}
+
+func TestLoadSharedDepsFromEnv_RealModeAllowsDefaultLoopbackHealthWithLocalOnlyWaiver(t *testing.T) {
+	privPEM, pubPEM := generateTestPEM(t)
+	t.Setenv("GOCELL_ADAPTER_MODE", "real")
+	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "memory")
+	t.Setenv("GOCELL_HTTP_HEALTH_ADDR", "")
+	t.Setenv("GOCELL_HTTP_HEALTH_LOCAL_ONLY", "1")
+	t.Setenv("GOCELL_SINGLE_POD", "1")
+	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
+	t.Setenv(auth.EnvJWTPrivateKey, string(privPEM))
+	t.Setenv(auth.EnvJWTPublicKey, string(pubPEM))
+	t.Setenv(auth.EnvJWTPrevPublicKey, "")
+	t.Setenv("GOCELL_JWT_ISSUER", "gocell-real-test")
+	t.Setenv("GOCELL_JWT_AUDIENCE", "gocell")
+	t.Setenv("GOCELL_SERVICE_SECRET", freshTestServiceSecret(t))
+	t.Setenv("GOCELL_READYZ_VERBOSE_TOKEN", "readyz-token-present")
+	t.Setenv("GOCELL_METRICS_TOKEN", "metrics-token-present")
+
+	deps, err := LoadSharedDepsFromEnv(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, "127.0.0.1:9091", deps.HealthHTTPAddr)
+	assert.True(t, deps.HealthLocalOnly)
+}
+
 type validateDistributedNonceStore struct{}
 
 func (validateDistributedNonceStore) Kind() auth.NonceStoreKind {

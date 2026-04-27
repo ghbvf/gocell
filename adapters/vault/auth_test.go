@@ -84,6 +84,16 @@ func writeTempFile(t *testing.T, content string) string {
 	return path
 }
 
+func requireVaultAuthFailed(t *testing.T, err error) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected ErrVaultAuthFailed, got nil")
+	}
+	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
+		t.Fatalf("want ErrVaultAuthFailed, got: %v", err)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // NewAuthMethodFromEnv — dispatch table
 // ---------------------------------------------------------------------------
@@ -561,53 +571,50 @@ func fileProviderForTest(t *testing.T, path string) (SecretIDProvider, error) {
 	return secretIDFromEnv(context.Background(), nil)
 }
 
-func TestSecretIDFromEnv_FileMode_EmptyFile_Fails(t *testing.T) {
-	// Empty file: provider constructs OK (filePath is set); invocation trips
-	// the in-closure empty-string guard.
-	path := writeTempFile(t, "")
+func requireFileProviderForTest(t *testing.T, path string) SecretIDProvider {
+	t.Helper()
 	provider, err := fileProviderForTest(t, path)
 	if err != nil {
 		t.Fatalf("provider construction unexpectedly failed: %v", err)
 	}
-	_, invokeErr := provider(context.Background())
-	if invokeErr == nil {
-		t.Fatal("expected error for empty secret_id file on provider invocation, got nil")
+	return provider
+}
+
+func requireProviderVaultAuthFailed(t *testing.T, provider SecretIDProvider) {
+	t.Helper()
+	_, err := provider(context.Background())
+	requireVaultAuthFailed(t, err)
+}
+
+func requireProviderValue(t *testing.T, provider SecretIDProvider, want string) {
+	t.Helper()
+	got, err := provider(context.Background())
+	if err != nil {
+		t.Fatalf("provider invocation: %v", err)
 	}
-	if !errChainHasCode(invokeErr, errcode.ErrVaultAuthFailed) {
-		t.Errorf("want ErrVaultAuthFailed, got: %v", invokeErr)
+	if got != want {
+		t.Errorf("provider returned %q, want %q", got, want)
 	}
+}
+
+func TestSecretIDFromEnv_FileMode_EmptyFile_Fails(t *testing.T) {
+	// Empty file: provider constructs OK (filePath is set); invocation trips
+	// the in-closure empty-string guard.
+	provider := requireFileProviderForTest(t, writeTempFile(t, ""))
+	requireProviderVaultAuthFailed(t, provider)
 }
 
 func TestSecretIDFromEnv_FileMode_NonexistentFile_Fails(t *testing.T) {
 	// Nonexistent file: provider construction succeeds (no pre-read); the
 	// os.ReadFile inside the closure is what fails.
-	provider, err := fileProviderForTest(t, "/no/such/file/secret_id_xyz")
-	if err != nil {
-		t.Fatalf("provider construction unexpectedly failed: %v", err)
-	}
-	_, invokeErr := provider(context.Background())
-	if invokeErr == nil {
-		t.Fatal("expected error for nonexistent file on provider invocation, got nil")
-	}
-	if !errChainHasCode(invokeErr, errcode.ErrVaultAuthFailed) {
-		t.Errorf("want ErrVaultAuthFailed, got: %v", invokeErr)
-	}
+	provider := requireFileProviderForTest(t, "/no/such/file/secret_id_xyz")
+	requireProviderVaultAuthFailed(t, provider)
 }
 
 func TestSecretIDFromEnv_FileMode_ValidFile_ReturnsContent(t *testing.T) {
 	const wantID = "s3cr3t-id-from-file"
-	path := writeTempFile(t, wantID)
-	provider, err := fileProviderForTest(t, path)
-	if err != nil {
-		t.Fatalf("provider construction failed: %v", err)
-	}
-	got, err := provider(context.Background())
-	if err != nil {
-		t.Fatalf("provider invocation: %v", err)
-	}
-	if got != wantID {
-		t.Errorf("file provider returned %q, want %q", got, wantID)
-	}
+	provider := requireFileProviderForTest(t, writeTempFile(t, wantID))
+	requireProviderValue(t, provider, wantID)
 }
 
 func TestSecretIDFromEnv_FileMode_MissingFileEnv_Fails(t *testing.T) {
@@ -618,12 +625,7 @@ func TestSecretIDFromEnv_FileMode_MissingFileEnv_Fails(t *testing.T) {
 		"VAULT_SECRET_ID_FILE", "",
 	)
 	_, err := secretIDFromEnv(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected error when VAULT_SECRET_ID_FILE is unset, got nil")
-	}
-	if !errChainHasCode(err, errcode.ErrVaultAuthFailed) {
-		t.Errorf("want ErrVaultAuthFailed, got: %v", err)
-	}
+	requireVaultAuthFailed(t, err)
 }
 
 // ---------------------------------------------------------------------------

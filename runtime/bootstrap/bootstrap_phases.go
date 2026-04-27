@@ -664,7 +664,7 @@ func (b *Bootstrap) mountOneRouteGroup(rtr *router.Router, rg cell.RouteGroup, _
 // router and calls FinalizeAuth on every declared listener's router.
 //
 // CORR-01: previously only the primary router was finalized, silently skipping
-// verifyDelegatedConsistency + verifyPolicyCoverage for Internal and Health routers.
+// internal-route affinity + policy coverage checks for Internal and Health routers.
 //
 // PR-258 RES-5: the /internal/v1/* 404 isolation is now installed as an
 // early-responder middleware via WithEarlyResponder at router-build time

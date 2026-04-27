@@ -44,6 +44,7 @@ func setRealModeEnv(t *testing.T, dsn string) {
 	t.Setenv("GOCELL_JWT_AUDIENCE", "smoke")
 	t.Setenv("GOCELL_ADAPTER_MODE", "real")
 	t.Setenv("GOCELL_CELL_ADAPTER_MODE", "postgres")
+	t.Setenv("GOCELL_HTTP_HEALTH_ADDR", ":9091")
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
 	// F1: in real mode, in-memory nonce store requires explicit single-pod opt-in.
 	t.Setenv("GOCELL_SINGLE_POD", "1")

@@ -153,7 +153,11 @@ package mycell
 import (
     "context"
     "log/slog"
+    "net/http"
+
     "github.com/ghbvf/gocell/kernel/cell"
+    "github.com/ghbvf/gocell/kernel/wrapper"
+    "github.com/ghbvf/gocell/runtime/auth"
 )
 
 type MyCell struct {
@@ -178,10 +182,24 @@ func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
     return c.BaseCell.Init(ctx, deps)
 }
 
-func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
-    mux.Handle("GET /api/v1/hello", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-        w.Write([]byte(`{"message":"hello from mycell"}`))
-    }))
+func (c *MyCell) RouteGroups() []cell.RouteGroup {
+    return []cell.RouteGroup{
+        cell.SingleGroup(cell.PrimaryListener, "/api/v1", func(mux cell.RouteMux) error {
+            return auth.Mount(mux, auth.Route{
+                Contract: wrapper.ContractSpec{
+                    ID:        "http.mycell.hello.v1",
+                    Kind:      "http",
+                    Transport: "http",
+                    Method:    "GET",
+                    Path:      "/api/v1/hello",
+                },
+                Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+                    _, _ = w.Write([]byte(`{"message":"hello from mycell"}`))
+                }),
+                Public: true,
+            })
+        }),
+    }
 }
 ```
 
@@ -197,6 +215,7 @@ import (
 
     mycell "github.com/ghbvf/gocell/cells/mycell"
     "github.com/ghbvf/gocell/kernel/assembly"
+    "github.com/ghbvf/gocell/kernel/cell"
     "github.com/ghbvf/gocell/runtime/bootstrap"
 )
 
@@ -209,9 +228,10 @@ func main() {
 
     app := bootstrap.New(
         bootstrap.WithAssembly(asm),
-        // PR-A14a dual listener — primary (public + infra) + internal (/internal/v1/*).
-        bootstrap.WithHTTPPrimaryAddr(":8080"),
-        bootstrap.WithHTTPInternalAddr("127.0.0.1:9090"),
+        bootstrap.WithListener(cell.PrimaryListener, ":8080",
+            []cell.ListenerAuth{cell.AuthNone{}}),
+        bootstrap.WithListener(cell.InternalListener, "127.0.0.1:9090",
+            []cell.ListenerAuth{cell.AuthNone{}}),
     )
     app.Run(ctx)
 }
@@ -375,7 +395,8 @@ safely degrade to a new root trace.
 tracer := tracing.NewTracer("my-service")  // or adapters/otel.NewTracer(...)
 app := bootstrap.New(
     bootstrap.WithAssembly(asm),
-    bootstrap.WithHTTPAddr(":8080"),
+    bootstrap.WithListener(cell.PrimaryListener, ":8080",
+        []cell.ListenerAuth{cell.AuthNone{}}),
     bootstrap.WithTracer(tracer),
 )
 

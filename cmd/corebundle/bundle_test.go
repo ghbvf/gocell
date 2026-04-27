@@ -277,6 +277,7 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		EventBus:            eventbus.New(),
 		ConsumerClaimer:     idempotency.NewInMemClaimer(),
 		ConsumerClaimerKind: consumerClaimerKindInMemory,
+		HealthHTTPAddr:      ":9091",
 		// PR-A35: verbose endpoint is now gated in every mode. A test-time
 		// token keeps the dev baseline valid; prod tests override via the
 		// mutate callback when they want to exercise the missing-token path.

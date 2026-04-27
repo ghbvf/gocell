@@ -229,6 +229,22 @@ func TestPhase0_RejectsNilAuthChain(t *testing.T) {
 	}
 }
 
+func TestPhase0_RejectsZeroListenerRef(t *testing.T) {
+	t.Parallel()
+
+	b := New(
+		WithListener(cell.ListenerRef{}, ":8080", []cell.ListenerAuth{cell.AuthNone{}}),
+	)
+
+	err := b.phase0ValidateOptions()
+	if err == nil {
+		t.Fatal("phase0ValidateOptions must reject a zero ListenerRef")
+	}
+	if !strings.Contains(err.Error(), "zero listener ref") {
+		t.Fatalf("phase0ValidateOptions error must mention zero listener ref, got: %v", err)
+	}
+}
+
 // TestPhase0_AcceptsExplicitAuthNone verifies that passing cell.AuthNone{}
 // explicitly for HealthListener is accepted by phase0 (the positive case for
 // the fail-closed authChain requirement).

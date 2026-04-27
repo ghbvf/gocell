@@ -92,77 +92,81 @@ func (c *MyCell) Init(ctx context.Context, deps cell.Dependencies) error {
 
 ### 4. 注册 HTTP 路由（可选）
 
-实现 `cell.HTTPRegistrar` 接口，使用 `auth.Mount` 在注册点声明鉴权语义
-（F3 模式，参见 [runtime-api.md](../../.claude/rules/gocell/runtime-api.md)）：
+实现 `cell.RouteGroupContributor` 接口，Cell 通过 `RouteGroups()` 声明
+每组路由所属的物理 listener，并在 `Register` 闭包里使用 `auth.Mount`
+声明鉴权语义（F3 模式，参见
+[runtime-api.md](../../.claude/rules/gocell/runtime-api.md)）：
 
 ```go
-var _ cell.HTTPRegistrar = (*MyCell)(nil)
+var _ cell.RouteGroupContributor = (*MyCell)(nil)
 
-func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
-    mux.Route("/api/v1/my-resource", func(sub cell.RouteMux) {
-        auth.Mount(sub, auth.Route{
-            Contract: wrapper.ContractSpec{
-                ID:        "http.mycell.my-resource.get.v1",
-                Kind:      "http",
-                Transport: "http",
-                Method:    "GET",
-                Path:      "/api/v1/my-resource/{id}",
-            },
-            Handler: http.HandlerFunc(c.handler.Get),
-            Policy:  auth.Authenticated(),
-        })
-    })
+func (c *MyCell) RouteGroups() []cell.RouteGroup {
+    return []cell.RouteGroup{
+        cell.SingleGroup(cell.PrimaryListener, "/api/v1/my-resource", func(mux cell.RouteMux) error {
+            return auth.Mount(mux, auth.Route{
+                Contract: wrapper.ContractSpec{
+                    ID:        "http.mycell.my-resource.get.v1",
+                    Kind:      "http",
+                    Transport: "http",
+                    Method:    "GET",
+                    Path:      "/api/v1/my-resource/{id}",
+                },
+                Handler: http.HandlerFunc(c.handler.Get),
+                Policy:  auth.Authenticated(),
+            })
+        }),
+    }
 }
 ```
 
-#### PR-A14a 双 listener 分流
+#### Listener 分流
 
-`runtime` 层运行两个独立 `http.Server`：
+`runtime` 层运行三个独立 `http.Server`：
 
-- **primary** (`:8080` 默认) — `/api/v1/*`、`/healthz`、`/readyz`、`/metrics`、所有 public 业务路由；JWT AuthMiddleware 工作在此 listener 上。
-- **internal** (`127.0.0.1:9090` 默认) — 仅 `/internal/v1/*` 控制面路由；service-token / mTLS 中间件由 composition root 通过 `bootstrap.WithInternalMiddleware(mw)` 注入作为唯一鉴权层。
+- **primary** (`:8080` 默认) — `/api/v1/*` 和所有 public 业务路由；JWT AuthMiddleware 通过 `bootstrap.WithListener(cell.PrimaryListener, ..., []cell.ListenerAuth{...})` 装配在此 listener 上。
+- **internal** (`127.0.0.1:9090` 默认) — 仅 `/internal/v1/*` 控制面路由；service-token / mTLS 通过 `bootstrap.WithListener(cell.InternalListener, ..., []cell.ListenerAuth{...})` 装配为 listener 级鉴权层。
+- **health** (`127.0.0.1:9091` local/dev 默认；生产 PodIP/Service probe 用 `:9091`) — 仅 `/healthz`、`/readyz`、`/metrics`。
 
-Cell 在 `RegisterRoutes` 里按路径前缀声明，`Router` 自动把 `/internal/v1/*` pattern 物理挂到 internalMux：
+Cell 在 `RouteGroups()` 里按 listener + 路径前缀声明，bootstrap 会把每组路由挂到对应 listener 的独立 router：
 
 ```go
-func (c *MyCell) RegisterRoutes(mux cell.RouteMux) {
-    // public → publicMux
-    mux.Route("/api/v1/my-resource", func(sub cell.RouteMux) {
-        auth.Mount(sub, auth.Route{
-            Contract: wrapper.ContractSpec{
-                ID:        "http.mycell.my-resource.get.v1",
-                Kind:      "http",
-                Transport: "http",
-                Method:    "GET",
-                Path:      "/api/v1/my-resource/{id}",
-            },
-            Handler: http.HandlerFunc(c.handler.Get),
-            Policy:  auth.Authenticated(),
-        })
-    })
-    // internal → internalMux（service-token/mTLS 是唯一鉴权层；JWT 不触达）
-    mux.Route("/internal/v1/my-resource", func(sub cell.RouteMux) {
-        auth.Mount(sub, auth.Route{
-            Contract: wrapper.ContractSpec{
-                ID:        "http.mycell.my-resource.admin-op.v1",
-                Kind:      "http",
-                Transport: "http",
-                Method:    "POST",
-                Path:      "/internal/v1/my-resource/admin-op",
-            },
-            Handler: http.HandlerFunc(c.handler.AdminOp),
-            Policy:    internalAdminPolicy,
-            Delegated: true, // 必须：FinalizeAuth 在启动期断言 Delegated ⇔ /internal/v1/*
-        })
-    })
+func (c *MyCell) RouteGroups() []cell.RouteGroup {
+    return []cell.RouteGroup{
+        cell.SingleGroup(cell.PrimaryListener, "/api/v1/my-resource", func(mux cell.RouteMux) error {
+            return auth.Mount(mux, auth.Route{
+                Contract: wrapper.ContractSpec{
+                    ID:        "http.mycell.my-resource.get.v1",
+                    Kind:      "http",
+                    Transport: "http",
+                    Method:    "GET",
+                    Path:      "/api/v1/my-resource/{id}",
+                },
+                Handler: http.HandlerFunc(c.handler.Get),
+                Policy:  auth.Authenticated(),
+            })
+        }),
+        cell.SingleGroup(cell.InternalListener, "/internal/v1/my-resource", func(mux cell.RouteMux) error {
+            return auth.Mount(mux, auth.Route{
+                Contract: wrapper.ContractSpec{
+                    ID:        "http.mycell.my-resource.admin-op.v1",
+                    Kind:      "http",
+                    Transport: "http",
+                    Method:    "POST",
+                    Path:      "/internal/v1/my-resource/admin-op",
+                },
+                Handler: http.HandlerFunc(c.handler.AdminOp),
+                Policy:  auth.AnyRole(auth.RoleInternalAdmin),
+            })
+        }),
+    }
 }
 ```
 
 **约束**：
 
-- 所有 `/internal/v1/*` 路由必须 `Delegated: true`，否则 `FinalizeAuth()` 启动期失败；反之 `Delegated: true` 只能用于 `/internal/v1/*`。
+- 所有 `/internal/v1/*` 路由必须挂在 `cell.InternalListener`；`FinalizeAuth()` 会在启动期校验内部前缀与 listener 归属一致。
 - 禁止在 `Route` / `Group` / `With` 嵌套子作用域里再次进入 `/internal/v1/*`——会触发 `chiRouterAdapter.guardNestedInternalRegistration` panic（顶层 Router 是内外 mux 分流的唯一入口）。
-- `/healthz` / `/readyz` / `/metrics` 只在 primary listener，internal listener 对这些路径返回 404。
+- `/healthz` / `/readyz` / `/metrics` 只在 health listener；未声明 health listener 时才 fallback 到 primary。
 
 ### 5. 注册事件订阅（可选）
 

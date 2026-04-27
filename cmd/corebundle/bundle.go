@@ -119,7 +119,9 @@ func defaultRuntimeOptions(
 		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, buildInternalAuthChain(shared.InternalGuard)))
 	}
 	// B2: HealthListener is required when a metrics handler is configured.
-	// Production deployments always set GOCELL_HTTP_HEALTH_ADDR.
+	// Production PodIP/Service probes set GOCELL_HTTP_HEALTH_ADDR to a
+	// reachable bind; same-netns deployments explicitly waive loopback via
+	// GOCELL_HTTP_HEALTH_LOCAL_ONLY=1.
 	// Tests inject their own HealthListener via extra bootstrap.WithListener options.
 	if shared.HealthHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []cell.ListenerAuth{cell.AuthNone{}}))
