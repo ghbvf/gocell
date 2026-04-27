@@ -65,7 +65,7 @@ func TestCircuitBreaker_Open_Returns503(t *testing.T) {
 	err := json.NewDecoder(rec.Body).Decode(&body)
 	require.NoError(t, err)
 	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_CIRCUIT_OPEN", errObj["code"])
+	assert.Equal(t, "ERR_SERVICE_UNAVAILABLE", errObj["code"])
 	assert.Equal(t, "service unavailable", errObj["message"],
 		"503 message must say 'service unavailable', not 'internal server error'")
 	assert.False(t, cb.doneInvoked, "done callback must not be invoked when circuit is open")
