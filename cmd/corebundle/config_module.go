@@ -132,7 +132,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
 
-	// A13: register vault token renewal counters when the KeyProvider exposes them.
+	// Register Vault diagnostics when the KeyProvider exposes them.
 	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
 		shared.SharedPGPool = nil
 		rollback()
@@ -164,18 +164,29 @@ type renewalMetricsProvider interface {
 	RenewalMetrics() []prom.Collector
 }
 
+type keyProviderMetricsProvider interface {
+	Metrics() []prom.Collector
+}
+
 // registerRenewalMetrics registers per-collector metrics exposed by KeyProvider
 // implementations that satisfy renewalMetricsProvider. Returns error on
 // registration failures other than AlreadyRegisteredError.
 func registerRenewalMetrics(kp kcrypto.KeyProvider, reg prom.Registerer) error {
+	if mp, ok := kp.(keyProviderMetricsProvider); ok {
+		return registerCollectors(mp.Metrics(), reg, "key provider metric")
+	}
 	rmp, ok := kp.(renewalMetricsProvider)
 	if !ok {
 		return nil
 	}
-	for _, col := range rmp.RenewalMetrics() {
+	return registerCollectors(rmp.RenewalMetrics(), reg, "vault renewal metric")
+}
+
+func registerCollectors(collectors []prom.Collector, reg prom.Registerer, label string) error {
+	for _, col := range collectors {
 		if err := reg.Register(col); err != nil {
 			if _, ok := err.(prom.AlreadyRegisteredError); !ok {
-				return fmt.Errorf("vault renewal metric: %w", err)
+				return fmt.Errorf("%s: %w", label, err)
 			}
 		}
 	}

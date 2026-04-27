@@ -19,6 +19,7 @@ import (
 
 	vaultadapter "github.com/ghbvf/gocell/adapters/vault"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/tests/testutil"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,7 +33,7 @@ func startVaultContainer(t *testing.T) (addr, token string, teardown func()) {
 	ctx := context.Background()
 
 	container, err := vaultcontainer.Run(ctx,
-		"hashicorp/vault:1.17",
+		testutil.VaultImage,
 		vaultcontainer.WithToken("root-test-token"),
 		vaultcontainer.WithInitCommand(
 			"secrets enable transit",

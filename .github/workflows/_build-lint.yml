@@ -110,7 +110,7 @@ jobs:
         if: matrix.static_checks
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
         with:
-          version: v2.11
+          version: v2.11.0
           # only-new-issues uses the GitHub pull-request diff API which
           # refuses diffs larger than 300 files; fall back to
           # --new-from-merge-base so mass-rename PRs (repo-wide renames,

@@ -1148,6 +1148,34 @@ func (p *TransitKeyProvider) RenewalMetrics() []prometheus.Collector {
 	return collectors
 }
 
+// CacheVersionMetrics returns the Prometheus collector exposing the latest
+// Vault Transit key version cached by this process. The collector is not
+// registered here; composition roots own registry selection and duplicate
+// handling.
+func (p *TransitKeyProvider) CacheVersionMetrics() []prometheus.Collector {
+	return []prometheus.Collector{
+		prometheus.NewGaugeFunc(prometheus.GaugeOpts{
+			Namespace: "gocell",
+			Subsystem: "vault",
+			Name:      "cached_key_version",
+			Help:      "Latest Vault Transit key version cached by this process; 0 means cache miss.",
+			ConstLabels: prometheus.Labels{
+				"mount_path": p.mountPath,
+				"key_name":   p.keyName,
+			},
+		}, func() float64 {
+			return float64(p.cachedLatestVersion.Load())
+		}),
+	}
+}
+
+// Metrics returns all Prometheus collectors exposed by TransitKeyProvider.
+func (p *TransitKeyProvider) Metrics() []prometheus.Collector {
+	collectors := p.CacheVersionMetrics()
+	collectors = append(collectors, p.RenewalMetrics()...)
+	return collectors
+}
+
 // Worker returns the token renewal worker when one has been configured, or nil
 // when the VaultClient does not implement TokenRenewer (e.g. test fakes with
 // static tokens). The bootstrap layer skips WithWorkers registration for nil.
