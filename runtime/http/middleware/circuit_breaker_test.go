@@ -198,6 +198,12 @@ func TestCircuitBreaker_NilBreaker_ReturnsError(t *testing.T) {
 	assert.Error(t, err)
 }
 
+func TestMustCircuitBreaker_NilBreaker_Panics(t *testing.T) {
+	require.Panics(t, func() {
+		MustCircuitBreaker(nil)
+	})
+}
+
 // TestIsTypedNilAllower verifies that IsTypedNilAllower detects typed-nil
 // pointers wrapped in an Allower interface value.
 func TestIsTypedNilAllower(t *testing.T) {
