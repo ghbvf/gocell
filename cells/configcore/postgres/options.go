@@ -48,6 +48,9 @@ func WithOnStaleCipher(fn func(key, storedKeyID, currentKeyID string)) Option {
 // The pool lifecycle, schema guard, TxManager, outbox writer, and relay remain
 // the composition root's responsibility. This option only adapts the pool into
 // configcore's cell-local repository ports.
+//
+// WithLogger configures repository logs only. Call configcore.WithLogger
+// separately when the cell itself should use the same logger.
 func WithPool(pool *pgxpool.Pool, opts ...Option) configcore.Option {
 	cfg := settings{logger: slog.Default()}
 	for _, opt := range opts {

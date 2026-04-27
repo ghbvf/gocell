@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
-	accesshttp "github.com/ghbvf/gocell/cells/accesscore/internal/adapters/http"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/mem"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/slices/authorizationdecide"
@@ -197,28 +196,11 @@ func WithInitialAdminBootstrap(opts ...initialadmin.LifecycleOption) Option {
 // (contract: http.config.internal.get.v1). When not set the slice operates in
 // log-only mode — no cross-cell HTTP call is made.
 //
-// Tests should prefer this option with a stub implementation. Production
-// composition roots that cannot import cells/accesscore/internal/adapters/http
-// (e.g. cmd/corebundle) use WithConfigGetterHTTP instead.
+// Tests and composition roots inject an implementation directly. Concrete
+// factories live in cell-owned adapter subpackages so the root Cell API stays
+// port-oriented.
 func WithConfigGetter(c ports.ConfigGetter) Option {
 	return func(ac *AccessCore) { ac.configGetter = c }
-}
-
-// WithConfigGetterHTTP constructs a new HTTP-backed ConfigGetter from the
-// given base URL and HMAC key ring and injects it.
-//
-// This public factory is the composition-root entrypoint for cmd/corebundle
-// and similar callers that cannot import cells/accesscore/internal/adapters/http
-// directly. It is equivalent to calling WithConfigGetter(NewHTTPConfigGetter(baseURL, ring)).
-//
-// The ring parameter is *auth.HMACKeyRing (concrete type) because outbound
-// service-token signing relies on its Current() method; tests that don't need
-// real signing should use WithConfigGetter(stub) instead.
-//
-// contract: http.config.internal.get.v1
-// ref: go-micro config/source/remote — polling + on-change patterns.
-func WithConfigGetterHTTP(baseURL string, ring *auth.HMACKeyRing) Option {
-	return WithConfigGetter(accesshttp.NewHTTPConfigGetter(baseURL, ring))
 }
 
 // AccessCore is the accesscore Cell implementation.

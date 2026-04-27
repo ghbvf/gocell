@@ -2,8 +2,10 @@ package postgres
 
 import (
 	"log/slog"
+	"reflect"
 	"testing"
 
+	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/stretchr/testify/assert"
 )
@@ -23,4 +25,16 @@ func TestOptionsApplySettings(t *testing.T) {
 	assert.Equal(t, transformer, cfg.transformer)
 	cfg.onStaleCipher("key", "old", "new")
 	assert.Equal(t, 1, calls)
+}
+
+func TestWithPoolWiresStaleCipherCallback(t *testing.T) {
+	c := configcore.NewConfigCore(
+		WithPool(nil, WithOnStaleCipher(func(_, _, _ string) {})),
+	)
+
+	repo := reflect.ValueOf(c).Elem().FieldByName("configRepo")
+	assert.False(t, repo.IsNil(), "WithPool must inject a config repository")
+	concreteRepo := repo.Elem().Elem()
+	callback := concreteRepo.FieldByName("onStaleCipher")
+	assert.False(t, callback.IsNil(), "WithPool must pass WithOnStaleCipher to the repository")
 }

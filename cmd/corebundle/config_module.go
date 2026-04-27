@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
@@ -103,6 +104,20 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 	pgRes := modResult.PGResource
 	cellOpts := modResult.CellOptions
 	relayOpts := modResult.BootstrapOpts
+	var opts []bootstrap.Option
+	var provisional []kernellifecycle.ManagedResource
+	if pgRes != nil {
+		opts = append(opts, bootstrap.WithManagedResource(pgRes))
+		provisional = append(provisional, pgRes)
+	}
+	rollback := func() {
+		for i := len(provisional) - 1; i >= 0; i-- {
+			if closeErr := provisional[i].Close(ctx); closeErr != nil {
+				slog.Warn("configcore: provisional rollback close failed",
+					slog.Any("error", closeErr))
+			}
+		}
+	}
 	// Expose the pool through SharedDeps so AccessCoreModule + AuditCoreModule
 	// can wire their own outbox.Writer + TxManager from the same pool in
 	// postgres mode. In memory mode modResult.PGPool is nil — SharedPGPool
@@ -119,15 +134,11 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 
 	// A13: register vault token renewal counters when the KeyProvider exposes them.
 	if err := registerRenewalMetrics(kp, shared.PromStack.registry); err != nil {
+		shared.SharedPGPool = nil
+		rollback()
 		return nil, nil, nil, fmt.Errorf("configcore: register renewal metrics: %w", err)
 	}
 
-	var opts []bootstrap.Option
-	var provisional []kernellifecycle.ManagedResource
-	if pgRes != nil {
-		opts = append(opts, bootstrap.WithManagedResource(pgRes))
-		provisional = append(provisional, pgRes)
-	}
 	// Relay opts: in postgres mode, relayOpts contains WithManagedResource(relay)
 	// so the relay worker is independently managed by bootstrap (Worker/Close/Checkers).
 	opts = append(opts, relayOpts...)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"go/ast"
+	"go/token"
 	"go/types"
 	"os"
 	"path/filepath"
@@ -101,6 +102,7 @@ func isInternal(importPath string) bool {
 // cmd/ and examples/ are always exempt (composition roots and unrestricted
 // consumers respectively; see the layering conventions in archtest's doc.go).
 var cellOwnedSubpackages = map[string]string{
+	"cells/accesscore/configgetter": "cells/accesscore/",
 	"cells/accesscore/initialadmin": "cells/accesscore/",
 	"cells/configcore/postgres":     "cells/configcore/",
 }
@@ -180,6 +182,19 @@ func checkLayering(modPrefix string, pkgs []pkgInfo) []violation {
 			// are owned by the declaring cell; sibling cells must use contract wire types instead.
 			// Same-cell self-import is allowed; cmd/ and examples/ are unrestricted.
 			impCell := cellOf(modPrefix, imp)
+			if isRootCellPackage(modPrefix, pkg.ImportPath) && srcCell != "" {
+				impRel := strings.TrimPrefix(imp, modPrefix)
+				internalAdaptersPrefix := "cells/" + srcCell + "/internal/adapters/"
+				if strings.HasPrefix(impRel, internalAdaptersPrefix) {
+					out = append(out, violation{
+						Rule:    "LAYER-10",
+						Pkg:     pkg.ImportPath,
+						Import:  imp,
+						Message: fmt.Sprintf("LAYER-10: %s imports %s (root cell package must not construct concrete adapters)", pkg.ImportPath, imp),
+					})
+				}
+			}
+
 			if srcCell != "" && impCell != "" && srcCell != impCell {
 				impRel := strings.TrimPrefix(imp, modPrefix)
 				eventsPrefix := "cells/" + impCell + "/events"
@@ -246,6 +261,7 @@ func isCellPublicAPIDisallowedType(modPrefix, pkgPath string) bool {
 	for _, prefix := range []string{
 		"github.com/aws/aws-sdk-go-v2/",
 		"github.com/jackc/pgx/",
+		"github.com/prometheus/client_golang/prometheus",
 		"github.com/rabbitmq/amqp091-go",
 		"github.com/redis/go-redis/",
 		"nhooyr.io/websocket",
@@ -267,7 +283,15 @@ func findDisallowedTypePath(modPrefix string, typ types.Type) string {
 		if obj := t.Obj(); obj != nil && obj.Pkg() != nil && isCellPublicAPIDisallowedType(modPrefix, obj.Pkg().Path()) {
 			return obj.Pkg().Path()
 		}
+		typeArgs := t.TypeArgs()
+		for i := 0; typeArgs != nil && i < typeArgs.Len(); i++ {
+			if p := findDisallowedTypePath(modPrefix, typeArgs.At(i)); p != "" {
+				return p
+			}
+		}
 		return ""
+	case *types.TypeParam:
+		return findDisallowedTypePath(modPrefix, t.Constraint())
 	case *types.Pointer:
 		return findDisallowedTypePath(modPrefix, t.Elem())
 	case *types.Slice:
@@ -289,6 +313,11 @@ func findDisallowedTypePath(modPrefix string, typ types.Type) string {
 	case *types.Interface:
 		for i := 0; i < t.NumExplicitMethods(); i++ {
 			if p := findDisallowedTypePath(modPrefix, t.ExplicitMethod(i).Type()); p != "" {
+				return p
+			}
+		}
+		for i := 0; i < t.NumEmbeddeds(); i++ {
+			if p := findDisallowedTypePath(modPrefix, t.EmbeddedType(i)); p != "" {
 				return p
 			}
 		}
@@ -709,14 +738,78 @@ func TestIsCellPublicAPIDisallowedType(t *testing.T) {
 		{"github.com/redis/go-redis/v9", true},
 		{"github.com/rabbitmq/amqp091-go", true},
 		{"nhooyr.io/websocket", true},
+		{"github.com/prometheus/client_golang/prometheus", true},
 		{"github.com/ghbvf/gocell/kernel/outbox", false},
-		{"github.com/prometheus/client_golang/prometheus", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.pkgPath, func(t *testing.T) {
 			assert.Equal(t, tt.want, isCellPublicAPIDisallowedType(mod, tt.pkgPath))
 		})
 	}
+}
+
+func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
+	const mod = "github.com/ghbvf/gocell/"
+	rootPkg := types.NewPackage("github.com/ghbvf/gocell/cells/accesscore", "accesscore")
+	poolPkg := types.NewPackage("github.com/jackc/pgx/v5/pgxpool", "pgxpool")
+	promPkg := types.NewPackage("github.com/prometheus/client_golang/prometheus", "prometheus")
+
+	poolType := types.NewNamed(types.NewTypeName(token.NoPos, poolPkg, "Pool", nil), types.NewStruct(nil, nil), nil)
+	counterType := types.NewNamed(types.NewTypeName(token.NoPos, promPkg, "Counter", nil), types.NewInterfaceType(nil, nil).Complete(), nil)
+	poolPtr := types.NewPointer(poolType)
+
+	typeSpec := &ast.TypeSpec{Name: ast.NewIdent("ExportedStruct"), Type: ast.NewIdent("struct")}
+	ifaceSpec := &ast.TypeSpec{Name: ast.NewIdent("ExportedInterface"), Type: ast.NewIdent("interface")}
+	funcDecl := &ast.FuncDecl{Name: ast.NewIdent("WithPool"), Type: &ast.FuncType{}}
+	varSpec := &ast.ValueSpec{Names: []*ast.Ident{ast.NewIdent("ExportedMetric")}}
+	metricName := varSpec.Names[0]
+	file := &ast.File{
+		Name: ast.NewIdent("accesscore"),
+		Decls: []ast.Decl{
+			&ast.GenDecl{Specs: []ast.Spec{typeSpec}},
+			&ast.GenDecl{Specs: []ast.Spec{ifaceSpec}},
+			funcDecl,
+			&ast.GenDecl{Specs: []ast.Spec{varSpec}},
+		},
+	}
+
+	fakePkg := &packages.Package{
+		PkgPath: "github.com/ghbvf/gocell/cells/accesscore",
+		Syntax:  []*ast.File{file},
+		Types:   rootPkg,
+		TypesInfo: &types.Info{
+			Defs:  map[*ast.Ident]types.Object{},
+			Types: map[ast.Expr]types.TypeAndValue{},
+		},
+	}
+	fakePkg.TypesInfo.Types[typeSpec.Type] = types.TypeAndValue{
+		Type: types.NewStruct([]*types.Var{
+			types.NewField(token.NoPos, rootPkg, "Pool", poolPtr, false),
+		}, nil),
+	}
+	fakePkg.TypesInfo.Types[ifaceSpec.Type] = types.TypeAndValue{
+		Type: types.NewInterfaceType([]*types.Func{
+			types.NewFunc(token.NoPos, rootPkg, "Observe", types.NewSignatureType(nil, nil, nil,
+				types.NewTuple(types.NewVar(token.NoPos, rootPkg, "counter", counterType)), nil, false)),
+		}, nil).Complete(),
+	}
+	fakePkg.TypesInfo.Defs[funcDecl.Name] = types.NewFunc(token.NoPos, rootPkg, "WithPool",
+		types.NewSignatureType(nil, nil, nil,
+			types.NewTuple(types.NewVar(token.NoPos, rootPkg, "pool", poolPtr)), nil, false))
+	fakePkg.TypesInfo.Defs[metricName] = types.NewVar(token.NoPos, rootPkg, "ExportedMetric", counterType)
+	fakePkg.PkgPath = "github.com/ghbvf/gocell/cells/accesscore"
+
+	violations := checkCellPublicAPIAdapterTypes(mod, []*packages.Package{fakePkg})
+
+	var messages []string
+	for _, v := range violations {
+		messages = append(messages, v.Message)
+	}
+	assert.Len(t, violations, 4)
+	assert.Contains(t, strings.Join(messages, "\n"), "exported type ExportedStruct")
+	assert.Contains(t, strings.Join(messages, "\n"), "exported type ExportedInterface")
+	assert.Contains(t, strings.Join(messages, "\n"), "exported API WithPool")
+	assert.Contains(t, strings.Join(messages, "\n"), "exported var/const ExportedMetric")
 }
 
 func TestIsInternal(t *testing.T) {
@@ -925,6 +1018,15 @@ func TestCheckLayering(t *testing.T) {
 				}},
 			},
 			wantRules: []string{"LAYER-06"},
+		},
+		{
+			name: "LAYER-10 violation: root cell imports own internal adapter",
+			pkgs: []pkgInfo{
+				{ImportPath: "github.com/ghbvf/gocell/cells/accesscore", Imports: []string{
+					"github.com/ghbvf/gocell/cells/accesscore/internal/adapters/http", // forbidden — hidden adapter factory
+				}},
+			},
+			wantRules: []string{"LAYER-10"},
 		},
 		{
 			name: "LAYER-06 violation: sibling cell slice imports nested path of initialadmin",
