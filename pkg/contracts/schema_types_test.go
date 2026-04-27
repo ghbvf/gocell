@@ -214,10 +214,10 @@ func TestParamSchemaConstraintsRoundTrip(t *testing.T) {
 }
 
 func TestParamTypesWhitelist(t *testing.T) {
-	for _, name := range []string{"string", "integer", "number", "boolean", "uuid"} {
+	for _, name := range []string{"string", "integer", "number", "boolean"} {
 		assert.True(t, ParamTypes[name], "%s should be accepted", name)
 	}
-	for _, name := range []string{"int", "float", "array", "", "object"} {
+	for _, name := range []string{"int", "float", "array", "", "object", "uuid"} {
 		assert.False(t, ParamTypes[name], "%s should be rejected", name)
 	}
 }

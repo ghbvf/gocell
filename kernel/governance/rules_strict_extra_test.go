@@ -497,6 +497,51 @@ func TestFMT20_ArrayItemsObjectMissingAdditionalProperties(t *testing.T) {
 	}
 }
 
+func TestFMT20_UnevaluatedItemsObjectMissingAdditionalProperties(t *testing.T) {
+	dir := t.TempDir()
+	contractDir := filepath.Join(dir, "contracts", "http", "arraytest", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+
+	responsePath := filepath.Join(contractDir, "response.schema.json")
+	responseContent := `{
+		"type": "array",
+		"items": {"type": "string"},
+		"unevaluatedItems": {
+			"type": "object",
+			"properties": {
+				"id": {"type": "string"}
+			}
+		}
+	}`
+	require.NoError(t, os.WriteFile(responsePath, []byte(responseContent), 0o644))
+
+	pm := &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			"http.arraytest.v1": {
+				ID:        "http.arraytest.v1",
+				Kind:      "http",
+				OwnerCell: "testcell",
+				Lifecycle: "active",
+				SchemaRefs: metadata.SchemaRefsMeta{
+					Response: "response.schema.json",
+				},
+				Dir:  "contracts/http/arraytest/v1",
+				File: "contracts/http/arraytest/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-20")
+	require.Len(t, matches, 1,
+		"expected 1 FMT-20 violation at $.unevaluatedItems, got %d: %v", len(matches), matches)
+	assert.Equal(t, "$.unevaluatedItems", matches[0].Field)
+}
+
 // TestFMT22_EmptyStateViolation verifies FMT-22 fires when state is empty string.
 func TestFMT22_EmptyStateViolation(t *testing.T) {
 	pm := &metadata.ProjectMeta{
@@ -1210,6 +1255,23 @@ func TestFMT25_RequestCombinatorStringConstraints(t *testing.T) {
 	assert.Contains(t, matches[0].Message, "maxLength")
 }
 
+func TestFMT25_RequestUnevaluatedItemsStringConstraints(t *testing.T) {
+	dir := t.TempDir()
+	body := `{
+		"type": "array",
+		"items": {"type": "string", "minLength": 1, "maxLength": 64},
+		"unevaluatedItems": {"type": "string", "minLength": 1}
+	}`
+	fmt25WriteSchema(t, dir, "contracts/http/test/v1", body)
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1)
+	assert.Equal(t, "$.unevaluatedItems", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "maxLength")
+}
+
 // TestFMT25_QueryParamsStringMissingConstraints verifies that
 // contract.yaml.queryParams string fields are also checked.
 func TestFMT25_QueryParamsStringMissingConstraints(t *testing.T) {
@@ -1353,15 +1415,37 @@ func TestFMT25_SkipsInvalidPathParams(t *testing.T) {
 	dir := t.TempDir()
 	fmt25WriteSchema(t, dir, "contracts/http/test/v1",
 		`{"type": "object", "additionalProperties": false}`)
-	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil,
-		map[string]contracts.ParamSchema{
-			"ghost": {Type: "string"}, // no {ghost} placeholder in path
-		})
-	pm.Contracts["http.test.v1"].Endpoints.HTTP.Path = "/x"
+	tests := []struct {
+		name       string
+		path       string
+		pathParams map[string]contracts.ParamSchema
+	}{
+		{
+			name: "declaration without placeholder",
+			path: "/x",
+			pathParams: map[string]contracts.ParamSchema{
+				"ghost": {Type: "string"},
+			},
+		},
+		{
+			name: "unsupported path param type",
+			path: "/x/{id}",
+			pathParams: map[string]contracts.ParamSchema{
+				"id": {Type: "unsupported"},
+			},
+		},
+	}
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, tc.pathParams)
+			pm.Contracts["http.test.v1"].Endpoints.HTTP.Path = tc.path
 
-	results := NewValidator(pm, dir).Validate()
-	matches := findByCode(results, "FMT-25")
-	assert.Empty(t, matches)
+			results := NewValidator(pm, dir).Validate()
+			matches := findByCode(results, "FMT-25")
+			assert.Empty(t, matches)
+		})
+	}
 }
 
 // TestFMT25_PathParamsUUIDFormatExempt verifies that pathParams with

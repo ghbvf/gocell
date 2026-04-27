@@ -53,13 +53,17 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 			OriginPatterns: cfg.AllowedOrigins,
 		}
 
+		if _, ok := w.(http.Hijacker); !ok {
+			logUpgradeFailure(r, errcode.New(ErrAdapterWSUpgrade,
+				"websocket: response writer does not support hijack"))
+			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
+			return
+		}
+
 		acceptWriter := newUpgradeAcceptWriter(w)
 		wsConn, err := websocket.Accept(acceptWriter, r, opts)
 		if err != nil {
-			slog.Error("websocket: upgrade failed",
-				slog.Any("error", err),
-				slog.String("remote_addr", r.RemoteAddr),
-			)
+			logUpgradeFailure(r, err)
 			http.Error(w, "websocket upgrade failed", http.StatusBadRequest)
 			return
 		}
@@ -82,6 +86,13 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 			slog.String("remote_addr", r.RemoteAddr),
 		)
 	})
+}
+
+func logUpgradeFailure(r *http.Request, err error) {
+	slog.Error("websocket: upgrade failed",
+		slog.Any("error", err),
+		slog.String("remote_addr", r.RemoteAddr),
+	)
 }
 
 type upgradeAcceptWriter struct {

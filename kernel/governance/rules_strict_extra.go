@@ -185,6 +185,7 @@ func walkSchemaNamedObjectChildren(root, node map[string]any, path string, depth
 		"then",
 		"else",
 		"unevaluatedProperties",
+		"unevaluatedItems",
 	} {
 		if child, ok := node[keyword].(map[string]any); ok {
 			walkSchemaTreeDepthRoot(root, child, path+"."+keyword, depth+1, seenRefs, visit)
@@ -497,18 +498,37 @@ func (v *Validator) validateParamInputConstraints(c *metadata.ContractMeta) []Va
 	}
 	h := c.Endpoints.HTTP
 	results := v.checkParamSchemaConstraints(c, h.QueryParams, "queryParams")
-	if v.pathParamsReadyForInputConstraints(c, h) {
+	if pathParamsReadyForInputConstraints(h) {
 		results = append(results, v.checkParamSchemaConstraints(c, h.PathParams, "pathParams")...)
 	}
 	return results
 }
 
-func (v *Validator) pathParamsReadyForInputConstraints(c *metadata.ContractMeta, h *metadata.HTTPTransportMeta) bool {
-	file := contractFile(c)
-	if len(v.validateFMT13Path(c, h, file)) > 0 {
+func pathParamsReadyForInputConstraints(h *metadata.HTTPTransportMeta) bool {
+	if h.Path == "" || !strings.HasPrefix(h.Path, "/") {
 		return false
 	}
-	return len(v.validateFMT13PathParams(c, h, file)) == 0
+	placeholders := extractPathPlaceholders(h.Path)
+	placeholderSet := make(map[string]bool, len(placeholders))
+	for _, name := range placeholders {
+		placeholderSet[name] = true
+		if _, ok := h.PathParams[name]; !ok {
+			return false
+		}
+	}
+	for _, name := range sortedParamKeys(h.PathParams) {
+		if !placeholderSet[name] {
+			return false
+		}
+		p := h.PathParams[name]
+		if p.Type == "" || !contracts.ParamTypes[p.Type] {
+			return false
+		}
+		if p.Required != nil && !*p.Required {
+			return false
+		}
+	}
+	return true
 }
 
 // scanSchemaForInputConstraints reads a JSON schema file and walks every node,
@@ -685,6 +705,7 @@ func walkSchemaInputObjectChildren(root, node map[string]any, path string, depth
 		"then",
 		"else",
 		"unevaluatedProperties",
+		"unevaluatedItems",
 	} {
 		if child, ok := node[keyword].(map[string]any); ok {
 			if err := walkSchemaTreeDepthInputRoot(root, child, path+"."+keyword, depth+1, seenRefs, visit); err != nil {

@@ -29,7 +29,9 @@ type HTTPTransport struct {
 
 // ParamSchema describes a single HTTP path or query parameter.
 //
-// Type must be one of the well-known primitive names in ParamTypes.
+// Type must be one of the well-known primitive names in ParamTypes. UUID path
+// parameters use `type: "string"` with `format: "uuid"` so governance and
+// runtime parsing rules share one convention.
 //
 // Required encodes three distinct states, chosen via pointer so YAML
 // `required: false` can be distinguished from an omitted field:
@@ -70,7 +72,6 @@ var ParamTypes = map[string]bool{
 	"integer": true,
 	"number":  true,
 	"boolean": true,
-	"uuid":    true,
 }
 
 // HTTPResponse describes a declared error response for a specific HTTP status code.

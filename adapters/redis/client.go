@@ -2,6 +2,7 @@ package redis
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -331,7 +332,7 @@ func buildFailoverURLOptions(base *goredis.FailoverOptions, addrs []string) (*go
 }
 
 func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
-	parsed, err := goredis.ParseURL(addr)
+	parsed, err := goredis.ParseFailoverURL(addr)
 	if err != nil {
 		return errcode.Wrap(ErrAdapterRedisConnect,
 			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr), err)
@@ -341,16 +342,83 @@ func appendFailoverURL(base *goredis.FailoverOptions, addr string) error {
 			"redis: sentinel URL addresses must use the same TLS scheme")
 	}
 	if len(base.SentinelAddrs) == 0 {
-		base.TLSConfig = parsed.TLSConfig
+		base.TLSConfig = failoverTLSConfig(parsed.TLSConfig)
+	} else if err := checkFailoverTLSConfigCompatible(base.TLSConfig, parsed.TLSConfig); err != nil {
+		return err
 	}
-	base.SentinelAddrs = append(base.SentinelAddrs, parsed.Addr)
-	if base.Password == "" && parsed.Password != "" {
-		base.Password = parsed.Password
+	if err := mergeFailoverURLFields(base, parsed); err != nil {
+		return err
 	}
-	if base.DB == 0 && parsed.DB != 0 {
-		base.DB = parsed.DB
+	if len(parsed.SentinelAddrs) != 1 {
+		return errcode.New(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: invalid SentinelAddrs URL %q", addr))
 	}
+	base.SentinelAddrs = append(base.SentinelAddrs, parsed.SentinelAddrs[0])
 	return nil
+}
+
+func checkFailoverTLSConfigCompatible(base, parsed *tls.Config) error {
+	if base == nil || parsed == nil || base.InsecureSkipVerify == parsed.InsecureSkipVerify {
+		return nil
+	}
+	return errcode.New(ErrAdapterRedisConnect,
+		"redis: sentinel URL addresses must use the same TLS verification settings")
+}
+
+func mergeFailoverURLFields(base, parsed *goredis.FailoverOptions) error {
+	if err := mergeFailoverStringField(&base.MasterName, parsed.MasterName, "master_name"); err != nil {
+		return err
+	}
+	if err := mergeFailoverStringField(&base.Username, parsed.Username, "username"); err != nil {
+		return err
+	}
+	if err := mergeFailoverStringField(&base.Password, parsed.Password, "password"); err != nil {
+		return err
+	}
+	if err := mergeFailoverStringField(&base.SentinelUsername, parsed.SentinelUsername, "sentinel username"); err != nil {
+		return err
+	}
+	if err := mergeFailoverStringField(&base.SentinelPassword, parsed.SentinelPassword, "sentinel password"); err != nil {
+		return err
+	}
+	return mergeFailoverIntField(&base.DB, parsed.DB, "db")
+}
+
+func mergeFailoverStringField(dst *string, incoming, name string) error {
+	if incoming == "" || *dst == incoming {
+		return nil
+	}
+	if *dst != "" {
+		return errcode.New(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: conflicting Sentinel URL %s values", name))
+	}
+	*dst = incoming
+	return nil
+}
+
+func mergeFailoverIntField(dst *int, incoming int, name string) error {
+	if incoming == 0 || *dst == incoming {
+		return nil
+	}
+	if *dst != 0 {
+		return errcode.New(ErrAdapterRedisConnect,
+			fmt.Sprintf("redis: conflicting Sentinel URL %s values", name))
+	}
+	*dst = incoming
+	return nil
+}
+
+func failoverTLSConfig(parsed *tls.Config) *tls.Config {
+	if parsed == nil {
+		return nil
+	}
+	cfg := parsed.Clone()
+	// FailoverOptions carries a single TLSConfig shared by every Sentinel dial
+	// and by the resolved master dial. Leaving the first URL's ServerName here
+	// would force that SNI onto all later addresses; an empty ServerName lets
+	// crypto/tls infer the host from each tls.DialWithDialer target.
+	cfg.ServerName = ""
+	return cfg
 }
 
 // Health pings the Redis server and returns an error if it is unreachable.

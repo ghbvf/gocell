@@ -19,8 +19,8 @@ endpoints:
     path: /api/v1/TODO/{id}           # TODO: replace with real route template
     # pathParams:                     # TODO: one entry per `{name}` in path
     #   id:
-    #     type: string                # string | integer | number | boolean | uuid
-    #     format: uuid                # optional hint; uuid is exempt from FMT-25 length facets
+    #     type: string                # string | integer | number | boolean
+    #     format: uuid                # UUID convention: type:string + format:uuid
     # queryParams:                    # uncomment if the endpoint accepts query args
     #   cursor:
     #     type: string

@@ -107,6 +107,38 @@ func TestUpgradeHandler_UpgradeFailureResponseIsPublic(t *testing.T) {
 	assert.NotContains(t, string(body), "websocket: the client is not using the websocket protocol")
 }
 
+func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
+	cfg := rtws.DefaultHubConfig()
+	cfg.PingInterval = 100 * time.Millisecond
+	hub := rtws.NewHub(cfg, nil)
+
+	startErr := make(chan error, 1)
+	go func() { startErr <- hub.Start(context.Background()) }()
+	require.Eventually(t, hub.IsRunning, 2*time.Second, time.Millisecond)
+	t.Cleanup(func() {
+		stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = hub.Stop(stopCtx)
+		<-startErr
+	})
+
+	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"*"},
+	})
+	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Sec-WebSocket-Version", "13")
+	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
+
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+
+	require.Equal(t, http.StatusBadRequest, rr.Code)
+	assert.Equal(t, "websocket upgrade failed\n", rr.Body.String())
+	assert.NotEqual(t, http.StatusSwitchingProtocols, rr.Code)
+}
+
 func TestHub_RegisterUnregister(t *testing.T) {
 	hub, server := setupTestHub(t, nil)
 	defer server.Close()
