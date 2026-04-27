@@ -26,7 +26,7 @@ endpoints:
         description: "Payload Too Large — request body exceeds the size limit"
         schemaRef: ../../../../shared/errors/error-response-v1.schema.json
       503:
-        description: Refresh store unavailable.
+        description: "ERR_SERVICE_UNAVAILABLE - refresh store unavailable. Public message is service unavailable; original internal errcode is logged server-side."
         schemaRef: ../../../../shared/errors/error-response-v1.schema.json
 schemaRefs:
   request: request.schema.json

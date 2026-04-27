@@ -195,6 +195,7 @@ func TestWriteError_5xx_MasksPublicCodeAndLogsOriginal(t *testing.T) {
 		code       string
 		message    string
 		wantCode   string
+		wantMsg    string
 		wantLogged bool
 	}{
 		{
@@ -203,6 +204,7 @@ func TestWriteError_5xx_MasksPublicCodeAndLogsOriginal(t *testing.T) {
 			code:       string(errcode.ErrConfigDecryptFailed),
 			message:    "database host leaked",
 			wantCode:   string(errcode.ErrInternal),
+			wantMsg:    msgInternalServerError,
 			wantLogged: true,
 		},
 		{
@@ -211,14 +213,16 @@ func TestWriteError_5xx_MasksPublicCodeAndLogsOriginal(t *testing.T) {
 			code:       string(errcode.ErrKeyProviderTransient),
 			message:    "vault sealed",
 			wantCode:   "ERR_SERVICE_UNAVAILABLE",
+			wantMsg:    "service unavailable",
 			wantLogged: true,
 		},
 		{
-			name:       "504 masks timeout code to internal",
+			name:       "504 keeps public timeout code",
 			status:     http.StatusGatewayTimeout,
 			code:       string(errcode.ErrServerTimeout),
 			message:    "downstream deadline exceeded",
-			wantCode:   string(errcode.ErrInternal),
+			wantCode:   string(errcode.ErrServerTimeout),
+			wantMsg:    "gateway timeout",
 			wantLogged: true,
 		},
 		{
@@ -227,6 +231,7 @@ func TestWriteError_5xx_MasksPublicCodeAndLogsOriginal(t *testing.T) {
 			code:       string(errcode.ErrInternal),
 			message:    msgInternalServerError,
 			wantCode:   string(errcode.ErrInternal),
+			wantMsg:    msgInternalServerError,
 			wantLogged: false,
 		},
 	}
@@ -248,7 +253,7 @@ func TestWriteError_5xx_MasksPublicCodeAndLogsOriginal(t *testing.T) {
 
 			errObj := body["error"].(map[string]any)
 			assert.Equal(t, tt.wantCode, errObj["code"])
-			assert.Equal(t, msgInternalServerError, errObj["message"])
+			assert.Equal(t, tt.wantMsg, errObj["message"])
 
 			errRec := findErrorRecord(handler)
 			if !tt.wantLogged {
@@ -422,19 +427,19 @@ func TestWriteDomainError_5xx_HidesMessage(t *testing.T) {
 			name:     "503 circuit open masks code to service unavailable",
 			err:      errcode.New(errcode.ErrCircuitOpen, "circuit breaker open"),
 			wantCode: "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:  "internal server error",
+			wantMsg:  "service unavailable",
 		},
 		{
 			name:     "503 vault auth failed masks code to service unavailable",
 			err:      errcode.New(errcode.ErrVaultAuthFailed, "vault token rejected"),
 			wantCode: "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:  "internal server error",
+			wantMsg:  "service unavailable",
 		},
 		{
 			name:     "503 key provider transient masks code to service unavailable",
 			err:      errcode.New(errcode.ErrKeyProviderTransient, "vault sealed"),
 			wantCode: "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:  "internal server error",
+			wantMsg:  "service unavailable",
 		},
 	}
 
@@ -562,7 +567,7 @@ func TestWriteDecodeError_Contract(t *testing.T) {
 			err:        errcode.New(errcode.ErrKeyProviderTransient, "vault sealed"),
 			wantStatus: http.StatusServiceUnavailable,
 			wantCode:   "ERR_SERVICE_UNAVAILABLE",
-			wantMsg:    "internal server error",
+			wantMsg:    "service unavailable",
 		},
 		{
 			name:       "non-errcode error → 400 fallback",
@@ -1129,11 +1134,10 @@ func TestWriteDomainError_499_LogsWarn(t *testing.T) {
 
 // TestWriteDomainError_504_LogsError locks the PR275 P2-3 split contract:
 // ErrServerTimeout (HTTP 504 Gateway Timeout) must route through the 5xx
-// writer path — message sanitized to "internal server error", slog level
-// Error (so 5xx alerting + retry-on-504 SDK policies fire), code surfaced
-// verbatim, and the cancel_reason slog field carrying "deadline_exceeded"
-// (PR275 P1: log5xx parity with log4xx) so dashboards can aggregate
-// cancel_reason across both 499 and 504 streams.
+// writer path, with status-level public message/code for clients, slog level
+// Error for alerting, and the cancel_reason slog field carrying
+// "deadline_exceeded" (PR275 P1: log5xx parity with log4xx) so dashboards can
+// aggregate cancel_reason across both 499 and 504 streams.
 func TestWriteDomainError_504_LogsError(t *testing.T) {
 	handler := &captureHandler{}
 	orig := slog.Default()
@@ -1154,9 +1158,9 @@ func TestWriteDomainError_504_LogsError(t *testing.T) {
 	var body map[string]any
 	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &body))
 	errObj := body["error"].(map[string]any)
-	assert.Equal(t, "ERR_INTERNAL", errObj["code"])
-	assert.Equal(t, msgInternalServerError, errObj["message"],
-		"5xx response must mask message to prevent internal-detail leakage")
+	assert.Equal(t, "ERR_SERVER_TIMEOUT", errObj["code"])
+	assert.Equal(t, "gateway timeout", errObj["message"],
+		"504 response must keep public timeout semantics without leaking cause details")
 
 	errRec := findErrorRecord(handler)
 	require.NotNil(t, errRec, "504 must emit slog.Error (not Warn)")

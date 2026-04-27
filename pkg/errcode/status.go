@@ -120,6 +120,7 @@ var codeToStatus = map[Code]int{
 	ErrBodyTooLarge: http.StatusRequestEntityTooLarge,
 
 	// --- 503 Service Unavailable ---
+	ErrServiceUnavailable:     http.StatusServiceUnavailable,
 	ErrCircuitOpen:            http.StatusServiceUnavailable,
 	ErrWSHubStopping:          http.StatusServiceUnavailable,
 	ErrWSHubNotRunning:        http.StatusServiceUnavailable,
@@ -229,4 +230,31 @@ func MapCodeToStatus(code Code) int {
 func IsClientError(code Code) bool {
 	status, ok := codeToStatus[code]
 	return ok && status >= 400 && status < 500
+}
+
+// PublicCode returns the wire-safe error code for an internal errcode.Code.
+// Client-error codes are already public and pass through unchanged. Server
+// errors collapse to status-level public codes so callers can still distinguish
+// retry-relevant transport semantics without learning internal subsystem names.
+func PublicCode(code Code) Code {
+	status := MapCodeToStatus(code)
+	if status < http.StatusInternalServerError {
+		return code
+	}
+	return PublicCodeForStatus(status)
+}
+
+// PublicCodeForStatus returns the wire-safe error code for an HTTP status.
+// It is used by raw HTTP writers that know the status before they have a typed
+// errcode.Code. Unknown or less-specific 5xx statuses intentionally collapse to
+// ERR_INTERNAL.
+func PublicCodeForStatus(status int) Code {
+	switch status {
+	case http.StatusServiceUnavailable:
+		return ErrServiceUnavailable
+	case http.StatusGatewayTimeout:
+		return ErrServerTimeout
+	default:
+		return ErrInternal
+	}
 }

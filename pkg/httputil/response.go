@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	msgInternalServerError       = "internal server error"
-	publicCodeServiceUnavailable = "ERR_SERVICE_UNAVAILABLE"
+	msgInternalServerError = "internal server error"
+	msgGatewayTimeout      = "gateway timeout"
+	msgServiceUnavailable  = "service unavailable"
 )
 
 // StatusClientClosedRequest is nginx's non-standard 499 status code returned
@@ -47,7 +48,7 @@ func WriteJSON(w http.ResponseWriter, status int, v any) {
 func WritePublicError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
 	respCode := code
 	if status >= 500 {
-		respCode = public5xxCode(status)
+		respCode = string(errcode.PublicCodeForStatus(status))
 		if code != respCode {
 			logAttrs := []any{
 				slog.String("code", code),
@@ -84,14 +85,14 @@ func WritePublicError(ctx context.Context, w http.ResponseWriter, status int, co
 // If ctx carries a request_id (via ctxkeys), it is included in the response.
 // Callers that need additional response headers (e.g. Retry-After) must set
 // them before calling WriteError, as it calls w.WriteHeader internally.
-// For 5xx responses, message is forced to "internal server error" and code is
-// reduced to a status-level public code to prevent accidental information
-// leakage through this low-level function.
+// For 5xx responses, message and code are reduced to status-level public
+// values to prevent accidental information leakage through this low-level
+// function.
 func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, message string) {
 	msg := message
 	respCode := code
 	if status >= 500 {
-		respCode = public5xxCode(status)
+		respCode = string(errcode.PublicCodeForStatus(status))
 		if message != msgInternalServerError || code != respCode {
 			slog.Error("write error (5xx)",
 				slog.String("code", code),
@@ -99,7 +100,7 @@ func WriteError(ctx context.Context, w http.ResponseWriter, status int, code, me
 				slog.String("message", message),
 			)
 		}
-		msg = msgInternalServerError
+		msg = public5xxMessage(status)
 	}
 
 	errBody := map[string]any{
@@ -141,9 +142,9 @@ func WriteDecodeError(ctx context.Context, w http.ResponseWriter, err error) {
 
 // WriteDomainError inspects err and writes the appropriate HTTP error response.
 //   - If err is an *errcode.Error the error code is mapped to an HTTP status.
-//     For 5xx responses the message is always "internal server error", code is
-//     reduced to a status-level public code, and the original detail is logged
-//     via slog. For other statuses Message is used.
+//     For 5xx responses the message and code are reduced to status-level public
+//     values, and the original detail is logged via slog. For other statuses
+//     Message is used.
 //   - Otherwise a generic 500 "internal server error" is returned and the
 //     original error is logged via slog.
 func WriteDomainError(ctx context.Context, w http.ResponseWriter, err error) {
@@ -272,8 +273,8 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 		// Log structured fields per observability.md:
 		// "Error 级别必须含完整 error + 关联业务字段"
 		log5xx(ctx, label, ecErr)
-		msg = msgInternalServerError
-		respCode = public5xxCode(status)
+		msg = public5xxMessage(status)
+		respCode = string(errcode.PublicCodeForStatus(status))
 		details = map[string]any{}
 	}
 
@@ -295,11 +296,14 @@ func writeErrcodeError(ctx context.Context, w http.ResponseWriter, label string,
 	}
 }
 
-func public5xxCode(status int) string {
+func public5xxMessage(status int) string {
 	if status == http.StatusServiceUnavailable {
-		return publicCodeServiceUnavailable
+		return msgServiceUnavailable
 	}
-	return string(errcode.ErrInternal)
+	if status == http.StatusGatewayTimeout {
+		return msgGatewayTimeout
+	}
+	return msgInternalServerError
 }
 
 // MapCodeToStatus maps an errcode.Code to the appropriate HTTP status code.
