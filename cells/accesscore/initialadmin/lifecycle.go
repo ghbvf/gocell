@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"path/filepath"
 	"sync"
 	"time"
 
@@ -151,15 +150,11 @@ func (l *Lifecycle) start(ctx context.Context) error {
 	// cleaner worker that will remove the file after its remaining TTL. This
 	// closes the runtime window where a fresh orphan file would otherwise persist
 	// until the next process restart (P1-16 full fix).
-	var sweepStateDir string
-	if cfg.CredentialPath != "" {
-		sweepStateDir = filepath.Dir(cfg.CredentialPath)
-	}
 	sweepResult, err := sweep(ctx, sweepConfig{
-		StateDir:  sweepStateDir,
-		Clock:     cfg.Clock,
-		Scheduler: cfg.Scheduler,
-		Logger:    logger,
+		CredentialPath: cfg.CredentialPath,
+		Clock:          cfg.Clock,
+		Scheduler:      cfg.Scheduler,
+		Logger:         logger,
 	})
 	if err != nil {
 		return fmt.Errorf("initialadmin: sweep: %w", err)

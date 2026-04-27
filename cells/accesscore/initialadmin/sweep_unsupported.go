@@ -10,8 +10,8 @@ import (
 // sweepConfig parameterises startup-time credential sweep.
 // On non-unix platforms, sweep is a no-op stub.
 type sweepConfig struct {
-	// StateDir is the directory to scan (typically $GOCELL_STATE_DIR).
-	StateDir string
+	// CredentialPath is the exact credential file to sweep.
+	CredentialPath string
 	// Clock supplies "now" for expiry comparison. nil → realClock{}.
 	Clock Clock
 	// Scheduler is used when constructing the returned cleaner worker. nil → realScheduler{}.

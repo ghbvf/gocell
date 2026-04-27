@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -206,6 +207,61 @@ func TestLifecycle_StartWithBind_RepeatRun_AdminExists_NoCleaner(t *testing.T) {
 	hasCleaner := l.cleaner != nil
 	l.mu.Unlock()
 	assert.False(t, hasCleaner, "no cleaner expected when admin already exists and no orphan file")
+}
+
+func TestLifecycle_StartWithCustomCredentialPath_SweepsExactFile(t *testing.T) {
+	now := time.Now().UTC()
+	dir := t.TempDir()
+	customCredPath := filepath.Join(dir, "custom_admin_password")
+	defaultCredPath := filepath.Join(dir, "initial_admin_password")
+
+	opts := []LifecycleOption{
+		WithCredentialPath(customCredPath),
+		WithTTL(time.Hour),
+		WithClock(&fakeClock{t: now}),
+		WithPasswordHasher(BcryptHasher{Cost: 4}),
+		WithScheduler(newFakeSchedulerCross()),
+		withPasswordSource(newFixedPasswordSourceCross()),
+	}
+	l := NewLifecycle(opts...)
+
+	deps := makeLifecycleDeps(t)
+	logger := deps.Logger
+
+	bs, err := newBootstrapper(BootstrapDeps{
+		UserRepo: deps.UserRepo,
+		RoleRepo: deps.RoleRepo,
+		Logger:   logger,
+		Clock:    l.cfg.Clock,
+	}, bootstrapConfig{
+		CredentialPath: customCredPath,
+		TTL:            l.cfg.TTL,
+		PasswordSource: newFixedPasswordSourceCross(),
+		Scheduler:      l.cfg.Scheduler,
+		Hasher:         l.cfg.Hasher,
+	})
+	require.NoError(t, err)
+	firstResult, err := bs.ensureAdmin(context.Background())
+	require.NoError(t, err)
+	if firstResult.Cleaner != nil {
+		require.NoError(t, firstResult.Cleaner.Stop(context.Background()))
+	}
+	require.NoError(t, removeCredentialFile(customCredPath))
+
+	require.NoError(t, writeCredentialFile(customCredPath, credentialPayload{
+		Username:    "admin",
+		Password:    "secret",
+		GeneratedAt: now.Add(-2 * time.Hour),
+		ExpiresAt:   now.Add(-time.Hour),
+	}))
+
+	l.Bind(deps, logger)
+	require.NoError(t, l.Hook().OnStart(context.Background()))
+
+	_, err = os.Stat(customCredPath)
+	assert.True(t, os.IsNotExist(err), "expired custom credential path must be swept; got %v", err)
+	_, err = os.Stat(defaultCredPath)
+	assert.True(t, os.IsNotExist(err), "sweep must not synthesize or target the default basename")
 }
 
 // ---------------------------------------------------------------------------

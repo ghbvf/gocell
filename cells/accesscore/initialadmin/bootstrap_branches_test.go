@@ -157,14 +157,14 @@ func TestMaybeMacOSHint_Darwin(t *testing.T) {
 // sweep branch coverage
 // ---------------------------------------------------------------------------
 
-// TestSweep_NonAbsoluteStateDir_ReturnsError verifies that a relative StateDir
-// is treated as a configuration error and returned immediately.
-func TestSweep_NonAbsoluteStateDir_ReturnsError(t *testing.T) {
+// TestSweep_NonAbsoluteCredentialPath_ReturnsError verifies that a relative
+// CredentialPath is treated as a configuration error and returned immediately.
+func TestSweep_NonAbsoluteCredentialPath_ReturnsError(t *testing.T) {
 	_, err := sweep(context.Background(), sweepConfig{
-		StateDir: "relative/path",
-		Logger:   nil, // nil falls back to slog.Default
+		CredentialPath: "relative/path",
+		Logger:         nil, // nil falls back to slog.Default
 	})
-	require.Error(t, err, "non-absolute StateDir must return an error")
+	require.Error(t, err, "non-absolute CredentialPath must return an error")
 	assert.Contains(t, err.Error(), "absolute")
 }
 

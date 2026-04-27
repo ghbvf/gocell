@@ -52,6 +52,7 @@ import (
 )
 
 const ruleErrorFirstAPI01 = "ERROR-FIRST-API-01"
+const ruleErrorFirstTypedNil01 = "ERROR-FIRST-TYPED-NIL-01"
 
 // errorFirstEnforcedFiles are the relative paths (from module root) of files
 // whose declarations must satisfy ERROR-FIRST-API-01. Slash-separated for
@@ -99,6 +100,43 @@ type errorFirstViolation struct {
 	Reason   string
 }
 
+type typedNilConstructorRule struct {
+	File       string
+	FuncName   string
+	ParamNames []string
+}
+
+var typedNilConstructorRules = []typedNilConstructorRule{
+	{
+		File:     "cells/accesscore/slices/sessionlogin/service.go",
+		FuncName: "NewService",
+		ParamNames: []string{
+			"userRepo",
+			"sessionRepo",
+			"roleRepo",
+			"refreshStore",
+		},
+	},
+	{
+		File:     "cells/accesscore/slices/sessionrefresh/service.go",
+		FuncName: "NewService",
+		ParamNames: []string{
+			"sessionRepo",
+			"roleRepo",
+			"userRepo",
+			"refreshStore",
+		},
+	},
+	{
+		File:     "cells/accesscore/slices/sessionlogout/service.go",
+		FuncName: "NewService",
+		ParamNames: []string{
+			"sessionRepo",
+			"refreshStore",
+		},
+	},
+}
+
 // TestErrorFirstAPI01 walks the enforced file list and reports panic() calls
 // inside error-less function declarations.
 func TestErrorFirstAPI01(t *testing.T) {
@@ -122,6 +160,27 @@ func TestErrorFirstAPI01(t *testing.T) {
 			"rename to Must*, or add an ADR-justified file-level whitelist entry "+
 			"(see docs/architecture/202604270030-architectural-panic-whitelist.md)",
 		ruleErrorFirstAPI01)
+}
+
+func TestErrorFirstTypedNil01(t *testing.T) {
+	root := findModuleRoot(t)
+
+	var violations []errorFirstViolation
+	for _, rule := range typedNilConstructorRules {
+		abs := filepath.Join(root, filepath.FromSlash(rule.File))
+		violations = append(violations, scanConstructorForTypedNilGuards(t, abs, rule)...)
+	}
+
+	if len(violations) > 0 {
+		t.Logf("%s: %d violation(s):", ruleErrorFirstTypedNil01, len(violations))
+		for _, v := range violations {
+			t.Logf("  %s:%d  %s — %s", v.File, v.Line, v.FuncName, v.Reason)
+		}
+	}
+	assert.Empty(t, violations,
+		"%s: error-first constructors must validate interface dependencies with "+
+			"validation.IsNilInterface(param), so typed-nil implementations fail at construction time",
+		ruleErrorFirstTypedNil01)
 }
 
 // scanFileForErrorFirstViolations parses a single Go source file and returns
@@ -162,6 +221,66 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 		})
 	}
 	return violations
+}
+
+func scanConstructorForTypedNilGuards(t *testing.T, abs string, rule typedNilConstructorRule) []errorFirstViolation {
+	t.Helper()
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution|parser.ParseComments)
+	require.NoErrorf(t, err, "%s: parse failed", rule.File)
+
+	var target *ast.FuncDecl
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil || fd.Name.Name != rule.FuncName {
+			continue
+		}
+		target = fd
+		break
+	}
+	require.NotNilf(t, target, "%s: expected function %s", rule.File, rule.FuncName)
+
+	var violations []errorFirstViolation
+	for _, paramName := range rule.ParamNames {
+		if hasValidationIsNilInterfaceGuard(target.Body, paramName) {
+			continue
+		}
+		violations = append(violations, errorFirstViolation{
+			File:     rule.File,
+			Line:     fset.Position(target.Pos()).Line,
+			FuncName: rule.FuncName,
+			Reason:   "interface dependency " + paramName + " is not validated with validation.IsNilInterface",
+		})
+	}
+	return violations
+}
+
+func hasValidationIsNilInterfaceGuard(body *ast.BlockStmt, paramName string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok || len(call.Args) != 1 {
+			return true
+		}
+		sel, ok := call.Fun.(*ast.SelectorExpr)
+		if !ok || sel.Sel.Name != "IsNilInterface" {
+			return true
+		}
+		pkgIdent, ok := sel.X.(*ast.Ident)
+		if !ok || pkgIdent.Name != "validation" {
+			return true
+		}
+		argIdent, ok := call.Args[0].(*ast.Ident)
+		if !ok || argIdent.Name != paramName {
+			return true
+		}
+		found = true
+		return false
+	})
+	return found
 }
 
 // isInitFunc returns true if fd is `func init()` (no receiver, no params, no

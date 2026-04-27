@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -19,10 +20,10 @@ import (
 
 // sweepConfig parameterises startup-time credential sweep.
 type sweepConfig struct {
-	// StateDir is the directory to scan (typically $GOCELL_STATE_DIR).
-	// An empty string falls back to ResolveCredentialPath("") semantics
-	// (GOCELL_STATE_DIR env var → /run/gocell/initial_admin_password).
-	StateDir string
+	// CredentialPath is the exact credential file to sweep. An empty string
+	// falls back to ResolveCredentialPath("") semantics (GOCELL_STATE_DIR env var
+	// → /run/gocell/initial_admin_password).
+	CredentialPath string
 	// Clock supplies "now" for expiry comparison. nil → realClock{}.
 	Clock Clock
 	// Scheduler is used when constructing the returned cleaner worker. nil → realScheduler{}.
@@ -37,7 +38,7 @@ type sweepConfig struct {
 // runs and removes them if they have expired.
 //
 // Algorithm:
-//  1. Resolve the credential file path (ResolveCredentialPath or StateDir).
+//  1. Resolve the credential file path (CredentialPath or ResolveCredentialPath("")).
 //  2. File absent → no-op, return (nil, nil).
 //  3. Read expires_at. Parse failure → slog.Error + return (nil, nil) (file
 //     retained; never delete unknown formats to guard against false positives).
@@ -51,8 +52,8 @@ type sweepConfig struct {
 //
 // sweep never blocks startup: non-ENOENT FS errors are logged at Error and
 // the function returns (nil, nil) so the caller can proceed. The only exception
-// is a misconfigured StateDir (non-absolute path), which is a programmer error
-// surfaced as a returned error so it fails fast.
+// is a misconfigured CredentialPath (non-absolute path), which is a programmer
+// error surfaced as a returned error so it fails fast.
 //
 // Conflict note: when adminExists==false AND a fresh orphan file exists, sweep
 // retains the file and returns a cleaner, but ensureAdmin will subsequently
@@ -68,9 +69,8 @@ func sweep(ctx context.Context, cfg sweepConfig) (sweepResult, error) {
 		clk = realClock{}
 	}
 
-	credPath, err := ResolveCredentialPath(cfg.StateDir)
+	credPath, err := resolveSweepCredentialPath(cfg.CredentialPath)
 	if err != nil {
-		// Non-absolute StateDir is a configuration error — fail fast.
 		return sweepResult{}, err
 	}
 
@@ -147,4 +147,16 @@ func sweep(ctx context.Context, cfg sweepConfig) (sweepResult, error) {
 		return sweepResult{}, nil
 	}
 	return sweepResult{Cleaner: cleaner}, nil
+}
+
+func resolveSweepCredentialPath(credentialPath string) (string, error) {
+	if credentialPath == "" {
+		return ResolveCredentialPath("")
+	}
+	cleaned := filepath.Clean(credentialPath)
+	if !filepath.IsAbs(cleaned) {
+		return "", errcode.New(errcode.ErrCellInvalidConfig,
+			"initialadmin: credential path must be absolute")
+	}
+	return cleaned, nil
 }

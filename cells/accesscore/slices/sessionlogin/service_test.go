@@ -37,6 +37,10 @@ func (s failingIssueRefreshStore) Issue(context.Context, string, string) (string
 	return "", nil, s.err
 }
 
+type typedNilRefreshStore struct {
+	refresh.Store
+}
+
 type trackingSessionRepo struct {
 	*mem.SessionRepository
 	created []string
@@ -97,6 +101,57 @@ func newTestService() (*Service, *mem.UserRepository) {
 	sessionRepo := mem.NewSessionRepository()
 	roleRepo := mem.NewRoleRepository()
 	return MustNewService(userRepo, sessionRepo, roleRepo, newTestRefreshStore(), testIssuer, slog.Default()), userRepo
+}
+
+func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	refreshStore := newTestRefreshStore()
+
+	cases := []struct {
+		name string
+		run  func() (*Service, error)
+	}{
+		{
+			name: "typed nil userRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.UserRepository
+				return NewService(typedNil, sessionRepo, roleRepo, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil sessionRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.SessionRepository
+				return NewService(userRepo, typedNil, roleRepo, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil roleRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.RoleRepository
+				return NewService(userRepo, sessionRepo, typedNil, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil refreshStore",
+			run: func() (*Service, error) {
+				var typedNil *typedNilRefreshStore
+				return NewService(userRepo, sessionRepo, roleRepo, typedNil, testIssuer, slog.Default())
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.run()
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+		})
+	}
 }
 
 // seedUser creates a user with a bcrypt-hashed password.

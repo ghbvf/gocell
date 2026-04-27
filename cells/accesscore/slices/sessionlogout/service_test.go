@@ -24,9 +24,48 @@ func newLogoutRefreshStore() refresh.Store {
 	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
+type typedNilRefreshStore struct {
+	refresh.Store
+}
+
 func newTestService() (*Service, *mem.SessionRepository) {
 	repo := mem.NewSessionRepository()
 	return MustNewService(repo, newLogoutRefreshStore(), slog.Default()), repo
+}
+
+func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	refreshStore := newLogoutRefreshStore()
+
+	cases := []struct {
+		name string
+		run  func() (*Service, error)
+	}{
+		{
+			name: "typed nil sessionRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.SessionRepository
+				return NewService(typedNil, refreshStore, slog.Default())
+			},
+		},
+		{
+			name: "typed nil refreshStore",
+			run: func() (*Service, error) {
+				var typedNil *typedNilRefreshStore
+				return NewService(sessionRepo, typedNil, slog.Default())
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.run()
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+		})
+	}
 }
 
 func seedSession(repo *mem.SessionRepository, id, userID string) {

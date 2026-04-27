@@ -33,6 +33,29 @@ var (
 	_ cell.AuthRouteDeclarer = (*captureMux)(nil)
 )
 
+type failingDeclareMux struct {
+	*http.ServeMux
+	handleCalls int
+}
+
+func newFailingDeclareMux() *failingDeclareMux {
+	return &failingDeclareMux{ServeMux: http.NewServeMux()}
+}
+
+func (m *failingDeclareMux) Handle(pattern string, h http.Handler) {
+	m.handleCalls++
+	m.ServeMux.Handle(pattern, h)
+}
+
+func (m *failingDeclareMux) DeclareAuthMeta(cell.AuthRouteMeta) error {
+	return assert.AnError
+}
+
+var (
+	_ cell.RouteHandler      = (*failingDeclareMux)(nil)
+	_ cell.AuthRouteDeclarer = (*failingDeclareMux)(nil)
+)
+
 var noopHandler = http.HandlerFunc(func(http.ResponseWriter, *http.Request) {})
 
 func loginContractSpec() wrapper.ContractSpec {
@@ -78,6 +101,20 @@ func TestMount_WritesContractIDIntoContext(t *testing.T) {
 	req := httptest.NewRequest("POST", "/api/v1/access/sessions/login", nil)
 	mux.ServeHTTP(httptest.NewRecorder(), req)
 	assert.Equal(t, "http.auth.login.v1", seen)
+}
+
+func TestMount_DeclareAuthMetaErrorDoesNotRegisterRoute(t *testing.T) {
+	mux := newFailingDeclareMux()
+
+	err := Mount(mux, Route{
+		Contract: loginContractSpec(),
+		Handler:  noopHandler,
+		Public:   true,
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "declare auth metadata")
+	assert.Zero(t, mux.handleCalls, "Mount must validate and declare metadata before registering the route")
 }
 
 func TestMount_ReturnsErrorOnMissingContractID(t *testing.T) {

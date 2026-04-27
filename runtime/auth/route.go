@@ -109,7 +109,6 @@ func Mount(mux cell.RouteHandler, r Route) error {
 	handler = wrapped
 
 	cleanedRel := path.Clean(relPath)
-	mux.Handle(r.Contract.Method+" "+cleanedRel, handler)
 
 	if declarer, ok := mux.(cell.AuthRouteDeclarer); ok {
 		// declarer.DeclareAuthMeta's Path is the sub-route-relative path;
@@ -129,6 +128,8 @@ func Mount(mux cell.RouteHandler, r Route) error {
 			return fmt.Errorf("auth.Mount: declare HTTP contract metadata: %w", err)
 		}
 	}
+
+	mux.Handle(r.Contract.Method+" "+cleanedRel, handler)
 	return nil
 }
 

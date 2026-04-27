@@ -54,16 +54,16 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
-	if sessionRepo == nil {
+	if validation.IsNilInterface(sessionRepo) {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: sessionRepo must not be nil")
 	}
-	if roleRepo == nil {
+	if validation.IsNilInterface(roleRepo) {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: roleRepo must not be nil")
 	}
-	if userRepo == nil {
+	if validation.IsNilInterface(userRepo) {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: userRepo must not be nil")
 	}
-	if refreshStore == nil {
+	if validation.IsNilInterface(refreshStore) {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionrefresh.NewService: refreshStore must not be nil")
 	}
 	if issuer == nil {

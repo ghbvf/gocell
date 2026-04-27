@@ -46,6 +46,10 @@ func newTestRefreshStore() refresh.Store {
 	return refreshmem.MustNew(refresh.Policy{ReuseInterval: 2 * time.Second, MaxAge: time.Hour}, clock, nil)
 }
 
+type typedNilRefreshStore struct {
+	refresh.Store
+}
+
 // TestNewService_IssuerDefaultAudienceWrittenOnRefresh verifies that the
 // sessionrefresh Service issues tokens with the audience configured in the
 // issuer (Registry path), without caching audience separately (S31).
@@ -113,6 +117,57 @@ func newTestServiceWithUserRepo() (*Service, *mem.SessionRepository, *mem.UserRe
 	refreshStore := newTestRefreshStore()
 	svc := MustNewService(sessionRepo, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
 	return svc, sessionRepo, userRepo
+}
+
+func TestNewService_RejectsTypedNilDependencies(t *testing.T) {
+	sessionRepo := mem.NewSessionRepository()
+	roleRepo := mem.NewRoleRepository()
+	userRepo := mem.NewUserRepository()
+	refreshStore := newTestRefreshStore()
+
+	cases := []struct {
+		name string
+		run  func() (*Service, error)
+	}{
+		{
+			name: "typed nil sessionRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.SessionRepository
+				return NewService(typedNil, roleRepo, userRepo, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil roleRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.RoleRepository
+				return NewService(sessionRepo, typedNil, userRepo, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil userRepo",
+			run: func() (*Service, error) {
+				var typedNil *mem.UserRepository
+				return NewService(sessionRepo, roleRepo, typedNil, refreshStore, testIssuer, slog.Default())
+			},
+		},
+		{
+			name: "typed nil refreshStore",
+			run: func() (*Service, error) {
+				var typedNil *typedNilRefreshStore
+				return NewService(sessionRepo, roleRepo, userRepo, typedNil, testIssuer, slog.Default())
+			},
+		},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.run()
+			require.Error(t, err)
+			var ec *errcode.Error
+			require.ErrorAs(t, err, &ec)
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
+		})
+	}
 }
 
 // issueTestWireToken creates a session + issues a wire token from the refreshStore.

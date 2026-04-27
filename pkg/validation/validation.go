@@ -7,6 +7,7 @@ package validation
 
 import (
 	"fmt"
+	"reflect"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
@@ -53,4 +54,22 @@ func RequireNotBlank(code errcode.Code, fields ...NamedValue) error {
 		}
 	}
 	return nil
+}
+
+// IsNilInterface reports whether v is nil or a typed-nil interface value.
+//
+// Use this at construction boundaries for interface dependencies. A plain
+// `dep == nil` check misses values such as `var dep *Repo; New(dep)` because
+// the interface carries a non-nil concrete type descriptor.
+func IsNilInterface(v any) bool {
+	if v == nil {
+		return true
+	}
+	rv := reflect.ValueOf(v)
+	switch rv.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+		return rv.IsNil()
+	default:
+		return false
+	}
 }

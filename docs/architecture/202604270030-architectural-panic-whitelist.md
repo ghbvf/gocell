@@ -93,6 +93,10 @@ an architectural whitelist entry:
 - `.golangci.yml` enables `nilerr`, `nilnesserr`, and `nilnil` with
   `nilnil.only-two: false`, so multi-return success sentinels like
   `nil, ..., nil` are rejected.
+- `tools/archtest/error_first_test.go` adds `ERROR-FIRST-TYPED-NIL-01`:
+  enrolled error-first constructors with interface dependencies must validate
+  those dependencies through `validation.IsNilInterface(param)`, not only
+  `param == nil`.
 - `runtime/distlock/locker.go::New`,
   `runtime/auth/refresh/memstore/store.go::New`, and the accesscore
   session login/refresh/logout `NewService` constructors now return
@@ -107,7 +111,8 @@ an architectural whitelist entry:
   instead of panicking. No router whitelist entry was added.
 - `kernel/persistence.NoopTxRunner.RunInTx(nil)`,
   `command.ActiveScanner.GetCommand` not-found handling,
-  `adminprovision.Ensure`, initial-admin cleanup, governance helpers,
+  `adminprovision.Ensure`, initial-admin cleanup (including exact custom
+  credential-path sweep), governance helpers,
   archtest AST helpers, and `tools/nogo/unconditionalskip` were adjusted so
   nil no longer encodes success or silently hides parse/walk failures.
 
@@ -209,8 +214,9 @@ Completed in PR-MODE-6.1:
   without adding a router whitelist entry.
 - `cells/accesscore/slices/sessionlogin/service.go::NewService`,
   `sessionrefresh/service.go::NewService`, and
-  `sessionlogout/service.go::NewService` — nil dependency checks now return
-  errors with `MustNewService` wrappers.
+  `sessionlogout/service.go::NewService` — nil and typed-nil dependency
+  checks now return errors with `MustNewService` wrappers, enforced by
+  `ERROR-FIRST-TYPED-NIL-01`.
 
 Remaining watchlist:
 

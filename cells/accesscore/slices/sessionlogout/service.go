@@ -51,10 +51,10 @@ func NewService(
 	logger *slog.Logger,
 	opts ...Option,
 ) (*Service, error) {
-	if sessionRepo == nil {
+	if validation.IsNilInterface(sessionRepo) {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogout.NewService: sessionRepo must not be nil")
 	}
-	if refreshStore == nil {
+	if validation.IsNilInterface(refreshStore) {
 		return nil, errcode.New(errcode.ErrCellInvalidConfig, "sessionlogout.NewService: refreshStore must not be nil")
 	}
 	if logger == nil {
