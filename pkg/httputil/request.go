@@ -2,7 +2,6 @@ package httputil
 
 import (
 	"fmt"
-	"log/slog"
 	"net/http"
 	"strconv"
 
@@ -26,16 +25,9 @@ func ParsePageParams(r *http.Request) (query.PageParams, error) {
 	if s := r.URL.Query().Get("limit"); s != "" {
 		n, err := strconv.Atoi(s)
 		if err != nil {
-			slog.Warn("pagination: invalid limit parameter",
-				slog.String("value", s),
-			)
 			return pr, errcode.New(errcode.ErrValidationFailed, "invalid limit parameter")
 		}
 		if n > query.MaxPageSize {
-			slog.Warn("pagination: page size exceeded",
-				slog.Int("requested", n),
-				slog.Int("max", query.MaxPageSize),
-			)
 			return pr, errcode.New(errcode.ErrPageSizeExceeded,
 				fmt.Sprintf("limit %d exceeds maximum %d", n, query.MaxPageSize))
 		}
@@ -44,10 +36,6 @@ func ParsePageParams(r *http.Request) (query.PageParams, error) {
 
 	cursor := r.URL.Query().Get("cursor")
 	if len(cursor) > query.MaxCursorTokenBytes {
-		slog.Warn("pagination: cursor token exceeds maximum length",
-			slog.Int("length", len(cursor)),
-			slog.Int("max", query.MaxCursorTokenBytes),
-		)
 		return pr, errcode.New(errcode.ErrCursorInvalid,
 			"cursor token exceeds maximum length")
 	}

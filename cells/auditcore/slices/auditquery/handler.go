@@ -152,7 +152,7 @@ func (h *Handler) HandleQuery(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.Query(r.Context(), filters, pageReq)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WritePageDomainError(r.Context(), w, err)
 		return
 	}
 

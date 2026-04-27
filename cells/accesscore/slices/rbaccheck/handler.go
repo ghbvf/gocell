@@ -95,7 +95,7 @@ func (h *Handler) handleListRoles(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.ListRoles(r.Context(), userID, pageReq)
 	if err != nil {
-		httputil.WriteDomainError(r.Context(), w, err)
+		httputil.WritePageDomainError(r.Context(), w, err)
 		return
 	}
 

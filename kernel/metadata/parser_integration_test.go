@@ -64,7 +64,7 @@ func TestParseRealProject(t *testing.T) {
 
 	// --- Contracts: at least the 27 contracts after config state-sync split (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Contracts), 27, "expected at least 27 contracts after config state-sync split")
-	assert.LessOrEqual(t, len(pm.Contracts), 64, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
+	assert.LessOrEqual(t, len(pm.Contracts), 80, "unexpected extra contracts parsed — update this bound if new contracts were added intentionally")
 	expectedContracts := []string{
 		"http.auth.login.v1",
 		"http.auth.refresh.v1",
@@ -113,6 +113,7 @@ func TestParseRealProject(t *testing.T) {
 	for _, id := range expectedJourneys {
 		assert.Contains(t, pm.Journeys, id, "missing journey %s", id)
 	}
+	assert.Contains(t, pm.Journeys, "J-ordercreate", "example journey J-ordercreate must be parsed")
 
 	// --- Assemblies: at least the 1 original assembly (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.Assemblies), 1, "expected at least 1 assembly")
@@ -122,6 +123,17 @@ func TestParseRealProject(t *testing.T) {
 	// --- Status Board: at least the 8 original entries (upper bound catches over-parse) ---
 	assert.GreaterOrEqual(t, len(pm.StatusBoard), 8, "expected at least 8 status-board entries")
 	assert.LessOrEqual(t, len(pm.StatusBoard), 12, "unexpected extra status-board entries parsed — update this bound if new entries were added intentionally")
+	var orderCreateStatus *StatusBoardEntry
+	for i := range pm.StatusBoard {
+		if pm.StatusBoard[i].JourneyID == "J-ordercreate" {
+			orderCreateStatus = &pm.StatusBoard[i]
+			break
+		}
+	}
+	require.NotNil(t, orderCreateStatus, "status-board must track J-ordercreate")
+	assert.Equal(t, "todo", orderCreateStatus.State)
+	assert.Equal(t, "low", orderCreateStatus.Risk)
+	assert.Equal(t, "2026-04-23", orderCreateStatus.UpdatedAt)
 
 	// --- Actors: 4 (edge-bff + 3 external subscribers added by PR-CFG-B for ADV-05) ---
 	assert.Len(t, pm.Actors, 4, "expected 4 actors")
