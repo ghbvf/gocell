@@ -10,6 +10,7 @@ import (
 
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -214,6 +215,74 @@ func TestRoleRepository_GetByUserID_NoRoles(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, roles, "empty result must be non-nil slice")
 	require.Empty(t, roles)
+}
+
+func TestRoleRepository_ListByUserID_NoRoles(t *testing.T) {
+	repo := NewRoleRepository()
+
+	roles, err := repo.ListByUserID(context.Background(), "user-with-no-roles", query.ListParams{
+		Limit: 2,
+		Sort:  []query.SortColumn{{Name: "name", Direction: query.SortASC}},
+	})
+
+	require.NoError(t, err)
+	require.NotNil(t, roles, "empty result must be non-nil slice")
+	require.Empty(t, roles)
+}
+
+func TestRoleRepository_ListByUserID_SortsPagesAndClones(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+	roles := []*domain.Role{
+		{ID: "role-c", Name: "viewer", Permissions: []domain.Permission{{Resource: "devices", Action: "read"}}},
+		{ID: "role-a", Name: "admin", Permissions: []domain.Permission{{Resource: "users", Action: "write"}}},
+		{ID: "role-b", Name: "operator", Permissions: []domain.Permission{{Resource: "devices", Action: "write"}}},
+	}
+	for _, role := range roles {
+		repo.SeedRole(role)
+		_, err := repo.AssignToUser(ctx, "user-1", role.ID)
+		require.NoError(t, err)
+	}
+
+	params := query.ListParams{
+		Limit: 2,
+		Sort: []query.SortColumn{
+			{Name: "name", Direction: query.SortASC},
+			{Name: "id", Direction: query.SortASC},
+		},
+	}
+	page, err := repo.ListByUserID(ctx, "user-1", params)
+	require.NoError(t, err)
+	require.Len(t, page, 3, "repository returns Limit+1 rows for page-result hasMore detection")
+	assert.Equal(t, []string{"admin", "operator", "viewer"}, []string{page[0].Name, page[1].Name, page[2].Name})
+
+	page[0].Permissions[0].Action = "mutated"
+	got, err := repo.GetByID(ctx, "role-a")
+	require.NoError(t, err)
+	assert.Equal(t, "write", got.Permissions[0].Action, "listed roles must be cloned from repository state")
+
+	params.CursorValues = []any{"operator", "role-b"}
+	nextPage, err := repo.ListByUserID(ctx, "user-1", params)
+	require.NoError(t, err)
+	require.Len(t, nextPage, 1)
+	assert.Equal(t, "viewer", nextPage[0].Name)
+}
+
+func TestRoleRepository_ListByUserID_InvalidCursorParams(t *testing.T) {
+	repo := NewRoleRepository()
+	ctx := context.Background()
+	repo.SeedRole(&domain.Role{ID: "role-a", Name: "admin"})
+	_, err := repo.AssignToUser(ctx, "user-1", "role-a")
+	require.NoError(t, err)
+
+	_, err = repo.ListByUserID(ctx, "user-1", query.ListParams{
+		Limit:        2,
+		Sort:         []query.SortColumn{{Name: "name", Direction: query.SortASC}},
+		CursorValues: []any{"admin", "role-a"},
+	})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "role-repo: list-by-user")
 }
 
 func TestRoleRepository_Create(t *testing.T) {

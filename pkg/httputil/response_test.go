@@ -951,7 +951,7 @@ func TestWriteDomainError_4xx_LogSampling(t *testing.T) {
 	slog.SetDefault(slog.New(handler))
 	t.Cleanup(func() { slog.SetDefault(orig) })
 
-	ctx := WithClientErrorLogSampling(context.Background(), 100)
+	ctx := WithListErrorLogSampling(context.Background(), t.Name())
 	for i := 0; i < 200; i++ {
 		rec := httptest.NewRecorder()
 		WriteDomainError(ctx, rec, errcode.New(errcode.ErrValidationFailed, "invalid cursor"))
@@ -959,6 +959,28 @@ func TestWriteDomainError_4xx_LogSampling(t *testing.T) {
 	}
 
 	assert.Equal(t, 2, countWarnRecords(handler), "1%% sampling should log two records for 200 client errors")
+}
+
+func TestWithListErrorLogSampling_EveryOneLogsAll(t *testing.T) {
+	ctx := withClientErrorLogSampling(context.Background(), t.Name(), 1)
+
+	assert.True(t, shouldLogClientError(ctx))
+	assert.True(t, shouldLogClientError(ctx))
+
+	ctxZero := withClientErrorLogSampling(context.Background(), t.Name()+"/zero", 0)
+	assert.True(t, shouldLogClientError(ctxZero))
+	assert.True(t, shouldLogClientError(ctxZero))
+}
+
+func TestWithListErrorLogSampling_RouteKeyedCounters(t *testing.T) {
+	sampler := newListErrorLogSampler(2)
+	ctxA := sampler.withContext(context.Background(), t.Name()+"/a")
+	ctxB := sampler.withContext(context.Background(), t.Name()+"/b")
+
+	assert.False(t, shouldLogClientError(ctxA))
+	assert.True(t, shouldLogClientError(ctxA))
+	assert.False(t, shouldLogClientError(ctxB))
+	assert.True(t, shouldLogClientError(ctxB))
 }
 
 // TestWriteDomainError_499_LogsWarn locks the PR-A50+A51 + PR275 contract:
