@@ -546,20 +546,7 @@ func TestLifecycle_OnStartNearTimeoutWarns(t *testing.T) {
 		t.Fatalf("Start: %v", err)
 	}
 
-	var slow map[string]any
-	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
-		if len(line) == 0 {
-			continue
-		}
-		var rec map[string]any
-		if err := json.Unmarshal(line, &rec); err != nil {
-			t.Fatalf("bad log line %q: %v", line, err)
-		}
-		if rec["msg"] == "hook.start_slow" {
-			slow = rec
-			break
-		}
-	}
+	slow := findLifecycleLogRecord(t, &buf, "hook.start_slow")
 	if slow == nil {
 		t.Fatalf("expected hook.start_slow warning, got logs=%s", buf.String())
 	}
