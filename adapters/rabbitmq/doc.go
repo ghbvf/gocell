@@ -45,6 +45,14 @@
 // "rabbitmq_ready" probe (wrapping Health(ctx)) is exposed on /readyz
 // automatically.
 //
+// Wiring example:
+//
+//	conn, _ := rabbitmq.NewConnection(rabbitmq.Config{URL: amqpURL})
+//	pub := rabbitmq.NewPublisher(conn)
+//	sub := rabbitmq.NewSubscriber(conn, rabbitmq.SubscriberConfig{QueueName: "audit"})
+//	app, _ := bootstrap.New(bootstrap.WithManagedResource(conn))
+//	_ = pub; _ = sub; _ = app
+//
 // ref: ThreeDotsLabs/watermill-amqp — reconnect + ACK/NACK + channel lifecycle
 // ref: uber-go/fx app.go StopTimeout — ctx as shared shutdown budget
 // ref: rabbitmq/amqp091-go channel.go — Cancel→drain→Wait→Close graceful stop order

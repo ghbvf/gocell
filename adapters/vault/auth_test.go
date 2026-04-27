@@ -22,7 +22,10 @@ package vault
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -461,6 +464,61 @@ func TestNewKubernetesAuth_EmptyRole_Fails(t *testing.T) {
 	_, err := NewKubernetesAuth(client, "", "", "")
 	if err == nil {
 		t.Fatal("expected error for empty role, got nil")
+	}
+}
+
+func TestKubernetesAuth_Login_ReadsServiceAccountJWTAndSetsClientToken(t *testing.T) {
+	const (
+		wantRole = "gocell-config-reader"
+		wantJWT  = "projected-service-account-jwt"
+	)
+	jwtPath := writeTempFile(t, wantJWT)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/v1/auth/kubernetes/login" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		var req map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if req["role"] != wantRole {
+			t.Fatalf("role = %q, want %q", req["role"], wantRole)
+		}
+		if req["jwt"] != wantJWT {
+			t.Fatalf("jwt = %q, want projected service account JWT", req["jwt"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"auth":{"client_token":"vault-k8s-token","lease_duration":3600,"renewable":true}}`))
+	}))
+	defer server.Close()
+
+	cfg := vaultapi.DefaultConfig()
+	cfg.Address = server.URL
+	client, err := vaultapi.NewClient(cfg)
+	if err != nil {
+		t.Fatalf("vaultapi.NewClient: %v", err)
+	}
+	auth, err := NewKubernetesAuth(client, wantRole, jwtPath, "kubernetes")
+	if err != nil {
+		t.Fatalf("NewKubernetesAuth: %v", err)
+	}
+
+	result, err := auth.Login(context.Background())
+	if err != nil {
+		t.Fatalf("Login: %v", err)
+	}
+	if result.ClientToken != "vault-k8s-token" {
+		t.Errorf("ClientToken = %q, want vault-k8s-token", result.ClientToken)
+	}
+	if result.LeaseSeconds != 3600 {
+		t.Errorf("LeaseSeconds = %d, want 3600", result.LeaseSeconds)
+	}
+	if !result.Renewable {
+		t.Error("Renewable = false, want true")
+	}
+	if got := client.Token(); got != "vault-k8s-token" {
+		t.Errorf("client.Token() = %q, want vault-k8s-token", got)
 	}
 }
 
