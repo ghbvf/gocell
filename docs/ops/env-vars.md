@@ -134,7 +134,7 @@ Substitute `<keyname>` with the value of `GOCELL_VAULT_TRANSIT_KEY` (default `go
 | Variable | Purpose | Default | Accepted Values |
 |---|---|---|---|
 | `GOCELL_HTTP_PRIMARY_ADDR` | Primary listener bind address (public / API) | `:8080` | Any `host:port` accepted by `net.Listen("tcp", …)`. Use `0.0.0.0:8080` or a specific interface in production. |
-| `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `127.0.0.1:9090` | Same format as primary. **Default is loopback** so a dev deployment without a service-token guard is not trivially reachable across the network. Production deployments binding to an internal VPC interface (e.g. `10.0.0.10:9090`) must set this variable explicitly so service-token / mTLS enforcement is the primary defence. |
+| `GOCELL_HTTP_INTERNAL_ADDR` | Internal listener bind address (`/internal/v1/*`) | `127.0.0.1:9090` | Same format as primary. **Default is loopback** for local development; startup still requires `GOCELL_SERVICE_SECRET` so the internal listener is service-token guarded in every mode. Production deployments binding to an internal VPC interface (e.g. `10.0.0.10:9090`) must set this variable explicitly. |
 | `GOCELL_HTTP_HEALTH_ADDR` | Health listener bind address (`/healthz`, `/readyz`, `/metrics`) | `127.0.0.1:9091` | Same format as primary. Default is local/dev only. Use `:9091` or another Pod-reachable address for kubelet HTTP probes and Prometheus PodIP/Service scrapes. |
 | `GOCELL_HTTP_HEALTH_LOCAL_ONLY` | Explicit waiver for loopback health listener in `GOCELL_ADAPTER_MODE=real` | unset | Set to `1` only when health/metrics are reached from the same network namespace, such as local dev, same-Pod sidecar, or exec-probe style checks. |
 

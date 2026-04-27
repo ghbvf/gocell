@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/pkg/httputil"
+	"github.com/ghbvf/gocell/pkg/validation"
 )
 
 const (
@@ -90,7 +91,7 @@ func WithServiceTokenClock(fn func() time.Time) ServiceTokenOption {
 // propagating a nil interface through the authenticator pipeline.
 func WithServiceTokenNonceStore(ns NonceStore) ServiceTokenOption {
 	return func(c *serviceTokenConfig) {
-		if ns == nil {
+		if validation.IsNilInterface(ns) {
 			return
 		}
 		c.nonceStore = ns
@@ -209,7 +210,7 @@ func ServiceTokenMiddleware(ring cell.HMACKeyring, opts ...ServiceTokenOption) f
 		o(&cfg)
 	}
 
-	if ring == nil {
+	if validation.IsNilInterface(ring) {
 		return func(next http.Handler) http.Handler {
 			return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				cfg.metrics.recordServiceVerify("failure", "internal")

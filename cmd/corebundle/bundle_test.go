@@ -135,6 +135,8 @@ func TestBuildConsumerBase_NilSharedDepsErrors(t *testing.T) {
 
 func TestDefaultRuntimeOptions_IncludesRedisHealthAndCloser(t *testing.T) {
 	shared := buildTestSharedDeps(t)
+	shared.InternalHTTPAddr = "127.0.0.1:0"
+	shared.InternalGuard = newTestInternalGuard(t)
 	asm := assembly.New(assembly.Config{ID: "test-redis-options", DurabilityMode: cell.DurabilityDemo})
 	cb, err := buildConsumerBase(shared)
 	require.NoError(t, err)
@@ -237,13 +239,14 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 		EventBus:            eb,
 		ConsumerClaimer:     idempotency.NewInMemClaimer(),
 		ConsumerClaimerKind: consumerClaimerKindInMemory,
+		InternalHTTPAddr:    "127.0.0.1:9090",
+		InternalGuard:       newTestInternalGuard(t),
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
 		// just waive it — nothing here exercises the verbose body.
 		VerboseDisabled: true,
-		// PR-A14a: PrimaryHTTPAddr/InternalHTTPAddr left empty. Tests that
-		// drive the full BuildApp path must inject listeners via
-		// WithPrimaryListener + WithInternalListener so bind addrs are
-		// unused; phase0 accepts either an addr or a listener per side.
+		// Tests that drive the full BuildApp path inject pre-bound listeners via
+		// runtimeBaseOptions + WithListener, so SharedDeps listener addresses are
+		// not used by those helpers.
 	}
 }
 
@@ -277,16 +280,16 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 		EventBus:            eventbus.New(),
 		ConsumerClaimer:     idempotency.NewInMemClaimer(),
 		ConsumerClaimerKind: consumerClaimerKindInMemory,
+		InternalHTTPAddr:    "127.0.0.1:9090",
+		InternalGuard:       newTestInternalGuard(t),
 		HealthHTTPAddr:      ":9091",
 		// PR-A35: verbose endpoint is now gated in every mode. A test-time
 		// token keeps the dev baseline valid; prod tests override via the
 		// mutate callback when they want to exercise the missing-token path.
 		VerboseToken: "test-verbose",
-		// PR-A14a: addrs intentionally empty; tests drive via listener injection.
 	}
 	if topo.RequireProductionControlPlane() {
 		deps.MetricsToken = "test-metrics"
-		deps.InternalGuard = newTestInternalGuard(t)
 	}
 	if topo.StorageBackend == "postgres" {
 		t.Setenv("GOCELL_CONFIGCORE_MASTER_KEY", "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899")
@@ -360,7 +363,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Li
 	}
 
 	adapterInfo := adapterInfoForSharedDeps(shared)
-	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
 	// Primary listener carries the JWT policy resolved from the assembly. F3
 	// round-3: this is the single source of truth for JWT auth — there is no
@@ -373,6 +376,16 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Li
 	))
 	opts = append(opts, extra...)
 	return bootstrap.New(opts...), nil
+}
+
+func withCorebundleTestInternalListener(t *testing.T, ln net.Listener) bootstrap.Option {
+	t.Helper()
+	return bootstrap.WithListener(
+		cell.InternalListener,
+		ln.Addr().String(),
+		buildInternalAuthChain(newTestInternalGuard(t)),
+		bootstrap.WithListenerNet(ln),
+	)
 }
 
 func TestAdapterInfoForSharedDeps_IncludesReplayState(t *testing.T) {
@@ -568,7 +581,7 @@ func TestBuildBootstrap_MemoryTopology(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 	require.NotNil(t, app)
@@ -620,7 +633,7 @@ func TestBuildBootstrap_PostgresTopology_FakePGResource(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)),
 		bootstrap.WithManagedResource(fakePG),
 	)
@@ -656,7 +669,7 @@ func TestBuildBootstrap_AssemblyHasAllCells(t *testing.T) {
 	healthLn := newCorebundleLocalListener(t)
 
 	app, err := buildBootstrapFromShared(t, shared, ln,
-		bootstrap.WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(newCorebundleLocalListener(t))),
+		withCorebundleTestInternalListener(t, newCorebundleLocalListener(t)),
 		bootstrap.WithListener(cell.HealthListener, healthLn.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, bootstrap.WithListenerNet(healthLn)))
 	require.NoError(t, err)
 

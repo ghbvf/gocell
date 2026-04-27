@@ -49,37 +49,13 @@ func durabilityModeForTopology(topo bootstrap.Topology) cell.DurabilityMode {
 	return cell.DurabilityDemo
 }
 
-// defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the
-// shared cross-cutting deps, a pre-built assembly, a ConsumerBase, a metrics
-// handler, and the adapter info map. Called by run() after BuildApp returns.
-//
-// PGResource options are contributed per-Cell by CellModule.Provide (via
-// BuildApp opts). This function covers only the cross-cutting concerns:
-// HTTP addr, publisher/subscriber, public/exempt endpoints, metrics, etc.
-func defaultRuntimeOptions(
+func runtimeBaseOptions(
 	shared *SharedDeps,
 	asm *assembly.CoreAssembly,
 	consumerBase *outbox.ConsumerBase,
 	metricsHandler http.Handler,
 	adapterInfo map[string]string,
 ) []bootstrap.Option {
-	// PR-A14b: three-listener topology — primary (business routes + JWT auth),
-	// internal (/internal/v1/* + service-token auth), health (/healthz /readyz
-	// /metrics on a dedicated port).
-	//
-	// Primary listener: AuthJWTFromAssembly discovers IntentTokenVerifier from
-	// accesscore post-Init (lazy phase4 resolution, fail-closed).
-	// Internal listener: AuthServiceToken from InternalGuard. Guard is always
-	// non-nil when InternalHTTPAddr is set: SharedDeps.Validate enforces this
-	// for production topologies, and tests either supply a guard or leave the
-	// addr empty (skipping listener registration entirely).
-	// Health listener: framework-owned /healthz, /readyz, /metrics route groups;
-	// when shared.VerboseToken is set, the health handler's strict-gate path
-	// (WithReadyzVerboseToken → SetVerboseToken) requires a matching X-Readyz-Token
-	// for ?verbose=true requests; mismatches return 401 ErrReadyzVerboseDenied.
-	//
-	// ref: go-kratos/kratos app.go — per-server option pattern.
-
 	healthRouteOpts := []bootstrap.HealthRouteGroupOption{
 		bootstrap.WithMetricsHandler(metricsHandler),
 	}
@@ -105,32 +81,54 @@ func defaultRuntimeOptions(
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
 	}
-	// Primary listener carries the JWT auth plan. AuthJWTFromAssembly
-	// resolves an IntentTokenVerifier from an authProvider cell during phase4.
-	// Tests that pre-bind their own listener still go through this path —
-	// they inject the same listener via extra bootstrap.WithListener options downstream.
+	if shared.RedisClient != nil {
+		opts = append(opts,
+			bootstrap.WithHealthChecker("redis_ready", shared.RedisClient.Health),
+			bootstrap.WithManagedCloser(shared.RedisClient),
+		)
+	}
+	return opts
+}
+
+// defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the
+// shared cross-cutting deps, a pre-built assembly, a ConsumerBase, a metrics
+// handler, and the adapter info map. Called by run() after BuildApp returns.
+//
+// PGResource options are contributed per-Cell by CellModule.Provide (via
+// BuildApp opts). This function covers only the cross-cutting concerns:
+// HTTP addr, publisher/subscriber, public/exempt endpoints, metrics, etc.
+func defaultRuntimeOptions(
+	shared *SharedDeps,
+	asm *assembly.CoreAssembly,
+	consumerBase *outbox.ConsumerBase,
+	metricsHandler http.Handler,
+	adapterInfo map[string]string,
+) []bootstrap.Option {
+	// PR-A14b: three-listener topology — primary (business routes + JWT auth),
+	// internal (/internal/v1/* + service-token auth), health (/healthz /readyz
+	// /metrics on a dedicated port).
+	//
+	// Primary listener: AuthJWTFromAssembly discovers IntentTokenVerifier from
+	// accesscore post-Init (lazy phase4 resolution, fail-closed).
+	// Internal listener: AuthServiceToken from InternalGuard. The listener is
+	// always registered in the runtime path; SharedDeps.Validate requires both
+	// InternalHTTPAddr and InternalGuard before run() reaches this point.
+	// Health listener: framework-owned /healthz, /readyz, /metrics route groups;
+	// when shared.VerboseToken is set, the health handler's strict-gate path
+	// (WithReadyzVerboseToken → SetVerboseToken) requires a matching X-Readyz-Token
+	// for ?verbose=true requests; mismatches return 401 ErrReadyzVerboseDenied.
+	//
+	// ref: go-kratos/kratos app.go — per-server option pattern.
+	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	if shared.PrimaryHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(
 			cell.PrimaryListener, shared.PrimaryHTTPAddr,
 			[]cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		))
 	}
-	if shared.InternalHTTPAddr != "" {
-		opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, buildInternalAuthChain(shared.InternalGuard)))
-	}
-	// B2: HealthListener is required when a metrics handler is configured.
-	// Production PodIP/Service probes set GOCELL_HTTP_HEALTH_ADDR to a
-	// reachable bind; same-netns deployments explicitly waive loopback via
-	// GOCELL_HTTP_HEALTH_LOCAL_ONLY=1.
-	// Tests inject their own HealthListener via extra bootstrap.WithListener options.
+	opts = append(opts, bootstrap.WithListener(cell.InternalListener, shared.InternalHTTPAddr, buildInternalAuthChain(shared.InternalGuard)))
 	if shared.HealthHTTPAddr != "" {
 		opts = append(opts, bootstrap.WithListener(cell.HealthListener, shared.HealthHTTPAddr, []cell.ListenerAuth{cell.AuthNone{}}))
-	}
-	if shared.RedisClient != nil {
-		opts = append(opts,
-			bootstrap.WithHealthChecker("redis_ready", shared.RedisClient.Health),
-			bootstrap.WithManagedCloser(shared.RedisClient),
-		)
 	}
 	return opts
 }

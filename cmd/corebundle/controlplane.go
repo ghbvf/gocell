@@ -48,8 +48,8 @@ func (g *internalGuard) NonceStore() auth.NonceStore { return g.nonceStore }
 // startup but cannot know the topology, so the operator is responsible for
 // matching store class to pod count.
 //
-// ref: Kubernetes kube-apiserver service-account verification — guard only when
-// key material is present; no guard is better than a broken guard.
+// ref: Kubernetes kube-apiserver service-account verification — require key
+// material before installing an authentication guard.
 // ref: gorilla/securecookie — replay protection defaults on, not opt-in.
 func internalGuardFromEnv(adapterMode string, store auth.NonceStore) (*internalGuard, error) {
 	secret := os.Getenv(auth.EnvServiceSecret)

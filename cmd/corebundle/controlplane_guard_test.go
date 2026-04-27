@@ -1,8 +1,7 @@
 // Tests for controlplane service-token guard wiring (C6).
 //
 // internalGuardFromEnv returns a ServiceTokenMiddleware guard when
-// GOCELL_SERVICE_SECRET is set. In real mode, missing secret is a hard error.
-// In dev mode, missing secret disables the guard (returns nil, nil).
+// GOCELL_SERVICE_SECRET is set. Missing secret is a hard error in every mode.
 package main
 
 import (
