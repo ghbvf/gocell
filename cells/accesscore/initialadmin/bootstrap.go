@@ -18,6 +18,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/adminprovision"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/domain"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/worker"
 )
 
@@ -75,16 +76,17 @@ type bootstrapper struct {
 // values are invalid.
 func newBootstrapper(deps BootstrapDeps, cfg bootstrapConfig) (*bootstrapper, error) {
 	if deps.UserRepo == nil {
-		return nil, fmt.Errorf("initialadmin: bootstrapper requires UserRepo")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires UserRepo")
 	}
 	if deps.RoleRepo == nil {
-		return nil, fmt.Errorf("initialadmin: bootstrapper requires RoleRepo")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires RoleRepo")
 	}
 	if deps.Logger == nil {
-		return nil, fmt.Errorf("initialadmin: bootstrapper requires Logger")
+		return nil, errcode.New(errcode.ErrCellInvalidConfig, "initialadmin: bootstrapper requires Logger")
 	}
 	if cfg.TTL < 0 {
-		return nil, fmt.Errorf("initialadmin: bootstrapper TTL must be non-negative, got %s", cfg.TTL)
+		return nil, errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("initialadmin: bootstrapper TTL must be non-negative, got %s", cfg.TTL))
 	}
 
 	// Apply defaults.

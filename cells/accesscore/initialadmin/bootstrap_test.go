@@ -491,6 +491,9 @@ func TestBootstrap_NewBootstrapperValidatesInput(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			_, err := newBootstrapper(tt.deps, tt.cfg)
 			require.Error(t, err)
+			var ec *errcode.Error
+			require.True(t, errors.As(err, &ec), "expected errcode.Error, got %T: %v", err, err)
+			assert.Equal(t, errcode.ErrCellInvalidConfig, ec.Code)
 			assert.Contains(t, err.Error(), tt.wantErr)
 		})
 	}

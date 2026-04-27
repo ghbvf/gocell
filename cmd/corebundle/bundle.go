@@ -9,7 +9,7 @@ import (
 
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 	adaptervault "github.com/ghbvf/gocell/adapters/vault"
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
+	"github.com/ghbvf/gocell/cells/accesscore/initialadmin"
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	configpg "github.com/ghbvf/gocell/cells/configcore/postgres"
 	"github.com/ghbvf/gocell/kernel/assembly"
@@ -384,12 +384,14 @@ func buildConfigCorePGStorage(pool *adapterpg.Pool, cfg ConfigCoreModuleConfig) 
 }
 
 // logInitialAdminCredPath emits a startup info log so operators know where to
-// find the initial admin credential on first run. Uses
-// accesscore.ResolveBootstrapCredentialPath so the logged path always matches
-// the path actually written by the bootstrapper (P2-6: no duplicated path
-// resolution logic).
-func logInitialAdminCredPath() {
-	credPath, err := accesscore.ResolveBootstrapCredentialPath("")
+// find the initial admin credential when bootstrap mode is active. Interactive
+// mode does not write a credential file, so it intentionally skips path
+// resolution and avoids warning on GOCELL_STATE_DIR values it will not use.
+func logInitialAdminCredPath(mode adminProvisionMode) {
+	if mode != adminProvisionModeBootstrap {
+		return
+	}
+	credPath, err := initialadmin.ResolveCredentialPath("")
 	if err != nil {
 		// GOCELL_STATE_DIR is not absolute — the bootstrapper will fail-fast too,
 		// so log the error here and let the user fix the config.

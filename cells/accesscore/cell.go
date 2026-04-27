@@ -160,16 +160,6 @@ func WithRefreshMetricsProvider(p metrics.Provider) Option {
 	return func(c *AccessCore) { c.metricsProvider = p }
 }
 
-// ResolveBootstrapCredentialPath returns the credential file path using the
-// same resolution logic as the internal Bootstrapper: stateDir overrides
-// GOCELL_STATE_DIR, which overrides the platform default state directory.
-//
-// This is the canonical path helper for cmd/corebundle startup logging so
-// that the logged path always matches the file the bootstrapper writes (P2-6).
-func ResolveBootstrapCredentialPath(stateDir string) (string, error) {
-	return initialadmin.ResolveCredentialPath(stateDir)
-}
-
 // WithInMemoryDefaults configures in-memory repositories for development
 // and testing. Not suitable for production use.
 func WithInMemoryDefaults() Option {

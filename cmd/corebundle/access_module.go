@@ -78,6 +78,7 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 	slog.Info("accesscore: admin provision mode resolved",
 		slog.String("mode", string(mode)),
 		slog.Bool("force_bootstrap", m.ForceBootstrap))
+	logInitialAdminCredPath(mode)
 
 	// Cursor codec for accesscore: read env via LoadCursorKeys then build.
 	accessPrimary, accessPrevious := LoadCursorKeys("ACCESSCORE")

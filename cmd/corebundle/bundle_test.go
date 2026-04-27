@@ -84,20 +84,44 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 // logInitialAdminCredPath coverage
 // ---------------------------------------------------------------------------
 
-// TestLogInitialAdminCredPath_InvalidStateDir verifies that logInitialAdminCredPath
-// emits a warning (and does not panic) when GOCELL_STATE_DIR is set to a
-// relative path (which ResolveBootstrapCredentialPath rejects as unsafe).
-func TestLogInitialAdminCredPath_InvalidStateDir(t *testing.T) {
+// TestLogInitialAdminCredPath_InteractiveSkipsPathResolution verifies that
+// interactive admin provisioning does not advertise or validate the bootstrap
+// credential path.
+func TestLogInitialAdminCredPath_InteractiveSkipsPathResolution(t *testing.T) {
+	buf, restore := captureSlogInfoLines(t)
+	t.Cleanup(restore)
+
 	t.Setenv("GOCELL_STATE_DIR", "relative/not/absolute")
-	// Must not panic; warning is logged but not surfaced as an error.
-	require.NotPanics(t, func() { logInitialAdminCredPath() })
+	require.NotPanics(t, func() { logInitialAdminCredPath(adminProvisionModeInteractive) })
+
+	logs := buf.String()
+	assert.NotContains(t, logs, "initial admin credential")
+	assert.NotContains(t, logs, "GOCELL_STATE_DIR")
+}
+
+// TestLogInitialAdminCredPath_BootstrapInvalidStateDirWarns verifies that
+// bootstrap mode still warns when the credential path cannot be resolved.
+func TestLogInitialAdminCredPath_BootstrapInvalidStateDirWarns(t *testing.T) {
+	buf, restore := captureSlogInfoLines(t)
+	t.Cleanup(restore)
+
+	t.Setenv("GOCELL_STATE_DIR", "relative/not/absolute")
+	require.NotPanics(t, func() { logInitialAdminCredPath(adminProvisionModeBootstrap) })
+
+	logs := buf.String()
+	assert.Contains(t, logs, "invalid GOCELL_STATE_DIR")
 }
 
 // TestLogInitialAdminCredPath_ValidStateDir verifies that logInitialAdminCredPath
 // runs without panic when GOCELL_STATE_DIR is a valid absolute path.
 func TestLogInitialAdminCredPath_ValidStateDir(t *testing.T) {
+	buf, restore := captureSlogInfoLines(t)
+	t.Cleanup(restore)
+
 	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
-	require.NotPanics(t, func() { logInitialAdminCredPath() })
+	require.NotPanics(t, func() { logInitialAdminCredPath(adminProvisionModeBootstrap) })
+
+	assert.Contains(t, buf.String(), "initial admin credentials are written")
 }
 
 // ---------------------------------------------------------------------------
