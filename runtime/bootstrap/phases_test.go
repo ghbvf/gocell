@@ -1009,7 +1009,7 @@ func (s *stubNonceStore) CheckAndMark(_ context.Context, _ string) error {
 }
 
 func (s *stubNonceStore) Kind() cell.NonceStoreKind {
-	return cell.NonceStoreKindNoop
+	return cell.NonceStoreKindInMemory
 }
 
 type stubHMACKeyring struct{}

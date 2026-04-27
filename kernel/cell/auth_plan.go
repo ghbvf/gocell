@@ -265,11 +265,13 @@ type AuthServiceToken struct {
 }
 
 // NewAuthServiceToken constructs an AuthServiceToken plan. Returns an error if
-// either argument is nil or if ring.Current() returns fewer than MinHMACKeyBytes
-// bytes — both are required for a properly guarded internal listener; a short
-// HMAC secret silently weakens MAC strength and is rejected at construction time
-// (NIST SP 800-107 §5.3.4 — HMAC key length must match underlying hash
-// security strength: 256-bit / 32-byte for HMAC-SHA-256).
+// either argument is nil, if store.Kind() is NonceStoreKindNoop, or if
+// ring.Current() returns fewer than MinHMACKeyBytes bytes. A service-token plan
+// is a replay-safe internal-listener guard; NoopNonceStore explicitly disables
+// replay defense and is therefore not a valid AuthServiceToken dependency.
+// A short HMAC secret silently weakens MAC strength and is rejected at
+// construction time (NIST SP 800-107 §5.3.4 — HMAC key length must match
+// underlying hash security strength: 256-bit / 32-byte for HMAC-SHA-256).
 //
 // Use MustNewAuthServiceToken for fail-fast static wiring at composition root.
 func NewAuthServiceToken(store NonceStore, ring HMACKeyring) (AuthServiceToken, error) {
@@ -278,6 +280,9 @@ func NewAuthServiceToken(store NonceStore, ring HMACKeyring) (AuthServiceToken, 
 	}
 	if validation.IsNilInterface(ring) {
 		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken ring must not be nil")
+	}
+	if store.Kind() == NonceStoreKindNoop {
+		return AuthServiceToken{}, fmt.Errorf("cell: NewAuthServiceToken store must not be NonceStoreKindNoop; service-token guards require replay protection")
 	}
 	if got := len(ring.Current()); got < MinHMACKeyBytes {
 		return AuthServiceToken{}, fmt.Errorf(

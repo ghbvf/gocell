@@ -173,13 +173,19 @@ func validateAuthServiceTokenPlan(listener string, position int, p cell.AuthServ
 	if validation.IsNilInterface(p.Store) {
 		return errcode.New(errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("listener %q: AuthServiceToken at position %d Store must not be nil; "+
-				"construct it with cell.NewAuthServiceToken(store, ring)",
+				"construct it with cell.MustNewAuthServiceToken(store, ring)",
 				listener, position))
 	}
 	if validation.IsNilInterface(p.Ring) {
 		return errcode.New(errcode.ErrCellInvalidConfig,
 			fmt.Sprintf("listener %q: AuthServiceToken at position %d Ring must not be nil; "+
-				"construct it with cell.NewAuthServiceToken(store, ring)",
+				"construct it with cell.MustNewAuthServiceToken(store, ring)",
+				listener, position))
+	}
+	if p.Store.Kind() == cell.NonceStoreKindNoop {
+		return errcode.New(errcode.ErrCellInvalidConfig,
+			fmt.Sprintf("listener %q: AuthServiceToken at position %d Store must not be NonceStoreKindNoop; "+
+				"service-token guards require replay protection",
 				listener, position))
 	}
 	if got := len(p.Ring.Current()); got < cell.MinHMACKeyBytes {

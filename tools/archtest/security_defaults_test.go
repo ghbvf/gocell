@@ -238,18 +238,129 @@ func findInternalListenerAuthNoneChain(path string) ([]int, error) {
 		return nil, err
 	}
 	var lines []int
+	facts := collectAuthNoneChainFacts(f)
 	ast.Inspect(f, func(n ast.Node) bool {
 		call, ok := n.(*ast.CallExpr)
 		if !ok || !isWithListenerCall(call) || len(call.Args) < 3 {
 			return true
 		}
-		if !isInternalListenerRef(call.Args[0]) || !chainLiteralContainsAuthNone(call.Args[2]) {
+		if !isInternalListenerRef(call.Args[0]) || !chainExprContainsAuthNone(call.Args[2], facts) {
 			return true
 		}
 		lines = append(lines, fset.Position(call.Lparen).Line)
 		return true
 	})
 	return lines, nil
+}
+
+type authNoneChainFacts struct {
+	vars  map[string]bool
+	funcs map[string]bool
+}
+
+func collectAuthNoneChainFacts(f *ast.File) authNoneChainFacts {
+	facts := authNoneChainFacts{
+		vars:  make(map[string]bool),
+		funcs: make(map[string]bool),
+	}
+	ast.Inspect(f, func(n ast.Node) bool {
+		fn, ok := n.(*ast.FuncDecl)
+		if !ok || fn.Body == nil {
+			return true
+		}
+		for _, stmt := range fn.Body.List {
+			ret, ok := stmt.(*ast.ReturnStmt)
+			if !ok {
+				continue
+			}
+			for _, result := range ret.Results {
+				if chainLiteralContainsAuthNone(result) {
+					facts.funcs[fn.Name.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	ast.Inspect(f, func(n ast.Node) bool {
+		switch stmt := n.(type) {
+		case *ast.ValueSpec:
+			for i, name := range stmt.Names {
+				if authNoneRHSAt(stmt.Values, i) {
+					facts.vars[name.Name] = true
+				}
+			}
+		case *ast.AssignStmt:
+			for i, lhs := range stmt.Lhs {
+				id, ok := lhs.(*ast.Ident)
+				if !ok {
+					continue
+				}
+				if authNoneRHSAt(stmt.Rhs, i) {
+					facts.vars[id.Name] = true
+				}
+			}
+		}
+		return true
+	})
+	return facts
+}
+
+func authNoneRHSAt(rhs []ast.Expr, idx int) bool {
+	if len(rhs) == 0 {
+		return false
+	}
+	if len(rhs) == 1 {
+		return chainLiteralContainsAuthNone(rhs[0])
+	}
+	if idx >= len(rhs) {
+		return false
+	}
+	return chainLiteralContainsAuthNone(rhs[idx])
+}
+
+func chainExprContainsAuthNone(expr ast.Expr, facts authNoneChainFacts) bool {
+	if chainLiteralContainsAuthNone(expr) {
+		return true
+	}
+	switch e := expr.(type) {
+	case *ast.Ident:
+		return facts.vars[e.Name]
+	case *ast.CallExpr:
+		id, ok := e.Fun.(*ast.Ident)
+		return ok && facts.funcs[id.Name]
+	default:
+		return false
+	}
+}
+
+func TestFindInternalListenerAuthNoneChain_CatchesLiteralVarAndHelper(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.go")
+	src := `package main
+
+import (
+	"github.com/ghbvf/gocell/kernel/cell"
+	"github.com/ghbvf/gocell/runtime/bootstrap"
+)
+
+func main() {
+	chain := []cell.ListenerAuth{cell.AuthNone{}}
+	bootstrap.WithListener(cell.InternalListener, ":9090", chain)
+	bootstrap.WithListener(cell.InternalListener, ":9091", insecureInternalAuth())
+}
+
+func insecureInternalAuth() []cell.ListenerAuth {
+	return []cell.ListenerAuth{cell.AuthNone{}}
+}
+`
+	require.NoError(t, os.WriteFile(path, []byte(src), 0o644))
+
+	lines, err := findInternalListenerAuthNoneChain(path)
+
+	require.NoError(t, err)
+	assert.Len(t, lines, 2)
 }
 
 func isWithListenerCall(call *ast.CallExpr) bool {

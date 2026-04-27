@@ -294,6 +294,13 @@ func TestValidateAuthServiceTokenPlans(t *testing.T) {
 			},
 			wantErr: "Ring must not be nil",
 		},
+		{
+			name: "rejects noop nonce store literal",
+			chain: []cell.ListenerAuth{
+				cell.AuthServiceToken{Store: &applyNoopNonceStore{}, Ring: &applyStubHMACKeyring{}},
+			},
+			wantErr: "NonceStoreKindNoop",
+		},
 	}
 
 	for _, tc := range tests {

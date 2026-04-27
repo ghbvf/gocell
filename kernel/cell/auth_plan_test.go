@@ -163,6 +163,19 @@ func TestNewAuthServiceToken_TypedNilRingReturnsError(t *testing.T) {
 	}
 }
 
+func TestNewAuthServiceToken_RejectsNoopNonceStore(t *testing.T) {
+	t.Parallel()
+
+	_, err := cell.NewAuthServiceToken(&stubNoopNonceStore{}, &stubHMACKeyring{})
+
+	if err == nil {
+		t.Fatal("expected error for noop nonce store, got nil")
+	}
+	if !strings.Contains(err.Error(), "NonceStoreKindNoop") {
+		t.Errorf("error message must mention NonceStoreKindNoop: %q", err.Error())
+	}
+}
+
 func TestMustNewAuthServiceToken_NilStorePanics(t *testing.T) {
 	t.Parallel()
 	defer func() {
@@ -281,7 +294,15 @@ func (s *stubNonceStore) CheckAndMark(_ context.Context, _ string) error {
 	return nil
 }
 
-func (s *stubNonceStore) Kind() cell.NonceStoreKind { return cell.NonceStoreKindNoop }
+func (s *stubNonceStore) Kind() cell.NonceStoreKind { return cell.NonceStoreKindInMemory }
+
+type stubNoopNonceStore struct{}
+
+func (s *stubNoopNonceStore) CheckAndMark(_ context.Context, _ string) error {
+	return nil
+}
+
+func (s *stubNoopNonceStore) Kind() cell.NonceStoreKind { return cell.NonceStoreKindNoop }
 
 // stubHMACKeyring satisfies cell.HMACKeyring.
 type stubHMACKeyring struct{}

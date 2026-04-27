@@ -106,7 +106,7 @@ func buildBootstrapWithFakeKeyProvider(t *testing.T, shared *SharedDeps, kp kcry
 	}
 
 	adapterInfo := adapterInfoForSharedDeps(shared)
-	opts := defaultRuntimeOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
+	opts := runtimeBaseOptions(shared, asm, consumerBase, metricsHandler, adapterInfo)
 	opts = append(opts, cellOpts...)
 	opts = append(opts, bootstrap.WithListener(
 		cell.PrimaryListener,

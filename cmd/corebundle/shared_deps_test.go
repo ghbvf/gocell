@@ -174,7 +174,7 @@ func TestSharedDeps_Validate_RealModeRejectsLoopbackHealthAddrWithoutLocalOnlyWa
 	}
 }
 
-func TestSharedDeps_Validate_InternalAddrRequiresGuardInAllModes(t *testing.T) {
+func TestSharedDeps_Validate_InternalListenerRequiresAddrAndGuardInAllModes(t *testing.T) {
 	tests := []struct {
 		name string
 		topo bootstrap.Topology
@@ -186,15 +186,24 @@ func TestSharedDeps_Validate_InternalAddrRequiresGuardInAllModes(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			deps := newValidatedSharedDeps(t, tc.topo)
-			deps.InternalHTTPAddr = "127.0.0.1:9090"
-			deps.InternalGuard = nil
 
+			deps.InternalHTTPAddr = ""
 			err := deps.Validate()
 
 			require.Error(t, err)
 			assert.Contains(t, err.Error(), "InternalHTTPAddr")
+			assert.Contains(t, err.Error(), "must be set")
+
+			deps = newValidatedSharedDeps(t, tc.topo)
+			deps.InternalHTTPAddr = "127.0.0.1:9090"
+			deps.InternalGuard = nil
+
+			err = deps.Validate()
+
+			require.Error(t, err)
 			assert.Contains(t, err.Error(), "InternalGuard")
 			assert.Contains(t, err.Error(), "/internal/v1/*")
+			assert.NotContains(t, err.Error(), "clear GOCELL_HTTP_INTERNAL_ADDR")
 		})
 	}
 }
