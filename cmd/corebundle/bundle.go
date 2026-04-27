@@ -221,16 +221,18 @@ func keyProviderToTransformer(kp kcrypto.KeyProvider) kcrypto.ValueTransformer {
 
 type noKeyProvider struct{}
 
+const noKeyProviderConfiguredMessage = "configcore: no key provider configured"
+
 func (noKeyProvider) Current(context.Context) (kcrypto.KeyHandle, error) {
-	return nil, errcode.New(errcode.ErrConfigKeyMissing, "configcore: no key provider configured")
+	return nil, errcode.New(errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
 }
 
 func (noKeyProvider) ByID(context.Context, string) (kcrypto.KeyHandle, error) {
-	return nil, errcode.New(errcode.ErrConfigKeyMissing, "configcore: no key provider configured")
+	return nil, errcode.New(errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
 }
 
 func (noKeyProvider) Rotate(context.Context) (string, error) {
-	return "", errcode.New(errcode.ErrConfigKeyMissing, "configcore: no key provider configured")
+	return "", errcode.New(errcode.ErrConfigKeyMissing, noKeyProviderConfiguredMessage)
 }
 
 func isNoKeyProvider(kp kcrypto.KeyProvider) bool {
