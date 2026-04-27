@@ -78,7 +78,7 @@ jobs:
             race: false
             static_checks: false
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           # Need full history so `golangci-lint --new-from-merge-base=origin/<base-ref>`
           # can run `git merge-base` successfully. Only the kernel shard actually
@@ -86,7 +86,7 @@ jobs:
           # keeping it uniform avoids conditional checkout complexity.
           fetch-depth: 0
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.25"
           cache-dependency-path: go.sum
@@ -108,7 +108,7 @@ jobs:
 
       - name: golangci-lint
         if: matrix.static_checks
-        uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7.0.1
+        uses: golangci/golangci-lint-action@1e7e51e771db61008b38414a730f564565cf7c20 # v9.2.0
         with:
           version: v2.11.0
           # only-new-issues uses the GitHub pull-request diff API which
@@ -227,7 +227,7 @@ jobs:
           echo "PASS: kernel coverage >= 90%"
 
       - name: Upload coverage profile
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-shard-${{ matrix.shard }}
           path: coverage-shard-${{ matrix.shard }}.out
@@ -245,9 +245,9 @@ jobs:
     # testcontainers manages containers dynamically (no static services)
     # to avoid port conflicts with host-bound services.
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.25"
           cache-dependency-path: go.sum
@@ -293,7 +293,7 @@ jobs:
         run: go test -tags=integration,otelcollector ./adapters/otel/... -run '^TestNewTracer_ExportsSpanToOTLPCollector$' -count=1 -timeout 10m
 
       - name: Upload integration coverage profile
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-integration-profile
           path: coverage-integration.out
@@ -325,8 +325,8 @@ jobs:
     env:
       E2E_PG_PASSWORD: gocell-e2e-ci-pwd
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.25"
           cache-dependency-path: go.sum
@@ -378,7 +378,7 @@ jobs:
         run: docker compose -f docker-compose.e2e.yaml down -v
       - name: Upload e2e diagnostics on failure
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: e2e-diagnostics
           path: |
@@ -405,8 +405,8 @@ jobs:
       fail-fast: false
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.25"
           cache-dependency-path: go.sum
@@ -442,8 +442,8 @@ jobs:
       # default shallow checkout is sufficient and faster. (build-test sets
       # fetch-depth: 0 only because golangci-lint --new-from-merge-base
       # needs `git merge-base`.)
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
         with:
           go-version: "1.25"
           cache-dependency-path: go.sum
@@ -480,20 +480,20 @@ jobs:
     # This ensures new code in DB-path branches (schema_guard, outbox_relay)
     # counts toward the coverage gate.
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       # Downloads all per-shard unit coverage artifacts into the workspace
       # root (merge-multiple: true flattens shard-keyed directories). Each
       # artifact contains exactly one file `coverage-shard-<shard>.out`; names
       # do not collide because each shard's output path is unique.
       - name: Download unit coverage profiles (all shards)
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: coverage-shard-*
           merge-multiple: true
 
       - name: Download integration coverage profile
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: coverage-integration-profile
 
@@ -517,7 +517,7 @@ jobs:
           echo "merged profile has $(wc -l < coverage-merged.out) lines from $(ls coverage-shard-*.out coverage-integration.out | wc -l) source profiles"
 
       - name: Cache SonarQube packages
-        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           path: ~/.sonar/cache
           key: ${{ runner.os }}-sonar
