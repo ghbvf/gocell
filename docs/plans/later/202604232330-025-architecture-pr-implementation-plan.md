@@ -1,7 +1,8 @@
 # 架构项 PR 实施计划（剩余开放项）
 
-> 基线: `develop @ 6773b86a`（2026-04-26）
-> 状态: Wave 1 / Wave 2 / Wave 2.5 主线全部清零；🎯 v1.0 发布硬约束已在 2026-04-25 全部达成。
+> 基线: `develop @ 34499ef5`（2026-04-28）
+> 状态: Wave 1 / Wave 2 / **Wave 2.5 全部清零**；🎯 v1.0 发布硬约束已在 2026-04-25 全部达成。
+> **2026-04-28 更新**：Wave 2.5 残余 PR-CFG-4 / PR-CFG-6 已迁入 `docs/plans/202604260058-l4-virtual-taco.md`（CFG-4 → PR-CFG-L 独立 / CFG-6 → PR-CFG-M.M.3 吸收）；Wave 2.5 板块从本 plan 完全清零。本 plan 此后只承载 Wave 3 / Wave 4 新模块路线图。
 >
 > **完整历史版本（含 Wave 1-2 已完工 PR 详情、13 轮 round 更新、所有完工 PR 描述）已归档**：
 > [`docs/plans/archive/202604232330-025-architecture-pr-implementation-plan.md`](archive/202604232330-025-architecture-pr-implementation-plan.md)
@@ -18,40 +19,16 @@
 
 | Wave | 剩余 OPEN |
 |---|---|
-| **Wave 2.5** | PR-CFG-4 / PR-CFG-6 |
 | **Wave 3** | PR-A15 / A16 / A17 / A36 / A37 / A38 |
 | **Wave 4** | PR-A21 / A22 / A24 / A33 |
 
-> Wave 1 / Wave 2 / Wave 2.5 已清零 / Wave 3 已完工（A14b/A18/A35）/ Wave 4 已完工（A19/A20/A23）/ won't-do（PR-CFG-5）—— 全部从本 plan 删除。
-
-### Wave 2.5 残余（PR-CFG-1 已关闭，剩 PR-CFG-4 / PR-CFG-6）
-
-#### PR-CFG-1 READYZ-RELAY-PROBE-FORWARD-01（✅ 2026-04-27 复核关闭）
-
-**复核结论**：基于 `develop @ b5131358`，relay 已在 `cmd/corebundle/bundle.go::buildConfigCoreOpts` 通过 `bootstrap.WithManagedResource(relayWorker)` 独立注册；`bootstrap.expandManagedResources()` 会自动聚合该 relay 的 `Relay.Checkers()`，因此 `outbox-relay-poll/reclaim/cleanup` 已进入 `/readyz?verbose`。原先“把 relay 探针转发进 `PGResource.Checkers()`”的最小修已经过期；若现在继续实施，会与独立 relay ManagedResource 产生重复 checker key，并被 bootstrap duplicate-checker fail-fast 拦截。
-
-**关闭方式**：保持 `PGResource` 只负责 postgres pool probe + pool Close；保持 relay 作为独立 ManagedResource 负责 Worker/Close/Checkers。`docs/patterns/pg-cell-template.md` 已同步该 wiring 模式，避免新 cell 模板复活 `NewPGResource(pool, relayWorker)` 旧写法。
-
-#### PR-CFG-4 CONFIG-READ-METADATA-ADMIN-GATE-01（P1, Cx2, 🔴 安全数据泄漏，~1d）
-
-**问题**：`cells/configcore/cell_routes.go` 把 `GET /api/v1/config/` 与 `GET /api/v1/config/{key}` 挂在 `auth.Authenticated()` 下，任意已登录用户都能枚举 key 列表 + 读 sensitive 元数据；`contracts/http/config/{get,list}/v1/response.schema.json` 未声明 `sensitive: bool` 字段但真实 DTO 已写——contract-first 调用方误判线上响应非法。
-
-**修复（同 PR）**：(1) 两条 GET 改 `auth.AnyRole(auth.RoleAdmin)`；(2) response.schema.json 显式声明 `sensitive: bool`；(3) handler/service/DTO 校齐；(4) contract_test 加 `MustRejectResponse` 负向断言。
-**前置**：#267 PR-CFG-C 已铺好 `runtime/auth/authtest` 基底，本 PR 直接复用即可。
-**ref**：Vault KV v2 `data` vs `metadata` 路径分离授权；K8s RBAC ConfigMap/Secret 默认不进 `view`；Consul KV 把 keys 枚举与 metadata/value 读取分离。
-**文件**：`cells/configcore/cell_routes.go` + `contracts/http/config/{get,list}/v1/response.schema.json` + `cells/configcore/slices/configread/{handler,service,contract_test}.go`。
-
-#### PR-CFG-6 OUTBOX-EMIT-FAILOPEN-DROP-COUNTER-01（P1, Cx2, 🟡 ops 可观测，~3-4h）
-
-**问题**（relay readyz 聚合路径确认后剩余两件）：
-- (a) `kernel/outbox/emitter.go:101-108` `DirectPublishFailOpen` 分支仅 `slog.Warn` + `return nil`，无任何 metrics counter 自增
-- (b) `tools/archtest/outbox_topic_test.go:217-237` `extractStringField` 检查 `*ast.BasicLit`，遇 `*ast.Ident`（常量引用）/`*ast.SelectorExpr` 时直接 `ok=false` 跳过——常量/变量构造的 topic 漏检
-
-**修复**：(1) `DirectEmitter` 构造时注入 metrics provider（避免在 kernel/ 引入全局注册表），fail-open 分支自增 `gocell_outbox_emit_failopen_dropped_total{cell, topic}`；(2) archtest 同包内构建常量值表（`ast.GenDecl` + `ast.ValueSpec` 扫一遍同文件 const）做单文件级值传播，参考 PR#257 PR246-FU1 FMT-19 AST 模式。
-**关联**：原 backlog `MULTI-REVIEW-RES-2` (1)+(2) 与本条合并实施。
-**文件**：`kernel/outbox/emitter.go` + `runtime/observability/metrics/` + `tools/archtest/outbox_topic_test.go`。
-
----
+> Wave 1 / Wave 2 / **Wave 2.5 全部清零** / Wave 3 已完工（A14b/A18/A35）/ Wave 4 已完工（A19/A20/A23）/ won't-do（PR-CFG-5）—— 全部从本 plan 删除。
+>
+> **Wave 2.5 关闭索引**（2026-04-28）：
+> - **PR-CFG-1** READYZ-RELAY-PROBE-FORWARD-01 — ✅ 2026-04-27 复核关闭（relay 已独立 ManagedResource 注册，最小修已过期）
+> - **PR-CFG-4** CONFIG-READ-METADATA-ADMIN-GATE-01 — ➡️ 迁入 `202604260058-l4-virtual-taco.md` 作为 **PR-CFG-L** 独立 PR（🔴 P1 安全独占审）
+> - **PR-CFG-5** — won't-do
+> - **PR-CFG-6** OUTBOX-EMIT-FAILOPEN-DROP-COUNTER-01 — ➡️ 迁入 `202604260058-l4-virtual-taco.md` 作为 **PR-CFG-M.M.3** 吸收（与 archtest 加固批共用 packages.Load + go/types 范式）
 
 ### Wave 3 残余（6 PR）
 
@@ -184,42 +161,39 @@
 
 ## Lane 并行执行计划
 
-> 12 条 OPEN 项按文件域 + 主题分 6 条 lane，lane 内串行、lane 间并行。文件域不重叠才能开 worktree 并行；下方 Sprint batch 已按冲突避让。
+> 10 条 OPEN 项按文件域 + 主题分 4 条 lane，lane 内串行、lane 间并行。文件域不重叠才能开 worktree 并行；下方 Sprint batch 已按冲突避让。
+> Wave 2.5 残余的 L1 Config / L2 Outbox lane 已迁出本 plan（CFG-4 / CFG-6 → l4-virtual-taco PR-CFG-L / PR-CFG-M）；本节只承载 Wave 3 / Wave 4 lane。
 
-### 6 条 lane（剩余开放项）
+### 4 条 lane（剩余开放项）
 
 | Lane | 任务链 | 主要文件域 | 备注 |
 |---|---|---|---|
-| **L1 Config / Contracts** | PR-CFG-4 | `cells/configcore/cell_routes.go` + `contracts/http/config/{get,list}/v1/response.schema.json` + `cells/configcore/slices/configread/` | 🔴 安全数据泄漏；1d；前置 #267 PR-CFG-C 已铺基底 |
-| **L2 Outbox / Observability** | PR-CFG-6 → PR-A36 | `kernel/outbox/emitter.go` / `tools/archtest/outbox_topic_test.go` / `runtime/observability/metrics/provider_collector.go` / `runtime/bootstrap/bootstrap_phases.go` / `runtime/http/middleware/metrics.go` | 串行：CFG-6 加 counter 后 A36 重排 label；A36 是 🟠 触发项 |
-| **L3 Auth / Refresh** | PR-A21 → PR-A33 | `runtime/auth/` + `adapters/postgres/refresh_store.go` + migrations 010/011/012 | A21 可能 won't-do（评估）；A33 X12+X13+X14 一批 |
-| **L4 Kernel 新模块** | PR-A15 ‖ PR-A16 ‖ PR-A17 → PR-A24 | `kernel/webhook/` / `kernel/reconcile/` / `runtime/scheduler/` / `kernel/replay/` / `kernel/rollback/` | A15/A16/A17 文件域不重叠可三路并行；A24 v1.1 长期债打包 |
-| **L5 DevTools / Tooling** | PR-A37 → PR-A38 | `cmd/gocell/app/export.go` + `kernel/metadata/export.go` + `tools/depgraph/` | 串行：A38 是 A37 `--include-deps` 提供方 |
-| **L6 Architecture (破坏性)** | PR-A22 Cell ISP | `kernel/cell/` + 所有 `cells/*/cell.go` + examples | 🔴 高风险；独占审，禁止与 L4 / L3 / L1 同 batch（cells/* 大面积冲突） |
+| **L1 Auth / Refresh** | PR-A21 → PR-A33 | `runtime/auth/` + `adapters/postgres/refresh_store.go` + migrations 010/011/012 | A21 可能 won't-do（评估）；A33 X12+X13+X14 一批 |
+| **L2 Kernel 新模块** | PR-A15 ‖ PR-A16 ‖ PR-A17 → PR-A24 | `kernel/webhook/` / `kernel/reconcile/` / `runtime/scheduler/` / `kernel/replay/` / `kernel/rollback/` | A15/A16/A17 文件域不重叠可三路并行；A24 v1.1 长期债打包 |
+| **L3 DevTools / Tooling** | PR-A37 → PR-A38 → PR-A36 | `cmd/gocell/app/export.go` + `kernel/metadata/export.go` + `tools/depgraph/` + `runtime/observability/metrics/provider_collector.go` + `runtime/http/middleware/metrics.go` | 串行：A38 是 A37 `--include-deps` 提供方；A36 HTTP metrics label realign（多 cell assembly 部署前触发，🟠） |
+| **L4 Architecture (破坏性)** | PR-A22 Cell ISP | `kernel/cell/` + 所有 `cells/*/cell.go` + examples | 🔴 高风险；独占审，禁止与 L1/L2 同 batch（cells/* 大面积冲突） |
 
 ### 推荐执行 Sprint
 
 > 默认双人 worktree 并行；单人按 sprint 拉成 1.6×。每 sprint ~5 个净工作日窗口，含 review 往返。
 
-#### Sprint 1（~1.5d 净）— Wave 2.5 收尾 + DX 启动（🔴 优先）
+#### Sprint 1（~2d 净）— DX 短链路 + auth 评估
 
 | worktree | PR | 工时 | 文件域 | 冲突检查 |
 |---|---|---|---|---|
-| A | **PR-CFG-4** CONFIG-READ-METADATA-ADMIN-GATE | 1d | `cells/configcore/` + `contracts/http/config/` | 与 B 无重叠 |
-| B | **PR-A37** DEVTOOLS-METADATA-EXPORT | 1d | `cmd/gocell/` + `kernel/metadata/export.go` | 与 A 无重叠 |
+| A | **PR-A37** DEVTOOLS-METADATA-EXPORT | 1d | `cmd/gocell/` + `kernel/metadata/export.go` | 与 B 无重叠 |
+| B | **PR-A21** AUTH-JWT-ABSTRACT-EVAL | 0.5-1d | `runtime/auth/`（评估，可能 won't-do） | 与 A 无重叠 |
 
-**原则**：先清 🔴 CFG-4，同窗口起 DX 短链路（A37）。两个 worktree 完全独立；PR-CFG-1 已复核关闭，不再占用 Sprint 入口。
+**原则**：A37 是 gocell-web 自包含构建解锁；A21 评估线，结论可能 won't-do（结果写入 backlog 决定继续或关闭）。
 
-#### Sprint 2（~1.5-2d 净）— Wave 2.5/3 收尾 + 评估项
+#### Sprint 2（~2-2.5d 净）— Tooling 收口
 
 | worktree | PR | 工时 | 文件域 | 依赖 |
 |---|---|---|---|---|
-| A | **PR-CFG-6** OUTBOX-EMIT-FAILOPEN-DROP-COUNTER | 3-4h | `kernel/outbox/emitter.go` + `tools/archtest/outbox_topic_test.go` | 无 |
-| A→ | **PR-A36** HTTP-METRICS-LABEL-REALIGN | 4h | `runtime/observability/metrics/provider_collector.go` + `runtime/http/middleware/metrics.go` | CFG-6 合后做（同 lane 串行避免 metrics provider 修改冲突） |
-| B | **PR-A38** TOOLS/DEPGRAPH | 1.5-2d | `tools/depgraph/`（新） | PR-A37（Sprint 1 worktree B）已合 |
-| C | **PR-A21** AUTH-JWT-ABSTRACT-EVAL | 0.5-1d | `runtime/auth/` | 无（结论可能 won't-do，先评估） |
+| A | **PR-A38** TOOLS/DEPGRAPH | 1.5-2d | `tools/depgraph/`（新） | PR-A37（Sprint 1）已合 |
+| A→ | **PR-A36** HTTP-METRICS-LABEL-REALIGN | 4h | `runtime/observability/metrics/provider_collector.go` + `runtime/http/middleware/metrics.go` + `runtime/bootstrap/bootstrap_phases.go` | 多 cell assembly 部署前触发；与 A38 同 lane 串行 |
 
-**原则**：A 走 Outbox/Observability lane 串行（CFG-6 → A36，避免同改 metrics 包冲突）；B 等 A37 完工启动 depgraph；C 独立评估线，结果写入 backlog 决定继续或关闭。
+**原则**：A38 + A36 同 lane 串行（都触 runtime tooling）；多 cell assembly 部署窗口决定 A36 是否需提前。
 
 #### Sprint 3（~2-3d 净）— Wave 4 长期债打头阵
 
@@ -245,22 +219,23 @@
 
 | PR-A | PR-B | 冲突点 | 解决 |
 |---|---|---|---|
-| PR-CFG-6 | PR-A36 | 都触 `runtime/observability/metrics/` | 同 lane 串行（Sprint 2 worktree A） |
 | PR-A22 | PR-A15/A16/A17 | A22 改 `cells/*/cell.go`，A16 写 example cell，A17 可能加 cell-side scheduler hook | A22 必须独占 sprint，禁止与任何写 cells/* 的 PR 同窗口 |
 | PR-A37 | PR-A38 | A38 是 A37 `--include-deps` 提供方 | 严格串行（Sprint 1 → Sprint 2） |
-| PR-A33 | PR-A21 | 都触 `runtime/auth/` 但 A21 仅评估、A33 改 refresh | 不同 sprint（A21 in Sprint 2 评估；A33 in Sprint 3 实施） |
+| PR-A33 | PR-A21 | 都触 `runtime/auth/` 但 A21 仅评估、A33 改 refresh | 不同 sprint（A21 in Sprint 1 评估；A33 in Sprint 3 实施） |
+| PR-A38 | PR-A36 | 都触 runtime tooling | 同 lane 串行（Sprint 2 worktree A） |
 
 ### 时间线（双人并行估算）
 
 | Sprint | 净工时 | 含 buffer 1.4× | 累计 |
 |---|---|---|---|
-| Sprint 1 | ~1.5d | ~2d | 2d |
-| Sprint 2 | ~2d | ~2.7d | 4.7d |
-| Sprint 3 | ~2.5d | ~3.5d | 8.2d |
-| Sprint 4 | ~7d | ~10d | **18.2d（~3.6 周）** |
+| Sprint 1 | ~2d | ~2.8d | 2.8d |
+| Sprint 2 | ~2.5d | ~3.5d | 6.3d |
+| Sprint 3 | ~2.5d | ~3.5d | 9.8d |
+| Sprint 4 | ~7d | ~10d | **19.8d（~4 周）** |
 
-> Sprint 1+2 完成即可宣布 v1.0 后清债 Wave 2.5 + Wave 3 短链路全部清零；Sprint 3+4 是 v1.1 节奏，可与 026 plan / Wave 5+ 工作交错。
-> 单人场景把上表 ×1.6 → ~5.8 周。
+> Sprint 1+2 完成即可宣布 v1.0 后短链路（DX + tooling + auth 评估）全部清零；Sprint 3+4 是 v1.1 节奏，可与 026 plan / Wave 5+ 工作交错。
+> Wave 2.5 残余 L 与 M 由 `202604260058-l4-virtual-taco.md` 负责，与本 plan 完全独立可并行。
+> 单人场景把上表 ×1.6 → ~6.4 周。
 
 ---
 
