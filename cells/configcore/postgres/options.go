@@ -11,6 +11,7 @@ import (
 	configcore "github.com/ghbvf/gocell/cells/configcore"
 	cellpg "github.com/ghbvf/gocell/cells/configcore/internal/adapters/postgres"
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -49,9 +50,16 @@ func WithOnStaleCipher(fn func(key, storedKeyID, currentKeyID string)) Option {
 // the composition root's responsibility. This option only adapts the pool into
 // configcore's cell-local repository ports.
 //
+// Returns ErrCellInvalidConfig when pool is nil so wiring mistakes fail before
+// ConfigCore is constructed with unusable repositories.
+//
 // WithLogger configures repository logs only. Call configcore.WithLogger
 // separately when the cell itself should use the same logger.
-func WithPool(pool *pgxpool.Pool, opts ...Option) configcore.Option {
+func WithPool(pool *pgxpool.Pool, opts ...Option) (configcore.Option, error) {
+	if pool == nil {
+		return nil, errcode.New(errcode.ErrCellInvalidConfig,
+			"configcore/postgres: WithPool requires a non-nil *pgxpool.Pool")
+	}
 	cfg := settings{logger: slog.Default()}
 	for _, opt := range opts {
 		opt(&cfg)
@@ -64,5 +72,5 @@ func WithPool(pool *pgxpool.Pool, opts ...Option) configcore.Option {
 		}
 		configcore.WithConfigRepository(cellpg.NewConfigRepository(session, cfg.transformer, cfg.logger, repoOpts...))(c)
 		configcore.WithFlagRepository(cellpg.NewFlagRepository(session))(c)
-	}
+	}, nil
 }

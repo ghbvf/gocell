@@ -350,10 +350,34 @@ func findDisallowedTupleTypePath(modPrefix string, tuple *types.Tuple) string {
 	return ""
 }
 
+func layer10IncompleteTypeDataViolation(pkgPath, detail string) violation {
+	return violation{
+		Rule:    "LAYER-10",
+		Pkg:     pkgPath,
+		Message: fmt.Sprintf("LAYER-10: %s typed package load incomplete: %s", pkgPath, detail),
+	}
+}
+
 func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) []violation {
 	var out []violation
 	for _, pkg := range pkgs {
 		if !isRootCellPackage(modPrefix, pkg.PkgPath) {
+			continue
+		}
+		for _, pe := range pkg.Errors {
+			out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
+				fmt.Sprintf("package load/type error: %v", pe)))
+		}
+		if pkg.Types == nil {
+			out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath, "missing Types"))
+			continue
+		}
+		if pkg.TypesInfo == nil {
+			out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath, "missing TypesInfo"))
+			continue
+		}
+		if len(pkg.Syntax) == 0 {
+			out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath, "missing syntax"))
 			continue
 		}
 		for _, file := range pkg.Syntax {
@@ -363,15 +387,17 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 					if !d.Name.IsExported() {
 						continue
 					}
+					symbol := d.Name.Name
+					if d.Recv != nil {
+						symbol = "method " + symbol
+					}
 					obj := pkg.TypesInfo.Defs[d.Name]
 					if obj == nil {
+						out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
+							fmt.Sprintf("missing type info for exported API %s", symbol)))
 						continue
 					}
 					if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
-						symbol := d.Name.Name
-						if d.Recv != nil {
-							symbol = "method " + symbol
-						}
 						out = append(out, violation{
 							Rule:    "LAYER-10",
 							Pkg:     pkg.PkgPath,
@@ -387,6 +413,11 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 								continue
 							}
 							typ := pkg.TypesInfo.TypeOf(s.Type)
+							if typ == nil {
+								out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
+									fmt.Sprintf("missing type info for exported type %s", s.Name.Name)))
+								continue
+							}
 							if p := findDisallowedTypePath(modPrefix, typ); p != "" {
 								out = append(out, violation{
 									Rule:    "LAYER-10",
@@ -402,6 +433,8 @@ func checkCellPublicAPIAdapterTypes(modPrefix string, pkgs []*packages.Package) 
 								}
 								obj := pkg.TypesInfo.Defs[name]
 								if obj == nil {
+									out = append(out, layer10IncompleteTypeDataViolation(pkg.PkgPath,
+										fmt.Sprintf("missing type info for exported var/const %s", name.Name)))
 									continue
 								}
 								if p := findDisallowedTypePath(modPrefix, obj.Type()); p != "" {
@@ -810,6 +843,58 @@ func TestCheckCellPublicAPIAdapterTypes_FindsViolations(t *testing.T) {
 	assert.Contains(t, strings.Join(messages, "\n"), "exported type ExportedInterface")
 	assert.Contains(t, strings.Join(messages, "\n"), "exported API WithPool")
 	assert.Contains(t, strings.Join(messages, "\n"), "exported var/const ExportedMetric")
+}
+
+func TestCheckCellPublicAPIAdapterTypes_FailsClosedOnIncompleteTypedPackage(t *testing.T) {
+	const mod = "github.com/ghbvf/gocell/"
+	rootPkg := types.NewPackage("github.com/ghbvf/gocell/cells/accesscore", "accesscore")
+	funcDecl := &ast.FuncDecl{Name: ast.NewIdent("Exported"), Type: &ast.FuncType{}}
+	file := &ast.File{
+		Name:  ast.NewIdent("accesscore"),
+		Decls: []ast.Decl{funcDecl},
+	}
+
+	loadErrorPkg := &packages.Package{
+		PkgPath: "github.com/ghbvf/gocell/cells/accesscore",
+		Syntax:  []*ast.File{file},
+		Types:   rootPkg,
+		TypesInfo: &types.Info{
+			Defs: map[*ast.Ident]types.Object{
+				funcDecl.Name: types.NewFunc(token.NoPos, rootPkg, "Exported",
+					types.NewSignatureType(nil, nil, nil, nil, nil, false)),
+			},
+		},
+		Errors: []packages.Error{{Msg: "undefined: broken"}},
+	}
+	missingObjectPkg := &packages.Package{
+		PkgPath: "github.com/ghbvf/gocell/cells/configcore",
+		Syntax:  []*ast.File{file},
+		Types:   types.NewPackage("github.com/ghbvf/gocell/cells/configcore", "configcore"),
+		TypesInfo: &types.Info{
+			Defs: map[*ast.Ident]types.Object{},
+		},
+	}
+	missingTypesInfoPkg := &packages.Package{
+		PkgPath: "github.com/ghbvf/gocell/cells/auditcore",
+		Syntax:  []*ast.File{file},
+		Types:   types.NewPackage("github.com/ghbvf/gocell/cells/auditcore", "auditcore"),
+	}
+
+	violations := checkCellPublicAPIAdapterTypes(mod, []*packages.Package{
+		loadErrorPkg,
+		missingObjectPkg,
+		missingTypesInfoPkg,
+	})
+
+	messages := make([]string, 0, len(violations))
+	for _, v := range violations {
+		messages = append(messages, v.Message)
+	}
+	got := strings.Join(messages, "\n")
+	assert.Len(t, violations, 3)
+	assert.Contains(t, got, "typed package load incomplete")
+	assert.Contains(t, got, "missing type info for exported API Exported")
+	assert.Contains(t, got, "missing TypesInfo")
 }
 
 func TestIsInternal(t *testing.T) {
