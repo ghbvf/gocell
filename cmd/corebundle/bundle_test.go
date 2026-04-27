@@ -80,24 +80,23 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")
 }
 
-// ---------------------------------------------------------------------------
-// logInitialAdminCredPath coverage
-// ---------------------------------------------------------------------------
+// TestAccessCoreModule_BootstrapProvideDoesNotAdvertiseCredentialPath verifies
+// wiring does not promise a credential file before lifecycle execution owns the
+// effective config and outcome.
+func TestAccessCoreModule_BootstrapProvideDoesNotAdvertiseCredentialPath(t *testing.T) {
+	buf, restore := captureSlogInfoLines(t)
+	t.Cleanup(restore)
 
-// TestLogInitialAdminCredPath_InvalidStateDir verifies that logInitialAdminCredPath
-// emits a warning (and does not panic) when GOCELL_STATE_DIR is set to a
-// relative path (which ResolveBootstrapCredentialPath rejects as unsafe).
-func TestLogInitialAdminCredPath_InvalidStateDir(t *testing.T) {
-	t.Setenv("GOCELL_STATE_DIR", "relative/not/absolute")
-	// Must not panic; warning is logged but not surfaced as an error.
-	require.NotPanics(t, func() { logInitialAdminCredPath() })
-}
+	shared := buildTestSharedDeps(t)
+	t.Setenv(AdminProvisionModeEnv, "bootstrap")
 
-// TestLogInitialAdminCredPath_ValidStateDir verifies that logInitialAdminCredPath
-// runs without panic when GOCELL_STATE_DIR is a valid absolute path.
-func TestLogInitialAdminCredPath_ValidStateDir(t *testing.T) {
-	t.Setenv("GOCELL_STATE_DIR", t.TempDir())
-	require.NotPanics(t, func() { logInitialAdminCredPath() })
+	_, _, _, err := AccessCoreModule{InitialAdminOpts: fastAdminBootstrapOpts()}.Provide(context.Background(), shared)
+	require.NoError(t, err)
+
+	logs := buf.String()
+	assert.Contains(t, logs, "admin provision mode resolved")
+	assert.NotContains(t, logs, "initial admin credential")
+	assert.NotContains(t, logs, "cred_path")
 }
 
 // ---------------------------------------------------------------------------

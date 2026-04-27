@@ -286,6 +286,17 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 		return err
 	}
 
+	if isStart && hookTimeout > 0 {
+		threshold := hookTimeout * 8 / 10
+		if elapsed >= threshold {
+			attrs := append(hookIdentityAttrs(h),
+				slog.Duration("elapsed", elapsed),
+				slog.Duration("timeout", hookTimeout),
+				slog.Duration("threshold", threshold))
+			lc.logger.LogAttrs(ctx, slog.LevelWarn, "hook.start_slow", attrs...)
+		}
+	}
+
 	okAttrs := append(hookIdentityAttrs(h), slog.Duration("elapsed", elapsed))
 	lc.logger.LogAttrs(ctx, slog.LevelInfo, okMsg, okAttrs...)
 	return nil
