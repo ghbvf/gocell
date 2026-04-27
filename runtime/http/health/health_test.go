@@ -1228,6 +1228,43 @@ func (s *stubDegradedCell) Health() cell.HealthStatus {
 	return cell.HealthStatus{Status: "degraded"}
 }
 
+type stubPanickingHealthCell struct {
+	*cell.BaseCell
+}
+
+func newStubPanickingHealthCell(id string) *stubPanickingHealthCell {
+	return &stubPanickingHealthCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+	}
+}
+
+func (s *stubPanickingHealthCell) Health() cell.HealthStatus {
+	panic("cell health panic")
+}
+
+func TestReadyz_ComputationPanic_UsesServiceUnavailableCode(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-health-panic", DurabilityMode: cell.DurabilityDemo})
+	c := newStubPanickingHealthCell("panic-cell")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	h := New(asm)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	require.NotPanics(t, func() {
+		h.ReadyzHandler().ServeHTTP(rec, req)
+	})
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	errObj := errorBody(t, rec)
+	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_computation_failed")
+}
+
 // TestReadyz_DegradedAggregatesFromCellHealth verifies the E2E path:
 // when a cell's Health() returns HealthStatus.Status="degraded" and no probe
 // checkers are registered, ReadyzHandler must respond HTTP 200 with body
