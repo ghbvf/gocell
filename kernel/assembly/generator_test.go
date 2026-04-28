@@ -119,7 +119,7 @@ func buildTestProject() *metadata.ProjectMeta {
 
 func TestGenerateEntrypoint_ContainsAssemblyID(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
@@ -130,7 +130,7 @@ func TestGenerateEntrypoint_ContainsAssemblyID(t *testing.T) {
 
 func TestGenerateEntrypoint_ContainsCellComments(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
@@ -142,7 +142,7 @@ func TestGenerateEntrypoint_ContainsCellComments(t *testing.T) {
 
 func TestGenerateEntrypoint_ContainsModulePath(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
@@ -153,7 +153,7 @@ func TestGenerateEntrypoint_ContainsModulePath(t *testing.T) {
 
 func TestGenerateEntrypoint_ContainsDoNotEdit(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateEntrypoint("ssobff")
 	require.NoError(t, err)
@@ -164,7 +164,7 @@ func TestGenerateEntrypoint_ContainsDoNotEdit(t *testing.T) {
 
 func TestGenerateEntrypoint_NotFoundAssembly(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	_, err := gen.GenerateEntrypoint("nonexistent")
 	require.Error(t, err)
@@ -180,7 +180,7 @@ func TestGenerateEntrypoint_NotFoundAssembly(t *testing.T) {
 
 func TestGenerateBoundary_ExportedContracts(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
@@ -196,7 +196,7 @@ func TestGenerateBoundary_ExportedContracts(t *testing.T) {
 
 func TestGenerateBoundary_NotExportedWhenAllConsumersInside(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
@@ -235,7 +235,7 @@ func TestGenerateBoundary_NotExportedWhenAllConsumersInside(t *testing.T) {
 
 func TestGenerateBoundary_ImportedContracts(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
@@ -264,7 +264,7 @@ func TestGenerateBoundary_ImportedContracts(t *testing.T) {
 
 func TestGenerateBoundary_SmokeTargets(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
@@ -283,7 +283,7 @@ func TestGenerateBoundary_SmokeTargets(t *testing.T) {
 
 func TestGenerateBoundary_FingerprintNonEmpty(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
@@ -304,7 +304,7 @@ func TestGenerateBoundary_FingerprintNonEmpty(t *testing.T) {
 
 func TestGenerateBoundary_ContainsAssemblyID(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
@@ -315,7 +315,7 @@ func TestGenerateBoundary_ContainsAssemblyID(t *testing.T) {
 
 func TestGenerateBoundary_NotFoundAssembly(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	_, err := gen.GenerateBoundary("nonexistent")
 	require.Error(t, err)
@@ -326,38 +326,6 @@ func TestGenerateBoundary_NotFoundAssembly(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// sourceDateEpochOrNow tests
-// ---------------------------------------------------------------------------
-
-// TestSourceDateEpochOrNow_SourceDateEpochSet verifies that when SOURCE_DATE_EPOCH
-// is set to a valid Unix timestamp, sourceDateEpochOrNow returns a deterministic
-// RFC3339 timestamp corresponding to that epoch.
-func TestSourceDateEpochOrNow_SourceDateEpochSet(t *testing.T) {
-	t.Setenv("SOURCE_DATE_EPOCH", "0") // Unix epoch → 1970-01-01T00:00:00Z
-	result := sourceDateEpochOrNow()
-	assert.Equal(t, "1970-01-01T00:00:00Z", result,
-		"SOURCE_DATE_EPOCH=0 must produce the Unix epoch timestamp")
-}
-
-// TestSourceDateEpochOrNow_InvalidSourceDateEpoch verifies that an invalid
-// SOURCE_DATE_EPOCH value falls back to time.Now().
-func TestSourceDateEpochOrNow_InvalidSourceDateEpoch(t *testing.T) {
-	t.Setenv("SOURCE_DATE_EPOCH", "not-a-number")
-	result := sourceDateEpochOrNow()
-	// Should be a parseable RFC3339 string (time.Now fallback).
-	assert.NotEmpty(t, result)
-	assert.Contains(t, result, "T", "fallback must be an RFC3339 timestamp")
-}
-
-// TestSourceDateEpochOrNow_Unset verifies that without SOURCE_DATE_EPOCH the
-// function returns a non-empty RFC3339 timestamp (time.Now).
-func TestSourceDateEpochOrNow_Unset(t *testing.T) {
-	t.Setenv("SOURCE_DATE_EPOCH", "")
-	result := sourceDateEpochOrNow()
-	assert.NotEmpty(t, result)
-}
-
-// ---------------------------------------------------------------------------
 // sourceFingerprint with nil assembly (edge case)
 // ---------------------------------------------------------------------------
 
@@ -365,8 +333,9 @@ func TestSourceDateEpochOrNow_Unset(t *testing.T) {
 // when the assembly ID is not found in the project.
 func TestSourceFingerprint_NilAssembly(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
-	fp := gen.sourceFingerprint("does-not-exist", nil, nil)
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+	fp, err := gen.sourceFingerprint("does-not-exist", nil, nil)
+	require.NoError(t, err)
 	assert.Empty(t, fp, "sourceFingerprint must return empty string for unknown assembly")
 }
 
@@ -379,8 +348,9 @@ func TestSourceFingerprint_MissingCellInAssembly(t *testing.T) {
 		ID:    "ghost-bundle",
 		Cells: []string{"ghost-cell"},
 	}
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
-	fp := gen.sourceFingerprint("ghost-bundle", nil, nil)
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+	fp, err := gen.sourceFingerprint("ghost-bundle", nil, nil)
+	require.NoError(t, err)
 	// Must return a non-empty fingerprint (missing cell falls back to "cell:<id>:missing").
 	assert.NotEmpty(t, fp, "sourceFingerprint must return a fingerprint even with missing cells")
 }
@@ -396,7 +366,7 @@ func TestGenerateBoundary_EmptyAssembly(t *testing.T) {
 		Cells: []string{},
 		Build: metadata.BuildMeta{},
 	}
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateBoundary("empty")
 	require.NoError(t, err)
@@ -416,7 +386,7 @@ func TestGenerateEntrypoint_EmptyAssembly(t *testing.T) {
 		Cells: []string{},
 		Build: metadata.BuildMeta{},
 	}
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateEntrypoint("empty")
 	require.NoError(t, err)
@@ -433,14 +403,16 @@ func TestGenerateEntrypoint_EmptyAssembly(t *testing.T) {
 
 func TestSourceFingerprint_Deterministic(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	cellSet := map[string]bool{"accesscore": true, "auditcore": true}
 	exported, imported, err := gen.computeBoundaryContracts(cellSet)
 	require.NoError(t, err)
 
-	fp1 := gen.sourceFingerprint("ssobff", exported, imported)
-	fp2 := gen.sourceFingerprint("ssobff", exported, imported)
+	fp1, err := gen.sourceFingerprint("ssobff", exported, imported)
+	require.NoError(t, err)
+	fp2, err := gen.sourceFingerprint("ssobff", exported, imported)
+	require.NoError(t, err)
 
 	assert.Equal(t, fp1, fp2, "fingerprint should be deterministic")
 	assert.Len(t, fp1, 64)
@@ -448,9 +420,10 @@ func TestSourceFingerprint_Deterministic(t *testing.T) {
 
 func TestSourceFingerprint_NotFoundReturnsEmpty(t *testing.T) {
 	project := buildTestProject()
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
-	fp := gen.sourceFingerprint("nonexistent", nil, nil)
+	fp, err := gen.sourceFingerprint("nonexistent", nil, nil)
+	require.NoError(t, err)
 	assert.Empty(t, fp)
 }
 
@@ -484,7 +457,7 @@ func TestGenerateBoundary_CommandAndProjectionKinds(t *testing.T) {
 	}
 
 	// Rebuild generator to pick up new contracts
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
@@ -510,7 +483,7 @@ func TestGenerateBoundary_UnknownKindReturnsError(t *testing.T) {
 		OwnerCell: "accesscore",
 		Endpoints: metadata.EndpointsMeta{Server: "accesscore"},
 	}
-	gen := NewGenerator(project, "github.com/ghbvf/gocell")
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
 
 	_, err := gen.GenerateBoundary("ssobff")
 	require.Error(t, err)

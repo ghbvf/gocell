@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"path/filepath"
 	"regexp"
 	"sort"
 	"strings"
@@ -815,12 +814,19 @@ func (v *Validator) checkFMT15Contract(c *metadata.ContractMeta) []ValidationRes
 	if c.Kind != "http" || c.SchemaRefs.Response == "" {
 		return nil
 	}
-	contractDir := filepath.Join(v.root, contractDirFromMeta(c))
-	schemaPath := filepath.Join(contractDir, c.SchemaRefs.Response)
-	if !IsWithinRoot(v.root, schemaPath) {
-		return nil
+	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, metadata.ContractSchemaRef{
+		Field: fieldSchemaRefsResponse,
+		Ref:   c.SchemaRefs.Response,
+		Scope: metadata.SchemaRefScopeContractDir,
+	})
+	if resolveErr != nil {
+		return []ValidationResult{v.newResult(
+			codeFMT15, SeverityError, IssueInvalid,
+			contractFile(c), fieldSchemaRefsResponse,
+			fmt.Sprintf("cannot resolve response schema for contract %q: %v", c.ID, resolveErr),
+		)}
 	}
-	data, err := v.readFile(schemaPath)
+	data, err := v.readFile(resolved.AbsPath)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil // REF-12 handles missing files

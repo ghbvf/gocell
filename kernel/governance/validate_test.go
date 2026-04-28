@@ -4638,8 +4638,10 @@ func TestFMT15(t *testing.T) {
 		}
 		val.validateFMT15()
 
-		// contractDirFromID("http.auth.login.v1") → "contracts/http/auth/login/v1"
-		expected := filepath.Join("/project", "contracts/http/auth/login/v1", "response.schema.json")
+		// The schema resolver canonicalizes the fake root through filepath.Abs,
+		// which preserves the current drive on Windows.
+		expected, err := filepath.Abs(filepath.Join("/project", "contracts/http/auth/login/v1", "response.schema.json"))
+		require.NoError(t, err)
 		assert.Equal(t, expected, capturedPath)
 	})
 }

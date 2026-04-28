@@ -140,7 +140,7 @@ paths:
 
 - `gocell validate` - 验证 cell.yaml/slice.yaml 元数据合规
 - `gocell scaffold {cell|slice|contract|journey}` - 生成骨架
-- `gocell generate {assembly|indexes|boundaries}` - 从元数据生成产物
+- `gocell generate {assembly|indexes}` - 从元数据生成产物
 - `gocell check contract-health` - 检查契约健康度
 - `gocell check slice-coverage --cell=<cellID>` - 检查 slice 覆盖
 - `gocell check assembly-completeness --id=<assemblyID>` - 检查 assembly 完整性

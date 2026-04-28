@@ -7,9 +7,10 @@ package archtest
 // rest of the lifecycle contract" class of bugs that WithRelayHealth
 // represented.
 //
-// Implementation: pure AST analysis via go/parser over the source tree.
-// This avoids introducing golang.org/x/tools as a dependency while matching
-// the existing archtest style (file-system walk + go list -json).
+// Implementation: golang.org/x/tools/go/packages + go/types — types.NewMethodSet
+// surfaces promoted methods from embedded fields, so a type that satisfies the
+// contract via embedding (e.g. struct embedding *PGResource) is correctly
+// recognised as implementing ManagedResource.
 //
 // Enforcement scope: runtime/, adapters/ packages only.
 // Excluded: cells/, kernel/cell/ — HealthCheckersContributor is a different
@@ -17,21 +18,20 @@ package archtest
 
 import (
 	"go/ast"
-	"go/parser"
-	"go/token"
-	"os"
+	"go/types"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// typeMethodSet collects the method names defined on exported types in a
-// directory tree (only direct method declarations, not embedded/promoted).
+// typeMethodSet collects every exported method (own + promoted) on every
+// exported named type loaded from the requested patterns.
 type typeMethodSet struct {
-	// methods maps TypeName → set of method names declared in the source.
+	// methods maps "<pkg>.<TypeName>" → set of method names.
 	methods map[string]map[string]struct{}
 }
 
@@ -39,164 +39,132 @@ func newTypeMethodSet() *typeMethodSet {
 	return &typeMethodSet{methods: make(map[string]map[string]struct{})}
 }
 
-func (s *typeMethodSet) add(typeName, methodName string) {
-	if _, ok := s.methods[typeName]; !ok {
-		s.methods[typeName] = make(map[string]struct{})
+func (s *typeMethodSet) add(qualified, methodName string) {
+	if _, ok := s.methods[qualified]; !ok {
+		s.methods[qualified] = make(map[string]struct{})
 	}
-	s.methods[typeName][methodName] = struct{}{}
+	s.methods[qualified][methodName] = struct{}{}
 }
 
-func (s *typeMethodSet) has(typeName, methodName string) bool {
-	ms, ok := s.methods[typeName]
-	if !ok {
-		return false
+func (s *typeMethodSet) has(qualified, methodName string) bool {
+	if ms, ok := s.methods[qualified]; ok {
+		_, hit := ms[methodName]
+		return hit
 	}
-	_, ok = ms[methodName]
-	return ok
+	return false
 }
 
-// collectTypeMethods walks all .go files under root (skipping *_test.go) and
-// collects (receiver-type, method-name) pairs for exported types.
-//
-// Known limitation: promoted methods from embedded fields are NOT detected.
-// For example, if TypeA embeds TypeB and TypeB has Close(), the AST walk
-// records Close() on TypeB but not on TypeA. Enforcement therefore relies on
-// direct method declarations. Types that satisfy ManagedResource solely via
-// embedding must declare a thin delegation method in their own source file to
-// be detected. This is an accepted limitation for the current pure-AST approach.
-func collectTypeMethods(t *testing.T, root string) *typeMethodSet {
+// collectMethodSets loads patterns under modRoot with full type info and
+// records every exported method (own or promoted) on every exported named type.
+// Keys are qualified by import path so types from different packages with the
+// same simple name do not collide.
+func collectMethodSets(t *testing.T, modRoot string, patterns ...string) *typeMethodSet {
 	t.Helper()
+	pkgs, errs, err := typeseval.LoadPackages(modRoot, patterns...)
+	require.NoError(t, err, "packages.Load")
+	require.Empty(t, errs, "package load errors: %v", errs)
+
 	s := newTypeMethodSet()
-	fset := token.NewFileSet()
-
-	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
-		if err != nil {
-			return err
+	for _, pkg := range pkgs {
+		if pkg.Types == nil {
+			continue
 		}
-		// Skip test files and vendor.
-		if d.IsDir() {
-			switch d.Name() {
-			case "vendor", "worktrees", "testdata", "generated":
-				return filepath.SkipDir
-			}
-			return nil
-		}
-		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
-			return nil
-		}
-
-		f, parseErr := parser.ParseFile(fset, path, nil, 0)
-		if parseErr != nil {
-			return parseErr
-		}
-
-		for _, decl := range f.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok || fn.Recv == nil || len(fn.Recv.List) == 0 {
+		scope := pkg.Types.Scope()
+		for _, name := range scope.Names() {
+			if !ast.IsExported(name) {
 				continue
 			}
-			// Extract receiver type name (handle *T and T).
-			recvType := receiverTypeName(fn.Recv.List[0].Type)
-			if recvType == "" {
+			tn, ok := scope.Lookup(name).(*types.TypeName)
+			if !ok {
 				continue
 			}
-			// Only exported types and methods.
-			if !ast.IsExported(recvType) || !fn.Name.IsExported() {
+			named, ok := tn.Type().(*types.Named)
+			if !ok {
 				continue
 			}
-			s.add(recvType, fn.Name.Name)
+			qualified := pkg.PkgPath + "." + name
+			ms := types.NewMethodSet(types.NewPointer(named))
+			for i := 0; i < ms.Len(); i++ {
+				sel := ms.At(i)
+				if sel.Obj().Exported() {
+					s.add(qualified, sel.Obj().Name())
+				}
+			}
 		}
-		return nil
-	})
-	require.NoError(t, err, "walking source tree failed")
+	}
 	return s
 }
 
-// receiverTypeName extracts the base type name from a receiver type expression.
-// Handles *T (StarExpr) and T (Ident).
-func receiverTypeName(expr ast.Expr) string {
-	switch e := expr.(type) {
-	case *ast.StarExpr:
-		if id, ok := e.X.(*ast.Ident); ok {
-			return id.Name
-		}
-	case *ast.Ident:
-		return e.Name
-	case *ast.IndexExpr:
-		// generic: T[P] — extract T.
-		if id, ok := e.X.(*ast.Ident); ok {
-			return id.Name
-		}
-	}
-	return ""
+// isManagedResource returns true when qualified type carries the full
+// ManagedResource trio (Checkers + Worker + Close).
+func isManagedResource(s *typeMethodSet, qualified string) bool {
+	return s.has(qualified, "Checkers") &&
+		s.has(qualified, "Worker") &&
+		s.has(qualified, "Close")
 }
 
-// isManagedResource returns true if the type has all three ManagedResource methods:
-// Checkers(), Worker(), and Close().
-func isManagedResource(s *typeMethodSet, typeName string) bool {
-	return s.has(typeName, "Checkers") &&
-		s.has(typeName, "Worker") &&
-		s.has(typeName, "Close")
-}
-
-// exposesHealthCheckerMethod returns true if the type has Checkers() or
-// HealthCheckers() — the two spellings that signal health-checking intent.
+// exposesHealthCheckerMethod returns true when qualified type advertises
+// health-checking via Checkers() or the legacy HealthCheckers() spelling.
 //
 // Note: "Health(ctx)" (e.g. adapters/postgres.Pool.Health) is intentionally
-// NOT included in this word list. Pool.Health is a DB connectivity probe with
-// different semantics; Pool is wrapped by adapters/postgres.PGResource which
-// implements the full ManagedResource contract. Adding "Health" to this list
-// would incorrectly flag Pool as needing Worker/Close.
-func exposesHealthCheckerMethod(s *typeMethodSet, typeName string) bool {
-	return s.has(typeName, "Checkers") || s.has(typeName, "HealthCheckers")
+// NOT included. Pool.Health is a connectivity probe with different semantics;
+// Pool is wrapped by adapters/postgres.PGResource which carries the full
+// ManagedResource contract. Adding "Health" here would incorrectly flag Pool.
+func exposesHealthCheckerMethod(s *typeMethodSet, qualified string) bool {
+	return s.has(qualified, "Checkers") || s.has(qualified, "HealthCheckers")
 }
 
 // TestHealthCheckersImpliesManagedResource (HEALTH-AGG-01) asserts that every
 // exported type in runtime/ or adapters/ that exposes Checkers() or
 // HealthCheckers() also implements the full ManagedResource contract
-// (Checkers + Worker + Close).
+// (Checkers + Worker + Close), counting promoted methods from embedded fields.
 func TestHealthCheckersImpliesManagedResource(t *testing.T) {
 	root := findModuleRoot(t)
-
-	// Enforce only runtime/ and adapters/ — exclude cells/ and kernel/cell/.
-	enforcedLayers := []string{
-		filepath.Join(root, "runtime"),
-		filepath.Join(root, "adapters"),
-	}
+	s := collectMethodSets(t, root, "./runtime/...", "./adapters/...")
 
 	var violations []string
-
-	for _, layerRoot := range enforcedLayers {
-		if _, err := os.Stat(layerRoot); os.IsNotExist(err) {
+	for qualified := range s.methods {
+		if !exposesHealthCheckerMethod(s, qualified) {
 			continue
 		}
-		s := collectTypeMethods(t, layerRoot)
-
-		for typeName := range s.methods {
-			if !exposesHealthCheckerMethod(s, typeName) {
-				continue
-			}
-			if !isManagedResource(s, typeName) {
-				// Determine which methods are missing for a useful message.
-				var missing []string
-				if !s.has(typeName, "Worker") {
-					missing = append(missing, "Worker()")
-				}
-				if !s.has(typeName, "Close") {
-					missing = append(missing, "Close()")
-				}
-				// If the type only has HealthCheckers() (old spelling) but not
-				// Checkers(), it also needs the rename.
-				if s.has(typeName, "HealthCheckers") && !s.has(typeName, "Checkers") {
-					missing = append(missing, "Checkers() [rename from HealthCheckers]")
-				}
-				rel := strings.TrimPrefix(layerRoot, root+string(filepath.Separator))
-				violations = append(violations,
-					rel+": "+typeName+" exposes health checker methods but is missing: "+
-						strings.Join(missing, ", ")+" (HEALTH-AGG-01: must implement ManagedResource)")
-			}
+		if isManagedResource(s, qualified) {
+			continue
 		}
+		var missing []string
+		if !s.has(qualified, "Worker") {
+			missing = append(missing, "Worker()")
+		}
+		if !s.has(qualified, "Close") {
+			missing = append(missing, "Close()")
+		}
+		if s.has(qualified, "HealthCheckers") && !s.has(qualified, "Checkers") {
+			missing = append(missing, "Checkers() [rename from HealthCheckers]")
+		}
+		violations = append(violations,
+			qualified+" exposes health checker methods but is missing: "+
+				strings.Join(missing, ", ")+" (HEALTH-AGG-01: must implement ManagedResource)")
 	}
 
-	assert.Empty(t, violations, "HEALTH-AGG-01 violation: types exposing health checker methods must implement kernellifecycle.ManagedResource")
+	assert.Empty(t, violations,
+		"HEALTH-AGG-01 violation: types exposing health checker methods must implement kernellifecycle.ManagedResource")
+}
+
+// TestHealthAggregation_FixtureRegression exercises the fixture set under
+// testdata/health_agg_fixtures/ to prove that promoted methods are detected
+// (promoted_ok.App must NOT be flagged) and that bare Checkers() declarations
+// are still flagged (checkers_only.Bad must be flagged).
+func TestHealthAggregation_FixtureRegression(t *testing.T) {
+	fixturesRoot := filepath.Join(findArchTestDir(t), "testdata", "health_agg_fixtures")
+	s := collectMethodSets(t, fixturesRoot, "./promoted_ok", "./checkers_only", "./base")
+
+	const promotedOkApp = "healthaggfixtures/promoted_ok.App"
+	require.True(t, exposesHealthCheckerMethod(s, promotedOkApp),
+		"App should expose Checkers() via promoted method from embedded *PGResource")
+	assert.True(t, isManagedResource(s, promotedOkApp),
+		"App should be ManagedResource via promoted Worker/Close (proves go/types upgrade)")
+
+	const checkersOnlyBad = "healthaggfixtures/checkers_only.Bad"
+	require.True(t, exposesHealthCheckerMethod(s, checkersOnlyBad))
+	assert.False(t, isManagedResource(s, checkersOnlyBad),
+		"Bad declares only Checkers() — must remain flagged as missing Worker/Close")
 }

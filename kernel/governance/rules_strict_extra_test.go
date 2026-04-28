@@ -939,6 +939,33 @@ func fmt25Project(contractID, contractDir string, queryParams, pathParams map[st
 	}
 }
 
+func TestFMT25_RequestSchemaPathEscapeFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "contracts/http/test"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "contracts/http/test/outside.schema.json"), []byte(`{"type":"object","additionalProperties":false}`), 0o644))
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	pm.Contracts["http.test.v1"].SchemaRefs.Request = "../outside.schema.json"
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "schemaRefs.request", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "failed to resolve")
+}
+
+func TestFMT25_RequestSchemaMissingFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1)
+	assert.Equal(t, IssueRefNotFound, matches[0].IssueType)
+	assert.Equal(t, "schemaRefs.request", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "missing file")
+}
+
 // TestFMT25_RequestStringMissingMinLength verifies a violation fires when a
 // string field in request.schema.json lacks minLength.
 func TestFMT25_RequestStringMissingMinLength(t *testing.T) {
@@ -1525,4 +1552,151 @@ func TestFMT25_NonHTTPContractIgnored(t *testing.T) {
 	results := v.Validate()
 	matches := findByCode(results, "FMT-25")
 	assert.Empty(t, matches, "non-HTTP contract must not be scanned by FMT-25")
+}
+
+// fmt20Fixture writes a single contract.yaml + response.schema.json pair under
+// dir/contracts/http/<name>/v1/ and returns a ProjectMeta whose contract
+// references it. The schema content is the literal JSON passed in.
+func fmt20Fixture(t *testing.T, dir, name, schema string) *metadata.ProjectMeta {
+	t.Helper()
+	contractDir := filepath.Join(dir, "contracts", "http", name, "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(contractDir, "response.schema.json"), []byte(schema), 0o644))
+	id := "http." + name + ".v1"
+	return &metadata.ProjectMeta{
+		Cells:  map[string]*metadata.CellMeta{},
+		Slices: map[string]*metadata.SliceMeta{},
+		Contracts: map[string]*metadata.ContractMeta{
+			id: {
+				ID:         id,
+				Kind:       "http",
+				OwnerCell:  "testcell",
+				Lifecycle:  "active",
+				SchemaRefs: metadata.SchemaRefsMeta{Response: "response.schema.json"},
+				Dir:        "contracts/http/" + name + "/v1",
+				File:       "contracts/http/" + name + "/v1/contract.yaml",
+			},
+		},
+		Journeys:   map[string]*metadata.JourneyMeta{},
+		Assemblies: map[string]*metadata.AssemblyMeta{},
+	}
+}
+
+// TestFMT20_AllOfMissingAdditionalProperties locks down regression coverage
+// for the allOf composition path: an inner type=object inside allOf must be
+// flagged when it omits additionalProperties.
+func TestFMT20_AllOfMissingAdditionalProperties(t *testing.T) {
+	dir := t.TempDir()
+	schema := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"data": {
+				"allOf": [
+					{
+						"type": "object",
+						"properties": {"id": {"type": "string"}}
+					}
+				]
+			}
+		}
+	}`
+	v := NewValidator(fmt20Fixture(t, dir, "allof", schema), dir)
+	matches := findByCode(v.Validate(), "FMT-20")
+	require.NotEmpty(t, matches, "allOf inner object missing additionalProperties must be flagged")
+	var hit bool
+	for _, m := range matches {
+		if strings.Contains(m.Field, "allOf[0]") {
+			hit = true
+			break
+		}
+	}
+	assert.True(t, hit, "violation field must reference $.data.allOf[0]; got fields: %v", fieldList(matches))
+}
+
+// TestFMT20_IfThenElseConditional locks down the conditional branch walker:
+// if/then/else nodes carrying type=object are recursively validated.
+func TestFMT20_IfThenElseConditional(t *testing.T) {
+	dir := t.TempDir()
+	schema := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"payload": {
+				"if": {"properties": {"kind": {"const": "a"}}},
+				"then": {
+					"type": "object",
+					"properties": {"value": {"type": "string"}}
+				},
+				"else": {
+					"type": "object",
+					"properties": {"reason": {"type": "string"}}
+				}
+			}
+		}
+	}`
+	v := NewValidator(fmt20Fixture(t, dir, "ifthenelse", schema), dir)
+	matches := findByCode(v.Validate(), "FMT-20")
+	require.GreaterOrEqual(t, len(matches), 2,
+		"both then and else branches must each yield a FMT-20 violation; got %d: %v", len(matches), fieldList(matches))
+	var thenHit, elseHit bool
+	for _, m := range matches {
+		switch {
+		case strings.Contains(m.Field, ".then"):
+			thenHit = true
+		case strings.Contains(m.Field, ".else"):
+			elseHit = true
+		}
+	}
+	assert.True(t, thenHit, "expected violation under .then; got %v", fieldList(matches))
+	assert.True(t, elseHit, "expected violation under .else; got %v", fieldList(matches))
+}
+
+// TestFMT20_LocalRefThroughComposition locks down $ref + oneOf composition:
+// the walker must follow $ref into a $defs target and recurse through the
+// oneOf branch to reach a nested object.
+func TestFMT20_LocalRefThroughComposition(t *testing.T) {
+	dir := t.TempDir()
+	schema := `{
+		"type": "object",
+		"additionalProperties": false,
+		"properties": {
+			"data": {"$ref": "#/$defs/Wrapper"}
+		},
+		"$defs": {
+			"Wrapper": {
+				"type": "object",
+				"additionalProperties": false,
+				"properties": {
+					"choice": {
+						"oneOf": [
+							{
+								"type": "object",
+								"properties": {"a": {"type": "string"}}
+							}
+						]
+					}
+				}
+			}
+		}
+	}`
+	v := NewValidator(fmt20Fixture(t, dir, "refoneof", schema), dir)
+	matches := findByCode(v.Validate(), "FMT-20")
+	require.NotEmpty(t, matches, "oneOf inside $ref target must surface a violation; got %v", fieldList(matches))
+	var hit bool
+	for _, m := range matches {
+		if strings.Contains(m.Field, "oneOf[0]") {
+			hit = true
+			break
+		}
+	}
+	assert.True(t, hit, "violation field must reference oneOf[0]; got %v", fieldList(matches))
+}
+
+func fieldList(results []ValidationResult) []string {
+	out := make([]string, 0, len(results))
+	for _, r := range results {
+		out = append(out, r.Field)
+	}
+	return out
 }

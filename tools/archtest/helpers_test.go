@@ -1,11 +1,30 @@
 package archtest
 
 import (
+	"go/ast"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 )
+
+// receiverTypeName extracts the base type name from a receiver type expression.
+// Handles *T (StarExpr), T (Ident), and T[P] (IndexExpr generic).
+func receiverTypeName(expr ast.Expr) string {
+	switch e := expr.(type) {
+	case *ast.StarExpr:
+		if id, ok := e.X.(*ast.Ident); ok {
+			return id.Name
+		}
+	case *ast.Ident:
+		return e.Name
+	case *ast.IndexExpr:
+		if id, ok := e.X.(*ast.Ident); ok {
+			return id.Name
+		}
+	}
+	return ""
+}
 
 // findCellProductionGoFiles walks cells/** for production .go files
 // (excluding _test.go + vendor + .git + testdata + generated). Used by both

@@ -25,6 +25,17 @@ func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
 		"golangci-lint must be pinned to patch version, not only major.minor")
 }
 
+func TestGeneratedBoundaryGateChecksUntrackedFiles(t *testing.T) {
+	root := findModuleRoot(t)
+	body, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "_build-lint.yml"))
+	require.NoError(t, err)
+	text := string(body)
+
+	assert.Contains(t, text, "go run ./cmd/gocell generate assembly --id \"$(basename \"$d\")\" --boundary-only")
+	assert.Contains(t, text, "git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml")
+	assert.Contains(t, text, "Untracked boundary.yaml files found")
+}
+
 func TestDependabotCoversCIAndGolangCILint(t *testing.T) {
 	root := findModuleRoot(t)
 	body, err := os.ReadFile(filepath.Join(root, ".github", "dependabot.yml"))

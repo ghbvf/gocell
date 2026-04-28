@@ -40,61 +40,63 @@ func (v *Validator) validateFMTResponseStrict01() []ValidationResult {
 		if c.Kind != "http" {
 			continue
 		}
-		for _, schemaRef := range collectHTTPSchemaPaths(c) {
-			absPath := filepath.Join(v.root, schemaRef)
-			missing, err := scanSchemaForStrictMissing(absPath)
-			if err != nil {
-				if os.IsNotExist(err) {
-					// Missing schema file is reported by FMT-09 / REF rules; skip here.
-					continue
-				}
-				// Parse/IO errors are definitive FMT-20 violations (fail-closed).
-				results = append(results, v.newResult(
-					ruleFMT20, SeverityError, IssueInvalid,
-					schemaRef, "$",
-					fmt.Sprintf("contract %q schema %q failed to parse: %v", c.ID, schemaRef, err),
-				))
-				continue
-			}
-			for _, loc := range missing {
-				results = append(results, v.newResult(
-					ruleFMT20, SeverityError, IssueRequired,
-					schemaRef, loc,
-					fmt.Sprintf("contract %q schema must declare additionalProperties explicitly (true=open, false=strict) at %s", c.ID, loc),
-				))
-			}
-		}
+		results = append(results, v.validateFMTResponseStrictContract(c)...)
 	}
 	return results
 }
 
-// collectHTTPSchemaPaths returns the relative schema paths for an HTTP contract,
-// resolved relative to the project root. It includes the top-level request and
-// response refs from schemaRefs, plus the per-status schemaRef from
-// endpoints.http.responses[*] so FMT-20 also covers error response schemas.
-func collectHTTPSchemaPaths(c *metadata.ContractMeta) []string {
-	var paths []string
-	if c.SchemaRefs.Request != "" {
-		paths = append(paths, filepath.Join(c.Dir, c.SchemaRefs.Request))
-	}
-	if c.SchemaRefs.Response != "" {
-		paths = append(paths, filepath.Join(c.Dir, c.SchemaRefs.Response))
-	}
-	if c.Endpoints.HTTP != nil && len(c.Endpoints.HTTP.Responses) > 0 {
-		// Sort by int key for deterministic violation ordering across runs.
-		keys := make([]int, 0, len(c.Endpoints.HTTP.Responses))
-		for k := range c.Endpoints.HTTP.Responses {
-			keys = append(keys, k)
+func (v *Validator) validateFMTResponseStrictContract(c *metadata.ContractMeta) []ValidationResult {
+	var results []ValidationResult
+	for _, ref := range metadata.ContractSchemaRefs(c) {
+		if !strictSchemaRefField(ref.Field) || ref.Ref == "" {
+			continue
 		}
-		sort.Ints(keys)
-		for _, k := range keys {
-			r := c.Endpoints.HTTP.Responses[k]
-			if r.SchemaRef != "" {
-				paths = append(paths, filepath.Join(c.Dir, r.SchemaRef))
-			}
-		}
+		results = append(results, v.validateFMTResponseStrictRef(c, ref)...)
 	}
-	return paths
+	return results
+}
+
+func (v *Validator) validateFMTResponseStrictRef(c *metadata.ContractMeta, ref metadata.ContractSchemaRef) []ValidationResult {
+	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, ref)
+	if resolveErr != nil {
+		return []ValidationResult{v.newResult(
+			ruleFMT20, SeverityError, IssueInvalid,
+			contractFile(c), ref.Field,
+			fmt.Sprintf("contract %q schema %q failed to resolve: %v", c.ID, ref.Ref, resolveErr),
+		)}
+	}
+	missing, err := scanSchemaForStrictMissing(resolved.AbsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// Missing schema file is reported by FMT-09 / REF rules; skip here.
+			return nil
+		}
+		// Parse/IO errors are definitive FMT-20 violations (fail-closed).
+		return []ValidationResult{v.newResult(
+			ruleFMT20, SeverityError, IssueInvalid,
+			resolved.ProjectRel, "$",
+			fmt.Sprintf("contract %q schema %q failed to parse: %v", c.ID, ref.Ref, err),
+		)}
+	}
+	return v.fmt20MissingSchemaResults(c, resolved.ProjectRel, missing)
+}
+
+func (v *Validator) fmt20MissingSchemaResults(c *metadata.ContractMeta, rel string, missing []string) []ValidationResult {
+	results := make([]ValidationResult, 0, len(missing))
+	for _, loc := range missing {
+		results = append(results, v.newResult(
+			ruleFMT20, SeverityError, IssueRequired,
+			rel, loc,
+			fmt.Sprintf("contract %q schema must declare additionalProperties explicitly (true=open, false=strict) at %s", c.ID, loc),
+		))
+	}
+	return results
+}
+
+func strictSchemaRefField(field string) bool {
+	return field == "schemaRefs.request" ||
+		field == "schemaRefs.response" ||
+		strings.HasPrefix(field, "endpoints.http.responses[")
 }
 
 // scanSchemaForStrictMissing reads a JSON schema file and recursively walks it.
@@ -456,10 +458,30 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 	if c.SchemaRefs.Request == "" {
 		return nil
 	}
-	schemaFile := filepath.Join(c.Dir, c.SchemaRefs.Request)
-	absPath := filepath.Join(v.root, schemaFile)
-	missing, err := scanSchemaForInputConstraints(absPath)
-	if err != nil && !os.IsNotExist(err) {
+	ref := metadata.ContractSchemaRef{
+		Field: "schemaRefs.request",
+		Ref:   c.SchemaRefs.Request,
+		Scope: metadata.SchemaRefScopeContractDir,
+	}
+	resolved, resolveErr := metadata.ResolveContractSchemaRef(v.root, c, ref)
+	if resolveErr != nil {
+		return []ValidationResult{v.newResult(
+			ruleFMT25, SeverityError, IssueInvalid,
+			contractFile(c), ref.Field,
+			fmt.Sprintf("contract %q request schema %q failed to resolve: %v",
+				c.ID, c.SchemaRefs.Request, resolveErr),
+		)}
+	}
+	missing, err := scanSchemaForInputConstraints(resolved.AbsPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []ValidationResult{v.newResult(
+				ruleFMT25, SeverityError, IssueRefNotFound,
+				contractFile(c), ref.Field,
+				fmt.Sprintf("contract %q request schema points to missing file %q",
+					c.ID, c.SchemaRefs.Request),
+			)}
+		}
 		field := "$"
 		var walkErr *schemaWalkError
 		if errors.As(err, &walkErr) {
@@ -467,7 +489,7 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 		}
 		return []ValidationResult{v.newResult(
 			ruleFMT25, SeverityError, IssueInvalid,
-			schemaFile, field,
+			resolved.ProjectRel, field,
 			fmt.Sprintf("contract %q request schema %q failed to parse: %v",
 				c.ID, c.SchemaRefs.Request, err),
 		)}
@@ -485,7 +507,7 @@ func (v *Validator) validateRequestSchemaInputConstraints(c *metadata.ContractMe
 		}
 		results = append(results, v.newResult(
 			ruleFMT25, SeverityError, issueType,
-			schemaFile, viol.location,
+			resolved.ProjectRel, viol.location,
 			msg,
 		))
 	}

@@ -110,10 +110,10 @@ type ContractMeta struct {
 	Replayable        *bool          `yaml:"replayable,omitempty"`
 	IdempotencyKey    string         `yaml:"idempotencyKey,omitempty"`
 	DeliverySemantics string         `yaml:"deliverySemantics,omitempty"`
-	Description       string         `yaml:"description,omitempty"`
-	DeprecatedAt      string         `yaml:"deprecatedAt,omitempty"`
-	Dir               string         `yaml:"-"` // parsed contract version directory relative to project root
-	File              string         `yaml:"-"` // parsed contract.yaml path relative to project root
+	Description       string         `yaml:"description,omitempty"  fingerprint:"-"` // documentation only — excluded from structural fingerprint
+	DeprecatedAt      string         `yaml:"deprecatedAt,omitempty" fingerprint:"-"` // documentation only — excluded from structural fingerprint
+	Dir               string         `yaml:"-"                      fingerprint:"-"` // parsed contract version directory relative to project root
+	File              string         `yaml:"-"                      fingerprint:"-"` // parsed contract.yaml path relative to project root
 }
 
 // ProviderEndpoint returns the provider cell/actor ID for this contract

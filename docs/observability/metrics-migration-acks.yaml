@@ -1,0 +1,22 @@
+# Machine-readable acknowledgements for OBS-01.
+#
+# Add an entry only when a metric label value intentionally depends on
+# errcode.Category(...) or errcode.IsInfraError(...), and the dashboard / alert
+# migration has been reviewed. The failing archtest prints the fingerprint,
+# metric sink, and label; paste them here exactly. All fields below are
+# required; unknown fields fail the gate. dashboardOrAlertRefs must be http(s)
+# URLs or existing repo-relative paths.
+#
+# acknowledgements:
+#   - rule: OBS-01
+#     fingerprint: "<printed by tools/archtest>"
+#     metric: "gocell_example_total"
+#     label: "reason"
+#     oldSemantics: "previous bucket meaning"
+#     newSemantics: "new bucket meaning"
+#     dashboardOrAlertRefs:
+#       - "docs/ops/example-dashboard.md"
+#     owner: "platform-observability"
+#     reviewedAt: "2026-04-28"
+#     rationale: "dashboard and alert migration reviewed with service owner"
+acknowledgements: []
