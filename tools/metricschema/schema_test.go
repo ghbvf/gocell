@@ -242,8 +242,10 @@ var _ = registerCounterVec(prom.CounterOpts{Name: "helper_vec_total"}, buildLabe
 }
 
 func TestBuild_EmptyKnownWrapperBucketsUseDefaults(t *testing.T) {
-	cfgExpr, err := parser.ParseExpr(`metrics.ProviderCollectorConfig{DurationBuckets: []float64{}}`)
-	require.NoError(t, err)
+	cfgExprs := []string{
+		`metrics.ProviderCollectorConfig{DurationBuckets: []float64{}}`,
+		`metrics.ProviderCollectorConfig{DurationBuckets: nil}`,
+	}
 	defaultExpr, err := parser.ParseExpr(`[]float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}`)
 	require.NoError(t, err)
 	pkg := types.NewPackage(runtimeMetricsPkg, "metrics")
@@ -253,9 +255,13 @@ func TestBuild_EmptyKnownWrapperBucketsUseDefaults(t *testing.T) {
 		inits: map[types.Object]ast.Expr{defaultObj: defaultExpr},
 	}
 
-	buckets, err := sp.configBuckets(cfgExpr.(*ast.CompositeLit), "DurationBuckets", runtimeMetricsPkg, "DefaultDurationBuckets", "fixture.go")
-	require.NoError(t, err)
-	assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, buckets)
+	for _, cfg := range cfgExprs {
+		cfgExpr, err := parser.ParseExpr(cfg)
+		require.NoError(t, err)
+		buckets, err := sp.configBuckets(cfgExpr.(*ast.CompositeLit), "DurationBuckets", runtimeMetricsPkg, "DefaultDurationBuckets", "fixture.go")
+		require.NoError(t, err)
+		assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, buckets)
+	}
 }
 
 func TestCheckOBS01DetectsDirectLocalAndHelperParamClassifiers(t *testing.T) {
@@ -372,11 +378,16 @@ func useMulti(err error) {
 	_, reason := multi(err)
 	counter.With(metrics.Labels{"reason": reason}).Inc()
 }
+
+func useVarMulti(err error) {
+	var _, reason = multi(err)
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
 `)
 
 	diagnostics, err := CheckOBS01(root, "./reachable")
 	require.NoError(t, err)
-	require.Len(t, diagnostics, 2)
+	require.Len(t, diagnostics, 3)
 }
 
 func TestCheckOBS01DoesNotReportClearedTaintOrCategoryConstants(t *testing.T) {

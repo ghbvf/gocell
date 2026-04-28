@@ -660,6 +660,9 @@ func (sp *scanPackage) configBuckets(
 ) ([]string, error) {
 	if lit != nil {
 		if value, ok := compositeField(lit, fieldName); ok {
+			if isNilExpr(value) {
+				return sp.defaultNumberSlice(defaultPkg, defaultName, rel)
+			}
 			buckets, err := sp.numberSlice(value, rel)
 			if err != nil {
 				return nil, err
@@ -683,6 +686,11 @@ func compositeField(lit *ast.CompositeLit, fieldName string) (ast.Expr, bool) {
 		}
 	}
 	return nil, false
+}
+
+func isNilExpr(expr ast.Expr) bool {
+	id, ok := expr.(*ast.Ident)
+	return ok && id.Name == "nil"
 }
 
 func (sp *scanPackage) collectPrometheusOptSinks() map[*types.Func][]prometheusOptSink {
@@ -2061,14 +2069,12 @@ func markOBS01ValueSpecTaint(
 	returnTaints map[*types.Func]bool,
 ) {
 	for i, name := range spec.Names {
-		if i >= len(spec.Values) {
-			continue
-		}
 		obj := info.Defs[name]
 		if obj == nil {
 			continue
 		}
-		if exprDependsOnErrcodeClassifier(info, spec.Values[i], tainted, returnTaints) {
+		value := assignmentRHSForLHS(spec.Values, i)
+		if value != nil && exprDependsOnErrcodeClassifier(info, value, tainted, returnTaints) {
 			tainted[obj] = true
 		} else {
 			delete(tainted, obj)
