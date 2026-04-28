@@ -106,7 +106,13 @@ func setupInternalHandler() http.Handler {
 // request. The single helper covers all three negative tests — primary
 // list/get and internal get — by accepting an optional pre-built principal,
 // keeping the assertion shape identical across listeners.
-func runAuthzCases(t *testing.T, h http.Handler, method, target string, cases []authzCase) {
+//
+// In addition to status + error.code, the recorded body is validated
+// against the contract's declared 4xx schemaRef so that drift in the
+// shared error envelope (message / details / request_id presence) or in
+// contract.yaml's responses[<status>] declaration is caught here, not
+// only in upstream contract conformance tooling.
+func runAuthzCases(t *testing.T, h http.Handler, c *contracttest.Contract, method, target string, cases []authzCase) {
 	t.Helper()
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,13 +123,15 @@ func runAuthzCases(t *testing.T, h http.Handler, method, target string, cases []
 			}
 			h.ServeHTTP(rec, req)
 			assert.Equal(t, tc.wantStatus, rec.Code)
+			body := rec.Body.Bytes()
 			var resp struct {
 				Error struct {
 					Code string `json:"code"`
 				} `json:"error"`
 			}
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			require.NoError(t, json.Unmarshal(body, &resp))
 			assert.Equal(t, tc.wantErrCode, resp.Error.Code)
+			c.ValidateErrorResponse(t, tc.wantStatus, body)
 		})
 	}
 }
@@ -157,8 +165,10 @@ func servicePrincipal(subject string, roles []string) *auth.Principal {
 // without the admin role are rejected with 403 ERR_AUTH_FORBIDDEN. The
 // happy-path response shape is locked by TestHttpConfigGetV1Serve.
 func TestHttpConfigGetV1_AuthzNegative(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.get.v1")
 	h, _ := setupHandler()
-	runAuthzCases(t, h, http.MethodGet, configBasePath+"/some-key", []authzCase{
+	runAuthzCases(t, h, c, http.MethodGet, configBasePath+"/some-key", []authzCase{
 		{"no_auth", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
 		{"non_admin", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
@@ -169,21 +179,38 @@ func TestHttpConfigGetV1_AuthzNegative(t *testing.T) {
 // single-entry GET semantics. The base path's trailing slash matches the
 // production registration in cell_routes.go (mux.Route("/config", ...)).
 func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.list.v1")
 	h, _ := setupHandler()
-	runAuthzCases(t, h, http.MethodGet, configBasePath+"/", []authzCase{
+	runAuthzCases(t, h, c, http.MethodGet, configBasePath+"/", []authzCase{
 		{"no_auth", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
 		{"non_admin", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
 }
 
-// TestHttpConfigInternalGetV1_AuthzNegative locks the auth-guard contract
-// for the internal-listener GET /internal/v1/config/{key}: a missing
-// principal produces 401 (defence-in-depth alongside the listener's
-// service-token chain), and a service principal lacking RoleInternalAdmin
-// produces 403. The service-principal pattern matches runtime/auth/authz_test.go.
-func TestHttpConfigInternalGetV1_AuthzNegative(t *testing.T) {
+// TestHttpConfigInternalGetV1_PolicyDefenceInDepth locks the route-level
+// Policy guard on /internal/v1/config/{key} as a defence-in-depth layer
+// behind the listener's service-token authn chain, NOT the listener-level
+// "missing or invalid service token" path declared by the contract — that
+// path involves token parsing, nonce replay, and PrincipalService
+// injection wired by composition root (cmd/corebundle.internalGuardFromEnv +
+// runtime/auth.NewServiceTokenAuthenticator) and is exercised end-to-end
+// in integration tests, not here. This test asserts:
+//   - missing Principal → 401 (the route-policy short-circuit when the
+//     listener auth chain failed to inject a Principal — guards against a
+//     wiring regression that lets an unauth request reach the route)
+//   - PrincipalService without RoleInternalAdmin → 403 (guards against a
+//     downgrade of the route Policy to a weaker guard like AnyRole(any))
+//
+// The package-level TestMux (kernel/cell/celltest/mux.go) is intentionally
+// scoped to route-policy semantics, so a real bundle.Run harness is the
+// right fit for token-chain coverage; this slice-local test does not
+// replace it.
+func TestHttpConfigInternalGetV1_PolicyDefenceInDepth(t *testing.T) {
+	root := contracttest.ContractsRoot()
+	c := contracttest.LoadByID(t, root, "http.config.internal.get.v1")
 	h := setupInternalHandler()
-	runAuthzCases(t, h, http.MethodGet, "/internal/v1/config/some-key", []authzCase{
+	runAuthzCases(t, h, c, http.MethodGet, "/internal/v1/config/some-key", []authzCase{
 		{"no_principal", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
 		{"service_principal_without_role", servicePrincipal("svc-x", nil), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
