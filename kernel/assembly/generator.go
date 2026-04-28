@@ -387,10 +387,7 @@ func assemblyRunHelperName(assemblyID string) (string, error) {
 			}
 			suffix.WriteRune(r)
 			upperNext = false
-		case r >= 'A' && r <= 'Z':
-			suffix.WriteRune(r)
-			upperNext = false
-		case r >= '0' && r <= '9':
+		case r >= 'A' && r <= 'Z' || r >= '0' && r <= '9':
 			suffix.WriteRune(r)
 			upperNext = false
 		default:
