@@ -176,6 +176,41 @@ func TestGenerateEntrypoint_NotFoundAssembly(t *testing.T) {
 	assert.Equal(t, ecErr.ErrAssemblyNotFound, ec.Code)
 }
 
+func TestGenerateEntrypoint_InvalidHelperNameReturnsMetadataError(t *testing.T) {
+	project := buildTestProject()
+	project.Assemblies["---"] = &metadata.AssemblyMeta{ID: "---"}
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	_, err := gen.GenerateEntrypoint("---")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "generated run helper")
+
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+}
+
+func TestAssemblyRunHelperName_NormalizesSeparatorsUppercaseAndDigits(t *testing.T) {
+	got, err := assemblyRunHelperName("sso-bff_2API")
+	require.NoError(t, err)
+	assert.Equal(t, "runSsoBff2API", got)
+
+	_, err = assemblyRunHelperName("---")
+	require.Error(t, err)
+}
+
+func TestExecuteTemplate_MissingTemplateReturnsMetadataError(t *testing.T) {
+	project := buildTestProject()
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	_, err := gen.executeTemplate("does-not-exist.tpl", nil)
+	require.Error(t, err)
+
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrMetadataInvalid, ec.Code)
+}
+
 // ---------------------------------------------------------------------------
 // GenerateBoundary tests
 // ---------------------------------------------------------------------------

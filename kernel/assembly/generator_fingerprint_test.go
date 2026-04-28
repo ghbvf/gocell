@@ -440,6 +440,53 @@ func (failingHashWriter) Write([]byte) (int, error) {
 	return 0, errors.New("hash write failed")
 }
 
+func TestHashBoundaryContractsIncludesNilContractMarker(t *testing.T) {
+	p := fingerprintProject()
+	gen := NewGenerator(p, "github.com/ghbvf/gocell", "")
+
+	var buf bytes.Buffer
+	require.NoError(t, gen.hashBoundaryContracts(&buf, []string{"missing.contract.v1"}, nil))
+	assert.Equal(t, "contract:missing.contract.v1\x00nil\n", buf.String())
+}
+
+func TestWriteSchemaFileContents_NilContractNoop(t *testing.T) {
+	var buf bytes.Buffer
+	require.NoError(t, writeSchemaFileContents(&buf, t.TempDir(), nil))
+	assert.Empty(t, buf.String())
+}
+
+func TestWriteSchemaFileContents_PropagatesContentWriteError(t *testing.T) {
+	root := t.TempDir()
+	contractDir := filepath.Join(root, "contracts", "http", "auth", "login", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(contractDir, "request.schema.json"), []byte(`{"version":1}`), 0o644))
+
+	c := &metadata.ContractMeta{
+		ID:   "http.auth.login.v1",
+		Dir:  filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1")),
+		Kind: "http",
+		SchemaRefs: contracts.SchemaRefs{
+			Request: "request.schema.json",
+		},
+	}
+	err := writeSchemaFileContents(&failOnWriteN{n: 2}, root, c)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hash write failed")
+}
+
+type failOnWriteN struct {
+	n     int
+	calls int
+}
+
+func (w *failOnWriteN) Write(p []byte) (int, error) {
+	w.calls++
+	if w.calls == w.n {
+		return 0, errors.New("hash write failed")
+	}
+	return len(p), nil
+}
+
 // ---------------------------------------------------------------------------
 // canonicalEncode stability tests
 // ---------------------------------------------------------------------------
