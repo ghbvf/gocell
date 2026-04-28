@@ -490,25 +490,11 @@ func TestSourceFingerprint_AnyFieldChange(t *testing.T) {
 
 // mutateContractField sets a single exported field of *c to a non-zero / changed
 // value so that canonicalEncode produces a different byte sequence.
-func mutateContractField(c *metadata.ContractMeta, f reflect.StructField) { //nolint:cyclop
+func mutateContractField(c *metadata.ContractMeta, f reflect.StructField) {
 	v := reflect.ValueOf(c).Elem().Field(f.Index[0])
 	switch v.Kind() {
 	case reflect.String:
-		// Kind must remain a valid contract kind so the registry can resolve the
-		// provider/consumer; flip between valid kinds instead of appending a suffix.
-		if f.Name == "Kind" {
-			if v.String() == "http" {
-				v.SetString("event")
-			} else {
-				v.SetString("http")
-			}
-			return
-		}
-		if v.String() == "" {
-			v.SetString("mutated")
-		} else {
-			v.SetString(v.String() + "-mutated")
-		}
+		mutateContractStringField(v, f.Name)
 	case reflect.Bool:
 		v.SetBool(!v.Bool())
 	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
@@ -516,33 +502,63 @@ func mutateContractField(c *metadata.ContractMeta, f reflect.StructField) { //no
 	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 		v.SetUint(v.Uint() + 1)
 	case reflect.Slice:
-		// Append a string element or replace with a non-empty slice.
-		if v.Type().Elem().Kind() == reflect.String {
-			v.Set(reflect.Append(v, reflect.ValueOf("mutated")))
-		}
+		mutateContractSliceField(v)
 	case reflect.Ptr:
-		// For *bool: flip; for other pointers: replace with non-nil.
-		if v.Type() == reflect.TypeOf((*bool)(nil)) {
-			b := true
-			if !v.IsNil() {
-				prev := v.Elem().Bool()
-				b = !prev
-			}
-			v.Set(reflect.ValueOf(&b))
-		}
+		mutateContractPointerField(v)
 	case reflect.Struct:
-		// For EndpointsMeta: append a subscriber to trigger a structural change.
-		if f.Name == "Endpoints" {
-			ep := v.Interface().(metadata.EndpointsMeta)
-			ep.Subscribers = append(ep.Subscribers, "mutated-cell")
-			v.Set(reflect.ValueOf(ep))
-		}
-		// For SchemaRefsMeta: set Request to a new path.
-		if f.Name == "SchemaRefs" {
-			sr := v.Interface().(contracts.SchemaRefs)
-			sr.Request = "mutated.schema.json"
-			v.Set(reflect.ValueOf(sr))
-		}
+		mutateContractStructField(v, f.Name)
+	}
+}
+
+func mutateContractStringField(v reflect.Value, fieldName string) {
+	// Kind must remain a valid contract kind so the registry can resolve the
+	// provider/consumer; flip between valid kinds instead of appending a suffix.
+	if fieldName == "Kind" {
+		mutateContractKind(v)
+		return
+	}
+	if v.String() == "" {
+		v.SetString("mutated")
+		return
+	}
+	v.SetString(v.String() + "-mutated")
+}
+
+func mutateContractKind(v reflect.Value) {
+	if v.String() == "http" {
+		v.SetString("event")
+		return
+	}
+	v.SetString("http")
+}
+
+func mutateContractSliceField(v reflect.Value) {
+	if v.Type().Elem().Kind() == reflect.String {
+		v.Set(reflect.Append(v, reflect.ValueOf("mutated")))
+	}
+}
+
+func mutateContractPointerField(v reflect.Value) {
+	if v.Type() != reflect.TypeOf((*bool)(nil)) {
+		return
+	}
+	b := true
+	if !v.IsNil() {
+		b = !v.Elem().Bool()
+	}
+	v.Set(reflect.ValueOf(&b))
+}
+
+func mutateContractStructField(v reflect.Value, fieldName string) {
+	switch fieldName {
+	case "Endpoints":
+		ep := v.Interface().(metadata.EndpointsMeta)
+		ep.Subscribers = append(ep.Subscribers, "mutated-cell")
+		v.Set(reflect.ValueOf(ep))
+	case "SchemaRefs":
+		sr := v.Interface().(contracts.SchemaRefs)
+		sr.Request = "mutated.schema.json"
+		v.Set(reflect.ValueOf(sr))
 	}
 }
 
