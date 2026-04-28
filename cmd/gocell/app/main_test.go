@@ -15,6 +15,7 @@ func TestPrintUsage(t *testing.T) {
 		"generate    Generate assembly code and derived files",
 		"assembly --id=<assemblyID>",
 		"metrics-schema --id=<assemblyID>",
+		"generated [--module=<module>]",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("PrintUsage() missing %q in:\n%s", want, out)

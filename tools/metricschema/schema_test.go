@@ -8,6 +8,7 @@ import (
 	"go/types"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -1604,6 +1605,53 @@ func direct(err error) {
 	assert.Empty(t, diagnostics)
 }
 
+func TestCheckOBS01AckSuppressesMatchingFingerprintWithTrackedDashboard(t *testing.T) {
+	root := writeMetricsFixture(t)
+	gitRun(t, root, "init")
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
+	gitRun(t, root, "add", "docs/ops/example-dashboard.md")
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func direct(err error) {
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+}
+`)
+
+	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
+  - rule: OBS-01
+    fingerprint: %q
+    metric: %s
+    label: %s
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`, diagnostics[0].Fingerprint, diagnostics[0].Metric, diagnostics[0].Label))
+
+	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
 func TestCheckOBS01AckMustMatchMetricAndLabel(t *testing.T) {
 	root := writeMetricsFixture(t)
 	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
@@ -2058,4 +2106,12 @@ func writeFile(t *testing.T, root, rel, body string) {
 	path := filepath.Join(root, filepath.FromSlash(rel))
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+}
+
+func gitRun(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s failed:\n%s", strings.Join(args, " "), string(out))
 }

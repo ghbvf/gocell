@@ -48,6 +48,17 @@ func TestWorkflowUsesPinnedRejectsTagPinnedAction(t *testing.T) {
 	require.Error(t, validateWorkflowUsesPinned("fixture.yml", body))
 }
 
+func TestWorkflowUsesPinnedRejectsTagPinnedActionThroughAlias(t *testing.T) {
+	body := []byte(`x-actions:
+  checkout: &checkout actions/checkout@v6
+jobs:
+  test:
+    steps:
+      - uses: *checkout
+`)
+	require.Error(t, validateWorkflowUsesPinned("fixture.yml", body))
+}
+
 func TestWorkflowUsesPinnedAllowsLocalReusableWorkflow(t *testing.T) {
 	body := []byte(`jobs:
   test:
@@ -64,15 +75,17 @@ func TestGeneratedArtifactGatesAreStructured(t *testing.T) {
 	require.NoError(t, validateGeneratedArtifactGates(body))
 }
 
-func TestGeneratedArtifactGateRejectsMissingMetricsUntrackedCheck(t *testing.T) {
+func TestGeneratedArtifactGateRejectsProducerDefinedScope(t *testing.T) {
 	body := []byte(`jobs:
   build-test:
     steps:
-      - name: Verify generated assemblies are up-to-date
+      - name: Verify generated artifacts are up-to-date
         if: matrix.static_checks
         run: |
+          go run ./cmd/gocell verify generated
           entrypoints_file="$(mktemp)"
           go run ./cmd/gocell generate assembly --id "$(basename "$d")"
+          echo "Generated: cmd/corebundle/main.go"
           generated_entrypoints=()
           while IFS= read -r entrypoint; do
             [ -n "$entrypoint" ] || continue
@@ -83,11 +96,6 @@ func TestGeneratedArtifactGateRejectsMissingMetricsUntrackedCheck(t *testing.T) 
           git diff --exit-code -- "${diff_paths[@]}"
           git ls-files --others --exclude-standard -- "${generated_entrypoints[@]}"
           git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml
-      - name: Verify generated metrics-schema is up-to-date
-        if: matrix.static_checks
-        run: |
-          go run ./cmd/gocell generate metrics-schema --id "$(basename "$d")"
-          git diff --exit-code assemblies/*/generated/metrics-schema.yaml
 `)
 	require.Error(t, validateGeneratedArtifactGates(body))
 }
@@ -96,19 +104,14 @@ func TestGeneratedArtifactGateRejectsLegacyEntrypointGlob(t *testing.T) {
 	body := []byte(`jobs:
   build-test:
     steps:
-      - name: Verify generated assemblies are up-to-date
+      - name: Verify generated artifacts are up-to-date
         if: matrix.static_checks
         run: |
+          go run ./cmd/gocell verify generated
           go run ./cmd/gocell generate assembly --id "$(basename "$d")"
           git diff --exit-code assemblies/ cmd/*/main.go
           git ls-files --others --exclude-standard cmd/*/main.go
           git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml
-      - name: Verify generated metrics-schema is up-to-date
-        if: matrix.static_checks
-        run: |
-          go run ./cmd/gocell generate metrics-schema --id "$(basename "$d")"
-          git diff --exit-code assemblies/*/generated/metrics-schema.yaml
-          git ls-files --others --exclude-standard assemblies/*/generated/metrics-schema.yaml
 `)
 	require.Error(t, validateGeneratedArtifactGates(body))
 }
@@ -325,23 +328,50 @@ func workflowFiles(root string) ([]string, error) {
 }
 
 func walkWorkflowUses(node *yaml.Node, visit func(string)) {
+	walkWorkflowUsesSeen(node, visit, map[*yaml.Node]bool{})
+}
+
+func walkWorkflowUsesSeen(node *yaml.Node, visit func(string), seen map[*yaml.Node]bool) {
 	if node == nil {
 		return
 	}
+	if seen[node] {
+		return
+	}
+	seen[node] = true
 	switch node.Kind {
 	case yaml.DocumentNode, yaml.SequenceNode:
 		for _, child := range node.Content {
-			walkWorkflowUses(child, visit)
+			walkWorkflowUsesSeen(child, visit, seen)
 		}
+	case yaml.AliasNode:
+		walkWorkflowUsesSeen(node.Alias, visit, seen)
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(node.Content); i += 2 {
 			key := node.Content[i]
 			value := node.Content[i+1]
-			if key.Value == "uses" && value.Kind == yaml.ScalarNode {
-				visit(value.Value)
+			if key.Value == "uses" {
+				if uses, ok := workflowScalarValue(value, map[*yaml.Node]bool{}); ok {
+					visit(uses)
+				}
 			}
-			walkWorkflowUses(value, visit)
+			walkWorkflowUsesSeen(value, visit, seen)
 		}
+	}
+}
+
+func workflowScalarValue(node *yaml.Node, seen map[*yaml.Node]bool) (string, bool) {
+	if node == nil || seen[node] {
+		return "", false
+	}
+	seen[node] = true
+	switch node.Kind {
+	case yaml.ScalarNode:
+		return node.Value, true
+	case yaml.AliasNode:
+		return workflowScalarValue(node.Alias, seen)
+	default:
+		return "", false
 	}
 }
 
@@ -364,46 +394,29 @@ func validateGeneratedArtifactGates(body []byte) error {
 	if !ok {
 		return fmt.Errorf("build-test job missing")
 	}
-	assemblyStep, ok := findWorkflowStep(job.Steps, "Verify generated assemblies are up-to-date")
+	assemblyStep, ok := findWorkflowStep(job.Steps, "Verify generated artifacts are up-to-date")
 	if !ok {
-		return fmt.Errorf("generated assembly gate missing")
+		return fmt.Errorf("generated artifact gate missing")
 	}
 	if err := validateStaticCheckStep(assemblyStep); err != nil {
-		return fmt.Errorf("generated assembly gate: %w", err)
+		return fmt.Errorf("generated artifact gate: %w", err)
 	}
-	for _, want := range []string{
-		"go run ./cmd/gocell generate assembly --id",
-		"entrypoints_file=",
-		"generated_entrypoints=()",
-		"git diff --exit-code -- \"${diff_paths[@]}\"",
-		"git ls-files --others --exclude-standard -- \"${generated_entrypoints[@]}\"",
-		"git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml",
+	if !strings.Contains(assemblyStep.Run, "go run ./cmd/gocell verify generated") {
+		return fmt.Errorf("generated artifact gate must call gocell verify generated")
+	}
+	for _, forbidden := range []string{
+		"Generated:",
+		"entrypoints_file",
+		"generated_entrypoints",
+		"go run ./cmd/gocell generate assembly",
+		"go run ./cmd/gocell generate metrics-schema",
+		"git diff",
+		"git ls-files",
+		"cmd/*/main.go",
+		"--boundary-only",
 	} {
-		if !strings.Contains(assemblyStep.Run, want) {
-			return fmt.Errorf("generated assembly gate missing %q", want)
-		}
-	}
-	if strings.Contains(assemblyStep.Run, "cmd/*/main.go") {
-		return fmt.Errorf("generated assembly gate must use metadata entrypoint paths, not cmd/*/main.go")
-	}
-	if strings.Contains(assemblyStep.Run, "--boundary-only") {
-		return fmt.Errorf("generated assembly gate must not use --boundary-only")
-	}
-
-	metricsStep, ok := findWorkflowStep(job.Steps, "Verify generated metrics-schema is up-to-date")
-	if !ok {
-		return fmt.Errorf("metrics-schema gate missing")
-	}
-	if err := validateStaticCheckStep(metricsStep); err != nil {
-		return fmt.Errorf("metrics-schema gate: %w", err)
-	}
-	for _, want := range []string{
-		"go run ./cmd/gocell generate metrics-schema --id",
-		"git diff --exit-code assemblies/*/generated/metrics-schema.yaml",
-		"git ls-files --others --exclude-standard assemblies/*/generated/metrics-schema.yaml",
-	} {
-		if !strings.Contains(metricsStep.Run, want) {
-			return fmt.Errorf("metrics-schema gate missing %q", want)
+		if strings.Contains(assemblyStep.Run, forbidden) {
+			return fmt.Errorf("generated artifact gate must not contain %q", forbidden)
 		}
 	}
 	return nil
