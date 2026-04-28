@@ -70,52 +70,24 @@ func TestHttpConfigListV1Serve(t *testing.T) {
 	c.MustRejectResponse(t, []byte(`{"data":[{"id":"c-1","key":"app.name","value":"myapp","version":1,"createdAt":"2026-01-01T00:00:00Z","updatedAt":"2026-01-01T00:00:00Z"}],"nextCursor":"","hasMore":false}`))
 }
 
-// authzCase models a row in the authz negative-test tables. injectAuth=false
-// produces an anonymous request (no Principal in context) — the Mount's
-// auth.AnyRole policy short-circuits to ErrAuthUnauthorized before role
-// inspection. injectAuth=true with a non-admin role exercises the
-// "authenticated-but-unauthorized" branch and produces ErrAuthForbidden.
+// authzCase models a row in the runtime mux authz negative-test tables.
+// principal=nil produces an anonymous request — the Mount's auth.AnyRole
+// policy short-circuits to ErrAuthUnauthorized before role inspection.
+// A non-nil principal exercises the authenticated-but-unauthorized branch
+// (any role mismatch returns ErrAuthForbidden via principalHasAnyRole).
 type authzCase struct {
 	name        string
-	injectAuth  bool
-	subject     string
-	roles       []string
+	principal   *auth.Principal
 	wantStatus  int
 	wantErrCode string
-}
-
-// runAuthzCases drives a table of authz cases through h with the given
-// request — extracted to avoid duplicating the same recorder/decode/assert
-// dance across the three negative tests.
-func runAuthzCases(t *testing.T, h http.Handler, method, target string, cases []authzCase) {
-	t.Helper()
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			rec := httptest.NewRecorder()
-			req := httptest.NewRequest(method, target, nil)
-			if tc.injectAuth {
-				req = req.WithContext(auth.TestContext(tc.subject, tc.roles))
-			}
-			h.ServeHTTP(rec, req)
-			assert.Equal(t, tc.wantStatus, rec.Code)
-			var resp struct {
-				Error struct {
-					Code string `json:"code"`
-				} `json:"error"`
-			}
-			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-			assert.Equal(t, tc.wantErrCode, resp.Error.Code)
-		})
-	}
 }
 
 // setupInternalHandler wires the handler onto a celltest mux via
 // RegisterInternalRoutes — nested under /internal/v1/config to mirror the
 // production cell_routes.go InternalListener layout. The internal route
 // applies auth.AnyRole(auth.RoleInternalAdmin); a request without a
-// Principal must surface as 401 (listener service-token chain absent in
-// this in-process test) and a service principal without RoleInternalAdmin
-// must surface as 403 — the same Policy that production runs.
+// Principal must surface as 401 and a service principal without
+// RoleInternalAdmin must surface as 403 — the same Policy production runs.
 func setupInternalHandler() http.Handler {
 	repo := mem.NewConfigRepository()
 	codec, _ := query.NewCursorCodec([]byte("gocell-demo-cursor-key-32bytes!!"))
@@ -130,17 +102,65 @@ func setupInternalHandler() http.Handler {
 	return mux
 }
 
+// runAuthzCases drives a table of authz cases through h with the given
+// request. The single helper covers all three negative tests — primary
+// list/get and internal get — by accepting an optional pre-built principal,
+// keeping the assertion shape identical across listeners.
+func runAuthzCases(t *testing.T, h http.Handler, method, target string, cases []authzCase) {
+	t.Helper()
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(method, target, nil)
+			if tc.principal != nil {
+				req = req.WithContext(auth.WithPrincipal(req.Context(), tc.principal))
+			}
+			h.ServeHTTP(rec, req)
+			assert.Equal(t, tc.wantStatus, rec.Code)
+			var resp struct {
+				Error struct {
+					Code string `json:"code"`
+				} `json:"error"`
+			}
+			require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+			assert.Equal(t, tc.wantErrCode, resp.Error.Code)
+		})
+	}
+}
+
+// userPrincipal builds a PrincipalUser for table-driven authz cases. Mirrors
+// auth.TestContext but exposes the *Principal so it can be embedded in the
+// authzCase struct alongside service principals.
+func userPrincipal(subject string, roles []string) *auth.Principal {
+	return &auth.Principal{
+		Kind:       auth.PrincipalUser,
+		Subject:    subject,
+		Roles:      append([]string(nil), roles...),
+		AuthMethod: "test",
+	}
+}
+
+// servicePrincipal builds a PrincipalService for the internal listener
+// authz cases — paired with userPrincipal for symmetry.
+func servicePrincipal(subject string, roles []string) *auth.Principal {
+	return &auth.Principal{
+		Kind:       auth.PrincipalService,
+		Subject:    subject,
+		Roles:      append([]string(nil), roles...),
+		AuthMethod: "test",
+	}
+}
+
 // TestHttpConfigGetV1_AuthzNegative locks the runtime auth-guard contract
 // for the admin-gated GET /api/v1/config/{key}: anonymous requests are
 // rejected with 401 ERR_AUTH_UNAUTHORIZED, and authenticated principals
 // without the admin role are rejected with 403 ERR_AUTH_FORBIDDEN. The
-// happy-path response shape is locked separately by TestHttpConfigGetV1Serve
-// via contract schema validation.
+// happy-path response shape is locked by TestHttpConfigGetV1Serve.
 func TestHttpConfigGetV1_AuthzNegative(t *testing.T) {
 	h, _ := setupHandler()
 	runAuthzCases(t, h, http.MethodGet, configBasePath+"/some-key", []authzCase{
-		{"no_auth", false, "", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", true, "user-1", []string{"viewer"}, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"no_auth", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"non_admin", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
 }
 
@@ -151,8 +171,8 @@ func TestHttpConfigGetV1_AuthzNegative(t *testing.T) {
 func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
 	h, _ := setupHandler()
 	runAuthzCases(t, h, http.MethodGet, configBasePath+"/", []authzCase{
-		{"no_auth", false, "", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
-		{"non_admin", true, "user-1", []string{"viewer"}, http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
+		{"no_auth", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"non_admin", userPrincipal("user-1", []string{"viewer"}), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
 }
 
@@ -160,45 +180,11 @@ func TestHttpConfigListV1_AuthzNegative(t *testing.T) {
 // for the internal-listener GET /internal/v1/config/{key}: a missing
 // principal produces 401 (defence-in-depth alongside the listener's
 // service-token chain), and a service principal lacking RoleInternalAdmin
-// produces 403. The service-principal pattern matches runtime/auth/authz_test.go's
-// PrincipalService cases (cell handlers see Principal regardless of source).
+// produces 403. The service-principal pattern matches runtime/auth/authz_test.go.
 func TestHttpConfigInternalGetV1_AuthzNegative(t *testing.T) {
 	h := setupInternalHandler()
-	target := "/internal/v1/config/some-key"
-
-	// Anonymous: no Principal in context.
-	t.Run("no_principal", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, target, nil)
-		h.ServeHTTP(rec, req)
-		assert.Equal(t, http.StatusUnauthorized, rec.Code)
-		var resp struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
-		}
-		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-		assert.Equal(t, "ERR_AUTH_UNAUTHORIZED", resp.Error.Code)
-	})
-
-	// Service principal without RoleInternalAdmin: authenticated but unauthorized.
-	t.Run("service_principal_without_role", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		req := httptest.NewRequest(http.MethodGet, target, nil)
-		ctx := auth.WithPrincipal(req.Context(), &auth.Principal{
-			Kind:       auth.PrincipalService,
-			Subject:    "svc-x",
-			Roles:      []string{},
-			AuthMethod: "test",
-		})
-		h.ServeHTTP(rec, req.WithContext(ctx))
-		assert.Equal(t, http.StatusForbidden, rec.Code)
-		var resp struct {
-			Error struct {
-				Code string `json:"code"`
-			} `json:"error"`
-		}
-		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
-		assert.Equal(t, "ERR_AUTH_FORBIDDEN", resp.Error.Code)
+	runAuthzCases(t, h, http.MethodGet, "/internal/v1/config/some-key", []authzCase{
+		{"no_principal", nil, http.StatusUnauthorized, "ERR_AUTH_UNAUTHORIZED"},
+		{"service_principal_without_role", servicePrincipal("svc-x", nil), http.StatusForbidden, "ERR_AUTH_FORBIDDEN"},
 	})
 }
