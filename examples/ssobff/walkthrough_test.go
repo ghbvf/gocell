@@ -26,8 +26,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,16 +35,7 @@ import (
 	"testing"
 	"time"
 
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	auditcore "github.com/ghbvf/gocell/cells/auditcore"
-	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/query"
-	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/eventrouter"
-	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -140,165 +131,72 @@ func credentialFromFile(path string) (username, password string, err error) {
 	return username, password, nil
 }
 
-// buildWalkthroughServer constructs an in-memory test server that mirrors
-// ssobff main.go but uses httptest.NewServer for port-free testing.
+// buildWalkthroughServer constructs an in-memory ssobff server through the
+// same NewSSOBFFApp/bootstrap path used by main.go.
 //
 // It uses WithInitialAdminBootstrap so bootstrap credentials are written to
 // <stateDir>/initial_admin_password. Callers read credentials from the file.
 //
 // The capturing slog handler is threaded through so the test can assert that
 // no plaintext password appears in any log record (PR#172 F1 regression gate).
-// mountAllRouteGroups walks each cell's RouteGroups and mounts them on the
-// test router. The walkthrough server uses a single Router (one process,
-// httptest.NewServer) regardless of the production three-listener split, so
-// RouteGroups targeting any listener are flattened onto the same router.
-type routeGroupContributor interface {
-	RouteGroups() []cell.RouteGroup
-}
-
-func mountAllRouteGroups(r *router.Router, contribs ...routeGroupContributor) {
-	for _, c := range contribs {
-		for _, rg := range c.RouteGroups() {
-			rg := rg
-			if rg.Prefix == "" {
-				rg.Register(r)
-				continue
-			}
-			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
-		}
-	}
-}
-
-func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturingHandler) (*httptest.Server, func()) {
+func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturingHandler) (string, func()) {
 	t.Helper()
 
 	// Set GOCELL_STATE_DIR so the bootstrapper resolves the credential path to
 	// <stateDir>/initial_admin_password.
 	t.Setenv("GOCELL_STATE_DIR", stateDir)
 
-	testLogger := slog.New(capHandler)
-
-	eb := eventbus.New()
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
-	require.NoError(t, err)
-
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-test", 15*time.Minute,
-		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
-	require.NoError(t, err)
-
-	jwtVerifier, err := auth.NewJWTVerifier(keySet,
-		auth.WithExpectedAudiences("gocell"),
-		auth.WithExpectedIssuer("ssobff-test"))
-	require.NoError(t, err)
-
-	// Demo mode: no outboxWriter/txRunner — cells publish directly via the
-	// eventbus publisher. This ensures accesscore events reach auditcore's
-	// subscriber without transactional outbox machinery.
-	// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore — no sink needed.
-	ac := accesscore.NewAccessCore(
-		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nil),
-		accesscore.WithJWTIssuer(jwtIssuer),
-		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithLogger(testLogger),
-		accesscore.WithInitialAdminBootstrap(),
-		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
+	primary := newWalkthroughListener(t)
+	internal := newWalkthroughListener(t)
+	health := newWalkthroughListener(t)
+	app, err := NewSSOBFFApp(
+		WithSSOBFFLogger(slog.New(capHandler)),
+		WithSSOBFFInternalServiceSecret("walkthrough-service-token-secret-32b"),
+		WithSSOBFFListener(cell.PrimaryListener, primary),
+		WithSSOBFFListener(cell.InternalListener, internal),
+		WithSSOBFFListener(cell.HealthListener, health),
 	)
-
-	auditHMACKey := []byte("walkthrough-test-hmac-key-32b!!!")
-	auditCursorCodec, err := query.NewCursorCodec([]byte("walkthrough-audit-cursor-key-32b"))
 	require.NoError(t, err)
 
-	auc := auditcore.NewAuditCore(
-		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nil),
-		auditcore.WithHMACKey(auditHMACKey),
-		auditcore.WithCursorCodec(auditCursorCodec),
-		auditcore.WithLogger(testLogger),
-		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	)
-
-	configCursorCodec, err := query.NewCursorCodec([]byte("walkthrough-config-cursor-key-32b"))
-	require.NoError(t, err)
-
-	// configcore: demo mode — publisher only, no outboxWriter/txRunner.
-	cc := configcore.NewConfigCore(
-		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(eb, nil),
-		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithLogger(testLogger),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
-	)
-
-	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-	}
-	require.NoError(t, ac.Init(ctx, deps))
-	require.NoError(t, auc.Init(ctx, deps))
-	require.NoError(t, cc.Init(ctx, deps))
-
-	// This test harness bypasses bootstrap.Run, so phase3b's
-	// LifecycleContributor auto-discovery never fires. Drive the hooks
-	// manually here so initial-admin credential-file generation actually
-	// happens. Production code (examples/ssobff/main.go, cmd/corebundle)
-	// goes through bootstrap.Run and does NOT need this block.
-	lifecycleHooks := ac.LifecycleHooks()
-	for _, h := range lifecycleHooks {
-		if h.OnStart != nil {
-			require.NoError(t, h.OnStart(ctx))
-		}
-	}
-
-	// PR-A14b: public routes (login, refresh) and PasswordResetExempt routes
-	// (change-password, logout) are declared via auth.Mount inside each cell's
-	// RouteGroups callback. FinalizeAuth compiles them into the router's auth
-	// predicates. The walkthrough uses a single test router (httptest.NewServer
-	// is one process), so RouteGroups intended for InternalListener are mounted
-	// here too — auth.MustMount(Public:true) on /internal paths still works because
-	// the matcher fires before AuthMiddleware and the test never exercises a
-	// JWT-only internal route.
-	r := router.MustNew(
-		router.WithAuthMiddleware(ac.TokenVerifier()),
-	)
-	mountAllRouteGroups(r, ac, auc, cc)
-	if err := r.FinalizeAuth(); err != nil {
-		panic(err)
-	}
-
-	// Wire auditcore event subscriptions so accesscore events reach the
-	// audit handler asynchronously (mirrors bootstrap wiring in main.go).
-	evtRouter := eventrouter.New(eb)
-	require.NoError(t, auc.RegisterSubscriptions(evtRouter))
-	require.NoError(t, cc.RegisterSubscriptions(evtRouter))
-
-	evtCtx, evtCancel := context.WithCancel(context.Background())
-	evtDone := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
 	go func() {
-		defer close(evtDone)
-		_ = evtRouter.Run(evtCtx)
+		done <- app.Run(ctx)
 	}()
-	// Wait briefly for subscriptions to start consuming.
-	select {
-	case <-evtRouter.Running():
-	case <-time.After(500 * time.Millisecond):
-	}
+	waitForWalkthroughReady(t, app.HealthAddr(), done)
 
-	srv := httptest.NewServer(r)
 	cleanup := func() {
-		srv.Close()
-		// LIFO rollback of lifecycle hooks (mirrors bootstrap.Lifecycle.Stop).
-		for i := len(lifecycleHooks) - 1; i >= 0; i-- {
-			if lifecycleHooks[i].OnStop != nil {
-				_ = lifecycleHooks[i].OnStop(ctx)
-			}
-		}
-		evtCancel()
-		<-evtDone
+		cancel()
+		require.NoError(t, <-done)
 	}
-	return srv, cleanup
+	return "http://" + app.PrimaryAddr(), cleanup
+}
+
+func newWalkthroughListener(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln
+}
+
+func waitForWalkthroughReady(t *testing.T, healthAddr string, done <-chan error) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			t.Fatal("ssobff exited before becoming ready")
+			return false
+		default:
+		}
+		resp, err := http.Get("http://" + healthAddr + "/readyz") //nolint:noctx
+		if err != nil {
+			return false
+		}
+		resp.Body.Close()
+		return resp.StatusCode == http.StatusOK
+	}, 5*time.Second, 50*time.Millisecond, "ssobff bootstrap never became ready")
 }
 
 // TestWalkthrough exercises the complete ssobff API walkthrough.
@@ -308,7 +206,7 @@ func TestWalkthrough(t *testing.T) {
 	// so we can assert no plaintext password appears in logs.
 	stateDir := t.TempDir()
 	capHandler := newCapturingHandler(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	srv, cleanup := buildWalkthroughServer(t, stateDir, capHandler)
+	base, cleanup := buildWalkthroughServer(t, stateDir, capHandler)
 	defer cleanup()
 
 	// Read bootstrap credentials from the credential file written during Init.
@@ -322,8 +220,6 @@ func TestWalkthrough(t *testing.T) {
 	require.NoError(t, err, "must read credentials from credential file")
 	require.NotEmpty(t, bootstrapUsername, "bootstrap username must be non-empty")
 	require.NotEmpty(t, bootstrapPassword, "bootstrap password must be non-empty")
-
-	base := srv.URL
 
 	var adminToken string
 	var adminUserID string
