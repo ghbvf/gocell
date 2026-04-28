@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"golang.org/x/tools/go/packages"
 	"gopkg.in/yaml.v3"
 )
@@ -1630,11 +1631,15 @@ func (sp *scanPackage) prometheusMetricIdentity(call *ast.CallExpr, rel string) 
 	}, true
 }
 
-// CheckOBS01 reports metric label values whose expression depends on
+// CheckOBS01 reports production metric label values whose expression depends on
 // errcode.Category or errcode.IsInfraError without a checked-in acknowledgement.
-func CheckOBS01(projectRoot string, patterns ...string) ([]Diagnostic, error) {
+func CheckOBS01(projectRoot string) ([]Diagnostic, error) {
+	return checkOBS01WithPatterns(projectRoot, obs01ProductionPatterns(projectRoot)...)
+}
+
+func checkOBS01WithPatterns(projectRoot string, patterns ...string) ([]Diagnostic, error) {
 	if len(patterns) == 0 {
-		patterns = []string{"./..."}
+		patterns = obs01ProductionPatterns(projectRoot)
 	}
 	acks, err := loadOBS01Acks(projectRoot)
 	if err != nil {
@@ -1670,6 +1675,10 @@ func CheckOBS01(projectRoot string, patterns ...string) ([]Diagnostic, error) {
 		return diagnostics[i].Column < diagnostics[j].Column
 	})
 	return dedupeDiagnostics(diagnostics), nil
+}
+
+func obs01ProductionPatterns(projectRoot string) []string {
+	return prodscan.Patterns(projectRoot)
 }
 
 func dedupeDiagnostics(in []Diagnostic) []Diagnostic {

@@ -210,41 +210,20 @@ func contractPathMatches(c *metadata.ContractMeta, f string) bool {
 	if c == nil {
 		return false
 	}
-	contractDir := c.Dir
-	if contractDir == "" {
-		contractDir = strings.ReplaceAll(contractDirFromID(c.ID), "\\", "/")
-	}
+	contractDir := metadata.ContractDirFromMeta(c)
 	if contractDir != "" && pathWithin(f, contractDir) {
 		return true
 	}
-	for _, ref := range contractSchemaRefs(c) {
-		if ref == "" || contractDir == "" {
+	for _, ref := range metadata.ContractSchemaRefs(c) {
+		if ref.Ref == "" || contractDir == "" {
 			continue
 		}
-		ref = strings.ReplaceAll(ref, "\\", "/")
-		if path.Clean(path.Join(contractDir, ref)) == f {
+		refPath := strings.ReplaceAll(ref.Ref, "\\", "/")
+		if path.Clean(path.Join(contractDir, refPath)) == f {
 			return true
 		}
 	}
 	return false
-}
-
-func contractSchemaRefs(c *metadata.ContractMeta) []string {
-	refs := []string{
-		c.SchemaRefs.Request,
-		c.SchemaRefs.Response,
-		c.SchemaRefs.Payload,
-		c.SchemaRefs.Headers,
-	}
-	for _, ref := range c.SchemaRefs.Extra {
-		refs = append(refs, ref)
-	}
-	if c.Endpoints.HTTP != nil {
-		for _, resp := range c.Endpoints.HTTP.Responses {
-			refs = append(refs, resp.SchemaRef)
-		}
-	}
-	return refs
 }
 
 func (ts *TargetSelector) addSlicesForContract(contractID string, sliceSet map[string]struct{}) {

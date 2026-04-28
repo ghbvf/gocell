@@ -236,88 +236,38 @@ func (v *Validator) validateREF12() []ValidationResult {
 	}
 	var results []ValidationResult
 	for _, c := range v.project.Contracts {
-		contractDir := filepath.Join(v.root, contractDirFromMeta(c))
-		results = append(results, v.checkREF12SchemaRefs(c, contractDir)...)
-		results = append(results, v.checkREF12Responses(c, contractDir)...)
+		results = append(results, v.checkREF12Contract(c)...)
 	}
 	return results
 }
 
-// checkREF12SchemaRefs validates the schemaRefs.* fields of a single contract.
-func (v *Validator) checkREF12SchemaRefs(c *metadata.ContractMeta, contractDir string) []ValidationResult {
-	type refEntry struct {
-		field string
-		value string
-	}
-	refs := []refEntry{
-		{"schemaRefs.request", c.SchemaRefs.Request},
-		{"schemaRefs.response", c.SchemaRefs.Response},
-		{"schemaRefs.payload", c.SchemaRefs.Payload},
-		{"schemaRefs.headers", c.SchemaRefs.Headers},
-	}
-	for key, val := range c.SchemaRefs.Extra {
-		refs = append(refs, refEntry{fmt.Sprintf("schemaRefs.%s", key), val})
-	}
-
+// checkREF12Contract validates all schema refs declared by a single contract.
+func (v *Validator) checkREF12Contract(c *metadata.ContractMeta) []ValidationResult {
 	var results []ValidationResult
-	for _, ref := range refs {
-		results = append(results, v.checkSchemaRefFile(c.ID, contractDir, ref.field, ref.value)...)
+	for _, ref := range metadata.ContractSchemaRefs(c) {
+		if ref.Ref == "" {
+			continue
+		}
+		resolved, err := metadata.ResolveContractSchemaRef(v.root, c, ref)
+		if err != nil {
+			results = append(results, v.newResult(
+				"REF-12", SeverityError, IssueInvalid,
+				contractFile(c),
+				ref.Field,
+				fmt.Sprintf("contract %q %s %q: %v", c.ID, ref.Field, ref.Ref, err),
+			))
+			continue
+		}
+		if !v.fileExists(resolved.AbsPath) {
+			results = append(results, v.newResult(
+				"REF-12", SeverityError, IssueRefNotFound,
+				contractFile(c),
+				ref.Field,
+				fmt.Sprintf("contract %q %s points to missing file %q", c.ID, ref.Field, ref.Ref),
+			))
+		}
 	}
 	return results
-}
-
-// checkREF12Responses validates endpoints.http.responses[N].schemaRef entries.
-// These were introduced in PR#181 alongside HTTPTransportMeta.Responses but were
-// not previously walked by the governance layer.
-//
-// Unlike schemaRefs.* (which must stay inside the contract directory), response
-// schemas may reference shared schemas via relative paths that navigate up to
-// the contracts/shared/ subtree. The bounds check therefore uses the project root
-// (v.root) rather than the contract directory.
-func (v *Validator) checkREF12Responses(c *metadata.ContractMeta, contractDir string) []ValidationResult {
-	if c.Endpoints.HTTP == nil {
-		return nil
-	}
-	var results []ValidationResult
-	for status, resp := range c.Endpoints.HTTP.Responses {
-		field := fmt.Sprintf("endpoints.http.responses[%d].schemaRef", status)
-		results = append(results, v.checkSchemaRefFileWithRoot(c.ID, contractDir, v.root, field, resp.SchemaRef)...)
-	}
-	return results
-}
-
-// checkSchemaRefFile checks that a single schemaRef value points to an existing
-// file within the contract directory (boundsRoot == contractDir).
-// Empty values are silently skipped.
-func (v *Validator) checkSchemaRefFile(contractID, contractDir, field, value string) []ValidationResult {
-	return v.checkSchemaRefFileWithRoot(contractID, contractDir, contractDir, field, value)
-}
-
-// checkSchemaRefFileWithRoot resolves value relative to contractDir and checks
-// that the result exists on disk and does not escape boundsRoot. Empty values
-// are silently skipped.
-func (v *Validator) checkSchemaRefFileWithRoot(contractID, contractDir, boundsRoot, field, value string) []ValidationResult {
-	if value == "" {
-		return nil
-	}
-	fullPath := filepath.Join(contractDir, value)
-	if !IsWithinRoot(boundsRoot, fullPath) {
-		return []ValidationResult{v.newResult(
-			"REF-12", SeverityError, IssueInvalid,
-			contractFileFromID(contractID),
-			field,
-			fmt.Sprintf("contract %q %s %q: path escapes project root", contractID, field, value),
-		)}
-	}
-	if !v.fileExists(fullPath) {
-		return []ValidationResult{v.newResult(
-			"REF-12", SeverityError, IssueRefNotFound,
-			contractFileFromID(contractID),
-			field,
-			fmt.Sprintf("contract %q %s points to missing file %q", contractID, field, value),
-		)}
-	}
-	return nil
 }
 
 // validateREF13 checks that the contract provider actor exists as a cell or actor.

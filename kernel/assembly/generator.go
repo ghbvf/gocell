@@ -13,7 +13,6 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"text/template"
 
@@ -35,8 +34,7 @@ type Generator struct {
 // NewGenerator creates a Generator from project metadata, a Go module path,
 // and the absolute filesystem path to the project root (the directory
 // containing go.mod). projectRoot is required when contracts reference schema
-// files; passing "" causes fingerprinting to skip schema content hashing,
-// which is acceptable only for tests that use contracts without SchemaRefs.
+// files.
 func NewGenerator(project *metadata.ProjectMeta, module, projectRoot string) *Generator {
 	return &Generator{
 		project:     project,
@@ -298,46 +296,22 @@ func normalizeContract(c metadata.ContractMeta) metadata.ContractMeta {
 }
 
 // writeSchemaFileContents hashes the content of each non-empty schema ref file
-// for the contract. Paths are resolved relative to the contract's Dir.
+// for the contract. Paths are resolved through the metadata schema resolver so
+// every generator/governance consumer shares the same schema-ref boundary.
 func writeSchemaFileContents(h hashWriter, projectRoot string, c *metadata.ContractMeta) error {
-	if c == nil || projectRoot == "" {
+	if c == nil {
 		return nil
 	}
-	contractDir := filepath.Join(projectRoot, filepath.FromSlash(c.Dir))
-	refs := []struct {
-		key  string
-		path string
-	}{
-		{"schema.request", c.SchemaRefs.Request},
-		{"schema.response", c.SchemaRefs.Response},
-		{"schema.payload", c.SchemaRefs.Payload},
-		{"schema.headers", c.SchemaRefs.Headers},
+	refs, err := metadata.ResolveContractSchemaRefs(projectRoot, c)
+	if err != nil {
+		return fmt.Errorf("fingerprint: resolve schema for contract %q: %w", c.ID, err)
 	}
-	for _, r := range refs {
-		if r.path == "" {
-			continue
-		}
-		absPath := filepath.Join(contractDir, r.path)
-		content, err := os.ReadFile(absPath)
+	for _, ref := range refs {
+		content, err := os.ReadFile(ref.AbsPath)
 		if err != nil {
-			return fmt.Errorf("fingerprint: read schema %s for contract %q: %w", r.path, c.ID, err)
+			return fmt.Errorf("fingerprint: read schema %s for contract %q: %w", ref.Ref, c.ID, err)
 		}
-		fmt.Fprintf(h, "%s:%s:", r.key, r.path) //nolint:errcheck
-		_, _ = h.Write(content)
-		fmt.Fprint(h, "\n") //nolint:errcheck
-	}
-	keys := sortedMapKeys(c.SchemaRefs.Extra)
-	for _, k := range keys {
-		path := c.SchemaRefs.Extra[k]
-		if path == "" {
-			continue
-		}
-		absPath := filepath.Join(contractDir, path)
-		content, err := os.ReadFile(absPath)
-		if err != nil {
-			return fmt.Errorf("fingerprint: read schema %s for contract %q: %w", path, c.ID, err)
-		}
-		fmt.Fprintf(h, "schema.extra.%s:%s:", k, path) //nolint:errcheck
+		fmt.Fprintf(h, "%s:%s:", ref.Field, ref.Ref) //nolint:errcheck
 		_, _ = h.Write(content)
 		fmt.Fprint(h, "\n") //nolint:errcheck
 	}
@@ -386,19 +360,6 @@ func sortedCopy(ss []string) []string {
 
 // sortedKeys returns sorted keys from a bool map.
 func sortedKeys(m map[string]bool) []string {
-	if len(m) == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// sortedMapKeys returns sorted keys from any string-keyed map.
-func sortedMapKeys[V any](m map[string]V) []string {
 	if len(m) == 0 {
 		return nil
 	}

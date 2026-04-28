@@ -3,26 +3,37 @@ package archtest
 import (
 	"fmt"
 	"go/ast"
+	"go/constant"
 	"go/token"
+	"go/types"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
+	kerneloutbox "github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
+	"github.com/ghbvf/gocell/tools/internal/prodscan"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/tools/go/packages"
 )
 
 const (
-	outboxTopicRuleFailOpen          = "OUTBOX-TOPIC-FAILOPEN-01_security_topics_must_not_opt_in_fail_open"
-	outboxTopicForbiddenPolicyIdent  = "FailurePolicyFailOpen"
-	outboxTopicForbiddenPolicyField  = "FailurePolicy"
-	outboxTopicEntryField            = "Topic"
-	outboxTopicEventTypeField        = "EventType"
-	outboxTopicEntryCompositeTypeSfx = "outbox.Entry"
+	outboxTopicRuleFailOpen         = "OUTBOX-TOPIC-FAILOPEN-01_security_topics_must_not_opt_in_fail_open"
+	outboxTopicForbiddenPolicyField = "FailurePolicy"
+	outboxTopicEntryField           = "Topic"
+	outboxTopicEventTypeField       = "EventType"
+	outboxEntryTypeName             = "Entry"
+	outboxFailurePolicyTypeName     = "FailurePolicy"
+	gocellOutboxPackagePath         = "github.com/ghbvf/gocell/kernel/outbox"
+	fixtureOutboxPackagePath        = "fixturetest/outbox"
 )
+
+var outboxFailOpenConstValues = map[string]int64{
+	gocellOutboxPackagePath:  int64(kerneloutbox.FailurePolicyFailOpen),
+	fixtureOutboxPackagePath: 1,
+}
 
 // outboxSecurityTopicPattern matches topics that carry security or audit-chain
 // semantics. Events matching these prefixes must not opt into
@@ -55,13 +66,13 @@ func (v outboxTopicViolation) String() string {
 // SelectorExprs (e.g. dto.TopicSessionCreated). go/types' built-in constant
 // folding provides full intra-module const propagation without manual SSA.
 //
-// Scope: scans all non-test .go files under cells/** via packages.Load.
+// Scope: scans all production non-test .go files via packages.Load.
 //
 // ref: kubernetes apiserver/pkg/audit Backend.FailurePolicy (Ignore/Fail)
 // ref: ThreeDotsLabs/watermill message/router/middleware/retry.go
 func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 	if testing.Short() {
-		t.Skip("skipping packages.Load-based archtest in -short mode (loads ./cells/... module-wide, ~5-10s)")
+		t.Skip("skipping packages.Load-based archtest in -short mode (loads production packages module-wide, ~5-10s)")
 	}
 	root := findModuleRoot(t)
 
@@ -82,10 +93,10 @@ func TestSecurityTopicsDoNotOptInFailOpen(t *testing.T) {
 			"unset (= Default, falls through to Cell ctor default = FailClosed).")
 }
 
-// checkOutboxTopicFailOpenRule loads all cells/ packages with full type info
-// and scans every non-test Go file for OUTBOX-TOPIC-FAILOPEN-01 violations.
+// checkOutboxTopicFailOpenRule loads module packages with full type info and
+// scans production Go files for OUTBOX-TOPIC-FAILOPEN-01 violations.
 func checkOutboxTopicFailOpenRule(root string) ([]outboxTopicViolation, error) {
-	r, err := typeseval.SharedResolver(root, "./cells/...")
+	r, err := typeseval.SharedResolver(root, prodscan.Patterns(root)...)
 	if err != nil {
 		return nil, err
 	}
@@ -114,6 +125,9 @@ func scanPackage(root string, p *packages.Package) ([]outboxTopicViolation, erro
 			return nil, fmt.Errorf("filepath.Rel: %w", err)
 		}
 		rel = filepath.ToSlash(rel)
+		if skipOutboxTopicProductionScan(rel) {
+			continue
+		}
 		violations = append(violations, scanOutboxTopicFailOpenAST(p.Fset, file, rel, p)...)
 	}
 	return violations, nil
@@ -133,66 +147,80 @@ func scanOutboxTopicFailOpenAST(fset *token.FileSet, file *ast.File, fileLabel s
 		if !ok {
 			return true
 		}
-		if !isOutboxEntryLiteral(lit) {
+		if !isOutboxEntryLiteral(pkg, lit) {
 			return true
 		}
-		topic, topicOK := extractStringField(pkg, lit, outboxTopicEntryField)
-		eventType, eventTypeOK := extractStringField(pkg, lit, outboxTopicEventTypeField)
+		policy := extractFailurePolicy(pkg, lit)
+		if policy.safe() {
+			return true
+		}
+		topic := extractStringField(pkg, lit, outboxTopicEntryField)
+		eventType := extractStringField(pkg, lit, outboxTopicEventTypeField)
+		route := effectiveOutboxRoute(topic, eventType)
 
-		var matched string
 		switch {
-		case topicOK && outboxSecurityTopicPattern.MatchString(topic):
-			matched = topic
-		case eventTypeOK && outboxSecurityTopicPattern.MatchString(eventType):
-			matched = eventType
+		case route.ok && outboxSecurityTopicPattern.MatchString(route.value):
+			violations = append(violations, outboxTopicViolation{
+				Rule:    outboxTopicRuleFailOpen,
+				File:    fileLabel,
+				Line:    fset.Position(lit.Pos()).Line,
+				Message: outboxPolicyViolationMessage(policy, route.value),
+			})
+			return true
+		case route.unknown() || !route.present:
+			violations = append(violations, outboxTopicViolation{
+				Rule:    outboxTopicRuleFailOpen,
+				File:    fileLabel,
+				Line:    fset.Position(lit.Pos()).Line,
+				Message: outboxUnknownRouteViolationMessage(policy),
+			})
+			return true
 		default:
 			return true
 		}
-		if !entryHasFailOpenPolicy(lit) {
-			return true
-		}
-		violations = append(violations, outboxTopicViolation{
-			Rule:    outboxTopicRuleFailOpen,
-			File:    fileLabel,
-			Line:    fset.Position(lit.Pos()).Line,
-			Message: fmt.Sprintf("outbox.Entry for topic %q opts into FailurePolicyFailOpen; security/audit events must remain FailClosed (leave FailurePolicy unset)", matched),
-		})
-		return true
 	})
 	return violations
 }
 
-// isOutboxEntryLiteral matches `outbox.Entry{...}` and its variants
-// (e.g. kernel-outbox aliases). Matches type expressions ending in
-// `.Entry` from any imported outbox package alias.
-func isOutboxEntryLiteral(lit *ast.CompositeLit) bool {
-	switch t := lit.Type.(type) {
-	case *ast.SelectorExpr:
-		// X.Entry where X is some package identifier — require identifier
-		// name to contain "outbox" to avoid false positives on unrelated
-		// Entry types (e.g. log.Entry).
-		if t.Sel.Name != "Entry" {
-			return false
-		}
-		id, ok := t.X.(*ast.Ident)
-		if !ok {
-			return false
-		}
-		return strings.Contains(strings.ToLower(id.Name), "outbox")
-	case *ast.Ident:
-		// Same-package literal `Entry{...}`. Only meaningful inside the
-		// outbox package itself — scope excludes kernel/, so this arm is
-		// unused in practice but kept for completeness.
-		return t.Name == "Entry"
+// isOutboxEntryLiteral matches real kernel/outbox.Entry composite literals by
+// type identity. Import aliases and type aliases are resolved by go/types;
+// unrelated Entry structs are rejected even when they share field names.
+func isOutboxEntryLiteral(pkg *packages.Package, lit *ast.CompositeLit) bool {
+	if pkg.TypesInfo == nil || lit.Type == nil {
+		return false
 	}
-	return false
+	tv, ok := pkg.TypesInfo.Types[lit.Type]
+	if !ok {
+		return false
+	}
+	return isOutboxNamedType(tv.Type, outboxEntryTypeName)
+}
+
+type outboxTopicFieldValue struct {
+	present bool
+	ok      bool
+	value   string
+}
+
+func (f outboxTopicFieldValue) unknown() bool {
+	return f.present && !f.ok
+}
+
+func effectiveOutboxRoute(topic, eventType outboxTopicFieldValue) outboxTopicFieldValue {
+	if topic.present {
+		if topic.ok && topic.value == "" {
+			return eventType
+		}
+		return topic
+	}
+	return eventType
 }
 
 // extractStringField returns the compile-time constant string value for the
 // named field of a composite literal, evaluated via typeseval.EvaluateConstString.
 // Covers BasicLit, same-package const Ident, and cross-package SelectorExpr.
 // Returns ok=false when the field is missing or its value is not a constant string.
-func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName string) (string, bool) {
+func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName string) outboxTopicFieldValue {
 	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -202,9 +230,37 @@ func extractStringField(pkg *packages.Package, lit *ast.CompositeLit, fieldName 
 		if !ok || key.Name != fieldName {
 			continue
 		}
-		return typeseval.EvaluateConstString(pkg.TypesInfo, kv.Value)
+		value, ok := typeseval.EvaluateConstString(pkg.TypesInfo, kv.Value)
+		return outboxTopicFieldValue{present: true, ok: ok, value: value}
 	}
-	return "", false
+	return outboxTopicFieldValue{}
+}
+
+type outboxFailurePolicyStatus int
+
+const (
+	outboxPolicyAbsent outboxFailurePolicyStatus = iota
+	outboxPolicyKnownOther
+	outboxPolicyKnownFailOpen
+	outboxPolicyUnknown
+)
+
+func (s outboxFailurePolicyStatus) safe() bool {
+	return s == outboxPolicyAbsent || s == outboxPolicyKnownOther
+}
+
+func outboxPolicyViolationMessage(policy outboxFailurePolicyStatus, topic string) string {
+	if policy == outboxPolicyUnknown {
+		return fmt.Sprintf("outbox.Entry for topic %q uses non-constant FailurePolicy; security/audit events must statically remain FailClosed", topic)
+	}
+	return fmt.Sprintf("outbox.Entry for topic %q opts into FailurePolicyFailOpen; security/audit events must remain FailClosed (leave FailurePolicy unset)", topic)
+}
+
+func outboxUnknownRouteViolationMessage(policy outboxFailurePolicyStatus) string {
+	if policy == outboxPolicyUnknown {
+		return "outbox.Entry uses non-constant FailurePolicy and Topic/EventType is not statically known; security/audit fail-open policy must be statically ruled out"
+	}
+	return "outbox.Entry opts into FailurePolicyFailOpen but Topic/EventType is not statically known; fail-open requires a statically non-security topic"
 }
 
 // TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures asserts that the
@@ -242,6 +298,23 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 		{"./eventtype_only_const_audit_failopen", true},
 		// Cross-package const for a non-session security topic (audit.*).
 		{"./crosspackage_audit_dto/consumer", true},
+		// Import alias must not affect outbox.Entry identity.
+		{"./import_alias_entry_session_failopen", true},
+		// Type aliases to outbox.Entry still have outbox.Entry identity.
+		{"./entry_type_alias_session_failopen", true},
+		// Local and cross-package aliases to the fail-open const are still fail-open.
+		{"./local_failopen_alias_session", true},
+		{"./crosspackage_failopen_alias/consumer", true},
+		// Dynamic policy on a security route is fail-closed.
+		{"./dynamic_failopen_policy_session", true},
+		// Non-outbox Entry types must not be matched by name alone.
+		{"./unrelated_entry_failopen_passes", false},
+		// Fail-open entries with dynamic routing topics fail closed.
+		{"./dynamic_topic_failopen", true},
+		// Empty Topic falls back to EventType, matching outbox.Entry.RoutingTopic.
+		{"./topic_empty_event_session_failopen", true},
+		// Topic takes precedence over EventType, matching outbox.Entry.RoutingTopic.
+		{"./topic_precedence_dynamic_event_passes", false},
 	}
 
 	for _, c := range cases {
@@ -273,9 +346,10 @@ func TestSecurityTopicsDoNotOptInFailOpen_RegressionFixtures(t *testing.T) {
 	}
 }
 
-// entryHasFailOpenPolicy checks whether the composite literal sets
-// `FailurePolicy: <something referencing FailurePolicyFailOpen>`.
-func entryHasFailOpenPolicy(lit *ast.CompositeLit) bool {
+// extractFailurePolicy classifies the FailurePolicy field. A dynamic policy is
+// treated as unknown, and callers fail closed when the route is security-like or
+// not statically known.
+func extractFailurePolicy(pkg *packages.Package, lit *ast.CompositeLit) outboxFailurePolicyStatus {
 	for _, elt := range lit.Elts {
 		kv, ok := elt.(*ast.KeyValueExpr)
 		if !ok {
@@ -285,18 +359,79 @@ func entryHasFailOpenPolicy(lit *ast.CompositeLit) bool {
 		if !ok || key.Name != outboxTopicForbiddenPolicyField {
 			continue
 		}
-		switch v := kv.Value.(type) {
-		case *ast.Ident:
-			if v.Name == outboxTopicForbiddenPolicyIdent {
-				return true
-			}
-		case *ast.SelectorExpr:
-			if v.Sel != nil && v.Sel.Name == outboxTopicForbiddenPolicyIdent {
-				return true
-			}
+		if isOutboxFailOpenConst(pkg.TypesInfo, kv.Value) {
+			return outboxPolicyKnownFailOpen
 		}
+		if isKnownOutboxFailurePolicyConst(pkg.TypesInfo, kv.Value) {
+			return outboxPolicyKnownOther
+		}
+		return outboxPolicyUnknown
 	}
-	return false
+	return outboxPolicyAbsent
+}
+
+func isOutboxFailOpenConst(info *types.Info, expr ast.Expr) bool {
+	if info == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok || tv.Value == nil {
+		return false
+	}
+	pkgPath, ok := outboxNamedTypePackagePath(tv.Type, outboxFailurePolicyTypeName)
+	if !ok {
+		return false
+	}
+	failOpenValue, ok := outboxFailOpenConstValues[pkgPath]
+	if !ok {
+		return false
+	}
+	value, exact := constant.Int64Val(constant.ToInt(tv.Value))
+	return exact && value == failOpenValue
+}
+
+func isKnownOutboxFailurePolicyConst(info *types.Info, expr ast.Expr) bool {
+	if info == nil {
+		return false
+	}
+	tv, ok := info.Types[expr]
+	if !ok || tv.Value == nil {
+		return false
+	}
+	_, ok = outboxNamedTypePackagePath(tv.Type, outboxFailurePolicyTypeName)
+	return ok
+}
+
+func isOutboxNamedType(t types.Type, name string) bool {
+	_, ok := outboxNamedTypePackagePath(t, name)
+	return ok
+}
+
+func outboxNamedTypePackagePath(t types.Type, name string) (string, bool) {
+	if t == nil {
+		return "", false
+	}
+	named, ok := types.Unalias(t).(*types.Named)
+	if !ok {
+		return "", false
+	}
+	obj := named.Obj()
+	if obj == nil || obj.Name() != name || obj.Pkg() == nil {
+		return "", false
+	}
+	pkgPath := obj.Pkg().Path()
+	return pkgPath, isOutboxPackagePath(pkgPath)
+}
+
+func isOutboxPackagePath(pkgPath string) bool {
+	return pkgPath == gocellOutboxPackagePath || pkgPath == fixtureOutboxPackagePath
+}
+
+func skipOutboxTopicProductionScan(rel string) bool {
+	return strings.HasPrefix(rel, "tools/") ||
+		strings.HasPrefix(rel, "tests/") ||
+		strings.Contains(rel, "/testdata/") ||
+		strings.HasPrefix(rel, "testdata/")
 }
 
 // findArchTestDir returns the absolute path of the tools/archtest directory,

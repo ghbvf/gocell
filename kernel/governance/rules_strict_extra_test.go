@@ -939,6 +939,33 @@ func fmt25Project(contractID, contractDir string, queryParams, pathParams map[st
 	}
 }
 
+func TestFMT25_RequestSchemaPathEscapeFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	require.NoError(t, os.MkdirAll(filepath.Join(dir, "contracts/http/test"), 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "contracts/http/test/outside.schema.json"), []byte(`{"type":"object","additionalProperties":false}`), 0o644))
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+	pm.Contracts["http.test.v1"].SchemaRefs.Request = "../outside.schema.json"
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1)
+	assert.Equal(t, IssueInvalid, matches[0].IssueType)
+	assert.Equal(t, "schemaRefs.request", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "failed to resolve")
+}
+
+func TestFMT25_RequestSchemaMissingFailsClosed(t *testing.T) {
+	dir := t.TempDir()
+	pm := fmt25Project("http.test.v1", "contracts/http/test/v1", nil, nil)
+
+	results := NewValidator(pm, dir).Validate()
+	matches := findByCode(results, "FMT-25")
+	require.Len(t, matches, 1)
+	assert.Equal(t, IssueRefNotFound, matches[0].IssueType)
+	assert.Equal(t, "schemaRefs.request", matches[0].Field)
+	assert.Contains(t, matches[0].Message, "missing file")
+}
+
 // TestFMT25_RequestStringMissingMinLength verifies a violation fires when a
 // string field in request.schema.json lacks minLength.
 func TestFMT25_RequestStringMissingMinLength(t *testing.T) {
