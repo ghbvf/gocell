@@ -95,34 +95,32 @@ func goToolName() string {
 func goTestEnv(goTool string) []string {
 	env := os.Environ()
 	pathKey, pathValue := pathEnv(env)
-	env = withoutEnvKeys(env, "PATH", "Path")
+	env = withoutPathEnv(env)
 	return append(env, pathKey+"="+prependPath(filepath.Dir(goTool), pathValue))
 }
 
-func withoutEnvKeys(env []string, keys ...string) []string {
+func withoutPathEnv(env []string) []string {
 	filtered := env[:0]
 	for _, entry := range env {
 		key, _, ok := strings.Cut(entry, "=")
-		if !ok || !matchesAnyEnvKey(key, keys) {
+		if !ok || !matchesPathEnvKey(key) {
 			filtered = append(filtered, entry)
 		}
 	}
 	return filtered
 }
 
-func matchesAnyEnvKey(key string, candidates []string) bool {
-	for _, candidate := range candidates {
-		if strings.EqualFold(key, candidate) {
-			return true
-		}
+func matchesPathEnvKey(key string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(key, "PATH")
 	}
-	return false
+	return key == "PATH"
 }
 
 func pathEnv(env []string) (string, string) {
 	for _, entry := range env {
 		key, value, ok := strings.Cut(entry, "=")
-		if ok && strings.EqualFold(key, "PATH") {
+		if ok && matchesPathEnvKey(key) {
 			return key, value
 		}
 	}

@@ -165,6 +165,22 @@ func TestGoTestEnvPreservesCallerEnvAndPrependsGoDir(t *testing.T) {
 	assert.Equal(t, callerGoRoot, envValue(env, "GOROOT"))
 }
 
+func TestPathEnvUsesExactPATHOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows environment keys are case-insensitive")
+	}
+
+	env := []string{
+		"Path=wrong",
+		"PATH=right",
+		"GOROOT=/tmp/goroot",
+	}
+	key, value := pathEnv(env)
+	assert.Equal(t, "PATH", key)
+	assert.Equal(t, "right", value)
+	assert.Contains(t, withoutPathEnv(env), "Path=wrong")
+}
+
 func envValue(env []string, key string) string {
 	for _, entry := range env {
 		envKey, value, ok := strings.Cut(entry, "=")
