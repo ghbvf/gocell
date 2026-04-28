@@ -383,11 +383,1018 @@ func useVarMulti(err error) {
 	var _, reason = multi(err)
 	counter.With(metrics.Labels{"reason": reason}).Inc()
 }
+
+func useMultiFlag(err error) {
+	flag, _ := multi(err)
+	counter.With(metrics.Labels{"reason": fmt.Sprint(flag)}).Inc()
+}
 `)
 
 	diagnostics, err := CheckOBS01(root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 3)
+}
+
+func TestCheckOBS01DetectsExpandedMultiReturnHelperArgsByPosition(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func multi(err error) (bool, string) {
+	return false, fmt.Sprint(errcode.IsInfraError(err))
+}
+
+func helperReason(_ bool, reason string) {
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+
+func helperFlag(flag bool, _ string) {
+	counter.With(metrics.Labels{"reason": fmt.Sprint(flag)}).Inc()
+}
+
+func useReason(err error) {
+	helperReason(multi(err))
+}
+
+func useFlag(err error) {
+	helperFlag(multi(err))
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsBranchTaintBeforeSink(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func branched(err error, safe bool) {
+	reason := "ok"
+	if safe {
+		reason = "ok"
+	} else {
+		reason = fmt.Sprint(errcode.IsInfraError(err))
+	}
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsCommaOKTupleExpressionTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func commaOK(err error) {
+	_, ok := map[string]string{}[fmt.Sprint(errcode.IsInfraError(err))]
+	counter.With(metrics.Labels{"reason": fmt.Sprint(ok)}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DoesNotMergeTerminatedBranchTaintIntoLaterSink(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func terminated(err error, unsafe bool) {
+	reason := "ok"
+	if unsafe {
+		reason = fmt.Sprint(errcode.IsInfraError(err))
+		return
+	}
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01DetectsSwitchFallthroughTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func fallthroughTaint(err error, code int) {
+	reason := "ok"
+	switch code {
+	case 1:
+		reason = fmt.Sprint(errcode.IsInfraError(err))
+		fallthrough
+	case 2:
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsRangeValueTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func rangeValue(err error) {
+	for _, reason := range []string{fmt.Sprint(errcode.IsInfraError(err))} {
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsFuncLiteralLocalTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func literal(err error) {
+	func() {
+		reason := fmt.Sprint(errcode.IsInfraError(err))
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsGlobalTransitiveHelperSinkParams(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "shared/obs.go", `package shared
+
+import "github.com/ghbvf/gocell/kernel/observability/metrics"
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func Record(reason string) {
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+
+func Forward(reason string) {
+	Record(reason)
+}
+`)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"example.com/metricsfixture/shared"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+func viaShared(err error) {
+	shared.Forward(fmt.Sprint(errcode.IsInfraError(err)))
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsIIFEParamTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func iife(err error) {
+	func(reason string) {
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}(fmt.Sprint(errcode.IsInfraError(err)))
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DoesNotScanUncalledFuncLiteral(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func uncalled(err error) {
+	reason := fmt.Sprint(errcode.IsInfraError(err))
+	_ = func() {
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01DetectsCalledFuncLiteralVariable(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func called(err error) {
+	reason := fmt.Sprint(errcode.IsInfraError(err))
+	f := func() {
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+	f()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsCompoundAssignmentPreservesTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func compound(err error) {
+	reason := fmt.Sprint(errcode.IsInfraError(err))
+	reason += ""
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DoesNotTaintRangeIndexFromSliceValue(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func rangeIndex(err error) {
+	for i := range []string{fmt.Sprint(errcode.IsInfraError(err))} {
+		counter.With(metrics.Labels{"reason": fmt.Sprint(i)}).Inc()
+	}
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01DetectsMapLabelMutation(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func mapMutation(err error) {
+	labels := metrics.Labels{}
+	labels["reason"] = fmt.Sprint(errcode.IsInfraError(err))
+	counter.With(labels).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "<labels>", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsVariadicWithLabelValues(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+var counter = prom.NewCounterVec(prom.CounterOpts{
+	Name: "obs_total",
+}, []string{"status", "reason"})
+
+func direct(err error) {
+	counter.WithLabelValues([]string{"ok", fmt.Sprint(errcode.IsInfraError(err))}...).Inc()
+}
+
+func record(vals ...string) {
+	counter.WithLabelValues(vals...).Inc()
+}
+
+func viaWrapper(err error) {
+	record("ok", fmt.Sprint(errcode.IsInfraError(err)))
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 2)
+	for _, diag := range diagnostics {
+		assert.Equal(t, "obs_total", diag.Metric)
+		assert.Equal(t, "reason", diag.Label)
+	}
+}
+
+func TestCheckOBS01KeyedSpreadSliceUsesElementIndex(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+var counter = prom.NewCounterVec(prom.CounterOpts{
+	Name: "obs_total",
+}, []string{"status", "reason"})
+
+func direct(err error) {
+	counter.WithLabelValues([]string{1: fmt.Sprint(errcode.IsInfraError(err))}...).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsBreakTaintAfterSwitch(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func breakTaint(err error, code int) {
+	reason := "ok"
+	switch code {
+	case 1:
+		reason = fmt.Sprint(errcode.IsInfraError(err))
+		break
+	}
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DoesNotCollectSinkParamsFromUncalledLiteral(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func wrapper(reason string) {
+	_ = func() {
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+}
+
+func direct(err error) {
+	wrapper(fmt.Sprint(errcode.IsInfraError(err)))
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01DetectsIIFEReturnTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func helper(err error) (reason string) {
+	func() {
+		reason = fmt.Sprint(errcode.IsInfraError(err))
+	}()
+	return
+}
+
+func direct(err error) {
+	counter.With(metrics.Labels{"reason": helper(err)}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01SpreadSliceVariableUsesGenericLabel(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+var counter = prom.NewCounterVec(prom.CounterOpts{
+	Name: "obs_total",
+}, []string{"status", "reason"})
+
+func direct(err error) {
+	vals := []string{"ok", fmt.Sprint(errcode.IsInfraError(err))}
+	counter.WithLabelValues(vals...).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "<labelValues>", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DetectsAssignedMapKeyRangeTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func rangeMapKey(err error) {
+	values := map[string]string{fmt.Sprint(errcode.IsInfraError(err)): "x"}
+	for reason := range values {
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01BranchClosureBindingsMerge(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func branchClosure(err error, safe bool) {
+	reason := fmt.Sprint(errcode.IsInfraError(err))
+	f := func() {}
+	if safe {
+		f = func() {
+			counter.With(metrics.Labels{"reason": reason}).Inc()
+		}
+	} else {
+		f = func() {}
+	}
+	f()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01ClosureCallCanClearCapturedTaint(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func clearInClosure(err error) {
+	reason := fmt.Sprint(errcode.IsInfraError(err))
+	f := func() {
+		reason = "ok"
+	}
+	f()
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01DetectsVariadicIIFEArgs(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+var counter = prom.NewCounterVec(prom.CounterOpts{
+	Name: "obs_total",
+}, []string{"status", "reason"})
+
+func iife(err error) {
+	func(vals ...string) {
+		counter.WithLabelValues(vals...).Inc()
+	}("ok", fmt.Sprint(errcode.IsInfraError(err)))
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
+}
+
+func TestCheckOBS01SpreadWrapperUsesGenericLabelOnce(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+var counter = prom.NewCounterVec(prom.CounterOpts{
+	Name: "obs_total",
+}, []string{"status", "reason"})
+
+func record(vals ...string) {
+	counter.WithLabelValues(vals...).Inc()
+}
+
+func viaSpread(err error) {
+	vals := []string{"ok", fmt.Sprint(errcode.IsInfraError(err))}
+	record(vals...)
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "<labelValues>", diagnostics[0].Label)
+}
+
+func TestCheckOBS01DoesNotTaintAssignedMapKeyFromValue(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func rangeMapValue(err error) {
+	values := map[string]string{"safe": fmt.Sprint(errcode.IsInfraError(err))}
+	for reason := range values {
+		counter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01DoesNotScanFunctionLiteralExpressionBody(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func literalValue(err error) {
+	f := func() string {
+		return fmt.Sprint(errcode.IsInfraError(err))
+	}
+	counter.With(metrics.Labels{"reason": fmt.Sprint(f)}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01DetectsControlFlowAndMutationEdges(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+var provider = metrics.NopProvider{}
+var loopCounter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "loop_obs_total",
+	LabelNames: []string{"reason"},
+})
+var closureCounter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "closure_obs_total",
+	LabelNames: []string{"reason"},
+})
+var switchCounter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "switch_obs_total",
+	LabelNames: []string{"reason"},
+})
+var continueCounter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "continue_obs_total",
+	LabelNames: []string{"reason"},
+})
+var mapCounter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "map_key_obs_total",
+	LabelNames: []string{"reason"},
+})
+var spreadCounter = prom.NewCounterVec(prom.CounterOpts{
+	Name: "spread_obs_total",
+}, []string{"status", "reason"})
+
+func record(vals ...string) {
+	spreadCounter.WithLabelValues(vals...).Inc()
+}
+
+func loopCarried(err error) {
+	reason := "ok"
+	for i := 0; i < 2; i++ {
+		loopCounter.With(metrics.Labels{"reason": reason}).Inc()
+		reason = fmt.Sprint(errcode.IsInfraError(err))
+	}
+}
+
+func closureAlternatives(err error, clear bool) {
+	reason := fmt.Sprint(errcode.IsInfraError(err))
+	f := func() {}
+	if clear {
+		f = func() {
+			reason = "ok"
+		}
+	} else {
+		f = func() {}
+	}
+	f()
+	closureCounter.With(metrics.Labels{"reason": reason}).Inc()
+}
+
+func switchClosure(err error, mode int) {
+	reason := fmt.Sprint(errcode.IsInfraError(err))
+	f := func() {
+		switchCounter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+	switch mode {
+	case 1:
+		f = func() {}
+	}
+	f()
+}
+
+func continuePost(err error) {
+	reason := "ok"
+	i := 0
+	for ; i < 2; reason = fmt.Sprint(errcode.IsInfraError(err)) {
+		continueCounter.With(metrics.Labels{"reason": reason}).Inc()
+		i++
+		continue
+	}
+}
+
+func viaCompositeSpread(err error) {
+	record([]string{"ok", fmt.Sprint(errcode.IsInfraError(err))}...)
+}
+
+func mapKeyMutation(err error) {
+	values := map[string]string{}
+	values[fmt.Sprint(errcode.IsInfraError(err))] = "x"
+	for reason := range values {
+		mapCounter.With(metrics.Labels{"reason": reason}).Inc()
+	}
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 6)
+	got := map[string]int{}
+	for _, diagnostic := range diagnostics {
+		assert.Equal(t, "reason", diagnostic.Label)
+		got[diagnostic.Metric]++
+	}
+	assert.Equal(t, map[string]int{
+		"closure_obs_total":  1,
+		"continue_obs_total": 1,
+		"loop_obs_total":     1,
+		"map_key_obs_total":  1,
+		"spread_obs_total":   1,
+		"switch_obs_total":   1,
+	}, got)
 }
 
 func TestCheckOBS01DoesNotReportClearedTaintOrCategoryConstants(t *testing.T) {

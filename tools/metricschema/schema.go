@@ -1341,9 +1341,11 @@ func collectOBS01MetricIdentities(
 	return out
 }
 
-func collectOBS01ReturnTaints(pkgs []*packages.Package) map[*types.Func]bool {
+type obs01ReturnTaints map[*types.Func]map[int]bool
+
+func collectOBS01ReturnTaints(pkgs []*packages.Package) obs01ReturnTaints {
 	funcs, infos, objects := collectOBS01Funcs(pkgs)
-	out := map[*types.Func]bool{}
+	out := obs01ReturnTaints{}
 	for changed := true; changed; {
 		changed = updateOBS01ReturnTaints(funcs, infos, objects, out)
 	}
@@ -1382,65 +1384,79 @@ func updateOBS01ReturnTaints(
 	funcs []*ast.FuncDecl,
 	infos map[*ast.FuncDecl]*types.Info,
 	objects map[*ast.FuncDecl]*types.Func,
-	out map[*types.Func]bool,
+	out obs01ReturnTaints,
 ) bool {
 	changed := false
 	for _, fn := range funcs {
 		obj := objects[fn]
-		if out[obj] {
-			continue
-		}
-		if obs01FuncReturnsClassifier(infos[fn], fn, out) {
-			out[obj] = true
+		for index := range obs01FuncReturnTaints(infos[fn], fn, out) {
+			if out[obj] == nil {
+				out[obj] = map[int]bool{}
+			}
+			if out[obj][index] {
+				continue
+			}
+			out[obj][index] = true
 			changed = true
 		}
 	}
 	return changed
 }
 
-func obs01FuncReturnsClassifier(info *types.Info, fn *ast.FuncDecl, returnTaints map[*types.Func]bool) bool {
+func obs01FuncReturnTaints(info *types.Info, fn *ast.FuncDecl, returnTaints obs01ReturnTaints) map[int]bool {
 	tainted := map[types.Object]bool{}
-	found := false
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		if found {
-			return false
-		}
-		switch node := n.(type) {
-		case *ast.AssignStmt:
-			markOBS01AssignedTaint(info, node.Lhs, node.Rhs, tainted, returnTaints)
-		case *ast.ValueSpec:
-			markOBS01ValueSpecTaint(info, node, tainted, returnTaints)
-		case *ast.ReturnStmt:
-			if obs01ReturnStmtDependsOnClassifier(info, fn, node, tainted, returnTaints) {
-				found = true
-				return false
+	out := map[int]bool{}
+	walkOBS01Stmts(info, fn.Body.List, tainted, returnTaints, obs01StmtHandlers{
+		onReturn: func(node *ast.ReturnStmt, state map[types.Object]bool) {
+			for index := range obs01ReturnStmtTaints(info, fn, node, state, returnTaints) {
+				out[index] = true
 			}
-		}
-		return true
+		},
 	})
-	return found
+	return out
 }
 
-func obs01ReturnStmtDependsOnClassifier(
+func obs01ReturnStmtTaints(
 	info *types.Info,
 	fn *ast.FuncDecl,
 	stmt *ast.ReturnStmt,
 	tainted map[types.Object]bool,
-	returnTaints map[*types.Func]bool,
-) bool {
-	for _, result := range stmt.Results {
-		if exprDependsOnErrcodeClassifier(info, result, tainted, returnTaints) {
-			return true
+	returnTaints obs01ReturnTaints,
+) map[int]bool {
+	out := map[int]bool{}
+	if len(stmt.Results) > 0 {
+		resultCount := obs01ResultCount(fn)
+		if resultCount == 0 {
+			resultCount = len(stmt.Results)
 		}
-	}
-	if len(stmt.Results) == 0 {
-		for _, obj := range namedResultObjects(info, fn) {
-			if tainted[obj] {
-				return true
+		for i := 0; i < resultCount; i++ {
+			if exprDependsOnErrcodeClassifierForPosition(info, stmt.Results, i, tainted, returnTaints) {
+				out[i] = true
 			}
 		}
+		return out
 	}
-	return false
+	for i, obj := range namedResultObjects(info, fn) {
+		if tainted[obj] {
+			out[i] = true
+		}
+	}
+	return out
+}
+
+func obs01ResultCount(fn *ast.FuncDecl) int {
+	if fn.Type.Results == nil {
+		return 0
+	}
+	count := 0
+	for _, field := range fn.Type.Results.List {
+		if len(field.Names) == 0 {
+			count++
+			continue
+		}
+		count += len(field.Names)
+	}
+	return count
 }
 
 func namedResultObjects(info *types.Info, fn *ast.FuncDecl) []types.Object {
@@ -1572,9 +1588,10 @@ func CheckOBS01(projectRoot string, patterns ...string) ([]Diagnostic, error) {
 	}
 	metricIdentities := collectOBS01MetricIdentities(projectRoot, pkgs, inits, namespace)
 	returnTaints := collectOBS01ReturnTaints(pkgs)
+	sinkParams := collectOBS01SinkParams(pkgs, metricIdentities)
 	var diagnostics []Diagnostic
 	for _, p := range pkgs {
-		pkgDiagnostics, scanErr := scanOBS01Package(projectRoot, p, acks, metricIdentities, returnTaints)
+		pkgDiagnostics, scanErr := scanOBS01Package(projectRoot, p, acks, sinkParams, metricIdentities, returnTaints)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -1589,31 +1606,49 @@ func CheckOBS01(projectRoot string, patterns ...string) ([]Diagnostic, error) {
 		}
 		return diagnostics[i].Column < diagnostics[j].Column
 	})
-	return diagnostics, nil
+	return dedupeDiagnostics(diagnostics), nil
+}
+
+func dedupeDiagnostics(in []Diagnostic) []Diagnostic {
+	seen := map[Diagnostic]bool{}
+	out := make([]Diagnostic, 0, len(in))
+	for _, diagnostic := range in {
+		if seen[diagnostic] {
+			continue
+		}
+		seen[diagnostic] = true
+		out = append(out, diagnostic)
+	}
+	return out
 }
 
 type obs01SinkArg struct {
-	Expr    ast.Expr
-	Metric  string
-	Label   string
-	Ackable bool
+	Expr          ast.Expr
+	ValueIndex    int
+	Variadic      bool
+	VariadicIndex int
+	Metric        string
+	Label         string
+	Ackable       bool
 }
 
 type obs01SinkBinding struct {
-	Metric  string
-	Label   string
-	Ackable bool
+	Variadic      bool
+	VariadicIndex int
+	Metric        string
+	Label         string
+	Ackable       bool
 }
 
 func scanOBS01Package(
 	root string,
 	p *packages.Package,
 	acks map[string]obsAck,
+	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
-	returnTaints map[*types.Func]bool,
+	returnTaints obs01ReturnTaints,
 ) ([]Diagnostic, error) {
 	var diagnostics []Diagnostic
-	sinkParams := collectOBS01SinkParams(p, metricIdentities)
 	for _, file := range p.Syntax {
 		path := p.Fset.Position(file.Pos()).Filename
 		if !isProjectGoFile(root, path) {
@@ -1636,7 +1671,7 @@ func scanOBS01File(
 	acks map[string]obsAck,
 	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
-	returnTaints map[*types.Func]bool,
+	returnTaints obs01ReturnTaints,
 ) []Diagnostic {
 	var diagnostics []Diagnostic
 	for _, decl := range file.Decls {
@@ -1656,21 +1691,15 @@ func scanOBS01Func(
 	acks map[string]obsAck,
 	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
-	returnTaints map[*types.Func]bool,
+	returnTaints obs01ReturnTaints,
 ) []Diagnostic {
 	var diagnostics []Diagnostic
 	tainted := map[types.Object]bool{}
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		switch node := n.(type) {
-		case *ast.AssignStmt:
-			markOBS01AssignedTaint(p.TypesInfo, node.Lhs, node.Rhs, tainted, returnTaints)
-		case *ast.ValueSpec:
-			markOBS01ValueSpecTaint(p.TypesInfo, node, tainted, returnTaints)
-		case *ast.CallExpr:
+	walkOBS01Stmts(p.TypesInfo, fn.Body.List, tainted, returnTaints, obs01StmtHandlers{
+		onCall: func(node *ast.CallExpr, state map[types.Object]bool) {
 			diagnostics = append(diagnostics,
-				obs01DiagnosticsForCall(p, node, rel, acks, tainted, sinkParams, metricIdentities, returnTaints)...)
-		}
-		return true
+				obs01DiagnosticsForCall(p, node, rel, acks, state, sinkParams, metricIdentities, returnTaints)...)
+		},
 	})
 	return diagnostics
 }
@@ -1683,16 +1712,21 @@ func obs01DiagnosticsForCall(
 	tainted map[types.Object]bool,
 	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
-	returnTaints map[*types.Func]bool,
+	returnTaints obs01ReturnTaints,
 ) []Diagnostic {
 	var diagnostics []Diagnostic
+	for _, sink := range obs01FuncLitVariadicSpreadSinkArgs(p.TypesInfo, p.Fset, call, metricIdentities) {
+		if exprDependsOnErrcodeClassifierForValue(p.TypesInfo, sink.Expr, sink.ValueIndex, tainted, returnTaints) {
+			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks)
+		}
+	}
 	for _, sink := range metricLabelBindingArgs(p.TypesInfo, p.Fset, call, metricIdentities) {
-		if exprDependsOnErrcodeClassifier(p.TypesInfo, sink.Expr, tainted, returnTaints) {
+		if exprDependsOnErrcodeClassifierForValue(p.TypesInfo, sink.Expr, sink.ValueIndex, tainted, returnTaints) {
 			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks)
 		}
 	}
 	for _, sink := range obs01SinkArgs(p.TypesInfo, call, sinkParams) {
-		if exprDependsOnErrcodeClassifier(p.TypesInfo, sink.Expr, tainted, returnTaints) {
+		if exprDependsOnErrcodeClassifierForValue(p.TypesInfo, sink.Expr, sink.ValueIndex, tainted, returnTaints) {
 			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks)
 		}
 	}
@@ -1754,41 +1788,142 @@ func metricLabelBindingArgs(
 	}
 	metric := obs01MetricSink(info, fset, sel.X, metricIdentities)
 	if sel.Sel.Name == "WithLabelValues" {
-		out := make([]obs01SinkArg, 0, len(call.Args))
-		for i, arg := range call.Args {
-			label := fmt.Sprintf("arg%d", i+1)
-			ackable := false
-			if i < len(metric.Labels) {
-				label = metric.Labels[i]
-				ackable = metric.Resolved
-			}
-			out = append(out, obs01SinkArg{
-				Expr:    arg,
-				Metric:  metric.Metric,
-				Label:   label,
-				Ackable: ackable,
-			})
-		}
-		return out
+		return obs01WithLabelValuesArgs(info, metric, call)
 	}
-	if sel.Sel.Name != "With" || len(call.Args) != 1 {
+	return obs01WithLabelsArgs(info, fset, metric, sel.Sel.Name, call.Args)
+}
+
+func obs01FuncLitVariadicSpreadSinkArgs(
+	info *types.Info,
+	fset *token.FileSet,
+	call *ast.CallExpr,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+) []obs01SinkArg {
+	fn, ok := unparenExpr(call.Fun).(*ast.FuncLit)
+	if !ok {
 		return nil
 	}
-	pkgPath, typ, ok := namedType(info, call.Args[0])
+	variadicObj, paramIndex, ok := obs01FuncLitVariadicParam(info, fn.Type)
+	if !ok {
+		return nil
+	}
+	var out []obs01SinkArg
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if nested, ok := n.(*ast.FuncLit); ok && nested != fn {
+			return false
+		}
+		bodyCall, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		metricExpr, ok := obs01VariadicSpreadLabelValueCall(info, bodyCall, variadicObj)
+		if !ok {
+			return true
+		}
+		metric := obs01MetricSink(info, fset, metricExpr, metricIdentities)
+		for i, label := range metric.Labels {
+			out = append(out, obs01SinkArgsForBindingWithVariadic(info, true, call, paramIndex, obs01SinkBinding{
+				Variadic:      true,
+				VariadicIndex: i,
+				Metric:        metric.Metric,
+				Label:         label,
+				Ackable:       metric.Resolved,
+			})...)
+		}
+		return true
+	})
+	return out
+}
+
+func obs01FuncLitVariadicParam(info *types.Info, typ *ast.FuncType) (types.Object, int, bool) {
+	if !obs01FuncTypeVariadic(typ) {
+		return nil, 0, false
+	}
+	params := functionParamObjects(info, typ)
+	if len(params) == 0 {
+		return nil, 0, false
+	}
+	obj := params[len(params)-1]
+	idx, ok := functionParamIndexes(info, typ)[obj]
+	return obj, idx, ok
+}
+
+func obs01VariadicSpreadLabelValueCall(
+	info *types.Info,
+	call *ast.CallExpr,
+	variadicObj types.Object,
+) (ast.Expr, bool) {
+	if !call.Ellipsis.IsValid() || len(call.Args) != 1 {
+		return nil, false
+	}
+	if objectForOBS01Expr(info, call.Args[0]) != variadicObj {
+		return nil, false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "WithLabelValues" {
+		return nil, false
+	}
+	return sel.X, true
+}
+
+func obs01WithLabelValuesArgs(info *types.Info, metric obs01MetricIdentity, call *ast.CallExpr) []obs01SinkArg {
+	if call.Ellipsis.IsValid() && len(call.Args) == 1 {
+		return obs01SpreadLabelValueArgs(metric, call.Args[0])
+	}
+	valueCount := obs01ValueExprsCount(info, call.Args)
+	out := make([]obs01SinkArg, 0, valueCount)
+	for i := 0; i < valueCount; i++ {
+		if value, ok := obs01ValueExprForPosition(info, call.Args, i); ok {
+			out = append(out, obs01PositionalLabelArg(metric, value, i))
+		}
+	}
+	return out
+}
+
+func obs01PositionalLabelArg(metric obs01MetricIdentity, value obs01ValueExpr, index int) obs01SinkArg {
+	label := fmt.Sprintf("arg%d", index+1)
+	ackable := false
+	if index < len(metric.Labels) {
+		label = metric.Labels[index]
+		ackable = metric.Resolved
+	}
+	return obs01SinkArg{
+		Expr:          value.Expr,
+		ValueIndex:    value.Index,
+		VariadicIndex: -1,
+		Metric:        metric.Metric,
+		Label:         label,
+		Ackable:       ackable,
+	}
+}
+
+func obs01WithLabelsArgs(
+	info *types.Info,
+	fset *token.FileSet,
+	metric obs01MetricIdentity,
+	method string,
+	args []ast.Expr,
+) []obs01SinkArg {
+	if method != "With" || len(args) != 1 {
+		return nil
+	}
+	pkgPath, typ, ok := namedType(info, args[0])
 	if !ok || typ != "Labels" || (pkgPath != kernelMetricsPkg && pkgPath != prometheusPkg) {
 		return nil
 	}
-	return obs01LabelsArgs(info, fset, metric.Metric, metric.Resolved, call.Args[0])
+	return obs01LabelsArgs(info, fset, metric.Metric, metric.Resolved, args[0])
 }
 
 func obs01LabelsArgs(info *types.Info, fset *token.FileSet, metric string, ackableMetric bool, expr ast.Expr) []obs01SinkArg {
 	lit, ok := expr.(*ast.CompositeLit)
 	if !ok {
 		return []obs01SinkArg{{
-			Expr:    expr,
-			Metric:  metric,
-			Label:   "<labels>",
-			Ackable: false,
+			Expr:          expr,
+			ValueIndex:    0,
+			VariadicIndex: -1,
+			Metric:        metric,
+			Label:         "<labels>",
+			Ackable:       false,
 		}}
 	}
 	out := make([]obs01SinkArg, 0, len(lit.Elts))
@@ -1798,21 +1933,80 @@ func obs01LabelsArgs(info *types.Info, fset *token.FileSet, metric string, ackab
 			continue
 		}
 		out = append(out, obs01SinkArg{
-			Expr:    kv.Value,
-			Metric:  metric,
-			Label:   obs01LabelKey(info, fset, kv.Key),
-			Ackable: ackableMetric && obs01ConstantStringKey(info, kv.Key),
+			Expr:          kv.Value,
+			ValueIndex:    0,
+			VariadicIndex: -1,
+			Metric:        metric,
+			Label:         obs01LabelKey(info, fset, kv.Key),
+			Ackable:       ackableMetric && obs01ConstantStringKey(info, kv.Key),
 		})
 	}
 	if len(out) == 0 {
 		return []obs01SinkArg{{
-			Expr:    expr,
-			Metric:  metric,
-			Label:   "<labels>",
-			Ackable: false,
+			Expr:          expr,
+			ValueIndex:    0,
+			VariadicIndex: -1,
+			Metric:        metric,
+			Label:         "<labels>",
+			Ackable:       false,
 		}}
 	}
 	return out
+}
+
+func obs01SpreadLabelValueArgs(metric obs01MetricIdentity, expr ast.Expr) []obs01SinkArg {
+	if lit, ok := unparenExpr(expr).(*ast.CompositeLit); ok {
+		return obs01CompositeSpreadLabelValueArgs(metric, lit)
+	}
+	return []obs01SinkArg{{
+		Expr:          expr,
+		ValueIndex:    0,
+		VariadicIndex: -1,
+		Metric:        metric.Metric,
+		Label:         "<labelValues>",
+		Ackable:       false,
+	}}
+}
+
+func obs01CompositeSpreadLabelValueArgs(metric obs01MetricIdentity, lit *ast.CompositeLit) []obs01SinkArg {
+	out := make([]obs01SinkArg, 0, len(lit.Elts))
+	for i, elt := range lit.Elts {
+		value := elt
+		labelIndex := i
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			value = kv.Value
+			if idx, ok := obs01IntegerIndex(kv.Key); ok {
+				labelIndex = idx
+			}
+		}
+		label := fmt.Sprintf("arg%d", labelIndex+1)
+		ackable := false
+		if labelIndex >= 0 && labelIndex < len(metric.Labels) {
+			label = metric.Labels[labelIndex]
+			ackable = metric.Resolved
+		}
+		out = append(out, obs01SinkArg{
+			Expr:          value,
+			ValueIndex:    0,
+			VariadicIndex: -1,
+			Metric:        metric.Metric,
+			Label:         label,
+			Ackable:       ackable,
+		})
+	}
+	return out
+}
+
+func obs01IntegerIndex(expr ast.Expr) (int, bool) {
+	lit, ok := unparenExpr(expr).(*ast.BasicLit)
+	if !ok || lit.Kind != token.INT {
+		return 0, false
+	}
+	idx, err := strconv.Atoi(lit.Value)
+	if err != nil || idx < 0 {
+		return 0, false
+	}
+	return idx, true
 }
 
 func obs01MetricSink(
@@ -1855,48 +2049,83 @@ func obs01ConstantString(info *types.Info, expr ast.Expr) (string, bool) {
 }
 
 func collectOBS01SinkParams(
-	p *packages.Package,
+	pkgs []*packages.Package,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 ) map[*types.Func]map[int][]obs01SinkBinding {
 	out := map[*types.Func]map[int][]obs01SinkBinding{}
-	for _, file := range p.Syntax {
-		for _, decl := range file.Decls {
-			fn, ok := decl.(*ast.FuncDecl)
-			if !ok {
-				continue
+	funcs := collectOBS01SinkParamFuncs(pkgs)
+	for changed := true; changed; {
+		changed = false
+		for _, fn := range funcs {
+			if collectOBS01SinkParamsForFunc(fn, out, metricIdentities) {
+				changed = true
 			}
-			collectOBS01SinkParamsForFunc(p.TypesInfo, p.Fset, fn, out, metricIdentities)
 		}
 	}
 	return out
 }
 
+type obs01SinkParamFunc struct {
+	info   *types.Info
+	fset   *token.FileSet
+	decl   *ast.FuncDecl
+	obj    *types.Func
+	params map[types.Object]int
+}
+
+func collectOBS01SinkParamFuncs(pkgs []*packages.Package) []obs01SinkParamFunc {
+	var out []obs01SinkParamFunc
+	for _, p := range pkgs {
+		for _, file := range p.Syntax {
+			for _, decl := range file.Decls {
+				if fn, ok := obs01SinkParamFuncForDecl(p, decl); ok {
+					out = append(out, fn)
+				}
+			}
+		}
+	}
+	return out
+}
+
+func obs01SinkParamFuncForDecl(
+	p *packages.Package,
+	decl ast.Decl,
+) (obs01SinkParamFunc, bool) {
+	fn, ok := decl.(*ast.FuncDecl)
+	if !ok || fn.Body == nil {
+		return obs01SinkParamFunc{}, false
+	}
+	obj, ok := p.TypesInfo.Defs[fn.Name].(*types.Func)
+	if !ok {
+		return obs01SinkParamFunc{}, false
+	}
+	params := functionParamIndexes(p.TypesInfo, fn.Type)
+	if len(params) == 0 {
+		return obs01SinkParamFunc{}, false
+	}
+	return obs01SinkParamFunc{
+		info:   p.TypesInfo,
+		fset:   p.Fset,
+		decl:   fn,
+		obj:    obj,
+		params: params,
+	}, true
+}
+
 func collectOBS01SinkParamsForFunc(
-	info *types.Info,
-	fset *token.FileSet,
-	fn *ast.FuncDecl,
+	fn obs01SinkParamFunc,
 	out map[*types.Func]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
-) {
-	if fn.Body == nil {
-		return
-	}
-	obj, ok := info.Defs[fn.Name].(*types.Func)
-	if !ok {
-		return
-	}
-	params := functionParamIndexes(info, fn.Type)
-	if len(params) == 0 {
-		return
-	}
-	ast.Inspect(fn.Body, func(n ast.Node) bool {
-		call, ok := n.(*ast.CallExpr)
-		if !ok {
-			return true
-		}
-		recordOBS01SinkParamDeps(info, fset, out, obj, call, params, metricIdentities)
-		return true
+) bool {
+	changed := false
+	walkOBS01Stmts(fn.info, fn.decl.Body.List, map[types.Object]bool{}, obs01ReturnTaints{}, obs01StmtHandlers{
+		onCall: func(call *ast.CallExpr, _ map[types.Object]bool) {
+			if recordOBS01SinkParamDeps(fn.info, fn.fset, out, fn.obj, call, fn.params, metricIdentities) {
+				changed = true
+			}
+		},
 	})
+	return changed
 }
 
 func recordOBS01SinkParamDeps(
@@ -1907,16 +2136,90 @@ func recordOBS01SinkParamDeps(
 	call *ast.CallExpr,
 	params map[types.Object]int,
 	metricIdentities map[types.Object]obs01MetricIdentity,
-) {
-	for _, sink := range metricLabelBindingArgs(info, fset, call, metricIdentities) {
+) bool {
+	changed := false
+	recordedVariadic, variadicChanged := recordOBS01VariadicLabelValueParamDeps(info, fset, out, fn, call, params, metricIdentities)
+	changed = recordOBS01SinkParamBindings(
+		info,
+		out,
+		fn,
+		params,
+		metricLabelBindingArgs(info, fset, call, metricIdentities),
+		recordedVariadic,
+	) || changed
+	if variadicChanged {
+		changed = true
+	}
+	return recordOBS01SinkParamBindings(info, out, fn, params, obs01SinkArgs(info, call, out), false) || changed
+}
+
+func recordOBS01SinkParamBindings(
+	info *types.Info,
+	out map[*types.Func]map[int][]obs01SinkBinding,
+	fn *types.Func,
+	params map[types.Object]int,
+	sinks []obs01SinkArg,
+	skipGenericLabelValues bool,
+) bool {
+	changed := false
+	for _, sink := range sinks {
+		if skipGenericLabelValues && sink.Label == "<labelValues>" {
+			continue
+		}
 		for idx := range obs01ParamDeps(info, sink.Expr, params) {
-			recordOBS01SinkBinding(out, fn, idx, obs01SinkBinding{
-				Metric:  sink.Metric,
-				Label:   sink.Label,
-				Ackable: sink.Ackable,
-			})
+			if recordOBS01SinkBinding(out, fn, idx, obs01SinkBinding{
+				Variadic:      sink.Variadic,
+				VariadicIndex: sink.VariadicIndex,
+				Metric:        sink.Metric,
+				Label:         sink.Label,
+				Ackable:       sink.Ackable,
+			}) {
+				changed = true
+			}
 		}
 	}
+	return changed
+}
+
+func recordOBS01VariadicLabelValueParamDeps(
+	info *types.Info,
+	fset *token.FileSet,
+	out map[*types.Func]map[int][]obs01SinkBinding,
+	fn *types.Func,
+	call *ast.CallExpr,
+	params map[types.Object]int,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+) (bool, bool) {
+	if !call.Ellipsis.IsValid() || len(call.Args) != 1 {
+		return false, false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "WithLabelValues" {
+		return false, false
+	}
+	paramIndexes := obs01ParamDeps(info, call.Args[0], params)
+	if len(paramIndexes) == 0 {
+		return false, false
+	}
+	metric := obs01MetricSink(info, fset, sel.X, metricIdentities)
+	if len(metric.Labels) == 0 {
+		return false, false
+	}
+	changed := false
+	for idx := range paramIndexes {
+		for i, label := range metric.Labels {
+			if recordOBS01SinkBinding(out, fn, idx, obs01SinkBinding{
+				Variadic:      true,
+				VariadicIndex: i,
+				Metric:        metric.Metric,
+				Label:         label,
+				Ackable:       metric.Resolved,
+			}) {
+				changed = true
+			}
+		}
+	}
+	return true, changed
 }
 
 func recordOBS01SinkBinding(
@@ -1924,16 +2227,17 @@ func recordOBS01SinkBinding(
 	fn *types.Func,
 	idx int,
 	binding obs01SinkBinding,
-) {
+) bool {
 	if out[fn] == nil {
 		out[fn] = map[int][]obs01SinkBinding{}
 	}
 	for _, existing := range out[fn][idx] {
 		if existing == binding {
-			return
+			return false
 		}
 	}
 	out[fn][idx] = append(out[fn][idx], binding)
+	return true
 }
 
 func functionParamIndexes(info *types.Info, typ *ast.FuncType) map[types.Object]int {
@@ -1951,6 +2255,21 @@ func functionParamIndexes(info *types.Info, typ *ast.FuncType) map[types.Object]
 		}
 		if len(field.Names) == 0 {
 			idx++
+		}
+	}
+	return out
+}
+
+func functionParamObjects(info *types.Info, typ *ast.FuncType) []types.Object {
+	if typ.Params == nil {
+		return nil
+	}
+	var out []types.Object
+	for _, field := range typ.Params.List {
+		for _, name := range field.Names {
+			if obj := info.Defs[name]; obj != nil {
+				out = append(out, obj)
+			}
 		}
 	}
 	return out
@@ -2002,18 +2321,117 @@ func obs01SinkArgs(
 	sort.Ints(indexes)
 	var out []obs01SinkArg
 	for _, idx := range indexes {
-		if idx < len(call.Args) {
-			for _, binding := range sinkParams[fn][idx] {
-				out = append(out, obs01SinkArg{
-					Expr:    call.Args[idx],
-					Metric:  binding.Metric,
-					Label:   binding.Label,
-					Ackable: binding.Ackable,
-				})
-			}
+		for _, binding := range sinkParams[fn][idx] {
+			out = append(out, obs01SinkArgsForBinding(info, fn, call, idx, binding)...)
 		}
 	}
 	return out
+}
+
+func obs01SinkArgsForBinding(
+	info *types.Info,
+	fn *types.Func,
+	call *ast.CallExpr,
+	idx int,
+	binding obs01SinkBinding,
+) []obs01SinkArg {
+	return obs01SinkArgsForBindingWithVariadic(info, obs01FuncVariadic(fn), call, idx, binding)
+}
+
+func obs01SinkArgsForBindingWithVariadic(
+	info *types.Info,
+	variadic bool,
+	call *ast.CallExpr,
+	idx int,
+	binding obs01SinkBinding,
+) []obs01SinkArg {
+	if call.Ellipsis.IsValid() && binding.Variadic {
+		return obs01SpreadSinkArgForBinding(call, idx, binding)
+	}
+	valuePosition := idx
+	if binding.Variadic && variadic && binding.VariadicIndex >= 0 {
+		valuePosition = idx + binding.VariadicIndex
+	}
+	value, ok := obs01ValueExprForPosition(info, call.Args, valuePosition)
+	if !ok {
+		return nil
+	}
+	return []obs01SinkArg{{
+		Expr:          value.Expr,
+		ValueIndex:    value.Index,
+		Variadic:      binding.Variadic,
+		VariadicIndex: binding.VariadicIndex,
+		Metric:        binding.Metric,
+		Label:         binding.Label,
+		Ackable:       binding.Ackable,
+	}}
+}
+
+func obs01SpreadSinkArgForBinding(call *ast.CallExpr, idx int, binding obs01SinkBinding) []obs01SinkArg {
+	if idx >= len(call.Args) {
+		return nil
+	}
+	if lit, ok := unparenExpr(call.Args[idx]).(*ast.CompositeLit); ok {
+		value, ok := obs01CompositeValueAtIndex(lit, binding.VariadicIndex)
+		if !ok {
+			return nil
+		}
+		return []obs01SinkArg{{
+			Expr:          value,
+			ValueIndex:    0,
+			Variadic:      true,
+			VariadicIndex: binding.VariadicIndex,
+			Metric:        binding.Metric,
+			Label:         binding.Label,
+			Ackable:       binding.Ackable,
+		}}
+	}
+	if binding.VariadicIndex != 0 {
+		return nil
+	}
+	return []obs01SinkArg{{
+		Expr:          call.Args[idx],
+		ValueIndex:    0,
+		VariadicIndex: -1,
+		Metric:        binding.Metric,
+		Label:         "<labelValues>",
+		Ackable:       false,
+	}}
+}
+
+func obs01CompositeValueAtIndex(lit *ast.CompositeLit, index int) (ast.Expr, bool) {
+	if index < 0 {
+		return nil, false
+	}
+	nextIndex := 0
+	for _, elt := range lit.Elts {
+		value := elt
+		valueIndex := nextIndex
+		nextIndex++
+		if kv, ok := elt.(*ast.KeyValueExpr); ok {
+			value = kv.Value
+			keyIndex, ok := obs01IntegerIndex(kv.Key)
+			if !ok {
+				continue
+			}
+			valueIndex = keyIndex
+			if keyIndex >= nextIndex {
+				nextIndex = keyIndex + 1
+			}
+		}
+		if valueIndex == index {
+			return value, true
+		}
+	}
+	return nil, false
+}
+
+func obs01FuncVariadic(fn *types.Func) bool {
+	if fn == nil {
+		return false
+	}
+	sig, ok := fn.Type().(*types.Signature)
+	return ok && sig.Variadic()
 }
 
 func calledFunc(info *types.Info, call *ast.CallExpr) *types.Func {
@@ -2032,49 +2450,1154 @@ func calledFunc(info *types.Info, call *ast.CallExpr) *types.Func {
 	return nil
 }
 
+type obs01StmtHandlers struct {
+	onCall         func(*ast.CallExpr, map[types.Object]bool)
+	onReturn       func(*ast.ReturnStmt, map[types.Object]bool)
+	closures       obs01Closures
+	activeClosures map[*ast.FuncLit]bool
+	rangeTaints    map[types.Object]obs01RangeTaint
+	suppressCalls  map[*ast.CallExpr]bool
+}
+
+type obs01Closures map[types.Object]map[*ast.FuncLit]bool
+
+type obs01RangeTaint struct {
+	Key   bool
+	Value bool
+}
+
+type obs01Flow struct {
+	tainted       map[types.Object]bool
+	continues     bool
+	breaks        []map[types.Object]bool
+	continuesLoop []map[types.Object]bool
+}
+
+func walkOBS01Stmts(
+	info *types.Info,
+	stmts []ast.Stmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	if handlers.closures == nil {
+		handlers.closures = obs01Closures{}
+	}
+	if handlers.activeClosures == nil {
+		handlers.activeClosures = map[*ast.FuncLit]bool{}
+	}
+	if handlers.rangeTaints == nil {
+		handlers.rangeTaints = map[types.Object]obs01RangeTaint{}
+	}
+	if handlers.suppressCalls == nil {
+		handlers.suppressCalls = map[*ast.CallExpr]bool{}
+	}
+	flow := obs01Flow{tainted: tainted, continues: true}
+	for _, stmt := range stmts {
+		if !flow.continues {
+			break
+		}
+		flow = walkOBS01Stmt(info, stmt, flow.tainted, returnTaints, handlers)
+	}
+	return flow
+}
+
+func walkOBS01Stmt(
+	info *types.Info,
+	stmt ast.Stmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	flow := obs01Flow{tainted: tainted, continues: true}
+	switch node := stmt.(type) {
+	case *ast.AssignStmt:
+		markOBS01AssignedClosure(info, node.Lhs, node.Rhs, node.Tok, handlers.closures)
+		markOBS01AssignedRangeTaint(info, node.Lhs, node.Rhs, node.Tok, tainted, returnTaints, handlers.rangeTaints)
+		markOBS01AssignedTaint(info, node.Lhs, node.Rhs, node.Tok, tainted, returnTaints)
+		inspectOBS01Calls(info, node, tainted, returnTaints, handlers)
+	case *ast.DeclStmt:
+		walkOBS01Decl(info, node.Decl, tainted, returnTaints, handlers)
+	case *ast.ReturnStmt:
+		if handlers.onReturn != nil {
+			handlers.onReturn(node, tainted)
+		}
+		inspectOBS01Calls(info, node, tainted, returnTaints, handlers)
+		flow.continues = false
+	case *ast.IfStmt:
+		flow = walkOBS01IfStmt(info, node, tainted, returnTaints, handlers)
+	case *ast.ForStmt:
+		flow = walkOBS01ForStmt(info, node, tainted, returnTaints, handlers)
+	case *ast.RangeStmt:
+		flow = walkOBS01RangeStmt(info, node, tainted, returnTaints, handlers)
+	case *ast.SwitchStmt:
+		flow = walkOBS01SwitchStmt(info, node, tainted, returnTaints, handlers)
+	case *ast.TypeSwitchStmt:
+		flow = walkOBS01TypeSwitchStmt(info, node, tainted, returnTaints, handlers)
+	case *ast.SelectStmt:
+		flow = walkOBS01SelectStmt(info, node, tainted, returnTaints, handlers)
+	case *ast.BlockStmt:
+		flow = walkOBS01Stmts(info, node.List, tainted, returnTaints, handlers)
+	case *ast.LabeledStmt:
+		flow = walkOBS01Stmt(info, node.Stmt, tainted, returnTaints, handlers)
+	case *ast.BranchStmt:
+		switch node.Tok {
+		case token.FALLTHROUGH:
+			flow.continues = false
+		case token.BREAK:
+			flow.continues = false
+			flow.breaks = []map[types.Object]bool{cloneOBS01Taints(tainted)}
+		case token.CONTINUE:
+			flow.continues = false
+			flow.continuesLoop = []map[types.Object]bool{cloneOBS01Taints(tainted)}
+		default:
+			flow.continues = false
+		}
+	default:
+		inspectOBS01Calls(info, node, tainted, returnTaints, handlers)
+	}
+	return flow
+}
+
+func walkOBS01Decl(
+	info *types.Info,
+	decl ast.Decl,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) {
+	gen, ok := decl.(*ast.GenDecl)
+	if !ok {
+		inspectOBS01Calls(info, decl, tainted, returnTaints, handlers)
+		return
+	}
+	for _, spec := range gen.Specs {
+		valueSpec, ok := spec.(*ast.ValueSpec)
+		if !ok {
+			inspectOBS01Calls(info, spec, tainted, returnTaints, handlers)
+			continue
+		}
+		markOBS01ValueSpecClosure(info, valueSpec, handlers.closures)
+		markOBS01ValueSpecRangeTaint(info, valueSpec, tainted, returnTaints, handlers.rangeTaints)
+		markOBS01ValueSpecTaint(info, valueSpec, tainted, returnTaints)
+		inspectOBS01Calls(info, valueSpec, tainted, returnTaints, handlers)
+	}
+}
+
+func walkOBS01IfStmt(
+	info *types.Info,
+	stmt *ast.IfStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	if stmt.Init != nil {
+		initFlow := walkOBS01Stmt(info, stmt.Init, tainted, returnTaints, handlers)
+		if !initFlow.continues {
+			return initFlow
+		}
+		tainted = initFlow.tainted
+	}
+	inspectOBS01Calls(info, stmt.Cond, tainted, returnTaints, handlers)
+	baseClosures := cloneOBS01Closures(handlers.closures)
+	baseRanges := cloneOBS01RangeTaints(handlers.rangeTaints)
+	parentClosures := handlers.closures
+	parentRanges := handlers.rangeTaints
+
+	thenHandlers := handlers
+	thenHandlers.closures = cloneOBS01Closures(baseClosures)
+	thenHandlers.rangeTaints = cloneOBS01RangeTaints(baseRanges)
+	thenState := walkOBS01Stmts(info, stmt.Body.List, cloneOBS01Taints(tainted), returnTaints, thenHandlers)
+
+	elseHandlers := handlers
+	elseHandlers.closures = cloneOBS01Closures(baseClosures)
+	elseHandlers.rangeTaints = cloneOBS01RangeTaints(baseRanges)
+	elseState := obs01Flow{tainted: cloneOBS01Taints(tainted), continues: true}
+	if stmt.Else != nil {
+		elseState = walkOBS01Stmt(info, stmt.Else, elseState.tainted, returnTaints, elseHandlers)
+	}
+	replaceOBS01Closures(parentClosures, mergeOBS01BranchClosures(thenState, thenHandlers.closures, elseState, elseHandlers.closures))
+	replaceOBS01RangeTaints(parentRanges, mergeOBS01BranchRangeTaints(thenState, thenHandlers.rangeTaints, elseState, elseHandlers.rangeTaints))
+	return mergeOBS01Flows(thenState, elseState)
+}
+
+func walkOBS01ForStmt(
+	info *types.Info,
+	stmt *ast.ForStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	if stmt.Init != nil {
+		initFlow := walkOBS01Stmt(info, stmt.Init, tainted, returnTaints, handlers)
+		if !initFlow.continues {
+			return initFlow
+		}
+		tainted = initFlow.tainted
+	}
+	inspectOBS01Calls(info, stmt.Cond, tainted, returnTaints, handlers)
+	bodyState := walkOBS01Stmts(info, stmt.Body.List, cloneOBS01Taints(tainted), returnTaints, handlers)
+	bodyState = walkOBS01ForPostFlow(info, stmt.Post, bodyState, returnTaints, handlers)
+	secondEntry := mergeOBS01TaintMaps(tainted, bodyState.tainted)
+	secondEntry = mergeOBS01TaintMaps(append([]map[types.Object]bool{secondEntry}, bodyState.continuesLoop...)...)
+	secondBody := walkOBS01Stmts(info, stmt.Body.List, cloneOBS01Taints(secondEntry), returnTaints, handlers)
+	secondBody = walkOBS01ForPostFlow(info, stmt.Post, secondBody, returnTaints, handlers)
+	return obs01LoopFlow(obs01Flow{tainted: tainted, continues: true}, bodyState, secondBody)
+}
+
+func walkOBS01ForPostFlow(
+	info *types.Info,
+	post ast.Stmt,
+	flow obs01Flow,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	if post == nil {
+		return flow
+	}
+	out := flow
+	out.continuesLoop = nil
+	if flow.continues {
+		postFlow := walkOBS01Stmt(info, post, flow.tainted, returnTaints, handlers)
+		out.tainted = postFlow.tainted
+		out.continues = postFlow.continues
+		out.breaks = append(out.breaks, postFlow.breaks...)
+		out.continuesLoop = append(out.continuesLoop, postFlow.continuesLoop...)
+	}
+	for _, state := range flow.continuesLoop {
+		postFlow := walkOBS01Stmt(info, post, cloneOBS01Taints(state), returnTaints, handlers)
+		if postFlow.continues {
+			out.continuesLoop = append(out.continuesLoop, postFlow.tainted)
+		}
+		out.breaks = append(out.breaks, postFlow.breaks...)
+		out.continuesLoop = append(out.continuesLoop, postFlow.continuesLoop...)
+	}
+	return out
+}
+
+func walkOBS01RangeStmt(
+	info *types.Info,
+	stmt *ast.RangeStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	inspectOBS01Calls(info, stmt.X, tainted, returnTaints, handlers)
+	bodyTaints := cloneOBS01Taints(tainted)
+	markOBS01RangeTaint(info, stmt, bodyTaints, returnTaints, handlers.rangeTaints)
+	bodyState := walkOBS01Stmts(info, stmt.Body.List, bodyTaints, returnTaints, handlers)
+	secondEntry := mergeOBS01TaintMaps(tainted, bodyState.tainted)
+	for _, state := range bodyState.continuesLoop {
+		secondEntry = mergeOBS01TaintMaps(secondEntry, state)
+	}
+	secondBodyTaints := cloneOBS01Taints(secondEntry)
+	markOBS01RangeTaint(info, stmt, secondBodyTaints, returnTaints, handlers.rangeTaints)
+	secondBody := walkOBS01Stmts(info, stmt.Body.List, secondBodyTaints, returnTaints, handlers)
+	return obs01LoopFlow(obs01Flow{tainted: tainted, continues: true}, bodyState, secondBody)
+}
+
+func markOBS01RangeTaint(
+	info *types.Info,
+	stmt *ast.RangeStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	rangeTaints map[types.Object]obs01RangeTaint,
+) {
+	keyTainted, valueTainted := obs01RangeKeyValueTaints(info, stmt.X, tainted, returnTaints, rangeTaints)
+	if keyTainted {
+		if obj := objectForOBS01Expr(info, stmt.Key); obj != nil {
+			tainted[obj] = true
+		}
+	}
+	if valueTainted {
+		if obj := objectForOBS01Expr(info, stmt.Value); obj != nil {
+			tainted[obj] = true
+		}
+	}
+}
+
+func obs01RangeKeyValueTaints(
+	info *types.Info,
+	expr ast.Expr,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	rangeTaints map[types.Object]obs01RangeTaint,
+) (bool, bool) {
+	if lit, ok := unparenExpr(expr).(*ast.CompositeLit); ok {
+		return obs01CompositeRangeKeyValueTaints(info, lit, tainted, returnTaints)
+	}
+	if obj := objectForOBS01Expr(info, expr); obj != nil {
+		if rangeTaint, ok := rangeTaints[obj]; ok {
+			return rangeTaint.Key, rangeTaint.Value
+		}
+	}
+	if !exprDependsOnErrcodeClassifier(info, expr, tainted, returnTaints) {
+		return false, false
+	}
+	if obs01RangeExprIsMap(info, expr) {
+		return true, true
+	}
+	return false, true
+}
+
+func obs01RangeExprIsMap(info *types.Info, expr ast.Expr) bool {
+	tv, ok := info.Types[unparenExpr(expr)]
+	if !ok || tv.Type == nil {
+		return false
+	}
+	_, ok = tv.Type.Underlying().(*types.Map)
+	return ok
+}
+
+func obs01CompositeRangeKeyValueTaints(
+	info *types.Info,
+	lit *ast.CompositeLit,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+) (bool, bool) {
+	keyTainted := false
+	valueTainted := false
+	isMap := obs01CompositeIsMap(info, lit)
+	for _, elt := range lit.Elts {
+		kv, ok := elt.(*ast.KeyValueExpr)
+		if !ok {
+			if exprDependsOnErrcodeClassifier(info, elt, tainted, returnTaints) {
+				valueTainted = true
+			}
+			continue
+		}
+		if isMap && exprDependsOnErrcodeClassifier(info, kv.Key, tainted, returnTaints) {
+			keyTainted = true
+		}
+		if exprDependsOnErrcodeClassifier(info, kv.Value, tainted, returnTaints) {
+			valueTainted = true
+		}
+	}
+	return keyTainted, valueTainted
+}
+
+func obs01CompositeIsMap(info *types.Info, lit *ast.CompositeLit) bool {
+	tv, ok := info.Types[lit]
+	if !ok || tv.Type == nil {
+		return false
+	}
+	_, ok = tv.Type.Underlying().(*types.Map)
+	return ok
+}
+
+func walkOBS01SwitchStmt(
+	info *types.Info,
+	stmt *ast.SwitchStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	if stmt.Init != nil {
+		initFlow := walkOBS01Stmt(info, stmt.Init, tainted, returnTaints, handlers)
+		if !initFlow.continues {
+			return initFlow
+		}
+		tainted = initFlow.tainted
+	}
+	inspectOBS01Calls(info, stmt.Tag, tainted, returnTaints, handlers)
+	return obs01BreakableFlow(mergeOBS01CaseTaints(info, stmt.Body.List, tainted, returnTaints, handlers))
+}
+
+func walkOBS01TypeSwitchStmt(
+	info *types.Info,
+	stmt *ast.TypeSwitchStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	if stmt.Init != nil {
+		initFlow := walkOBS01Stmt(info, stmt.Init, tainted, returnTaints, handlers)
+		if !initFlow.continues {
+			return initFlow
+		}
+		tainted = initFlow.tainted
+	}
+	if stmt.Assign != nil {
+		assignFlow := walkOBS01Stmt(info, stmt.Assign, tainted, returnTaints, handlers)
+		if !assignFlow.continues {
+			return assignFlow
+		}
+		tainted = assignFlow.tainted
+	}
+	return obs01BreakableFlow(mergeOBS01CaseTaints(info, stmt.Body.List, tainted, returnTaints, handlers))
+}
+
+func walkOBS01SelectStmt(
+	info *types.Info,
+	stmt *ast.SelectStmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	baseClosures := cloneOBS01Closures(handlers.closures)
+	baseRanges := cloneOBS01RangeTaints(handlers.rangeTaints)
+	parentClosures := handlers.closures
+	parentRanges := handlers.rangeTaints
+	states := []obs01Flow{{tainted: tainted, continues: true}}
+	closureStates := []obs01Closures{baseClosures}
+	rangeStates := []map[types.Object]obs01RangeTaint{baseRanges}
+	for _, item := range stmt.Body.List {
+		clause, ok := item.(*ast.CommClause)
+		if !ok {
+			continue
+		}
+		caseHandlers := handlers
+		caseHandlers.closures = cloneOBS01Closures(baseClosures)
+		caseHandlers.rangeTaints = cloneOBS01RangeTaints(baseRanges)
+		caseState := cloneOBS01Taints(tainted)
+		if clause.Comm != nil {
+			commFlow := walkOBS01Stmt(info, clause.Comm, caseState, returnTaints, caseHandlers)
+			if !commFlow.continues {
+				states = append(states, commFlow)
+				if obs01FlowCanReachOuter(commFlow) {
+					closureStates = append(closureStates, caseHandlers.closures)
+					rangeStates = append(rangeStates, caseHandlers.rangeTaints)
+				}
+				continue
+			}
+			caseState = commFlow.tainted
+		}
+		flow := walkOBS01Stmts(info, clause.Body, caseState, returnTaints, caseHandlers)
+		states = append(states, flow)
+		if obs01FlowCanReachOuter(flow) {
+			closureStates = append(closureStates, caseHandlers.closures)
+			rangeStates = append(rangeStates, caseHandlers.rangeTaints)
+		}
+	}
+	replaceOBS01Closures(parentClosures, mergeOBS01Closures(closureStates...))
+	replaceOBS01RangeTaints(parentRanges, mergeOBS01RangeTaints(rangeStates...))
+	return obs01BreakableFlow(mergeOBS01Flows(states...))
+}
+
+func mergeOBS01CaseTaints(
+	info *types.Info,
+	cases []ast.Stmt,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	states := make([]obs01Flow, 0, len(cases)+1)
+	hasDefault := false
+	var fallthroughState map[types.Object]bool
+	var fallthroughClosures obs01Closures
+	var fallthroughRanges map[types.Object]obs01RangeTaint
+	baseClosures := cloneOBS01Closures(handlers.closures)
+	baseRanges := cloneOBS01RangeTaints(handlers.rangeTaints)
+	parentClosures := handlers.closures
+	parentRanges := handlers.rangeTaints
+	var closureStates []obs01Closures
+	var rangeStates []map[types.Object]obs01RangeTaint
+	for _, item := range cases {
+		clause, ok := item.(*ast.CaseClause)
+		if !ok {
+			continue
+		}
+		if len(clause.List) == 0 {
+			hasDefault = true
+		}
+		for _, expr := range clause.List {
+			inspectOBS01Calls(info, expr, tainted, returnTaints, handlers)
+		}
+		caseState, caseHandlers := obs01CaseEntry(tainted, baseClosures, baseRanges, fallthroughState, fallthroughClosures, fallthroughRanges, handlers)
+		flow, fallsThrough := walkOBS01CaseBody(info, clause, caseState, returnTaints, caseHandlers)
+		fallthroughState = nil
+		fallthroughClosures = nil
+		fallthroughRanges = nil
+		if fallsThrough {
+			fallthroughState = flow.tainted
+			fallthroughClosures = cloneOBS01Closures(caseHandlers.closures)
+			fallthroughRanges = cloneOBS01RangeTaints(caseHandlers.rangeTaints)
+			continue
+		}
+		states = append(states, flow)
+		closureStates, rangeStates = appendOBS01ReachableHandlers(closureStates, rangeStates, flow, caseHandlers)
+	}
+	if !hasDefault {
+		states = append(states, obs01Flow{tainted: tainted, continues: true})
+		closureStates = append(closureStates, baseClosures)
+		rangeStates = append(rangeStates, baseRanges)
+	}
+	replaceOBS01Closures(parentClosures, mergeOBS01Closures(closureStates...))
+	replaceOBS01RangeTaints(parentRanges, mergeOBS01RangeTaints(rangeStates...))
+	return mergeOBS01Flows(states...)
+}
+
+func obs01CaseEntry(
+	tainted map[types.Object]bool,
+	baseClosures obs01Closures,
+	baseRanges map[types.Object]obs01RangeTaint,
+	fallthroughState map[types.Object]bool,
+	fallthroughClosures obs01Closures,
+	fallthroughRanges map[types.Object]obs01RangeTaint,
+	handlers obs01StmtHandlers,
+) (map[types.Object]bool, obs01StmtHandlers) {
+	caseState := cloneOBS01Taints(tainted)
+	caseClosures := cloneOBS01Closures(baseClosures)
+	caseRanges := cloneOBS01RangeTaints(baseRanges)
+	if fallthroughState != nil {
+		caseState = mergeOBS01TaintMaps(caseState, fallthroughState)
+		caseClosures = mergeOBS01Closures(caseClosures, fallthroughClosures)
+		caseRanges = mergeOBS01RangeTaints(caseRanges, fallthroughRanges)
+	}
+	caseHandlers := handlers
+	caseHandlers.closures = caseClosures
+	caseHandlers.rangeTaints = caseRanges
+	return caseState, caseHandlers
+}
+
+func walkOBS01CaseBody(
+	info *types.Info,
+	clause *ast.CaseClause,
+	caseState map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	caseHandlers obs01StmtHandlers,
+) (obs01Flow, bool) {
+	body := clause.Body
+	fallsThrough := obs01FallsThrough(body)
+	if fallsThrough {
+		body = body[:len(body)-1]
+	}
+	flow := walkOBS01Stmts(info, body, caseState, returnTaints, caseHandlers)
+	return flow, fallsThrough && flow.continues
+}
+
+func appendOBS01ReachableHandlers(
+	closureStates []obs01Closures,
+	rangeStates []map[types.Object]obs01RangeTaint,
+	flow obs01Flow,
+	handlers obs01StmtHandlers,
+) ([]obs01Closures, []map[types.Object]obs01RangeTaint) {
+	if !obs01FlowCanReachOuter(flow) {
+		return closureStates, rangeStates
+	}
+	return append(closureStates, handlers.closures), append(rangeStates, handlers.rangeTaints)
+}
+
+func obs01FallsThrough(stmts []ast.Stmt) bool {
+	if len(stmts) == 0 {
+		return false
+	}
+	branch, ok := stmts[len(stmts)-1].(*ast.BranchStmt)
+	return ok && branch.Tok == token.FALLTHROUGH
+}
+
+func inspectOBS01Calls(
+	info *types.Info,
+	node ast.Node,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) {
+	if node == nil {
+		return
+	}
+	ast.Inspect(node, func(n ast.Node) bool {
+		if call, ok := n.(*ast.CallExpr); ok {
+			return inspectOBS01Call(info, call, tainted, returnTaints, handlers)
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		return true
+	})
+}
+
+func inspectOBS01Call(
+	info *types.Info,
+	call *ast.CallExpr,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) bool {
+	if inspectOBS01FuncLitCall(info, call, tainted, returnTaints, handlers) {
+		return false
+	}
+	if inspectOBS01ClosureCall(info, call, tainted, returnTaints, handlers) {
+		return false
+	}
+	reportOBS01Call(call, tainted, handlers)
+	return true
+}
+
+func inspectOBS01FuncLitCall(
+	info *types.Info,
+	call *ast.CallExpr,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) bool {
+	fn, ok := unparenExpr(call.Fun).(*ast.FuncLit)
+	if !ok {
+		return false
+	}
+	inspectOBS01CallArgs(info, call.Args, tainted, returnTaints, handlers)
+	reportOBS01Call(call, tainted, handlers)
+	walkOBS01FuncLitCall(info, fn, call.Args, tainted, returnTaints, handlers)
+	return true
+}
+
+func inspectOBS01ClosureCall(
+	info *types.Info,
+	call *ast.CallExpr,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) bool {
+	fns := obs01CalledClosures(info, call, handlers.closures)
+	if len(fns) == 0 {
+		return false
+	}
+	inspectOBS01CallArgs(info, call.Args, tainted, returnTaints, handlers)
+	baseTaints := cloneOBS01Taints(tainted)
+	baseClosures := cloneOBS01Closures(handlers.closures)
+	baseRanges := cloneOBS01RangeTaints(handlers.rangeTaints)
+	parentClosures := handlers.closures
+	parentRanges := handlers.rangeTaints
+	var states []map[types.Object]bool
+	var closureStates []obs01Closures
+	var rangeStates []map[types.Object]obs01RangeTaint
+	for _, fn := range fns {
+		altHandlers := handlers
+		altHandlers.closures = cloneOBS01Closures(baseClosures)
+		altHandlers.rangeTaints = cloneOBS01RangeTaints(baseRanges)
+		flow := runOBS01FuncLitCall(info, fn, call.Args, cloneOBS01Taints(baseTaints), returnTaints, altHandlers)
+		states = append(states, flow.tainted)
+		closureStates = append(closureStates, altHandlers.closures)
+		rangeStates = append(rangeStates, altHandlers.rangeTaints)
+	}
+	replaceOBS01Taints(tainted, mergeOBS01TaintMaps(states...))
+	replaceOBS01Closures(parentClosures, mergeOBS01Closures(closureStates...))
+	replaceOBS01RangeTaints(parentRanges, mergeOBS01RangeTaints(rangeStates...))
+	return true
+}
+
+func reportOBS01Call(call *ast.CallExpr, tainted map[types.Object]bool, handlers obs01StmtHandlers) {
+	if handlers.onCall != nil && !handlers.suppressCalls[call] {
+		handlers.onCall(call, tainted)
+	}
+}
+
+func inspectOBS01CallArgs(
+	info *types.Info,
+	args []ast.Expr,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) {
+	for _, arg := range args {
+		inspectOBS01Calls(info, arg, tainted, returnTaints, handlers)
+	}
+}
+
+func walkOBS01FuncLitCall(
+	info *types.Info,
+	fn *ast.FuncLit,
+	args []ast.Expr,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) {
+	flow := runOBS01FuncLitCall(info, fn, args, tainted, returnTaints, handlers)
+	replaceOBS01Taints(tainted, flow.tainted)
+}
+
+func runOBS01FuncLitCall(
+	info *types.Info,
+	fn *ast.FuncLit,
+	args []ast.Expr,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	handlers obs01StmtHandlers,
+) obs01Flow {
+	if handlers.activeClosures[fn] {
+		return obs01Flow{tainted: tainted, continues: true}
+	}
+	handlers.activeClosures[fn] = true
+	defer delete(handlers.activeClosures, fn)
+	suppressed := obs01FuncLitVariadicSpreadCalls(info, fn)
+	for call := range suppressed {
+		handlers.suppressCalls[call] = true
+	}
+	defer func() {
+		for call := range suppressed {
+			delete(handlers.suppressCalls, call)
+		}
+	}()
+
+	callTaints := cloneOBS01Taints(tainted)
+	markOBS01FuncLitParamTaint(info, fn.Type, args, callTaints, returnTaints)
+	return walkOBS01Stmts(info, fn.Body.List, callTaints, returnTaints, handlers)
+}
+
+func obs01FuncLitVariadicSpreadCalls(info *types.Info, fn *ast.FuncLit) map[*ast.CallExpr]bool {
+	variadicObj, _, ok := obs01FuncLitVariadicParam(info, fn.Type)
+	if !ok {
+		return nil
+	}
+	out := map[*ast.CallExpr]bool{}
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if nested, ok := n.(*ast.FuncLit); ok && nested != fn {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if _, ok := obs01VariadicSpreadLabelValueCall(info, call, variadicObj); ok {
+			out[call] = true
+		}
+		return true
+	})
+	return out
+}
+
+func obs01CalledClosures(
+	info *types.Info,
+	call *ast.CallExpr,
+	closures obs01Closures,
+) []*ast.FuncLit {
+	if closures == nil {
+		return nil
+	}
+	var out []*ast.FuncLit
+	for fn := range closures[objectForOBS01Expr(info, call.Fun)] {
+		out = append(out, fn)
+	}
+	return out
+}
+
+func markOBS01FuncLitParamTaint(
+	info *types.Info,
+	typ *ast.FuncType,
+	args []ast.Expr,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+) {
+	params := functionParamObjects(info, typ)
+	for i, obj := range params {
+		if obs01FuncTypeVariadic(typ) && i == len(params)-1 {
+			if exprDependsOnAnyErrcodeClassifierPosition(info, args, i, tainted, returnTaints) {
+				tainted[obj] = true
+			}
+			continue
+		}
+		if exprDependsOnErrcodeClassifierForPosition(info, args, i, tainted, returnTaints) {
+			tainted[obj] = true
+		}
+	}
+}
+
+func exprDependsOnAnyErrcodeClassifierPosition(
+	info *types.Info,
+	values []ast.Expr,
+	start int,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+) bool {
+	for i := start; i < obs01ValueExprsCount(info, values); i++ {
+		if exprDependsOnErrcodeClassifierForPosition(info, values, i, tainted, returnTaints) {
+			return true
+		}
+	}
+	return false
+}
+
+func obs01FuncTypeVariadic(typ *ast.FuncType) bool {
+	if typ.Params == nil || len(typ.Params.List) == 0 {
+		return false
+	}
+	_, ok := typ.Params.List[len(typ.Params.List)-1].Type.(*ast.Ellipsis)
+	return ok
+}
+
+func cloneOBS01Taints(in map[types.Object]bool) map[types.Object]bool {
+	out := map[types.Object]bool{}
+	for obj, tainted := range in {
+		if tainted {
+			out[obj] = true
+		}
+	}
+	return out
+}
+
+func replaceOBS01Taints(dst, src map[types.Object]bool) {
+	for obj := range dst {
+		delete(dst, obj)
+	}
+	for obj, tainted := range src {
+		if tainted {
+			dst[obj] = true
+		}
+	}
+}
+
+func mergeOBS01Flows(states ...obs01Flow) obs01Flow {
+	var continuing []map[types.Object]bool
+	var breaks []map[types.Object]bool
+	var continuesLoop []map[types.Object]bool
+	for _, state := range states {
+		if state.continues {
+			continuing = append(continuing, state.tainted)
+		}
+		breaks = append(breaks, state.breaks...)
+		continuesLoop = append(continuesLoop, state.continuesLoop...)
+	}
+	if len(continuing) == 0 {
+		return obs01Flow{
+			tainted:       map[types.Object]bool{},
+			continues:     false,
+			breaks:        breaks,
+			continuesLoop: continuesLoop,
+		}
+	}
+	return obs01Flow{
+		tainted:       mergeOBS01TaintMaps(continuing...),
+		continues:     true,
+		breaks:        breaks,
+		continuesLoop: continuesLoop,
+	}
+}
+
+func obs01BreakableFlow(flow obs01Flow) obs01Flow {
+	var states []map[types.Object]bool
+	if flow.continues {
+		states = append(states, flow.tainted)
+	}
+	states = append(states, flow.breaks...)
+	if len(states) == 0 {
+		return obs01Flow{
+			tainted:       map[types.Object]bool{},
+			continues:     false,
+			continuesLoop: flow.continuesLoop,
+		}
+	}
+	return obs01Flow{
+		tainted:       mergeOBS01TaintMaps(states...),
+		continues:     true,
+		continuesLoop: flow.continuesLoop,
+	}
+}
+
+func obs01LoopFlow(entry obs01Flow, bodies ...obs01Flow) obs01Flow {
+	states := []map[types.Object]bool{entry.tainted}
+	for _, body := range bodies {
+		if body.continues {
+			states = append(states, body.tainted)
+		}
+		states = append(states, body.breaks...)
+		states = append(states, body.continuesLoop...)
+	}
+	return obs01Flow{tainted: mergeOBS01TaintMaps(states...), continues: true}
+}
+
+func obs01FlowCanReachOuter(flow obs01Flow) bool {
+	return flow.continues || len(flow.breaks) > 0 || len(flow.continuesLoop) > 0
+}
+
+func cloneOBS01Closures(in obs01Closures) obs01Closures {
+	out := obs01Closures{}
+	for obj, fns := range in {
+		out[obj] = map[*ast.FuncLit]bool{}
+		for fn := range fns {
+			out[obj][fn] = true
+		}
+	}
+	return out
+}
+
+func replaceOBS01Closures(dst, src obs01Closures) {
+	for obj := range dst {
+		delete(dst, obj)
+	}
+	mergeOBS01ClosureMapInto(dst, src)
+}
+
+func mergeOBS01Closures(states ...obs01Closures) obs01Closures {
+	out := obs01Closures{}
+	for _, state := range states {
+		mergeOBS01ClosureMapInto(out, state)
+	}
+	return out
+}
+
+func mergeOBS01BranchClosures(
+	left obs01Flow,
+	leftClosures obs01Closures,
+	right obs01Flow,
+	rightClosures obs01Closures,
+) obs01Closures {
+	out := obs01Closures{}
+	if obs01FlowCanReachOuter(left) {
+		mergeOBS01ClosureMapInto(out, leftClosures)
+	}
+	if obs01FlowCanReachOuter(right) {
+		mergeOBS01ClosureMapInto(out, rightClosures)
+	}
+	return out
+}
+
+func mergeOBS01ClosureMapInto(dst, src obs01Closures) {
+	for obj, fns := range src {
+		if dst[obj] == nil {
+			dst[obj] = map[*ast.FuncLit]bool{}
+		}
+		for fn := range fns {
+			dst[obj][fn] = true
+		}
+	}
+}
+
+func cloneOBS01RangeTaints(in map[types.Object]obs01RangeTaint) map[types.Object]obs01RangeTaint {
+	out := map[types.Object]obs01RangeTaint{}
+	for obj, taint := range in {
+		out[obj] = taint
+	}
+	return out
+}
+
+func mergeOBS01BranchRangeTaints(
+	left obs01Flow,
+	leftRanges map[types.Object]obs01RangeTaint,
+	right obs01Flow,
+	rightRanges map[types.Object]obs01RangeTaint,
+) map[types.Object]obs01RangeTaint {
+	out := map[types.Object]obs01RangeTaint{}
+	if obs01FlowCanReachOuter(left) {
+		mergeOBS01RangeTaintMapInto(out, leftRanges)
+	}
+	if obs01FlowCanReachOuter(right) {
+		mergeOBS01RangeTaintMapInto(out, rightRanges)
+	}
+	return out
+}
+
+func replaceOBS01RangeTaints(dst, src map[types.Object]obs01RangeTaint) {
+	for obj := range dst {
+		delete(dst, obj)
+	}
+	mergeOBS01RangeTaintMapInto(dst, src)
+}
+
+func mergeOBS01RangeTaints(states ...map[types.Object]obs01RangeTaint) map[types.Object]obs01RangeTaint {
+	out := map[types.Object]obs01RangeTaint{}
+	for _, state := range states {
+		mergeOBS01RangeTaintMapInto(out, state)
+	}
+	return out
+}
+
+func mergeOBS01RangeTaintMapInto(dst, src map[types.Object]obs01RangeTaint) {
+	for obj, taint := range src {
+		existing := dst[obj]
+		dst[obj] = obs01RangeTaint{
+			Key:   existing.Key || taint.Key,
+			Value: existing.Value || taint.Value,
+		}
+	}
+}
+
+func mergeOBS01TaintMaps(states ...map[types.Object]bool) map[types.Object]bool {
+	out := map[types.Object]bool{}
+	for _, state := range states {
+		for obj, tainted := range state {
+			if tainted {
+				out[obj] = true
+			}
+		}
+	}
+	return out
+}
+
 func markOBS01AssignedTaint(
 	info *types.Info,
 	lhs, rhs []ast.Expr,
+	tok token.Token,
 	tainted map[types.Object]bool,
-	returnTaints map[*types.Func]bool,
+	returnTaints obs01ReturnTaints,
 ) {
+	replaces := tok == token.ASSIGN || tok == token.DEFINE
 	for i, left := range lhs {
+		if markOBS01IndexAssignedTaint(info, left, rhs, i, tainted, returnTaints) {
+			continue
+		}
 		obj := objectForOBS01Expr(info, left)
 		if obj == nil {
 			continue
 		}
-		right := assignmentRHSForLHS(rhs, i)
-		if right != nil && exprDependsOnErrcodeClassifier(info, right, tainted, returnTaints) {
+		if exprDependsOnErrcodeClassifierForPosition(info, rhs, i, tainted, returnTaints) {
 			tainted[obj] = true
-		} else {
+		} else if replaces {
 			delete(tainted, obj)
 		}
 	}
 }
 
-func assignmentRHSForLHS(rhs []ast.Expr, i int) ast.Expr {
-	if i < len(rhs) {
-		return rhs[i]
+func markOBS01AssignedClosure(
+	info *types.Info,
+	lhs, rhs []ast.Expr,
+	tok token.Token,
+	closures obs01Closures,
+) {
+	if tok != token.ASSIGN && tok != token.DEFINE {
+		return
 	}
-	if len(rhs) == 1 {
-		return rhs[0]
+	for i, left := range lhs {
+		obj := objectForOBS01Expr(info, left)
+		if obj == nil {
+			continue
+		}
+		if value, ok := obs01ValueExprForPosition(info, rhs, i); ok && value.Index == 0 {
+			if fn, ok := unparenExpr(value.Expr).(*ast.FuncLit); ok {
+				closures[obj] = map[*ast.FuncLit]bool{fn: true}
+				continue
+			}
+		}
+		delete(closures, obj)
 	}
-	return nil
 }
 
-func markOBS01ValueSpecTaint(
+func markOBS01AssignedRangeTaint(
+	info *types.Info,
+	lhs, rhs []ast.Expr,
+	tok token.Token,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	rangeTaints map[types.Object]obs01RangeTaint,
+) {
+	if tok != token.ASSIGN && tok != token.DEFINE {
+		return
+	}
+	for i, left := range lhs {
+		if markOBS01IndexAssignedRangeTaint(info, left, rhs, i, tainted, returnTaints, rangeTaints) {
+			continue
+		}
+		obj := objectForOBS01Expr(info, left)
+		if obj == nil {
+			continue
+		}
+		if value, ok := obs01ValueExprForPosition(info, rhs, i); ok && value.Index == 0 {
+			if lit, ok := unparenExpr(value.Expr).(*ast.CompositeLit); ok && obs01CompositeIsMap(info, lit) {
+				key, value := obs01CompositeRangeKeyValueTaints(info, lit, tainted, returnTaints)
+				rangeTaints[obj] = obs01RangeTaint{Key: key, Value: value}
+				continue
+			}
+		}
+		delete(rangeTaints, obj)
+	}
+}
+
+func markOBS01IndexAssignedRangeTaint(
+	info *types.Info,
+	left ast.Expr,
+	rhs []ast.Expr,
+	index int,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	rangeTaints map[types.Object]obs01RangeTaint,
+) bool {
+	indexExpr, ok := left.(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	obj := objectForOBS01Expr(info, indexExpr.X)
+	if obj == nil {
+		return true
+	}
+	existing := rangeTaints[obj]
+	if exprDependsOnErrcodeClassifier(info, indexExpr.Index, tainted, returnTaints) {
+		existing.Key = true
+	}
+	if exprDependsOnErrcodeClassifierForPosition(info, rhs, index, tainted, returnTaints) {
+		existing.Value = true
+	}
+	if existing.Key || existing.Value {
+		rangeTaints[obj] = existing
+	}
+	return true
+}
+
+func markOBS01IndexAssignedTaint(
+	info *types.Info,
+	left ast.Expr,
+	rhs []ast.Expr,
+	index int,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+) bool {
+	indexExpr, ok := left.(*ast.IndexExpr)
+	if !ok {
+		return false
+	}
+	obj := objectForOBS01Expr(info, indexExpr.X)
+	if obj == nil {
+		return true
+	}
+	if exprDependsOnErrcodeClassifierForPosition(info, rhs, index, tainted, returnTaints) {
+		tainted[obj] = true
+	}
+	return true
+}
+
+func markOBS01ValueSpecClosure(
 	info *types.Info,
 	spec *ast.ValueSpec,
-	tainted map[types.Object]bool,
-	returnTaints map[*types.Func]bool,
+	closures obs01Closures,
 ) {
 	for i, name := range spec.Names {
 		obj := info.Defs[name]
 		if obj == nil {
 			continue
 		}
-		value := assignmentRHSForLHS(spec.Values, i)
-		if value != nil && exprDependsOnErrcodeClassifier(info, value, tainted, returnTaints) {
+		if value, ok := obs01ValueExprForPosition(info, spec.Values, i); ok && value.Index == 0 {
+			if fn, ok := unparenExpr(value.Expr).(*ast.FuncLit); ok {
+				closures[obj] = map[*ast.FuncLit]bool{fn: true}
+				continue
+			}
+		}
+		delete(closures, obj)
+	}
+}
+
+func markOBS01ValueSpecRangeTaint(
+	info *types.Info,
+	spec *ast.ValueSpec,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+	rangeTaints map[types.Object]obs01RangeTaint,
+) {
+	for i, name := range spec.Names {
+		obj := info.Defs[name]
+		if obj == nil {
+			continue
+		}
+		if value, ok := obs01ValueExprForPosition(info, spec.Values, i); ok && value.Index == 0 {
+			if lit, ok := unparenExpr(value.Expr).(*ast.CompositeLit); ok && obs01CompositeIsMap(info, lit) {
+				key, value := obs01CompositeRangeKeyValueTaints(info, lit, tainted, returnTaints)
+				rangeTaints[obj] = obs01RangeTaint{Key: key, Value: value}
+				continue
+			}
+		}
+		delete(rangeTaints, obj)
+	}
+}
+
+func markOBS01ValueSpecTaint(
+	info *types.Info,
+	spec *ast.ValueSpec,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+) {
+	for i, name := range spec.Names {
+		obj := info.Defs[name]
+		if obj == nil {
+			continue
+		}
+		if exprDependsOnErrcodeClassifierForPosition(info, spec.Values, i, tainted, returnTaints) {
 			tainted[obj] = true
 		} else {
 			delete(tainted, obj)
@@ -2086,7 +3609,7 @@ func exprDependsOnErrcodeClassifier(
 	info *types.Info,
 	expr ast.Expr,
 	tainted map[types.Object]bool,
-	returnTaints map[*types.Func]bool,
+	returnTaints obs01ReturnTaints,
 ) bool {
 	found := false
 	ast.Inspect(expr, func(n ast.Node) bool {
@@ -2100,17 +3623,184 @@ func exprDependsOnErrcodeClassifier(
 			}
 			return true
 		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if isErrcodeClassifierCall(info, call) || returnTaints[calledFunc(info, call)] {
+		if isErrcodeClassifierCall(info, call) || obs01AnyReturnTainted(returnTaints, calledFunc(info, call)) {
 			found = true
 			return false
 		}
 		return true
 	})
 	return found
+}
+
+func exprDependsOnErrcodeClassifierForPosition(
+	info *types.Info,
+	values []ast.Expr,
+	index int,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+) bool {
+	value, ok := obs01ValueExprForPosition(info, values, index)
+	if !ok {
+		return false
+	}
+	return exprDependsOnErrcodeClassifierForValue(info, value.Expr, value.Index, tainted, returnTaints)
+}
+
+func exprDependsOnErrcodeClassifierForValue(
+	info *types.Info,
+	expr ast.Expr,
+	valueIndex int,
+	tainted map[types.Object]bool,
+	returnTaints obs01ReturnTaints,
+) bool {
+	if valueIndex == 0 && obs01ExprResultCount(info, expr) <= 1 {
+		return exprDependsOnErrcodeClassifier(info, expr, tainted, returnTaints)
+	}
+	if taintedReturn, ok := obs01CallReturnIndexTainted(info, expr, returnTaints, valueIndex); ok && taintedReturn {
+		return true
+	}
+	if exprDirectlyDependsOnErrcodeClassifier(info, expr, tainted) {
+		return true
+	}
+	if _, ok := obs01CallReturnIndexTainted(info, expr, returnTaints, valueIndex); ok {
+		return false
+	}
+	return exprDependsOnErrcodeClassifier(info, expr, tainted, returnTaints)
+}
+
+type obs01ValueExpr struct {
+	Expr  ast.Expr
+	Index int
+}
+
+func obs01ValueExprForPosition(info *types.Info, values []ast.Expr, position int) (obs01ValueExpr, bool) {
+	if len(values) == 0 || position < 0 {
+		return obs01ValueExpr{}, false
+	}
+	offset := 0
+	for _, expr := range values {
+		count := obs01ExprResultCount(info, expr)
+		if count == 0 {
+			count = 1
+		}
+		if position < offset+count {
+			return obs01ValueExpr{Expr: expr, Index: position - offset}, true
+		}
+		offset += count
+	}
+	return obs01ValueExpr{}, false
+}
+
+func obs01ValueExprsCount(info *types.Info, values []ast.Expr) int {
+	total := 0
+	for _, expr := range values {
+		count := obs01ExprResultCount(info, expr)
+		if count == 0 {
+			count = 1
+		}
+		total += count
+	}
+	return total
+}
+
+func obs01ExprResultCount(info *types.Info, expr ast.Expr) int {
+	if expr == nil {
+		return 0
+	}
+	tv, ok := info.Types[unparenExpr(expr)]
+	if !ok || tv.Type == nil {
+		return 1
+	}
+	if tuple, ok := tv.Type.(*types.Tuple); ok {
+		return tuple.Len()
+	}
+	return 1
+}
+
+func obs01CallReturnIndexTainted(
+	info *types.Info,
+	expr ast.Expr,
+	returnTaints obs01ReturnTaints,
+	index int,
+) (bool, bool) {
+	call, ok := unparenExpr(expr).(*ast.CallExpr)
+	if !ok {
+		return false, false
+	}
+	if isErrcodeClassifierCall(info, call) {
+		return index == 0, true
+	}
+	fn := calledFunc(info, call)
+	if fn == nil {
+		return false, false
+	}
+	tainted, ok := returnTaints[fn]
+	if !ok {
+		return false, false
+	}
+	return tainted[index], true
+}
+
+func exprDirectlyDependsOnErrcodeClassifier(
+	info *types.Info,
+	expr ast.Expr,
+	tainted map[types.Object]bool,
+) bool {
+	found := false
+	ast.Inspect(expr, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if id, ok := n.(*ast.Ident); ok {
+			if tainted[objectForOBS01Expr(info, id)] {
+				found = true
+				return false
+			}
+			return true
+		}
+		if _, ok := n.(*ast.FuncLit); ok {
+			return false
+		}
+		call, ok := n.(*ast.CallExpr)
+		if !ok {
+			return true
+		}
+		if isErrcodeClassifierCall(info, call) {
+			found = true
+			return false
+		}
+		return true
+	})
+	return found
+}
+
+func obs01AnyReturnTainted(returnTaints obs01ReturnTaints, fn *types.Func) bool {
+	if fn == nil {
+		return false
+	}
+	for _, tainted := range returnTaints[fn] {
+		if tainted {
+			return true
+		}
+	}
+	return false
+}
+
+func unparenExpr(expr ast.Expr) ast.Expr {
+	for {
+		paren, ok := expr.(*ast.ParenExpr)
+		if !ok {
+			return expr
+		}
+		expr = paren.X
+	}
 }
 
 func objectForOBS01Expr(info *types.Info, expr ast.Expr) types.Object {
