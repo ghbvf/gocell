@@ -686,6 +686,72 @@ func TestShutdownAllServers_AggregatesPartialErrors(t *testing.T) {
 		"joined error must wrap err2 with listener name")
 }
 
+func TestShutdownAllServers_WaitsForServeLoopStopped(t *testing.T) {
+	stopped := make(chan struct{})
+	shutdownCalled := make(chan struct{})
+	tasks := []shutdownTask{
+		{
+			name:      "server-a",
+			shutGrace: 0,
+			shutdown: func(_ context.Context) error {
+				close(shutdownCalled)
+				return nil
+			},
+			stopped: stopped,
+		},
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		done <- shutdownAllServers(context.Background(), tasks)
+	}()
+
+	<-shutdownCalled
+	select {
+	case err := <-done:
+		t.Fatalf("shutdownAllServers returned before Serve loop stopped: %v", err)
+	default:
+	}
+
+	close(stopped)
+	require.NoError(t, <-done)
+}
+
+func TestShutdownAllServers_ForceClosesOnContextExpiry(t *testing.T) {
+	stopped := make(chan struct{})
+	forceClosed := make(chan struct{})
+	tasks := []shutdownTask{
+		{
+			name:      "server-a",
+			shutGrace: 0,
+			shutdown: func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			forceClose: func() error {
+				close(forceClosed)
+				close(stopped)
+				return nil
+			},
+			stopped: stopped,
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+	got := shutdownAllServers(ctx, tasks)
+	require.Error(t, got, "shutdownAllServers must surface the graceful shutdown timeout")
+	assert.True(t, errors.Is(got, context.DeadlineExceeded) || strings.Contains(got.Error(), context.DeadlineExceeded.Error()),
+		"joined error must contain the shutdown context error")
+	assert.Contains(t, got.Error(), `listener "server-a"`,
+		"timeout error must preserve per-listener attribution")
+	select {
+	case <-forceClosed:
+	default:
+		t.Fatal("forceClose must run when graceful shutdown times out")
+	}
+}
+
 // ---------------------------------------------------------------------------
 // T-03: Phase7ServeAll dual listener — no close race (-race required)
 // ---------------------------------------------------------------------------
