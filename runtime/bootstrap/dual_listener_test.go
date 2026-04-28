@@ -730,7 +730,6 @@ func TestShutdownAllServers_ForceClosesOnContextExpiry(t *testing.T) {
 			},
 			forceClose: func() error {
 				close(forceClosed)
-				close(stopped)
 				return nil
 			},
 			stopped: stopped,
@@ -750,6 +749,52 @@ func TestShutdownAllServers_ForceClosesOnContextExpiry(t *testing.T) {
 	default:
 		t.Fatal("forceClose must run when graceful shutdown times out")
 	}
+}
+
+func TestShutdownAllServers_WaitsForStoppedAfterPerListenerGraceTimeout(t *testing.T) {
+	stopped := make(chan struct{})
+	forceClosed := make(chan struct{})
+	tasks := []shutdownTask{
+		{
+			name:      "server-a",
+			shutGrace: 10 * time.Millisecond,
+			shutdown: func(ctx context.Context) error {
+				<-ctx.Done()
+				return ctx.Err()
+			},
+			forceClose: func() error {
+				close(forceClosed)
+				return nil
+			},
+			stopped: stopped,
+		},
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- shutdownAllServers(ctx, tasks)
+	}()
+
+	select {
+	case <-forceClosed:
+	case <-time.After(time.Second):
+		t.Fatal("forceClose was not called after per-listener grace timeout")
+	}
+	select {
+	case err := <-done:
+		t.Fatalf("shutdownAllServers returned before Serve loop stopped: %v", err)
+	default:
+	}
+
+	close(stopped)
+	got := <-done
+	require.Error(t, got, "per-listener grace timeout must still be reported")
+	assert.True(t, errors.Is(got, context.DeadlineExceeded) || strings.Contains(got.Error(), context.DeadlineExceeded.Error()),
+		"joined error must contain the per-listener grace timeout")
+	assert.Contains(t, got.Error(), `listener "server-a"`,
+		"timeout error must preserve per-listener attribution")
 }
 
 // ---------------------------------------------------------------------------

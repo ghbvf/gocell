@@ -84,7 +84,7 @@ func shutdownServerTask(parent context.Context, task shutdownTask) error {
 	err := task.shutdown(shutCtx)
 	if err != nil {
 		if shutCtx.Err() != nil {
-			err = errors.Join(err, forceCloseServer(task))
+			err = errors.Join(err, forceCloseServer(task), waitForServerStoppedAfterForceClose(parent, task))
 		}
 		return err
 	}
@@ -100,6 +100,18 @@ func waitForServerStopped(ctx context.Context, task shutdownTask) error {
 		return nil
 	case <-ctx.Done():
 		return errors.Join(ctx.Err(), forceCloseServer(task))
+	}
+}
+
+func waitForServerStoppedAfterForceClose(ctx context.Context, task shutdownTask) error {
+	if task.stopped == nil {
+		return nil
+	}
+	select {
+	case <-task.stopped:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 
