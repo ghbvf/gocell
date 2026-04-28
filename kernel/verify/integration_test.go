@@ -83,21 +83,31 @@ func TestRunGoTest_ContextCancelled(t *testing.T) {
 	assert.False(t, res.Passed)
 }
 
-func TestRunGoTest_UsesTrustedGoAndSanitizedPATH(t *testing.T) {
+func TestRunGoTest_UsesCallerSelectedGoAndAdditivePATH(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("uses a POSIX shell script as the fake go binary")
 	}
 
 	dir := t.TempDir()
-	fakeBin := filepath.Join(dir, "malicious-go-bin")
-	require.NoError(t, os.Mkdir(fakeBin, 0o755))
-	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "go"), []byte(`#!/bin/sh
-echo MALICIOUS_GO_ON_PATH
-exit 99
+	realGo, err := exec.LookPath("go")
+	require.NoError(t, err)
+
+	selectedBin := filepath.Join(dir, "selected-go-bin")
+	sentinelBin := filepath.Join(dir, "sentinel-bin")
+	require.NoError(t, os.Mkdir(selectedBin, 0o755))
+	require.NoError(t, os.Mkdir(sentinelBin, 0o755))
+
+	logPath := filepath.Join(dir, "go-wrapper.log")
+	require.NoError(t, os.WriteFile(filepath.Join(selectedBin, "go"), []byte(`#!/bin/sh
+printf '%s\n' "$*" >> "$GO_WRAPPER_LOG"
+exec "$REAL_GO" "$@"
 `), 0o755))
 
-	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("GOROOT", filepath.Join(dir, "bad-goroot"))
+	t.Setenv("PATH", selectedBin+string(os.PathListSeparator)+sentinelBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("REAL_GO", realGo)
+	t.Setenv("GO_WRAPPER_LOG", logPath)
+	t.Setenv("GOCELL_VERIFY_SELECTED_BIN", selectedBin)
+	t.Setenv("GOCELL_VERIFY_SENTINEL_BIN", sentinelBin)
 
 	moduleDir := filepath.Join(dir, "module")
 	require.NoError(t, os.Mkdir(moduleDir, 0o755))
@@ -109,12 +119,23 @@ import (
 	"testing"
 )
 
-func TestPATHIsSanitized(t *testing.T) {
-	if strings.Contains(os.Getenv("PATH"), "malicious-go-bin") {
-		t.Fatalf("PATH inherited writable test directory: %s", os.Getenv("PATH"))
+func TestPATHIsAdditive(t *testing.T) {
+	path := os.Getenv("PATH")
+	selected := os.Getenv("GOCELL_VERIFY_SELECTED_BIN")
+	sentinel := os.Getenv("GOCELL_VERIFY_SENTINEL_BIN")
+	if selected == "" || sentinel == "" {
+		t.Fatal("missing test path markers")
 	}
-	if strings.Contains(os.Getenv("GOROOT"), "bad-goroot") {
-		t.Fatalf("GOROOT inherited writable test directory: %s", os.Getenv("GOROOT"))
+	selectedIndex := strings.Index(path, selected)
+	if selectedIndex < 0 {
+		t.Fatalf("PATH does not include selected go dir: %s", path)
+	}
+	sentinelIndex := strings.Index(path, sentinel)
+	if sentinelIndex < 0 {
+		t.Fatalf("PATH lost caller-provided entries: %s", path)
+	}
+	if selectedIndex > sentinelIndex {
+		t.Fatalf("selected go dir should be prepended before caller entries: %s", path)
 	}
 }
 `), 0o644))
@@ -122,29 +143,36 @@ func TestPATHIsSanitized(t *testing.T) {
 	res := runGoTest(context.Background(), moduleDir, []string{"./...", "-v"})
 	require.NoError(t, res.Err)
 	assert.True(t, res.Passed, res.Output)
-	assert.NotContains(t, res.Output, "MALICIOUS_GO_ON_PATH")
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logBytes), "test ./... -v")
 }
 
-func TestGoToolPathIgnoresProcessGOROOT(t *testing.T) {
-	if os.Getenv("GOCELL_VERIFY_GOTOOLPATH_HELPER") == "1" {
-		path := goToolPath()
-		if strings.Contains(path, "bad-goroot") {
-			t.Fatalf("goToolPath used hostile GOROOT: %s", path)
-		}
-		if !filepath.IsAbs(path) {
-			t.Fatalf("goToolPath returned non-absolute path: %s", path)
-		}
-		return
-	}
+func TestGoTestEnvPreservesCallerEnvAndPrependsGoDir(t *testing.T) {
+	selectedDir := t.TempDir()
+	callerBin := filepath.Join(t.TempDir(), "caller-bin")
+	callerGoRoot := filepath.Join(t.TempDir(), "caller-goroot")
+	t.Setenv("PATH", callerBin)
+	t.Setenv("GOROOT", callerGoRoot)
 
-	badRoot := filepath.Join(t.TempDir(), "bad-goroot")
-	cmd := exec.Command(os.Args[0], "-test.run=^TestGoToolPathIgnoresProcessGOROOT$")
-	cmd.Env = append(os.Environ(),
-		"GOCELL_VERIFY_GOTOOLPATH_HELPER=1",
-		"GOROOT="+badRoot,
-	)
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(out))
+	env := goTestEnv(filepath.Join(selectedDir, goToolName()))
+	pathValue := envValue(env, "PATH")
+	pathParts := strings.Split(pathValue, string(os.PathListSeparator))
+	require.NotEmpty(t, pathParts)
+	assert.Equal(t, selectedDir, pathParts[0])
+	assert.Contains(t, pathValue, callerBin)
+	assert.Equal(t, callerGoRoot, envValue(env, "GOROOT"))
+}
+
+func envValue(env []string, key string) string {
+	for _, entry := range env {
+		envKey, value, ok := strings.Cut(entry, "=")
+		if ok && strings.EqualFold(envKey, key) {
+			return value
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------

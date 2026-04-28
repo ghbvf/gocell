@@ -8,7 +8,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
-	"sort"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -23,14 +22,34 @@ type goTestResult struct {
 	Err         error  // non-ExitError (command couldn't run at all)
 }
 
+type goTestRunner struct {
+	goTool string
+}
+
+func newGoTestRunner() (goTestRunner, error) {
+	path, err := goToolPath()
+	if err != nil {
+		return goTestRunner{}, errcode.Wrap(errcode.ErrTestExecution, "resolve go tool", err)
+	}
+	return goTestRunner{goTool: path}, nil
+}
+
 // runGoTest executes `go test` with the given arguments in dir.
 // It detects zero-match scenarios by scanning output for the well-known
 // Go test messages "no tests to run" and "[no test files]".
 func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
+	runner, err := newGoTestRunner()
+	if err != nil {
+		return goTestResult{Err: err}
+	}
+	return runner.run(ctx, dir, args)
+}
+
+func (r goTestRunner) run(ctx context.Context, dir string, args []string) goTestResult {
 	fullArgs := append([]string{"test"}, args...)
-	cmd := exec.CommandContext(ctx, goToolPath(), fullArgs...)
+	cmd := exec.CommandContext(ctx, r.goTool, fullArgs...)
 	cmd.Dir = filepath.Clean(dir)
-	cmd.Env = goTestEnv()
+	cmd.Env = goTestEnv(r.goTool)
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -55,16 +74,15 @@ func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
 	}
 }
 
-func goToolPath() string {
-	name := goToolName()
-	for _, dir := range fixedGoToolDirs() {
-		candidate := filepath.Join(dir, name)
-		if isExecutableFile(candidate) {
-			return candidate
-		}
+func goToolPath() (string, error) {
+	path, err := exec.LookPath(goToolName())
+	if err != nil {
+		return "", err
 	}
-
-	return filepath.Join(fixedGoToolDirs()[0], name)
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	return filepath.Abs(path)
 }
 
 func goToolName() string {
@@ -74,11 +92,11 @@ func goToolName() string {
 	return "go"
 }
 
-func goTestEnv() []string {
-	env := withoutEnvKeys(os.Environ(), "PATH", "Path", "GOROOT")
-	return append(env,
-		"PATH="+fixedGoTestPath(),
-	)
+func goTestEnv(goTool string) []string {
+	env := os.Environ()
+	pathKey, pathValue := pathEnv(env)
+	env = withoutEnvKeys(env, "PATH", "Path")
+	return append(env, pathKey+"="+prependPath(filepath.Dir(goTool), pathValue))
 }
 
 func withoutEnvKeys(env []string, keys ...string) []string {
@@ -101,66 +119,24 @@ func matchesAnyEnvKey(key string, candidates []string) bool {
 	return false
 }
 
-func fixedGoTestPath() string {
-	return strings.Join(fixedGoToolDirs(), string(os.PathListSeparator))
+func pathEnv(env []string) (string, string) {
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && strings.EqualFold(key, "PATH") {
+			return key, value
+		}
+	}
+	return "PATH", ""
 }
 
-func fixedGoToolDirs() []string {
-	if runtime.GOOS == "windows" {
-		return fixedWindowsGoToolDirs()
+func prependPath(dir, pathValue string) string {
+	if dir == "" {
+		return pathValue
 	}
-
-	dirs := []string{
-		"/usr/local/go/bin",
-		"/opt/homebrew/opt/go/libexec/bin",
-		"/usr/bin",
-		"/bin",
-		"/usr/sbin",
-		"/sbin",
+	if pathValue == "" {
+		return dir
 	}
-	dirs = append(dirs, hostedToolcacheGoDirs()...)
-	if os.Getenv("GOROOT") == "" {
-		dirs = append([]string{filepath.Join(buildGoRootForVerify(), "bin")}, dirs...)
-	}
-	return dirs
-}
-
-func fixedWindowsGoToolDirs() []string {
-	dirs := []string{
-		`C:\Program Files\Go\bin`,
-		`C:\Windows\System32`,
-		`C:\Windows\System32\WindowsPowerShell\v1.0`,
-	}
-	if os.Getenv("GOROOT") == "" {
-		dirs = append([]string{filepath.Join(buildGoRootForVerify(), "bin")}, dirs...)
-	}
-	return dirs
-}
-
-func hostedToolcacheGoDirs() []string {
-	matches, err := filepath.Glob("/opt/hostedtoolcache/go/*/*/bin")
-	if err != nil {
-		return nil
-	}
-	sort.Sort(sort.Reverse(sort.StringSlice(matches)))
-	return matches
-}
-
-func isExecutableFile(path string) bool {
-	info, err := os.Stat(path)
-	if err != nil || info.IsDir() {
-		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
-	}
-	return info.Mode()&0o111 != 0
-}
-
-func buildGoRootForVerify() string {
-	// Used only when the parent process did not set GOROOT. In that case,
-	// the build toolchain path lets runGoTest avoid user-controlled PATH.
-	return runtime.GOROOT() //nolint:staticcheck
+	return dir + string(os.PathListSeparator) + pathValue
 }
 
 // isZeroMatch returns true only when NO tests actually ran across all packages.

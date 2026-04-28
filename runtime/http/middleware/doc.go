@@ -25,9 +25,10 @@
 //	  - CSRF runs first: rejects cross-origin requests (403) before any
 //	    cookie processing or authentication happens. This prevents a
 //	    malicious site from triggering cookie-based actions.
-//	  - CookieSession runs second: reads the HttpOnly; Secure; SameSite=Strict
-//	    session cookie and injects an Authorization: Bearer header so that
-//	    downstream middleware sees a standard JWT.
+//	  - CookieSession runs second: reads the HttpOnly; Secure session cookie
+//	    and injects an Authorization: Bearer header so that downstream
+//	    middleware sees a standard JWT. SameSite defaults to Strict and remains
+//	    configurable through CookieSessionConfig.
 //	  - AuthMiddleware runs third: verifies the JWT (from cookie or header)
 //	    and injects Claims into the request context.
 //

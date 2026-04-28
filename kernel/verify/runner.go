@@ -44,13 +44,23 @@ const (
 
 // Runner executes metadata-driven verification tests.
 type Runner struct {
-	project *metadata.ProjectMeta
-	root    string // Go module root (where go.mod lives)
+	project   *metadata.ProjectMeta
+	root      string // Go module root (where go.mod lives)
+	goTest    goTestRunner
+	goTestErr error
 }
 
 // NewRunner creates a Runner for executing verification tests.
 func NewRunner(project *metadata.ProjectMeta, root string) *Runner {
-	return &Runner{project: project, root: root}
+	goTest, err := newGoTestRunner()
+	return &Runner{project: project, root: root, goTest: goTest, goTestErr: err}
+}
+
+func (r *Runner) runGoTest(ctx context.Context, dir string, args []string) goTestResult {
+	if r.goTestErr != nil {
+		return goTestResult{Err: r.goTestErr}
+	}
+	return r.goTest.run(ctx, dir, args)
 }
 
 // VerifySlice runs tests for a slice driven by metadata verify.unit and
@@ -84,7 +94,7 @@ func (r *Runner) VerifySlice(ctx context.Context, sliceKey string) (*VerifyResul
 	}
 
 	// Fallback: no metadata refs, run all tests in the slice package.
-	res := runGoTest(ctx, r.root, []string{pkg, "-v"})
+	res := r.runGoTest(ctx, r.root, []string{pkg, "-v"})
 	recordResult(result, sliceKey, res, pkg, "")
 	return result, nil
 }
@@ -124,7 +134,7 @@ func (r *Runner) VerifyCell(ctx context.Context, cellID string) (*VerifyResult, 
 		if pkg == "" {
 			pkg = cellPkg
 		}
-		res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
+		res := r.runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
 		recordResult(result, ref, res, pkg, resolved.RunPattern)
 	}
 	return result, nil
@@ -258,7 +268,7 @@ func (r *Runner) RunJourneyCheckRef(ctx context.Context, j *metadata.JourneyMeta
 	}
 	pkg, extraArgs := r.resolveJourneyPkg(j, resolved)
 	args := append([]string{pkg, "-v", "-run", resolved.RunPattern}, extraArgs...)
-	res := runGoTest(ctx, r.root, args)
+	res := r.runGoTest(ctx, r.root, args)
 	recordResult(result, ref, res, pkg, resolved.RunPattern)
 	if len(result.Results) == 0 {
 		return TestResult{Name: ref, Passed: false}, result.Errors
@@ -282,7 +292,7 @@ func (r *Runner) runRefs(ctx context.Context, result *VerifyResult, fallbackPkg 
 		if resolved.Pkg != "" {
 			pkg = resolved.Pkg
 		}
-		res := runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
+		res := r.runGoTest(ctx, r.root, []string{pkg, "-v", "-run", resolved.RunPattern})
 		recordResult(result, ref, res, pkg, resolved.RunPattern)
 	}
 }
