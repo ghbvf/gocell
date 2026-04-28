@@ -171,10 +171,10 @@ func newTestCell(id string) *testCell {
 func TestNew_Defaults(t *testing.T) {
 	b := New()
 	// PR-A14b: no default listeners; callers must declare via WithListener.
-	assert.Nil(t, b.listenerConfigs)
-	assert.Nil(t, b.assembly)
-	assert.Nil(t, b.publisher)
-	assert.Nil(t, b.subscriber)
+	assert.Nil(t, b.http.listenerConfigs)
+	assert.Nil(t, b.assembly.core)
+	assert.Nil(t, b.events.publisher)
+	assert.Nil(t, b.events.subscriber)
 }
 
 func TestNew_WithOptions(t *testing.T) {
@@ -188,16 +188,16 @@ func TestNew_WithOptions(t *testing.T) {
 		WithShutdownTimeout(5*time.Second),
 	)
 
-	// PR-A14b: listener addr lives in listenerConfigs, not primaryAddr.
+	// PR-A14b: listener addr lives in http.listenerConfigs, not primaryAddr.
 	// Use :7070 (not :9090) to avoid visual collision with the InternalListener
 	// default (127.0.0.1:9090) when scanning the assertion at a glance.
-	cfg, ok := b.listenerConfigs[cell.PrimaryListener]
+	cfg, ok := b.http.listenerConfigs[cell.PrimaryListener]
 	require.True(t, ok, "PrimaryListener config must be registered")
 	assert.Equal(t, ":7070", cfg.addr)
-	assert.Equal(t, asm, b.assembly)
-	assert.Equal(t, eb, b.publisher)
-	assert.Equal(t, eb, b.subscriber)
-	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
+	assert.Equal(t, asm, b.assembly.core)
+	assert.Equal(t, eb, b.events.publisher)
+	assert.Equal(t, eb, b.events.subscriber)
+	assert.Equal(t, 5*time.Second, b.lc.shutdownTimeout)
 }
 
 // Verbose-token gating is now a regular cell.Policy (PolicyVerboseToken)
@@ -227,11 +227,11 @@ func TestNew_WithTracer(t *testing.T) {
 	// itself) and router.WithTracingOptions(WithProbeFilter(DefaultProbeFilter))
 	// so /healthz, /readyz, /metrics skip span creation on the per-listener
 	// HealthListener router (the pre-PR-A14b outer-mux bypass is gone).
-	require.Len(t, b.routerOpts, 2,
+	require.Len(t, b.http.routerOpts, 2,
 		"WithTracer must forward two router options (WithTracer + WithTracingOptions)")
 
-	origins := make([]string, len(b.routerOpts))
-	for i, opt := range b.routerOpts {
+	origins := make([]string, len(b.http.routerOpts))
+	for i, opt := range b.http.routerOpts {
 		origins[i] = optionOriginName(opt)
 	}
 
@@ -282,8 +282,8 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 
 func TestNew_WithConfig(t *testing.T) {
 	b := New(WithConfig("/nonexistent.yaml", "APP"))
-	assert.Equal(t, "/nonexistent.yaml", b.configPath)
-	assert.Equal(t, "APP", b.envPrefix)
+	assert.Equal(t, "/nonexistent.yaml", b.assembly.configPath)
+	assert.Equal(t, "APP", b.assembly.envPrefix)
 }
 
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
@@ -342,8 +342,8 @@ func TestNew_WithPublisherAndSubscriber(t *testing.T) {
 		WithSubscriber(eb),
 	)
 
-	assert.Equal(t, eb, b.publisher)
-	assert.Equal(t, eb, b.subscriber)
+	assert.Equal(t, eb, b.events.publisher)
+	assert.Equal(t, eb, b.events.subscriber)
 }
 
 func TestNew_WithPublisherOnly(t *testing.T) {
@@ -351,8 +351,8 @@ func TestNew_WithPublisherOnly(t *testing.T) {
 
 	b := New(WithPublisher(eb))
 
-	assert.Equal(t, eb, b.publisher)
-	assert.Nil(t, b.subscriber)
+	assert.Equal(t, eb, b.events.publisher)
+	assert.Nil(t, b.events.subscriber)
 }
 
 func TestNew_WithSubscriberOnly(t *testing.T) {
@@ -360,8 +360,8 @@ func TestNew_WithSubscriberOnly(t *testing.T) {
 
 	b := New(WithSubscriber(eb))
 
-	assert.Nil(t, b.publisher)
-	assert.Equal(t, eb, b.subscriber)
+	assert.Nil(t, b.events.publisher)
+	assert.Equal(t, eb, b.events.subscriber)
 }
 
 // eventCell implements cell.EventRegistrar with a configurable error.
@@ -1437,7 +1437,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 		WithShutdownTimeout(time.Second),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
-	b.configWatcherFactory = func(string, ...config.WatcherOption) (*config.Watcher, error) {
+	b.assembly.configWatcherFactory = func(string, ...config.WatcherOption) (*config.Watcher, error) {
 		return nil, errors.New("watcher init failed")
 	}
 

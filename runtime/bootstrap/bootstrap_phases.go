@@ -129,16 +129,16 @@ func (s *phaseState) addCloser(res any) {
 // Returns immediately on the first violation so the error message is unambiguous.
 func (b *Bootstrap) phase0ValidateOptions() error {
 	// Surface shutdown metrics registration errors before any component starts.
-	if b.shutdownMetricsErr != nil {
-		return fmt.Errorf("bootstrap: shutdown metrics registration failed: %w", b.shutdownMetricsErr)
+	if b.metrics.shutdownMetricsErr != nil {
+		return fmt.Errorf("bootstrap: shutdown metrics registration failed: %w", b.metrics.shutdownMetricsErr)
 	}
 	if err := b.validateHealthCheckers(); err != nil {
 		return err
 	}
-	if b.circuitBreakerNil {
+	if b.http.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
 	}
-	if b.managedResourceNil {
+	if b.lc.managedResourceNil {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}
 	if err := b.validateAuthPlanAssemblyMatch(); err != nil {
@@ -170,8 +170,8 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 // other in the health handler, making one probe invisible — surface the
 // error at phase 0 before any side effects.
 func (b *Bootstrap) validateHealthCheckers() error {
-	seen := make(map[string]struct{}, len(b.healthCheckers))
-	for _, hc := range b.healthCheckers {
+	seen := make(map[string]struct{}, len(b.http.healthCheckers))
+	for _, hc := range b.http.healthCheckers {
 		if hc.name == "" {
 			return fmt.Errorf("bootstrap: health checker name must not be empty")
 		}
@@ -190,8 +190,8 @@ func (b *Bootstrap) validateHealthCheckers() error {
 // was provided), and registers closable middleware teardowns.
 // On success, s.cfg and s.cfgWatcher are populated.
 func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
-	if b.configPath != "" {
-		cfg, err := config.Load(b.configPath, b.envPrefix)
+	if b.assembly.configPath != "" {
+		cfg, err := config.Load(b.assembly.configPath, b.assembly.envPrefix)
 		if err != nil {
 			return fmt.Errorf("bootstrap: load config: %w", err)
 		}
@@ -202,8 +202,8 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 
 	// Create the watcher but do NOT start it yet — OnChange must be bound first
 	// (phase4) to prevent a window where file events are lost.
-	if b.configPath != "" {
-		w, err := b.configWatcherFactory(b.configPath)
+	if b.assembly.configPath != "" {
+		w, err := b.assembly.configWatcherFactory(b.assembly.configPath)
 		if err != nil {
 			return fmt.Errorf("bootstrap: config watcher: %w", err)
 		}
@@ -216,16 +216,16 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	// Register closable middleware dependencies (e.g. rate limiter background
 	// goroutines). addCloser prefers ContextCloser over io.Closer so that
 	// resources upgraded to CloseCtx automatically receive the shut budget.
-	for _, cl := range b.closers {
+	for _, cl := range b.lc.closers {
 		s.addCloser(cl)
 	}
 
-	// Tracer wiring: b.wrapperTracer is threaded into router.WithTracer
+	// Tracer wiring: b.http.wrapperTracer is threaded into router.WithTracer
 	// (phase7, HTTP side) and ContractTracingMiddleware (phase6, consumer side)
 	// at the construction call sites. When WithTracer was not supplied,
 	// HTTP tracing is disabled and wrapper.WrapConsumer falls back to
 	// NoopTracer so spans degrade silently — no package-level setup needed.
-	if b.wrapperTracer == nil {
+	if b.http.wrapperTracer == nil {
 		slog.Warn("bootstrap: no tracer provided, HTTP tracing is disabled and consumer spans will be no-op; use WithTracer to enable distributed tracing")
 	}
 	return nil
@@ -234,8 +234,8 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 // phase2InitPubSub initialises the publisher and subscriber.
 // When neither is provided a default InMemoryEventBus serves both roles.
 func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
-	pub := b.publisher
-	sub := b.subscriber
+	pub := b.events.publisher
+	sub := b.events.subscriber
 	if pub == nil && sub == nil {
 		eb := eventbus.New()
 		pub = eb
@@ -270,20 +270,20 @@ func samePubSubIdentity(pub outbox.Publisher, sub outbox.Subscriber) bool {
 // teardown, then calls StartWithConfig.
 // On success, s.asm and s.reloads are populated.
 func (b *Bootstrap) phase3InitAssembly(ctx context.Context, s *phaseState) error {
-	asm := b.assembly
+	asm := b.assembly.core
 	if asm == nil {
 		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
-		if b.hookTimeoutSet {
-			cfg.HookTimeout = b.hookTimeout
+		if b.assembly.hookTimeoutSet {
+			cfg.HookTimeout = b.assembly.hookTimeout
 		}
-		if b.hookObserver != nil {
-			cfg.HookObserver = b.hookObserver
+		if b.assembly.hookObserver != nil {
+			cfg.HookObserver = b.assembly.hookObserver
 		}
-		if b.metricsProvider != nil {
-			cfg.MetricsProvider = b.metricsProvider
+		if b.metrics.provider != nil {
+			cfg.MetricsProvider = b.metrics.provider
 		}
 		asm = assembly.New(cfg)
-	} else if b.hookTimeoutSet || b.hookObserver != nil {
+	} else if b.assembly.hookTimeoutSet || b.assembly.hookObserver != nil {
 		slog.Warn("bootstrap: WithHookTimeout/WithHookObserver ignored because WithAssembly was used; configure via assembly.Config")
 	}
 
@@ -337,7 +337,7 @@ func (b *Bootstrap) bindConfigWatcher(s *phaseState) {
 	if s.cfgWatcher == nil {
 		return
 	}
-	yamlPath, envPrefix := b.configPath, b.envPrefix
+	yamlPath, envPrefix := b.assembly.configPath, b.assembly.envPrefix
 	s.cfgWatcher.OnChange(b.buildOnChangeCallback(s, yamlPath, envPrefix))
 	// Start after OnChange is bound so no events are consumed without a handler.
 	s.cfgWatcher.Start()
@@ -531,8 +531,8 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	cfg := b.resolveHealthRouteGroupCfg()
 
 	var hhOpts []health.Option
-	if b.readyzDeadline > 0 {
-		hhOpts = append(hhOpts, health.WithDeadline(b.readyzDeadline))
+	if b.http.readyzDeadline > 0 {
+		hhOpts = append(hhOpts, health.WithDeadline(b.http.readyzDeadline))
 	}
 	// PR-A35 + PR-A14b round-3: WithReadyzVerboseDisabled is a
 	// HealthRouteGroupOption (no longer a bootstrap-level Option) — peek
@@ -541,8 +541,8 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 		hhOpts = append(hhOpts, health.WithVerboseDisabled())
 	}
 	hh := health.New(s.asm, hhOpts...)
-	if b.adapterInfo != nil {
-		hh.SetAdapterInfo(b.adapterInfo)
+	if b.http.adapterInfo != nil {
+		hh.SetAdapterInfo(b.http.adapterInfo)
 	}
 	// PR-A35 defense-in-depth: when WithReadyzVerboseToken is supplied,
 	// configure the handler's strict X-Readyz-Token gate too. The
@@ -553,14 +553,14 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 		hh.SetVerboseToken(cfg.verboseToken)
 	}
 	s.hh = hh
-	s.healthRouteGroupOpts = b.healthRouteGroupOpts
+	s.healthRouteGroupOpts = b.http.healthRouteGroupOpts
 	return b.registerAllHealthCheckers(s)
 }
 
 // phase5BuildPerListenerRouters creates one Router per declared listener config.
 func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.ListenerRef]*router.Router, error) {
-	routers := make(map[cell.ListenerRef]*router.Router, len(b.listenerConfigs))
-	for ref, cfg := range b.listenerConfigs {
+	routers := make(map[cell.ListenerRef]*router.Router, len(b.http.listenerConfigs))
+	for ref, cfg := range b.http.listenerConfigs {
 		rtrOpts, err := b.buildListenerRouterOpts(s, ref, cfg)
 		if err != nil {
 			return nil, err
@@ -716,7 +716,7 @@ func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef,
 	if ref != cell.InternalListener {
 		return nil
 	}
-	cfg, ok := b.listenerConfigs[ref]
+	cfg, ok := b.http.listenerConfigs[ref]
 	if !ok || chainContainsInternalGuard(cfg.authChain) {
 		return nil
 	}
@@ -751,7 +751,7 @@ func declaredInternalRoutes(rtr *router.Router) []string {
 // Uses chainProtectsRoutes (from auth_plan_describe.go) for the typed check,
 // replacing the old string-based isAuthFlavoredPolicy check.
 func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, rtr *router.Router) error {
-	cfg := b.listenerConfigs[ref]
+	cfg := b.http.listenerConfigs[ref]
 	if chainProtectsRoutes(cfg.authChain) {
 		return nil
 	}
@@ -780,8 +780,8 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 // the JWT verifier is installed via router.WithAuthMiddleware so the router
 // can build matcher-aware AuthMiddleware after FinalizeAuth.
 func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
-	opts := make([]router.Option, 0, len(b.routerOpts)+6)
-	opts = append(opts, b.routerOpts...)
+	opts := make([]router.Option, 0, len(b.http.routerOpts)+6)
+	opts = append(opts, b.http.routerOpts...)
 
 	// R2: auto-wire HTTP metrics collector when a Provider is configured.
 	var err error
@@ -823,7 +823,7 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 // registerAllHealthCheckers registers option-supplied, cell-discovered, watcher,
 // and drift health checkers. Returns error on duplicate names or nil checkers.
 func (b *Bootstrap) registerAllHealthCheckers(s *phaseState) error {
-	for _, hc := range b.healthCheckers {
+	for _, hc := range b.http.healthCheckers {
 		if err := s.registerHealthChecker(hc.name, hc.fn); err != nil {
 			return err
 		}
@@ -913,7 +913,7 @@ func (b *Bootstrap) registerOneCellLifecycleHooks(id string, lc cell.LifecycleCo
 		if h.OnStart == nil && h.OnStop == nil {
 			continue
 		}
-		if err := b.lifecycle.Append(Hook{
+		if err := b.lc.kernel.Append(Hook{
 			CellID:       id,
 			Name:         h.Name,
 			OnStart:      h.OnStart,
@@ -963,32 +963,32 @@ func (b *Bootstrap) registerConfigDriftChecker(s *phaseState) error {
 // ref: runtime/observability/metrics.NewProviderCollector — provider-neutral
 // HTTP collector that records http_requests_total + http_request_duration_seconds.
 func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router.Option, error) {
-	if b.metricsProvider == nil {
+	if b.metrics.provider == nil {
 		return opts, nil
 	}
 	// NopProvider is the default when no provider is injected; skip auto-wire
 	// to avoid allocating a no-op collector on every bootstrap startup.
-	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
+	if _, isNop := b.metrics.provider.(kernelmetrics.NopProvider); isNop {
 		return opts, nil
 	}
-	// Create the collector only once (cached in b.httpCollector) so that
+	// Create the collector only once (cached in b.metrics.httpCollector) so that
 	// multiple calls to buildListenerRouterOpts (one per declared listener)
 	// share the same collector and do not attempt to re-register Prometheus
 	// counters/histograms with the same names.
-	if b.httpCollector == nil {
+	if b.metrics.httpCollector == nil {
 		// Derive cell ID from the most specific source available:
 		//  1. Explicit WithAssemblyID — caller's intent takes precedence.
-		//  2. Pre-built assembly's ID (b.assembly.ID()) — avoids requiring callers
+		//  2. Pre-built assembly's ID (b.assembly.core.ID()) — avoids requiring callers
 		//     to repeat the assembly ID when using WithAssembly(asm).
 		//  3. Fallback "default" — matches the ID used by the auto-built assembly.
-		cellID := b.assemblyID
-		if cellID == "" && b.assembly != nil {
-			cellID = b.assembly.ID()
+		cellID := b.assembly.assemblyID
+		if cellID == "" && b.assembly.core != nil {
+			cellID = b.assembly.core.ID()
 		}
 		if cellID == "" {
 			cellID = "default"
 		}
-		collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{
+		collector, err := metricsmiddleware.NewProviderCollector(b.metrics.provider, metricsmiddleware.ProviderCollectorConfig{
 			CellID: cellID,
 		})
 		if err != nil {
@@ -997,19 +997,19 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 					"do not also pass router.WithMetricsCollector via WithRouterOptions. "+
 					"Remove one side: %w", err)
 		}
-		b.httpCollector = collector
+		b.metrics.httpCollector = collector
 	}
-	return append(opts, router.WithMetricsCollector(b.httpCollector)), nil
+	return append(opts, router.WithMetricsCollector(b.metrics.httpCollector)), nil
 }
 
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics
 // options for the given verifier.
 func (b *Bootstrap) buildAuthRouterOptions(v auth.IntentTokenVerifier) ([]router.Option, error) {
 	opts := []router.Option{router.WithAuthMiddleware(v)}
-	if b.metricsProvider == nil {
+	if b.metrics.provider == nil {
 		return opts, nil
 	}
-	am, err := auth.NewAuthMetrics(b.metricsProvider)
+	am, err := auth.NewAuthMetrics(b.metrics.provider)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: register auth metrics: %w", err)
 	}
@@ -1035,13 +1035,13 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	// middleware here. ContractTracingMiddleware therefore observes a
 	// ctx already populated with entry.Observability fields.
 	mws := []outbox.SubscriptionMiddleware{
-		eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor),
+		eventrouter.ContractTracingMiddleware(b.http.wrapperTracer, b.http.errorRedactor),
 	}
-	mws = append(mws, b.consumerMiddleware...)
+	mws = append(mws, b.events.consumerMiddleware...)
 
 	var evtRouterOpts []eventrouter.Option
-	if b.eventRouterReadyTimeoutSet {
-		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.eventRouterReadyTimeout))
+	if b.events.routerReadyTimeoutSet {
+		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.events.routerReadyTimeout))
 	}
 	evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
 		Inner:      sub,
@@ -1114,7 +1114,7 @@ func (b *Bootstrap) checkNoEventRegistrars(asm *assembly.CoreAssembly) error {
 // ref: uber-go/fx run vs stop ctx separation.
 func (b *Bootstrap) phase8StartWorkers(runCtx context.Context, s *phaseState) {
 	wg := worker.NewWorkerGroup()
-	for _, w := range b.workers {
+	for _, w := range b.events.workers {
 		wg.Add(w)
 	}
 
@@ -1122,7 +1122,7 @@ func (b *Bootstrap) phase8StartWorkers(runCtx context.Context, s *phaseState) {
 	// stop workers. Workers stop only when phase10 calls their teardown.
 	workerCtx, workerCancel := context.WithCancel(runCtx)
 
-	if len(b.workers) == 0 {
+	if len(b.events.workers) == 0 {
 		workerCancel() // no workers; release immediately
 		return
 	}
@@ -1216,10 +1216,10 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 // ref: uber-go/fx app.go StopTimeout
 // ref: Kubernetes pod shutdown model (preStop counts toward terminationGracePeriodSeconds)
 func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal) error {
-	shutCtx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
+	shutCtx, cancel := context.WithTimeout(context.Background(), b.lc.shutdownTimeout)
 	defer cancel()
 
-	m := b.shutdownMet
+	m := b.metrics.shutdownMet
 	totalStart := time.Now()
 
 	// --- stage 1: readiness flip ---
@@ -1284,13 +1284,13 @@ func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState)
 		s.hh.SetShuttingDown()
 	}
 
-	if b.preShutdownDelay <= 0 {
+	if b.lc.preShutdownDelay <= 0 {
 		return
 	}
 	slog.Info("bootstrap: pre-shutdown drain delay",
-		slog.Duration("delay", b.preShutdownDelay))
+		slog.Duration("delay", b.lc.preShutdownDelay))
 	select {
-	case <-time.After(b.preShutdownDelay):
+	case <-time.After(b.lc.preShutdownDelay):
 	case <-shutCtx.Done():
 	}
 }

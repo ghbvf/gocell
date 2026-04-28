@@ -44,18 +44,115 @@ const (
 	eventRouterCheckerName   = "eventrouter"
 )
 
+// bootstrapAssembly groups config-loading and CoreAssembly construction fields.
+//
+// ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/server/config.go
+// Config named sub-struct fields (e.g., SecureServingInfo).
+type bootstrapAssembly struct {
+	configPath           string
+	envPrefix            string
+	core                 *assembly.CoreAssembly // renamed from "assembly" to avoid b.assembly.assembly stutter
+	assemblyID           string
+	hookTimeout          time.Duration
+	hookTimeoutSet       bool
+	hookObserver         cell.LifecycleHookObserver
+	configWatcherFactory func(string, ...config.WatcherOption) (*config.Watcher, error)
+}
+
+// bootstrapHTTP groups HTTP listener, router, health, and middleware fields.
+//
+// ref: uber-go/fx app.go — grouped option fields per concern.
+type bootstrapHTTP struct {
+	listenerConfigs       map[cell.ListenerRef]listenerConfig
+	duplicateListenerRefs []cell.ListenerRef
+	routerOpts            []router.Option
+	healthRouteGroupOpts  []HealthRouteGroupOption
+	wrapperTracer         tracing.Tracer
+	errorRedactor         wrapper.ErrorRedactor
+	circuitBreakerNil     bool
+	healthCheckers        []namedChecker
+	adapterInfo           map[string]string
+	readyzDeadline        time.Duration
+}
+
+// bootstrapEvents groups outbox pubsub, worker, and event-router fields.
+type bootstrapEvents struct {
+	workers                     []worker.Worker
+	publisher                   outbox.Publisher
+	subscriber                  outbox.Subscriber
+	consumerMiddleware          []outbox.SubscriptionMiddleware
+	routerReadyTimeout          time.Duration // renamed from eventRouterReadyTimeout
+	routerReadyTimeoutSet       bool          // renamed from eventRouterReadyTimeoutSet
+	disableObservabilityRestore bool
+}
+
+// bootstrapLifecycle groups kernel/cell Lifecycle, ManagedResource, and shutdown fields.
+type bootstrapLifecycle struct {
+	kernel                       Lifecycle // renamed from "lifecycle" to avoid b.lc.lifecycle stutter
+	lifecycleDefaultStartTimeout time.Duration
+	lifecycleDefaultStopTimeout  time.Duration
+	lifecycleRegistrars          []func(Lifecycle)
+	managedResources             []kernellifecycle.ManagedResource
+	managedResourceTeardowns     []namedTeardown
+	managedResourceNil           bool
+	closers                      []any
+	shutdownTimeout              time.Duration
+	preShutdownDelay             time.Duration
+}
+
+// bootstrapMetrics groups metrics provider and HTTP collector fields.
+type bootstrapMetrics struct {
+	provider           kernelmetrics.Provider // renamed from metricsProvider
+	httpCollector      metricsmiddleware.Collector
+	shutdownMet        *shutdownMetrics
+	shutdownMetricsErr error
+}
+
+// Bootstrap orchestrates the GoCell application lifecycle.
+//
+// Fields are organised into five named sub-structs by concern:
+//
+//   - assembly: config loading + CoreAssembly construction + hooks
+//   - http:     listener declarations + router options + health + tracing
+//   - events:   outbox pubsub + event router + workers
+//   - lc:       kernel/cell Lifecycle + ManagedResource + shutdown budgets
+//   - metrics:  metrics provider + auto-wired HTTP collector + shutdown metrics
+//
+// ref: uber-go/fx app.go — named field grouping per concern.
+// ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/server/config.go
+// — named sub-struct fields (SecureServingInfo, etc.).
+type Bootstrap struct {
+	assembly bootstrapAssembly
+	http     bootstrapHTTP
+	events   bootstrapEvents
+	lc       bootstrapLifecycle
+	metrics  bootstrapMetrics
+
+	runOnce sync.Once // Run() single-execution guard; not part of any concern domain
+}
+
+// namedChecker pairs a readiness probe name with its check function.
+type namedChecker struct {
+	name string                      // unique identifier shown in /readyz?verbose output
+	fn   func(context.Context) error // nil return = healthy; non-nil = unhealthy
+}
+
+// ---------------------------------------------------------------------------
+// Option functions — assembly group
+// ---------------------------------------------------------------------------
+
 // WithConfig sets the YAML config path and environment prefix.
 func WithConfig(yamlPath, envPrefix string) Option {
 	return func(b *Bootstrap) {
-		b.configPath = yamlPath
-		b.envPrefix = envPrefix
+		b.assembly.configPath = yamlPath
+		b.assembly.envPrefix = envPrefix
 	}
 }
 
 // WithAssembly sets a pre-built CoreAssembly.
 func WithAssembly(asm *assembly.CoreAssembly) Option {
 	return func(b *Bootstrap) {
-		b.assembly = asm
+		b.assembly.core = asm
 	}
 }
 
@@ -71,45 +168,57 @@ func WithAssembly(asm *assembly.CoreAssembly) Option {
 // to "default" (the ID of the auto-built assembly).
 func WithAssemblyID(id string) Option {
 	return func(b *Bootstrap) {
-		b.assemblyID = id
+		b.assembly.assemblyID = id
 	}
 }
 
-// WithWorkers adds background workers.
-func WithWorkers(ws ...worker.Worker) Option {
-	return func(b *Bootstrap) {
-		b.workers = append(b.workers, ws...)
-	}
-}
-
-// WithPublisher sets the outbox.Publisher used for event publishing.
+// WithHookTimeout configures the per-hook deadline for the default
+// assembly built when no WithAssembly option is supplied. Zero uses
+// assembly.DefaultHookTimeout. Negative values disable per-hook
+// timeouts entirely.
 //
-// ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
-func WithPublisher(p outbox.Publisher) Option {
+// When WithAssembly is used, the pre-built assembly's Config.HookTimeout
+// takes precedence — this option has no effect. For pre-built assemblies,
+// set the value directly on assembly.Config when constructing.
+func WithHookTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.publisher = p
+		b.assembly.hookTimeout = d
+		b.assembly.hookTimeoutSet = true
 	}
 }
 
-// WithSubscriber sets the outbox.Subscriber used for event consumption.
+// WithHookObserver registers a cell lifecycle hook observer for the
+// default assembly built when no WithAssembly option is supplied.
 //
-// ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
-func WithSubscriber(s outbox.Subscriber) Option {
+// When WithAssembly is used, the pre-built assembly's Config.HookObserver
+// takes precedence — this option has no effect. For pre-built assemblies,
+// set the observer directly on assembly.Config when constructing.
+//
+// A nil observer (including a typed nil wrapping a nil concrete pointer)
+// is equivalent to not calling this option.
+func WithHookObserver(obs cell.LifecycleHookObserver) Option {
 	return func(b *Bootstrap) {
-		b.subscriber = s
+		if cell.IsNilHookObserver(obs) {
+			return
+		}
+		b.assembly.hookObserver = obs
 	}
 }
+
+// ---------------------------------------------------------------------------
+// Option functions — http group
+// ---------------------------------------------------------------------------
 
 // WithRouterOptions passes options to the router builder.
 func WithRouterOptions(opts ...router.Option) Option {
 	return func(b *Bootstrap) {
-		b.routerOpts = append(b.routerOpts, opts...)
+		b.http.routerOpts = append(b.http.routerOpts, opts...)
 	}
 }
 
 // WithTracer enables distributed tracing. The tracer is forwarded to
 // router.WithTracer (the single HTTP request span owner) and stored on
-// Bootstrap.wrapperTracer so eventrouter.ContractTracingMiddleware can create
+// Bootstrap.http.wrapperTracer so eventrouter.ContractTracingMiddleware can create
 // consumer-side wrapper.WrapConsumer spans. Without this option, HTTP tracing
 // is disabled and WrapConsumer falls back to wrapper.NoopTracer{}; a slog.Warn
 // is emitted at bootstrap time so ops notice the silent degrade.
@@ -117,7 +226,7 @@ func WithRouterOptions(opts ...router.Option) Option {
 // ref: go-zero — observability configuration at app level
 func WithTracer(t tracing.Tracer) Option {
 	return func(b *Bootstrap) {
-		b.routerOpts = append(b.routerOpts,
+		b.http.routerOpts = append(b.http.routerOpts,
 			router.WithTracer(t),
 			// Skip span creation for canonical infra probe endpoints
 			// (/healthz, /readyz, /metrics) so high-rate liveness/readiness
@@ -128,7 +237,7 @@ func WithTracer(t tracing.Tracer) Option {
 			// install the filter explicitly here.
 			router.WithTracingOptions(middleware.WithProbeFilter(middleware.DefaultProbeFilter)),
 		)
-		b.wrapperTracer = t
+		b.http.wrapperTracer = t
 	}
 }
 
@@ -148,8 +257,8 @@ func WithTracer(t tracing.Tracer) Option {
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser preferred over io.Closer
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(b *Bootstrap) {
-		b.routerOpts = append(b.routerOpts, router.WithRateLimiter(rl))
-		b.closers = append(b.closers, rl)
+		b.http.routerOpts = append(b.http.routerOpts, router.WithRateLimiter(rl))
+		b.lc.closers = append(b.lc.closers, rl)
 	}
 }
 
@@ -169,12 +278,220 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(b *Bootstrap) {
 		if cb == nil || middleware.IsTypedNilAllower(cb) {
-			b.circuitBreakerNil = true
+			b.http.circuitBreakerNil = true
 			return
 		}
-		b.routerOpts = append(b.routerOpts, router.WithCircuitBreaker(cb))
-		b.closers = append(b.closers, cb)
+		b.http.routerOpts = append(b.http.routerOpts, router.WithCircuitBreaker(cb))
+		b.lc.closers = append(b.lc.closers, cb)
 	}
+}
+
+// WithSecurityHeadersOptions configures HSTS and other security header
+// directives. This is a convenience wrapper around
+// WithRouterOptions(router.WithSecurityHeadersOptions(...)).
+//
+// ref: unrolled/secure — configurable HSTS directives via struct fields
+func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option {
+	return func(b *Bootstrap) {
+		b.http.routerOpts = append(b.http.routerOpts, router.WithSecurityHeadersOptions(opts...))
+	}
+}
+
+// WithErrorRedactor installs a wrapper.ErrorRedactor that scrubs error text
+// before it reaches span.RecordError on HTTP request spans and consumer-side
+// CONSUME spans. A nil fn disables redaction (identity semantics).
+//
+// Use when strict source-side sanitisation is required (regulated
+// environments); otherwise leave unset and let the OTel span processor /
+// exporter filter handle scrubbing at export time.
+func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
+	return func(b *Bootstrap) {
+		if fn != nil {
+			b.http.errorRedactor = fn
+			b.http.routerOpts = append(b.http.routerOpts, router.WithTracingOptions(middleware.WithErrorRedactor(fn)))
+		}
+	}
+}
+
+// WithHealthChecker registers a named readiness checker that contributes to
+// aggregate /readyz and appears in `/readyz?verbose` responses. Use this to
+// wire adapter health probes (e.g., conn.Health for RabbitMQ) without
+// bootstrap depending on adapter types.
+//
+// Accepts func(context.Context) error so callers can honour the /readyz probe
+// deadline. Validation (empty name, nil fn) is deferred to Run() where it fires
+// at Step 0 before any component starts, returning an error directly.
+func WithHealthChecker(name string, fn func(context.Context) error) Option {
+	return func(b *Bootstrap) {
+		b.http.healthCheckers = append(b.http.healthCheckers, namedChecker{name: name, fn: fn})
+	}
+}
+
+// WithReadyzDeadline overrides the per-probe deadline for /readyz. All
+// registered checkers must complete within this duration; checkers that exceed
+// it are reported as status="timeout". A zero or negative value uses the
+// health.Handler default (5 s, Kubernetes readiness probe convention).
+//
+// ref: k8s.io/apiserver/pkg/server/healthz — server-side readyz deadline
+// independent of the kubelet HTTP connection deadline.
+func WithReadyzDeadline(d time.Duration) Option {
+	return func(b *Bootstrap) {
+		b.http.readyzDeadline = d
+	}
+}
+
+// WithAdapterInfo sets static adapter configuration metadata that is exposed
+// in /readyz?verbose output. Helps operators verify which storage/bus backends
+// are active without inspecting application logs.
+func WithAdapterInfo(info map[string]string) Option {
+	return func(b *Bootstrap) {
+		b.http.adapterInfo = info
+	}
+}
+
+// WithHealthRoutes accumulates HealthRouteGroupOption values that customise
+// the framework-owned /healthz, /readyz, and /metrics route groups. The
+// canonical use cases are:
+//
+//	bootstrap.WithHealthRoutes(bootstrap.WithMetricsHandler(promHandler))
+//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseToken(token))
+//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled())
+//
+// Multiple WithHealthRoutes calls accumulate; later options for the same
+// concern (metrics handler, verbose-token, verbose-disabled) overwrite earlier
+// ones in the order they were appended. Pass nil-valued options at your peril —
+// they overwrite any previously-set value with the zero value.
+//
+// PR-A35 / PR269 round-3 strict semantics: a request with ?verbose= but no
+// matching readyz verbose-token / disabled flag yields 401
+// ErrReadyzVerboseDenied at the health handler layer, never a silent
+// downgrade to plain 200.
+func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
+	return func(b *Bootstrap) {
+		b.http.healthRouteGroupOpts = append(b.http.healthRouteGroupOpts, opts...)
+	}
+}
+
+// JWT authentication is wired through a typed []cell.ListenerAuth chain mounted
+// on a listener via WithListener:
+//
+//	bootstrap.WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.NewAuthJWT(verifier)})
+//	bootstrap.WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)})
+//
+// The previous bootstrap.WithAuthMiddleware / WithAuthDiscovery options have
+// been removed (PR-A14b round-3 F3): one mechanism, one source of truth. The
+// listener's auth chain carries the verifier; Bootstrap installs the router-aware
+// AuthMiddleware at phase5 so Public / PasswordResetExempt route bypass works
+// for free.
+
+// PR-A35's bootstrap-level WithVerboseDisabled has been removed (PR-A14b
+// round-3 F3 collapse): use WithHealthRoutes(WithReadyzVerboseDisabled()).
+// The single-mechanism rule applies — verbose-mode configuration lives on
+// the readyz route group exclusively.
+
+// ---------------------------------------------------------------------------
+// Option functions — events group
+// ---------------------------------------------------------------------------
+
+// WithWorkers adds background workers.
+func WithWorkers(ws ...worker.Worker) Option {
+	return func(b *Bootstrap) {
+		b.events.workers = append(b.events.workers, ws...)
+	}
+}
+
+// WithPublisher sets the outbox.Publisher used for event publishing.
+//
+// ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
+func WithPublisher(p outbox.Publisher) Option {
+	return func(b *Bootstrap) {
+		b.events.publisher = p
+	}
+}
+
+// WithSubscriber sets the outbox.Subscriber used for event consumption.
+//
+// ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
+func WithSubscriber(s outbox.Subscriber) Option {
+	return func(b *Bootstrap) {
+		b.events.subscriber = s
+	}
+}
+
+// WithConsumerMiddleware registers subscriber-side middleware applied to every
+// topic handler before it is passed to the underlying Subscriber.Subscribe call.
+// Middleware is applied in registration order; each entry wraps the next, so the
+// first registered middleware is outermost at invocation time.
+//
+// Typical use: inject ConsumerBase.AsMiddleware so every consumer inherits
+// two-phase Claimer idempotency, backoff retry, and DLX routing without each
+// slice wiring it individually. Observability context restoration
+// (entry.Observability → ctx) is the outermost step inside
+// outbox.SubscriberWithMiddleware.Subscribe, so middleware registered here
+// always sees a context populated with trace_id/request_id/correlation_id.
+//
+// ref: ThreeDotsLabs/watermill message/router.go — AddMiddleware wraps handlers
+// at router level; MassTransit UseMessageRetry — pipeline middleware at
+// receive-endpoint configuration.
+func WithConsumerMiddleware(mw ...outbox.SubscriptionMiddleware) Option {
+	return func(b *Bootstrap) {
+		b.events.consumerMiddleware = append(b.events.consumerMiddleware, mw...)
+	}
+}
+
+// WithEventRouterReadyTimeout overrides the EventRouter Phase-3 ready-wait
+// budget. A non-positive value disables the bound (router waits indefinitely
+// until ctx cancel). Default: eventrouter.DefaultReadyTimeout (30s).
+//
+// On timeout, Bootstrap.Run returns an error listing not-ready
+// "consumerGroup/topic" pairs so operators can pinpoint the stuck subscription.
+func WithEventRouterReadyTimeout(d time.Duration) Option {
+	return func(b *Bootstrap) {
+		b.events.routerReadyTimeoutSet = true
+		b.events.routerReadyTimeout = d
+	}
+}
+
+// WithDisableObservabilityRestore prevents the consumer-side
+// ObservabilityContextMiddleware from restoring request_id / correlation_id /
+// trace_id from outbox entry metadata into the handler context. The kill
+// switch for the consume-side observability bridge — set this only when
+// integrating with a custom observability stack that resets context keys
+// itself.
+func WithDisableObservabilityRestore() Option {
+	return func(b *Bootstrap) {
+		b.events.disableObservabilityRestore = true
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Option functions — lifecycle group
+// ---------------------------------------------------------------------------
+
+// WithLifecycle registers a hook-registration callback invoked during New()
+// (after all options are applied, as part of lifecycle initialisation). Use
+// for composition-root Hook registration without needing a Bootstrap reference.
+// Multiple WithLifecycle options and direct b.Lifecycle().Append() calls
+// accumulate in the order they are applied.
+func WithLifecycle(fn func(lc Lifecycle)) Option {
+	return func(b *Bootstrap) {
+		if fn != nil {
+			b.lc.lifecycleRegistrars = append(b.lc.lifecycleRegistrars, fn)
+		}
+	}
+}
+
+// WithLifecycleDefaultStartTimeout overrides the per-hook default StartTimeout.
+// Zero value retains DefaultStartTimeout (30s). Negative disables default timeout
+// (hooks without own StartTimeout will block indefinitely).
+func WithLifecycleDefaultStartTimeout(d time.Duration) Option {
+	return func(b *Bootstrap) { b.lc.lifecycleDefaultStartTimeout = d }
+}
+
+// WithLifecycleDefaultStopTimeout mirrors WithLifecycleDefaultStartTimeout for StopTimeout.
+// Zero value retains DefaultStopTimeout (10s). Negative disables default timeout.
+func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
+	return func(b *Bootstrap) { b.lc.lifecycleDefaultStopTimeout = d }
 }
 
 // WithManagedCloser registers an adapter or resource that implements
@@ -197,37 +514,14 @@ func WithManagedCloser(c kernellifecycle.ContextCloser) Option {
 		if c == nil {
 			return
 		}
-		b.closers = append(b.closers, c)
+		b.lc.closers = append(b.lc.closers, c)
 	}
 }
-
-// WithSecurityHeadersOptions configures HSTS and other security header
-// directives. This is a convenience wrapper around
-// WithRouterOptions(router.WithSecurityHeadersOptions(...)).
-//
-// ref: unrolled/secure — configurable HSTS directives via struct fields
-func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option {
-	return func(b *Bootstrap) {
-		b.routerOpts = append(b.routerOpts, router.WithSecurityHeadersOptions(opts...))
-	}
-}
-
-// JWT authentication is wired through a typed []cell.ListenerAuth chain mounted
-// on a listener via WithListener:
-//
-//	bootstrap.WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.NewAuthJWT(verifier)})
-//	bootstrap.WithListener(cell.PrimaryListener, addr, []cell.ListenerAuth{cell.NewAuthJWTFromAssembly(asm)})
-//
-// The previous bootstrap.WithAuthMiddleware / WithAuthDiscovery options have
-// been removed (PR-A14b round-3 F3): one mechanism, one source of truth. The
-// listener's auth chain carries the verifier; Bootstrap installs the router-aware
-// AuthMiddleware at phase5 so Public / PasswordResetExempt route bypass works
-// for free.
 
 // WithShutdownTimeout overrides the default graceful shutdown timeout.
 func WithShutdownTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.shutdownTimeout = d
+		b.lc.shutdownTimeout = d
 	}
 }
 
@@ -242,36 +536,38 @@ func WithShutdownTimeout(d time.Duration) Option {
 // ref: Kubernetes pod shutdown — preStop counts toward terminationGracePeriodSeconds
 func WithPreShutdownDelay(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.preShutdownDelay = d
+		b.lc.preShutdownDelay = d
 	}
 }
 
-// WithHealthChecker registers a named readiness checker that contributes to
-// aggregate /readyz and appears in `/readyz?verbose` responses. Use this to
-// wire adapter health probes (e.g., conn.Health for RabbitMQ) without
-// bootstrap depending on adapter types.
+// ---------------------------------------------------------------------------
+// Option functions — metrics group
+// ---------------------------------------------------------------------------
+
+// WithMetricsProvider registers a provider-neutral metrics backend used by
+// components that need to emit counters/histograms through a common
+// abstraction (hook dispatcher drop counters, OTel pool-stats collector,
+// custom caller-registered metrics). Pass nil or omit the option to use
+// kernel/observability/metrics.NopProvider (no emission).
 //
-// Accepts func(context.Context) error so callers can honour the /readyz probe
-// deadline. Validation (empty name, nil fn) is deferred to Run() where it fires
-// at Step 0 before any component starts, returning an error directly.
-func WithHealthChecker(name string, fn func(context.Context) error) Option {
+// Callers can read b.MetricsProvider() to register additional metrics
+// against the same backend — useful when cmd/* builds both an HTTP
+// Collector and a relay Collector on the same Provider instance.
+//
+// ref: opentelemetry-go otel.GetMeterProvider@main — single global
+// provider entry point; GoCell exposes it per-Bootstrap instance to avoid
+// mutable global state.
+func WithMetricsProvider(p kernelmetrics.Provider) Option {
 	return func(b *Bootstrap) {
-		b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
+		if p != nil {
+			b.metrics.provider = p
+		}
 	}
 }
 
-// WithReadyzDeadline overrides the per-probe deadline for /readyz. All
-// registered checkers must complete within this duration; checkers that exceed
-// it are reported as status="timeout". A zero or negative value uses the
-// health.Handler default (5 s, Kubernetes readiness probe convention).
-//
-// ref: k8s.io/apiserver/pkg/server/healthz — server-side readyz deadline
-// independent of the kubelet HTTP connection deadline.
-func WithReadyzDeadline(d time.Duration) Option {
-	return func(b *Bootstrap) {
-		b.readyzDeadline = d
-	}
-}
+// ---------------------------------------------------------------------------
+// Validation helpers (http group fields)
+// ---------------------------------------------------------------------------
 
 // validateHTTPListenerConfigs fail-fasts when no listeners are declared via
 // WithListener, or when a listener config has neither addr nor pre-bound net.
@@ -280,13 +576,13 @@ func WithReadyzDeadline(d time.Duration) Option {
 // declarative via WithListener; the old primaryAddr/internalAddr fields are gone.
 // CORR-02: also rejects duplicate listener refs recorded by WithListener.
 func (b *Bootstrap) validateHTTPListenerConfigs() error {
-	if len(b.listenerConfigs) == 0 {
+	if len(b.http.listenerConfigs) == 0 {
 		return fmt.Errorf("bootstrap: no HTTP listeners declared; use WithListener to declare at least one listener")
 	}
 	if err := b.validateNoDuplicateListenerRefs(); err != nil {
 		return err
 	}
-	for ref, cfg := range b.listenerConfigs {
+	for ref, cfg := range b.http.listenerConfigs {
 		if err := validateListenerConfig(ref, cfg); err != nil {
 			return err
 		}
@@ -294,7 +590,7 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 	// B2: when a metrics handler is configured, a dedicated HealthListener must
 	// be declared so /metrics is isolated from the public primary listener.
 	if b.resolveHealthRouteGroupCfg().metricsHandler != nil {
-		if _, ok := b.listenerConfigs[cell.HealthListener]; !ok {
+		if _, ok := b.http.listenerConfigs[cell.HealthListener]; !ok {
 			return fmt.Errorf(
 				"bootstrap: WithHealthRoutes(WithMetricsHandler(...)) requires a dedicated HealthListener; " +
 					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener")
@@ -372,12 +668,12 @@ func validateListenerTLSConfig(ref cell.ListenerRef, cfg *tls.Config) error {
 // validateNoDuplicateListenerRefs returns an error when the same ListenerRef
 // was declared more than once via WithListener (CORR-02).
 func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
-	if len(b.duplicateListenerRefs) == 0 {
+	if len(b.http.duplicateListenerRefs) == 0 {
 		return nil
 	}
-	dups := make([]string, 0, len(b.duplicateListenerRefs))
+	dups := make([]string, 0, len(b.http.duplicateListenerRefs))
 	seen := make(map[string]bool)
-	for _, ref := range b.duplicateListenerRefs {
+	for _, ref := range b.http.duplicateListenerRefs {
 		name := ref.String()
 		if !seen[name] {
 			dups = append(dups, name)
@@ -389,316 +685,9 @@ func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
 		strings.Join(dups, ", "))
 }
 
-// WithAdapterInfo sets static adapter configuration metadata that is exposed
-// in /readyz?verbose output. Helps operators verify which storage/bus backends
-// are active without inspecting application logs.
-func WithAdapterInfo(info map[string]string) Option {
-	return func(b *Bootstrap) {
-		b.adapterInfo = info
-	}
-}
-
-// WithHealthRoutes accumulates HealthRouteGroupOption values that customise
-// the framework-owned /healthz, /readyz, and /metrics route groups. The
-// canonical use cases are:
-//
-//	bootstrap.WithHealthRoutes(bootstrap.WithMetricsHandler(promHandler))
-//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseToken(token))
-//	bootstrap.WithHealthRoutes(bootstrap.WithReadyzVerboseDisabled())
-//
-// Multiple WithHealthRoutes calls accumulate; later options for the same
-// concern (metrics handler, verbose-token, verbose-disabled) overwrite earlier
-// ones in the order they were appended. Pass nil-valued options at your peril —
-// they overwrite any previously-set value with the zero value.
-//
-// PR-A35 / PR269 round-3 strict semantics: a request with ?verbose= but no
-// matching readyz verbose-token / disabled flag yields 401
-// ErrReadyzVerboseDenied at the health handler layer, never a silent
-// downgrade to plain 200.
-func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
-	return func(b *Bootstrap) {
-		b.healthRouteGroupOpts = append(b.healthRouteGroupOpts, opts...)
-	}
-}
-
-// PR-A35's bootstrap-level WithVerboseDisabled has been removed (PR-A14b
-// round-3 F3 collapse): use WithHealthRoutes(WithReadyzVerboseDisabled()).
-// The single-mechanism rule applies — verbose-mode configuration lives on
-// the readyz route group exclusively.
-
-// WithEventRouterReadyTimeout overrides the EventRouter Phase-3 ready-wait
-// budget. A non-positive value disables the bound (router waits indefinitely
-// until ctx cancel). Default: eventrouter.DefaultReadyTimeout (30s).
-//
-// On timeout, Bootstrap.Run returns an error listing not-ready
-// "consumerGroup/topic" pairs so operators can pinpoint the stuck subscription.
-func WithEventRouterReadyTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) {
-		b.eventRouterReadyTimeoutSet = true
-		b.eventRouterReadyTimeout = d
-	}
-}
-
-// WithErrorRedactor installs a wrapper.ErrorRedactor that scrubs error text
-// before it reaches span.RecordError on HTTP request spans and consumer-side
-// CONSUME spans. A nil fn disables redaction (identity semantics).
-//
-// Use when strict source-side sanitisation is required (regulated
-// environments); otherwise leave unset and let the OTel span processor /
-// exporter filter handle scrubbing at export time.
-func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
-	return func(b *Bootstrap) {
-		if fn != nil {
-			b.errorRedactor = fn
-			b.routerOpts = append(b.routerOpts, router.WithTracingOptions(middleware.WithErrorRedactor(fn)))
-		}
-	}
-}
-
-// WithDisableObservabilityRestore prevents the consumer-side
-// ObservabilityContextMiddleware from restoring request_id / correlation_id /
-// trace_id from outbox entry metadata into the handler context. The kill
-// switch for the consume-side observability bridge — set this only when
-// integrating with a custom observability stack that resets context keys
-// itself.
-func WithDisableObservabilityRestore() Option {
-	return func(b *Bootstrap) {
-		b.disableObservabilityRestore = true
-	}
-}
-
-// WithConsumerMiddleware registers subscriber-side middleware applied to every
-// topic handler before it is passed to the underlying Subscriber.Subscribe call.
-// Middleware is applied in registration order; each entry wraps the next, so the
-// first registered middleware is outermost at invocation time.
-//
-// Typical use: inject ConsumerBase.AsMiddleware so every consumer inherits
-// two-phase Claimer idempotency, backoff retry, and DLX routing without each
-// slice wiring it individually. Observability context restoration
-// (entry.Observability → ctx) is the outermost step inside
-// outbox.SubscriberWithMiddleware.Subscribe, so middleware registered here
-// always sees a context populated with trace_id/request_id/correlation_id.
-//
-// ref: ThreeDotsLabs/watermill message/router.go — AddMiddleware wraps handlers
-// at router level; MassTransit UseMessageRetry — pipeline middleware at
-// receive-endpoint configuration.
-func WithConsumerMiddleware(mw ...outbox.SubscriptionMiddleware) Option {
-	return func(b *Bootstrap) {
-		b.consumerMiddleware = append(b.consumerMiddleware, mw...)
-	}
-}
-
-// WithHookTimeout configures the per-hook deadline for the default
-// assembly built when no WithAssembly option is supplied. Zero uses
-// assembly.DefaultHookTimeout. Negative values disable per-hook
-// timeouts entirely.
-//
-// When WithAssembly is used, the pre-built assembly's Config.HookTimeout
-// takes precedence — this option has no effect. For pre-built assemblies,
-// set the value directly on assembly.Config when constructing.
-func WithHookTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) {
-		b.hookTimeout = d
-		b.hookTimeoutSet = true
-	}
-}
-
-// WithMetricsProvider registers a provider-neutral metrics backend used by
-// components that need to emit counters/histograms through a common
-// abstraction (hook dispatcher drop counters, OTel pool-stats collector,
-// custom caller-registered metrics). Pass nil or omit the option to use
-// kernel/observability/metrics.NopProvider (no emission).
-//
-// Callers can read b.MetricsProvider() to register additional metrics
-// against the same backend — useful when cmd/* builds both an HTTP
-// Collector and a relay Collector on the same Provider instance.
-//
-// ref: opentelemetry-go otel.GetMeterProvider@main — single global
-// provider entry point; GoCell exposes it per-Bootstrap instance to avoid
-// mutable global state.
-func WithMetricsProvider(p kernelmetrics.Provider) Option {
-	return func(b *Bootstrap) {
-		if p != nil {
-			b.metricsProvider = p
-		}
-	}
-}
-
-// WithHookObserver registers a cell lifecycle hook observer for the
-// default assembly built when no WithAssembly option is supplied.
-//
-// When WithAssembly is used, the pre-built assembly's Config.HookObserver
-// takes precedence — this option has no effect. For pre-built assemblies,
-// set the observer directly on assembly.Config when constructing.
-//
-// A nil observer (including a typed nil wrapping a nil concrete pointer)
-// is equivalent to not calling this option.
-func WithHookObserver(obs cell.LifecycleHookObserver) Option {
-	return func(b *Bootstrap) {
-		if cell.IsNilHookObserver(obs) {
-			return
-		}
-		b.hookObserver = obs
-	}
-}
-
-// WithLifecycleDefaultStartTimeout overrides the per-hook default StartTimeout.
-// Zero value retains DefaultStartTimeout (30s). Negative disables default timeout
-// (hooks without own StartTimeout will block indefinitely).
-func WithLifecycleDefaultStartTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) { b.lifecycleDefaultStartTimeout = d }
-}
-
-// WithLifecycleDefaultStopTimeout mirrors WithLifecycleDefaultStartTimeout for StopTimeout.
-// Zero value retains DefaultStopTimeout (10s). Negative disables default timeout.
-func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) { b.lifecycleDefaultStopTimeout = d }
-}
-
-// WithLifecycle registers a hook-registration callback invoked during New()
-// (after all options are applied, as part of lifecycle initialisation). Use
-// for composition-root Hook registration without needing a Bootstrap reference.
-// Multiple WithLifecycle options and direct b.Lifecycle().Append() calls
-// accumulate in the order they are applied.
-func WithLifecycle(fn func(lc Lifecycle)) Option {
-	return func(b *Bootstrap) {
-		if fn != nil {
-			b.lifecycleRegistrars = append(b.lifecycleRegistrars, fn)
-		}
-	}
-}
-
-// namedChecker pairs a readiness probe name with its check function.
-type namedChecker struct {
-	name string                      // unique identifier shown in /readyz?verbose output
-	fn   func(context.Context) error // nil return = healthy; non-nil = unhealthy
-}
-
-// Bootstrap orchestrates the GoCell application lifecycle.
-//
-// Fields are organised by concern; the dividers below are not load-bearing
-// (Go has no notion of struct sub-groups) but reading and reviewing this 45-
-// field struct is materially easier when related fields sit together.
-type Bootstrap struct {
-	// --- assembly + config ---
-	configPath string
-	envPrefix  string
-	assembly   *assembly.CoreAssembly
-
-	// --- workers + outbox pubsub ---
-	workers    []worker.Worker
-	publisher  outbox.Publisher
-	subscriber outbox.Subscriber
-
-	// --- router options (per-listener routerOpts append target) ---
-	routerOpts []router.Option
-
-	// --- shutdown + draining budgets ---
-	shutdownTimeout  time.Duration
-	preShutdownDelay time.Duration
-
-	// --- health probes + adapter metadata ---
-	healthCheckers []namedChecker
-	adapterInfo    map[string]string // static adapter metadata for /readyz verbose
-
-	// --- closers + observability lifecycle ---
-	closers                     []any // middleware/adapter dependencies that need shutdown (ContextCloser preferred, io.Closer fallback)
-	disableObservabilityRestore bool
-
-	// --- consumer / event-router wiring ---
-	eventRouterReadyTimeout    time.Duration
-	eventRouterReadyTimeoutSet bool
-	consumerMiddleware         []outbox.SubscriptionMiddleware
-
-	// --- lifecycle hooks (assembly-level start/stop callbacks) ---
-	hookTimeout    time.Duration // applied when assembly not pre-built
-	hookTimeoutSet bool          // distinguishes zero-value "unset" from explicit zero
-	hookObserver   cell.LifecycleHookObserver
-
-	// --- metrics provider + auto-wired HTTP collector ---
-	metricsProvider    kernelmetrics.Provider
-	httpCollector      metricsmiddleware.Collector // cached auto-wired HTTP collector (created once, shared across listeners)
-	shutdownMet        *shutdownMetrics
-	shutdownMetricsErr error // non-nil when metric registration failed in New
-
-	// --- run state ---
-	runOnce sync.Once
-
-	// configWatcherFactory creates a config watcher. Defaults to
-	// config.NewWatcher. Override per-instance in tests to inject failures
-	// without mutating package-level state (safe for parallel tests).
-	configWatcherFactory func(string, ...config.WatcherOption) (*config.Watcher, error)
-
-	// --- option-validation flags (fail-fast in phase0) ---
-
-	// circuitBreakerNil is set by WithCircuitBreaker when a nil Allower is
-	// passed. Checked at Run() to fail-fast instead of silently skipping CB.
-	circuitBreakerNil bool
-
-	// readyzDeadline overrides the per-probe deadline for /readyz.
-	// Zero means use health.Handler default (5 s).
-	readyzDeadline time.Duration
-
-	// assemblyID is only the `cell_id` label used in HTTP metrics emitted by
-	// the auto-wired metrics collector. Defaults to "default" when empty.
-	assemblyID string
-
-	// --- kernel/cell Lifecycle (uber/fx-style start/stop) ---
-
-	// lifecycle fields wired by WithLifecycle* options.
-	lifecycle                    Lifecycle
-	lifecycleDefaultStartTimeout time.Duration
-	lifecycleDefaultStopTimeout  time.Duration
-	lifecycleRegistrars          []func(Lifecycle) // accumulated by WithLifecycle
-
-	// --- managed resources (LIFO teardown) ---
-
-	// managedResources holds resources registered via WithManagedResource.
-	// Each resource is expanded into health checkers, workers, and LIFO teardowns
-	// by expandManagedResources() at the beginning of Run().
-	managedResources []kernellifecycle.ManagedResource
-
-	// managedResourceTeardowns holds named LIFO close functions derived from
-	// managedResources during expandManagedResources(). Iterated in reverse
-	// order during shutdown so the last-registered resource is closed first.
-	// Each teardown returns the Close error so phase10LIFOTeardown can wrap it
-	// with the resource type and aggregate it into the Run() return value.
-	managedResourceTeardowns []namedTeardown
-
-	// managedResourceNil is set by WithManagedResource when a nil resource is
-	// passed. Checked in phase0 to fail-fast rather than silently skipping
-	// resource registration.
-	managedResourceNil bool
-
-	// --- declarative listeners + route groups (PR-A14b) ---
-
-	// listenerConfigs holds the PR-A14b declarative listener registrations.
-	// Keyed by ListenerRef to deduplicate declarations.
-	// Initialized lazily by the first WithListener option.
-	listenerConfigs map[cell.ListenerRef]listenerConfig
-
-	// duplicateListenerRefs records refs that were passed to WithListener more
-	// than once. validateHTTPListenerConfigs surfaces these as a phase0 error.
-	// CORR-02: doc says "duplicate ref is a phase0 error" — now enforced.
-	duplicateListenerRefs []cell.ListenerRef
-
-	// healthRouteGroupOpts accumulates HealthRouteGroupOption values from
-	// WithHealthRoutes calls. phase5 passes them straight to HealthRouteGroups.
-	healthRouteGroupOpts []HealthRouteGroupOption
-
-	// --- tracing + error redaction ---
-
-	// wrapperTracer is the Tracer supplied via WithTracer. It is threaded into
-	// router.WithTracer (HTTP) and ContractTracingMiddleware (consumer) at
-	// phase6/phase7 construction. When nil, wrapper.HTTPHandler and
-	// wrapper.WrapConsumer each fall back to wrapper.NoopTracer{} at call
-	// time, and phase1 logs a slog.Warn so missing tracer wiring surfaces.
-	wrapperTracer tracing.Tracer
-
-	// errorRedactor (set via WithErrorRedactor) sanitises error text before
-	// it reaches span.RecordError on consumer spans. nil → identity.
-	errorRedactor wrapper.ErrorRedactor
-}
+// ---------------------------------------------------------------------------
+// New / Lifecycle / MetricsProvider / Run
+// ---------------------------------------------------------------------------
 
 // New creates a Bootstrap with the given options.
 //
@@ -708,11 +697,11 @@ type Bootstrap struct {
 // On registration failure the error is stored and surfaced by Run() at
 // phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
-	b := &Bootstrap{
-		shutdownTimeout:      shutdown.DefaultTimeout,
-		configWatcherFactory: config.NewWatcher,
-		metricsProvider:      kernelmetrics.NopProvider{},
-	}
+	b := &Bootstrap{}
+	b.lc.shutdownTimeout = shutdown.DefaultTimeout
+	b.assembly.configWatcherFactory = config.NewWatcher
+	b.metrics.provider = kernelmetrics.NopProvider{}
+
 	for _, o := range opts {
 		o(b)
 	}
@@ -721,22 +710,22 @@ func New(opts ...Option) *Bootstrap {
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
 	// DefaultStartTimeout / DefaultStopTimeout constants internally.
 	logger := slog.Default()
-	b.lifecycle = NewLifecycle(LifecycleConfig{
-		DefaultStartTimeout: b.lifecycleDefaultStartTimeout,
-		DefaultStopTimeout:  b.lifecycleDefaultStopTimeout,
+	b.lc.kernel = NewLifecycle(LifecycleConfig{
+		DefaultStartTimeout: b.lc.lifecycleDefaultStartTimeout,
+		DefaultStopTimeout:  b.lc.lifecycleDefaultStopTimeout,
 		Logger:              logger,
 	})
-	for _, reg := range b.lifecycleRegistrars {
-		reg(b.lifecycle)
+	for _, reg := range b.lc.lifecycleRegistrars {
+		reg(b.lc.kernel)
 	}
 	// Register shutdown metrics against the (potentially Nop) provider.
 	// newShutdownMetrics returns a disabled metrics object for a nil provider.
-	m, err := newShutdownMetrics(b.metricsProvider)
+	m, err := newShutdownMetrics(b.metrics.provider)
 	if err != nil {
 		// Store error; phase0 will surface it before any component starts.
-		b.shutdownMetricsErr = err
+		b.metrics.shutdownMetricsErr = err
 	} else {
-		b.shutdownMet = m
+		b.metrics.shutdownMet = m
 	}
 	return b
 }
@@ -746,7 +735,7 @@ func New(opts ...Option) *Bootstrap {
 // not goroutine-safe concurrent with Run(). Hooks registered here are
 // appended to those from WithLifecycle options.
 func (b *Bootstrap) Lifecycle() Lifecycle {
-	return b.lifecycle
+	return b.lc.kernel
 }
 
 // MetricsProvider returns the configured provider-neutral metrics backend.
@@ -754,12 +743,12 @@ func (b *Bootstrap) Lifecycle() Lifecycle {
 // used the NopProvider default surfaces, so callers can register metrics
 // unconditionally.
 func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
-	if b.metricsProvider == nil {
+	if b.metrics.provider == nil {
 		// Defensive: if a future refactor clears the field post-New, keep the
 		// contract of never returning nil so call sites can omit nil checks.
 		return kernelmetrics.NopProvider{}
 	}
-	return b.metricsProvider
+	return b.metrics.provider
 }
 
 // Run executes the full startup sequence. It blocks until ctx is cancelled
@@ -825,7 +814,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	//
 	// managedResourceTeardowns is in registration order; reversed by the LIFO
 	// shutdown loop at the end of Run().
-	for _, td := range b.managedResourceTeardowns {
+	for _, td := range b.lc.managedResourceTeardowns {
 		s.addNamedTeardown(td.name, td.fn) // td already returns error; phase10 aggregates via LIFO teardown chain
 	}
 
@@ -833,7 +822,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if s.hh != nil {
 			s.hh.SetShuttingDown()
 		}
-		rctx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
+		rctx, cancel := context.WithTimeout(context.Background(), b.lc.shutdownTimeout)
 		defer cancel()
 		return s.rollback(rctx, cause)
 	}
@@ -853,11 +842,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// executes before asm.Stop in the LIFO teardown sequence, letting hooks
 	// still access cell resources during shutdown.
 	// ref: uber-go/fx internal/lifecycle/lifecycle.go — numStarted LIFO rollback.
-	if err := b.lifecycle.Start(ctx); err != nil {
+	if err := b.lc.kernel.Start(ctx); err != nil {
 		return rollback(fmt.Errorf("bootstrap: lifecycle start: %w", err))
 	}
 	s.addTeardown(func(stopCtx context.Context) error {
-		return b.lifecycle.Stop(stopCtx)
+		return b.lc.kernel.Stop(stopCtx)
 	})
 	if err := b.phase4WireAuthAndWatcher(s); err != nil {
 		return rollback(err)
@@ -877,6 +866,10 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	return b.phase10OrchestrateShutdown(s, sig)
 }
 
+// ---------------------------------------------------------------------------
+// Utility helpers
+// ---------------------------------------------------------------------------
+
 // cloneStrings returns a shallow copy of a string slice.
 // If src is nil, returns nil (preserving the nil vs empty distinction).
 func cloneStrings(src []string) []string {
@@ -888,9 +881,8 @@ func cloneStrings(src []string) []string {
 	return dst
 }
 
-// cloneMap returns a deep copy of a map[string]any. Values that are slices
-// or nested maps are recursively cloned so that mutations by one consumer
-// cannot affect another.
+// filterMapByPrefixes returns a new map containing only entries whose key
+// has one of the given prefixes.
 func filterMapByPrefixes(src map[string]any, prefixes []string) map[string]any {
 	dst := make(map[string]any, len(src))
 	for k, v := range src {

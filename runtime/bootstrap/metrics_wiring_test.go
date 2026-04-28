@@ -79,14 +79,14 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 
 	// Mirror bootstrap.Run's default-assembly construction exactly.
 	cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
-	if b.hookTimeoutSet {
-		cfg.HookTimeout = b.hookTimeout
+	if b.assembly.hookTimeoutSet {
+		cfg.HookTimeout = b.assembly.hookTimeout
 	}
-	if b.hookObserver != nil {
-		cfg.HookObserver = b.hookObserver
+	if b.assembly.hookObserver != nil {
+		cfg.HookObserver = b.assembly.hookObserver
 	}
-	if b.metricsProvider != nil {
-		cfg.MetricsProvider = b.metricsProvider
+	if b.metrics.provider != nil {
+		cfg.MetricsProvider = b.metrics.provider
 	}
 	asm := assembly.New(cfg)
 	t.Cleanup(asm.Shutdown)
@@ -107,8 +107,8 @@ func TestBootstrap_DefaultAssembly_WiresMetricsProvider(t *testing.T) {
 func TestBootstrap_DefaultAssembly_NoProviderUsesNop(t *testing.T) {
 	b := New()
 	cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
-	if b.metricsProvider != nil {
-		cfg.MetricsProvider = b.metricsProvider
+	if b.metrics.provider != nil {
+		cfg.MetricsProvider = b.metrics.provider
 	}
 	asm := assembly.New(cfg)
 	t.Cleanup(asm.Shutdown)

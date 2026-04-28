@@ -78,12 +78,12 @@ func WithListenerShutdownGrace(d time.Duration) ListenerOption {
 // ref: go-kratos/kratos transport/http/server.go — options applied before server start.
 func WithListener(ref cell.ListenerRef, addr string, authChain []cell.ListenerAuth, opts ...ListenerOption) Option {
 	return func(b *Bootstrap) {
-		if b.listenerConfigs == nil {
-			b.listenerConfigs = make(map[cell.ListenerRef]listenerConfig)
+		if b.http.listenerConfigs == nil {
+			b.http.listenerConfigs = make(map[cell.ListenerRef]listenerConfig)
 		}
 		// CORR-02: track duplicate refs for phase0 validation.
-		if _, exists := b.listenerConfigs[ref]; exists {
-			b.duplicateListenerRefs = append(b.duplicateListenerRefs, ref)
+		if _, exists := b.http.listenerConfigs[ref]; exists {
+			b.http.duplicateListenerRefs = append(b.http.duplicateListenerRefs, ref)
 		}
 		cfg := listenerConfig{
 			ref:       ref,
@@ -93,6 +93,6 @@ func WithListener(ref cell.ListenerRef, addr string, authChain []cell.ListenerAu
 		for _, o := range opts {
 			o(&cfg)
 		}
-		b.listenerConfigs[ref] = cfg
+		b.http.listenerConfigs[ref] = cfg
 	}
 }

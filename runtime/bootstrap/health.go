@@ -68,7 +68,7 @@ func applyHealthRouteGroupOpts(opts []HealthRouteGroupOption) healthRouteGroupCf
 // options once so phase0 / phase5 can inspect the resolved configuration
 // without applying side-effects.
 func (b *Bootstrap) resolveHealthRouteGroupCfg() healthRouteGroupCfg {
-	return applyHealthRouteGroupOpts(b.healthRouteGroupOpts)
+	return applyHealthRouteGroupOpts(b.http.healthRouteGroupOpts)
 }
 
 // WithMetricsHandler installs an http.Handler at /metrics on the HealthListener.

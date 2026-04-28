@@ -26,30 +26,30 @@ func (r *recordingHookObserver) OnHookEvent(e cell.HookEvent) {
 
 func TestWithHookTimeout_PopulatesField(t *testing.T) {
 	b := New(WithHookTimeout(2 * time.Second))
-	assert.Equal(t, 2*time.Second, b.hookTimeout)
-	assert.True(t, b.hookTimeoutSet)
+	assert.Equal(t, 2*time.Second, b.assembly.hookTimeout)
+	assert.True(t, b.assembly.hookTimeoutSet)
 }
 
 func TestWithHookTimeout_NegativeDisables(t *testing.T) {
 	b := New(WithHookTimeout(-1))
-	assert.Equal(t, time.Duration(-1), b.hookTimeout)
-	assert.True(t, b.hookTimeoutSet)
+	assert.Equal(t, time.Duration(-1), b.assembly.hookTimeout)
+	assert.True(t, b.assembly.hookTimeoutSet)
 }
 
 func TestWithHookTimeout_NotCalled_FieldUnset(t *testing.T) {
 	b := New()
-	assert.False(t, b.hookTimeoutSet)
+	assert.False(t, b.assembly.hookTimeoutSet)
 }
 
 func TestWithHookObserver_PopulatesField(t *testing.T) {
 	obs := &recordingHookObserver{}
 	b := New(WithHookObserver(obs))
-	assert.Same(t, obs, b.hookObserver)
+	assert.Same(t, obs, b.assembly.hookObserver)
 }
 
 func TestWithHookObserver_Nil_NoOp(t *testing.T) {
 	b := New(WithHookObserver(nil))
-	assert.Nil(t, b.hookObserver)
+	assert.Nil(t, b.assembly.hookObserver)
 }
 
 // ptrObserver is used to exercise the typed-nil path in WithHookObserver:
@@ -62,7 +62,7 @@ func (p *ptrObserver) OnHookEvent(e cell.HookEvent) { p.events = append(p.events
 func TestWithHookObserver_TypedNil_NoOp(t *testing.T) {
 	var typed *ptrObserver
 	b := New(WithHookObserver(typed))
-	assert.Nil(t, b.hookObserver, "typed nil must be rejected — otherwise Run would dispatch to nil receiver")
+	assert.Nil(t, b.assembly.hookObserver, "typed nil must be rejected — otherwise Run would dispatch to nil receiver")
 }
 
 // TestWithAssembly_OverridesHookOptions_BehaviourContract runs the full

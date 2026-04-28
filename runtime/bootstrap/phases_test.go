@@ -107,7 +107,7 @@ func TestPhase0_RejectsEmptyHealthCheckerName(t *testing.T) {
 
 func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
 	b := New()
-	b.healthCheckers = append(b.healthCheckers, namedChecker{name: "test", fn: nil})
+	b.http.healthCheckers = append(b.http.healthCheckers, namedChecker{name: "test", fn: nil})
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `health checker "test" must not be nil`)
@@ -115,7 +115,7 @@ func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
 
 func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 	b := New()
-	b.circuitBreakerNil = true
+	b.http.circuitBreakerNil = true
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "circuit breaker must not be nil")
@@ -298,7 +298,7 @@ func TestPhase1_LoadConfig_NoPath_UsesEmptyConfig(t *testing.T) {
 func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
 	closed := false
 	b := New()
-	b.closers = append(b.closers, closerFunc(func() error {
+	b.lc.closers = append(b.lc.closers, closerFunc(func() error {
 		closed = true
 		return nil
 	}))
