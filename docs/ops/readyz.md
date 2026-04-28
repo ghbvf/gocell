@@ -14,7 +14,7 @@ have changed.
 | `GET /readyz?verbose=true` | 200 / 401 / 503 | Detailed breakdown: cell statuses + per-dependency probe results. Always gated by `X-Readyz-Token` (see below). |
 
 During graceful shutdown `/readyz` returns `503` with
-`{"error":{"code":"ERR_READYZ_SHUTTING_DOWN","message":"...","details":{}}}`
+`{"error":{"code":"ERR_SERVICE_UNAVAILABLE","message":"service unavailable","details":{"status":"shutting_down","reason":"graceful_shutdown"}}}`
 so load balancers can drain traffic before the HTTP server closes
 connections.
 
@@ -30,6 +30,13 @@ The verbose breakdown (cells + dependencies + optional adapters) lives
 under `data.*` on 200 and under `error.details.*` on 503, so consumers
 walk one consistent path regardless of probe outcome. There is no special
 "infrastructure-endpoint" shape to special-case.
+
+Public `/readyz` 503 reasons are intentionally low-cardinality:
+
+| `error.details.status` | `error.details.reason` | Meaning |
+|------------------------|------------------------|---------|
+| `unhealthy` | `readiness_failed` | One or more cells/probes failed, or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
+| `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
 
 ## Kubernetes probes — MUST NOT use `?verbose`
 
@@ -100,9 +107,11 @@ the `X-Readyz-Token` header.
 ```json
 {
   "error": {
-    "code": "ERR_READYZ_UNHEALTHY",
-    "message": "readiness checks failed",
+    "code": "ERR_SERVICE_UNAVAILABLE",
+    "message": "service unavailable",
     "details": {
+	      "status": "unhealthy",
+	      "reason": "readiness_failed",
 	      "cells": { "accesscore": "healthy", "auditcore": "degraded" },
 	      "dependencies": {
 	        "postgres_ready": { "status": "healthy", "duration_ms": 3 },

@@ -68,6 +68,17 @@ func errorBody(t *testing.T, rec *httptest.ResponseRecorder) map[string]any {
 	return errObj
 }
 
+func assertReadyzServiceUnavailable(t *testing.T, errObj map[string]any, wantStatus, wantReason string) map[string]any {
+	t.Helper()
+	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"])
+	assert.Equal(t, "service unavailable", errObj["message"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "readyz 503 response must carry details map")
+	assert.Equal(t, wantStatus, details["status"])
+	assert.Equal(t, wantReason, details["reason"])
+	return details
+}
+
 func TestLivezHandler(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -175,10 +186,7 @@ func TestReadyzHandler(t *testing.T) {
 				assert.Equal(t, tt.wantBodyStat, payload["status"])
 			} else {
 				errObj := errorBody(t, rec)
-				assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
-				var ok bool
-				payload, ok = errObj["details"].(map[string]any)
-				require.True(t, ok, "unhealthy response must carry details map")
+				payload = assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 			}
 
 			// Verify namespace separation: cells and dependencies are in distinct maps.
@@ -214,9 +222,7 @@ func TestReadyzHandler_MultipleCheckers(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
 	errObj := errorBody(t, rec)
-	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "unhealthy response must carry details map")
+	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 
 	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
@@ -397,9 +403,7 @@ func TestReadyzHandler_DefaultOutput_UnhealthyAggregate(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
 	errObj := errorBody(t, rec)
-	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "unhealthy response must carry details map (may be empty)")
+	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 	_, hasCells := details["cells"]
 	assert.False(t, hasCells, "non-verbose unhealthy /readyz must not expose cells in details")
 	_, hasDependencies := details["dependencies"]
@@ -478,14 +482,14 @@ func TestReadyz_ShuttingDown_Returns503(t *testing.T) {
 	// Mark shutting down.
 	h.SetShuttingDown()
 
-	// After shutdown: should be 503 with the dedicated errcode.
+	// After shutdown: should be 503 with the shared public 503 code and a
+	// low-cardinality reason that preserves drain semantics.
 	rec = httptest.NewRecorder()
 	req = httptest.NewRequest(http.MethodGet, "/readyz", nil)
 	h.ReadyzHandler().ServeHTTP(rec, req)
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	errObj := errorBody(t, rec)
-	assert.Equal(t, string(errcode.ErrReadyzShuttingDown), errObj["code"],
-		"shutdown path must carry the ERR_READYZ_SHUTTING_DOWN code so operators distinguish drain from probe failure")
+	assertReadyzServiceUnavailable(t, errObj, "shutting_down", "graceful_shutdown")
 }
 
 func TestSetShuttingDown_Idempotent(t *testing.T) {
@@ -755,9 +759,7 @@ func TestReadyz_DeadlineExceeded(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
 	errObj := errorBody(t, rec)
-	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "unhealthy response must carry details map")
+	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 
 	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
@@ -837,9 +839,7 @@ func TestReadyz_ProbePanic_Caught(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
 	errObj := errorBody(t, rec)
-	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "unhealthy response must carry details map")
+	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 
 	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
@@ -973,9 +973,7 @@ func TestReadyz_VerboseError_LongErrTruncated(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 
 	errObj := errorBody(t, rec)
-	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "unhealthy response must carry details map")
+	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 
 	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose output must contain dependencies")
@@ -1029,7 +1027,7 @@ func TestReadyz_UncooperativeChecker_WrapperReturnsOnDeadline(t *testing.T) {
 	// WithVerboseDisabled answers verbose requests with the plain aggregate
 	// body (no dependencies map); we only assert the aggregate status here.
 	errObj := errorBody(t, rr)
-	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 }
 
 // TestReadyz_UncooperativeChecker_VerboseReportsTimeout covers the verbose
@@ -1065,9 +1063,7 @@ func TestReadyz_UncooperativeChecker_VerboseReportsTimeout(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rr.Code)
 
 	errObj := errorBody(t, rr)
-	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok, "unhealthy verbose response must include details")
+	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "verbose details must carry dependencies map")
 	stuck, ok := deps["stuck"].(map[string]any)
@@ -1133,9 +1129,7 @@ func TestReadyz_VerboseDependencies_StructuredOutput(t *testing.T) {
 	// One probe is unhealthy → 503 envelope places verbose breakdown under
 	// error.details.dependencies.
 	errObj := errorBody(t, rec)
-	require.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
-	details, ok := errObj["details"].(map[string]any)
-	require.True(t, ok)
+	details := assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok)
 
@@ -1209,7 +1203,7 @@ func TestReadyz_UnhealthyTrumpsDegraded(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code, "unhealthy must trump degraded → 503")
 
 	errObj := errorBody(t, rec)
-	assert.Equal(t, string(errcode.ErrReadyzUnhealthy), errObj["code"])
+	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 }
 
 // stubDegradedCell is a minimal Cell that always reports HealthStatus.Status="degraded".
@@ -1232,6 +1226,43 @@ func newStubDegradedCell(id string) *stubDegradedCell {
 // a cell that is started but operating in a degraded state.
 func (s *stubDegradedCell) Health() cell.HealthStatus {
 	return cell.HealthStatus{Status: "degraded"}
+}
+
+type stubPanickingHealthCell struct {
+	*cell.BaseCell
+}
+
+func newStubPanickingHealthCell(id string) *stubPanickingHealthCell {
+	return &stubPanickingHealthCell{
+		BaseCell: cell.NewBaseCell(cell.CellMetadata{
+			ID:   id,
+			Type: cell.CellTypeCore,
+		}),
+	}
+}
+
+func (s *stubPanickingHealthCell) Health() cell.HealthStatus {
+	panic("cell health panic")
+}
+
+func TestReadyz_ComputationPanic_UsesServiceUnavailableCode(t *testing.T) {
+	asm := assembly.New(assembly.Config{ID: "test-health-panic", DurabilityMode: cell.DurabilityDemo})
+	c := newStubPanickingHealthCell("panic-cell")
+	require.NoError(t, asm.Register(c))
+	require.NoError(t, asm.Start(context.Background()))
+	t.Cleanup(func() { _ = asm.Stop(context.Background()) })
+
+	h := New(asm)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/readyz", nil)
+	require.NotPanics(t, func() {
+		h.ReadyzHandler().ServeHTTP(rec, req)
+	})
+
+	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
+	errObj := errorBody(t, rec)
+	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 }
 
 // TestReadyz_DegradedAggregatesFromCellHealth verifies the E2E path:

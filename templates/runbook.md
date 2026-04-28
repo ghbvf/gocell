@@ -48,14 +48,15 @@
 ### Health Check Verification
 
 ```bash
-# Quick health check
+# Machine smoke checks: fail fast when the service is not live/ready.
 curl -sf http://{host}:{port}/healthz
-
-# Aggregate readiness (safe for kubelet / LBs)
 curl -sf http://{host}:{port}/readyz
 
-# Detailed readiness check (operator / on-call only)
-curl -sf -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
+# Aggregate readiness diagnosis: preserve the 503 body for status/reason.
+curl -sS http://{host}:{port}/readyz | jq .
+
+# Detailed readiness diagnosis (operator / on-call only): preserve 401/503 bodies.
+curl -sS -H "X-Readyz-Token: $GOCELL_READYZ_VERBOSE_TOKEN" \
   "http://{host}:{port}/readyz?verbose" | jq .
 ```
 
@@ -85,9 +86,11 @@ Example verbose response (`503 Service Unavailable` — at least one probe faili
 ```json
 {
   "error": {
-    "code": "ERR_READYZ_UNHEALTHY",
-    "message": "readiness checks failed",
+    "code": "ERR_SERVICE_UNAVAILABLE",
+    "message": "service unavailable",
     "details": {
+      "status": "unhealthy",
+      "reason": "readiness_failed",
       "cells": {
         "accesscore": "healthy"
       },
@@ -214,8 +217,11 @@ path. Probe entries are structured `ProbeResult` maps (`status` +
    # Check pod status
    {kubectl get pods -l app={cell-id}}
 
-   # Verify health endpoint
+   # Verify health endpoint (smoke probe)
    curl -sf http://{host}:{port}/readyz
+
+   # If the smoke probe fails, preserve the 503 body for status/reason.
+   curl -sS http://{host}:{port}/readyz | jq .
    ```
 
 4. **Check for data migration conflicts:**

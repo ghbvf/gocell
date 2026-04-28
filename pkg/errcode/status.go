@@ -190,10 +190,6 @@ var codeToStatus = map[Code]int{
 	// ErrReadyzVerboseUnconfigured is a 401 — verbose requested without a
 	// configured token AND without explicit Disabled is fail-closed (PR-MODE-1).
 	ErrReadyzVerboseUnconfigured: http.StatusUnauthorized,
-	// ErrReadyzUnhealthy / ErrReadyzShuttingDown are 503 so load balancers
-	// and kubelet readinessProbes mark the pod unavailable.
-	ErrReadyzUnhealthy:    http.StatusServiceUnavailable,
-	ErrReadyzShuttingDown: http.StatusServiceUnavailable,
 	// SEC-FAIL-CLOSED startup misconfiguration (PR-MODE-1): adapter endpoint
 	// not TLS, listener authChain missing, websocket origins missing — all
 	// fail-fast at boot, never reach HTTP in practice. 500 is the conservative

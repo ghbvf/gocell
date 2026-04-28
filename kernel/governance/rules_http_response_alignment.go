@@ -160,8 +160,6 @@ var errcodeNameToStatus = func() map[string]int {
 		{"ErrClientCanceled", errcode.ErrClientCanceled},
 		{"ErrServerTimeout", errcode.ErrServerTimeout},
 		{"ErrReadyzVerboseDenied", errcode.ErrReadyzVerboseDenied},
-		{"ErrReadyzUnhealthy", errcode.ErrReadyzUnhealthy},
-		{"ErrReadyzShuttingDown", errcode.ErrReadyzShuttingDown},
 		{"ErrNonceStoreFull", errcode.ErrNonceStoreFull},
 		{"ErrKeyProviderKeyNotFound", errcode.ErrKeyProviderKeyNotFound},
 		{"ErrKeyProviderAuthFailed", errcode.ErrKeyProviderAuthFailed},

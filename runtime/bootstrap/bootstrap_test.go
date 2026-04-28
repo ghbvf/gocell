@@ -24,6 +24,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/auth/authtest"
 	"github.com/ghbvf/gocell/runtime/config"
@@ -138,6 +139,19 @@ func readyzPayload(t *testing.T, body map[string]any) map[string]any {
 	}
 	t.Fatalf("readyz body has neither data nor error envelope: %#v", body)
 	return nil
+}
+
+func assertReadyzServiceUnavailable(t *testing.T, body map[string]any, wantStatus, wantReason string) map[string]any {
+	t.Helper()
+	errObj, ok := body["error"].(map[string]any)
+	require.True(t, ok, "503 readyz must carry an error envelope")
+	assert.Equal(t, string(errcode.ErrServiceUnavailable), errObj["code"])
+	assert.Equal(t, "service unavailable", errObj["message"])
+	details, ok := errObj["details"].(map[string]any)
+	require.True(t, ok, "503 readyz must carry details")
+	assert.Equal(t, wantStatus, details["status"])
+	assert.Equal(t, wantReason, details["reason"])
+	return details
 }
 
 // testCell is a minimal Cell for bootstrap testing.
@@ -1056,11 +1070,7 @@ func TestBootstrap_WithMultipleHealthCheckers_OneUnhealthy(t *testing.T) {
 	postgresEntry, ok := deps["postgres"].(map[string]any)
 	require.True(t, ok, "postgres entry must be a map")
 	assert.Equal(t, "unhealthy", postgresEntry["status"], "postgres checker should be unhealthy")
-	// PR-A35 503 envelope conveys overall status via error.code; status code
-	// 503 (asserted above) and "ERR_READYZ_UNHEALTHY" together mean unhealthy.
-	errObj, _ := body["error"].(map[string]any)
-	require.NotNil(t, errObj, "503 readyz must carry an error envelope")
-	assert.Equal(t, "ERR_READYZ_UNHEALTHY", errObj["code"], "overall status must be unhealthy")
+	assertReadyzServiceUnavailable(t, body, "unhealthy", "readiness_failed")
 
 	cancel()
 	select {

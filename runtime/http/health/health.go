@@ -55,6 +55,13 @@ const (
 	sfKeyVerbose   = "readyz:verbose"
 )
 
+const (
+	readyzPublic503Message       = "service unavailable"
+	readyzStatusShuttingDown     = "shutting_down"
+	readyzReasonReadinessFailed  = "readiness_failed"
+	readyzReasonGracefulShutdown = "graceful_shutdown"
+)
+
 // Checker is a named readiness probe. Returning a non-nil error marks the
 // check as unhealthy. The context carries the deadline set on the Handler
 // (default 5 s, matching Kubernetes readiness probe convention).
@@ -236,6 +243,7 @@ type readyzResult struct {
 	cells        map[string]string         // nil when !verbose
 	dependencies map[string]map[string]any // nil when !verbose
 	adapters     map[string]string         // nil when !verbose or no adapter info registered
+	reason       string                    // optional low-cardinality reason for unhealthy 503 details
 }
 
 // ReadyzHandler returns an http.HandlerFunc for the /readyz readiness endpoint.
@@ -258,9 +266,9 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if h.shuttingDown.Load() {
 			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
-				errcode.ErrReadyzShuttingDown,
-				"HTTP server is draining for graceful shutdown",
-				nil,
+				errcode.PublicCodeForStatus(http.StatusServiceUnavailable),
+				readyzPublic503Message,
+				readyzDetails(readyzStatusShuttingDown, readyzReasonGracefulShutdown, nil),
 			))
 			return
 		}
@@ -285,11 +293,12 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		result, ok := shared.(readyzResult)
 		if !ok {
 			slog.Error("readyz: singleflight returned unexpected payload; failing closed",
+				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("value", shared))
 			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
-				errcode.ErrReadyzUnhealthy,
-				"readiness computation failed",
-				nil,
+				errcode.PublicCodeForStatus(http.StatusServiceUnavailable),
+				readyzPublic503Message,
+				readyzDetails("unhealthy", readyzReasonReadinessFailed, nil),
 			))
 			return
 		}
@@ -307,8 +316,9 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("readyz: recovered panic during readiness computation",
+				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("panic", r))
-			result = readyzResult{overall: "unhealthy"}
+			result = readyzResult{overall: "unhealthy", reason: readyzReasonReadinessFailed}
 		}
 	}()
 	return h.computeReadyz(verbose)
@@ -414,8 +424,8 @@ func (h *Handler) aggregateProbeResults(results map[string]ProbeResult, verbose 
 // writeTo serialises the readyz result through the project-standard envelope:
 //
 //	200 → {"data":  {"status":"healthy"|"degraded", ...verbose fields}}
-//	503 → {"error": {"code":"ERR_READYZ_UNHEALTHY", "message":"...",
-//	                  "details": {...verbose fields}}}
+//	503 → {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "message":"service unavailable",
+//	                  "details": {"status":"unhealthy","reason":"readiness_failed", ...verbose fields}}}
 //
 // degraded maps to HTTP 200 — a degraded service (fail-open) should NOT
 // trigger pod eviction; operators monitor degraded via the response body
@@ -433,12 +443,26 @@ func (r readyzResult) writeTo(w http.ResponseWriter) {
 		// HTTP 200 — degraded does NOT trigger pod eviction.
 		writeJSON(w, http.StatusOK, envelopeData(body))
 	default: // "unhealthy"
+		reason := r.reason
+		if reason == "" {
+			reason = readyzReasonReadinessFailed
+		}
+		body["reason"] = reason
 		writeJSON(w, http.StatusServiceUnavailable, envelopeError(
-			errcode.ErrReadyzUnhealthy,
-			"readiness checks failed",
+			errcode.PublicCodeForStatus(http.StatusServiceUnavailable),
+			readyzPublic503Message,
 			body,
 		))
 	}
+}
+
+func readyzDetails(status, reason string, fields map[string]any) map[string]any {
+	if fields == nil {
+		fields = map[string]any{}
+	}
+	fields["status"] = status
+	fields["reason"] = reason
+	return fields
 }
 
 // verboseFields returns the cells / dependencies / adapters payload (or an

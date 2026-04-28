@@ -561,7 +561,8 @@ func TestRelay_AsManagedResource_TrippedBudget_Returns503(t *testing.T) {
 	assert.Equal(t, http.StatusServiceUnavailable, verboseResp.StatusCode)
 	var body map[string]any
 	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&body))
-	deps, ok := readyzPayload(t, body)["dependencies"].(map[string]any)
+	details := assertReadyzServiceUnavailable(t, body, "unhealthy", "readiness_failed")
+	deps, ok := details["dependencies"].(map[string]any)
 	require.True(t, ok, "response must contain dependencies map")
 	require.Contains(t, deps, "outbox-relay-poll", "poll checker must appear in verbose output")
 	pollProbe, ok := deps["outbox-relay-poll"].(map[string]any)

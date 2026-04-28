@@ -13,6 +13,7 @@ import (
 	kcrypto "github.com/ghbvf/gocell/kernel/crypto"
 	kernellifecycle "github.com/ghbvf/gocell/kernel/lifecycle"
 	kworker "github.com/ghbvf/gocell/kernel/worker"
+	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -176,17 +177,23 @@ func TestA19_ConfigCoreModule_RegistersKeyProviderReadiness(t *testing.T) {
 	defer verboseResp.Body.Close()
 
 	// PR-A35 envelope: 503 /readyz responses carry the dependency breakdown
-	// inside {"error": {"code":"ERR_READYZ_UNHEALTHY", "details": {...}}}.
+	// inside {"error": {"code":"ERR_SERVICE_UNAVAILABLE", "details": {...}}}.
 	var envelope struct {
 		Error struct {
 			Code    string `json:"code"`
+			Message string `json:"message"`
 			Details struct {
+				Status       string                    `json:"status"`
+				Reason       string                    `json:"reason"`
 				Dependencies map[string]map[string]any `json:"dependencies"`
 			} `json:"details"`
 		} `json:"error"`
 	}
 	require.NoError(t, json.NewDecoder(verboseResp.Body).Decode(&envelope))
-	assert.Equal(t, "ERR_READYZ_UNHEALTHY", envelope.Error.Code)
+	assert.Equal(t, string(errcode.ErrServiceUnavailable), envelope.Error.Code)
+	assert.Equal(t, "service unavailable", envelope.Error.Message)
+	assert.Equal(t, "unhealthy", envelope.Error.Details.Status)
+	assert.Equal(t, "readiness_failed", envelope.Error.Details.Reason)
 	probe, ok := envelope.Error.Details.Dependencies["fake_key_provider_ready"]
 	require.True(t, ok, "fake_key_provider_ready must appear in /readyz?verbose error details")
 	assert.Equal(t, "unhealthy", probe["status"],
