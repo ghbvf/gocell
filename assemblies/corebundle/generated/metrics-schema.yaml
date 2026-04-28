@@ -212,7 +212,7 @@ metrics:
         - "5"
         - "10"
       file: runtime/bootstrap/bootstrap_phases.go
-      line: 995
+      line: 991
     - name: http_requests_total
       fqName: gocell_http_requests_total
       namespace: gocell
@@ -224,7 +224,7 @@ metrics:
         - status
         - cell
       file: runtime/bootstrap/bootstrap_phases.go
-      line: 995
+      line: 991
     - name: outbox_batch_size
       fqName: gocell_outbox_batch_size
       namespace: gocell

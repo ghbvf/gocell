@@ -28,7 +28,9 @@ func shutdownCtxFor(parent context.Context, shutGrace time.Duration) (context.Co
 // noopShutdownCancel is the cancel function returned by shutdownCtxFor when
 // shutGrace == 0. There is nothing to cancel because no derived context exists,
 // but callers always defer the returned cancel.
-func noopShutdownCancel() {}
+func noopShutdownCancel() {
+	// Intentionally empty: shutGrace == 0 returns the parent context unchanged.
+}
 
 // shutdownTask represents a single server shutdown operation with its name and
 // grace period. Tests can inject arbitrary shutdown functions without requiring
