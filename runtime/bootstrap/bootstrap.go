@@ -37,6 +37,7 @@ import (
 // Option configures a Bootstrap instance.
 type Option func(*Bootstrap)
 
+// readyz probe names; consumed by phases_assembly.go / bootstrap_phases.go
 const (
 	configWatcherCheckerName = "config-watcher"
 	configDriftCheckerName   = "config-drift"
@@ -50,7 +51,7 @@ const (
 type bootstrapAssembly struct {
 	configPath           string
 	envPrefix            string
-	core                 *assembly.CoreAssembly // renamed from "assembly" to avoid b.assembly.assembly stutter
+	core                 *assembly.CoreAssembly
 	assemblyID           string
 	hookTimeout          time.Duration
 	hookTimeoutSet       bool
@@ -80,28 +81,30 @@ type bootstrapEvents struct {
 	publisher                   outbox.Publisher
 	subscriber                  outbox.Subscriber
 	consumerMiddleware          []outbox.SubscriptionMiddleware
-	routerReadyTimeout          time.Duration // renamed from eventRouterReadyTimeout
-	routerReadyTimeoutSet       bool          // renamed from eventRouterReadyTimeoutSet
+	routerReadyTimeout          time.Duration
+	routerReadyTimeoutSet       bool
 	disableObservabilityRestore bool
 }
 
 // bootstrapLifecycle groups kernel/cell Lifecycle, ManagedResource, and shutdown fields.
 type bootstrapLifecycle struct {
-	kernel                       Lifecycle // renamed from "lifecycle" to avoid b.lc.lifecycle stutter
+	kernel                       Lifecycle // named "kernel" to avoid b.lifecycle.lifecycle stutter
 	lifecycleDefaultStartTimeout time.Duration
 	lifecycleDefaultStopTimeout  time.Duration
 	lifecycleRegistrars          []func(Lifecycle)
 	managedResources             []kernellifecycle.ManagedResource
 	managedResourceTeardowns     []namedTeardown
 	managedResourceNil           bool
-	closers                      []any
-	shutdownTimeout              time.Duration
-	preShutdownDelay             time.Duration
+	// Accepts ContextCloser/io.Closer instances registered by any sub-struct's options
+	// (e.g., http rate-limiter); centralised here for unified LIFO teardown.
+	closers          []any
+	shutdownTimeout  time.Duration
+	preShutdownDelay time.Duration
 }
 
 // bootstrapMetrics groups metrics provider and HTTP collector fields.
 type bootstrapMetrics struct {
-	provider           kernelmetrics.Provider // renamed from metricsProvider
+	provider           kernelmetrics.Provider
 	httpCollector      metricsmiddleware.Collector
 	shutdownMet        *shutdownMetrics
 	shutdownMetricsErr error
@@ -114,20 +117,22 @@ type bootstrapMetrics struct {
 //   - assembly: config loading + CoreAssembly construction + hooks
 //   - http:     listener declarations + router options + health + tracing
 //   - events:   outbox pubsub + event router + workers
-//   - lc:       kernel/cell Lifecycle + ManagedResource + shutdown budgets
+//   - lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets
 //   - metrics:  metrics provider + auto-wired HTTP collector + shutdown metrics
+//
+// runOnce is a one-shot guard, not part of any concern group.
 //
 // ref: uber-go/fx app.go — named field grouping per concern.
 // ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/server/config.go
 // — named sub-struct fields (SecureServingInfo, etc.).
 type Bootstrap struct {
-	assembly bootstrapAssembly
-	http     bootstrapHTTP
-	events   bootstrapEvents
-	lc       bootstrapLifecycle
-	metrics  bootstrapMetrics
+	assembly  bootstrapAssembly
+	http      bootstrapHTTP
+	events    bootstrapEvents
+	lifecycle bootstrapLifecycle
+	metrics   bootstrapMetrics
 
-	runOnce sync.Once // Run() single-execution guard; not part of any concern domain
+	runOnce sync.Once // Run() single-execution guard; not part of any concern group
 }
 
 // namedChecker pairs a readiness probe name with its check function.
@@ -269,7 +274,7 @@ func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
 // phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{}
-	b.lc.shutdownTimeout = shutdown.DefaultTimeout
+	b.lifecycle.shutdownTimeout = shutdown.DefaultTimeout
 	b.assembly.configWatcherFactory = config.NewWatcher
 	b.metrics.provider = kernelmetrics.NopProvider{}
 
@@ -281,13 +286,13 @@ func New(opts ...Option) *Bootstrap {
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
 	// DefaultStartTimeout / DefaultStopTimeout constants internally.
 	logger := slog.Default()
-	b.lc.kernel = NewLifecycle(LifecycleConfig{
-		DefaultStartTimeout: b.lc.lifecycleDefaultStartTimeout,
-		DefaultStopTimeout:  b.lc.lifecycleDefaultStopTimeout,
+	b.lifecycle.kernel = NewLifecycle(LifecycleConfig{
+		DefaultStartTimeout: b.lifecycle.lifecycleDefaultStartTimeout,
+		DefaultStopTimeout:  b.lifecycle.lifecycleDefaultStopTimeout,
 		Logger:              logger,
 	})
-	for _, reg := range b.lc.lifecycleRegistrars {
-		reg(b.lc.kernel)
+	for _, reg := range b.lifecycle.lifecycleRegistrars {
+		reg(b.lifecycle.kernel)
 	}
 	// Register shutdown metrics against the (potentially Nop) provider.
 	// newShutdownMetrics returns a disabled metrics object for a nil provider.
@@ -306,7 +311,7 @@ func New(opts ...Option) *Bootstrap {
 // not goroutine-safe concurrent with Run(). Hooks registered here are
 // appended to those from WithLifecycle options.
 func (b *Bootstrap) Lifecycle() Lifecycle {
-	return b.lc.kernel
+	return b.lifecycle.kernel
 }
 
 // MetricsProvider returns the configured provider-neutral metrics backend.
@@ -385,7 +390,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	//
 	// managedResourceTeardowns is in registration order; reversed by the LIFO
 	// shutdown loop at the end of Run().
-	for _, td := range b.lc.managedResourceTeardowns {
+	for _, td := range b.lifecycle.managedResourceTeardowns {
 		s.addNamedTeardown(td.name, td.fn) // td already returns error; phase10 aggregates via LIFO teardown chain
 	}
 
@@ -393,7 +398,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if s.hh != nil {
 			s.hh.SetShuttingDown()
 		}
-		rctx, cancel := context.WithTimeout(context.Background(), b.lc.shutdownTimeout)
+		rctx, cancel := context.WithTimeout(context.Background(), b.lifecycle.shutdownTimeout)
 		defer cancel()
 		return s.rollback(rctx, cause)
 	}
@@ -413,11 +418,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// executes before asm.Stop in the LIFO teardown sequence, letting hooks
 	// still access cell resources during shutdown.
 	// ref: uber-go/fx internal/lifecycle/lifecycle.go — numStarted LIFO rollback.
-	if err := b.lc.kernel.Start(ctx); err != nil {
+	if err := b.lifecycle.kernel.Start(ctx); err != nil {
 		return rollback(fmt.Errorf("bootstrap: lifecycle start: %w", err))
 	}
 	s.addTeardown(func(stopCtx context.Context) error {
-		return b.lc.kernel.Stop(stopCtx)
+		return b.lifecycle.kernel.Stop(stopCtx)
 	})
 	if err := b.phase4WireAuthAndWatcher(s); err != nil {
 		return rollback(err)

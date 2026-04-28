@@ -23,7 +23,7 @@ import (
 func WithLifecycle(fn func(lc Lifecycle)) Option {
 	return func(b *Bootstrap) {
 		if fn != nil {
-			b.lc.lifecycleRegistrars = append(b.lc.lifecycleRegistrars, fn)
+			b.lifecycle.lifecycleRegistrars = append(b.lifecycle.lifecycleRegistrars, fn)
 		}
 	}
 }
@@ -32,13 +32,13 @@ func WithLifecycle(fn func(lc Lifecycle)) Option {
 // Zero value retains DefaultStartTimeout (30s). Negative disables default timeout
 // (hooks without own StartTimeout will block indefinitely).
 func WithLifecycleDefaultStartTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) { b.lc.lifecycleDefaultStartTimeout = d }
+	return func(b *Bootstrap) { b.lifecycle.lifecycleDefaultStartTimeout = d }
 }
 
 // WithLifecycleDefaultStopTimeout mirrors WithLifecycleDefaultStartTimeout for StopTimeout.
 // Zero value retains DefaultStopTimeout (10s). Negative disables default timeout.
 func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) { b.lc.lifecycleDefaultStopTimeout = d }
+	return func(b *Bootstrap) { b.lifecycle.lifecycleDefaultStopTimeout = d }
 }
 
 // WithManagedCloser registers an adapter or resource that implements
@@ -61,14 +61,14 @@ func WithManagedCloser(c kernellifecycle.ContextCloser) Option {
 		if c == nil {
 			return
 		}
-		b.lc.closers = append(b.lc.closers, c)
+		b.lifecycle.closers = append(b.lifecycle.closers, c)
 	}
 }
 
 // WithShutdownTimeout overrides the default graceful shutdown timeout.
 func WithShutdownTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.lc.shutdownTimeout = d
+		b.lifecycle.shutdownTimeout = d
 	}
 }
 
@@ -83,6 +83,6 @@ func WithShutdownTimeout(d time.Duration) Option {
 // ref: Kubernetes pod shutdown — preStop counts toward terminationGracePeriodSeconds
 func WithPreShutdownDelay(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.lc.preShutdownDelay = d
+		b.lifecycle.preShutdownDelay = d
 	}
 }

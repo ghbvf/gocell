@@ -106,6 +106,9 @@ func TestPhase0_RejectsEmptyHealthCheckerName(t *testing.T) {
 }
 
 func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
+	// White-box: directly populates b.http internals because the public
+	// WithHealthChecker rejects nil at option construction time, but we want
+	// to verify phase0 also rejects (defense-in-depth).
 	b := New()
 	b.http.healthCheckers = append(b.http.healthCheckers, namedChecker{name: "test", fn: nil})
 	err := b.phase0ValidateOptions()
@@ -114,6 +117,9 @@ func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
 }
 
 func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
+	// White-box: directly populates b.http internals because the public
+	// WithCircuitBreaker rejects nil at option construction time, but we want
+	// to verify phase0 also rejects (defense-in-depth).
 	b := New()
 	b.http.circuitBreakerNil = true
 	err := b.phase0ValidateOptions()
@@ -298,7 +304,7 @@ func TestPhase1_LoadConfig_NoPath_UsesEmptyConfig(t *testing.T) {
 func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
 	closed := false
 	b := New()
-	b.lc.closers = append(b.lc.closers, closerFunc(func() error {
+	b.lifecycle.closers = append(b.lifecycle.closers, closerFunc(func() error {
 		closed = true
 		return nil
 	}))

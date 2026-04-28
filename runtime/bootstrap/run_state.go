@@ -111,7 +111,9 @@ func (s *runState) addNamedTeardown(name string, fn func(context.Context) error)
 // ref: uber-go/fx app.go withRollback — every started component must be
 // torn down in reverse even when a later step never succeeded.
 func (s *runState) rollback(shutCtx context.Context, cause error) error {
-	slog.Error("bootstrap: startup failed, rolling back", slog.Any("error", cause))
+	slog.Error("bootstrap: startup failed, rolling back",
+		slog.String("error", cause.Error()),
+		slog.Int("teardowns_pending", len(s.teardowns)))
 	for i := len(s.teardowns) - 1; i >= 0; i-- {
 		td := s.teardowns[i]
 		if err := td.fn(shutCtx); err != nil {

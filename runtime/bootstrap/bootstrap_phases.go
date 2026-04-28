@@ -140,6 +140,7 @@ func (b *Bootstrap) phase5BuildRouters(s *phaseState) error {
 		return err
 	}
 	groups := b.phase5CollectRouteGroups(s, routers)
+	// defense-in-depth: phase0 already validated; re-check after phase4 resolved verifiers
 	if err := b.validateAuthPlanMTLSBindings(); err != nil {
 		return err
 	}
@@ -543,7 +544,7 @@ func (b *Bootstrap) registerOneCellLifecycleHooks(id string, lc cell.LifecycleCo
 		if h.OnStart == nil && h.OnStop == nil {
 			continue
 		}
-		if err := b.lc.kernel.Append(Hook{
+		if err := b.lifecycle.kernel.Append(Hook{
 			CellID:       id,
 			Name:         h.Name,
 			OnStart:      h.OnStart,
@@ -821,12 +822,16 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 		return shutdownSignal{reason: reasonHTTPError, err: drainHTTPErrors(s.httpErrCh, firstErr)}
 	case err := <-s.workerErrCh:
 		if err != nil {
-			slog.Error("bootstrap: worker failed, initiating shutdown", slog.Any("error", err))
+			slog.Error("bootstrap: worker failed, initiating shutdown",
+				slog.String("component", "worker"),
+				slog.Any("error", err))
 		}
 		return shutdownSignal{reason: reasonWorkerError, err: err}
 	case err := <-s.routerErrCh:
 		if err != nil {
-			slog.Error("bootstrap: event router failed, initiating shutdown", slog.Any("error", err))
+			slog.Error("bootstrap: event router failed, initiating shutdown",
+				slog.String("component", "event_router"),
+				slog.Any("error", err))
 		}
 		return shutdownSignal{reason: reasonRouterError, err: err}
 	}
@@ -846,7 +851,7 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 // ref: uber-go/fx app.go StopTimeout
 // ref: Kubernetes pod shutdown model (preStop counts toward terminationGracePeriodSeconds)
 func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal) error {
-	shutCtx, cancel := context.WithTimeout(context.Background(), b.lc.shutdownTimeout)
+	shutCtx, cancel := context.WithTimeout(context.Background(), b.lifecycle.shutdownTimeout)
 	defer cancel()
 
 	m := b.metrics.shutdownMet
@@ -866,7 +871,7 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 
 	// --- stage 3: finalize ---
 	m.recordPhaseEntry(shutdownPhaseClosed)
-	m.observePhaseDuration("total", time.Since(totalStart))
+	m.observePhaseDuration(shutdownPhaseTotal, time.Since(totalStart))
 
 	// F3: outcome reflects the final return semantics, not just ctx state.
 	// Precedence: timeout > teardown_error > signal_error > success.
@@ -914,13 +919,13 @@ func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState)
 		s.hh.SetShuttingDown()
 	}
 
-	if b.lc.preShutdownDelay <= 0 {
+	if b.lifecycle.preShutdownDelay <= 0 {
 		return
 	}
 	slog.Info("bootstrap: pre-shutdown drain delay",
-		slog.Duration("delay", b.lc.preShutdownDelay))
+		slog.Duration("delay", b.lifecycle.preShutdownDelay))
 	select {
-	case <-time.After(b.lc.preShutdownDelay):
+	case <-time.After(b.lifecycle.preShutdownDelay):
 	case <-shutCtx.Done():
 	}
 }

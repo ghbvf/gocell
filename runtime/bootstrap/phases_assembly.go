@@ -32,7 +32,7 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 	if b.http.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
 	}
-	if b.lc.managedResourceNil {
+	if b.lifecycle.managedResourceNil {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}
 	if err := b.validateAuthPlanAssemblyMatch(); err != nil {
@@ -110,7 +110,7 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	// Register closable middleware dependencies (e.g. rate limiter background
 	// goroutines). addCloser prefers ContextCloser over io.Closer so that
 	// resources upgraded to CloseCtx automatically receive the shut budget.
-	for _, cl := range b.lc.closers {
+	for _, cl := range b.lifecycle.closers {
 		s.addCloser(cl)
 	}
 
@@ -120,7 +120,8 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	// HTTP tracing is disabled and wrapper.WrapConsumer falls back to
 	// NoopTracer so spans degrade silently — no package-level setup needed.
 	if b.http.wrapperTracer == nil {
-		slog.Warn("bootstrap: no tracer provided, HTTP tracing is disabled and consumer spans will be no-op; use WithTracer to enable distributed tracing")
+		slog.Warn("bootstrap: no tracer provided, HTTP tracing is disabled and consumer spans will be no-op",
+			slog.String("hint", "use bootstrap.WithTracer(...) in composition root"))
 	}
 	return nil
 }
@@ -372,15 +373,13 @@ func (b *Bootstrap) invokeCellReload(id string, cr cell.ConfigReloader, evt cell
 				slog.Error("bootstrap: config reload callback panic",
 					slog.String("cell", id),
 					slog.String("type", fmt.Sprintf("%T", r)))
-				slog.Debug("bootstrap: config reload callback panic detail",
-					slog.String("cell", id), slog.Any("panic", r))
 			}
 		}()
 		if err := cr.OnConfigReload(evt); err != nil {
 			ok = false
 			slog.Error("bootstrap: config reload callback failed",
 				slog.String("cell", id),
-				slog.Any("error", err),
+				slog.String("error", err.Error()),
 				slog.Int64("config_generation", evt.Generation))
 		}
 	}()

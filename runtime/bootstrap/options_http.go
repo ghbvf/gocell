@@ -6,6 +6,8 @@ package bootstrap
 // WithSecurityHeadersOptions, WithErrorRedactor, WithHealthChecker,
 // WithReadyzDeadline, WithAdapterInfo, WithHealthRoutes.
 //
+// Note: WithRateLimiter and WithCircuitBreaker also append to b.lifecycle.closers (lifecycle teardown).
+//
 // ref: go-kratos/kratos transport/http/server.go — per-server option pattern.
 // ref: go-zero — resilience middleware configuration at app level.
 
@@ -53,6 +55,7 @@ func WithTracer(t tracing.Tracer) Option {
 
 // WithRateLimiter enables per-IP rate limiting for HTTP requests. The limiter
 // is forwarded to the router's middleware chain via router.WithRateLimiter.
+// Also registers the resource for LIFO teardown via b.lifecycle.closers.
 // If the limiter implements lifecycle.ContextCloser or io.Closer
 // (e.g. adapters/ratelimit.Limiter), Bootstrap registers it for teardown on
 // shutdown and startup rollback. ContextCloser is preferred so the shared
@@ -68,13 +71,14 @@ func WithTracer(t tracing.Tracer) Option {
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(b *Bootstrap) {
 		b.http.routerOpts = append(b.http.routerOpts, router.WithRateLimiter(rl))
-		b.lc.closers = append(b.lc.closers, rl)
+		b.lifecycle.closers = append(b.lifecycle.closers, rl)
 	}
 }
 
 // WithCircuitBreaker enables circuit breaker protection for HTTP requests.
 // The breaker is forwarded to the router's middleware chain via
-// router.WithCircuitBreaker. If the breaker implements lifecycle.ContextCloser
+// router.WithCircuitBreaker. Also registers the resource for LIFO teardown via b.lifecycle.closers.
+// If the breaker implements lifecycle.ContextCloser
 // or io.Closer, Bootstrap registers it for teardown on shutdown and startup
 // rollback. ContextCloser is preferred so the shared shutCtx budget flows
 // through to the resource.
@@ -92,7 +96,7 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 			return
 		}
 		b.http.routerOpts = append(b.http.routerOpts, router.WithCircuitBreaker(cb))
-		b.lc.closers = append(b.lc.closers, cb)
+		b.lifecycle.closers = append(b.lifecycle.closers, cb)
 	}
 }
 

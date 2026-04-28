@@ -22,6 +22,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -175,6 +176,10 @@ func TestNew_Defaults(t *testing.T) {
 	assert.Nil(t, b.assembly.core)
 	assert.Nil(t, b.events.publisher)
 	assert.Nil(t, b.events.subscriber)
+	// Te-1: sub-struct key fields have expected zero/non-zero defaults.
+	assert.NotNil(t, b.metrics.provider, "metrics.provider must be non-nil (NopProvider default)")
+	assert.True(t, b.lifecycle.shutdownTimeout > 0, "lc.shutdownTimeout must be positive (DefaultTimeout)")
+	assert.NotNil(t, b.assembly.configWatcherFactory, "assembly.configWatcherFactory must be non-nil")
 }
 
 func TestNew_WithOptions(t *testing.T) {
@@ -197,7 +202,18 @@ func TestNew_WithOptions(t *testing.T) {
 	assert.Equal(t, asm, b.assembly.core)
 	assert.Equal(t, eb, b.events.publisher)
 	assert.Equal(t, eb, b.events.subscriber)
-	assert.Equal(t, 5*time.Second, b.lc.shutdownTimeout)
+	assert.Equal(t, 5*time.Second, b.lifecycle.shutdownTimeout)
+}
+
+// TestNew_WithMetricsProvider verifies that WithMetricsProvider writes into
+// b.metrics.provider. White-box assertion: metrics.provider is the field
+// directly read by MetricsProvider() and passed to newShutdownMetrics.
+func TestNew_WithMetricsProvider(t *testing.T) {
+	// Use a custom NopProvider to distinguish from the default.
+	custom := struct{ kernelmetrics.NopProvider }{}
+	b := New(WithMetricsProvider(custom))
+	assert.Equal(t, custom, b.metrics.provider,
+		"WithMetricsProvider must write the provider into b.metrics.provider")
 }
 
 // Verbose-token gating is now a regular cell.Policy (PolicyVerboseToken)
@@ -284,6 +300,8 @@ func TestNew_WithConfig(t *testing.T) {
 	b := New(WithConfig("/nonexistent.yaml", "APP"))
 	assert.Equal(t, "/nonexistent.yaml", b.assembly.configPath)
 	assert.Equal(t, "APP", b.assembly.envPrefix)
+	// Te-8: configWatcherFactory must remain non-nil after WithConfig (New sets the default).
+	assert.NotNil(t, b.assembly.configWatcherFactory, "assembly.configWatcherFactory must be non-nil after WithConfig")
 }
 
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {

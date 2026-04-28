@@ -144,7 +144,7 @@ func TestPhase3b_NoCellImplementsContributor(t *testing.T) {
 
 	ml := &mockLifecycle{}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -165,7 +165,7 @@ func TestPhase3b_EmptySliceContributor(t *testing.T) {
 
 	ml := &mockLifecycle{}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -197,7 +197,7 @@ func TestPhase3b_DuplicateHookName_FailFast(t *testing.T) {
 	b := New()
 	// Use the real lifecycle so Append's dup-name guard actually fires;
 	// mockLifecycle has no state tracking.
-	b.lc.kernel = NewLifecycle(LifecycleConfig{})
+	b.lifecycle.kernel = NewLifecycle(LifecycleConfig{})
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -240,7 +240,7 @@ func TestPhase3b_NilSliceContributor(t *testing.T) {
 
 	ml := &mockLifecycle{}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -263,7 +263,7 @@ func TestPhase3b_OneCellTwoHooks(t *testing.T) {
 
 	ml := &mockLifecycle{}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -290,7 +290,7 @@ func TestPhase3b_TwoCellsOrderPreserved(t *testing.T) {
 
 	ml := &mockLifecycle{}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -326,7 +326,7 @@ func TestPhase3b_StampsCellIDOnAppendedHook(t *testing.T) {
 
 	ml := &mockLifecycle{}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -351,7 +351,7 @@ func TestPhase3b_BothNilSkipped(t *testing.T) {
 
 	ml := &mockLifecycle{}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -373,7 +373,7 @@ func TestPhase3b_EmptyNameAllowed(t *testing.T) {
 
 	ml := &mockLifecycle{}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm
@@ -397,7 +397,7 @@ func TestPhase3b_AppendError_PropagatesWithCellAndHookName(t *testing.T) {
 
 	ml := &mockLifecycle{appendErr: errors.New("already started")}
 	b := New()
-	b.lc.kernel = ml
+	b.lifecycle.kernel = ml
 
 	_, s := newPhaseState()
 	s.asm = asm

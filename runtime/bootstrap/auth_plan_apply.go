@@ -58,7 +58,7 @@ func (b *Bootstrap) applyListenerAuthChain(
 				// phase4 must have run before phase5; this is a programmer error.
 				return nil, nil, "", errcode.New(errcode.ErrCellInvalidConfig,
 					fmt.Sprintf("listener %q: AuthJWTFromAssembly verifier not resolved; "+
-						"phase4 (runAuthPlanValidateHooks) must complete before applyListenerAuthChain",
+						"phase ordering violation: phase4 must complete before applyListenerAuthChain",
 						ref.String()))
 			}
 			authOpts, aerr := b.buildAuthRouterOptions(v)

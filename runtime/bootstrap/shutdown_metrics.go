@@ -49,6 +49,7 @@ const (
 	shutdownPhaseReadinessFlip = "readiness_flip"
 	shutdownPhaseLIFOTeardown  = "lifo_teardown"
 	shutdownPhaseClosed        = "closed"
+	shutdownPhaseTotal         = "total"
 )
 
 // registerErrFmt is the error-wrap format shared by every metric registration
