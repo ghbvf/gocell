@@ -34,9 +34,9 @@ func TestNewSSOBFFApp_AcceptsInjectedListeners(t *testing.T) {
 	)
 	require.NoError(t, err)
 	require.NotNil(t, app)
-	require.Equal(t, primary.Addr().String(), app.PrimaryAddr())
-	require.Equal(t, internal.Addr().String(), app.InternalAddr())
-	require.Equal(t, health.Addr().String(), app.HealthAddr())
+	require.Equal(t, primary.Addr().String(), app.PrimaryListenAddr())
+	require.Equal(t, internal.Addr().String(), app.InternalListenAddr())
+	require.Equal(t, health.Addr().String(), app.HealthListenAddr())
 }
 
 func newTestListener(t *testing.T) net.Listener {

@@ -36,9 +36,9 @@ func main() {
 	logger.Info("ssobff: starting",
 		slog.String("mode", "in-memory"),
 		slog.Int("cells", 3),
-		slog.String("primary_addr", app.PrimaryAddr()),
-		slog.String("internal_addr", app.InternalAddr()),
-		slog.String("health_addr", app.HealthAddr()),
+		slog.String("primary_listen_addr", app.PrimaryListenAddr()),
+		slog.String("internal_listen_addr", app.InternalListenAddr()),
+		slog.String("health_listen_addr", app.HealthListenAddr()),
 	)
 	if err := app.Run(ctx); err != nil {
 		logger.Error("ssobff: application exited with error", slog.Any("error", err))

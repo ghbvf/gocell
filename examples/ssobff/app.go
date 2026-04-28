@@ -24,10 +24,10 @@ import (
 
 // SSOBFFApp is the shared ssobff composition root used by main and tests.
 type SSOBFFApp struct {
-	bootstrap    *bootstrap.Bootstrap
-	primaryAddr  string
-	internalAddr string
-	healthAddr   string
+	bootstrap          *bootstrap.Bootstrap
+	primaryListenAddr  string
+	internalListenAddr string
+	healthListenAddr   string
 }
 
 // Run executes the underlying bootstrap lifecycle.
@@ -38,28 +38,28 @@ func (a *SSOBFFApp) Run(ctx context.Context) error {
 	return a.bootstrap.Run(ctx)
 }
 
-// PrimaryAddr returns the bound public listener address.
-func (a *SSOBFFApp) PrimaryAddr() string {
+// PrimaryListenAddr returns the configured public listener address.
+func (a *SSOBFFApp) PrimaryListenAddr() string {
 	if a == nil {
 		return ""
 	}
-	return a.primaryAddr
+	return a.primaryListenAddr
 }
 
-// InternalAddr returns the bound internal listener address.
-func (a *SSOBFFApp) InternalAddr() string {
+// InternalListenAddr returns the configured internal listener address.
+func (a *SSOBFFApp) InternalListenAddr() string {
 	if a == nil {
 		return ""
 	}
-	return a.internalAddr
+	return a.internalListenAddr
 }
 
-// HealthAddr returns the bound health listener address.
-func (a *SSOBFFApp) HealthAddr() string {
+// HealthListenAddr returns the configured health listener address.
+func (a *SSOBFFApp) HealthListenAddr() string {
 	if a == nil {
 		return ""
 	}
-	return a.healthAddr
+	return a.healthListenAddr
 }
 
 // SSOBFFAppOption configures NewSSOBFFApp.
@@ -206,10 +206,10 @@ func NewSSOBFFApp(opts ...SSOBFFAppOption) (*SSOBFFApp, error) {
 	)
 
 	return &SSOBFFApp{
-		bootstrap:    b,
-		primaryAddr:  cfg.primary.addr,
-		internalAddr: cfg.internal.addr,
-		healthAddr:   cfg.health.addr,
+		bootstrap:          b,
+		primaryListenAddr:  cfg.primary.addr,
+		internalListenAddr: cfg.internal.addr,
+		healthListenAddr:   cfg.health.addr,
 	}, nil
 }
 
