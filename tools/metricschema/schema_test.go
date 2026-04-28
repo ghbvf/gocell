@@ -101,8 +101,72 @@ var _ = metrics.CounterOpts{
 	project := fixtureProject("fixture", "cmd/app/main.go")
 
 	_, err := Build(root, project, "fixture")
-	require.ErrorIs(t, err, ErrUnresolvedLabel)
+	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
 	assert.Contains(t, err.Error(), "metric name must be a compile-time string")
+}
+
+func TestBuild_FailsClosedOnUnresolvedPrometheusConstructorOpts(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/bad_prom.go", `package reachable
+
+import prom "github.com/prometheus/client_golang/prometheus"
+
+func buildCounterOpts() prom.CounterOpts {
+	return prom.CounterOpts{Name: "dynamic_total"}
+}
+
+var _ = prom.NewCounterVec(buildCounterOpts(), []string{"status"})
+`)
+	project := fixtureProject("fixture", "cmd/app/main.go")
+
+	_, err := Build(root, project, "fixture")
+	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
+	assert.Contains(t, err.Error(), "Prometheus metric opts must be a resolvable literal")
+}
+
+func TestBuild_FailsClosedOnUnresolvedExplicitPrometheusNamespace(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/bad_namespace.go", `package reachable
+
+import (
+	"os"
+
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+var _ = prom.NewCounter(prom.CounterOpts{
+	Namespace: os.Getenv("METRIC_NAMESPACE"),
+	Name: "dynamic_namespace_total",
+})
+`)
+	project := fixtureProject("fixture", "cmd/app/main.go")
+
+	_, err := Build(root, project, "fixture")
+	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
+	assert.Contains(t, err.Error(), "metric namespace must be a compile-time string")
+}
+
+func TestBuild_FailsClosedOnUnresolvedPrometheusHelperOpts(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/bad_helper.go", `package reachable
+
+import prom "github.com/prometheus/client_golang/prometheus"
+
+func buildCounterOpts() prom.CounterOpts {
+	return prom.CounterOpts{Name: "helper_total"}
+}
+
+func registerCounter(opts prom.CounterOpts) prom.Counter {
+	return prom.NewCounter(opts)
+}
+
+var _ = registerCounter(buildCounterOpts())
+`)
+	project := fixtureProject("fixture", "cmd/app/main.go")
+
+	_, err := Build(root, project, "fixture")
+	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
+	assert.Contains(t, err.Error(), "Prometheus metric helper opts must be a resolvable literal")
 }
 
 func TestCheckOBS01DetectsDirectLocalAndHelperParamClassifiers(t *testing.T) {
@@ -144,6 +208,10 @@ func negative(v metrics.CounterVec, err error) {
 	diagnostics, err := CheckOBS01(root, "./reachable")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 3)
+	for _, diag := range diagnostics {
+		assert.Equal(t, "v", diag.Metric)
+		assert.Equal(t, "reason", diag.Label)
+	}
 	assert.Contains(t, diagnostics[0].Message, "metrics-migration-acks.yaml")
 }
 
@@ -194,7 +262,85 @@ func direct(v metrics.CounterVec, err error) {
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
   - rule: OBS-01
     fingerprint: %q
-    metric: provider_total
+    metric: %s
+    label: %s
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`, diagnostics[0].Fingerprint, diagnostics[0].Metric, diagnostics[0].Label))
+
+	diagnostics, err = CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01AckMustMatchMetricAndLabel(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+func direct(v metrics.CounterVec, err error) {
+	v.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
+  - rule: OBS-01
+    fingerprint: %q
+    metric: otherMetric
+    label: %s
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`, diagnostics[0].Fingerprint, diagnostics[0].Label))
+
+	diagnostics, err = CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
+  - rule: OBS-01
+    fingerprint: %q
+    metric: %s
+    label: otherLabel
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`, diagnostics[0].Fingerprint, diagnostics[0].Metric))
+
+	diagnostics, err = CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+}
+
+func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: duplicate
+    metric: v
     label: reason
     oldSemantics: infra errors grouped as infra
     newSemantics: domain config errors grouped as domain
@@ -203,11 +349,22 @@ func direct(v metrics.CounterVec, err error) {
     owner: platform-observability
     reviewedAt: "2026-04-28"
     rationale: reviewed SLO bucket migration with service owner
-`, diagnostics[0].Fingerprint))
+  - rule: OBS-01
+    fingerprint: duplicate
+    metric: v
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
 
-	diagnostics, err = CheckOBS01(root, "./reachable")
-	require.NoError(t, err)
-	assert.Empty(t, diagnostics)
+	_, err := CheckOBS01(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicates fingerprint")
 }
 
 func requireMetric(t *testing.T, schema *Schema, name string) Entry {

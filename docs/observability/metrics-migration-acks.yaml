@@ -2,8 +2,9 @@
 #
 # Add an entry only when a metric label value intentionally depends on
 # errcode.Category(...) or errcode.IsInfraError(...), and the dashboard / alert
-# migration has been reviewed. The failing archtest prints the fingerprint to
-# paste here. All fields below are required; unknown fields fail the gate.
+# migration has been reviewed. The failing archtest prints the fingerprint,
+# metric sink, and label; paste them here exactly. All fields below are
+# required; unknown fields fail the gate.
 #
 # acknowledgements:
 #   - rule: OBS-01
