@@ -3,7 +3,7 @@ package bootstrap
 // options_events.go — With* option functions for the bootstrapEvents group.
 //
 // Covers: WithWorkers, WithPublisher, WithSubscriber, WithConsumerMiddleware,
-// WithEventRouterReadyTimeout, WithDisableObservabilityRestore.
+// WithEventRouterReadyTimeout.
 //
 // ref: ThreeDotsLabs/watermill message/router.go — AddMiddleware wraps handlers
 // at router level; pipeline middleware at receive-endpoint configuration.
@@ -72,17 +72,5 @@ func WithEventRouterReadyTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
 		b.events.routerReadyTimeoutSet = true
 		b.events.routerReadyTimeout = d
-	}
-}
-
-// WithDisableObservabilityRestore prevents the consumer-side
-// ObservabilityContextMiddleware from restoring request_id / correlation_id /
-// trace_id from outbox entry metadata into the handler context. The kill
-// switch for the consume-side observability bridge — set this only when
-// integrating with a custom observability stack that resets context keys
-// itself.
-func WithDisableObservabilityRestore() Option {
-	return func(b *Bootstrap) {
-		b.events.disableObservabilityRestore = true
 	}
 }

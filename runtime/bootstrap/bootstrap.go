@@ -77,13 +77,12 @@ type bootstrapHTTP struct {
 
 // bootstrapEvents groups outbox pubsub, worker, and event-router fields.
 type bootstrapEvents struct {
-	workers                     []worker.Worker
-	publisher                   outbox.Publisher
-	subscriber                  outbox.Subscriber
-	consumerMiddleware          []outbox.SubscriptionMiddleware
-	routerReadyTimeout          time.Duration
-	routerReadyTimeoutSet       bool
-	disableObservabilityRestore bool
+	workers               []worker.Worker
+	publisher             outbox.Publisher
+	subscriber            outbox.Subscriber
+	consumerMiddleware    []outbox.SubscriptionMiddleware
+	routerReadyTimeout    time.Duration
+	routerReadyTimeoutSet bool
 }
 
 // bootstrapLifecycle groups kernel/cell Lifecycle, ManagedResource, and shutdown fields.

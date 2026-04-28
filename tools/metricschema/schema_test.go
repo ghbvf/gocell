@@ -49,7 +49,7 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	httpDuration := requireMetric(t, schema, "http_request_duration_seconds")
 	assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, httpDuration.Buckets)
 	assert.Empty(t, httpDuration.BucketSource)
-	assert.Equal(t, "runtime/bootstrap/bootstrap_phases.go", httpDuration.File)
+	assert.Equal(t, "runtime/bootstrap/phases_http.go", httpDuration.File)
 
 	vaultLogin := requireMetric(t, schema, "auth_login_total")
 	assert.Equal(t, "gocell_vault_auth_login_total", vaultLogin.FQName)
