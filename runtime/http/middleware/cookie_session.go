@@ -36,11 +36,6 @@ type CookieSessionConfig struct {
 	// CookieDomain is the cookie domain. Default: "" (current domain).
 	CookieDomain string
 
-	// Insecure disables the Secure flag on cookies. Only use for local
-	// development over plain HTTP (http://localhost).
-	// Default: false (cookies are always Secure).
-	Insecure bool
-
 	// CookieSameSite sets the SameSite attribute. Default: Strict.
 	CookieSameSite http.SameSite
 
@@ -56,12 +51,11 @@ func DefaultCookieSessionConfig(secret []byte) CookieSessionConfig {
 		CookiePath:     "/",
 		CookieSameSite: http.SameSiteStrictMode,
 		MaxAge:         900,
-		// Insecure defaults to false → Secure=true
 	}
 }
 
 // normalizeCookieSessionConfig fills zero-value fields with safe defaults.
-// All zero values produce secure behavior (Secure=true via !Insecure).
+// All zero values produce secure cookie attributes.
 func normalizeCookieSessionConfig(cfg *CookieSessionConfig) {
 	if cfg.CookieName == "" {
 		cfg.CookieName = "session"
@@ -75,11 +69,6 @@ func normalizeCookieSessionConfig(cfg *CookieSessionConfig) {
 	if cfg.MaxAge == 0 {
 		cfg.MaxAge = 900
 	}
-}
-
-// cookieSecure returns true unless Insecure is explicitly set.
-func (cfg *CookieSessionConfig) cookieSecure() bool {
-	return !cfg.Insecure
 }
 
 // NewCookieSession creates the cookie session middleware, returning an error
@@ -180,7 +169,7 @@ func (w *SessionCookieWriter) Set(rw http.ResponseWriter, jwt string) error {
 		Path:     w.cfg.CookiePath,
 		Domain:   w.cfg.CookieDomain,
 		MaxAge:   w.cfg.MaxAge,
-		Secure:   w.cfg.cookieSecure(),
+		Secure:   true,
 		HttpOnly: true,
 		SameSite: w.cfg.CookieSameSite,
 	})
@@ -195,7 +184,7 @@ func (w *SessionCookieWriter) Clear(rw http.ResponseWriter) {
 		Path:     w.cfg.CookiePath,
 		Domain:   w.cfg.CookieDomain,
 		MaxAge:   -1,
-		Secure:   w.cfg.cookieSecure(),
+		Secure:   true,
 		HttpOnly: true,
 		SameSite: w.cfg.CookieSameSite,
 	})
@@ -233,7 +222,7 @@ func SetSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig, jwt string
 		Path:     cfg.CookiePath,
 		Domain:   cfg.CookieDomain,
 		MaxAge:   cfg.MaxAge,
-		Secure:   cfg.cookieSecure(),
+		Secure:   true,
 		HttpOnly: true,
 		SameSite: cfg.CookieSameSite,
 	})
@@ -250,7 +239,7 @@ func ClearSessionCookie(w http.ResponseWriter, cfg CookieSessionConfig) {
 		Path:     cfg.CookiePath,
 		Domain:   cfg.CookieDomain,
 		MaxAge:   -1,
-		Secure:   cfg.cookieSecure(),
+		Secure:   true,
 		HttpOnly: true,
 		SameSite: cfg.CookieSameSite,
 	})

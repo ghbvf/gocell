@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -20,13 +22,34 @@ type goTestResult struct {
 	Err         error  // non-ExitError (command couldn't run at all)
 }
 
+type goTestRunner struct {
+	goTool string
+}
+
+func newGoTestRunner() (goTestRunner, error) {
+	path, err := goToolPath()
+	if err != nil {
+		return goTestRunner{}, errcode.Wrap(errcode.ErrTestExecution, "resolve go tool", err)
+	}
+	return goTestRunner{goTool: path}, nil
+}
+
 // runGoTest executes `go test` with the given arguments in dir.
 // It detects zero-match scenarios by scanning output for the well-known
 // Go test messages "no tests to run" and "[no test files]".
 func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
+	runner, err := newGoTestRunner()
+	if err != nil {
+		return goTestResult{Err: err}
+	}
+	return runner.run(ctx, dir, args)
+}
+
+func (r goTestRunner) run(ctx context.Context, dir string, args []string) goTestResult {
 	fullArgs := append([]string{"test"}, args...)
-	cmd := exec.CommandContext(ctx, "go", fullArgs...)
+	cmd := exec.CommandContext(ctx, r.goTool, fullArgs...)
 	cmd.Dir = filepath.Clean(dir)
+	cmd.Env = goTestEnv(r.goTool)
 
 	var buf bytes.Buffer
 	cmd.Stdout = &buf
@@ -49,6 +72,69 @@ func runGoTest(ctx context.Context, dir string, args []string) goTestResult {
 		Output: output,
 		Err:    errcode.Wrap(errcode.ErrTestExecution, "go test execution failed", runErr),
 	}
+}
+
+func goToolPath() (string, error) {
+	path, err := exec.LookPath(goToolName())
+	if err != nil {
+		return "", err
+	}
+	if filepath.IsAbs(path) {
+		return filepath.Clean(path), nil
+	}
+	return filepath.Abs(path)
+}
+
+func goToolName() string {
+	if runtime.GOOS == "windows" {
+		return "go.exe"
+	}
+	return "go"
+}
+
+func goTestEnv(goTool string) []string {
+	env := os.Environ()
+	pathKey, pathValue := pathEnv(env)
+	env = withoutPathEnv(env)
+	return append(env, pathKey+"="+prependPath(filepath.Dir(goTool), pathValue))
+}
+
+func withoutPathEnv(env []string) []string {
+	filtered := env[:0]
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if !ok || !matchesPathEnvKey(key) {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
+
+func matchesPathEnvKey(key string) bool {
+	if runtime.GOOS == "windows" {
+		return strings.EqualFold(key, "PATH")
+	}
+	return key == "PATH"
+}
+
+func pathEnv(env []string) (string, string) {
+	for _, entry := range env {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && matchesPathEnvKey(key) {
+			return key, value
+		}
+	}
+	return "PATH", ""
+}
+
+func prependPath(dir, pathValue string) string {
+	if dir == "" {
+		return pathValue
+	}
+	if pathValue == "" {
+		return dir
+	}
+	return dir + string(os.PathListSeparator) + pathValue
 }
 
 // isZeroMatch returns true only when NO tests actually ran across all packages.

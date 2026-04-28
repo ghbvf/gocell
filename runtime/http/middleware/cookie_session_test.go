@@ -183,22 +183,9 @@ func TestSetSessionCookie_Attributes(t *testing.T) {
 	assert.Equal(t, "/", c.Path)
 	assert.Equal(t, "example.com", c.Domain)
 	assert.Equal(t, 900, c.MaxAge)
-	assert.True(t, c.Secure, "default Insecure=false → Secure=true")
+	assert.True(t, c.Secure)
 	assert.True(t, c.HttpOnly)
 	assert.Equal(t, http.SameSiteStrictMode, c.SameSite)
-}
-
-func TestSetSessionCookie_InsecureMode(t *testing.T) {
-	cfg := newTestSessionConfig(t)
-	cfg.Insecure = true
-
-	rec := httptest.NewRecorder()
-	err := SetSessionCookie(rec, cfg, "jwt")
-	require.NoError(t, err)
-
-	cookies := rec.Result().Cookies()
-	require.Len(t, cookies, 1)
-	assert.False(t, cookies[0].Secure, "Insecure=true → Secure=false")
 }
 
 func TestSetSessionCookie_ZeroValueConfig_IsSecure(t *testing.T) {
@@ -212,7 +199,7 @@ func TestSetSessionCookie_ZeroValueConfig_IsSecure(t *testing.T) {
 
 	cookies := rec.Result().Cookies()
 	require.Len(t, cookies, 1)
-	assert.True(t, cookies[0].Secure, "zero-value Insecure=false → Secure=true")
+	assert.True(t, cookies[0].Secure)
 	assert.Equal(t, http.SameSiteStrictMode, cookies[0].SameSite)
 	assert.Equal(t, 900, cookies[0].MaxAge)
 }
@@ -267,7 +254,6 @@ func TestDefaultCookieSessionConfig(t *testing.T) {
 	assert.Equal(t, secret, cfg.Secret)
 	assert.Equal(t, "session", cfg.CookieName)
 	assert.Equal(t, "/", cfg.CookiePath)
-	assert.False(t, cfg.Insecure, "default is Secure")
 	assert.Equal(t, http.SameSiteStrictMode, cfg.CookieSameSite)
 	assert.Equal(t, 900, cfg.MaxAge)
 }
@@ -325,6 +311,7 @@ func TestSessionCookieWriter_SetAndClear(t *testing.T) {
 	cookies := rec.Result().Cookies()
 	require.Len(t, cookies, 1)
 	assert.Equal(t, "session", cookies[0].Name)
+	assert.True(t, cookies[0].Secure)
 
 	capture := &authCapture{}
 	handler := MustCookieSession(cfg)(capture.handler())
@@ -339,6 +326,7 @@ func TestSessionCookieWriter_SetAndClear(t *testing.T) {
 	clearCookies := rec3.Result().Cookies()
 	require.Len(t, clearCookies, 1)
 	assert.Equal(t, -1, clearCookies[0].MaxAge)
+	assert.True(t, clearCookies[0].Secure)
 }
 
 func TestNormalizeCookieSessionConfig(t *testing.T) {

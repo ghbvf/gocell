@@ -3,7 +3,10 @@ package verify
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -78,6 +81,114 @@ func TestRunGoTest_ContextCancelled(t *testing.T) {
 	cancel()
 	res := runGoTest(ctx, t.TempDir(), []string{"./..."})
 	assert.False(t, res.Passed)
+}
+
+func TestRunGoTest_UsesCallerSelectedGoAndAdditivePATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell script as the fake go binary")
+	}
+
+	dir := t.TempDir()
+	realGo, err := exec.LookPath("go")
+	require.NoError(t, err)
+
+	selectedBin := filepath.Join(dir, "selected-go-bin")
+	sentinelBin := filepath.Join(dir, "sentinel-bin")
+	require.NoError(t, os.Mkdir(selectedBin, 0o755))
+	require.NoError(t, os.Mkdir(sentinelBin, 0o755))
+
+	logPath := filepath.Join(dir, "go-wrapper.log")
+	require.NoError(t, os.WriteFile(filepath.Join(selectedBin, "go"), []byte(`#!/bin/sh
+printf '%s\n' "$*" >> "$GO_WRAPPER_LOG"
+exec "$REAL_GO" "$@"
+`), 0o755))
+
+	t.Setenv("PATH", selectedBin+string(os.PathListSeparator)+sentinelBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("REAL_GO", realGo)
+	t.Setenv("GO_WRAPPER_LOG", logPath)
+	t.Setenv("GOCELL_VERIFY_SELECTED_BIN", selectedBin)
+	t.Setenv("GOCELL_VERIFY_SENTINEL_BIN", sentinelBin)
+
+	moduleDir := filepath.Join(dir, "module")
+	require.NoError(t, os.Mkdir(moduleDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "path_test.go"), []byte(`package testmod
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestPATHIsAdditive(t *testing.T) {
+	path := os.Getenv("PATH")
+	selected := os.Getenv("GOCELL_VERIFY_SELECTED_BIN")
+	sentinel := os.Getenv("GOCELL_VERIFY_SENTINEL_BIN")
+	if selected == "" || sentinel == "" {
+		t.Fatal("missing test path markers")
+	}
+	selectedIndex := strings.Index(path, selected)
+	if selectedIndex < 0 {
+		t.Fatalf("PATH does not include selected go dir: %s", path)
+	}
+	sentinelIndex := strings.Index(path, sentinel)
+	if sentinelIndex < 0 {
+		t.Fatalf("PATH lost caller-provided entries: %s", path)
+	}
+	if selectedIndex > sentinelIndex {
+		t.Fatalf("selected go dir should be prepended before caller entries: %s", path)
+	}
+}
+`), 0o644))
+
+	res := runGoTest(context.Background(), moduleDir, []string{"./...", "-v"})
+	require.NoError(t, res.Err)
+	assert.True(t, res.Passed, res.Output)
+
+	logBytes, err := os.ReadFile(logPath)
+	require.NoError(t, err)
+	assert.Contains(t, string(logBytes), "test ./... -v")
+}
+
+func TestGoTestEnvPreservesCallerEnvAndPrependsGoDir(t *testing.T) {
+	selectedDir := t.TempDir()
+	callerBin := filepath.Join(t.TempDir(), "caller-bin")
+	callerGoRoot := filepath.Join(t.TempDir(), "caller-goroot")
+	t.Setenv("PATH", callerBin)
+	t.Setenv("GOROOT", callerGoRoot)
+
+	env := goTestEnv(filepath.Join(selectedDir, goToolName()))
+	pathValue := envValue(env, "PATH")
+	pathParts := strings.Split(pathValue, string(os.PathListSeparator))
+	require.NotEmpty(t, pathParts)
+	assert.Equal(t, selectedDir, pathParts[0])
+	assert.Contains(t, pathValue, callerBin)
+	assert.Equal(t, callerGoRoot, envValue(env, "GOROOT"))
+}
+
+func TestPathEnvUsesExactPATHOnUnix(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows environment keys are case-insensitive")
+	}
+
+	env := []string{
+		"Path=wrong",
+		"PATH=right",
+		"GOROOT=/tmp/goroot",
+	}
+	key, value := pathEnv(env)
+	assert.Equal(t, "PATH", key)
+	assert.Equal(t, "right", value)
+	assert.Contains(t, withoutPathEnv(env), "Path=wrong")
+}
+
+func envValue(env []string, key string) string {
+	for _, entry := range env {
+		envKey, value, ok := strings.Cut(entry, "=")
+		if ok && strings.EqualFold(envKey, key) {
+			return value
+		}
+	}
+	return ""
 }
 
 // ---------------------------------------------------------------------------
