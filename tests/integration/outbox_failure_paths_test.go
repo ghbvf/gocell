@@ -217,7 +217,7 @@ func runRelay(t *testing.T, relay *outboxruntime.Relay) (stop func()) {
 func setupPGOnly(t *testing.T) (*postgres.Pool, func()) {
 	t.Helper()
 	pool, cleanup := setupPostgresContainer(t)
-	migrator, err := postgres.NewMigrator(pool, postgres.MigrationsFS(), "schema_migrations")
+	migrator, err := postgres.NewMigrator(pool, testPostgresMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err, "NewMigrator")
 	require.NoError(t, migrator.Up(context.Background()), "migrations must apply")
 	return pool, cleanup

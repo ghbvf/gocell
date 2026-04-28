@@ -94,16 +94,16 @@ func TestWrapCtxSafe_PropagatesError_WhenInnerReturnsFirst(t *testing.T) {
 	}
 }
 
-// TestWrapCtxSafe_PanicBubbles verifies a panic inside inner fn bubbles out
-// to the wrapped call site so that the outer recover fence in runOneProbe
-// can catch it just as it would for an unwrapped Checker.
-func TestWrapCtxSafe_PanicBubbles(t *testing.T) {
+// TestWrapCtxSafe_PanicBecomesError verifies a panic inside inner fn is
+// converted into an unhealthy probe error instead of re-panicking through the
+// wrapper.
+func TestWrapCtxSafe_PanicBecomesError(t *testing.T) {
 	wrapped := wrapCtxSafe(func(_ context.Context) error {
 		panic("boom")
 	})
-	assert.PanicsWithValue(t, "boom", func() {
-		_ = wrapped(context.Background())
-	})
+	err := wrapped(context.Background())
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "panic: boom")
 }
 
 // TestWrapCtxSafe_NilInput ensures defensive wrapping of nil returns a

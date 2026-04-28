@@ -95,7 +95,7 @@ func (tm *TxManager) RunInTx(ctx context.Context, fn func(ctx context.Context) e
 					slog.String("rollback_error", rbErr.Error()),
 				)
 			}
-			panic(r)
+			repanicAfterTopLevelTxRollback(r)
 		}
 	}()
 
@@ -139,7 +139,7 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 					slog.String("rollback_error", rbErr.Error()),
 				)
 			}
-			panic(r)
+			repanicAfterSavepointRollback(r)
 		}
 	}()
 
@@ -159,4 +159,12 @@ func (tm *TxManager) runInSavepoint(ctx context.Context, tx pgx.Tx, fn func(ctx 
 		return errcode.Wrap(ErrAdapterPGQuery, fmt.Sprintf("postgres: release savepoint %s", spName), err)
 	}
 	return nil
+}
+
+func repanicAfterTopLevelTxRollback(recovered any) {
+	panic(recovered)
+}
+
+func repanicAfterSavepointRollback(recovered any) {
+	panic(recovered)
 }

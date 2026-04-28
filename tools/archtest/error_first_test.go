@@ -87,16 +87,6 @@ var errorFirstEnforcedFiles = []string{
 	"adapters/postgres/refresh_store.go",
 }
 
-// errorFirstWhitelistedFunctions maps "<rel-path>::<funcName>" to a
-// justification. The rule SCANS the file but skips only the listed function;
-// any other error-less function in the same file that contains panic() is
-// still reported as a violation. ADR-pinned in
-// docs/architecture/202604270030-architectural-panic-whitelist.md (§4).
-var errorFirstWhitelistedFunctions = map[string]string{
-	"kernel/wrapper/lifecycle.go::recoverAndFinishWithRedactor":              "re-panics from defer recover so outer Recovery middleware can serialize the panic",
-	"runtime/http/middleware/circuit_breaker.go::repanicAfterBreakerFailure": "re-panics from defer recover after reporting circuit-breaker failure",
-}
-
 // errorFirstViolation describes a single ERROR-FIRST-API-01 violation.
 type errorFirstViolation struct {
 	File     string // relative slash path from module root
@@ -213,7 +203,7 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 			continue
 		}
 		whitelistKey := rel + "::" + fd.Name.Name
-		if _, whitelisted := errorFirstWhitelistedFunctions[whitelistKey]; whitelisted {
+		if _, whitelisted := architecturalPanicWhitelist[whitelistKey]; whitelisted {
 			continue
 		}
 		findPanicCalls(fd.Body, func(callPos token.Pos) {

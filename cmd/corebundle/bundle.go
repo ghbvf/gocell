@@ -300,9 +300,9 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 			return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG pool: %w", err)
 		}
 		// A12: fail-fast on schema version mismatch.
-		if schemaErr := adapterpg.VerifyExpectedVersion(ctx, pool, adapterpg.MigrationsFS()); schemaErr != nil {
+		if schemaErr := verifyConfigCorePGSchema(ctx, pool); schemaErr != nil {
 			_ = pool.Close(ctx)
-			return ConfigCoreModuleResult{}, fmt.Errorf("configcore PG schema guard: %w", schemaErr)
+			return ConfigCoreModuleResult{}, schemaErr
 		}
 		// A4: warn on INVALID indexes (non-fatal).
 		if invalid, detectErr := adapterpg.DetectInvalidIndexes(ctx, pool); detectErr != nil {
@@ -363,6 +363,17 @@ func buildConfigCoreOpts(ctx context.Context, cfg ConfigCoreModuleConfig) (Confi
 		return ConfigCoreModuleResult{}, errcode.New(errcode.ErrValidationFailed,
 			fmt.Sprintf("buildConfigCoreOpts: unexpected StorageBackend %q (topology validation bypass)", cfg.Topology.StorageBackend))
 	}
+}
+
+func verifyConfigCorePGSchema(ctx context.Context, pool *adapterpg.Pool) error {
+	migrationsFS, err := adapterpg.MigrationsFS()
+	if err != nil {
+		return fmt.Errorf("configcore PG migrations fs: %w", err)
+	}
+	if err := adapterpg.VerifyExpectedVersion(ctx, pool, migrationsFS); err != nil {
+		return fmt.Errorf("configcore PG schema guard: %w", err)
+	}
+	return nil
 }
 
 func buildConfigCorePGStorage(pool *adapterpg.Pool, cfg ConfigCoreModuleConfig) (kernellifecycle.ManagedResource, configcore.Option, error) {

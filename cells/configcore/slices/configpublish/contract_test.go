@@ -56,7 +56,7 @@ func newContractMux(svc *Service) http.Handler {
 // --- HTTP contract test ---
 
 func TestHttpConfigPublishV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
 	svc, repo, _ := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
@@ -77,7 +77,7 @@ func TestHttpConfigPublishV1Serve(t *testing.T) {
 }
 
 func TestHttpConfigRollbackV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
 	svc, repo, _ := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
@@ -119,7 +119,7 @@ type errEnvelope struct {
 // validates the response body shape against the contract's declared error schema
 // and asserts the exact error code emitted by the real auth chain.
 func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.publish.v1")
 	svc, _, _ := newContractService(t)
 	mux := newContractMux(svc)
@@ -162,7 +162,7 @@ func TestHttpConfigPublishV1_Serve_Unauthorized(t *testing.T) {
 // TestHttpConfigRollbackV1_Serve_Unauthorized mirrors the publish unauthorized test
 // for the rollback endpoint, asserting real error codes from the RequireAnyRole chain.
 func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.config.rollback.v1")
 	svc, _, _ := newContractService(t)
 	mux := newContractMux(svc)
@@ -201,7 +201,7 @@ func TestHttpConfigRollbackV1_Serve_Unauthorized(t *testing.T) {
 // --- Event contract tests ---
 
 func TestEventConfigVersionPublishedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.config.version-published.v1")
 	svc, repo, writer := newContractService(t)
 	seedContractEntry(repo, "app.name", "value")
@@ -220,7 +220,7 @@ func TestEventConfigVersionPublishedV1Publish(t *testing.T) {
 }
 
 func TestEventConfigRollbackV1Publish_RollbackEmitsStateThenAudit(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	upserted := contracttest.LoadByID(t, root, "event.config.entry-upserted.v1")
 	rollback := contracttest.LoadByID(t, root, "event.config.rollback.v1")
 	svc, repo, writer := newContractService(t)

@@ -48,7 +48,7 @@ func newContractHandler() (http.Handler, *recordingPublisher) {
 }
 
 func TestSpecDeviceRegisterMatchesContract(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.register.v1")
 	require.NotNil(t, c.HTTP)
 	require.Equal(t, c.ID, specDeviceRegister.ID)
@@ -57,7 +57,7 @@ func TestSpecDeviceRegisterMatchesContract(t *testing.T) {
 }
 
 func TestHttpDeviceRegisterV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.register.v1")
 	h, _ := newContractHandler()
 
@@ -72,7 +72,7 @@ func TestHttpDeviceRegisterV1Serve(t *testing.T) {
 }
 
 func TestEventDeviceRegisteredV1Publish(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	httpContract := contracttest.LoadByID(t, root, "http.device.register.v1")
 	c := contracttest.LoadByID(t, root, "event.device-registered.v1")
 	h, pub := newContractHandler()

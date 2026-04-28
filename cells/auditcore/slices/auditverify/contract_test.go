@@ -7,7 +7,7 @@ import (
 )
 
 func TestEventAuditIntegrityVerifiedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.audit.integrity-verified.v1")
 
 	c.ValidatePayload(t, []byte(`{"valid":true,"firstInvalidIndex":0,"entriesChecked":100}`))

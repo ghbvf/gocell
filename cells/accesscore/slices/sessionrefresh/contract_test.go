@@ -8,7 +8,7 @@ import (
 )
 
 func TestHttpAuthRefreshV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.refresh.v1")
 
 	c.ValidateRequest(t, []byte(`{"refreshToken":"old-token-with-min-len20"}`))

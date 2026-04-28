@@ -55,7 +55,7 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 
 	mux := http.NewServeMux()
 	// Use explicit AllowedOrigins; empty origins will be rejected after SEC-FAIL-CLOSED-04.
-	mux.Handle("/ws", adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"*"},
 	}))
 
@@ -70,6 +70,13 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	})
 
 	return hub, server
+}
+
+func requireUpgradeHandler(t testing.TB, hub *rtws.Hub, cfg adapterws.UpgradeConfig) http.Handler {
+	t.Helper()
+	handler, err := adapterws.UpgradeHandler(hub, cfg)
+	require.NoError(t, err)
+	return handler
 }
 
 func dialWS(t *testing.T, serverURL string) *websocket.Conn {
@@ -122,7 +129,7 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 		<-startErr
 	})
 
-	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"*"},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
@@ -327,7 +334,7 @@ func TestUpgradeHandler_AllowedOrigins(t *testing.T) {
 	cfg := rtws.DefaultHubConfig()
 	hub := rtws.NewHub(cfg, nil)
 
-	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"example.com"},
 	})
 
@@ -392,7 +399,7 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 	// Hub intentionally NOT started.
 
 	// AllowedOrigins is required post-SEC-FAIL-CLOSED-04; use a valid value.
-	handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		AllowedOrigins: []string{"example.com"},
 	})
 
@@ -405,51 +412,33 @@ func TestUpgradeHandler_HubNotRunning_503(t *testing.T) {
 }
 
 // TestUpgradeHandler_RejectsEmptyOrigins verifies that constructing an
-// UpgradeConfig with nil AllowedOrigins panics at construction time with an
-// *errcode.Error (SEC-FAIL-CLOSED). The recover block asserts the panic value
-// carries errcode.ErrWebsocketOriginsMissing so that recover chains can
-// errors.As on the recovered value.
+// UpgradeConfig with nil AllowedOrigins returns an *errcode.Error
+// (SEC-FAIL-CLOSED).
 //
 // Positive case: AllowedOrigins: []string{"example.com"} must not panic.
 func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 	cfg := rtws.DefaultHubConfig()
 
-	t.Run("empty origins — expect construction panic with *errcode.Error", func(t *testing.T) {
+	t.Run("empty origins — expect construction error with *errcode.Error", func(t *testing.T) {
 		hub := rtws.NewHub(cfg, nil)
 
-		var panicVal any
-		panicked := func() (didPanic bool) {
-			defer func() {
-				if r := recover(); r != nil {
-					panicVal = r
-					didPanic = true
-				}
-			}()
-			_ = adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{AllowedOrigins: nil})
-			return false
-		}()
-
-		if !panicked {
-			t.Fatal("UpgradeHandler with nil AllowedOrigins must panic at construction time")
-		}
-		// The panic value must be an *errcode.Error so recover chains can errors.As on it.
-		ec, ok := panicVal.(*errcode.Error)
-		if !ok {
-			t.Errorf("panic value must be *errcode.Error; got %T: %v", panicVal, panicVal)
-			return
-		}
+		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{AllowedOrigins: nil})
+		require.Error(t, err)
+		assert.Nil(t, handler)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
 		if ec.Code != errcode.ErrWebsocketOriginsMissing {
-			t.Errorf("panic *errcode.Error must have code ErrWebsocketOriginsMissing; got %q", ec.Code)
+			t.Errorf("error code must be ErrWebsocketOriginsMissing; got %q", ec.Code)
 		}
 	})
 
 	t.Run("explicit allowed origins — ok", func(t *testing.T) {
 		hub := rtws.NewHub(cfg, nil)
 
-		// Must not panic; construction with valid origins must succeed.
-		handler := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 			AllowedOrigins: []string{"example.com"},
 		})
+		require.NoError(t, err)
 		require.NotNil(t, handler)
 	})
 }

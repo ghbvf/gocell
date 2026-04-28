@@ -21,7 +21,7 @@ import (
 )
 
 func TestSpecDeviceListMatchesContract(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.list.v1")
 	require.NotNil(t, c.HTTP)
 	require.Equal(t, c.ID, specDeviceListSlice.ID)
@@ -73,7 +73,7 @@ func decodeDeviceListPage(t *testing.T, rec *httptest.ResponseRecorder) deviceLi
 }
 
 func TestHttpDeviceListV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.list.v1")
 	h := newContractDeviceListHandler(t)
 
@@ -133,7 +133,7 @@ func TestHttpDeviceListV1Serve(t *testing.T) {
 }
 
 func TestDeviceListContractSpecMatchesContract(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.list.v1")
 	if c.HTTP == nil {
 		t.Fatal("http.device.list.v1 must declare HTTP transport metadata")

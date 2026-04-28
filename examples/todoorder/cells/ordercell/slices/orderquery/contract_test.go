@@ -18,7 +18,7 @@ import (
 )
 
 func TestSpecOrderQueryMatchesContracts(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("todoorder")
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
 
 	get := contracttest.LoadByID(t, root, "http.order.get.v1")
 	require.NotNil(t, get.HTTP)
@@ -51,7 +51,7 @@ func newContractQueryHandler(orders ...*domain.Order) http.Handler {
 }
 
 func TestHttpOrderGetV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("todoorder")
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.get.v1")
 	h := newContractQueryHandler(&domain.Order{
 		ID:        "ord-contract-get",
@@ -67,7 +67,7 @@ func TestHttpOrderGetV1Serve(t *testing.T) {
 }
 
 func TestHttpOrderListV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("todoorder")
+	root := contracttest.ExampleContractsRoot(t, "todoorder")
 	c := contracttest.LoadByID(t, root, "http.order.list.v1")
 	h := newContractQueryHandler(
 		&domain.Order{ID: "ord-a", Item: "widget", Status: "pending", CreatedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)},

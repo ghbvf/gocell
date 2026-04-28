@@ -41,7 +41,7 @@ func newContractQueryHandler(entries ...*domain.AuditEntry) http.Handler {
 }
 
 func TestHttpAuditListV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
 
 	h := newContractQueryHandler(&domain.AuditEntry{
@@ -58,7 +58,7 @@ func TestHttpAuditListV1Serve(t *testing.T) {
 }
 
 func TestHttpAuditListV1Serve_Empty(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
 
 	h := newContractQueryHandler()
@@ -73,7 +73,7 @@ func TestHttpAuditListV1Serve_Empty(t *testing.T) {
 }
 
 func TestHttpAuditListV1_QueryParamsMetadata(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.audit.list.v1")
 	if c.HTTP == nil {
 		t.Fatal("HTTP transport metadata should be loaded")

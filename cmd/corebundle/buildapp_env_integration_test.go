@@ -22,7 +22,7 @@ func applyMigrationsForMain(t *testing.T, ctx context.Context, dsn string) {
 	t.Helper()
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: dsn})
 	require.NoError(t, err, "migration prep pool must open")
-	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err, "NewMigrator must succeed")
 	require.NoError(t, migrator.Up(ctx), "Up() must apply all migrations")
 	_ = pool.Close(ctx)

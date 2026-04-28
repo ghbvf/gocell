@@ -176,7 +176,7 @@ const (
 	//
 	// Example:
 	//
-	//	adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	//	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
 	//	    AllowedOrigins: []string{"https://example.com"},
 	//	})
 	//
@@ -535,10 +535,9 @@ func Wrap(code Code, message string, cause error) *Error {
 // WithDetails returns a shallow copy of err with the provided details merged in.
 // If err.Details is nil a new map is allocated; existing keys are preserved
 // unless overwritten by the supplied details.
-// It panics if err is nil — callers must not pass a nil *Error.
-func WithDetails(err *Error, details map[string]any) *Error {
+func WithDetails(err *Error, details map[string]any) (*Error, error) {
 	if err == nil {
-		panic("errcode: WithDetails called with nil *Error")
+		return nil, New(ErrInternal, "errcode: WithDetails called with nil *Error")
 	}
 	merged := make(map[string]any, len(err.Details)+len(details))
 	maps.Copy(merged, err.Details)
@@ -550,5 +549,5 @@ func WithDetails(err *Error, details map[string]any) *Error {
 		Details:         merged,
 		Cause:           err.Cause,
 		Category:        err.Category,
-	}
+	}, nil
 }

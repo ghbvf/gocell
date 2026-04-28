@@ -7,7 +7,7 @@ import (
 )
 
 func TestHttpAuthLoginV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.login.v1")
 
 	c.ValidateRequest(t, []byte(`{"username":"alice","password":"secret12"}`))
@@ -38,7 +38,7 @@ func TestHttpAuthLoginV1Serve(t *testing.T) {
 }
 
 func TestEventSessionCreatedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.session.created.v1")
 
 	c.ValidatePayload(t, []byte(`{"sessionId":"sess-1","userId":"usr-1"}`))

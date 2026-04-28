@@ -76,7 +76,7 @@ func TestLoadByID(t *testing.T) {
 }
 
 func TestExampleContractsRoot(t *testing.T) {
-	root := ExampleContractsRoot("todoorder")
+	root := ExampleContractsRoot(t, "todoorder")
 	wantSuffix := filepath.Join("examples", "todoorder", "contracts")
 	if !strings.HasSuffix(root, wantSuffix) {
 		t.Fatalf("ExampleContractsRoot suffix = %q, want %q", root, wantSuffix)
@@ -269,12 +269,12 @@ func TestValidateRequest_NoSchema(t *testing.T) {
 }
 
 func TestContractsRoot(t *testing.T) {
-	root := ContractsRoot()
+	root := ContractsRoot(t)
 	if !filepath.IsAbs(root) {
-		t.Errorf("ContractsRoot() returned non-absolute path: %s", root)
+		t.Errorf("ContractsRoot(t) returned non-absolute path: %s", root)
 	}
 	if filepath.Base(root) != "contracts" {
-		t.Errorf("ContractsRoot() should end with 'contracts', got: %s", root)
+		t.Errorf("ContractsRoot(t) should end with 'contracts', got: %s", root)
 	}
 }
 

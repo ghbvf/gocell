@@ -59,7 +59,7 @@ func setupWriteService(t *testing.T) (writeBundle, func()) {
 	pool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: connStr})
 	require.NoError(t, err)
 
-	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 
@@ -210,7 +210,7 @@ func TestCreate_RollbackOnOutboxFailure(t *testing.T) {
 		}
 	}()
 
-	migrator, err := adapterpg.NewMigrator(pool, adapterpg.MigrationsFS(), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(pool, testAdapterMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err)
 	require.NoError(t, migrator.Up(ctx))
 

@@ -7,10 +7,11 @@ import (
 )
 
 // errorTestContractsRoot returns the path to testdata contracts for error response tests.
-func errorTestContractsRoot() string {
+func errorTestContractsRoot(t testing.TB) string {
+	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
-		panic("contracttest: runtime.Caller failed")
+		t.Fatalf("contracttest: runtime.Caller failed")
 	}
 	return filepath.Join(filepath.Dir(thisFile), "testdata", "contracts")
 }
@@ -67,7 +68,7 @@ func TestValidateErrorResponse(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			c := LoadByID(t, errorTestContractsRoot(), tt.contractID)
+			c := LoadByID(t, errorTestContractsRoot(t), tt.contractID)
 			mockT := &mockTB{}
 			c.ValidateErrorResponse(mockT, tt.status, tt.body)
 			if tt.wantFail && !mockT.failed {

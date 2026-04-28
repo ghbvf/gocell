@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestNew(t *testing.T) {
@@ -111,7 +112,7 @@ func TestWithDetails(t *testing.T) {
 		},
 		{
 			name: "merge details preserving and overwriting",
-			base: WithDetails(
+			base: withDetailsForTest(t,
 				New(ErrMetadataInvalid, "invalid"),
 				map[string]any{"field": "owner", "line": 10},
 			),
@@ -129,7 +130,8 @@ func TestWithDetails(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := WithDetails(tt.base, tt.details)
+			result, err := WithDetails(tt.base, tt.details)
+			require.NoError(t, err)
 
 			// WithDetails returns a new Error; original is unmodified.
 			assert.NotSame(t, tt.base, result)
@@ -141,14 +143,18 @@ func TestWithDetails(t *testing.T) {
 }
 
 func TestWithDetails_NilError(t *testing.T) {
-	assert.PanicsWithValue(t, "errcode: WithDetails called with nil *Error", func() {
-		WithDetails(nil, map[string]any{"key": "val"})
-	})
+	result, err := WithDetails(nil, map[string]any{"key": "val"})
+	require.Error(t, err)
+	assert.Nil(t, result)
+	var ec *Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, ErrInternal, ec.Code)
 }
 
 func TestWithDetailsDDoesNotMutateOriginal(t *testing.T) {
-	original := WithDetails(New(ErrAssemblyNotFound, "not found"), map[string]any{"key": "val"})
-	_ = WithDetails(original, map[string]any{"extra": "data"})
+	original := withDetailsForTest(t, New(ErrAssemblyNotFound, "not found"), map[string]any{"key": "val"})
+	_, err := WithDetails(original, map[string]any{"extra": "data"})
+	require.NoError(t, err)
 
 	// Original must be unchanged.
 	assert.Equal(t, map[string]any{"key": "val"}, original.Details)
@@ -247,12 +253,20 @@ func TestWrap_InternalMessageEmpty(t *testing.T) {
 
 func TestWithDetails_PreservesInternalMessage(t *testing.T) {
 	original := Safe(ErrInternal, "internal server error", "pool exhausted")
-	result := WithDetails(original, map[string]any{"host": "db-1"})
+	result, err := WithDetails(original, map[string]any{"host": "db-1"})
+	require.NoError(t, err)
 
 	assert.Equal(t, "pool exhausted", result.InternalMessage,
 		"WithDetails must preserve InternalMessage")
 	assert.Equal(t, "internal server error", result.Message)
 	assert.Equal(t, map[string]any{"host": "db-1"}, result.Details)
+}
+
+func withDetailsForTest(t testing.TB, base *Error, details map[string]any) *Error {
+	t.Helper()
+	detailed, err := WithDetails(base, details)
+	require.NoError(t, err)
+	return detailed
 }
 
 func TestSentinelCodes(t *testing.T) {

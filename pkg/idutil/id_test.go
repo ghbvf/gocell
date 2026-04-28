@@ -58,7 +58,8 @@ func TestMaxMetadataIDLen(t *testing.T) {
 }
 
 func TestNewUUID_Format(t *testing.T) {
-	id := NewUUID()
+	id, err := NewUUID()
+	require.NoError(t, err)
 	assert.Len(t, id, 36, "UUID must be 36 chars: 8-4-4-4-12")
 
 	// Dash positions: 8, 13, 18, 23
@@ -77,7 +78,8 @@ func TestNewUUID_Format(t *testing.T) {
 func TestNewUUID_Uniqueness(t *testing.T) {
 	seen := make(map[string]struct{}, 1000)
 	for range 1000 {
-		id := NewUUID()
+		id, err := NewUUID()
+		require.NoError(t, err)
 		_, dup := seen[id]
 		require.False(t, dup, "duplicate UUID: %s", id)
 		seen[id] = struct{}{}
@@ -86,7 +88,8 @@ func TestNewUUID_Uniqueness(t *testing.T) {
 
 func TestNewUUID_PassesIsSafeID(t *testing.T) {
 	for range 100 {
-		id := NewUUID()
+		id, err := NewUUID()
+		require.NoError(t, err)
 		assert.True(t, IsSafeID(id), "generated UUID %q must pass IsSafeID", id)
 		assert.LessOrEqual(t, len(id), MaxHTTPIDLen)
 	}

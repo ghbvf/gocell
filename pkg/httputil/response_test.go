@@ -380,7 +380,7 @@ func TestWriteDomainError_PlainError(t *testing.T) {
 }
 
 func TestWriteDomainError_WithDetails(t *testing.T) {
-	ecErr := errcode.WithDetails(
+	ecErr := errWithDetails(t,
 		errcode.New(errcode.ErrValidationFailed, "field missing"),
 		map[string]any{"field": "email"},
 	)
@@ -419,7 +419,7 @@ func TestWriteDomainError_5xx_HidesMessage(t *testing.T) {
 		},
 		{
 			name:     "500 with Details - still hides message and code",
-			err:      errcode.WithDetails(errcode.New(errcode.ErrBusClosed, "bus is closed"), map[string]any{"bus": "main"}),
+			err:      errWithDetails(t, errcode.New(errcode.ErrBusClosed, "bus is closed"), map[string]any{"bus": "main"}),
 			wantCode: string(errcode.ErrInternal),
 			wantMsg:  "internal server error",
 		},
@@ -605,7 +605,7 @@ func TestWriteDecodeError_Details(t *testing.T) {
 	}{
 		{
 			name: "4xx with details passes through",
-			err: errcode.WithDetails(
+			err: errWithDetails(t,
 				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
 				map[string]any{"reason": "empty body"},
 			),
@@ -622,7 +622,7 @@ func TestWriteDecodeError_Details(t *testing.T) {
 		},
 		{
 			name: "unknown field includes field name",
-			err: errcode.WithDetails(
+			err: errWithDetails(t,
 				errcode.New(errcode.ErrValidationFailed, "invalid request body"),
 				map[string]any{"reason": "unknown field", "field": "foo"},
 			),
@@ -632,7 +632,7 @@ func TestWriteDecodeError_Details(t *testing.T) {
 		},
 		{
 			name: "413 with details passes through",
-			err: errcode.WithDetails(
+			err: errWithDetails(t,
 				errcode.New(errcode.ErrBodyTooLarge, "request body too large"),
 				map[string]any{"maxBytes": float64(1048576)},
 			),
@@ -642,7 +642,7 @@ func TestWriteDecodeError_Details(t *testing.T) {
 		},
 		{
 			name: "5xx details masked",
-			err: errcode.WithDetails(
+			err: errWithDetails(t,
 				errcode.New(errcode.ErrConfigDecryptFailed, "decrypt failed"),
 				map[string]any{"host": "db-3"},
 			),
@@ -1238,4 +1238,11 @@ func TestCodeToStatus_Exhaustive(t *testing.T) {
 		got := MapCodeToStatus(tc.code)
 		assert.Equal(t, tc.want, got, "MapCodeToStatus(%q)", tc.code)
 	}
+}
+
+func errWithDetails(t testing.TB, base *errcode.Error, details map[string]any) error {
+	t.Helper()
+	detailed, err := errcode.WithDetails(base, details)
+	require.NoError(t, err)
+	return detailed
 }

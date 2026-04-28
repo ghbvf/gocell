@@ -27,7 +27,7 @@ func TestPGOutboxStore_ConformanceSuite(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_store_conformance")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_store_conformance")
 	require.NoError(t, err, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 
@@ -51,7 +51,7 @@ func TestPGOutboxStore_RelayPublishesRollbackStateBeforeAudit(t *testing.T) {
 	t.Cleanup(cleanup)
 
 	ctx := context.Background()
-	migrator, err := NewMigrator(pool, MigrationsFS(), "schema_migrations_store_order")
+	migrator, err := NewMigrator(pool, testMigrationsFS(t), "schema_migrations_store_order")
 	require.NoError(t, err, "NewMigrator should succeed")
 	require.NoError(t, migrator.Up(ctx), "migrations must apply")
 

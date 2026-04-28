@@ -44,7 +44,7 @@ func newContractCommandHandler() (http.Handler, *mem.DeviceRepository, *commandt
 // --- HTTP contract tests (real handler) ---
 
 func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.command.enqueue.v1")
 
 	handler, devRepo, _ := newContractCommandHandler()
@@ -67,7 +67,7 @@ func TestHttpDeviceCommandEnqueueV1Serve(t *testing.T) {
 }
 
 func TestHttpDeviceCommandDequeueV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.command.dequeue.v1")
 
 	handler, devRepo, q := newContractCommandHandler()
@@ -87,7 +87,7 @@ func TestHttpDeviceCommandDequeueV1Serve(t *testing.T) {
 }
 
 func TestHttpDeviceCommandAckV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.command.ack.v1")
 
 	handler, devRepo, q := newContractCommandHandler()
@@ -114,7 +114,7 @@ func TestHttpDeviceCommandAckV1Serve(t *testing.T) {
 }
 
 func TestHttpDeviceCommandReportV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.command.report.v1")
 
 	handler, devRepo, q := newContractCommandHandler()
@@ -136,7 +136,7 @@ func TestHttpDeviceCommandReportV1Serve(t *testing.T) {
 }
 
 func TestHttpDeviceCommandExtendLeaseV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.device.command.extend-lease.v1")
 
 	handler, devRepo, q := newContractCommandHandler()
@@ -164,7 +164,7 @@ func TestHttpDeviceCommandExtendLeaseV1Serve(t *testing.T) {
 }
 
 func TestHttpInternalDeviceCommandsListV1Serve(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "http.internal.devicecommands.list.v1")
 
 	handler, devRepo, q := newContractCommandHandler()
@@ -185,7 +185,7 @@ func TestHttpInternalDeviceCommandsListV1Serve(t *testing.T) {
 // --- Command-kind contract tests (schema validation) ---
 
 func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "command.device-command.enqueue.v1")
 
 	// payload required; commandType optional
@@ -196,7 +196,7 @@ func TestCommandDeviceCommandEnqueueV1Handle(t *testing.T) {
 }
 
 func TestCommandDeviceCommandDequeueV1Handle(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "command.device-command.dequeue.v1")
 
 	c.ValidateResponse(t, []byte(`{"data":[{"id":"cmd-1","deviceId":"d-1","commandType":"reboot","payload":"reboot","status":"sent","attempt":1,"createdAt":"2026-01-01T00:00:00Z","sentAt":"2026-01-01T00:00:01Z"}]}`))
@@ -204,7 +204,7 @@ func TestCommandDeviceCommandDequeueV1Handle(t *testing.T) {
 }
 
 func TestCommandDeviceCommandAckV1Handle(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "command.device-command.ack.v1")
 
 	c.ValidateRequest(t, []byte(`{"reason":"success"}`))
@@ -217,7 +217,7 @@ func TestCommandDeviceCommandAckV1Handle(t *testing.T) {
 }
 
 func TestCommandDeviceCommandReportV1Handle(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "command.device-command.report.v1")
 
 	c.ValidateRequest(t, []byte(`{}`))
@@ -227,7 +227,7 @@ func TestCommandDeviceCommandReportV1Handle(t *testing.T) {
 }
 
 func TestCommandDeviceCommandExtendLeaseV1Handle(t *testing.T) {
-	root := contracttest.ExampleContractsRoot("iotdevice")
+	root := contracttest.ExampleContractsRoot(t, "iotdevice")
 	c := contracttest.LoadByID(t, root, "command.device-command.extend-lease.v1")
 
 	c.ValidateRequest(t, []byte(`{"extensionSeconds":60}`))

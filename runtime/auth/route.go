@@ -97,7 +97,11 @@ func Mount(mux cell.RouteHandler, r Route) error {
 
 	handler := r.Handler
 	if r.Policy != nil {
-		handler = RequirePolicy(r.Policy)(handler)
+		middleware, err := RequirePolicy(r.Policy)
+		if err != nil {
+			return fmt.Errorf("auth.Mount: %w", err)
+		}
+		handler = middleware(handler)
 	}
 	// wrapper.HTTPHandler is a pure ctx contributor (round-4) — it writes
 	// ContractID + contract attrs into ctx so the outer middleware.Tracing

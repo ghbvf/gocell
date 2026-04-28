@@ -63,7 +63,7 @@ func seedContractSession(repo *mem.SessionRepository) string {
 // --- HTTP contract test (S1-F1) ---
 
 func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.session.delete.v1")
 
 	sessionRepo := mem.NewSessionRepository()
@@ -89,7 +89,7 @@ func TestHttpAuthSessionDeleteV1Serve(t *testing.T) {
 // --- Event contract test ---
 
 func TestEventSessionRevokedV1Publish(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.session.revoked.v1")
 
 	sessionRepo := mem.NewSessionRepository()
@@ -123,7 +123,7 @@ func TestEventSessionRevokedV1Publish(t *testing.T) {
 // contract_test.go — together they cover both halves of the contract, which
 // is why the slice.yaml waiver for VERIFY-01 no longer applies.
 func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.assigned.v1")
 
 	repo := mem.NewSessionRepository()
@@ -146,7 +146,7 @@ func TestContract_EventRoleAssignedV1_Subscribe_PayloadValid(t *testing.T) {
 // TestContract_EventRoleRevokedV1_Subscribe_PayloadValid mirrors the assigned
 // test for the revoked topic.
 func TestContract_EventRoleRevokedV1_Subscribe_PayloadValid(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.role.revoked.v1")
 
 	repo := mem.NewSessionRepository()

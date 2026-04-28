@@ -110,7 +110,7 @@ func TestOutboxE2E_PGMode_WriteToSubscribe(t *testing.T) {
 
 	migrationPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
 	require.NoError(t, err, "create migration PG pool")
-	migrator, err := adapterpg.NewMigrator(migrationPool, adapterpg.MigrationsFS(), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(migrationPool, testAdapterMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err, "create migrator")
 	require.NoError(t, migrator.Up(ctx), "run migrations")
 	_ = migrationPool.Close(ctx)
@@ -468,7 +468,7 @@ func TestOutboxE2E_RefetchLoop_AccessCoreCallsInternalGet(t *testing.T) {
 
 	migrationPool, err := adapterpg.NewPool(ctx, adapterpg.Config{DSN: pgConnStr})
 	require.NoError(t, err, "create migration PG pool")
-	migrator, err := adapterpg.NewMigrator(migrationPool, adapterpg.MigrationsFS(), "schema_migrations")
+	migrator, err := adapterpg.NewMigrator(migrationPool, testAdapterMigrationsFS(t), "schema_migrations")
 	require.NoError(t, err, "create migrator")
 	require.NoError(t, migrator.Up(ctx), "run migrations")
 	_ = migrationPool.Close(ctx)

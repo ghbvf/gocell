@@ -81,7 +81,7 @@ func decodeRoleListPage(t *testing.T, rec *httptest.ResponseRecorder) roleListPa
 }
 
 func TestHttpAuthRoleListV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.role.list.v1")
 	h := newContractRBACHandler()
 
@@ -141,7 +141,7 @@ func TestHttpAuthRoleListV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthRoleCheckV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.role.check.v1")
 	h := newContractRBACHandler()
 

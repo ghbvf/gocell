@@ -34,14 +34,13 @@ func (c UpgradeConfig) Validate() error {
 }
 
 // UpgradeHandler returns an http.Handler that upgrades HTTP connections to
-// WebSocket and registers them with the Hub. Panics at construction time if
-// cfg.AllowedOrigins is empty — SEC-FAIL-CLOSED: the previous behaviour of
-// silently setting InsecureSkipVerify=true for empty origins is removed.
-// Callers at the composition root will observe the panic immediately at
-// startup rather than silently accepting connections from all origins.
-func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
+// WebSocket and registers them with the Hub. It rejects an empty
+// cfg.AllowedOrigins at construction time — SEC-FAIL-CLOSED: the previous
+// behaviour of silently setting InsecureSkipVerify=true for empty origins is
+// removed.
+func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
 	if err := cfg.Validate(); err != nil {
-		panic(err)
+		return nil, err
 	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !hub.IsRunning() {
@@ -85,7 +84,16 @@ func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
 			slog.String("conn_id", connID),
 			slog.String("remote_addr", r.RemoteAddr),
 		)
-	})
+	}), nil
+}
+
+// MustUpgradeHandler is the static-wiring variant of UpgradeHandler.
+func MustUpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) http.Handler {
+	handler, err := UpgradeHandler(hub, cfg)
+	if err != nil {
+		panic(err)
+	}
+	return handler
 }
 
 func logUpgradeFailure(r *http.Request, err error) {

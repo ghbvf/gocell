@@ -87,7 +87,7 @@ func wrapCtxSafe(fn Checker) Checker {
 			return ctx.Err()
 		case o := <-done:
 			if o.panicV != nil {
-				panic(o.panicV)
+				return fmt.Errorf("panic: %v", o.panicV)
 			}
 			return o.err
 		}

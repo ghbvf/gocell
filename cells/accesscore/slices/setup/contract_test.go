@@ -21,7 +21,7 @@ import (
 )
 
 func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.setup.status.v1")
 
 	c.ValidateResponse(t, []byte(`{"data":{"hasAdmin":false}}`))
@@ -68,7 +68,7 @@ func TestHttpAuthSetupStatusV1Serve(t *testing.T) {
 }
 
 func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "http.auth.setup.admin.v1")
 
 	c.ValidateRequest(t, []byte(`{"username":"root","email":"root@local","password":"SecretPass!23"}`))
@@ -186,7 +186,7 @@ func TestHttpAuthSetupAdminV1Serve(t *testing.T) {
 // real handler path and assert the emitted outbox entry's payload + headers
 // both satisfy the event contract.
 func TestEventUserCreatedV1Publish_FromSetup(t *testing.T) {
-	root := contracttest.ContractsRoot()
+	root := contracttest.ContractsRoot(t)
 	c := contracttest.LoadByID(t, root, "event.user.created.v1")
 
 	w := &stubWriter{}

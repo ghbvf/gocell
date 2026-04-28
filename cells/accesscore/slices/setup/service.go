@@ -265,11 +265,15 @@ func (s *Service) provisionAndMaybeEmit(ctx context.Context, in CreateAdminInput
 // not embedded on the wire — contract is the single source of truth for
 // endpoint paths.
 func setupRetiredError() error {
-	return errcode.WithDetails(
+	detailed, err := errcode.WithDetails(
 		errcode.New(errcode.ErrSetupAlreadyInitialized,
 			"first-run admin already provisioned; this endpoint is retired"),
 		map[string]any{"nextAction": "login"},
 	)
+	if err != nil {
+		return err
+	}
+	return detailed
 }
 
 func (s *Service) publishUserCreated(ctx context.Context, user *domain.User) error {

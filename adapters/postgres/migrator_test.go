@@ -120,9 +120,9 @@ func TestValidateIdentifier(t *testing.T) {
 }
 
 func TestMigrationsFS_SubDirectory(t *testing.T) {
-	// Verify that MigrationsFS() returns a valid FS with goose-annotated files
+	// Verify that testMigrationsFS(t) returns a valid FS with goose-annotated files
 	// accessible at the root level (not under migrations/).
-	mfs := MigrationsFS()
+	mfs := testMigrationsFS(t)
 	require.NotNil(t, mfs)
 
 	entries, err := fs.ReadDir(mfs, ".")

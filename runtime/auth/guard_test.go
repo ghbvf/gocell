@@ -99,7 +99,9 @@ func TestRequirePolicy_LegacySecuredBehavior(t *testing.T) {
 			w := httptest.NewRecorder()
 			r := buildRequest(TestContext("user-1", []string{"admin"}))
 
-			h := RequirePolicy(tc.policy)(inner)
+			middleware, err := RequirePolicy(tc.policy)
+			require.NoError(t, err)
+			h := middleware(inner)
 			h.ServeHTTP(w, r)
 
 			assert.Equal(t, tc.wantStatus, w.Code)
@@ -113,12 +115,14 @@ func TestRequirePolicy_LegacySecuredBehavior(t *testing.T) {
 	}
 }
 
-// TestRequirePolicy_NilPolicy_Panics verifies that passing a nil policy to
-// RequirePolicy panics immediately at wrap time, making misuse detectable at
-// startup/test rather than silently skipping authorization at request time.
-func TestRequirePolicy_NilPolicy_Panics(t *testing.T) {
-	inner := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {})
-	require.Panics(t, func() { RequirePolicy(nil)(inner) })
+// TestRequirePolicy_NilPolicy_ReturnsError verifies that passing a nil policy
+// to RequirePolicy is rejected at wrap time rather than silently skipping
+// authorization at request time.
+func TestRequirePolicy_NilPolicy_ReturnsError(t *testing.T) {
+	middleware, err := RequirePolicy(nil)
+	require.Error(t, err)
+	assert.Nil(t, middleware)
+	assert.Contains(t, err.Error(), "policy must not be nil")
 }
 
 // --- TestAuthenticated ---

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/ghbvf/gocell/pkg/httputil"
@@ -29,16 +30,13 @@ var validRouteMethods = map[string]bool{
 // error via httputil.WriteDomainError and short-circuits the chain; on
 // success it delegates to next.
 //
-// A nil policy panics at wrap time — failing fast during startup/test is
-// preferred over silently skipping authorization at request time.
-//
 // ref: grpc-ecosystem/go-grpc-middleware auth.UnaryServerInterceptor —
 // policy is declared at registration time, not inside the handler body.
 // ref: go-chi/jwtauth Authenticator — short-circuit pattern with response
 // written inside the guard.
-func RequirePolicy(p Policy) func(http.Handler) http.Handler {
+func RequirePolicy(p Policy) (func(http.Handler) http.Handler, error) {
 	if p == nil {
-		panic("auth.RequirePolicy: policy must not be nil")
+		return nil, fmt.Errorf("auth.RequirePolicy: policy must not be nil")
 	}
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,5 +46,5 @@ func RequirePolicy(p Policy) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(w, r)
 		})
-	}
+	}, nil
 }

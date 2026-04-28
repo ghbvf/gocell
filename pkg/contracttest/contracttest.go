@@ -8,7 +8,7 @@
 // Usage:
 //
 //	func TestHttpAuthUserCreateV1Serve(t *testing.T) {
-//	    c := contracttest.LoadByID(t, contracttest.ContractsRoot(), "http.auth.user.create.v1")
+//	    c := contracttest.LoadByID(t, contracttest.ContractsRoot(t), "http.auth.user.create.v1")
 //	    c.ValidateRequest(t, []byte(`{"username":"alice","email":"a@b.com","password":"s"}`))
 //	    c.ValidateResponse(t, []byte(`{"data":{"id":"u-1","username":"alice",...}}`))
 //	    c.MustRejectRequest(t, []byte(`{"extra":"field"}`))
@@ -72,20 +72,23 @@ type endpointsYAML struct {
 
 // ContractsRoot returns the absolute path to the contracts/ directory,
 // derived from the source location of this package.
-func ContractsRoot() string {
-	return filepath.Join(projectRoot(), "contracts")
+func ContractsRoot(t testing.TB) string {
+	t.Helper()
+	return filepath.Join(projectRoot(t), "contracts")
 }
 
 // ExampleContractsRoot returns the absolute path to an example's contracts/
 // directory. The example name is the directory under examples/.
-func ExampleContractsRoot(example string) string {
-	return filepath.Join(projectRoot(), "examples", example, "contracts")
+func ExampleContractsRoot(t testing.TB, example string) string {
+	t.Helper()
+	return filepath.Join(projectRoot(t), "examples", example, "contracts")
 }
 
-func projectRoot() string {
+func projectRoot(t testing.TB) string {
+	t.Helper()
 	_, thisFile, _, ok := runtime.Caller(0)
 	if !ok {
-		panic("contracttest: runtime.Caller failed")
+		t.Fatalf("contracttest: runtime.Caller failed")
 	}
 	// thisFile = .../pkg/contracttest/contracttest.go
 	return filepath.Dir(filepath.Dir(filepath.Dir(thisFile)))
