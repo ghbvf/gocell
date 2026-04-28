@@ -12,6 +12,10 @@ const ssobffServiceSecretEnv = "GOCELL_SSOBFF_SERVICE_SECRET"
 
 func newInternalAuthChainFromEnv() ([]cell.ListenerAuth, error) {
 	secret := os.Getenv(ssobffServiceSecretEnv)
+	return newInternalAuthChain(secret)
+}
+
+func newInternalAuthChain(secret string) ([]cell.ListenerAuth, error) {
 	if secret == "" {
 		return nil, fmt.Errorf("%s must be set for the internal listener", ssobffServiceSecretEnv)
 	}

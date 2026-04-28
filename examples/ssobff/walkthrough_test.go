@@ -26,8 +26,9 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
-	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -35,30 +36,30 @@ import (
 	"testing"
 	"time"
 
-	accesscore "github.com/ghbvf/gocell/cells/accesscore"
-	auditcore "github.com/ghbvf/gocell/cells/auditcore"
-	configcore "github.com/ghbvf/gocell/cells/configcore"
 	"github.com/ghbvf/gocell/kernel/cell"
-	"github.com/ghbvf/gocell/kernel/observability/metrics"
-	"github.com/ghbvf/gocell/pkg/query"
 	"github.com/ghbvf/gocell/runtime/auth"
-	"github.com/ghbvf/gocell/runtime/eventbus"
-	"github.com/ghbvf/gocell/runtime/eventrouter"
-	"github.com/ghbvf/gocell/runtime/http/router"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
+const walkthroughServiceSecret = "walkthrough-service-token-secret-32b"
+
+var walkthroughHTTPClient = &http.Client{Timeout: time.Second}
+
+type capturedLogRecords struct {
+	mu      sync.Mutex
+	records []slog.Record
+}
+
 // capturingHandler is an slog.Handler that records every log record for
 // post-test inspection. It is goroutine-safe via a mutex.
 type capturingHandler struct {
-	mu      sync.Mutex
-	records []slog.Record
-	inner   slog.Handler
+	store *capturedLogRecords
+	inner slog.Handler
 }
 
 func newCapturingHandler(inner slog.Handler) *capturingHandler {
-	return &capturingHandler{inner: inner}
+	return &capturingHandler{store: &capturedLogRecords{}, inner: inner}
 }
 
 func (h *capturingHandler) Enabled(ctx context.Context, level slog.Level) bool {
@@ -66,18 +67,18 @@ func (h *capturingHandler) Enabled(ctx context.Context, level slog.Level) bool {
 }
 
 func (h *capturingHandler) Handle(ctx context.Context, r slog.Record) error {
-	h.mu.Lock()
-	h.records = append(h.records, r.Clone())
-	h.mu.Unlock()
+	h.store.mu.Lock()
+	h.store.records = append(h.store.records, r.Clone())
+	h.store.mu.Unlock()
 	return h.inner.Handle(ctx, r)
 }
 
 func (h *capturingHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	return &capturingHandler{inner: h.inner.WithAttrs(attrs)}
+	return &capturingHandler{store: h.store, inner: h.inner.WithAttrs(attrs)}
 }
 
 func (h *capturingHandler) WithGroup(name string) slog.Handler {
-	return &capturingHandler{inner: h.inner.WithGroup(name)}
+	return &capturingHandler{store: h.store, inner: h.inner.WithGroup(name)}
 }
 
 // assertNoPlaintextPassword verifies that none of the captured slog records
@@ -88,10 +89,10 @@ func assertNoPlaintextPassword(t *testing.T, h *capturingHandler, password strin
 	if password == "" {
 		return // no password to check
 	}
-	h.mu.Lock()
-	records := make([]slog.Record, len(h.records))
-	copy(records, h.records)
-	h.mu.Unlock()
+	h.store.mu.Lock()
+	records := make([]slog.Record, len(h.store.records))
+	copy(records, h.store.records)
+	h.store.mu.Unlock()
 
 	for _, rec := range records {
 		// Check the log message itself.
@@ -140,165 +141,132 @@ func credentialFromFile(path string) (username, password string, err error) {
 	return username, password, nil
 }
 
-// buildWalkthroughServer constructs an in-memory test server that mirrors
-// ssobff main.go but uses httptest.NewServer for port-free testing.
+// buildWalkthroughServer constructs an in-memory ssobff server through the
+// same NewSSOBFFApp/bootstrap path used by main.go.
 //
 // It uses WithInitialAdminBootstrap so bootstrap credentials are written to
 // <stateDir>/initial_admin_password. Callers read credentials from the file.
 //
 // The capturing slog handler is threaded through so the test can assert that
 // no plaintext password appears in any log record (PR#172 F1 regression gate).
-// mountAllRouteGroups walks each cell's RouteGroups and mounts them on the
-// test router. The walkthrough server uses a single Router (one process,
-// httptest.NewServer) regardless of the production three-listener split, so
-// RouteGroups targeting any listener are flattened onto the same router.
-type routeGroupContributor interface {
-	RouteGroups() []cell.RouteGroup
+type walkthroughServer struct {
+	primaryBaseURL  string
+	internalBaseURL string
+	healthBaseURL   string
+	serviceSecret   string
+	cancel          context.CancelFunc
+	done            <-chan error
 }
 
-func mountAllRouteGroups(r *router.Router, contribs ...routeGroupContributor) {
-	for _, c := range contribs {
-		for _, rg := range c.RouteGroups() {
-			rg := rg
-			if rg.Prefix == "" {
-				rg.Register(r)
-				continue
-			}
-			r.Route(rg.Prefix, func(sub cell.RouteMux) { rg.Register(sub) })
-		}
+func (s *walkthroughServer) Cleanup(t *testing.T) {
+	t.Helper()
+	s.cancel()
+	select {
+	case err := <-s.done:
+		require.NoError(t, err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("ssobff did not shut down within 5s")
 	}
 }
 
-func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturingHandler) (*httptest.Server, func()) {
+func buildWalkthroughServer(t *testing.T, stateDir string, capHandler *capturingHandler) *walkthroughServer {
 	t.Helper()
 
 	// Set GOCELL_STATE_DIR so the bootstrapper resolves the credential path to
 	// <stateDir>/initial_admin_password.
 	t.Setenv("GOCELL_STATE_DIR", stateDir)
+	logger := slog.New(capHandler)
+	previousDefaultLogger := slog.Default()
+	slog.SetDefault(logger)
+	t.Cleanup(func() { slog.SetDefault(previousDefaultLogger) })
 
-	testLogger := slog.New(capHandler)
-
-	eb := eventbus.New()
-	privKey, pubKey := auth.MustGenerateTestKeyPair()
-	keySet, err := auth.NewKeySet(privKey, pubKey)
-	require.NoError(t, err)
-
-	jwtIssuer, err := auth.NewJWTIssuer(keySet, "ssobff-test", 15*time.Minute,
-		auth.WithIssuerAudiencesFromSlice([]string{"gocell"}))
-	require.NoError(t, err)
-
-	jwtVerifier, err := auth.NewJWTVerifier(keySet,
-		auth.WithExpectedAudiences("gocell"),
-		auth.WithExpectedIssuer("ssobff-test"))
-	require.NoError(t, err)
-
-	// Demo mode: no outboxWriter/txRunner — cells publish directly via the
-	// eventbus publisher. This ensures accesscore events reach auditcore's
-	// subscriber without transactional outbox machinery.
-	// Bootstrap phase3b auto-discovers LifecycleHooks() from accesscore — no sink needed.
-	ac := accesscore.NewAccessCore(
-		accesscore.WithInMemoryDefaults(),
-		accesscore.WithOutboxDeps(eb, nil),
-		accesscore.WithJWTIssuer(jwtIssuer),
-		accesscore.WithJWTVerifier(jwtVerifier),
-		accesscore.WithLogger(testLogger),
-		accesscore.WithInitialAdminBootstrap(),
-		accesscore.WithRefreshMetricsProvider(metrics.NopProvider{}),
+	primary := newWalkthroughListener(t)
+	internal := newWalkthroughListener(t)
+	health := newWalkthroughListener(t)
+	app, err := NewSSOBFFApp(
+		WithSSOBFFLogger(logger),
+		WithSSOBFFInternalServiceSecret(walkthroughServiceSecret),
+		WithSSOBFFListener(cell.PrimaryListener, primary),
+		WithSSOBFFListener(cell.InternalListener, internal),
+		WithSSOBFFListener(cell.HealthListener, health),
 	)
-
-	auditHMACKey := []byte("walkthrough-test-hmac-key-32b!!!")
-	auditCursorCodec, err := query.NewCursorCodec([]byte("walkthrough-audit-cursor-key-32b"))
 	require.NoError(t, err)
 
-	auc := auditcore.NewAuditCore(
-		auditcore.WithInMemoryDefaults(),
-		auditcore.WithOutboxDeps(eb, nil),
-		auditcore.WithHMACKey(auditHMACKey),
-		auditcore.WithCursorCodec(auditCursorCodec),
-		auditcore.WithLogger(testLogger),
-		auditcore.WithMetricsProvider(metrics.NopProvider{}),
-	)
-
-	configCursorCodec, err := query.NewCursorCodec([]byte("walkthrough-config-cursor-key-32b"))
-	require.NoError(t, err)
-
-	// configcore: demo mode — publisher only, no outboxWriter/txRunner.
-	cc := configcore.NewConfigCore(
-		configcore.WithInMemoryDefaults(),
-		configcore.WithOutboxDeps(eb, nil),
-		configcore.WithCursorCodec(configCursorCodec),
-		configcore.WithLogger(testLogger),
-		configcore.WithMetricsProvider(metrics.NopProvider{}),
-	)
-
-	ctx := context.Background()
-	deps := cell.Dependencies{
-		Config:         make(map[string]any),
-		DurabilityMode: cell.DurabilityDemo,
-	}
-	require.NoError(t, ac.Init(ctx, deps))
-	require.NoError(t, auc.Init(ctx, deps))
-	require.NoError(t, cc.Init(ctx, deps))
-
-	// This test harness bypasses bootstrap.Run, so phase3b's
-	// LifecycleContributor auto-discovery never fires. Drive the hooks
-	// manually here so initial-admin credential-file generation actually
-	// happens. Production code (examples/ssobff/main.go, cmd/corebundle)
-	// goes through bootstrap.Run and does NOT need this block.
-	lifecycleHooks := ac.LifecycleHooks()
-	for _, h := range lifecycleHooks {
-		if h.OnStart != nil {
-			require.NoError(t, h.OnStart(ctx))
-		}
-	}
-
-	// PR-A14b: public routes (login, refresh) and PasswordResetExempt routes
-	// (change-password, logout) are declared via auth.Mount inside each cell's
-	// RouteGroups callback. FinalizeAuth compiles them into the router's auth
-	// predicates. The walkthrough uses a single test router (httptest.NewServer
-	// is one process), so RouteGroups intended for InternalListener are mounted
-	// here too — auth.MustMount(Public:true) on /internal paths still works because
-	// the matcher fires before AuthMiddleware and the test never exercises a
-	// JWT-only internal route.
-	r := router.MustNew(
-		router.WithAuthMiddleware(ac.TokenVerifier()),
-	)
-	mountAllRouteGroups(r, ac, auc, cc)
-	if err := r.FinalizeAuth(); err != nil {
-		panic(err)
-	}
-
-	// Wire auditcore event subscriptions so accesscore events reach the
-	// audit handler asynchronously (mirrors bootstrap wiring in main.go).
-	evtRouter := eventrouter.New(eb)
-	require.NoError(t, auc.RegisterSubscriptions(evtRouter))
-	require.NoError(t, cc.RegisterSubscriptions(evtRouter))
-
-	evtCtx, evtCancel := context.WithCancel(context.Background())
-	evtDone := make(chan struct{})
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
 	go func() {
-		defer close(evtDone)
-		_ = evtRouter.Run(evtCtx)
+		done <- app.Run(ctx)
 	}()
-	// Wait briefly for subscriptions to start consuming.
-	select {
-	case <-evtRouter.Running():
-	case <-time.After(500 * time.Millisecond):
-	}
+	waitForWalkthroughReady(t, "http://"+app.HealthListenAddr()+"/readyz", done)
 
-	srv := httptest.NewServer(r)
-	cleanup := func() {
-		srv.Close()
-		// LIFO rollback of lifecycle hooks (mirrors bootstrap.Lifecycle.Stop).
-		for i := len(lifecycleHooks) - 1; i >= 0; i-- {
-			if lifecycleHooks[i].OnStop != nil {
-				_ = lifecycleHooks[i].OnStop(ctx)
+	return &walkthroughServer{
+		primaryBaseURL:  "http://" + app.PrimaryListenAddr(),
+		internalBaseURL: "http://" + app.InternalListenAddr(),
+		healthBaseURL:   "http://" + app.HealthListenAddr(),
+		serviceSecret:   walkthroughServiceSecret,
+		cancel:          cancel,
+		done:            done,
+	}
+}
+
+func newWalkthroughListener(t *testing.T) net.Listener {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = ln.Close() })
+	return ln
+}
+
+func waitForWalkthroughReady(t *testing.T, readyzURL string, done <-chan error) {
+	t.Helper()
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(50 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case err := <-done:
+			require.NoError(t, err)
+			t.Fatal("ssobff exited before becoming ready")
+		case <-deadline.C:
+			t.Fatal("ssobff bootstrap never became ready within 5s")
+		case <-tick.C:
+			req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, readyzURL, http.NoBody)
+			require.NoError(t, err)
+			resp, err := walkthroughHTTPClient.Do(req)
+			if err != nil {
+				continue
+			}
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return
 			}
 		}
-		evtCancel()
-		<-evtDone
 	}
-	return srv, cleanup
+}
+
+func doWalkthroughRequest(t *testing.T, req *http.Request) *http.Response {
+	t.Helper()
+	resp, err := walkthroughHTTPClient.Do(req)
+	require.NoError(t, err)
+	return resp
+}
+
+func postWalkthroughJSON(t *testing.T, rawURL string, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, rawURL, strings.NewReader(body))
+	require.NoError(t, err)
+	req.Header.Set("Content-Type", "application/json")
+	return doWalkthroughRequest(t, req)
+}
+
+func walkthroughServiceToken(t *testing.T, secret, method, rawURL string) string {
+	t.Helper()
+	parsed, err := url.Parse(rawURL)
+	require.NoError(t, err)
+	ring, err := auth.NewHMACKeyRing([]byte(secret), nil)
+	require.NoError(t, err)
+	return auth.GenerateServiceToken(ring, method, parsed.Path, parsed.RawQuery, time.Now())
 }
 
 // TestWalkthrough exercises the complete ssobff API walkthrough.
@@ -308,8 +276,10 @@ func TestWalkthrough(t *testing.T) {
 	// so we can assert no plaintext password appears in logs.
 	stateDir := t.TempDir()
 	capHandler := newCapturingHandler(slog.NewTextHandler(io.Discard, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	srv, cleanup := buildWalkthroughServer(t, stateDir, capHandler)
-	defer cleanup()
+	srv := buildWalkthroughServer(t, stateDir, capHandler)
+	defer srv.Cleanup(t)
+	require.NotEmpty(t, srv.healthBaseURL, "health base URL must be available for diagnostics")
+	base := srv.primaryBaseURL
 
 	// Read bootstrap credentials from the credential file written during Init.
 	credPath := filepath.Join(stateDir, "initial_admin_password")
@@ -323,17 +293,13 @@ func TestWalkthrough(t *testing.T) {
 	require.NotEmpty(t, bootstrapUsername, "bootstrap username must be non-empty")
 	require.NotEmpty(t, bootstrapPassword, "bootstrap password must be non-empty")
 
-	base := srv.URL
-
 	var adminToken string
 	var adminUserID string
 
 	// Step 1: Bootstrap admin login — must return 201 + passwordResetRequired=true.
 	t.Run("bootstrap admin can login and passwordResetRequired=true", func(t *testing.T) {
 		body := fmt.Sprintf(`{"username":%q,"password":%q}`, bootstrapUsername, bootstrapPassword)
-		resp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
-			"application/json", strings.NewReader(body))
-		require.NoError(t, err)
+		resp := postWalkthroughJSON(t, base+"/api/v1/access/sessions/login", body)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusCreated, resp.StatusCode,
@@ -365,6 +331,47 @@ func TestWalkthrough(t *testing.T) {
 	require.NotEmpty(t, adminToken, "adminToken must be set by admin login subtest")
 	require.NotEmpty(t, adminUserID, "adminUserID must be set from login response userId field")
 
+	t.Run("internal listener is isolated and service-token protected", func(t *testing.T) {
+		const internalRoleAssignPath = "/internal/v1/access/roles/assign"
+		body := fmt.Sprintf(`{"userId":%q,"roleId":"admin"}`, adminUserID)
+
+		primaryReq, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPost,
+			srv.primaryBaseURL+internalRoleAssignPath,
+			strings.NewReader(body))
+		require.NoError(t, err)
+		primaryReq.Header.Set("Content-Type", "application/json")
+		primaryResp := doWalkthroughRequest(t, primaryReq)
+		primaryResp.Body.Close()
+		assert.Equal(t, http.StatusNotFound, primaryResp.StatusCode,
+			"primary listener must not expose /internal/v1/* routes")
+
+		internalURL := srv.internalBaseURL + internalRoleAssignPath
+		unauthReq, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPost,
+			internalURL,
+			strings.NewReader(body))
+		require.NoError(t, err)
+		unauthReq.Header.Set("Content-Type", "application/json")
+		unauthResp := doWalkthroughRequest(t, unauthReq)
+		unauthResp.Body.Close()
+		assert.Equal(t, http.StatusUnauthorized, unauthResp.StatusCode,
+			"internal listener must reject missing service token")
+
+		authReq, err := http.NewRequestWithContext(context.Background(),
+			http.MethodPost,
+			internalURL,
+			strings.NewReader(body))
+		require.NoError(t, err)
+		authReq.Header.Set("Content-Type", "application/json")
+		authReq.Header.Set("Authorization", "ServiceToken "+
+			walkthroughServiceToken(t, srv.serviceSecret, http.MethodPost, internalURL))
+		authResp := doWalkthroughRequest(t, authReq)
+		defer authResp.Body.Close()
+		assert.Equal(t, http.StatusCreated, authResp.StatusCode,
+			"internal listener must accept valid service token on internal route")
+	})
+
 	// Step 2: Business endpoint with reset-required token → 403.
 	t.Run("business endpoint blocked with ERR_AUTH_PASSWORD_RESET_REQUIRED", func(t *testing.T) {
 		// GET /api/v1/config/site.title is an authenticated non-exempt endpoint.
@@ -375,8 +382,7 @@ func TestWalkthrough(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer "+adminToken)
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		bodyBytes, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		require.NoError(t, readErr)
@@ -401,8 +407,7 @@ func TestWalkthrough(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+adminToken)
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		bodyBytes, readErr := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		require.NoError(t, readErr)
@@ -444,8 +449,7 @@ func TestWalkthrough(t *testing.T) {
 		createReq.Header.Set("Content-Type", "application/json")
 		createReq.Header.Set("Authorization", "Bearer "+newAdminToken)
 
-		createResp, err := http.DefaultClient.Do(createReq)
-		require.NoError(t, err)
+		createResp := doWalkthroughRequest(t, createReq)
 		createResp.Body.Close()
 		assert.Equal(t, http.StatusCreated, createResp.StatusCode,
 			"POST /config/ with new token must return 201 Created")
@@ -458,8 +462,7 @@ func TestWalkthrough(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer "+newAdminToken)
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
@@ -484,8 +487,7 @@ func TestWalkthrough(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+newAdminToken)
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusCreated, resp.StatusCode,
@@ -502,9 +504,7 @@ func TestWalkthrough(t *testing.T) {
 
 	t.Run("alice can login and returns accessToken+refreshToken+sessionId", func(t *testing.T) {
 		body := `{"username":"alice","password":"P@ssw0rd123"}`
-		resp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
-			"application/json", strings.NewReader(body))
-		require.NoError(t, err)
+		resp := postWalkthroughJSON(t, base+"/api/v1/access/sessions/login", body)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusCreated, resp.StatusCode,
@@ -543,8 +543,7 @@ func TestWalkthrough(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		// No Authorization header — refresh is a public endpoint.
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
@@ -573,8 +572,7 @@ func TestWalkthrough(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer "+accessToken)
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusNoContent, resp.StatusCode,
@@ -599,8 +597,7 @@ func TestWalkthrough(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.True(t, resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusGone,
@@ -647,8 +644,7 @@ func TestWalkthrough(t *testing.T) {
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("Authorization", "Bearer "+newAdminToken)
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
@@ -673,8 +669,7 @@ func TestWalkthrough(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer "+newAdminToken)
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
@@ -699,9 +694,7 @@ func TestWalkthrough(t *testing.T) {
 	// a fresh non-admin access token specifically for this assertion.
 	t.Run("non-admin reader is forbidden on /api/v1/config and /api/v1/flags", func(t *testing.T) {
 		loginBody := `{"username":"alice","password":"P@ssw0rd123"}`
-		loginResp, err := http.Post(base+"/api/v1/access/sessions/login", //nolint:noctx
-			"application/json", strings.NewReader(loginBody))
-		require.NoError(t, err)
+		loginResp := postWalkthroughJSON(t, base+"/api/v1/access/sessions/login", loginBody)
 		defer loginResp.Body.Close()
 		require.Equalf(t, http.StatusCreated, loginResp.StatusCode,
 			"alice re-login must return 201 (PR-CFG-C 403 probe needs a live non-admin token)")
@@ -725,8 +718,7 @@ func TestWalkthrough(t *testing.T) {
 			require.NoError(t, err)
 			req.Header.Set("Authorization", "Bearer "+nonAdminToken)
 
-			resp, err := http.DefaultClient.Do(req)
-			require.NoError(t, err)
+			resp := doWalkthroughRequest(t, req)
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
 
@@ -743,8 +735,7 @@ func TestWalkthrough(t *testing.T) {
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer "+newAdminToken)
 
-		resp, err := http.DefaultClient.Do(req)
-		require.NoError(t, err)
+		resp := doWalkthroughRequest(t, req)
 		defer resp.Body.Close()
 
 		assert.Equal(t, http.StatusOK, resp.StatusCode,
@@ -769,7 +760,7 @@ func fetchAuditEntries(url, token string) ([]json.RawMessage, bool) {
 		return nil, false
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := walkthroughHTTPClient.Do(req)
 	if err != nil || resp.StatusCode != http.StatusOK {
 		if resp != nil {
 			resp.Body.Close()
