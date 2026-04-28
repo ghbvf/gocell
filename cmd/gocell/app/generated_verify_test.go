@@ -1,0 +1,91 @@
+package app
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+)
+
+func TestRunVerifyGenerated_SyntheticProjectPasses(t *testing.T) {
+	root := newGeneratedVerifyAppFixture(t)
+	withWorkingDir(t, root)
+
+	require.NoError(t, runGenerate([]string{"assembly", "--id=fixture"}))
+	require.NoError(t, runGenerate([]string{"metrics-schema", "--id=fixture"}))
+
+	var err error
+	out := captureStdout(t, func() {
+		err = runVerify([]string{"generated"})
+	})
+
+	require.NoError(t, err)
+	assert.Contains(t, out, "Generated artifacts verified: 3 files")
+}
+
+func TestRunVerifyGenerated_ReportsDrift(t *testing.T) {
+	root := newGeneratedVerifyAppFixture(t)
+	withWorkingDir(t, root)
+
+	require.NoError(t, runGenerate([]string{"assembly", "--id=fixture"}))
+	require.NoError(t, runGenerate([]string{"metrics-schema", "--id=fixture"}))
+	writeAppFixtureFile(t, root, "assemblies/fixture/generated/boundary.yaml", []byte("stale\n"))
+
+	err := runVerify([]string{"generated"})
+
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "verify generated: 1 drift(s)")
+	assert.Contains(t, err.Error(), "make generate")
+}
+
+func newGeneratedVerifyAppFixture(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	writeAppFixtureFile(t, root, "go.mod", []byte("module example.com/generatedfixture\n\ngo 1.25.0\n"))
+	writeAppFixtureFile(t, root, "assemblies/fixture/assembly.yaml", []byte(`id: fixture
+cells: []
+build:
+  entrypoint: cmd/fixture/main.go
+  binary: fixture
+  deployTemplate: local
+`))
+	writeAppFixtureFile(t, root, "runtime/shutdown/shutdown.go", []byte(`package shutdown
+
+import "context"
+
+func NotifyContext(parent context.Context) (context.Context, context.CancelFunc) {
+	return context.WithCancel(parent)
+}
+`))
+	writeAppFixtureFile(t, root, "cmd/fixture/run.go", []byte(`package main
+
+import "context"
+
+func runFixture(context.Context, string, []string) error {
+	return nil
+}
+`))
+	return root
+}
+
+func withWorkingDir(t *testing.T, dir string) {
+	t.Helper()
+
+	orig, err := os.Getwd()
+	require.NoError(t, err)
+	require.NoError(t, os.Chdir(dir))
+	t.Cleanup(func() {
+		require.NoError(t, os.Chdir(orig))
+	})
+}
+
+func writeAppFixtureFile(t *testing.T, root, rel string, content []byte) {
+	t.Helper()
+
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
+	require.NoError(t, os.WriteFile(path, content, 0o644))
+}
