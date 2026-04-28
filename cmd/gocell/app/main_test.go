@@ -202,6 +202,13 @@ func TestRunGenerateAssemblyMissingID(t *testing.T) {
 	}
 }
 
+func TestRunGenerateMetricsSchemaMissingID(t *testing.T) {
+	err := runGenerate([]string{"metrics-schema"})
+	if err == nil {
+		t.Error("generate metrics-schema without --id should return error")
+	}
+}
+
 func TestRunCheckNoArgs(t *testing.T) {
 	err := runCheck([]string{})
 	if err == nil {

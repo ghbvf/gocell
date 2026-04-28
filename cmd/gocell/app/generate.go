@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
+	"github.com/ghbvf/gocell/tools/metricschema"
 )
 
 // runGenerate implements:
@@ -107,12 +108,11 @@ func generateAssembly(args []string) error {
 //
 //	gocell generate metrics-schema --id=<assemblyID>
 //
-// It scans runtime/observability/metrics/ and adapters/ for metric Opts
-// composite literals, serializes the result to
+// It loads the assembly entrypoint with go/packages, walks the reachable
+// project packages with type information, serializes the result to
 // assemblies/<id>/generated/metrics-schema.yaml, and prints the output path.
-// The file is the Source-of-Record baseline for CI's verify-and-diff gate
-// (OBS-01 policy). Run this command locally and commit the result whenever a
-// metric name, label set, or bucket list changes.
+// Run this command locally and commit the result whenever a metric name, label
+// set, bucket list, or bucket source changes.
 func generateMetricsSchema(args []string) error {
 	fs := flag.NewFlagSet("generate metrics-schema", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
@@ -128,12 +128,18 @@ func generateMetricsSchema(args []string) error {
 		return fmt.Errorf("cannot find project root: %w", err)
 	}
 
-	schema, err := governance.BuildMetricsSchema(root, *id)
+	parser := metadata.NewParser(root)
+	project, err := parser.Parse()
+	if err != nil {
+		return fmt.Errorf("metadata parse: %w", err)
+	}
+
+	schema, err := metricschema.Build(root, project, *id)
 	if err != nil {
 		return fmt.Errorf("scan metrics: %w", err)
 	}
 
-	content, err := governance.MarshalMetricsSchema(schema)
+	content, err := metricschema.Marshal(schema)
 	if err != nil {
 		return fmt.Errorf("serialize metrics-schema: %w", err)
 	}
