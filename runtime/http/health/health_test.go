@@ -1262,7 +1262,7 @@ func TestReadyz_ComputationPanic_UsesServiceUnavailableCode(t *testing.T) {
 
 	assert.Equal(t, http.StatusServiceUnavailable, rec.Code)
 	errObj := errorBody(t, rec)
-	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_computation_failed")
+	assertReadyzServiceUnavailable(t, errObj, "unhealthy", "readiness_failed")
 }
 
 // TestReadyz_DegradedAggregatesFromCellHealth verifies the E2E path:

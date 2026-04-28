@@ -56,11 +56,10 @@ const (
 )
 
 const (
-	readyzPublic503Message        = "service unavailable"
-	readyzStatusShuttingDown      = "shutting_down"
-	readyzReasonReadinessFailed   = "readiness_failed"
-	readyzReasonComputationFailed = "readiness_computation_failed"
-	readyzReasonGracefulShutdown  = "graceful_shutdown"
+	readyzPublic503Message       = "service unavailable"
+	readyzStatusShuttingDown     = "shutting_down"
+	readyzReasonReadinessFailed  = "readiness_failed"
+	readyzReasonGracefulShutdown = "graceful_shutdown"
 )
 
 // Checker is a named readiness probe. Returning a non-nil error marks the
@@ -294,11 +293,12 @@ func (h *Handler) ReadyzHandler() http.HandlerFunc {
 		result, ok := shared.(readyzResult)
 		if !ok {
 			slog.Error("readyz: singleflight returned unexpected payload; failing closed",
+				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("value", shared))
 			writeJSON(w, http.StatusServiceUnavailable, envelopeError(
 				errcode.PublicCodeForStatus(http.StatusServiceUnavailable),
 				readyzPublic503Message,
-				readyzDetails("unhealthy", readyzReasonComputationFailed, nil),
+				readyzDetails("unhealthy", readyzReasonReadinessFailed, nil),
 			))
 			return
 		}
@@ -316,8 +316,9 @@ func (h *Handler) computeReadyzSafe(verbose bool) (result readyzResult) {
 	defer func() {
 		if r := recover(); r != nil {
 			slog.Error("readyz: recovered panic during readiness computation",
+				slog.String("internal_reason", "readiness_computation_failed"),
 				slog.Any("panic", r))
-			result = readyzResult{overall: "unhealthy", reason: readyzReasonComputationFailed}
+			result = readyzResult{overall: "unhealthy", reason: readyzReasonReadinessFailed}
 		}
 	}()
 	return h.computeReadyz(verbose)

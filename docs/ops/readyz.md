@@ -31,6 +31,13 @@ under `data.*` on 200 and under `error.details.*` on 503, so consumers
 walk one consistent path regardless of probe outcome. There is no special
 "infrastructure-endpoint" shape to special-case.
 
+Public `/readyz` 503 reasons are intentionally low-cardinality:
+
+| `error.details.status` | `error.details.reason` | Meaning |
+|------------------------|------------------------|---------|
+| `unhealthy` | `readiness_failed` | One or more cells/probes failed, or the readiness aggregator failed closed. Internal computation failures are logged server-side and do not create a separate public reason. |
+| `shutting_down` | `graceful_shutdown` | The process is draining and should be removed from load balancer traffic. |
+
 ## Kubernetes probes — MUST NOT use `?verbose`
 
 Kubernetes only inspects the HTTP status code, so pointing `readinessProbe`
