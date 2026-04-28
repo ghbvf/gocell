@@ -34,9 +34,6 @@ import (
 // were wired simultaneously and whichever raced first won.
 const AdminProvisionModeEnv = "GOCELL_ACCESSCORE_ADMIN_PROVISION_MODE"
 
-// defaultRefreshGCRetention is the default retention period for the refresh GC.
-const defaultRefreshGCRetention = 24 * time.Hour
-
 type adminProvisionMode string
 
 const (
@@ -106,8 +103,9 @@ func (m AccessCoreModule) Provide(_ context.Context, shared *SharedDeps) (cell.C
 		accesscore.WithJWTIssuer(shared.JWTDeps.issuer),
 		accesscore.WithJWTVerifier(shared.JWTDeps.verifier),
 		accesscore.WithCursorCodec(cursorCodec),
-		accesscore.WithRefreshMetricsProvider(shared.PromStack.metricProvider),
-		accesscore.WithRefreshGC(time.Hour, defaultRefreshGCRetention),
+		accesscore.WithMetricsProvider(shared.PromStack.metricProvider),
+		accesscore.WithConfigEventCollector(shared.ConfigEventCollector),
+		accesscore.WithRefreshGC(time.Hour, 24*time.Hour),
 	}
 	if shared.Topology.StorageBackend == "postgres" {
 		if shared.SharedPGPool == nil {

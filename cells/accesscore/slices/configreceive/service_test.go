@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -23,6 +24,20 @@ type stubConfigGetter struct {
 func (s *stubConfigGetter) GetEntry(_ context.Context, key string) (ports.ConfigEntry, error) {
 	s.calledWith = key
 	return s.entry, s.err
+}
+
+type recordingConfigEventCollector struct {
+	records []configEventRecord
+}
+
+type configEventRecord struct {
+	cell    string
+	slice   string
+	outcome obmetrics.ConfigEventOutcome
+}
+
+func (c *recordingConfigEventCollector) RecordEventProcessed(cellID, sliceID string, outcome obmetrics.ConfigEventOutcome) {
+	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, outcome: outcome})
 }
 
 func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
@@ -244,4 +259,116 @@ func TestHandleEntryUpserted_WithoutConfigGetter_NoFetch(t *testing.T) {
 	}
 	err := svc.HandleEntryUpserted(context.Background(), entry)
 	require.NoError(t, err)
+}
+
+func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
+	tests := []struct {
+		name        string
+		getter      ports.ConfigGetter
+		payload     []byte
+		wantErr     bool
+		wantRecords []configEventRecord
+	}{
+		{
+			name:    "valid upsert without getter records ack",
+			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantRecords: []configEventRecord{{
+				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeAck,
+			}},
+		},
+		{
+			name: "getter success records ack",
+			getter: &stubConfigGetter{entry: ports.ConfigEntry{
+				Key: "jwt.ttl", Value: "30m", Version: 1,
+			}},
+			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantRecords: []configEventRecord{{
+				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeAck,
+			}},
+		},
+		{
+			name:    "getter not found records stale",
+			getter:  &stubConfigGetter{err: errcode.NewDomain(errcode.ErrConfigNotFound, "missing")},
+			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantRecords: []configEventRecord{{
+				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeStale,
+			}},
+		},
+		{
+			name:    "invalid payload records permanent error",
+			payload: []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"adm-1"}`),
+			wantErr: true,
+			wantRecords: []configEventRecord{{
+				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomePermanentError,
+			}},
+		},
+		{
+			name:        "transient getter error records no service outcome",
+			getter:      &stubConfigGetter{err: errors.New("configcore unavailable")},
+			payload:     []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
+			wantErr:     true,
+			wantRecords: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := &recordingConfigEventCollector{}
+			opts := []Option{WithConfigEventCollector(collector)}
+			if tt.getter != nil {
+				opts = append(opts, WithConfigGetter(tt.getter))
+			}
+			svc := NewService(slog.Default(), opts...)
+			entry := outbox.Entry{ID: "evt-metrics", Topic: TopicConfigEntryUpserted, Payload: tt.payload}
+
+			err := svc.HandleEntryUpserted(context.Background(), entry)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantRecords, collector.records)
+		})
+	}
+}
+
+func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
+	tests := []struct {
+		name        string
+		payload     []byte
+		wantErr     bool
+		wantRecords []configEventRecord
+	}{
+		{
+			name:    "valid delete records ack",
+			payload: []byte(`{"key":"jwt.ttl","version":3,"actorId":"adm-1"}`),
+			wantRecords: []configEventRecord{{
+				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeAck,
+			}},
+		},
+		{
+			name:    "invalid delete records permanent error",
+			payload: []byte(`{"key":"jwt.ttl","value":"old","version":3,"actorId":"adm-1"}`),
+			wantErr: true,
+			wantRecords: []configEventRecord{{
+				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomePermanentError,
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := &recordingConfigEventCollector{}
+			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
+			entry := outbox.Entry{ID: "evt-del-metrics", Topic: TopicConfigEntryDeleted, Payload: tt.payload}
+
+			err := svc.HandleEntryDeleted(context.Background(), entry)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantRecords, collector.records)
+		})
+	}
 }

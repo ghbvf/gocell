@@ -20,6 +20,7 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 )
 
@@ -80,7 +81,7 @@ func runtimeBaseOptions(
 		bootstrap.WithAssembly(asm),
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
-		bootstrap.WithConsumerMiddleware(consumerBase.AsMiddleware()),
+		bootstrap.WithConsumerMiddleware(consumerMiddlewares(shared, consumerBase)...),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),
@@ -92,6 +93,42 @@ func runtimeBaseOptions(
 		)
 	}
 	return opts
+}
+
+func consumerMiddlewares(shared *SharedDeps, consumerBase *outbox.ConsumerBase) []outbox.SubscriptionMiddleware {
+	return []outbox.SubscriptionMiddleware{
+		configEventConsumerMiddleware(shared.ConfigEventCollector),
+		consumerBase.AsMiddleware(),
+	}
+}
+
+func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) outbox.SubscriptionMiddleware {
+	return obmetrics.ConfigEventRejectMiddleware(collector,
+		obmetrics.ConfigEventSubscription{
+			CellID:        "accesscore",
+			SliceID:       "configreceive",
+			Topic:         "event.config.entry-upserted.v1",
+			ConsumerGroup: "accesscore",
+		},
+		obmetrics.ConfigEventSubscription{
+			CellID:        "accesscore",
+			SliceID:       "configreceive",
+			Topic:         "event.config.entry-deleted.v1",
+			ConsumerGroup: "accesscore",
+		},
+		obmetrics.ConfigEventSubscription{
+			CellID:        "configcore",
+			SliceID:       "configsubscribe",
+			Topic:         "event.config.entry-upserted.v1",
+			ConsumerGroup: "configcore",
+		},
+		obmetrics.ConfigEventSubscription{
+			CellID:        "configcore",
+			SliceID:       "configsubscribe",
+			Topic:         "event.config.entry-deleted.v1",
+			ConsumerGroup: "configcore",
+		},
+	)
 }
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the

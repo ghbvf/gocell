@@ -23,6 +23,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/crypto"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -230,16 +231,19 @@ func buildTestSharedDeps(t *testing.T) *SharedDeps {
 
 	ps, err := buildPromStack()
 	require.NoError(t, err)
+	configEventCollector, err := obmetrics.NewProviderConfigEventCollector(ps.metricProvider)
+	require.NoError(t, err)
 
 	return &SharedDeps{
-		Topology:            bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
-		JWTDeps:             jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:           ps,
-		EventBus:            eb,
-		ConsumerClaimer:     idempotency.NewInMemClaimer(),
-		ConsumerClaimerKind: consumerClaimerKindInMemory,
-		InternalHTTPAddr:    "127.0.0.1:9090",
-		InternalGuard:       newTestInternalGuard(t),
+		Topology:             bootstrap.Topology{StorageBackend: "memory", AdapterMode: ""},
+		JWTDeps:              jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:            ps,
+		EventBus:             eb,
+		ConfigEventCollector: configEventCollector,
+		ConsumerClaimer:      idempotency.NewInMemClaimer(),
+		ConsumerClaimerKind:  consumerClaimerKindInMemory,
+		InternalHTTPAddr:     "127.0.0.1:9090",
+		InternalGuard:        newTestInternalGuard(t),
 		// PR-A35: verbose endpoint is gated in every mode. Memory/dev tests
 		// just waive it — nothing here exercises the verbose body.
 		VerboseDisabled: true,
@@ -271,17 +275,20 @@ func newValidatedSharedDeps(t *testing.T, topo bootstrap.Topology) *SharedDeps {
 
 	ps, err := buildPromStack()
 	require.NoError(t, err)
+	configEventCollector, err := obmetrics.NewProviderConfigEventCollector(ps.metricProvider)
+	require.NoError(t, err)
 
 	deps := &SharedDeps{
-		Topology:            topo,
-		JWTDeps:             jwtDeps{issuer: issuer, verifier: verifier},
-		PromStack:           ps,
-		EventBus:            eventbus.New(),
-		ConsumerClaimer:     idempotency.NewInMemClaimer(),
-		ConsumerClaimerKind: consumerClaimerKindInMemory,
-		InternalHTTPAddr:    "127.0.0.1:9090",
-		InternalGuard:       newTestInternalGuard(t),
-		HealthHTTPAddr:      ":9091",
+		Topology:             topo,
+		JWTDeps:              jwtDeps{issuer: issuer, verifier: verifier},
+		PromStack:            ps,
+		EventBus:             eventbus.New(),
+		ConfigEventCollector: configEventCollector,
+		ConsumerClaimer:      idempotency.NewInMemClaimer(),
+		ConsumerClaimerKind:  consumerClaimerKindInMemory,
+		InternalHTTPAddr:     "127.0.0.1:9090",
+		InternalGuard:        newTestInternalGuard(t),
+		HealthHTTPAddr:       ":9091",
 		// PR-A35: verbose endpoint is now gated in every mode. A test-time
 		// token keeps the dev baseline valid; prod tests override via the
 		// mutate callback when they want to exercise the missing-token path.

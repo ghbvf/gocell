@@ -199,7 +199,10 @@ func (c *AccessCore) initSlices() error {
 
 	// config-receive: subscribes to config state-sync events from configcore.
 	// WithConfigGetter is optional — nil disables the cross-cell GetEntry fetch.
-	c.configReceiveSvc = configreceive.NewService(c.logger, configreceive.WithConfigGetter(c.configGetter))
+	c.configReceiveSvc = configreceive.NewService(c.logger,
+		configreceive.WithConfigGetter(c.configGetter),
+		configreceive.WithConfigEventCollector(c.configEventCollector),
+	)
 	c.AddSlice(cell.NewBaseSlice("configreceive", "accesscore", cell.L3))
 
 	// setup: interactive first-run admin provisioning (Public HTTP endpoints).

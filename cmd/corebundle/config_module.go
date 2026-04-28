@@ -129,6 +129,7 @@ func (m ConfigCoreModule) Provide(ctx context.Context, shared *SharedDeps) (cell
 		// the transactional writer; memory adapter passes writer=nil).
 		configcore.WithCursorCodec(cursorCodec),
 		configcore.WithMetricsProvider(shared.PromStack.metricProvider),
+		configcore.WithConfigEventCollector(shared.ConfigEventCollector),
 	}
 	c := configcore.NewConfigCore(append(baseOpts, cellOpts...)...)
 

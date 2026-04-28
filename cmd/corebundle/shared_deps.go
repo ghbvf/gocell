@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/ghbvf/gocell/runtime/eventbus"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	prom "github.com/prometheus/client_golang/prometheus"
 )
 
@@ -41,6 +43,11 @@ type SharedDeps struct {
 
 	// EventBus is the in-process event bus used for both publish and subscribe.
 	EventBus *eventbus.InMemoryEventBus
+
+	// ConfigEventCollector records config consumer outcomes for accesscore and
+	// configcore. It is registered once against the shared metrics provider and
+	// then injected into both Cells plus the final-reject middleware.
+	ConfigEventCollector obmetrics.ConfigEventCollector
 
 	// SharedPGPool is the postgres pool created by ConfigCoreModule when running
 	// in StorageBackend == "postgres" mode. AccessCoreModule + AuditCoreModule
@@ -147,6 +154,26 @@ type sharedReplayDeps struct {
 	NonceStore          auth.NonceStore
 	ConsumerClaimer     idempotency.Claimer
 	ConsumerClaimerKind consumerClaimerKind
+}
+
+type sharedMetricsDeps struct {
+	PromStack            promStack
+	ConfigEventCollector obmetrics.ConfigEventCollector
+}
+
+func buildSharedMetricsDeps() (sharedMetricsDeps, error) {
+	ps, err := buildPromStack()
+	if err != nil {
+		return sharedMetricsDeps{}, err
+	}
+	configEventCollector, err := obmetrics.NewProviderConfigEventCollector(ps.metricProvider)
+	if err != nil {
+		return sharedMetricsDeps{}, fmt.Errorf("build config event metrics collector: %w", err)
+	}
+	return sharedMetricsDeps{
+		PromStack:            ps,
+		ConfigEventCollector: configEventCollector,
+	}, nil
 }
 
 func buildSharedReplayDeps(ctx context.Context, topo bootstrap.Topology) (sharedReplayDeps, error) {
@@ -296,6 +323,9 @@ func (d *SharedDeps) validateCore() []error {
 	if d.EventBus == nil {
 		missing("EventBus")
 	}
+	if d.ConfigEventCollector == nil {
+		missing("ConfigEventCollector")
+	}
 	if d.ConsumerClaimer == nil {
 		missing("ConsumerClaimer")
 	}
@@ -424,7 +454,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 		return nil, err
 	}
 
-	ps, err := buildPromStack()
+	metricsDeps, err := buildSharedMetricsDeps()
 	if err != nil {
 		return nil, err
 	}
@@ -473,7 +503,7 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	healthLocalOnly := healthLocalOnlyRaw == "1" || strings.EqualFold(healthLocalOnlyRaw, "true")
 
 	metricsToken := os.Getenv("GOCELL_METRICS_TOKEN")
-	metricsHandler, err := buildMetricsHandler(metricsToken, ps.registry)
+	metricsHandler, err := buildMetricsHandler(metricsToken, metricsDeps.PromStack.registry)
 	if err != nil {
 		return nil, err
 	}
@@ -495,22 +525,23 @@ func LoadSharedDepsFromEnv(ctx context.Context) (*SharedDeps, error) {
 	}
 
 	deps := &SharedDeps{
-		Topology:            topo,
-		JWTDeps:             jwt,
-		PromStack:           ps,
-		EventBus:            eb,
-		RedisClient:         replay.RedisClient,
-		ConsumerClaimer:     replay.ConsumerClaimer,
-		ConsumerClaimerKind: replay.ConsumerClaimerKind,
-		InternalGuard:       internalGuard,
-		PrimaryHTTPAddr:     primaryAddr,
-		InternalHTTPAddr:    internalAddr,
-		HealthHTTPAddr:      healthAddr,
-		HealthLocalOnly:     healthLocalOnly,
-		MetricsToken:        metricsToken,
-		VerboseToken:        verboseToken,
-		VerboseDisabled:     verboseDisabled,
-		metricsHandler:      metricsHandler,
+		Topology:             topo,
+		JWTDeps:              jwt,
+		PromStack:            metricsDeps.PromStack,
+		EventBus:             eb,
+		ConfigEventCollector: metricsDeps.ConfigEventCollector,
+		RedisClient:          replay.RedisClient,
+		ConsumerClaimer:      replay.ConsumerClaimer,
+		ConsumerClaimerKind:  replay.ConsumerClaimerKind,
+		InternalGuard:        internalGuard,
+		PrimaryHTTPAddr:      primaryAddr,
+		InternalHTTPAddr:     internalAddr,
+		HealthHTTPAddr:       healthAddr,
+		HealthLocalOnly:      healthLocalOnly,
+		MetricsToken:         metricsToken,
+		VerboseToken:         verboseToken,
+		VerboseDisabled:      verboseDisabled,
+		metricsHandler:       metricsHandler,
 	}
 
 	if err := deps.Validate(); err != nil {

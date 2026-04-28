@@ -9,6 +9,7 @@ import (
 	"github.com/ghbvf/gocell/cells/configcore/internal/domain"
 	configevents "github.com/ghbvf/gocell/cells/configcore/internal/events"
 	"github.com/ghbvf/gocell/kernel/outbox"
+	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -28,6 +29,20 @@ func makeEntryUpserted(key string, version int) outbox.Entry {
 func makeEntryDeleted(key string, version int) outbox.Entry {
 	payload, _ := json.Marshal(configevents.EntryDeleted{Key: key, Version: version, ActorID: "admin-test"})
 	return outbox.Entry{ID: "test-delete", Topic: domain.TopicConfigEntryDeleted, Payload: payload}
+}
+
+type recordingConfigEventCollector struct {
+	records []configEventRecord
+}
+
+type configEventRecord struct {
+	cell    string
+	slice   string
+	outcome obmetrics.ConfigEventOutcome
+}
+
+func (c *recordingConfigEventCollector) RecordEventProcessed(cellID, sliceID string, outcome obmetrics.ConfigEventOutcome) {
+	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, outcome: outcome})
 }
 
 func TestService_HandleEntryUpserted(t *testing.T) {
@@ -292,6 +307,137 @@ func TestWrapLegacyHandler_Reject_Cases(t *testing.T) {
 
 			assert.Equal(t, outbox.DispositionReject, result.Disposition)
 			assert.Error(t, result.Err)
+		})
+	}
+}
+
+func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
+	tests := []struct {
+		name        string
+		arrange     func(*Service)
+		entry       outbox.Entry
+		wantErr     bool
+		wantRecords []configEventRecord
+	}{
+		{
+			name:  "accepted upsert records ack",
+			entry: makeEntryUpserted("app.name", 1),
+			wantRecords: []configEventRecord{{
+				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeAck,
+			}},
+		},
+		{
+			name: "replayed older upsert records stale",
+			arrange: func(svc *Service) {
+				require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 2)))
+			},
+			entry: makeEntryUpserted("app.name", 1),
+			wantRecords: []configEventRecord{{
+				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeStale,
+			}},
+		},
+		{
+			name:    "invalid upsert records permanent error",
+			entry:   outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`)},
+			wantErr: true,
+			wantRecords: []configEventRecord{{
+				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomePermanentError,
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := &recordingConfigEventCollector{}
+			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
+			if tt.arrange != nil {
+				tt.arrange(svc)
+				collector.records = nil
+			}
+
+			err := svc.HandleEntryUpserted(context.Background(), tt.entry)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantRecords, collector.records)
+		})
+	}
+}
+
+func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
+	tests := []struct {
+		name        string
+		arrange     func(*Service)
+		entry       outbox.Entry
+		wantErr     bool
+		wantRecords []configEventRecord
+	}{
+		{
+			name:  "accepted delete records ack",
+			entry: makeEntryDeleted("app.name", 1),
+			wantRecords: []configEventRecord{{
+				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeAck,
+			}},
+		},
+		{
+			name: "same-version delete records ack",
+			arrange: func(svc *Service) {
+				require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
+			},
+			entry: makeEntryDeleted("app.name", 3),
+			wantRecords: []configEventRecord{{
+				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeAck,
+			}},
+		},
+		{
+			name: "older delete records stale",
+			arrange: func(svc *Service) {
+				require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
+			},
+			entry: makeEntryDeleted("app.name", 2),
+			wantRecords: []configEventRecord{{
+				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeStale,
+			}},
+		},
+		{
+			name: "replayed same-version tombstone records stale",
+			arrange: func(svc *Service) {
+				require.NoError(t, svc.HandleEntryUpserted(context.Background(), makeEntryUpserted("app.name", 3)))
+				require.NoError(t, svc.HandleEntryDeleted(context.Background(), makeEntryDeleted("app.name", 3)))
+			},
+			entry: makeEntryDeleted("app.name", 3),
+			wantRecords: []configEventRecord{{
+				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeStale,
+			}},
+		},
+		{
+			name:    "invalid delete records permanent error",
+			entry:   outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`)},
+			wantErr: true,
+			wantRecords: []configEventRecord{{
+				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomePermanentError,
+			}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			collector := &recordingConfigEventCollector{}
+			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
+			if tt.arrange != nil {
+				tt.arrange(svc)
+				collector.records = nil
+			}
+
+			err := svc.HandleEntryDeleted(context.Background(), tt.entry)
+			if tt.wantErr {
+				require.Error(t, err)
+			} else {
+				require.NoError(t, err)
+			}
+			assert.Equal(t, tt.wantRecords, collector.records)
 		})
 	}
 }

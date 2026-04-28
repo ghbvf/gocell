@@ -54,6 +54,59 @@ entry-level `FailurePolicyFailClosed` 覆盖，不依赖此告警。
 
 ---
 
+## Config Event Consumer 可观测性
+
+`gocell_config_event_processed_total{cell,slice,outcome}` 记录 config event consumer 的最终业务处理结果。
+当前仅覆盖 `accesscore/configreceive` 与 `configcore/configsubscribe`。
+
+| outcome | 含义 |
+|---|---|
+| `ack` | consumer 接受事件并完成处理 |
+| `stale` | 事件已过期或 replay，安全跳过 |
+| `permanent_error` | payload / schema / 语义错误，直接 DLX，不重试 |
+| `reject` | 非永久错误经 ConsumerBase 本地重试耗尽后最终 reject |
+
+### ConfigEventConsumerReject
+
+非永久错误耗尽 ConsumerBase 本地重试后进入 DLX。通常意味着 configcore 内部 GET
+或下游依赖持续故障，重试已经无法在本次投递内恢复。
+
+```yaml
+- alert: GoCellConfigEventConsumerReject
+  expr: sum(increase(gocell_config_event_processed_total{outcome="reject"}[10m])) by (cell, slice) > 0
+  for: 0m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Config event consumer rejecting after retries ({{ $labels.cell }}/{{ $labels.slice }})"
+    description: |
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is rejecting
+      non-permanent failures after ConsumerBase retry exhaustion.
+      Check consumer logs for "retry budget exhausted" and verify configcore internal
+      GET readiness plus the downstream dependency named by the handler error.
+```
+
+### ConfigEventConsumerPermanentError
+
+payload/schema 永久错误不应在正常生产流量中增长；任意持续增长通常表示 producer/contract
+漂移，或旧版本事件在重放。
+
+```yaml
+- alert: GoCellConfigEventConsumerPermanentError
+  expr: sum(increase(gocell_config_event_processed_total{outcome="permanent_error"}[10m])) by (cell, slice) > 0
+  for: 0m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Config event permanent errors ({{ $labels.cell }}/{{ $labels.slice }})"
+    description: |
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is routing
+      permanent payload/schema errors to DLX. Compare event payloads with
+      contracts/event/config/* schemas and recent producer deploys.
+```
+
+---
+
 ## Bootstrap Shutdown 可观测性
 
 指标 `gocell_bootstrap_shutdown_total` 带 `outcome` 标签，取值见下表：
@@ -295,6 +348,12 @@ sum(rate(gocell_auth_service_token_verify_total[5m])) by (result, reason)
 
 把 result/reason 联合分组的趋势贴到 Grafana stack panel，可一眼看出 replay 突袭、
 nonce store 后端故障、token 失效（key 漂移）三类不同诱因的占比变化。
+
+### config event consumer outcome 分布
+
+```promql
+sum(rate(gocell_config_event_processed_total[5m])) by (cell, slice, outcome)
+```
 
 ---
 

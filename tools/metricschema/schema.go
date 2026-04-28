@@ -556,6 +556,7 @@ func skipMetricImplementationFile(rel string) bool {
 	case "adapters/prometheus/metric_provider.go",
 		"adapters/prometheus/hook_observer.go",
 		"runtime/observability/metrics/provider_collector.go",
+		"runtime/observability/metrics/config_event_collector.go",
 		"kernel/outbox/relay_collector.go":
 		return true
 	}
@@ -576,6 +577,10 @@ func (sp *scanPackage) knownMetricWrapperEntries(call *ast.CallExpr, rel string)
 	case runtimeMetricsPkg:
 		if fn.Name() == "NewProviderCollector" {
 			entries, err := sp.providerCollectorEntries(call, rel)
+			return entries, true, err
+		}
+		if fn.Name() == "NewProviderConfigEventCollector" {
+			entries, err := sp.providerConfigEventCollectorEntries(call, rel)
 			return entries, true, err
 		}
 	case kernelOutboxPkg:
@@ -652,6 +657,20 @@ func (sp *scanPackage) providerCollectorEntries(call *ast.CallExpr, rel string) 
 			help:      "HTTP request duration in seconds.",
 			labels:    labels,
 			buckets:   buckets,
+		}, rel, call.Pos()),
+	}, nil
+}
+
+func (sp *scanPackage) providerConfigEventCollectorEntries(call *ast.CallExpr, rel string) ([]Entry, error) {
+	if len(call.Args) == 0 {
+		return nil, sp.unresolved(call, rel, "provider config event collector Provider argument is missing")
+	}
+	return []Entry{
+		sp.entryFromOpts("counter", opts{
+			name:      "config_event_processed_total",
+			namespace: sp.namespace,
+			help:      "Total number of config events processed by consumers, partitioned by outcome.",
+			labels:    []string{"cell", "slice", "outcome"},
 		}, rel, call.Pos()),
 	}, nil
 }
