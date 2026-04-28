@@ -7,7 +7,6 @@ import (
 	"go/token"
 	"go/types"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -670,7 +669,7 @@ func viaShared(err error) {
 }
 `)
 
-	diagnostics, err := CheckOBS01(root, "./reachable")
+	diagnostics, err := CheckOBS01(root, "./reachable", "./shared")
 	require.NoError(t, err)
 	require.Len(t, diagnostics, 1)
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
@@ -1762,17 +1761,11 @@ func writeMetricsFixture(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
 	moduleRoot := filepath.ToSlash(repoRoot(t))
-	writeFile(t, root, "go.mod", fmt.Sprintf(`module example.com/metricsfixture
-
-go 1.25.0
-
-require (
-	github.com/ghbvf/gocell v0.0.0
-	github.com/prometheus/client_golang v1.23.2
-)
-
-replace github.com/ghbvf/gocell => %s
-`, moduleRoot))
+	mod, err := os.ReadFile(filepath.Join(repoRoot(t), "go.mod"))
+	require.NoError(t, err)
+	modText := strings.Replace(string(mod), "module github.com/ghbvf/gocell", "module example.com/metricsfixture", 1)
+	modText += fmt.Sprintf("\nrequire github.com/ghbvf/gocell v0.0.0\nreplace github.com/ghbvf/gocell => %s\n", moduleRoot)
+	writeFile(t, root, "go.mod", modText)
 	sum, err := os.ReadFile(filepath.Join(repoRoot(t), "go.sum"))
 	require.NoError(t, err)
 	writeFile(t, root, "go.sum", string(sum))
@@ -1829,10 +1822,6 @@ var UnreachableMetric = metrics.CounterOpts{
 	Help: "must not be scanned",
 }
 `)
-	cmd := exec.Command("go", "mod", "tidy")
-	cmd.Dir = root
-	out, err := cmd.CombinedOutput()
-	require.NoError(t, err, string(out))
 	return root
 }
 

@@ -131,7 +131,7 @@ func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string)
 		entrypoint = filepath.Join("cmd", assemblyID, "main.go")
 	}
 	pattern := "./" + filepath.ToSlash(filepath.Dir(entrypoint))
-	pkgs, err := loadPackages(projectRoot, pattern)
+	pkgs, err := loadReachablePackages(projectRoot, pattern)
 	if err != nil {
 		return nil, err
 	}
@@ -177,11 +177,20 @@ func Marshal(schema *Schema) ([]byte, error) {
 }
 
 func loadPackages(root string, patterns ...string) ([]*packages.Package, error) {
+	return loadPackagesWithMode(root, false, patterns...)
+}
+
+func loadReachablePackages(root string, patterns ...string) ([]*packages.Package, error) {
+	return loadPackagesWithMode(root, true, patterns...)
+}
+
+func loadPackagesWithMode(root string, includeDeps bool, patterns ...string) ([]*packages.Package, error) {
+	if !includeDeps && len(patterns) > 1 {
+		return loadPatternScopedPackages(root, patterns...)
+	}
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-			packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo |
-			packages.NeedImports | packages.NeedDeps,
-		Dir: root,
+		Mode: packageLoadMode(includeDeps),
+		Dir:  root,
 	}
 	roots, err := packages.Load(cfg, patterns...)
 	if err != nil {
@@ -199,6 +208,50 @@ func loadPackages(root string, patterns ...string) ([]*packages.Package, error) 
 		return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(loadErrs), loadErrs[0])
 	}
 	return out, nil
+}
+
+func loadPatternScopedPackages(root string, patterns ...string) ([]*packages.Package, error) {
+	byPath := map[string]*packages.Package{}
+	var paths []string
+	for _, pattern := range patterns {
+		pkgs, err := loadPackagesWithMode(root, false, pattern)
+		if err != nil {
+			return nil, err
+		}
+		paths = mergeLoadedPackages(byPath, paths, pkgs)
+	}
+	sort.Strings(paths)
+	out := make([]*packages.Package, 0, len(paths))
+	for _, path := range paths {
+		out = append(out, byPath[path])
+	}
+	return out, nil
+}
+
+func mergeLoadedPackages(
+	byPath map[string]*packages.Package,
+	paths []string,
+	pkgs []*packages.Package,
+) []string {
+	for _, p := range pkgs {
+		if _, ok := byPath[p.PkgPath]; !ok {
+			paths = append(paths, p.PkgPath)
+		}
+		if existing := byPath[p.PkgPath]; existing == nil || len(existing.Syntax) == 0 {
+			byPath[p.PkgPath] = p
+		}
+	}
+	return paths
+}
+
+func packageLoadMode(includeDeps bool) packages.LoadMode {
+	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
+		packages.NeedSyntax | packages.NeedTypes | packages.NeedTypesInfo |
+		packages.NeedImports
+	if includeDeps {
+		mode |= packages.NeedDeps
+	}
+	return mode
 }
 
 func collectInits(pkgs []*packages.Package) map[types.Object]ast.Expr {
@@ -1341,7 +1394,14 @@ func collectOBS01MetricIdentities(
 	return out
 }
 
-type obs01ReturnTaints map[*types.Func]map[int]bool
+type obs01ReturnTaints map[string]map[int]bool
+
+func obs01FuncKey(fn *types.Func) string {
+	if fn == nil {
+		return ""
+	}
+	return fn.FullName()
+}
 
 func collectOBS01ReturnTaints(pkgs []*packages.Package) obs01ReturnTaints {
 	funcs, infos, objects := collectOBS01Funcs(pkgs)
@@ -1388,15 +1448,18 @@ func updateOBS01ReturnTaints(
 ) bool {
 	changed := false
 	for _, fn := range funcs {
-		obj := objects[fn]
+		key := obs01FuncKey(objects[fn])
+		if key == "" {
+			continue
+		}
 		for index := range obs01FuncReturnTaints(infos[fn], fn, out) {
-			if out[obj] == nil {
-				out[obj] = map[int]bool{}
+			if out[key] == nil {
+				out[key] = map[int]bool{}
 			}
-			if out[obj][index] {
+			if out[key][index] {
 				continue
 			}
-			out[obj][index] = true
+			out[key][index] = true
 			changed = true
 		}
 	}
@@ -1573,11 +1636,11 @@ func CheckOBS01(projectRoot string, patterns ...string) ([]Diagnostic, error) {
 	if len(patterns) == 0 {
 		patterns = []string{"./..."}
 	}
-	pkgs, err := loadPackages(projectRoot, patterns...)
+	acks, err := loadOBS01Acks(projectRoot)
 	if err != nil {
 		return nil, err
 	}
-	acks, err := loadOBS01Acks(projectRoot)
+	pkgs, err := loadPackages(projectRoot, patterns...)
 	if err != nil {
 		return nil, err
 	}
@@ -1644,7 +1707,7 @@ func scanOBS01Package(
 	root string,
 	p *packages.Package,
 	acks map[string]obsAck,
-	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
+	sinkParams map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 	returnTaints obs01ReturnTaints,
 ) ([]Diagnostic, error) {
@@ -1669,7 +1732,7 @@ func scanOBS01File(
 	file *ast.File,
 	rel string,
 	acks map[string]obsAck,
-	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
+	sinkParams map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 	returnTaints obs01ReturnTaints,
 ) []Diagnostic {
@@ -1689,7 +1752,7 @@ func scanOBS01Func(
 	fn *ast.FuncDecl,
 	rel string,
 	acks map[string]obsAck,
-	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
+	sinkParams map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 	returnTaints obs01ReturnTaints,
 ) []Diagnostic {
@@ -1710,7 +1773,7 @@ func obs01DiagnosticsForCall(
 	rel string,
 	acks map[string]obsAck,
 	tainted map[types.Object]bool,
-	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
+	sinkParams map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 	returnTaints obs01ReturnTaints,
 ) []Diagnostic {
@@ -2051,8 +2114,8 @@ func obs01ConstantString(info *types.Info, expr ast.Expr) (string, bool) {
 func collectOBS01SinkParams(
 	pkgs []*packages.Package,
 	metricIdentities map[types.Object]obs01MetricIdentity,
-) map[*types.Func]map[int][]obs01SinkBinding {
-	out := map[*types.Func]map[int][]obs01SinkBinding{}
+) map[string]map[int][]obs01SinkBinding {
+	out := map[string]map[int][]obs01SinkBinding{}
 	funcs := collectOBS01SinkParamFuncs(pkgs)
 	for changed := true; changed; {
 		changed = false
@@ -2114,7 +2177,7 @@ func obs01SinkParamFuncForDecl(
 
 func collectOBS01SinkParamsForFunc(
 	fn obs01SinkParamFunc,
-	out map[*types.Func]map[int][]obs01SinkBinding,
+	out map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 ) bool {
 	changed := false
@@ -2131,7 +2194,7 @@ func collectOBS01SinkParamsForFunc(
 func recordOBS01SinkParamDeps(
 	info *types.Info,
 	fset *token.FileSet,
-	out map[*types.Func]map[int][]obs01SinkBinding,
+	out map[string]map[int][]obs01SinkBinding,
 	fn *types.Func,
 	call *ast.CallExpr,
 	params map[types.Object]int,
@@ -2155,7 +2218,7 @@ func recordOBS01SinkParamDeps(
 
 func recordOBS01SinkParamBindings(
 	info *types.Info,
-	out map[*types.Func]map[int][]obs01SinkBinding,
+	out map[string]map[int][]obs01SinkBinding,
 	fn *types.Func,
 	params map[types.Object]int,
 	sinks []obs01SinkArg,
@@ -2184,7 +2247,7 @@ func recordOBS01SinkParamBindings(
 func recordOBS01VariadicLabelValueParamDeps(
 	info *types.Info,
 	fset *token.FileSet,
-	out map[*types.Func]map[int][]obs01SinkBinding,
+	out map[string]map[int][]obs01SinkBinding,
 	fn *types.Func,
 	call *ast.CallExpr,
 	params map[types.Object]int,
@@ -2223,20 +2286,24 @@ func recordOBS01VariadicLabelValueParamDeps(
 }
 
 func recordOBS01SinkBinding(
-	out map[*types.Func]map[int][]obs01SinkBinding,
+	out map[string]map[int][]obs01SinkBinding,
 	fn *types.Func,
 	idx int,
 	binding obs01SinkBinding,
 ) bool {
-	if out[fn] == nil {
-		out[fn] = map[int][]obs01SinkBinding{}
+	key := obs01FuncKey(fn)
+	if key == "" {
+		return false
 	}
-	for _, existing := range out[fn][idx] {
+	if out[key] == nil {
+		out[key] = map[int][]obs01SinkBinding{}
+	}
+	for _, existing := range out[key][idx] {
 		if existing == binding {
 			return false
 		}
 	}
-	out[fn][idx] = append(out[fn][idx], binding)
+	out[key][idx] = append(out[key][idx], binding)
 	return true
 }
 
@@ -2308,20 +2375,21 @@ func obs01ParamDeps(info *types.Info, expr ast.Expr, params map[types.Object]int
 func obs01SinkArgs(
 	info *types.Info,
 	call *ast.CallExpr,
-	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
+	sinkParams map[string]map[int][]obs01SinkBinding,
 ) []obs01SinkArg {
 	fn := calledFunc(info, call)
-	if fn == nil || len(sinkParams[fn]) == 0 {
+	key := obs01FuncKey(fn)
+	if key == "" || len(sinkParams[key]) == 0 {
 		return nil
 	}
-	indexes := make([]int, 0, len(sinkParams[fn]))
-	for idx := range sinkParams[fn] {
+	indexes := make([]int, 0, len(sinkParams[key]))
+	for idx := range sinkParams[key] {
 		indexes = append(indexes, idx)
 	}
 	sort.Ints(indexes)
 	var out []obs01SinkArg
 	for _, idx := range indexes {
-		for _, binding := range sinkParams[fn][idx] {
+		for _, binding := range sinkParams[key][idx] {
 			out = append(out, obs01SinkArgsForBinding(info, fn, call, idx, binding)...)
 		}
 	}
@@ -3738,10 +3806,11 @@ func obs01CallReturnIndexTainted(
 		return index == 0, true
 	}
 	fn := calledFunc(info, call)
-	if fn == nil {
+	key := obs01FuncKey(fn)
+	if key == "" {
 		return false, false
 	}
-	tainted, ok := returnTaints[fn]
+	tainted, ok := returnTaints[key]
 	if !ok {
 		return false, false
 	}
@@ -3782,10 +3851,11 @@ func exprDirectlyDependsOnErrcodeClassifier(
 }
 
 func obs01AnyReturnTainted(returnTaints obs01ReturnTaints, fn *types.Func) bool {
-	if fn == nil {
+	key := obs01FuncKey(fn)
+	if key == "" {
 		return false
 	}
-	for _, tainted := range returnTaints[fn] {
+	for _, tainted := range returnTaints[key] {
 		if tainted {
 			return true
 		}
