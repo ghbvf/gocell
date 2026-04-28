@@ -3,7 +3,10 @@ package verify
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -78,6 +81,70 @@ func TestRunGoTest_ContextCancelled(t *testing.T) {
 	cancel()
 	res := runGoTest(ctx, t.TempDir(), []string{"./..."})
 	assert.False(t, res.Passed)
+}
+
+func TestRunGoTest_UsesTrustedGoAndSanitizedPATH(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("uses a POSIX shell script as the fake go binary")
+	}
+
+	dir := t.TempDir()
+	fakeBin := filepath.Join(dir, "malicious-go-bin")
+	require.NoError(t, os.Mkdir(fakeBin, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(fakeBin, "go"), []byte(`#!/bin/sh
+echo MALICIOUS_GO_ON_PATH
+exit 99
+`), 0o755))
+
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("GOROOT", filepath.Join(dir, "bad-goroot"))
+
+	moduleDir := filepath.Join(dir, "module")
+	require.NoError(t, os.Mkdir(moduleDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "go.mod"), []byte("module testmod\n\ngo 1.21\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(moduleDir, "path_test.go"), []byte(`package testmod
+import (
+	"os"
+	"strings"
+	"testing"
+)
+
+func TestPATHIsSanitized(t *testing.T) {
+	if strings.Contains(os.Getenv("PATH"), "malicious-go-bin") {
+		t.Fatalf("PATH inherited writable test directory: %s", os.Getenv("PATH"))
+	}
+	if strings.Contains(os.Getenv("GOROOT"), "bad-goroot") {
+		t.Fatalf("GOROOT inherited writable test directory: %s", os.Getenv("GOROOT"))
+	}
+}
+`), 0o644))
+
+	res := runGoTest(context.Background(), moduleDir, []string{"./...", "-v"})
+	require.NoError(t, res.Err)
+	assert.True(t, res.Passed, res.Output)
+	assert.NotContains(t, res.Output, "MALICIOUS_GO_ON_PATH")
+}
+
+func TestGoToolPathIgnoresProcessGOROOT(t *testing.T) {
+	if os.Getenv("GOCELL_VERIFY_GOTOOLPATH_HELPER") == "1" {
+		path := goToolPath()
+		if strings.Contains(path, "bad-goroot") {
+			t.Fatalf("goToolPath used hostile GOROOT: %s", path)
+		}
+		if !filepath.IsAbs(path) {
+			t.Fatalf("goToolPath returned non-absolute path: %s", path)
+		}
+		return
+	}
+
+	badRoot := filepath.Join(t.TempDir(), "bad-goroot")
+	cmd := exec.Command(os.Args[0], "-test.run=^TestGoToolPathIgnoresProcessGOROOT$")
+	cmd.Env = append(os.Environ(),
+		"GOCELL_VERIFY_GOTOOLPATH_HELPER=1",
+		"GOROOT="+badRoot,
+	)
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, string(out))
 }
 
 // ---------------------------------------------------------------------------
