@@ -2,6 +2,10 @@ package metricschema
 
 import (
 	"fmt"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -237,6 +241,23 @@ var _ = registerCounterVec(prom.CounterOpts{Name: "helper_vec_total"}, buildLabe
 	assert.Contains(t, err.Error(), "label names must be a resolvable string slice")
 }
 
+func TestBuild_EmptyKnownWrapperBucketsUseDefaults(t *testing.T) {
+	cfgExpr, err := parser.ParseExpr(`metrics.ProviderCollectorConfig{DurationBuckets: []float64{}}`)
+	require.NoError(t, err)
+	defaultExpr, err := parser.ParseExpr(`[]float64{.005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10}`)
+	require.NoError(t, err)
+	pkg := types.NewPackage(runtimeMetricsPkg, "metrics")
+	defaultObj := types.NewVar(token.NoPos, pkg, "DefaultDurationBuckets", nil)
+	sp := &scanPackage{
+		fset:  token.NewFileSet(),
+		inits: map[types.Object]ast.Expr{defaultObj: defaultExpr},
+	}
+
+	buckets, err := sp.configBuckets(cfgExpr.(*ast.CompositeLit), "DurationBuckets", runtimeMetricsPkg, "DefaultDurationBuckets", "fixture.go")
+	require.NoError(t, err)
+	assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, buckets)
+}
+
 func TestCheckOBS01DetectsDirectLocalAndHelperParamClassifiers(t *testing.T) {
 	root := writeMetricsFixture(t)
 	writeFile(t, root, "reachable/obs.go", `package reachable
@@ -315,6 +336,47 @@ func direct(err error) {
 	assert.Equal(t, "obs_total", diagnostics[0].Metric)
 	assert.Equal(t, "reason", diagnostics[0].Label)
 	assert.Contains(t, diagnostics[0].Message, "metrics-migration-acks.yaml")
+}
+
+func TestCheckOBS01DetectsNamedAndMultiReturnHelperClassifiers(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func named(err error) (reason string) {
+	reason = fmt.Sprint(errcode.IsInfraError(err))
+	return
+}
+
+func multi(err error) (bool, string) {
+	return false, fmt.Sprint(errcode.IsInfraError(err))
+}
+
+func useNamed(err error) {
+	counter.With(metrics.Labels{"reason": named(err)}).Inc()
+}
+
+func useMulti(err error) {
+	_, reason := multi(err)
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 2)
 }
 
 func TestCheckOBS01DoesNotReportClearedTaintOrCategoryConstants(t *testing.T) {
@@ -511,6 +573,54 @@ func direct(err error) {
 	require.Len(t, diagnostics, 1)
 }
 
+func TestCheckOBS01AckCannotSuppressDynamicLabelKey(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+	"os"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func direct(err error) {
+	label := os.Getenv("LABEL")
+	counter.With(metrics.Labels{label: fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
+  - rule: OBS-01
+    fingerprint: %q
+    metric: %s
+    label: %s
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`, diagnostics[0].Fingerprint, diagnostics[0].Metric, diagnostics[0].Label))
+
+	diagnostics, err = CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Contains(t, diagnostics[0].Message, "not machine-resolvable")
+}
+
 func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
 	root := writeMetricsFixture(t)
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
@@ -554,6 +664,27 @@ func TestCheckOBS01RejectsPlaceholderDashboardRefs(t *testing.T) {
     newSemantics: domain config errors grouped as domain
     dashboardOrAlertRefs:
       - TODO
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
+
+	_, err := CheckOBS01(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dashboardOrAlertRefs")
+}
+
+func TestCheckOBS01RejectsDashboardRefPathTraversal(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: abc123
+    metric: fixture_obs_total
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/../../go.mod
     owner: platform-observability
     reviewedAt: "2026-04-28"
     rationale: reviewed SLO bucket migration with service owner

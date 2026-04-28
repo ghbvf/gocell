@@ -660,7 +660,13 @@ func (sp *scanPackage) configBuckets(
 ) ([]string, error) {
 	if lit != nil {
 		if value, ok := compositeField(lit, fieldName); ok {
-			return sp.numberSlice(value, rel)
+			buckets, err := sp.numberSlice(value, rel)
+			if err != nil {
+				return nil, err
+			}
+			if len(buckets) > 0 {
+				return buckets, nil
+			}
 		}
 	}
 	return sp.defaultNumberSlice(defaultPkg, defaultName, rel)
@@ -1397,16 +1403,51 @@ func obs01FuncReturnsClassifier(info *types.Info, fn *ast.FuncDecl, returnTaints
 		case *ast.ValueSpec:
 			markOBS01ValueSpecTaint(info, node, tainted, returnTaints)
 		case *ast.ReturnStmt:
-			for _, result := range node.Results {
-				if exprDependsOnErrcodeClassifier(info, result, tainted, returnTaints) {
-					found = true
-					return false
-				}
+			if obs01ReturnStmtDependsOnClassifier(info, fn, node, tainted, returnTaints) {
+				found = true
+				return false
 			}
 		}
 		return true
 	})
 	return found
+}
+
+func obs01ReturnStmtDependsOnClassifier(
+	info *types.Info,
+	fn *ast.FuncDecl,
+	stmt *ast.ReturnStmt,
+	tainted map[types.Object]bool,
+	returnTaints map[*types.Func]bool,
+) bool {
+	for _, result := range stmt.Results {
+		if exprDependsOnErrcodeClassifier(info, result, tainted, returnTaints) {
+			return true
+		}
+	}
+	if len(stmt.Results) == 0 {
+		for _, obj := range namedResultObjects(info, fn) {
+			if tainted[obj] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func namedResultObjects(info *types.Info, fn *ast.FuncDecl) []types.Object {
+	if fn.Type.Results == nil {
+		return nil
+	}
+	var out []types.Object
+	for _, field := range fn.Type.Results.List {
+		for _, name := range field.Names {
+			if obj := info.Defs[name]; obj != nil {
+				out = append(out, obj)
+			}
+		}
+	}
+	return out
 }
 
 func (sp *scanPackage) collectOBS01MetricIdentitiesFromValueSpec(
@@ -1752,7 +1793,7 @@ func obs01LabelsArgs(info *types.Info, fset *token.FileSet, metric string, ackab
 			Expr:    kv.Value,
 			Metric:  metric,
 			Label:   obs01LabelKey(info, fset, kv.Key),
-			Ackable: ackableMetric,
+			Ackable: ackableMetric && obs01ConstantStringKey(info, kv.Key),
 		})
 	}
 	if len(out) == 0 {
@@ -1786,6 +1827,13 @@ func obs01LabelKey(info *types.Info, fset *token.FileSet, expr ast.Expr) string 
 		return s
 	}
 	return "<label>"
+}
+
+func obs01ConstantStringKey(info *types.Info, expr ast.Expr) bool {
+	if s, ok := obs01ConstantString(info, expr); ok {
+		return s != ""
+	}
+	return false
 }
 
 func obs01ConstantString(info *types.Info, expr ast.Expr) (string, bool) {
@@ -1983,19 +2031,27 @@ func markOBS01AssignedTaint(
 	returnTaints map[*types.Func]bool,
 ) {
 	for i, left := range lhs {
-		if i >= len(rhs) {
-			continue
-		}
 		obj := objectForOBS01Expr(info, left)
 		if obj == nil {
 			continue
 		}
-		if exprDependsOnErrcodeClassifier(info, rhs[i], tainted, returnTaints) {
+		right := assignmentRHSForLHS(rhs, i)
+		if right != nil && exprDependsOnErrcodeClassifier(info, right, tainted, returnTaints) {
 			tainted[obj] = true
 		} else {
 			delete(tainted, obj)
 		}
 	}
+}
+
+func assignmentRHSForLHS(rhs []ast.Expr, i int) ast.Expr {
+	if i < len(rhs) {
+		return rhs[i]
+	}
+	if len(rhs) == 1 {
+		return rhs[0]
+	}
+	return nil
 }
 
 func markOBS01ValueSpecTaint(
@@ -2169,7 +2225,19 @@ func validOBS01Ref(root, ref string) bool {
 	if filepath.IsAbs(ref) || strings.HasPrefix(ref, "..") {
 		return false
 	}
-	_, err = os.Stat(filepath.Join(root, filepath.FromSlash(ref)))
+	cleanRoot, err := filepath.Abs(root)
+	if err != nil {
+		return false
+	}
+	candidate, err := filepath.Abs(filepath.Join(root, filepath.FromSlash(ref)))
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(cleanRoot, candidate)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return false
+	}
+	_, err = os.Stat(candidate)
 	return err == nil
 }
 
