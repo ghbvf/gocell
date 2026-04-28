@@ -25,7 +25,10 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 
 	hookTotal := requireMetric(t, schema, "cell_hook_total")
 	assert.Equal(t, []string{"cell_id", "hook", "outcome"}, hookTotal.Labels)
-	assert.Equal(t, "adapters/prometheus/hook_observer.go", hookTotal.File)
+	assert.Equal(t, "cmd/corebundle/metrics.go", hookTotal.File)
+
+	hookDuration := requireMetric(t, schema, "cell_hook_duration_seconds")
+	assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10", "30"}, hookDuration.Buckets)
 
 	authVerify := requireMetric(t, schema, "auth_token_verify_total")
 	assert.Equal(t, []string{"result", "reason"}, authVerify.Labels)
@@ -36,12 +39,11 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 	outboxRelayed := requireMetric(t, schema, "outbox_relayed_total")
 	assert.Equal(t, []string{"cell", "outcome"}, outboxRelayed.Labels)
 	assert.Equal(t, "gocell_outbox_relayed_total", outboxRelayed.FQName)
-	assert.Equal(t, "kernel/outbox/relay_collector.go", outboxRelayed.File)
+	assert.Equal(t, "cmd/corebundle/bundle.go", outboxRelayed.File)
 
 	httpDuration := requireMetric(t, schema, "http_request_duration_seconds")
-	assert.Equal(t,
-		"github.com/ghbvf/gocell/runtime/observability/metrics.ProviderCollectorConfig.DurationBuckets",
-		httpDuration.BucketSource)
+	assert.Equal(t, []string{".005", ".01", ".025", ".05", ".1", ".25", ".5", "1", "2.5", "5", "10"}, httpDuration.Buckets)
+	assert.Empty(t, httpDuration.BucketSource)
 
 	vaultLogin := requireMetric(t, schema, "auth_login_total")
 	assert.Equal(t, "gocell_vault_auth_login_total", vaultLogin.FQName)
@@ -55,6 +57,19 @@ func TestBuild_CorebundleCapturesReachableTypedMetrics(t *testing.T) {
 			assert.NotContains(t, bucket, "<", "buckets must not contain unresolved placeholders")
 		}
 	}
+}
+
+func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
+	root := repoRoot(t)
+	project, err := metadata.NewParser(root).Parse()
+	require.NoError(t, err)
+	schema, err := Build(root, project, "corebundle")
+	require.NoError(t, err)
+	got, err := Marshal(schema)
+	require.NoError(t, err)
+	want, err := os.ReadFile(filepath.Join(root, "assemblies/corebundle/generated/metrics-schema.yaml"))
+	require.NoError(t, err)
+	assert.Equal(t, string(want), string(got))
 }
 
 func TestBuild_FixtureLocksReachabilityIdentityAndLabels(t *testing.T) {
@@ -169,6 +184,59 @@ var _ = registerCounter(buildCounterOpts())
 	assert.Contains(t, err.Error(), "Prometheus metric helper opts must be a resolvable literal")
 }
 
+func TestBuild_FailsClosedOnUnresolvedCrossPackagePrometheusHelperOpts(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "helper/helper.go", `package helper
+
+import prom "github.com/prometheus/client_golang/prometheus"
+
+func RegisterCounter(opts prom.CounterOpts) prom.Counter {
+	return prom.NewCounter(opts)
+}
+`)
+	writeFile(t, root, "reachable/bad_cross_package_helper.go", `package reachable
+
+import (
+	"example.com/metricsfixture/helper"
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+func buildCounterOpts() prom.CounterOpts {
+	return prom.CounterOpts{Name: "helper_total"}
+}
+
+var _ = helper.RegisterCounter(buildCounterOpts())
+`)
+	project := fixtureProject("fixture", "cmd/app/main.go")
+
+	_, err := Build(root, project, "fixture")
+	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
+	assert.Contains(t, err.Error(), "Prometheus metric helper opts must be a resolvable literal")
+}
+
+func TestBuild_FailsClosedOnUnresolvedPrometheusHelperVecLabels(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/bad_helper_labels.go", `package reachable
+
+import prom "github.com/prometheus/client_golang/prometheus"
+
+func registerCounterVec(opts prom.CounterOpts, labels []string) *prom.CounterVec {
+	return prom.NewCounterVec(opts, labels)
+}
+
+func buildLabels() []string {
+	return []string{"status"}
+}
+
+var _ = registerCounterVec(prom.CounterOpts{Name: "helper_vec_total"}, buildLabels())
+`)
+	project := fixtureProject("fixture", "cmd/app/main.go")
+
+	_, err := Build(root, project, "fixture")
+	require.ErrorIs(t, err, ErrUnresolvedMetricSchema)
+	assert.Contains(t, err.Error(), "label names must be a resolvable string slice")
+}
+
 func TestCheckOBS01DetectsDirectLocalAndHelperParamClassifiers(t *testing.T) {
 	root := writeMetricsFixture(t)
 	writeFile(t, root, "reachable/obs.go", `package reachable
@@ -212,7 +280,101 @@ func negative(v metrics.CounterVec, err error) {
 		assert.Equal(t, "v", diag.Metric)
 		assert.Equal(t, "reason", diag.Label)
 	}
+	assert.Contains(t, diagnostics[0].Message, "metric/label identity is not machine-resolvable")
+}
+
+func TestCheckOBS01DetectsHelperReturnClassifiers(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func classify(err error) string {
+	return fmt.Sprint(errcode.IsInfraError(err))
+}
+
+func direct(err error) {
+	counter.With(metrics.Labels{"reason": classify(err)}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
 	assert.Contains(t, diagnostics[0].Message, "metrics-migration-acks.yaml")
+}
+
+func TestCheckOBS01DoesNotReportClearedTaintOrCategoryConstants(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func cleared(err error) {
+	reason := fmt.Sprint(errcode.IsInfraError(err))
+	reason = "ok"
+	counter.With(metrics.Labels{"reason": reason}).Inc()
+}
+
+func constantCategory() {
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.CategoryDomain)}).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01ResolvesPrometheusWithLabelValuesLabelNames(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/pkg/errcode"
+	prom "github.com/prometheus/client_golang/prometheus"
+)
+
+var counter = prom.NewCounterVec(prom.CounterOpts{
+	Name: "prom_obs_total",
+}, []string{"reason"})
+
+func direct(err error) {
+	counter.WithLabelValues(fmt.Sprint(errcode.IsInfraError(err))).Inc()
+}
+`)
+
+	diagnostics, err := CheckOBS01(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	assert.Equal(t, "prom_obs_total", diagnostics[0].Metric)
+	assert.Equal(t, "reason", diagnostics[0].Label)
 }
 
 func TestCheckOBS01RequiresStrictAckFields(t *testing.T) {
@@ -242,6 +404,7 @@ func direct(v metrics.CounterVec, err error) {
 
 func TestCheckOBS01AckSuppressesMatchingFingerprint(t *testing.T) {
 	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
@@ -251,8 +414,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func direct(v metrics.CounterVec, err error) {
-	v.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func direct(err error) {
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
 }
 `)
 
@@ -280,6 +449,7 @@ func direct(v metrics.CounterVec, err error) {
 
 func TestCheckOBS01AckMustMatchMetricAndLabel(t *testing.T) {
 	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
@@ -289,8 +459,14 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-func direct(v metrics.CounterVec, err error) {
-	v.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func direct(err error) {
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
 }
 `)
 
@@ -345,7 +521,7 @@ func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
     oldSemantics: infra errors grouped as infra
     newSemantics: domain config errors grouped as domain
     dashboardOrAlertRefs:
-      - docs/ops/example-dashboard.md
+      - https://example.com/dashboard
     owner: platform-observability
     reviewedAt: "2026-04-28"
     rationale: reviewed SLO bucket migration with service owner
@@ -356,7 +532,7 @@ func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
     oldSemantics: infra errors grouped as infra
     newSemantics: domain config errors grouped as domain
     dashboardOrAlertRefs:
-      - docs/ops/example-dashboard.md
+      - https://example.com/dashboard
     owner: platform-observability
     reviewedAt: "2026-04-28"
     rationale: reviewed SLO bucket migration with service owner
@@ -365,6 +541,27 @@ func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
 	_, err := CheckOBS01(root, "./reachable")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "duplicates fingerprint")
+}
+
+func TestCheckOBS01RejectsPlaceholderDashboardRefs(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: abc123
+    metric: fixture_obs_total
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - TODO
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
+
+	_, err := CheckOBS01(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "dashboardOrAlertRefs")
 }
 
 func requireMetric(t *testing.T, schema *Schema, name string) Entry {

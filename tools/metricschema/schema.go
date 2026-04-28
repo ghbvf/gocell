@@ -13,6 +13,7 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sort"
@@ -26,10 +27,12 @@ import (
 )
 
 const (
-	kernelMetricsPkg = "github.com/ghbvf/gocell/kernel/observability/metrics"
-	adapterPromPkg   = "github.com/ghbvf/gocell/adapters/prometheus"
-	prometheusPkg    = "github.com/prometheus/client_golang/prometheus"
-	errcodePkg       = "github.com/ghbvf/gocell/pkg/errcode"
+	kernelMetricsPkg  = "github.com/ghbvf/gocell/kernel/observability/metrics"
+	kernelOutboxPkg   = "github.com/ghbvf/gocell/kernel/outbox"
+	runtimeMetricsPkg = "github.com/ghbvf/gocell/runtime/observability/metrics"
+	adapterPromPkg    = "github.com/ghbvf/gocell/adapters/prometheus"
+	prometheusPkg     = "github.com/prometheus/client_golang/prometheus"
+	errcodePkg        = "github.com/ghbvf/gocell/pkg/errcode"
 )
 
 // Schema describes concrete metric registrations reachable from an assembly
@@ -110,6 +113,12 @@ type prometheusOptSink struct {
 	Labels          []string
 }
 
+type obs01MetricIdentity struct {
+	Metric   string
+	Labels   []string
+	Resolved bool
+}
+
 // Build walks the package graph reachable from assemblyID's build entrypoint
 // and returns all concrete metric registrations in project-owned packages.
 func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string) (*Schema, error) {
@@ -126,10 +135,12 @@ func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string)
 	if err != nil {
 		return nil, err
 	}
-	namespace, err := prometheusProviderNamespace(projectRoot, pkgs)
+	inits := collectInits(pkgs)
+	namespace, err := prometheusProviderNamespace(projectRoot, pkgs, inits)
 	if err != nil {
 		return nil, err
 	}
+	prometheusOptSinks := collectPrometheusOptSinks(projectRoot, pkgs, inits)
 
 	schema := &Schema{
 		AssemblyID: assemblyID,
@@ -137,7 +148,7 @@ func Build(projectRoot string, project *metadata.ProjectMeta, assemblyID string)
 		Entrypoint: filepath.ToSlash(entrypoint),
 	}
 	for _, p := range pkgs {
-		sp := newScanPackage(projectRoot, p, namespace)
+		sp := newScanPackage(projectRoot, p, namespace, inits, prometheusOptSinks)
 		entries, scanErr := sp.scanMetrics()
 		if scanErr != nil {
 			return nil, scanErr
@@ -190,6 +201,38 @@ func loadPackages(root string, patterns ...string) ([]*packages.Package, error) 
 	return out, nil
 }
 
+func collectInits(pkgs []*packages.Package) map[types.Object]ast.Expr {
+	out := map[types.Object]ast.Expr{}
+	for _, p := range pkgs {
+		for _, file := range p.Syntax {
+			collectInitsFromFile(out, p.TypesInfo, file)
+		}
+	}
+	return out
+}
+
+func collectInitsFromFile(out map[types.Object]ast.Expr, info *types.Info, file *ast.File) {
+	ast.Inspect(file, func(n ast.Node) bool {
+		vs, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		collectInitsFromValueSpec(out, info, vs)
+		return true
+	})
+}
+
+func collectInitsFromValueSpec(out map[types.Object]ast.Expr, info *types.Info, vs *ast.ValueSpec) {
+	for i, name := range vs.Names {
+		if i >= len(vs.Values) {
+			continue
+		}
+		if obj := info.Defs[name]; obj != nil {
+			out[obj] = vs.Values[i]
+		}
+	}
+}
+
 func packageHasProjectFile(root string, p *packages.Package) bool {
 	for _, f := range p.CompiledGoFiles {
 		if isProjectGoFile(root, f) {
@@ -211,40 +254,50 @@ func isProjectGoFile(root, file string) bool {
 	return !strings.HasPrefix(rel, "tools/") && !strings.Contains(rel, "/testdata/")
 }
 
-func newScanPackage(root string, p *packages.Package, namespace string) *scanPackage {
+func newScanPackage(
+	root string,
+	p *packages.Package,
+	namespace string,
+	inits map[types.Object]ast.Expr,
+	prometheusOptSinks map[*types.Func][]prometheusOptSink,
+) *scanPackage {
+	if inits == nil {
+		inits = collectInits([]*packages.Package{p})
+	}
+	if prometheusOptSinks == nil {
+		prometheusOptSinks = map[*types.Func][]prometheusOptSink{}
+	}
 	sp := &scanPackage{
-		pkg:       p,
-		inits:     map[types.Object]ast.Expr{},
-		fset:      p.Fset,
-		root:      root,
-		seenOpts:  map[*ast.CompositeLit]bool{},
-		namespace: namespace,
+		pkg:                p,
+		inits:              inits,
+		fset:               p.Fset,
+		root:               root,
+		seenOpts:           map[*ast.CompositeLit]bool{},
+		namespace:          namespace,
+		prometheusOptSinks: prometheusOptSinks,
 	}
-	for _, file := range p.Syntax {
-		ast.Inspect(file, func(n ast.Node) bool {
-			vs, ok := n.(*ast.ValueSpec)
-			if !ok {
-				return true
-			}
-			for i, name := range vs.Names {
-				if i >= len(vs.Values) {
-					continue
-				}
-				if obj := p.TypesInfo.Defs[name]; obj != nil {
-					sp.inits[obj] = vs.Values[i]
-				}
-			}
-			return true
-		})
-	}
-	sp.prometheusOptSinks = sp.collectPrometheusOptSinks()
 	return sp
 }
 
-func prometheusProviderNamespace(root string, pkgs []*packages.Package) (string, error) {
+func collectPrometheusOptSinks(
+	root string,
+	pkgs []*packages.Package,
+	inits map[types.Object]ast.Expr,
+) map[*types.Func][]prometheusOptSink {
+	out := map[*types.Func][]prometheusOptSink{}
+	for _, p := range pkgs {
+		sp := newScanPackage(root, p, "", inits, nil)
+		for fn, sinks := range sp.collectPrometheusOptSinks() {
+			out[fn] = append(out[fn], sinks...)
+		}
+	}
+	return out
+}
+
+func prometheusProviderNamespace(root string, pkgs []*packages.Package, inits map[types.Object]ast.Expr) (string, error) {
 	var namespace string
 	for _, p := range pkgs {
-		ns, err := prometheusProviderNamespaceForPackage(root, p)
+		ns, err := prometheusProviderNamespaceForPackage(root, p, inits)
 		if err != nil {
 			return "", err
 		}
@@ -259,8 +312,8 @@ func prometheusProviderNamespace(root string, pkgs []*packages.Package) (string,
 	return namespace, nil
 }
 
-func prometheusProviderNamespaceForPackage(root string, p *packages.Package) (string, error) {
-	sp := newScanPackage(root, p, "")
+func prometheusProviderNamespaceForPackage(root string, p *packages.Package, inits map[types.Object]ast.Expr) (string, error) {
+	sp := newScanPackage(root, p, "", inits, nil)
 	var namespace string
 	for _, file := range p.Syntax {
 		path := p.Fset.Position(file.Pos()).Filename
@@ -368,7 +421,7 @@ func (sp *scanPackage) scanMetrics() ([]Entry, error) {
 			return nil, err
 		}
 		rel = filepath.ToSlash(rel)
-		if rel == "adapters/prometheus/metric_provider.go" {
+		if skipMetricImplementationFile(rel) {
 			continue
 		}
 		direct, scanErr := sp.scanDirectPrometheus(file, rel)
@@ -414,26 +467,216 @@ func (sp *scanPackage) scanDirectPrometheusNode(node ast.Node, rel string, param
 		if !ok {
 			return true
 		}
-		entry, ok, err := sp.directPrometheusEntry(call, rel, params)
+		callEntries, err := sp.directPrometheusCallEntries(call, rel, params)
 		if err != nil {
 			scanErr = err
 			return false
 		}
-		if ok {
-			entries = append(entries, entry)
-			return true
-		}
-		wrapperEntries, ok, err := sp.prometheusWrapperEntries(call, rel)
-		if err != nil {
-			scanErr = err
-			return false
-		}
-		if ok {
-			entries = append(entries, wrapperEntries...)
-		}
+		entries = append(entries, callEntries...)
 		return true
 	})
 	return entries, scanErr
+}
+
+func (sp *scanPackage) directPrometheusCallEntries(
+	call *ast.CallExpr,
+	rel string,
+	params map[types.Object]bool,
+) ([]Entry, error) {
+	if entries, ok, err := sp.knownMetricWrapperEntries(call, rel); ok || err != nil {
+		return entries, err
+	}
+	entry, ok, err := sp.directPrometheusEntry(call, rel, params)
+	if err != nil || ok {
+		if !ok {
+			return nil, err
+		}
+		return []Entry{entry}, err
+	}
+	entries, _, err := sp.prometheusWrapperEntries(call, rel)
+	return entries, err
+}
+
+func skipMetricImplementationFile(rel string) bool {
+	switch rel {
+	case "adapters/prometheus/metric_provider.go",
+		"adapters/prometheus/hook_observer.go",
+		"runtime/observability/metrics/provider_collector.go",
+		"kernel/outbox/relay_collector.go":
+		return true
+	}
+	return false
+}
+
+func (sp *scanPackage) knownMetricWrapperEntries(call *ast.CallExpr, rel string) ([]Entry, bool, error) {
+	fn := calledFunc(sp.pkg.TypesInfo, call)
+	if fn == nil || fn.Pkg() == nil {
+		return nil, false, nil
+	}
+	switch fn.Pkg().Path() {
+	case adapterPromPkg:
+		if fn.Name() == "NewHookObserver" {
+			entries, err := sp.hookObserverEntries(call, rel)
+			return entries, true, err
+		}
+	case runtimeMetricsPkg:
+		if fn.Name() == "NewProviderCollector" {
+			entries, err := sp.providerCollectorEntries(call, rel)
+			return entries, true, err
+		}
+	case kernelOutboxPkg:
+		if fn.Name() == "NewProviderRelayCollector" {
+			entries, err := sp.providerRelayCollectorEntries(call, rel)
+			return entries, true, err
+		}
+	}
+	return nil, false, nil
+}
+
+func (sp *scanPackage) hookObserverEntries(call *ast.CallExpr, rel string) ([]Entry, error) {
+	if len(call.Args) == 0 {
+		return nil, sp.unresolved(call, rel, "prometheus hook observer config argument is missing")
+	}
+	lit := sp.resolveCompositeLit(call.Args[0])
+	if lit == nil {
+		return nil, sp.unresolved(call.Args[0], rel, "prometheus hook observer config must be a resolvable literal")
+	}
+	namespace := "gocell"
+	if value, ok := compositeField(lit, "Namespace"); ok {
+		ns, ok := sp.string(value)
+		if !ok {
+			return nil, sp.unresolved(value, rel, "prometheus hook observer namespace must be a compile-time string")
+		}
+		if ns != "" {
+			namespace = ns
+		}
+	}
+	buckets, err := sp.configBuckets(lit, "DurationBuckets", adapterPromPkg, "DefaultHookDurationBuckets", rel)
+	if err != nil {
+		return nil, err
+	}
+	return []Entry{
+		sp.entryFromOpts("counter", opts{
+			name:      "cell_hook_total",
+			namespace: namespace,
+			help:      "Total number of cell lifecycle hook invocations, partitioned by outcome.",
+			labels:    []string{"cell_id", "hook", "outcome"},
+		}, rel, call.Pos()),
+		sp.entryFromOpts("histogram", opts{
+			name:      "cell_hook_duration_seconds",
+			namespace: namespace,
+			help:      "Duration of cell lifecycle hook invocations in seconds.",
+			labels:    []string{"cell_id", "hook"},
+			buckets:   buckets,
+		}, rel, call.Pos()),
+	}, nil
+}
+
+func (sp *scanPackage) providerCollectorEntries(call *ast.CallExpr, rel string) ([]Entry, error) {
+	if len(call.Args) < 2 {
+		return nil, sp.unresolved(call, rel, "provider collector config argument is missing")
+	}
+	lit := sp.resolveCompositeLit(call.Args[1])
+	if lit == nil {
+		return nil, sp.unresolved(call.Args[1], rel, "provider collector config must be a resolvable literal")
+	}
+	buckets, err := sp.configBuckets(lit, "DurationBuckets", runtimeMetricsPkg, "DefaultDurationBuckets", rel)
+	if err != nil {
+		return nil, err
+	}
+	labels := []string{"method", "route", "status", "cell"}
+	return []Entry{
+		sp.entryFromOpts("counter", opts{
+			name:      "http_requests_total",
+			namespace: sp.namespace,
+			help:      "Total number of HTTP requests.",
+			labels:    labels,
+		}, rel, call.Pos()),
+		sp.entryFromOpts("histogram", opts{
+			name:      "http_request_duration_seconds",
+			namespace: sp.namespace,
+			help:      "HTTP request duration in seconds.",
+			labels:    labels,
+			buckets:   buckets,
+		}, rel, call.Pos()),
+	}, nil
+}
+
+func (sp *scanPackage) providerRelayCollectorEntries(call *ast.CallExpr, rel string) ([]Entry, error) {
+	var lit *ast.CompositeLit
+	if len(call.Args) > 2 {
+		lit = sp.resolveCompositeLit(call.Args[2])
+		if lit == nil {
+			return nil, sp.unresolved(call.Args[2], rel, "provider relay collector config must be a resolvable literal")
+		}
+	}
+	pollBuckets, err := sp.configBuckets(lit, "PollBuckets", kernelOutboxPkg, "DefaultRelayPollBuckets", rel)
+	if err != nil {
+		return nil, err
+	}
+	batchBuckets, err := sp.configBuckets(lit, "BatchBuckets", kernelOutboxPkg, "DefaultRelayBatchBuckets", rel)
+	if err != nil {
+		return nil, err
+	}
+	return []Entry{
+		sp.entryFromOpts("counter", opts{
+			name:      "outbox_relayed_total",
+			namespace: sp.namespace,
+			help:      "Total number of outbox entries processed by the relay, by outcome.",
+			labels:    []string{"cell", "outcome"},
+		}, rel, call.Pos()),
+		sp.entryFromOpts("histogram", opts{
+			name:      "outbox_poll_duration_seconds",
+			namespace: sp.namespace,
+			help:      "Duration of each relay poll phase in seconds.",
+			labels:    []string{"cell", "phase"},
+			buckets:   pollBuckets,
+		}, rel, call.Pos()),
+		sp.entryFromOpts("histogram", opts{
+			name:      "outbox_batch_size",
+			namespace: sp.namespace,
+			help:      "Number of entries claimed per relay poll cycle.",
+			labels:    []string{"cell"},
+			buckets:   batchBuckets,
+		}, rel, call.Pos()),
+		sp.entryFromOpts("counter", opts{
+			name:      "outbox_reclaimed_total",
+			namespace: sp.namespace,
+			help:      "Total number of stale entries reclaimed by the relay.",
+			labels:    []string{"cell"},
+		}, rel, call.Pos()),
+		sp.entryFromOpts("counter", opts{
+			name:      "outbox_cleaned_total",
+			namespace: sp.namespace,
+			help:      "Total number of entries cleaned up (deleted) by the relay.",
+			labels:    []string{"cell", "status"},
+		}, rel, call.Pos()),
+	}, nil
+}
+
+func (sp *scanPackage) configBuckets(
+	lit *ast.CompositeLit,
+	fieldName, defaultPkg, defaultName, rel string,
+) ([]string, error) {
+	if lit != nil {
+		if value, ok := compositeField(lit, fieldName); ok {
+			return sp.numberSlice(value, rel)
+		}
+	}
+	return sp.defaultNumberSlice(defaultPkg, defaultName, rel)
+}
+
+func compositeField(lit *ast.CompositeLit, fieldName string) (ast.Expr, bool) {
+	if lit == nil {
+		return nil, false
+	}
+	for _, elt := range lit.Elts {
+		key, value, ok := keyValueField(elt)
+		if ok && key == fieldName {
+			return value, true
+		}
+	}
+	return nil, false
 }
 
 func (sp *scanPackage) collectPrometheusOptSinks() map[*types.Func][]prometheusOptSink {
@@ -763,10 +1006,7 @@ func (sp *scanPackage) applyPrometheusOptField(out *opts, key string, value ast.
 	case "Namespace":
 		namespace, ok := sp.string(value)
 		if !ok {
-			namespace, ok = sp.defaultedPrometheusNamespace(value)
-			if !ok {
-				return sp.unresolved(value, rel, "metric namespace must be a compile-time string")
-			}
+			return sp.unresolved(value, rel, "metric namespace must be a compile-time string")
 		}
 		out.namespace = namespace
 	case "Subsystem":
@@ -790,12 +1030,11 @@ func (sp *scanPackage) applyPrometheusOptField(out *opts, key string, value ast.
 }
 
 func (sp *scanPackage) applyBucketField(out *opts, value ast.Expr, rel string) error {
-	buckets, source, err := sp.numberSliceOrSource(value, rel)
+	buckets, err := sp.numberSlice(value, rel)
 	if err != nil {
 		return err
 	}
 	out.buckets = buckets
-	out.bucketSource = source
 	return nil
 }
 
@@ -809,18 +1048,6 @@ func (sp *scanPackage) string(expr ast.Expr) (string, bool) {
 	}
 	if init := sp.inits[obj]; init != nil && init != expr {
 		return sp.string(init)
-	}
-	return "", false
-}
-
-func (sp *scanPackage) defaultedPrometheusNamespace(expr ast.Expr) (string, bool) {
-	sel, ok := expr.(*ast.SelectorExpr)
-	if !ok || sel.Sel.Name != "Namespace" {
-		return "", false
-	}
-	pkgPath, typ := namedTypePathAndName(sp.pkg.TypesInfo.TypeOf(sel.X))
-	if pkgPath == adapterPromPkg && typ == "HookObserverConfig" {
-		return "gocell", true
 	}
 	return "", false
 }
@@ -861,55 +1088,19 @@ func (sp *scanPackage) stringSlice(expr ast.Expr, rel string) ([]string, error) 
 	return nil, sp.unresolved(expr, rel, "label names must be a resolvable string slice")
 }
 
-func (sp *scanPackage) numberSliceOrSource(expr ast.Expr, rel string) ([]string, string, error) {
+func (sp *scanPackage) numberSlice(expr ast.Expr, rel string) ([]string, error) {
 	if lit := sp.resolveCompositeLit(expr); lit != nil {
 		out := make([]string, 0, len(lit.Elts))
 		for _, elt := range lit.Elts {
 			s, ok := sp.number(elt)
 			if !ok {
-				return nil, "", sp.unresolved(elt, rel, "bucket values must be numeric constants")
+				return nil, sp.unresolved(elt, rel, "bucket values must be numeric constants")
 			}
 			out = append(out, s)
 		}
-		return out, "", nil
+		return out, nil
 	}
-	source := sp.bucketSource(expr)
-	if source == "" {
-		return nil, "", sp.unresolved(expr, rel, "bucket source is not representable")
-	}
-	return nil, source, nil
-}
-
-func (sp *scanPackage) bucketSource(expr ast.Expr) string {
-	sel, ok := expr.(*ast.SelectorExpr)
-	if !ok {
-		return exprString(sp.fset, expr)
-	}
-	obj := sp.pkg.TypesInfo.Uses[sel.Sel]
-	if obj == nil || obj.Pkg() == nil {
-		return exprString(sp.fset, expr)
-	}
-	typ := namedTypeName(sp.pkg.TypesInfo.TypeOf(sel.X))
-	if typ == "" {
-		return obj.Pkg().Path() + "." + obj.Name()
-	}
-	return obj.Pkg().Path() + "." + typ + "." + obj.Name()
-}
-
-func namedTypeName(t types.Type) string {
-	_, name := namedTypePathAndName(t)
-	return name
-}
-
-func namedTypePathAndName(t types.Type) (string, string) {
-	if ptr, ok := t.(*types.Pointer); ok {
-		t = ptr.Elem()
-	}
-	named, ok := t.(*types.Named)
-	if !ok || named.Obj() == nil || named.Obj().Pkg() == nil {
-		return "", ""
-	}
-	return named.Obj().Pkg().Path(), named.Obj().Name()
+	return nil, sp.unresolved(expr, rel, "bucket values must be a resolvable numeric slice")
 }
 
 func (sp *scanPackage) number(expr ast.Expr) (string, bool) {
@@ -951,6 +1142,17 @@ func (sp *scanPackage) constLabelNames(expr ast.Expr, rel string) ([]string, err
 		out = append(out, key)
 	}
 	return sortedUnique(out), nil
+}
+
+func (sp *scanPackage) defaultNumberSlice(pkgPath, name, rel string) ([]string, error) {
+	for obj, expr := range sp.inits {
+		if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != pkgPath || obj.Name() != name {
+			continue
+		}
+		return sp.numberSlice(expr, rel)
+	}
+	return nil, sp.unresolved(&ast.Ident{Name: name, NamePos: token.NoPos}, rel,
+		fmt.Sprintf("default bucket values %s.%s are not resolvable", pkgPath, name))
 }
 
 func (sp *scanPackage) resolveCompositeLit(expr ast.Expr) *ast.CompositeLit {
@@ -1100,6 +1302,206 @@ func exprString(fset *token.FileSet, n any) string {
 	return b.String()
 }
 
+func collectOBS01MetricIdentities(
+	root string,
+	pkgs []*packages.Package,
+	inits map[types.Object]ast.Expr,
+	namespace string,
+) map[types.Object]obs01MetricIdentity {
+	out := map[types.Object]obs01MetricIdentity{}
+	for _, p := range pkgs {
+		sp := newScanPackage(root, p, namespace, inits, nil)
+		for _, file := range p.Syntax {
+			rel := sp.relForNode(file)
+			ast.Inspect(file, func(n ast.Node) bool {
+				switch node := n.(type) {
+				case *ast.ValueSpec:
+					sp.collectOBS01MetricIdentitiesFromValueSpec(out, node, rel)
+				case *ast.AssignStmt:
+					sp.collectOBS01MetricIdentitiesFromAssign(out, node, rel)
+				}
+				return true
+			})
+		}
+	}
+	return out
+}
+
+func collectOBS01ReturnTaints(pkgs []*packages.Package) map[*types.Func]bool {
+	funcs, infos, objects := collectOBS01Funcs(pkgs)
+	out := map[*types.Func]bool{}
+	for changed := true; changed; {
+		changed = updateOBS01ReturnTaints(funcs, infos, objects, out)
+	}
+	return out
+}
+
+func collectOBS01Funcs(pkgs []*packages.Package) (
+	[]*ast.FuncDecl,
+	map[*ast.FuncDecl]*types.Info,
+	map[*ast.FuncDecl]*types.Func,
+) {
+	funcs := make([]*ast.FuncDecl, 0)
+	infos := map[*ast.FuncDecl]*types.Info{}
+	objects := map[*ast.FuncDecl]*types.Func{}
+	for _, p := range pkgs {
+		for _, file := range p.Syntax {
+			for _, decl := range file.Decls {
+				fn, ok := decl.(*ast.FuncDecl)
+				if !ok || fn.Body == nil {
+					continue
+				}
+				obj, ok := p.TypesInfo.Defs[fn.Name].(*types.Func)
+				if !ok {
+					continue
+				}
+				funcs = append(funcs, fn)
+				infos[fn] = p.TypesInfo
+				objects[fn] = obj
+			}
+		}
+	}
+	return funcs, infos, objects
+}
+
+func updateOBS01ReturnTaints(
+	funcs []*ast.FuncDecl,
+	infos map[*ast.FuncDecl]*types.Info,
+	objects map[*ast.FuncDecl]*types.Func,
+	out map[*types.Func]bool,
+) bool {
+	changed := false
+	for _, fn := range funcs {
+		obj := objects[fn]
+		if out[obj] {
+			continue
+		}
+		if obs01FuncReturnsClassifier(infos[fn], fn, out) {
+			out[obj] = true
+			changed = true
+		}
+	}
+	return changed
+}
+
+func obs01FuncReturnsClassifier(info *types.Info, fn *ast.FuncDecl, returnTaints map[*types.Func]bool) bool {
+	tainted := map[types.Object]bool{}
+	found := false
+	ast.Inspect(fn.Body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		switch node := n.(type) {
+		case *ast.AssignStmt:
+			markOBS01AssignedTaint(info, node.Lhs, node.Rhs, tainted, returnTaints)
+		case *ast.ValueSpec:
+			markOBS01ValueSpecTaint(info, node, tainted, returnTaints)
+		case *ast.ReturnStmt:
+			for _, result := range node.Results {
+				if exprDependsOnErrcodeClassifier(info, result, tainted, returnTaints) {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
+	})
+	return found
+}
+
+func (sp *scanPackage) collectOBS01MetricIdentitiesFromValueSpec(
+	out map[types.Object]obs01MetricIdentity,
+	spec *ast.ValueSpec,
+	rel string,
+) {
+	for i, name := range spec.Names {
+		if i >= len(spec.Values) {
+			continue
+		}
+		identity, ok := sp.metricIdentityFromCall(spec.Values[i], rel)
+		if !ok {
+			continue
+		}
+		if obj := sp.pkg.TypesInfo.Defs[name]; obj != nil {
+			out[obj] = identity
+		}
+	}
+}
+
+func (sp *scanPackage) collectOBS01MetricIdentitiesFromAssign(
+	out map[types.Object]obs01MetricIdentity,
+	stmt *ast.AssignStmt,
+	rel string,
+) {
+	for i, left := range stmt.Lhs {
+		if i >= len(stmt.Rhs) {
+			continue
+		}
+		identity, ok := sp.metricIdentityFromCall(stmt.Rhs[i], rel)
+		if !ok {
+			continue
+		}
+		if obj := objectForOBS01Expr(sp.pkg.TypesInfo, left); obj != nil {
+			out[obj] = identity
+		}
+	}
+}
+
+func (sp *scanPackage) metricIdentityFromCall(expr ast.Expr, rel string) (obs01MetricIdentity, bool) {
+	call, ok := expr.(*ast.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return obs01MetricIdentity{}, false
+	}
+	fn := calledFunc(sp.pkg.TypesInfo, call)
+	if fn == nil || fn.Pkg() == nil {
+		return obs01MetricIdentity{}, false
+	}
+	switch {
+	case fn.Pkg().Path() == kernelMetricsPkg && (fn.Name() == "CounterVec" || fn.Name() == "HistogramVec"):
+		return sp.kernelMetricIdentity(call.Args[0], rel)
+	case fn.Pkg().Path() == prometheusPkg:
+		_, vec, ok := prometheusConstructor(sp.pkg.TypesInfo, call)
+		if !ok || !vec {
+			return obs01MetricIdentity{}, false
+		}
+		return sp.prometheusMetricIdentity(call, rel)
+	}
+	return obs01MetricIdentity{}, false
+}
+
+func (sp *scanPackage) kernelMetricIdentity(expr ast.Expr, rel string) (obs01MetricIdentity, bool) {
+	lit := sp.resolveCompositeLit(expr)
+	if lit == nil {
+		return obs01MetricIdentity{}, false
+	}
+	parsed, hasName, err := sp.extractKernelOpts(lit, rel)
+	if err != nil || !hasName {
+		return obs01MetricIdentity{}, false
+	}
+	name := promFQName(sp.namespace, "", parsed.name)
+	return obs01MetricIdentity{Metric: name, Labels: parsed.labels, Resolved: true}, true
+}
+
+func (sp *scanPackage) prometheusMetricIdentity(call *ast.CallExpr, rel string) (obs01MetricIdentity, bool) {
+	lit := sp.resolveCompositeLit(call.Args[0])
+	if lit == nil {
+		return obs01MetricIdentity{}, false
+	}
+	parsed, hasName, err := sp.extractPrometheusOpts(lit, rel)
+	if err != nil || !hasName {
+		return obs01MetricIdentity{}, false
+	}
+	labels, err := sp.prometheusVecLabels(call, rel)
+	if err != nil {
+		return obs01MetricIdentity{}, false
+	}
+	return obs01MetricIdentity{
+		Metric:   promFQName(parsed.namespace, parsed.subsystem, parsed.name),
+		Labels:   labels,
+		Resolved: true,
+	}, true
+}
+
 // CheckOBS01 reports metric label values whose expression depends on
 // errcode.Category or errcode.IsInfraError without a checked-in acknowledgement.
 func CheckOBS01(projectRoot string, patterns ...string) ([]Diagnostic, error) {
@@ -1114,9 +1516,16 @@ func CheckOBS01(projectRoot string, patterns ...string) ([]Diagnostic, error) {
 	if err != nil {
 		return nil, err
 	}
+	inits := collectInits(pkgs)
+	namespace, err := prometheusProviderNamespace(projectRoot, pkgs, inits)
+	if err != nil {
+		return nil, err
+	}
+	metricIdentities := collectOBS01MetricIdentities(projectRoot, pkgs, inits, namespace)
+	returnTaints := collectOBS01ReturnTaints(pkgs)
 	var diagnostics []Diagnostic
 	for _, p := range pkgs {
-		pkgDiagnostics, scanErr := scanOBS01Package(projectRoot, p, acks)
+		pkgDiagnostics, scanErr := scanOBS01Package(projectRoot, p, acks, metricIdentities, returnTaints)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -1135,19 +1544,27 @@ func CheckOBS01(projectRoot string, patterns ...string) ([]Diagnostic, error) {
 }
 
 type obs01SinkArg struct {
-	Expr   ast.Expr
-	Metric string
-	Label  string
+	Expr    ast.Expr
+	Metric  string
+	Label   string
+	Ackable bool
 }
 
 type obs01SinkBinding struct {
-	Metric string
-	Label  string
+	Metric  string
+	Label   string
+	Ackable bool
 }
 
-func scanOBS01Package(root string, p *packages.Package, acks map[string]obsAck) ([]Diagnostic, error) {
+func scanOBS01Package(
+	root string,
+	p *packages.Package,
+	acks map[string]obsAck,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+	returnTaints map[*types.Func]bool,
+) ([]Diagnostic, error) {
 	var diagnostics []Diagnostic
-	sinkParams := collectOBS01SinkParams(p)
+	sinkParams := collectOBS01SinkParams(p, metricIdentities)
 	for _, file := range p.Syntax {
 		path := p.Fset.Position(file.Pos()).Filename
 		if !isProjectGoFile(root, path) {
@@ -1157,7 +1574,7 @@ func scanOBS01Package(root string, p *packages.Package, acks map[string]obsAck) 
 		if err != nil {
 			return nil, err
 		}
-		fileDiagnostics := scanOBS01File(p, file, filepath.ToSlash(rel), acks, sinkParams)
+		fileDiagnostics := scanOBS01File(p, file, filepath.ToSlash(rel), acks, sinkParams, metricIdentities, returnTaints)
 		diagnostics = append(diagnostics, fileDiagnostics...)
 	}
 	return diagnostics, nil
@@ -1169,6 +1586,8 @@ func scanOBS01File(
 	rel string,
 	acks map[string]obsAck,
 	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+	returnTaints map[*types.Func]bool,
 ) []Diagnostic {
 	var diagnostics []Diagnostic
 	for _, decl := range file.Decls {
@@ -1176,7 +1595,7 @@ func scanOBS01File(
 		if !ok || fn.Body == nil {
 			continue
 		}
-		diagnostics = append(diagnostics, scanOBS01Func(p, fn, rel, acks, sinkParams)...)
+		diagnostics = append(diagnostics, scanOBS01Func(p, fn, rel, acks, sinkParams, metricIdentities, returnTaints)...)
 	}
 	return diagnostics
 }
@@ -1187,17 +1606,20 @@ func scanOBS01Func(
 	rel string,
 	acks map[string]obsAck,
 	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+	returnTaints map[*types.Func]bool,
 ) []Diagnostic {
 	var diagnostics []Diagnostic
 	tainted := map[types.Object]bool{}
 	ast.Inspect(fn.Body, func(n ast.Node) bool {
 		switch node := n.(type) {
 		case *ast.AssignStmt:
-			markOBS01AssignedTaint(p.TypesInfo, node.Lhs, node.Rhs, tainted)
+			markOBS01AssignedTaint(p.TypesInfo, node.Lhs, node.Rhs, tainted, returnTaints)
 		case *ast.ValueSpec:
-			markOBS01ValueSpecTaint(p.TypesInfo, node, tainted)
+			markOBS01ValueSpecTaint(p.TypesInfo, node, tainted, returnTaints)
 		case *ast.CallExpr:
-			diagnostics = append(diagnostics, obs01DiagnosticsForCall(p, node, rel, acks, tainted, sinkParams)...)
+			diagnostics = append(diagnostics,
+				obs01DiagnosticsForCall(p, node, rel, acks, tainted, sinkParams, metricIdentities, returnTaints)...)
 		}
 		return true
 	})
@@ -1211,15 +1633,17 @@ func obs01DiagnosticsForCall(
 	acks map[string]obsAck,
 	tainted map[types.Object]bool,
 	sinkParams map[*types.Func]map[int][]obs01SinkBinding,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+	returnTaints map[*types.Func]bool,
 ) []Diagnostic {
 	var diagnostics []Diagnostic
-	for _, sink := range metricLabelBindingArgs(p.TypesInfo, p.Fset, call) {
-		if exprDependsOnErrcodeClassifier(p.TypesInfo, sink.Expr, tainted) {
+	for _, sink := range metricLabelBindingArgs(p.TypesInfo, p.Fset, call, metricIdentities) {
+		if exprDependsOnErrcodeClassifier(p.TypesInfo, sink.Expr, tainted, returnTaints) {
 			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks)
 		}
 	}
 	for _, sink := range obs01SinkArgs(p.TypesInfo, call, sinkParams) {
-		if exprDependsOnErrcodeClassifier(p.TypesInfo, sink.Expr, tainted) {
+		if exprDependsOnErrcodeClassifier(p.TypesInfo, sink.Expr, tainted, returnTaints) {
 			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks)
 		}
 	}
@@ -1235,8 +1659,10 @@ func appendOBS01DiagnosticIfUnacked(
 ) []Diagnostic {
 	pos := p.Fset.Position(sink.Expr.Pos())
 	fingerprint := obs01Fingerprint(rel, pos.Line, pos.Column, sink.Metric, sink.Label, exprString(p.Fset, sink.Expr))
-	if ack, ok := acks[fingerprint]; ok && ack.matches(sink) {
-		return out
+	if sink.Ackable {
+		if ack, ok := acks[fingerprint]; ok && ack.matches(sink) {
+			return out
+		}
 	}
 	return append(out, obs01Diagnostic(p, sink, rel, fingerprint))
 }
@@ -1251,25 +1677,47 @@ func obs01Diagnostic(p *packages.Package, sink obs01SinkArg, rel, fingerprint st
 		Metric:      sink.Metric,
 		Label:       sink.Label,
 		Fingerprint: fingerprint,
-		Message: fmt.Sprintf("metric label value depends on errcode.Category or errcode.IsInfraError (metric=%q label=%q fingerprint=%s); "+
-			"add a checked-in docs/observability/metrics-migration-acks.yaml entry with this fingerprint after documenting the dashboard/alert migration",
-			sink.Metric, sink.Label, fingerprint),
+		Message:     obs01DiagnosticMessage(sink, fingerprint),
 	}
 }
 
-func metricLabelBindingArgs(info *types.Info, fset *token.FileSet, call *ast.CallExpr) []obs01SinkArg {
+func obs01DiagnosticMessage(sink obs01SinkArg, fingerprint string) string {
+	if !sink.Ackable {
+		return fmt.Sprintf("metric label value depends on errcode.Category or errcode.IsInfraError, "+
+			"but the metric/label identity is not machine-resolvable (metric=%q label=%q fingerprint=%s); "+
+			"use metrics.Labels with a metric vector constructed from literal opts before adding an acknowledgement",
+			sink.Metric, sink.Label, fingerprint)
+	}
+	return fmt.Sprintf("metric label value depends on errcode.Category or errcode.IsInfraError (metric=%q label=%q fingerprint=%s); "+
+		"add a checked-in docs/observability/metrics-migration-acks.yaml entry with this fingerprint after documenting the dashboard/alert migration",
+		sink.Metric, sink.Label, fingerprint)
+}
+
+func metricLabelBindingArgs(
+	info *types.Info,
+	fset *token.FileSet,
+	call *ast.CallExpr,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+) []obs01SinkArg {
 	sel, ok := call.Fun.(*ast.SelectorExpr)
 	if !ok {
 		return nil
 	}
-	metric := obs01MetricSinkName(info, fset, sel.X)
+	metric := obs01MetricSink(info, fset, sel.X, metricIdentities)
 	if sel.Sel.Name == "WithLabelValues" {
 		out := make([]obs01SinkArg, 0, len(call.Args))
 		for i, arg := range call.Args {
+			label := fmt.Sprintf("arg%d", i+1)
+			ackable := false
+			if i < len(metric.Labels) {
+				label = metric.Labels[i]
+				ackable = metric.Resolved
+			}
 			out = append(out, obs01SinkArg{
-				Expr:   arg,
-				Metric: metric,
-				Label:  fmt.Sprintf("arg%d", i+1),
+				Expr:    arg,
+				Metric:  metric.Metric,
+				Label:   label,
+				Ackable: ackable,
 			})
 		}
 		return out
@@ -1281,16 +1729,17 @@ func metricLabelBindingArgs(info *types.Info, fset *token.FileSet, call *ast.Cal
 	if !ok || typ != "Labels" || (pkgPath != kernelMetricsPkg && pkgPath != prometheusPkg) {
 		return nil
 	}
-	return obs01LabelsArgs(info, fset, metric, call.Args[0])
+	return obs01LabelsArgs(info, fset, metric.Metric, metric.Resolved, call.Args[0])
 }
 
-func obs01LabelsArgs(info *types.Info, fset *token.FileSet, metric string, expr ast.Expr) []obs01SinkArg {
+func obs01LabelsArgs(info *types.Info, fset *token.FileSet, metric string, ackableMetric bool, expr ast.Expr) []obs01SinkArg {
 	lit, ok := expr.(*ast.CompositeLit)
 	if !ok {
 		return []obs01SinkArg{{
-			Expr:   expr,
-			Metric: metric,
-			Label:  "<labels>",
+			Expr:    expr,
+			Metric:  metric,
+			Label:   "<labels>",
+			Ackable: false,
 		}}
 	}
 	out := make([]obs01SinkArg, 0, len(lit.Elts))
@@ -1300,29 +1749,33 @@ func obs01LabelsArgs(info *types.Info, fset *token.FileSet, metric string, expr 
 			continue
 		}
 		out = append(out, obs01SinkArg{
-			Expr:   kv.Value,
-			Metric: metric,
-			Label:  obs01LabelKey(info, fset, kv.Key),
+			Expr:    kv.Value,
+			Metric:  metric,
+			Label:   obs01LabelKey(info, fset, kv.Key),
+			Ackable: ackableMetric,
 		})
 	}
 	if len(out) == 0 {
 		return []obs01SinkArg{{
-			Expr:   expr,
-			Metric: metric,
-			Label:  "<labels>",
+			Expr:    expr,
+			Metric:  metric,
+			Label:   "<labels>",
+			Ackable: false,
 		}}
 	}
 	return out
 }
 
-func obs01MetricSinkName(info *types.Info, fset *token.FileSet, expr ast.Expr) string {
-	if obj := objectForOBS01Expr(info, expr); obj != nil {
-		return obj.Name()
+func obs01MetricSink(
+	info *types.Info,
+	fset *token.FileSet,
+	expr ast.Expr,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+) obs01MetricIdentity {
+	if identity, ok := metricIdentities[objectForOBS01Expr(info, expr)]; ok {
+		return identity
 	}
-	if s := exprString(fset, expr); s != "" {
-		return s
-	}
-	return "<metric>"
+	return obs01MetricIdentity{Metric: exprString(fset, expr), Resolved: false}
 }
 
 func obs01LabelKey(info *types.Info, fset *token.FileSet, expr ast.Expr) string {
@@ -1345,7 +1798,10 @@ func obs01ConstantString(info *types.Info, expr ast.Expr) (string, bool) {
 	return "", false
 }
 
-func collectOBS01SinkParams(p *packages.Package) map[*types.Func]map[int][]obs01SinkBinding {
+func collectOBS01SinkParams(
+	p *packages.Package,
+	metricIdentities map[types.Object]obs01MetricIdentity,
+) map[*types.Func]map[int][]obs01SinkBinding {
 	out := map[*types.Func]map[int][]obs01SinkBinding{}
 	for _, file := range p.Syntax {
 		for _, decl := range file.Decls {
@@ -1353,7 +1809,7 @@ func collectOBS01SinkParams(p *packages.Package) map[*types.Func]map[int][]obs01
 			if !ok {
 				continue
 			}
-			collectOBS01SinkParamsForFunc(p.TypesInfo, p.Fset, fn, out)
+			collectOBS01SinkParamsForFunc(p.TypesInfo, p.Fset, fn, out, metricIdentities)
 		}
 	}
 	return out
@@ -1364,6 +1820,7 @@ func collectOBS01SinkParamsForFunc(
 	fset *token.FileSet,
 	fn *ast.FuncDecl,
 	out map[*types.Func]map[int][]obs01SinkBinding,
+	metricIdentities map[types.Object]obs01MetricIdentity,
 ) {
 	if fn.Body == nil {
 		return
@@ -1381,7 +1838,7 @@ func collectOBS01SinkParamsForFunc(
 		if !ok {
 			return true
 		}
-		recordOBS01SinkParamDeps(info, fset, out, obj, call, params)
+		recordOBS01SinkParamDeps(info, fset, out, obj, call, params, metricIdentities)
 		return true
 	})
 }
@@ -1393,12 +1850,14 @@ func recordOBS01SinkParamDeps(
 	fn *types.Func,
 	call *ast.CallExpr,
 	params map[types.Object]int,
+	metricIdentities map[types.Object]obs01MetricIdentity,
 ) {
-	for _, sink := range metricLabelBindingArgs(info, fset, call) {
+	for _, sink := range metricLabelBindingArgs(info, fset, call, metricIdentities) {
 		for idx := range obs01ParamDeps(info, sink.Expr, params) {
 			recordOBS01SinkBinding(out, fn, idx, obs01SinkBinding{
-				Metric: sink.Metric,
-				Label:  sink.Label,
+				Metric:  sink.Metric,
+				Label:   sink.Label,
+				Ackable: sink.Ackable,
 			})
 		}
 	}
@@ -1490,9 +1949,10 @@ func obs01SinkArgs(
 		if idx < len(call.Args) {
 			for _, binding := range sinkParams[fn][idx] {
 				out = append(out, obs01SinkArg{
-					Expr:   call.Args[idx],
-					Metric: binding.Metric,
-					Label:  binding.Label,
+					Expr:    call.Args[idx],
+					Metric:  binding.Metric,
+					Label:   binding.Label,
+					Ackable: binding.Ackable,
 				})
 			}
 		}
@@ -1506,35 +1966,66 @@ func calledFunc(info *types.Info, call *ast.CallExpr) *types.Func {
 		fn, _ := info.Uses[fun].(*types.Func)
 		return fn
 	case *ast.SelectorExpr:
+		if sel := info.Selections[fun]; sel != nil {
+			fn, _ := sel.Obj().(*types.Func)
+			return fn
+		}
 		fn, _ := info.Uses[fun.Sel].(*types.Func)
 		return fn
 	}
 	return nil
 }
 
-func markOBS01AssignedTaint(info *types.Info, lhs, rhs []ast.Expr, tainted map[types.Object]bool) {
+func markOBS01AssignedTaint(
+	info *types.Info,
+	lhs, rhs []ast.Expr,
+	tainted map[types.Object]bool,
+	returnTaints map[*types.Func]bool,
+) {
 	for i, left := range lhs {
-		if i >= len(rhs) || !exprDependsOnErrcodeClassifier(info, rhs[i], tainted) {
+		if i >= len(rhs) {
 			continue
 		}
-		if obj := objectForOBS01Expr(info, left); obj != nil {
+		obj := objectForOBS01Expr(info, left)
+		if obj == nil {
+			continue
+		}
+		if exprDependsOnErrcodeClassifier(info, rhs[i], tainted, returnTaints) {
 			tainted[obj] = true
+		} else {
+			delete(tainted, obj)
 		}
 	}
 }
 
-func markOBS01ValueSpecTaint(info *types.Info, spec *ast.ValueSpec, tainted map[types.Object]bool) {
+func markOBS01ValueSpecTaint(
+	info *types.Info,
+	spec *ast.ValueSpec,
+	tainted map[types.Object]bool,
+	returnTaints map[*types.Func]bool,
+) {
 	for i, name := range spec.Names {
-		if i >= len(spec.Values) || !exprDependsOnErrcodeClassifier(info, spec.Values[i], tainted) {
+		if i >= len(spec.Values) {
 			continue
 		}
-		if obj := info.Defs[name]; obj != nil {
+		obj := info.Defs[name]
+		if obj == nil {
+			continue
+		}
+		if exprDependsOnErrcodeClassifier(info, spec.Values[i], tainted, returnTaints) {
 			tainted[obj] = true
+		} else {
+			delete(tainted, obj)
 		}
 	}
 }
 
-func exprDependsOnErrcodeClassifier(info *types.Info, expr ast.Expr, tainted map[types.Object]bool) bool {
+func exprDependsOnErrcodeClassifier(
+	info *types.Info,
+	expr ast.Expr,
+	tainted map[types.Object]bool,
+	returnTaints map[*types.Func]bool,
+) bool {
 	found := false
 	ast.Inspect(expr, func(n ast.Node) bool {
 		if found {
@@ -1547,15 +2038,11 @@ func exprDependsOnErrcodeClassifier(info *types.Info, expr ast.Expr, tainted map
 			}
 			return true
 		}
-		if sel, ok := n.(*ast.SelectorExpr); ok && isErrcodeCategorySelector(info, sel) {
-			found = true
-			return false
-		}
 		call, ok := n.(*ast.CallExpr)
 		if !ok {
 			return true
 		}
-		if isErrcodeClassifierCall(info, call) {
+		if isErrcodeClassifierCall(info, call) || returnTaints[calledFunc(info, call)] {
 			found = true
 			return false
 		}
@@ -1587,14 +2074,6 @@ func isErrcodeClassifierCall(info *types.Info, call *ast.CallExpr) bool {
 		return false
 	}
 	return fn.Name() == "Category" || fn.Name() == "IsInfraError"
-}
-
-func isErrcodeCategorySelector(info *types.Info, sel *ast.SelectorExpr) bool {
-	obj := info.Uses[sel.Sel]
-	if obj == nil || obj.Pkg() == nil || obj.Pkg().Path() != errcodePkg {
-		return false
-	}
-	return obj.Name() == "Category" || strings.HasPrefix(obj.Name(), "Category")
 }
 
 type obsAckFile struct {
@@ -1634,7 +2113,7 @@ func loadOBS01Acks(root string) (map[string]obsAck, error) {
 		if ack.Rule != "OBS-01" {
 			return nil, fmt.Errorf("%s: acknowledgement %d has unsupported rule %q", path, i+1, ack.Rule)
 		}
-		if err := ack.validate(path, i+1); err != nil {
+		if err := ack.validate(root, path, i+1); err != nil {
 			return nil, err
 		}
 		if _, exists := out[ack.Fingerprint]; exists {
@@ -1645,7 +2124,7 @@ func loadOBS01Acks(root string) (map[string]obsAck, error) {
 	return out, nil
 }
 
-func (ack obsAck) validate(path string, idx int) error {
+func (ack obsAck) validate(root, path string, idx int) error {
 	required := map[string]string{
 		"fingerprint":  ack.Fingerprint,
 		"metric":       ack.Metric,
@@ -1674,8 +2153,24 @@ func (ack obsAck) validate(path string, idx int) error {
 		if strings.TrimSpace(ref) == "" {
 			return fmt.Errorf("%s: OBS-01 acknowledgement %d has empty dashboardOrAlertRefs[%d]", path, idx, i)
 		}
+		if !validOBS01Ref(root, ref) {
+			return fmt.Errorf("%s: OBS-01 acknowledgement %d dashboardOrAlertRefs[%d] must be an existing repo path or http(s) URL", path, idx, i)
+		}
 	}
 	return nil
+}
+
+func validOBS01Ref(root, ref string) bool {
+	ref = strings.TrimSpace(ref)
+	u, err := url.Parse(ref)
+	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
+		return true
+	}
+	if filepath.IsAbs(ref) || strings.HasPrefix(ref, "..") {
+		return false
+	}
+	_, err = os.Stat(filepath.Join(root, filepath.FromSlash(ref)))
+	return err == nil
 }
 
 func (ack obsAck) matches(sink obs01SinkArg) bool {

@@ -154,9 +154,21 @@ metrics:
       labels:
         - cell_id
         - hook
-      bucketSource: github.com/ghbvf/gocell/adapters/prometheus.HookObserverConfig.DurationBuckets
-      file: adapters/prometheus/hook_observer.go
-      line: 84
+      buckets:
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+        - "30"
+      file: cmd/corebundle/metrics.go
+      line: 55
     - name: cell_hook_total
       fqName: gocell_cell_hook_total
       namespace: gocell
@@ -166,8 +178,8 @@ metrics:
         - cell_id
         - hook
         - outcome
-      file: adapters/prometheus/hook_observer.go
-      line: 78
+      file: cmd/corebundle/metrics.go
+      line: 55
     - name: hook_observer_dropped_total
       fqName: gocell_hook_observer_dropped_total
       namespace: gocell
@@ -187,9 +199,20 @@ metrics:
         - route
         - status
         - cell
-      bucketSource: github.com/ghbvf/gocell/runtime/observability/metrics.ProviderCollectorConfig.DurationBuckets
-      file: runtime/observability/metrics/provider_collector.go
-      line: 66
+      buckets:
+        - ".005"
+        - ".01"
+        - ".025"
+        - ".05"
+        - ".1"
+        - ".25"
+        - ".5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+      file: runtime/bootstrap/bootstrap_phases.go
+      line: 995
     - name: http_requests_total
       fqName: gocell_http_requests_total
       namespace: gocell
@@ -200,8 +223,8 @@ metrics:
         - route
         - status
         - cell
-      file: runtime/observability/metrics/provider_collector.go
-      line: 57
+      file: runtime/bootstrap/bootstrap_phases.go
+      line: 995
     - name: outbox_batch_size
       fqName: gocell_outbox_batch_size
       namespace: gocell
@@ -209,9 +232,17 @@ metrics:
       help: Number of entries claimed per relay poll cycle.
       labels:
         - cell
-      bucketSource: github.com/ghbvf/gocell/kernel/outbox.ProviderRelayCollectorConfig.BatchBuckets
-      file: kernel/outbox/relay_collector.go
-      line: 114
+      buckets:
+        - "1"
+        - "5"
+        - "10"
+        - "25"
+        - "50"
+        - "100"
+        - "200"
+        - "500"
+      file: cmd/corebundle/bundle.go
+      line: 319
     - name: outbox_cleaned_total
       fqName: gocell_outbox_cleaned_total
       namespace: gocell
@@ -220,8 +251,8 @@ metrics:
       labels:
         - cell
         - status
-      file: kernel/outbox/relay_collector.go
-      line: 135
+      file: cmd/corebundle/bundle.go
+      line: 319
     - name: outbox_emit_failopen_dropped_total
       fqName: gocell_outbox_emit_failopen_dropped_total
       namespace: gocell
@@ -240,9 +271,20 @@ metrics:
       labels:
         - cell
         - phase
-      bucketSource: github.com/ghbvf/gocell/kernel/outbox.ProviderRelayCollectorConfig.PollBuckets
-      file: kernel/outbox/relay_collector.go
-      line: 103
+      buckets:
+        - "0.005"
+        - "0.01"
+        - "0.025"
+        - "0.05"
+        - "0.1"
+        - "0.25"
+        - "0.5"
+        - "1"
+        - "2.5"
+        - "5"
+        - "10"
+      file: cmd/corebundle/bundle.go
+      line: 319
     - name: outbox_reclaimed_total
       fqName: gocell_outbox_reclaimed_total
       namespace: gocell
@@ -250,8 +292,8 @@ metrics:
       help: Total number of stale entries reclaimed by the relay.
       labels:
         - cell
-      file: kernel/outbox/relay_collector.go
-      line: 125
+      file: cmd/corebundle/bundle.go
+      line: 319
     - name: outbox_relayed_total
       fqName: gocell_outbox_relayed_total
       namespace: gocell
@@ -260,8 +302,8 @@ metrics:
       labels:
         - cell
         - outcome
-      file: kernel/outbox/relay_collector.go
-      line: 93
+      file: cmd/corebundle/bundle.go
+      line: 319
     - name: stale_cipher_total
       fqName: gocell_config_stale_cipher_total
       namespace: gocell
