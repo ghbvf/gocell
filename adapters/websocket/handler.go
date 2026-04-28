@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"strings"
 
 	"nhooyr.io/websocket"
 
@@ -16,9 +17,9 @@ import (
 // UpgradeConfig configures the WebSocket upgrade handler.
 type UpgradeConfig struct {
 	// AllowedOrigins is a list of allowed origin patterns for the upgrade.
-	// Must be non-empty — the handler is fail-closed and panics at construction
-	// time if AllowedOrigins is nil or empty. Use []string{"*"} only in
-	// development environments where origin checking is intentionally disabled.
+	// It must be non-empty and must not contain the full wildcard "*". The
+	// error-returning UpgradeHandler rejects invalid configuration; the
+	// MustUpgradeHandler composition-root helper panics on the same error.
 	AllowedOrigins []string
 }
 
@@ -28,7 +29,13 @@ type UpgradeConfig struct {
 func (c UpgradeConfig) Validate() error {
 	if len(c.AllowedOrigins) == 0 {
 		return errcode.New(errcode.ErrWebsocketOriginsMissing,
-			"websocket: UpgradeConfig.AllowedOrigins must be non-empty; use [\"*\"] only in dev (fail-closed)")
+			"websocket: UpgradeConfig.AllowedOrigins must be non-empty (fail-closed)")
+	}
+	for _, origin := range c.AllowedOrigins {
+		if pattern := strings.TrimSpace(origin); pattern == "" || pattern == "*" {
+			return errcode.New(errcode.ErrWebsocketOriginsInvalid,
+				"websocket: UpgradeConfig.AllowedOrigins must use explicit host patterns; wildcard * is forbidden")
+		}
 	}
 	return nil
 }

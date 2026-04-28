@@ -25,11 +25,9 @@ import (
 //     A pathological probe that calls select{}/for{} still leaks its
 //     goroutine, but the outer contract is structurally preserved so the
 //     aggregator is unaffected and the watcher records the event.
-//   - Panics inside fn propagate out of the goroutine and are surfaced to the
-//     outer call site when the race is won by the probe; runOneProbe's
-//     recover fence catches them just as it would for a non-wrapped Checker.
-//     When the race is won by ctx, a late panic is logged via the watcher
-//     rather than silently discarded.
+//   - Panics inside fn are converted into an unhealthy probe error and logged
+//     when the race is won by the probe. When the race is won by ctx, a late
+//     panic is logged via the watcher rather than silently discarded.
 //
 // wrapCtxSafe intentionally carries no time budget — the only "deadline"
 // relevant here is whatever the caller puts on ctx. Runtime callers
@@ -87,11 +85,18 @@ func wrapCtxSafe(fn Checker) Checker {
 			return ctx.Err()
 		case o := <-done:
 			if o.panicV != nil {
-				return fmt.Errorf("panic: %v", o.panicV)
+				return probePanicError(o.panicV)
 			}
 			return o.err
 		}
 	}
+}
+
+func probePanicError(panicV any) error {
+	slog.Warn("health: probe panicked",
+		slog.Any("panic", panicV),
+	)
+	return fmt.Errorf("panic: %v", panicV)
 }
 
 // watchLateProbeOutcome runs in its own goroutine after the outer Checker

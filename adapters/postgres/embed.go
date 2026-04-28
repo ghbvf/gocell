@@ -13,7 +13,8 @@ var migrationsFS embed.FS
 // MigrationsFS returns an fs.FS rooted at the migrations/ directory so that
 // file entries are directly accessible (e.g. "001_create_outbox_entries.up.sql"
 // rather than "migrations/001_create_outbox_entries.up.sql").
-// Callers can pass the result directly to NewMigrator.
+// Callers must handle the returned error before passing the filesystem to
+// NewMigrator.
 func MigrationsFS() (fs.FS, error) {
 	sub, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {

@@ -36,9 +36,8 @@ func setupIntegrationHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, 
 	mux := http.NewServeMux()
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
 		// SEC-FAIL-CLOSED (PR-MODE-1): empty AllowedOrigins returns an error; the
-		// integration test exercises a loopback httptest.Server, so any origin
-		// pattern that matches `127.0.0.1` is acceptable.
-		AllowedOrigins: []string{"*"},
+		// integration test does not set Origin, so a narrow host pattern is enough.
+		AllowedOrigins: []string{"example.com"},
 	}))
 	server := httptest.NewServer(mux)
 

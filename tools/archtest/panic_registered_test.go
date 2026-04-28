@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -31,6 +32,12 @@ type panicRegisteredViolation struct {
 	Line     int
 	FuncName string
 	Reason   string
+}
+
+type panicRegisteredScope struct {
+	FuncName     string
+	AllowMust    bool
+	WhitelistKey string
 }
 
 func TestPanicRegistered(t *testing.T) {
@@ -91,6 +98,24 @@ type T struct{}
 func (*T) MustNew() {
 	panic("boom")
 }`,
+		},
+		{
+			name: "package initializer panic fails",
+			src: `package p
+var _ = func() string {
+	panic("boom")
+}()`,
+			wantLines: []int{3},
+		},
+		{
+			name: "nested function literal panic under Must function fails",
+			src: `package p
+func MustNew() func() {
+	return func() {
+		panic("boom")
+	}
+}`,
+			wantLines: []int{4},
 		},
 		{
 			name: "init panic is not auto exempt",
@@ -197,37 +222,91 @@ func scanPanicRegisteredAST(
 	usedWhitelist map[string]bool,
 ) []panicRegisteredViolation {
 	var violations []panicRegisteredViolation
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil {
-			continue
+	var scopes []panicRegisteredScope
+	var pushedScopes []bool
+	funcLitCount := 0
+
+	ast.Inspect(file, func(n ast.Node) bool {
+		if n == nil {
+			if len(pushedScopes) == 0 {
+				return true
+			}
+			didPush := pushedScopes[len(pushedScopes)-1]
+			pushedScopes = pushedScopes[:len(pushedScopes)-1]
+			if didPush {
+				scopes = scopes[:len(scopes)-1]
+			}
+			return true
 		}
-		var panicPositions []token.Pos
-		findPanicCalls(fd.Body, func(callPos token.Pos) {
-			panicPositions = append(panicPositions, callPos)
-		})
-		if len(panicPositions) == 0 {
-			continue
-		}
-		if strings.HasPrefix(fd.Name.Name, "Must") {
-			continue
-		}
-		funcName := panicRegisteredFuncName(fd)
-		key := rel + "::" + funcName
-		if _, ok := whitelist[key]; ok {
-			usedWhitelist[key] = true
-			continue
-		}
-		for _, pos := range panicPositions {
-			violations = append(violations, panicRegisteredViolation{
-				File:     rel,
-				Line:     fset.Position(pos).Line,
-				FuncName: funcName,
-				Reason:   "panic() is neither in a Must* function nor registered in the architectural panic ADR",
+
+		didPush := false
+		switch node := n.(type) {
+		case *ast.FuncDecl:
+			funcName := panicRegisteredFuncName(node)
+			scopes = append(scopes, panicRegisteredScope{
+				FuncName:     funcName,
+				AllowMust:    strings.HasPrefix(node.Name.Name, "Must"),
+				WhitelistKey: rel + "::" + funcName,
 			})
+			didPush = true
+		case *ast.FuncLit:
+			funcLitCount++
+			scopes = append(scopes, panicRegisteredScope{
+				FuncName: panicRegisteredFuncLiteralName(scopes, funcLitCount),
+			})
+			didPush = true
+		case *ast.CallExpr:
+			if isPanicCallExpr(node) {
+				violations = appendPanicRegisteredViolation(violations, fset, rel, node.Pos(), scopes, whitelist, usedWhitelist)
+			}
+		}
+		pushedScopes = append(pushedScopes, didPush)
+		return true
+	})
+	return violations
+}
+
+func appendPanicRegisteredViolation(
+	violations []panicRegisteredViolation,
+	fset *token.FileSet,
+	rel string,
+	pos token.Pos,
+	scopes []panicRegisteredScope,
+	whitelist map[string]string,
+	usedWhitelist map[string]bool,
+) []panicRegisteredViolation {
+	scope := panicRegisteredScope{FuncName: "<package initializer>"}
+	if len(scopes) > 0 {
+		scope = scopes[len(scopes)-1]
+	}
+	if scope.AllowMust {
+		return violations
+	}
+	if scope.WhitelistKey != "" {
+		if _, ok := whitelist[scope.WhitelistKey]; ok {
+			usedWhitelist[scope.WhitelistKey] = true
+			return violations
 		}
 	}
-	return violations
+	return append(violations, panicRegisteredViolation{
+		File:     rel,
+		Line:     fset.Position(pos).Line,
+		FuncName: scope.FuncName,
+		Reason:   "panic() is neither in a Must* function nor registered in the architectural panic ADR",
+	})
+}
+
+func panicRegisteredFuncLiteralName(scopes []panicRegisteredScope, index int) string {
+	parent := "<package>"
+	if len(scopes) > 0 {
+		parent = scopes[len(scopes)-1].FuncName
+	}
+	return parent + ".func" + strconv.Itoa(index)
+}
+
+func isPanicCallExpr(call *ast.CallExpr) bool {
+	ident, ok := call.Fun.(*ast.Ident)
+	return ok && ident.Name == "panic"
 }
 
 func skipPanicRegisteredDir(root, path, name string) bool {
@@ -259,8 +338,8 @@ func assertPanicWhitelistMatchesADR(t *testing.T, root string, usedWhitelist map
 
 	assert.Equal(t, adrKeys, goKeys,
 		"%s: ADR whitelist table must exactly match architecturalPanicWhitelist", rulePanicRegistered01)
-	assert.LessOrEqual(t, len(goKeys), 5,
-		"%s: architectural panic whitelist must stay small and permanent", rulePanicRegistered01)
+	assert.Equal(t, 4, len(goKeys),
+		"%s: architectural panic whitelist must contain exactly the ADR-approved permanent entries", rulePanicRegistered01)
 
 	var unused []string
 	for _, key := range goKeys {

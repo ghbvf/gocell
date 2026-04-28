@@ -1,8 +1,10 @@
 package health
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -94,16 +96,23 @@ func TestWrapCtxSafe_PropagatesError_WhenInnerReturnsFirst(t *testing.T) {
 	}
 }
 
-// TestWrapCtxSafe_PanicBecomesError verifies a panic inside inner fn is
-// converted into an unhealthy probe error instead of re-panicking through the
-// wrapper.
-func TestWrapCtxSafe_PanicBecomesError(t *testing.T) {
+// TestWrapCtxSafe_PanicBecomesErrorAndLogs verifies a panic inside inner fn is
+// converted into an unhealthy probe error and logged instead of re-panicking
+// through the wrapper.
+func TestWrapCtxSafe_PanicBecomesErrorAndLogs(t *testing.T) {
+	var logs bytes.Buffer
+	prev := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	wrapped := wrapCtxSafe(func(_ context.Context) error {
 		panic("boom")
 	})
 	err := wrapped(context.Background())
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "panic: boom")
+	assert.Contains(t, logs.String(), "health: probe panicked")
+	assert.Contains(t, logs.String(), "boom")
 }
 
 // TestWrapCtxSafe_NilInput ensures defensive wrapping of nil returns a

@@ -185,8 +185,9 @@ var architecturalPanicWhitelist = map[string]string{
 To add an entry: open a PR, update this ADR's §4 table with a new row,
 update the map. `PANIC-REGISTERED-01` parses the ADR table and fails unless
 the table and map are exactly equal, every map entry is used by a real panic,
-and the whitelist stays at five entries or fewer. Reviewer must reject any
-whitelist addition that's absorbable as `Must*` rename or error propagation.
+and the whitelist contains exactly the four approved permanent entries.
+Reviewer must reject any whitelist addition that's absorbable as `Must*`
+rename or error propagation.
 
 ### Trade-offs
 

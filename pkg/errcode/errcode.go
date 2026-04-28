@@ -170,9 +170,8 @@ const (
 	ErrWSMaxConns       Code = "ERR_WS_MAX_CONNS"
 	// ErrWebsocketOriginsMissing signals that an UpgradeHandler was constructed
 	// with an empty AllowedOrigins list. The handler rejects construction
-	// fail-fast rather than silently enabling InsecureSkipVerify=true, which
-	// would accept connections from any origin. Operators must supply at least
-	// one origin pattern (use []string{"*"} only in development).
+	// fail-fast rather than silently accepting connections from any origin.
+	// Operators must supply at least one explicit origin host pattern.
 	//
 	// Example:
 	//
@@ -182,6 +181,10 @@ const (
 	//
 	// ref: docs/plans/202604270020-1-2-ci-3-claude-ship-reactive-bachman.md PR-MODE-1
 	ErrWebsocketOriginsMissing Code = "ERR_WEBSOCKET_ORIGINS_MISSING"
+	// ErrWebsocketOriginsInvalid signals that AllowedOrigins contains a pattern
+	// that would disable browser Origin protection, such as the full wildcard
+	// "*".
+	ErrWebsocketOriginsInvalid Code = "ERR_WEBSOCKET_ORIGINS_INVALID"
 
 	// Outbox envelope error codes.
 	// ErrEnvelopeSchema signals that an inbound wire message does not conform

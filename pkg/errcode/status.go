@@ -197,6 +197,7 @@ var codeToStatus = map[Code]int{
 	ErrAdapterEndpointNotTLS:    http.StatusInternalServerError,
 	ErrListenerAuthChainMissing: http.StatusInternalServerError,
 	ErrWebsocketOriginsMissing:  http.StatusInternalServerError,
+	ErrWebsocketOriginsInvalid:  http.StatusInternalServerError,
 
 	// --- Auth replay / nonce-store codes ---
 	// ErrAuthReplayDetected is a security signal: the nonce has already been

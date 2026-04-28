@@ -56,7 +56,7 @@ func setupTestHub(t *testing.T, handler rtws.MessageHandler) (*rtws.Hub, *httpte
 	mux := http.NewServeMux()
 	// Use explicit AllowedOrigins; empty origins will be rejected after SEC-FAIL-CLOSED-04.
 	mux.Handle("/ws", requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"*"},
+		AllowedOrigins: []string{"example.com"},
 	}))
 
 	server := httptest.NewServer(mux)
@@ -130,7 +130,7 @@ func TestUpgradeHandler_NonHijackerFailsBeforeAccept(t *testing.T) {
 	})
 
 	handler := requireUpgradeHandler(t, hub, adapterws.UpgradeConfig{
-		AllowedOrigins: []string{"*"},
+		AllowedOrigins: []string{"example.com"},
 	})
 	req := httptest.NewRequest(http.MethodGet, "/ws", nil)
 	req.Header.Set("Connection", "Upgrade")
@@ -440,5 +440,28 @@ func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 		})
 		require.NoError(t, err)
 		require.NotNil(t, handler)
+	})
+}
+
+func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
+
+	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"*"},
+	})
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrWebsocketOriginsInvalid, ec.Code)
+}
+
+func TestMustUpgradeHandler_PanicsOnInvalidConfig(t *testing.T) {
+	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
+
+	require.Panics(t, func() {
+		_ = adapterws.MustUpgradeHandler(hub, adapterws.UpgradeConfig{
+			AllowedOrigins: []string{"*"},
+		})
 	})
 }
