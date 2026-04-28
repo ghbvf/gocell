@@ -12,8 +12,10 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"fmt"
+	"io"
 	"os"
 	"sort"
+	"strings"
 	"text/template"
 
 	"github.com/ghbvf/gocell/kernel/assembly/gentpl"
@@ -49,6 +51,7 @@ func NewGenerator(project *metadata.ProjectMeta, module, projectRoot string) *Ge
 type entrypointContext struct {
 	Module     string
 	AssemblyID string
+	HelperName string
 	Cells      []string
 }
 
@@ -69,10 +72,17 @@ func (g *Generator) GenerateEntrypoint(assemblyID string) ([]byte, error) {
 			fmt.Sprintf("assembly %q not found", assemblyID))
 	}
 
+	helperName, err := assemblyRunHelperName(assemblyID)
+	if err != nil {
+		return nil, errcode.Wrap(errcode.ErrMetadataInvalid,
+			fmt.Sprintf("invalid assembly %q for generated run helper", assemblyID), err)
+	}
+
 	ctx := entrypointContext{
 		Module:     g.module,
 		AssemblyID: assemblyID,
-		Cells:      sortedCopy(asm.Cells),
+		HelperName: helperName,
+		Cells:      append([]string(nil), asm.Cells...),
 	}
 
 	return g.executeTemplate("main.go.tpl", ctx)
@@ -203,7 +213,9 @@ func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []st
 	}
 
 	h := sha256.New()
-	g.hashAssemblyIdentity(h, asm)
+	if err := g.hashAssemblyIdentity(h, asm); err != nil {
+		return "", err
+	}
 
 	if err := g.hashBoundaryContracts(h, exported, imported); err != nil {
 		return "", err
@@ -211,48 +223,79 @@ func (g *Generator) sourceFingerprint(assemblyID string, exported, imported []st
 
 	// Record the boundary membership lists so that adding or removing a contract
 	// from the boundary also shifts the fingerprint.
-	fmt.Fprint(h, "exported:") //nolint:errcheck
-	for _, cID := range exported {
-		fmt.Fprintf(h, "%s\x00", cID) //nolint:errcheck
+	if err := writeHash(h, "exported:"); err != nil {
+		return "", err
 	}
-	fmt.Fprint(h, "imported:") //nolint:errcheck
+	for _, cID := range exported {
+		if err := writeHash(h, "%s\x00", cID); err != nil {
+			return "", err
+		}
+	}
+	if err := writeHash(h, "imported:"); err != nil {
+		return "", err
+	}
 	for _, cID := range imported {
-		fmt.Fprintf(h, "%s\x00", cID) //nolint:errcheck
+		if err := writeHash(h, "%s\x00", cID); err != nil {
+			return "", err
+		}
 	}
 
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
 }
 
 // hashAssemblyIdentity writes the assembly's stable identity fields into h:
-// build config, sorted cell list, and per-cell structural metadata.
-func (g *Generator) hashAssemblyIdentity(h hashWriter, asm *metadata.AssemblyMeta) {
-	cells := sortedCopy(asm.Cells)
-	// hash.Hash.Write never returns error — safe to ignore per Go spec.
-	fmt.Fprintf(h, "assembly:%s\n", asm.ID)                       //nolint:errcheck
-	fmt.Fprintf(h, "build.entrypoint:%s\n", asm.Build.Entrypoint) //nolint:errcheck
-	fmt.Fprintf(h, "build.binary:%s\n", asm.Build.Binary)         //nolint:errcheck
-	for _, c := range cells {
-		fmt.Fprintf(h, "cells:%s\n", c) //nolint:errcheck
+// build config, runtime cell order, and per-cell structural metadata.
+func (g *Generator) hashAssemblyIdentity(h io.Writer, asm *metadata.AssemblyMeta) error {
+	if err := writeHash(h, "assembly:%s\n", asm.ID); err != nil {
+		return err
 	}
-	for _, cellID := range cells {
-		cellMeta := g.cells.Get(cellID)
-		if cellMeta == nil {
-			fmt.Fprintf(h, "cell:%s:missing\n", cellID) //nolint:errcheck
-			continue
-		}
-		fmt.Fprintf(h, "cell:%s:type:%s\n", cellID, cellMeta.Type)                    //nolint:errcheck
-		fmt.Fprintf(h, "cell:%s:consistency:%s\n", cellID, cellMeta.ConsistencyLevel) //nolint:errcheck
-		fmt.Fprintf(h, "cell:%s:owner:%s\n", cellID, cellMeta.Owner.Team)             //nolint:errcheck
-		fmt.Fprintf(h, "cell:%s:schema:%s\n", cellID, cellMeta.Schema.Primary)        //nolint:errcheck
-		for _, s := range cellMeta.Verify.Smoke {
-			fmt.Fprintf(h, "cell:%s:smoke:%s\n", cellID, s) //nolint:errcheck
+	if err := writeHash(h, "build.entrypoint:%s\n", asm.Build.Entrypoint); err != nil {
+		return err
+	}
+	if err := writeHash(h, "build.binary:%s\n", asm.Build.Binary); err != nil {
+		return err
+	}
+	for i, c := range asm.Cells {
+		if err := writeHash(h, "cells.order:%d:%s\n", i, c); err != nil {
+			return err
 		}
 	}
+	for _, cellID := range asm.Cells {
+		if err := g.hashCellIdentity(h, cellID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (g *Generator) hashCellIdentity(h io.Writer, cellID string) error {
+	cellMeta := g.cells.Get(cellID)
+	if cellMeta == nil {
+		return writeHash(h, "cell:%s:missing\n", cellID)
+	}
+	if err := writeHash(h, "cell:%s:type:%s\n", cellID, cellMeta.Type); err != nil {
+		return err
+	}
+	if err := writeHash(h, "cell:%s:consistency:%s\n", cellID, cellMeta.ConsistencyLevel); err != nil {
+		return err
+	}
+	if err := writeHash(h, "cell:%s:owner:%s\n", cellID, cellMeta.Owner.Team); err != nil {
+		return err
+	}
+	if err := writeHash(h, "cell:%s:schema:%s\n", cellID, cellMeta.Schema.Primary); err != nil {
+		return err
+	}
+	for _, s := range cellMeta.Verify.Smoke {
+		if err := writeHash(h, "cell:%s:smoke:%s\n", cellID, s); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // hashBoundaryContracts writes each boundary contract's canonical encoding into h.
 // Contracts are visited in sorted ID order to ensure determinism.
-func (g *Generator) hashBoundaryContracts(h hashWriter, exported, imported []string) error {
+func (g *Generator) hashBoundaryContracts(h io.Writer, exported, imported []string) error {
 	allContracts := make([]string, 0, len(exported)+len(imported))
 	allContracts = append(allContracts, exported...)
 	allContracts = append(allContracts, imported...)
@@ -261,9 +304,13 @@ func (g *Generator) hashBoundaryContracts(h hashWriter, exported, imported []str
 	for _, cID := range allContracts {
 		c := g.contracts.Get(cID)
 		// Write the contract ID as a separator even for nil contracts.
-		fmt.Fprintf(h, "contract:%s\x00", cID) //nolint:errcheck
+		if err := writeHash(h, "contract:%s\x00", cID); err != nil {
+			return err
+		}
 		if c == nil {
-			fmt.Fprint(h, "nil\n") //nolint:errcheck
+			if err := writeHash(h, "nil\n"); err != nil {
+				return err
+			}
 			continue
 		}
 		// normalizeContract sorts participant lists (Subscribers, Clients, etc.)
@@ -298,7 +345,7 @@ func normalizeContract(c metadata.ContractMeta) metadata.ContractMeta {
 // writeSchemaFileContents hashes the content of each non-empty schema ref file
 // for the contract. Paths are resolved through the metadata schema resolver so
 // every generator/governance consumer shares the same schema-ref boundary.
-func writeSchemaFileContents(h hashWriter, projectRoot string, c *metadata.ContractMeta) error {
+func writeSchemaFileContents(h io.Writer, projectRoot string, c *metadata.ContractMeta) error {
 	if c == nil {
 		return nil
 	}
@@ -311,16 +358,49 @@ func writeSchemaFileContents(h hashWriter, projectRoot string, c *metadata.Contr
 		if err != nil {
 			return fmt.Errorf("fingerprint: read schema %s for contract %q: %w", ref.Ref, c.ID, err)
 		}
-		fmt.Fprintf(h, "%s:%s:", ref.Field, ref.Ref) //nolint:errcheck
-		_, _ = h.Write(content)
-		fmt.Fprint(h, "\n") //nolint:errcheck
+		if err := writeHash(h, "%s:%s:", ref.Field, ref.Ref); err != nil {
+			return err
+		}
+		if _, err := h.Write(content); err != nil {
+			return err
+		}
+		if err := writeHash(h, "\n"); err != nil {
+			return err
+		}
 	}
 	return nil
 }
 
-// hashWriter is the interface satisfied by hash.Hash for fingerprint writes.
-type hashWriter interface {
-	Write(p []byte) (n int, err error)
+func writeHash(w io.Writer, format string, args ...any) error {
+	_, err := fmt.Fprintf(w, format, args...)
+	return err
+}
+
+func assemblyRunHelperName(assemblyID string) (string, error) {
+	var suffix strings.Builder
+	upperNext := true
+	for _, r := range assemblyID {
+		switch {
+		case r >= 'a' && r <= 'z':
+			if upperNext {
+				r -= 'a' - 'A'
+			}
+			suffix.WriteRune(r)
+			upperNext = false
+		case r >= 'A' && r <= 'Z':
+			suffix.WriteRune(r)
+			upperNext = false
+		case r >= '0' && r <= '9':
+			suffix.WriteRune(r)
+			upperNext = false
+		default:
+			upperNext = true
+		}
+	}
+	if suffix.Len() == 0 {
+		return "", fmt.Errorf("assembly ID contains no identifier characters")
+	}
+	return "run" + suffix.String(), nil
 }
 
 // executeTemplate loads a template from the embedded FS, parses it, and

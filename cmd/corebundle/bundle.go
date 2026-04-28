@@ -23,11 +23,16 @@ import (
 	outboxruntime "github.com/ghbvf/gocell/runtime/outbox"
 )
 
-// buildAssembly constructs the corebundle Assembly and registers the three
-// cells. Extracted to keep run() cognitive complexity ≤ 15.
-func buildAssembly(ps promStack, mode cell.DurabilityMode, cells ...cell.Cell) (*assembly.CoreAssembly, error) {
+// buildAssembly constructs the runtime Assembly and registers the generated
+// cell list. Extracted to keep runCorebundle cognitive complexity <= 15.
+func buildAssembly(
+	ps promStack,
+	assemblyID string,
+	mode cell.DurabilityMode,
+	cells ...cell.Cell,
+) (*assembly.CoreAssembly, error) {
 	asm := assembly.New(assembly.Config{
-		ID:              "corebundle",
+		ID:              assemblyID,
 		DurabilityMode:  mode,
 		HookObserver:    ps.hookObserver,
 		MetricsProvider: ps.metricProvider,

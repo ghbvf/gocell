@@ -4,8 +4,8 @@
 # errcode.Category(...) or errcode.IsInfraError(...), and the dashboard / alert
 # migration has been reviewed. The failing archtest prints the fingerprint,
 # metric sink, and label; paste them here exactly. All fields below are
-# required; unknown fields fail the gate. dashboardOrAlertRefs must be http(s)
-# URLs or existing repo-relative paths.
+# required; unknown fields fail the gate. dashboardOrAlertRefs must be existing
+# repo-relative files so acknowledgements remain reviewable and reproducible.
 #
 # acknowledgements:
 #   - rule: OBS-01

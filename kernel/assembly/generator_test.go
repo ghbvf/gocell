@@ -125,7 +125,9 @@ func TestGenerateEntrypoint_ContainsAssemblyID(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, `assembly.Config{ID: "ssobff", DurabilityMode: cell.DurabilityDemo}`)
+	assert.Contains(t, content, "func run(ctx context.Context) error")
+	assert.Contains(t, content, `runSsobff(ctx, "ssobff"`)
+	assert.NotContains(t, content, "runCorebundle(ctx")
 }
 
 func TestGenerateEntrypoint_ContainsCellComments(t *testing.T) {
@@ -136,8 +138,8 @@ func TestGenerateEntrypoint_ContainsCellComments(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, "accesscore")
-	assert.Contains(t, content, "auditcore")
+	assert.Contains(t, content, `"accesscore"`)
+	assert.Contains(t, content, `"auditcore"`)
 }
 
 func TestGenerateEntrypoint_ContainsModulePath(t *testing.T) {
@@ -148,7 +150,7 @@ func TestGenerateEntrypoint_ContainsModulePath(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, `"github.com/ghbvf/gocell/kernel/assembly"`)
+	assert.Contains(t, content, `"github.com/ghbvf/gocell/runtime/shutdown"`)
 }
 
 func TestGenerateEntrypoint_ContainsDoNotEdit(t *testing.T) {
@@ -392,8 +394,7 @@ func TestGenerateEntrypoint_EmptyAssembly(t *testing.T) {
 	require.NoError(t, err)
 
 	content := string(out)
-	assert.Contains(t, content, `assembly.Config{ID: "empty", DurabilityMode: cell.DurabilityDemo}`)
-	// No cell comments expected
+	assert.Contains(t, content, `runEmpty(ctx, "empty", []string{`)
 	assert.NotContains(t, content, "accesscore")
 }
 
@@ -416,6 +417,23 @@ func TestSourceFingerprint_Deterministic(t *testing.T) {
 
 	assert.Equal(t, fp1, fp2, "fingerprint should be deterministic")
 	assert.Len(t, fp1, 64)
+}
+
+func TestSourceFingerprint_CellOrderIsStructural(t *testing.T) {
+	project := buildTestProject()
+	gen := NewGenerator(project, "github.com/ghbvf/gocell", "")
+
+	cellSet := map[string]bool{"accesscore": true, "auditcore": true}
+	exported, imported, err := gen.computeBoundaryContracts(cellSet)
+	require.NoError(t, err)
+
+	baseline, err := gen.sourceFingerprint("ssobff", exported, imported)
+	require.NoError(t, err)
+
+	project.Assemblies["ssobff"].Cells = []string{"auditcore", "accesscore"}
+	got, err := gen.sourceFingerprint("ssobff", exported, imported)
+	require.NoError(t, err)
+	assert.NotEqual(t, baseline, got, "assembly cells order is runtime order and must change fingerprint")
 }
 
 func TestSourceFingerprint_NotFoundReturnsEmpty(t *testing.T) {

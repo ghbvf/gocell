@@ -1603,15 +1603,7 @@ func TestFMT20_AllOfMissingAdditionalProperties(t *testing.T) {
 	}`
 	v := NewValidator(fmt20Fixture(t, dir, "allof", schema), dir)
 	matches := findByCode(v.Validate(), "FMT-20")
-	require.NotEmpty(t, matches, "allOf inner object missing additionalProperties must be flagged")
-	var hit bool
-	for _, m := range matches {
-		if strings.Contains(m.Field, "allOf[0]") {
-			hit = true
-			break
-		}
-	}
-	assert.True(t, hit, "violation field must reference $.data.allOf[0]; got fields: %v", fieldList(matches))
+	assertFMT20RequiredFields(t, matches, []string{"$.data.allOf[0]"})
 }
 
 // TestFMT20_IfThenElseConditional locks down the conditional branch walker:
@@ -1637,19 +1629,7 @@ func TestFMT20_IfThenElseConditional(t *testing.T) {
 	}`
 	v := NewValidator(fmt20Fixture(t, dir, "ifthenelse", schema), dir)
 	matches := findByCode(v.Validate(), "FMT-20")
-	require.GreaterOrEqual(t, len(matches), 2,
-		"both then and else branches must each yield a FMT-20 violation; got %d: %v", len(matches), fieldList(matches))
-	var thenHit, elseHit bool
-	for _, m := range matches {
-		switch {
-		case strings.Contains(m.Field, ".then"):
-			thenHit = true
-		case strings.Contains(m.Field, ".else"):
-			elseHit = true
-		}
-	}
-	assert.True(t, thenHit, "expected violation under .then; got %v", fieldList(matches))
-	assert.True(t, elseHit, "expected violation under .else; got %v", fieldList(matches))
+	assertFMT20RequiredFields(t, matches, []string{"$.payload.then", "$.payload.else"})
 }
 
 // TestFMT20_LocalRefThroughComposition locks down $ref + oneOf composition:
@@ -1682,15 +1662,17 @@ func TestFMT20_LocalRefThroughComposition(t *testing.T) {
 	}`
 	v := NewValidator(fmt20Fixture(t, dir, "refoneof", schema), dir)
 	matches := findByCode(v.Validate(), "FMT-20")
-	require.NotEmpty(t, matches, "oneOf inside $ref target must surface a violation; got %v", fieldList(matches))
-	var hit bool
+	assertFMT20RequiredFields(t, matches, []string{"$.data.choice.oneOf[0]"})
+}
+
+func assertFMT20RequiredFields(t *testing.T, matches []ValidationResult, wantFields []string) {
+	t.Helper()
+	require.Len(t, matches, len(wantFields), "unexpected FMT-20 fields: %v", fieldList(matches))
+	assert.ElementsMatch(t, wantFields, fieldList(matches))
 	for _, m := range matches {
-		if strings.Contains(m.Field, "oneOf[0]") {
-			hit = true
-			break
-		}
+		assert.Equal(t, SeverityError, m.Severity)
+		assert.Equal(t, IssueRequired, m.IssueType)
 	}
-	assert.True(t, hit, "violation field must reference oneOf[0]; got %v", fieldList(matches))
 }
 
 func fieldList(results []ValidationResult) []string {

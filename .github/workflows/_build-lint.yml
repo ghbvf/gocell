@@ -149,22 +149,48 @@ jobs:
         if: matrix.static_checks
         run: go vet -tags=e2e ./tests/e2e/...
 
-      # Boundary regenerate-and-diff gate (PR-CFG-M, closes backlog PR220-e2):
-      # boundary.yaml is the generated source-of-truth for an assembly's exported
-      # / imported contracts. Drift between contract.yaml structural fields and
-      # the recorded sourceFingerprint silently invalidates downstream consumers
-      # of boundary.yaml, so regenerate locally and require a clean diff. Uses
-      # `--boundary-only` so the hand-extended composition root in
-      # cmd/corebundle/main.go is left alone (the boundary.yaml fingerprint is
-      # what gates downstream consumers; main.go is owned by the bundle author).
+      # Assembly regenerate-and-diff gate (PR-CFG-M follow-up):
+      # assembly.yaml is the source-of-truth for runtime cell order and boundary
+      # contracts. Regenerate generated entrypoints plus boundary.yaml and require
+      # a clean diff so runtime wiring and metadata cannot drift.
       - name: Verify generated assemblies are up-to-date
         if: matrix.static_checks
         run: |
+          entrypoints_file="$(mktemp)"
+          trap 'rm -f "$entrypoints_file"' EXIT
           for d in assemblies/*/; do
-            go run ./cmd/gocell generate assembly --id "$(basename "$d")" --boundary-only
+            output="$(go run ./cmd/gocell generate assembly --id "$(basename "$d")")"
+            printf '%s\n' "$output"
+            while IFS= read -r line; do
+              case "$line" in
+                Generated:\ *)
+                  path="${line#Generated: }"
+                  rel="${path#${PWD}/}"
+                  case "$rel" in
+                    assemblies/*/generated/boundary.yaml) ;;
+                    *) printf '%s\n' "$rel" >> "$entrypoints_file" ;;
+                  esac
+                  ;;
+              esac
+            done <<< "$output"
           done
-          if ! git diff --exit-code assemblies/; then
-            echo "::error::boundary.yaml drift detected. Run 'for d in assemblies/*/; do go run ./cmd/gocell generate assembly --id \"\$(basename \"\$d\")\" --boundary-only; done' locally and commit the result."
+          generated_entrypoints=()
+          while IFS= read -r entrypoint; do
+            [ -n "$entrypoint" ] || continue
+            generated_entrypoints+=("$entrypoint")
+          done < "$entrypoints_file"
+          diff_paths=(assemblies/)
+          diff_paths+=("${generated_entrypoints[@]}")
+          if ! git diff --exit-code -- "${diff_paths[@]}"; then
+            echo "::error::generated assembly drift detected. Run 'make generate' locally and commit the result."
+            exit 1
+          fi
+          untracked=""
+          if ((${#generated_entrypoints[@]} > 0)); then
+            untracked=$(git ls-files --others --exclude-standard -- "${generated_entrypoints[@]}" 2>/dev/null || true)
+          fi
+          if [ -n "$untracked" ]; then
+            echo "::error::Untracked generated assembly entrypoints found — commit them: $untracked"
             exit 1
           fi
           untracked=$(git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml 2>/dev/null || true)

@@ -2,9 +2,11 @@ package assembly
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/ghbvf/gocell/kernel/metadata"
@@ -124,11 +126,7 @@ func computeFingerprint(t *testing.T, p *metadata.ProjectMeta) string {
 	gen := NewGenerator(p, "github.com/ghbvf/gocell", "")
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
-	// boundary.yaml.tpl has a sourceFingerprint: <hex> line — extracting the
-	// fingerprint is overkill; the rendered bytes change iff the fingerprint
-	// changes (all fields are deterministic by sortedCopy). Use the rendered
-	// bytes directly as proxy.
-	return string(out)
+	return extractBoundaryFingerprint(t, out)
 }
 
 // computeFingerprintWithRoot runs GenerateBoundary via a Generator that can
@@ -138,7 +136,18 @@ func computeFingerprintWithRoot(t *testing.T, p *metadata.ProjectMeta, root stri
 	gen := NewGenerator(p, "github.com/ghbvf/gocell", root)
 	out, err := gen.GenerateBoundary("ssobff")
 	require.NoError(t, err)
-	return string(out)
+	return extractBoundaryFingerprint(t, out)
+}
+
+func extractBoundaryFingerprint(t *testing.T, out []byte) string {
+	t.Helper()
+	for _, line := range strings.Split(string(out), "\n") {
+		if strings.HasPrefix(line, "sourceFingerprint: ") {
+			return strings.TrimPrefix(line, "sourceFingerprint: ")
+		}
+	}
+	t.Fatalf("sourceFingerprint line missing from boundary:\n%s", string(out))
+	return ""
 }
 
 func TestSourceFingerprint_StructuralChangesDetected(t *testing.T) {
@@ -390,17 +399,45 @@ func TestSourceFingerprint_QueryParamsChange(t *testing.T) {
 	assert.NotEqual(t, baseline, got, "adding QueryParams must change fingerprint")
 }
 
-// TestSourceFingerprint_ResponseValueChange verifies that modifying the value
-// of an existing HTTP response (description or schemaRef) changes the fingerprint.
-func TestSourceFingerprint_ResponseValueChange(t *testing.T) {
+func TestSourceFingerprint_ResponseDescriptionIgnored(t *testing.T) {
 	baseline := computeFingerprint(t, fingerprintProject())
 
 	p := fingerprintProject()
-	// Change description of the 400 response (key already exists in fingerprintProject).
 	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] =
 		metadata.HTTPResponseMeta{Description: "changed description"}
 	got := computeFingerprint(t, p)
-	assert.NotEqual(t, baseline, got, "changing Responses value must change fingerprint")
+	assert.Equal(t, baseline, got, "changing response description must not change fingerprint")
+}
+
+func TestSourceFingerprint_ResponseSchemaRefChange(t *testing.T) {
+	root := t.TempDir()
+	contractDir := filepath.Join(root, "contracts", "http", "auth", "login", "v1")
+	require.NoError(t, os.MkdirAll(contractDir, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(contractDir, "error.schema.json"), []byte(`{"version":1}`), 0o644))
+
+	p := fingerprintProject()
+	p.Contracts["http.auth.login.v1"].Dir = filepath.ToSlash(filepath.Join("contracts", "http", "auth", "login", "v1"))
+	baseline := computeFingerprintWithRoot(t, p, root)
+
+	p.Contracts["http.auth.login.v1"].Endpoints.HTTP.Responses[400] =
+		metadata.HTTPResponseMeta{Description: "bad", SchemaRef: "error.schema.json"}
+	got := computeFingerprintWithRoot(t, p, root)
+	assert.NotEqual(t, baseline, got, "adding response schemaRef must change fingerprint")
+}
+
+func TestHashAssemblyIdentityPropagatesWriterError(t *testing.T) {
+	p := fingerprintProject()
+	gen := NewGenerator(p, "github.com/ghbvf/gocell", "")
+
+	err := gen.hashAssemblyIdentity(failingHashWriter{}, p.Assemblies["ssobff"])
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "hash write failed")
+}
+
+type failingHashWriter struct{}
+
+func (failingHashWriter) Write([]byte) (int, error) {
+	return 0, errors.New("hash write failed")
 }
 
 // ---------------------------------------------------------------------------

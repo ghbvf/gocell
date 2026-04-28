@@ -17,6 +17,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/runtime/auth"
 	"github.com/ghbvf/gocell/runtime/bootstrap"
 	"github.com/stretchr/testify/assert"
@@ -38,6 +39,32 @@ func freshTestServiceSecret(t *testing.T) string {
 func setPodReachableHealthAddr(t *testing.T) {
 	t.Helper()
 	t.Setenv("GOCELL_HTTP_HEALTH_ADDR", ":9091")
+}
+
+func TestCorebundleModulesMatchAssemblyMetadataOrder(t *testing.T) {
+	root := findRepoRoot(t)
+	project, err := metadata.NewParser(root).Parse()
+	require.NoError(t, err)
+	asm := project.Assemblies["corebundle"]
+	require.NotNil(t, asm)
+
+	modules, err := corebundleModules(asm.Cells)
+	require.NoError(t, err)
+	require.Len(t, modules, len(asm.Cells))
+
+	gotIDs := make([]string, 0, len(modules))
+	for _, module := range modules {
+		gotIDs = append(gotIDs, module.ID())
+	}
+	assert.Equal(t, asm.Cells, gotIDs)
+	assert.Equal(t, "configcore", gotIDs[0], "configcore must stay first because it owns SharedPGPool creation")
+}
+
+func TestCorebundleModulesRejectUnknownCell(t *testing.T) {
+	modules, err := corebundleModules([]string{"configcore", "ghostcore"})
+	require.Error(t, err)
+	assert.Nil(t, modules)
+	assert.Contains(t, err.Error(), `unsupported assembly cell "ghostcore"`)
 }
 
 func TestLoadKeySet_DevMode(t *testing.T) {

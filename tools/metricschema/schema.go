@@ -13,8 +13,8 @@ import (
 	"go/format"
 	"go/token"
 	"go/types"
-	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -58,7 +58,7 @@ type Entry struct {
 	Buckets      []string `yaml:"buckets,omitempty"`
 	BucketSource string   `yaml:"bucketSource,omitempty"`
 	File         string   `yaml:"file"`
-	Line         int      `yaml:"line"`
+	Line         int      `yaml:"-"`
 }
 
 // Diagnostic describes a typed OBS-01 violation.
@@ -1645,6 +1645,7 @@ func checkOBS01WithPatterns(projectRoot string, patterns ...string) ([]Diagnosti
 	if err != nil {
 		return nil, err
 	}
+	matchedAcks := map[string]bool{}
 	pkgs, err := loadPackages(projectRoot, patterns...)
 	if err != nil {
 		return nil, err
@@ -1659,7 +1660,15 @@ func checkOBS01WithPatterns(projectRoot string, patterns ...string) ([]Diagnosti
 	sinkParams := collectOBS01SinkParams(pkgs, metricIdentities)
 	var diagnostics []Diagnostic
 	for _, p := range pkgs {
-		pkgDiagnostics, scanErr := scanOBS01Package(projectRoot, p, acks, sinkParams, metricIdentities, returnTaints)
+		pkgDiagnostics, scanErr := scanOBS01Package(
+			projectRoot,
+			p,
+			acks,
+			matchedAcks,
+			sinkParams,
+			metricIdentities,
+			returnTaints,
+		)
 		if scanErr != nil {
 			return nil, scanErr
 		}
@@ -1674,7 +1683,11 @@ func checkOBS01WithPatterns(projectRoot string, patterns ...string) ([]Diagnosti
 		}
 		return diagnostics[i].Column < diagnostics[j].Column
 	})
-	return dedupeDiagnostics(diagnostics), nil
+	diagnostics = dedupeDiagnostics(diagnostics)
+	if err := rejectUnusedOBS01Acks(projectRoot, acks, matchedAcks); err != nil {
+		return diagnostics, err
+	}
+	return diagnostics, nil
 }
 
 func obs01ProductionPatterns(projectRoot string) []string {
@@ -1716,6 +1729,7 @@ func scanOBS01Package(
 	root string,
 	p *packages.Package,
 	acks map[string]obsAck,
+	matchedAcks map[string]bool,
 	sinkParams map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 	returnTaints obs01ReturnTaints,
@@ -1730,7 +1744,16 @@ func scanOBS01Package(
 		if err != nil {
 			return nil, err
 		}
-		fileDiagnostics := scanOBS01File(p, file, filepath.ToSlash(rel), acks, sinkParams, metricIdentities, returnTaints)
+		fileDiagnostics := scanOBS01File(
+			p,
+			file,
+			filepath.ToSlash(rel),
+			acks,
+			matchedAcks,
+			sinkParams,
+			metricIdentities,
+			returnTaints,
+		)
 		diagnostics = append(diagnostics, fileDiagnostics...)
 	}
 	return diagnostics, nil
@@ -1741,6 +1764,7 @@ func scanOBS01File(
 	file *ast.File,
 	rel string,
 	acks map[string]obsAck,
+	matchedAcks map[string]bool,
 	sinkParams map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 	returnTaints obs01ReturnTaints,
@@ -1751,7 +1775,8 @@ func scanOBS01File(
 		if !ok || fn.Body == nil {
 			continue
 		}
-		diagnostics = append(diagnostics, scanOBS01Func(p, fn, rel, acks, sinkParams, metricIdentities, returnTaints)...)
+		diagnostics = append(diagnostics,
+			scanOBS01Func(p, fn, rel, acks, matchedAcks, sinkParams, metricIdentities, returnTaints)...)
 	}
 	return diagnostics
 }
@@ -1761,6 +1786,7 @@ func scanOBS01Func(
 	fn *ast.FuncDecl,
 	rel string,
 	acks map[string]obsAck,
+	matchedAcks map[string]bool,
 	sinkParams map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
 	returnTaints obs01ReturnTaints,
@@ -1770,7 +1796,7 @@ func scanOBS01Func(
 	walkOBS01Stmts(p.TypesInfo, fn.Body.List, tainted, returnTaints, obs01StmtHandlers{
 		onCall: func(node *ast.CallExpr, state map[types.Object]bool) {
 			diagnostics = append(diagnostics,
-				obs01DiagnosticsForCall(p, node, rel, acks, state, sinkParams, metricIdentities, returnTaints)...)
+				obs01DiagnosticsForCall(p, node, rel, acks, matchedAcks, state, sinkParams, metricIdentities, returnTaints)...)
 		},
 	})
 	return diagnostics
@@ -1781,6 +1807,7 @@ func obs01DiagnosticsForCall(
 	call *ast.CallExpr,
 	rel string,
 	acks map[string]obsAck,
+	matchedAcks map[string]bool,
 	tainted map[types.Object]bool,
 	sinkParams map[string]map[int][]obs01SinkBinding,
 	metricIdentities map[types.Object]obs01MetricIdentity,
@@ -1789,17 +1816,17 @@ func obs01DiagnosticsForCall(
 	var diagnostics []Diagnostic
 	for _, sink := range obs01FuncLitVariadicSpreadSinkArgs(p.TypesInfo, p.Fset, call, metricIdentities) {
 		if exprDependsOnErrcodeClassifierForValue(p.TypesInfo, sink.Expr, sink.ValueIndex, tainted, returnTaints) {
-			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks)
+			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks, matchedAcks)
 		}
 	}
 	for _, sink := range metricLabelBindingArgs(p.TypesInfo, p.Fset, call, metricIdentities) {
 		if exprDependsOnErrcodeClassifierForValue(p.TypesInfo, sink.Expr, sink.ValueIndex, tainted, returnTaints) {
-			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks)
+			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks, matchedAcks)
 		}
 	}
 	for _, sink := range obs01SinkArgs(p.TypesInfo, call, sinkParams) {
 		if exprDependsOnErrcodeClassifierForValue(p.TypesInfo, sink.Expr, sink.ValueIndex, tainted, returnTaints) {
-			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks)
+			diagnostics = appendOBS01DiagnosticIfUnacked(diagnostics, p, sink, rel, acks, matchedAcks)
 		}
 	}
 	return diagnostics
@@ -1811,11 +1838,13 @@ func appendOBS01DiagnosticIfUnacked(
 	sink obs01SinkArg,
 	rel string,
 	acks map[string]obsAck,
+	matchedAcks map[string]bool,
 ) []Diagnostic {
 	pos := p.Fset.Position(sink.Expr.Pos())
 	fingerprint := obs01Fingerprint(rel, pos.Line, pos.Column, sink.Metric, sink.Label, exprString(p.Fset, sink.Expr))
 	if sink.Ackable {
 		if ack, ok := acks[fingerprint]; ok && ack.matches(sink) {
+			matchedAcks[fingerprint] = true
 			return out
 		}
 	}
@@ -3985,7 +4014,7 @@ func (ack obsAck) validate(root, path string, idx int) error {
 			return fmt.Errorf("%s: OBS-01 acknowledgement %d has empty dashboardOrAlertRefs[%d]", path, idx, i)
 		}
 		if !validOBS01Ref(root, ref) {
-			return fmt.Errorf("%s: OBS-01 acknowledgement %d dashboardOrAlertRefs[%d] must be an existing repo path or http(s) URL", path, idx, i)
+			return fmt.Errorf("%s: OBS-01 acknowledgement %d dashboardOrAlertRefs[%d] must be an existing repo-relative file tracked by git and not a symlink", path, idx, i)
 		}
 	}
 	return nil
@@ -3993,10 +4022,6 @@ func (ack obsAck) validate(root, path string, idx int) error {
 
 func validOBS01Ref(root, ref string) bool {
 	ref = strings.TrimSpace(ref)
-	u, err := url.Parse(ref)
-	if err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" {
-		return true
-	}
 	if filepath.IsAbs(ref) || strings.HasPrefix(ref, "..") {
 		return false
 	}
@@ -4012,12 +4037,46 @@ func validOBS01Ref(root, ref string) bool {
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return false
 	}
-	_, err = os.Stat(candidate)
+	info, err := os.Lstat(candidate)
+	if err != nil || !info.Mode().IsRegular() {
+		return false
+	}
+	if hasGitMetadata(root) && !gitTracksFile(root, filepath.ToSlash(rel)) {
+		return false
+	}
+	return true
+}
+
+func hasGitMetadata(root string) bool {
+	_, err := os.Stat(filepath.Join(root, ".git"))
 	return err == nil
+}
+
+func gitTracksFile(root, rel string) bool {
+	cmd := exec.Command("git", "-C", root, "ls-files", "--error-unmatch", "--", rel)
+	return cmd.Run() == nil
 }
 
 func (ack obsAck) matches(sink obs01SinkArg) bool {
 	return ack.Metric == sink.Metric && ack.Label == sink.Label
+}
+
+func rejectUnusedOBS01Acks(root string, acks map[string]obsAck, matched map[string]bool) error {
+	fingerprints := make([]string, 0, len(acks))
+	for fingerprint := range acks {
+		fingerprints = append(fingerprints, fingerprint)
+	}
+	sort.Strings(fingerprints)
+	for _, fingerprint := range fingerprints {
+		if matched[fingerprint] {
+			continue
+		}
+		ack := acks[fingerprint]
+		path := filepath.Join(root, "docs", "observability", "metrics-migration-acks.yaml")
+		return fmt.Errorf("%s: OBS-01 acknowledgement for fingerprint %q is unused or stale (metric=%q label=%q)",
+			path, fingerprint, ack.Metric, ack.Label)
+	}
+	return nil
 }
 
 func obs01Fingerprint(file string, line, column int, metric, label, expr string) string {
