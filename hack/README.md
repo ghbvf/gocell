@@ -36,6 +36,7 @@ itself enforces.
 | `verify-archtest.sh` | `tools/archtest/*` (LAYER-*, AUTH-*, SEC-FAIL-CLOSED-*, ERROR-FIRST-API-01, META-*, ADV-06) |
 | `verify-contract-health.sh` | `gocell check contract-health` (CH-*) |
 | `verify-examples-import.sh` | `examples/` must not import `cells/*/internal/` or `adapters/*/internal/` |
+| `verify-generated.sh` | generated `boundary.yaml` and `metrics-schema.yaml` are up to date |
 | `verify-govalidate.sh` | `gocell validate --strict` (FMT, ADV, REF, LAYER, VERIFY, CONTRACT-CONSISTENCY) |
 | `verify-journey.sh` | `gocell verify journey --active` (active journeys carry executable auto checks) |
 | `verify-scaffold-reject.sh` | `gocell scaffold slice` rejects kebab-case names |
