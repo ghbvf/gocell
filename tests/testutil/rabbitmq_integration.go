@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/docker/go-connections/nat"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	tcrabbitmq "github.com/testcontainers/testcontainers-go/modules/rabbitmq"
@@ -31,7 +30,7 @@ func StartRabbitMQContainerE(t *testing.T, ctx context.Context) (*tcrabbitmq.Rab
 
 	return tcrabbitmq.Run(ctx, RabbitMQImage,
 		testcontainers.WithAdditionalWaitStrategy(
-			wait.ForListeningPort(nat.Port(tcrabbitmq.DefaultAMQPPort)).
+			wait.ForListeningPort(tcrabbitmq.DefaultAMQPPort).
 				WithStartupTimeout(rabbitMQStartupTimeout),
 		),
 	)

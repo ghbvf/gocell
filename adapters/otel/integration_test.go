@@ -5,14 +5,15 @@ package otel_test
 import (
 	"context"
 	"io"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
-	dockercontainer "github.com/docker/docker/api/types/container"
-	"github.com/docker/go-connections/nat"
 	gcotel "github.com/ghbvf/gocell/adapters/otel"
 	"github.com/ghbvf/gocell/tests/testutil"
+	dockercontainer "github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/stretchr/testify/require"
 	"github.com/testcontainers/testcontainers-go"
 	"github.com/testcontainers/testcontainers-go/wait"
@@ -48,10 +49,10 @@ func TestNewTracer_ExportsSpanToOTLPCollector(t *testing.T) {
 			ExposedPorts: []string{"4317/tcp"},
 			Cmd:          []string{"--config=/etc/otelcol/config.yaml"},
 			HostConfigModifier: func(hostConfig *dockercontainer.HostConfig) {
-				hostConfig.PortBindings = nat.PortMap{
-					nat.Port("4317/tcp"): []nat.PortBinding{
+				hostConfig.PortBindings = network.PortMap{
+					network.MustParsePort("4317/tcp"): []network.PortBinding{
 						{
-							HostIP:   "127.0.0.1",
+							HostIP:   netip.MustParseAddr("127.0.0.1"),
 							HostPort: "0",
 						},
 					},
@@ -64,7 +65,7 @@ func TestNewTracer_ExportsSpanToOTLPCollector(t *testing.T) {
 					FileMode:          0o644,
 				},
 			},
-			WaitingFor: wait.ForListeningPort(nat.Port("4317/tcp")).
+			WaitingFor: wait.ForListeningPort("4317/tcp").
 				WithStartupTimeout(time.Minute),
 		},
 		Started: true,
@@ -74,7 +75,7 @@ func TestNewTracer_ExportsSpanToOTLPCollector(t *testing.T) {
 		require.NoError(t, container.Terminate(context.Background()), "terminate otel collector")
 	})
 
-	endpoint, err := container.PortEndpoint(ctx, nat.Port("4317/tcp"), "")
+	endpoint, err := container.PortEndpoint(ctx, "4317/tcp", "")
 	require.NoError(t, err, "get collector OTLP endpoint")
 
 	tracer, shutdown, err := gcotel.NewTracer(ctx, gcotel.TracerConfig{

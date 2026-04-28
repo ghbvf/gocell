@@ -92,6 +92,37 @@ updates:
 		"golangci-lint action pattern must be attached to the root github-actions update")
 }
 
+func TestDependabotCoversCIAndGolangCILintAllowsGroupExclusions(t *testing.T) {
+	body := []byte(`version: 2
+updates:
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      golangci-lint:
+        patterns:
+          - "golangci/golangci-lint-action"
+      github-actions:
+        patterns:
+          - "*"
+  - package-ecosystem: "gomod"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      go-special:
+        patterns:
+          - "example.com/special/*"
+      go-other:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "example.com/special/*"
+`)
+	require.NoError(t, validateDependabotCoversCIAndGolangCILint(body))
+}
+
 type dependabotConfig struct {
 	Version int                `yaml:"version"`
 	Updates []dependabotUpdate `yaml:"updates"`
@@ -109,7 +140,8 @@ type dependabotSchedule struct {
 }
 
 type dependabotGroup struct {
-	Patterns []string `yaml:"patterns"`
+	Patterns        []string `yaml:"patterns"`
+	ExcludePatterns []string `yaml:"exclude-patterns"`
 }
 
 func validateDependabotCoversCIAndGolangCILint(body []byte) error {

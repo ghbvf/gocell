@@ -16,3 +16,20 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      go-testcontainers:
+        patterns:
+          - "github.com/testcontainers/testcontainers-go*"
+      go-opentelemetry:
+        patterns:
+          - "go.opentelemetry.io/*"
+      go-x-modules:
+        patterns:
+          - "golang.org/x/*"
+      go-other-modules:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "github.com/testcontainers/testcontainers-go*"
+          - "go.opentelemetry.io/*"
+          - "golang.org/x/*"
