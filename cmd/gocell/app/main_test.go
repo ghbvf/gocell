@@ -111,17 +111,22 @@ func TestSubcommandHelpFlagsRenderHelp(t *testing.T) {
 	for _, tc := range cases {
 		for _, flag := range []string{"-h", "--help", "help"} {
 			t.Run(tc.name+"_"+flag, func(t *testing.T) {
-				out := captureStdout(t, func() {
-					if err := tc.run([]string{flag}); err != nil {
-						t.Fatalf("%s %q: unexpected error: %v", tc.name, flag, err)
-					}
-				})
-				for _, want := range tc.want {
-					if !strings.Contains(out, want) {
-						t.Fatalf("%s %q help output missing %q in:\n%s", tc.name, flag, want, out)
-					}
-				}
+				assertHelpOutput(t, tc.name, tc.run, flag, tc.want)
 			})
+		}
+	}
+}
+
+func assertHelpOutput(t *testing.T, name string, run func([]string) error, flag string, want []string) {
+	t.Helper()
+	out := captureStdout(t, func() {
+		if err := run([]string{flag}); err != nil {
+			t.Fatalf("%s %q: unexpected error: %v", name, flag, err)
+		}
+	})
+	for _, w := range want {
+		if !strings.Contains(out, w) {
+			t.Fatalf("%s %q help output missing %q in:\n%s", name, flag, w, out)
 		}
 	}
 }

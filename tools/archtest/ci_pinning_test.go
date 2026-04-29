@@ -28,14 +28,15 @@ func TestGolangCILintVersionPinnedToPatch(t *testing.T) {
 
 func TestWorkflowExternalUsesPinnedToSHA(t *testing.T) {
 	root := findModuleRoot(t)
-	workflowPaths, err := workflowFiles(root)
+	pinPaths, err := pinnableYAMLFiles(root)
 	require.NoError(t, err)
-	require.NotEmpty(t, workflowPaths)
+	require.NotEmpty(t, pinPaths)
 
-	for _, path := range workflowPaths {
+	for _, path := range pinPaths {
 		body, readErr := os.ReadFile(path)
 		require.NoError(t, readErr)
 		require.NoError(t, validateWorkflowUsesPinned(path, body))
+		require.NoError(t, validateLocalUsesResolve(root, path, body))
 	}
 }
 
@@ -65,6 +66,71 @@ func TestWorkflowUsesPinnedAllowsLocalReusableWorkflow(t *testing.T) {
     uses: ./.github/workflows/_build-lint.yml
 `)
 	require.NoError(t, validateWorkflowUsesPinned("fixture.yml", body))
+}
+
+// TestWorkflowUsesPinnedRejectsTagPinnedActionInsideCompositeAction guards the
+// completeness gap from the PR #332 round-2 review: composite actions
+// declared at .github/actions/<name>/action.yml are not in the workflow
+// glob, so a composite action that pulls actions/checkout@v6 internally
+// would historically slip past the pin check. validateWorkflowUsesPinned
+// is YAML-shape agnostic and should reject the violation regardless of
+// where the file lives; pinnableYAMLFiles puts action.yml files in scope
+// so the assertion runs against composite actions too.
+func TestWorkflowUsesPinnedRejectsTagPinnedActionInsideCompositeAction(t *testing.T) {
+	body := []byte(`name: composite-fixture
+runs:
+  using: composite
+  steps:
+    - uses: actions/checkout@v6
+      shell: bash
+      run: echo hi
+`)
+	require.Error(t, validateWorkflowUsesPinned("fixture/action.yml", body))
+}
+
+// TestWorkflowUsesPinnedRejectsDockerActionWithoutDigest covers the second
+// completeness gap: docker:// uses are pinned by sha256 digest, not by a
+// 40-hex git SHA. shaPinnedAction's regex never matches digests, so any
+// docker:// reference must be checked separately. Allow only the explicit
+// digest form so a tag-pinned docker action does not slip through.
+func TestWorkflowUsesPinnedRejectsDockerActionWithoutDigest(t *testing.T) {
+	body := []byte(`jobs:
+  test:
+    steps:
+      - uses: docker://alpine:3.20
+`)
+	require.Error(t, validateWorkflowUsesPinned("fixture.yml", body))
+}
+
+func TestWorkflowUsesPinnedAcceptsDockerActionWithDigest(t *testing.T) {
+	body := []byte(`jobs:
+  test:
+    steps:
+      - uses: docker://alpine@sha256:1c4eef651f65e2f7daee7ee785882ac164b02b78fb74503052a26dc061c90474
+`)
+	require.NoError(t, validateWorkflowUsesPinned("fixture.yml", body))
+}
+
+func TestValidateLocalUsesResolveRejectsMissingTarget(t *testing.T) {
+	root := t.TempDir()
+	body := []byte(`jobs:
+  test:
+    uses: ./.github/workflows/missing.yml
+`)
+	require.Error(t, validateLocalUsesResolve(root, "fixture.yml", body))
+}
+
+func TestValidateLocalUsesResolveAcceptsExistingTarget(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, ".github", "workflows", "_local.yml")
+	require.NoError(t, os.MkdirAll(filepath.Dir(target), 0o755))
+	require.NoError(t, os.WriteFile(target, []byte("jobs: {}\n"), 0o644))
+
+	body := []byte(`jobs:
+  test:
+    uses: ./.github/workflows/_local.yml
+`)
+	require.NoError(t, validateLocalUsesResolve(root, "fixture.yml", body))
 }
 
 func TestGeneratedArtifactGatesAreStructured(t *testing.T) {
@@ -302,6 +368,16 @@ func validateWorkflowUsesPinned(path string, body []byte) error {
 	var violations []string
 	walkWorkflowUses(&root, func(uses string) {
 		if strings.HasPrefix(uses, "./") {
+			// Local references are resolved by validateLocalUsesResolve;
+			// pin-checking them here would make no sense (they have no
+			// SHA), and skipping them silently was the original PR #332
+			// gap. The explicit split keeps each predicate focused.
+			return
+		}
+		if strings.HasPrefix(uses, "docker://") {
+			if !dockerDigestPinned(uses) {
+				violations = append(violations, uses)
+			}
 			return
 		}
 		if !shaPinnedAction(uses) {
@@ -309,20 +385,71 @@ func validateWorkflowUsesPinned(path string, body []byte) error {
 		}
 	})
 	if len(violations) > 0 {
-		return fmt.Errorf("%s: external workflow uses must be pinned to 40-char SHA: %s",
+		return fmt.Errorf("%s: external workflow uses must be pinned to a 40-char SHA "+
+			"(docker:// must use sha256 digest): %s",
 			path, strings.Join(violations, ", "))
 	}
 	return nil
 }
 
-func workflowFiles(root string) ([]string, error) {
+// validateLocalUsesResolve reports any `uses: ./...` reference whose target
+// file does not exist relative to repoRoot. Local references are scoped to
+// the repo, so a typo or stale reference must fail loudly rather than be
+// treated as "exempt from SHA pinning".
+func validateLocalUsesResolve(repoRoot, path string, body []byte) error {
+	var root yaml.Node
+	if err := yaml.Unmarshal(body, &root); err != nil {
+		return fmt.Errorf("%s: parse workflow: %w", path, err)
+	}
+	var missing []string
+	walkWorkflowUses(&root, func(uses string) {
+		if !strings.HasPrefix(uses, "./") {
+			return
+		}
+		// uses values are POSIX-style; convert to native path separators
+		// before joining so the check works on Windows (defensive — CI
+		// lives on Linux today, but the cost is one filepath.FromSlash).
+		target := filepath.Join(repoRoot, filepath.FromSlash(strings.TrimPrefix(uses, "./")))
+		if _, err := os.Stat(target); err != nil {
+			missing = append(missing, uses)
+		}
+	})
+	if len(missing) > 0 {
+		return fmt.Errorf("%s: local `uses:` references point to missing files: %s",
+			path, strings.Join(missing, ", "))
+	}
+	return nil
+}
+
+// pinnableYAMLFiles returns every YAML file the SHA-pin and local-reference
+// audits must visit. Workflow files (.github/workflows/*.{yml,yaml}) and
+// composite/local reusable actions (.github/actions/**/action.{yml,yaml})
+// are both in scope: a tag-pinned external action inside a composite
+// action would otherwise bypass the pin check because the workflow file
+// only lists the local wrapper.
+func pinnableYAMLFiles(root string) ([]string, error) {
 	var out []string
+	workflowsDir := filepath.Join(root, ".github", "workflows")
 	for _, ext := range []string{"*.yml", "*.yaml"} {
-		paths, err := filepath.Glob(filepath.Join(root, ".github", "workflows", ext))
+		paths, err := filepath.Glob(filepath.Join(workflowsDir, ext))
 		if err != nil {
 			return nil, err
 		}
 		out = append(out, paths...)
+	}
+	actionsDir := filepath.Join(root, ".github", "actions")
+	if entries, err := os.ReadDir(actionsDir); err == nil {
+		for _, entry := range entries {
+			if !entry.IsDir() {
+				continue
+			}
+			for _, name := range []string{"action.yml", "action.yaml"} {
+				candidate := filepath.Join(actionsDir, entry.Name(), name)
+				if _, statErr := os.Stat(candidate); statErr == nil {
+					out = append(out, candidate)
+				}
+			}
+		}
 	}
 	return out, nil
 }
@@ -382,6 +509,21 @@ func shaPinnedAction(uses string) bool {
 	}
 	sha := uses[at+1:]
 	return regexp.MustCompile(`^[a-f0-9]{40}$`).MatchString(sha)
+}
+
+// dockerDigestPinned reports whether a docker:// uses entry pins the image
+// to a sha256 digest. Format: `docker://image[:tag]@sha256:<64 hex>`. Tag
+// pinning alone (`docker://image:tag`) is not pinning — the tag can be
+// repointed to a different image without changing the workflow.
+func dockerDigestPinned(uses string) bool {
+	const prefix = "docker://"
+	rest := strings.TrimPrefix(uses, prefix)
+	at := strings.LastIndex(rest, "@")
+	if at < 0 || at == len(rest)-1 {
+		return false
+	}
+	digest := rest[at+1:]
+	return regexp.MustCompile(`^sha256:[a-f0-9]{64}$`).MatchString(digest)
 }
 
 func validateGeneratedArtifactGates(body []byte) error {

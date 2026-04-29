@@ -1,6 +1,9 @@
 package app
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 // isHelpFlag reports whether arg requests sub-command help.
 //
@@ -11,87 +14,177 @@ func isHelpFlag(arg string) bool {
 	return arg == "-h" || arg == "--help" || arg == "help"
 }
 
+// helpEntry is one type listed under a sub-command's "Types:" section. desc
+// can span multiple lines; printHelp indents continuation lines under the
+// type name so the help surface stays aligned.
+type helpEntry struct {
+	name string
+	desc []string
+}
+
+// printHelp renders a uniform help surface for sub-commands. The shape is
+//
+//	Usage: gocell <verb> <type> [flags]
+//
+//	Types:
+//	  <name>   <desc[0]>
+//	           <desc[1]>
+//	           ...
+//
+//	<footer>
+//
+// Adding a new type to a sub-command means appending a helpEntry; missing
+// the help line is impossible because the data structure is the source of
+// truth for the help renderer.
+func printHelp(verb string, entries []helpEntry, footer ...string) {
+	fmt.Printf("Usage: gocell %s <type> [flags]\n", verb)
+	fmt.Println()
+	fmt.Println("Types:")
+	width := longestEntryName(entries)
+	for _, e := range entries {
+		first := true
+		for _, line := range e.desc {
+			if first {
+				fmt.Printf("  %-*s  %s\n", width, e.name, line)
+				first = false
+				continue
+			}
+			fmt.Printf("  %-*s  %s\n", width, "", line)
+		}
+		if first {
+			// entry with no description; still emit the name so the type
+			// is discoverable.
+			fmt.Printf("  %s\n", e.name)
+		}
+	}
+	if len(footer) == 0 {
+		return
+	}
+	fmt.Println()
+	fmt.Println(strings.Join(footer, "\n"))
+}
+
+func longestEntryName(entries []helpEntry) int {
+	max := 0
+	for _, e := range entries {
+		if n := len(e.name); n > max {
+			max = n
+		}
+	}
+	return max
+}
+
 // printGenerateHelp documents the generate sub-tree, including the ownership
 // boundary between gocell-generated and hand-written files. The boundary is
 // enforced by writeGeneratedFile, but operators only see the enforcement as a
 // terse "refusing to overwrite non-generated file" error; this surface tells
 // them what they need to know up front.
 func printGenerateHelp() error {
-	fmt.Println("Usage: gocell generate <type> [flags]")
-	fmt.Println()
-	fmt.Println("Types:")
-	fmt.Println("  assembly        Generate the assembly entrypoint (cmd/<id>/main.go)")
-	fmt.Println("                  and assemblies/<id>/generated/boundary.yaml.")
-	fmt.Println("                  Generated files are owned by gocell. Hand-written")
-	fmt.Println("                  helpers may live in cmd/<id>/run.go etc., but")
-	fmt.Println("                  cmd/<id>/main.go must carry the gocell generated")
-	fmt.Println("                  header or generation aborts to protect your edits.")
-	fmt.Println("                  --id=<assemblyID> [--module=<module>]")
-	fmt.Println("  metrics-schema  Generate assemblies/<id>/generated/metrics-schema.yaml")
-	fmt.Println("                  by walking the assembly's reachable packages with")
-	fmt.Println("                  go/types. --id=<assemblyID>")
-	fmt.Println("  indexes         (not implemented)")
-	fmt.Println()
-	fmt.Println("Generated artifacts must be committed in HEAD; gocell verify generated")
-	fmt.Println("rejects stale or staged-only files.")
+	printHelp("generate", []helpEntry{
+		{"assembly", []string{
+			"Generate the assembly entrypoint (cmd/<id>/main.go)",
+			"and assemblies/<id>/generated/boundary.yaml.",
+			"Generated files are owned by gocell. Hand-written",
+			"helpers may live in cmd/<id>/run.go etc., but",
+			"cmd/<id>/main.go must carry the gocell generated",
+			"header or generation aborts to protect your edits.",
+			"--id=<assemblyID> [--module=<module>]",
+		}},
+		{"metrics-schema", []string{
+			"Generate assemblies/<id>/generated/metrics-schema.yaml",
+			"by walking the assembly's reachable packages with",
+			"go/types. --id=<assemblyID>",
+		}},
+		{"indexes", []string{"(not implemented)"}},
+	},
+		"Generated artifacts must be committed in HEAD; gocell verify generated",
+		"rejects stale or staged-only files.",
+	)
 	return nil
 }
 
 // printVerifyHelp mirrors printGenerateHelp for the verify sub-tree.
 func printVerifyHelp() error {
-	fmt.Println("Usage: gocell verify <type> [flags]")
-	fmt.Println()
-	fmt.Println("Types:")
-	fmt.Println("  slice      Run verify.unit + verify.contract for a slice.")
-	fmt.Println("             --id=<cellID/sliceID> [--format text|json|sarif]")
-	fmt.Println("  cell       Run verify.smoke + per-slice checks for a cell.")
-	fmt.Println("             --id=<cellID> [--format text|json|sarif]")
-	fmt.Println("  journey    Run a single journey or every active journey.")
-	fmt.Println("             --id=<journeyID> | --active [--format text|json|sarif]")
-	fmt.Println("  targets    List slices/cells/contracts/journeys reachable from")
-	fmt.Println("             the given files. --files=<file1,file2,...>")
-	fmt.Println("  generated  Verify assembly entrypoints, boundary.yaml, and")
-	fmt.Println("             metrics-schema.yaml against metadata-derived")
-	fmt.Println("             expectations and HEAD. Fails on stale, staged-only,")
-	fmt.Println("             or unexpected committed artifacts. [--module=<module>]")
+	printHelp("verify", []helpEntry{
+		{"slice", []string{
+			"Run verify.unit + verify.contract for a slice.",
+			"--id=<cellID/sliceID> [--format text|json|sarif]",
+		}},
+		{"cell", []string{
+			"Run verify.smoke + per-slice checks for a cell.",
+			"--id=<cellID> [--format text|json|sarif]",
+		}},
+		{"journey", []string{
+			"Run a single journey or every active journey.",
+			"--id=<journeyID> | --active [--format text|json|sarif]",
+		}},
+		{"targets", []string{
+			"List slices/cells/contracts/journeys reachable from",
+			"the given files. --files=<file1,file2,...>",
+		}},
+		{"generated", []string{
+			"Verify assembly entrypoints, boundary.yaml, and",
+			"metrics-schema.yaml against metadata-derived",
+			"expectations and HEAD. Fails on stale, staged-only,",
+			"or unexpected committed artifacts. [--module=<module>]",
+		}},
+	})
 	return nil
 }
 
 // printScaffoldHelp documents scaffold sub-types.
 func printScaffoldHelp() error {
-	fmt.Println("Usage: gocell scaffold <type> [flags]")
-	fmt.Println()
-	fmt.Println("Types:")
-	fmt.Println("  cell      Create cells/<id>/cell.yaml. --id=<id> --team=<team>")
-	fmt.Println("            [--type=core|edge|support] [--level=L0..L4] [--dry-run]")
-	fmt.Println("  slice     Create cells/<cellID>/slices/<id>/slice.yaml.")
-	fmt.Println("            --id=<id> --cell=<cellID> [--dry-run]")
-	fmt.Println("  contract  Create contracts/<kind>/<domain>/<v>/contract.yaml.")
-	fmt.Println("            --id=<id> --kind=<kind> --owner=<cellID> [--dry-run]")
-	fmt.Println("  journey   Create journeys/<id>.yaml.")
-	fmt.Println("            --id=<id> --goal=<goal> --team=<team> --cells=<a,b,...>")
-	fmt.Println("            [--dry-run]")
-	fmt.Println()
-	fmt.Println("--dry-run validates inputs and path conflicts without writing.")
+	printHelp("scaffold", []helpEntry{
+		{"cell", []string{
+			"Create cells/<id>/cell.yaml. --id=<id> --team=<team>",
+			"[--type=core|edge|support] [--level=L0..L4] [--dry-run]",
+		}},
+		{"slice", []string{
+			"Create cells/<cellID>/slices/<id>/slice.yaml.",
+			"--id=<id> --cell=<cellID> [--dry-run]",
+		}},
+		{"contract", []string{
+			"Create contracts/<kind>/<domain>/<v>/contract.yaml.",
+			"--id=<id> --kind=<kind> --owner=<cellID> [--dry-run]",
+		}},
+		{"journey", []string{
+			"Create journeys/<id>.yaml.",
+			"--id=<id> --goal=<goal> --team=<team> --cells=<a,b,...>",
+			"[--dry-run]",
+		}},
+	},
+		"--dry-run validates inputs and path conflicts without writing.",
+	)
 	return nil
 }
 
 // printCheckHelp documents check sub-types.
 func printCheckHelp() error {
-	fmt.Println("Usage: gocell check <type> [flags]")
-	fmt.Println()
-	fmt.Println("Types:")
-	fmt.Println("  contract-health         Aggregate contract metadata health.")
-	fmt.Println("                          [--format text|json|sarif]")
-	fmt.Println("  slice-coverage          Slice coverage of a cell.")
-	fmt.Println("                          --cell=<cellID>")
-	fmt.Println("  assembly-completeness   Assembly cell-set vs declared boundary.")
-	fmt.Println("                          --id=<assemblyID>")
-	fmt.Println("  journey-readiness       Journey readiness against status-board.")
-	fmt.Println("                          --journey=<journeyID>")
-	fmt.Println("  l0-imports              L0 dependency direction.")
-	fmt.Println("                          --cell=<cellID>")
-	fmt.Println("  unconditional-skip      Static analysis for unconditional t.Skip.")
-	fmt.Println("                          [--format text|json|sarif]")
+	printHelp("check", []helpEntry{
+		{"contract-health", []string{
+			"Aggregate contract metadata health.",
+			"[--format text|json|sarif]",
+		}},
+		{"slice-coverage", []string{
+			"Slice coverage of a cell.",
+			"--cell=<cellID>",
+		}},
+		{"assembly-completeness", []string{
+			"Assembly cell-set vs declared boundary.",
+			"--id=<assemblyID>",
+		}},
+		{"journey-readiness", []string{
+			"Journey readiness against status-board.",
+			"--journey=<journeyID>",
+		}},
+		{"l0-imports", []string{
+			"L0 dependency direction.",
+			"--cell=<cellID>",
+		}},
+		{"unconditional-skip", []string{
+			"Static analysis for unconditional t.Skip.",
+			"[--format text|json|sarif]",
+		}},
+	})
 	return nil
 }
