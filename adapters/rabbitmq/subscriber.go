@@ -33,10 +33,10 @@ const (
 	// error and the parent ctx has no deadline. Bounded so a stuck consumer
 	// cannot block Close() indefinitely.
 	defaultRMQWaitForReadyTimeout = 30 * time.Second
-	// detached-context timeout shared by dispatchAck commit and releaseReceipt;
-	// outlives caller cancellation so the broker never stays in an inconsistent
-	// ack state if the parent ctx is already done.
-	defaultRMQCleanupTimeout = 5 * time.Second
+	// detached-context timeout for dispatchAck Receipt.Commit and releaseReceipt
+	// Receipt.Release; outlives caller cancellation so the broker never stays
+	// in an inconsistent ack state if the parent ctx is already done.
+	defaultRMQReceiptOpTimeout = 5 * time.Second
 )
 
 // isRecoverableAMQPError returns true if the error indicates a transient
@@ -812,7 +812,7 @@ func (s *Subscriber) dispatchAck(
 	topic, eventID string,
 ) {
 	if res.Receipt != nil {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQCleanupTimeout)
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQReceiptOpTimeout)
 		commitErr := res.Receipt.Commit(rctx)
 		cancel()
 		if commitErr != nil {
@@ -840,14 +840,15 @@ func (s *Subscriber) dispatchAck(
 	}
 }
 
-// releaseReceipt releases the idempotency receipt with a 5s detached timeout.
-// Uses context.WithoutCancel so the operation completes even during graceful shutdown.
-// reason is used for structured log fields.
+// releaseReceipt releases the idempotency receipt bounded by
+// defaultRMQReceiptOpTimeout. Uses context.WithoutCancel so the operation
+// completes even during graceful shutdown. reason is used for structured log
+// fields.
 func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID, reason string) {
 	if receipt == nil {
 		return
 	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQCleanupTimeout)
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQReceiptOpTimeout)
 	defer cancel()
 	if relErr := receipt.Release(rctx); relErr != nil {
 		slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",

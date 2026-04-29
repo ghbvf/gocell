@@ -104,7 +104,10 @@ func collectProdDurationScanFiles(root string) ([]string, error) {
 		if strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
-		if filepath.Base(path) == "conformance.go" {
+		// Path-suffix match so any package's conformance.go test-helper is
+		// excluded regardless of nesting depth (driver-conformance suites
+		// own their literal sleeps as test semantics).
+		if strings.HasSuffix(filepath.ToSlash(path), "/conformance.go") {
 			return nil
 		}
 		files = append(files, path)
@@ -153,7 +156,7 @@ func scanProdDurationFile(root, path string) ([]prodDurationViolation, error) {
 		if !isLiteralDuration(arg) {
 			return true
 		}
-		pos := fset.Position(call.Lparen)
+		pos := fset.Position(arg.Pos())
 		violations = append(violations, prodDurationViolation{
 			File:     relSlash,
 			Line:     pos.Line,
@@ -221,9 +224,10 @@ func unwrapTimeNowAdd(expr ast.Expr) (ast.Expr, bool) {
 // isLiteralDuration reports whether expr contains a literal-bearing duration
 // (BasicLit, or a BinaryExpr/ParenExpr/UnaryExpr whose leaves include one).
 // Identifiers (named consts) and plain SelectorExprs (e.g. `pkg.Const`,
-// `c.field`) are compliant. CallExprs returning a duration are also compliant
-// because their value is computed at runtime — only directly-written literals
-// fail this rule.
+// `c.field`) are compliant. Most CallExprs returning a duration are compliant
+// because their value is computed at runtime — except `time.Duration(<lit>)`
+// type-conversion form, which is a literal in disguise and would otherwise
+// allow `time.Duration(30) * time.Second` to bypass the gate.
 func isLiteralDuration(expr ast.Expr) bool {
 	switch e := expr.(type) {
 	case *ast.BasicLit:
@@ -234,6 +238,17 @@ func isLiteralDuration(expr ast.Expr) bool {
 		return isLiteralDuration(e.X)
 	case *ast.UnaryExpr:
 		return isLiteralDuration(e.X)
+	case *ast.CallExpr:
+		// Only `time.Duration(<expr>)` type conversion participates in the
+		// literal check — any other CallExpr (e.g. min/max, helper funcs)
+		// returns a runtime value and is compliant by design.
+		if sel, ok := e.Fun.(*ast.SelectorExpr); ok {
+			if pkg, ok := sel.X.(*ast.Ident); ok &&
+				pkg.Name == "time" && sel.Sel.Name == "Duration" &&
+				len(e.Args) == 1 {
+				return isLiteralDuration(e.Args[0])
+			}
+		}
 	}
 	return false
 }
@@ -257,6 +272,17 @@ func literalString(expr ast.Expr) string {
 		return "(" + literalString(e.X) + ")"
 	case *ast.UnaryExpr:
 		return e.Op.String() + literalString(e.X)
+	case *ast.CallExpr:
+		// Render `time.Duration(<arg>)` literally so reports stay readable;
+		// other CallExprs aren't classified as literal so they shouldn't
+		// reach this branch.
+		if sel, ok := e.Fun.(*ast.SelectorExpr); ok {
+			if pkg, ok := sel.X.(*ast.Ident); ok {
+				if len(e.Args) == 1 {
+					return pkg.Name + "." + sel.Sel.Name + "(" + literalString(e.Args[0]) + ")"
+				}
+			}
+		}
 	}
 	return "<expr>"
 }
