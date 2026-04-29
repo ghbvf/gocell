@@ -28,6 +28,17 @@ var errSubscriptionLost = errors.New("rabbitmq: subscription lost")
 // can be safely embedded in AMQP message headers without truncation.
 const maxEntryIDLength = 255
 
+const (
+	// graceful-shutdown wait budget when subscribeOnce returns with a pending
+	// error and the parent ctx has no deadline. Bounded so a stuck consumer
+	// cannot block Close() indefinitely.
+	defaultRMQWaitForReadyTimeout = 30 * time.Second
+	// detached-context timeout shared by dispatchAck commit and releaseReceipt;
+	// outlives caller cancellation so the broker never stays in an inconsistent
+	// ack state if the parent ctx is already done.
+	defaultRMQCleanupTimeout = 5 * time.Second
+)
+
 // isRecoverableAMQPError returns true if the error indicates a transient
 // connection/channel loss that can be recovered via reconnect. Permanent errors
 // (ACCESS_REFUSED, PRECONDITION_FAILED, channel_max exhausted) return false.
@@ -450,7 +461,7 @@ func (s *Subscriber) subscribeOnce(
 	waitCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline && loopErr != nil {
 		var cancelWait context.CancelFunc
-		waitCtx, cancelWait = context.WithTimeout(ctx, 30*time.Second)
+		waitCtx, cancelWait = context.WithTimeout(ctx, defaultRMQWaitForReadyTimeout)
 		defer cancelWait()
 	}
 
@@ -801,7 +812,7 @@ func (s *Subscriber) dispatchAck(
 	topic, eventID string,
 ) {
 	if res.Receipt != nil {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQCleanupTimeout)
 		commitErr := res.Receipt.Commit(rctx)
 		cancel()
 		if commitErr != nil {
@@ -836,7 +847,7 @@ func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID,
 	if receipt == nil {
 		return
 	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQCleanupTimeout)
 	defer cancel()
 	if relErr := receipt.Release(rctx); relErr != nil {
 		slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",

@@ -24,6 +24,9 @@ const (
 	maxRetries     = 3
 	baseRetryDelay = 100 * time.Millisecond
 	maxRetryDelay  = 30 * time.Second
+	// detached-context timeout shared by commitReceipt / releaseReceipt; must
+	// outlive a graceful-shutdown ctx so receipts always complete.
+	defaultEventbusReleaseTimeout = 5 * time.Second
 )
 
 // DeadLetter represents a message that exhausted retries.
@@ -537,7 +540,7 @@ func (b *InMemoryEventBus) appendDeadLetter(topic string, entry outbox.Entry, er
 // failure must NOT be silently swallowed, otherwise stale holders could
 // "succeed" after losing the lease).
 func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string) error {
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultEventbusReleaseTimeout)
 	defer cancel()
 	if err := r.Commit(rctx); err != nil {
 		slog.Error("eventbus: receipt commit failed",
@@ -551,7 +554,7 @@ func commitReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string)
 
 // releaseReceipt calls Receipt.Release with a detached 5s-timeout context.
 func releaseReceipt(ctx context.Context, r outbox.Receipt, topic, entryID string) {
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultEventbusReleaseTimeout)
 	defer cancel()
 	if err := r.Release(rctx); err != nil {
 		slog.Error("eventbus: receipt release failed",
