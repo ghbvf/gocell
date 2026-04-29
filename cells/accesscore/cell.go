@@ -30,11 +30,20 @@ import (
 	refreshmem "github.com/ghbvf/gocell/runtime/auth/refresh/memstore"
 )
 
+const (
+	// defaultAccessCoreRefreshReuseInterval is the token reuse window for the
+	// in-memory refresh policy (demo/testing only).
+	defaultAccessCoreRefreshReuseInterval = 2 * time.Second
+	// defaultAccessCoreRefreshMaxAge is the maximum lifetime of a refresh token
+	// for the in-memory refresh policy (demo/testing only).
+	defaultAccessCoreRefreshMaxAge = 7 * 24 * time.Hour
+)
+
 // defaultRefreshPolicy is used only by WithInMemoryDefaults for demo/testing.
 // Durable mode must inject an explicit store via WithRefreshStore.
 var defaultRefreshPolicy = refresh.Policy{
-	ReuseInterval: 2 * time.Second,
-	MaxAge:        7 * 24 * time.Hour,
+	ReuseInterval: defaultAccessCoreRefreshReuseInterval,
+	MaxAge:        defaultAccessCoreRefreshMaxAge,
 }
 
 // realClock is a minimal refresh.Clock implementation backed by time.Now.

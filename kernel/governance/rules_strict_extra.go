@@ -25,6 +25,10 @@ const (
 	ruleFMT25 = "FMT-25"
 )
 
+// defaultDeprecationGracePeriod is the maximum allowed time between a contract's
+// deprecatedAt date and the validation run before FMT-23 fires a warning.
+const defaultDeprecationGracePeriod = 90 * 24 * time.Hour
+
 // --- FMT-20 (formerly FMT-RESPONSE-STRICT-01) ---
 
 // validateFMTResponseStrict01 scans every HTTP-kind contract's request/response
@@ -379,7 +383,7 @@ func (v *Validator) validateContractDeprecatedCleanup01() []ValidationResult {
 			))
 			continue
 		}
-		if now.UTC().Sub(ts) > 90*24*time.Hour {
+		if now.UTC().Sub(ts) > defaultDeprecationGracePeriod {
 			results = append(results, v.newResult(
 				ruleFMT23, SeverityWarning, IssueForbidden,
 				contractFile(c), "lifecycle",

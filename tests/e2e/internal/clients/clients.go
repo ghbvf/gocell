@@ -22,6 +22,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// defaultE2ERetryInterval is the WaitForReady poll cadence; small enough that
+// startup latency is dominated by the server's own readiness signal.
+const defaultE2ERetryInterval = 500 * time.Millisecond
+
 // BaseURL returns the primary listener (business API) base URL, defaulting
 // to localhost:8080. Override via E2E_BASE_URL.
 func BaseURL() string {
@@ -69,7 +73,7 @@ func WaitForReady(t *testing.T, timeout time.Duration) {
 		if resp != nil {
 			_ = resp.Body.Close()
 		}
-		time.Sleep(500 * time.Millisecond)
+		time.Sleep(defaultE2ERetryInterval)
 	}
 	t.Fatalf("server at %s did not become ready within %s", HealthURL(), timeout)
 }

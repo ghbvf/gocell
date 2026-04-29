@@ -15,6 +15,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/auth"
 )
 
+const (
+	// defaultConfigClientHTTPTimeout is the default HTTP client timeout for
+	// internal configcore requests.
+	defaultConfigClientHTTPTimeout = 5 * time.Second
+)
+
 // configEntryDataResponse mirrors the {data: {...}} envelope returned by
 // GET /internal/v1/config/{key} (contract: http.config.internal.get.v1).
 type configEntryDataResponse struct {
@@ -45,7 +51,7 @@ func NewHTTPConfigGetter(baseURL string, ring *auth.HMACKeyRing) *HTTPConfigGett
 	return &HTTPConfigGetter{
 		baseURL: baseURL,
 		ring:    ring,
-		client:  &http.Client{Timeout: 5 * time.Second},
+		client:  &http.Client{Timeout: defaultConfigClientHTTPTimeout},
 	}
 }
 

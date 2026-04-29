@@ -47,6 +47,12 @@ import (
 // long, potentially sensitive diagnostic messages.
 const maxVerboseErrLen = 512
 
+const (
+	// defaultHealthDeadline is the default readiness probe execution deadline.
+	// Matches the Kubernetes readiness probe convention (5 s).
+	defaultHealthDeadline = 5 * time.Second
+)
+
 // singleflight keys for the two response shapes. Verbose and non-verbose
 // results are not interchangeable (different body fields), so each shape gets
 // its own key; concurrent requests of the same shape share one probe pass.
@@ -150,7 +156,7 @@ func New(asm *assembly.CoreAssembly, opts ...Option) *Handler {
 	h := &Handler{
 		assembly: asm,
 		checkers: make(map[string]Checker),
-		deadline: 5 * time.Second,
+		deadline: defaultHealthDeadline,
 	}
 	for _, o := range opts {
 		o(h)

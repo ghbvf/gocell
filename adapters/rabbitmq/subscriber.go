@@ -28,6 +28,25 @@ var errSubscriptionLost = errors.New("rabbitmq: subscription lost")
 // can be safely embedded in AMQP message headers without truncation.
 const maxEntryIDLength = 255
 
+const (
+	// defaultRMQReconnectWaitTimeout is the graceful-shutdown wait budget when
+	// subscribeOnce returns with a pending error and the parent ctx has no
+	// deadline. Bounded so a stuck consumer cannot block Close() indefinitely.
+	defaultRMQReconnectWaitTimeout = 30 * time.Second
+	// defaultRMQReceiptOpTimeout is the detached-context timeout for dispatchAck
+	// Receipt.Commit and releaseReceipt Receipt.Release; outlives caller
+	// cancellation so the broker never stays in an inconsistent ack state if the
+	// parent ctx is already done.
+	defaultRMQReceiptOpTimeout = 5 * time.Second
+	// defaultRMQStopIntakePerCallTimeout bounds any single basic.cancel call
+	// during StopIntake. A hung broker cannot stall the whole shutdown chain
+	// beyond this budget per consumer.
+	defaultRMQStopIntakePerCallTimeout = 2 * time.Second
+	// defaultRMQDrainDeadline is the maximum wall-clock time drainRemaining waits
+	// for the deliveries channel to close after StopIntake issued basic.cancel.
+	defaultRMQDrainDeadline = 30 * time.Second
+)
+
 // isRecoverableAMQPError returns true if the error indicates a transient
 // connection/channel loss that can be recovered via reconnect. Permanent errors
 // (ACCESS_REFUSED, PRECONDITION_FAILED, channel_max exhausted) return false.
@@ -97,7 +116,7 @@ func (sc *SubscriberConfig) setDefaults() {
 		sc.PrefetchCount = 10
 	}
 	if sc.StopIntakePerCallTimeout == 0 {
-		sc.StopIntakePerCallTimeout = 2 * time.Second
+		sc.StopIntakePerCallTimeout = defaultRMQStopIntakePerCallTimeout
 	}
 }
 
@@ -450,7 +469,7 @@ func (s *Subscriber) subscribeOnce(
 	waitCtx := ctx
 	if _, hasDeadline := ctx.Deadline(); !hasDeadline && loopErr != nil {
 		var cancelWait context.CancelFunc
-		waitCtx, cancelWait = context.WithTimeout(ctx, 30*time.Second)
+		waitCtx, cancelWait = context.WithTimeout(ctx, defaultRMQReconnectWaitTimeout)
 		defer cancelWait()
 	}
 
@@ -578,6 +597,20 @@ func (s *Subscriber) consumeLoop(
 	}
 }
 
+// testOnlyDrainDeadlineOverride is non-zero only in tests that need to inject a
+// short drain budget to avoid waiting the full defaultRMQDrainDeadline.
+var testOnlyDrainDeadlineOverride time.Duration
+
+// currentDrainDeadline returns the active drain deadline. In production this
+// returns defaultRMQDrainDeadline. Tests may set testOnlyDrainDeadlineOverride
+// to a short value to exercise the timeout path without waiting 30 s.
+func currentDrainDeadline() time.Duration {
+	if testOnlyDrainDeadlineOverride != 0 {
+		return testOnlyDrainDeadlineOverride
+	}
+	return defaultRMQDrainDeadline
+}
+
 // drainRemaining processes deliveries already prefetched after StopIntake
 // issued basic.cancel. It exits when:
 //   - the deliveries channel is closed (broker acknowledged basic.cancel), or
@@ -588,17 +621,10 @@ func (s *Subscriber) consumeLoop(
 // window) are still processed correctly.
 //
 // ref: ThreeDotsLabs/watermill-amqp subscriber.go — closedChan drain pattern
-// drainDeadline is a package-level variable (not const) to allow test injection.
-//
-// It is the maximum wall-clock time drainRemaining waits for the deliveries
-// channel to close after StopIntake issued basic.cancel. A healthy broker
-// closes the chan within milliseconds of the cancel ack; this ceiling exists
-// solely to prevent an indefinite hang when the broker is unresponsive.
-var drainDeadline = 30 * time.Second
 
 // drainRemaining reads prefetched deliveries until the deliveries channel is
 // closed by the broker (the cancel ack path), the outer Subscribe ctx is
-// cancelled (hard abort), or drainDeadline elapses (broker never ack'd the
+// cancelled (hard abort), or currentDrainDeadline() elapses (broker never ack'd the
 // cancel).
 //
 // Invariant: closeCh is intentionally NOT in the select. Once StopIntake has
@@ -620,7 +646,7 @@ func (s *Subscriber) drainRemaining(
 	handler outbox.EntryHandler,
 ) error {
 	ch := run.ch
-	timer := time.NewTimer(drainDeadline)
+	timer := time.NewTimer(currentDrainDeadline())
 	defer timer.Stop()
 
 	for {
@@ -645,7 +671,7 @@ func (s *Subscriber) drainRemaining(
 		case <-timer.C:
 			slog.Warn("rabbitmq: drain deadline reached, broker did not acknowledge basic.cancel",
 				slog.String(logKeyTopic, topic),
-				slog.Duration("deadline", drainDeadline))
+				slog.Duration("deadline", currentDrainDeadline()))
 			return nil
 		}
 	}
@@ -801,7 +827,7 @@ func (s *Subscriber) dispatchAck(
 	topic, eventID string,
 ) {
 	if res.Receipt != nil {
-		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQReceiptOpTimeout)
 		commitErr := res.Receipt.Commit(rctx)
 		cancel()
 		if commitErr != nil {
@@ -829,14 +855,15 @@ func (s *Subscriber) dispatchAck(
 	}
 }
 
-// releaseReceipt releases the idempotency receipt with a 5s detached timeout.
-// Uses context.WithoutCancel so the operation completes even during graceful shutdown.
-// reason is used for structured log fields.
+// releaseReceipt releases the idempotency receipt bounded by
+// defaultRMQReceiptOpTimeout. Uses context.WithoutCancel so the operation
+// completes even during graceful shutdown. reason is used for structured log
+// fields.
 func releaseReceipt(ctx context.Context, receipt outbox.Receipt, topic, eventID, reason string) {
 	if receipt == nil {
 		return
 	}
-	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQReceiptOpTimeout)
 	defer cancel()
 	if relErr := receipt.Release(rctx); relErr != nil {
 		slog.LogAttrs(rctx, slog.LevelError, "rabbitmq: receipt release failed",
@@ -978,7 +1005,7 @@ func (s *Subscriber) StopIntake(ctx context.Context) error {
 
 	perCallTimeout := s.config.StopIntakePerCallTimeout
 	if perCallTimeout <= 0 {
-		perCallTimeout = 2 * time.Second
+		perCallTimeout = defaultRMQStopIntakePerCallTimeout
 	}
 
 	var cancelWg sync.WaitGroup

@@ -6,6 +6,29 @@ import (
 	kout "github.com/ghbvf/gocell/kernel/outbox"
 )
 
+const (
+	// defaultRelayPollInterval is how often the outbox relay polls for pending
+	// entries.
+	defaultRelayPollInterval = 1 * time.Second
+	// defaultRelayRetentionPeriod is how long published entries are kept before
+	// cleanup.
+	defaultRelayRetentionPeriod = 72 * time.Hour
+	// defaultRelayBaseRetryDelay is the base delay for exponential backoff on
+	// publish failures.
+	defaultRelayBaseRetryDelay = 5 * time.Second
+	// defaultRelayClaimTTL is how long a claimed entry is held before
+	// ReclaimStale recovers it.
+	defaultRelayClaimTTL = 60 * time.Second
+	// defaultRelayMaxRetryDelay caps the exponential backoff to prevent
+	// unbounded retry intervals.
+	defaultRelayMaxRetryDelay = 5 * time.Minute
+	// defaultRelayReclaimInterval is how often the relay reclaims stale claimed
+	// entries.
+	defaultRelayReclaimInterval = 30 * time.Second
+	// defaultRelayDeadRetentionPeriod is how long dead-lettered entries are kept.
+	defaultRelayDeadRetentionPeriod = 30 * 24 * time.Hour
+)
+
 // RelayConfig configures the outbox relay behaviour.
 // Extracted from adapters/postgres/outbox_relay.go to live at the runtime layer
 // so future relay implementations (non-PG) can share the same config surface.
@@ -63,15 +86,15 @@ type RelayConfig struct {
 // zero behaviour change during Phase C migration.
 func DefaultRelayConfig() RelayConfig {
 	return RelayConfig{
-		PollInterval:         1 * time.Second,
+		PollInterval:         defaultRelayPollInterval,
 		BatchSize:            100,
-		RetentionPeriod:      72 * time.Hour,
+		RetentionPeriod:      defaultRelayRetentionPeriod,
 		MaxAttempts:          5,
-		BaseRetryDelay:       5 * time.Second,
-		ClaimTTL:             60 * time.Second,
-		MaxRetryDelay:        5 * time.Minute,
-		ReclaimInterval:      30 * time.Second,
-		DeadRetentionPeriod:  30 * 24 * time.Hour, // 30 days
+		BaseRetryDelay:       defaultRelayBaseRetryDelay,
+		ClaimTTL:             defaultRelayClaimTTL,
+		MaxRetryDelay:        defaultRelayMaxRetryDelay,
+		ReclaimInterval:      defaultRelayReclaimInterval,
+		DeadRetentionPeriod:  defaultRelayDeadRetentionPeriod, // 30 days
 		PollFailureBudget:    5,
 		ReclaimFailureBudget: 5,
 		CleanupFailureBudget: 5,

@@ -586,14 +586,15 @@ func TestSubscribeOnce_ReconnectWaitCtx_InheritsParentCancel(t *testing.T) {
 // when the parent ctx has no deadline and reconnect occurs, subscribeOnce adds
 // a 30 s ceiling to the waitCtx (so the reconnect path is not unbounded).
 //
-// We use a short drainDeadline injection to simulate the 30 s budget without
-// waiting 30 real seconds. The test checks that Subscribe exits before the
-// unreachable background ctx cancels (i.e. the ceiling fired, not parent ctx).
+// We use a short testOnlyDrainDeadlineOverride injection to simulate the 30 s
+// budget without waiting 30 real seconds. The test checks that Subscribe exits
+// before the unreachable background ctx cancels (i.e. the ceiling fired, not
+// parent ctx).
 //
 // ref: Uber fx app.go StopTimeout — finite drain budget prevents reconnect stall
 func TestSubscribeOnce_ReconnectWaitCtx_NoDeadlineFallsBackTo30s(t *testing.T) {
 	// Temporarily inject a short wait budget so the test doesn't run for 30 s.
-	// The 30 s ceiling in subscribeOnce is context.WithTimeout(ctx, 30*time.Second);
+	// The 30 s ceiling in subscribeOnce is context.WithTimeout(ctx, defaultRMQReconnectWaitTimeout);
 	// we cannot inject that directly, so we verify the behaviour by ensuring the
 	// closed deliveries path causes subscribeOnce to hit the local-wg wait and
 	// eventually return (with the real 30 s this would just be slow; here we
