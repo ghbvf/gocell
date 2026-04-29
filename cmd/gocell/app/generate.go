@@ -22,6 +22,9 @@ func runGenerate(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell generate <assembly|metrics-schema|indexes> [flags]")
 	}
+	if isHelpFlag(args[0]) {
+		return printGenerateHelp()
+	}
 
 	subtype := args[0]
 	subArgs := args[1:]
@@ -155,7 +158,10 @@ func writeGeneratedFile(root, outPath string, content []byte, label string) erro
 		return fmt.Errorf("%s: path escapes project root", label)
 	}
 	if existing, err := os.ReadFile(outPath); err == nil && !isGocellGeneratedFile(existing) {
-		return fmt.Errorf("%s: refusing to overwrite non-generated file %s", label, outPath)
+		return fmt.Errorf("%s: refusing to overwrite non-generated file %s "+
+			"(generated files must start with the gocell header; remove the file or move "+
+			"hand-written code to a sibling like cmd/<id>/run.go and re-run generation)",
+			label, outPath)
 	} else if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("%s: read existing file: %w", label, err)
 	}

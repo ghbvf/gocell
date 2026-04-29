@@ -26,6 +26,9 @@ func runVerify(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell verify <slice|cell|journey|targets|generated> [flags]")
 	}
+	if isHelpFlag(args[0]) {
+		return printVerifyHelp()
+	}
 
 	subtype := args[0]
 	subArgs := args[1:]

@@ -92,6 +92,40 @@ func TestCommands(t *testing.T) {
 	}
 }
 
+// TestSubcommandHelpFlagsRenderHelp guards against a regression where
+// dispatch.go advertises `gocell <command> -h` but the sub-command parses
+// args[0] eagerly and reports "unknown … type" instead. Each runner must
+// recognise -h / --help / help and render its own help surface.
+func TestSubcommandHelpFlagsRenderHelp(t *testing.T) {
+	cases := []struct {
+		name string
+		run  func([]string) error
+		want []string
+	}{
+		{"generate", runGenerate, []string{"Usage: gocell generate", "metrics-schema", "owned by gocell"}},
+		{"verify", runVerify, []string{"Usage: gocell verify", "generated", "stale, staged-only"}},
+		{"scaffold", runScaffold, []string{"Usage: gocell scaffold", "cell", "--dry-run"}},
+		{"check", runCheck, []string{"Usage: gocell check", "contract-health", "unconditional-skip"}},
+	}
+
+	for _, tc := range cases {
+		for _, flag := range []string{"-h", "--help", "help"} {
+			t.Run(tc.name+"_"+flag, func(t *testing.T) {
+				out := captureStdout(t, func() {
+					if err := tc.run([]string{flag}); err != nil {
+						t.Fatalf("%s %q: unexpected error: %v", tc.name, flag, err)
+					}
+				})
+				for _, want := range tc.want {
+					if !strings.Contains(out, want) {
+						t.Fatalf("%s %q help output missing %q in:\n%s", tc.name, flag, want, out)
+					}
+				}
+			})
+		}
+	}
+}
+
 // --- Command function tests ---
 
 func TestRunValidate(t *testing.T) {

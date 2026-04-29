@@ -4,8 +4,13 @@
 # errcode.Category(...) or errcode.IsInfraError(...), and the dashboard / alert
 # migration has been reviewed. The failing archtest prints the fingerprint,
 # metric sink, and label; paste them here exactly. All fields below are
-# required; unknown fields fail the gate. dashboardOrAlertRefs must be existing
-# repo-relative files so acknowledgements remain reviewable and reproducible.
+# required; unknown fields fail the gate.
+#
+# dashboardOrAlertRefs entries must be repo-relative paths to existing,
+# git-tracked, regular files (no symlinks, no untracked drafts). The validator
+# in tools/metricschema rejects anything else so acknowledgements remain
+# reviewable and reproducible — committed files are the only proof a reviewer
+# can audit later.
 #
 # acknowledgements:
 #   - rule: OBS-01

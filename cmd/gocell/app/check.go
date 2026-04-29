@@ -47,6 +47,9 @@ func runCheck(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell check <contract-health|slice-coverage|assembly-completeness|journey-readiness|l0-imports|unconditional-skip> [flags]")
 	}
+	if isHelpFlag(args[0]) {
+		return printCheckHelp()
+	}
 
 	subtype := args[0]
 	subArgs := args[1:]
