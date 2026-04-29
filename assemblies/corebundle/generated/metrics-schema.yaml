@@ -14,7 +14,7 @@ metrics:
         - result
         - reason
       file: adapters/vault/transit_provider.go
-      line: 1268
+      line: 1271
     - name: auth_refresh_gc_duration_seconds
       fqName: gocell_auth_refresh_gc_duration_seconds
       namespace: gocell
@@ -145,7 +145,7 @@ metrics:
         - key_name
         - mount_path
       file: adapters/vault/transit_provider.go
-      line: 1157
+      line: 1160
     - name: cell_hook_duration_seconds
       fqName: gocell_cell_hook_duration_seconds
       namespace: gocell
@@ -321,7 +321,7 @@ metrics:
       help: 1 when Vault token renewal is healthy; 0 when the background renewer is re-authenticating after a terminal renewal failure.
       labels: []
       file: adapters/vault/transit_provider.go
-      line: 1260
+      line: 1263
     - name: token_renew_failure_total
       fqName: gocell_vault_token_renew_failure_total
       namespace: gocell
@@ -330,7 +330,7 @@ metrics:
       help: Number of Vault token renewal failures.
       labels: []
       file: adapters/vault/transit_provider.go
-      line: 1285
+      line: 1288
     - name: token_renew_success_total
       fqName: gocell_vault_token_renew_success_total
       namespace: gocell
@@ -339,4 +339,4 @@ metrics:
       help: Number of successful Vault token renewals.
       labels: []
       file: adapters/vault/transit_provider.go
-      line: 1279
+      line: 1282
