@@ -16,6 +16,11 @@ import (
 	"github.com/ghbvf/gocell/pkg/secutil"
 )
 
+const (
+	// defaultS3HTTPTimeout is the default HTTP client timeout for S3 operations.
+	defaultS3HTTPTimeout = 30 * time.Second
+)
+
 // Config holds the S3 connection configuration.
 type Config struct {
 	Endpoint        string
@@ -36,7 +41,7 @@ func ConfigFromEnv() Config {
 		AccessKeyID:     envWithFallback("GOCELL_S3_ACCESS_KEY", "S3_ACCESS_KEY_ID"),
 		SecretAccessKey: envWithFallback("GOCELL_S3_SECRET_KEY", "S3_SECRET_ACCESS_KEY"),
 		UsePathStyle:    envWithFallback("GOCELL_S3_USE_PATH_STYLE", "S3_USE_PATH_STYLE") == "true",
-		HTTPTimeout:     30 * time.Second,
+		HTTPTimeout:     defaultS3HTTPTimeout,
 	}
 }
 
@@ -92,7 +97,7 @@ func New(cfg Config) (*Client, error) {
 
 	timeout := cfg.HTTPTimeout
 	if timeout == 0 {
-		timeout = 30 * time.Second
+		timeout = defaultS3HTTPTimeout
 	}
 
 	awsCfg := aws.Config{

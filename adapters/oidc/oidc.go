@@ -14,6 +14,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+const (
+	// defaultOIDCHTTPTimeout is the default HTTP client timeout for OIDC
+	// provider discovery and token exchange requests.
+	defaultOIDCHTTPTimeout = 10 * time.Second
+)
+
 // Config holds the OIDC provider configuration.
 type Config struct {
 	IssuerURL    string
@@ -52,7 +58,7 @@ func New(cfg Config) (*Adapter, error) {
 	}
 	timeout := cfg.HTTPTimeout
 	if timeout == 0 {
-		timeout = 10 * time.Second
+		timeout = defaultOIDCHTTPTimeout
 	}
 	return &Adapter{
 		config: cfg,

@@ -136,7 +136,7 @@ func dockerGuardSkipDir(d fs.DirEntry) bool {
 		return false
 	}
 	switch d.Name() {
-	case ".git", "vendor", "generated", "worktrees":
+	case ".git", "vendor", "generated", "worktrees", "testdata":
 		return true
 	default:
 		return false

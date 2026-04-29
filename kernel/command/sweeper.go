@@ -7,6 +7,12 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+const (
+	// defaultCommandSweeperInterval is the default sweep tick interval when
+	// none is specified in the Sweeper configuration.
+	defaultCommandSweeperInterval = 30 * time.Second
+)
+
 // ExpiryTransition describes a single status change recommended by SweepOnce.
 type ExpiryTransition struct {
 	CommandID string
@@ -106,7 +112,7 @@ func (s *Sweeper) Start(ctx context.Context) error {
 
 	interval := s.Interval
 	if interval <= 0 {
-		interval = 30 * time.Second
+		interval = defaultCommandSweeperInterval
 	}
 
 	nowFn := s.Now

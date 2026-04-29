@@ -9,6 +9,10 @@ import (
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
+// defaultPGProbeTimeout bounds the inner /readyz probe so a slow PG never
+// holds the readyz response indefinitely. See Checkers() comment.
+const defaultPGProbeTimeout = 5 * time.Second
+
 // poolCloser is the narrow interface PGResource needs from the pool for
 // shutdown. Using an interface instead of *Pool makes Close(ctx) testable via
 // a stub without a real database connection.
@@ -73,7 +77,7 @@ func (r *PGResource) Checkers() map[string]func(context.Context) error {
 	}
 	return map[string]func(context.Context) error{
 		r.name: func(ctx context.Context) error {
-			probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			probeCtx, cancel := context.WithTimeout(ctx, defaultPGProbeTimeout)
 			defer cancel()
 			return healthFn(probeCtx)
 		},

@@ -2,6 +2,12 @@ package distlock
 
 import "time"
 
+const (
+	// defaultDistLockReleaseTimeout is the context deadline applied to background
+	// Driver.Release calls to prevent indefinite hangs.
+	defaultDistLockReleaseTimeout = 5 * time.Second
+)
+
 // Option is a functional option for configuring a Locker.
 type Option func(*config)
 
@@ -34,7 +40,7 @@ func defaultConfig() config {
 	return config{
 		renewFraction:    0.5,
 		driftFactor:      0.01,
-		releaseTimeout:   5 * time.Second,
+		releaseTimeout:   defaultDistLockReleaseTimeout,
 		maxRenewAttempts: 3,
 		clock:            realClock{},
 	}

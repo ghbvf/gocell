@@ -7,6 +7,12 @@ import (
 	"github.com/sony/gobreaker/v2"
 )
 
+const (
+	// defaultCircuitBreakerTimeout is the default per-call timeout when none is
+	// provided in Config. Matches gobreaker's internal default.
+	defaultCircuitBreakerTimeout = 60 * time.Second
+)
+
 // State represents the state of the circuit breaker.
 type State int
 
@@ -128,7 +134,7 @@ func New(cfg Config) (*Adapter, error) {
 
 	timeout := cfg.Timeout
 	if timeout <= 0 {
-		timeout = 60 * time.Second // gobreaker default
+		timeout = defaultCircuitBreakerTimeout // gobreaker default
 	}
 	return &Adapter{
 		cb:      gobreaker.NewTwoStepCircuitBreaker[struct{}](st),

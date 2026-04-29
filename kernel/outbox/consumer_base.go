@@ -25,6 +25,24 @@ const (
 // keeps minimum delay ≥ base, avoiding thundering herd on a recovering backend.
 const backoffJitterDivisor = 2
 
+// leaseRenewalDivisor determines the default LeaseRenewalInterval as a fraction
+// of LeaseTTL: interval = TTL / leaseRenewalDivisor. A value of 3 means renewal
+// fires at 1/3 of the TTL, providing two retry attempts before the lease expires.
+const leaseRenewalDivisor time.Duration = 3
+
+// exponentialDelayBase is the untyped-int scaling unit for ExponentialDelay:
+// delay = base * (exponentialDelayBase << attempt). Must equal 1.
+const exponentialDelayBase time.Duration = 1
+
+const (
+	// defaultConsumerBaseRetryBaseDelay is the base delay for exponential-backoff
+	// retry between handler invocations.
+	defaultConsumerBaseRetryBaseDelay = 1 * time.Second
+	// defaultConsumerBaseMaxRetryDelay caps the exponential-backoff delay to
+	// prevent unbounded sleep intervals at high retry counts.
+	defaultConsumerBaseMaxRetryDelay = 30 * time.Second
+)
+
 // ClaimPolicy controls ConsumerBase behavior when Claimer.Claim() fails.
 // The zero value (ClaimPolicyFailClosed) is the safe default.
 type ClaimPolicy uint8
@@ -119,7 +137,7 @@ func (c *ConsumerBaseConfig) SetDefaults() {
 		c.RetryCount = 3
 	}
 	if c.RetryBaseDelay <= 0 {
-		c.RetryBaseDelay = 1 * time.Second
+		c.RetryBaseDelay = defaultConsumerBaseRetryBaseDelay
 	}
 	if c.IdempotencyTTL <= 0 {
 		c.IdempotencyTTL = idempotency.DefaultTTL
@@ -134,10 +152,10 @@ func (c *ConsumerBaseConfig) SetDefaults() {
 		c.ClaimRetryBaseDelay = c.RetryBaseDelay
 	}
 	if c.MaxRetryDelay <= 0 {
-		c.MaxRetryDelay = 30 * time.Second
+		c.MaxRetryDelay = defaultConsumerBaseMaxRetryDelay
 	}
 	if c.LeaseRenewalInterval == 0 {
-		c.LeaseRenewalInterval = c.LeaseTTL / 3
+		c.LeaseRenewalInterval = c.LeaseTTL / leaseRenewalDivisor
 	}
 }
 
@@ -155,7 +173,7 @@ func ExponentialDelay(base, maxDelay time.Duration, attempt int) time.Duration {
 	if attempt > maxSafeShift {
 		return maxDelay
 	}
-	delay := base * (1 << uint(attempt))
+	delay := base * (exponentialDelayBase << uint(attempt))
 	if delay <= 0 || delay > maxDelay {
 		return maxDelay
 	}

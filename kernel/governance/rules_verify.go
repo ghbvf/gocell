@@ -14,6 +14,11 @@ import (
 const (
 	codeVERIFY06                  = "VERIFY-06"
 	fieldPassCriteriaCheckRefTmpl = "passCriteria[%d].checkRef"
+
+	// defaultWaiverExpiryTruncation is the granularity used when comparing a
+	// waiver's expiresAt date against the current time. Day-level truncation
+	// matches the YYYY-MM-DD format required by the metadata schema.
+	defaultWaiverExpiryTruncation = 24 * time.Hour
 )
 
 // validateVERIFY01 checks that every contractUsage has a matching
@@ -68,7 +73,7 @@ func (v *Validator) buildActiveWaiverSet(s *metadata.SliceMeta) map[string]bool 
 		if err != nil {
 			continue // unparseable expiresAt, invalid waiver
 		}
-		if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
+		if t.Before(v.now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
 			continue // expired waiver, not valid
 		}
 		waiverSet[w.Contract] = true
@@ -134,7 +139,7 @@ func (v *Validator) validateWaiverVERIFY02(file string, i int, w metadata.Waiver
 		))
 		return results
 	}
-	if t.Before(v.now().UTC().Truncate(24 * time.Hour)) {
+	if t.Before(v.now().UTC().Truncate(defaultWaiverExpiryTruncation)) {
 		results = append(results, v.newResult(
 			"VERIFY-02", SeverityError, IssueInvalid,
 			file,

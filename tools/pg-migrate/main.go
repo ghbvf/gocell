@@ -19,9 +19,13 @@ import (
 	adapterpg "github.com/ghbvf/gocell/adapters/postgres"
 )
 
+// defaultMigrationTimeout is the default overall timeout for applying
+// all pending migrations. 60 s is generous for ephemeral test environments.
+const defaultMigrationTimeout = 60 * time.Second
+
 func main() {
 	dsn := flag.String("dsn", os.Getenv("GOCELL_PG_DSN"), "postgres connection string (default: $GOCELL_PG_DSN)")
-	timeout := flag.Duration("timeout", 60*time.Second, "overall migration timeout")
+	timeout := flag.Duration("timeout", defaultMigrationTimeout, "overall migration timeout")
 	flag.Parse()
 
 	if *dsn == "" {

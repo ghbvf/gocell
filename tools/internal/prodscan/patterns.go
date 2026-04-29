@@ -51,6 +51,20 @@ func PatternTopLevels(patterns []string) map[string]bool {
 	return out
 }
 
+// PatternsExtended widens Patterns(root) to include tests/ and tools/ —
+// used by gates whose invariant covers production-like support packages
+// shipped with build-tag gating (e.g. tests/e2e/internal/clients).
+func PatternsExtended(root string) []string {
+	base := Patterns(root)
+	if dirExists(filepath.Join(root, "tests")) {
+		base = append(base, "./tests/...")
+	}
+	if dirExists(filepath.Join(root, "tools")) {
+		base = append(base, "./tools/...")
+	}
+	return base
+}
+
 func dirExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
