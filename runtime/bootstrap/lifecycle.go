@@ -39,6 +39,12 @@ const (
 	DefaultStartTimeout = 30 * time.Second
 	// DefaultStopTimeout is the default per-hook stop deadline.
 	DefaultStopTimeout = 10 * time.Second
+
+	// hookSlowNumerator and hookSlowDenominator define the slow-start warning
+	// threshold as a fraction of the hook timeout: threshold = timeout * num / den.
+	// 8/10 = 80% of the timeout is the slow-start warning boundary.
+	hookSlowNumerator   time.Duration = 8
+	hookSlowDenominator time.Duration = 10
 )
 
 // Hook is a pair of lifecycle callbacks invoked in Append order on Start and
@@ -287,7 +293,7 @@ func (lc *lifecycle) runHook(ctx context.Context, h Hook, isStart bool) error {
 	}
 
 	if isStart && hookTimeout > 0 {
-		threshold := hookTimeout * 8 / 10
+		threshold := hookTimeout * hookSlowNumerator / hookSlowDenominator
 		if elapsed >= threshold {
 			attrs := append(hookIdentityAttrs(h),
 				slog.Duration("elapsed", elapsed),

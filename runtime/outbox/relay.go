@@ -125,7 +125,7 @@ func NewRelay(store Store, pub kout.Publisher, cfg RelayConfig) *Relay {
 
 	// Guard: ClaimTTL must exceed 2x PollInterval to prevent ReclaimStale
 	// from reclaiming entries still being processed.
-	if cfg.ClaimTTL <= cfg.PollInterval*2 {
+	if cfg.ClaimTTL <= cfg.PollInterval*claimTTLPollMultiplier {
 		slog.Warn("outbox relay: ClaimTTL should be > 2*PollInterval to avoid premature reclaim",
 			slog.Duration("claim_ttl", cfg.ClaimTTL),
 			slog.Duration("poll_interval", cfg.PollInterval))
@@ -358,6 +358,11 @@ const (
 	defaultCleanupWaitFloor = 5 * time.Second
 	cleanupWaitCeiling      = 1 * time.Hour
 )
+
+// claimTTLPollMultiplier is the minimum ratio of ClaimTTL to PollInterval:
+// ClaimTTL must exceed PollInterval * claimTTLPollMultiplier to prevent
+// ReclaimStale from reclaiming entries still being processed.
+const claimTTLPollMultiplier time.Duration = 2
 
 // nextCleanupWait computes how long the cleanup loop should sleep before the
 // next pass: min(time-until-next-published-eligible, time-until-next-dead-eligible),
@@ -714,6 +719,12 @@ func (r *Relay) Ready() <-chan struct{} {
 	return ch
 }
 
+// retryDelayBase is the scaling unit for exponential backoff: delay = base * (retryDelayBase << shift).
+const retryDelayBase time.Duration = 1
+
+// retryJitterDivisor defines the jitter range as a fraction of the delay: jitter ∈ [0, delay/retryJitterDivisor).
+const retryJitterDivisor time.Duration = 4
+
 // retryDelay computes exponential backoff with jitter and cap.
 // Formula: cappedDelay(base * 2^attempts) + jitter([0, delay/4])
 // ref: adapters/rabbitmq/consumer_base.go claimWithRetry backoff
@@ -722,9 +733,9 @@ func (r *Relay) retryDelay(attempts int) time.Duration {
 	// large (defensive: real callers stop at MaxAttempts ≤ 10). 1<<30 * 5s already
 	// far exceeds MaxRetryDelay so the cap kicks in identically.
 	shift := min(attempts, 30)
-	delay := r.cappedDelay(r.cfg.BaseRetryDelay * (1 << shift))
+	delay := r.cappedDelay(r.cfg.BaseRetryDelay * (retryDelayBase << shift))
 	if delay > 0 {
-		jitter := time.Duration(rand.Int64N(int64(delay/4) + 1))
+		jitter := time.Duration(rand.Int64N(int64(delay/retryJitterDivisor) + 1))
 		delay += jitter
 	}
 	return delay

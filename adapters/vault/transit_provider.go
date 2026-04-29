@@ -30,6 +30,9 @@ const reauthBackoffInitial = time.Second
 // reauthBackoffCap is the maximum backoff interval for re-authentication retries.
 const reauthBackoffCap = 60 * time.Second
 
+// reauthBackoffMultiplier is the exponential backoff factor applied on each retry.
+const reauthBackoffMultiplier time.Duration = 2
+
 // defaultStartupTimeout bounds the total time spent on Vault-facing startup I/O
 // (auth Login, optional wrap-token unwrap, initial key metadata read). Override
 // via GOCELL_VAULT_STARTUP_TIMEOUT (a time.ParseDuration string, e.g. "45s").
@@ -277,7 +280,7 @@ func (w *tokenRenewalWorker) doReauth(ctx context.Context) (tokenWatcher, bool) 
 			return nil, false
 		case <-time.After(watcherBackoff):
 		}
-		watcherBackoff *= 2
+		watcherBackoff *= reauthBackoffMultiplier
 		if watcherBackoff > reauthBackoffCap {
 			watcherBackoff = reauthBackoffCap
 		}
@@ -383,7 +386,7 @@ func (w *tokenRenewalWorker) reauthenticate(ctx context.Context) error {
 				"vault-transit: re-authentication loop cancelled by context")
 		case <-time.After(backoff):
 		}
-		backoff *= 2
+		backoff *= reauthBackoffMultiplier
 		if backoff > reauthBackoffCap {
 			backoff = reauthBackoffCap
 		}

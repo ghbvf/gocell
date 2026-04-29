@@ -1,21 +1,23 @@
 // prod_duration_const_internal_test.go — regression-guard unit tests for the
-// PROD-DURATION-CONST-01 helper predicates. This file is the static safety net
-// mandated by the "引入新约束必须同 PR 闭环" memory: every helper that the
-// archtest enforcement relies on must have direct unit tests so a future refactor
-// cannot silently widen or narrow the predicate without a red build.
+// PROD-DURATION-CONST-01 helper predicates. Every helper that the archtest
+// enforcement relies on has direct unit tests so a future refactor cannot
+// silently widen or narrow the predicate without a red build.
+//
+// ref: docs/plans/202604272358-2-2-ci-batch2-k8s-verify.md PR-CI-6
 package archtest
 
 import (
 	"go/ast"
 	"go/parser"
+	"go/token"
+	"go/types"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-// parseExpr is a test helper that parses a single Go expression and returns
-// the ast.Expr. Failures are fatal — a bad source string is a test bug.
+// parseExpr parses a single Go expression. Failures are fatal — bad source is a test bug.
 func parseExpr(t *testing.T, src string) ast.Expr {
 	t.Helper()
 	expr, err := parser.ParseExpr(src)
@@ -23,8 +25,7 @@ func parseExpr(t *testing.T, src string) ast.Expr {
 	return expr
 }
 
-// callExpr extracts the *ast.CallExpr from a parsed expression. Panics on type
-// mismatch (test bug, not production code path).
+// callExpr extracts *ast.CallExpr from a parsed expression. Panics on type mismatch.
 func callExpr(t *testing.T, src string) *ast.CallExpr {
 	t.Helper()
 	e := parseExpr(t, src)
@@ -43,7 +44,6 @@ func TestIsTimeUnit(t *testing.T) {
 		src  string
 		want bool
 	}{
-		// All 6 standard time units must return true.
 		{"time.Nanosecond", true},
 		{"time.Microsecond", true},
 		{"time.Millisecond", true},
@@ -52,11 +52,11 @@ func TestIsTimeUnit(t *testing.T) {
 		{"time.Hour", true},
 		// time.Duration is a type, not a unit constant.
 		{"time.Duration", false},
-		// A non-time package — even if the field name matches.
+		// Non-time package — field name matches but wrong receiver.
 		{"mytime.Second", false},
 		// Bare identifier without selector.
 		{"Second", false},
-		// time.Sleep is a function call target — not a unit SelectorExpr.
+		// time.Now is a function, not a unit.
 		{"time.Now", false},
 	}
 	for _, c := range cases {
@@ -79,10 +79,9 @@ func TestIsTimeDurationCast(t *testing.T) {
 		src  string
 		want bool
 	}{
-		// The exact cast form.
 		{"time.Duration(30)", true},
 		{"time.Duration(x)", true},
-		// A time unit used as a function — not the cast.
+		// time.Hour used as function — not the cast.
 		{"time.Hour(30)", false},
 		// Wrong package name.
 		{"pkg.Duration(30)", false},
@@ -109,15 +108,14 @@ func TestAllLiteralOrLitProduct(t *testing.T) {
 		src  string
 		want bool
 	}{
-		// Non-zero integer literal — the happy path.
 		{"5", true},
 		{"30", true},
 		{"100", true},
-		// "0" is the idiomatic zero sentinel — must be rejected.
+		// Zero sentinel must be rejected.
 		{"0", false},
-		// Product of two non-zero literals — chained magnitudes like 7*24.
+		// Product of two non-zero literals.
 		{"7*24", true},
-		// Product containing an identifier — the magnitude includes a var.
+		// Product containing an identifier.
 		{"n*24", false},
 		// time.Duration(<BasicLit>) counts as literal-bearing magnitude.
 		{"time.Duration(30)", true},
@@ -137,7 +135,7 @@ func TestAllLiteralOrLitProduct(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestIsLiteralDurationExpr
+// TestIsLiteralDurationExpr — includes new BasicLit single-node cases
 // ---------------------------------------------------------------------------
 
 func TestIsLiteralDurationExpr(t *testing.T) {
@@ -155,7 +153,6 @@ func TestIsLiteralDurationExpr(t *testing.T) {
 		{"time.Second*5", true},
 		// Chained magnitude: 7*24*time.Hour.
 		{"7*24*time.Hour", true},
-		// 30*24*time.Hour
 		{"30*24*time.Hour", true},
 		// time.Duration(<BasicLit>) cast form.
 		{"time.Duration(30)", true},
@@ -163,17 +160,29 @@ func TestIsLiteralDurationExpr(t *testing.T) {
 		{"time.Duration(30)*time.Second", true},
 		// Parenthesised form.
 		{"(5*time.Second)", true},
-		// Zero sentinel expressed as literal — zero magnitude rejected.
-		{"0*time.Second", false},
-		// Pure zero literal (not even a binary expr).
+		// Negated form — -5*time.Second must still flag.
+		{"-5*time.Second", true},
+
+		// --- BasicLit single-node cases (彻底化关键新增) ---
+		// Non-zero bare literal — var x time.Duration = 5 scenario.
+		// isLiteralDurationExpr sees a *ast.BasicLit("5") → true.
+		{"5", true},
+		// Zero bare literal — return 0 sentinel → must NOT flag.
 		{"0", false},
-		// Named const scaling — existingDur*2 has no time.Unit on either side.
+
+		// Zero sentinel expressed as multiplication — magnitude "0" rejected.
+		{"0*time.Second", false},
+		// Named const scaling: existingDur*2.
+		// No recursive fallback — namedVar*scalar must not flag even without type guard.
 		{"existingDur*2", false},
-		// time.Unit * named const — the other side is not allLiteralOrLitProduct.
+		// time.Unit * named const — allLiteralOrLitProduct(BaseRetryDelay) = false.
 		{"BaseRetryDelay*time.Second", false},
-		// Non-time package unit.
+		// Non-time package unit: 5*custompkg.Second.
+		// isTimeUnit(custompkg.Second)=false, allLiteralOrLitProduct(5)=true but
+		// the other side is not a time.Unit, so terminal check fails.
+		// No recursive fallback → false.
 		{"5*custompkg.Second", false},
-		// A division expression (op != MUL) must not match.
+		// Division expression (op != MUL).
 		{"5*time.Hour/2", false},
 		// time.Duration cast with runtime expr.
 		{"time.Duration(x)", false},
@@ -193,39 +202,258 @@ func TestIsLiteralDurationExpr(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// TestUnwrapNowAddCall
+// TestExprIsTimeDuration — type-guard unit tests using synthetic types.Info
 // ---------------------------------------------------------------------------
 
-func TestUnwrapNowAddCall(t *testing.T) {
-	t.Parallel()
-	cases := []struct {
-		src       string
-		wantOK    bool
-		wantInner string
-	}{
-		// Standard form used in context.WithDeadline.
-		{"time.Now().Add(5*time.Second)", true, "5*time.Second"},
-		// Named const in the Add argument — still unwraps (inner not literal).
-		{"time.Now().Add(defaultTimeout)", true, "defaultTimeout"},
-		// Wrong method — Sub, not Add.
-		{"time.Now().Sub(5*time.Second)", false, ""},
-		// Receiver is not a call (bare ident).
-		{"now.Add(5*time.Second)", false, ""},
-		// Correct selector but receiver is not time.Now() — some other Now.
-		{"clock.Now().Add(5*time.Second)", false, ""},
-		// No arguments to Add.
-		{"time.Now().Add()", false, ""},
+// buildTimeDurationInfo returns a synthetic *types.Info that maps a dummy
+// ast.Ident to type time.Duration via a hand-crafted *types.Named object.
+// This lets us test exprIsTimeDuration without a full packages.Load.
+func buildTimeDurationInfo(expr ast.Expr, isDuration bool) *types.Info {
+	info := &types.Info{
+		Types: map[ast.Expr]types.TypeAndValue{},
 	}
+	if !isDuration {
+		return info
+	}
+	// Construct a *types.Named whose Obj reports pkg="time", name="Duration".
+	timePkg := types.NewPackage("time", "time")
+	durObj := types.NewTypeName(token.NoPos, timePkg, "Duration", nil)
+	durType := types.NewNamed(durObj, types.Typ[types.Int64], nil)
+	info.Types[expr] = types.TypeAndValue{Type: durType}
+	return info
+}
+
+func TestExprIsTimeDuration(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		desc       string
+		src        string
+		isDuration bool
+		want       bool
+	}{
+		{
+			desc:       "5*time.Second mapped to time.Duration → true",
+			src:        "5*time.Second",
+			isDuration: true,
+			want:       true,
+		},
+		{
+			desc:       "5 mapped to time.Duration → true",
+			src:        "5",
+			isDuration: true,
+			want:       true,
+		},
+		{
+			desc:       "5*int(0) — not time.Duration in info → false",
+			src:        "5",
+			isDuration: false,
+			want:       false,
+		},
+		{
+			desc:       "expr not present in info → false",
+			src:        "x",
+			isDuration: false,
+			want:       false,
+		},
+		{
+			desc:       "nil info → false",
+			src:        "5*time.Second",
+			isDuration: false, // will test with nil info directly
+			want:       false,
+		},
+		{
+			desc:       "time.Duration(30) mapped to time.Duration → true",
+			src:        "time.Duration(30)",
+			isDuration: true,
+			want:       true,
+		},
+	}
+
 	for _, c := range cases {
 		c := c
-		t.Run(c.src, func(t *testing.T) {
+		t.Run(c.desc, func(t *testing.T) {
 			t.Parallel()
-			inner, ok := unwrapNowAddCall(parseExpr(t, c.src))
-			assert.Equal(t, c.wantOK, ok, "unwrapNowAddCall(%q) ok", c.src)
-			if c.wantOK && ok {
-				assert.Equal(t, c.wantInner, prodExprText(inner),
-					"unwrapNowAddCall(%q) inner", c.src)
+			expr := parseExpr(t, c.src)
+			var info *types.Info
+			if c.desc != "nil info → false" {
+				info = buildTimeDurationInfo(expr, c.isDuration)
 			}
+			got := exprIsTimeDuration(expr, info)
+			assert.Equal(t, c.want, got, "exprIsTimeDuration for %q", c.src)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestUniformWalkSkipsPackageConst — universal walk skips package-level const
+// ---------------------------------------------------------------------------
+
+// countDurationLiteralsInFile counts how many times isLiteralDurationExpr
+// returns true when walking all non-package-const decls in the file.
+// The type guard (exprIsTimeDuration) is bypassed intentionally — these tests
+// focus on the walk/skip logic and predicate shape, not on type resolution.
+// In production, exprIsTimeDuration would further filter to only time.Duration
+// expressions; here every literal-shaped expr is counted.
+func countDurationLiteralsInFile(t *testing.T, src string) int {
+	t.Helper()
+	fset := token.NewFileSet()
+	f, err := parser.ParseFile(fset, "f.go", src, 0)
+	require.NoError(t, err)
+
+	count := 0
+	for _, decl := range f.Decls {
+		if gd, ok := decl.(*ast.GenDecl); ok && gd.Tok == token.CONST {
+			continue // package-level const — skip entire subtree
+		}
+		ast.Inspect(decl, func(n ast.Node) bool {
+			expr, ok := n.(ast.Expr)
+			if !ok {
+				return true
+			}
+			if !isLiteralDurationExpr(expr) {
+				return true
+			}
+			count++
+			return false
+		})
+	}
+	return count
+}
+
+func TestUniformWalkSkipsPackageConst(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		desc  string
+		src   string
+		count int
+	}{
+		{
+			desc: "package-level const x = 5*time.Second — zero violations",
+			src: `package p
+import "time"
+const x = 5 * time.Second
+`,
+			count: 0,
+		},
+		{
+			desc: "const block with two entries — zero violations",
+			src: `package p
+import "time"
+const (
+	a = 5 * time.Second
+	b = 7 * 24 * time.Hour
+)
+`,
+			count: 0,
+		},
+		{
+			desc: "func-local const — one violation",
+			src: `package p
+import "time"
+func f() {
+	const x = 5 * time.Second
+	_ = x
+}
+`,
+			count: 1,
+		},
+		{
+			desc: "var at package level — one violation",
+			src: `package p
+import "time"
+var x = 5 * time.Second
+`,
+			count: 1,
+		},
+		{
+			desc: "package-level const and var — only var is a violation",
+			src: `package p
+import "time"
+const ok = 5 * time.Second
+var bad = 30 * time.Second
+`,
+			count: 1,
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.desc, func(t *testing.T) {
+			t.Parallel()
+			got := countDurationLiteralsInFile(t, c.src)
+			assert.Equal(t, c.count, got, "violation count for: %s", c.desc)
+		})
+	}
+}
+
+// ---------------------------------------------------------------------------
+// TestUniformWalkUnwraps — walk reports outermost match only, not sub-exprs
+// ---------------------------------------------------------------------------
+
+func TestUniformWalkUnwraps(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		desc  string
+		src   string
+		count int
+	}{
+		{
+			desc: "time.Sleep(5*time.Second) — one violation at BinaryExpr",
+			src: `package p
+import "time"
+func f() { time.Sleep(5 * time.Second) }
+`,
+			count: 1,
+		},
+		{
+			desc: "nested call f(g(5*time.Second)) — one violation at innermost BinaryExpr",
+			src: `package p
+import "time"
+func g(d time.Duration) time.Duration { return d }
+func h(d time.Duration) {}
+func f() { h(g(5 * time.Second)) }
+`,
+			count: 1,
+		},
+		{
+			desc: "two independent literals — two violations",
+			src: `package p
+import "time"
+func f() {
+	time.Sleep(5 * time.Second)
+	time.Sleep(30 * time.Second)
+}
+`,
+			count: 2,
+		},
+		{
+			desc: "addition of two literal durations — two violations",
+			src: `package p
+import "time"
+var x = 5*time.Second + 30*time.Millisecond
+`,
+			count: 2,
+		},
+		{
+			desc: "named const passed to Sleep — zero violations",
+			src: `package p
+import "time"
+const d = 5 * time.Second
+func f() { time.Sleep(d) }
+`,
+			count: 0,
+		},
+	}
+
+	for _, c := range cases {
+		c := c
+		t.Run(c.desc, func(t *testing.T) {
+			t.Parallel()
+			got := countDurationLiteralsInFile(t, c.src)
+			assert.Equal(t, c.count, got, "violation count for: %s", c.desc)
 		})
 	}
 }

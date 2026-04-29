@@ -78,6 +78,35 @@ func LoadPackages(modRoot string, patterns ...string) ([]*packages.Package, []pa
 	return pkgs, errs, nil
 }
 
+// LoadPackagesWithTags loads patterns from modRoot with the given build tags
+// and full type info. Build tags are joined with commas and passed as
+// -tags=<tags> in BuildFlags. Returns the flat slice of packages.Errors
+// collected from every package as the second value so callers can fail fast
+// on type-check errors without re-walking.
+func LoadPackagesWithTags(modRoot string, tags []string, patterns ...string) ([]*packages.Package, []packages.Error, error) {
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedSyntax |
+			packages.NeedTypes | packages.NeedTypesInfo | packages.NeedImports |
+			packages.NeedDeps,
+		Dir: modRoot,
+	}
+	if len(tags) > 0 {
+		cfg.BuildFlags = []string{"-tags=" + strings.Join(tags, ",")}
+	}
+	pkgs, err := packages.Load(cfg, patterns...)
+	if err != nil {
+		return nil, nil, fmt.Errorf("packages.Load: %w", err)
+	}
+	var errs []packages.Error
+	packages.Visit(pkgs, nil, func(p *packages.Package) {
+		for i := range p.Errors {
+			p.Errors[i].Msg = modRoot + ": " + p.Errors[i].Msg
+		}
+		errs = append(errs, p.Errors...)
+	})
+	return pkgs, errs, nil
+}
+
 // NewResolver loads patterns from modRoot and returns a Resolver. Type-check
 // errors in any loaded package are turned into a single error so callers do
 // not act on partial type information.
@@ -115,6 +144,31 @@ func SharedResolver(modRoot string, patterns ...string) (*Resolver, error) {
 	if err != nil {
 		return nil, err
 	}
+	sharedCache[key] = r
+	return r, nil
+}
+
+// SharedResolverWithTags returns a process-wide cached Resolver keyed on
+// (modRoot, tags, patterns). Tags are included in the cache key so callers
+// using different build-tag sets get independent Resolvers.
+//
+// Cache keys are formed by joining modRoot, the sorted tag list, and each
+// pattern with NUL bytes (NUL is illegal in POSIX paths and Go import patterns).
+func SharedResolverWithTags(modRoot string, tags []string, patterns ...string) (*Resolver, error) {
+	key := modRoot + "\x00" + strings.Join(tags, "\x00") + "\x00" + strings.Join(patterns, "\x00")
+	sharedMu.Lock()
+	defer sharedMu.Unlock()
+	if r, ok := sharedCache[key]; ok {
+		return r, nil
+	}
+	pkgs, errs, err := LoadPackagesWithTags(modRoot, tags, patterns...)
+	if err != nil {
+		return nil, err
+	}
+	if len(errs) > 0 {
+		return nil, fmt.Errorf("packages.Load: %d error(s): first=%v", len(errs), errs[0])
+	}
+	r := &Resolver{pkgs: pkgs}
 	sharedCache[key] = r
 	return r, nil
 }
