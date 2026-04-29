@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"testing"
 )
 
 // receiverTypeName extracts the base type name from a receiver type expression.
@@ -54,4 +55,12 @@ func findCellProductionGoFiles(root string) ([]string, error) {
 	})
 	sort.Strings(files)
 	return files, err
+}
+
+// findArchTestDir returns the absolute path of the tools/archtest directory,
+// used to locate testdata fixtures at test runtime.
+func findArchTestDir(t *testing.T) string {
+	t.Helper()
+	root := findModuleRoot(t)
+	return filepath.Join(root, "tools", "archtest")
 }

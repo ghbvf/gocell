@@ -11,6 +11,7 @@ import (
 	"github.com/ghbvf/gocell/kernel/governance"
 	"github.com/ghbvf/gocell/kernel/metadata"
 	"github.com/ghbvf/gocell/kernel/verify"
+	"github.com/ghbvf/gocell/tools/generatedverify"
 )
 
 // runVerify implements:
@@ -20,9 +21,13 @@ import (
 //	gocell verify journey --id=<journeyID>
 //	gocell verify journey --active
 //	gocell verify targets --files=<file1,file2,...>
+//	gocell verify generated [--module=<module>]
 func runVerify(args []string) error {
 	if len(args) < 1 {
-		return fmt.Errorf("usage: gocell verify <slice|cell|journey|targets> [flags]")
+		return fmt.Errorf("usage: gocell verify <slice|cell|journey|targets|generated> [flags]")
+	}
+	if isHelpFlag(args[0]) {
+		return printVerifyHelp()
 	}
 
 	subtype := args[0]
@@ -37,8 +42,10 @@ func runVerify(args []string) error {
 		return verifyJourney(subArgs)
 	case "targets":
 		return verifyTargets(subArgs)
+	case "generated":
+		return verifyGenerated(subArgs)
 	default:
-		return fmt.Errorf("unknown verify type: %s (expected slice, cell, journey, or targets)", subtype)
+		return fmt.Errorf("unknown verify type: %s (expected slice, cell, journey, targets, or generated)", subtype)
 	}
 }
 
@@ -201,6 +208,41 @@ func verifyTargets(args []string) error {
 		fmt.Println("  (none)")
 	}
 
+	return nil
+}
+
+func verifyGenerated(args []string) error {
+	fs := flag.NewFlagSet("verify generated", flag.ContinueOnError)
+	module := fs.String("module", "", "Go module path (default: read from go.mod)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	root, project, err := parseProjectMeta()
+	if err != nil {
+		return err
+	}
+	mod := *module
+	if mod == "" {
+		mod, err = readModule(root)
+		if err != nil {
+			return fmt.Errorf("cannot read module from go.mod: %w", err)
+		}
+	}
+
+	result, err := generatedverify.Verify(root, mod, project)
+	if err != nil {
+		return fmt.Errorf("verify generated: %w", err)
+	}
+	if !result.Passed() {
+		for _, drift := range result.Drifts {
+			fmt.Fprintf(os.Stderr, "generated artifact drift: %s (%s, assembly %s): %s\n",
+				drift.Path, drift.Kind, drift.AssemblyID, drift.Message)
+		}
+		return fmt.Errorf("verify generated: %d drift(s); run 'make generate' and commit the result",
+			len(result.Drifts))
+	}
+	fmt.Printf("Generated artifacts verified: %d files\n", len(result.Artifacts))
 	return nil
 }
 

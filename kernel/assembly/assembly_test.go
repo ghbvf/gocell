@@ -150,6 +150,21 @@ func TestAssemblyDuplicateCellID(t *testing.T) {
 	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
 }
 
+func TestAssemblyID(t *testing.T) {
+	a := newTestAssembly(t, Config{ID: "id-test", DurabilityMode: cell.DurabilityDemo})
+	assert.Equal(t, "id-test", a.ID())
+}
+
+func TestAssemblyRegisterNilCellRejected(t *testing.T) {
+	a := newTestAssembly(t, Config{ID: "nil-cell-test", DurabilityMode: cell.DurabilityDemo})
+
+	err := a.Register(nil)
+	require.Error(t, err)
+	var ec *ecErr.Error
+	require.True(t, errors.As(err, &ec))
+	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
+}
+
 func TestAssemblyEmptyCellID(t *testing.T) {
 	a := newTestAssembly(t, Config{ID: "empty-id-test", DurabilityMode: cell.DurabilityDemo})
 
@@ -158,6 +173,11 @@ func TestAssemblyEmptyCellID(t *testing.T) {
 	var ec *ecErr.Error
 	require.True(t, errors.As(err, &ec))
 	assert.Equal(t, ecErr.ErrValidationFailed, ec.Code)
+}
+
+func TestAssemblyFlushHookEventsWithoutDispatcher(t *testing.T) {
+	a := &CoreAssembly{}
+	assert.True(t, a.FlushHookEvents(0))
 }
 
 func TestAssemblyInitFailure(t *testing.T) {

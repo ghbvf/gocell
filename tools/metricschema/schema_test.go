@@ -8,6 +8,7 @@ import (
 	"go/types"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"slices"
@@ -76,6 +77,30 @@ func TestBuild_CorebundleGeneratedSchemaIsCurrent(t *testing.T) {
 	want, err := os.ReadFile(filepath.Join(root, "assemblies/corebundle/generated/metrics-schema.yaml"))
 	require.NoError(t, err)
 	assert.Equal(t, string(want), string(got))
+}
+
+func TestMarshalOmitsLineNumbers(t *testing.T) {
+	schema := &Schema{
+		AssemblyID: "fixture",
+		Scope:      "assembly-reachable",
+		Entrypoint: "cmd/fixture/main.go",
+		Metrics: []Entry{{
+			Name:   "requests_total",
+			Type:   "counter",
+			Labels: []string{"status"},
+			File:   "cmd/fixture/metrics.go",
+			Line:   42,
+		}},
+	}
+
+	got, err := Marshal(schema)
+	require.NoError(t, err)
+	assert.NotContains(t, string(got), "line:")
+
+	schema.Metrics[0].Line = 99
+	gotAfterLineOnlyChange, err := Marshal(schema)
+	require.NoError(t, err)
+	assert.Equal(t, string(got), string(gotAfterLineOnlyChange))
 }
 
 func TestBuild_FixtureLocksReachabilityIdentityAndLabels(t *testing.T) {
@@ -1581,6 +1606,57 @@ func direct(err error) {
 	assert.Empty(t, diagnostics)
 }
 
+func TestCheckOBS01AckSuppressesMatchingFingerprintWithTrackedDashboard(t *testing.T) {
+	root := writeMetricsFixture(t)
+	gitRun(t, root, "init")
+	gitRun(t, root, "config", "user.email", "test@example.com")
+	gitRun(t, root, "config", "user.name", "Test")
+	gitRun(t, root, "config", "commit.gpgsign", "false")
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
+	gitRun(t, root, "add", "docs/ops/example-dashboard.md")
+	gitRun(t, root, "commit", "-q", "-m", "fixture", "--no-gpg-sign")
+	writeFile(t, root, "reachable/obs.go", `package reachable
+
+import (
+	"fmt"
+
+	"github.com/ghbvf/gocell/kernel/observability/metrics"
+	"github.com/ghbvf/gocell/pkg/errcode"
+)
+
+var provider = metrics.NopProvider{}
+var counter, _ = provider.CounterVec(metrics.CounterOpts{
+	Name:       "obs_total",
+	LabelNames: []string{"reason"},
+})
+
+func direct(err error) {
+	counter.With(metrics.Labels{"reason": fmt.Sprint(errcode.IsInfraError(err))}).Inc()
+}
+`)
+
+	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	require.NoError(t, err)
+	require.Len(t, diagnostics, 1)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
+  - rule: OBS-01
+    fingerprint: %q
+    metric: %s
+    label: %s
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`, diagnostics[0].Fingerprint, diagnostics[0].Metric, diagnostics[0].Label))
+
+	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
+	require.NoError(t, err)
+	assert.Empty(t, diagnostics)
+}
+
 func TestCheckOBS01AckMustMatchMetricAndLabel(t *testing.T) {
 	root := writeMetricsFixture(t)
 	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
@@ -1623,7 +1699,8 @@ func direct(err error) {
 `, diagnostics[0].Fingerprint, diagnostics[0].Label))
 
 	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unused or stale")
 	require.Len(t, diagnostics, 1)
 
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", fmt.Sprintf(`acknowledgements:
@@ -1638,10 +1715,11 @@ func direct(err error) {
     owner: platform-observability
     reviewedAt: "2026-04-28"
     rationale: reviewed SLO bucket migration with service owner
-`, diagnostics[0].Fingerprint, diagnostics[0].Metric))
+`, diagnostics[0].Fingerprint, "obs_total"))
 
 	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unused or stale")
 	require.Len(t, diagnostics, 1)
 }
 
@@ -1688,13 +1766,15 @@ func direct(err error) {
 `, diagnostics[0].Fingerprint, diagnostics[0].Metric, diagnostics[0].Label))
 
 	diagnostics, err = checkOBS01WithPatterns(root, "./reachable")
-	require.NoError(t, err)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unused or stale")
 	require.Len(t, diagnostics, 1)
 	assert.Contains(t, diagnostics[0].Message, "not machine-resolvable")
 }
 
 func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
 	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
 	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
   - rule: OBS-01
     fingerprint: duplicate
@@ -1703,13 +1783,34 @@ func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
     oldSemantics: infra errors grouped as infra
     newSemantics: domain config errors grouped as domain
     dashboardOrAlertRefs:
-      - https://example.com/dashboard
+      - docs/ops/example-dashboard.md
     owner: platform-observability
     reviewedAt: "2026-04-28"
     rationale: reviewed SLO bucket migration with service owner
   - rule: OBS-01
     fingerprint: duplicate
     metric: v
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
+
+	_, err := checkOBS01WithPatterns(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicates fingerprint")
+}
+
+func TestCheckOBS01RejectsURLDashboardRefs(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: abc123
+    metric: fixture_obs_total
     label: reason
     oldSemantics: infra errors grouped as infra
     newSemantics: domain config errors grouped as domain
@@ -1722,7 +1823,114 @@ func TestCheckOBS01RejectsDuplicateAckFingerprints(t *testing.T) {
 
 	_, err := checkOBS01WithPatterns(root, "./reachable")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicates fingerprint")
+	assert.Contains(t, err.Error(), "committed in HEAD")
+}
+
+func TestCheckOBS01RejectsUnusedAck(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: stale-fingerprint
+    metric: fixture_obs_total
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
+
+	diagnostics, err := checkOBS01WithPatterns(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "unused or stale")
+	assert.Empty(t, diagnostics)
+}
+
+func TestCheckOBS01RejectsSymlinkDashboardRefs(t *testing.T) {
+	root := writeMetricsFixture(t)
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
+	require.NoError(t, os.MkdirAll(filepath.Join(root, "docs", "ops"), 0o755))
+	linkPath := filepath.Join(root, "docs", "ops", "dashboard-link.md")
+	if err := os.Symlink("example-dashboard.md", linkPath); err != nil {
+		t.Skipf("symlink creation unavailable: %v", err)
+	}
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: abc123
+    metric: fixture_obs_total
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/dashboard-link.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
+
+	_, err := checkOBS01WithPatterns(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "committed in HEAD")
+}
+
+func TestCheckOBS01RejectsUntrackedDashboardRefsWhenGitMetadataPresent(t *testing.T) {
+	root := writeMetricsFixture(t)
+	require.NoError(t, os.Mkdir(filepath.Join(root, ".git"), 0o755))
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: abc123
+    metric: fixture_obs_total
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
+
+	_, err := checkOBS01WithPatterns(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "committed in HEAD")
+}
+
+// TestCheckOBS01RejectsStagedButUncommittedDashboardRef closes the
+// PR #332 round-2 gap where OBS-01 ack tracking accepted index-only
+// (`git add`-but-not-committed) files. The committed-in-HEAD predicate
+// now matches the one used by generatedverify so a single CI step that
+// only stages — never commits — cannot satisfy either gate.
+func TestCheckOBS01RejectsStagedButUncommittedDashboardRef(t *testing.T) {
+	root := writeMetricsFixture(t)
+	gitRun(t, root, "init")
+	gitRun(t, root, "config", "user.email", "test@example.com")
+	gitRun(t, root, "config", "user.name", "Test")
+	gitRun(t, root, "config", "commit.gpgsign", "false")
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
+	gitRun(t, root, "add", "docs/ops/example-dashboard.md")
+	// No commit — the file is in the index only.
+
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: abc123
+    metric: fixture_obs_total
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
+
+	_, err := checkOBS01WithPatterns(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "committed in HEAD")
 }
 
 func TestCheckOBS01RejectsPlaceholderDashboardRefs(t *testing.T) {
@@ -1937,4 +2145,12 @@ func writeFile(t *testing.T, root, rel, body string) {
 	path := filepath.Join(root, filepath.FromSlash(rel))
 	require.NoError(t, os.MkdirAll(filepath.Dir(path), 0o755))
 	require.NoError(t, os.WriteFile(path, []byte(body), 0o644))
+}
+
+func gitRun(t *testing.T, root string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = root
+	out, err := cmd.CombinedOutput()
+	require.NoError(t, err, "git %s failed:\n%s", strings.Join(args, " "), string(out))
 }

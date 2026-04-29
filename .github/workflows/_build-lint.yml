@@ -149,52 +149,14 @@ jobs:
         if: matrix.static_checks
         run: go vet -tags=e2e ./tests/e2e/...
 
-      # Boundary regenerate-and-diff gate (PR-CFG-M, closes backlog PR220-e2):
-      # boundary.yaml is the generated source-of-truth for an assembly's exported
-      # / imported contracts. Drift between contract.yaml structural fields and
-      # the recorded sourceFingerprint silently invalidates downstream consumers
-      # of boundary.yaml, so regenerate locally and require a clean diff. Uses
-      # `--boundary-only` so the hand-extended composition root in
-      # cmd/corebundle/main.go is left alone (the boundary.yaml fingerprint is
-      # what gates downstream consumers; main.go is owned by the bundle author).
-      - name: Verify generated assemblies are up-to-date
+      # Generated-artifact gate (PR-CFG-M follow-up):
+      # assembly.yaml is the source-of-truth for runtime cell order, generated
+      # entrypoint paths, boundary contracts, and assembly-reachable metrics
+      # schemas. The verifier derives the expected artifact manifest from
+      # metadata instead of trusting generator stdout to define the diff scope.
+      - name: Verify generated artifacts are up-to-date
         if: matrix.static_checks
-        run: |
-          for d in assemblies/*/; do
-            go run ./cmd/gocell generate assembly --id "$(basename "$d")" --boundary-only
-          done
-          if ! git diff --exit-code assemblies/; then
-            echo "::error::boundary.yaml drift detected. Run 'for d in assemblies/*/; do go run ./cmd/gocell generate assembly --id \"\$(basename \"\$d\")\" --boundary-only; done' locally and commit the result."
-            exit 1
-          fi
-          untracked=$(git ls-files --others --exclude-standard assemblies/*/generated/boundary.yaml 2>/dev/null || true)
-          if [ -n "$untracked" ]; then
-            echo "::error::Untracked boundary.yaml files found — commit them: $untracked"
-            exit 1
-          fi
-
-      # Metrics-schema verify-and-diff gate (OBS-01):
-      # assemblies/<id>/generated/metrics-schema.yaml records metric
-      # registrations reachable from that assembly's entrypoint (names, labels,
-      # buckets, or explicit bucket sources). Regenerate locally and require a
-      # clean diff. OBS-01 semantic checks live in tools/archtest where
-      # go/packages can enforce typed identity and checked-in migration acks.
-      - name: Verify generated metrics-schema is up-to-date
-        if: matrix.static_checks
-        run: |
-          for d in assemblies/*/; do
-            go run ./cmd/gocell generate metrics-schema --id "$(basename "$d")"
-          done
-          if ! git diff --exit-code assemblies/*/generated/metrics-schema.yaml; then
-            echo "::error::metrics-schema.yaml drift detected. Run 'go run ./cmd/gocell generate metrics-schema --id <id>' locally and commit. OBS-01 classifier-label migrations require checked-in docs/observability/metrics-migration-acks.yaml acknowledgements."
-            exit 1
-          fi
-          # Also catch newly generated files not yet committed (first-time addition).
-          untracked=$(git ls-files --others --exclude-standard assemblies/*/generated/metrics-schema.yaml 2>/dev/null || true)
-          if [ -n "$untracked" ]; then
-            echo "::error::Untracked metrics-schema.yaml files found — commit them: $untracked"
-            exit 1
-          fi
+        run: go run ./cmd/gocell verify generated
 
       # NOTE: Kernel coverage gate re-runs `go test -cover ./kernel/...`
       # deliberately — it is not a duplicate of the Test step. The gate requires

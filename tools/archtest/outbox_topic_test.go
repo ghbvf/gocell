@@ -433,11 +433,3 @@ func skipOutboxTopicProductionScan(rel string) bool {
 		strings.Contains(rel, "/testdata/") ||
 		strings.HasPrefix(rel, "testdata/")
 }
-
-// findArchTestDir returns the absolute path of the tools/archtest directory,
-// used to locate testdata fixtures at test runtime.
-func findArchTestDir(t *testing.T) string {
-	t.Helper()
-	root := findModuleRoot(t)
-	return filepath.Join(root, "tools", "archtest")
-}

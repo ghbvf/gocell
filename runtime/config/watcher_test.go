@@ -359,11 +359,23 @@ func TestWatcher_SymlinkPivot_DetectsTargetChange(t *testing.T) {
 	require.NoError(t, os.Remove(link))
 	require.NoError(t, os.Symlink(v2, link))
 
+	// Wait for the actual condition under assertion: a callback fired with
+	// SymlinkPivot=true. Polling on `called.Load() >= 1` was a weaker proxy
+	// that could fall through on slow CI runners (macos-latest Intel) where
+	// the Remove event's callback fired first (called=1, gotPivot=0) and
+	// the synthetic-create+SymlinkPivot callback had not yet been emitted
+	// when assertion ran. Anchoring Eventually on gotPivot keeps the loop
+	// alive until the SymlinkPivot signal arrives or the budget expires,
+	// matching the property the test is meant to lock down.
 	assert.Eventually(t, func() bool {
-		return called.Load() >= 1
-	}, 3*time.Second, 50*time.Millisecond, "symlink pivot should fire callback")
+		return gotPivot.Load() >= 1
+	}, 3*time.Second, 50*time.Millisecond, "WatchEvent.SymlinkPivot should be true")
 
-	assert.GreaterOrEqual(t, gotPivot.Load(), int32(1), "WatchEvent.SymlinkPivot should be true")
+	// Sanity: at least one callback total was observed (the SymlinkPivot
+	// path is a strict subset, but assert it explicitly so a future watcher
+	// regression that loses the SymlinkPivot tag still surfaces against
+	// "no callbacks at all" vs "callbacks without the tag".
+	assert.GreaterOrEqual(t, called.Load(), int32(1), "watcher must fire at least one callback after pivot")
 }
 
 func TestWatcher_SymlinkPivot_KubernetesDataPattern(t *testing.T) {

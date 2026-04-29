@@ -74,7 +74,7 @@ func TestBuildAssembly_RegisterError(t *testing.T) {
 	c1 := cell.NewBaseCell(cell.CellMetadata{ID: "dup-cell", Type: cell.CellTypeCore})
 	c2 := cell.NewBaseCell(cell.CellMetadata{ID: "dup-cell", Type: cell.CellTypeCore})
 
-	_, err = buildAssembly(ps, cell.DurabilityDemo, c1, c2)
+	_, err = buildAssembly(ps, "corebundle", cell.DurabilityDemo, c1, c2)
 	require.Error(t, err, "duplicate cell ID must cause buildAssembly to return an error")
 	assert.Contains(t, err.Error(), "dup-cell",
 		"error must mention the duplicate cell ID so operators can diagnose the conflict")
@@ -346,7 +346,7 @@ func buildBootstrapFromShared(t *testing.T, shared *SharedDeps, primaryLn net.Li
 		return nil, err
 	}
 
-	asm, err := buildAssembly(shared.PromStack, durabilityModeForTopology(shared.Topology), cells...)
+	asm, err := buildAssembly(shared.PromStack, "corebundle", durabilityModeForTopology(shared.Topology), cells...)
 	if err != nil {
 		return nil, err
 	}

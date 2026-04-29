@@ -1,8 +1,8 @@
 id: corebundle
 cells:
+  - configcore
   - accesscore
   - auditcore
-  - configcore
 build:
   entrypoint: cmd/corebundle/main.go
   binary: corebundle

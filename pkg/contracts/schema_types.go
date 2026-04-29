@@ -78,7 +78,7 @@ var ParamTypes = map[string]bool{
 // It references a JSON Schema file (relative to the contract directory) that
 // describes the error response body.
 type HTTPResponse struct {
-	Description string `yaml:"description" json:"description"`
+	Description string `yaml:"description" json:"description" fingerprint:"-"`
 	SchemaRef   string `yaml:"schemaRef"   json:"schemaRef"`
 }
 

@@ -21,6 +21,9 @@ func runGenerate(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell generate <assembly|metrics-schema|indexes> [flags]")
 	}
+	if isHelpFlag(args[0]) {
+		return printGenerateHelp()
+	}
 
 	subtype := args[0]
 	subArgs := args[1:]
@@ -41,7 +44,6 @@ func generateAssembly(args []string) error {
 	fs := flag.NewFlagSet("generate assembly", flag.ContinueOnError)
 	id := fs.String("id", "", "assembly ID (required)")
 	module := fs.String("module", "", "Go module path (default: read from go.mod)")
-	boundaryOnly := fs.Bool("boundary-only", false, "regenerate only assemblies/<id>/generated/boundary.yaml; skip entrypoint main.go (used by the regenerate-and-diff CI gate to avoid clobbering hand-extended composition roots)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -75,22 +77,20 @@ func generateAssembly(args []string) error {
 	// Generate.
 	gen := assembly.NewGenerator(project, mod, root)
 
-	if !*boundaryOnly {
-		entrypoint, err := gen.GenerateEntrypoint(*id)
-		if err != nil {
-			return fmt.Errorf("generate entrypoint: %w", err)
-		}
-		// ref: go-zero goctl — generated file paths driven by configuration
-		asm := project.Assemblies[*id]
-		entrypointRel := asm.Build.Entrypoint
-		if entrypointRel == "" {
-			entrypointRel = filepath.Join("cmd", *id, "main.go")
-		}
-		entrypointPath := filepath.Join(root, entrypointRel)
-		if err := writeGeneratedFile(root, entrypointPath, entrypoint,
-			fmt.Sprintf("assembly %q build.entrypoint %q", *id, entrypointRel)); err != nil {
-			return err
-		}
+	entrypoint, err := gen.GenerateEntrypoint(*id)
+	if err != nil {
+		return fmt.Errorf("generate entrypoint: %w", err)
+	}
+	// ref: go-zero goctl — generated file paths driven by configuration
+	asm := project.Assemblies[*id]
+	entrypointRel := asm.Build.Entrypoint
+	if entrypointRel == "" {
+		entrypointRel = filepath.Join("cmd", *id, "main.go")
+	}
+	entrypointPath := filepath.Join(root, entrypointRel)
+	if err := writeGeneratedFile(root, entrypointPath, entrypoint,
+		fmt.Sprintf("assembly %q build.entrypoint %q", *id, entrypointRel)); err != nil {
+		return err
 	}
 
 	boundary, err := gen.GenerateBoundary(*id)
@@ -156,6 +156,14 @@ func writeGeneratedFile(root, outPath string, content []byte, label string) erro
 	if !governance.IsWithinRoot(root, outPath) {
 		return fmt.Errorf("%s: path escapes project root", label)
 	}
+	if existing, err := os.ReadFile(outPath); err == nil && !isGocellGeneratedFile(existing) {
+		return fmt.Errorf("%s: refusing to overwrite non-generated file %s "+
+			"(generated files must start with the gocell header; remove the file or move "+
+			"hand-written code to a sibling like cmd/<id>/run.go and re-run generation)",
+			label, outPath)
+	} else if err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("%s: read existing file: %w", label, err)
+	}
 	if err := os.MkdirAll(filepath.Dir(outPath), 0o755); err != nil {
 		return fmt.Errorf("%s: create dir: %w", label, err)
 	}
@@ -164,4 +172,8 @@ func writeGeneratedFile(root, outPath string, content []byte, label string) erro
 	}
 	fmt.Printf("Generated: %s\n", outPath)
 	return nil
+}
+
+func isGocellGeneratedFile(content []byte) bool {
+	return governance.IsGoCellGenerated(content)
 }

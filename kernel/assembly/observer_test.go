@@ -2,6 +2,7 @@ package assembly
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -199,6 +200,41 @@ func TestObserver_PanicInSink_IsIsolated(t *testing.T) {
 	require.NoError(t, a.Stop(context.Background()))
 }
 
+func TestEmitHookEventFallbackWithoutDispatcher(t *testing.T) {
+	obs := &captureObserver{}
+	a := &CoreAssembly{cfg: Config{HookObserver: obs}}
+
+	a.emitHookEvent(cell.HookEvent{
+		CellID:  "fallback-cell",
+		Hook:    cell.HookBeforeStart,
+		Outcome: cell.OutcomeSuccess,
+	})
+
+	got := obs.snapshot()
+	require.Len(t, got, 1)
+	assert.Equal(t, "fallback-cell", got[0].CellID)
+}
+
+func TestEmitHookEventFallbackPanickingObserverIsIsolated(t *testing.T) {
+	for _, obs := range []cell.LifecycleHookObserver{badObserver{}, errorPanicObserver{}} {
+		a := &CoreAssembly{cfg: Config{HookObserver: obs}}
+		assert.NotPanics(t, func() {
+			a.emitHookEvent(cell.HookEvent{
+				CellID:  "fallback-cell",
+				Hook:    cell.HookAfterStop,
+				Outcome: cell.OutcomeSuccess,
+			})
+		})
+	}
+}
+
+type errorPanicObserver struct{}
+
+func (errorPanicObserver) OnHookEvent(cell.HookEvent) {
+	panic(errors.New("observer sink crashed"))
+}
+
 // Compile-time interface conformance check.
 var _ cell.LifecycleHookObserver = (*captureObserver)(nil)
 var _ cell.LifecycleHookObserver = badObserver{}
+var _ cell.LifecycleHookObserver = errorPanicObserver{}

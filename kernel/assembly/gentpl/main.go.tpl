@@ -6,36 +6,23 @@ import (
 	"log/slog"
 	"os"
 
-	"{{.Module}}/kernel/assembly"
-	"{{.Module}}/kernel/cell"
 	"{{.Module}}/runtime/shutdown"
-	// Cell imports
-{{- range .Cells}}
-	// TODO: import {{.}} cell package
-{{- end}}
 )
 
 func main() {
-	app := assembly.New(assembly.Config{ID: "{{.AssemblyID}}", DurabilityMode: cell.DurabilityDemo})
-
-	// Register cells
-{{- range .Cells}}
-	// TODO: app.Register({{.}}.NewCore(...))
-{{- end}}
-
 	ctx, cancel := shutdown.NotifyContext(context.Background())
 	defer cancel()
 
-	if err := app.Start(ctx); err != nil {
-		slog.Error("failed to start assembly", "error", err)
+	if err := run(ctx); err != nil {
+		slog.Error("application failed", "error", err)
 		os.Exit(1)
 	}
+}
 
-	<-ctx.Done()
-	slog.Info("shutting down")
-
-	if err := app.Stop(context.Background()); err != nil {
-		slog.Error("failed to stop assembly", "error", err)
-		os.Exit(1)
-	}
+func run(ctx context.Context) error {
+	return {{.HelperName}}(ctx, {{printf "%q" .AssemblyID}}, []string{
+{{- range .Cells}}
+		{{printf "%q" .}},
+{{- end}}
+	})
 }

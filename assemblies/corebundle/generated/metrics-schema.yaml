@@ -14,7 +14,6 @@ metrics:
         - result
         - reason
       file: adapters/vault/transit_provider.go
-      line: 1271
     - name: auth_refresh_gc_duration_seconds
       fqName: gocell_auth_refresh_gc_duration_seconds
       namespace: gocell
@@ -35,7 +34,6 @@ metrics:
         - "2.5"
         - "5"
       file: runtime/auth/refresh/metrics.go
-      line: 62
     - name: auth_refresh_gc_removed_total
       fqName: gocell_auth_refresh_gc_removed_total
       namespace: gocell
@@ -44,7 +42,6 @@ metrics:
       labels:
         - result
       file: runtime/auth/refresh/metrics.go
-      line: 52
     - name: auth_refresh_gc_runs_total
       fqName: gocell_auth_refresh_gc_runs_total
       namespace: gocell
@@ -53,7 +50,6 @@ metrics:
       labels:
         - result
       file: runtime/auth/refresh/metrics.go
-      line: 43
     - name: auth_service_token_verify_total
       fqName: gocell_auth_service_token_verify_total
       namespace: gocell
@@ -63,7 +59,6 @@ metrics:
         - result
         - reason
       file: runtime/auth/metrics.go
-      line: 51
     - name: auth_token_verify_duration_seconds
       fqName: gocell_auth_token_verify_duration_seconds
       namespace: gocell
@@ -81,7 +76,6 @@ metrics:
         - ".05"
         - ".1"
       file: runtime/auth/metrics.go
-      line: 41
     - name: auth_token_verify_total
       fqName: gocell_auth_token_verify_total
       namespace: gocell
@@ -91,7 +85,6 @@ metrics:
         - result
         - reason
       file: runtime/auth/metrics.go
-      line: 32
     - name: bootstrap_shutdown_phase_duration_seconds
       fqName: gocell_bootstrap_shutdown_phase_duration_seconds
       namespace: gocell
@@ -113,7 +106,6 @@ metrics:
         - "30"
         - "60"
       file: runtime/bootstrap/shutdown_metrics.go
-      line: 131
     - name: bootstrap_shutdown_phase_entries_total
       fqName: gocell_bootstrap_shutdown_phase_entries_total
       namespace: gocell
@@ -122,7 +114,6 @@ metrics:
       labels:
         - phase
       file: runtime/bootstrap/shutdown_metrics.go
-      line: 121
     - name: bootstrap_shutdown_total
       fqName: gocell_bootstrap_shutdown_total
       namespace: gocell
@@ -131,7 +122,6 @@ metrics:
       labels:
         - outcome
       file: runtime/bootstrap/shutdown_metrics.go
-      line: 142
     - name: cached_key_version
       fqName: gocell_vault_cached_key_version
       namespace: gocell
@@ -145,7 +135,6 @@ metrics:
         - key_name
         - mount_path
       file: adapters/vault/transit_provider.go
-      line: 1160
     - name: cell_hook_duration_seconds
       fqName: gocell_cell_hook_duration_seconds
       namespace: gocell
@@ -168,7 +157,6 @@ metrics:
         - "10"
         - "30"
       file: cmd/corebundle/metrics.go
-      line: 55
     - name: cell_hook_total
       fqName: gocell_cell_hook_total
       namespace: gocell
@@ -179,7 +167,6 @@ metrics:
         - hook
         - outcome
       file: cmd/corebundle/metrics.go
-      line: 55
     - name: hook_observer_dropped_total
       fqName: gocell_hook_observer_dropped_total
       namespace: gocell
@@ -188,7 +175,6 @@ metrics:
       labels:
         - reason
       file: kernel/assembly/hook_dispatcher.go
-      line: 110
     - name: http_request_duration_seconds
       fqName: gocell_http_request_duration_seconds
       namespace: gocell
@@ -212,7 +198,6 @@ metrics:
         - "5"
         - "10"
       file: runtime/bootstrap/phases_http.go
-      line: 403
     - name: http_requests_total
       fqName: gocell_http_requests_total
       namespace: gocell
@@ -224,7 +209,6 @@ metrics:
         - status
         - cell
       file: runtime/bootstrap/phases_http.go
-      line: 403
     - name: outbox_batch_size
       fqName: gocell_outbox_batch_size
       namespace: gocell
@@ -242,7 +226,6 @@ metrics:
         - "200"
         - "500"
       file: cmd/corebundle/bundle.go
-      line: 319
     - name: outbox_cleaned_total
       fqName: gocell_outbox_cleaned_total
       namespace: gocell
@@ -252,7 +235,6 @@ metrics:
         - cell
         - status
       file: cmd/corebundle/bundle.go
-      line: 319
     - name: outbox_emit_failopen_dropped_total
       fqName: gocell_outbox_emit_failopen_dropped_total
       namespace: gocell
@@ -262,7 +244,6 @@ metrics:
         - cell
         - topic
       file: kernel/outbox/emitter.go
-      line: 132
     - name: outbox_poll_duration_seconds
       fqName: gocell_outbox_poll_duration_seconds
       namespace: gocell
@@ -284,7 +265,6 @@ metrics:
         - "5"
         - "10"
       file: cmd/corebundle/bundle.go
-      line: 319
     - name: outbox_reclaimed_total
       fqName: gocell_outbox_reclaimed_total
       namespace: gocell
@@ -293,7 +273,6 @@ metrics:
       labels:
         - cell
       file: cmd/corebundle/bundle.go
-      line: 319
     - name: outbox_relayed_total
       fqName: gocell_outbox_relayed_total
       namespace: gocell
@@ -303,7 +282,6 @@ metrics:
         - cell
         - outcome
       file: cmd/corebundle/bundle.go
-      line: 319
     - name: stale_cipher_total
       fqName: gocell_config_stale_cipher_total
       namespace: gocell
@@ -312,7 +290,6 @@ metrics:
       help: Number of config values read that are encrypted with a non-current key version.
       labels: []
       file: cmd/corebundle/config_module.go
-      line: 37
     - name: token_auth_healthy
       fqName: gocell_vault_token_auth_healthy
       namespace: gocell
@@ -321,7 +298,6 @@ metrics:
       help: 1 when Vault token renewal is healthy; 0 when the background renewer is re-authenticating after a terminal renewal failure.
       labels: []
       file: adapters/vault/transit_provider.go
-      line: 1263
     - name: token_renew_failure_total
       fqName: gocell_vault_token_renew_failure_total
       namespace: gocell
@@ -330,7 +306,6 @@ metrics:
       help: Number of Vault token renewal failures.
       labels: []
       file: adapters/vault/transit_provider.go
-      line: 1288
     - name: token_renew_success_total
       fqName: gocell_vault_token_renew_success_total
       namespace: gocell
@@ -339,4 +314,3 @@ metrics:
       help: Number of successful Vault token renewals.
       labels: []
       file: adapters/vault/transit_provider.go
-      line: 1282

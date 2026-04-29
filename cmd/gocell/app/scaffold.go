@@ -33,6 +33,9 @@ func runScaffold(args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell scaffold <cell|slice|contract|journey> [flags]")
 	}
+	if isHelpFlag(args[0]) {
+		return printScaffoldHelp()
+	}
 	root, err := findRoot()
 	if err != nil {
 		return fmt.Errorf("cannot find project root: %w", err)
@@ -46,6 +49,9 @@ func runScaffold(args []string) error {
 func runScaffoldWithRoot(root string, args []string) error {
 	if len(args) < 1 {
 		return fmt.Errorf("usage: gocell scaffold <cell|slice|contract|journey> [flags]")
+	}
+	if isHelpFlag(args[0]) {
+		return printScaffoldHelp()
 	}
 
 	subtype := args[0]
