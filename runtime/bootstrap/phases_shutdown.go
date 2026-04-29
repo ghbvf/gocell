@@ -6,14 +6,15 @@ package bootstrap
 // Covers:
 //   - phase9AwaitShutdownSignal: blocks on ctx cancel / HTTP error / worker error / router error
 //   - drainHTTPErrors: collects all buffered HTTP errors before joining
-//   - phase10OrchestrateShutdown: three-stage LIFO teardown (readiness flip → pre-shutdown delay → components)
+//   - phase10OrchestrateShutdown: four explicit stages — readiness flip → HTTP drain → LIFO teardown → finalize
 //   - phase10ReadinessFlip: health handler SetShuttingDown + optional pre-shutdown delay
 //   - phase10LIFOTeardown: LIFO teardown with per-component error collection
 //
-// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go —
-// engageStopProcedure: LIFO teardown + StopAndWait + signal coordination.
-// The three-stage shutdown model (readiness flip → pre-shutdown delay →
-// component teardown) mirrors controller-runtime's graceful-stop sequence.
+// ref: kubernetes/kubernetes apiserver/pkg/server/genericapiserver.go RunWithContext
+//      — readiness flip → ShutdownDelayDuration → NotAcceptingNewRequest →
+//      InFlightRequestsDrained → stopHttpServerCtx (mirrored by phase10).
+// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go engageStopProcedure
+//      — LIFO + StopAndWait for the backend components.
 
 import (
 	"context"
@@ -73,24 +74,41 @@ func (b *Bootstrap) phase9AwaitShutdownSignal(ctx context.Context, s *phaseState
 	}
 }
 
-// phase10OrchestrateShutdown executes the three-stage LIFO shutdown:
+// phase10OrchestrateShutdown executes the four-stage shutdown:
 //
-//  1. Readiness flip (SetShuttingDown so LBs drain traffic)
-//  2. Pre-shutdown delay (optional, shares the total shutdownTimeout budget)
-//  3. LIFO teardown of all registered components
+//  1. Readiness flip (SetShuttingDown + optional preShutdownDelay so LBs drain
+//     traffic; mirrors kube-apiserver ShutdownDelayDuration).
+//  2. HTTP drain (stop accepting new requests + wait for in-flight to complete;
+//     mirrors kube-apiserver NotAcceptingNewRequest → InFlightRequestsDrained →
+//     stopHttpServerCtx). Runs BEFORE LIFO so in-flight requests can write
+//     through to still-healthy backends.
+//  3. LIFO teardown of all registered components (workers, event router,
+//     assembly, kernel lifecycle, closers, managed resources).
+//  4. Finalize (cancel runCtx + emit outcome metric).
 //
-// If the incoming signal carries a non-nil error (HTTP/worker/router failure) AND
-// phase10 teardown itself is clean, the signal error is still returned to the
-// caller so Run() surfaces the triggering failure.
+// HTTP drain is intentionally NOT registered into the LIFO teardown chain
+// (phase7 sets s.httpDrain instead of calling s.addTeardown). Encoding the
+// HTTP/worker stop ordering as an explicit stage rather than as an artefact
+// of teardown registration order makes the contract grep-able and resistant
+// to future phase reordering.
 //
-// ref: sigs.k8s.io/controller-runtime engageStopProcedure (LIFO + StopAndWait)
-// ref: uber-go/fx app.go StopTimeout
-// ref: Kubernetes pod shutdown model (preStop counts toward terminationGracePeriodSeconds)
+// If the incoming signal carries a non-nil error (HTTP/worker/router failure)
+// AND phase10 itself is clean, the signal error is still returned so Run()
+// surfaces the triggering failure.
+//
+// ref: kubernetes/kubernetes apiserver/pkg/server/genericapiserver.go
+//
+//	RunWithContext — explicit shutdown signal graph (readiness flip →
+//	drain delay → not-accepting → in-flight drained → listener stopped).
+//
+// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go
+//
+//	engageStopProcedure — LIFO + StopAndWait.
 func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal) error {
-	shutCtx, cancel := context.WithTimeout(context.Background(), b.lifecycle.shutdownTimeout)
+	shutCtx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 	defer cancel()
 
-	m := b.metrics.shutdownMet
+	m := b.shutdownMet
 	totalStart := time.Now()
 
 	// --- stage 1: readiness flip ---
@@ -99,24 +117,44 @@ func (b *Bootstrap) phase10OrchestrateShutdown(s *phaseState, sig shutdownSignal
 	b.phase10ReadinessFlip(shutCtx, s)
 	m.observePhaseDuration(shutdownPhaseReadinessFlip, time.Since(flipStart))
 
-	// --- stage 2: LIFO teardown ---
+	// --- stage 2: HTTP drain (explicit; runs BEFORE LIFO teardown) ---
+	m.recordPhaseEntry(shutdownPhaseHTTPDrain)
+	drainStart := time.Now()
+	var httpDrainErr error
+	if s.httpDrain != nil {
+		httpDrainErr = s.httpDrain(shutCtx)
+	}
+	m.observePhaseDuration(shutdownPhaseHTTPDrain, time.Since(drainStart))
+
+	// --- stage 3: LIFO teardown ---
 	m.recordPhaseEntry(shutdownPhaseLIFOTeardown)
 	tearStart := time.Now()
 	teardownErrs := b.phase10LIFOTeardown(shutCtx, s)
 	m.observePhaseDuration(shutdownPhaseLIFOTeardown, time.Since(tearStart))
 
-	// --- stage 3: finalize ---
+	// --- stage 4: finalize ---
 	m.recordPhaseEntry(shutdownPhaseClosed)
 	m.observePhaseDuration(shutdownPhaseTotal, time.Since(totalStart))
+
+	// Aggregate HTTP drain error with LIFO teardown errors. HTTP drain is
+	// best-effort just like LIFO: a failure here does not prevent backend
+	// teardown but is reported in the joined error.
+	allTeardownErrs := teardownErrs
+	if httpDrainErr != nil {
+		allTeardownErrs = append([]error{
+			&phaseError{Phase: "teardown_http_drain", Err: httpDrainErr},
+		}, teardownErrs...)
+	}
 
 	// F3: outcome reflects the final return semantics, not just ctx state.
 	// Precedence: timeout > teardown_error > signal_error > success.
 	//   - timeout       : shutCtx expired during any stage; worst case for SREs.
-	//   - teardown_error: at least one teardown returned non-nil (non-timeout).
+	//   - teardown_error: at least one teardown (HTTP drain or LIFO) returned
+	//                     non-nil without a ctx timeout.
 	//   - signal_error  : shutdown was triggered by an HTTP/worker/router error,
 	//                     teardown itself was clean.
 	//   - success       : user-initiated shutdown with clean teardown.
-	teardownErr := errors.Join(teardownErrs...)
+	teardownErr := errors.Join(allTeardownErrs...)
 	outcome := "success"
 	switch {
 	case shutCtx.Err() != nil:
@@ -155,13 +193,13 @@ func (b *Bootstrap) phase10ReadinessFlip(shutCtx context.Context, s *phaseState)
 		s.hh.SetShuttingDown()
 	}
 
-	if b.lifecycle.preShutdownDelay <= 0 {
+	if b.preShutdownDelay <= 0 {
 		return
 	}
 	slog.Info("bootstrap: pre-shutdown drain delay",
-		slog.Duration("delay", b.lifecycle.preShutdownDelay))
+		slog.Duration("delay", b.preShutdownDelay))
 	select {
-	case <-time.After(b.lifecycle.preShutdownDelay):
+	case <-time.After(b.preShutdownDelay):
 	case <-shutCtx.Done():
 	}
 }

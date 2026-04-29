@@ -91,9 +91,9 @@ func (b *Bootstrap) applyListenerAuthChain(
 // AuthJWTFromAssembly plan, discovers the verifier from the assembly and
 // caches it in the plan's atomic pointer. Called during phase4.
 func (b *Bootstrap) runAuthPlanValidateHooks() error {
-	refs := sortedListenerRefs(b.http.listenerConfigs)
+	refs := sortedListenerRefs(b.listenerConfigs)
 	for _, ref := range refs {
-		cfg := b.http.listenerConfigs[ref]
+		cfg := b.listenerConfigs[ref]
 		for _, plan := range cfg.authChain {
 			p, ok := plan.(cell.AuthJWTFromAssembly)
 			if !ok {

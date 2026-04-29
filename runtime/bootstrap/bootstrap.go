@@ -44,25 +44,41 @@ const (
 	eventRouterCheckerName   = "eventrouter"
 )
 
-// bootstrapAssembly groups config-loading and CoreAssembly construction fields.
+// Bootstrap orchestrates the GoCell application lifecycle.
 //
-// ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/server/config.go
-// Config named sub-struct fields (e.g., SecureServingInfo).
-type bootstrapAssembly struct {
+// Fields are flat: bootstrap is the composition root, and most options
+// influence behaviour across multiple phases (e.g. WithMetricsProvider feeds
+// both default-assembly construction and HTTP metric auto-wiring;
+// WithRateLimiter writes both router options and the closer list). Forcing
+// a "concern group" sub-struct layout would make those cross-cutting
+// consumptions look like boundary violations when in fact they are the
+// natural shape of a composition root. fx.App and kratos.App keep their
+// state flat for the same reason; controller-runtime only sub-groups state
+// when each group is independently start/stop-able as a batch.
+//
+// File-level decomposition (phases_assembly.go / phases_http.go /
+// phases_events.go / phases_workers.go / phases_shutdown.go etc.) is
+// orthogonal to struct grouping and intentionally retained: it splits this
+// file along phase ordering, not along ownership.
+//
+// ref: uber-go/fx app.go — App is a flat struct.
+// ref: go-kratos/kratos app.go — App is a flat struct.
+// ref: sigs.k8s.io/controller-runtime pkg/manager/internal.go — controllerManager
+//
+//	sub-groups runnables by lifecycle batch (HTTPServers / Webhooks / Caches),
+//	not by visual concern.
+type Bootstrap struct {
+	// --- assembly: config loading + CoreAssembly construction + hooks ---
 	configPath           string
 	envPrefix            string
-	core                 *assembly.CoreAssembly
+	assemblyCore         *assembly.CoreAssembly
 	assemblyID           string
 	hookTimeout          time.Duration
 	hookTimeoutSet       bool
 	hookObserver         cell.LifecycleHookObserver
 	configWatcherFactory func(string, ...config.WatcherOption) (*config.Watcher, error)
-}
 
-// bootstrapHTTP groups HTTP listener, router, health, and middleware fields.
-//
-// ref: uber-go/fx app.go — grouped option fields per concern.
-type bootstrapHTTP struct {
+	// --- http: listener declarations + router options + health + tracing ---
 	listenerConfigs       map[cell.ListenerRef]listenerConfig
 	duplicateListenerRefs []cell.ListenerRef
 	routerOpts            []router.Option
@@ -73,65 +89,35 @@ type bootstrapHTTP struct {
 	healthCheckers        []namedChecker
 	adapterInfo           map[string]string
 	readyzDeadline        time.Duration
-}
 
-// bootstrapEvents groups outbox pubsub, worker, and event-router fields.
-type bootstrapEvents struct {
+	// --- events: outbox pubsub + event router + workers ---
 	workers               []worker.Worker
 	publisher             outbox.Publisher
 	subscriber            outbox.Subscriber
 	consumerMiddleware    []outbox.SubscriptionMiddleware
 	routerReadyTimeout    time.Duration
 	routerReadyTimeoutSet bool
-}
 
-// bootstrapLifecycle groups kernel/cell Lifecycle, ManagedResource, and shutdown fields.
-type bootstrapLifecycle struct {
-	kernel                       Lifecycle // named "kernel" to avoid b.lifecycle.lifecycle stutter
-	lifecycleDefaultStartTimeout time.Duration
-	lifecycleDefaultStopTimeout  time.Duration
-	lifecycleRegistrars          []func(Lifecycle)
-	managedResources             []kernellifecycle.ManagedResource
-	managedResourceTeardowns     []namedTeardown
-	managedResourceNil           bool
-	// Accepts ContextCloser/io.Closer instances registered by any sub-struct's options
-	// (e.g., http rate-limiter); centralised here for unified LIFO teardown.
-	closers          []any
-	shutdownTimeout  time.Duration
-	preShutdownDelay time.Duration
-}
+	// --- lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets ---
+	lifecycle                Lifecycle
+	defaultStartTimeout      time.Duration
+	defaultStopTimeout       time.Duration
+	lifecycleRegistrars      []func(Lifecycle)
+	managedResources         []kernellifecycle.ManagedResource
+	managedResourceTeardowns []namedTeardown
+	managedResourceNil       bool
+	closers                  []any // ContextCloser/io.Closer from any option (e.g. WithRateLimiter); LIFO teardown
+	shutdownTimeout          time.Duration
+	preShutdownDelay         time.Duration
 
-// bootstrapMetrics groups metrics provider and HTTP collector fields.
-type bootstrapMetrics struct {
-	provider           kernelmetrics.Provider
+	// --- metrics: metrics provider + auto-wired HTTP collector + shutdown metrics ---
+	metricsProvider    kernelmetrics.Provider
 	httpCollector      metricsmiddleware.Collector
 	shutdownMet        *shutdownMetrics
 	shutdownMetricsErr error
-}
 
-// Bootstrap orchestrates the GoCell application lifecycle.
-//
-// Fields are organised into five named sub-structs by concern:
-//
-//   - assembly: config loading + CoreAssembly construction + hooks
-//   - http:     listener declarations + router options + health + tracing
-//   - events:   outbox pubsub + event router + workers
-//   - lifecycle: kernel/cell Lifecycle + ManagedResource + shutdown budgets
-//   - metrics:  metrics provider + auto-wired HTTP collector + shutdown metrics
-//
-// runOnce is a one-shot guard, not part of any concern group.
-//
-// ref: uber-go/fx app.go — named field grouping per concern.
-// ref: kubernetes/kubernetes staging/src/k8s.io/apiserver/pkg/server/config.go
-// — named sub-struct fields (SecureServingInfo, etc.).
-type Bootstrap struct {
-	assembly  bootstrapAssembly
-	http      bootstrapHTTP
-	events    bootstrapEvents
-	lifecycle bootstrapLifecycle
-	metrics   bootstrapMetrics
-
-	runOnce sync.Once // Run() single-execution guard; not part of any concern group
+	// --- runtime guard ---
+	runOnce sync.Once // Run() single-execution guard
 }
 
 // namedChecker pairs a readiness probe name with its check function.
@@ -151,13 +137,13 @@ type namedChecker struct {
 // declarative via WithListener; the old primaryAddr/internalAddr fields are gone.
 // CORR-02: also rejects duplicate listener refs recorded by WithListener.
 func (b *Bootstrap) validateHTTPListenerConfigs() error {
-	if len(b.http.listenerConfigs) == 0 {
+	if len(b.listenerConfigs) == 0 {
 		return fmt.Errorf("bootstrap: no HTTP listeners declared; use WithListener to declare at least one listener")
 	}
 	if err := b.validateNoDuplicateListenerRefs(); err != nil {
 		return err
 	}
-	for ref, cfg := range b.http.listenerConfigs {
+	for ref, cfg := range b.listenerConfigs {
 		if err := validateListenerConfig(ref, cfg); err != nil {
 			return err
 		}
@@ -165,7 +151,7 @@ func (b *Bootstrap) validateHTTPListenerConfigs() error {
 	// B2: when a metrics handler is configured, a dedicated HealthListener must
 	// be declared so /metrics is isolated from the public primary listener.
 	if b.resolveHealthRouteGroupCfg().metricsHandler != nil {
-		if _, ok := b.http.listenerConfigs[cell.HealthListener]; !ok {
+		if _, ok := b.listenerConfigs[cell.HealthListener]; !ok {
 			return fmt.Errorf(
 				"bootstrap: WithHealthRoutes(WithMetricsHandler(...)) requires a dedicated HealthListener; " +
 					"add WithListener(cell.HealthListener, ...) to isolate /metrics from the primary listener")
@@ -243,12 +229,12 @@ func validateListenerTLSConfig(ref cell.ListenerRef, cfg *tls.Config) error {
 // validateNoDuplicateListenerRefs returns an error when the same ListenerRef
 // was declared more than once via WithListener (CORR-02).
 func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
-	if len(b.http.duplicateListenerRefs) == 0 {
+	if len(b.duplicateListenerRefs) == 0 {
 		return nil
 	}
-	dups := make([]string, 0, len(b.http.duplicateListenerRefs))
+	dups := make([]string, 0, len(b.duplicateListenerRefs))
 	seen := make(map[string]bool)
-	for _, ref := range b.http.duplicateListenerRefs {
+	for _, ref := range b.duplicateListenerRefs {
 		name := ref.String()
 		if !seen[name] {
 			dups = append(dups, name)
@@ -273,34 +259,34 @@ func (b *Bootstrap) validateNoDuplicateListenerRefs() error {
 // phase0, before any side effects start.
 func New(opts ...Option) *Bootstrap {
 	b := &Bootstrap{}
-	b.lifecycle.shutdownTimeout = shutdown.DefaultTimeout
-	b.assembly.configWatcherFactory = config.NewWatcher
-	b.metrics.provider = kernelmetrics.NopProvider{}
+	b.shutdownTimeout = shutdown.DefaultTimeout
+	b.configWatcherFactory = config.NewWatcher
+	b.metricsProvider = kernelmetrics.NopProvider{}
 
 	for _, o := range opts {
 		o(b)
 	}
 	// Create the Lifecycle after all options are applied so that
-	// lifecycleDefaultStartTimeout / lifecycleDefaultStopTimeout are set.
+	// defaultStartTimeout / defaultStopTimeout are set.
 	// Zero values are forwarded as-is; NewLifecycle falls back to the
 	// DefaultStartTimeout / DefaultStopTimeout constants internally.
 	logger := slog.Default()
-	b.lifecycle.kernel = NewLifecycle(LifecycleConfig{
-		DefaultStartTimeout: b.lifecycle.lifecycleDefaultStartTimeout,
-		DefaultStopTimeout:  b.lifecycle.lifecycleDefaultStopTimeout,
+	b.lifecycle = NewLifecycle(LifecycleConfig{
+		DefaultStartTimeout: b.defaultStartTimeout,
+		DefaultStopTimeout:  b.defaultStopTimeout,
 		Logger:              logger,
 	})
-	for _, reg := range b.lifecycle.lifecycleRegistrars {
-		reg(b.lifecycle.kernel)
+	for _, reg := range b.lifecycleRegistrars {
+		reg(b.lifecycle)
 	}
 	// Register shutdown metrics against the (potentially Nop) provider.
 	// newShutdownMetrics returns a disabled metrics object for a nil provider.
-	m, err := newShutdownMetrics(b.metrics.provider)
+	m, err := newShutdownMetrics(b.metricsProvider)
 	if err != nil {
 		// Store error; phase0 will surface it before any component starts.
-		b.metrics.shutdownMetricsErr = err
+		b.shutdownMetricsErr = err
 	} else {
-		b.metrics.shutdownMet = m
+		b.shutdownMet = m
 	}
 	return b
 }
@@ -310,7 +296,7 @@ func New(opts ...Option) *Bootstrap {
 // not goroutine-safe concurrent with Run(). Hooks registered here are
 // appended to those from WithLifecycle options.
 func (b *Bootstrap) Lifecycle() Lifecycle {
-	return b.lifecycle.kernel
+	return b.lifecycle
 }
 
 // MetricsProvider returns the configured provider-neutral metrics backend.
@@ -318,12 +304,12 @@ func (b *Bootstrap) Lifecycle() Lifecycle {
 // used the NopProvider default surfaces, so callers can register metrics
 // unconditionally.
 func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
-	if b.metrics.provider == nil {
+	if b.metricsProvider == nil {
 		// Defensive: if a future refactor clears the field post-New, keep the
 		// contract of never returning nil so call sites can omit nil checks.
 		return kernelmetrics.NopProvider{}
 	}
-	return b.metrics.provider
+	return b.metricsProvider
 }
 
 // Run executes the full startup sequence. It blocks until ctx is cancelled
@@ -345,10 +331,15 @@ func (b *Bootstrap) MetricsProvider() kernelmetrics.Provider {
 //	phase4: discover auth verifier; bind config-watcher OnChange; start watcher
 //	phase5: build HTTP router + health handler; register all health checkers
 //	phase6: register event subscriptions; start event router on runCtx
-//	phase7: start HTTP server; wire httpErrCh
+//	phase7: start HTTP server; wire httpErrCh + s.httpDrain (NOT a LIFO teardown)
 //	phase8: start worker group on runCtx; wire workerErrCh
 //	phase9: block until external ctx cancel, HTTP error, worker error, or router error
-//	phase10: LIFO teardown (readiness flip → pre-shutdown delay → components)
+//	phase10: explicit shutdown stages — runs in this order:
+//	         stage1: readiness flip (/readyz=503 + preShutdownDelay)
+//	         stage2: HTTP drain    (s.httpDrain — stop accept + drain in-flight)
+//	         stage3: LIFO teardown (workers, event router, assembly, kernel
+//	                                lifecycle, closers, managed resources)
+//	         stage4: finalize      (cancel runCtx + outcome metric)
 //
 // runCtx is derived from context.Background(), NOT from the caller ctx.
 // External ctx cancellation only triggers phase9 to return; workers and the
@@ -389,7 +380,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	//
 	// managedResourceTeardowns is in registration order; reversed by the LIFO
 	// shutdown loop at the end of Run().
-	for _, td := range b.lifecycle.managedResourceTeardowns {
+	for _, td := range b.managedResourceTeardowns {
 		s.addNamedTeardown(td.name, td.fn) // td already returns error; phase10 aggregates via LIFO teardown chain
 	}
 
@@ -397,7 +388,7 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 		if s.hh != nil {
 			s.hh.SetShuttingDown()
 		}
-		rctx, cancel := context.WithTimeout(context.Background(), b.lifecycle.shutdownTimeout)
+		rctx, cancel := context.WithTimeout(context.Background(), b.shutdownTimeout)
 		defer cancel()
 		return s.rollback(rctx, cause)
 	}
@@ -417,11 +408,11 @@ func (b *Bootstrap) Run(ctx context.Context) error {
 	// executes before asm.Stop in the LIFO teardown sequence, letting hooks
 	// still access cell resources during shutdown.
 	// ref: uber-go/fx internal/lifecycle/lifecycle.go — numStarted LIFO rollback.
-	if err := b.lifecycle.kernel.Start(ctx); err != nil {
+	if err := b.lifecycle.Start(ctx); err != nil {
 		return rollback(fmt.Errorf("bootstrap: lifecycle start: %w", err))
 	}
 	s.addTeardown(func(stopCtx context.Context) error {
-		return b.lifecycle.kernel.Stop(stopCtx)
+		return b.lifecycle.Stop(stopCtx)
 	})
 	if err := b.phase4WireAuthAndWatcher(s); err != nil {
 		return rollback(err)

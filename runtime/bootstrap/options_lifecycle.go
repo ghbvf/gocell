@@ -1,6 +1,7 @@
 package bootstrap
 
-// options_lifecycle.go — With* option functions for the bootstrapLifecycle group.
+// options_lifecycle.go — With* option functions covering kernel/cell Lifecycle,
+// ManagedResource closers, and shutdown budgets.
 //
 // Covers: WithLifecycle, WithLifecycleDefaultStartTimeout,
 // WithLifecycleDefaultStopTimeout, WithManagedCloser, WithShutdownTimeout,
@@ -23,7 +24,7 @@ import (
 func WithLifecycle(fn func(lc Lifecycle)) Option {
 	return func(b *Bootstrap) {
 		if fn != nil {
-			b.lifecycle.lifecycleRegistrars = append(b.lifecycle.lifecycleRegistrars, fn)
+			b.lifecycleRegistrars = append(b.lifecycleRegistrars, fn)
 		}
 	}
 }
@@ -32,13 +33,13 @@ func WithLifecycle(fn func(lc Lifecycle)) Option {
 // Zero value retains DefaultStartTimeout (30s). Negative disables default timeout
 // (hooks without own StartTimeout will block indefinitely).
 func WithLifecycleDefaultStartTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) { b.lifecycle.lifecycleDefaultStartTimeout = d }
+	return func(b *Bootstrap) { b.defaultStartTimeout = d }
 }
 
 // WithLifecycleDefaultStopTimeout mirrors WithLifecycleDefaultStartTimeout for StopTimeout.
 // Zero value retains DefaultStopTimeout (10s). Negative disables default timeout.
 func WithLifecycleDefaultStopTimeout(d time.Duration) Option {
-	return func(b *Bootstrap) { b.lifecycle.lifecycleDefaultStopTimeout = d }
+	return func(b *Bootstrap) { b.defaultStopTimeout = d }
 }
 
 // WithManagedCloser registers an adapter or resource that implements
@@ -61,14 +62,14 @@ func WithManagedCloser(c kernellifecycle.ContextCloser) Option {
 		if c == nil {
 			return
 		}
-		b.lifecycle.closers = append(b.lifecycle.closers, c)
+		b.closers = append(b.closers, c)
 	}
 }
 
 // WithShutdownTimeout overrides the default graceful shutdown timeout.
 func WithShutdownTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.lifecycle.shutdownTimeout = d
+		b.shutdownTimeout = d
 	}
 }
 
@@ -83,6 +84,6 @@ func WithShutdownTimeout(d time.Duration) Option {
 // ref: Kubernetes pod shutdown — preStop counts toward terminationGracePeriodSeconds
 func WithPreShutdownDelay(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.lifecycle.preShutdownDelay = d
+		b.preShutdownDelay = d
 	}
 }

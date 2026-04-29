@@ -26,7 +26,7 @@ import (
 // to keep the discovery pattern symmetric.
 //
 // Must run after phase3InitAssembly (cells need Init to have populated any
-// state the hooks close over) and before b.lifecycle.Start(ctx).
+// state the hooks close over) and before lifecycle.Start(ctx).
 //
 // Cross-path uniqueness: Lifecycle.Append is the single source of truth for
 // duplicate-Name detection (returns ErrDuplicateHookName). That guard covers
@@ -57,7 +57,7 @@ func (b *Bootstrap) registerOneCellLifecycleHooks(id string, lc cell.LifecycleCo
 		if h.OnStart == nil && h.OnStop == nil {
 			continue
 		}
-		if err := b.lifecycle.kernel.Append(Hook{
+		if err := b.lifecycle.Append(Hook{
 			CellID:       id,
 			Name:         h.Name,
 			OnStart:      h.OnStart,
@@ -74,7 +74,7 @@ func (b *Bootstrap) registerOneCellLifecycleHooks(id string, lc cell.LifecycleCo
 // registerAllHealthCheckers registers option-supplied, cell-discovered, watcher,
 // and drift health checkers. Returns error on duplicate names or nil checkers.
 func (b *Bootstrap) registerAllHealthCheckers(s *phaseState) error {
-	for _, hc := range b.http.healthCheckers {
+	for _, hc := range b.healthCheckers {
 		if err := s.registerHealthChecker(hc.name, hc.fn); err != nil {
 			return err
 		}

@@ -668,13 +668,13 @@ func (nilWorkerResource) Close(_ context.Context) error { return nil }
 // nil-resource; only the background goroutine is omitted).
 func TestExpandManagedResources_NilWorker_Skip(t *testing.T) {
 	b := &Bootstrap{}
-	b.lifecycle.managedResources = []kernellifecycle.ManagedResource{nilWorkerResource{}}
+	b.managedResources = []kernellifecycle.ManagedResource{nilWorkerResource{}}
 
 	require.NoError(t, b.expandManagedResources())
 
-	assert.Len(t, b.http.healthCheckers, 1, "checker must still be registered when worker is nil")
-	assert.Empty(t, b.events.workers, "nil worker must not be added to worker pool")
-	assert.Len(t, b.lifecycle.managedResourceTeardowns, 1, "teardown must still be registered for Close")
+	assert.Len(t, b.healthCheckers, 1, "checker must still be registered when worker is nil")
+	assert.Empty(t, b.workers, "nil worker must not be added to worker pool")
+	assert.Len(t, b.managedResourceTeardowns, 1, "teardown must still be registered for Close")
 }
 
 // duplicateCheckerResource provides a single checker under a fixed key name.
@@ -697,7 +697,7 @@ func (r duplicateCheckerResource) Close(_ context.Context) error { return nil }
 // first and health misreporting goes undetected until production.
 func TestExpandManagedResources_DuplicateChecker_Phase0Error(t *testing.T) {
 	b := &Bootstrap{}
-	b.lifecycle.managedResources = []kernellifecycle.ManagedResource{
+	b.managedResources = []kernellifecycle.ManagedResource{
 		duplicateCheckerResource{key: "db"},
 		duplicateCheckerResource{key: "db"},
 	}
@@ -729,18 +729,18 @@ func TestExpandManagedResources_CloseFailure_TeardownChainContinues(t *testing.T
 	}
 
 	b := &Bootstrap{}
-	b.lifecycle.managedResources = []kernellifecycle.ManagedResource{
+	b.managedResources = []kernellifecycle.ManagedResource{
 		&orderedCloseResource{name: "first", closeFn: firstClose},
 		&orderedCloseResource{name: "second", closeFn: secondClose},
 	}
 
 	require.NoError(t, b.expandManagedResources())
-	require.Len(t, b.lifecycle.managedResourceTeardowns, 2)
+	require.Len(t, b.managedResourceTeardowns, 2)
 
 	// Teardowns are in registration order; LIFO means we call them reversed.
 	ctx := context.Background()
-	for i := len(b.lifecycle.managedResourceTeardowns) - 1; i >= 0; i-- {
-		_ = b.lifecycle.managedResourceTeardowns[i].fn(ctx) // ignore individual errors; chain must continue
+	for i := len(b.managedResourceTeardowns) - 1; i >= 0; i-- {
+		_ = b.managedResourceTeardowns[i].fn(ctx) // ignore individual errors; chain must continue
 	}
 
 	// LIFO: second registered → first closed; then first registered → closed second.
@@ -752,7 +752,7 @@ func TestExpandManagedResources_CloseFailure_TeardownChainContinues(t *testing.T
 
 func TestExpandManagedResources_CloseFailure_TeardownErrorIncludesResourceType(t *testing.T) {
 	b := &Bootstrap{}
-	b.lifecycle.managedResources = []kernellifecycle.ManagedResource{
+	b.managedResources = []kernellifecycle.ManagedResource{
 		&orderedCloseResource{
 			name: "typed-resource",
 			closeFn: func(context.Context) error {
@@ -762,10 +762,10 @@ func TestExpandManagedResources_CloseFailure_TeardownErrorIncludesResourceType(t
 	}
 
 	require.NoError(t, b.expandManagedResources())
-	require.Len(t, b.lifecycle.managedResourceTeardowns, 1)
+	require.Len(t, b.managedResourceTeardowns, 1)
 
 	_, s := newPhaseState()
-	for _, td := range b.lifecycle.managedResourceTeardowns {
+	for _, td := range b.managedResourceTeardowns {
 		s.addNamedTeardown(td.name, td.fn)
 	}
 

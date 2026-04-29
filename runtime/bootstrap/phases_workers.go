@@ -25,7 +25,7 @@ import (
 // ref: uber-go/fx run vs stop ctx separation.
 func (b *Bootstrap) phase8StartWorkers(runCtx context.Context, s *phaseState) {
 	wg := worker.NewWorkerGroup()
-	for _, w := range b.events.workers {
+	for _, w := range b.workers {
 		wg.Add(w)
 	}
 
@@ -33,7 +33,7 @@ func (b *Bootstrap) phase8StartWorkers(runCtx context.Context, s *phaseState) {
 	// stop workers. Workers stop only when phase10 calls their teardown.
 	workerCtx, workerCancel := context.WithCancel(runCtx)
 
-	if len(b.events.workers) == 0 {
+	if len(b.workers) == 0 {
 		workerCancel() // no workers; release immediately
 		return
 	}

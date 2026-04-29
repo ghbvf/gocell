@@ -1,12 +1,13 @@
 package bootstrap
 
-// options_http.go — With* option functions for the bootstrapHTTP group.
+// options_http.go — With* option functions covering HTTP listener, router,
+// health, and middleware setup.
 //
 // Covers: WithRouterOptions, WithTracer, WithRateLimiter, WithCircuitBreaker,
 // WithSecurityHeadersOptions, WithErrorRedactor, WithHealthChecker,
 // WithReadyzDeadline, WithAdapterInfo, WithHealthRoutes.
 //
-// Note: WithRateLimiter and WithCircuitBreaker also append to b.lifecycle.closers (lifecycle teardown).
+// Note: WithRateLimiter and WithCircuitBreaker also append to b.closers (lifecycle teardown).
 //
 // ref: go-kratos/kratos transport/http/server.go — per-server option pattern.
 // ref: go-zero — resilience middleware configuration at app level.
@@ -24,13 +25,13 @@ import (
 // WithRouterOptions passes options to the router builder.
 func WithRouterOptions(opts ...router.Option) Option {
 	return func(b *Bootstrap) {
-		b.http.routerOpts = append(b.http.routerOpts, opts...)
+		b.routerOpts = append(b.routerOpts, opts...)
 	}
 }
 
 // WithTracer enables distributed tracing. The tracer is forwarded to
 // router.WithTracer (the single HTTP request span owner) and stored on
-// Bootstrap.http.wrapperTracer so eventrouter.ContractTracingMiddleware can create
+// Bootstrap.wrapperTracer so eventrouter.ContractTracingMiddleware can create
 // consumer-side wrapper.WrapConsumer spans. Without this option, HTTP tracing
 // is disabled and WrapConsumer falls back to wrapper.NoopTracer{}; a slog.Warn
 // is emitted at bootstrap time so ops notice the silent degrade.
@@ -38,7 +39,7 @@ func WithRouterOptions(opts ...router.Option) Option {
 // ref: go-zero — observability configuration at app level
 func WithTracer(t tracing.Tracer) Option {
 	return func(b *Bootstrap) {
-		b.http.routerOpts = append(b.http.routerOpts,
+		b.routerOpts = append(b.routerOpts,
 			router.WithTracer(t),
 			// Skip span creation for canonical infra probe endpoints
 			// (/healthz, /readyz, /metrics) so high-rate liveness/readiness
@@ -49,13 +50,13 @@ func WithTracer(t tracing.Tracer) Option {
 			// install the filter explicitly here.
 			router.WithTracingOptions(middleware.WithProbeFilter(middleware.DefaultProbeFilter)),
 		)
-		b.http.wrapperTracer = t
+		b.wrapperTracer = t
 	}
 }
 
 // WithRateLimiter enables per-IP rate limiting for HTTP requests. The limiter
 // is forwarded to the router's middleware chain via router.WithRateLimiter.
-// Also registers the resource for LIFO teardown via b.lifecycle.closers.
+// Also registers the resource for LIFO teardown via b.closers.
 // If the limiter implements lifecycle.ContextCloser or io.Closer
 // (e.g. adapters/ratelimit.Limiter), Bootstrap registers it for teardown on
 // shutdown and startup rollback. ContextCloser is preferred so the shared
@@ -70,14 +71,14 @@ func WithTracer(t tracing.Tracer) Option {
 // ref: uber-go/fx lifecycle OnStop(ctx) — ContextCloser preferred over io.Closer
 func WithRateLimiter(rl middleware.RateLimiter) Option {
 	return func(b *Bootstrap) {
-		b.http.routerOpts = append(b.http.routerOpts, router.WithRateLimiter(rl))
-		b.lifecycle.closers = append(b.lifecycle.closers, rl)
+		b.routerOpts = append(b.routerOpts, router.WithRateLimiter(rl))
+		b.closers = append(b.closers, rl)
 	}
 }
 
 // WithCircuitBreaker enables circuit breaker protection for HTTP requests.
 // The breaker is forwarded to the router's middleware chain via
-// router.WithCircuitBreaker. Also registers the resource for LIFO teardown via b.lifecycle.closers.
+// router.WithCircuitBreaker. Also registers the resource for LIFO teardown via b.closers.
 // If the breaker implements lifecycle.ContextCloser
 // or io.Closer, Bootstrap registers it for teardown on shutdown and startup
 // rollback. ContextCloser is preferred so the shared shutCtx budget flows
@@ -92,11 +93,11 @@ func WithRateLimiter(rl middleware.RateLimiter) Option {
 func WithCircuitBreaker(cb middleware.Allower) Option {
 	return func(b *Bootstrap) {
 		if cb == nil || middleware.IsTypedNilAllower(cb) {
-			b.http.circuitBreakerNil = true
+			b.circuitBreakerNil = true
 			return
 		}
-		b.http.routerOpts = append(b.http.routerOpts, router.WithCircuitBreaker(cb))
-		b.lifecycle.closers = append(b.lifecycle.closers, cb)
+		b.routerOpts = append(b.routerOpts, router.WithCircuitBreaker(cb))
+		b.closers = append(b.closers, cb)
 	}
 }
 
@@ -107,7 +108,7 @@ func WithCircuitBreaker(cb middleware.Allower) Option {
 // ref: unrolled/secure — configurable HSTS directives via struct fields
 func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option {
 	return func(b *Bootstrap) {
-		b.http.routerOpts = append(b.http.routerOpts, router.WithSecurityHeadersOptions(opts...))
+		b.routerOpts = append(b.routerOpts, router.WithSecurityHeadersOptions(opts...))
 	}
 }
 
@@ -121,8 +122,8 @@ func WithSecurityHeadersOptions(opts ...middleware.SecurityHeadersOption) Option
 func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
 	return func(b *Bootstrap) {
 		if fn != nil {
-			b.http.errorRedactor = fn
-			b.http.routerOpts = append(b.http.routerOpts, router.WithTracingOptions(middleware.WithErrorRedactor(fn)))
+			b.errorRedactor = fn
+			b.routerOpts = append(b.routerOpts, router.WithTracingOptions(middleware.WithErrorRedactor(fn)))
 		}
 	}
 }
@@ -137,7 +138,7 @@ func WithErrorRedactor(fn wrapper.ErrorRedactor) Option {
 // at Step 0 before any component starts, returning an error directly.
 func WithHealthChecker(name string, fn func(context.Context) error) Option {
 	return func(b *Bootstrap) {
-		b.http.healthCheckers = append(b.http.healthCheckers, namedChecker{name: name, fn: fn})
+		b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
 	}
 }
 
@@ -150,7 +151,7 @@ func WithHealthChecker(name string, fn func(context.Context) error) Option {
 // independent of the kubelet HTTP connection deadline.
 func WithReadyzDeadline(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.http.readyzDeadline = d
+		b.readyzDeadline = d
 	}
 }
 
@@ -159,7 +160,7 @@ func WithReadyzDeadline(d time.Duration) Option {
 // are active without inspecting application logs.
 func WithAdapterInfo(info map[string]string) Option {
 	return func(b *Bootstrap) {
-		b.http.adapterInfo = info
+		b.adapterInfo = info
 	}
 }
 
@@ -182,6 +183,6 @@ func WithAdapterInfo(info map[string]string) Option {
 // downgrade to plain 200.
 func WithHealthRoutes(opts ...HealthRouteGroupOption) Option {
 	return func(b *Bootstrap) {
-		b.http.healthRouteGroupOpts = append(b.http.healthRouteGroupOpts, opts...)
+		b.healthRouteGroupOpts = append(b.healthRouteGroupOpts, opts...)
 	}
 }

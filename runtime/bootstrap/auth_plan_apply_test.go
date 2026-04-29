@@ -59,9 +59,7 @@ func (a *applyStubAssemblyRef) CellIDs() []string { return a.cellIDs }
 // newMinimalBootstrap creates a Bootstrap with no assembly for use in apply tests.
 func newMinimalBootstrap() *Bootstrap {
 	return &Bootstrap{
-		http: bootstrapHTTP{
-			listenerConfigs: make(map[cell.ListenerRef]listenerConfig),
-		},
+		listenerConfigs: make(map[cell.ListenerRef]listenerConfig),
 	}
 }
 
@@ -264,7 +262,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		t.Parallel()
 		asm := &fakeAssemblyWithCells{id: "no-providers", cells: map[string]cell.Cell{}}
 		b := newMinimalBootstrap()
-		b.http.listenerConfigs[cell.PrimaryListener] = listenerConfig{
+		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
 			authChain: []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
@@ -282,7 +280,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 			},
 		}
 		b := newMinimalBootstrap()
-		b.http.listenerConfigs[cell.PrimaryListener] = listenerConfig{
+		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
 			authChain: []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
@@ -299,7 +297,7 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 			},
 		}
 		b := newMinimalBootstrap()
-		b.http.listenerConfigs[cell.PrimaryListener] = listenerConfig{
+		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
 			authChain: []cell.ListenerAuth{cell.MustNewAuthJWTFromAssembly(asm)},
 		}
 		err := b.runAuthPlanValidateHooks()
@@ -317,13 +315,13 @@ func TestRunAuthPlanValidateHooks_DiscoverScenarios(t *testing.T) {
 		}
 		plan := cell.MustNewAuthJWTFromAssembly(asm)
 		b := newMinimalBootstrap()
-		b.http.listenerConfigs[cell.PrimaryListener] = listenerConfig{
+		b.listenerConfigs[cell.PrimaryListener] = listenerConfig{
 			authChain: []cell.ListenerAuth{plan},
 		}
 		err := b.runAuthPlanValidateHooks()
 		require.NoError(t, err)
 		// Retrieve the plan back from the config (p.SetResolved writes via atomic).
-		cfg := b.http.listenerConfigs[cell.PrimaryListener]
+		cfg := b.listenerConfigs[cell.PrimaryListener]
 		resolved, ok := cfg.authChain[0].(cell.AuthJWTFromAssembly)
 		require.True(t, ok)
 		assert.NotNil(t, resolved.ResolvedVerifier())

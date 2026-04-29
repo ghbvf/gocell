@@ -48,9 +48,15 @@ func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
 	httpErrCh := b.phase7ServeAll(servers)
 	s.httpErrCh = httpErrCh
 	shutTasks := boundServersToTasks(servers)
-	s.addTeardown(func(c context.Context) error {
+	// HTTP intake is NOT registered into the LIFO teardown chain. It runs as an
+	// explicit drain stage in phase10 BEFORE the LIFO loop so that in-flight
+	// requests can write through to still-healthy backends (workers / event
+	// router / assembly) before those backends shut down.
+	// ref: kube-apiserver genericapiserver.go RunWithContext shutdown signal graph
+	//      (NotAcceptingNewRequest → InFlightRequestsDrained → stopHttpServerCtx).
+	s.httpDrain = func(c context.Context) error {
 		return shutdownAllServers(c, shutTasks)
-	})
+	}
 	return nil
 }
 
@@ -64,15 +70,15 @@ func (b *Bootstrap) phase7StartHTTPServer(s *phaseState) error {
 // OPS-06: emit slog.Info after each successful bind (listener + addr + auth).
 // OPS-07: emit slog.Warn when a non-loopback listener binds with AuthNone or empty auth chain.
 func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
-	refs := make([]cell.ListenerRef, 0, len(b.http.listenerConfigs))
-	for ref := range b.http.listenerConfigs {
+	refs := make([]cell.ListenerRef, 0, len(b.listenerConfigs))
+	for ref := range b.listenerConfigs {
 		refs = append(refs, ref)
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].String() < refs[j].String() })
 
 	var servers []boundServer
 	for _, ref := range refs {
-		cfg := b.http.listenerConfigs[ref]
+		cfg := b.listenerConfigs[ref]
 		rtr, ok := s.routers[ref]
 		if !ok {
 			return nil, fmt.Errorf("bootstrap: no router for listener %q", ref.String())

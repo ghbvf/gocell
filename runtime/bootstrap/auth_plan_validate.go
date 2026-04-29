@@ -33,22 +33,22 @@ import (
 //
 // Replaces: validateListenerPolicyAssemblyMatch (bootstrap_phases.go).
 func (b *Bootstrap) validateAuthPlanAssemblyMatch() error {
-	if b.assembly.core == nil {
+	if b.assemblyCore == nil {
 		return nil
 	}
-	for ref, cfg := range b.http.listenerConfigs {
+	for ref, cfg := range b.listenerConfigs {
 		for _, plan := range cfg.authChain {
 			p, ok := plan.(cell.AuthJWTFromAssembly)
 			if !ok {
 				continue
 			}
 			// Identity check: same pointer, not just same ID.
-			if p.Assembly != b.assembly.core {
+			if p.Assembly != b.assemblyCore {
 				return errcode.New(errcode.ErrCellInvalidConfig,
 					fmt.Sprintf(
 						"bootstrap: listener %q AuthJWTFromAssembly carries assembly %q but WithAssembly registered %q; "+
 							"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
-						ref.String(), p.Assembly.ID(), b.assembly.core.ID()))
+						ref.String(), p.Assembly.ID(), b.assemblyCore.ID()))
 			}
 		}
 	}
@@ -64,7 +64,7 @@ func (b *Bootstrap) validateAuthPlanAssemblyMatch() error {
 // PR269 round-3: RouteGroup-level Auth no longer exists; mTLS bindings are
 // validated only at listener scope.
 func (b *Bootstrap) validateAuthPlanMTLSBindings() error {
-	for ref, cfg := range b.http.listenerConfigs {
+	for ref, cfg := range b.listenerConfigs {
 		if !chainContainsAuthMTLS(cfg.authChain) {
 			continue
 		}
@@ -111,7 +111,7 @@ func validateMTLSTLSConfig(source string, tlsCfg *tls.Config) error {
 // as a stacked middleware. Having multiple JWTs or a non-first JWT would cause
 // silent drops.
 func (b *Bootstrap) validateAuthChainJWTSingleton() error {
-	for ref, cfg := range b.http.listenerConfigs {
+	for ref, cfg := range b.listenerConfigs {
 		if err := checkJWTSingleton(ref.String(), cfg.authChain); err != nil {
 			return err
 		}
@@ -123,7 +123,7 @@ func (b *Bootstrap) validateAuthChainJWTSingleton() error {
 // plans. AuthNone is an explicit no-auth declaration, not a decoration; mixing
 // it with guards makes startup logs and reviews ambiguous.
 func (b *Bootstrap) validateAuthNoneExclusive() error {
-	for ref, cfg := range b.http.listenerConfigs {
+	for ref, cfg := range b.listenerConfigs {
 		hasNone := false
 		hasGuard := false
 		for _, plan := range cfg.authChain {
@@ -148,7 +148,7 @@ func (b *Bootstrap) validateAuthNoneExclusive() error {
 // struct literals can otherwise reach phase5 and fail inside HTTP middleware
 // assembly rather than at the option boundary.
 func (b *Bootstrap) validateAuthServiceTokenPlans() error {
-	for ref, cfg := range b.http.listenerConfigs {
+	for ref, cfg := range b.listenerConfigs {
 		seen := 0
 		for i, plan := range cfg.authChain {
 			p, ok := plan.(cell.AuthServiceToken)

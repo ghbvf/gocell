@@ -39,13 +39,13 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 	// middleware here. ContractTracingMiddleware therefore observes a
 	// ctx already populated with entry.Observability fields.
 	mws := []outbox.SubscriptionMiddleware{
-		eventrouter.ContractTracingMiddleware(b.http.wrapperTracer, b.http.errorRedactor),
+		eventrouter.ContractTracingMiddleware(b.wrapperTracer, b.errorRedactor),
 	}
-	mws = append(mws, b.events.consumerMiddleware...)
+	mws = append(mws, b.consumerMiddleware...)
 
 	var evtRouterOpts []eventrouter.Option
-	if b.events.routerReadyTimeoutSet {
-		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.events.routerReadyTimeout))
+	if b.routerReadyTimeoutSet {
+		evtRouterOpts = append(evtRouterOpts, eventrouter.WithReadyTimeout(b.routerReadyTimeout))
 	}
 	evtRouter := eventrouter.New(&outbox.SubscriberWithMiddleware{
 		Inner:      sub,

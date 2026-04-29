@@ -68,8 +68,8 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 	cfg := b.resolveHealthRouteGroupCfg()
 
 	var hhOpts []health.Option
-	if b.http.readyzDeadline > 0 {
-		hhOpts = append(hhOpts, health.WithDeadline(b.http.readyzDeadline))
+	if b.readyzDeadline > 0 {
+		hhOpts = append(hhOpts, health.WithDeadline(b.readyzDeadline))
 	}
 	// PR-A35 + PR-A14b round-3: WithReadyzVerboseDisabled is a
 	// HealthRouteGroupOption (no longer a bootstrap-level Option) — peek
@@ -78,8 +78,8 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 		hhOpts = append(hhOpts, health.WithVerboseDisabled())
 	}
 	hh := health.New(s.asm, hhOpts...)
-	if b.http.adapterInfo != nil {
-		hh.SetAdapterInfo(b.http.adapterInfo)
+	if b.adapterInfo != nil {
+		hh.SetAdapterInfo(b.adapterInfo)
 	}
 	// PR-A35 defense-in-depth: when WithReadyzVerboseToken is supplied,
 	// configure the handler's strict X-Readyz-Token gate too. The
@@ -90,14 +90,14 @@ func (b *Bootstrap) phase5InitHealthHandler(s *phaseState) error {
 		hh.SetVerboseToken(cfg.verboseToken)
 	}
 	s.hh = hh
-	s.healthRouteGroupOpts = b.http.healthRouteGroupOpts
+	s.healthRouteGroupOpts = b.healthRouteGroupOpts
 	return b.registerAllHealthCheckers(s)
 }
 
 // phase5BuildPerListenerRouters creates one Router per declared listener config.
 func (b *Bootstrap) phase5BuildPerListenerRouters(s *phaseState) (map[cell.ListenerRef]*router.Router, error) {
-	routers := make(map[cell.ListenerRef]*router.Router, len(b.http.listenerConfigs))
-	for ref, cfg := range b.http.listenerConfigs {
+	routers := make(map[cell.ListenerRef]*router.Router, len(b.listenerConfigs))
+	for ref, cfg := range b.listenerConfigs {
 		rtrOpts, err := b.buildListenerRouterOpts(s, ref, cfg)
 		if err != nil {
 			return nil, err
@@ -253,7 +253,7 @@ func (b *Bootstrap) validateInternalGuardForDeclaredRoutes(ref cell.ListenerRef,
 	if ref != cell.InternalListener {
 		return nil
 	}
-	cfg, ok := b.http.listenerConfigs[ref]
+	cfg, ok := b.listenerConfigs[ref]
 	if !ok || chainContainsInternalGuard(cfg.authChain) {
 		return nil
 	}
@@ -288,7 +288,7 @@ func declaredInternalRoutes(rtr *router.Router) []string {
 // Uses chainProtectsRoutes (from auth_plan_describe.go) for the typed check,
 // replacing the old string-based isAuthFlavoredPolicy check.
 func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, rtr *router.Router) error {
-	cfg := b.http.listenerConfigs[ref]
+	cfg := b.listenerConfigs[ref]
 	if chainProtectsRoutes(cfg.authChain) {
 		return nil
 	}
@@ -317,8 +317,8 @@ func (b *Bootstrap) validateAuthVerifierForDeclaredRoutes(ref cell.ListenerRef, 
 // the JWT verifier is installed via router.WithAuthMiddleware so the router
 // can build matcher-aware AuthMiddleware after FinalizeAuth.
 func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef, cfg listenerConfig) ([]router.Option, error) {
-	opts := make([]router.Option, 0, len(b.http.routerOpts)+6)
-	opts = append(opts, b.http.routerOpts...)
+	opts := make([]router.Option, 0, len(b.routerOpts)+6)
+	opts = append(opts, b.routerOpts...)
 
 	// R2: auto-wire HTTP metrics collector when a Provider is configured.
 	var err error
@@ -375,32 +375,32 @@ func (b *Bootstrap) buildListenerRouterOpts(s *phaseState, ref cell.ListenerRef,
 // ref: runtime/observability/metrics.NewProviderCollector — provider-neutral
 // HTTP collector that records http_requests_total + http_request_duration_seconds.
 func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router.Option, error) {
-	if b.metrics.provider == nil {
+	if b.metricsProvider == nil {
 		return opts, nil
 	}
 	// NopProvider is the default when no provider is injected; skip auto-wire
 	// to avoid allocating a no-op collector on every bootstrap startup.
-	if _, isNop := b.metrics.provider.(kernelmetrics.NopProvider); isNop {
+	if _, isNop := b.metricsProvider.(kernelmetrics.NopProvider); isNop {
 		return opts, nil
 	}
-	// Create the collector only once (cached in b.metrics.httpCollector) so that
+	// Create the collector only once (cached in b.httpCollector) so that
 	// multiple calls to buildListenerRouterOpts (one per declared listener)
 	// share the same collector and do not attempt to re-register Prometheus
 	// counters/histograms with the same names.
-	if b.metrics.httpCollector == nil {
+	if b.httpCollector == nil {
 		// Derive cell ID from the most specific source available:
 		//  1. Explicit WithAssemblyID — caller's intent takes precedence.
-		//  2. Pre-built assembly's ID (b.assembly.core.ID()) — avoids requiring callers
+		//  2. Pre-built assembly's ID (b.assemblyCore.ID()) — avoids requiring callers
 		//     to repeat the assembly ID when using WithAssembly(asm).
 		//  3. Fallback "default" — matches the ID used by the auto-built assembly.
-		cellID := b.assembly.assemblyID
-		if cellID == "" && b.assembly.core != nil {
-			cellID = b.assembly.core.ID()
+		cellID := b.assemblyID
+		if cellID == "" && b.assemblyCore != nil {
+			cellID = b.assemblyCore.ID()
 		}
 		if cellID == "" {
 			cellID = "default"
 		}
-		collector, err := metricsmiddleware.NewProviderCollector(b.metrics.provider, metricsmiddleware.ProviderCollectorConfig{
+		collector, err := metricsmiddleware.NewProviderCollector(b.metricsProvider, metricsmiddleware.ProviderCollectorConfig{
 			CellID: cellID,
 		})
 		if err != nil {
@@ -409,19 +409,19 @@ func (b *Bootstrap) autoWireHTTPMetricsCollector(opts []router.Option) ([]router
 					"do not also pass router.WithMetricsCollector via WithRouterOptions. "+
 					"Remove one side: %w", err)
 		}
-		b.metrics.httpCollector = collector
+		b.httpCollector = collector
 	}
-	return append(opts, router.WithMetricsCollector(b.metrics.httpCollector)), nil
+	return append(opts, router.WithMetricsCollector(b.httpCollector)), nil
 }
 
 // buildAuthRouterOptions assembles the auth-middleware and optional metrics
 // options for the given verifier.
 func (b *Bootstrap) buildAuthRouterOptions(v auth.IntentTokenVerifier) ([]router.Option, error) {
 	opts := []router.Option{router.WithAuthMiddleware(v)}
-	if b.metrics.provider == nil {
+	if b.metricsProvider == nil {
 		return opts, nil
 	}
-	am, err := auth.NewAuthMetrics(b.metrics.provider)
+	am, err := auth.NewAuthMetrics(b.metricsProvider)
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: register auth metrics: %w", err)
 	}

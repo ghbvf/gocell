@@ -23,16 +23,16 @@ import (
 // Returns immediately on the first violation so the error message is unambiguous.
 func (b *Bootstrap) phase0ValidateOptions() error {
 	// Surface shutdown metrics registration errors before any component starts.
-	if b.metrics.shutdownMetricsErr != nil {
-		return fmt.Errorf("bootstrap: shutdown metrics registration failed: %w", b.metrics.shutdownMetricsErr)
+	if b.shutdownMetricsErr != nil {
+		return fmt.Errorf("bootstrap: shutdown metrics registration failed: %w", b.shutdownMetricsErr)
 	}
 	if err := b.validateHealthCheckers(); err != nil {
 		return err
 	}
-	if b.http.circuitBreakerNil {
+	if b.circuitBreakerNil {
 		return fmt.Errorf("bootstrap: circuit breaker must not be nil")
 	}
-	if b.lifecycle.managedResourceNil {
+	if b.managedResourceNil {
 		return fmt.Errorf("bootstrap: managed resource must not be nil in WithManagedResource")
 	}
 	if err := b.validateAuthPlanAssemblyMatch(); err != nil {
@@ -64,8 +64,8 @@ func (b *Bootstrap) phase0ValidateOptions() error {
 // other in the health handler, making one probe invisible — surface the
 // error at phase 0 before any side effects.
 func (b *Bootstrap) validateHealthCheckers() error {
-	seen := make(map[string]struct{}, len(b.http.healthCheckers))
-	for _, hc := range b.http.healthCheckers {
+	seen := make(map[string]struct{}, len(b.healthCheckers))
+	for _, hc := range b.healthCheckers {
 		if hc.name == "" {
 			return fmt.Errorf("bootstrap: health checker name must not be empty")
 		}
@@ -84,8 +84,8 @@ func (b *Bootstrap) validateHealthCheckers() error {
 // was provided), and registers closable middleware teardowns.
 // On success, s.cfg and s.cfgWatcher are populated.
 func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
-	if b.assembly.configPath != "" {
-		cfg, err := config.Load(b.assembly.configPath, b.assembly.envPrefix)
+	if b.configPath != "" {
+		cfg, err := config.Load(b.configPath, b.envPrefix)
 		if err != nil {
 			return fmt.Errorf("bootstrap: load config: %w", err)
 		}
@@ -96,8 +96,8 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 
 	// Create the watcher but do NOT start it yet — OnChange must be bound first
 	// (phase4) to prevent a window where file events are lost.
-	if b.assembly.configPath != "" {
-		w, err := b.assembly.configWatcherFactory(b.assembly.configPath)
+	if b.configPath != "" {
+		w, err := b.configWatcherFactory(b.configPath)
 		if err != nil {
 			return fmt.Errorf("bootstrap: config watcher: %w", err)
 		}
@@ -110,16 +110,16 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 	// Register closable middleware dependencies (e.g. rate limiter background
 	// goroutines). addCloser prefers ContextCloser over io.Closer so that
 	// resources upgraded to CloseCtx automatically receive the shut budget.
-	for _, cl := range b.lifecycle.closers {
+	for _, cl := range b.closers {
 		s.addCloser(cl)
 	}
 
-	// Tracer wiring: b.http.wrapperTracer is threaded into router.WithTracer
+	// Tracer wiring: b.wrapperTracer is threaded into router.WithTracer
 	// (phase7, HTTP side) and ContractTracingMiddleware (phase6, consumer side)
 	// at the construction call sites. When WithTracer was not supplied,
 	// HTTP tracing is disabled and wrapper.WrapConsumer falls back to
 	// NoopTracer so spans degrade silently — no package-level setup needed.
-	if b.http.wrapperTracer == nil {
+	if b.wrapperTracer == nil {
 		slog.Warn("bootstrap: no tracer provided, HTTP tracing is disabled and consumer spans will be no-op",
 			slog.String("hint", "use bootstrap.WithTracer(...) in composition root"))
 	}
@@ -129,8 +129,8 @@ func (b *Bootstrap) phase1LoadConfig(s *phaseState) error {
 // phase2InitPubSub initialises the publisher and subscriber.
 // When neither is provided a default InMemoryEventBus serves both roles.
 func (b *Bootstrap) phase2InitPubSub(s *phaseState) {
-	pub := b.events.publisher
-	sub := b.events.subscriber
+	pub := b.publisher
+	sub := b.subscriber
 	if pub == nil && sub == nil {
 		eb := eventbus.New()
 		pub = eb
@@ -165,20 +165,20 @@ func samePubSubIdentity(pub outbox.Publisher, sub outbox.Subscriber) bool {
 // teardown, then calls StartWithConfig.
 // On success, s.asm and s.reloads are populated.
 func (b *Bootstrap) phase3InitAssembly(ctx context.Context, s *phaseState) error {
-	asm := b.assembly.core
+	asm := b.assemblyCore
 	if asm == nil {
 		cfg := assembly.Config{ID: "default", DurabilityMode: cell.DurabilityDemo}
-		if b.assembly.hookTimeoutSet {
-			cfg.HookTimeout = b.assembly.hookTimeout
+		if b.hookTimeoutSet {
+			cfg.HookTimeout = b.hookTimeout
 		}
-		if b.assembly.hookObserver != nil {
-			cfg.HookObserver = b.assembly.hookObserver
+		if b.hookObserver != nil {
+			cfg.HookObserver = b.hookObserver
 		}
-		if b.metrics.provider != nil {
-			cfg.MetricsProvider = b.metrics.provider
+		if b.metricsProvider != nil {
+			cfg.MetricsProvider = b.metricsProvider
 		}
 		asm = assembly.New(cfg)
-	} else if b.assembly.hookTimeoutSet || b.assembly.hookObserver != nil {
+	} else if b.hookTimeoutSet || b.hookObserver != nil {
 		slog.Warn("bootstrap: WithHookTimeout/WithHookObserver ignored because WithAssembly was used; configure via assembly.Config")
 	}
 
@@ -232,7 +232,7 @@ func (b *Bootstrap) bindConfigWatcher(s *phaseState) {
 	if s.cfgWatcher == nil {
 		return
 	}
-	yamlPath, envPrefix := b.assembly.configPath, b.assembly.envPrefix
+	yamlPath, envPrefix := b.configPath, b.envPrefix
 	s.cfgWatcher.OnChange(b.buildOnChangeCallback(s, yamlPath, envPrefix))
 	// Start after OnChange is bound so no events are consumed without a handler.
 	s.cfgWatcher.Start()

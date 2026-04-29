@@ -27,10 +27,10 @@ func TestWithListener_AppendsToListenerConfigs(t *testing.T) {
 	// We do not merely check b != nil — we verify functional correctness:
 	// (a) listenerConfigs has exactly one entry keyed by PrimaryListener, and
 	// (b) phase0ValidateOptions returns no error for this valid configuration.
-	if len(b.http.listenerConfigs) != 1 {
-		t.Fatalf("expected 1 listenerConfig entry, got %d", len(b.http.listenerConfigs))
+	if len(b.listenerConfigs) != 1 {
+		t.Fatalf("expected 1 listenerConfig entry, got %d", len(b.listenerConfigs))
 	}
-	if _, ok := b.http.listenerConfigs[cell.PrimaryListener]; !ok {
+	if _, ok := b.listenerConfigs[cell.PrimaryListener]; !ok {
 		t.Fatal("listenerConfigs must contain an entry for cell.PrimaryListener")
 	}
 	if err := b.phase0ValidateOptions(); err != nil {

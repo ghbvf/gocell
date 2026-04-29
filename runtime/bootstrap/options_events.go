@@ -1,6 +1,7 @@
 package bootstrap
 
-// options_events.go — With* option functions for the bootstrapEvents group.
+// options_events.go — With* option functions covering outbox pubsub, event
+// router, and worker registration.
 //
 // Covers: WithWorkers, WithPublisher, WithSubscriber, WithConsumerMiddleware,
 // WithEventRouterReadyTimeout.
@@ -19,7 +20,7 @@ import (
 // WithWorkers adds background workers.
 func WithWorkers(ws ...worker.Worker) Option {
 	return func(b *Bootstrap) {
-		b.events.workers = append(b.events.workers, ws...)
+		b.workers = append(b.workers, ws...)
 	}
 }
 
@@ -28,7 +29,7 @@ func WithWorkers(ws ...worker.Worker) Option {
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 func WithPublisher(p outbox.Publisher) Option {
 	return func(b *Bootstrap) {
-		b.events.publisher = p
+		b.publisher = p
 	}
 }
 
@@ -37,7 +38,7 @@ func WithPublisher(p outbox.Publisher) Option {
 // ref: uber-go/fx app.go — Option pattern; each Option targets a single concern.
 func WithSubscriber(s outbox.Subscriber) Option {
 	return func(b *Bootstrap) {
-		b.events.subscriber = s
+		b.subscriber = s
 	}
 }
 
@@ -58,7 +59,7 @@ func WithSubscriber(s outbox.Subscriber) Option {
 // receive-endpoint configuration.
 func WithConsumerMiddleware(mw ...outbox.SubscriptionMiddleware) Option {
 	return func(b *Bootstrap) {
-		b.events.consumerMiddleware = append(b.events.consumerMiddleware, mw...)
+		b.consumerMiddleware = append(b.consumerMiddleware, mw...)
 	}
 }
 
@@ -70,7 +71,7 @@ func WithConsumerMiddleware(mw ...outbox.SubscriptionMiddleware) Option {
 // "consumerGroup/topic" pairs so operators can pinpoint the stuck subscription.
 func WithEventRouterReadyTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.events.routerReadyTimeoutSet = true
-		b.events.routerReadyTimeout = d
+		b.routerReadyTimeoutSet = true
+		b.routerReadyTimeout = d
 	}
 }

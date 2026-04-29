@@ -30,10 +30,10 @@ import (
 func WithManagedResource(r kernellifecycle.ManagedResource) Option {
 	return func(b *Bootstrap) {
 		if isNilManagedResource(r) {
-			b.lifecycle.managedResourceNil = true
+			b.managedResourceNil = true
 			return
 		}
-		b.lifecycle.managedResources = append(b.lifecycle.managedResources, r)
+		b.managedResources = append(b.managedResources, r)
 	}
 }
 
@@ -66,7 +66,7 @@ func isNilManagedResource(r kernellifecycle.ManagedResource) bool {
 // registration order; Run() iterates teardowns in reverse to achieve LIFO.
 func (b *Bootstrap) expandManagedResources() error {
 	seen := make(map[string]struct{})
-	for _, r := range b.lifecycle.managedResources {
+	for _, r := range b.managedResources {
 		// Expand health checkers: r.Checkers() now returns
 		// map[string]func(context.Context) error matching namedChecker.fn type.
 		for name, fn := range r.Checkers() {
@@ -76,17 +76,17 @@ func (b *Bootstrap) expandManagedResources() error {
 			}
 			seen[name] = struct{}{}
 			fn := fn // capture
-			b.http.healthCheckers = append(b.http.healthCheckers, namedChecker{name: name, fn: fn})
+			b.healthCheckers = append(b.healthCheckers, namedChecker{name: name, fn: fn})
 		}
 		// Expand worker (skip nil).
 		if w := r.Worker(); w != nil {
-			b.events.workers = append(b.events.workers, w)
+			b.workers = append(b.workers, w)
 		}
 		// Register LIFO teardown. Capture r in a local so the closure is
 		// bound to this iteration's resource, not the loop variable.
 		res := r
 		resourceType := fmt.Sprintf("%T", res)
-		b.lifecycle.managedResourceTeardowns = append(b.lifecycle.managedResourceTeardowns, namedTeardown{
+		b.managedResourceTeardowns = append(b.managedResourceTeardowns, namedTeardown{
 			name: resourceType,
 			fn: func(ctx context.Context) error {
 				err := res.Close(ctx)

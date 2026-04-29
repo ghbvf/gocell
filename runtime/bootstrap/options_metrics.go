@@ -1,6 +1,7 @@
 package bootstrap
 
-// options_metrics.go — With* option functions for the bootstrapMetrics group.
+// options_metrics.go — With* option functions covering the metrics provider
+// and HTTP collector wiring.
 //
 // Covers: WithMetricsProvider.
 //
@@ -28,7 +29,7 @@ import (
 func WithMetricsProvider(p kernelmetrics.Provider) Option {
 	return func(b *Bootstrap) {
 		if p != nil {
-			b.metrics.provider = p
+			b.metricsProvider = p
 		}
 	}
 }

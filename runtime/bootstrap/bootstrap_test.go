@@ -172,14 +172,17 @@ func newTestCell(id string) *testCell {
 func TestNew_Defaults(t *testing.T) {
 	b := New()
 	// PR-A14b: no default listeners; callers must declare via WithListener.
-	assert.Nil(t, b.http.listenerConfigs)
-	assert.Nil(t, b.assembly.core)
-	assert.Nil(t, b.events.publisher)
-	assert.Nil(t, b.events.subscriber)
-	// Te-1: sub-struct key fields have expected zero/non-zero defaults.
-	assert.NotNil(t, b.metrics.provider, "metrics.provider must be non-nil (NopProvider default)")
-	assert.True(t, b.lifecycle.shutdownTimeout > 0, "lc.shutdownTimeout must be positive (DefaultTimeout)")
-	assert.NotNil(t, b.assembly.configWatcherFactory, "assembly.configWatcherFactory must be non-nil")
+	assert.Nil(t, b.listenerConfigs)
+	assert.Nil(t, b.assemblyCore)
+	assert.Nil(t, b.publisher)
+	assert.Nil(t, b.subscriber)
+	// Constructor invariants the rest of Run() relies on: never-nil provider
+	// (so MetricsProvider() can omit nil checks), positive default shutdown
+	// budget, and a watcher factory that phase1LoadConfig can call without
+	// recovering from a nil deref.
+	assert.NotNil(t, b.metricsProvider, "metricsProvider must be non-nil (NopProvider default)")
+	assert.True(t, b.shutdownTimeout > 0, "shutdownTimeout must be positive (DefaultTimeout)")
+	assert.NotNil(t, b.configWatcherFactory, "configWatcherFactory must be non-nil")
 }
 
 func TestNew_WithOptions(t *testing.T) {
@@ -193,27 +196,28 @@ func TestNew_WithOptions(t *testing.T) {
 		WithShutdownTimeout(5*time.Second),
 	)
 
-	// PR-A14b: listener addr lives in http.listenerConfigs, not primaryAddr.
+	// PR-A14b: listener addr is recorded by WithListener into b.listenerConfigs.
 	// Use :7070 (not :9090) to avoid visual collision with the InternalListener
 	// default (127.0.0.1:9090) when scanning the assertion at a glance.
-	cfg, ok := b.http.listenerConfigs[cell.PrimaryListener]
+	cfg, ok := b.listenerConfigs[cell.PrimaryListener]
 	require.True(t, ok, "PrimaryListener config must be registered")
 	assert.Equal(t, ":7070", cfg.addr)
-	assert.Equal(t, asm, b.assembly.core)
-	assert.Equal(t, eb, b.events.publisher)
-	assert.Equal(t, eb, b.events.subscriber)
-	assert.Equal(t, 5*time.Second, b.lifecycle.shutdownTimeout)
+	assert.Equal(t, asm, b.assemblyCore)
+	assert.Equal(t, eb, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
+	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
 }
 
-// TestNew_WithMetricsProvider verifies that WithMetricsProvider writes into
-// b.metrics.provider. White-box assertion: metrics.provider is the field
-// directly read by MetricsProvider() and passed to newShutdownMetrics.
+// TestNew_WithMetricsProvider verifies that WithMetricsProvider is observable
+// through MetricsProvider() — the public accessor downstream code reads. The
+// behaviour-level coverage that the provider actually flows into hook
+// dispatcher / HTTP collector lives in TestBootstrap_DefaultAssembly_WiresMetricsProvider
+// and TestAutoWire_CellLabel_* (metrics_wiring_test.go).
 func TestNew_WithMetricsProvider(t *testing.T) {
-	// Use a custom NopProvider to distinguish from the default.
 	custom := struct{ kernelmetrics.NopProvider }{}
 	b := New(WithMetricsProvider(custom))
-	assert.Equal(t, custom, b.metrics.provider,
-		"WithMetricsProvider must write the provider into b.metrics.provider")
+	assert.Equal(t, custom, b.MetricsProvider(),
+		"MetricsProvider() must return the provider injected via WithMetricsProvider")
 }
 
 // Verbose-token gating is now a regular cell.Policy (PolicyVerboseToken)
@@ -243,11 +247,11 @@ func TestNew_WithTracer(t *testing.T) {
 	// itself) and router.WithTracingOptions(WithProbeFilter(DefaultProbeFilter))
 	// so /healthz, /readyz, /metrics skip span creation on the per-listener
 	// HealthListener router (the pre-PR-A14b outer-mux bypass is gone).
-	require.Len(t, b.http.routerOpts, 2,
+	require.Len(t, b.routerOpts, 2,
 		"WithTracer must forward two router options (WithTracer + WithTracingOptions)")
 
-	origins := make([]string, len(b.http.routerOpts))
-	for i, opt := range b.http.routerOpts {
+	origins := make([]string, len(b.routerOpts))
+	for i, opt := range b.routerOpts {
 		origins[i] = optionOriginName(opt)
 	}
 
@@ -298,10 +302,10 @@ func TestBootstrap_InvalidTrustedProxies_ReturnsError(t *testing.T) {
 
 func TestNew_WithConfig(t *testing.T) {
 	b := New(WithConfig("/nonexistent.yaml", "APP"))
-	assert.Equal(t, "/nonexistent.yaml", b.assembly.configPath)
-	assert.Equal(t, "APP", b.assembly.envPrefix)
+	assert.Equal(t, "/nonexistent.yaml", b.configPath)
+	assert.Equal(t, "APP", b.envPrefix)
 	// Te-8: configWatcherFactory must remain non-nil after WithConfig (New sets the default).
-	assert.NotNil(t, b.assembly.configWatcherFactory, "assembly.configWatcherFactory must be non-nil after WithConfig")
+	assert.NotNil(t, b.configWatcherFactory, "configWatcherFactory must be non-nil after WithConfig")
 }
 
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
@@ -360,8 +364,8 @@ func TestNew_WithPublisherAndSubscriber(t *testing.T) {
 		WithSubscriber(eb),
 	)
 
-	assert.Equal(t, eb, b.events.publisher)
-	assert.Equal(t, eb, b.events.subscriber)
+	assert.Equal(t, eb, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
 }
 
 func TestNew_WithPublisherOnly(t *testing.T) {
@@ -369,8 +373,8 @@ func TestNew_WithPublisherOnly(t *testing.T) {
 
 	b := New(WithPublisher(eb))
 
-	assert.Equal(t, eb, b.events.publisher)
-	assert.Nil(t, b.events.subscriber)
+	assert.Equal(t, eb, b.publisher)
+	assert.Nil(t, b.subscriber)
 }
 
 func TestNew_WithSubscriberOnly(t *testing.T) {
@@ -378,8 +382,8 @@ func TestNew_WithSubscriberOnly(t *testing.T) {
 
 	b := New(WithSubscriber(eb))
 
-	assert.Nil(t, b.events.publisher)
-	assert.Equal(t, eb, b.events.subscriber)
+	assert.Nil(t, b.publisher)
+	assert.Equal(t, eb, b.subscriber)
 }
 
 // eventCell implements cell.EventRegistrar with a configurable error.
@@ -1392,7 +1396,7 @@ func TestBootstrap_ConfigWatcherInitFailure_FailsFast(t *testing.T) {
 		WithShutdownTimeout(time.Second),
 	)
 	// Override instance-level factory to simulate init failure (safe for parallel tests).
-	b.assembly.configWatcherFactory = func(string, ...config.WatcherOption) (*config.Watcher, error) {
+	b.configWatcherFactory = func(string, ...config.WatcherOption) (*config.Watcher, error) {
 		return nil, errors.New("watcher init failed")
 	}
 

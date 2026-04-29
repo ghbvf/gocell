@@ -1,6 +1,7 @@
 package bootstrap
 
-// options_assembly.go — With* option functions for the bootstrapAssembly group.
+// options_assembly.go — With* option functions covering config loading and
+// CoreAssembly construction.
 //
 // Covers: WithConfig, WithAssembly, WithAssemblyID, WithHookTimeout,
 // WithHookObserver.
@@ -17,15 +18,15 @@ import (
 // WithConfig sets the YAML config path and environment prefix.
 func WithConfig(yamlPath, envPrefix string) Option {
 	return func(b *Bootstrap) {
-		b.assembly.configPath = yamlPath
-		b.assembly.envPrefix = envPrefix
+		b.configPath = yamlPath
+		b.envPrefix = envPrefix
 	}
 }
 
 // WithAssembly sets a pre-built CoreAssembly.
 func WithAssembly(asm *assembly.CoreAssembly) Option {
 	return func(b *Bootstrap) {
-		b.assembly.core = asm
+		b.assemblyCore = asm
 	}
 }
 
@@ -41,7 +42,7 @@ func WithAssembly(asm *assembly.CoreAssembly) Option {
 // to "default" (the ID of the auto-built assembly).
 func WithAssemblyID(id string) Option {
 	return func(b *Bootstrap) {
-		b.assembly.assemblyID = id
+		b.assemblyID = id
 	}
 }
 
@@ -55,8 +56,8 @@ func WithAssemblyID(id string) Option {
 // set the value directly on assembly.Config when constructing.
 func WithHookTimeout(d time.Duration) Option {
 	return func(b *Bootstrap) {
-		b.assembly.hookTimeout = d
-		b.assembly.hookTimeoutSet = true
+		b.hookTimeout = d
+		b.hookTimeoutSet = true
 	}
 }
 
@@ -74,6 +75,6 @@ func WithHookObserver(obs cell.LifecycleHookObserver) Option {
 		if cell.IsNilHookObserver(obs) {
 			return
 		}
-		b.assembly.hookObserver = obs
+		b.hookObserver = obs
 	}
 }

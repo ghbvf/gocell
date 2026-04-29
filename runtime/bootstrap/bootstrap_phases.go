@@ -64,6 +64,15 @@ type phaseState struct {
 	rtr                  *router.Router                      // primary listener's router (may be nil when no primary)
 	routers              map[cell.ListenerRef]*router.Router // all per-listener routers
 
+	// set by phase7; consumed by phase10 as an explicit drain stage BEFORE LIFO
+	// teardown so workers / event router / assembly stop only AFTER HTTP intake
+	// closes and in-flight requests have completed. Mirrors kube-apiserver's
+	// genericapiserver.go RunWithContext signal graph (NotAcceptingNewRequest →
+	// InFlightRequestsDrained → stopHttpServerCtx → listenerStoppedCh).
+	//
+	// nil when no listeners declared (phase7 noop) or in tests that skip phase7.
+	httpDrain func(context.Context) error
+
 	// registeredCheckers guards against duplicate health checker names across
 	// phases. Keyed by checker name; value is struct{}.
 	registeredCheckers map[string]struct{}

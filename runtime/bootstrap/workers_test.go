@@ -30,13 +30,13 @@ func (w *countWorker) Stop(_ context.Context) error { return nil }
 func TestWithWorkers(t *testing.T) {
 	w := &countWorker{}
 	b := New(WithWorkers(w))
-	assert.Len(t, b.events.workers, 1)
+	assert.Len(t, b.workers, 1)
 }
 
 func TestWithRouterOptions(t *testing.T) {
 	opt := router.WithBodyLimit(512)
 	b := New(WithRouterOptions(opt))
-	assert.Len(t, b.http.routerOpts, 1)
+	assert.Len(t, b.routerOpts, 1)
 }
 
 func TestRun_WithWorkers_Shutdown(t *testing.T) {

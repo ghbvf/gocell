@@ -110,7 +110,7 @@ func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
 	// WithHealthChecker rejects nil at option construction time, but we want
 	// to verify phase0 also rejects (defense-in-depth).
 	b := New()
-	b.http.healthCheckers = append(b.http.healthCheckers, namedChecker{name: "test", fn: nil})
+	b.healthCheckers = append(b.healthCheckers, namedChecker{name: "test", fn: nil})
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), `health checker "test" must not be nil`)
@@ -121,7 +121,7 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 	// WithCircuitBreaker rejects nil at option construction time, but we want
 	// to verify phase0 also rejects (defense-in-depth).
 	b := New()
-	b.http.circuitBreakerNil = true
+	b.circuitBreakerNil = true
 	err := b.phase0ValidateOptions()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "circuit breaker must not be nil")
@@ -134,7 +134,7 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 
 // Round-3 finding #10: AuthJWTFromAssembly must capture the same assembly
 // instance as WithAssembly. A mismatch would silently discover the verifier
-// in the plan's asm while the rest of Bootstrap runs against b.assembly.
+// in the plan's asm while the rest of Bootstrap runs against b.assemblyCore.
 func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: cell.DurabilityDemo})
 	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: cell.DurabilityDemo})
@@ -304,7 +304,7 @@ func TestPhase1_LoadConfig_NoPath_UsesEmptyConfig(t *testing.T) {
 func TestPhase1_LoadConfig_RegistersCloserTeardown(t *testing.T) {
 	closed := false
 	b := New()
-	b.lifecycle.closers = append(b.lifecycle.closers, closerFunc(func() error {
+	b.closers = append(b.closers, closerFunc(func() error {
 		closed = true
 		return nil
 	}))

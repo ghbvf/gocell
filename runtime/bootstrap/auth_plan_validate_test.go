@@ -20,14 +20,12 @@ import (
 // bootstrapWithListener creates a minimal Bootstrap with a single listener.
 func bootstrapWithListener(ref cell.ListenerRef, chain []cell.ListenerAuth, tlsCfg *tls.Config) *Bootstrap {
 	b := &Bootstrap{
-		http: bootstrapHTTP{
-			listenerConfigs: map[cell.ListenerRef]listenerConfig{
-				ref: {
-					ref:       ref,
-					addr:      "127.0.0.1:0",
-					authChain: chain,
-					tls:       tlsCfg,
-				},
+		listenerConfigs: map[cell.ListenerRef]listenerConfig{
+			ref: {
+				ref:       ref,
+				addr:      "127.0.0.1:0",
+				authChain: chain,
+				tls:       tlsCfg,
 			},
 		},
 	}
@@ -154,11 +152,9 @@ func TestValidateAuthPlanAssemblyMatch(t *testing.T) {
 		// No WithAssembly — b.assembly is nil; validateAuthPlanAssemblyMatch
 		// should return nil immediately.
 		b := &Bootstrap{
-			http: bootstrapHTTP{
-				listenerConfigs: map[cell.ListenerRef]listenerConfig{
-					cell.PrimaryListener: {
-						authChain: []cell.ListenerAuth{cell.AuthMTLS{}},
-					},
+			listenerConfigs: map[cell.ListenerRef]listenerConfig{
+				cell.PrimaryListener: {
+					authChain: []cell.ListenerAuth{cell.AuthMTLS{}},
 				},
 			},
 		}
