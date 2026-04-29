@@ -13,6 +13,20 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var errTypedNilRefreshReaderUsed = errors.New("typed nil refresh reader should have been defaulted")
+
+type typedNilRefreshClock struct{}
+
+func (*typedNilRefreshClock) Now() time.Time {
+	return time.Now()
+}
+
+type typedNilRefreshReader struct{}
+
+func (*typedNilRefreshReader) Read([]byte) (int, error) {
+	return 0, errTypedNilRefreshReaderUsed
+}
+
 // ---------------------------------------------------------------------------
 // NewRefreshStore constructor validation
 // ---------------------------------------------------------------------------
@@ -32,6 +46,12 @@ func TestNewRefreshStore_ReturnsErrorOnInvalidArgs(t *testing.T) {
 
 	t.Run("nil_clock", func(t *testing.T) {
 		_, err := NewRefreshStore(dummyPool, validPolicy, nil, nil)
+		assert.Error(t, err)
+	})
+
+	t.Run("typed_nil_clock", func(t *testing.T) {
+		var clock *typedNilRefreshClock
+		_, err := NewRefreshStore(dummyPool, validPolicy, clock, nil)
 		assert.Error(t, err)
 	})
 
@@ -71,6 +91,18 @@ func TestNewRefreshStore_NilRandReader_UsesDefault(t *testing.T) {
 	s, err := NewRefreshStore(dummyPool, validPolicy, validClock, nil)
 	require.NoError(t, err)
 	assert.NotNil(t, s.rand, "rand field must be non-nil after constructor")
+}
+
+func TestNewRefreshStore_TypedNilRandReader_UsesDefault(t *testing.T) {
+	dummyPool := new(pgxpool.Pool)
+	validClock := storetest.NewFakeClock(time.Now())
+	validPolicy := refresh.Policy{ReuseInterval: time.Second, MaxAge: time.Hour}
+	var reader *typedNilRefreshReader
+
+	s, err := NewRefreshStore(dummyPool, validPolicy, validClock, reader)
+	require.NoError(t, err)
+	_, _, err = s.generatePair()
+	require.NoError(t, err)
 }
 
 // ---------------------------------------------------------------------------

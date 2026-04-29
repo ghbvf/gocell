@@ -33,6 +33,20 @@ func newTestLocker(fc *locktest.FakeClock, fd *locktest.FakeDriver) distlock.Loc
 	return distlock.MustNew(fd, distlock.WithClock(fc))
 }
 
+type typedNilDriver struct{}
+
+func (*typedNilDriver) SetNX(context.Context, string, string, time.Duration) (bool, error) {
+	return false, nil
+}
+
+func (*typedNilDriver) Renew(context.Context, string, string, time.Duration) (bool, error) {
+	return false, nil
+}
+
+func (*typedNilDriver) Release(context.Context, string, string) error {
+	return nil
+}
+
 // waitForRenewL waits for Renew count using the locker's manager RenewNotify.
 func waitForRenewL(t *testing.T, l distlock.Locker, fd *locktest.FakeDriver, want int) {
 	t.Helper()
@@ -699,6 +713,17 @@ func TestLocker_New_PanicsOnNilDriver(t *testing.T) {
 		}
 	}()
 	_ = distlock.MustNew(nil)
+}
+
+func TestLocker_New_ReturnsErrorOnTypedNilDriver(t *testing.T) {
+	var driver *typedNilDriver
+	locker, err := distlock.New(driver)
+	if err == nil {
+		t.Fatal("New(typed nil driver) should return error")
+	}
+	if locker != nil {
+		t.Fatalf("New(typed nil driver) locker = %T, want nil", locker)
+	}
 }
 
 // TestLocker_New_PanicsOnInvalidRenewFraction verifies fail-fast validation in New().

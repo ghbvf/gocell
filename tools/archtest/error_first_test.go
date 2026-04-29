@@ -1,9 +1,14 @@
 package archtest
 
-// error_first_test.go enforces ERROR-FIRST-API-01: in the explicitly enrolled
-// files (PR-MODE-6 scope), exported and unexported function declarations whose
-// return signature does NOT include an error MUST NOT contain a `panic(...)`
-// call in the function body.
+// error_first_test.go enforces:
+//   - ERROR-FIRST-API-01: in the explicitly enrolled files (PR-MODE-6 scope),
+//     exported and unexported function declarations whose return signature
+//     does NOT include an error MUST NOT contain a `panic(...)` call in the
+//     function body.
+//   - ERROR-FIRST-TYPED-NIL-01: error-returning New* constructors in the same
+//     file scope must validate interface dependencies with
+//     validation.IsNilInterface so typed-nil implementations fail at construction
+//     time, or are normalized through the constructor's optional-default path.
 //
 // Auto-exemptions:
 //   - Function name starts with "Must" (Go community convention for the
@@ -47,12 +52,16 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
+	"github.com/ghbvf/gocell/tools/archtest/internal/typeseval"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"golang.org/x/tools/go/packages"
 )
 
 const ruleErrorFirstAPI01 = "ERROR-FIRST-API-01"
@@ -95,43 +104,6 @@ type errorFirstViolation struct {
 	Reason   string
 }
 
-type typedNilConstructorRule struct {
-	File       string
-	FuncName   string
-	ParamNames []string
-}
-
-var typedNilConstructorRules = []typedNilConstructorRule{
-	{
-		File:     "cells/accesscore/slices/sessionlogin/service.go",
-		FuncName: "NewService",
-		ParamNames: []string{
-			"userRepo",
-			"sessionRepo",
-			"roleRepo",
-			"refreshStore",
-		},
-	},
-	{
-		File:     "cells/accesscore/slices/sessionrefresh/service.go",
-		FuncName: "NewService",
-		ParamNames: []string{
-			"sessionRepo",
-			"roleRepo",
-			"userRepo",
-			"refreshStore",
-		},
-	},
-	{
-		File:     "cells/accesscore/slices/sessionlogout/service.go",
-		FuncName: "NewService",
-		ParamNames: []string{
-			"sessionRepo",
-			"refreshStore",
-		},
-	},
-}
-
 // TestErrorFirstAPI01 walks the enforced file list and reports panic() calls
 // inside error-less function declarations.
 func TestErrorFirstAPI01(t *testing.T) {
@@ -160,11 +132,7 @@ func TestErrorFirstAPI01(t *testing.T) {
 func TestErrorFirstTypedNil01(t *testing.T) {
 	root := findModuleRoot(t)
 
-	var violations []errorFirstViolation
-	for _, rule := range typedNilConstructorRules {
-		abs := filepath.Join(root, filepath.FromSlash(rule.File))
-		violations = append(violations, scanConstructorForTypedNilGuards(t, abs, rule)...)
-	}
+	violations := scanErrorFirstConstructorsForTypedNilGuards(t, root)
 
 	if len(violations) > 0 {
 		t.Logf("%s: %d violation(s):", ruleErrorFirstTypedNil01, len(violations))
@@ -176,6 +144,97 @@ func TestErrorFirstTypedNil01(t *testing.T) {
 		"%s: error-first constructors must validate interface dependencies with "+
 			"validation.IsNilInterface(param), so typed-nil implementations fail at construction time",
 		ruleErrorFirstTypedNil01)
+}
+
+func TestErrorFirstTypedNilScannerFixtures(t *testing.T) {
+	tests := []struct {
+		name      string
+		src       string
+		wantLines []int
+	}{
+		{
+			name: "constructor interface param without IsNilInterface fails",
+			src: `package p
+type Dep interface{ Do() }
+func New(dep Dep) (*Service, error) {
+	if dep == nil {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+			wantLines: []int{3},
+		},
+		{
+			name: "constructor interface param with IsNilInterface passes",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+type Dep interface{ Do() }
+func New(dep Dep) (*Service, error) {
+	if validation.IsNilInterface(dep) {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "optional interface param default with IsNilInterface passes",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+type Reader interface{ Read([]byte) (int, error) }
+type defaultReader struct{}
+func (defaultReader) Read([]byte) (int, error) { return 0, nil }
+func New(reader Reader) (*Service, error) {
+	if validation.IsNilInterface(reader) {
+		reader = defaultReader{}
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "non error returning constructor is outside error-first typed-nil rule",
+			src: `package p
+type Dep interface{ Do() }
+func New(dep Dep) *Service {
+	return &Service{}
+}
+type Service struct{}`,
+		},
+		{
+			name: "non constructor function is outside typed-nil rule",
+			src: `package p
+type Dep interface{ Do() }
+func Build(dep Dep) (*Service, error) {
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			fset := token.NewFileSet()
+			file, err := parser.ParseFile(fset, "p.go", tc.src, parser.SkipObjectResolution|parser.ParseComments)
+			require.NoError(t, err)
+			info := types.Info{
+				Types: map[ast.Expr]types.TypeAndValue{},
+				Defs:  map[*ast.Ident]types.Object{},
+				Uses:  map[*ast.Ident]types.Object{},
+			}
+			conf := types.Config{Importer: nil}
+			_, err = conf.Check("p", fset, []*ast.File{file}, &info)
+			require.NoError(t, err)
+
+			violations := scanTypedNilGuardsInFile(fset, &info, file, "p.go")
+			var gotLines []int
+			for _, v := range violations {
+				gotLines = append(gotLines, v.Line)
+			}
+			assert.Equal(t, tc.wantLines, gotLines)
+		})
+	}
 }
 
 // scanFileForErrorFirstViolations parses a single Go source file and returns
@@ -218,36 +277,110 @@ func scanFileForErrorFirstViolations(t *testing.T, abs, rel string) []errorFirst
 	return violations
 }
 
-func scanConstructorForTypedNilGuards(t *testing.T, abs string, rule typedNilConstructorRule) []errorFirstViolation {
+func scanErrorFirstConstructorsForTypedNilGuards(t *testing.T, root string) []errorFirstViolation {
 	t.Helper()
-	fset := token.NewFileSet()
-	file, err := parser.ParseFile(fset, abs, nil, parser.SkipObjectResolution|parser.ParseComments)
-	require.NoErrorf(t, err, "%s: parse failed", rule.File)
+	pkgs, errs, err := typeseval.LoadPackages(root, errorFirstPackagePatterns()...)
+	require.NoError(t, err, "packages.Load")
+	require.Empty(t, errs, "packages.Load type errors")
 
-	var target *ast.FuncDecl
-	for _, decl := range file.Decls {
-		fd, ok := decl.(*ast.FuncDecl)
-		if !ok || fd.Body == nil || fd.Name.Name != rule.FuncName {
-			continue
-		}
-		target = fd
-		break
-	}
-	require.NotNilf(t, target, "%s: expected function %s", rule.File, rule.FuncName)
-
+	enforced := errorFirstEnforcedFileMap(root)
 	var violations []errorFirstViolation
-	for _, paramName := range rule.ParamNames {
-		if hasValidationIsNilInterfaceGuard(target.Body, paramName) {
-			continue
-		}
-		violations = append(violations, errorFirstViolation{
-			File:     rule.File,
-			Line:     fset.Position(target.Pos()).Line,
-			FuncName: rule.FuncName,
-			Reason:   "interface dependency " + paramName + " is not validated with validation.IsNilInterface",
-		})
+	for _, pkg := range pkgs {
+		violations = append(violations, scanTypedNilGuardsInPackage(pkg, enforced)...)
 	}
 	return violations
+}
+
+func scanTypedNilGuardsInPackage(pkg *packages.Package, enforced map[string]string) []errorFirstViolation {
+	var violations []errorFirstViolation
+	for i, file := range pkg.Syntax {
+		if i >= len(pkg.CompiledGoFiles) {
+			continue
+		}
+		abs := filepath.Clean(pkg.CompiledGoFiles[i])
+		rel, ok := enforced[abs]
+		if !ok {
+			continue
+		}
+		violations = append(violations, scanTypedNilGuardsInFile(pkg.Fset, pkg.TypesInfo, file, rel)...)
+	}
+	return violations
+}
+
+func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.File, rel string) []errorFirstViolation {
+	var violations []errorFirstViolation
+	for _, decl := range file.Decls {
+		fd, ok := decl.(*ast.FuncDecl)
+		if !ok || fd.Body == nil || !isErrorFirstConstructor(fd) {
+			continue
+		}
+		for _, paramName := range interfaceParamNames(info, fd) {
+			if hasValidationIsNilInterfaceGuard(fd.Body, paramName) {
+				continue
+			}
+			violations = append(violations, errorFirstViolation{
+				File:     rel,
+				Line:     fset.Position(fd.Pos()).Line,
+				FuncName: fd.Name.Name,
+				Reason:   "interface dependency " + paramName + " is not validated with validation.IsNilInterface",
+			})
+		}
+	}
+	return violations
+}
+
+func errorFirstPackagePatterns() []string {
+	dirs := make(map[string]struct{})
+	for _, rel := range errorFirstEnforcedFiles {
+		dirs[filepath.Dir(filepath.FromSlash(rel))] = struct{}{}
+	}
+	patterns := make([]string, 0, len(dirs))
+	for dir := range dirs {
+		patterns = append(patterns, "./"+filepath.ToSlash(dir))
+	}
+	sort.Strings(patterns)
+	return patterns
+}
+
+func errorFirstEnforcedFileMap(root string) map[string]string {
+	out := make(map[string]string, len(errorFirstEnforcedFiles))
+	for _, rel := range errorFirstEnforcedFiles {
+		out[filepath.Clean(filepath.Join(root, filepath.FromSlash(rel)))] = rel
+	}
+	return out
+}
+
+func isErrorFirstConstructor(fd *ast.FuncDecl) bool {
+	return fd.Recv == nil &&
+		strings.HasPrefix(fd.Name.Name, "New") &&
+		signatureReturnsError(fd.Type.Results)
+}
+
+func interfaceParamNames(info *types.Info, fd *ast.FuncDecl) []string {
+	if info == nil || fd.Type.Params == nil {
+		return nil
+	}
+	var names []string
+	for _, field := range fd.Type.Params.List {
+		if !isInterfaceType(info.TypeOf(field.Type)) {
+			continue
+		}
+		for _, name := range field.Names {
+			if name.Name == "_" {
+				continue
+			}
+			names = append(names, name.Name)
+		}
+	}
+	return names
+}
+
+func isInterfaceType(typ types.Type) bool {
+	if typ == nil {
+		return false
+	}
+	_, ok := typ.Underlying().(*types.Interface)
+	return ok
 }
 
 func hasValidationIsNilInterfaceGuard(body *ast.BlockStmt, paramName string) bool {
