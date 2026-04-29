@@ -33,7 +33,7 @@ import (
 //
 // Replaces: validateListenerPolicyAssemblyMatch (bootstrap_phases.go).
 func (b *Bootstrap) validateAuthPlanAssemblyMatch() error {
-	if b.assembly == nil {
+	if b.assemblyCore == nil {
 		return nil
 	}
 	for ref, cfg := range b.listenerConfigs {
@@ -43,12 +43,12 @@ func (b *Bootstrap) validateAuthPlanAssemblyMatch() error {
 				continue
 			}
 			// Identity check: same pointer, not just same ID.
-			if p.Assembly != b.assembly {
+			if p.Assembly != b.assemblyCore {
 				return errcode.New(errcode.ErrCellInvalidConfig,
 					fmt.Sprintf(
 						"bootstrap: listener %q AuthJWTFromAssembly carries assembly %q but WithAssembly registered %q; "+
 							"the composition root must wire the same *assembly.CoreAssembly instance everywhere",
-						ref.String(), p.Assembly.ID(), b.assembly.ID()))
+						ref.String(), p.Assembly.ID(), b.assemblyCore.ID()))
 			}
 		}
 	}

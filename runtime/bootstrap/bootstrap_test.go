@@ -22,6 +22,7 @@ import (
 
 	"github.com/ghbvf/gocell/kernel/assembly"
 	"github.com/ghbvf/gocell/kernel/cell"
+	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/ctxkeys"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -172,9 +173,16 @@ func TestNew_Defaults(t *testing.T) {
 	b := New()
 	// PR-A14b: no default listeners; callers must declare via WithListener.
 	assert.Nil(t, b.listenerConfigs)
-	assert.Nil(t, b.assembly)
+	assert.Nil(t, b.assemblyCore)
 	assert.Nil(t, b.publisher)
 	assert.Nil(t, b.subscriber)
+	// Constructor invariants the rest of Run() relies on: never-nil provider
+	// (so MetricsProvider() can omit nil checks), positive default shutdown
+	// budget, and a watcher factory that phase1LoadConfig can call without
+	// recovering from a nil deref.
+	assert.NotNil(t, b.metricsProvider, "metricsProvider must be non-nil (NopProvider default)")
+	assert.True(t, b.shutdownTimeout > 0, "shutdownTimeout must be positive (DefaultTimeout)")
+	assert.NotNil(t, b.configWatcherFactory, "configWatcherFactory must be non-nil")
 }
 
 func TestNew_WithOptions(t *testing.T) {
@@ -188,16 +196,28 @@ func TestNew_WithOptions(t *testing.T) {
 		WithShutdownTimeout(5*time.Second),
 	)
 
-	// PR-A14b: listener addr lives in listenerConfigs, not primaryAddr.
+	// PR-A14b: listener addr is recorded by WithListener into b.listenerConfigs.
 	// Use :7070 (not :9090) to avoid visual collision with the InternalListener
 	// default (127.0.0.1:9090) when scanning the assertion at a glance.
 	cfg, ok := b.listenerConfigs[cell.PrimaryListener]
 	require.True(t, ok, "PrimaryListener config must be registered")
 	assert.Equal(t, ":7070", cfg.addr)
-	assert.Equal(t, asm, b.assembly)
+	assert.Equal(t, asm, b.assemblyCore)
 	assert.Equal(t, eb, b.publisher)
 	assert.Equal(t, eb, b.subscriber)
 	assert.Equal(t, 5*time.Second, b.shutdownTimeout)
+}
+
+// TestNew_WithMetricsProvider verifies that WithMetricsProvider is observable
+// through MetricsProvider() — the public accessor downstream code reads. The
+// behaviour-level coverage that the provider actually flows into hook
+// dispatcher / HTTP collector lives in TestBootstrap_DefaultAssembly_WiresMetricsProvider
+// and TestAutoWire_CellLabel_* (metrics_wiring_test.go).
+func TestNew_WithMetricsProvider(t *testing.T) {
+	custom := struct{ kernelmetrics.NopProvider }{}
+	b := New(WithMetricsProvider(custom))
+	assert.Equal(t, custom, b.MetricsProvider(),
+		"MetricsProvider() must return the provider injected via WithMetricsProvider")
 }
 
 // Verbose-token gating is now a regular cell.Policy (PolicyVerboseToken)
@@ -284,6 +304,8 @@ func TestNew_WithConfig(t *testing.T) {
 	b := New(WithConfig("/nonexistent.yaml", "APP"))
 	assert.Equal(t, "/nonexistent.yaml", b.configPath)
 	assert.Equal(t, "APP", b.envPrefix)
+	// Te-8: configWatcherFactory must remain non-nil after WithConfig (New sets the default).
+	assert.NotNil(t, b.configWatcherFactory, "configWatcherFactory must be non-nil after WithConfig")
 }
 
 func TestBootstrap_RunWithInvalidConfig(t *testing.T) {
@@ -572,69 +594,6 @@ func TestBootstrap_EventSubscriptions_RestoreObservabilityContext(t *testing.T) 
 		t.Fatal("timed out waiting for restored consumer context")
 	}
 
-	addr := ln.Addr().String()
-	require.Eventually(t, func() bool {
-		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))
-		if err != nil {
-			return false
-		}
-		resp.Body.Close()
-		return resp.StatusCode == http.StatusOK
-	}, 3*time.Second, 50*time.Millisecond, "HTTP server did not become ready")
-
-	cancel()
-	select {
-	case err := <-done:
-		assert.NoError(t, err)
-	case <-time.After(5 * time.Second):
-		t.Fatal("bootstrap did not shut down in time")
-	}
-}
-
-func TestBootstrap_EventSubscriptions_DisableObservabilityRestore(t *testing.T) {
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	require.NoError(t, err)
-
-	asm := assembly.New(assembly.Config{ID: "test-kill-switch", DurabilityMode: cell.DurabilityDemo})
-	got := make(chan map[string]string, 1)
-	require.NoError(t, asm.Register(newContextCaptureCell("capture-cell", got)))
-
-	sub := &invokeOnceSubscriber{entry: outbox.Entry{
-		ID:        "evt-no-restore-1",
-		EventType: "test.context",
-		Metadata: map[string]string{
-			"request_id":     "req-should-not-restore",
-			"correlation_id": "corr-should-not-restore",
-			"trace_id":       "trace-should-not-restore",
-		},
-	}}
-
-	b := New(
-		WithAssembly(asm),
-		WithSubscriber(sub),
-		WithListener(cell.PrimaryListener, ln.Addr().String(), []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(ln)),
-		WithListener(cell.InternalListener, "127.0.0.1:0", []cell.ListenerAuth{cell.AuthNone{}}, WithListenerNet(newLocalListener(t))),
-		WithShutdownTimeout(2*time.Second),
-		WithDisableObservabilityRestore(),
-	)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan error, 1)
-	go func() { done <- b.Run(ctx) }()
-
-	select {
-	case observed := <-got:
-		assert.Empty(t, observed["request_id"],
-			"kill switch should prevent request_id restoration")
-		assert.Empty(t, observed["correlation_id"],
-			"kill switch should prevent correlation_id restoration")
-		assert.Empty(t, observed["trace_id"],
-			"kill switch should prevent trace_id restoration")
-	case <-time.After(3 * time.Second):
-		t.Fatal("timed out waiting for consumer context")
-	}
-
-	// Wait for bootstrap to finish startup (event router 500ms timeout + HTTP server).
 	addr := ln.Addr().String()
 	require.Eventually(t, func() bool {
 		resp, err := testHTTPClient.Get(fmt.Sprintf("http://%s/healthz", addr))

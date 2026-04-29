@@ -10,18 +10,17 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 // TestLifecycle_EmptyStartStop_NoError — zero hooks, Start+Stop return nil.
 func TestLifecycle_EmptyStartStop_NoError(t *testing.T) {
 	lc := NewLifecycle(LifecycleConfig{})
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := lc.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx))
+	require.NoError(t, lc.Stop(ctx))
 }
 
 // TestLifecycle_SingleHook_StartThenStop_Order — single hook A, verifies
@@ -49,17 +48,11 @@ func TestLifecycle_SingleHook_StartThenStop_Order(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := lc.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx))
+	require.NoError(t, lc.Stop(ctx))
 
 	want := []string{"A.start", "A.stop"}
-	if !equalStrSlice(calls, want) {
-		t.Errorf("got %v, want %v", calls, want)
-	}
+	assert.Equal(t, want, calls)
 }
 
 // TestLifecycle_MultiHook_LIFOOrder — A/B/C hooks: start A→B→C, stop C→B→A.
@@ -89,17 +82,11 @@ func TestLifecycle_MultiHook_LIFOOrder(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := lc.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx))
+	require.NoError(t, lc.Stop(ctx))
 
 	want := []string{"A.start", "B.start", "C.start", "C.stop", "B.stop", "A.stop"}
-	if !equalStrSlice(calls, want) {
-		t.Errorf("got %v, want %v", calls, want)
-	}
+	assert.Equal(t, want, calls)
 }
 
 // TestLifecycle_StartFailureMidway_LIFORollback — A ok, B ok, C fails:
@@ -146,22 +133,14 @@ func TestLifecycle_StartFailureMidway_LIFORollback(t *testing.T) {
 
 	ctx := context.Background()
 	startErr := lc.Start(ctx)
-	if startErr == nil {
-		t.Fatal("Start should return error when C fails")
-	}
-	if !errors.Is(startErr, cStartErr) {
-		t.Errorf("Start error should wrap cStartErr, got: %v", startErr)
-	}
+	require.Error(t, startErr, "Start should return error when C fails")
+	require.ErrorIs(t, startErr, cStartErr)
 
 	// After partial start failure, Stop should LIFO-rollback already-started hooks.
-	if err := lc.Stop(ctx); err != nil {
-		t.Fatalf("Stop after partial start: %v", err)
-	}
+	require.NoError(t, lc.Stop(ctx), "Stop after partial start")
 
 	want := []string{"B.stop", "A.stop"}
-	if !equalStrSlice(stopCalls, want) {
-		t.Errorf("rollback stop order: got %v, want %v", stopCalls, want)
-	}
+	assert.Equal(t, want, stopCalls, "rollback stop order")
 }
 
 // TestLifecycle_StopBestEffort_ErrorsCollected — middle OnStop returns error;
@@ -203,22 +182,14 @@ func TestLifecycle_StopBestEffort_ErrorsCollected(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx))
 	stopErr := lc.Stop(ctx)
-	if stopErr == nil {
-		t.Fatal("Stop should return error when middle OnStop fails")
-	}
-	if !errors.Is(stopErr, middleErr) {
-		t.Errorf("Stop error should wrap middleErr, got: %v", stopErr)
-	}
+	require.Error(t, stopErr, "Stop should return error when middle OnStop fails")
+	require.ErrorIs(t, stopErr, middleErr)
 
 	// All three hooks still called (best-effort).
 	want := []string{"last.stop", "middle.stop", "first.stop"}
-	if !equalStrSlice(stopCalls, want) {
-		t.Errorf("stop order: got %v, want %v", stopCalls, want)
-	}
+	assert.Equal(t, want, stopCalls, "stop order")
 }
 
 // TestLifecycle_PerHookStartTimeout — hook blocks 100ms, StartTimeout=50ms →
@@ -248,17 +219,11 @@ func TestLifecycle_PerHookStartTimeout(t *testing.T) {
 
 	ctx := context.Background()
 	err := lc.Start(ctx)
-	if err == nil {
-		t.Fatal("Start should return error on timeout")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("expected DeadlineExceeded in error chain, got: %v", err)
-	}
+	require.Error(t, err, "Start should return error on timeout")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 
 	// Hook never succeeded → its OnStop must NOT be called by rollback.
-	if stopCalled.Load() {
-		t.Error("OnStop of failed hook must not be called during rollback")
-	}
+	assert.False(t, stopCalled.Load(), "OnStop of failed hook must not be called during rollback")
 }
 
 // TestLifecycle_PerHookStopTimeoutIndependent — OnStop blocks 200ms with
@@ -282,24 +247,16 @@ func TestLifecycle_PerHookStopTimeoutIndependent(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx))
 
 	start := time.Now()
 	err := lc.Stop(ctx)
 	elapsed := time.Since(start)
 
-	if err == nil {
-		t.Fatal("Stop should return error on hook stop timeout")
-	}
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("expected DeadlineExceeded in error chain, got: %v", err)
-	}
+	require.Error(t, err, "Stop should return error on hook stop timeout")
+	require.ErrorIs(t, err, context.DeadlineExceeded)
 	// Should complete well before the full 200ms block; allow generous 150ms.
-	if elapsed > 150*time.Millisecond {
-		t.Errorf("Stop took too long: %v (expected < 150ms)", elapsed)
-	}
+	assert.Less(t, elapsed, 150*time.Millisecond, "Stop took too long: %v (expected < 150ms)", elapsed)
 }
 
 // TestLifecycle_AppendAfterStart_ReturnsError — Append after Start returns
@@ -307,13 +264,9 @@ func TestLifecycle_PerHookStopTimeoutIndependent(t *testing.T) {
 func TestLifecycle_AppendAfterStart_ReturnsError(t *testing.T) {
 	lc := NewLifecycle(LifecycleConfig{})
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx))
 	err := lc.Append(Hook{Name: "late"})
-	if !errors.Is(err, ErrLifecycleAlreadyStarted) {
-		t.Errorf("expected ErrLifecycleAlreadyStarted, got: %v", err)
-	}
+	require.ErrorIs(t, err, ErrLifecycleAlreadyStarted)
 	_ = lc.Stop(ctx)
 }
 
@@ -323,22 +276,14 @@ func TestLifecycle_DoubleStart_ReturnsError(t *testing.T) {
 	lc := NewLifecycle(LifecycleConfig{})
 	ctx := context.Background()
 
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("first Start: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx), "first Start")
 
 	err := lc.Start(ctx)
-	if !errors.Is(err, ErrLifecycleAlreadyStarted) {
-		t.Errorf("second Start: expected ErrLifecycleAlreadyStarted, got: %v", err)
-	}
+	require.ErrorIs(t, err, ErrLifecycleAlreadyStarted, "second Start")
 
-	if err := lc.Stop(ctx); err != nil {
-		t.Fatalf("first Stop: %v", err)
-	}
+	require.NoError(t, lc.Stop(ctx), "first Stop")
 	// Second Stop is idempotent.
-	if err := lc.Stop(ctx); err != nil {
-		t.Errorf("second Stop (idempotent): expected nil, got: %v", err)
-	}
+	require.NoError(t, lc.Stop(ctx), "second Stop (idempotent)")
 }
 
 // TestLifecycle_ConcurrentAppend_Safe — 100 goroutines concurrently Append
@@ -362,12 +307,8 @@ func TestLifecycle_ConcurrentAppend_Safe(t *testing.T) {
 	wg.Wait()
 
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start after concurrent Append: %v", err)
-	}
-	if err := lc.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx), "Start after concurrent Append")
+	require.NoError(t, lc.Stop(ctx))
 }
 
 // TestLifecycle_NegativeTimeout_NoDeadline — per-hook StartTimeout < 0 means no
@@ -388,15 +329,9 @@ func TestLifecycle_NegativeTimeout_NoDeadline(t *testing.T) {
 	})
 
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if startCtxHadDeadline {
-		t.Error("expected no deadline in hook ctx when StartTimeout < 0")
-	}
-	if err := lc.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	require.NoError(t, lc.Start(ctx))
+	assert.False(t, startCtxHadDeadline, "expected no deadline in hook ctx when StartTimeout < 0")
+	require.NoError(t, lc.Stop(ctx))
 }
 
 // TestLifecycle_NilOnStartOnStop_NoError — Hook with nil OnStart and nil OnStop
@@ -406,25 +341,8 @@ func TestLifecycle_NilOnStartOnStop_NoError(t *testing.T) {
 	_ = lc.Append(Hook{Name: "noop"}) // both OnStart and OnStop are nil
 
 	ctx := context.Background()
-	if err := lc.Start(ctx); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := lc.Stop(ctx); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-}
-
-// equalStrSlice compares two string slices element by element.
-func equalStrSlice(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
+	require.NoError(t, lc.Start(ctx))
+	require.NoError(t, lc.Stop(ctx))
 }
 
 // TestLifecycle_LogsCellLabel_WhenCellIDSet pins the observability contract:
@@ -439,52 +357,34 @@ func TestLifecycle_LogsCellLabel_WhenCellIDSet(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
 	lc := NewLifecycle(LifecycleConfig{Logger: logger})
-	require := func(err error) {
-		t.Helper()
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-	}
-	require(lc.Append(Hook{
+	require.NoError(t, lc.Append(Hook{
 		CellID:  "accesscore",
 		Name:    "accesscore.initial-admin-bootstrap",
 		OnStart: func(_ context.Context) error { return errors.New("boom") },
 	}))
 
-	if err := lc.Start(context.Background()); err == nil {
-		t.Fatalf("Start must surface OnStart error")
-	}
+	require.Error(t, lc.Start(context.Background()), "Start must surface OnStart error")
 
 	// Every emitted log line (hook.start, hook.start_err) must carry cell=accesscore.
 	sawStart := false
 	sawErr := false
 	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
 		var rec map[string]any
-		if err := json.Unmarshal(line, &rec); err != nil {
-			t.Fatalf("bad log line %q: %v", line, err)
-		}
+		require.NoError(t, json.Unmarshal(line, &rec), "bad log line %q", line)
 		msg, _ := rec["msg"].(string)
 		cellAttr, hasCell := rec["cell"].(string)
 		nameAttr, _ := rec["name"].(string)
 		switch msg {
 		case "hook.start":
 			sawStart = true
-			if !hasCell || cellAttr != "accesscore" {
-				t.Errorf("hook.start missing cell label; got %v", rec)
-			}
-			if nameAttr != "accesscore.initial-admin-bootstrap" {
-				t.Errorf("hook.start name mismatch: %v", rec)
-			}
+			assert.True(t, hasCell && cellAttr == "accesscore", "hook.start missing cell label; got %v", rec)
+			assert.Equal(t, "accesscore.initial-admin-bootstrap", nameAttr, "hook.start name mismatch")
 		case "hook.start_err":
 			sawErr = true
-			if !hasCell || cellAttr != "accesscore" {
-				t.Errorf("hook.start_err missing cell label; got %v", rec)
-			}
+			assert.True(t, hasCell && cellAttr == "accesscore", "hook.start_err missing cell label; got %v", rec)
 		}
 	}
-	if !sawStart || !sawErr {
-		t.Errorf("expected both hook.start and hook.start_err in log, got buf=%s", buf.String())
-	}
+	assert.True(t, sawStart && sawErr, "expected both hook.start and hook.start_err in log, got buf=%s", buf.String())
 }
 
 // TestLifecycle_OmitsCellLabel_WhenCellIDEmpty pins the inverse contract:
@@ -496,31 +396,22 @@ func TestLifecycle_OmitsCellLabel_WhenCellIDEmpty(t *testing.T) {
 	logger := slog.New(slog.NewJSONHandler(&buf, nil))
 
 	lc := NewLifecycle(LifecycleConfig{Logger: logger})
-	if err := lc.Append(Hook{
+	require.NoError(t, lc.Append(Hook{
 		Name:    "external.hook", // CellID intentionally omitted
 		OnStart: func(_ context.Context) error { return nil },
 		OnStop:  func(_ context.Context) error { return nil },
-	}); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if err := lc.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if err := lc.Stop(context.Background()); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
+	}))
+	require.NoError(t, lc.Start(context.Background()))
+	require.NoError(t, lc.Stop(context.Background()))
 
 	for _, line := range bytes.Split(bytes.TrimSpace(buf.Bytes()), []byte{'\n'}) {
 		if len(line) == 0 {
 			continue
 		}
 		var rec map[string]any
-		if err := json.Unmarshal(line, &rec); err != nil {
-			t.Fatalf("bad log line %q: %v", line, err)
-		}
-		if _, has := rec["cell"]; has {
-			t.Errorf("log line must NOT carry cell label when CellID is empty: %v", rec)
-		}
+		require.NoError(t, json.Unmarshal(line, &rec), "bad log line %q", line)
+		_, has := rec["cell"]
+		assert.False(t, has, "log line must NOT carry cell label when CellID is empty: %v", rec)
 	}
 }
 
@@ -532,37 +423,24 @@ func TestLifecycle_OnStartNearTimeoutWarns(t *testing.T) {
 		DefaultStartTimeout: 20 * time.Millisecond,
 		Logger:              logger,
 	})
-	if err := lc.Append(Hook{
+	require.NoError(t, lc.Append(Hook{
 		CellID: "accesscore",
 		Name:   "accesscore.initial-admin-bootstrap",
 		OnStart: func(_ context.Context) error {
 			time.Sleep(18 * time.Millisecond)
 			return nil
 		},
-	}); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if err := lc.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	}))
+	require.NoError(t, lc.Start(context.Background()))
 
 	slow := findLifecycleLogRecord(t, &buf, "hook.start_slow")
-	if slow == nil {
-		t.Fatalf("expected hook.start_slow warning, got logs=%s", buf.String())
-	}
-	if slow["level"] != "WARN" {
-		t.Fatalf("hook.start_slow level mismatch: %v", slow)
-	}
-	if slow["cell"] != "accesscore" {
-		t.Fatalf("hook.start_slow cell mismatch: %v", slow)
-	}
-	if slow["name"] != "accesscore.initial-admin-bootstrap" {
-		t.Fatalf("hook.start_slow name mismatch: %v", slow)
-	}
+	require.NotNil(t, slow, "expected hook.start_slow warning, got logs=%s", buf.String())
+	assert.Equal(t, "WARN", slow["level"])
+	assert.Equal(t, "accesscore", slow["cell"])
+	assert.Equal(t, "accesscore.initial-admin-bootstrap", slow["name"])
 	for _, key := range []string{"elapsed", "timeout", "threshold"} {
-		if _, ok := slow[key]; !ok {
-			t.Fatalf("hook.start_slow missing %s: %v", key, slow)
-		}
+		_, ok := slow[key]
+		assert.True(t, ok, "hook.start_slow missing %s: %v", key, slow)
 	}
 }
 
@@ -574,29 +452,20 @@ func TestLifecycle_OnStartNearTimeoutWarnsWithoutCellID(t *testing.T) {
 		DefaultStartTimeout: 20 * time.Millisecond,
 		Logger:              logger,
 	})
-	if err := lc.Append(Hook{
+	require.NoError(t, lc.Append(Hook{
 		Name: "composition-root.hook",
 		OnStart: func(_ context.Context) error {
 			time.Sleep(18 * time.Millisecond)
 			return nil
 		},
-	}); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if err := lc.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
+	}))
+	require.NoError(t, lc.Start(context.Background()))
 
 	slow := findLifecycleLogRecord(t, &buf, "hook.start_slow")
-	if slow == nil {
-		t.Fatalf("expected hook.start_slow warning, got logs=%s", buf.String())
-	}
-	if slow["name"] != "composition-root.hook" {
-		t.Fatalf("hook.start_slow name mismatch: %v", slow)
-	}
-	if _, hasCell := slow["cell"]; hasCell {
-		t.Fatalf("hook.start_slow must omit empty cell label: %v", slow)
-	}
+	require.NotNil(t, slow, "expected hook.start_slow warning, got logs=%s", buf.String())
+	assert.Equal(t, "composition-root.hook", slow["name"])
+	_, hasCell := slow["cell"]
+	assert.False(t, hasCell, "hook.start_slow must omit empty cell label: %v", slow)
 }
 
 func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
@@ -607,22 +476,17 @@ func TestLifecycle_NegativeStartTimeoutSkipsSlowWarn(t *testing.T) {
 		DefaultStartTimeout: 1 * time.Nanosecond,
 		Logger:              logger,
 	})
-	if err := lc.Append(Hook{
+	require.NoError(t, lc.Append(Hook{
 		Name: "no-deadline",
 		OnStart: func(_ context.Context) error {
 			time.Sleep(time.Millisecond)
 			return nil
 		},
 		StartTimeout: -1,
-	}); err != nil {
-		t.Fatalf("Append: %v", err)
-	}
-	if err := lc.Start(context.Background()); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	if rec := findLifecycleLogRecord(t, &buf, "hook.start_slow"); rec != nil {
-		t.Fatalf("negative StartTimeout must skip hook.start_slow, got %v", rec)
-	}
+	}))
+	require.NoError(t, lc.Start(context.Background()))
+	rec := findLifecycleLogRecord(t, &buf, "hook.start_slow")
+	assert.Nil(t, rec, "negative StartTimeout must skip hook.start_slow, got %v", rec)
 }
 
 func findLifecycleLogRecord(t *testing.T, buf *bytes.Buffer, msg string) map[string]any {

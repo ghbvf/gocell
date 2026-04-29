@@ -106,6 +106,9 @@ func TestPhase0_RejectsEmptyHealthCheckerName(t *testing.T) {
 }
 
 func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
+	// White-box: directly populates b.http internals because the public
+	// WithHealthChecker rejects nil at option construction time, but we want
+	// to verify phase0 also rejects (defense-in-depth).
 	b := New()
 	b.healthCheckers = append(b.healthCheckers, namedChecker{name: "test", fn: nil})
 	err := b.phase0ValidateOptions()
@@ -114,6 +117,9 @@ func TestPhase0_RejectsNilHealthCheckerFn(t *testing.T) {
 }
 
 func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
+	// White-box: directly populates b.http internals because the public
+	// WithCircuitBreaker rejects nil at option construction time, but we want
+	// to verify phase0 also rejects (defense-in-depth).
 	b := New()
 	b.circuitBreakerNil = true
 	err := b.phase0ValidateOptions()
@@ -128,7 +134,7 @@ func TestPhase0_RejectsNilCircuitBreaker(t *testing.T) {
 
 // Round-3 finding #10: AuthJWTFromAssembly must capture the same assembly
 // instance as WithAssembly. A mismatch would silently discover the verifier
-// in the plan's asm while the rest of Bootstrap runs against b.assembly.
+// in the plan's asm while the rest of Bootstrap runs against b.assemblyCore.
 func TestPhase0_RejectsAuthJWTFromAssemblyMismatch(t *testing.T) {
 	asmA := assembly.New(assembly.Config{ID: "asm-a", DurabilityMode: cell.DurabilityDemo})
 	asmB := assembly.New(assembly.Config{ID: "asm-b", DurabilityMode: cell.DurabilityDemo})
