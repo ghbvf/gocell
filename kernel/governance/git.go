@@ -10,7 +10,31 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 )
+
+// gitExecutable resolves git's absolute path once via PATH lookup and
+// caches the result. SonarCloud / gosec G204 flag exec.Command("git", ...)
+// because PATH may include writable directories where an attacker could
+// plant a malicious binary; resolving the path at first use narrows the
+// exposure window to package initialization, after which every git
+// invocation goes through the absolute path captured here. Returns "git"
+// when LookPath fails so callers still produce an honest "executable file
+// not found" error from exec.Run.
+var gitExecutable = sync.OnceValue(func() string {
+	if path, err := exec.LookPath("git"); err == nil {
+		return path
+	}
+	return "git"
+})
+
+// gitCmd builds an exec.Cmd that invokes the cached git binary. All git
+// invocations in this package go through this constructor so PATH
+// resolution lives in one place and the SAST suppression rationale stays
+// in one well-documented spot.
+func gitCmd(args ...string) *exec.Cmd {
+	return exec.Command(gitExecutable(), args...)
+}
 
 // HasGitMetadata reports whether root looks like a git work tree (has a .git
 // entry). Test fixtures that operate on plain temp directories return false
@@ -25,7 +49,7 @@ func HasGitMetadata(root string) bool {
 // to short-circuit before invoking git commands that would fail with
 // "unable to resolve revision".
 func hasHEAD(root string) bool {
-	return exec.Command("git", "-C", root, "rev-parse", "--verify", "--quiet", "HEAD").Run() == nil
+	return gitCmd("-C", root, "rev-parse", "--verify", "--quiet", "HEAD").Run() == nil
 }
 
 // CommittedInHEAD reports whether rel is committed in HEAD at root. Files
@@ -36,7 +60,7 @@ func hasHEAD(root string) bool {
 // as "not committed" (cat-file -e exits non-zero for unknown refs); other
 // errors propagate so the caller fails closed.
 func CommittedInHEAD(root, rel string) (bool, error) {
-	cmd := exec.Command("git", "-C", root, "cat-file", "-e", "HEAD:"+rel)
+	cmd := gitCmd("-C", root, "cat-file", "-e", "HEAD:"+rel)
 	if err := cmd.Run(); err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {

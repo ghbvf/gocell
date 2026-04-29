@@ -131,6 +131,26 @@ func assertHelpOutput(t *testing.T, name string, run func([]string) error, flag 
 	}
 }
 
+// TestPrintHelpRendersEntryWithoutDescription guards the data-driven help
+// renderer's fallback branch: an entry whose desc slice is empty (or nil)
+// must still surface its name in the "Types:" listing so a future caller
+// that forgets to add the description does not silently drop the type
+// from operator-visible output.
+func TestPrintHelpRendersEntryWithoutDescription(t *testing.T) {
+	out := captureStdout(t, func() {
+		printHelp("demo", []helpEntry{
+			{name: "with-desc", desc: []string{"has a description"}},
+			{name: "no-desc"},
+		})
+	})
+	if !strings.Contains(out, "with-desc") || !strings.Contains(out, "has a description") {
+		t.Fatalf("help output missing populated entry rendering:\n%s", out)
+	}
+	if !strings.Contains(out, "no-desc") {
+		t.Fatalf("help output dropped name-only entry; rendering must surface the name even with empty desc:\n%s", out)
+	}
+}
+
 // --- Command function tests ---
 
 func TestRunValidate(t *testing.T) {
