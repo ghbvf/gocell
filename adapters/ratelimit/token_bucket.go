@@ -11,6 +11,12 @@ import (
 	"github.com/ghbvf/gocell/runtime/http/middleware"
 )
 
+const (
+	// defaultRateLimitStaleAfter is the duration after which an idle per-key
+	// entry is considered stale and eligible for cleanup.
+	defaultRateLimitStaleAfter = 5 * time.Minute
+)
+
 // Compile-time checks.
 var (
 	_ middleware.RateLimiter         = (*Limiter)(nil)
@@ -46,7 +52,7 @@ func (c *Config) defaults() {
 		c.CleanupInterval = time.Minute
 	}
 	if c.StaleAfter <= 0 {
-		c.StaleAfter = 5 * time.Minute
+		c.StaleAfter = defaultRateLimitStaleAfter
 	}
 }
 

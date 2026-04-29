@@ -27,6 +27,15 @@ const (
 	ErrAdapterRedisDelete  errcode.Code = "ERR_ADAPTER_REDIS_DELETE"
 )
 
+const (
+	// defaultRedisDialTimeout is the default TCP connection timeout.
+	defaultRedisDialTimeout = 5 * time.Second
+	// defaultRedisReadTimeout is the default socket read timeout.
+	defaultRedisReadTimeout = 3 * time.Second
+	// defaultRedisDistLockTTL is the default distributed lock TTL.
+	defaultRedisDistLockTTL = 30 * time.Second
+)
+
 // Mode represents the Redis deployment topology.
 type Mode string
 
@@ -93,16 +102,16 @@ func (c *Config) defaults() {
 		c.Mode = ModeStandalone
 	}
 	if c.DialTimeout == 0 {
-		c.DialTimeout = 5 * time.Second
+		c.DialTimeout = defaultRedisDialTimeout
 	}
 	if c.ReadTimeout == 0 {
-		c.ReadTimeout = 3 * time.Second
+		c.ReadTimeout = defaultRedisReadTimeout
 	}
 	if c.WriteTimeout == 0 {
 		c.WriteTimeout = c.ReadTimeout
 	}
 	if c.DistLockTTL == 0 {
-		c.DistLockTTL = 30 * time.Second
+		c.DistLockTTL = defaultRedisDistLockTTL
 	}
 	if c.PoolSize == 0 {
 		// Mirror go-redis/v9's own default (10 * GOMAXPROCS) so the

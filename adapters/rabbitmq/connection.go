@@ -34,6 +34,16 @@ const (
 	ErrAdapterAMQPCloseTimeout       errcode.Code = "ERR_ADAPTER_AMQP_CLOSE_TIMEOUT"
 )
 
+const (
+	// defaultRMQReconnectMaxBackoff is the upper bound for the exponential
+	// reconnect backoff delay.
+	defaultRMQReconnectMaxBackoff = 30 * time.Second
+	// defaultRMQReconnectBaseDelay is the initial delay between reconnect attempts.
+	defaultRMQReconnectBaseDelay = 1 * time.Second
+	// defaultRMQConfirmTimeout is the per-publish confirm wait deadline.
+	defaultRMQConfirmTimeout = 5 * time.Second
+)
+
 // Pre-allocated Health() errors to avoid per-call allocation.
 var (
 	errHealthReconnecting   = errcode.New(ErrAdapterAMQPReconnecting, "rabbitmq: connection lost, reconnecting")
@@ -209,16 +219,16 @@ type Config struct {
 
 func (c *Config) setDefaults() {
 	if c.ReconnectMaxBackoff <= 0 {
-		c.ReconnectMaxBackoff = 30 * time.Second
+		c.ReconnectMaxBackoff = defaultRMQReconnectMaxBackoff
 	}
 	if c.ReconnectBaseDelay <= 0 {
-		c.ReconnectBaseDelay = 1 * time.Second
+		c.ReconnectBaseDelay = defaultRMQReconnectBaseDelay
 	}
 	if c.ChannelPoolSize <= 0 {
 		c.ChannelPoolSize = 10
 	}
 	if c.ConfirmTimeout <= 0 {
-		c.ConfirmTimeout = 5 * time.Second
+		c.ConfirmTimeout = defaultRMQConfirmTimeout
 	}
 }
 

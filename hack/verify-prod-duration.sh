@@ -13,4 +13,4 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-go test ./tools/archtest/ -run TestProdDurationConst -count=1 -v
+go test ./tools/archtest/ -run TestProdDurationConst -race -count=1 -timeout 2m -v

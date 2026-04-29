@@ -58,12 +58,25 @@ type watcherConfig struct {
 	drainTimeout time.Duration
 }
 
+const (
+	// defaultWatcherDebounce is the initial coalescing window for file-system
+	// events. A rapid burst of events is held for this duration; a new event
+	// resets the timer.
+	defaultWatcherDebounce = 100 * time.Millisecond
+	// defaultWatcherMaxDebounce caps the debounce deferral so callbacks always
+	// fire within this ceiling even under continuous event storms.
+	defaultWatcherMaxDebounce = 500 * time.Millisecond
+	// defaultWatcherDrainTimeout is the budget for draining the fsnotify event
+	// channel on watcher shutdown.
+	defaultWatcherDrainTimeout = 5 * time.Second
+)
+
 func defaultWatcherConfig() watcherConfig {
 	return watcherConfig{
-		debounce:     100 * time.Millisecond,
-		maxDebounce:  500 * time.Millisecond,
+		debounce:     defaultWatcherDebounce,
+		maxDebounce:  defaultWatcherMaxDebounce,
 		metrics:      NoopWatcherCollector{},
-		drainTimeout: 5 * time.Second,
+		drainTimeout: defaultWatcherDrainTimeout,
 	}
 }
 

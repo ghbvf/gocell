@@ -23,6 +23,20 @@ import (
 	"github.com/ghbvf/gocell/kernel/cell"
 )
 
+const (
+	// defaultBootstrapHTTPReadHeaderTimeout is the http.Server ReadHeaderTimeout.
+	// Prevents Slowloris attacks by bounding how long a client can take to send
+	// request headers.
+	defaultBootstrapHTTPReadHeaderTimeout = 10 * time.Second
+	// defaultBootstrapHTTPReadTimeout is the http.Server ReadTimeout.
+	defaultBootstrapHTTPReadTimeout = 30 * time.Second
+	// defaultBootstrapHTTPWriteTimeout is the http.Server WriteTimeout.
+	defaultBootstrapHTTPWriteTimeout = 30 * time.Second
+	// defaultBootstrapHTTPIdleTimeout is the http.Server IdleTimeout for keep-alive
+	// connections.
+	defaultBootstrapHTTPIdleTimeout = 60 * time.Second
+)
+
 // boundServer holds a resolved HTTP server and its associated listener.
 type boundServer struct {
 	name      string
@@ -109,10 +123,10 @@ func (b *Bootstrap) phase7BindListeners(s *phaseState) ([]boundServer, error) {
 			name: ref.String(),
 			srv: &http.Server{
 				Handler:           rtr.Handler(),
-				ReadHeaderTimeout: 10 * time.Second,
-				ReadTimeout:       30 * time.Second,
-				WriteTimeout:      30 * time.Second,
-				IdleTimeout:       60 * time.Second,
+				ReadHeaderTimeout: defaultBootstrapHTTPReadHeaderTimeout,
+				ReadTimeout:       defaultBootstrapHTTPReadTimeout,
+				WriteTimeout:      defaultBootstrapHTTPWriteTimeout,
+				IdleTimeout:       defaultBootstrapHTTPIdleTimeout,
 			},
 			ln:        ln,
 			owned:     owned,

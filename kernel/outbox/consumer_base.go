@@ -25,6 +25,15 @@ const (
 // keeps minimum delay ≥ base, avoiding thundering herd on a recovering backend.
 const backoffJitterDivisor = 2
 
+const (
+	// defaultConsumerBaseRetryBaseDelay is the base delay for exponential-backoff
+	// retry between handler invocations.
+	defaultConsumerBaseRetryBaseDelay = 1 * time.Second
+	// defaultConsumerBaseMaxRetryDelay caps the exponential-backoff delay to
+	// prevent unbounded sleep intervals at high retry counts.
+	defaultConsumerBaseMaxRetryDelay = 30 * time.Second
+)
+
 // ClaimPolicy controls ConsumerBase behavior when Claimer.Claim() fails.
 // The zero value (ClaimPolicyFailClosed) is the safe default.
 type ClaimPolicy uint8
@@ -119,7 +128,7 @@ func (c *ConsumerBaseConfig) SetDefaults() {
 		c.RetryCount = 3
 	}
 	if c.RetryBaseDelay <= 0 {
-		c.RetryBaseDelay = 1 * time.Second
+		c.RetryBaseDelay = defaultConsumerBaseRetryBaseDelay
 	}
 	if c.IdempotencyTTL <= 0 {
 		c.IdempotencyTTL = idempotency.DefaultTTL
@@ -134,7 +143,7 @@ func (c *ConsumerBaseConfig) SetDefaults() {
 		c.ClaimRetryBaseDelay = c.RetryBaseDelay
 	}
 	if c.MaxRetryDelay <= 0 {
-		c.MaxRetryDelay = 30 * time.Second
+		c.MaxRetryDelay = defaultConsumerBaseMaxRetryDelay
 	}
 	if c.LeaseRenewalInterval == 0 {
 		c.LeaseRenewalInterval = c.LeaseTTL / 3
