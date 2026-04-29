@@ -15,7 +15,7 @@ import (
 // Provider configuration lives in cmd/corebundle/metrics.go (Namespace: "gocell").
 const (
 	// shutdownPhaseCounterName counts entries into each named shutdown phase.
-	// Labels: phase = readiness_flip | lifo_teardown | closed.
+	// Labels: phase = readiness_flip | http_drain | lifo_teardown | closed.
 	// SRE use: detect stuck shutdowns by comparing phase entry counts across
 	// instances; a missing "closed" entry pinpoints where the hang occurred.
 	//
@@ -26,7 +26,7 @@ const (
 	shutdownPhaseCounterName = "bootstrap_shutdown_phase_entries_total"
 
 	// shutdownPhaseDurationName records per-phase wall-clock latency.
-	// Labels: phase = readiness_flip | lifo_teardown | total.
+	// Labels: phase = readiness_flip | http_drain | lifo_teardown | total.
 	// SRE use: P99 histogram in Grafana reveals which phase dominates
 	// shutdown latency.
 	shutdownPhaseDurationName = "bootstrap_shutdown_phase_duration_seconds"
@@ -47,8 +47,10 @@ const (
 // Phase label values for shutdownPhaseCounterName.
 const (
 	shutdownPhaseReadinessFlip = "readiness_flip"
+	shutdownPhaseHTTPDrain     = "http_drain"
 	shutdownPhaseLIFOTeardown  = "lifo_teardown"
 	shutdownPhaseClosed        = "closed"
+	shutdownPhaseTotal         = "total"
 )
 
 // registerErrFmt is the error-wrap format shared by every metric registration

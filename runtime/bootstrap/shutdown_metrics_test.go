@@ -185,9 +185,9 @@ func runWithCancelAndListener(t *testing.T, b *Bootstrap, ln net.Listener, runTi
 // Test 1: phase counter transitions
 // ---------------------------------------------------------------------------
 
-// TestShutdownMetrics_PhaseCounterTransitions verifies that all three shutdown
-// phase labels (readiness_flip, lifo_teardown, closed) are recorded in the
-// phase-entry counter and that each is incremented exactly once.
+// TestShutdownMetrics_PhaseCounterTransitions verifies that all four shutdown
+// phase labels (readiness_flip, http_drain, lifo_teardown, closed) are recorded
+// in the phase-entry counter and that each is incremented exactly once.
 func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
@@ -207,6 +207,7 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 
 	for _, label := range []string{
 		shutdownPhaseReadinessFlip,
+		shutdownPhaseHTTPDrain,
 		shutdownPhaseLIFOTeardown,
 		shutdownPhaseClosed,
 	} {
@@ -222,7 +223,7 @@ func TestShutdownMetrics_PhaseCounterTransitions(t *testing.T) {
 
 // TestShutdownMetrics_DurationRecorded verifies that the phase-duration
 // histogram receives exactly one observation each for readiness_flip,
-// lifo_teardown, and total, each with a non-negative value.
+// http_drain, lifo_teardown, and total, each with a non-negative value.
 func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 	p := newFakeMetricsProvider()
 	ln := newLocalListener(t)
@@ -242,6 +243,7 @@ func TestShutdownMetrics_DurationRecorded(t *testing.T) {
 
 	for _, label := range []string{
 		shutdownPhaseReadinessFlip,
+		shutdownPhaseHTTPDrain,
 		shutdownPhaseLIFOTeardown,
 		"total",
 	} {
