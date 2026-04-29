@@ -460,13 +460,40 @@ func TestUpgradeHandler_RejectsNilHub(t *testing.T) {
 }
 
 // TestMustUpgradeHandler_PanicsOnNilHub locks the static-wiring twin: a nil
-// hub must surface as a panic at composition root, not at request time.
+// hub must surface as a panic at composition root, not at request time, and
+// the panic value must be a typed *errcode.Error carrying ErrWebsocketHubMissing
+// so a recovery-based composition root can report the precise misconfiguration.
 func TestMustUpgradeHandler_PanicsOnNilHub(t *testing.T) {
-	require.Panics(t, func() {
-		_ = adapterws.MustUpgradeHandler(nil, adapterws.UpgradeConfig{
-			AllowedOrigins: []string{"example.com"},
-		})
+	defer func() {
+		r := recover()
+		require.NotNil(t, r, "MustUpgradeHandler must panic on nil hub")
+		err, ok := r.(error)
+		require.True(t, ok, "panic value must be an error, got %T", r)
+		var ec *errcode.Error
+		require.ErrorAs(t, err, &ec)
+		assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code)
+	}()
+	_ = adapterws.MustUpgradeHandler(nil, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
 	})
+	t.Fatal("expected MustUpgradeHandler to panic, got none")
+}
+
+// TestUpgradeHandler_NilHubTakesPriorityOverOrigins locks the diagnostic order:
+// when both hub and cfg are invalid, the caller sees ErrWebsocketHubMissing
+// first. Reordering the checks in UpgradeHandler would silently change which
+// errcode operators see for misconfigured wiring.
+func TestUpgradeHandler_NilHubTakesPriorityOverOrigins(t *testing.T) {
+	handler, err := adapterws.UpgradeHandler(nil, adapterws.UpgradeConfig{
+		AllowedOrigins: nil,
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code,
+		"nil hub must be diagnosed before invalid origins")
 }
 
 func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {

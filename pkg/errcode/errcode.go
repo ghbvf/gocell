@@ -192,10 +192,11 @@ const (
 	//
 	// Example:
 	//
-	//	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	//	handler, err := adapterws.UpgradeHandler(nil, adapterws.UpgradeConfig{
 	//	    AllowedOrigins: []string{"https://example.com"},
 	//	})
-	//	if hub == nil { /* err.Code == ErrWebsocketHubMissing */ }
+	//	var ec *errcode.Error
+	//	if errors.As(err, &ec) && ec.Code == errcode.ErrWebsocketHubMissing { /* misconfig */ }
 	ErrWebsocketHubMissing Code = "ERR_WEBSOCKET_HUB_MISSING"
 
 	// Outbox envelope error codes.

@@ -351,6 +351,52 @@ func New(items []int) (*Service, error) {
 }
 type Service struct{}`,
 		},
+		{
+			name: "negative: then handles nil only inside defer FuncLit fails",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+type Dep interface{ Do() }
+func New(dep Dep) (*Service, error) {
+	if validation.IsNilInterface(dep) {
+		defer func() { _ = 1 }()
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+			wantLines: []int{4},
+		},
+		{
+			name: "negative: aliased validation pkg is not recognized as guard (known-gap)",
+			src: `package p
+var val = struct{ IsNilInterface func(any) bool }{}
+type Dep interface{ Do() }
+func New(dep Dep) (*Service, error) {
+	if val.IsNilInterface(dep) {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+			wantLines: []int{4},
+		},
+		{
+			name: "positive: unnamed (type-only) param is intentionally outside rule scope",
+			src: `package p
+type Dep interface{ Do() }
+func New(Dep) (*Service, error) {
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "positive: blank-name (_) param is intentionally outside rule scope",
+			src: `package p
+type Dep interface{ Do() }
+func New(_ Dep) (*Service, error) {
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
 	}
 
 	for _, tc := range tests {
@@ -534,6 +580,11 @@ func nillableParamKind(t types.Type) paramKind {
 }
 
 // nillableDependencyParams returns the named, nil-able parameters of fd.
+// Unnamed (type-only) parameters like `func New(Dep) (*S, error)` are
+// intentionally skipped — they cannot be referred to in a guard expression,
+// so the rule has no symbol to verify; constructors that require such a
+// parameter for ergonomic reasons should name it (`func New(_ Dep)` is also
+// skipped on purpose because `_` is unaddressable).
 func nillableDependencyParams(info *types.Info, fd *ast.FuncDecl) []paramRef {
 	if info == nil || fd.Type.Params == nil {
 		return nil
@@ -631,8 +682,14 @@ func isIdentNamed(e ast.Expr, name string) bool {
 
 // isValidationIsNilInterfaceCall returns true if call is exactly
 // validation.IsNilInterface(paramName) — single argument, named param, fixed
-// selector path. Aliasing the validation package is not currently used in the
-// repo and would be a deliberate workaround.
+// selector path on the unaliased "validation" identifier.
+//
+// known-gap: aliased imports (e.g. `import val "github.com/.../pkg/validation"`
+// + `val.IsNilInterface(p)`) are not recognized as a guard; the alias would
+// surface as a violation report. This is by design — every IsNilInterface
+// call in the enrolled scope uses the unaliased package, and matching aliases
+// would require types.Info-level package resolution that adds cost without
+// covering a real-world need.
 func isValidationIsNilInterfaceCall(call *ast.CallExpr, paramName string) bool {
 	if len(call.Args) != 1 {
 		return false
