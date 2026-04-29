@@ -761,7 +761,7 @@ func (s *Subscriber) processDelivery(
 			slog.Any("error", res.Err))
 	}
 
-	s.dispatchDisposition(deliveryCtx, ch, delivery.DeliveryTag, res, topic, entry.ID)
+	s.dispatchDisposition(deliveryCtx, ch, delivery.DeliveryTag, res, topic, entry)
 }
 
 // dispatchDisposition executes the broker-level disposition and settles the
@@ -781,27 +781,37 @@ func (s *Subscriber) dispatchDisposition(
 	ch AMQPChannel,
 	tag uint64,
 	res outbox.HandleResult,
-	topic, eventID string,
+	topic string,
+	entry outbox.Entry,
 ) {
+	eventID := entry.ID
 	switch res.Disposition {
 	case outbox.DispositionAck:
-		s.dispatchAck(ctx, ch, tag, res, topic, eventID)
+		s.dispatchAck(ctx, ch, tag, res, topic, entry)
 	case outbox.DispositionReject:
 		if nackErr := ch.Nack(tag, false, false); nackErr != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(reject) failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.Any("error", nackErr))
+			releaseReceipt(ctx, res.Receipt, topic, eventID, "reject")
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultNackFailed, nackErr)
+			return
 		}
 		releaseReceipt(ctx, res.Receipt, topic, eventID, "reject")
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 	case outbox.DispositionRequeue:
 		if nackErr := ch.Nack(tag, false, true); nackErr != nil {
 			slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: nack(requeue) failed",
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.Any("error", nackErr))
+			releaseReceipt(ctx, res.Receipt, topic, eventID, "requeue")
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, nackErr)
+			return
 		}
 		releaseReceipt(ctx, res.Receipt, topic, eventID, "requeue")
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	default:
 		slog.LogAttrs(ctx, slog.LevelError, "rabbitmq: unknown disposition, nacking with requeue",
 			slog.String(logKeyTopic, topic),
@@ -812,8 +822,12 @@ func (s *Subscriber) dispatchDisposition(
 				slog.String(logKeyTopic, topic),
 				slog.String(logKeyEventID, eventID),
 				slog.Any("error", nackErr))
+			releaseReceipt(ctx, res.Receipt, topic, eventID, "unknown")
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, nackErr)
+			return
 		}
 		releaseReceipt(ctx, res.Receipt, topic, eventID, "unknown")
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	}
 }
 
@@ -824,8 +838,10 @@ func (s *Subscriber) dispatchAck(
 	ch AMQPChannel,
 	tag uint64,
 	res outbox.HandleResult,
-	topic, eventID string,
+	topic string,
+	entry outbox.Entry,
 ) {
+	eventID := entry.ID
 	if res.Receipt != nil {
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), defaultRMQReceiptOpTimeout)
 		commitErr := res.Receipt.Commit(rctx)
@@ -840,7 +856,10 @@ func (s *Subscriber) dispatchAck(
 					slog.String(logKeyTopic, topic),
 					slog.String(logKeyEventID, eventID),
 					slog.Any("error", nackErr))
+				outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultNackFailed, nackErr)
+				return
 			}
+			outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultCommitFailed, commitErr)
 			return
 		}
 	}
@@ -852,7 +871,10 @@ func (s *Subscriber) dispatchAck(
 		// Receipt already committed; broker ack failure means the message will
 		// be redelivered, but the idempotency key (ClaimDone) prevents double
 		// processing on the next delivery.
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultAckFailed, ackErr)
+		return
 	}
+	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 }
 
 // releaseReceipt releases the idempotency receipt bounded by

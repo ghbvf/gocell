@@ -44,9 +44,9 @@ type SharedDeps struct {
 	// EventBus is the in-process event bus used for both publish and subscribe.
 	EventBus *eventbus.InMemoryEventBus
 
-	// ConfigEventCollector records config consumer outcomes for accesscore and
-	// configcore. It is registered once against the shared metrics provider and
-	// then injected into both Cells plus the final-reject middleware.
+	// ConfigEventCollector records config consumer process and settlement
+	// metrics for accesscore and configcore. It is registered once against the
+	// shared metrics provider and then injected into both Cells plus middleware.
 	ConfigEventCollector obmetrics.ConfigEventCollector
 
 	// SharedPGPool is the postgres pool created by ConfigCoreModule when running

@@ -460,8 +460,9 @@ func (cb *ConsumerBase) retryLoop(
 		lastResult = handler(ctx, entry)
 		if lastResult.Disposition == DispositionAck {
 			return HandleResult{
-				Disposition: DispositionAck,
-				Receipt:     receipt,
+				Disposition:   DispositionAck,
+				Receipt:       receipt,
+				ProcessReason: lastResult.ProcessReason,
 			}
 		}
 
@@ -471,9 +472,10 @@ func (cb *ConsumerBase) retryLoop(
 				slog.String(logKeyTopic, topic),
 				slog.Any("error", lastResult.Err))
 			return HandleResult{
-				Disposition: DispositionReject,
-				Err:         lastResult.Err,
-				Receipt:     receipt,
+				Disposition:   DispositionReject,
+				Err:           lastResult.Err,
+				Receipt:       receipt,
+				ProcessReason: lastResult.ProcessReason,
 			}
 		}
 
@@ -500,9 +502,10 @@ func (cb *ConsumerBase) retryLoop(
 		slog.Int("retry_count", cb.config.RetryCount),
 		slog.Any("error", lastResult.Err))
 	return HandleResult{
-		Disposition: DispositionReject,
-		Err:         lastResult.Err,
-		Receipt:     receipt,
+		Disposition:   DispositionReject,
+		Err:           lastResult.Err,
+		Receipt:       receipt,
+		ProcessReason: lastResult.ProcessReason,
 	}
 }
 
@@ -561,7 +564,12 @@ func (cb *ConsumerBase) runWithRenewal(
 		logWithContext(ctx, slog.LevelWarn, "outbox: lease lost during processing, downgrading Ack to Requeue (hard fence)",
 			slog.String(logKeyEventID, entry.ID),
 			slog.String(logKeyTopic, topic))
-		return HandleResult{Disposition: DispositionRequeue, Receipt: receipt, Err: idempotency.ErrLeaseExpired}
+		return HandleResult{
+			Disposition:   DispositionRequeue,
+			Receipt:       receipt,
+			Err:           idempotency.ErrLeaseExpired,
+			ProcessReason: result.ProcessReason,
+		}
 	}
 
 	return result

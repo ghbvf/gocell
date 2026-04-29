@@ -20,9 +20,6 @@ const (
 	TopicConfigEntryUpserted = "event.config.entry-upserted.v1"
 	// TopicConfigEntryDeleted is the config delete state-sync topic consumed by this slice.
 	TopicConfigEntryDeleted = "event.config.entry-deleted.v1"
-
-	configEventCellID  = "accesscore"
-	configEventSliceID = "configreceive"
 )
 
 // Service consumes config change events for accesscore.
@@ -52,7 +49,7 @@ func WithConfigGetter(c ports.ConfigGetter) Option {
 	return func(s *Service) { s.configGetter = c }
 }
 
-// WithConfigEventCollector injects config event outcome metrics.
+// WithConfigEventCollector injects config event process metrics.
 func WithConfigEventCollector(c obmetrics.ConfigEventCollector) Option {
 	return func(s *Service) {
 		if c == nil {
@@ -85,7 +82,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomePermanentError)
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-upserted payload: %w", err))
 	}
 
@@ -103,7 +100,7 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 					slog.Any("error", fetchErr),
 					slog.String("key", event.Key),
 					slog.Int("version", event.Version))
-				s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomeStale)
+				s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 				return nil
 			}
 			// Transient failure — return error so the legacy handler wrapper
@@ -120,30 +117,30 @@ func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) e
 			slog.Bool("sensitive", cfg.Sensitive))
 	}
 
-	s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomeAck)
+	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
 	return nil
 }
 
 // HandleEntryDeleted processes an event.config.entry-deleted.v1 event.
-func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) error {
+func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) error {
 	event, err := dto.DecodeEntryDeleted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-receive: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomePermanentError)
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.NewPermanentError(fmt.Errorf("config-receive: unmarshal entry-deleted payload: %w", err))
 	}
 
 	s.logger.Debug("config-receive: config deleted",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
-	s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomeAck)
+	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
 	return nil
 }
 
-func (s *Service) recordConfigEventOutcome(outcome obmetrics.ConfigEventOutcome) {
+func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics.ConfigEventProcessReason) {
 	if s.configEventCollector == nil {
 		return
 	}
-	s.configEventCollector.RecordEventProcessed(configEventCellID, configEventSliceID, outcome)
+	obmetrics.RecordConfigEventProcess(ctx, s.configEventCollector, reason)
 }

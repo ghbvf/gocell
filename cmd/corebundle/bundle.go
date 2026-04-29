@@ -103,32 +103,7 @@ func consumerMiddlewares(shared *SharedDeps, consumerBase *outbox.ConsumerBase) 
 }
 
 func configEventConsumerMiddleware(collector obmetrics.ConfigEventCollector) outbox.SubscriptionMiddleware {
-	return obmetrics.ConfigEventRejectMiddleware(collector,
-		obmetrics.ConfigEventSubscription{
-			CellID:        "accesscore",
-			SliceID:       "configreceive",
-			Topic:         "event.config.entry-upserted.v1",
-			ConsumerGroup: "accesscore",
-		},
-		obmetrics.ConfigEventSubscription{
-			CellID:        "accesscore",
-			SliceID:       "configreceive",
-			Topic:         "event.config.entry-deleted.v1",
-			ConsumerGroup: "accesscore",
-		},
-		obmetrics.ConfigEventSubscription{
-			CellID:        "configcore",
-			SliceID:       "configsubscribe",
-			Topic:         "event.config.entry-upserted.v1",
-			ConsumerGroup: "configcore",
-		},
-		obmetrics.ConfigEventSubscription{
-			CellID:        "configcore",
-			SliceID:       "configsubscribe",
-			Topic:         "event.config.entry-deleted.v1",
-			ConsumerGroup: "configcore",
-		},
-	)
+	return obmetrics.ConfigEventMiddleware(collector)
 }
 
 // defaultRuntimeOptions constructs the ordered bootstrap.Option slice from the

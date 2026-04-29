@@ -103,12 +103,12 @@ func (c *AccessCore) RouteGroups() []cell.RouteGroup {
 func (c *AccessCore) RegisterSubscriptions(r cell.EventRouter) error {
 	// config-receive: config state-sync events from configcore.
 	upsertedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryUpserted)
-	if err := r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "accesscore"); err != nil {
+	if err := r.AddContractHandler(specEventConfigEntryUpserted, upsertedHandler, "accesscore", cell.WithSubscriptionSliceID("configreceive")); err != nil {
 		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryUpserted.Topic, err)
 	}
 
 	deletedHandler := outbox.WrapLegacyHandler(c.configReceiveSvc.HandleEntryDeleted)
-	if err := r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "accesscore"); err != nil {
+	if err := r.AddContractHandler(specEventConfigEntryDeleted, deletedHandler, "accesscore", cell.WithSubscriptionSliceID("configreceive")); err != nil {
 		return fmt.Errorf(errFmtSubscribe, specEventConfigEntryDeleted.Topic, err)
 	}
 

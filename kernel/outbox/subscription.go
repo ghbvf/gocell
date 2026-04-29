@@ -5,7 +5,7 @@ import "github.com/ghbvf/gocell/pkg/errcode"
 // Subscription describes the full identity of a single subscription intent.
 // It is the first-class object passed through the middleware chain, ensuring
 // every layer (idempotency, observability, retry) sees Topic, ConsumerGroup,
-// and CellID without information loss at middleware boundaries.
+// CellID, and SliceID without information loss at middleware boundaries.
 //
 // ref: ThreeDotsLabs/watermill message/router.go handler context injection
 // ref: MassTransit ConsumeContext — full identity traverses the entire pipeline
@@ -22,6 +22,11 @@ type Subscription struct {
 	// CellID is an optional observability label. When set it is used in log
 	// fields and metrics labels; falls back to ConsumerGroup when empty.
 	CellID string
+
+	// SliceID is an optional observability owner label. Runtime eventrouter
+	// fills it from the subscription declaration when a cell wants per-slice
+	// consumer metrics.
+	SliceID string
 
 	// ContractID/Kind/Transport identify the contract bound to this
 	// subscription. They are intentionally primitive strings rather than a

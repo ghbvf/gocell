@@ -403,8 +403,10 @@ func (b *InMemoryEventBus) removeSub(topic, consumerGroup string, target *subscr
 
 func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, entry outbox.Entry, handler outbox.EntryHandler) {
 	var lastErr error
+	var lastResult outbox.HandleResult
 	for attempt := range maxRetries {
 		res := handler(ctx, entry)
+		lastResult = res
 		done, err := b.processResult(ctx, topic, entry, res, attempt)
 		if done {
 			return
@@ -416,6 +418,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 		}
 	}
 	b.appendDeadLetter(topic, entry, lastErr)
+	outbox.NotifySettlement(ctx, lastResult, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 	slog.Error("eventbus: retries exhausted, routing to dead letter",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID),
@@ -438,9 +441,11 @@ func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entr
 					slog.String("topic", topic),
 					slog.String("entry_id", entry.ID),
 					slog.Any("error", commitErr))
+				outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultCommitFailed, commitErr)
 				return false, commitErr
 			}
 		}
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
 		return true, nil
 	case outbox.DispositionReject:
 		if res.Receipt != nil {
@@ -452,6 +457,7 @@ func (b *InMemoryEventBus) processResult(ctx context.Context, topic string, entr
 			slog.Any("error", res.Err),
 		)
 		b.appendDeadLetter(topic, entry, res.Err)
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 		return true, nil
 	case outbox.DispositionRequeue:
 		return b.handleRequeue(ctx, topic, entry, res, attempt)
@@ -474,6 +480,7 @@ func (b *InMemoryEventBus) handleRequeue(ctx context.Context, topic string, entr
 			slog.Any("error", res.Err),
 		)
 		b.appendDeadLetter(topic, entry, res.Err)
+		outbox.NotifySettlement(ctx, res, entry, outbox.DispositionReject, outbox.SettlementResultSuccess, nil)
 		return true, nil
 	}
 	delay := retryDelay(attempt)
@@ -483,6 +490,7 @@ func (b *InMemoryEventBus) handleRequeue(ctx context.Context, topic string, entr
 		slog.Any("error", res.Err),
 		slog.Duration("retry_delay", delay),
 	)
+	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	return false, res.Err
 }
 
@@ -500,6 +508,7 @@ func (b *InMemoryEventBus) handleInvalidDisposition(ctx context.Context, topic s
 		slog.Int("attempt", attempt+1),
 		slog.Duration("retry_delay", delay),
 	)
+	outbox.NotifySettlement(ctx, res, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 	return false, res.Err
 }
 

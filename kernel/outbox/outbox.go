@@ -488,6 +488,42 @@ func (d Disposition) String() string {
 // may be replaced with a standalone interface in a future version.
 type Receipt = idempotency.Receipt
 
+// SettlementResult describes whether the subscriber completed the final broker
+// settlement action. It intentionally observes the boundary after Commit,
+// Ack/Nack, and receipt release decisions, not the handler's process result.
+type SettlementResult string
+
+const (
+	SettlementResultSuccess      SettlementResult = "success"
+	SettlementResultCommitFailed SettlementResult = "commit_failed"
+	SettlementResultAckFailed    SettlementResult = "ack_failed"
+	SettlementResultNackFailed   SettlementResult = "nack_failed"
+)
+
+// SettlementObservation is emitted by subscribers after the final delivery
+// settlement action is known.
+type SettlementObservation struct {
+	Entry         Entry
+	Disposition   Disposition
+	Result        SettlementResult
+	ProcessReason string
+	Err           error
+}
+
+// SettlementObserver records a post-settlement observation. Implementations
+// must be non-blocking or bounded; subscriber delivery loops call observers on
+// the hot path after broker settlement.
+type SettlementObserver interface {
+	ObserveSettlement(context.Context, SettlementObservation)
+}
+
+// SettlementObserverFunc adapts a function into a SettlementObserver.
+type SettlementObserverFunc func(context.Context, SettlementObservation)
+
+func (f SettlementObserverFunc) ObserveSettlement(ctx context.Context, obs SettlementObservation) {
+	f(ctx, obs)
+}
+
 // HandleResult carries the business handler's processing outcome.
 // The Subscriber inspects Disposition to decide Ack/Nack, then calls
 // Receipt.Commit or Receipt.Release based on the broker outcome.
@@ -495,6 +531,35 @@ type HandleResult struct {
 	Disposition Disposition
 	Err         error   // optional: logged/observed; nil for success
 	Receipt     Receipt // nil when idempotency is not in use
+
+	// ProcessReason is a low-cardinality handler/process classification, such
+	// as "ack", "stale", or "permanent_error". It is not a broker outcome.
+	ProcessReason string
+
+	// SettlementObservers are notified by subscribers after final broker
+	// settlement. Middleware appends observers after ConsumerBase has resolved
+	// retry/lease decisions.
+	SettlementObservers []SettlementObserver
+}
+
+// NotifySettlement emits a settlement observation to every observer attached
+// to the result. It is a no-op when no observer is present.
+func NotifySettlement(ctx context.Context, result HandleResult, entry Entry, disposition Disposition, settlement SettlementResult, err error) {
+	if len(result.SettlementObservers) == 0 {
+		return
+	}
+	obs := SettlementObservation{
+		Entry:         entry,
+		Disposition:   disposition,
+		Result:        settlement,
+		ProcessReason: result.ProcessReason,
+		Err:           err,
+	}
+	for _, observer := range result.SettlementObservers {
+		if observer != nil {
+			observer.ObserveSettlement(ctx, obs)
+		}
+	}
 }
 
 // EntryHandler is the Solution B handler signature. Business handlers return

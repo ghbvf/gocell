@@ -63,7 +63,7 @@ type mockEventRouter struct {
 	topics []string
 }
 
-func (m *mockEventRouter) AddContractHandler(spec wrapper.ContractSpec, _ outbox.EntryHandler, _ string) error {
+func (m *mockEventRouter) AddContractHandler(spec wrapper.ContractSpec, _ outbox.EntryHandler, _ string, _ ...SubscriptionOption) error {
 	m.topics = append(m.topics, spec.Topic)
 	return nil
 }

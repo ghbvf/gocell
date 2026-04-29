@@ -22,108 +22,130 @@ func TestProviderConfigEventCollector_NopProviderNoPanic(t *testing.T) {
 	collector, err := obmetrics.NewProviderConfigEventCollector(kernelmetrics.NopProvider{})
 	require.NoError(t, err)
 
-	collector.RecordEventProcessed("accesscore", "configreceive", obmetrics.ConfigEventOutcomeAck)
-	collector.RecordEventProcessed("configcore", "configsubscribe", obmetrics.ConfigEventOutcomePermanentError)
+	collector.RecordEventProcess("accesscore", "configreceive", obmetrics.ConfigEventProcessReasonAck)
+	collector.RecordEventSettlement("configcore", "configsubscribe", "requeue", outbox.SettlementResultCommitFailed)
 }
 
 func TestProviderConfigEventCollector_ReturnsRegistrationError(t *testing.T) {
 	collector, err := obmetrics.NewProviderConfigEventCollector(failingCounterProvider{})
 	require.Error(t, err)
 	assert.Nil(t, collector)
-	assert.Contains(t, err.Error(), "register config_event_processed_total")
+	assert.Contains(t, err.Error(), "register config_event_process_total")
 }
 
-func TestProviderConfigEventCollector_EmitsExpectedMetricAndLabels(t *testing.T) {
+func TestProviderConfigEventCollector_EmitsExpectedMetricsAndLabels(t *testing.T) {
 	p := newSpyProvider()
 	collector, err := obmetrics.NewProviderConfigEventCollector(p)
 	require.NoError(t, err)
 
-	collector.RecordEventProcessed("accesscore", "configreceive", obmetrics.ConfigEventOutcomeStale)
+	collector.RecordEventProcess("accesscore", "configreceive", obmetrics.ConfigEventProcessReasonStale)
+	collector.RecordEventSettlement("accesscore", "configreceive", "ack", outbox.SettlementResultSuccess)
 
-	ops := p.counterOps["config_event_processed_total"]
-	require.Len(t, ops, 1)
+	processOps := p.counterOps["config_event_process_total"]
+	require.Len(t, processOps, 1)
 	assert.Equal(t, kernelmetrics.Labels{
-		"cell":    "accesscore",
-		"slice":   "configreceive",
-		"outcome": "stale",
-	}, ops[0].labels)
-	assert.Equal(t, 1.0, ops[0].value)
+		"cell":   "accesscore",
+		"slice":  "configreceive",
+		"reason": "stale",
+	}, processOps[0].labels)
+	assert.Equal(t, 1.0, processOps[0].value)
+
+	settlementOps := p.counterOps["config_event_settlement_total"]
+	require.Len(t, settlementOps, 1)
+	assert.Equal(t, kernelmetrics.Labels{
+		"cell":        "accesscore",
+		"slice":       "configreceive",
+		"disposition": "ack",
+		"result":      "success",
+	}, settlementOps[0].labels)
+	assert.Equal(t, 1.0, settlementOps[0].value)
 }
 
-func TestConfigEventRejectMiddleware_RecordsFinalNonPermanentRejectForTargets(t *testing.T) {
+func TestConfigEventMiddleware_RecordsProcessReasonFromSubscriptionOwner(t *testing.T) {
 	collector := &recordingConfigEventCollector{}
-	mw := obmetrics.ConfigEventRejectMiddleware(collector,
-		obmetrics.ConfigEventSubscription{
-			CellID:        "accesscore",
-			SliceID:       "configreceive",
-			Topic:         "event.config.entry-upserted.v1",
-			ConsumerGroup: "accesscore",
-		},
-		obmetrics.ConfigEventSubscription{
-			CellID:        "configcore",
-			SliceID:       "configsubscribe",
-			Topic:         "event.config.entry-deleted.v1",
-			ConsumerGroup: "configcore",
+	mw := obmetrics.ConfigEventMiddleware(collector)
+	wrapped := mw(
+		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
+		func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+			obmetrics.RecordConfigEventProcess(ctx, collector, obmetrics.ConfigEventProcessReasonAck)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
 		},
 	)
 
-	for _, sub := range []outbox.Subscription{
-		{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore"},
-		{Topic: "event.config.entry-deleted.v1", ConsumerGroup: "configcore"},
-	} {
-		wrapped := mw(sub, func(context.Context, outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("retry exhausted")}
-		})
-		result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
-		assert.Equal(t, outbox.DispositionReject, result.Disposition)
-	}
+	result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
 
-	require.Equal(t, []configEventRecord{
-		{cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeReject},
-		{cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeReject},
-	}, collector.records)
+	assert.Equal(t, outbox.DispositionAck, result.Disposition)
+	require.Equal(t, []configEventProcessRecord{{
+		cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonAck,
+	}}, collector.processRecords)
+	require.Len(t, result.SettlementObservers, 1)
 }
 
-func TestConfigEventRejectMiddleware_SkipsPermanentRejectAndNonTargets(t *testing.T) {
+func TestConfigEventMiddleware_RecordsSettlementOnlyAfterNotification(t *testing.T) {
 	collector := &recordingConfigEventCollector{}
-	mw := obmetrics.ConfigEventRejectMiddleware(collector, obmetrics.ConfigEventSubscription{
-		CellID:        "accesscore",
-		SliceID:       "configreceive",
-		Topic:         "event.config.entry-upserted.v1",
-		ConsumerGroup: "accesscore",
-	})
+	mw := obmetrics.ConfigEventMiddleware(collector)
+	entry := outbox.Entry{ID: "evt-1"}
+	wrapped := mw(
+		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
+		func(context.Context, outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionRequeue}
+		},
+	)
 
-	target := outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore"}
-	permanent := mw(target, func(context.Context, outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{
-			Disposition: outbox.DispositionReject,
-			Err:         outbox.NewPermanentError(errors.New("bad payload")),
-		}
-	})
-	result := permanent(context.Background(), outbox.Entry{ID: "evt-permanent"})
-	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	result := wrapped(context.Background(), entry)
+	assert.Empty(t, collector.settlementRecords)
 
-	other := mw(outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "auditcore"}, func(context.Context, outbox.Entry) outbox.HandleResult {
-		return outbox.HandleResult{Disposition: outbox.DispositionReject, Err: errors.New("retry exhausted")}
-	})
-	result = other(context.Background(), outbox.Entry{ID: "evt-other"})
-	assert.Equal(t, outbox.DispositionReject, result.Disposition)
+	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionRequeue, outbox.SettlementResultSuccess, nil)
 
-	assert.Empty(t, collector.records)
+	require.Equal(t, []configEventSettlementRecord{{
+		cell: "accesscore", slice: "configreceive", disposition: "requeue", result: outbox.SettlementResultSuccess,
+	}}, collector.settlementRecords)
+}
+
+func TestConfigEventMiddleware_SkipsSubscriptionsWithoutOwnerOrConfigTopic(t *testing.T) {
+	collector := &recordingConfigEventCollector{}
+	mw := obmetrics.ConfigEventMiddleware(collector)
+
+	for _, sub := range []outbox.Subscription{
+		{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore"},
+		{Topic: "event.audit.appended.v1", ConsumerGroup: "auditcore", CellID: "auditcore", SliceID: "auditappend"},
+	} {
+		wrapped := mw(sub, func(ctx context.Context, _ outbox.Entry) outbox.HandleResult {
+			obmetrics.RecordConfigEventProcess(ctx, collector, obmetrics.ConfigEventProcessReasonAck)
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		})
+		result := wrapped(context.Background(), outbox.Entry{ID: "evt-1"})
+		outbox.NotifySettlement(context.Background(), result, outbox.Entry{ID: "evt-1"}, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
+	}
+
+	assert.Empty(t, collector.processRecords)
+	assert.Empty(t, collector.settlementRecords)
 }
 
 type recordingConfigEventCollector struct {
-	records []configEventRecord
+	processRecords    []configEventProcessRecord
+	settlementRecords []configEventSettlementRecord
 }
 
-type configEventRecord struct {
-	cell    string
-	slice   string
-	outcome obmetrics.ConfigEventOutcome
+type configEventProcessRecord struct {
+	cell   string
+	slice  string
+	reason obmetrics.ConfigEventProcessReason
 }
 
-func (c *recordingConfigEventCollector) RecordEventProcessed(cellID, sliceID string, outcome obmetrics.ConfigEventOutcome) {
-	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, outcome: outcome})
+type configEventSettlementRecord struct {
+	cell        string
+	slice       string
+	disposition string
+	result      outbox.SettlementResult
+}
+
+func (c *recordingConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
+	c.processRecords = append(c.processRecords, configEventProcessRecord{cell: cellID, slice: sliceID, reason: reason})
+}
+
+func (c *recordingConfigEventCollector) RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult) {
+	c.settlementRecords = append(c.settlementRecords, configEventSettlementRecord{cell: cellID, slice: sliceID, disposition: disposition, result: result})
 }
 
 type failingCounterProvider struct {

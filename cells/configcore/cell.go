@@ -94,7 +94,7 @@ func WithMetricsProvider(p metrics.Provider) Option {
 	return func(c *ConfigCore) { c.metricsProvider = p }
 }
 
-// WithConfigEventCollector injects config-event consumer outcome metrics.
+// WithConfigEventCollector injects config-event consumer process metrics.
 func WithConfigEventCollector(collector obmetrics.ConfigEventCollector) Option {
 	return func(c *ConfigCore) { c.configEventCollector = collector }
 }

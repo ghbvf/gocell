@@ -211,7 +211,23 @@ type EventRouter interface {
 	// Returns a non-nil error when handler is nil, consumerGroup is empty,
 	// spec.Kind != "event", or spec.Validate() fails. Callers (typically
 	// Cell.RegisterSubscriptions) should propagate the error.
-	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) error
+	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...SubscriptionOption) error
+}
+
+// SubscriptionOptions carries optional event-subscription owner metadata.
+type SubscriptionOptions struct {
+	SliceID string
+}
+
+// SubscriptionOption configures optional event subscription metadata.
+type SubscriptionOption func(*SubscriptionOptions)
+
+// WithSubscriptionSliceID declares the owning slice for subscription
+// observability. The concrete router copies this into outbox.Subscription.
+func WithSubscriptionSliceID(sliceID string) SubscriptionOption {
+	return func(o *SubscriptionOptions) {
+		o.SliceID = sliceID
+	}
 }
 
 // EventRegistrar is optionally implemented by Cells that subscribe to events.

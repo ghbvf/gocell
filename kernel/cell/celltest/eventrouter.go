@@ -16,6 +16,7 @@ type StubEventRouter struct {
 	Topics         []string
 	Handlers       []outbox.EntryHandler
 	ConsumerGroups []string
+	SliceIDs       []string
 	Contracts      []wrapper.ContractSpec
 }
 
@@ -24,10 +25,17 @@ type StubEventRouter struct {
 // inputs — production-style validation lives in runtime/eventrouter.Router.
 // Returns nil unconditionally so cells can exercise their RegisterSubscriptions
 // happy path without bringing in the full router pipeline.
-func (r *StubEventRouter) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) error {
+func (r *StubEventRouter) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...cell.SubscriptionOption) error {
+	var subOpts cell.SubscriptionOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&subOpts)
+		}
+	}
 	r.Topics = append(r.Topics, spec.Topic)
 	r.Handlers = append(r.Handlers, handler)
 	r.ConsumerGroups = append(r.ConsumerGroups, consumerGroup)
+	r.SliceIDs = append(r.SliceIDs, subOpts.SliceID)
 	r.Contracts = append(r.Contracts, spec)
 	return nil
 }

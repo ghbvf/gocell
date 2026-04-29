@@ -630,6 +630,8 @@ type recordingGroupSubscriber struct {
 type groupSubscribeCall struct {
 	Topic         string
 	ConsumerGroup string
+	CellID        string
+	SliceID       string
 }
 
 func (s *recordingGroupSubscriber) Setup(_ context.Context, _ outbox.Subscription) error { return nil }
@@ -640,7 +642,12 @@ func (s *recordingGroupSubscriber) Ready(_ outbox.Subscription) <-chan struct{} 
 }
 func (s *recordingGroupSubscriber) Subscribe(ctx context.Context, sub outbox.Subscription, _ outbox.EntryHandler) error {
 	s.mu.Lock()
-	s.calls = append(s.calls, groupSubscribeCall{Topic: sub.Topic, ConsumerGroup: sub.ConsumerGroup})
+	s.calls = append(s.calls, groupSubscribeCall{
+		Topic:         sub.Topic,
+		ConsumerGroup: sub.ConsumerGroup,
+		CellID:        sub.CellID,
+		SliceID:       sub.SliceID,
+	})
 	s.mu.Unlock()
 	<-ctx.Done()
 	return ctx.Err()
@@ -662,7 +669,7 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 	r := New(sub)
 
 	_ = r.AddContractHandler(testEventSpec("session.created"), noopHandler, "auditcore")
-	_ = r.AddContractHandler(testEventSpec("config.entry-upserted"), noopHandler, "configcore")
+	_ = r.AddContractHandler(testEventSpec("config.entry-upserted"), noopHandler, "configcore", cell.WithSubscriptionSliceID("configsubscribe"))
 	_ = r.AddContractHandler(testEventSpec("legacy.event"), noopHandler, "legacy-cell")
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -689,6 +696,15 @@ func TestRouter_ConsumerGroup_PropagatesToSubscriber(t *testing.T) {
 	assert.Equal(t, "auditcore", groupByTopic["session.created"])
 	assert.Equal(t, "configcore", groupByTopic["config.entry-upserted"])
 	assert.Equal(t, "legacy-cell", groupByTopic["legacy.event"])
+
+	var configCall groupSubscribeCall
+	for _, c := range calls {
+		if c.Topic == "config.entry-upserted" {
+			configCall = c
+		}
+	}
+	assert.Equal(t, "configcore", configCall.CellID)
+	assert.Equal(t, "configsubscribe", configCall.SliceID)
 }
 
 func TestRouter_AddContractHandler_ReturnsErrorOnEmptyConsumerGroup(t *testing.T) {

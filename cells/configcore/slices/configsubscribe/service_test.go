@@ -36,13 +36,36 @@ type recordingConfigEventCollector struct {
 }
 
 type configEventRecord struct {
-	cell    string
-	slice   string
-	outcome obmetrics.ConfigEventOutcome
+	cell   string
+	slice  string
+	reason obmetrics.ConfigEventProcessReason
 }
 
-func (c *recordingConfigEventCollector) RecordEventProcessed(cellID, sliceID string, outcome obmetrics.ConfigEventOutcome) {
-	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, outcome: outcome})
+func (c *recordingConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
+	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, reason: reason})
+}
+
+func (c *recordingConfigEventCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
+}
+
+func callWithConfigEventOwner(
+	collector obmetrics.ConfigEventCollector,
+	entry outbox.Entry,
+	fn func(context.Context, outbox.Entry) error,
+) error {
+	var err error
+	wrapped := obmetrics.ConfigEventMiddleware(collector)(
+		outbox.Subscription{Topic: entry.Topic, ConsumerGroup: "configcore", CellID: "configcore", SliceID: "configsubscribe"},
+		func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+			err = fn(ctx, entry)
+			if err != nil {
+				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
+			}
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		},
+	)
+	wrapped(context.Background(), entry)
+	return err
 }
 
 func TestService_HandleEntryUpserted(t *testing.T) {
@@ -323,7 +346,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 			name:  "accepted upsert records ack",
 			entry: makeEntryUpserted("app.name", 1),
 			wantRecords: []configEventRecord{{
-				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeAck,
+				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
 		},
 		{
@@ -333,7 +356,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 			},
 			entry: makeEntryUpserted("app.name", 1),
 			wantRecords: []configEventRecord{{
-				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeStale,
+				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonStale,
 			}},
 		},
 		{
@@ -341,7 +364,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 			entry:   outbox.Entry{ID: "bad", Topic: domain.TopicConfigEntryUpserted, Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`)},
 			wantErr: true,
 			wantRecords: []configEventRecord{{
-				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomePermanentError,
+				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,
 			}},
 		},
 	}
@@ -355,7 +378,7 @@ func TestService_ConfigEventMetrics_EntryUpsertedOutcomes(t *testing.T) {
 				collector.records = nil
 			}
 
-			err := svc.HandleEntryUpserted(context.Background(), tt.entry)
+			err := callWithConfigEventOwner(collector, tt.entry, svc.HandleEntryUpserted)
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {
@@ -378,7 +401,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			name:  "accepted delete records ack",
 			entry: makeEntryDeleted("app.name", 1),
 			wantRecords: []configEventRecord{{
-				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeAck,
+				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
 		},
 		{
@@ -388,7 +411,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			},
 			entry: makeEntryDeleted("app.name", 3),
 			wantRecords: []configEventRecord{{
-				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeAck,
+				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
 		},
 		{
@@ -398,7 +421,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			},
 			entry: makeEntryDeleted("app.name", 2),
 			wantRecords: []configEventRecord{{
-				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeStale,
+				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonStale,
 			}},
 		},
 		{
@@ -409,7 +432,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			},
 			entry: makeEntryDeleted("app.name", 3),
 			wantRecords: []configEventRecord{{
-				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomeStale,
+				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonStale,
 			}},
 		},
 		{
@@ -417,7 +440,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 			entry:   outbox.Entry{ID: "bad-delete", Topic: domain.TopicConfigEntryDeleted, Payload: []byte(`{"key":"k","value":"v","version":1,"actorId":"a"}`)},
 			wantErr: true,
 			wantRecords: []configEventRecord{{
-				cell: "configcore", slice: "configsubscribe", outcome: obmetrics.ConfigEventOutcomePermanentError,
+				cell: "configcore", slice: "configsubscribe", reason: obmetrics.ConfigEventProcessReasonPermanentError,
 			}},
 		},
 	}
@@ -431,7 +454,7 @@ func TestService_ConfigEventMetrics_EntryDeletedOutcomes(t *testing.T) {
 				collector.records = nil
 			}
 
-			err := svc.HandleEntryDeleted(context.Background(), tt.entry)
+			err := callWithConfigEventOwner(collector, tt.entry, svc.HandleEntryDeleted)
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {

@@ -2,40 +2,44 @@ package metrics
 
 import (
 	"context"
-	"errors"
 	"fmt"
+	"strings"
 
 	kernelmetrics "github.com/ghbvf/gocell/kernel/observability/metrics"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/pkg/errcode"
 )
 
-// ConfigEventOutcome is the low-cardinality result taxonomy for config event
-// consumer processing.
-type ConfigEventOutcome string
+// ConfigEventProcessReason is the low-cardinality handler/process taxonomy for
+// config event consumers. It is intentionally separate from broker settlement.
+type ConfigEventProcessReason string
 
 const (
-	ConfigEventOutcomeAck            ConfigEventOutcome = "ack"
-	ConfigEventOutcomeStale          ConfigEventOutcome = "stale"
-	ConfigEventOutcomePermanentError ConfigEventOutcome = "permanent_error"
-	ConfigEventOutcomeReject         ConfigEventOutcome = "reject"
+	ConfigEventProcessReasonAck            ConfigEventProcessReason = "ack"
+	ConfigEventProcessReasonStale          ConfigEventProcessReason = "stale"
+	ConfigEventProcessReasonPermanentError ConfigEventProcessReason = "permanent_error"
 )
 
-// ConfigEventCollector records config event consumer outcomes.
+// ConfigEventCollector records config event process and settlement metrics.
 type ConfigEventCollector interface {
-	RecordEventProcessed(cellID, sliceID string, outcome ConfigEventOutcome)
+	RecordEventProcess(cellID, sliceID string, reason ConfigEventProcessReason)
+	RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult)
 }
 
 // NoopConfigEventCollector drops config event observations.
 type NoopConfigEventCollector struct{}
 
-func (NoopConfigEventCollector) RecordEventProcessed(string, string, ConfigEventOutcome) {
+func (NoopConfigEventCollector) RecordEventProcess(string, string, ConfigEventProcessReason) {
 	// Intentionally empty: callers can inject this collector when config-event
 	// metrics are disabled while keeping service code free of nil checks.
 }
 
+func (NoopConfigEventCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
+}
+
 type providerConfigEventCollector struct {
-	processed kernelmetrics.CounterVec
+	process    kernelmetrics.CounterVec
+	settlement kernelmetrics.CounterVec
 }
 
 var _ ConfigEventCollector = (*providerConfigEventCollector)(nil)
@@ -47,75 +51,102 @@ func NewProviderConfigEventCollector(p kernelmetrics.Provider) (ConfigEventColle
 		return nil, errcode.New(errcode.ErrObservabilityConfigInvalid,
 			"runtime/observability/metrics: config event Provider is required")
 	}
-	processed, err := p.CounterVec(kernelmetrics.CounterOpts{
-		Name:       "config_event_processed_total",
-		Help:       "Total number of config events processed by consumers, partitioned by outcome.",
-		LabelNames: []string{"cell", "slice", "outcome"},
+	process, err := p.CounterVec(kernelmetrics.CounterOpts{
+		Name:       "config_event_process_total",
+		Help:       "Total number of config event handler process results, partitioned by reason.",
+		LabelNames: []string{"cell", "slice", "reason"},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("runtime/observability/metrics: register config_event_processed_total: %w", err)
+		return nil, fmt.Errorf("runtime/observability/metrics: register config_event_process_total: %w", err)
 	}
-	return &providerConfigEventCollector{processed: processed}, nil
+	settlement, err := p.CounterVec(kernelmetrics.CounterOpts{
+		Name:       "config_event_settlement_total",
+		Help:       "Total number of config event delivery settlements, partitioned by disposition and result.",
+		LabelNames: []string{"cell", "slice", "disposition", "result"},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("runtime/observability/metrics: register config_event_settlement_total: %w", err)
+	}
+	return &providerConfigEventCollector{process: process, settlement: settlement}, nil
 }
 
-func (c *providerConfigEventCollector) RecordEventProcessed(cellID, sliceID string, outcome ConfigEventOutcome) {
+func (c *providerConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason ConfigEventProcessReason) {
 	if c == nil {
 		return
 	}
-	c.processed.With(kernelmetrics.Labels{
-		"cell":    cellID,
-		"slice":   sliceID,
-		"outcome": string(outcome),
+	c.process.With(kernelmetrics.Labels{
+		"cell":   cellID,
+		"slice":  sliceID,
+		"reason": string(reason),
 	}).Inc()
 }
 
-// ConfigEventSubscription identifies a config-event subscription whose final
-// non-permanent reject should be counted by ConfigEventRejectMiddleware.
-type ConfigEventSubscription struct {
-	CellID        string
-	SliceID       string
-	Topic         string
-	ConsumerGroup string
+func (c *providerConfigEventCollector) RecordEventSettlement(cellID, sliceID, disposition string, result outbox.SettlementResult) {
+	if c == nil {
+		return
+	}
+	c.settlement.With(kernelmetrics.Labels{
+		"cell":        cellID,
+		"slice":       sliceID,
+		"disposition": disposition,
+		"result":      string(result),
+	}).Inc()
 }
 
-// ConfigEventRejectMiddleware records outcome=reject only after downstream
-// middleware returns a final non-permanent Reject. Register it outside
-// ConsumerBase so retry exhaustion is counted once, after all local attempts.
-func ConfigEventRejectMiddleware(
-	collector ConfigEventCollector,
-	targets ...ConfigEventSubscription,
-) outbox.SubscriptionMiddleware {
+type configEventOwner struct {
+	cellID  string
+	sliceID string
+}
+
+type configEventOwnerContextKey struct{}
+
+// RecordConfigEventProcess records a handler/process reason using the owner
+// metadata installed by ConfigEventMiddleware.
+func RecordConfigEventProcess(ctx context.Context, collector ConfigEventCollector, reason ConfigEventProcessReason) {
 	if collector == nil {
 		collector = NoopConfigEventCollector{}
 	}
-	targetBySub := make(map[string]ConfigEventSubscription, len(targets))
-	for _, target := range targets {
-		targetBySub[configEventSubscriptionKey(target.Topic, target.ConsumerGroup)] = target
+	owner, ok := ctx.Value(configEventOwnerContextKey{}).(configEventOwner)
+	if !ok || owner.cellID == "" || owner.sliceID == "" {
+		return
+	}
+	collector.RecordEventProcess(owner.cellID, owner.sliceID, reason)
+}
+
+// ConfigEventMiddleware installs config-event owner metadata for process
+// metrics and appends a settlement observer for final broker disposition.
+func ConfigEventMiddleware(collector ConfigEventCollector) outbox.SubscriptionMiddleware {
+	if collector == nil {
+		collector = NoopConfigEventCollector{}
 	}
 	return func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
-		target, ok := targetBySub[configEventSubscriptionKey(sub.Topic, sub.ConsumerGroup)]
-		if !ok {
+		if !isConfigEventSubscription(sub) {
 			return next
 		}
+		owner := configEventOwner{cellID: sub.CellID, sliceID: sub.SliceID}
 		return func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+			ctx = context.WithValue(ctx, configEventOwnerContextKey{}, owner)
 			result := next(ctx, entry)
-			if result.Disposition != outbox.DispositionReject || isPermanentConfigEventReject(result.Err) {
-				return result
-			}
-			collector.RecordEventProcessed(target.CellID, target.SliceID, ConfigEventOutcomeReject)
+			result.SettlementObservers = append(result.SettlementObservers, configEventSettlementObserver{
+				collector: collector,
+				owner:     owner,
+			})
 			return result
 		}
 	}
 }
 
-func configEventSubscriptionKey(topic, consumerGroup string) string {
-	return topic + "\x00" + consumerGroup
+func isConfigEventSubscription(sub outbox.Subscription) bool {
+	return sub.CellID != "" &&
+		sub.SliceID != "" &&
+		strings.HasPrefix(sub.Topic, "event.config.")
 }
 
-func isPermanentConfigEventReject(err error) bool {
-	if err == nil {
-		return false
-	}
-	var permErr *outbox.PermanentError
-	return errors.As(err, &permErr)
+type configEventSettlementObserver struct {
+	collector ConfigEventCollector
+	owner     configEventOwner
+}
+
+func (o configEventSettlementObserver) ObserveSettlement(_ context.Context, obs outbox.SettlementObservation) {
+	o.collector.RecordEventSettlement(o.owner.cellID, o.owner.sliceID, obs.Disposition.String(), obs.Result)
 }

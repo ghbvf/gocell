@@ -63,6 +63,7 @@ type handlerConfig struct {
 	topic         string
 	handler       outbox.EntryHandler
 	consumerGroup string
+	sliceID       string
 	contract      wrapper.ContractSpec
 }
 
@@ -116,7 +117,7 @@ func New(sub outbox.Subscriber, opts ...Option) *Router {
 // spec is malformed, or kernel/cell.EventRouter contract is otherwise
 // violated; callers (Cell.RegisterSubscriptions) should propagate the error
 // to the bootstrap phase5 walker.
-func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string) error {
+func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...cell.SubscriptionOption) error {
 	if handler == nil {
 		return fmt.Errorf("eventrouter: AddContractHandler called with nil handler")
 	}
@@ -129,12 +130,19 @@ func (r *Router) AddContractHandler(spec wrapper.ContractSpec, handler outbox.En
 	if err := spec.Validate(); err != nil {
 		return fmt.Errorf("eventrouter: AddContractHandler: %w", err)
 	}
+	var subOpts cell.SubscriptionOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&subOpts)
+		}
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.handlers = append(r.handlers, handlerConfig{
 		topic:         spec.Topic,
 		handler:       handler,
 		consumerGroup: consumerGroup,
+		sliceID:       subOpts.SliceID,
 		contract:      spec,
 	})
 	return nil
@@ -362,6 +370,7 @@ func (h handlerConfig) subscription() outbox.Subscription {
 		Topic:         h.topic,
 		ConsumerGroup: h.consumerGroup,
 		CellID:        h.consumerGroup,
+		SliceID:       h.sliceID,
 	}
 	if h.contract.ID != "" {
 		sub.ContractID = h.contract.ID

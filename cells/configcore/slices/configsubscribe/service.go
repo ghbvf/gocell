@@ -18,11 +18,6 @@ import (
 	obmetrics "github.com/ghbvf/gocell/runtime/observability/metrics"
 )
 
-const (
-	configEventCellID  = "configcore"
-	configEventSliceID = "configsubscribe"
-)
-
 // cacheEntry tracks the highest version seen for a config key plus a presence
 // flag indicating whether the key is currently active (present=true) or
 // tombstoned by a delete event (present=false).
@@ -88,7 +83,7 @@ type Service struct {
 // Option configures a configsubscribe Service.
 type Option func(*Service)
 
-// WithConfigEventCollector injects config event outcome metrics.
+// WithConfigEventCollector injects config event process metrics.
 func WithConfigEventCollector(c obmetrics.ConfigEventCollector) Option {
 	return func(s *Service) {
 		if c == nil {
@@ -116,11 +111,11 @@ func (s *Service) Cache() *Cache {
 	return s.cache
 }
 
-func (s *Service) recordConfigEventOutcome(outcome obmetrics.ConfigEventOutcome) {
+func (s *Service) recordConfigEventProcess(ctx context.Context, reason obmetrics.ConfigEventProcessReason) {
 	if s.configEventCollector == nil {
 		return
 	}
-	s.configEventCollector.RecordEventProcessed(configEventCellID, configEventSliceID, outcome)
+	obmetrics.RecordConfigEventProcess(ctx, s.configEventCollector, reason)
 }
 
 // HandleEntryUpserted processes an event.config.entry-upserted.v1 event.
@@ -134,12 +129,12 @@ func (s *Service) recordConfigEventOutcome(outcome obmetrics.ConfigEventOutcome)
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false)
-func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) error {
+func (s *Service) HandleEntryUpserted(ctx context.Context, entry outbox.Entry) error {
 	event, err := configevents.DecodeEntryUpserted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal entry-upserted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomePermanentError)
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-upserted payload: %w", err))
 	}
 
@@ -151,7 +146,7 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 			slog.String("key", event.Key),
 			slog.Int("incoming_version", event.Version),
 			slog.Int("known_version", known.version))
-		s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomeStale)
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 		return nil
 	}
 	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: true}
@@ -159,7 +154,7 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 	s.logger.Debug("config-subscribe: cache updated",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
-	s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomeAck)
+	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
 	return nil
 }
 
@@ -178,12 +173,12 @@ func (s *Service) HandleEntryUpserted(_ context.Context, entry outbox.Entry) err
 // Idempotency: Claimer (two-phase Claim/Commit/Release), TTL 24h
 // Disposition: Ack on success / Requeue on transient / Reject on permanent
 // DLX: broker-native via DispositionReject → Nack(requeue=false)
-func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) error {
+func (s *Service) HandleEntryDeleted(ctx context.Context, entry outbox.Entry) error {
 	event, err := configevents.DecodeEntryDeleted(entry.Payload)
 	if err != nil {
 		s.logger.Error("config-subscribe: failed to unmarshal entry-deleted event, routing to dead letter",
 			slog.Any("error", err), slog.String("entry_id", entry.ID))
-		s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomePermanentError)
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonPermanentError)
 		return outbox.NewPermanentError(fmt.Errorf("config-subscribe: unmarshal entry-deleted payload: %w", err))
 	}
 
@@ -199,7 +194,7 @@ func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) erro
 			slog.String("key", event.Key),
 			slog.Int("incoming_version", event.Version),
 			slog.Int("known_version", known.version))
-		s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomeStale)
+		s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonStale)
 		return nil
 	}
 	s.cache.entries[event.Key] = cacheEntry{version: event.Version, present: false}
@@ -207,6 +202,6 @@ func (s *Service) HandleEntryDeleted(_ context.Context, entry outbox.Entry) erro
 	s.logger.Debug("config-subscribe: key tombstoned in cache",
 		slog.String("key", event.Key),
 		slog.Int("version", event.Version))
-	s.recordConfigEventOutcome(obmetrics.ConfigEventOutcomeAck)
+	s.recordConfigEventProcess(ctx, obmetrics.ConfigEventProcessReasonAck)
 	return nil
 }

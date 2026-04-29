@@ -667,10 +667,16 @@ func (sp *scanPackage) providerConfigEventCollectorEntries(call *ast.CallExpr, r
 	}
 	return []Entry{
 		sp.entryFromOpts("counter", opts{
-			name:      "config_event_processed_total",
+			name:      "config_event_process_total",
 			namespace: sp.namespace,
-			help:      "Total number of config events processed by consumers, partitioned by outcome.",
-			labels:    []string{"cell", "slice", "outcome"},
+			help:      "Total number of config event handler process results, partitioned by reason.",
+			labels:    []string{"cell", "slice", "reason"},
+		}, rel, call.Pos()),
+		sp.entryFromOpts("counter", opts{
+			name:      "config_event_settlement_total",
+			namespace: sp.namespace,
+			help:      "Total number of config event delivery settlements, partitioned by disposition and result.",
+			labels:    []string{"cell", "slice", "disposition", "result"},
 		}, rel, call.Pos()),
 	}, nil
 }

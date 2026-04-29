@@ -31,13 +31,36 @@ type recordingConfigEventCollector struct {
 }
 
 type configEventRecord struct {
-	cell    string
-	slice   string
-	outcome obmetrics.ConfigEventOutcome
+	cell   string
+	slice  string
+	reason obmetrics.ConfigEventProcessReason
 }
 
-func (c *recordingConfigEventCollector) RecordEventProcessed(cellID, sliceID string, outcome obmetrics.ConfigEventOutcome) {
-	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, outcome: outcome})
+func (c *recordingConfigEventCollector) RecordEventProcess(cellID, sliceID string, reason obmetrics.ConfigEventProcessReason) {
+	c.records = append(c.records, configEventRecord{cell: cellID, slice: sliceID, reason: reason})
+}
+
+func (c *recordingConfigEventCollector) RecordEventSettlement(string, string, string, outbox.SettlementResult) {
+}
+
+func callWithConfigEventOwner(
+	collector obmetrics.ConfigEventCollector,
+	entry outbox.Entry,
+	fn func(context.Context, outbox.Entry) error,
+) error {
+	var err error
+	wrapped := obmetrics.ConfigEventMiddleware(collector)(
+		outbox.Subscription{Topic: entry.Topic, ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
+		func(ctx context.Context, entry outbox.Entry) outbox.HandleResult {
+			err = fn(ctx, entry)
+			if err != nil {
+				return outbox.HandleResult{Disposition: outbox.DispositionRequeue, Err: err}
+			}
+			return outbox.HandleResult{Disposition: outbox.DispositionAck}
+		},
+	)
+	wrapped(context.Background(), entry)
+	return err
 }
 
 func TestHandleEntryUpserted_ValidPayload(t *testing.T) {
@@ -273,7 +296,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			name:    "valid upsert without getter records ack",
 			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantRecords: []configEventRecord{{
-				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeAck,
+				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
 		},
 		{
@@ -283,7 +306,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			}},
 			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantRecords: []configEventRecord{{
-				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeAck,
+				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
 		},
 		{
@@ -291,7 +314,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			getter:  &stubConfigGetter{err: errcode.NewDomain(errcode.ErrConfigNotFound, "missing")},
 			payload: []byte(`{"key":"jwt.ttl","version":1,"actorId":"adm-1"}`),
 			wantRecords: []configEventRecord{{
-				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeStale,
+				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonStale,
 			}},
 		},
 		{
@@ -299,7 +322,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			payload: []byte(`{"key":"jwt.ttl","value":"30m","version":1,"actorId":"adm-1"}`),
 			wantErr: true,
 			wantRecords: []configEventRecord{{
-				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomePermanentError,
+				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonPermanentError,
 			}},
 		},
 		{
@@ -321,7 +344,7 @@ func TestHandleEntryUpserted_ConfigEventMetricsOutcomes(t *testing.T) {
 			svc := NewService(slog.Default(), opts...)
 			entry := outbox.Entry{ID: "evt-metrics", Topic: TopicConfigEntryUpserted, Payload: tt.payload}
 
-			err := svc.HandleEntryUpserted(context.Background(), entry)
+			err := callWithConfigEventOwner(collector, entry, svc.HandleEntryUpserted)
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {
@@ -343,7 +366,7 @@ func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 			name:    "valid delete records ack",
 			payload: []byte(`{"key":"jwt.ttl","version":3,"actorId":"adm-1"}`),
 			wantRecords: []configEventRecord{{
-				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomeAck,
+				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonAck,
 			}},
 		},
 		{
@@ -351,7 +374,7 @@ func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 			payload: []byte(`{"key":"jwt.ttl","value":"old","version":3,"actorId":"adm-1"}`),
 			wantErr: true,
 			wantRecords: []configEventRecord{{
-				cell: "accesscore", slice: "configreceive", outcome: obmetrics.ConfigEventOutcomePermanentError,
+				cell: "accesscore", slice: "configreceive", reason: obmetrics.ConfigEventProcessReasonPermanentError,
 			}},
 		},
 	}
@@ -362,7 +385,7 @@ func TestHandleEntryDeleted_ConfigEventMetricsOutcomes(t *testing.T) {
 			svc := NewService(slog.Default(), WithConfigEventCollector(collector))
 			entry := outbox.Entry{ID: "evt-del-metrics", Topic: TopicConfigEntryDeleted, Payload: tt.payload}
 
-			err := svc.HandleEntryDeleted(context.Background(), entry)
+			err := callWithConfigEventOwner(collector, entry, svc.HandleEntryDeleted)
 			if tt.wantErr {
 				require.Error(t, err)
 			} else {
