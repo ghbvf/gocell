@@ -113,7 +113,7 @@ metrics:
         - "30"
         - "60"
       file: runtime/bootstrap/shutdown_metrics.go
-      line: 130
+      line: 131
     - name: bootstrap_shutdown_phase_entries_total
       fqName: gocell_bootstrap_shutdown_phase_entries_total
       namespace: gocell
@@ -122,7 +122,7 @@ metrics:
       labels:
         - phase
       file: runtime/bootstrap/shutdown_metrics.go
-      line: 120
+      line: 121
     - name: bootstrap_shutdown_total
       fqName: gocell_bootstrap_shutdown_total
       namespace: gocell
@@ -131,7 +131,7 @@ metrics:
       labels:
         - outcome
       file: runtime/bootstrap/shutdown_metrics.go
-      line: 141
+      line: 142
     - name: cached_key_version
       fqName: gocell_vault_cached_key_version
       namespace: gocell
