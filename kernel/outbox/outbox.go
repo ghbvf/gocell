@@ -494,10 +494,11 @@ type Receipt = idempotency.Receipt
 type SettlementResult string
 
 const (
-	SettlementResultSuccess      SettlementResult = "success"
-	SettlementResultCommitFailed SettlementResult = "commit_failed"
-	SettlementResultAckFailed    SettlementResult = "ack_failed"
-	SettlementResultNackFailed   SettlementResult = "nack_failed"
+	SettlementResultSuccess        SettlementResult = "success"
+	SettlementResultRetryExhausted SettlementResult = "retry_exhausted"
+	SettlementResultCommitFailed   SettlementResult = "commit_failed"
+	SettlementResultAckFailed      SettlementResult = "ack_failed"
+	SettlementResultNackFailed     SettlementResult = "nack_failed"
 )
 
 // SettlementObservation is emitted by subscribers after the final delivery
@@ -556,9 +557,20 @@ func NotifySettlement(ctx context.Context, result HandleResult, entry Entry, dis
 		Err:           err,
 	}
 	for _, observer := range result.SettlementObservers {
-		if observer != nil {
-			observer.ObserveSettlement(ctx, obs)
+		if observer == nil {
+			continue
 		}
+		func() {
+			defer func() {
+				if r := recover(); r != nil {
+					slog.LogAttrs(ctx, slog.LevelError, "outbox: settlement observer panicked",
+						slog.String("topic", entry.Topic),
+						slog.String("entry_id", entry.ID),
+						slog.Any("panic", r))
+				}
+			}()
+			observer.ObserveSettlement(ctx, obs)
+		}()
 	}
 }
 

@@ -52,6 +52,10 @@ func (b *Bootstrap) phase6StartEventRouter(runCtx context.Context, s *phaseState
 		Middleware: mws,
 	}, evtRouterOpts...)
 
+	for _, v := range b.subscriptionValidators {
+		evtRouter.AddSubscriptionValidator(v)
+	}
+
 	for _, id := range s.asm.CellIDs() {
 		c := s.asm.Cell(id)
 		if er, ok := c.(cell.EventRegistrar); ok {

@@ -45,21 +45,19 @@ func TestConfigEventConsumerMiddlewareUsesSubscriptionOwnerMetadata(t *testing.T
 	}}, collector.settlementRecords)
 }
 
-func TestConfigEventConsumerMiddlewareSkipsSubscriptionsWithoutOwnerMetadata(t *testing.T) {
-	collector := &recordingCoreConfigEventCollector{}
-	mw := configEventConsumerMiddleware(collector)
-	entry := outbox.Entry{ID: "evt-target"}
-	wrapped := mw(
-		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore"},
-		func(context.Context, outbox.Entry) outbox.HandleResult {
-			return outbox.HandleResult{Disposition: outbox.DispositionAck}
-		},
-	)
-
-	result := wrapped(context.Background(), entry)
-	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionAck, outbox.SettlementResultSuccess, nil)
-
-	assert.Empty(t, collector.settlementRecords)
+// TestConfigEventOwnerValidator_RejectsConfigSubscriptionWithoutOwner verifies
+// that ConfigEventOwnerValidator returns an error when a config-topic subscription
+// is missing CellID or SliceID owner metadata. This is the registration-time
+// fail-fast (Finding 2, PR #334 L4 review).
+func TestConfigEventOwnerValidator_RejectsConfigSubscriptionWithoutOwner(t *testing.T) {
+	sub := outbox.Subscription{
+		Topic:         "event.config.entry-upserted.v1",
+		ConsumerGroup: "accesscore",
+		// Intentionally missing CellID and SliceID.
+	}
+	err := obmetrics.ConfigEventOwnerValidator(sub)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "owner metadata")
 }
 
 func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *testing.T) {
@@ -83,12 +81,12 @@ func TestConsumerMiddlewares_ConfigEventSettlementRunsOutsideConsumerBase(t *tes
 	)
 
 	result := wrapped(context.Background(), entry)
-	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultSuccess, nil)
+	outbox.NotifySettlement(context.Background(), result, entry, result.Disposition, outbox.SettlementResultRetryExhausted, nil)
 
 	assert.Equal(t, 2, attempts)
 	assert.Equal(t, outbox.DispositionReject, result.Disposition)
 	require.Equal(t, []coreConfigEventSettlementRecord{{
-		cell: "accesscore", slice: "configreceive", disposition: "reject", result: outbox.SettlementResultSuccess,
+		cell: "accesscore", slice: "configreceive", disposition: "reject", result: outbox.SettlementResultRetryExhausted,
 	}}, collector.settlementRecords)
 }
 

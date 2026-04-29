@@ -115,12 +115,18 @@ func RecordConfigEventProcess(ctx context.Context, collector ConfigEventCollecto
 
 // ConfigEventMiddleware installs config-event owner metadata for process
 // metrics and appends a settlement observer for final broker disposition.
+// The non-config-prefix fast path (isConfigEventSubscription == false) is
+// legitimate: non-config subscriptions and audit/command topics pass through
+// without instrumentation. Config subscriptions missing owner metadata are
+// intercepted at registration time by ConfigEventOwnerValidator and never
+// reach this middleware.
 func ConfigEventMiddleware(collector ConfigEventCollector) outbox.SubscriptionMiddleware {
 	if collector == nil {
 		collector = NoopConfigEventCollector{}
 	}
 	return func(sub outbox.Subscription, next outbox.EntryHandler) outbox.EntryHandler {
 		if !isConfigEventSubscription(sub) {
+			// Fast path: non-config-prefix or non-config topic — skip instrumentation.
 			return next
 		}
 		owner := configEventOwner{cellID: sub.CellID, sliceID: sub.SliceID}
@@ -136,6 +142,28 @@ func ConfigEventMiddleware(collector ConfigEventCollector) outbox.SubscriptionMi
 	}
 }
 
+// ConfigEventOwnerValidator enforces that any subscription on an event.config.*
+// topic carries owner metadata (CellID + SliceID) so config-event observability
+// cannot be silently dropped at runtime. Composition roots register this with
+// EventRouter.AddSubscriptionValidator.
+//
+// ref: kratos middleware/recovery — fail at registration boundary, not at
+// delivery time, so misconfigurations surface during bootstrap.
+func ConfigEventOwnerValidator(sub outbox.Subscription) error {
+	if !strings.HasPrefix(sub.Topic, "event.config.") {
+		return nil
+	}
+	if sub.CellID == "" || sub.SliceID == "" {
+		return fmt.Errorf("config-event subscription %q requires CellID and SliceID owner metadata (use cell.WithSubscriptionSliceID)", sub.Topic)
+	}
+	return nil
+}
+
+// isConfigEventSubscription returns true when sub has a config-event topic prefix
+// and both CellID and SliceID owner fields set. Non-config topics are the fast
+// path (legitimate skip); config topics missing owner are intercepted at
+// registration time by ConfigEventOwnerValidator — they will not reach this
+// function at delivery time.
 func isConfigEventSubscription(sub outbox.Subscription) bool {
 	return sub.CellID != "" &&
 		sub.SliceID != "" &&

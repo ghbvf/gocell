@@ -148,6 +148,77 @@ func (c *recordingConfigEventCollector) RecordEventSettlement(cellID, sliceID, d
 	c.settlementRecords = append(c.settlementRecords, configEventSettlementRecord{cell: cellID, slice: sliceID, disposition: disposition, result: result})
 }
 
+// ---------------------------------------------------------------------------
+// ConfigEventOwnerValidator tests (Finding 2 — registration-time validation)
+// ---------------------------------------------------------------------------
+
+func TestConfigEventOwnerValidator(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		sub     outbox.Subscription
+		wantErr bool
+		errMsg  string
+	}{
+		{
+			name:    "non-config topic passes",
+			sub:     outbox.Subscription{Topic: "event.audit.appended.v1", ConsumerGroup: "auditcore", CellID: "auditcore", SliceID: "auditappend"},
+			wantErr: false,
+		},
+		{
+			name:    "config topic with owner passes",
+			sub:     outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
+			wantErr: false,
+		},
+		{
+			name:    "config topic missing CellID fails",
+			sub:     outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", SliceID: "configreceive"},
+			wantErr: true,
+			errMsg:  "owner metadata",
+		},
+		{
+			name:    "config topic missing SliceID fails",
+			sub:     outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore"},
+			wantErr: true,
+			errMsg:  "owner metadata",
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := obmetrics.ConfigEventOwnerValidator(tc.sub)
+			if tc.wantErr {
+				require.Error(t, err)
+				assert.Contains(t, err.Error(), tc.errMsg)
+			} else {
+				assert.NoError(t, err)
+			}
+		})
+	}
+}
+
+// TestConfigEventMiddleware_RetryExhaustedSettlement verifies that when
+// NotifySettlement is called with SettlementResultRetryExhausted, the
+// settlement observer records the correct result label.
+func TestConfigEventMiddleware_RetryExhaustedSettlement(t *testing.T) {
+	t.Parallel()
+	collector := &recordingConfigEventCollector{}
+	mw := obmetrics.ConfigEventMiddleware(collector)
+	entry := outbox.Entry{ID: "evt-retry-exhausted"}
+	wrapped := mw(
+		outbox.Subscription{Topic: "event.config.entry-upserted.v1", ConsumerGroup: "accesscore", CellID: "accesscore", SliceID: "configreceive"},
+		func(context.Context, outbox.Entry) outbox.HandleResult {
+			return outbox.HandleResult{Disposition: outbox.DispositionReject, ProcessReason: "retry_exhausted"}
+		},
+	)
+
+	result := wrapped(context.Background(), entry)
+	outbox.NotifySettlement(context.Background(), result, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, nil)
+
+	require.Equal(t, []configEventSettlementRecord{{
+		cell: "accesscore", slice: "configreceive", disposition: "reject", result: outbox.SettlementResultRetryExhausted,
+	}}, collector.settlementRecords)
+}
+
 type failingCounterProvider struct {
 	kernelmetrics.NopProvider
 }

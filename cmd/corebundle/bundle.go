@@ -82,6 +82,7 @@ func runtimeBaseOptions(
 		bootstrap.WithPublisher(shared.EventBus),
 		bootstrap.WithSubscriber(shared.EventBus),
 		bootstrap.WithConsumerMiddleware(consumerMiddlewares(shared, consumerBase)...),
+		bootstrap.WithSubscriptionValidator(obmetrics.ConfigEventOwnerValidator),
 		bootstrap.WithAdapterInfo(adapterInfo),
 		bootstrap.WithHealthRoutes(healthRouteOpts...),
 		bootstrap.WithMetricsProvider(shared.PromStack.metricProvider),

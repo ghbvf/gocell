@@ -214,6 +214,22 @@ type EventRouter interface {
 	AddContractHandler(spec wrapper.ContractSpec, handler outbox.EntryHandler, consumerGroup string, opts ...SubscriptionOption) error
 }
 
+// SubscriptionValidator validates a Subscription at registration time. Validators
+// are invoked by the EventRouter implementation after the Subscription has been
+// constructed but before the handler is registered. A non-nil error fails the
+// registration and bubbles up to RegisterSubscriptions.
+//
+// ref: opentelemetry-collector otelcol/config.go Validate() — declarative,
+// composable validation at config load time.
+type SubscriptionValidator func(outbox.Subscription) error
+
+// SubscriptionValidatorRegistrar lets composition roots inject registration-time
+// validators. Implementations of EventRouter MAY also implement this interface;
+// composition roots type-assert at wiring time.
+type SubscriptionValidatorRegistrar interface {
+	AddSubscriptionValidator(SubscriptionValidator)
+}
+
 // SubscriptionOptions carries optional event-subscription owner metadata.
 type SubscriptionOptions struct {
 	SliceID string

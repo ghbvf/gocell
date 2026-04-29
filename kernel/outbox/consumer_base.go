@@ -505,7 +505,7 @@ func (cb *ConsumerBase) retryLoop(
 		Disposition:   DispositionReject,
 		Err:           lastResult.Err,
 		Receipt:       receipt,
-		ProcessReason: lastResult.ProcessReason,
+		ProcessReason: "retry_exhausted",
 	}
 }
 

@@ -507,6 +507,53 @@ var noopHandler = func(_ context.Context, _ outbox.Entry) outbox.HandleResult {
 	return outbox.HandleResult{Disposition: outbox.DispositionAck}
 }
 
+// ---------------------------------------------------------------------------
+// SubscriptionValidator tests (Finding 2 — registration-time validation)
+// ---------------------------------------------------------------------------
+
+// TestRouter_AddSubscriptionValidator_ChainSucceeds verifies that when all
+// registered validators return nil, AddContractHandler succeeds.
+func TestRouter_AddSubscriptionValidator_ChainSucceeds(t *testing.T) {
+	r := New(&blockingSubscriber{})
+
+	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return nil })
+	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return nil })
+
+	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore",
+		cell.WithSubscriptionSliceID("configreceive"))
+	require.NoError(t, err)
+}
+
+// TestRouter_AddSubscriptionValidator_FirstFailureAggregated verifies that when
+// multiple validators fail, both errors are surfaced via errors.Join.
+func TestRouter_AddSubscriptionValidator_FirstFailureAggregated(t *testing.T) {
+	r := New(&blockingSubscriber{})
+
+	sentinel1 := errors.New("validator-1 failed")
+	sentinel2 := errors.New("validator-2 failed")
+	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return sentinel1 })
+	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return sentinel2 })
+
+	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel1, "first validator error must be included")
+	assert.ErrorIs(t, err, sentinel2, "second validator error must be included")
+}
+
+// TestRouter_AddSubscriptionValidator_NilSkipped verifies that a nil validator
+// in the chain does not panic and that a non-nil validator still fires.
+func TestRouter_AddSubscriptionValidator_NilSkipped(t *testing.T) {
+	r := New(&blockingSubscriber{})
+
+	sentinel := errors.New("non-nil validator failed")
+	r.AddSubscriptionValidator(nil)
+	r.AddSubscriptionValidator(func(_ outbox.Subscription) error { return sentinel })
+
+	err := r.AddContractHandler(testEventSpec("event.config.entry-upserted.v1"), noopHandler, "accesscore")
+	require.Error(t, err)
+	assert.ErrorIs(t, err, sentinel)
+}
+
 // mockCell implements cell.EventRegistrar for testing.
 type mockCell struct {
 	handler outbox.EntryHandler

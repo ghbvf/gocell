@@ -72,15 +72,16 @@ config event consumer 拆成两条生命周期边界不同的指标：
 | settlement disposition/result | 含义 |
 |---|---|
 | `ack/success` | delivery 最终 ack 成功 |
-| `reject/success` | delivery 最终 reject，进入 DLX |
+| `reject/success` | handler 永久错误或显式 reject 后进入 DLX |
+| `reject/retry_exhausted` | 重试耗尽后 reject，进入 DLX |
 | `requeue/success` | delivery 最终 requeue，将被重投 |
 | `requeue/commit_failed` | handler 原本 ack，但 receipt commit 失败，已降级 requeue |
 | `ack/ack_failed` 或 `*/nack_failed` | broker settlement 调用失败，需要检查 broker/channel 状态 |
 
 ### ConfigEventConsumerReject
 
-非永久错误耗尽 ConsumerBase 本地重试后进入 DLX。通常意味着 configcore 内部 GET
-或下游依赖持续故障，重试已经无法在本次投递内恢复。
+handler 永久错误（payload / schema / 语义问题）或显式 DispositionReject 后进入 DLX。
+`result="success"` 桶仅命中 PermanentError 或 handler 主动 Reject 路径，与重试耗尽桶互斥。
 
 ```yaml
 - alert: GoCellConfigEventConsumerReject
@@ -89,12 +90,32 @@ config event consumer 拆成两条生命周期边界不同的指标：
   labels:
     severity: warning
   annotations:
-    summary: "Config event consumer rejecting after retries ({{ $labels.cell }}/{{ $labels.slice }})"
+    summary: "Config event consumer permanent reject ({{ $labels.cell }}/{{ $labels.slice }})"
     description: |
-      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is rejecting
-      non-permanent failures after ConsumerBase retry exhaustion.
-      Check consumer logs for "retry budget exhausted" and verify configcore internal
-      GET readiness plus the downstream dependency named by the handler error.
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} is routing
+      permanent payload/handler errors to DLX (result=success means PermanentError or
+      explicit DispositionReject, not retry exhaustion).
+      Check consumer logs for "permanent error, rejecting to DLX" and verify
+      producer/contract drift.
+```
+
+### ConfigEventConsumerRetryExhausted
+
+ConsumerBase 重试预算耗尽后进入 DLX。通常意味着下游依赖持续故障，重试已经无法在本次投递内恢复。
+
+```yaml
+- alert: GoCellConfigEventConsumerRetryExhausted
+  expr: sum(increase(gocell_config_event_settlement_total{disposition="reject",result="retry_exhausted"}[10m])) by (cell, slice) > 0
+  for: 0m
+  labels:
+    severity: warning
+  annotations:
+    summary: "Config event consumer retry budget exhausted ({{ $labels.cell }}/{{ $labels.slice }})"
+    description: |
+      Config event consumer {{ $labels.cell }}/{{ $labels.slice }} exhausted
+      ConsumerBase retry budget; downstream dependency likely failing.
+      Check consumer logs for "retry budget exhausted" and verify configcore
+      internal GET readiness plus the downstream dependency named by the handler error.
 ```
 
 ### ConfigEventConsumerPermanentError
