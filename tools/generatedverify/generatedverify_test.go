@@ -35,11 +35,10 @@ func TestExpectedArtifactsDerivesManifestFromMetadata(t *testing.T) {
 	assert.Contains(t, string(artifacts[2].Content), "entrypoint: cmd/fixture/main.go")
 }
 
-func TestVerifyPassesWhenExpectedFilesAreTracked(t *testing.T) {
+func TestVerifyPassesWhenExpectedFilesAreCommitted(t *testing.T) {
 	root, project := newGeneratedFixture(t)
 	artifacts := writeExpectedArtifacts(t, root, project)
-	gitRun(t, root, "init")
-	gitRun(t, root, "add", artifactPaths(artifacts)...)
+	gitInitAndCommit(t, root, artifactPaths(artifacts))
 
 	result, err := Verify(root, fixtureModule, project)
 	require.NoError(t, err)
@@ -84,10 +83,11 @@ func TestVerifyReportsMissingAndChangedArtifacts(t *testing.T) {
 	}, result.Drifts)
 }
 
-func TestVerifyReportsUntrackedArtifacts(t *testing.T) {
+func TestVerifyReportsUncommittedArtifactsInsideGitRepo(t *testing.T) {
 	root, project := newGeneratedFixture(t)
 	writeExpectedArtifacts(t, root, project)
-	gitRun(t, root, "init")
+	gitRun(t, root, "init", "-q")
+	gitConfigUser(t, root)
 
 	result, err := Verify(root, fixtureModule, project)
 	require.NoError(t, err)
@@ -98,21 +98,91 @@ func TestVerifyReportsUntrackedArtifacts(t *testing.T) {
 			AssemblyID: "fixture",
 			Kind:       "boundary",
 			Path:       "assemblies/fixture/generated/boundary.yaml",
-			Message:    "file is not tracked by git",
+			Message:    "file is not committed in HEAD",
 		},
 		{
 			AssemblyID: "fixture",
 			Kind:       "metrics-schema",
 			Path:       "assemblies/fixture/generated/metrics-schema.yaml",
-			Message:    "file is not tracked by git",
+			Message:    "file is not committed in HEAD",
 		},
 		{
 			AssemblyID: "fixture",
 			Kind:       "assembly-entrypoint",
 			Path:       "cmd/fixture/main.go",
-			Message:    "file is not tracked by git",
+			Message:    "file is not committed in HEAD",
 		},
 	}, result.Drifts)
+}
+
+// TestVerifyRejectsStagedButUncommittedArtifact covers the CI-during-staging
+// attack from PR #332 review report 1: a malicious or buggy CI step could
+// `git add` regenerated content without committing, and the previous gate
+// (which probed `git ls-files`) would treat the staged file as tracked. The
+// fail-closed gate must require the file to exist in HEAD.
+func TestVerifyRejectsStagedButUncommittedArtifact(t *testing.T) {
+	root, project := newGeneratedFixture(t)
+	artifacts := writeExpectedArtifacts(t, root, project)
+	gitRun(t, root, "init", "-q")
+	gitConfigUser(t, root)
+	gitAdd(t, root, artifactPaths(artifacts))
+
+	result, err := Verify(root, fixtureModule, project)
+	require.NoError(t, err)
+
+	assert.False(t, result.Passed())
+	for _, d := range result.Drifts {
+		assert.Equal(t, "file is not committed in HEAD", d.Message,
+			"every drift must be uncommitted-in-HEAD; got %+v", d)
+	}
+	assert.Len(t, result.Drifts, 3)
+}
+
+// TestVerifyDetectsStaleTrackedArtifactInManagedDir covers the
+// reverse-enumeration gap from PR #332 review report 1: an old generated file
+// that is no longer in the metadata-derived expected set but is still
+// committed under assemblies/<id>/generated/ must be flagged. Without reverse
+// enumeration the gate stays green even after a generator's output set
+// shrinks, leaving stale artifacts in the tree forever.
+func TestVerifyDetectsStaleTrackedArtifactInManagedDir(t *testing.T) {
+	root, project := newGeneratedFixture(t)
+	artifacts := writeExpectedArtifacts(t, root, project)
+
+	stalePath := "assemblies/fixture/generated/legacy-boundary.yaml"
+	writeFile(t, root, stalePath, []byte("# stale generated artifact, no longer in manifest\n"))
+
+	allCommitted := append(artifactPaths(artifacts), stalePath)
+	gitInitAndCommit(t, root, allCommitted)
+
+	result, err := Verify(root, fixtureModule, project)
+	require.NoError(t, err)
+
+	assert.False(t, result.Passed())
+	require.Len(t, result.Drifts, 1)
+	assert.Equal(t, Drift{
+		AssemblyID: "fixture",
+		Kind:       driftKindUnexpected,
+		Path:       stalePath,
+		Message:    "file is not in expected manifest",
+	}, result.Drifts[0])
+}
+
+// TestVerifyAllowsHandwrittenSiblingOfEntrypoint guards the rule that an
+// entrypoint is managed file-by-file rather than directory-wide: cmd/<id>/
+// can host hand-written helpers (e.g. cmd/corebundle/run.go) without
+// triggering reverse-enumeration drift.
+func TestVerifyAllowsHandwrittenSiblingOfEntrypoint(t *testing.T) {
+	root, project := newGeneratedFixture(t)
+	artifacts := writeExpectedArtifacts(t, root, project)
+
+	// cmd/fixture/run.go is created by newGeneratedFixture and is hand-written.
+	allCommitted := append(artifactPaths(artifacts), "cmd/fixture/run.go", "go.mod", "runtime/shutdown/shutdown.go")
+	gitInitAndCommit(t, root, allCommitted)
+
+	result, err := Verify(root, fixtureModule, project)
+	require.NoError(t, err)
+
+	assert.True(t, result.Passed(), "hand-written sibling under cmd/<id>/ must not be flagged: %+v", result.Drifts)
 }
 
 func TestExpectedArtifactsRejectsInvalidInputs(t *testing.T) {
@@ -146,6 +216,16 @@ func TestValidateArtifactPathsRejectsUnsafePaths(t *testing.T) {
 		Path:       "../cmd/fixture/main.go",
 	}})
 	require.ErrorContains(t, err, "escapes project root")
+}
+
+func TestManagedDirRootsExcludesEntrypointParents(t *testing.T) {
+	artifacts := []Artifact{
+		{Kind: "assembly-entrypoint", Path: "cmd/fixture/main.go"},
+		{Kind: "boundary", Path: "assemblies/fixture/generated/boundary.yaml"},
+		{Kind: "metrics-schema", Path: "assemblies/fixture/generated/metrics-schema.yaml"},
+	}
+	dirs := managedDirRoots(artifacts)
+	assert.Equal(t, []string{"assemblies/fixture/generated"}, dirs)
 }
 
 func newGeneratedFixture(t *testing.T) (string, *metadata.ProjectMeta) {
@@ -230,4 +310,30 @@ func gitRun(t *testing.T, root, name string, args ...string) {
 	cmd := exec.Command("git", fullArgs...)
 	output, err := cmd.CombinedOutput()
 	require.NoError(t, err, string(output))
+}
+
+func gitConfigUser(t *testing.T, root string) {
+	t.Helper()
+
+	gitRun(t, root, "config", "user.email", "test@example.com")
+	gitRun(t, root, "config", "user.name", "Test")
+	// commit.gpgsign defaults to false in tests, but be explicit so
+	// host-level signing config doesn't make `git commit` block.
+	gitRun(t, root, "config", "commit.gpgsign", "false")
+}
+
+func gitAdd(t *testing.T, root string, paths []string) {
+	t.Helper()
+
+	args := append([]string{"--"}, paths...)
+	gitRun(t, root, "add", args...)
+}
+
+func gitInitAndCommit(t *testing.T, root string, paths []string) {
+	t.Helper()
+
+	gitRun(t, root, "init", "-q")
+	gitConfigUser(t, root)
+	gitAdd(t, root, paths)
+	gitRun(t, root, "commit", "-q", "-m", "fixture", "--no-gpg-sign")
 }
