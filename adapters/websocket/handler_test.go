@@ -443,6 +443,32 @@ func TestUpgradeHandler_RejectsEmptyOrigins(t *testing.T) {
 	})
 }
 
+// TestUpgradeHandler_RejectsNilHub verifies that constructing UpgradeHandler
+// with a nil *rtws.Hub fails fast at composition time with
+// ErrWebsocketHubMissing rather than deferring the failure to the first
+// HTTP request — error-first construction contract (PR-MODE-6.1).
+func TestUpgradeHandler_RejectsNilHub(t *testing.T) {
+	handler, err := adapterws.UpgradeHandler(nil, adapterws.UpgradeConfig{
+		AllowedOrigins: []string{"example.com"},
+	})
+
+	require.Error(t, err)
+	assert.Nil(t, handler)
+	var ec *errcode.Error
+	require.ErrorAs(t, err, &ec)
+	assert.Equal(t, errcode.ErrWebsocketHubMissing, ec.Code)
+}
+
+// TestMustUpgradeHandler_PanicsOnNilHub locks the static-wiring twin: a nil
+// hub must surface as a panic at composition root, not at request time.
+func TestMustUpgradeHandler_PanicsOnNilHub(t *testing.T) {
+	require.Panics(t, func() {
+		_ = adapterws.MustUpgradeHandler(nil, adapterws.UpgradeConfig{
+			AllowedOrigins: []string{"example.com"},
+		})
+	})
+}
+
 func TestUpgradeHandler_RejectsWildcardOrigin(t *testing.T) {
 	hub := rtws.NewHub(rtws.DefaultHubConfig(), nil)
 

@@ -41,11 +41,16 @@ func (c UpgradeConfig) Validate() error {
 }
 
 // UpgradeHandler returns an http.Handler that upgrades HTTP connections to
-// WebSocket and registers them with the Hub. It rejects an empty
-// cfg.AllowedOrigins at construction time — SEC-FAIL-CLOSED: the previous
-// behaviour of silently setting InsecureSkipVerify=true for empty origins is
-// removed.
+// WebSocket and registers them with the Hub. It rejects a nil hub or an
+// invalid cfg at construction time — error-first fail-fast — so static-wiring
+// mistakes surface at composition root instead of the first HTTP request
+// (PR-MODE-6.1). SEC-FAIL-CLOSED: the previous behaviour of silently setting
+// InsecureSkipVerify=true for empty origins is removed.
 func UpgradeHandler(hub *rtws.Hub, cfg UpgradeConfig) (http.Handler, error) {
+	if hub == nil {
+		return nil, errcode.New(errcode.ErrWebsocketHubMissing,
+			"websocket: UpgradeHandler hub must not be nil (fail-fast at wire time)")
+	}
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}

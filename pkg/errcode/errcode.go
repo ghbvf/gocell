@@ -185,6 +185,18 @@ const (
 	// that would disable browser Origin protection, such as the full wildcard
 	// "*".
 	ErrWebsocketOriginsInvalid Code = "ERR_WEBSOCKET_ORIGINS_INVALID"
+	// ErrWebsocketHubMissing signals that UpgradeHandler was constructed with
+	// a nil *rtws.Hub. Composition-time fail-fast — letting nil through would
+	// defer the failure until the first HTTP request, violating the
+	// error-first construction contract (PR-MODE-6.1).
+	//
+	// Example:
+	//
+	//	handler, err := adapterws.UpgradeHandler(hub, adapterws.UpgradeConfig{
+	//	    AllowedOrigins: []string{"https://example.com"},
+	//	})
+	//	if hub == nil { /* err.Code == ErrWebsocketHubMissing */ }
+	ErrWebsocketHubMissing Code = "ERR_WEBSOCKET_HUB_MISSING"
 
 	// Outbox envelope error codes.
 	// ErrEnvelopeSchema signals that an inbound wire message does not conform

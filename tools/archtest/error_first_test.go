@@ -5,10 +5,16 @@ package archtest
 //     exported and unexported function declarations whose return signature
 //     does NOT include an error MUST NOT contain a `panic(...)` call in the
 //     function body.
-//   - ERROR-FIRST-TYPED-NIL-01: error-returning New* constructors in the same
-//     file scope must validate interface dependencies with
-//     validation.IsNilInterface so typed-nil implementations fail at construction
-//     time, or are normalized through the constructor's optional-default path.
+//   - ERROR-FIRST-TYPED-NIL-01: error-returning New* constructors in the
+//     enrolled file scope must nil-guard each nil-able dependency parameter at
+//     construction time. Interface params must be guarded with
+//     validation.IsNilInterface(p) (typed-nil defeat); pointer / map / chan /
+//     func params may use p == nil. The guard must appear as the if-Cond
+//     (top-level || branches accepted; && / unary ! rejected) with a
+//     then-branch that returns or assigns p (defaulting). FuncLit bodies are
+//     stop-descend — deferred returns inside goroutines / closures do not
+//     satisfy the constructor's outer fail-fast contract. Slice and generic
+//     type-parameter params are intentionally outside scope.
 //
 // Auto-exemptions:
 //   - Function name starts with "Must" (Go community convention for the
@@ -141,8 +147,9 @@ func TestErrorFirstTypedNil01(t *testing.T) {
 		}
 	}
 	assert.Empty(t, violations,
-		"%s: error-first constructors must validate interface dependencies with "+
-			"validation.IsNilInterface(param), so typed-nil implementations fail at construction time",
+		"%s: error-first constructors must guard each nil-able dependency at construction time. "+
+			"Interface params: validation.IsNilInterface(p); pointer/map/chan/func params: p == nil. "+
+			"Guard must be the if-Cond (top-level || allowed) with then doing return or assignment to p.",
 		ruleErrorFirstTypedNil01)
 }
 
@@ -207,6 +214,139 @@ type Service struct{}`,
 			src: `package p
 type Dep interface{ Do() }
 func Build(dep Dep) (*Service, error) {
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "negative: IsNilInterface result discarded fails",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+type Dep interface{ Do() }
+func New(dep Dep) (*Service, error) {
+	_ = validation.IsNilInterface(dep)
+	return &Service{}, nil
+}
+type Service struct{}`,
+			wantLines: []int{4},
+		},
+		{
+			name: "negative: IsNilInterface inside non-if call fails",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+func sink(bool) {}
+type Dep interface{ Do() }
+func New(dep Dep) (*Service, error) {
+	sink(validation.IsNilInterface(dep))
+	return &Service{}, nil
+}
+type Service struct{}`,
+			wantLines: []int{5},
+		},
+		{
+			name: "negative: if cond matches but then neither returns nor assigns dep",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+type Dep interface{ Do() }
+func New(dep Dep) (*Service, error) {
+	if validation.IsNilInterface(dep) {
+		_ = 1
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+			wantLines: []int{4},
+		},
+		{
+			name: "negative: then handles nil only inside goroutine FuncLit fails",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+type Dep interface{ Do() }
+func New(dep Dep) (*Service, error) {
+	if validation.IsNilInterface(dep) {
+		go func() { _ = 1 }()
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+			wantLines: []int{4},
+		},
+		{
+			name: "negative: && compound does not fail-fast on nil dep",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+type Dep interface{ Do() }
+func New(dep Dep, strict bool) (*Service, error) {
+	if validation.IsNilInterface(dep) && strict {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+			wantLines: []int{4},
+		},
+		{
+			name: "positive: pointer dependency with == nil guard passes",
+			src: `package p
+type Pool struct{}
+func New(pool *Pool) (*Service, error) {
+	if pool == nil {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "positive: || compound IsNilInterface with return passes",
+			src: `package p
+var validation = struct{ IsNilInterface func(any) bool }{}
+type Dep interface{ Do() }
+func New(dep Dep, strict bool) (*Service, error) {
+	if validation.IsNilInterface(dep) || strict {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "positive: map dependency with == nil guard passes",
+			src: `package p
+func New(routes map[string]int) (*Service, error) {
+	if routes == nil {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "positive: chan dependency with == nil guard passes",
+			src: `package p
+func New(events chan int) (*Service, error) {
+	if events == nil {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "positive: func dependency with == nil guard passes",
+			src: `package p
+func New(handler func() error) (*Service, error) {
+	if handler == nil {
+		return nil, nil
+	}
+	return &Service{}, nil
+}
+type Service struct{}`,
+		},
+		{
+			name: "positive: slice dependency is not in nil-able rule scope",
+			src: `package p
+func New(items []int) (*Service, error) {
 	return &Service{}, nil
 }
 type Service struct{}`,
@@ -314,15 +454,15 @@ func scanTypedNilGuardsInFile(fset *token.FileSet, info *types.Info, file *ast.F
 		if !ok || fd.Body == nil || !isErrorFirstConstructor(fd) {
 			continue
 		}
-		for _, paramName := range interfaceParamNames(info, fd) {
-			if hasValidationIsNilInterfaceGuard(fd.Body, paramName) {
+		for _, param := range nillableDependencyParams(info, fd) {
+			if hasNilGuard(fd.Body, param.name, param.kind) {
 				continue
 			}
 			violations = append(violations, errorFirstViolation{
 				File:     rel,
 				Line:     fset.Position(fd.Pos()).Line,
 				FuncName: fd.Name.Name,
-				Reason:   "interface dependency " + paramName + " is not validated with validation.IsNilInterface",
+				Reason:   "nil-able dependency " + param.name + " is not guarded at construction time",
 			})
 		}
 	}
@@ -356,57 +496,185 @@ func isErrorFirstConstructor(fd *ast.FuncDecl) bool {
 		signatureReturnsError(fd.Type.Results)
 }
 
-func interfaceParamNames(info *types.Info, fd *ast.FuncDecl) []string {
+// paramKind classifies how a function parameter is nil-able for the purposes
+// of ERROR-FIRST-TYPED-NIL-01. Slices are intentionally excluded: nil slice
+// is safe to read (len/range) and treating it as a guard target would produce
+// false positives for every []T parameter. Generic type parameters are also
+// excluded — there is no enforced-scope code using them, and their nil-ability
+// depends on the constraint, not the syntactic form.
+type paramKind int
+
+const (
+	paramNone paramKind = iota
+	paramInterface
+	paramPointerOrNillableConcrete
+)
+
+// paramRef pairs a parameter name with its kind so the rule can pick the
+// right guard form per kind (IsNilInterface for interfaces; == nil acceptable
+// for pointer / map / chan / func).
+type paramRef struct {
+	name string
+	kind paramKind
+}
+
+// nillableParamKind returns the paramKind for a Go type, or paramNone if the
+// type is outside the rule's scope.
+func nillableParamKind(t types.Type) paramKind {
+	if t == nil {
+		return paramNone
+	}
+	switch t.Underlying().(type) {
+	case *types.Interface:
+		return paramInterface
+	case *types.Pointer, *types.Map, *types.Chan, *types.Signature:
+		return paramPointerOrNillableConcrete
+	}
+	return paramNone
+}
+
+// nillableDependencyParams returns the named, nil-able parameters of fd.
+func nillableDependencyParams(info *types.Info, fd *ast.FuncDecl) []paramRef {
 	if info == nil || fd.Type.Params == nil {
 		return nil
 	}
-	var names []string
+	var out []paramRef
 	for _, field := range fd.Type.Params.List {
-		if !isInterfaceType(info.TypeOf(field.Type)) {
+		kind := nillableParamKind(info.TypeOf(field.Type))
+		if kind == paramNone {
 			continue
 		}
 		for _, name := range field.Names {
 			if name.Name == "_" {
 				continue
 			}
-			names = append(names, name.Name)
+			out = append(out, paramRef{name: name.Name, kind: kind})
 		}
 	}
-	return names
+	return out
 }
 
-func isInterfaceType(typ types.Type) bool {
-	if typ == nil {
-		return false
-	}
-	_, ok := typ.Underlying().(*types.Interface)
-	return ok
-}
-
-func hasValidationIsNilInterfaceGuard(body *ast.BlockStmt, paramName string) bool {
+// hasNilGuard returns true if body contains an IfStmt whose Cond is a nil
+// check on paramName AND whose Then-branch surfaces the nil case (return or
+// assignment to paramName for defaulting). Goroutine / closure FuncLit bodies
+// are stop-descend: a deferred return inside a closure does not satisfy the
+// constructor's outer fail-fast contract.
+func hasNilGuard(body *ast.BlockStmt, paramName string, kind paramKind) bool {
 	found := false
 	ast.Inspect(body, func(n ast.Node) bool {
 		if found {
 			return false
 		}
-		call, ok := n.(*ast.CallExpr)
-		if !ok || len(call.Args) != 1 {
+		ifStmt, ok := n.(*ast.IfStmt)
+		if !ok {
 			return true
 		}
-		sel, ok := call.Fun.(*ast.SelectorExpr)
-		if !ok || sel.Sel.Name != "IsNilInterface" {
+		if !condMatchesNilCheck(ifStmt.Cond, paramName, kind) {
 			return true
 		}
-		pkgIdent, ok := sel.X.(*ast.Ident)
-		if !ok || pkgIdent.Name != "validation" {
-			return true
-		}
-		argIdent, ok := call.Args[0].(*ast.Ident)
-		if !ok || argIdent.Name != paramName {
+		if !thenReturnsOrAssigns(ifStmt.Body, paramName) {
 			return true
 		}
 		found = true
 		return false
+	})
+	return found
+}
+
+// condMatchesNilCheck returns true if expr nil-checks paramName, either as a
+// leaf or as a leaf of a top-level || (LOR) chain. && (LAND) and unary ! are
+// rejected: && lets nil flow past, and ! inverts the fail-fast direction.
+//
+// Leaf forms:
+//   - validation.IsNilInterface(paramName)             (any kind)
+//   - paramName == nil / nil == paramName              (paramPointerOrNillableConcrete only)
+//
+// Interface params reject == nil because typed-nil ((*Concrete)(nil) cast to
+// interface) bypasses the comparison; only IsNilInterface defeats it.
+func condMatchesNilCheck(expr ast.Expr, paramName string, kind paramKind) bool {
+	switch e := expr.(type) {
+	case *ast.ParenExpr:
+		return condMatchesNilCheck(e.X, paramName, kind)
+	case *ast.BinaryExpr:
+		if e.Op == token.LOR {
+			return condMatchesNilCheck(e.X, paramName, kind) ||
+				condMatchesNilCheck(e.Y, paramName, kind)
+		}
+		if e.Op == token.EQL && kind == paramPointerOrNillableConcrete {
+			return isNilEquality(e, paramName)
+		}
+		return false
+	case *ast.CallExpr:
+		return isValidationIsNilInterfaceCall(e, paramName)
+	}
+	return false
+}
+
+// isNilEquality returns true if e is `paramName == nil` or `nil == paramName`.
+func isNilEquality(e *ast.BinaryExpr, paramName string) bool {
+	if e.Op != token.EQL {
+		return false
+	}
+	if isIdentNamed(e.X, paramName) && isNilIdent(e.Y) {
+		return true
+	}
+	if isIdentNamed(e.Y, paramName) && isNilIdent(e.X) {
+		return true
+	}
+	return false
+}
+
+func isIdentNamed(e ast.Expr, name string) bool {
+	id, ok := e.(*ast.Ident)
+	return ok && id.Name == name
+}
+
+// isValidationIsNilInterfaceCall returns true if call is exactly
+// validation.IsNilInterface(paramName) — single argument, named param, fixed
+// selector path. Aliasing the validation package is not currently used in the
+// repo and would be a deliberate workaround.
+func isValidationIsNilInterfaceCall(call *ast.CallExpr, paramName string) bool {
+	if len(call.Args) != 1 {
+		return false
+	}
+	sel, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || sel.Sel.Name != "IsNilInterface" {
+		return false
+	}
+	pkg, ok := sel.X.(*ast.Ident)
+	if !ok || pkg.Name != "validation" {
+		return false
+	}
+	arg, ok := call.Args[0].(*ast.Ident)
+	return ok && arg.Name == paramName
+}
+
+// thenReturnsOrAssigns returns true if body contains a top-level (non-FuncLit)
+// ReturnStmt or an AssignStmt whose LHS includes paramName (defaulting). The
+// FuncLit stop-descend prevents `if cond { go func() { return }() }` from
+// satisfying the constructor's outer contract.
+func thenReturnsOrAssigns(body *ast.BlockStmt, paramName string) bool {
+	found := false
+	ast.Inspect(body, func(n ast.Node) bool {
+		if found {
+			return false
+		}
+		if _, isFuncLit := n.(*ast.FuncLit); isFuncLit {
+			return false
+		}
+		switch s := n.(type) {
+		case *ast.ReturnStmt:
+			found = true
+			return false
+		case *ast.AssignStmt:
+			for _, lhs := range s.Lhs {
+				if isIdentNamed(lhs, paramName) {
+					found = true
+					return false
+				}
+			}
+		}
+		return true
 	})
 	return found
 }
