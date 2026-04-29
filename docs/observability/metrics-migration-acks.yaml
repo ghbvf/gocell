@@ -7,10 +7,11 @@
 # required; unknown fields fail the gate.
 #
 # dashboardOrAlertRefs entries must be repo-relative paths to existing,
-# git-tracked, regular files (no symlinks, no untracked drafts). The validator
-# in tools/metricschema rejects anything else so acknowledgements remain
-# reviewable and reproducible — committed files are the only proof a reviewer
-# can audit later.
+# regular files (no symlinks) that are committed in HEAD. The validator in
+# tools/metricschema rejects index-only or untracked drafts so acknowledgements
+# remain reviewable and reproducible — committed files are the only proof a
+# reviewer can audit later. The same committed-in-HEAD predicate is shared
+# with `gocell verify generated` so both gates stay aligned.
 #
 # acknowledgements:
 #   - rule: OBS-01

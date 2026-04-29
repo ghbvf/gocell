@@ -4,11 +4,8 @@ package generatedverify
 
 import (
 	"bytes"
-	"errors"
 	"fmt"
 	"os"
-	"os/exec"
-	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -45,32 +42,38 @@ type Result struct {
 
 // Passed reports whether all expected generated artifacts are present and
 // byte-for-byte current, every expected file is committed in HEAD, and no
-// unexpected committed file lives under a directory exclusively owned by the
-// generator. Tracking and reverse-enumeration checks are skipped when the
-// project is not a git working tree (test fixtures), in which case only the
-// content check runs.
+// other committed file in the work tree carries a gocell generator header.
+// Tracking and reverse-enumeration checks are skipped when the project is
+// not a git working tree (test fixtures), in which case only the content
+// check runs.
 func (r Result) Passed() bool {
 	return len(r.Drifts) == 0
 }
 
 // driftKindUnexpected labels reverse-enumeration drift entries (committed
-// files inside a generator-owned directory that are not in the expected
-// manifest).
+// files that carry a gocell generator header but are not in the expected
+// manifest — orphans from removed assemblies, renamed entrypoints, or
+// generators that have been retired).
 const driftKindUnexpected = "unexpected"
 
 // Verify derives every generated artifact path and content from project
 // metadata, then compares the result with the checked-in repository state.
 //
-// Two checks run in parallel against different data sources, deliberately:
+// Two checks run against different data sources, deliberately:
 //
 //   - Content byte-equality is compared against the working tree so
 //     developers can iterate locally without committing every step.
 //   - Tracking and reverse-enumeration are compared against HEAD so a file
-//     that was only `git add`-ed during CI cannot satisfy the gate, and stale
-//     committed artifacts that fell out of the expected set are detected.
+//     that was only `git add`-ed during CI cannot satisfy the gate, and
+//     committed files that fell out of the expected set are detected
+//     wherever they live in the tree.
 //
-// The verifier deliberately does not consume generator stdout; it owns the
-// expected artifact set.
+// Reverse enumeration is header-driven: every committed file at HEAD whose
+// first line is a gocell generator sentinel (governance.GoGeneratedPrefix
+// or governance.YAMLGeneratedPrefix) is a candidate. Anything outside the
+// expected manifest is drift, regardless of directory. This makes
+// assembly.yaml the single source of truth for what may live under any
+// generator-owned path.
 func Verify(root, module string, project *metadata.ProjectMeta) (*Result, error) {
 	artifacts, err := ExpectedArtifacts(root, module, project)
 	if err != nil {
@@ -82,14 +85,7 @@ func Verify(root, module string, project *metadata.ProjectMeta) (*Result, error)
 		expectedSet[artifact.Path] = artifact
 	}
 
-	var committed map[string]bool
-	managedDirs := managedDirRoots(artifacts)
-	if hasGitMetadata(root) {
-		committed, err = collectCommittedPaths(root, managedDirs, artifacts)
-		if err != nil {
-			return nil, fmt.Errorf("list committed generated artifacts: %w", err)
-		}
-	}
+	gitTracked := governance.HasGitMetadata(root)
 
 	result := &Result{Artifacts: artifacts}
 
@@ -103,23 +99,31 @@ func Verify(root, module string, project *metadata.ProjectMeta) (*Result, error)
 		case !bytes.Equal(actual, artifact.Content):
 			result.Drifts = append(result.Drifts, drift(artifact, "content differs"))
 		}
-		if committed != nil && !committed[artifact.Path] {
+		if !gitTracked {
+			continue
+		}
+		committed, err := governance.CommittedInHEAD(root, artifact.Path)
+		if err != nil {
+			return nil, fmt.Errorf("check committed artifact %s: %w", artifact.Path, err)
+		}
+		if !committed {
 			result.Drifts = append(result.Drifts, drift(artifact, "file is not committed in HEAD"))
 		}
 	}
 
-	if committed != nil {
-		for committedPath := range committed {
-			if _, expected := expectedSet[committedPath]; expected {
-				continue
-			}
-			if !underManagedDir(committedPath, managedDirs) {
+	if gitTracked {
+		generatedPaths, err := governance.ListGeneratedInHEAD(root)
+		if err != nil {
+			return nil, fmt.Errorf("list generator-marked files in HEAD: %w", err)
+		}
+		for _, p := range generatedPaths {
+			if _, expected := expectedSet[p]; expected {
 				continue
 			}
 			result.Drifts = append(result.Drifts, Drift{
-				AssemblyID: assemblyForManagedPath(committedPath, artifacts),
+				AssemblyID: assemblyForOrphanPath(p),
 				Kind:       driftKindUnexpected,
-				Path:       committedPath,
+				Path:       p,
 				Message:    "file is not in expected manifest",
 			})
 		}
@@ -212,86 +216,23 @@ func AssemblyEntrypointPath(assemblyID string, asm *metadata.AssemblyMeta) strin
 	return filepath.ToSlash(filepath.Join("cmd", assemblyID, "main.go"))
 }
 
-// managedDirRoots returns the directory paths that are owned exclusively by
-// generators. Every committed file under one of these directories must be in
-// the expected manifest; otherwise it is reverse-enumeration drift.
-//
-// Entrypoint files (e.g. cmd/<id>/main.go) share their parent directory with
-// hand-written helpers (cmd/<id>/run.go), so they are managed file-by-file
-// rather than by directory and do not contribute here.
-func managedDirRoots(artifacts []Artifact) []string {
-	seen := map[string]bool{}
-	for _, artifact := range artifacts {
-		switch artifact.Kind {
-		case "boundary", "metrics-schema":
-			dir := path.Dir(artifact.Path)
-			if dir == "." || dir == "" {
-				continue
-			}
-			seen[dir] = true
-		}
+// assemblyForOrphanPath best-effort-derives the AssemblyID for an orphan
+// reverse-enumeration drift entry. assemblies/<id>/generated/... paths
+// always belong to assembly <id>; entrypoint orphans (e.g. cmd/<id>/main.go
+// left behind after an entrypoint rename) cannot be tied to a current
+// manifest assembly and surface with an empty AssemblyID — the drift
+// message itself is enough to point operators at the path.
+func assemblyForOrphanPath(p string) string {
+	const prefix = "assemblies/"
+	if !strings.HasPrefix(p, prefix) {
+		return ""
 	}
-	dirs := make([]string, 0, len(seen))
-	for dir := range seen {
-		dirs = append(dirs, dir)
+	rest := p[len(prefix):]
+	slash := strings.IndexByte(rest, '/')
+	if slash <= 0 {
+		return ""
 	}
-	sort.Strings(dirs)
-	return dirs
-}
-
-func underManagedDir(p string, managedDirs []string) bool {
-	for _, dir := range managedDirs {
-		if p == dir || strings.HasPrefix(p, dir+"/") {
-			return true
-		}
-	}
-	return false
-}
-
-func assemblyForManagedPath(p string, artifacts []Artifact) string {
-	for _, artifact := range artifacts {
-		switch artifact.Kind {
-		case "boundary", "metrics-schema":
-			dir := path.Dir(artifact.Path)
-			if dir != "" && strings.HasPrefix(p, dir+"/") {
-				return artifact.AssemblyID
-			}
-		}
-	}
-	return ""
-}
-
-// collectCommittedPaths returns the set of repo-relative paths that are
-// committed in HEAD, scoped to (a) every path under a managed directory and
-// (b) every expected entrypoint file. The two scopes are sufficient to power
-// both the forward "is this expected artifact committed?" check and the
-// reverse "is this committed file unexpected?" check.
-func collectCommittedPaths(root string, managedDirs []string, artifacts []Artifact) (map[string]bool, error) {
-	committed := map[string]bool{}
-
-	for _, dir := range managedDirs {
-		paths, err := gitListTreeHEAD(root, dir)
-		if err != nil {
-			return nil, err
-		}
-		for _, p := range paths {
-			committed[p] = true
-		}
-	}
-
-	for _, artifact := range artifacts {
-		if underManagedDir(artifact.Path, managedDirs) {
-			continue
-		}
-		ok, err := gitHEADContains(root, artifact.Path)
-		if err != nil {
-			return nil, err
-		}
-		if ok {
-			committed[artifact.Path] = true
-		}
-	}
-	return committed, nil
+	return rest[:slash]
 }
 
 func validateArtifactPaths(root string, artifacts []Artifact) error {
@@ -319,50 +260,4 @@ func drift(artifact Artifact, message string) Drift {
 
 func absPath(root, rel string) string {
 	return filepath.Join(root, filepath.FromSlash(rel))
-}
-
-func hasGitMetadata(root string) bool {
-	_, err := os.Stat(filepath.Join(root, ".git"))
-	return err == nil
-}
-
-// gitListTreeHEAD returns every path committed in HEAD under dir. An empty
-// repo (no HEAD yet) returns an empty list rather than an error so the caller
-// reports "file is not committed in HEAD" against each expected artifact
-// instead of crashing the gate.
-func gitListTreeHEAD(root, dir string) ([]string, error) {
-	cmd := exec.Command("git", "-C", root, "ls-tree", "-r", "--name-only", "HEAD", "--", dir)
-	out, err := cmd.Output()
-	if err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("git ls-tree HEAD %s: %w", dir, err)
-	}
-	trimmed := bytes.TrimSpace(out)
-	if len(trimmed) == 0 {
-		return nil, nil
-	}
-	lines := bytes.Split(trimmed, []byte("\n"))
-	paths := make([]string, 0, len(lines))
-	for _, line := range lines {
-		if len(line) == 0 {
-			continue
-		}
-		paths = append(paths, string(line))
-	}
-	return paths, nil
-}
-
-func gitHEADContains(root, rel string) (bool, error) {
-	cmd := exec.Command("git", "-C", root, "cat-file", "-e", "HEAD:"+rel)
-	if err := cmd.Run(); err != nil {
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return false, nil
-		}
-		return false, fmt.Errorf("git cat-file HEAD:%s: %w", rel, err)
-	}
-	return true, nil
 }

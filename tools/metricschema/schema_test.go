@@ -1608,8 +1608,12 @@ func direct(err error) {
 func TestCheckOBS01AckSuppressesMatchingFingerprintWithTrackedDashboard(t *testing.T) {
 	root := writeMetricsFixture(t)
 	gitRun(t, root, "init")
+	gitRun(t, root, "config", "user.email", "test@example.com")
+	gitRun(t, root, "config", "user.name", "Test")
+	gitRun(t, root, "config", "commit.gpgsign", "false")
 	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
 	gitRun(t, root, "add", "docs/ops/example-dashboard.md")
+	gitRun(t, root, "commit", "-q", "-m", "fixture", "--no-gpg-sign")
 	writeFile(t, root, "reachable/obs.go", `package reachable
 
 import (
@@ -1818,7 +1822,7 @@ func TestCheckOBS01RejectsURLDashboardRefs(t *testing.T) {
 
 	_, err := checkOBS01WithPatterns(root, "./reachable")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "existing repo-relative file")
+	assert.Contains(t, err.Error(), "committed in HEAD")
 }
 
 func TestCheckOBS01RejectsUnusedAck(t *testing.T) {
@@ -1868,7 +1872,7 @@ func TestCheckOBS01RejectsSymlinkDashboardRefs(t *testing.T) {
 
 	_, err := checkOBS01WithPatterns(root, "./reachable")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "existing repo-relative file")
+	assert.Contains(t, err.Error(), "committed in HEAD")
 }
 
 func TestCheckOBS01RejectsUntrackedDashboardRefsWhenGitMetadataPresent(t *testing.T) {
@@ -1891,7 +1895,41 @@ func TestCheckOBS01RejectsUntrackedDashboardRefsWhenGitMetadataPresent(t *testin
 
 	_, err := checkOBS01WithPatterns(root, "./reachable")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "existing repo-relative file")
+	assert.Contains(t, err.Error(), "committed in HEAD")
+}
+
+// TestCheckOBS01RejectsStagedButUncommittedDashboardRef closes the
+// PR #332 round-2 gap where OBS-01 ack tracking accepted index-only
+// (`git add`-but-not-committed) files. The committed-in-HEAD predicate
+// now matches the one used by generatedverify so a single CI step that
+// only stages — never commits — cannot satisfy either gate.
+func TestCheckOBS01RejectsStagedButUncommittedDashboardRef(t *testing.T) {
+	root := writeMetricsFixture(t)
+	gitRun(t, root, "init")
+	gitRun(t, root, "config", "user.email", "test@example.com")
+	gitRun(t, root, "config", "user.name", "Test")
+	gitRun(t, root, "config", "commit.gpgsign", "false")
+	writeFile(t, root, "docs/ops/example-dashboard.md", "# example\n")
+	gitRun(t, root, "add", "docs/ops/example-dashboard.md")
+	// No commit — the file is in the index only.
+
+	writeFile(t, root, "docs/observability/metrics-migration-acks.yaml", `acknowledgements:
+  - rule: OBS-01
+    fingerprint: abc123
+    metric: fixture_obs_total
+    label: reason
+    oldSemantics: infra errors grouped as infra
+    newSemantics: domain config errors grouped as domain
+    dashboardOrAlertRefs:
+      - docs/ops/example-dashboard.md
+    owner: platform-observability
+    reviewedAt: "2026-04-28"
+    rationale: reviewed SLO bucket migration with service owner
+`)
+
+	_, err := checkOBS01WithPatterns(root, "./reachable")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "committed in HEAD")
 }
 
 func TestCheckOBS01RejectsPlaceholderDashboardRefs(t *testing.T) {
