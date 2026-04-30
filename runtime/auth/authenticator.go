@@ -191,8 +191,8 @@ func NewServiceTokenAuthenticator(ring cell.HMACKeyring, opts ...ServiceTokenOpt
 //   - 3-part format: {timestamp}:{nonce}:{hex_hmac}
 //   - timestamp within ServiceTokenMaxAge
 //   - HMAC valid for any key in ring
-//   - nonce not replayed (NoopNonceStore disables the check; production uses
-//     an in-memory or distributed store via WithServiceTokenNonceStore)
+//   - nonce not replayed via NonceStore.CheckAndMark (Noop/nil stores are
+//     rejected at construction time by NewServiceTokenAuthenticator)
 //
 // Nonce replay errors preserve the original NonceStore error as the Cause so
 // callers can inspect it with errors.Is (e.g. to distinguish ErrNonceReused
@@ -239,10 +239,10 @@ func verifyServiceTokenPayload(ring cell.HMACKeyring, payload string, cfg servic
 		return errcode.NewAuth(errcode.ErrAuthUnauthorized, "invalid service token MAC")
 	}
 
-	// NoopNonceStore returns nil unconditionally, so dev-mode opt-out takes
-	// the same path as a first-use pass without a branch here. Preserve the
-	// original NonceStore error as Cause so callers can distinguish
-	// ErrNonceReused (replay → 401) from store failures (→ 500).
+	// NonceStore.CheckAndMark is always a real replay-safe store (Noop rejected
+	// at NewServiceTokenAuthenticator construction). Preserve the original
+	// NonceStore error as Cause so callers can distinguish ErrNonceReused
+	// (replay → 401) from store failures (→ 500).
 	if err := cfg.nonceStore.CheckAndMark(r.Context(), nonce); err != nil {
 		return errcode.WrapAuth(errcode.ErrAuthUnauthorized, "service token nonce check failed", err)
 	}

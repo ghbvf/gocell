@@ -79,13 +79,11 @@ func WithServiceTokenClock(fn func() time.Time) ServiceTokenOption {
 	}
 }
 
-// WithServiceTokenNonceStore sets a NonceStore for replay prevention.
-//
-// When the supplied store's Kind is not NonceStoreKindNoop, the middleware
-// rejects tokens whose nonce has already been consumed within the store's
-// TTL window. Replay protection is mandatory — both ServiceTokenMiddleware and
-// NewServiceTokenAuthenticator reject nil/Noop NonceStore at construction time.
-// Use NewInMemoryNonceStore(ServiceTokenNonceTTL) for dev/test wiring.
+// WithServiceTokenNonceStore configures the replay-defence store. The
+// middleware rejects nonces already consumed within the store's TTL window.
+// Replay protection is mandatory — both ServiceTokenMiddleware and
+// NewServiceTokenAuthenticator reject nil/Noop NonceStore at construction
+// time. Use NewInMemoryNonceStore(ServiceTokenNonceTTL) for dev/test wiring.
 //
 // Passing nil is a no-op: cfg.nonceStore stays nil and construction will fail.
 func WithServiceTokenNonceStore(ns NonceStore) ServiceTokenOption {
@@ -260,7 +258,8 @@ func errorMiddlewareInternal(cfg serviceTokenConfig, reason string) func(http.Ha
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			cfg.metrics.recordServiceVerify("failure", "internal")
 			cfg.logger.Error("service token middleware misconfigured",
-				slog.String("reason", reason))
+				slog.String("reason", reason),
+				slog.String("path", r.URL.Path))
 			httputil.WriteError(r.Context(), w, http.StatusInternalServerError, "ERR_INTERNAL", msgInternalServerError)
 		})
 	}

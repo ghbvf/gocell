@@ -40,21 +40,11 @@ func mustTestRing(t *testing.T, current, previous string) *HMACKeyRing {
 	return ring
 }
 
-// mustNewSvcNonceStore creates an InMemoryNonceStore for use in service-token
-// middleware helpers. Each call returns a fresh store so parallel tests do not
-// share nonce state.
-func mustNewSvcNonceStore(t *testing.T) NonceStore {
-	t.Helper()
-	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
-	require.NoError(t, err)
-	return store
-}
-
 func mustTestServiceHandler(t *testing.T, ring *HMACKeyRing, clockFn func() time.Time) http.Handler {
 	t.Helper()
 	return ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(clockFn),
-		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
@@ -66,7 +56,7 @@ func mustTestServiceHandlerFatal(t *testing.T, ring *HMACKeyRing, clockFn func()
 	t.Helper()
 	return ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(clockFn),
-		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Fatal("should not be called")
@@ -414,7 +404,7 @@ func TestServiceTokenMiddleware_FutureTimestamp_Rejected(t *testing.T) {
 func TestServiceTokenMiddleware_InvalidFormat_NoColon(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	handler := ServiceTokenMiddleware(ring,
-		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called")
 	}))
@@ -633,7 +623,7 @@ func TestServiceTokenMiddleware_LegacyTwoPartFormat_RealSignature_Rejected(t *te
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
-		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: semantically valid 2-part token must be rejected")
 	}))
@@ -662,7 +652,7 @@ func TestServiceTokenMiddleware_MalformedToken_TwoSegments_Rejected(t *testing.T
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
-		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: 2-part token must be rejected")
 	}))
@@ -686,7 +676,7 @@ func TestServiceTokenMiddleware_WithMetrics_NoPanic(t *testing.T) {
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
-		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -742,7 +732,7 @@ func TestServiceTokenMiddleware_InjectsServicePrincipal(t *testing.T) {
 	var gotPrincipal *Principal
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
-		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 	)(
 		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			p, ok := FromContext(r.Context())
@@ -850,7 +840,7 @@ func TestServiceToken_LegacyTwoPart_MetricLabel(t *testing.T) {
 
 	handler := ServiceTokenMiddleware(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
-		WithServiceTokenNonceStore(mustNewSvcNonceStore(t)),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)),
 		WithServiceTokenMetrics(am),
 	)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatal("should not be called: 2-part token must be rejected")
