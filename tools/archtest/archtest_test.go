@@ -324,7 +324,6 @@ func findDisallowedTypePath(modPrefix string, typ types.Type) string {
 		return ""
 	case *types.Struct:
 		for f := range t.Fields() {
-			f := f
 			if !f.Exported() && !f.Anonymous() {
 				continue
 			}

@@ -62,7 +62,6 @@ func TestInMemoryNonceStore_ConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(n)
 	for i := range n {
-		i := i
 		go func() {
 			defer wg.Done()
 			nonce := fmt.Sprintf("unique-nonce-%d", i)

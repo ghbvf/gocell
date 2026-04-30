@@ -119,7 +119,7 @@ func appendCompoundOR(b *Builder, cols []SortColumn, values []any) error {
 	for level := range cols {
 		var conditions []string
 
-		for j := 0; j < level; j++ {
+		for j := range level {
 			p := b.NextParam(values[j])
 			conditions = append(conditions, fmt.Sprintf("%s = %s", cols[j].Name, p))
 		}

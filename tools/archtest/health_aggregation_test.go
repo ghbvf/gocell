@@ -85,7 +85,6 @@ func collectMethodSets(t *testing.T, modRoot string, patterns ...string) *typeMe
 			qualified := pkg.PkgPath + "." + name
 			ms := types.NewMethodSet(types.NewPointer(named))
 			for sel := range ms.Methods() {
-				sel := sel
 				if sel.Obj().Exported() {
 					s.add(qualified, sel.Obj().Name())
 				}
