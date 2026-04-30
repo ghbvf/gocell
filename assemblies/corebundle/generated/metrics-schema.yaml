@@ -167,7 +167,6 @@ metrics:
         - hook
         - outcome
       file: cmd/corebundle/metrics.go
-      line: 55
     - name: config_event_process_total
       fqName: gocell_config_event_process_total
       namespace: gocell
@@ -178,7 +177,6 @@ metrics:
         - slice
         - reason
       file: cmd/corebundle/shared_deps.go
-      line: 169
     - name: config_event_settlement_total
       fqName: gocell_config_event_settlement_total
       namespace: gocell
@@ -190,7 +188,6 @@ metrics:
         - disposition
         - result
       file: cmd/corebundle/shared_deps.go
-      line: 169
     - name: hook_observer_dropped_total
       fqName: gocell_hook_observer_dropped_total
       namespace: gocell
@@ -250,7 +247,6 @@ metrics:
         - "200"
         - "500"
       file: cmd/corebundle/bundle.go
-      line: 332
     - name: outbox_cleaned_total
       fqName: gocell_outbox_cleaned_total
       namespace: gocell
@@ -260,7 +256,6 @@ metrics:
         - cell
         - status
       file: cmd/corebundle/bundle.go
-      line: 332
     - name: outbox_emit_failopen_dropped_total
       fqName: gocell_outbox_emit_failopen_dropped_total
       namespace: gocell
@@ -291,7 +286,6 @@ metrics:
         - "5"
         - "10"
       file: cmd/corebundle/bundle.go
-      line: 332
     - name: outbox_reclaimed_total
       fqName: gocell_outbox_reclaimed_total
       namespace: gocell
@@ -300,7 +294,6 @@ metrics:
       labels:
         - cell
       file: cmd/corebundle/bundle.go
-      line: 332
     - name: outbox_relayed_total
       fqName: gocell_outbox_relayed_total
       namespace: gocell
@@ -310,7 +303,6 @@ metrics:
         - cell
         - outcome
       file: cmd/corebundle/bundle.go
-      line: 332
     - name: stale_cipher_total
       fqName: gocell_config_stale_cipher_total
       namespace: gocell
