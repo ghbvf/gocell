@@ -302,8 +302,9 @@ func (w *Watcher) loop() {
 
 func (w *Watcher) symlinkPivotTicker() (<-chan time.Time, func()) {
 	if w.cfg.symPivotPoll <= 0 {
-		// Polling disabled: return nil channel and no-op stop function.
-		return nil, func() {}
+		return nil, func() {
+			// no-op: polling is disabled so there is no ticker to stop.
+		}
 	}
 	t := time.NewTicker(w.cfg.symPivotPoll)
 	return t.C, t.Stop
