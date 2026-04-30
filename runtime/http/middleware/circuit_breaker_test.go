@@ -305,7 +305,6 @@ func TestCircuitBreaker_3xx_ReportsSuccess(t *testing.T) {
 		{"308 Permanent Redirect", http.StatusPermanentRedirect},
 	}
 	for _, tc := range cases {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			cb := &mockBreaker{}
 			handler := MustCircuitBreaker(cb)(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

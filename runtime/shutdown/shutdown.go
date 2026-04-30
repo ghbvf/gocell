@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"time"
 )
 
@@ -95,8 +96,8 @@ func (m *Manager) Shutdown() error {
 func (m *Manager) runHooks(ctx context.Context) error {
 	var errs []error
 	// Execute hooks in LIFO order: last registered, first executed.
-	for i := len(m.hooks) - 1; i >= 0; i-- {
-		if err := m.hooks[i](ctx); err != nil {
+	for i, v := range slices.Backward(m.hooks) {
+		if err := v(ctx); err != nil {
 			slog.Error("shutdown hook failed",
 				slog.Int("hook_index", i),
 				slog.Any("error", err),

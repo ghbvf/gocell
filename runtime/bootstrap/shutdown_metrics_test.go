@@ -541,10 +541,8 @@ func TestShutdownMetrics_ConcurrentObserve(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var panicked atomic.Bool
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 10 {
+		wg.Go(func() {
 			defer func() {
 				if recover() != nil {
 					panicked.Store(true)
@@ -553,7 +551,7 @@ func TestShutdownMetrics_ConcurrentObserve(t *testing.T) {
 			m.recordPhaseEntry(shutdownPhaseReadinessFlip)
 			m.observePhaseDuration("readiness_flip", time.Millisecond)
 			m.countOutcome("success")
-		}()
+		})
 	}
 	wg.Wait()
 	assert.False(t, panicked.Load(), "concurrent calls must not panic")

@@ -140,10 +140,7 @@ func (w *OutboxWriter) WriteBatch(ctx context.Context, entries []outbox.Entry) e
 
 	// Split into chunks to stay within PostgreSQL's 65535 parameter limit.
 	for offset := 0; offset < len(entries); offset += writeBatchChunkSize {
-		end := offset + writeBatchChunkSize
-		if end > len(entries) {
-			end = len(entries)
-		}
+		end := min(offset+writeBatchChunkSize, len(entries))
 		if err := w.writeBatchChunk(ctx, tx, entries[offset:end], offset); err != nil {
 			return err
 		}

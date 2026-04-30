@@ -258,11 +258,11 @@ func matchWildcardOrigin(origin, pattern string) bool {
 
 // splitOrigin splits "https://host:port" into (scheme, host:port, ok).
 func splitOrigin(origin string) (scheme, host string, ok bool) {
-	idx := strings.Index(origin, "://")
-	if idx < 0 {
+	before, after, ok := strings.Cut(origin, "://")
+	if !ok {
 		return "", "", false
 	}
-	return origin[:idx], origin[idx+3:], true
+	return before, after, true
 }
 
 // extractOrigin extracts scheme://host[:port] from a full URL.

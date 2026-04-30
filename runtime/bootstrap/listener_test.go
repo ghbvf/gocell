@@ -84,7 +84,6 @@ func TestWithListenerOptions(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			b := New(
@@ -207,7 +206,6 @@ func TestPhase0_RejectsNilAuthChain(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 

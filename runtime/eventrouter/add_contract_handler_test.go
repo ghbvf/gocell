@@ -225,7 +225,7 @@ func TestContractTracingMiddleware_PanicsOnEmptyContractID(t *testing.T) {
 func TestAddContractHandler_MultipleRegistrations_HandlersGrow(t *testing.T) {
 	t.Parallel()
 	r := New(&blockingSubscriber{})
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		spec := configEntryUpsertedSpec()
 		spec.Topic = spec.Topic + "." + string(rune('a'+i))
 		require.NoError(t, r.AddContractHandler(spec, okHandler(), "accesscore"))

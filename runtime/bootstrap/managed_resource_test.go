@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -739,8 +740,8 @@ func TestExpandManagedResources_CloseFailure_TeardownChainContinues(t *testing.T
 
 	// Teardowns are in registration order; LIFO means we call them reversed.
 	ctx := context.Background()
-	for i := len(b.managedResourceTeardowns) - 1; i >= 0; i-- {
-		_ = b.managedResourceTeardowns[i].fn(ctx) // ignore individual errors; chain must continue
+	for _, v := range slices.Backward(b.managedResourceTeardowns) {
+		_ = v.fn(ctx) // ignore individual errors; chain must continue
 	}
 
 	// LIFO: second registered → first closed; then first registered → closed second.

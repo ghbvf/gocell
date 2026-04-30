@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 )
 
 // phaseError wraps a teardown error with the name of the component/phase that
@@ -114,8 +115,8 @@ func (s *runState) rollback(shutCtx context.Context, cause error) error {
 	slog.Error("bootstrap: startup failed, rolling back",
 		slog.String("error", cause.Error()),
 		slog.Int("teardowns_pending", len(s.teardowns)))
-	for i := len(s.teardowns) - 1; i >= 0; i-- {
-		td := s.teardowns[i]
+	for _, v := range slices.Backward(s.teardowns) {
+		td := v
 		if err := td.fn(shutCtx); err != nil {
 			if td.name != "" {
 				err = &phaseError{Phase: "teardown_" + td.name, Err: err}

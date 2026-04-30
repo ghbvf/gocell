@@ -39,7 +39,7 @@ func TestRotate_InvalidatesAndRefillsCache(t *testing.T) {
 	if baseline == 0 {
 		t.Fatalf("expected NewTransitKeyProvider to issue at least one Read at construction; got 0")
 	}
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		if _, err := p.Current(context.Background()); err != nil {
 			t.Fatalf("Current loop[%d]: %v", i, err)
 		}
@@ -72,7 +72,7 @@ func TestCurrent_ConcurrentReaders(t *testing.T) {
 	const N = 100
 	var wg sync.WaitGroup
 	wg.Add(N)
-	for i := 0; i < N; i++ {
+	for range N {
 		go func() {
 			defer wg.Done()
 			h, err := p.Current(context.Background())
@@ -100,7 +100,7 @@ func TestRotateAndCurrent_ConcurrentRace(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(readerN)
-	for i := 0; i < readerN; i++ {
+	for range readerN {
 		go func() {
 			defer wg.Done()
 			for {
@@ -121,7 +121,7 @@ func TestRotateAndCurrent_ConcurrentRace(t *testing.T) {
 			}
 		}()
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		if _, err := p.Rotate(context.Background()); err != nil {
 			t.Errorf("Rotate iteration %d: %v", i, err)
 			break
@@ -136,8 +136,8 @@ func TestRotateAndCurrent_ConcurrentRace(t *testing.T) {
 // the field type rather than the field name so that a future legitimate
 // sync.Mutex / sync.Once with any name does not trip the test.
 func TestTransitKeyProvider_NoRWMutex(t *testing.T) {
-	rwMutexType := reflect.TypeOf(sync.RWMutex{})
-	rt := reflect.TypeOf(TransitKeyProvider{})
+	rwMutexType := reflect.TypeFor[sync.RWMutex]()
+	rt := reflect.TypeFor[TransitKeyProvider]()
 	for i := 0; i < rt.NumField(); i++ {
 		f := rt.Field(i)
 		if f.Type == rwMutexType {

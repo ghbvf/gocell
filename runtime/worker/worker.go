@@ -11,6 +11,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 
 	kworker "github.com/ghbvf/gocell/kernel/worker"
@@ -112,8 +113,8 @@ func (g *WorkerGroup) Stop(ctx context.Context) error {
 
 	var firstErr error
 	// Stop in reverse order, serially.
-	for i := len(workers) - 1; i >= 0; i-- {
-		if err := workers[i].Stop(ctx); err != nil {
+	for _, v := range slices.Backward(workers) {
+		if err := v.Stop(ctx); err != nil {
 			slog.Error("worker stop failed", slog.Any("error", err))
 			if firstErr == nil {
 				firstErr = err

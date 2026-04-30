@@ -1698,7 +1698,6 @@ func TestNewTransitKeyProviderFromEnv_RejectsHTTPVaultAddr(t *testing.T) {
 	}
 
 	for _, tc := range tests {
-		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			// Set VAULT_ADDR; VAULT_AUTH_METHOD intentionally left unset so the
 			// function fails at auth setup for non-TLS-rejected cases. TLS validation

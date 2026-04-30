@@ -61,7 +61,7 @@ func TestInMemoryNonceStore_ConcurrentAccess(t *testing.T) {
 	const n = 100
 	var wg sync.WaitGroup
 	wg.Add(n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		i := i
 		go func() {
 			defer wg.Done()
@@ -84,7 +84,7 @@ func TestInMemoryNonceStore_LazyPrune(t *testing.T) {
 	require.NoError(t, err)
 
 	// Insert 10 entries; all will expire after ServiceTokenNonceTTL.
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		err := store.CheckAndMark(context.Background(), fmt.Sprintf("prune-nonce-%d", i))
 		require.NoError(t, err)
 	}

@@ -16,6 +16,7 @@ import (
 	"crypto/subtle"
 	"io"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -262,9 +263,9 @@ func (s *store) GC(_ context.Context, olderThan time.Time) (int, error) {
 // probability negligible); we still prefer the latest-inserted row if multiple
 // ever existed, matching PG's idx_refresh_tokens_selector_live semantics.
 func (s *store) findBySelectorLocked(sel []byte) *tokenRecord {
-	for i := len(s.rows) - 1; i >= 0; i-- {
-		if subtle.ConstantTimeCompare(s.rows[i].selector, sel) == 1 {
-			return s.rows[i]
+	for _, v := range slices.Backward(s.rows) {
+		if subtle.ConstantTimeCompare(v.selector, sel) == 1 {
+			return v
 		}
 	}
 	return nil

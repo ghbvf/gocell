@@ -4,6 +4,7 @@ import (
 	"errors"
 	"log/slog"
 	"slices"
+	"strings"
 	"sync"
 
 	"github.com/ghbvf/gocell/kernel/observability/metrics"
@@ -218,14 +219,15 @@ func (p *MetricProvider) lookupHistogramVecLabels(hv *prom.HistogramVec) []strin
 
 // join produces a compact comma-separated string for error messages.
 func join(ss []string) string {
-	out := "["
+	var out strings.Builder
+	out.WriteString("[")
 	for i, s := range ss {
 		if i > 0 {
-			out += ","
+			out.WriteString(",")
 		}
-		out += s
+		out.WriteString(s)
 	}
-	return out + "]"
+	return out.String() + "]"
 }
 
 type promCounter struct{ inner prom.Counter }

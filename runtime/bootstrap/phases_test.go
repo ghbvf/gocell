@@ -985,7 +985,7 @@ func TestBootstrapTeardown_LIFOOrder(t *testing.T) {
 	_, s := newPhaseState()
 
 	var order []int
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		idx := i
 		s.addNamedTeardown(fmt.Sprintf("step%d", idx), func(_ context.Context) error {
 			order = append(order, idx)

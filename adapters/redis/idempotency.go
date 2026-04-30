@@ -132,10 +132,7 @@ func (c *IdempotencyClaimer) Claim(ctx context.Context, key string, leaseTTL, do
 
 	leaseKey := "lease:" + key
 	doneKey := "done:" + key
-	leaseSec := int64(leaseTTL.Seconds())
-	if leaseSec < 1 {
-		leaseSec = 1
-	}
+	leaseSec := max(int64(leaseTTL.Seconds()), 1)
 
 	res, err := c.rdb.Eval(ctx, claimScript, []string{doneKey, leaseKey}, token, leaseSec).Result()
 	if err != nil {
@@ -194,10 +191,7 @@ func (r *redisReceipt) Commit(ctx context.Context) error {
 	if r.committed {
 		return r.commitErr
 	}
-	doneSec := int64(r.doneTTL.Seconds())
-	if doneSec < 1 {
-		doneSec = 1
-	}
+	doneSec := max(int64(r.doneTTL.Seconds()), 1)
 	res, err := r.rdb.Eval(ctx, commitScript, []string{r.leaseKey, r.doneKey}, r.token, doneSec).Result()
 	if err != nil {
 		r.commitErr = errcode.Wrap(ErrAdapterRedisSet,
@@ -250,10 +244,7 @@ func (r *redisReceipt) Release(ctx context.Context) error {
 // as ErrLeaseExpired so callers can distinguish infrastructure failures from
 // intentional lease preemption.
 func (r *redisReceipt) Extend(ctx context.Context, ttl time.Duration) error {
-	ttlMs := ttl.Milliseconds()
-	if ttlMs < 1 {
-		ttlMs = 1
-	}
+	ttlMs := max(ttl.Milliseconds(), 1)
 	res, err := r.rdb.Eval(ctx, extendScript, []string{r.leaseKey}, r.token, ttlMs).Result()
 	if err != nil {
 		return errcode.Wrap(ErrAdapterRedisSet, "redis claimer: extend lease", err)

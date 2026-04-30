@@ -3,6 +3,7 @@ package websocket
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -484,9 +485,7 @@ func (h *Hub) pingLoop(ctx context.Context) {
 func (h *Hub) pingAll(ctx context.Context) {
 	h.connMu.Lock()
 	snapshot := make(map[string]*connEntry, len(h.conns))
-	for k, v := range h.conns {
-		snapshot[k] = v
-	}
+	maps.Copy(snapshot, h.conns)
 	h.connMu.Unlock()
 
 	for connID, entry := range snapshot {
