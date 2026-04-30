@@ -96,6 +96,8 @@ actors.yaml   — 外部 Actor 注册（参与 contract 但不属于 Cell 模型
 - 配置热更新 → go-micro
 - 事件驱动 → Watermill
 
+> **对标 ≠ 采纳**：以上映射是**吸收设计语义**（接口形状、生命周期钩子、Lifecycle 对称清理、依赖图可视化等），不是引入实现包。GoCell 领域逻辑（Cell/Slice 模型、DI/Lifecycle 编排、错误码体系、metadata schema、治理规则）按上节「依赖选择原则」保留自建。例如：fx 对标点是「Lifecycle 失败矩阵的对称清理算法 + Module 隔离思想」，不是 `import go.uber.org/fx`；GoCell 用 Option pattern + 10-phase + archtest LAYER + boundary.yaml 实现等价语义。
+
 ### 对标对比规则
 
 新建或重构 kernel/、cells/、runtime/、adapters/ 下的模块时，**必须**先在线读取对标框架的对应源码再动手：
