@@ -283,14 +283,14 @@ func TestHandleDequeue_ClaimBatches(t *testing.T) {
 	h, _, q := setupCommandHandler()
 	ctx := context.Background()
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		id := "cmd-" + string(rune('a'+i))
 		require.NoError(t, q.Enqueue(ctx, command.NewEntry(id, "dev-1", "reboot", []byte("p"), command.Timeouts{}, base.Add(time.Duration(i)*time.Hour)), command.EnqueueOptions{}))
 	}
 
 	var allIDs []string
 
-	for page := 0; page < 3; page++ {
+	for range 3 {
 		url := "/api/v1/devices/dev-1/commands?limit=3"
 		w := httptest.NewRecorder()
 		req := httptest.NewRequest(http.MethodGet, url, nil)

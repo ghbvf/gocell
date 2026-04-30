@@ -95,7 +95,7 @@ func TestService_GetByID(t *testing.T) {
 func TestService_List_FirstPage(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var seed []*domain.Order
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		seed = append(seed, &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
 			Item:      "item",
@@ -118,7 +118,7 @@ func TestService_List_FirstPage(t *testing.T) {
 func TestService_List_WithCursor(t *testing.T) {
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	var seed []*domain.Order
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		seed = append(seed, &domain.Order{
 			ID:        fmt.Sprintf("ord-%02d", i),
 			Item:      "item",
