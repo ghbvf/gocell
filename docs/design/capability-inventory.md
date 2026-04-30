@@ -192,7 +192,7 @@
 - `SDK()` — 暴露底层 `*s3.Client` 用于 download/delete/presigned 等操作
 - 不包装 SDK 已有能力（Download/Delete/PresignedURL 通过 SDK() 直接使用）
 
-### 4.6 websocket — WebSocket (nhooyr.io/websocket)
+### 4.6 websocket — WebSocket (github.com/coder/websocket)
 - `Hub` — 连接管理 (register/unregister/broadcast/unicast)
 - Signal-first 模式（推送轻量刷新信号）
 - `UpgradeHandler` — HTTP 升级 + origin 检查
@@ -326,7 +326,7 @@ Adapters: internal/mem + internal/adapters/postgres (ConfigRepository PG)
 | jackc/pgx/v5 | PostgreSQL 驱动 |
 | redis/go-redis/v9 | Redis 客户端 |
 | rabbitmq/amqp091-go | RabbitMQ AMQP |
-| nhooyr.io/websocket | WebSocket |
+| github.com/coder/websocket | WebSocket |
 | fsnotify/fsnotify | 文件监听 |
 | golang.org/x/crypto | bcrypt |
 | stretchr/testify | 测试断言 |

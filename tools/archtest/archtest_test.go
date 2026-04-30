@@ -264,7 +264,7 @@ func isCellPublicAPIDisallowedType(modPrefix, pkgPath string) bool {
 		"github.com/prometheus/client_golang/prometheus",
 		"github.com/rabbitmq/amqp091-go",
 		"github.com/redis/go-redis/",
-		"nhooyr.io/websocket",
+		"github.com/coder/websocket",
 	} {
 		if strings.HasPrefix(pkgPath, prefix) {
 			return true
@@ -770,7 +770,7 @@ func TestIsCellPublicAPIDisallowedType(t *testing.T) {
 		{"github.com/jackc/pgx/v5/pgxpool", true},
 		{"github.com/redis/go-redis/v9", true},
 		{"github.com/rabbitmq/amqp091-go", true},
-		{"nhooyr.io/websocket", true},
+		{"github.com/coder/websocket", true},
 		{"github.com/prometheus/client_golang/prometheus", true},
 		{"github.com/ghbvf/gocell/kernel/outbox", false},
 	}
@@ -1528,5 +1528,7 @@ func TestCorebundleMainLineLimit(t *testing.T) {
 	}
 	assert.LessOrEqualf(t, lines, maxLines,
 		"cmd/corebundle/main.go has %d lines, exceeds V-A8 ceiling of %d; "+
-			"re-evaluate V-A8 deferred decision before raising the limit", lines, maxLines)
+			"re-evaluate V-A8-DEFERRED triggers in docs/backlog.md and "+
+			"docs/plans/202604252100-026-post-v1.0-cleanup-plan.md before raising the limit",
+		lines, maxLines)
 }

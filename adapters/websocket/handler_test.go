@@ -91,7 +91,7 @@ func dialWS(t *testing.T, serverURL string) *websocket.Conn {
 	require.NoError(t, err)
 
 	// Always CloseNow on cleanup. Graceful Close may fail if server
-	// already closed the connection, leaving nhooyr's timeoutLoop alive.
+	// already closed the connection, leaving coder/websocket's timeoutLoop alive.
 	// CloseNow tears down the transport unconditionally.
 	t.Cleanup(func() { _ = conn.CloseNow() })
 

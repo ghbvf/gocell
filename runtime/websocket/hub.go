@@ -240,12 +240,12 @@ func (h *Hub) shutdown(ctx context.Context) error {
 	h.connMu.Unlock()
 
 	// Close all connections synchronously. cancel() unblocks Read via
-	// context; Close() tears down the transport (nhooyr CloseNow is
+	// context; Close() tears down the transport (coder/websocket CloseNow is
 	// lock-free, so this never blocks behind Write). Both are belt-and-
-	// suspenders: cancel works for fakeConn, Close works for nhooyr.
+	// suspenders: cancel works for fakeConn, Close works for coder/websocket.
 	//
 	// Synchronous close ensures Stop returns only after all transport
-	// resources (including nhooyr's internal timeoutLoop) are cleaned up.
+	// resources (including coder/websocket's internal timeoutLoop) are cleaned up.
 	// If connection counts reach thousands, replace with concurrent close
 	// + closeWg (see WS-OPS-02 in tech-debt-registry).
 	for _, e := range entries {

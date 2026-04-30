@@ -1012,6 +1012,9 @@ func TestWatcher_isRelevantEvent_TableDriven(t *testing.T) {
 
 	otherInDir := filepath.Join(dir, "other.yaml")
 
+	// NOTE: symlink-pivot positive branch (wantSym=true) is intentionally
+	// omitted here — it requires real filesystem state mutation and is
+	// covered by TestWatcher_SymlinkPivot_* integration tests.
 	cases := []struct {
 		name    string
 		event   fsnotify.Event
@@ -1057,4 +1060,98 @@ func TestWatcher_isRelevantEvent_TableDriven(t *testing.T) {
 			assert.Equal(t, tc.wantRel, gotRel, "relevant")
 		})
 	}
+}
+
+// orderedSpyCollector records the exact sequence of metric method invocations
+// so that tests can lock the order in which processFSEvent / processPivotTick
+// fan out to RecordEvent / RecordLastEventTimestamp / scheduleCallback. The
+// dispatch order is dashboard-load-bearing: a "RecordEvent before
+// RecordLastEventTimestamp" invariant means the counter increment is visible
+// before the timestamp gauge advances, so an alert that joins them never sees
+// a stale counter.
+type orderedSpyCollector struct {
+	mu    sync.Mutex
+	calls []string
+}
+
+func (s *orderedSpyCollector) RecordEvent(eventType string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "RecordEvent:"+eventType)
+}
+
+func (s *orderedSpyCollector) RecordLastEventTimestamp(time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "RecordLastEventTimestamp")
+}
+
+func (s *orderedSpyCollector) RecordDebounceCoalesced() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls = append(s.calls, "RecordDebounceCoalesced")
+}
+
+func (s *orderedSpyCollector) snapshot() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]string, len(s.calls))
+	copy(out, s.calls)
+	return out
+}
+
+// TestWatcher_handleWatcherEvent_MetricOrdering directly exercises
+// handleWatcherEvent (introduced by #339 to keep loop() under the gocognit
+// ceiling) to lock the metric dispatch order. RecordEvent must precede
+// RecordLastEventTimestamp; both must precede the scheduleCallback fan-out.
+// Existing integration tests only assert "events>=1 && lastTime>0" eventually,
+// which would silently survive a swap.
+func TestWatcher_handleWatcherEvent_MetricOrdering(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	touchFile(t, target, "key: val")
+
+	spy := &orderedSpyCollector{}
+	w, err := NewWatcher(target, WithMetrics(spy), WithDebounce(0))
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	w.handleWatcherEvent(fsnotify.Event{Name: target, Op: fsnotify.Write})
+
+	calls := spy.snapshot()
+	require.GreaterOrEqual(t, len(calls), 2, "expected RecordEvent + RecordLastEventTimestamp")
+	assert.Equal(t, "RecordEvent:write", calls[0],
+		"RecordEvent must be first — dashboards depend on counter-before-timestamp ordering")
+	assert.Equal(t, "RecordLastEventTimestamp", calls[1],
+		"RecordLastEventTimestamp must immediately follow RecordEvent")
+}
+
+// TestWatcher_handleSymlinkPivotTick_MetricOrdering exercises the symlink-
+// pivot polling path. handleSymlinkPivotTick early-returns when
+// checkSymlinkPivot reports no pivot, so the test seeds w.lastResolved with a
+// sentinel that EvalSymlinks will never return, forcing the positive branch
+// through one tick.
+func TestWatcher_handleSymlinkPivotTick_MetricOrdering(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "config.yaml")
+	touchFile(t, target, "key: val")
+
+	spy := &orderedSpyCollector{}
+	w, err := NewWatcher(target, WithMetrics(spy), WithDebounce(0))
+	require.NoError(t, err)
+	defer func() { _ = w.Close(context.Background()) }()
+
+	// Force the next checkSymlinkPivot to detect a change.
+	w.mu.Lock()
+	w.lastResolved = "<sentinel-never-resolves>"
+	w.mu.Unlock()
+
+	w.handleSymlinkPivotTick()
+
+	calls := spy.snapshot()
+	require.GreaterOrEqual(t, len(calls), 2, "pivot tick must record event + timestamp")
+	assert.Equal(t, "RecordEvent:symlink_pivot", calls[0],
+		"pivot tick must record EventTypeSymlinkPivot first")
+	assert.Equal(t, "RecordLastEventTimestamp", calls[1],
+		"RecordLastEventTimestamp must immediately follow RecordEvent on pivot tick")
 }
