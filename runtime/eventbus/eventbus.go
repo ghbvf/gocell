@@ -418,7 +418,7 @@ func (b *InMemoryEventBus) handleWithRetry(ctx context.Context, topic string, en
 		}
 	}
 	b.appendDeadLetter(topic, entry, lastErr)
-	outbox.NotifySettlement(ctx, lastResult, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, nil)
+	outbox.NotifySettlement(ctx, lastResult, entry, outbox.DispositionReject, outbox.SettlementResultRetryExhausted, lastErr)
 	slog.Error("eventbus: retries exhausted, routing to dead letter",
 		slog.String("topic", topic),
 		slog.String("entry_id", entry.ID),

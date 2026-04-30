@@ -1355,6 +1355,7 @@ func TestSubscribe_RetryExhausted_NotifiesRetryExhausted(t *testing.T) {
 	last := spy.last()
 	assert.Equal(t, outbox.DispositionReject, last.Disposition)
 	assert.Equal(t, outbox.SettlementResultRetryExhausted, last.Result)
+	assert.ErrorIs(t, last.Err, transientErr, "retry-exhausted notification must propagate the last handler error")
 
 	assert.Equal(t, 1, bus.DeadLetterLen(), "one entry must be dead-lettered")
 }
