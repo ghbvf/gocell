@@ -163,7 +163,7 @@ func testPublishSubscribe(t *testing.T, _ Features, constructor PubSubConstructo
 
 func testPublishSubscribeMultiple(t *testing.T, features Features, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	topic := TestTopic(t)
 
 	n := features.MessageCount
@@ -190,7 +190,7 @@ func testPublishSubscribeInOrder(t *testing.T, features Features, constructor Pu
 	}
 
 	pub, sub := constructor(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	topic := TestTopic(t)
 
 	n := 20
@@ -215,7 +215,7 @@ func testPublishSubscribeInOrder(t *testing.T, features Features, constructor Pu
 
 func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	topicA := TestTopic(t) + "-A"
 	topicB := TestTopic(t) + "-B"
 
@@ -285,7 +285,7 @@ func testTopicIsolation(t *testing.T, _ Features, constructor PubSubConstructor)
 
 func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	topic := TestTopic(t)
 
 	var (
@@ -347,7 +347,7 @@ func testMultipleSubscribers(t *testing.T, _ Features, constructor PubSubConstru
 // Features is unused here; the signature matches the test-registration interface.
 func testCompetingConsumers(t *testing.T, _ Features, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	topic := TestTopic(t)
 
 	var (
@@ -536,7 +536,7 @@ func testWrapLegacyHandlerSuccess(t *testing.T) {
 	legacy := func(_ context.Context, _ outbox.Entry) error { return nil }
 	handler := outbox.WrapLegacyHandler(legacy)
 
-	res := handler(context.Background(), outbox.Entry{ID: testEntryID})
+	res := handler(t.Context(), outbox.Entry{ID: testEntryID})
 	assertEqual(t, outbox.DispositionAck, res.Disposition)
 	assertTrue(t, res.Err == nil, "expected nil error")
 }
@@ -547,7 +547,7 @@ func testWrapLegacyHandlerTransientError(t *testing.T) {
 	}
 	handler := outbox.WrapLegacyHandler(legacy)
 
-	res := handler(context.Background(), outbox.Entry{ID: testEntryID})
+	res := handler(t.Context(), outbox.Entry{ID: testEntryID})
 	assertEqual(t, outbox.DispositionRequeue, res.Disposition)
 	assertTrue(t, res.Err != nil, "expected non-nil error")
 }
@@ -558,7 +558,7 @@ func testWrapLegacyHandlerPermanentError(t *testing.T) {
 	}
 	handler := outbox.WrapLegacyHandler(legacy)
 
-	res := handler(context.Background(), outbox.Entry{ID: testEntryID})
+	res := handler(t.Context(), outbox.Entry{ID: testEntryID})
 	assertEqual(t, outbox.DispositionReject, res.Disposition)
 	assertTrue(t, res.Err != nil, "expected non-nil error")
 
@@ -700,7 +700,7 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 	}
 
 	_, sub := constructor(t)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	subscribeReturned := make(chan error, 1)
 	go func() {
@@ -730,7 +730,7 @@ func testSubscribeBlocksUntilCancel(t *testing.T, features Features, constructor
 
 func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSubConstructor) {
 	_, sub := constructor(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	topic := TestTopic(t)
 
 	subscribeReturned := make(chan struct{})
@@ -742,7 +742,7 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 	}()
 	waitForSubscription(t, ctx, sub, topic, "")
 
-	assertNoError(t, sub.Close(context.Background()))
+	assertNoError(t, sub.Close(t.Context()))
 
 	select {
 	case <-subscribeReturned:
@@ -755,22 +755,22 @@ func testCloseTerminatesSubscribers(t *testing.T, _ Features, constructor PubSub
 func testCloseIsIdempotent(t *testing.T, constructor PubSubConstructor) {
 	_, sub := constructor(t)
 
-	assertNoError(t, sub.Close(context.Background()))
+	assertNoError(t, sub.Close(t.Context()))
 
 	// Second close should not panic.
 	assertNotPanics(t, func() {
-		assertNoError(t, sub.Close(context.Background()))
+		assertNoError(t, sub.Close(t.Context()))
 	})
 }
 
 func testPublishAfterClose(t *testing.T, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
 
-	assertNoError(t, sub.Close(context.Background()))
+	assertNoError(t, sub.Close(t.Context()))
 
 	// Publishing after close should not panic.
 	assertNotPanics(t, func() {
-		_ = pub.Publish(context.Background(), "any-topic", wrapV1Envelope(t, "any-topic", []byte(`{}`)))
+		_ = pub.Publish(t.Context(), "any-topic", wrapV1Envelope(t, "any-topic", []byte(`{}`)))
 	})
 }
 
@@ -780,7 +780,7 @@ func testPublishAfterClose(t *testing.T, constructor PubSubConstructor) {
 
 func testConcurrentPublish(t *testing.T, features Features, constructor PubSubConstructor) {
 	pub, sub := constructor(t)
-	ctx := context.Background()
+	ctx := t.Context()
 	topic := TestTopic(t)
 
 	n := min(features.MessageCount, 50)

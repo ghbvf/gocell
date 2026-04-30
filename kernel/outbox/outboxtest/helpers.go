@@ -304,7 +304,7 @@ func newHarness(t *testing.T, constructor PubSubConstructor) *pubSubHarness {
 // Subscribe errors (other than context.Canceled) are surfaced via t.Errorf.
 func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 	h.T.Helper()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(h.T.Context())
 	h.cancel = cancel
 	h.T.Cleanup(cancel)
 	wrapped := func(hctx context.Context, entry outbox.Entry) outbox.HandleResult {
@@ -334,7 +334,7 @@ func (h *pubSubHarness) subscribe(handler outbox.EntryHandler) {
 // delivering it to subscribers.
 func (h *pubSubHarness) publishAndWait(payload []byte) {
 	h.T.Helper()
-	assertNoError(h.T, h.Pub.Publish(context.Background(), h.Topic, wrapV1Envelope(h.T, h.Topic, payload)))
+	assertNoError(h.T, h.Pub.Publish(h.T.Context(), h.Topic, wrapV1Envelope(h.T, h.Topic, payload)))
 	select {
 	case <-h.done:
 	case <-time.After(defaultTimeout):
