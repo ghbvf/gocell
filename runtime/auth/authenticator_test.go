@@ -316,9 +316,112 @@ func TestJWTAuthenticator_Success_PrincipalShape(t *testing.T) {
 
 // --- T3: ServiceToken Authenticator tests ---
 
+// mustNewInMemoryNonceStore is a test helper that constructs an InMemoryNonceStore
+// with ServiceTokenNonceTTL, failing the test on error. Use instead of repeating
+// require.NoError boilerplate in every test that needs a replay-safe store.
+func mustNewInMemoryNonceStore(t *testing.T) NonceStore {
+	t.Helper()
+	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
+	if err != nil {
+		t.Fatalf("mustNewInMemoryNonceStore: %v", err)
+	}
+	return store
+}
+
+// mustNewServiceTokenAuthenticator is a test helper that constructs a
+// NewServiceTokenAuthenticator, failing the test on construction error.
+func mustNewServiceTokenAuthenticator(t *testing.T, ring *HMACKeyRing, opts ...ServiceTokenOption) Authenticator {
+	t.Helper()
+	a, err := NewServiceTokenAuthenticator(ring, opts...)
+	if err != nil {
+		t.Fatalf("NewServiceTokenAuthenticator: %v", err)
+	}
+	return a
+}
+
+// --- fail-closed construction tests (new) ---
+
+func TestNewServiceTokenAuthenticator_NilRing_ReturnsError(t *testing.T) {
+	_, err := NewServiceTokenAuthenticator(nil,
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
+	if err == nil {
+		t.Fatal("expected error for nil ring, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != errcode.ErrAuthKeyMissing {
+		t.Errorf("expected ErrAuthKeyMissing, got %v", ec.Code)
+	}
+}
+
+func TestNewServiceTokenAuthenticator_TypedNilRing_ReturnsError(t *testing.T) {
+	var ring *HMACKeyRing
+	_, err := NewServiceTokenAuthenticator(ring,
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
+	if err == nil {
+		t.Fatal("expected error for typed-nil ring, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != errcode.ErrAuthKeyMissing {
+		t.Errorf("expected ErrAuthKeyMissing, got %v", ec.Code)
+	}
+}
+
+func TestNewServiceTokenAuthenticator_NilNonceStore_ReturnsError(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	// No WithServiceTokenNonceStore → cfg.nonceStore stays nil → must error.
+	_, err := NewServiceTokenAuthenticator(ring)
+	if err == nil {
+		t.Fatal("expected error for nil NonceStore, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != errcode.ErrCellInvalidConfig {
+		t.Errorf("expected ErrCellInvalidConfig, got %v", ec.Code)
+	}
+}
+
+func TestNewServiceTokenAuthenticator_NoopNonceStore_ReturnsError(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	_, err := NewServiceTokenAuthenticator(ring,
+		WithServiceTokenNonceStore(NewNoopNonceStore()))
+	if err == nil {
+		t.Fatal("expected error for NoopNonceStore, got nil")
+	}
+	var ec *errcode.Error
+	if !errors.As(err, &ec) {
+		t.Fatalf("expected *errcode.Error, got %T: %v", err, err)
+	}
+	if ec.Code != errcode.ErrCellInvalidConfig {
+		t.Errorf("expected ErrCellInvalidConfig, got %v", ec.Code)
+	}
+}
+
+func TestNewServiceTokenAuthenticator_InMemoryNonceStore_OK(t *testing.T) {
+	ring := mustTestRing(t, testSecret, "")
+	a, err := NewServiceTokenAuthenticator(ring,
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if a == nil {
+		t.Fatal("expected non-nil Authenticator")
+	}
+}
+
+// --- existing ServiceToken Authenticator tests (updated to error-first + explicit store) ---
+
 func TestServiceTokenAuthenticator_NoHeader_Absent(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
-	a := NewServiceTokenAuthenticator(ring)
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	p, ok, err := a.Authenticate(req)
 	if err != nil {
@@ -334,7 +437,8 @@ func TestServiceTokenAuthenticator_NoHeader_Absent(t *testing.T) {
 
 func TestServiceTokenAuthenticator_BearerSchemeIgnored_Absent(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
-	a := NewServiceTokenAuthenticator(ring)
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "Bearer some-jwt-token")
 	p, ok, err := a.Authenticate(req)
@@ -352,7 +456,9 @@ func TestServiceTokenAuthenticator_BearerSchemeIgnored_Absent(t *testing.T) {
 func TestServiceTokenAuthenticator_InvalidMAC_Error(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	// Construct a token with wrong HMAC (last byte flipped).
 	goodToken := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
@@ -376,7 +482,9 @@ func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
 	oldTime := now.Add(-6 * time.Minute)
 	// Token is signed for 6 minutes ago — exceeds ServiceTokenMaxAge.
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", oldTime)
-	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 	p, ok, err := a.Authenticate(req)
@@ -394,14 +502,14 @@ func TestServiceTokenAuthenticator_Expired_Error(t *testing.T) {
 func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	store, err := NewInMemoryNonceStore(ServiceTokenNonceTTL)
-	if err != nil {
-		t.Fatalf("NewInMemoryNonceStore: %v", err)
-	}
-	a := NewServiceTokenAuthenticator(ring,
+	store := mustNewInMemoryNonceStore(t)
+	a, err := NewServiceTokenAuthenticator(ring,
 		WithServiceTokenClock(func() time.Time { return now }),
 		WithServiceTokenNonceStore(store),
 	)
+	if err != nil {
+		t.Fatalf("NewServiceTokenAuthenticator: %v", err)
+	}
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
 
 	// First use — must succeed.
@@ -436,7 +544,9 @@ func TestServiceTokenAuthenticator_NonceReplay_Error(t *testing.T) {
 func TestServiceTokenAuthenticator_Success_PrincipalShape(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
@@ -543,7 +653,9 @@ func TestUnionAuthenticator_BearerAndServiceToken_NoCrossBleed(t *testing.T) {
 	trackingVerifier := &trackingIntentVerifier{onVerify: func() { verifierCalled = true }}
 
 	jwtAuth := NewJWTAuthenticator(trackingVerifier)
-	svcAuth := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	svcAuth := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	union := NewUnionAuthenticator(jwtAuth, svcAuth)
 
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", now)
@@ -589,7 +701,9 @@ func (v *trackingIntentVerifier) VerifyIntent(_ context.Context, _ string, _ Tok
 func TestServiceTokenAuthenticator_LegacyTwoPart_Error(t *testing.T) {
 	ring := mustTestRing(t, testSecret, "")
 	now := time.Now()
-	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 
 	// Build a 2-part token: {timestamp}:{hex_hmac} (no nonce).
 	tsStr := fmt.Sprintf("%d", now.Unix())
@@ -619,7 +733,9 @@ func TestServiceTokenAuthenticator_FutureTimestamp_Error(t *testing.T) {
 	futureTime := now.Add(ServiceTokenClockSkew + time.Second)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", futureTime)
 
-	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
@@ -641,7 +757,9 @@ func TestServiceTokenAuthenticator_FarFutureTimestampOverflow_Error(t *testing.T
 	farFuture := time.Unix(math.MaxInt64/2, 0)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", farFuture)
 
-	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
@@ -663,7 +781,9 @@ func TestServiceTokenAuthenticator_FutureTimestampWithinSkew_Accepted(t *testing
 	futureTime := now.Add(ServiceTokenClockSkew)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", futureTime)
 
-	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 
@@ -685,7 +805,9 @@ func TestServiceTokenAuthenticator_PastTimestampAtMaxAge_Error(t *testing.T) {
 	oldTime := now.Add(-ServiceTokenMaxAge)
 	token := GenerateServiceToken(ring, http.MethodGet, "/internal/v1/resource", "", oldTime)
 
-	a := NewServiceTokenAuthenticator(ring, WithServiceTokenClock(func() time.Time { return now }))
+	a := mustNewServiceTokenAuthenticator(t, ring,
+		WithServiceTokenClock(func() time.Time { return now }),
+		WithServiceTokenNonceStore(mustNewInMemoryNonceStore(t)))
 	req := httptest.NewRequest(http.MethodGet, "/internal/v1/resource", nil)
 	req.Header.Set("Authorization", "ServiceToken "+token)
 

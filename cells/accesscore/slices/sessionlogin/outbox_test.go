@@ -2,6 +2,7 @@ package sessionlogin
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"testing"
 	"time"
@@ -81,4 +82,74 @@ func TestService_WithTxManager(t *testing.T) {
 	_, err := svc.Login(context.Background(), LoginInput{Username: "bob", Password: string(testCredential)})
 	require.NoError(t, err)
 	assert.Equal(t, 1, tx.calls)
+}
+
+// failingEmitter returns an error on every Emit call.
+type failingEmitter struct{ err error }
+
+func (f *failingEmitter) Emit(_ context.Context, _ outbox.Entry) error { return f.err }
+
+// trackingOutboxSessionRepo wraps mem.SessionRepository and records Delete calls.
+type trackingOutboxSessionRepo struct {
+	*mem.SessionRepository
+	deleted []string
+}
+
+func (r *trackingOutboxSessionRepo) Delete(ctx context.Context, id string) error {
+	r.deleted = append(r.deleted, id)
+	return r.SessionRepository.Delete(ctx, id)
+}
+
+// TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup verifies
+// that when a durable (non-noop) TxRunner is used and outbox.Emit fails,
+// no explicit cleanupIssuedSession call is made. The tx rollback handles
+// atomicity; explicit cleanup would double-delete in a real durable setup.
+func TestPersistSessionWithRefresh_DurableTx_EmitFails_NoExplicitCleanup(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := mem.NewRoleRepository()
+
+	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
+	// stubTxRunner is NOT a Nooper — isNoopTx(tx) returns false.
+	tx := &stubTxRunner{}
+
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
+		WithEmitter(emitter),
+		WithTxManager(tx))
+
+	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
+	seedUserDirect(userRepo, "durable-emit-fail", string(hash))
+
+	_, err := svc.Login(context.Background(), LoginInput{Username: "durable-emit-fail", Password: string(testCredential)})
+	require.Error(t, err, "emit failure must propagate as an error")
+
+	// In durable tx mode, cleanupIssuedSession must NOT be called (tx rollback handles it).
+	assert.Len(t, sessionRepo.deleted, 0,
+		"durable tx: no explicit Delete during emit failure — tx rollback is the recovery mechanism")
+}
+
+// TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns verifies
+// that when NoopTxRunner (demo mode) is in use and outbox.Emit fails,
+// cleanupIssuedSession IS called to compensate the already-written session.
+// This is the mirror case of the durable-tx test above.
+func TestPersistSessionWithRefresh_NoopTxRunner_EmitFails_CleanupRuns(t *testing.T) {
+	userRepo := mem.NewUserRepository()
+	sessionRepo := &trackingOutboxSessionRepo{SessionRepository: mem.NewSessionRepository()}
+	roleRepo := mem.NewRoleRepository()
+
+	emitter := &failingEmitter{err: fmt.Errorf("broker down")}
+	// No WithTxManager → service defaults to NoopTxRunner — isNoopTx returns true.
+
+	svc := MustNewService(userRepo, sessionRepo, roleRepo, newOutboxRefreshStore(), testIssuer, slog.Default(),
+		WithEmitter(emitter))
+
+	hash, _ := bcrypt.GenerateFromPassword(testCredential, bcrypt.MinCost)
+	seedUserDirect(userRepo, "noop-emit-fail", string(hash))
+
+	_, err := svc.Login(context.Background(), LoginInput{Username: "noop-emit-fail", Password: string(testCredential)})
+	require.Error(t, err, "emit failure must propagate as an error")
+
+	// In noop tx mode, cleanupIssuedSession must compensate the session write.
+	assert.Len(t, sessionRepo.deleted, 1,
+		"noop tx (demo mode): explicit Delete must run to compensate the already-written session")
 }

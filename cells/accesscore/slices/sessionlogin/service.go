@@ -13,6 +13,7 @@ import (
 	"github.com/ghbvf/gocell/cells/accesscore/internal/dto"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/ports"
 	"github.com/ghbvf/gocell/cells/accesscore/internal/sessionmint"
+	"github.com/ghbvf/gocell/kernel/cell"
 	"github.com/ghbvf/gocell/kernel/outbox"
 	"github.com/ghbvf/gocell/kernel/persistence"
 	"github.com/ghbvf/gocell/pkg/errcode"
@@ -198,7 +199,12 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain
 		if err != nil {
 			s.logger.Error("session-login: refresh store issue failed",
 				slog.Any("error", err), slog.String("user_id", userID))
-			_ = s.sessionRepo.Delete(context.WithoutCancel(txCtx), session.ID)
+			// In demo/noop-tx mode, the session was already written without a real
+			// transaction; compensate explicitly. In durable-tx mode, the tx rollback
+			// handles atomicity — no explicit cleanup is needed (and would double-delete).
+			if isNoopTx(s.txRunner) {
+				_ = s.sessionRepo.Delete(context.WithoutCancel(txCtx), session.ID)
+			}
 			return errcode.WrapInfra(errcode.ErrAuthRefreshUnavailable, "refresh store unavailable", err)
 		}
 		refreshWire = wire
@@ -206,7 +212,10 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain
 			SessionID: session.ID,
 			UserID:    userID,
 		}); err != nil {
-			s.cleanupIssuedSession(txCtx, session.ID)
+			// Same pattern: explicit cleanup only in noop/demo mode.
+			if isNoopTx(s.txRunner) {
+				s.cleanupIssuedSession(txCtx, session.ID)
+			}
 			return fmt.Errorf("session-login: emit event: %w", err)
 		}
 		return nil
@@ -217,6 +226,15 @@ func (s *Service) persistSessionWithRefresh(ctx context.Context, session *domain
 	return refreshWire, nil
 }
 
+// isNoopTx reports whether r is a demo/noop TxRunner (implements cell.Nooper and
+// returns Noop()==true). Used to decide whether explicit session cleanup is
+// needed on failure paths: noop tx has no rollback, so we compensate manually;
+// durable tx rollback handles atomicity.
+func isNoopTx(r persistence.TxRunner) bool {
+	n, ok := r.(cell.Nooper)
+	return ok && n.Noop()
+}
+
 func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 	cleanupCtx := context.WithoutCancel(ctx)
 	if err := s.refreshStore.RevokeSession(cleanupCtx, sessionID); err != nil {
@@ -224,6 +242,15 @@ func (s *Service) cleanupIssuedSession(ctx context.Context, sessionID string) {
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}
 	if err := s.sessionRepo.Delete(cleanupCtx, sessionID); err != nil {
+		// Not-found means the session was already gone (concurrent cleanup or
+		// prior rollback) — this is harmless. Log at Debug to avoid paging on-call
+		// for a condition that has no correctness impact.
+		// Matches the pattern in sessionrefresh/service.go and sessionvalidate/service.go.
+		if errcode.IsDomainNotFound(err, errcode.ErrSessionNotFound) {
+			s.logger.Debug("session-login: cleanup session already absent",
+				slog.String("session_id", sessionID))
+			return
+		}
 		s.logger.Error("session-login: cleanup session failed",
 			slog.Any("error", err), slog.String("session_id", sessionID))
 	}
